@@ -1,0 +1,35 @@
+---
+title: "IExactnessVault"
+---
+
+# IExactnessVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/VaultRegistry.sol)
+
+<i>
+
+Minimal view the registry needs to surface a vault's vault-attested
+exactness class (unified `Vault`, ADR-0010 §5.1 / C2). Declared as an
+interface (not an import) to avoid a circular compile-time dependency
+between the registry and the vault.
+
+</i>
+
+## Functions
+
+<a id="allexact"></a>
+
+### allExact
+
+True iff every active adapter is vault-attested exact.
+
+```solidity
+function allExact() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+

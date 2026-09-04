@@ -1,0 +1,270 @@
+---
+title: "AccessRolesTest"
+---
+
+# AccessRolesTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AccessRoles.t.sol)
+
+**Inherits:** Test
+
+## State Variables
+
+### roles
+
+```solidity
+AccessRolesHarness internal roles;
+```
+
+### ADMIN
+
+```solidity
+bytes32 internal ADMIN;
+```
+
+### PAUSER
+
+```solidity
+bytes32 internal PAUSER;
+```
+
+### AGENT
+
+```solidity
+bytes32 internal AGENT;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("agent");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_adminrole_iskeccakofname"></a>
+
+### test_adminRole_isKeccakOfName
+
+```solidity
+function test_adminRole_isKeccakOfName() public view;
+```
+
+<a id="test_pauserrole_iskeccakofname"></a>
+
+### test_pauserRole_isKeccakOfName
+
+```solidity
+function test_pauserRole_isKeccakOfName() public view;
+```
+
+<a id="test_agentrole_iskeccakofname"></a>
+
+### test_agentRole_isKeccakOfName
+
+```solidity
+function test_agentRole_isKeccakOfName() public view;
+```
+
+<a id="test_allroleids_aredistinct"></a>
+
+### test_allRoleIds_areDistinct
+
+```solidity
+function test_allRoleIds_areDistinct() public view;
+```
+
+<a id="test_grantagent_revertsifalreadyadmin"></a>
+
+### test_grantAgent_revertsIfAlreadyAdmin
+
+```solidity
+function test_grantAgent_revertsIfAlreadyAdmin() public;
+```
+
+<a id="test_grantagent_revertsifalreadypauser"></a>
+
+### test_grantAgent_revertsIfAlreadyPauser
+
+```solidity
+function test_grantAgent_revertsIfAlreadyPauser() public;
+```
+
+<a id="test_grantadmin_revertsifalreadyagent"></a>
+
+### test_grantAdmin_revertsIfAlreadyAgent
+
+```solidity
+function test_grantAdmin_revertsIfAlreadyAgent() public;
+```
+
+<a id="test_grantpauser_revertsifalreadyagent"></a>
+
+### test_grantPauser_revertsIfAlreadyAgent
+
+```solidity
+function test_grantPauser_revertsIfAlreadyAgent() public;
+```
+
+<a id="test_grantagent_succeedsforfreshaccount"></a>
+
+### test_grantAgent_succeedsForFreshAccount
+
+```solidity
+function test_grantAgent_succeedsForFreshAccount() public;
+```
+
+<a id="test_grantpauser_revertsifalreadyadmin"></a>
+
+### test_grantPauser_revertsIfAlreadyAdmin
+
+<i>
+
+Pauser key compromise must not also confer admin powers
+(and vice versa). The audit (H1) flagged that the previous
+implementation permitted this overlap.
+
+</i>
+
+```solidity
+function test_grantPauser_revertsIfAlreadyAdmin() public;
+```
+
+<a id="test_grantadmin_revertsifalreadypauser"></a>
+
+### test_grantAdmin_revertsIfAlreadyPauser
+
+```solidity
+function test_grantAdmin_revertsIfAlreadyPauser() public;
+```
+
+<a id="test_adminandpauser_cannotcoexistonsameaccount"></a>
+
+### test_adminAndPauser_cannotCoexistOnSameAccount
+
+```solidity
+function test_adminAndPauser_cannotCoexistOnSameAccount() public;
+```
+
+<a id="test_grantagent_revertsifalreadydefaultadmin"></a>
+
+### test_grantAgent_revertsIfAlreadyDefaultAdmin
+
+```solidity
+function test_grantAgent_revertsIfAlreadyDefaultAdmin() public;
+```
+
+<a id="test_grantpauser_revertsifalreadydefaultadmin"></a>
+
+### test_grantPauser_revertsIfAlreadyDefaultAdmin
+
+```solidity
+function test_grantPauser_revertsIfAlreadyDefaultAdmin() public;
+```
+
+<a id="test_grantdefaultadmin_revertsifalreadypauser"></a>
+
+### test_grantDefaultAdmin_revertsIfAlreadyPauser
+
+```solidity
+function test_grantDefaultAdmin_revertsIfAlreadyPauser() public;
+```
+
+<a id="test_grantdefaultadmin_revertsifalreadyagent"></a>
+
+### test_grantDefaultAdmin_revertsIfAlreadyAgent
+
+```solidity
+function test_grantDefaultAdmin_revertsIfAlreadyAgent() public;
+```
+
+<a id="test_defaultadminandadmin_maycoexistasonetier"></a>
+
+### test_defaultAdminAndAdmin_mayCoexistAsOneTier
+
+```solidity
+function test_defaultAdminAndAdmin_mayCoexistAsOneTier() public view;
+```
+
+<a id="test_assertroleseparation_revertsondefaultadminagentoverlap"></a>
+
+### test_assertRoleSeparation_revertsOnDefaultAdminAgentOverlap
+
+```solidity
+function test_assertRoleSeparation_revertsOnDefaultAdminAgentOverlap() public;
+```
+
+<a id="test_assertroleseparation_passesforadminonly"></a>
+
+### test_assertRoleSeparation_passesForAdminOnly
+
+```solidity
+function test_assertRoleSeparation_passesForAdminOnly() public view;
+```
+
+<a id="test_assertroleseparation_passesforfreshaccount"></a>
+
+### test_assertRoleSeparation_passesForFreshAccount
+
+```solidity
+function test_assertRoleSeparation_passesForFreshAccount() public view;
+```
+
+<a id="test_assertroleseparation_passesforagentonly"></a>
+
+### test_assertRoleSeparation_passesForAgentOnly
+
+```solidity
+function test_assertRoleSeparation_passesForAgentOnly() public;
+```
+
+<a id="test_assertroleseparation_revertsonadminpauseroverlap"></a>
+
+### test_assertRoleSeparation_revertsOnAdminPauserOverlap
+
+```solidity
+function test_assertRoleSeparation_revertsOnAdminPauserOverlap() public;
+```
+
+<a id="test_assertroleseparation_revertsonagentadminoverlap"></a>
+
+### test_assertRoleSeparation_revertsOnAgentAdminOverlap
+
+```solidity
+function test_assertRoleSeparation_revertsOnAgentAdminOverlap() public;
+```
+
+<a id="test_grantrole_unauthorizedcaller_reverts"></a>
+
+### test_grantRole_unauthorizedCaller_reverts
+
+```solidity
+function test_grantRole_unauthorizedCaller_reverts() public;
+```
+

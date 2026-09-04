@@ -1,0 +1,159 @@
+---
+title: "MockDeSPXAPool"
+---
+
+# MockDeSPXAPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RwaVault.t.sol)
+
+<i>
+
+Mock pool for addAsset() cardinality and liquidity gate checks.
+Chronicle (not pool TWAP) is used for pricing, so observe() is never
+called on hot paths. However addAsset() checks slot0.observationCardinality
+and pool.liquidity(), so we implement both.
+
+</i>
+
+## Constants
+
+### token0
+
+```solidity
+address public immutable token0;
+```
+
+### token1
+
+```solidity
+address public immutable token1;
+```
+
+## State Variables
+
+### cardinality
+
+```solidity
+uint16 public cardinality = 100;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address token0_, address token1_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token0_ | `address` |  |
+| token1_ | `address` |  |
+
+<a id="setcardinality-uint16"></a>
+
+### setCardinality
+
+```solidity
+function setCardinality(uint16 c) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `uint16` |  |
+
+<a id="slot0"></a>
+
+### slot0
+
+```solidity
+function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+| &lt;none&gt; | `int24` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint8` |  |
+| &lt;none&gt; | `bool` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+<i>
+
+observe() is not called by RwaVault (Chronicle is the price source),
+but it must not revert since BasketVault has no way to skip it.
+Return flat zero-tick cumulatives (tick=0 → 1:1 price ratio).
+
+</i>
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secondsAgos | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickCumulatives | `int56[]` |  |
+| secondsPerLiq | `uint160[]` |  |
+
+<a id="observations-uint256"></a>
+
+### observations
+
+```solidity
+function observations(uint256) external view returns (uint32, int56, uint160, bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint32` |  |
+| &lt;none&gt; | `int56` |  |
+| &lt;none&gt; | `uint160` |  |
+| &lt;none&gt; | `bool` |  |
+
+<a id="liquidity"></a>
+
+### liquidity
+
+```solidity
+function liquidity() external pure returns (uint128);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint128` |  |
+

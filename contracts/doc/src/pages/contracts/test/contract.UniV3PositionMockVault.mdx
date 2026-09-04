@@ -1,0 +1,131 @@
+---
+title: "UniV3PositionMockVault"
+---
+
+# UniV3PositionMockVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/UniswapV3AssetPositionAdapter.t.sol)
+
+<i>
+
+Minimal vault harness: answers `hasRole(ADMIN_ROLE, .)` for the adapter's
+onlyVaultAdmin setters and relays deploy/withdraw as the bound VAULT
+(msg.sender == this) after funding the adapter with USDC. TEST FIXTURE.
+
+</i>
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+## State Variables
+
+### _roles
+
+```solidity
+mapping(bytes32 => mapping(address => bool)) internal _roles;
+```
+
+## Functions
+
+<a id="grantrole-bytes32-address"></a>
+
+### grantRole
+
+```solidity
+function grantRole(bytes32 role, address account) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| account | `address` |  |
+
+<a id="hasrole-bytes32-address"></a>
+
+### hasRole
+
+```solidity
+function hasRole(bytes32 role, address account) external view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="calldeploy-uniswapv3assetpositionadapter-ierc20-uint256-uint256"></a>
+
+### callDeploy
+
+<i>
+
+Mirror the vault choreography: transfer USDC to the adapter first,
+then call deploy (spec §2.2, same as v1 `_allocateTo`).
+
+</i>
+
+```solidity
+function callDeploy(
+        UniswapV3AssetPositionAdapter adapter,
+        IERC20 usdc,
+        uint256 usdcIn,
+        uint256 minValueOut
+    ) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `UniswapV3AssetPositionAdapter` |  |
+| usdc | `IERC20` |  |
+| usdcIn | `uint256` |  |
+| minValueOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="callwithdraw-uniswapv3assetpositionadapter-uint256-uint256"></a>
+
+### callWithdraw
+
+```solidity
+function callWithdraw(
+        UniswapV3AssetPositionAdapter adapter,
+        uint256 usdcWanted,
+        uint256 minUsdcOut
+    ) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `UniswapV3AssetPositionAdapter` |  |
+| usdcWanted | `uint256` |  |
+| minUsdcOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

@@ -1,0 +1,309 @@
+---
+title: "DeployTest"
+description: "Note: adapter constructors only check for address(0) — they do NOT require the protocol contracts to have bytecode. The in-process test therefore succeeds even though AAVE_V3_POOL et al. are not deployed in the forge unit-test environment. Actual protocol interaction is tested by the fork regression suite (VaultForkRegressions.t.sol) and the fork-e2e-rust harness."
+---
+
+# DeployTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/Deploy.t.sol)
+
+**Inherits:** Test
+
+<i>
+
+Exercises the deploy script in-process and asserts the post-deploy
+invariants the operator and downstream tooling rely on (issue #10).
+The script deploys RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter
++ MorphoAdapter (issue #363) instead of MockVault.
+MockVault is retained only for its own unit
+tests.  The script always binds the gateway to an externally-supplied
+USDC token; this test deploys a `TestERC20` helper and passes its
+address in.  The smoke-test devnet does the same with the canonical
+Base USDC proxy seeded into genesis alloc (issue #255).
+
+</i>
+
+Note: adapter constructors only check for address(0) — they do NOT
+require the protocol contracts to have bytecode. The in-process test
+therefore succeeds even though AAVE_V3_POOL et al. are not deployed
+in the forge unit-test environment. Actual protocol interaction is
+tested by the fork regression suite (VaultForkRegressions.t.sol) and
+the fork-e2e-rust harness.
+
+## State Variables
+
+### script
+
+```solidity
+Deploy internal script;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("agent");
+```
+
+### shareReceiver
+
+```solidity
+address internal shareReceiver = makeAddr("shareReceiver");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_run"></a>
+
+### _run
+
+```solidity
+function _run() internal returns (Deploy.Deployed memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Deploy.Deployed` |  |
+
+<a id="test_deploy_wiresusdcvaultandadminpauserroles"></a>
+
+### test_deploy_wiresUsdcVaultAndAdminPauserRoles
+
+```solidity
+function test_deploy_wiresUsdcVaultAndAdminPauserRoles() public;
+```
+
+<a id="test_deploy_wiresthreedistinctrealadapteraddresses"></a>
+
+### test_deploy_wiresThreeDistinctRealAdapterAddresses
+
+The production deploy path wires exactly three DISTINCT real
+adapter addresses — no single-address aliasing. This is the
+regression guard for the removed test-only no-yield deploy hatch
+(issue #912), which used to alias all three typed adapter fields
+to one no-yield adapter instance. `runInProcessWith` shares the
+same `_doDeploy` adapter-construction code path as the broadcast
+`run()` entrypoint, so this exercises the `run()`-equivalent
+wiring.
+
+```solidity
+function test_deploy_wiresThreeDistinctRealAdapterAddresses() public;
+```
+
+<a id="test_deploy_authorizesagentwithsanepolicy"></a>
+
+### test_deploy_authorizesAgentWithSanePolicy
+
+```solidity
+function test_deploy_authorizesAgentWithSanePolicy() public;
+```
+
+<a id="test_deploy_doesnotminttoagent"></a>
+
+### test_deploy_doesNotMintToAgent
+
+```solidity
+function test_deploy_doesNotMintToAgent() public;
+```
+
+<a id="test_deploy_revertswhenusdcaddresszero"></a>
+
+### test_deploy_revertsWhenUsdcAddressZero
+
+```solidity
+function test_deploy_revertsWhenUsdcAddressZero() public;
+```
+
+<a id="test_deploy_revertswhenusdcaddresshasnocode"></a>
+
+### test_deploy_revertsWhenUsdcAddressHasNoCode
+
+```solidity
+function test_deploy_revertsWhenUsdcAddressHasNoCode() public;
+```
+
+<a id="test_deploy_grantingagentroletoadminreverts"></a>
+
+### test_deploy_grantingAgentRoleToAdminReverts
+
+```solidity
+function test_deploy_grantingAgentRoleToAdminReverts() public;
+```
+
+<a id="test_deploy_grantingagentroletopauserreverts"></a>
+
+### test_deploy_grantingAgentRoleToPauserReverts
+
+```solidity
+function test_deploy_grantingAgentRoleToPauserReverts() public;
+```
+
+<a id="test_deploy_revertswhenadminequalspauser"></a>
+
+### test_deploy_revertsWhenAdminEqualsPauser
+
+```solidity
+function test_deploy_revertsWhenAdminEqualsPauser() public;
+```
+
+<a id="test_deploy_revertswhenadminequalsagent"></a>
+
+### test_deploy_revertsWhenAdminEqualsAgent
+
+```solidity
+function test_deploy_revertsWhenAdminEqualsAgent() public;
+```
+
+<a id="test_deploy_revertswhenpauserequalsagent"></a>
+
+### test_deploy_revertsWhenPauserEqualsAgent
+
+```solidity
+function test_deploy_revertsWhenPauserEqualsAgent() public;
+```
+
+<a id="test_deploy_seeddepositamount_isoneusdc"></a>
+
+### test_deploy_seedDepositAmount_isOneUsdc
+
+SEED_DEPOSIT_AMOUNT constant equals 1 USDC (1_000_000 wei).
+This is a pure unit check — no protocol interaction required.
+The fork-level post-conditions are in DeploySeedDeposit.t.sol.
+TEMPORARY: was 1,000 USDC; see docs/future/review-usdc-seed.md.
+
+```solidity
+function test_deploy_seedDepositAmount_isOneUsdc() public view;
+```
+
+<a id="test_deploy_envdriven_runinprocesssucceeds"></a>
+
+### test_deploy_envDriven_runInProcessSucceeds
+
+```solidity
+function test_deploy_envDriven_runInProcessSucceeds() public;
+```
+
+<a id="_canonicaltickmath"></a>
+
+### _canonicalTickMath
+
+<i>
+
+The audited reference is the TickMath library linked into the test
+artifact set, which is identical to the one linked into the deploy
+scripts and the basket vaults (same compiled build). Using it as the
+reference — rather than a hardcoded codehash — keeps the assertion
+robust across compiler/metadata variance while still detecting a
+mislink (a vault pointing at a different address or empty code).
+
+</i>
+
+```solidity
+function _canonicalTickMath() internal pure returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_deploybasketvault"></a>
+
+### _deployBasketVault
+
+<i>
+
+Deploy a representative basket-family vault (uses the TickMath link)
+with no real swap router; totalAssets() with an empty basket returns
+the vault's USDC balance and never touches TickMath, so it is a
+non-reverting in-range probe.
+
+</i>
+
+```solidity
+function _deployBasketVault() internal returns (BasketVault);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVault` |  |
+
+<a id="test_tickmathlink_codehashmatchesaudited_andtotalassetsinrange"></a>
+
+### test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange
+
+The basket vault's linked TickMath library is the canonical
+instance (non-zero, has code, same address + codehash as the
+artifact's `TickMath`), and totalAssets() is non-reverting and in
+range. Positive arm of the deploy-time assertion.
+
+```solidity
+function test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange() public;
+```
+
+<a id="test_tickmathlink_deployassertscanonicallibrary"></a>
+
+### test_tickMathLink_deployAssertsCanonicalLibrary
+
+The Deploy.s.sol deploy path asserts the linked TickMath is
+present: a successful in-process deploy implies the link-sanity
+check inside _doDeploy passed.
+
+```solidity
+function test_tickMathLink_deployAssertsCanonicalLibrary() public;
+```
+
+<a id="test_tickmathlink_wrongorzeroaddressfailscodehashcheck"></a>
+
+### test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck
+
+A deliberately wrong (and a zero) linked-library address fails the
+same codehash check the deploy assertion enforces. Proves the
+assertion is not vacuous — a mislinked library does not pass.
+
+```solidity
+function test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck() public;
+```
+
+<a id="test_tickmathlink_deployassertionrevertsonmislink"></a>
+
+### test_tickMathLink_deployAssertionRevertsOnMislink
+
+The actual DeployDemoExtraVaults TickMath link-integrity assertion
+reverts when a vault links a zero (no-code) or wrong (non-TickMath)
+library — proving the deploy assertion fails closed on mislink.
+
+```solidity
+function test_tickMathLink_deployAssertionRevertsOnMislink() public;
+```
+

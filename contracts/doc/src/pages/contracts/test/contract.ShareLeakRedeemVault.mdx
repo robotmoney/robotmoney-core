@@ -1,0 +1,62 @@
+---
+title: "ShareLeakRedeemVault"
+---
+
+# ShareLeakRedeemVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RobotMoneyGateway.t.sol)
+
+**Inherits:** [MockVault](/contracts/gateway/contract.MockVault)
+
+<i>
+
+Vault that, during redeem, re-mints 1 share to the caller after
+burning the redeemed shares. The gateway must hold zero shares after
+redeem; re-minting 1 trips the ShareCustodyInvariantViolated check.
+
+</i>
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address asset_) MockVault(asset_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `address` |  |
+
+<a id="redeem-uint256-address-address"></a>
+
+### redeem
+
+ERC-4626-style redeem. Burns `shares` from `owner` and
+transfers `assets == shares` USDC (1:1, no exit fee) to `receiver`.
+
+```solidity
+function redeem(uint256 shares, address receiver, address owner)
+        external
+        override
+        returns (uint256 assets);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Amount of `rmUSDC` shares to burn. |
+| receiver | `address` | Recipient of the redeemed USDC. |
+| owner | `address` | Share owner whose balance is debited. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` | Amount of USDC transferred (== shares, 1:1). |
+

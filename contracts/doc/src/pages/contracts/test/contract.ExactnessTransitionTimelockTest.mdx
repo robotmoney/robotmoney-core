@@ -1,0 +1,114 @@
+---
+title: "ExactnessTransitionTimelockTest"
+---
+
+# ExactnessTransitionTimelockTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/ExactnessAttestation.t.sol)
+
+**Inherits:** [ExactnessBase](/contracts/test/abstract.ExactnessBase)
+
+## State Variables
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="_newinexact"></a>
+
+### _newInexact
+
+```solidity
+function _newInexact() internal returns (SelfReportLiarAdapter a);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `SelfReportLiarAdapter` |  |
+
+<a id="test_sameclassexactadd_needsnoarm_staysallexact"></a>
+
+### test_sameClassExactAdd_needsNoArm_staysAllExact
+
+A same-class add (a second EXACT adapter to an all-exact vault)
+needs no arm, keeps `allExact()` true, and fires no transition.
+
+```solidity
+function test_sameClassExactAdd_needsNoArm_staysAllExact() public;
+```
+
+<a id="test_firstinexactadd_revertswithoutarm"></a>
+
+### test_firstInexactAdd_revertsWithoutArm
+
+Adding the first inexact adapter to an operating all-exact vault
+reverts when the transition was never armed.
+
+```solidity
+function test_firstInexactAdd_revertsWithoutArm() public;
+```
+
+<a id="test_firstinexactadd_revertsbeforedelayelapses"></a>
+
+### test_firstInexactAdd_revertsBeforeDelayElapses
+
+Even once armed, the flip reverts until `EXACTNESS_TRANSITION_DELAY`
+has elapsed.
+
+```solidity
+function test_firstInexactAdd_revertsBeforeDelayElapses() public;
+```
+
+<a id="test_firstinexactadd_succeedsafterdelay_emitsevent_flipsallexact"></a>
+
+### test_firstInexactAdd_succeedsAfterDelay_emitsEvent_flipsAllExact
+
+After the delay elapses the flip lands: it emits
+`ExactnessTransition(true, false, adapter)`, flips `allExact()`
+to false, and the registry-visible flag mirrors the new class.
+
+```solidity
+function test_firstInexactAdd_succeedsAfterDelay_emitsEvent_flipsAllExact() public;
+```
+
+<a id="test_registryvisibleflag_matchesvaultallexact"></a>
+
+### test_registryVisibleFlag_matchesVaultAllExact
+
+The registry-visible flag tracks the vault's live class before and
+after the flip (read-through, so it can never drift).
+
+```solidity
+function test_registryVisibleFlag_matchesVaultAllExact() public;
+```
+
+## Events
+
+### ExactnessTransition
+
+```solidity
+event ExactnessTransition(bool wasAllExact, bool nowAllExact, address indexed adapter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| wasAllExact | `bool` |  |
+| nowAllExact | `bool` |  |
+| adapter | `address` |  |
+

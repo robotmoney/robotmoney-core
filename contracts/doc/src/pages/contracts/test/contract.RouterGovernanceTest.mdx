@@ -1,0 +1,925 @@
+---
+title: "RouterGovernanceTest"
+---
+
+# RouterGovernanceTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RouterGovernance.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### VOTING_PERIOD
+
+```solidity
+uint64 constant VOTING_PERIOD = 1 days;
+```
+
+### EXECUTION_DELAY
+
+```solidity
+uint64 constant EXECUTION_DELAY = 1 days;
+```
+
+### QUORUM_THRESHOLD
+
+```solidity
+uint256 constant QUORUM_THRESHOLD = 510_000e18;
+```
+
+### ALICE_POWER
+
+```solidity
+uint256 constant ALICE_POWER = 600_000e18;
+```
+
+### BOB_POWER
+
+```solidity
+uint256 constant BOB_POWER = 200_000e18;
+```
+
+### CAROL_POWER
+
+```solidity
+uint256 constant CAROL_POWER = 200_000e18;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+MockUsdc internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
+
+### govAdmin
+
+```solidity
+address internal govAdmin = makeAddr("govAdmin");
+```
+
+### routerAdmin
+
+```solidity
+address internal routerAdmin = makeAddr("routerAdmin");
+```
+
+### registryAdmin
+
+```solidity
+address internal registryAdmin = makeAddr("registryAdmin");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### carol
+
+```solidity
+address internal carol = makeAddr("carol");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### vaultA
+
+```solidity
+MockGovVault internal vaultA;
+```
+
+### vaultB
+
+```solidity
+MockGovVault internal vaultB;
+```
+
+### metaA
+
+```solidity
+VaultRegistry.VaultMetadata internal metaA;
+```
+
+### metaB
+
+```solidity
+VaultRegistry.VaultMetadata internal metaB;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_proposevalid"></a>
+
+### _proposeValid
+
+<i>
+
+Build a valid 60/40 proposal and submit it from govAdmin.
+
+</i>
+
+```solidity
+function _proposeValid() internal returns (uint256 proposalId);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proposalId | `uint256` |  |
+
+<a id="test_constructor_revertsonzerorouter"></a>
+
+### test_constructor_revertsOnZeroRouter
+
+```solidity
+function test_constructor_revertsOnZeroRouter() public;
+```
+
+<a id="test_constructor_revertsonzeroadmin"></a>
+
+### test_constructor_revertsOnZeroAdmin
+
+```solidity
+function test_constructor_revertsOnZeroAdmin() public;
+```
+
+<a id="test_constructor_storesparams"></a>
+
+### test_constructor_storesParams
+
+```solidity
+function test_constructor_storesParams() public view;
+```
+
+<a id="test_constructor_adminrolegranted"></a>
+
+### test_constructor_adminRoleGranted
+
+```solidity
+function test_constructor_adminRoleGranted() public view;
+```
+
+<a id="test_setvotingpower_setsandtrackstotal"></a>
+
+### test_setVotingPower_setsAndTracksTotal
+
+```solidity
+function test_setVotingPower_setsAndTracksTotal() public view;
+```
+
+<a id="test_setvotingpower_revertsonzeroaddress"></a>
+
+### test_setVotingPower_revertsOnZeroAddress
+
+```solidity
+function test_setVotingPower_revertsOnZeroAddress() public;
+```
+
+<a id="test_setvotingpower_revertsfornonadmin"></a>
+
+### test_setVotingPower_revertsForNonAdmin
+
+```solidity
+function test_setVotingPower_revertsForNonAdmin() public;
+```
+
+<a id="test_propose_successfulcreation"></a>
+
+### test_propose_successfulCreation
+
+```solidity
+function test_propose_successfulCreation() public;
+```
+
+<a id="test_propose_emitsproposalcreated"></a>
+
+### test_propose_emitsProposalCreated
+
+```solidity
+function test_propose_emitsProposalCreated() public;
+```
+
+<a id="test_propose_revertsfornonadmin"></a>
+
+### test_propose_revertsForNonAdmin
+
+```solidity
+function test_propose_revertsForNonAdmin() public;
+```
+
+<a id="test_propose_revertsoninvalidweightsum"></a>
+
+### test_propose_revertsOnInvalidWeightSum
+
+```solidity
+function test_propose_revertsOnInvalidWeightSum() public;
+```
+
+<a id="test_propose_revertsonlengthmismatch"></a>
+
+### test_propose_revertsOnLengthMismatch
+
+```solidity
+function test_propose_revertsOnLengthMismatch() public;
+```
+
+<a id="test_propose_revertsifalreadyactive"></a>
+
+### test_propose_revertsIfAlreadyActive
+
+```solidity
+function test_propose_revertsIfAlreadyActive() public;
+```
+
+<a id="test_propose_revertsonzeroaddressvault"></a>
+
+### test_propose_revertsOnZeroAddressVault
+
+propose() with address(0) in the vault list reverts naming address(0).
+AC: forge test: propose() with address(0) in the vault list reverts naming address(0)
+
+```solidity
+function test_propose_revertsOnZeroAddressVault() public;
+```
+
+<a id="test_propose_revertsonunregisteredvault"></a>
+
+### test_propose_revertsOnUnregisteredVault
+
+propose() with a vault not in VaultRegistry reverts naming that vault.
+AC: forge test: propose() with an unregistered vault reverts naming the vault address
+
+```solidity
+function test_propose_revertsOnUnregisteredVault() public;
+```
+
+<a id="test_propose_revertsonineligiblevault"></a>
+
+### test_propose_revertsOnIneligibleVault
+
+propose() with a vault that was registered then had eligibility revoked reverts at propose time.
+AC: forge test: register then revoke eligibility for a vault; call propose() with it; assert revert
+
+```solidity
+function test_propose_revertsOnIneligibleVault() public;
+```
+
+<a id="test_propose_revertsonpausedvault"></a>
+
+### test_propose_revertsOnPausedVault
+
+propose() with a vault that was Paused (transient registry
+status) reverts VaultNotEligible naming that vault. This is the
+contract-side of the #1248 draft-worker fallback: the worker
+re-checks isRouterEligibleAndActive at draft time precisely
+because a vault Active at receipt time may be Paused by then and
+propose() would revert on exactly this vault.
+AC: forge test: pause a vault; propose() with it reverts VaultNotEligible
+
+```solidity
+function test_propose_revertsOnPausedVault() public;
+```
+
+<a id="test_propose_alleligiblevaultssucceedsactive"></a>
+
+### test_propose_allEligibleVaultsSucceedsActive
+
+propose() with all eligible vaults succeeds and transitions proposal to Active state.
+AC: forge test: propose() with all eligible vaults; assert proposal Active and no revert
+
+```solidity
+function test_propose_allEligibleVaultsSucceedsActive() public;
+```
+
+<a id="test_propose_allowsnewproposalafterdefeated"></a>
+
+### test_propose_allowsNewProposalAfterDefeated
+
+```solidity
+function test_propose_allowsNewProposalAfterDefeated() public;
+```
+
+<a id="test_propose_snapshotsvotesnapshot"></a>
+
+### test_propose_snapshotsVoteSnapshot
+
+propose() stores the creation block number as voteSnapshot.
+
+```solidity
+function test_propose_snapshotsVoteSnapshot() public;
+```
+
+<a id="test_vote_usessnapshotpowernotlive"></a>
+
+### test_vote_usesSnapshotPowerNotLive
+
+vote() reads checkpointed power at the snapshot block, not live
+votingPower: reducing Alice's power to 0 after propose() does not
+stop her from voting with her snapshot power.
+
+```solidity
+function test_vote_usesSnapshotPowerNotLive() public;
+```
+
+<a id="test_vote_midproposalpowerchangedoesnotaffectcastvotes"></a>
+
+### test_vote_midProposalPowerChangeDoesNotAffectCastVotes
+
+Mid-proposal voting power changes do not retroactively affect
+already-cast votes. Alice votes with 600k power at vote time,
+then admin reduces Alice to 0 — her vote weight is preserved.
+
+```solidity
+function test_vote_midProposalPowerChangeDoesNotAffectCastVotes() public;
+```
+
+<a id="test_vote_revertsifpowergrantedafterproposal"></a>
+
+### test_vote_revertsIfPowerGrantedAfterProposal
+
+Granting voting power after a proposal is created does not let
+the new voter affect that proposal — the checkpoint lookup at the
+snapshot block returns 0 for newly-empowered addresses.
+
+```solidity
+function test_vote_revertsIfPowerGrantedAfterProposal() public;
+```
+
+<a id="test_getpastvotes_returnshistoricalpower"></a>
+
+### test_getPastVotes_returnsHistoricalPower
+
+getPastVotes returns the historical checkpoint value, not the
+latest assignment.
+
+```solidity
+function test_getPastVotes_returnsHistoricalPower() public;
+```
+
+<a id="test_getpastvotes_300blocksinpastdoesnotrevert"></a>
+
+### test_getPastVotes_300BlocksInPastDoesNotRevert
+
+getPastVotes for a snapshot 300 blocks in the past does not
+revert (AZ-GOV-1). The old 256-block cap would revert here.
+
+```solidity
+function test_getPastVotes_300BlocksInPastDoesNotRevert() public;
+```
+
+<a id="test_getpastvotes_1800blocksinpastdoesnotrevert"></a>
+
+### test_getPastVotes_1800BlocksInPastDoesNotRevert
+
+getPastVotes for a snapshot 1800 blocks in the past (beyond
+MIN_VOTING_PERIOD on a 2s L2) does not revert (AZ-GOV-1).
+
+```solidity
+function test_getPastVotes_1800BlocksInPastDoesNotRevert() public;
+```
+
+<a id="test_getpastvotes_revertswhentooold"></a>
+
+### test_getPastVotes_revertsWhenTooOld
+
+getPastVotes for a snapshot more than MAX_HISTORY_BLOCKS behind
+the tip reverts with CheckpointTooOld.
+
+```solidity
+function test_getPastVotes_revertsWhenTooOld() public;
+```
+
+<a id="test_vote_success"></a>
+
+### test_vote_success
+
+```solidity
+function test_vote_success() public;
+```
+
+<a id="test_vote_emitsvotecast"></a>
+
+### test_vote_emitsVoteCast
+
+```solidity
+function test_vote_emitsVoteCast() public;
+```
+
+<a id="test_vote_revertsondoublevote"></a>
+
+### test_vote_revertsOnDoubleVote
+
+```solidity
+function test_vote_revertsOnDoubleVote() public;
+```
+
+<a id="test_vote_revertsaftervotingperiod"></a>
+
+### test_vote_revertsAfterVotingPeriod
+
+```solidity
+function test_vote_revertsAfterVotingPeriod() public;
+```
+
+<a id="test_vote_revertsonnonexistentproposal"></a>
+
+### test_vote_revertsOnNonExistentProposal
+
+```solidity
+function test_vote_revertsOnNonExistentProposal() public;
+```
+
+<a id="test_vote_revertsifnovotingpower"></a>
+
+### test_vote_revertsIfNoVotingPower
+
+```solidity
+function test_vote_revertsIfNoVotingPower() public;
+```
+
+<a id="test_vote_multiplevotersaccumulate"></a>
+
+### test_vote_multipleVotersAccumulate
+
+```solidity
+function test_vote_multipleVotersAccumulate() public;
+```
+
+<a id="test_proposalstate_activebeforevotingdeadline"></a>
+
+### test_proposalState_activeBeforeVotingDeadline
+
+```solidity
+function test_proposalState_activeBeforeVotingDeadline() public;
+```
+
+<a id="test_proposalstate_defeatedwhennoquorum"></a>
+
+### test_proposalState_defeatedWhenNoQuorum
+
+```solidity
+function test_proposalState_defeatedWhenNoQuorum() public;
+```
+
+<a id="test_proposalstate_queuedwhenquorumreached"></a>
+
+### test_proposalState_queuedWhenQuorumReached
+
+```solidity
+function test_proposalState_queuedWhenQuorumReached() public;
+```
+
+<a id="test_proposalstate_executedafterexecution"></a>
+
+### test_proposalState_executedAfterExecution
+
+```solidity
+function test_proposalState_executedAfterExecution() public;
+```
+
+<a id="test_proposalstate_revertsonnonexistent"></a>
+
+### test_proposalState_revertsOnNonExistent
+
+```solidity
+function test_proposalState_revertsOnNonExistent() public;
+```
+
+<a id="test_execute_success"></a>
+
+### test_execute_success
+
+```solidity
+function test_execute_success() public;
+```
+
+<a id="test_execute_emitsproposalexecuted"></a>
+
+### test_execute_emitsProposalExecuted
+
+```solidity
+function test_execute_emitsProposalExecuted() public;
+```
+
+<a id="test_execute_revertsbeforevotingends"></a>
+
+### test_execute_revertsBeforeVotingEnds
+
+```solidity
+function test_execute_revertsBeforeVotingEnds() public;
+```
+
+<a id="test_execute_revertsbeforeexecutiondelay"></a>
+
+### test_execute_revertsBeforeExecutionDelay
+
+```solidity
+function test_execute_revertsBeforeExecutionDelay() public;
+```
+
+<a id="test_execute_revertsifquorumnotreached"></a>
+
+### test_execute_revertsIfQuorumNotReached
+
+```solidity
+function test_execute_revertsIfQuorumNotReached() public;
+```
+
+<a id="test_execute_revertsifalreadyexecuted"></a>
+
+### test_execute_revertsIfAlreadyExecuted
+
+```solidity
+function test_execute_revertsIfAlreadyExecuted() public;
+```
+
+<a id="test_cadenceparams_returnsstoredvalues"></a>
+
+### test_cadenceParams_returnsStoredValues
+
+```solidity
+function test_cadenceParams_returnsStoredValues() public view;
+```
+
+<a id="test_currentweights_returnsrouterweights"></a>
+
+### test_currentWeights_returnsRouterWeights
+
+```solidity
+function test_currentWeights_returnsRouterWeights() public;
+```
+
+<a id="test_hasvoted_tracksvoterstate"></a>
+
+### test_hasVoted_tracksVoterState
+
+```solidity
+function test_hasVoted_tracksVoterState() public;
+```
+
+<a id="test_fullgovernanceroundtrip"></a>
+
+### test_fullGovernanceRoundTrip
+
+```solidity
+function test_fullGovernanceRoundTrip() public;
+```
+
+<a id="_defaultvectors"></a>
+
+### _defaultVectors
+
+<i>
+
+Build a valid default 70/30 vector over the two eligible vaults.
+
+</i>
+
+```solidity
+function _defaultVectors()
+        internal
+        view
+        returns (address[] memory vaults, uint256[] memory bps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+
+<a id="test_setdefaultweights_admin_only"></a>
+
+### test_setDefaultWeights_admin_only
+
+setDefaultWeights is gated by ADMIN_ROLE on governance; a
+non-admin caller reverts, and the admin path forwards to the
+router and updates `getDefaultWeights`.
+
+```solidity
+function test_setDefaultWeights_admin_only() public;
+```
+
+<a id="test_setdefaultweights_rejects_bad_sum"></a>
+
+### test_setDefaultWeights_rejects_bad_sum
+
+A default vector whose bps do not sum to 10 000 reverts.
+
+```solidity
+function test_setDefaultWeights_rejects_bad_sum() public;
+```
+
+<a id="test_setdefaultweights_rejects_length_mismatch"></a>
+
+### test_setDefaultWeights_rejects_length_mismatch
+
+A default vector whose length does not match the registry's
+router-eligible vault count reverts.
+
+```solidity
+function test_setDefaultWeights_rejects_length_mismatch() public;
+```
+
+<a id="test_constructor_revertsonzeroquorumthreshold"></a>
+
+### test_constructor_revertsOnZeroQuorumThreshold
+
+Deploying with quorumThreshold = 0 must revert.
+
+```solidity
+function test_constructor_revertsOnZeroQuorumThreshold() public;
+```
+
+<a id="test_constructor_revertsonvotingperiodbelowmin"></a>
+
+### test_constructor_revertsOnVotingPeriodBelowMin
+
+Deploying with votingPeriod below MIN_VOTING_PERIOD must revert.
+
+```solidity
+function test_constructor_revertsOnVotingPeriodBelowMin() public;
+```
+
+<a id="test_constructor_validfloorargumentssucceed"></a>
+
+### test_constructor_validFloorArgumentsSucceed
+
+Deploying with quorumThreshold = 1, votingPeriod = MIN_VOTING_PERIOD,
+and executionDelay = MIN_EXECUTION_DELAY succeeds.
+
+```solidity
+function test_constructor_validFloorArgumentsSucceed() public;
+```
+
+<a id="test_setquorumthreshold_revertsonzero"></a>
+
+### test_setQuorumThreshold_revertsOnZero
+
+setQuorumThreshold(0) must revert with QuorumBelowMinimum.
+
+```solidity
+function test_setQuorumThreshold_revertsOnZero() public;
+```
+
+<a id="test_setvotingperiod_revertsonbelowmin"></a>
+
+### test_setVotingPeriod_revertsOnBelowMin
+
+setVotingPeriod(MIN_VOTING_PERIOD - 1) must revert with VotingPeriodBelowMinimum.
+
+```solidity
+function test_setVotingPeriod_revertsOnBelowMin() public;
+```
+
+<a id="test_constructor_revertsonexecutiondelaybelowmin"></a>
+
+### test_constructor_revertsOnExecutionDelayBelowMin
+
+Deploying with executionDelay below MIN_EXECUTION_DELAY must revert.
+
+```solidity
+function test_constructor_revertsOnExecutionDelayBelowMin() public;
+```
+
+<a id="test_setexecutiondelay_revertsonbelowmin"></a>
+
+### test_setExecutionDelay_revertsOnBelowMin
+
+setExecutionDelay(MIN_EXECUTION_DELAY - 1) must revert with ExecutionDelayBelowMinimum.
+
+```solidity
+function test_setExecutionDelay_revertsOnBelowMin() public;
+```
+
+<a id="test_setexecutiondelay_succeedswithmindelay"></a>
+
+### test_setExecutionDelay_succeedsWithMinDelay
+
+setExecutionDelay with MIN_EXECUTION_DELAY succeeds.
+
+```solidity
+function test_setExecutionDelay_succeedsWithMinDelay() public;
+```
+
+<a id="test_zerovoteexploitsequenceblocked"></a>
+
+### test_zeroVoteExploitSequenceBlocked
+
+With quorumThreshold=1 a single actor cannot
+execute with 0 votes — execute() must revert because quorum is not
+reached (0 votes &lt; 1 required).
+
+```solidity
+function test_zeroVoteExploitSequenceBlocked() public;
+```
+
+<a id="test_snapshotquorum_loweringthresholddoesnotrevivedefeated"></a>
+
+### test_snapshotQuorum_loweringThresholdDoesNotReviveDefeated
+
+Lowering quorumThreshold after a proposal's voting deadline must
+not retroactively change a Defeated proposal to Queued.
+AC: forge test: lowering quorumThreshold after a proposal's voting deadline
+does not change the proposal's state from Defeated to Queued.
+
+```solidity
+function test_snapshotQuorum_loweringThresholdDoesNotReviveDefeated() public;
+```
+
+<a id="test_snapshotquorum_raisingthresholddoesnotdefeatqueued"></a>
+
+### test_snapshotQuorum_raisingThresholdDoesNotDefeatQueued
+
+Raising quorumThreshold while a proposal is Active must not
+retroactively force it to Defeated once voting ends.
+AC: forge test: raising quorumThreshold while a proposal is Active does
+not force the proposal to Defeated.
+
+```solidity
+function test_snapshotQuorum_raisingThresholdDoesNotDefeatQueued() public;
+```
+
+<a id="test_snapshotquorum_capturedatproposetime"></a>
+
+### test_snapshotQuorum_capturedAtProposeTime
+
+p.snapshotQuorum must equal quorumThreshold at the time propose()
+was called, even if quorumThreshold changes afterward.
+AC: forge test: p.snapshotQuorum equals quorumThreshold at the time
+propose() was called.
+
+```solidity
+function test_snapshotQuorum_capturedAtProposeTime() public;
+```
+
+<a id="test_snapshotquorum_twoproposalsindependentsnapshots"></a>
+
+### test_snapshotQuorum_twoProposalsIndependentSnapshots
+
+Two sequential proposals each capture their own quorumThreshold
+snapshot independently.
+AC: forge test: two sequential proposals each use their own snapshot value
+even when quorumThreshold changes between them.
+
+```solidity
+function test_snapshotQuorum_twoProposalsIndependentSnapshots() public;
+```
+
+<a id="test_cancel_admincancelsqueuedproposal"></a>
+
+### test_cancel_adminCancelsQueuedProposal
+
+ADMIN_ROLE can cancel a Queued proposal; state transitions to
+Cancelled and ProposalCancelled event is emitted.
+
+```solidity
+function test_cancel_adminCancelsQueuedProposal() public;
+```
+
+<a id="test_cancel_admincancelsactiveproposal"></a>
+
+### test_cancel_adminCancelsActiveProposal
+
+ADMIN_ROLE can cancel an Active proposal.
+
+```solidity
+function test_cancel_adminCancelsActiveProposal() public;
+```
+
+<a id="test_cancel_revertsfornonadmin"></a>
+
+### test_cancel_revertsForNonAdmin
+
+Non-ADMIN_ROLE cancel() call reverts with AccessControl error.
+
+```solidity
+function test_cancel_revertsForNonAdmin() public;
+```
+
+<a id="test_cancel_revertsonnonexistentproposal"></a>
+
+### test_cancel_revertsOnNonExistentProposal
+
+cancel() on a non-existent proposal reverts with NoActiveProposal.
+
+```solidity
+function test_cancel_revertsOnNonExistentProposal() public;
+```
+
+<a id="test_cancel_revertsonalreadyexecuted"></a>
+
+### test_cancel_revertsOnAlreadyExecuted
+
+cancel() on an already-executed proposal reverts with ProposalAlreadyExecuted.
+
+```solidity
+function test_cancel_revertsOnAlreadyExecuted() public;
+```
+
+<a id="test_cancel_revertsonalreadycancelled"></a>
+
+### test_cancel_revertsOnAlreadyCancelled
+
+cancel() on an already-cancelled proposal reverts with ProposalAlreadyCancelled.
+
+```solidity
+function test_cancel_revertsOnAlreadyCancelled() public;
+```
+
+<a id="test_cancel_allowsnewproposalaftercancelled"></a>
+
+### test_cancel_allowsNewProposalAfterCancelled
+
+A new proposal can be created immediately after prior proposal is cancelled.
+
+```solidity
+function test_cancel_allowsNewProposalAfterCancelled() public;
+```
+
+<a id="test_execute_revertsifcancelled"></a>
+
+### test_execute_revertsIfCancelled
+
+execute() on a Cancelled proposal reverts with ProposalIsCancelled.
+
+```solidity
+function test_execute_revertsIfCancelled() public;
+```
+
+<a id="test_cancel_deadlockrecovery"></a>
+
+### test_cancel_deadlockRecovery
+
+Governance deadlock recovery: vault loses router eligibility after
+proposal is Queued, cancel() unblocks propose() with valid vaults.
+
+```solidity
+function test_cancel_deadlockRecovery() public;
+```
+
+<a id="test_clearvotedweights_revertstodefault"></a>
+
+### test_clearVotedWeights_revertsToDefault
+
+clearVotedWeights forwards to the router and reverts routing to
+the default vector while leaving defaultWeights untouched.
+
+```solidity
+function test_clearVotedWeights_revertsToDefault() public;
+```
+
+<a id="test_lastadminfloor_governance_cannotdropsoleadmin"></a>
+
+### test_lastAdminFloor_governance_cannotDropSoleAdmin
+
+The sole ADMIN_ROLE holder on RouterGovernance cannot renounce or
+revoke itself to zero admins (LastAdminFloor); after a second
+admin is granted, the original can be dropped.
+
+```solidity
+function test_lastAdminFloor_governance_cannotDropSoleAdmin() public;
+```
+

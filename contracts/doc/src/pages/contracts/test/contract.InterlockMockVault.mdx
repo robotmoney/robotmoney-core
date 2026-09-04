@@ -1,0 +1,82 @@
+---
+title: "InterlockMockVault"
+description: "Minimal ERC-4626-shaped vault mock exposing `asset()` = USDC, which is all the router needs to accept it into a weight vector."
+---
+
+# InterlockMockVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/EligibilityWeightsInterlock.t.sol)
+
+**Inherits:** ERC20
+
+Minimal ERC-4626-shaped vault mock exposing `asset()` = USDC, which
+is all the router needs to accept it into a weight vector.
+
+## Constants
+
+### assetToken
+
+```solidity
+IERC20 public immutable assetToken;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address asset_) ERC20("Mock Vault Shares", "MVS");
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `address` |  |
+
+<a id="decimals"></a>
+
+### decimals
+
+<i>
+
+Returns the number of decimals used to get its user representation.
+For example, if `decimals` equals `2`, a balance of `505` tokens should
+be displayed to a user as `5.05` (`505 / 10 ** 2`).
+
+Tokens usually opt for a value of 18, imitating the relationship between
+Ether and Wei. This is the default value returned by this function, unless
+it's overridden.
+
+NOTE: This information is only used for _display_ purposes: it in
+no way affects any of the arithmetic of the contract, including
+`IERC20` and `IERC20`.
+
+</i>
+
+```solidity
+function decimals() public pure override returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="asset"></a>
+
+### asset
+
+```solidity
+function asset() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

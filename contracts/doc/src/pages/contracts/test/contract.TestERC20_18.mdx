@@ -1,0 +1,94 @@
+---
+title: "TestERC20_18"
+---
+
+# TestERC20_18
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RwaVault.t.sol)
+
+**Inherits:** ERC20
+
+<i>
+
+18-decimal ERC-20 test token. Mirrors real deSPXA decimals.
+deSPXA (and most Centrifuge RWA tokens) use 18 decimals on Base.
+
+</i>
+
+## Functions
+
+<a id="constructor-string-string"></a>
+
+### constructor
+
+```solidity
+constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name_ | `string` |  |
+| symbol_ | `string` |  |
+
+<a id="decimals"></a>
+
+### decimals
+
+<i>
+
+Returns the number of decimals used to get its user representation.
+For example, if `decimals` equals `2`, a balance of `505` tokens should
+be displayed to a user as `5.05` (`505 / 10 ** 2`).
+
+Tokens usually opt for a value of 18, imitating the relationship between
+Ether and Wei. This is the default value returned by this function, unless
+it's overridden.
+
+NOTE: This information is only used for _display_ purposes: it in
+no way affects any of the arithmetic of the contract, including
+`IERC20` and `IERC20`.
+
+</i>
+
+```solidity
+function decimals() public pure override returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="mint-address-uint256"></a>
+
+### mint
+
+```solidity
+function mint(address to, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="burn-address-uint256"></a>
+
+### burn
+
+```solidity
+function burn(address from, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| amount | `uint256` |  |
+

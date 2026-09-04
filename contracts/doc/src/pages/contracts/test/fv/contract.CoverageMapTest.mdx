@@ -1,0 +1,197 @@
+---
+title: "CoverageMapTest"
+---
+
+# CoverageMapTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/fv/CoverageMap.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### SPEC
+
+```solidity
+string internal constant SPEC = "docs/technical/smart-contract-invariants.md";
+```
+
+### HEADING
+
+<i>
+
+Heading marker that precedes every invariant ID in the spec.
+
+</i>
+
+```solidity
+bytes internal constant HEADING = bytes("> **`");
+```
+
+## Functions
+
+<a id="test_specandregistryareinbijection"></a>
+
+### test_specAndRegistryAreInBijection
+
+AC1: every invariant ID in the spec has exactly one registry entry,
+and every registry entry corresponds to a spec ID. Fails CI if the
+two sets diverge in either direction.
+
+```solidity
+function test_specAndRegistryAreInBijection() public view;
+```
+
+<a id="test_everyredentrynamesremediationissue"></a>
+
+### test_everyRedEntryNamesRemediationIssue
+
+Every RED registry entry names a remediation issue; every HOLDS
+entry has none. Guards the invariant that an expected-fail test can
+always tell its downstream issue which test to flip green.
+
+```solidity
+function test_everyRedEntryNamesRemediationIssue() public pure;
+```
+
+<a id="test_negativefixture_unmappedspecidisdetected"></a>
+
+### test_negativeFixture_unmappedSpecIdIsDetected
+
+Proves the coverage gate actually bites: an ID that exists in a
+(simulated) spec but NOT in the registry must be reported as
+unmapped. We feed the parser a synthetic spec fragment containing a
+never-registered ID and assert the registry does not cover it — the
+exact failure mode test_specAndRegistryAreInBijection would raise.
+
+```solidity
+function test_negativeFixture_unmappedSpecIdIsDetected() public pure;
+```
+
+<a id="_parsespecids-string"></a>
+
+### _parseSpecIds
+
+<i>
+
+Extract every invariant ID that starts a `> **\`ID\`` heading line.
+Scans for the HEADING marker and reads the run of characters up to the
+closing backtick. Returns IDs in document order (no dedup — duplicates
+would be a spec bug the cardinality check then surfaces).
+
+</i>
+
+```solidity
+function _parseSpecIds(string memory spec) internal pure returns (string[] memory ids);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spec | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `string[]` |  |
+
+<a id="_isinvariantid-bytes"></a>
+
+### _isInvariantId
+
+<i>
+
+True for IDs of the shape LETTERS "-" DIGITS (e.g. "INV-1", "ORA-7").
+Rejects the spec's literal `ID` placeholder and any other non-ID
+backtick heading.
+
+</i>
+
+```solidity
+function _isInvariantId(bytes memory id) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_matchesat-bytes-bytes-uint256"></a>
+
+### _matchesAt
+
+```solidity
+function _matchesAt(bytes memory hay, bytes memory needle, uint256 at)
+        internal
+        pure
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hay | `bytes` |  |
+| needle | `bytes` |  |
+| at | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_registryhas-invariantregistry-entry-string"></a>
+
+### _registryHas
+
+```solidity
+function _registryHas(InvariantRegistry.Entry[] memory reg, string memory id)
+        internal
+        pure
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reg | `InvariantRegistry.Entry[]` |  |
+| id | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_arrayhas-string-string"></a>
+
+### _arrayHas
+
+```solidity
+function _arrayHas(string[] memory arr, string memory id) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| arr | `string[]` |  |
+| id | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+

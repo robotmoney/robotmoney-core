@@ -1,0 +1,106 @@
+---
+title: "DeSpxaFreezeSafeTest"
+---
+
+# DeSpxaFreezeSafeTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeSpxaAssetPositionAdapter.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### token
+
+```solidity
+DeSpxaFreezableToken18 internal token;
+```
+
+### chronicle
+
+```solidity
+DeSpxaPositionMockChronicle internal chronicle;
+```
+
+### venue
+
+```solidity
+DeSpxaFreezeMockVenue internal venue;
+```
+
+### vault
+
+```solidity
+DeSpxaPositionMockVault internal vault;
+```
+
+### adapter
+
+```solidity
+DeSpxaAssetPositionAdapter internal adapter;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_totalassets_reportssafevaluewhilefrozen"></a>
+
+### test_totalAssets_reportsSafeValueWhileFrozen
+
+```solidity
+function test_totalAssets_reportsSafeValueWhileFrozen() public;
+```
+
+<a id="test_totalassets_zerobalancestillsafewhilefrozen"></a>
+
+### test_totalAssets_zeroBalanceStillSafeWhileFrozen
+
+```solidity
+function test_totalAssets_zeroBalanceStillSafeWhileFrozen() public;
+```
+
+<a id="test_deploy_revertswhilefrozenbuttotalassetssurvives"></a>
+
+### test_deploy_revertsWhileFrozenButTotalAssetsSurvives
+
+```solidity
+function test_deploy_revertsWhileFrozenButTotalAssetsSurvives() public;
+```
+
+<a id="test_withdraw_revertswhilefrozenbuttotalassetssurvives"></a>
+
+### test_withdraw_revertsWhileFrozenButTotalAssetsSurvives
+
+```solidity
+function test_withdraw_revertsWhileFrozenButTotalAssetsSurvives() public;
+```
+
+<a id="test_withdraw_succeedsafterfreezeislifted"></a>
+
+### test_withdraw_succeedsAfterFreezeIsLifted
+
+```solidity
+function test_withdraw_succeedsAfterFreezeIsLifted() public;
+```
+

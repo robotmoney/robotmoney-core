@@ -65,7 +65,13 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.7.1
+          # Tracks `stable`, matching deploy-contracts.yml (issue #1264):
+          # rehearsal and the real ceremony must run the same Foundry version
+          # for a green rehearsal to prove anything about the real deploy
+          # (docs/operations/contract-release-runbooks.md §3-4 rehearsal-first
+          # discipline). CURRENT.anvil-state (the fixture dry-run.sh loads)
+          # is confirmed to load on Foundry 1.8.1's anvil.
+          version: stable
 
       - name: Run dry-run ceremony
         run: bash scripts/base-sepolia-rehearsal/dry-run.sh
@@ -94,7 +100,10 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.7.1
+          # Tracks `stable`, matching deploy-contracts.yml and the dry-run job
+          # above (issue #1264) — the live ceremony must run the same Foundry
+          # version as the real deploy ceremony it rehearses.
+          version: stable
 
       - name: Pre-flight secret check
         env:

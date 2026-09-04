@@ -1,0 +1,196 @@
+---
+title: "IUniswapV3Pool"
+description: "Minimal Uniswap V3 Pool interface used for slot0 pricing and TWAP reads via `observe()`."
+---
+
+# IUniswapV3Pool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/interfaces/IUniswapV3Pool.sol)
+
+Minimal Uniswap V3 Pool interface used for slot0 pricing and
+TWAP reads via `observe()`.
+
+## Functions
+
+<a id="token0"></a>
+
+### token0
+
+```solidity
+function token0() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="token1"></a>
+
+### token1
+
+```solidity
+function token1() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="fee"></a>
+
+### fee
+
+The pool's fee tier in hundredths of a bip (e.g. 3000 = 0.30%).
+
+<i>
+
+Used by `BasketVault.addAsset` to assert that the execution pool
+resolved from the configured `swapFee` is the SAME pool the NAV TWAP
+is read from (invariant ORA-3 / finding F-09). Uniswap V3 and
+observe-compatible Uniswap V4 pools both expose this accessor.
+
+</i>
+
+```solidity
+function fee() external view returns (uint24);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint24` |  |
+
+<a id="liquidity"></a>
+
+### liquidity
+
+The in-range liquidity available to the pool.
+
+<i>
+
+This value does not include out-of-range concentrated liquidity
+positions. Used by `BasketVault.addAsset` to enforce a minimum-
+liquidity floor before activating an asset.
+
+</i>
+
+```solidity
+function liquidity() external view returns (uint128);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint128` |  |
+
+<a id="slot0"></a>
+
+### slot0
+
+```solidity
+function slot0()
+        external
+        view
+        returns (
+            uint160 sqrtPriceX96,
+            int24 tick,
+            uint16 observationIndex,
+            uint16 observationCardinality,
+            uint16 observationCardinalityNext,
+            uint8 feeProtocol,
+            bool unlocked
+        );
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sqrtPriceX96 | `uint160` |  |
+| tick | `int24` |  |
+| observationIndex | `uint16` |  |
+| observationCardinality | `uint16` |  |
+| observationCardinalityNext | `uint16` |  |
+| feeProtocol | `uint8` |  |
+| unlocked | `bool` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+Returns the cumulative tick and liquidity as of each timestamp
+`secondsAgos` from the current block timestamp.
+
+<i>
+
+`secondsAgos[i]` is the number of seconds in the past to compute
+the cumulative against. The first cumulative is at `secondsAgos[0]`
+seconds in the past, the second at `secondsAgos[1]`, and so on.
+
+</i>
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (
+            int56[] memory tickCumulatives,
+            uint160[] memory secondsPerLiquidityCumulativeX128s
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secondsAgos | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickCumulatives | `int56[]` |  |
+| secondsPerLiquidityCumulativeX128s | `uint160[]` |  |
+
+<a id="observations-uint256"></a>
+
+### observations
+
+Returns observation cardinality (number of slots available for
+historical price storage). Required to verify that a TWAP
+window of `W` seconds has sufficient observations to be
+manipulation-resistant.
+
+```solidity
+function observations(uint256 index)
+        external
+        view
+        returns (
+            uint32 blockTimestamp,
+            int56 tickCumulative,
+            uint160 secondsPerLiquidityCumulativeX128,
+            bool initialized
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| blockTimestamp | `uint32` |  |
+| tickCumulative | `int56` |  |
+| secondsPerLiquidityCumulativeX128 | `uint160` |  |
+| initialized | `bool` |  |
+

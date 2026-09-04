@@ -1,0 +1,62 @@
+---
+title: "MockGateway"
+---
+
+# MockGateway
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/InvestmentCommitteePolicy.t.sol)
+
+<i>
+
+Thin stub that forwards `submitVote` calls as if they came from a
+real RobotMoneyGateway.  The real gateway enforces per-agent policy
+caps; for this test we only care about the IC contract's own guards.
+
+</i>
+
+## State Variables
+
+### ic
+
+```solidity
+InvestmentCommitteePolicy public ic;
+```
+
+## Functions
+
+<a id="setic-investmentcommitteepolicy"></a>
+
+### setIC
+
+```solidity
+function setIC(InvestmentCommitteePolicy ic_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ic_ | `InvestmentCommitteePolicy` |  |
+
+<a id="callsubmitvote-investmentcommitteepolicy-voteparams"></a>
+
+### callSubmitVote
+
+```solidity
+function callSubmitVote(InvestmentCommitteePolicy.VoteParams calldata p)
+        external
+        returns (uint256 voteId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `InvestmentCommitteePolicy.VoteParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| voteId | `uint256` |  |
+

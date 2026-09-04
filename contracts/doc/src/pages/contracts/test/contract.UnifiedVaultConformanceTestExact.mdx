@@ -1,0 +1,139 @@
+---
+title: "UnifiedVaultConformanceTestExact"
+---
+
+# UnifiedVaultConformanceTestExact
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/UnifiedVaultConformance.t.sol)
+
+**Inherits:** [UnifiedVaultConformanceBase](/contracts/test/abstract.UnifiedVaultConformanceBase)
+
+## State Variables
+
+### adapter
+
+```solidity
+ConformanceExactAdapter internal adapter;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_composition_isexactmode"></a>
+
+### test_composition_isExactMode
+
+```solidity
+function test_composition_isExactMode() public;
+```
+
+<a id="test_previewdeposit_parity"></a>
+
+### test_previewDeposit_parity
+
+`previewDeposit` equals the shares `deposit` actually mints, and
+both equal OZ's floor conversion (exact composition, spec §5.2).
+
+```solidity
+function test_previewDeposit_parity() public;
+```
+
+<a id="test_previewwithdraw_islive_andparity"></a>
+
+### test_previewWithdraw_isLive_andParity
+
+`previewWithdraw` is LIVE in exact mode and equals the shares
+`withdraw` burns; the receiver gets exactly the requested net.
+
+```solidity
+function test_previewWithdraw_isLive_andParity() public;
+```
+
+<a id="test_previewredeem_parity_zerofee"></a>
+
+### test_previewRedeem_parity_zeroFee
+
+`previewRedeem` equals the assets `redeem` returns; with zero fee
+it equals the gross conversion (exact composition).
+
+```solidity
+function test_previewRedeem_parity_zeroFee() public;
+```
+
+<a id="test_maxviews_liveandnonzero"></a>
+
+### test_maxViews_liveAndNonZero
+
+```solidity
+function test_maxViews_liveAndNonZero() public;
+```
+
+<a id="test_maxwithdraw_roundtripneverreverts_withfee"></a>
+
+### test_maxWithdraw_roundTripNeverReverts_withFee
+
+E-1 (classic ERC-4626 fee edge): `withdraw(maxWithdraw(owner))`
+must never revert, even under a non-zero exit fee.
+
+```solidity
+function test_maxWithdraw_roundTripNeverReverts_withFee() public;
+```
+
+<a id="test_feebase_isgross_onwithdraw"></a>
+
+### test_feeBase_isGross_onWithdraw
+
+```solidity
+function test_feeBase_isGross_onWithdraw() public;
+```
+
+<a id="test_feebase_previewredeem_isgrossminusfee"></a>
+
+### test_feeBase_previewRedeem_isGrossMinusFee
+
+`previewRedeem` in exact mode is gross-minus-fee (fee-on-gross).
+
+```solidity
+function test_feeBase_previewRedeem_isGrossMinusFee() public;
+```
+
+<a id="testfuzz_depositredeemroundtrip_noprofit-uint256"></a>
+
+### testFuzz_depositRedeemRoundTrip_noProfit
+
+SUP-3: an immediate deposit→redeem round trip cannot profit; with
+zero fee on an exact set it returns exactly the principal.
+
+```solidity
+function testFuzz_depositRedeemRoundTrip_noProfit(uint256 assets) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+
+<a id="testfuzz_convertroundtrip_floorednoinflation-uint256"></a>
+
+### testFuzz_convertRoundTrip_flooredNoInflation
+
+convert* rounding direction: shares→assets→shares never inflates.
+
+```solidity
+function testFuzz_convertRoundTrip_flooredNoInflation(uint256 assets) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+

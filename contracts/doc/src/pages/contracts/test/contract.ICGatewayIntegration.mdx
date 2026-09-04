@@ -1,0 +1,220 @@
+---
+title: "ICGatewayIntegration"
+description: "Integration tests verifying the full on-chain path: gateway → IC contract → event emitted (issue #1049 acceptance criteria)."
+---
+
+# ICGatewayIntegration
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/ICGatewayIntegration.t.sol)
+
+**Inherits:** Test
+
+**Title:** ICGatewayIntegration
+
+Integration tests verifying the full on-chain path:
+gateway → IC contract → event emitted (issue #1049 acceptance criteria).
+
+Three tests cover all three ACs:
+1. gateway-routed `committeeRegister` reaches IC and emits `AgentRegistered`
+2. gateway-routed `committeeVoteSubmit` reaches IC and emits `VoteSubmitted`
+3. direct (non-gateway) call to IC `registerAgent` reverts
+
+## Constants
+
+### VOTE_JSON_HASH
+
+```solidity
+bytes32 constant VOTE_JSON_HASH = keccak256("vote-json-integration");
+```
+
+### PROMPT_HASH
+
+```solidity
+bytes32 constant PROMPT_HASH = keccak256("prompt-v1");
+```
+
+### INPUTS_DIGEST
+
+```solidity
+bytes32 constant INPUTS_DIGEST = keccak256("inputs-2026-06-23");
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address admin = address(0xA0);
+```
+
+### pauser
+
+```solidity
+address pauser = address(0xA1);
+```
+
+### shareReceiver
+
+```solidity
+address shareReceiver = address(0xA2);
+```
+
+### committeeAgent
+
+```solidity
+address committeeAgent = address(0xB1);
+```
+
+### vaultAddr
+
+```solidity
+address vaultAddr = address(0xC1);
+```
+
+### usdc
+
+```solidity
+TestERC20 usdc;
+```
+
+### vault
+
+```solidity
+MockVault vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway gateway;
+```
+
+### ic
+
+```solidity
+InvestmentCommitteePolicy ic;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_defaultvoteparams"></a>
+
+### _defaultVoteParams
+
+```solidity
+function _defaultVoteParams()
+        internal
+        view
+        returns (IInvestmentCommitteePolicy.VoteParams memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IInvestmentCommitteePolicy.VoteParams` |  |
+
+<a id="test_gatewayroutedregister_emitsagentregistered"></a>
+
+### test_gatewayRoutedRegister_emitsAgentRegistered
+
+<i>
+
+AC-1 (issue #1049): `gateway.committeeRegister` → IC `registerAgent`
+→ `AgentRegistered` event emitted with the correct args.
+Proves the full on-chain path gateway → IC contract → event.
+
+</i>
+
+```solidity
+function test_gatewayRoutedRegister_emitsAgentRegistered() public;
+```
+
+<a id="test_gatewayroutedvotesubmit_emitsvotesubmitted"></a>
+
+### test_gatewayRoutedVoteSubmit_emitsVoteSubmitted
+
+<i>
+
+AC-2 (issue #1049): `gateway.committeeVoteSubmit` → IC `submitVote`
+→ `VoteSubmitted` event emitted with the correct args.
+Proves the full on-chain path gateway → IC contract → event.
+
+</i>
+
+```solidity
+function test_gatewayRoutedVoteSubmit_emitsVoteSubmitted() public;
+```
+
+<a id="test_directcalltoicregister_reverts"></a>
+
+### test_directCallToICRegister_reverts
+
+<i>
+
+AC-3 (issue #1049): direct call to IC `registerAgent` by an address
+that does not hold IC's ADMIN_ROLE reverts. The committee agent holds
+AGENT_ROLE on the gateway but not ADMIN_ROLE on the IC contract, so a
+direct bypass attempt is rejected — the gateway is the only path.
+
+</i>
+
+```solidity
+function test_directCallToICRegister_reverts() public;
+```
+
+<a id="test_directcalltoicregister_byagent_reverts"></a>
+
+### test_directCallToICRegister_byAgent_reverts
+
+<i>
+
+Complementary revert test: even an AGENT_ROLE holder on the gateway
+cannot bypass the gateway to call IC registerAgent directly — role
+separation ensures the agent has no IC admin privileges.
+
+</i>
+
+```solidity
+function test_directCallToICRegister_byAgent_reverts() public;
+```
+
+<a id="test_committeeregister_revertswhenicpolicynotset"></a>
+
+### test_committeeRegister_revertsWhenICPolicyNotSet
+
+<i>
+
+Proves the `ICPolicyNotSet` guard on `committeeRegister` fires when
+the gateway's `icPolicy` slot is empty.  A freshly-deployed gateway
+with no `setICPolicy` call has `icPolicy == address(0)`.
+
+</i>
+
+```solidity
+function test_committeeRegister_revertsWhenICPolicyNotSet() public;
+```
+
+<a id="test_committeevotesubmit_revertswhenicpolicynotset"></a>
+
+### test_committeeVoteSubmit_revertsWhenICPolicyNotSet
+
+<i>
+
+Proves the `ICPolicyNotSet` guard on `committeeVoteSubmit` fires when
+the gateway's `icPolicy` slot is empty.
+
+</i>
+
+```solidity
+function test_committeeVoteSubmit_revertsWhenICPolicyNotSet() public;
+```
+

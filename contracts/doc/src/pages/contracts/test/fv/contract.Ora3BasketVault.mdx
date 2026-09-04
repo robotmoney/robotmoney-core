@@ -1,0 +1,63 @@
+---
+title: "Ora3BasketVault"
+---
+
+# Ora3BasketVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/fv/DeployAssertions.t.sol)
+
+**Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
+
+<i>
+
+Concrete BasketVault to exercise `addAsset` (BasketVault is abstract).
+
+</i>
+
+## Functions
+
+<a id="constructor-ierc20-iswaprouter-address"></a>
+
+### constructor
+
+```solidity
+constructor(IERC20 usdc_, ISwapRouter router_, address admin_)
+        BasketVault(
+            "ORA3 Basket",
+            "bORA3",
+            usdc_,
+            router_,
+            type(uint256).max,
+            type(uint256).max,
+            0,
+            30,
+            admin_,
+            admin_,
+            admin_
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `IERC20` |  |
+| router_ | `ISwapRouter` |  |
+| admin_ | `address` |  |
+
+<a id="maxassets"></a>
+
+### maxAssets
+
+Subclasses declare the maximum number of assets in the basket.
+
+```solidity
+function maxAssets() public pure override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

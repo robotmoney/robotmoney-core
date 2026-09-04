@@ -1,0 +1,268 @@
+---
+title: "UniV4AssetPositionAdapterTest"
+---
+
+# UniV4AssetPositionAdapterTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/UniswapV4AssetPositionAdapter.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### FEE
+
+```solidity
+uint24 internal constant FEE = 3000;
+```
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### token
+
+```solidity
+UniV4PositionMockToken18 internal token;
+```
+
+### venue
+
+```solidity
+UniV4PositionMockVenue internal venue;
+```
+
+### pool
+
+```solidity
+UniV4PositionMockPool internal pool;
+```
+
+### vault
+
+```solidity
+UniV4PositionMockVault internal vault;
+```
+
+### adapter
+
+```solidity
+UniswapV4AssetPositionAdapter internal adapter;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("attacker");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_identityviews_constructorbound"></a>
+
+### test_identityViews_constructorBound
+
+```solidity
+function test_identityViews_constructorBound() public view;
+```
+
+<a id="test_isexact_isfalse"></a>
+
+### test_isExact_isFalse
+
+```solidity
+function test_isExact_isFalse() public view;
+```
+
+<a id="test_effectivetwapwindow_defaultswhenunset"></a>
+
+### test_effectiveTwapWindow_defaultsWhenUnset
+
+```solidity
+function test_effectiveTwapWindow_defaultsWhenUnset() public view;
+```
+
+<a id="test_totalassets_zerobalancereturnszerowithoutoracle"></a>
+
+### test_totalAssets_zeroBalanceReturnsZeroWithoutOracle
+
+```solidity
+function test_totalAssets_zeroBalanceReturnsZeroWithoutOracle() public;
+```
+
+<a id="test_constructor_revertswhenhooksnonzero"></a>
+
+### test_constructor_revertsWhenHooksNonZero
+
+```solidity
+function test_constructor_revertsWhenHooksNonZero() public;
+```
+
+<a id="test_constructor_succeedswhenhookszero"></a>
+
+### test_constructor_succeedsWhenHooksZero
+
+```solidity
+function test_constructor_succeedsWhenHooksZero() public view;
+```
+
+<a id="test_deploy_custodiestokenandcreditsrealizedvalue"></a>
+
+### test_deploy_custodiesTokenAndCreditsRealizedValue
+
+```solidity
+function test_deploy_custodiesTokenAndCreditsRealizedValue() public;
+```
+
+<a id="test_deploy_onlyvault"></a>
+
+### test_deploy_onlyVault
+
+```solidity
+function test_deploy_onlyVault() public;
+```
+
+<a id="test_deploy_revertswhenvaluebelowminvalueout"></a>
+
+### test_deploy_revertsWhenValueBelowMinValueOut
+
+```solidity
+function test_deploy_revertsWhenValueBelowMinValueOut() public;
+```
+
+<a id="test_totalassets_usesconfiguredtwapwindow"></a>
+
+### test_totalAssets_usesConfiguredTwapWindow
+
+```solidity
+function test_totalAssets_usesConfiguredTwapWindow() public;
+```
+
+<a id="test_deploy_navdeviationguardreverts_onoutofwindowmark"></a>
+
+### test_deploy_navDeviationGuardReverts_onOutOfWindowMark
+
+```solidity
+function test_deploy_navDeviationGuardReverts_onOutOfWindowMark() public;
+```
+
+<a id="test_deploy_navdeviationguardpasses_whenspottrackstwap"></a>
+
+### test_deploy_navDeviationGuardPasses_whenSpotTracksTwap
+
+```solidity
+function test_deploy_navDeviationGuardPasses_whenSpotTracksTwap() public;
+```
+
+<a id="test_withdraw_deliversusdctovault"></a>
+
+### test_withdraw_deliversUsdcToVault
+
+```solidity
+function test_withdraw_deliversUsdcToVault() public;
+```
+
+<a id="test_withdraw_onlyvault"></a>
+
+### test_withdraw_onlyVault
+
+```solidity
+function test_withdraw_onlyVault() public;
+```
+
+<a id="test_withdraw_revertsbelowcomposedfloor"></a>
+
+### test_withdraw_revertsBelowComposedFloor
+
+```solidity
+function test_withdraw_revertsBelowComposedFloor() public;
+```
+
+<a id="test_withdraw_clampsshortfallabovefloor"></a>
+
+### test_withdraw_clampsShortfallAboveFloor
+
+```solidity
+function test_withdraw_clampsShortfallAboveFloor() public;
+```
+
+<a id="test_setters_onlyvaultadmin"></a>
+
+### test_setters_onlyVaultAdmin
+
+```solidity
+function test_setters_onlyVaultAdmin() public;
+```
+
+<a id="test_settwapwindow_boundsenforced"></a>
+
+### test_setTwapWindow_boundsEnforced
+
+```solidity
+function test_setTwapWindow_boundsEnforced() public;
+```
+
+<a id="test_setmaxslippagebps_ceilingenforced"></a>
+
+### test_setMaxSlippageBps_ceilingEnforced
+
+```solidity
+function test_setMaxSlippageBps_ceilingEnforced() public;
+```
+
+<a id="test_setnavdeviationguardbps_ceilingenforced"></a>
+
+### test_setNavDeviationGuardBps_ceilingEnforced
+
+```solidity
+function test_setNavDeviationGuardBps_ceilingEnforced() public;
+```
+
+<a id="test_harvestrewards_isnoopandneverreverts"></a>
+
+### test_harvestRewards_isNoOpAndNeverReverts
+
+```solidity
+function test_harvestRewards_isNoOpAndNeverReverts() public;
+```
+
+<a id="test_sweepforeigntoken_revertsforprotectedusdcandtoken"></a>
+
+### test_sweepForeignToken_revertsForProtectedUsdcAndToken
+
+```solidity
+function test_sweepForeignToken_revertsForProtectedUsdcAndToken() public;
+```
+
+<a id="test_sweepforeigntoken_quarantinesforeigntoken"></a>
+
+### test_sweepForeignToken_quarantinesForeignToken
+
+```solidity
+function test_sweepForeignToken_quarantinesForeignToken() public;
+```
+

@@ -1,0 +1,309 @@
+---
+title: "MockPool"
+---
+
+# MockPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/BasketVault.t.sol)
+
+<i>
+
+Minimal mock supporting both slot0 (legacy spot read) and observe()
+(TWAP read). `setTickCumulativeRate` controls the per-second tick
+growth: the TWAP arithmetic-mean tick equals exactly this value,
+independent of the slot0 spot, which lets tests separate manipulation
+of slot0 from the TWAP-bounded price the vault actually consumes.
+
+</i>
+
+## Constants
+
+### token0
+
+```solidity
+address public immutable token0;
+```
+
+### token1
+
+```solidity
+address public immutable token1;
+```
+
+## State Variables
+
+### sqrtPriceX96Spot
+
+```solidity
+uint160 public sqrtPriceX96Spot;
+```
+
+### spotTick
+
+```solidity
+int24 public spotTick;
+```
+
+### tickCumulativeRate
+
+```solidity
+int56 public tickCumulativeRate;
+```
+
+### cardinality
+
+```solidity
+uint16 public cardinality;
+```
+
+### poolLiquidity
+
+```solidity
+uint128 public poolLiquidity;
+```
+
+### revertObserve
+
+```solidity
+bool public revertObserve;
+```
+
+### feeTier
+
+```solidity
+uint24 public feeTier;
+```
+
+## Functions
+
+<a id="constructor-address-address-uint160"></a>
+
+### constructor
+
+```solidity
+constructor(address token0_, address token1_, uint160 sqrtPriceX96_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token0_ | `address` |  |
+| token1_ | `address` |  |
+| sqrtPriceX96_ | `uint160` |  |
+
+<a id="fee"></a>
+
+### fee
+
+<i>
+
+ORA-3 / F-09: `addAsset` asserts the pool's `fee()` equals `swapFee_`.
+
+</i>
+
+```solidity
+function fee() external view returns (uint24);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint24` |  |
+
+<a id="setfee-uint24"></a>
+
+### setFee
+
+```solidity
+function setFee(uint24 fee_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fee_ | `uint24` |  |
+
+<a id="setspot-uint160"></a>
+
+### setSpot
+
+```solidity
+function setSpot(uint160 sqrtPriceX96_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sqrtPriceX96_ | `uint160` |  |
+
+<a id="setspottick-int24"></a>
+
+### setSpotTick
+
+<i>
+
+Set the slot0 spot tick the ORA-4 deviation guard reads. The TWAP
+mean tick is governed separately by `tickCumulativeRate`, so a test
+can drive spot ≠ TWAP to exercise the deviation guard.
+
+</i>
+
+```solidity
+function setSpotTick(int24 tick_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tick_ | `int24` |  |
+
+<a id="settickcumulativerate-int56"></a>
+
+### setTickCumulativeRate
+
+```solidity
+function setTickCumulativeRate(int56 rate) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rate | `int56` |  |
+
+<a id="setcardinality-uint16"></a>
+
+### setCardinality
+
+```solidity
+function setCardinality(uint16 cardinality_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cardinality_ | `uint16` |  |
+
+<a id="setliquidity-uint128"></a>
+
+### setLiquidity
+
+```solidity
+function setLiquidity(uint128 liquidity_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| liquidity_ | `uint128` |  |
+
+<a id="setrevertobserve-bool"></a>
+
+### setRevertObserve
+
+```solidity
+function setRevertObserve(bool value) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `bool` |  |
+
+<a id="liquidity"></a>
+
+### liquidity
+
+```solidity
+function liquidity() external view returns (uint128);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint128` |  |
+
+<a id="slot0"></a>
+
+### slot0
+
+```solidity
+function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+| &lt;none&gt; | `int24` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint8` |  |
+| &lt;none&gt; | `bool` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secondsAgos | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickCumulatives | `int56[]` |  |
+| secondsPerLiq | `uint160[]` |  |
+
+<a id="observations-uint256"></a>
+
+### observations
+
+```solidity
+function observations(uint256)
+        external
+        view
+        returns (
+            uint32 blockTimestamp,
+            int56 tickCumulative,
+            uint160 secondsPerLiquidity,
+            bool initialized
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| blockTimestamp | `uint32` |  |
+| tickCumulative | `int56` |  |
+| secondsPerLiquidity | `uint160` |  |
+| initialized | `bool` |  |
+

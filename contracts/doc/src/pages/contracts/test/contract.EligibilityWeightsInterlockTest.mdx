@@ -1,0 +1,238 @@
+---
+title: "EligibilityWeightsInterlockTest"
+---
+
+# EligibilityWeightsInterlockTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/EligibilityWeightsInterlock.t.sol)
+
+**Inherits:** Test
+
+## State Variables
+
+### usdc
+
+```solidity
+MockUsdc internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### registryAdmin
+
+```solidity
+address internal registryAdmin = makeAddr("registryAdmin");
+```
+
+### routerAdmin
+
+```solidity
+address internal routerAdmin = makeAddr("routerAdmin");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### vaultA
+
+```solidity
+InterlockMockVault internal vaultA;
+```
+
+### vaultB
+
+```solidity
+InterlockMockVault internal vaultB;
+```
+
+### vaultC
+
+```solidity
+InterlockMockVault internal vaultC;
+```
+
+### vaultD
+
+```solidity
+InterlockMockVault internal vaultD;
+```
+
+### vaultE
+
+```solidity
+InterlockMockVault internal vaultE;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_deadlock_everyeligibilityflipreverts"></a>
+
+### test_deadlock_everyEligibilityFlipReverts
+
+With 4 eligible vaults and a length-4 default vector, EVERY
+single non-atomic eligibility change reverts
+StaleDefaultWeightsLength — both making a fifth vault eligible
+(count would rise to 5) and revoking one (count would fall to 3).
+Every escape is closed, so migration deadlocks. (H-A1)
+
+```solidity
+function test_deadlock_everyEligibilityFlipReverts() public;
+```
+
+<a id="test_migrateeligibility_addsvaultatomically"></a>
+
+### test_migrateEligibility_addsVaultAtomically
+
+The atomic entry point flips eligibility AND sets the new
+full-length default vector in one call, without reverting, and
+the count==length invariant holds afterwards.
+
+```solidity
+function test_migrateEligibility_addsVaultAtomically() public;
+```
+
+<a id="test_migrateeligibility_removesvaultatomically"></a>
+
+### test_migrateEligibility_removesVaultAtomically
+
+The same atomic entry point also revokes eligibility while
+shrinking the default vector in one call — the other deadlocked
+direction.
+
+```solidity
+function test_migrateEligibility_removesVaultAtomically() public;
+```
+
+<a id="test_migrateeligibility_rejectspartialupdate"></a>
+
+### test_migrateEligibility_rejectsPartialUpdate
+
+A partial update — flipping eligibility while supplying a default
+vector whose length disagrees with the post-flip count — is
+rejected by the router's length check and reverts the WHOLE
+transaction, leaving no stale state behind.
+
+```solidity
+function test_migrateEligibility_rejectsPartialUpdate() public;
+```
+
+<a id="test_applymigrationdefaultweights_onlyregistry"></a>
+
+### test_applyMigrationDefaultWeights_onlyRegistry
+
+The router's registry-only weight setter cannot be called by
+anyone but the linked registry — it carries no independent
+authority and reverts OnlyRegistry for every other caller.
+
+```solidity
+function test_applyMigrationDefaultWeights_onlyRegistry() public;
+```
+
+<a id="test_migrateeligibility_requireslinkedrouter"></a>
+
+### test_migrateEligibility_requiresLinkedRouter
+
+`migrateEligibility` requires a linked router; with none, it
+reverts RouterNotLinked (use plain setRouterEligible instead).
+
+```solidity
+function test_migrateEligibility_requiresLinkedRouter() public;
+```
+
+<a id="_meta-string"></a>
+
+### _meta
+
+```solidity
+function _meta(string memory name) internal view returns (VaultRegistry.VaultMetadata memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `VaultRegistry.VaultMetadata` |  |
+
+<a id="_fourvaults"></a>
+
+### _fourVaults
+
+```solidity
+function _fourVaults() internal view returns (address[] memory vaults);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+
+<a id="_fourbps"></a>
+
+### _fourBps
+
+```solidity
+function _fourBps() internal pure returns (uint256[] memory bps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+
+<a id="_fivevaults"></a>
+
+### _fiveVaults
+
+```solidity
+function _fiveVaults() internal view returns (address[] memory vaults);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+
+<a id="_fivebps"></a>
+
+### _fiveBps
+
+```solidity
+function _fiveBps() internal pure returns (uint256[] memory bps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+

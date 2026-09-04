@@ -216,6 +216,41 @@ print(int(v, 0) if isinstance(v, str) and v.startswith("0x") else int(v))
 '
 }
 
+# Sum a uint256[] return value (JSON array at the given top-level index) as a
+# decimal integer. Same normalisation as rcall_int, elementwise: cast --json
+# may render each uint256 as a bare number or as a "0x…"/decimal string
+# (Foundry 1.8.x quotes large integers for JS-safe-integer precision), and
+# `jq add` on a mix of JSON strings silently degrades to string
+# concatenation instead of numeric addition — this must not be summed with
+# raw jq or bash `((...))` arithmetic on the unparsed text.
+json_int_array_sum() {
+  local json="$1" index="$2"
+  python3 -c '
+import json, sys
+data = json.loads(sys.argv[1])
+idx = int(sys.argv[2])
+def to_int(v):
+    return int(v, 0) if isinstance(v, str) and v.startswith("0x") else int(v)
+print(sum(to_int(v) for v in data[idx]))
+' "$json" "$index"
+}
+
+# Read a single element out of a multi-value `cast --json` tuple return as a
+# decimal integer, same normalisation as rcall_int/json_int_array_sum: never
+# feed `jq '.[N]'`'s raw output (which may now be a quoted "0x…"/decimal
+# string under Foundry 1.8.x) straight into a bash `[[ ... -ge ... ]]` or
+# `((...))` test — a quoted string is not a valid arithmetic operand and
+# fails with a bash syntax error, not a clean comparison failure.
+json_int_at() {
+  local json="$1" index="$2"
+  python3 -c '
+import json, sys
+data = json.loads(sys.argv[1])
+v = data[int(sys.argv[2])]
+print(int(v, 0) if isinstance(v, str) and v.startswith("0x") else int(v))
+' "$json" "$index"
+}
+
 assert_role() {
   local contract="$1" role="$2" holder="$3" expect="$4" label="$5"
   local got
@@ -279,7 +314,7 @@ eligible="$("$CAST" call --json "$REGISTRY" "isRouterEligible(address)(bool)" "$
   --rpc-url "$RPC_URL" | jq -r 'if .[0] == null then "call-failed" else .[0] end')"
 [[ "$eligible" == "true" ]] || fail "registry isRouterEligible($VAULT) = $eligible (expected true)"
 weights_json="$("$CAST" call --json "$ROUTER" "getWeights()(address[],uint256[])" --rpc-url "$RPC_URL")"
-weights_sum="$(echo "$weights_json" | jq '.[1] | add // 0')"
+weights_sum="$(json_int_array_sum "$weights_json" 1)"
 weights_vaults="$(echo "$weights_json" | jq -r '.[0][] // empty')"
 (( weights_sum == 10000 )) || fail "router getWeights bps sum $weights_sum != 10000 (got: $weights_json)"
 echo "$weights_vaults" | grep -qi "$(lower_addr "$VAULT")" \
@@ -302,8 +337,8 @@ GOVERNANCE="$(resolve_json "$GOV_OUT" '.governance')"
 
 cadence_json="$("$CAST" call --json "$GOVERNANCE" "cadenceParams()(uint64,uint64,uint256,uint256)" \
   --rpc-url "$RPC_URL")"
-exec_delay="$(echo "$cadence_json" | jq '.[1]')"
-quorum_onchain="$(echo "$cadence_json" | jq '.[2]')"
+exec_delay="$(json_int_at "$cadence_json" 1)"
+quorum_onchain="$(json_int_at "$cadence_json" 2)"
 [[ "$exec_delay" -ge 3600 ]] || fail "governance executionDelay $exec_delay < MIN_EXECUTION_DELAY 3600 (got: $cadence_json)"
 [[ "$quorum_onchain" -gt 0 ]] || fail "governance quorumThreshold on chain is 0 (got: $cadence_json)"
 info "postcondition OK: governance executionDelay=$exec_delay quorum=$quorum_onchain (pinned $QUORUM_THRESHOLD)"

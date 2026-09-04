@@ -1,0 +1,203 @@
+---
+title: "MigVault"
+description: "ERC-4626-shaped vault mock supporting the full deposit/redeem cycle the router drives, plus the `IRetirableVault` deposit-halt hooks the registry calls on `retire()`/`unretire()`. 1:1 shares. This is the smallest mock that lets the integration test prove real allocation (deposit) and real redemption (redeem) — not just view consistency."
+---
+
+# MigVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/V2MigrationIntegration.t.sol)
+
+**Inherits:** ERC20
+
+ERC-4626-shaped vault mock supporting the full deposit/redeem cycle
+the router drives, plus the `IRetirableVault` deposit-halt hooks the
+registry calls on `retire()`/`unretire()`. 1:1 shares. This is the
+smallest mock that lets the integration test prove real allocation
+(deposit) and real redemption (redeem) — not just view consistency.
+
+## Constants
+
+### assetToken
+
+```solidity
+IERC20 public immutable assetToken;
+```
+
+## State Variables
+
+### retired
+
+<i>
+
+Registry-driven deposit-halt flag (IRetirableVault). Deposits revert
+once retired; redemptions are never gated (ADR-0009 withdraw-only).
+
+</i>
+
+```solidity
+bool public retired;
+```
+
+## Functions
+
+<a id="constructor-address-string"></a>
+
+### constructor
+
+```solidity
+constructor(address asset_, string memory sym) ERC20("Mig Vault Shares", sym);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `address` |  |
+| sym | `string` |  |
+
+<a id="decimals"></a>
+
+### decimals
+
+<i>
+
+Returns the number of decimals used to get its user representation.
+For example, if `decimals` equals `2`, a balance of `505` tokens should
+be displayed to a user as `5.05` (`505 / 10 ** 2`).
+
+Tokens usually opt for a value of 18, imitating the relationship between
+Ether and Wei. This is the default value returned by this function, unless
+it's overridden.
+
+NOTE: This information is only used for _display_ purposes: it in
+no way affects any of the arithmetic of the contract, including
+`IERC20` and `IERC20`.
+
+</i>
+
+```solidity
+function decimals() public pure override returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="asset"></a>
+
+### asset
+
+```solidity
+function asset() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+```solidity
+function totalAssets() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="previewdeposit-uint256"></a>
+
+### previewDeposit
+
+```solidity
+function previewDeposit(uint256 assets) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="retire"></a>
+
+### retire
+
+<i>
+
+IRetirableVault deposit-halt hooks. Registry-gated in production; the
+integration test calls them only through the registry's retire path.
+
+</i>
+
+```solidity
+function retire() external;
+```
+
+<a id="unretire"></a>
+
+### unretire
+
+```solidity
+function unretire() external;
+```
+
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+```solidity
+function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="redeem-uint256-address-address"></a>
+
+### redeem
+
+```solidity
+function redeem(uint256 shares, address receiver, address owner)
+        external
+        returns (uint256 assets);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| receiver | `address` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+

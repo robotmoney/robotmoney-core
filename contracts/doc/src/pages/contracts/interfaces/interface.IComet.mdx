@@ -1,0 +1,76 @@
+---
+title: "IComet"
+description: "Minimal Compound V3 Comet interface used by CompoundV3Adapter."
+---
+
+# IComet
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/interfaces/IComet.sol)
+
+Minimal Compound V3 Comet interface used by CompoundV3Adapter.
+
+<i>
+
+Comet is not ERC-4626. supply/withdraw always credit/debit msg.sender.
+balanceOf returns live underlying USDC including accrued interest.
+
+</i>
+
+## Functions
+
+<a id="supply-address-uint256"></a>
+
+### supply
+
+Supply `amount` of `asset` into Compound V3 (credits msg.sender).
+
+```solidity
+function supply(address asset, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+
+<a id="withdraw-address-uint256"></a>
+
+### withdraw
+
+Withdraw `amount` of `asset` from Compound V3 (sends to msg.sender).
+
+```solidity
+function withdraw(address asset, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` | Use type(uint256).max to withdraw the full balance. |
+
+<a id="balanceof-address"></a>
+
+### balanceOf
+
+Live USDC balance of `account` including accrued interest.
+
+```solidity
+function balanceOf(address account) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

@@ -1,0 +1,46 @@
+---
+title: "IRetirableVaultLink"
+---
+
+# IRetirableVaultLink
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployTimelock.s.sol)
+
+<i>
+
+Minimal vault interface used to link the registry into the vault so the
+unified governance `retire()` action (DI-2) can drive the vault's
+deposit-halt leg. `setRegistry` is set-once and ADMIN_ROLE-gated.
+
+</i>
+
+## Functions
+
+<a id="setregistry-address"></a>
+
+### setRegistry
+
+```solidity
+function setRegistry(address newRegistry) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newRegistry | `address` |  |
+
+<a id="registry"></a>
+
+### registry
+
+```solidity
+function registry() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

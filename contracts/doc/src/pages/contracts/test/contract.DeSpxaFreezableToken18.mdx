@@ -1,0 +1,100 @@
+---
+title: "DeSpxaFreezableToken18"
+---
+
+# DeSpxaFreezableToken18
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeSpxaAssetPositionAdapter.t.sol)
+
+**Inherits:** ERC20
+
+<i>
+
+deSPXA stand-in that reverts real (non-mint/non-burn) transfers while
+`frozen`, modeling the issuer freeze-control risk in ADR-0006 §3. Mint
+and burn (from/to == address(0)) are always allowed so test setup can
+fund balances even while frozen. TEST FIXTURE.
+
+</i>
+
+## State Variables
+
+### frozen
+
+```solidity
+bool public frozen;
+```
+
+## Functions
+
+<a id="constructor"></a>
+
+### constructor
+
+```solidity
+constructor() ERC20("Freezable deSPXA", "fDESPXA");
+```
+
+<a id="mint-address-uint256"></a>
+
+### mint
+
+```solidity
+function mint(address to, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="setfrozen-bool"></a>
+
+### setFrozen
+
+```solidity
+function setFrozen(bool frozen_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| frozen_ | `bool` |  |
+
+<a id="_update-address-address-uint256"></a>
+
+### _update
+
+<i>
+
+Transfers a `value` amount of tokens from `from` to `to`, or alternatively mints (or burns) if `from`
+(or `to`) is the zero address. All customizations to transfers, mints, and burns should be done by overriding
+this function.
+
+Emits a `Transfer` event.
+
+</i>
+
+```solidity
+function _update(address from, address to, uint256 value) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| to | `address` |  |
+| value | `uint256` |  |
+
+## Errors
+
+### TransfersFrozen
+
+```solidity
+error TransfersFrozen();
+```
+

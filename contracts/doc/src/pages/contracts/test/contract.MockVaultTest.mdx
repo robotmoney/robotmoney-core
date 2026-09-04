@@ -1,0 +1,122 @@
+---
+title: "MockVaultTest"
+---
+
+# MockVaultTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/MockVault.t.sol)
+
+**Inherits:** Test
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vault
+
+```solidity
+MockVault internal vault;
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### receiver
+
+```solidity
+address internal receiver = makeAddr("receiver");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_metadata"></a>
+
+### test_metadata
+
+```solidity
+function test_metadata() public view;
+```
+
+<a id="test_deposit_onetooneshares_routestoreceiver"></a>
+
+### test_deposit_oneToOneShares_routesToReceiver
+
+```solidity
+function test_deposit_oneToOneShares_routesToReceiver() public;
+```
+
+<a id="test_deposit_revertswithoutallowance"></a>
+
+### test_deposit_revertsWithoutAllowance
+
+```solidity
+function test_deposit_revertsWithoutAllowance() public;
+```
+
+<a id="test_deposit_revertsonzeroamount"></a>
+
+### test_deposit_revertsOnZeroAmount
+
+```solidity
+function test_deposit_revertsOnZeroAmount() public;
+```
+
+<a id="test_deposit_revertsonzeroreceiver"></a>
+
+### test_deposit_revertsOnZeroReceiver
+
+```solidity
+function test_deposit_revertsOnZeroReceiver() public;
+```
+
+<a id="test_deposit_multipleagentsaccumulate"></a>
+
+### test_deposit_multipleAgentsAccumulate
+
+```solidity
+function test_deposit_multipleAgentsAccumulate() public;
+```
+
+<a id="test_emitsdepositevent"></a>
+
+### test_emitsDepositEvent
+
+```solidity
+function test_emitsDepositEvent() public;
+```
+
+<a id="testfuzz_deposit_onetoone-uint96"></a>
+
+### testFuzz_deposit_oneToOne
+
+```solidity
+function testFuzz_deposit_oneToOne(uint96 amount) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint96` |  |
+

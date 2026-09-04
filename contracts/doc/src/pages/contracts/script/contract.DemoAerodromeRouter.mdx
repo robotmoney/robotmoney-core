@@ -1,0 +1,89 @@
+---
+title: "DemoAerodromeRouter"
+description: "Minimal Aerodrome router stub for demo purposes. Records swaps at a 1:1 rate, minting output token to the recipient. Demo-only. Used by AgentTokenVault for its RM leg, where the pool TWAP also returns 1:1 (DemoUsdcPool.observe returns zero ticks), so totalAssets ≈ totalDeposits and no share inflation occurs."
+---
+
+# DemoAerodromeRouter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployDemoExtraVaults.s.sol)
+
+Minimal Aerodrome router stub for demo purposes. Records swaps at
+a 1:1 rate, minting output token to the recipient. Demo-only.
+Used by AgentTokenVault for its RM leg, where the pool TWAP
+also returns 1:1 (DemoUsdcPool.observe returns zero ticks), so
+totalAssets ≈ totalDeposits and no share inflation occurs.
+
+## State Variables
+
+### pools
+
+```solidity
+mapping(bytes32 => address) public pools;
+```
+
+## Functions
+
+<a id="setpool-address-address-int24-address"></a>
+
+### setPool
+
+```solidity
+function setPool(address tokenA, address tokenB, int24 tickSpacing, address pool) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenA | `address` |  |
+| tokenB | `address` |  |
+| tickSpacing | `int24` |  |
+| pool | `address` |  |
+
+<a id="getpool-address-address-int24"></a>
+
+### getPool
+
+```solidity
+function getPool(address tokenA, address tokenB, int24 tickSpacing)
+        external
+        view
+        returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenA | `address` |  |
+| tokenB | `address` |  |
+| tickSpacing | `int24` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="exactinputsingle-iaerodromeslipstreamrouter-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(IAerodromeSlipstreamRouter.ExactInputSingleParams calldata params)
+        external
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `IAerodromeSlipstreamRouter.ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

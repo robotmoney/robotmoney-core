@@ -1,0 +1,47 @@
+---
+title: "_ISafeSetup"
+---
+
+# _ISafeSetup
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/SafeIntegration.t.sol)
+
+<i>
+
+Used only to generate the `setup(...)` calldata for SafeProxyFactory.
+Not imported from a Safe library to keep the test self-contained.
+
+</i>
+
+## Functions
+
+<a id="setup-address-uint256-address-bytes-address-address-uint256-address-payable"></a>
+
+### setup
+
+```solidity
+function setup(
+        address[] calldata _owners,
+        uint256 _threshold,
+        address to,
+        bytes calldata data,
+        address fallbackHandler,
+        address paymentToken,
+        uint256 payment,
+        address payable paymentReceiver
+    ) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _owners | `address[]` |  |
+| _threshold | `uint256` |  |
+| to | `address` |  |
+| data | `bytes` |  |
+| fallbackHandler | `address` |  |
+| paymentToken | `address` |  |
+| payment | `uint256` |  |
+| paymentReceiver | `address payable` |  |
+

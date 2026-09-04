@@ -1,0 +1,233 @@
+---
+title: "IPositionAdapterInterfaceTest"
+---
+
+# IPositionAdapterInterfaceTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/IPositionAdapter.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1_000_000;
+```
+
+### FROZEN_INTERFACE_ID
+
+<i>
+
+The frozen ERC-165 interfaceId of the eight-member IPositionAdapter
+surface (#1116). Recompute and update only via a coordinated
+surface change; a silent drift fails `test_interfaceId_*`.
+
+</i>
+
+```solidity
+bytes4 internal constant FROZEN_INTERFACE_ID = 0xa301918b;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### adapter
+
+```solidity
+MockPositionAdapter internal adapter;
+```
+
+### vault
+
+```solidity
+address internal vault = makeAddr("vault");
+```
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("attacker");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_identityviews_returnconstructorbound"></a>
+
+### test_identityViews_returnConstructorBound
+
+```solidity
+function test_identityViews_returnConstructorBound() public view;
+```
+
+<a id="test_constructor_revertsonzeroidentity"></a>
+
+### test_constructor_revertsOnZeroIdentity
+
+```solidity
+function test_constructor_revertsOnZeroIdentity() public;
+```
+
+<a id="test_deploy_exactreturnsusdcin"></a>
+
+### test_deploy_exactReturnsUsdcIn
+
+```solidity
+function test_deploy_exactReturnsUsdcIn() public;
+```
+
+<a id="test_deploy_revertsbelowfloor"></a>
+
+### test_deploy_revertsBelowFloor
+
+```solidity
+function test_deploy_revertsBelowFloor() public;
+```
+
+<a id="test_deploy_revertsfornonvault"></a>
+
+### test_deploy_revertsForNonVault
+
+```solidity
+function test_deploy_revertsForNonVault() public;
+```
+
+<a id="test_withdraw_clampsatbalanceanddelivers"></a>
+
+### test_withdraw_clampsAtBalanceAndDelivers
+
+```solidity
+function test_withdraw_clampsAtBalanceAndDelivers() public;
+```
+
+<a id="test_withdraw_revertsbelowfloor"></a>
+
+### test_withdraw_revertsBelowFloor
+
+```solidity
+function test_withdraw_revertsBelowFloor() public;
+```
+
+<a id="test_withdraw_revertsfornonvault"></a>
+
+### test_withdraw_revertsForNonVault
+
+```solidity
+function test_withdraw_revertsForNonVault() public;
+```
+
+<a id="test_isexact_true"></a>
+
+### test_isExact_true
+
+```solidity
+function test_isExact_true() public view;
+```
+
+<a id="test_harvestrewards_neverreverts"></a>
+
+### test_harvestRewards_neverReverts
+
+```solidity
+function test_harvestRewards_neverReverts() public;
+```
+
+<a id="test_sweepforeigntoken_quarantinesforeignrevertsonusdc"></a>
+
+### test_sweepForeignToken_quarantinesForeignRevertsOnUsdc
+
+```solidity
+function test_sweepForeignToken_quarantinesForeignRevertsOnUsdc() public;
+```
+
+<a id="test_subset_unchangedmembersshareselectors"></a>
+
+### test_subset_unchangedMembersShareSelectors
+
+<i>
+
+Members carried verbatim from v1 keep identical selectors.
+
+</i>
+
+```solidity
+function test_subset_unchangedMembersShareSelectors() public pure;
+```
+
+<a id="test_subset_extendedmembershavenewselectors"></a>
+
+### test_subset_extendedMembersHaveNewSelectors
+
+<i>
+
+`deploy`/`withdraw` are strictly extended (min-out params + a
+realized-value return), so their selectors MUST differ from v1.
+
+</i>
+
+```solidity
+function test_subset_extendedMembersHaveNewSelectors() public pure;
+```
+
+<a id="test_superset_addsisexactusdcvault"></a>
+
+### test_superset_addsIsExactUsdcVault
+
+<i>
+
+The three members IPositionAdapter adds on top of v1. Referencing
+their selectors is a compile-time proof they exist on the surface;
+the runtime asserts they are non-empty and mutually distinct.
+
+</i>
+
+```solidity
+function test_superset_addsIsExactUsdcVault() public pure;
+```
+
+<a id="test_interfaceid_isstableanddistinct"></a>
+
+### test_interfaceId_isStableAndDistinct
+
+<i>
+
+interfaceId is the XOR of all eight member selectors and MUST be
+stable. The hardcoded literal freezes the surface: any signature
+add/remove/rename changes the XOR and fails this loudly. It also
+MUST differ from the v1 interfaceId (the two are distinct types).
+
+</i>
+
+```solidity
+function test_interfaceId_isStableAndDistinct() public pure;
+```
+
+<a id="test_errorset_selectorsfrozen"></a>
+
+### test_errorSet_selectorsFrozen
+
+<i>
+
+The frozen normative error selectors (#1116). Hardcoded so a rename
+of a shared error breaks the freeze loudly.
+
+</i>
+
+```solidity
+function test_errorSet_selectorsFrozen() public pure;
+```
+

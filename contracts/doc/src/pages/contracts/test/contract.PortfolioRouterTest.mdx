@@ -1,0 +1,1072 @@
+---
+title: "PortfolioRouterTest"
+---
+
+# PortfolioRouterTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/PortfolioRouter.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+MockUSDC internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### depositor
+
+```solidity
+address internal depositor = makeAddr("depositor");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### vaultA
+
+```solidity
+MockRouterVault internal vaultA;
+```
+
+### vaultB
+
+```solidity
+MockRouterVault internal vaultB;
+```
+
+### vaultC
+
+```solidity
+MockRouterVault internal vaultC;
+```
+
+### metaA
+
+```solidity
+VaultRegistry.VaultMetadata internal metaA;
+```
+
+### metaB
+
+```solidity
+VaultRegistry.VaultMetadata internal metaB;
+```
+
+### metaC
+
+```solidity
+VaultRegistry.VaultMetadata internal metaC;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_setequalweights"></a>
+
+### _setEqualWeights
+
+```solidity
+function _setEqualWeights() internal;
+```
+
+<a id="_fundandapprove-address-uint256"></a>
+
+### _fundAndApprove
+
+```solidity
+function _fundAndApprove(address user, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+| amount | `uint256` |  |
+
+<a id="test_constructor_revertsonzerousdc"></a>
+
+### test_constructor_revertsOnZeroUsdc
+
+```solidity
+function test_constructor_revertsOnZeroUsdc() public;
+```
+
+<a id="test_constructor_revertsonzeroregistry"></a>
+
+### test_constructor_revertsOnZeroRegistry
+
+```solidity
+function test_constructor_revertsOnZeroRegistry() public;
+```
+
+<a id="test_constructor_revertsonzeroadmin"></a>
+
+### test_constructor_revertsOnZeroAdmin
+
+```solidity
+function test_constructor_revertsOnZeroAdmin() public;
+```
+
+<a id="test_constructor_grantsadminrole"></a>
+
+### test_constructor_grantsAdminRole
+
+```solidity
+function test_constructor_grantsAdminRole() public view;
+```
+
+<a id="test_setweights_revertsifsumnot10000"></a>
+
+### test_setWeights_revertsIfSumNot10000
+
+```solidity
+function test_setWeights_revertsIfSumNot10000() public;
+```
+
+<a id="test_setweights_revertsifvaultnotregistered"></a>
+
+### test_setWeights_revertsIfVaultNotRegistered
+
+```solidity
+function test_setWeights_revertsIfVaultNotRegistered() public;
+```
+
+<a id="test_setweights_revertsiflengthmismatch"></a>
+
+### test_setWeights_revertsIfLengthMismatch
+
+```solidity
+function test_setWeights_revertsIfLengthMismatch() public;
+```
+
+<a id="test_setweights_revertsforunauthorized"></a>
+
+### test_setWeights_revertsForUnauthorized
+
+```solidity
+function test_setWeights_revertsForUnauthorized() public;
+```
+
+<a id="test_setweights_happypath_emitsevent"></a>
+
+### test_setWeights_happyPath_emitsEvent
+
+```solidity
+function test_setWeights_happyPath_emitsEvent() public;
+```
+
+<a id="test_deposit_splitsusdcproportionally"></a>
+
+### test_deposit_splitsUSDCProportionally
+
+```solidity
+function test_deposit_splitsUSDCProportionally() public;
+```
+
+<a id="test_deposit_emitsrouterdepositperleg"></a>
+
+### test_deposit_emitsRouterDepositPerLeg
+
+```solidity
+function test_deposit_emitsRouterDepositPerLeg() public;
+```
+
+<a id="test_deposit_asymmetricweights"></a>
+
+### test_deposit_asymmetricWeights
+
+```solidity
+function test_deposit_asymmetricWeights() public;
+```
+
+<a id="test_deposit_revertsifanylegreverts"></a>
+
+### test_deposit_revertsIfAnyLegReverts
+
+FS-RTR-1: when a vault's deposit() reverts (e.g. USDC blacklist
+or fee-on-transfer), the router surfaces a named
+UsdcLegTransferFailed error that identifies the vault, rather
+than the opaque raw revert string from the vault.
+
+```solidity
+function test_deposit_revertsIfAnyLegReverts() public;
+```
+
+<a id="test_deposit_revertsifroutercapexceeded"></a>
+
+### test_deposit_revertsIfRouterCapExceeded
+
+```solidity
+function test_deposit_revertsIfRouterCapExceeded() public;
+```
+
+<a id="test_deposit_revertsifvaultcapexceeded"></a>
+
+### test_deposit_revertsIfVaultCapExceeded
+
+```solidity
+function test_deposit_revertsIfVaultCapExceeded() public;
+```
+
+<a id="test_deposit_succeedswhenbelowallcaps"></a>
+
+### test_deposit_succeedsWhenBelowAllCaps
+
+```solidity
+function test_deposit_succeedsWhenBelowAllCaps() public;
+```
+
+<a id="test_deposit_revertsifslippageexceeded"></a>
+
+### test_deposit_revertsIfSlippageExceeded
+
+```solidity
+function test_deposit_revertsIfSlippageExceeded() public;
+```
+
+<a id="test_deposit_revertsifminshareslengthmismatch"></a>
+
+### test_deposit_revertsIfMinSharesLengthMismatch
+
+```solidity
+function test_deposit_revertsIfMinSharesLengthMismatch() public;
+```
+
+<a id="test_deposit_revertsifnoweightsset"></a>
+
+### test_deposit_revertsIfNoWeightsSet
+
+```solidity
+function test_deposit_revertsIfNoWeightsSet() public;
+```
+
+<a id="test_previewdeposit_returnscorrectlegamounts"></a>
+
+### test_previewDeposit_returnsCorrectLegAmounts
+
+```solidity
+function test_previewDeposit_returnsCorrectLegAmounts() public;
+```
+
+<a id="test_previewdeposit_marksunavailableforpausedvault"></a>
+
+### test_previewDeposit_marksUnavailableForPausedVault
+
+```solidity
+function test_previewDeposit_marksUnavailableForPausedVault() public;
+```
+
+<a id="test_previewdeposit_marksunavailableforretiredvault"></a>
+
+### test_previewDeposit_marksUnavailableForRetiredVault
+
+```solidity
+function test_previewDeposit_marksUnavailableForRetiredVault() public;
+```
+
+<a id="test_previewdeposit_doesnotrevertforunavailablevault"></a>
+
+### test_previewDeposit_doesNotRevertForUnavailableVault
+
+```solidity
+function test_previewDeposit_doesNotRevertForUnavailableVault() public;
+```
+
+<a id="test_setroutercap_emitsevent"></a>
+
+### test_setRouterCap_emitsEvent
+
+```solidity
+function test_setRouterCap_emitsEvent() public;
+```
+
+<a id="test_setvaultcap_emitsevent"></a>
+
+### test_setVaultCap_emitsEvent
+
+```solidity
+function test_setVaultCap_emitsEvent() public;
+```
+
+<a id="test_setroutercap_revertsforunauthorized"></a>
+
+### test_setRouterCap_revertsForUnauthorized
+
+```solidity
+function test_setRouterCap_revertsForUnauthorized() public;
+```
+
+<a id="test_setvaultcap_revertsonzeroaddress"></a>
+
+### test_setVaultCap_revertsOnZeroAddress
+
+```solidity
+function test_setVaultCap_revertsOnZeroAddress() public;
+```
+
+<a id="test_deposit_skipsregistrypausedvault"></a>
+
+### test_deposit_skipsRegistryPausedVault
+
+Skip-and-renormalise (RTR-5 / F-13): a vault Paused in the registry
+after weighting is skipped, NOT reverted; the deposit routes the
+full amount to the surviving Active leg. Preview reports the Paused
+leg unavailable, and execute deposits exactly the available legs —
+a single Paused vault never bricks the whole router deposit (NC-4).
+
+```solidity
+function test_deposit_skipsRegistryPausedVault() public;
+```
+
+<a id="test_deposit_skipsregistryretiredvault"></a>
+
+### test_deposit_skipsRegistryRetiredVault
+
+Skip-and-renormalise (RTR-5 / F-13): a vault Retired in the
+registry after weighting is skipped, NOT reverted; the deposit
+routes the full amount to the surviving Active leg, matching preview.
+
+```solidity
+function test_deposit_skipsRegistryRetiredVault() public;
+```
+
+<a id="test_deposit_revertswhenalllegsunavailable"></a>
+
+### test_deposit_revertsWhenAllLegsUnavailable
+
+When EVERY weighted vault is non-Active the basket is consistently
+unavailable: preview reports all legs unavailable and the deposit
+reverts (NoWeightsSet) rather than stranding the caller's USDC.
+Preview and execute never disagree (RTR-5).
+
+```solidity
+function test_deposit_revertsWhenAllLegsUnavailable() public;
+```
+
+<a id="test_setweights_revertsifvaultassetmismatch"></a>
+
+### test_setWeights_revertsIfVaultAssetMismatch
+
+Registered vault whose ERC-4626 `asset()` is not router USDC
+cannot be added to the weight vector.
+
+```solidity
+function test_setWeights_revertsIfVaultAssetMismatch() public;
+```
+
+<a id="test_setweights_revertsifvaultassetunreadable"></a>
+
+### test_setWeights_revertsIfVaultAssetUnreadable
+
+A registered EOA-style "vault" (no code, asset() reverts) cannot
+be added to the weight vector. This protects against an
+attacker registering an arbitrary address with crafted metadata
+and being able to weight it.
+
+```solidity
+function test_setWeights_revertsIfVaultAssetUnreadable() public;
+```
+
+<a id="test_deposit_skipsruntimeassetmismatchvault"></a>
+
+### test_deposit_skipsRuntimeAssetMismatchVault
+
+A malicious ERC-4626-shaped vault whose underlying asset is not
+router USDC cannot receive USDC via PortfolioRouter.deposit even
+if it were somehow present in the weight vector. The
+setWeights guard normally blocks this; this test installs the
+bad vault via direct storage manipulation (foundry `store`) on
+a fresh router so we can prove the deposit-time check rejects
+it as defence in depth.
+
+```solidity
+function test_deposit_skipsRuntimeAssetMismatchVault() public;
+```
+
+<a id="test_depositfor_skipsruntimeassetmismatchvault"></a>
+
+### test_depositFor_skipsRuntimeAssetMismatchVault
+
+`depositFor` also skip-and-renormalises a leg that becomes
+router-ineligible (asset mismatch) at runtime (RTR-5).
+
+```solidity
+function test_depositFor_skipsRuntimeAssetMismatchVault() public;
+```
+
+<a id="test_deposit_eligiblevaults_succeed"></a>
+
+### test_deposit_eligibleVaults_succeed
+
+Eligible vaults retain their normal deposit behaviour — the
+eligibility guard does not affect the happy path.
+
+```solidity
+function test_deposit_eligibleVaults_succeed() public;
+```
+
+<a id="test_isroutereligible_trueforusdcvault"></a>
+
+### test_isRouterEligible_trueForUSDCVault
+
+`isRouterEligible` returns true for a USDC-backed ERC-4626 vault.
+
+```solidity
+function test_isRouterEligible_trueForUSDCVault() public view;
+```
+
+<a id="test_isroutereligible_falsefornonusdcvault"></a>
+
+### test_isRouterEligible_falseForNonUSDCVault
+
+`isRouterEligible` returns false for a non-USDC-backed vault.
+
+```solidity
+function test_isRouterEligible_falseForNonUSDCVault() public;
+```
+
+<a id="test_isroutereligible_falseforeoa"></a>
+
+### test_isRouterEligible_falseForEOA
+
+`isRouterEligible` returns false for an EOA (no asset() view).
+
+```solidity
+function test_isRouterEligible_falseForEOA() public;
+```
+
+<a id="test_isroutereligible_falseforzeroaddress"></a>
+
+### test_isRouterEligible_falseForZeroAddress
+
+`isRouterEligible` returns false for address(0).
+
+```solidity
+function test_isRouterEligible_falseForZeroAddress() public view;
+```
+
+<a id="test_isroutereligible_independentofregistrystatus"></a>
+
+### test_isRouterEligible_independentOfRegistryStatus
+
+Router eligibility is distinct from a *transient* registry status
+— a vault that is Paused in the registry is still router-eligible
+from an asset-compatibility standpoint. Clients must read both
+signals to compose accurate UI state. Retirement, however, is
+coupled to eligibility (#1173): a Retired vault must never remain
+counted in `routerEligibleCount`, so eligibility must be dropped
+before the vault can be retired.
+
+```solidity
+function test_isRouterEligible_independentOfRegistryStatus() public;
+```
+
+<a id="testfuzz_setweights_singlevaultinvalidsum-uint256"></a>
+
+### testFuzz_setWeights_singleVaultInvalidSum
+
+Any single-vault weight that is not 10000 must revert.
+
+```solidity
+function testFuzz_setWeights_singleVaultInvalidSum(uint256 bps) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256` |  |
+
+<a id="testfuzz_deposit_proportionalsplit-uint256-uint256"></a>
+
+### testFuzz_deposit_proportionalSplit
+
+A two-vault deposit always splits proportionally (capped to avoid overflow).
+The first leg receives the floored BPS allocation; the final leg receives
+the floored allocation plus any rounding remainder so the router holds zero.
+
+```solidity
+function testFuzz_deposit_proportionalSplit(uint256 amount, uint256 bpsA) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+| bpsA | `uint256` |  |
+
+<a id="test_deposit_norouterdustonunevensplit"></a>
+
+### test_deposit_noRouterDustOnUnevenSplit
+
+Deposit with an amount not divisible by leg count leaves zero
+USDC in the router (remainder is assigned to the final leg).
+
+```solidity
+function test_deposit_noRouterDustOnUnevenSplit() public;
+```
+
+<a id="testfuzz_deposit_routerbalancealwayszero-uint256-uint256"></a>
+
+### testFuzz_deposit_routerBalanceAlwaysZero
+
+Fuzz: arbitrary deposit amounts and two-leg weights — router
+balance is always zero after a successful deposit.
+
+```solidity
+function testFuzz_deposit_routerBalanceAlwaysZero(uint256 amount, uint256 bpsA) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+| bpsA | `uint256` |  |
+
+<a id="_registerineligible-address"></a>
+
+### _registerIneligible
+
+Helper: register a vault in the registry without marking it
+router-eligible. Used to exercise the eligibility gate from
+the un-opted-in default state.
+
+```solidity
+function _registerIneligible(address vault) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
+
+<a id="test_setweights_revertsifvaultnotroutereligible"></a>
+
+### test_setWeights_revertsIfVaultNotRouterEligible
+
+AC#4 (test-plan: fail-closed): a registered vault that has NOT
+been marked router-eligible in the registry is rejected by
+setWeights with `VaultNotRouterEligible`. The default
+eligibility value is false for every registration, so a fresh
+deployment is gated by construction.
+
+```solidity
+function test_setWeights_revertsIfVaultNotRouterEligible() public;
+```
+
+<a id="test_setweights_succeedsafterregistryoptin"></a>
+
+### test_setWeights_succeedsAfterRegistryOptIn
+
+AC#3 (test-plan: configuration-only success): a vault becomes
+router-eligible via a single registry call — no subclass, no
+code override — and a USDC deposit through PortfolioRouter
+succeeds end-to-end. This is the production weighting flow
+that test, demo, and mainnet all share.
+
+```solidity
+function test_setWeights_succeedsAfterRegistryOptIn() public;
+```
+
+<a id="test_deposit_skipsregistryeligibilityrevokedvault"></a>
+
+### test_deposit_skipsRegistryEligibilityRevokedVault
+
+Skip-and-renormalise (RTR-5 / F-13): revoking the registry
+eligibility flag after a vault has been weighted makes that leg
+unavailable — it is skipped (matching preview), and the surviving
+eligible leg absorbs the renormalised amount. The ineligible vault
+never receives USDC.
+
+```solidity
+function test_deposit_skipsRegistryEligibilityRevokedVault() public;
+```
+
+<a id="test_setroutereligible_revertsforunauthorized"></a>
+
+### test_setRouterEligible_revertsForUnauthorized
+
+`VaultRegistry.setRouterEligible` is admin-gated.
+
+```solidity
+function test_setRouterEligible_revertsForUnauthorized() public;
+```
+
+<a id="test_setroutereligible_revertsifnotregistered"></a>
+
+### test_setRouterEligible_revertsIfNotRegistered
+
+`VaultRegistry.setRouterEligible` rejects unregistered vaults
+— the flag cannot be set on an address that was never
+registered.
+
+```solidity
+function test_setRouterEligible_revertsIfNotRegistered() public;
+```
+
+<a id="test_setroutereligible_emitsevent"></a>
+
+### test_setRouterEligible_emitsEvent
+
+`VaultRegistry.setRouterEligible` emits the audit event with
+old/new values so a registry indexer can track every flip.
+
+```solidity
+function test_setRouterEligible_emitsEvent() public;
+```
+
+<a id="test_isroutereligible_followsregistryflag"></a>
+
+### test_isRouterEligible_followsRegistryFlag
+
+`PortfolioRouter.isRouterEligible` mirrors the gate enforced
+at setWeights / deposit time: false for a registered but
+un-opted-in vault, true once the registry flag is flipped.
+
+```solidity
+function test_isRouterEligible_followsRegistryFlag() public;
+```
+
+<a id="_deploypartialvault"></a>
+
+### _deployPartialVault
+
+<i>
+
+Deploy and register a PartialAcceptVault, marking it router-eligible.
+
+</i>
+
+```solidity
+function _deployPartialVault() internal returns (PartialAcceptVault pv);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pv | `PartialAcceptVault` |  |
+
+<a id="test_deposit_revertswithinvariantviolation_whenvaultacceptspartial"></a>
+
+### test_deposit_revertsWithInvariantViolation_whenVaultAcceptsPartial
+
+AC#1: deposit through a mock vault that accepts only half legAmount
+causes the full deposit to revert with UsdcCustodyInvariantViolated.
+
+```solidity
+function test_deposit_revertsWithInvariantViolation_whenVaultAcceptsPartial() public;
+```
+
+<a id="test_deposit_happypath_leaveszerousdcinrouter"></a>
+
+### test_deposit_happyPath_leavesZeroUsdcInRouter
+
+AC#4: normal deposit through well-behaved vaults leaves zero USDC
+in the router — confirming the invariant is satisfied on the
+happy path without triggering UsdcCustodyInvariantViolated.
+
+```solidity
+function test_deposit_happyPath_leavesZeroUsdcInRouter() public;
+```
+
+<a id="test_deposit_revertswithnamederror_whenusdcblacklist"></a>
+
+### test_deposit_revertsWithNamedError_whenUsdcBlacklist
+
+FS-RTR-1 / AC#2: when the router's USDC contract reverts on
+transferFrom because the router address is blacklisted, the
+router re-raises UsdcLegTransferFailed (not the opaque
+UsdcCustodyInvariantViolated) so callers can identify the cause.
+
+Setup: deploy a BlacklistableUSDC + BlacklistableVault, wire a
+fresh router, blacklist the router address, then attempt a
+deposit through that vault.
+
+```solidity
+function test_deposit_revertsWithNamedError_whenUsdcBlacklist() public;
+```
+
+<a id="test_deposit_succeedswithdonatedusdcinrouter"></a>
+
+### test_deposit_succeedsWithDonatedUsdcInRouter
+
+AZ-RTR-2 / AC#3: a small USDC donation to the router before a
+deposit must not cause the deposit to revert. The post-deposit
+invariant uses a balance delta (snapshot before pulling the
+caller's funds) so the pre-existing donated USDC is excluded.
+
+```solidity
+function test_deposit_succeedsWithDonatedUsdcInRouter() public;
+```
+
+<a id="test_sweepforeigntoken_revertsforusdc"></a>
+
+### test_sweepForeignToken_revertsForUsdc
+
+INV-1: USDC (a protocol asset) can never be swept out of the router.
+The deleted `rescueUsdc` is replaced by a sweep that refuses USDC,
+so there is no admin/role path that routes USDC to any recipient.
+
+```solidity
+function test_sweepForeignToken_revertsForUsdc() public;
+```
+
+<a id="test_sweepforeigntoken_permissionlesstoquarantine"></a>
+
+### test_sweepForeignToken_permissionlessToQuarantine
+
+INV-2: a foreign (non-USDC) token that lands on the router is
+permissionlessly swept to the fixed quarantine address — any
+caller, never a caller-supplied recipient.
+
+```solidity
+function test_sweepForeignToken_permissionlessToQuarantine() public;
+```
+
+<a id="test_sweepforeigntoken_zerobalanceisnoop"></a>
+
+### test_sweepForeignToken_zeroBalanceIsNoop
+
+The sweep is a harmless no-op when there is nothing to move.
+
+```solidity
+function test_sweepForeignToken_zeroBalanceIsNoop() public;
+```
+
+<a id="_registerrwaplaceholder"></a>
+
+### _registerRwaPlaceholder
+
+<i>
+
+Register a fourth vault matching the demo's RWA/Thematic
+placeholder shape: present in the registry but non-Active
+(Paused) and never marked router-eligible. Returns the vault.
+
+</i>
+
+```solidity
+function _registerRwaPlaceholder() internal returns (MockRouterVault rwa);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rwa | `MockRouterVault` |  |
+
+<a id="test_previewdeposit_skipsrwaplaceholder"></a>
+
+### test_previewDeposit_skipsRwaPlaceholder
+
+AC (issue #479): with the RWA/Thematic placeholder present in
+the registry as a non-Active, non-router-eligible entry,
+`previewDeposit` returns only the weighted (Active, eligible)
+legs and does not surface or revert on the RWA leg.
+
+```solidity
+function test_previewDeposit_skipsRwaPlaceholder() public;
+```
+
+<a id="test_deposit_succeedswithrwaplaceholderpresent"></a>
+
+### test_deposit_succeedsWithRwaPlaceholderPresent
+
+AC (issue #479): `deposit` succeeds and splits across the
+Active weighted vaults while the non-Active RWA placeholder
+sits inertly in the registry — no revert, no flow to RWA.
+
+```solidity
+function test_deposit_succeedsWithRwaPlaceholderPresent() public;
+```
+
+<a id="test_rwaplaceholder_isnonactiveandineligible"></a>
+
+### test_rwaPlaceholder_isNonActiveAndIneligible
+
+AC (issue #479): the RWA placeholder reports the expected
+non-Active status and stays router-ineligible — the two
+signals the dapp and Router read to keep it out of flow.
+
+```solidity
+function test_rwaPlaceholder_isNonActiveAndIneligible() public;
+```
+
+<a id="_setdefaultweights"></a>
+
+### _setDefaultWeights
+
+<i>
+
+Set a default 60/40 vector over the two eligible vaults.
+
+</i>
+
+```solidity
+function _setDefaultWeights() internal;
+```
+
+<a id="test_setdefaultweights_revertsiflengthmismatch"></a>
+
+### test_setDefaultWeights_revertsIfLengthMismatch
+
+setDefaultWeights rejects a length that does not match the
+registry's router-eligible vault count.
+
+```solidity
+function test_setDefaultWeights_revertsIfLengthMismatch() public;
+```
+
+<a id="test_redeemfor_unauthorizedcaller_reverts"></a>
+
+### test_redeemFor_unauthorizedCaller_reverts
+
+An unauthorized caller cannot redeemFor — the confused-deputy
+guard reverts with UnauthorizedRedeemer before any vault call.
+
+```solidity
+function test_redeemFor_unauthorizedCaller_reverts() public;
+```
+
+<a id="test_redeemfor_shareholdercanredeem"></a>
+
+### test_redeemFor_shareHolderCanRedeem
+
+shareHolder can call redeemFor on their own shares.
+
+```solidity
+function test_redeemFor_shareHolderCanRedeem() public;
+```
+
+<a id="_depositandapproveforredeem-uint256"></a>
+
+### _depositAndApproveForRedeem
+
+<i>
+
+Deposit `amount`, fund both vaults to cover redemption, approve the
+router on both share tokens, and return the per-leg share array.
+
+</i>
+
+```solidity
+function _depositAndApproveForRedeem(uint256 amount)
+        internal
+        returns (uint256[] memory sharesToRedeem);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sharesToRedeem | `uint256[]` |  |
+
+<a id="_redeemvaults"></a>
+
+### _redeemVaults
+
+<i>
+
+The explicit redeem vault set [vaultA, vaultB], parallel to the
+equal-weight deposit legs. `redeemFor` now drives legs from this
+caller-supplied array, not the live weight vector (issue #967).
+
+</i>
+
+```solidity
+function _redeemVaults() internal view returns (address[] memory vaults);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+
+<a id="test_redeemfor_revertswhenbelowminassetsfloor"></a>
+
+### test_redeemFor_revertsWhenBelowMinAssetsFloor
+
+redeemFor reverts SlippageExceeded when realized per-leg proceeds
+fall below the caller-supplied minAssetsPerLeg floor.
+
+```solidity
+function test_redeemFor_revertsWhenBelowMinAssetsFloor() public;
+```
+
+<a id="test_redeemfor_revertswhendeadlineexpired_succeedsbeforedeadline"></a>
+
+### test_redeemFor_revertsWhenDeadlineExpired_succeedsBeforeDeadline
+
+redeemFor reverts DeadlineExpired when block.timestamp exceeds the
+supplied deadline, and the floor/deadline both pass at-or-above the
+floor before the deadline (happy path settles).
+
+```solidity
+function test_redeemFor_revertsWhenDeadlineExpired_succeedsBeforeDeadline() public;
+```
+
+<a id="test_redeemfor_revertsonminassetslengthmismatch"></a>
+
+### test_redeemFor_revertsOnMinAssetsLengthMismatch
+
+redeemFor reverts RedeemVaultsLengthMismatch when the floor array
+length does not match the explicit `vaults[]` leg count.
+
+```solidity
+function test_redeemFor_revertsOnMinAssetsLengthMismatch() public;
+```
+
+<a id="test_redeemfor_driveslegsfromexplicitvaults_notweightvector"></a>
+
+### test_redeemFor_drivesLegsFromExplicitVaults_notWeightVector
+
+redeemFor drives legs from the explicit `vaults[]` argument, not
+the live weight vector (F-03). After a full reweight onto vaultC,
+the holder still exits vaultA/vaultB by naming them.
+
+```solidity
+function test_redeemFor_drivesLegsFromExplicitVaults_notWeightVector() public;
+```
+
+<a id="test_redeemfor_redeemsfromretiredvault"></a>
+
+### test_redeemFor_redeemsFromRetiredVault
+
+redeemFor permits redeeming from a Retired vault (F-02): Retired
+is withdraw-only, so the exit path must still succeed.
+
+```solidity
+function test_redeemFor_redeemsFromRetiredVault() public;
+```
+
+<a id="test_redeemfor_revertswhenlegpaused"></a>
+
+### test_redeemFor_revertsWhenLegPaused
+
+redeemFor reverts VaultPausedForRedeem when a named leg is Paused
+(F-02): only Paused blocks the exit path.
+
+```solidity
+function test_redeemFor_revertsWhenLegPaused() public;
+```
+
+<a id="test_redeemfor_revertsonunregisteredvault"></a>
+
+### test_redeemFor_revertsOnUnregisteredVault
+
+redeemFor reverts RedeemVaultNotRegistered when a named vault is
+not registered in the VaultRegistry.
+
+```solidity
+function test_redeemFor_revertsOnUnregisteredVault() public;
+```
+
+<a id="test_redeemfor_revertsonshareslengthmismatch"></a>
+
+### test_redeemFor_revertsOnSharesLengthMismatch
+
+redeemFor reverts RedeemVaultsLengthMismatch when the shares array
+length does not match the explicit `vaults[]`.
+
+```solidity
+function test_redeemFor_revertsOnSharesLengthMismatch() public;
+```
+
+<a id="test_lastadminfloor_router_cannotdropsoleadmin"></a>
+
+### test_lastAdminFloor_router_cannotDropSoleAdmin
+
+The sole ADMIN_ROLE holder cannot renounceRole itself to an admin
+count of zero (LastAdminFloor), and cannot revokeRole itself
+either; after first granting a second admin, the old admin can be
+dropped (floor only blocks the LAST admin).
+
+```solidity
+function test_lastAdminFloor_router_cannotDropSoleAdmin() public;
+```
+
+<a id="test_previewdeposit_uses_defaultweights_when_no_proposal"></a>
+
+### test_previewDeposit_uses_defaultWeights_when_no_proposal
+
+With no proposal ever passed (voted vector inactive), the router
+previews and routes by the default weight vector. ADR-0002.
+
+```solidity
+function test_previewDeposit_uses_defaultWeights_when_no_proposal() public;
+```
+
+<a id="test_previewdeposit_uses_defaultweights_after_failed_quorum"></a>
+
+### test_previewDeposit_uses_defaultWeights_after_failed_quorum
+
+After the voted vector is cleared (simulating a fall-back to
+default after the most recent proposal failed quorum), the
+router previews by the default vector again. ADR-0002.
+
+```solidity
+function test_previewDeposit_uses_defaultWeights_after_failed_quorum() public;
+```
+
+<a id="test_voted_weights_override_defaults_then_revert_to_defaults"></a>
+
+### test_voted_weights_override_defaults_then_revert_to_defaults
+
+A passed vote overrides the default; defaultWeights storage is
+unchanged; clearing the voted vector reverts to default. ADR-0002.
+
+```solidity
+function test_voted_weights_override_defaults_then_revert_to_defaults() public;
+```
+

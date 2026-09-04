@@ -1,0 +1,103 @@
+---
+title: "Sup5Pool"
+---
+
+# Sup5Pool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/fv/StaleOracleRedemption.t.sol)
+
+<i>
+
+deSPXA pool stub: satisfies addAsset cardinality/liquidity gates.
+
+</i>
+
+## Constants
+
+### token0
+
+```solidity
+address public immutable token0;
+```
+
+### token1
+
+```solidity
+address public immutable token1;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address t0, address t1);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t0 | `address` |  |
+| t1 | `address` |  |
+
+<a id="slot0"></a>
+
+### slot0
+
+```solidity
+function slot0() external pure returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+| &lt;none&gt; | `int24` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint8` |  |
+| &lt;none&gt; | `bool` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+        external
+        pure
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secondsAgos | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickCumulatives | `int56[]` |  |
+| secondsPerLiq | `uint160[]` |  |
+
+<a id="liquidity"></a>
+
+### liquidity
+
+```solidity
+function liquidity() external pure returns (uint128);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint128` |  |
+

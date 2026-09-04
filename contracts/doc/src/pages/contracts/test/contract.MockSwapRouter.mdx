@@ -1,0 +1,69 @@
+---
+title: "MockSwapRouter"
+---
+
+# MockSwapRouter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/BasketVault.t.sol)
+
+**Inherits:** [ISwapRouter](/contracts/interfaces/interface.ISwapRouter)
+
+## State Variables
+
+### amountOut
+
+```solidity
+uint256 public amountOut;
+```
+
+## Functions
+
+<a id="setamountout-uint256"></a>
+
+### setAmountOut
+
+```solidity
+function setAmountOut(uint256 amountOut_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut_ | `uint256` |  |
+
+<a id="exactinputsingle-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(ExactInputSingleParams calldata params) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+## Errors
+
+### TooLittleReceived
+
+```solidity
+error TooLittleReceived(uint256 amountOut, uint256 amountOutMinimum);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+| amountOutMinimum | `uint256` |  |
+

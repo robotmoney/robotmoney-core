@@ -1,0 +1,59 @@
+---
+title: "MockTwapSource"
+---
+
+# MockTwapSource
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/fv/TwapManipulation.t.sol)
+
+<i>
+
+Mock manipulable TWAP source: a settable USDC-value per unit so a test can
+skew the "oracle" the vault would price against and derive its floor from.
+
+</i>
+
+## State Variables
+
+### usdcValuePerUnit
+
+```solidity
+uint256 public usdcValuePerUnit;
+```
+
+## Functions
+
+<a id="set-uint256"></a>
+
+### set
+
+```solidity
+function set(uint256 v) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="quote-uint256"></a>
+
+### quote
+
+```solidity
+function quote(uint256 units) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| units | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

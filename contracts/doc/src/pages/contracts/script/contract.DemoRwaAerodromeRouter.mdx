@@ -1,0 +1,111 @@
+---
+title: "DemoRwaAerodromeRouter"
+description: "Price-aware Aerodrome router stub for the RWA vault demo. Unlike DemoAerodromeRouter (which swaps 1:1), this stub mirrors the ChronicleOracleAdapter conversion formula so that `totalAssets` stays in sync with `totalSupply` after every deposit. Without this, each deposit into the RWA vault would leave near-zero USDC-denominated assets in the vault (because the Chronicle oracle values deSPXA at 5000 USDC each, not 1:1), causing exponential share inflation that overflows uint256 after a handful of deposits."
+---
+
+# DemoRwaAerodromeRouter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployDemoExtraVaults.s.sol)
+
+Price-aware Aerodrome router stub for the RWA vault demo.
+Unlike DemoAerodromeRouter (which swaps 1:1), this stub mirrors the
+ChronicleOracleAdapter conversion formula so that `totalAssets` stays
+in sync with `totalSupply` after every deposit. Without this, each
+deposit into the RWA vault would leave near-zero USDC-denominated
+assets in the vault (because the Chronicle oracle values deSPXA at
+5000 USDC each, not 1:1), causing exponential share inflation that
+overflows uint256 after a handful of deposits.
+
+Conversion mirrors ChronicleOracleAdapter exactly:
+USDC → RWA: amountOut = (amountIn * 1e12) * WAD / DEMO_PRICE
+RWA → USDC: amountOut = amountIn * DEMO_PRICE / (WAD * 1e12)
+
+Demo-only; never deployed on mainnet.
+
+## Constants
+
+### DEMO_PRICE
+
+<i>
+
+Must match DemoChronicleOracle.DEMO_PRICE so swaps are consistent
+with the oracle NAV. 5000 USD per deSPXA in 18-decimal WAD format.
+
+</i>
+
+```solidity
+uint256 public constant DEMO_PRICE = 5_000e18;
+```
+
+### WAD
+
+```solidity
+uint256 private constant WAD = 1e18;
+```
+
+### USDC
+
+```solidity
+address public immutable USDC;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+
+<a id="swapexacttokensfortokens-uint256-uint256-iaerodromerouter-route-address-uint256"></a>
+
+### swapExactTokensForTokens
+
+```solidity
+function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256, /* amountOutMin */
+        IAerodromeRouter.Route[] calldata routes,
+        address to,
+        uint256 /* deadline */
+    ) external returns (uint256[] memory amounts);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountIn | `uint256` |  |
+| _ | `uint256` |  |
+| routes | `IAerodromeRouter.Route[]` |  |
+| to | `address` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amounts | `uint256[]` |  |
+
+<a id="defaultfactory"></a>
+
+### defaultFactory
+
+```solidity
+function defaultFactory() external pure returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

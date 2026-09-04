@@ -1,0 +1,177 @@
+---
+title: "IBasketVaultViews"
+---
+
+# IBasketVaultViews
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/lib/BasketViews.sol)
+
+<i>
+
+Minimal read surface of `BasketVault` consumed by the weight-preview
+views. Declared here (not imported from BasketVault) to avoid a cyclic
+library↔contract import.
+
+</i>
+
+## Functions
+
+<a id="activeassetcount"></a>
+
+### activeAssetCount
+
+```solidity
+function activeAssetCount() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="assetcount"></a>
+
+### assetCount
+
+```solidity
+function assetCount() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="assets-uint256"></a>
+
+### assets
+
+```solidity
+function assets(uint256 index)
+        external
+        view
+        returns (
+            address token,
+            address pool,
+            uint24 swapFee,
+            bool active,
+            address adapter,
+            uint8 venue
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| pool | `address` |  |
+| swapFee | `uint24` |  |
+| active | `bool` |  |
+| adapter | `address` |  |
+| venue | `uint8` |  |
+
+<a id="assetusdcvalue-uint256-uint256"></a>
+
+### assetUsdcValue
+
+```solidity
+function assetUsdcValue(uint256 index, uint256 amount) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="assettokenvalue-uint256-uint256"></a>
+
+### assetTokenValue
+
+```solidity
+function assetTokenValue(uint256 index, uint256 usdcAmount) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| usdcAmount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="balanceof-address"></a>
+
+### balanceOf
+
+```solidity
+function balanceOf(address account) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="totalsupply"></a>
+
+### totalSupply
+
+```solidity
+function totalSupply() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="effectivetwapwindow-address"></a>
+
+### effectiveTwapWindow
+
+```solidity
+function effectiveTwapWindow(address token) external view returns (uint32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint32` |  |
+

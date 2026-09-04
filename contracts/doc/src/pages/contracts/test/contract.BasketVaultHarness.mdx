@@ -1,0 +1,58 @@
+---
+title: "BasketVaultHarness"
+---
+
+# BasketVaultHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/BasketVault.t.sol)
+
+**Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
+
+## Functions
+
+<a id="constructor-ierc20-iswaprouter-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(IERC20 usdc_, ISwapRouter swapRouter_, address admin_, address emergencyResponder_)
+        BasketVault(
+            "Basket Harness",
+            "bTEST",
+            usdc_,
+            swapRouter_,
+            1_000_000e6,
+            100_000e6,
+            0,
+            100,
+            admin_,
+            admin_,
+            emergencyResponder_
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `IERC20` |  |
+| swapRouter_ | `ISwapRouter` |  |
+| admin_ | `address` |  |
+| emergencyResponder_ | `address` |  |
+
+<a id="maxassets"></a>
+
+### maxAssets
+
+Subclasses declare the maximum number of assets in the basket.
+
+```solidity
+function maxAssets() public pure override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

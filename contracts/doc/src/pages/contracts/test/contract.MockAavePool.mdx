@@ -1,0 +1,87 @@
+---
+title: "MockAavePool"
+---
+
+# MockAavePool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AaveV3Adapter.t.sol)
+
+<i>
+
+Minimal Aave V3 Pool mock. `supply` pulls USDC from the caller via
+`transferFrom` (consuming the adapter's allowance, like the real pool)
+and credits the caller's aToken balance 1:1. `withdraw` burns aTokens
+and returns USDC to `to`.
+
+</i>
+
+## Constants
+
+### usdc
+
+```solidity
+IERC20 public immutable usdc;
+```
+
+### aToken
+
+```solidity
+TestERC20 public immutable aToken;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_, address aToken_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+| aToken_ | `address` |  |
+
+<a id="supply-address-uint256-address-uint16"></a>
+
+### supply
+
+```solidity
+function supply(address asset, uint256 amount, address onBehalfOf, uint16) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+| onBehalfOf | `address` |  |
+| _ | `uint16` |  |
+
+<a id="withdraw-address-uint256-address"></a>
+
+### withdraw
+
+```solidity
+function withdraw(address asset, uint256 amount, address to) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

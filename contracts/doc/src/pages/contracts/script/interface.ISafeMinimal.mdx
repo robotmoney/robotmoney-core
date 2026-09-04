@@ -1,0 +1,31 @@
+---
+title: "ISafeMinimal"
+---
+
+# ISafeMinimal
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployTimelock.s.sol)
+
+<i>
+
+Minimal Safe interface — only `getThreshold()` is required for the
+deploy-time guard that rejects EOA or low-threshold Safe addresses.
+
+</i>
+
+## Functions
+
+<a id="getthreshold"></a>
+
+### getThreshold
+
+```solidity
+function getThreshold() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

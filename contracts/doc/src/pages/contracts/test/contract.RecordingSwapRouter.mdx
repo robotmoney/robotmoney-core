@@ -1,0 +1,48 @@
+---
+title: "RecordingSwapRouter"
+---
+
+# RecordingSwapRouter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AgentTokenVault.t.sol)
+
+**Inherits:** [ISwapRouter](/contracts/interfaces/interface.ISwapRouter)
+
+<i>
+
+Swap router mock that records the USDC `amountIn` of every USDC->token
+deposit swap, keyed by output token, so equal-weight allocation can be
+asserted directly. Returns `amountIn` 1:1 to the recipient.
+
+</i>
+
+## State Variables
+
+### usdcInForToken
+
+```solidity
+mapping(address => uint256) public usdcInForToken;
+```
+
+## Functions
+
+<a id="exactinputsingle-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(ExactInputSingleParams calldata params) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

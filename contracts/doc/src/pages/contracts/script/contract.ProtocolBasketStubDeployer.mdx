@@ -1,0 +1,45 @@
+---
+title: "ProtocolBasketStubDeployer"
+description: "One-shot batch deployer for the ProtocolAssetVault devnet basket stand-ins (PRD §11.2 — wETH, cbBTC, wSOL). Mirrors the `AgentBasketStubDeployer` shape: 6 sub-CREATEs (3 stand-in tokens + 3 USDC pool stubs) in a single broadcaster CREATE. Demo-only."
+---
+
+# ProtocolBasketStubDeployer
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployDemoExtraVaults.s.sol)
+
+One-shot batch deployer for the ProtocolAssetVault devnet basket
+stand-ins (PRD §11.2 — wETH, cbBTC, wSOL). Mirrors the
+`AgentBasketStubDeployer` shape: 6 sub-CREATEs (3 stand-in tokens
++ 3 USDC pool stubs) in a single broadcaster CREATE. Demo-only.
+
+## State Variables
+
+### tokens
+
+```solidity
+DemoBasketToken[3] public tokens;
+```
+
+### pools
+
+```solidity
+DemoUsdcPool[3] public pools;
+```
+
+## Functions
+
+<a id="constructor-string-3-address"></a>
+
+### constructor
+
+```solidity
+constructor(string[3] memory symbols, address usdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| symbols | `string[3]` |  |
+| usdc | `address` |  |
+

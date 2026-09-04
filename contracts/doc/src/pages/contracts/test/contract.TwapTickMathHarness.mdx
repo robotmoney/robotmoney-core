@@ -1,0 +1,34 @@
+---
+title: "TwapTickMathHarness"
+---
+
+# TwapTickMathHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/TwapTickMath.t.sol)
+
+<i>
+
+External wrapper so library reverts cross a call boundary and can be
+asserted with `vm.expectRevert` (internal library calls are inlined and
+do not trip the cheatcode reliably).
+
+</i>
+
+## Functions
+
+<a id="checkpoolpair-address-address-address"></a>
+
+### checkPoolPair
+
+```solidity
+function checkPoolPair(address pool, address baseToken, address quoteToken) external view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| baseToken | `address` |  |
+| quoteToken | `address` |  |
+

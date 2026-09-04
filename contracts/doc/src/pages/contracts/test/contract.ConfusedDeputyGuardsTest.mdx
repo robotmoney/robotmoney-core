@@ -1,0 +1,264 @@
+---
+title: "ConfusedDeputyGuardsTest"
+description: "Pins every authority invariant from the confused-deputy audit. Each test name maps to a numbered invariant in the audit artifact §5."
+---
+
+# ConfusedDeputyGuardsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/ConfusedDeputyGuards.t.sol)
+
+**Inherits:** Test
+
+**Title:** ConfusedDeputyGuardsTest
+
+Pins every authority invariant from the confused-deputy audit. Each
+test name maps to a numbered invariant in the audit artifact §5.
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+### MAX_PER_PAYMENT
+
+```solidity
+uint256 internal constant MAX_PER_PAYMENT = 1_000 * ONE_USDC;
+```
+
+### MAX_PER_WINDOW
+
+```solidity
+uint256 internal constant MAX_PER_WINDOW = 5_000 * ONE_USDC;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vault
+
+```solidity
+MockVault internal vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### depositor
+
+```solidity
+address internal depositor = makeAddr("depositor");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("agent");
+```
+
+### otherDepositor
+
+```solidity
+address internal otherDepositor = makeAddr("otherDepositor");
+```
+
+### otherAgent
+
+```solidity
+address internal otherAgent = makeAddr("otherAgent");
+```
+
+### shareReceiver
+
+```solidity
+address internal shareReceiver = makeAddr("shareReceiver");
+```
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("attacker");
+```
+
+### attackerReceiver
+
+```solidity
+address internal attackerReceiver = makeAddr("attackerReceiver");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_policy-address"></a>
+
+### _policy
+
+```solidity
+function _policy(address shareReceiver_) internal view returns (IGateway.AgentPolicy memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shareReceiver_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IGateway.AgentPolicy` |  |
+
+<a id="_authorize-address-address-igateway-agentpolicy"></a>
+
+### _authorize
+
+```solidity
+function _authorize(address owner_, address agent_, IGateway.AgentPolicy memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner_ | `address` |  |
+| agent_ | `address` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="_fund-address-uint256"></a>
+
+### _fund
+
+```solidity
+function _fund(address who, uint256 amt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| amt | `uint256` |  |
+
+<a id="test_invariant1_deposit_sharesgotopolicyreceiver"></a>
+
+### test_invariant1_deposit_sharesGoToPolicyReceiver
+
+Deposit sends shares to policy.shareReceiver, not to any address
+the agent caller might supply via calldata or other means.
+There is no `recipient` calldata parameter in deposit() — this test
+confirms shares land at the policy-registered receiver even when a
+different EOA is funding the deposit.
+
+```solidity
+function test_invariant1_deposit_sharesGoToPolicyReceiver() public;
+```
+
+<a id="test_invariant2_withdraw_assetsgotopolicyassetrecipient"></a>
+
+### test_invariant2_withdraw_assetsGoToPolicyAssetRecipient
+
+withdraw() forwards USDC only to policy.assetRecipient. There is
+no calldata receiver parameter the agent can supply.
+
+```solidity
+function test_invariant2_withdraw_assetsGoToPolicyAssetRecipient() public;
+```
+
+<a id="test_invariant3_depositto_rejectsunlisteddestination"></a>
+
+### test_invariant3_depositTo_rejectsUnlistedDestination
+
+depositTo rejects any destination not in policy.allowedDestinations.
+An attacker cannot redirect funds to an arbitrary vault by
+supplying a foreign destination address.
+
+```solidity
+function test_invariant3_depositTo_rejectsUnlistedDestination() public;
+```
+
+<a id="test_invariant4_withdraw_rejectsforeignsourcevault"></a>
+
+### test_invariant4_withdraw_rejectsForeignSourceVault
+
+withdraw() rejects any sourceVault != gateway's pinned vault.
+An attacker cannot supply a foreign vault address to bypass
+the asset-redemption rail.
+
+```solidity
+function test_invariant4_withdraw_rejectsForeignSourceVault() public;
+```
+
+<a id="test_invariant5_setpolicy_requiresagentowner"></a>
+
+### test_invariant5_setPolicy_requiresAgentOwner
+
+A third party cannot update another depositor's agent policy.
+setPolicy must revert with NotAgentOwner when the caller is not
+the recorded agentOwner.
+
+```solidity
+function test_invariant5_setPolicy_requiresAgentOwner() public;
+```
+
+<a id="test_invariant6_revokeagent_requiresagentowner"></a>
+
+### test_invariant6_revokeAgent_requiresAgentOwner
+
+A third party cannot revoke another depositor's agent.
+
+```solidity
+function test_invariant6_revokeAgent_requiresAgentOwner() public;
+```
+
+<a id="test_invariant7_authorizeagent_rejectsdoubleregistration"></a>
+
+### test_invariant7_authorizeAgent_rejectsDoubleRegistration
+
+authorizeAgent on an already-owned agent reverts AgentAlreadyOwned.
+A second caller cannot steal ownership of an existing agent.
+
+```solidity
+function test_invariant7_authorizeAgent_rejectsDoubleRegistration() public;
+```
+
+<a id="test_invariant7b_agentowner_boundtofirstdepositor"></a>
+
+### test_invariant7b_agentOwner_boundToFirstDepositor
+
+agentOwner[agent] is set to msg.sender at first authorize and
+can only change via the recorded owner calling revokeAgent.
+
+```solidity
+function test_invariant7b_agentOwner_boundToFirstDepositor() public;
+```
+

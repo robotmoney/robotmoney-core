@@ -1,0 +1,183 @@
+---
+title: "UnifiedVaultBase"
+---
+
+# UnifiedVaultBase
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/UnifiedVault.t.sol)
+
+**Inherits:** Test
+
+<i>
+
+Shared harness: deploys a `Vault`, funds users, and registers adapters
+through the full eligibility gate (allowlist + codehash + identity).
+
+</i>
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1_000_000;
+```
+
+### MAX_BPS
+
+```solidity
+uint256 internal constant MAX_BPS = 10_000;
+```
+
+### MAX_SLIPPAGE_BPS
+
+```solidity
+uint256 internal constant MAX_SLIPPAGE_BPS = 200;
+```
+
+### MAX_NAV_GROWTH_RATE_BPS
+
+```solidity
+uint256 internal constant MAX_NAV_GROWTH_RATE_BPS = 1e30;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vault
+
+```solidity
+Vault internal vault;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### feeRecipient
+
+```solidity
+address internal feeRecipient = makeAddr("feeRecipient");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+## Functions
+
+<a id="_deployvault-uint256"></a>
+
+### _deployVault
+
+```solidity
+function _deployVault(uint256 exitFeeBps) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| exitFeeBps | `uint256` |  |
+
+<a id="_registerexact-uint16"></a>
+
+### _registerExact
+
+```solidity
+function _registerExact(uint16 capBps) internal returns (ExactHoldAdapter a);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| capBps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `ExactHoldAdapter` |  |
+
+<a id="_registerinexact-uint16-uint256"></a>
+
+### _registerInexact
+
+```solidity
+function _registerInexact(uint16 capBps, uint256 haircutBps)
+        internal
+        returns (InexactSellAdapter a);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| capBps | `uint16` |  |
+| haircutBps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `InexactSellAdapter` |  |
+
+<a id="_register-address-uint16-bool"></a>
+
+### _register
+
+```solidity
+function _register(address adapter, uint16 capBps, bool isExact) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+| capBps | `uint16` |  |
+| isExact | `bool` |  |
+
+<a id="_deposit-address-uint256"></a>
+
+### _deposit
+
+```solidity
+function _deposit(address who, uint256 assets) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| assets | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+

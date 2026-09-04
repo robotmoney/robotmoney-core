@@ -1,0 +1,147 @@
+---
+title: "ActivateBasketVaultEligibilityTest"
+description: "Tests for ActivateBasketVaultEligibility.s.sol."
+---
+
+# ActivateBasketVaultEligibilityTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/ActivateBasketVaultEligibility.t.sol)
+
+**Inherits:** Test
+
+Tests for ActivateBasketVaultEligibility.s.sol.
+
+The acceptance criteria (issue #692):
+- Reverts when `BASKET_VAULT_AUDIT_COMPLETE` is not set (passed as false).
+- Succeeds with `isRouterEligible` returning true for both vaults when
+`BASKET_VAULT_AUDIT_COMPLETE` is set to "true".
+
+Uses `runInProcessWith(auditComplete=true/false)` to exercise both paths
+without requiring env var manipulation inside forge tests.
+
+## State Variables
+
+### script
+
+```solidity
+ActivateBasketVaultEligibility internal script;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### admin
+
+```solidity
+address internal admin = address(this);
+```
+
+### protocolVault
+
+```solidity
+address internal protocolVault;
+```
+
+### agentVault
+
+```solidity
+address internal agentVault;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_reverts_when_auditcomplete_false"></a>
+
+### test_reverts_when_auditComplete_false
+
+The activation script reverts when auditComplete is false.
+This exercises the safety gate that prevents accidental activation
+before the Architecture §4.1 certification checklist is satisfied.
+
+```solidity
+function test_reverts_when_auditComplete_false() public;
+```
+
+<a id="test_vaults_stay_ineligible_when_gate_reverts"></a>
+
+### test_vaults_stay_ineligible_when_gate_reverts
+
+Both vaults remain ineligible after the gated revert.
+
+```solidity
+function test_vaults_stay_ineligible_when_gate_reverts() public;
+```
+
+<a id="test_activates_both_vaults_when_auditcomplete_true"></a>
+
+### test_activates_both_vaults_when_auditComplete_true
+
+Both vaults become router-eligible after successful activation.
+The test contract is admin (setUp set admin = address(this) and
+deployed registry with that admin), so no prank is needed.
+
+```solidity
+function test_activates_both_vaults_when_auditComplete_true() public;
+```
+
+<a id="test_returned_struct_matches_inputs"></a>
+
+### test_returned_struct_matches_inputs
+
+The returned struct contains the correct vault addresses.
+
+```solidity
+function test_returned_struct_matches_inputs() public;
+```
+
+<a id="test_routereligiblecount_increments_by_two"></a>
+
+### test_routerEligibleCount_increments_by_two
+
+`routerEligibleCount` increments by 2 after activating both vaults.
+
+```solidity
+function test_routerEligibleCount_increments_by_two() public;
+```
+
+<a id="test_reverts_on_zero_registry"></a>
+
+### test_reverts_on_zero_registry
+
+```solidity
+function test_reverts_on_zero_registry() public;
+```
+
+<a id="test_reverts_on_zero_protocolvault"></a>
+
+### test_reverts_on_zero_protocolVault
+
+```solidity
+function test_reverts_on_zero_protocolVault() public;
+```
+
+<a id="test_reverts_on_zero_agentvault"></a>
+
+### test_reverts_on_zero_agentVault
+
+```solidity
+function test_reverts_on_zero_agentVault() public;
+```
+

@@ -1,0 +1,37 @@
+---
+title: "DeployRehearsalSafe"
+description: "Deploy the rehearsal-only Safe stand-in. Broadcast as the deployer EOA so the SAFE_ADDRESS passed to DeployTimelock.s.sol has deployed code and a threshold >= 2, exactly as _validate requires."
+---
+
+# DeployRehearsalSafe
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployRehearsalSafe.s.sol)
+
+**Inherits:** Script
+
+**Title:** DeployRehearsalSafe
+
+Deploy the rehearsal-only Safe stand-in. Broadcast as the deployer
+EOA so the SAFE_ADDRESS passed to DeployTimelock.s.sol has deployed
+code and a threshold >= 2, exactly as _validate requires.
+
+Optional env vars:
+DEPLOYMENT_OUT   — path for the output JSON
+(default: "deployments/rehearsal-safe-&lt;chain_id>.json")
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+```solidity
+function run() external returns (RehearsalSafe safe);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe | `RehearsalSafe` |  |
+

@@ -1,0 +1,155 @@
+---
+title: "BlacklistableVault"
+description: "ERC-4626-shaped vault that uses a BlacklistableUSDC instance. Identical to MockRouterVault but typed to BlacklistableUSDC so the blacklist test can pass the address check in setWeights / _requireRouterEligible."
+---
+
+# BlacklistableVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/PortfolioRouter.t.sol)
+
+**Inherits:** ERC20
+
+ERC-4626-shaped vault that uses a BlacklistableUSDC instance.
+Identical to MockRouterVault but typed to BlacklistableUSDC so the
+blacklist test can pass the address check in setWeights / _requireRouterEligible.
+
+## Constants
+
+### assetToken
+
+```solidity
+IERC20 public immutable assetToken;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address asset_) ERC20("Blacklistable Vault Shares", "BVS");
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `address` |  |
+
+<a id="decimals"></a>
+
+### decimals
+
+<i>
+
+Returns the number of decimals used to get its user representation.
+For example, if `decimals` equals `2`, a balance of `505` tokens should
+be displayed to a user as `5.05` (`505 / 10 ** 2`).
+
+Tokens usually opt for a value of 18, imitating the relationship between
+Ether and Wei. This is the default value returned by this function, unless
+it's overridden.
+
+NOTE: This information is only used for _display_ purposes: it in
+no way affects any of the arithmetic of the contract, including
+`IERC20` and `IERC20`.
+
+</i>
+
+```solidity
+function decimals() public pure override returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="asset"></a>
+
+### asset
+
+```solidity
+function asset() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+```solidity
+function totalAssets() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="previewdeposit-uint256"></a>
+
+### previewDeposit
+
+```solidity
+function previewDeposit(uint256 assets) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+```solidity
+function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+## Events
+
+### Deposit
+
+```solidity
+event Deposit(address indexed sender, address indexed receiver, uint256 assets, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sender | `address` |  |
+| receiver | `address` |  |
+| assets | `uint256` |  |
+| shares | `uint256` |  |
+

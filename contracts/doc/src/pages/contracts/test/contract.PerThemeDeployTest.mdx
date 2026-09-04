@@ -1,0 +1,328 @@
+---
+title: "PerThemeDeployTest"
+---
+
+# PerThemeDeployTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/PerThemeDeploy.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### TVL_CAP
+
+```solidity
+uint256 internal constant TVL_CAP = 10_000_000 * 1e6;
+```
+
+### PER_DEPOSIT_CAP
+
+```solidity
+uint256 internal constant PER_DEPOSIT_CAP = 1_000_000 * 1e6;
+```
+
+### NAV_GROWTH_BPS
+
+```solidity
+uint256 internal constant NAV_GROWTH_BPS = 500;
+```
+
+## State Variables
+
+### deployer
+
+```solidity
+DeployVaultThemes internal deployer;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### feeRecipient
+
+```solidity
+address internal feeRecipient = makeAddr("feeRecipient");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_deployvault-deployvaultthemes-theme"></a>
+
+### _deployVault
+
+```solidity
+function _deployVault(DeployVaultThemes.Theme t) internal returns (Vault v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `DeployVaultThemes.Theme` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `Vault` |  |
+
+<a id="_specs-vault-uint16-bool"></a>
+
+### _specs
+
+<i>
+
+Build a variable-length adapter set for `v`: one mock adapter per
+`(capBps, isExact)` pair, each bound to the vault.
+
+</i>
+
+```solidity
+function _specs(Vault v, uint16[] memory caps, bool[] memory exacts)
+        internal
+        returns (DeployVaultThemes.AdapterSpec[] memory specs);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `Vault` |  |
+| caps | `uint16[]` |  |
+| exacts | `bool[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| specs | `DeployVaultThemes.AdapterSpec[]` |  |
+
+<a id="_assertadapterset-vault-deployvaultthemes-adapterspec"></a>
+
+### _assertAdapterSet
+
+<i>
+
+Assert the vault's registered adapter set matches `specs` exactly:
+count, per-adapter address, weight (`capBps`), attested `isExact`,
+and active flag.
+
+</i>
+
+```solidity
+function _assertAdapterSet(Vault v, DeployVaultThemes.AdapterSpec[] memory specs)
+        internal
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `Vault` |  |
+| specs | `DeployVaultThemes.AdapterSpec[]` |  |
+
+<a id="test_rmusdc_deploysexactlendingset"></a>
+
+### test_rmUsdc_deploysExactLendingSet
+
+```solidity
+function test_rmUsdc_deploysExactLendingSet() public;
+```
+
+<a id="test_rmproto_deploysinexactv3set"></a>
+
+### test_rmProto_deploysInexactV3Set
+
+```solidity
+function test_rmProto_deploysInexactV3Set() public;
+```
+
+<a id="test_rmagent_deploysmixedsetwithtimelockadmin"></a>
+
+### test_rmAgent_deploysMixedSetWithTimelockAdmin
+
+```solidity
+function test_rmAgent_deploysMixedSetWithTimelockAdmin() public;
+```
+
+<a id="test_rmrwa_deployssingleadapterandenforcescapofone"></a>
+
+### test_rmRwa_deploysSingleAdapterAndEnforcesCapOfOne
+
+```solidity
+function test_rmRwa_deploysSingleAdapterAndEnforcesCapOfOne() public;
+```
+
+<a id="_assertwirecountmatchesexpected-deployvaultthemes-theme"></a>
+
+### _assertWireCountMatchesExpected
+
+<i>
+
+After a correctly-counted wiring, the vault's active adapter count
+equals the theme's `expectedAdapters` — the field is now read and
+enforced, not a write-only doc aid.
+
+</i>
+
+```solidity
+function _assertWireCountMatchesExpected(DeployVaultThemes.Theme t) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `DeployVaultThemes.Theme` |  |
+
+<a id="test_rmusdc_wirecountmatchesexpected"></a>
+
+### test_rmUsdc_wireCountMatchesExpected
+
+```solidity
+function test_rmUsdc_wireCountMatchesExpected() public;
+```
+
+<a id="test_rmproto_wirecountmatchesexpected"></a>
+
+### test_rmProto_wireCountMatchesExpected
+
+```solidity
+function test_rmProto_wireCountMatchesExpected() public;
+```
+
+<a id="test_rmagent_wirecountmatchesexpected"></a>
+
+### test_rmAgent_wireCountMatchesExpected
+
+```solidity
+function test_rmAgent_wireCountMatchesExpected() public;
+```
+
+<a id="test_rmrwa_wirecountmatchesexpected"></a>
+
+### test_rmRwa_wireCountMatchesExpected
+
+```solidity
+function test_rmRwa_wireCountMatchesExpected() public;
+```
+
+<a id="_assertwirewrongcountreverts-deployvaultthemes-theme-uint256"></a>
+
+### _assertWireWrongCountReverts
+
+<i>
+
+A wiring whose adapter count differs from `expectedAdapters` reverts
+`AdapterCountMismatch` — the documented spec §8 MUST-invariant is now
+an in-code guarantee for every theme, not just rmRWA's incidental cap.
+
+</i>
+
+```solidity
+function _assertWireWrongCountReverts(DeployVaultThemes.Theme t, uint256 wrong) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `DeployVaultThemes.Theme` |  |
+| wrong | `uint256` |  |
+
+<a id="test_rmusdc_wirewrongcountreverts"></a>
+
+### test_rmUsdc_wireWrongCountReverts
+
+```solidity
+function test_rmUsdc_wireWrongCountReverts() public;
+```
+
+<a id="test_rmproto_wirewrongcountreverts"></a>
+
+### test_rmProto_wireWrongCountReverts
+
+```solidity
+function test_rmProto_wireWrongCountReverts() public;
+```
+
+<a id="test_rmagent_wirewrongcountreverts"></a>
+
+### test_rmAgent_wireWrongCountReverts
+
+```solidity
+function test_rmAgent_wireWrongCountReverts() public;
+```
+
+<a id="test_rmrwa_wirewrongcountreverts"></a>
+
+### test_rmRwa_wireWrongCountReverts
+
+```solidity
+function test_rmRwa_wireWrongCountReverts() public;
+```
+
+<a id="test_weightarraylengthvariespertheme"></a>
+
+### test_weightArrayLengthVariesPerTheme
+
+```solidity
+function test_weightArrayLengthVariesPerTheme() public;
+```
+
+<a id="_wirelenfor-deployvaultthemes-theme-uint256-bool"></a>
+
+### _wireLenFor
+
+<i>
+
+Deploy `t`, wire `n` equal-weight adapters, return the resulting active
+count (== the wired weight-array length).
+
+</i>
+
+```solidity
+function _wireLenFor(DeployVaultThemes.Theme t, uint256 n, bool exact)
+        internal
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `DeployVaultThemes.Theme` |  |
+| n | `uint256` |  |
+| exact | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

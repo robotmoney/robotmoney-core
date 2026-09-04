@@ -1,0 +1,57 @@
+---
+title: "UnifiedVaultDepositTest"
+---
+
+# UnifiedVaultDepositTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/UnifiedVault.t.sol)
+
+**Inherits:** [UnifiedVaultBase](/contracts/test/abstract.UnifiedVaultBase)
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_firstdepositintocapfull_nounderflow"></a>
+
+### test_firstDepositIntoCapFull_noUnderflow
+
+AC: first deposit into a (nearly) cap-full adapter set with
+`taBefore == 0` and `revokedIdle == 0` does NOT underflow the
+`taBefore - revokedIdle + 1` denominator — it mints against the
+realized delta (idle-and-continue), never reverts (A-H2).
+
+```solidity
+function test_firstDepositIntoCapFull_noUnderflow() public;
+```
+
+<a id="test_idleinclusivedenominator_noroundtripprofit"></a>
+
+### test_idleInclusiveDenominator_noRoundTripProfit
+
+AC (SUP-3 / C1): with pre-existing idle USDC backing existing
+shares, the mint uses the idle-INCLUSIVE denominator `taBefore + 1`
+(NOT the buggy `taBefore - idle + 1`), so a deposit+redeem round
+trip cannot profit and existing holders are not diluted.
+
+```solidity
+function test_idleInclusiveDenominator_noRoundTripProfit() public;
+```
+
+<a id="test_depositreturnsactualmintedshares"></a>
+
+### test_depositReturnsActualMintedShares
+
+The deposit() override returns the ACTUAL minted shares (AZ-BSK-2),
+which for an exact set equals OZ's `convertToShares` of the deposit.
+
+```solidity
+function test_depositReturnsActualMintedShares() public;
+```
+

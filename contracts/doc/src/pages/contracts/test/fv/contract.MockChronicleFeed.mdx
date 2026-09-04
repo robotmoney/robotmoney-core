@@ -1,0 +1,63 @@
+---
+title: "MockChronicleFeed"
+---
+
+# MockChronicleFeed
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/fv/StaleOracleRedemption.t.sol)
+
+<i>
+
+Minimal Chronicle-feed mock: a settable latest-update timestamp so a test
+can age the feed past any heartbeat. Mirrors the IChronicleOracle surface
+RwaVault._checkOracleFreshness reads (`latestTimestamp()`).
+
+</i>
+
+## State Variables
+
+### latestTimestamp
+
+```solidity
+uint256 public latestTimestamp;
+```
+
+### latestValue
+
+```solidity
+uint256 public latestValue;
+```
+
+## Functions
+
+<a id="set-uint256-uint256"></a>
+
+### set
+
+```solidity
+function set(uint256 value, uint256 updatedAt) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `uint256` |  |
+| updatedAt | `uint256` |  |
+
+<a id="age-uint256"></a>
+
+### age
+
+Age the feed so it is `staleness` seconds older than `now`.
+
+```solidity
+function age(uint256 staleness) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| staleness | `uint256` |  |
+

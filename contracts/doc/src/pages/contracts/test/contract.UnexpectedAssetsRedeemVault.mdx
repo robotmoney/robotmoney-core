@@ -1,0 +1,59 @@
+---
+title: "UnexpectedAssetsRedeemVault"
+---
+
+# UnexpectedAssetsRedeemVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RobotMoneyGateway.t.sol)
+
+**Inherits:** [MockVault](/contracts/gateway/contract.MockVault)
+
+<i>
+
+Vault that, during redeem, routes USDC to the caller (the gateway)
+instead of to the designated receiver. This trips the post-redeem
+gateway-USDC-balance invariant (UnexpectedAssetsReceived).
+
+</i>
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address asset_) MockVault(asset_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `address` |  |
+
+<a id="redeem-uint256-address-address"></a>
+
+### redeem
+
+```solidity
+function redeem(uint256 shares, address, address owner)
+        external
+        override
+        returns (uint256 assets);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| _ | `address` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+
