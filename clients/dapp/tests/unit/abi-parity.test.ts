@@ -36,12 +36,7 @@
  *     `abi.generated.ts` to compare it against.
  */
 import { describe, it, expect } from "vitest";
-import {
-  gatewayAbi,
-  erc20Abi,
-  vaultAbi,
-  routerAbi,
-} from "../../src/lib/abi";
+import { gatewayAbi, erc20Abi, vaultAbi, routerAbi } from "../../src/lib/abi";
 import {
   gatewayAbiGenerated,
   erc20AbiGenerated,

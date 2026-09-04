@@ -102,7 +102,11 @@ content = f"""\
 
 /**
  * Full RobotMoneyGateway ABI — generated from Foundry artifact.
- * The hand-crafted excerpt in abi.ts imports selected entries from here.
+ * abi.ts does not import from this file — it hand-maintains its own excerpt
+ * (see abi.ts's header). This file's canonical signatures are instead
+ * cross-checked against abi.ts's exports by
+ * clients/dapp/tests/unit/abi-parity.test.ts (issue #1281), which fails on
+ * any abi.ts entry that has no exact match here.
  */
 export const gatewayAbiGenerated = {abi_to_ts(gateway_abi)} as const;
 
