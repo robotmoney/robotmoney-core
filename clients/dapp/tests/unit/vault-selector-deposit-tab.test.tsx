@@ -266,6 +266,24 @@ describe("VaultSelectorDepositTab submit disabled when vault status is paused", 
     const submit = screen.getByTestId("vault-selector-deposit-submit") as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
   });
+
+  // Issue #1348: the guard reads the live `getVault` status POSITIONALLY,
+  // because viem decodes a two-output function as `[metadata, status]`. The
+  // old code did `(record).status`, which on an array is `undefined` — and
+  // `undefined !== Active` meant the guard latched ON permanently. These two
+  // assertions pin both directions, so either mistake (never firing, or
+  // always firing) is red.
+  it("raises the paused warning when the live status output is Paused", () => {
+    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 1] as const;
+    renderTab();
+    expect(screen.getByTestId("vault-paused-warning")).toBeDefined();
+  });
+
+  it("does NOT raise the paused warning when the live status output is Active", () => {
+    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const;
+    renderTab();
+    expect(screen.queryByTestId("vault-paused-warning")).toBeNull();
+  });
 });
 
 describe("VaultSelectorDepositTab submit disabled when USDC balance insufficient", () => {
