@@ -1,8 +1,8 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b01a1006295a36fa4f656f7aeda0a98b3de7411/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
-ERC4626, AccessControl, Pausable, ReentrancyGuard
+ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/AdminFloorAccessControlCounter.sol/abstract.AdminFloorAccessControlCounter.md), Pausable, ReentrancyGuard
 
 **Title:**
 BasketVault
@@ -146,15 +146,6 @@ uint128 public constant MIN_POOL_LIQUIDITY = 1e6
 
 
 ## State Variables
-### adminCount
-Number of accounts currently holding `ADMIN_ROLE`.
-
-
-```solidity
-uint256 public adminCount
-```
-
-
 ### assets
 
 ```solidity
@@ -208,6 +199,22 @@ bool public shutdown
 
 ```solidity
 bool public depositsPaused
+```
+
+
+### retired
+Whether the vault has been retired by the unified governance
+`retire()` action (DI-2 / FS-VLT-19). Distinct from
+`depositsPaused` so `unpause()` (ADMIN_ROLE) can never clear a
+registry-driven retirement — matching RobotMoneyVault's and
+Vault's separate-flag model (the three enforcement paths never
+alias). Recovery is the deliberate governance abort
+`VaultRegistry.setVaultStatus(vault, Active)` reflected back via
+`unretire()`.
+
+
+```solidity
+bool public retired
 ```
 
 
@@ -295,27 +302,6 @@ uint256 internal _lastWithdrawnAssets
 
 
 ## Functions
-### _grantRole
-
-Track `ADMIN_ROLE` membership so the last-admin floor can be enforced
-without enumeration. Only increments on a real (new) grant.
-
-
-```solidity
-function _grantRole(bytes32 role, address account) internal virtual override returns (bool);
-```
-
-### _revokeRole
-
-Block revoking/renouncing the final `ADMIN_ROLE` holder (ACL-3 / F-06);
-both public setters route through here. Decrements only on a real
-(effective) revoke.
-
-
-```solidity
-function _revokeRole(bytes32 role, address account) internal virtual override returns (bool);
-```
-
 ### constructor
 
 
@@ -864,7 +850,9 @@ Hard-stop direct deposits. Callable ONLY by the linked registry,
 which sets registry status to `Retired` in the same call (atomic
 unified governance retire, DI-2 / FS-VLT-19). Idempotent.
 Withdrawals/redemptions stay open (ERC-4626 `redeem` is never
-revoked; ADR-0009).
+revoked; ADR-0009). Sets the dedicated `retired` flag — distinct
+from `depositsPaused` so `unpause()` cannot clear it (matches
+RobotMoneyVault's / Vault's separate-flag model).
 
 
 ```solidity
@@ -873,9 +861,9 @@ function retire() external;
 
 ### unretire
 
-Re-open direct deposits (governance abort). Callable ONLY by the
-linked registry, mirroring the `Retired → Active` transition in
-docs/architecture.md §4.7. Idempotent.
+Reactivate a retired vault and re-open direct deposits. Callable
+ONLY by the linked registry, mirroring the `Retired → Active`
+transition in docs/architecture.md §4.7. Idempotent.
 
 
 ```solidity
@@ -1478,15 +1466,6 @@ event WeightSnapshot(
 ```
 
 ## Errors
-### LastAdminFloor
-Revoking the sole `ADMIN_ROLE` holder is forbidden (would leave the
-vault with zero admins and brick every admin path).
-
-
-```solidity
-error LastAdminFloor();
-```
-
 ### TVLCapExceeded
 
 ```solidity
@@ -1519,12 +1498,6 @@ error OnlyRegistry();
 
 ```solidity
 error RegistryAlreadySet();
-```
-
-### VaultShutdown
-
-```solidity
-error VaultShutdown();
 ```
 
 ### NotShutdown

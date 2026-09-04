@@ -20,7 +20,6 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
@@ -32,6 +31,7 @@ import {BpsMath} from "../lib/BpsMath.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 import {BasketViews, IBasketVaultViews} from "../lib/BasketViews.sol";
+import {AdminFloorAccessControlCounter} from "../lib/AdminFloorAccessControlCounter.sol";
 
 /// @title BasketVault
 /// @notice Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
@@ -41,7 +41,12 @@ import {BasketViews, IBasketVaultViews} from "../lib/BasketViews.sol";
 ///         arithmetic-mean tick) over a per-asset, admin-configurable window.
 ///
 ///         Subclasses set the vault name/symbol, max basket size, and default slippage.
-abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
+abstract contract BasketVault is
+    ERC4626,
+    AdminFloorAccessControlCounter,
+    Pausable,
+    ReentrancyGuard
+{
     using SafeERC20 for IERC20;
     using Math for uint256;
 
@@ -52,42 +57,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     // ─── Last-admin floor (ACL-3 / F-06) ──────────────────────────────
     //
-    // The vault uses a single self-administered `ADMIN_ROLE` as its own role
-    // admin. OZ's `revokeRole`/`renounceRole` are public, so dropping the sole
-    // admin would brick all configuration forever. We forbid that one transition
-    // with a lightweight manual counter (no AccessControlEnumerable — that base
-    // pushes the vault family past the EIP-170 24_576-byte code-size limit). The
-    // counter is maintained by overriding the internal `_grantRole`/`_revokeRole`
-    // hooks both OZ public setters route through.
-
-    /// @notice Number of accounts currently holding `ADMIN_ROLE`.
-    uint256 public adminCount;
-
-    /// @notice Revoking the sole `ADMIN_ROLE` holder is forbidden (would leave the
-    ///         vault with zero admins and brick every admin path).
-    error LastAdminFloor();
-
-    /// @inheritdoc AccessControl
-    /// @dev Track `ADMIN_ROLE` membership so the last-admin floor can be enforced
-    ///      without enumeration. Only increments on a real (new) grant.
-    function _grantRole(bytes32 role, address account) internal virtual override returns (bool) {
-        bool granted = super._grantRole(role, account);
-        if (granted && role == ADMIN_ROLE) adminCount++;
-        return granted;
-    }
-
-    /// @inheritdoc AccessControl
-    /// @dev Block revoking/renouncing the final `ADMIN_ROLE` holder (ACL-3 / F-06);
-    ///      both public setters route through here. Decrements only on a real
-    ///      (effective) revoke.
-    function _revokeRole(bytes32 role, address account) internal virtual override returns (bool) {
-        if (role == ADMIN_ROLE && hasRole(role, account) && adminCount == 1) {
-            revert LastAdminFloor();
-        }
-        bool revoked = super._revokeRole(role, account);
-        if (revoked && role == ADMIN_ROLE) adminCount--;
-        return revoked;
-    }
+    // Enforced by the shared `AdminFloorAccessControlCounter` base (no
+    // AccessControlEnumerable — that base pushes the vault family past the
+    // EIP-170 24_576-byte code-size limit); see that contract for the
+    // mechanism.
 
     // ─── Immutable constants ──────────────────────────────────────────
 
@@ -179,6 +152,15 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     uint256 public maxSlippageBps;
     bool public shutdown;
     bool public depositsPaused;
+    /// @notice Whether the vault has been retired by the unified governance
+    ///         `retire()` action (DI-2 / FS-VLT-19). Distinct from
+    ///         `depositsPaused` so `unpause()` (ADMIN_ROLE) can never clear a
+    ///         registry-driven retirement — matching RobotMoneyVault's and
+    ///         Vault's separate-flag model (the three enforcement paths never
+    ///         alias). Recovery is the deliberate governance abort
+    ///         `VaultRegistry.setVaultStatus(vault, Active)` reflected back via
+    ///         `unretire()`.
+    bool public retired;
 
     /// @notice Linked `VaultRegistry`. Set once by `ADMIN_ROLE` via `setRegistry`.
     ///         The registry is the only address permitted to call `retire()` /
@@ -306,7 +288,6 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error OnlyRegistry();
     /// @notice `setRegistry` was called more than once; registry is set-once.
     error RegistryAlreadySet();
-    error VaultShutdown();
     /// @notice `restoreVault` called while the vault is not in a shut-down state.
     error NotShutdown();
     error InvalidFee();
@@ -552,8 +533,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         whenNotPaused
         nonReentrant
     {
-        if (shutdown) revert VaultShutdown();
-        if (depositsPaused) revert EnforcedPause();
+        // `shutdown`/`depositsPaused`/`retired` are already gated by
+        // `maxDeposit()`, which both OZ `deposit()` and `mint()` public
+        // entrypoints check before ever reaching `_deposit` (the sole caller
+        // of this internal override) — a repeated check here would be dead
+        // code duplicating that revert (removed to reclaim EIP-170 headroom,
+        // issue #1284).
         if (usdcAmount > perDepositCap) revert PerDepositCapExceeded();
         if (_activeAssetCount() == 0) revert NoActiveAssets();
 
@@ -761,7 +746,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///         (`type(uint256).max`) for ERC-4626 conformance: max* views MUST
     ///         return 0 when deposits are disabled (audit 2026-06-09, L-16).
     function maxDeposit(address) public view override returns (uint256) {
-        if (paused() || depositsPaused || shutdown) return 0;
+        if (paused() || depositsPaused || shutdown || retired) return 0;
         if (_activeAssetCount() == 0) return 0;
         if (tvlCap == type(uint256).max && perDepositCap == type(uint256).max) {
             return type(uint256).max;
@@ -1205,21 +1190,23 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///         which sets registry status to `Retired` in the same call (atomic
     ///         unified governance retire, DI-2 / FS-VLT-19). Idempotent.
     ///         Withdrawals/redemptions stay open (ERC-4626 `redeem` is never
-    ///         revoked; ADR-0009).
+    ///         revoked; ADR-0009). Sets the dedicated `retired` flag — distinct
+    ///         from `depositsPaused` so `unpause()` cannot clear it (matches
+    ///         RobotMoneyVault's / Vault's separate-flag model).
     function retire() external {
         if (msg.sender != registry) revert OnlyRegistry();
-        if (depositsPaused) return;
-        _setDepositsPaused(true);
+        if (retired) return;
+        retired = true;
         emit Retired();
     }
 
-    /// @notice Re-open direct deposits (governance abort). Callable ONLY by the
-    ///         linked registry, mirroring the `Retired → Active` transition in
-    ///         docs/architecture.md §4.7. Idempotent.
+    /// @notice Reactivate a retired vault and re-open direct deposits. Callable
+    ///         ONLY by the linked registry, mirroring the `Retired → Active`
+    ///         transition in docs/architecture.md §4.7. Idempotent.
     function unretire() external {
         if (msg.sender != registry) revert OnlyRegistry();
-        if (!depositsPaused) return;
-        _setDepositsPaused(false);
+        if (!retired) return;
+        retired = false;
         emit Unretired();
     }
 

@@ -15,6 +15,7 @@ import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+import {AdminFloorAccessControlCounter} from "../lib/AdminFloorAccessControlCounter.sol";
 
 // ─── Minimal USDC mock ───────────────────────────────────────────────────────
 
@@ -238,6 +239,48 @@ contract RobotMoneyVaultTest is Test {
         vault_.setAdapterAllowed(adapter_, true);
         vm.prank(admin);
         vault_.setAdapterCodeHashAllowed(adapter_.codehash, true);
+    }
+
+    // ─── Last-admin floor (ACL-3 / F-06, issue #1284) ─────────────────────────
+    //
+    // RobotMoneyVault previously had no protection against the final ADMIN_ROLE
+    // holder renouncing/being revoked, unlike Vault.sol and BasketVault.sol
+    // (which each had their own hand-rolled counter). These three tests were
+    // red before this fix — `renounceRole`/`revokeRole` succeeded silently,
+    // stripping the vault's ADMIN_ROLE membership to zero and permanently
+    // bricking setRegistry/fee configuration/keeper assignment/the
+    // EMERGENCY_ROLE grant path.
+
+    /// @notice The sole ADMIN_ROLE holder cannot renounce.
+    function test_lastAdminFloor_renounceRevertsForSoleAdmin() public {
+        bytes32 role = vault.ADMIN_ROLE();
+        vm.prank(admin);
+        vm.expectRevert(AdminFloorAccessControlCounter.LastAdminFloor.selector);
+        vault.renounceRole(role, admin);
+    }
+
+    /// @notice The sole ADMIN_ROLE holder cannot be revoked (even by itself).
+    function test_lastAdminFloor_revokeRevertsForSoleAdmin() public {
+        bytes32 role = vault.ADMIN_ROLE();
+        vm.prank(admin);
+        vm.expectRevert(AdminFloorAccessControlCounter.LastAdminFloor.selector);
+        vault.revokeRole(role, admin);
+    }
+
+    /// @notice Once a second admin exists, revoking the original one succeeds —
+    ///         the floor blocks only the last-holder transition, not admin
+    ///         rotation.
+    function test_lastAdminFloor_revokeSucceedsWithTwoAdmins() public {
+        bytes32 role = vault.ADMIN_ROLE();
+        address secondAdmin = makeAddr("secondAdmin");
+        vm.prank(admin);
+        vault.grantRole(role, secondAdmin);
+
+        vm.prank(admin);
+        vault.revokeRole(role, admin);
+
+        assertFalse(vault.hasRole(role, admin), "original admin must be revoked");
+        assertTrue(vault.hasRole(role, secondAdmin), "second admin must still hold the role");
     }
 
     // ─── Adapter eligibility ─────────────────────────────────────────────────

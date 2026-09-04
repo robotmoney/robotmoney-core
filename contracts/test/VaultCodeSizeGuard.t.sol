@@ -49,6 +49,19 @@ contract VaultCodeSizeGuard is Test {
         _assertUnderLimit("AgentTokenVault.sol:AgentTokenVault");
     }
 
+    /// @notice Aggregate check matching issue #1284's test-plan command
+    ///         (`forge test --match-test test_bytecodeSize`) — the vault-family
+    ///         members already individually guarded above, asserted together
+    ///         after the last-admin-floor consolidation and BasketVault
+    ///         retirement-flag addition.
+    function test_bytecodeSize_vaultFamilyUnderEip170() public {
+        _assertUnderLimit("RobotMoneyVault.sol:RobotMoneyVault");
+        _assertUnderLimit("Vault.sol:Vault");
+        _assertUnderLimit("RwaVault.sol:RwaVault");
+        _assertUnderLimit("AgentTokenVault.sol:AgentTokenVault");
+        _assertUnderLimit("ProtocolAssetVault.sol:ProtocolAssetVault");
+    }
+
     // ─── Unified Vault + adapter set (ADR-0010, issue #1127, M-A2) ─────────
     //
     // The unified `Vault` is the single non-abstract ERC-4626 allocator every

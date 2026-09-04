@@ -1,5 +1,5 @@
 # RobotMoneyVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b01a1006295a36fa4f656f7aeda0a98b3de7411/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 Test
@@ -111,6 +111,35 @@ function setUp() public;
 
 ```solidity
 function _allowAdapter(RobotMoneyVault vault_, address adapter_) internal;
+```
+
+### test_lastAdminFloor_renounceRevertsForSoleAdmin
+
+The sole ADMIN_ROLE holder cannot renounce.
+
+
+```solidity
+function test_lastAdminFloor_renounceRevertsForSoleAdmin() public;
+```
+
+### test_lastAdminFloor_revokeRevertsForSoleAdmin
+
+The sole ADMIN_ROLE holder cannot be revoked (even by itself).
+
+
+```solidity
+function test_lastAdminFloor_revokeRevertsForSoleAdmin() public;
+```
+
+### test_lastAdminFloor_revokeSucceedsWithTwoAdmins
+
+Once a second admin exists, revoking the original one succeeds —
+the floor blocks only the last-holder transition, not admin
+rotation.
+
+
+```solidity
+function test_lastAdminFloor_revokeSucceedsWithTwoAdmins() public;
 ```
 
 ### test_addAdapter_revertsWhenAdapterAddressNotAllowed
