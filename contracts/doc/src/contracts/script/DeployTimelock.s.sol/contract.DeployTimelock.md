@@ -1,5 +1,5 @@
 # DeployTimelock
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0df8fdff297aedb1734e0e690175f52c7720f0e1/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:**
 Script
@@ -39,6 +39,26 @@ EOA; ACL-1 / F-01)
 TIMELOCK_MIN_DELAY     — minimum delay in seconds (e.g. 172800 = 2 days)
 Optional env vars:
 DEPLOYMENT_OUT         — output JSON path; default artifacts/timelock.json
+IC_POLICY_ADDRESS      — InvestmentCommitteePolicy (issue #1319, one-
+ceremony rule #1247 AC10 / INV-3). When set,
+the same grant→verify→revoke handover runs on
+it: ADMIN_ROLE + DEFAULT_ADMIN_ROLE move to the
+timelock and are revoked from the deployer EOA
+(the ADMIN_ADDRESS DeployInvestmentCommitteePolicy
+granted them to). The gateway's ADMIN_ROLE on the
+IC policy — granted separately so it can forward
+committeeRegister calls — is untouched.
+CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
+same rule). When set, ADMIN_ROLE +
+DEFAULT_ADMIN_ROLE move to the timelock.
+RECEIPT_ADMIN_ADDRESS  — the address that currently holds ADMIN_ROLE /
+DEFAULT_ADMIN_ROLE on the receipt contract (the
+RECEIPT_ADMIN_ADDRESS DeployInvestmentCommittee-
+Policy granted them to — not necessarily the
+deployer EOA). Only meaningful when
+CONSENSUS_RECEIPT_ADDRESS is set; revoked from
+here instead of msg.sender. Defaults to
+msg.sender when unset.
 
 After deploying, the broadcaster (current ADMIN_ROLE holder) is no
 longer the admin on any contract. Verify with:
@@ -87,7 +107,8 @@ bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00
 ### run
 
 Broadcast entrypoint. Reads env vars, deploys timelock, and
-transfers ADMIN_ROLE on all five contracts.
+transfers ADMIN_ROLE on all five contracts (plus the optional
+IC policy / consensus receipt handover — issue #1319).
 
 
 ```solidity
@@ -97,7 +118,9 @@ function run() external returns (Deployed memory d);
 ### runInProcess
 
 In-process variant for Forge tests. Caller sets up prank context.
-No JSON is written; no env vars are read.
+No JSON is written; no env vars are read. Does not exercise the
+optional IC policy / consensus receipt handover — use
+`runInProcessWithCommittee` for that.
 
 
 ```solidity
@@ -112,6 +135,45 @@ function runInProcess(
     uint256 minDelay_
 ) external returns (Deployed memory d);
 ```
+
+### runInProcessWithCommittee
+
+In-process variant that also exercises the optional IC policy /
+consensus receipt handover (issue #1319). Caller sets up prank
+context. No JSON is written; no env vars are read.
+
+
+```solidity
+function runInProcessWithCommittee(
+    address vault_,
+    address gateway_,
+    address registry_,
+    address router_,
+    address governance_,
+    address safe_,
+    address emergency_,
+    uint256 minDelay_,
+    address icPolicy_,
+    address consensusReceipt_,
+    address receiptAdmin_
+) external returns (Deployed memory d);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault_`|`address`||
+|`gateway_`|`address`||
+|`registry_`|`address`||
+|`router_`|`address`||
+|`governance_`|`address`||
+|`safe_`|`address`||
+|`emergency_`|`address`||
+|`minDelay_`|`uint256`||
+|`icPolicy_`|`address`|       InvestmentCommitteePolicy address, or address(0) to skip.|
+|`consensusReceipt_`|`address`|ConsensusRecommendationReceipt address, or address(0) to skip.|
+|`receiptAdmin_`|`address`|   Current holder of ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the receipt contract (RECEIPT_ADMIN_ADDRESS at its construction); address(0) defaults to msg.sender.|
+
 
 ### _validate
 
@@ -155,6 +217,9 @@ struct Deployed {
     address safe;
     address emergency;
     uint256 minDelay;
+    address icPolicy;
+    address consensusReceipt;
+    address receiptAdmin;
 }
 ```
 

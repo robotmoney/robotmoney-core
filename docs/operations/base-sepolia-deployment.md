@@ -107,30 +107,35 @@ deploys both contracts together, wires both into the gateway
 `ADMIN_ROLE` to `RECEIPT_ADMIN_ADDRESS` (the `TimelockController` in production,
 `INV-3`).
 
-> **Sequencing note — IC policy `ADMIN_ROLE` handover (#1319).** `DeployTimelock`
-> currently hands elevated roles to the timelock only on the five core
-> contracts (Vault, Gateway, Registry, Router, Governance). It does **not** yet
-> move the `InvestmentCommitteePolicy`'s `ADMIN_ROLE`/`DEFAULT_ADMIN_ROLE` or
-> the receipt contract's roles to the timelock.
+> **Sequencing note — IC policy `ADMIN_ROLE` handover (#1319, implemented).**
+> `DeployTimelock` hands elevated roles to the timelock on the five core
+> contracts (Vault, Gateway, Registry, Router, Governance) **and**, when
+> `IC_POLICY_ADDRESS`/`CONSENSUS_RECEIPT_ADDRESS` are set, on the
+> `InvestmentCommitteePolicy` and `ConsensusRecommendationReceipt` contracts too
+> — see Step 7.
 >
-> This forces the ceremony order this runbook documents: the IC + receipt
-> ceremony runs **before** the timelock handover, because
+> The ceremony order this runbook documents still runs the IC + receipt
+> ceremony **before** the timelock handover, because
 > `DeployInvestmentCommitteePolicy` wires the gateway
 > (`setICPolicy` + `setConsensusReceipt`) as its broadcaster and the broadcaster
-> only holds gateway `ADMIN_ROLE` until `DeployTimelock` revokes it. Until #1319
-> lands the rehearsal asserts, exactly and no more than:
+> only holds gateway `ADMIN_ROLE` until `DeployTimelock` revokes it. The
+> rehearsal asserts, in order:
 >
 > - `INV-3` on the **five core contracts** (timelock holds `ADMIN_ROLE`, deployer
 >   holds none — `DeployTimelock`'s own grant→verify→revoke postconditions).
 > - The **wiring happened**: gateway `icPolicy()`/`consensusReceipt()` point at
->   the two deployed contracts, and the receipt contract's `ADMIN_ROLE` equals
->   the configured `RECEIPT_ADMIN_ADDRESS` (which must be the timelock once
->   #1319 lands — then and only then is that assertion `INV-3`).
-> - The IC policy's `ADMIN_ROLE` holder is **recorded, not asserted** as the
->   timelock: it is set to `ADMIN_ADDRESS` at construction and its handover is
->   exactly #1319's scope.
+>   the two deployed contracts.
+> - `INV-3` on the **IC policy and receipt contracts**: after Step 7, the
+>   timelock holds `ADMIN_ROLE`/`DEFAULT_ADMIN_ROLE` on both, and neither the
+>   deployer nor the configured `RECEIPT_ADMIN_ADDRESS` still does.
 >
-> The live rehearsal gates its full `INV-3` proof on #1319.
+> **Operator warning:** `DeployTimelock` treats `IC_POLICY_ADDRESS` /
+> `CONSENSUS_RECEIPT_ADDRESS` as optional and silently skips the corresponding
+> handover when either is left unset — it does not revert. A ceremony run by
+> hand without setting these two env vars (plus `RECEIPT_ADMIN_ADDRESS`) will
+> report success while still leaving the IC policy and receipt contracts in
+> violation of `INV-3`. Always set all three for a real ceremony; the
+> rehearsal driver (`rehearsal.sh`) sets them automatically.
 
 ## Ceremony steps (in order)
 
@@ -235,28 +240,39 @@ cast call "$RECEIPTS" "hasRole(bytes32,address)(bool)" \
   "$(cast keccak 'ADMIN_ROLE')" "$RECEIPT_ADMIN" --rpc-url "$RPC_URL"  # expect: true
 ```
 
-> `RECEIPT_ADMIN_ADDRESS` is the `TimelockController` once #1319 lands (then
-> this assertion is `INV-3`); until then it is an explicitly-configured address
-> and the rehearsal asserts the wiring, not the INV-3 target. See the
-> sequencing note in the one-ceremony section above.
+> `RECEIPT_ADMIN_ADDRESS` here is only the address the receipt's `ADMIN_ROLE`
+> starts on — `DeployTimelock` (Step 7) revokes it from this exact address, not
+> necessarily from the deployer, so pass the same `RECEIPT_ADMIN_ADDRESS` value
+> to both steps. The full `INV-3` target (the timelock, and only the timelock,
+> holds the role) is reached after Step 7, not here. See the sequencing note in
+> the one-ceremony section above.
 
 ### Step 7 — Timelock + role handover
 
 **Script:** `forge script contracts/script/DeployTimelock.s.sol` (env:
 `VAULT_ADDRESS`, `GATEWAY_ADDRESS`, `REGISTRY_ADDRESS`, `ROUTER_ADDRESS`,
 `GOVERNANCE_ADDRESS`, `SAFE_ADDRESS`, `EMERGENCY_ADDRESS`,
-`TIMELOCK_MIN_DELAY`).
+`TIMELOCK_MIN_DELAY`, plus `IC_POLICY_ADDRESS`, `CONSENSUS_RECEIPT_ADDRESS`, and
+`RECEIPT_ADMIN_ADDRESS` — required for a real ceremony; see the operator
+warning in the sequencing note above).
 
 **What.** Deploys `TimelockController` and, on the five core contracts, moves
 `ADMIN_ROLE` (and the Gateway's `DEFAULT_ADMIN_ROLE`) to the timelock,
 grant→verify→revoke, so no EOA retains a privileged role. Also moves the vault's
 `EMERGENCY_ROLE` to the independent emergency hot key and verifies the Safe.
+When `IC_POLICY_ADDRESS`/`CONSENSUS_RECEIPT_ADDRESS` are set, performs the same
+grant→verify→revoke handover on the `InvestmentCommitteePolicy` and
+`ConsensusRecommendationReceipt` contracts (issue #1319): the receipt's roles
+are revoked from `RECEIPT_ADMIN_ADDRESS`, not assumed to be the deployer. Both
+are optional and silently skipped when left unset — no revert, no signal that
+`INV-3` was not fully closed for these two contracts.
 
 **Postcondition (checked by `rehearsal.sh`):** for each of the five core
 contracts, the timelock holds `ADMIN_ROLE` and the deployer does not; the
 gateway's `DEFAULT_ADMIN_ROLE` is the timelock; the vault `EMERGENCY_ROLE` is the
-emergency address and not the deployer. (See #1319 for the IC-policy/receipt
-extension.)
+emergency address and not the deployer. The timelock also holds
+`ADMIN_ROLE`/`DEFAULT_ADMIN_ROLE` on the IC policy and the receipt contract, and
+neither the deployer nor `RECEIPT_ADMIN_ADDRESS` still does.
 
 ### Step 8 — Record
 
