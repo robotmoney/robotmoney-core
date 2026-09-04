@@ -36,6 +36,49 @@
 #   the repo root via the build-args context.
 # - The packages: write permission is required explicitly; the default token only has
 #   contents: read.
+#
+# WHY `inputs.tag` NEVER APPEARS INSIDE A `run:` BODY (issue #1301)
+# Actions substitutes a `${{ }}` expression into the shell SOURCE before bash
+# ever parses it, so quoting at the call site does nothing to contain it — a
+# `workflow_dispatch` with `tag` set to `v1";$(...)  ;"` would reach code
+# execution on the runner. `inputs.tag` is therefore read once, through the
+# `Validate tag` and `Create and push git tag` steps' own `env:` blocks, and
+# referenced only as the shell variable `"$INPUT_TAG"`. This is the same shape
+# release-rmpc.yml was hardened into by #1279 (see that file's `Validate
+# inputs` step for the fuller rationale) and this file never was, until now.
+# `scripts/release/install-rmpc-selftest.sh` audits that shape for
+# release-rmpc.yml; `.github/scripts/audit_workflow_run_splice_and_perms.py`
+# (issue #1301) audits it here, plus the per-job permissions map below, and is
+# proved non-vacuous against hostile mutated copies of this file by
+# `.github/scripts/tests/test_audit_workflow_run_splice_and_perms.sh`.
+#
+# WHY THE TAG IS SHAPE-CHECKED BEFORE ANYTHING CONSUMES IT
+# `inputs.tag` reaches `git tag`, and would otherwise reach the Docker image
+# tags via docker/metadata-action's semver extraction. Matched with bash
+# `[[ =~ ]]`, not `grep -E`: grep matches LINE-wise, so a tag carrying an
+# embedded newline (`v1.2.3\nanything`) would satisfy a line-anchored `^…$` on
+# its first line and pass, where `[[ =~ ]]` anchors the whole string and
+# rejects it. The namespace is `v*.*.*` — this file's own (issue #1243); the
+# `rmpc-v*` namespace belongs to release-rmpc.yml and is deliberately refused
+# here so the two release pipelines can never be dispatched into each other's
+# tag space.
+#
+# WHY `inputs.commit_hash` IS NOT SHAPE-CHECKED
+# It reaches only `actions/checkout`'s `ref:` — a `with:` value the Actions
+# runner passes to the checkout action as data, not text spliced into a shell
+# body. An invalid or hostile value fails the checkout (unknown ref) rather
+# than executing anything, so it is not a shell-injection sink the way
+# `inputs.tag` was. (issue #1301 asked this be confirmed rather than assumed.)
+#
+# WHY `permissions:` IS PER-JOB, NOT WORKFLOW-SCOPE (issue #1301, mirroring #1237)
+# This file used to declare `contents: write` and `packages: write` at
+# workflow scope, so every job — including any job added to this file in the
+# future — would silently inherit both. Today there is exactly one job
+# (`build-and-push`), which genuinely needs both scopes (`contents: write` to
+# push the tag, `packages: write` to push to GHCR), so the blast radius was
+# smaller than #1237's rmpc matrix case — but the trap was armed the same way.
+# The workflow default is now `contents: read`, the floor rather than the
+# ceiling, and `build-and-push` states its own two scopes explicitly.
 
 name: release-dapp
 
@@ -55,14 +98,16 @@ on:
         type: string
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   build-and-push:
     name: build-and-push-dapp-image
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
 
     steps:
       - name: Checkout
@@ -70,13 +115,34 @@ jobs:
         with:
           ref: ${{ inputs.commit_hash || github.sha }}
 
+      # Shape-checked before anything consumes it — see the "WHY THE TAG IS
+      # SHAPE-CHECKED" comment at the top of this file. `[[ =~ ]]`, not
+      # `grep -E`: a line-anchored grep would pass a tag carrying an embedded
+      # newline on its first line; bash's `[[ =~ ]]` anchors the whole string.
+      - name: Validate tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${INPUT_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag input '${INPUT_TAG}' is not a dApp release tag. Expected vX.Y.Z or vX.Y.Z-prerelease. The 'rmpc-v*' namespace belongs to release-rmpc.yml (issue #1243)."
+            exit 1
+          fi
+
+      # `inputs.tag` is read through this step's own env: and referenced only
+      # as "$INPUT_TAG" — never spliced into the run: body. See the "WHY
+      # `inputs.tag` NEVER APPEARS INSIDE A `run:` BODY" comment above.
       - name: Create and push git tag
         if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ inputs.tag }}"
-          git push origin "${{ inputs.tag }}"
+          git tag "${INPUT_TAG}"
+          git push origin "${INPUT_TAG}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -30,6 +30,12 @@
 # - Issue #835: bun-audit now runs clients/dapp/scripts/audit-deps.sh (the same
 #   gate suite-09 dapp-lint-build uses) instead of a bare `bun audit`, so the
 #   accepted-advisory list with dated justifications lives in exactly one place.
+# - Issue #1301: release-workflow-authority-audit added. Structurally audits
+#   release-dapp.yml (and, as a second target proving the checker is not
+#   dapp-only, release-rmpc.yml) for the #1237 defect class: a `${{ }}`
+#   expression spliced into a `run:` body, or a job whose permissions map is
+#   missing, over-scoped, or silently inherited from workflow scope. See
+#   .github/scripts/audit_workflow_run_splice_and_perms.py.
 
 name: security-gates
 
@@ -55,6 +61,10 @@ on:
       - "docs/audits.md"
       - "SECURITY.md"
       - ".github/workflows/suite-18-security-gates.yml"
+      - ".github/workflows/release-dapp.yml"
+      - ".github/workflows/release-rmpc.yml"
+      - ".github/scripts/audit_workflow_run_splice_and_perms.py"
+      - ".github/scripts/tests/test_audit_workflow_run_splice_and_perms.sh"
   workflow_dispatch:
 
 concurrency:
@@ -184,3 +194,59 @@ jobs:
         run: bash scripts/validate-seam-map --self-test
       - name: Validate committed unified-vault seam map
         run: bash scripts/validate-seam-map
+
+  # ── Release-workflow authority audit ──────────────────────────────────────
+  # Structurally audits release-dapp.yml against the #1237 defect class: a
+  # caller-supplied `${{ inputs.* }}` / `${{ github.event.* }}` expression
+  # spliced into a `run:` body (Actions substitutes into the shell SOURCE
+  # before bash parses it, so quoting cannot contain it), and a job whose
+  # `permissions:` block is missing, over-scoped, or silently inherited from
+  # workflow scope. release-dapp.yml had both defects and no selftest of its
+  # own (issue #1301) — release-rmpc.yml's equivalent auditor, added by
+  # #1237/#1297, lives inside scripts/release/install-rmpc-selftest.sh and is
+  # deliberately rmpc-specific (hardcoded job names, rmpc-only fixtures), so
+  # rather than thread a second workflow and writer-job set through that
+  # already-dense file, the auditor was pulled out as a small, parameterized,
+  # standalone checker any workflow can be pointed at.
+  # release-rmpc.yml is run through it too, as a second target proving the
+  # checker is workflow-agnostic rather than a second dapp-only copy of the
+  # existing rmpc auditor.
+  # Script: .github/scripts/audit_workflow_run_splice_and_perms.py.
+  # shellcheck runs first because the selftest harness is shell-driven
+  # (matches the per-suite shellcheck pattern). The selftest itself proves
+  # every finding class reachable against hostile mutated copies of BOTH real
+  # workflows before the clean audit of the committed files is trusted.
+  release-workflow-authority-audit:
+    name: release-workflow-authority-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+      - name: shellcheck the selftest harness
+        run: shellcheck .github/scripts/tests/test_audit_workflow_run_splice_and_perms.sh
+      - name: Self-test — every finding class reachable on hostile mutated copies
+        run: bash .github/scripts/tests/test_audit_workflow_run_splice_and_perms.sh
+      - name: "Audit release-dapp.yml (writer job: build-and-push)"
+        run: |
+          set -euo pipefail
+          OUT="$(python3 .github/scripts/audit_workflow_run_splice_and_perms.py \
+            .github/workflows/release-dapp.yml --writer-job build-and-push)"
+          if [ -n "$OUT" ]; then
+            echo "::error::release-dapp.yml failed the authority audit:"
+            echo "$OUT"
+            exit 1
+          fi
+          echo "release-dapp.yml: clean"
+      - name: "Audit release-rmpc.yml (writer jobs: publish, bump-manifest)"
+        run: |
+          set -euo pipefail
+          OUT="$(python3 .github/scripts/audit_workflow_run_splice_and_perms.py \
+            .github/workflows/release-rmpc.yml --writer-job publish --writer-job bump-manifest)"
+          if [ -n "$OUT" ]; then
+            echo "::error::release-rmpc.yml failed the authority audit:"
+            echo "$OUT"
+            exit 1
+          fi
+          echo "release-rmpc.yml: clean"
