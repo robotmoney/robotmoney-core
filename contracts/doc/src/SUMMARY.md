@@ -186,6 +186,7 @@
     - [MockHighThresholdSafe](contracts/test/DeployTimelock.t.sol/contract.MockHighThresholdSafe.md)
     - [MockLowThresholdSafe](contracts/test/DeployTimelock.t.sol/contract.MockLowThresholdSafe.md)
     - [NaiveAgentGateway](contracts/test/DeployTimelock.t.sol/contract.NaiveAgentGateway.md)
+    - [DeployTimelockCommitteeTest](contracts/test/DeployTimelockCommittee.t.sol/contract.DeployTimelockCommitteeTest.md)
     - [DeployVaultRegistryTest](contracts/test/DeployVaultRegistry.t.sol/contract.DeployVaultRegistryTest.md)
     - [MockMorpho4626](contracts/test/ERC4626PreconditionChecks.t.sol/contract.MockMorpho4626.md)
     - [ERC4626PreconditionChecks](contracts/test/ERC4626PreconditionChecks.t.sol/contract.ERC4626PreconditionChecks.md)

@@ -65,6 +65,26 @@ interface IRetirableVaultLink {
 ///
 ///         Optional env vars:
 ///           DEPLOYMENT_OUT         — output JSON path; default artifacts/timelock.json
+///           IC_POLICY_ADDRESS      — InvestmentCommitteePolicy (issue #1319, one-
+///                                    ceremony rule #1247 AC10 / INV-3). When set,
+///                                    the same grant→verify→revoke handover runs on
+///                                    it: ADMIN_ROLE + DEFAULT_ADMIN_ROLE move to the
+///                                    timelock and are revoked from the deployer EOA
+///                                    (the ADMIN_ADDRESS DeployInvestmentCommitteePolicy
+///                                    granted them to). The gateway's ADMIN_ROLE on the
+///                                    IC policy — granted separately so it can forward
+///                                    committeeRegister calls — is untouched.
+///           CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
+///                                    same rule). When set, ADMIN_ROLE +
+///                                    DEFAULT_ADMIN_ROLE move to the timelock.
+///           RECEIPT_ADMIN_ADDRESS  — the address that currently holds ADMIN_ROLE /
+///                                    DEFAULT_ADMIN_ROLE on the receipt contract (the
+///                                    RECEIPT_ADMIN_ADDRESS DeployInvestmentCommittee-
+///                                    Policy granted them to — not necessarily the
+///                                    deployer EOA). Only meaningful when
+///                                    CONSENSUS_RECEIPT_ADDRESS is set; revoked from
+///                                    here instead of msg.sender. Defaults to
+///                                    msg.sender when unset.
 ///
 /// @dev After deploying, the broadcaster (current ADMIN_ROLE holder) is no
 ///      longer the admin on any contract. Verify with:
@@ -87,10 +107,14 @@ contract DeployTimelock is Script {
         address safe;
         address emergency;
         uint256 minDelay;
+        address icPolicy;
+        address consensusReceipt;
+        address receiptAdmin;
     }
 
     /// @notice Broadcast entrypoint. Reads env vars, deploys timelock, and
-    ///         transfers ADMIN_ROLE on all five contracts.
+    ///         transfers ADMIN_ROLE on all five contracts (plus the optional
+    ///         IC policy / consensus receipt handover — issue #1319).
     function run() external returns (Deployed memory d) {
         d.vault = vm.envAddress("VAULT_ADDRESS");
         d.gateway = vm.envAddress("GATEWAY_ADDRESS");
@@ -100,6 +124,9 @@ contract DeployTimelock is Script {
         d.safe = vm.envAddress("SAFE_ADDRESS");
         d.emergency = vm.envAddress("EMERGENCY_ADDRESS");
         d.minDelay = vm.envUint("TIMELOCK_MIN_DELAY");
+        d.icPolicy = vm.envOr("IC_POLICY_ADDRESS", address(0));
+        d.consensusReceipt = vm.envOr("CONSENSUS_RECEIPT_ADDRESS", address(0));
+        d.receiptAdmin = vm.envOr("RECEIPT_ADMIN_ADDRESS", address(0));
 
         _validate(d);
 
@@ -112,7 +139,9 @@ contract DeployTimelock is Script {
     }
 
     /// @notice In-process variant for Forge tests. Caller sets up prank context.
-    ///         No JSON is written; no env vars are read.
+    ///         No JSON is written; no env vars are read. Does not exercise the
+    ///         optional IC policy / consensus receipt handover — use
+    ///         `runInProcessWithCommittee` for that.
     function runInProcess(
         address vault_,
         address gateway_,
@@ -131,6 +160,43 @@ contract DeployTimelock is Script {
         d.safe = safe_;
         d.emergency = emergency_;
         d.minDelay = minDelay_;
+
+        _validate(d);
+        d.timelock = _deployAndWire(d);
+    }
+
+    /// @notice In-process variant that also exercises the optional IC policy /
+    ///         consensus receipt handover (issue #1319). Caller sets up prank
+    ///         context. No JSON is written; no env vars are read.
+    /// @param icPolicy_        InvestmentCommitteePolicy address, or address(0) to skip.
+    /// @param consensusReceipt_ ConsensusRecommendationReceipt address, or address(0) to skip.
+    /// @param receiptAdmin_    Current holder of ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the
+    ///                         receipt contract (RECEIPT_ADMIN_ADDRESS at its
+    ///                         construction); address(0) defaults to msg.sender.
+    function runInProcessWithCommittee(
+        address vault_,
+        address gateway_,
+        address registry_,
+        address router_,
+        address governance_,
+        address safe_,
+        address emergency_,
+        uint256 minDelay_,
+        address icPolicy_,
+        address consensusReceipt_,
+        address receiptAdmin_
+    ) external returns (Deployed memory d) {
+        d.vault = vault_;
+        d.gateway = gateway_;
+        d.registry = registry_;
+        d.router = router_;
+        d.governance = governance_;
+        d.safe = safe_;
+        d.emergency = emergency_;
+        d.minDelay = minDelay_;
+        d.icPolicy = icPolicy_;
+        d.consensusReceipt = consensusReceipt_;
+        d.receiptAdmin = receiptAdmin_;
 
         _validate(d);
         d.timelock = _deployAndWire(d);
@@ -319,6 +385,71 @@ contract DeployTimelock is Script {
             !IAccessControl(d.governance).hasRole(ADMIN_ROLE, msg.sender),
             "Deployer still has ADMIN_ROLE on governance"
         );
+
+        // InvestmentCommitteePolicy (optional — issue #1319, one-ceremony rule
+        // #1247 AC10 / INV-3).
+        //
+        // DeployInvestmentCommitteePolicy grants DEFAULT_ADMIN_ROLE + ADMIN_ROLE
+        // on the IC policy to ADMIN_ADDRESS, the same deployer EOA that runs this
+        // script (msg.sender here). Mirror the five-core-contract handover
+        // exactly. The gateway separately holds ADMIN_ROLE on the IC policy
+        // (granted at wiring time so it can forward committeeRegister calls) —
+        // that is a second, intentional holder and is left untouched.
+        if (d.icPolicy != address(0)) {
+            IAccessControl(d.icPolicy).grantRole(ADMIN_ROLE, address(timelock));
+            require(
+                IAccessControl(d.icPolicy).hasRole(ADMIN_ROLE, address(timelock)),
+                "Timelock missing ADMIN_ROLE on IC policy"
+            );
+            IAccessControl(d.icPolicy).grantRole(DEFAULT_ADMIN_ROLE, address(timelock));
+            require(
+                IAccessControl(d.icPolicy).hasRole(DEFAULT_ADMIN_ROLE, address(timelock)),
+                "Timelock missing DEFAULT_ADMIN_ROLE on IC policy"
+            );
+            IAccessControl(d.icPolicy).revokeRole(ADMIN_ROLE, msg.sender);
+            require(
+                !IAccessControl(d.icPolicy).hasRole(ADMIN_ROLE, msg.sender),
+                "Deployer still has ADMIN_ROLE on IC policy"
+            );
+            IAccessControl(d.icPolicy).revokeRole(DEFAULT_ADMIN_ROLE, msg.sender);
+            require(
+                !IAccessControl(d.icPolicy).hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
+                "Deployer still has DEFAULT_ADMIN_ROLE on IC policy"
+            );
+        }
+
+        // ConsensusRecommendationReceipt (optional — issue #1319, same rule).
+        //
+        // DeployInvestmentCommitteePolicy grants DEFAULT_ADMIN_ROLE + ADMIN_ROLE
+        // on the receipt contract to RECEIPT_ADMIN_ADDRESS, which is NOT
+        // necessarily the deployer EOA (it defaults to ADMIN_ADDRESS for devnet
+        // ceremonies but may be configured independently). Resolve the actual
+        // current holder (d.receiptAdmin, defaulting to msg.sender when unset)
+        // and revoke from there instead of assuming msg.sender.
+        if (d.consensusReceipt != address(0)) {
+            address currentReceiptAdmin = d.receiptAdmin == address(0) ? msg.sender : d.receiptAdmin;
+            IAccessControl(d.consensusReceipt).grantRole(ADMIN_ROLE, address(timelock));
+            require(
+                IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, address(timelock)),
+                "Timelock missing ADMIN_ROLE on consensus receipt"
+            );
+            IAccessControl(d.consensusReceipt).grantRole(DEFAULT_ADMIN_ROLE, address(timelock));
+            require(
+                IAccessControl(d.consensusReceipt).hasRole(DEFAULT_ADMIN_ROLE, address(timelock)),
+                "Timelock missing DEFAULT_ADMIN_ROLE on consensus receipt"
+            );
+            IAccessControl(d.consensusReceipt).revokeRole(ADMIN_ROLE, currentReceiptAdmin);
+            require(
+                !IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, currentReceiptAdmin),
+                "Configured receipt admin still has ADMIN_ROLE on consensus receipt"
+            );
+            IAccessControl(d.consensusReceipt).revokeRole(DEFAULT_ADMIN_ROLE, currentReceiptAdmin);
+            require(
+                !IAccessControl(d.consensusReceipt)
+                    .hasRole(DEFAULT_ADMIN_ROLE, currentReceiptAdmin),
+                "Configured receipt admin still has DEFAULT_ADMIN_ROLE on consensus receipt"
+            );
+        }
     }
 
     function _logResult(Deployed memory d) internal pure {
@@ -332,6 +463,12 @@ contract DeployTimelock is Script {
         console2.log("  registry    :", d.registry);
         console2.log("  router      :", d.router);
         console2.log("  governance  :", d.governance);
+        if (d.icPolicy != address(0)) {
+            console2.log("  ic_policy   :", d.icPolicy);
+        }
+        if (d.consensusReceipt != address(0)) {
+            console2.log("  consensus_receipt :", d.consensusReceipt);
+        }
     }
 
     function _writeJson(Deployed memory d) internal {
