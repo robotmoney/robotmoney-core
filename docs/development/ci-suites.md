@@ -1204,7 +1204,7 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
 | 18 | `suite-18-secrets-scan.yml` | `secrets-scan` (gitleaks) | `none` |
-| 18b | `suite-18-security-gates.yml` | `cargo-audit` \| `bun-audit` \| `csp-gate` | `none` |
+| 18b | `suite-18-security-gates.yml` | `cargo-audit` \| `bun-audit` \| `csp-gate` \| `audit-ledger` \| `seam-map-drift` \| `seam-map-validator` \| `release-workflow-authority-audit` | `none` |
 | 19 | `suite-19-erc4626-demo-tvl-matrix.yml` | `erc4626-precondition` (matrix) \| `demo-tvl` | `anvil` / `devnet` |
 | 20 | `suite-20-watchdog.yml` | `watchdog-unit` \| `watchdog-integration` | `none` / `postgres-testcontainer` |
 | 21 | `suite-21-nightly.yml` | `dispatch-all-suites` | `none` |
