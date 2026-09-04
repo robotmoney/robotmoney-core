@@ -3,10 +3,19 @@
 # WHY THIS SUITE EXISTS
 # Foundry artifacts are the single canonical ABI source. Any hand-maintained
 # copy drifts; history shows the indexer already had live ABI drift (issue
-# #366). This suite regenerates the ABI binding files from `out/` and fails
-# if they differ from the committed copies. Because drift is caught here,
-# contributors can never silently break the Rust or dapp ABI surfaces by
-# changing a contract without also regenerating (issue #374).
+# #366). This suite regenerates the ABI binding files listed below from
+# `out/` and fails if they differ from the committed copies.
+#
+# This suite alone does NOT guarantee contributors can't silently break the
+# Rust or dapp ABI surfaces (issue #374's original claim) — the dapp actually
+# encodes calls with the hand-maintained clients/dapp/src/lib/abi.ts, not the
+# generated file below, and this suite never reads abi.ts. As of issue #1281
+# the dapp side of that gap is closed by
+# clients/dapp/tests/unit/abi-parity.test.ts, which fails if abi.ts drifts
+# from the canonical signatures in abi.generated.ts. The Rust/explorer-indexer
+# side of the gap (the hand-edited rmpc ABI files below and
+# services/explorer-indexer's independently hand-maintained event tables)
+# remains open, tracked in issue #1346.
 #
 # WHICH FILES ARE DRIFT-GATED
 # - clients/rust-payment-client/abi/Erc20.json
