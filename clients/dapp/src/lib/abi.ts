@@ -424,8 +424,12 @@ export interface VaultRecord {
  * router deposit flow (issue #320, extended issue #417). Exposes:
  *   - `previewDeposit(amount)` — per-vault breakdown without state change.
  *   - `deposit(amount, minSharesPerLeg)` — all-or-revert multi-vault deposit.
- *   - `activeVaults()` — current active vault list; used by RouterDepositTab
- *     to detect vault-list changes between preview and submit (AC §7).
+ *   - `getEffectiveWeights()` — the vault list the router currently routes
+ *     by (`(address[] vaults, uint256[] bps)`); used by RouterDepositTab to
+ *     detect vault-list changes between preview and submit (AC §7). Replaces
+ *     the never-implemented `activeVaults()` (issue #1281) — no Solidity
+ *     source ever defined that selector; `getEffectiveWeights()` is the real
+ *     read `previewDeposit` itself routes by.
  *
  * The LegPreview tuple matches `PortfolioRouter.sol`'s `LegPreview` struct:
  * { vault, weightBps, legAmount, estShares, unavailable }.
@@ -462,10 +466,13 @@ export const routerAbi = [
   },
   {
     type: "function",
-    name: "activeVaults",
+    name: "getEffectiveWeights",
     stateMutability: "view",
     inputs: [],
-    outputs: [{ name: "vaults", type: "address[]" }],
+    outputs: [
+      { name: "vaults", type: "address[]" },
+      { name: "bps", type: "uint256[]" },
+    ],
   },
   // Router-eligibility view (issue #426): true if the vault's ERC-4626
   // `asset()` equals the router's USDC. Distinct from VaultRegistry status —

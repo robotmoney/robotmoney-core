@@ -13,10 +13,13 @@
  * The global error capture module is installed before React renders so that
  * all errors and warnings are captured from startup.
  *
- * VaultRegistryContext and RouterContext (issue #417) are mounted here as
- * shared data-fetching seams so all downstream components receive vault
- * metadata from a single batched registry read rather than N independent
- * chain reads. See docs/technical/multi-vault-dapp-decisions.md §4.1.
+ * VaultRegistryContext (issue #417) is mounted here as a shared
+ * data-fetching seam so all downstream components receive vault metadata
+ * from a single batched registry read rather than N independent chain
+ * reads. See docs/technical/multi-vault-dapp-decisions.md §4.1. (The
+ * router side of that seam, RouterContext, was removed in issue #1281:
+ * it had zero consumers and issued a reverting read for a selector no
+ * Solidity source defines; RouterDepositTab reads the router directly.)
  *
  * ExplorerProvider (ExplorerContext) is mounted here as the single polling
  * loop for the explorer API (/v1/vaults and /v1/stats). All components that
@@ -54,7 +57,6 @@ import { useGatewayVerifier } from "./lib/useGatewayVerifier";
 import { resolveExplorerApiUrl } from "./lib/explorerApi";
 import { initErrorCapture } from "./lib/error-capture";
 import { VaultRegistryProvider } from "./lib/VaultRegistryContext";
-import { RouterProvider } from "./lib/RouterContext";
 import { ExplorerProvider } from "./lib/ExplorerContext";
 
 // Install global error capture before React renders so startup errors are
@@ -246,19 +248,13 @@ const rootEl = document.getElementById("root");
 if (!rootEl) throw new Error("#root element missing from index.html");
 
 // Wrap App with ExplorerProvider (single polling loop for /v1/vaults and
-// /v1/stats), VaultRegistryProvider, and RouterProvider when contract
-// addresses are configured. Both chain-read providers are no-ops when their
-// address is missing (e.g. single-vault deployments).
-// docs/technical/multi-vault-dapp-decisions.md §4.1.
+// /v1/stats) and VaultRegistryProvider when the registry address is
+// configured. VaultRegistryProvider is a no-op when its address is missing
+// (e.g. single-vault deployments). docs/technical/multi-vault-dapp-decisions.md
+// §4.1.
 const appWithChainProviders = registry ? (
   <VaultRegistryProvider registryAddress={registry}>
-    {router ? (
-      <RouterProvider routerAddress={router}>
-        <App />
-      </RouterProvider>
-    ) : (
-      <App />
-    )}
+    <App />
   </VaultRegistryProvider>
 ) : (
   <App />

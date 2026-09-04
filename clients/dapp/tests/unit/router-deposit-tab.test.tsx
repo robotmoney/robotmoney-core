@@ -4,7 +4,7 @@
  * Covers acceptance criteria:
  *   AC §6  per-leg preview shows destination vaults, weights, estimated receipts;
  *          unavailable-leg warning shown when a leg is unavailable.
- *   AC §7  submit disabled when activeVaults() result differs from preview vault list.
+ *   AC §7  submit disabled when getEffectiveWeights()'s vault list differs from preview vault list.
  *
  * Test names match the issue test plan exactly so the pnpm --testNamePattern
  * invocations resolve correctly.
@@ -75,7 +75,8 @@ interface WagmiMockState {
   address: Address | undefined;
   allowance: bigint | undefined;
   previewDepositLegs: LegRaw[] | undefined;
-  activeVaults: Address[] | undefined;
+  /** Vault list half of getEffectiveWeights()'s (vaults, bps) return tuple. */
+  effectiveWeightsVaults: Address[] | undefined;
   approveSim: unknown;
   depositSim: unknown;
 }
@@ -85,7 +86,7 @@ const mockState: WagmiMockState = {
   address: USER,
   allowance: 10_000_000n,
   previewDepositLegs: activeLegsPrev,
-  activeVaults: [VAULT_A, VAULT_B],
+  effectiveWeightsVaults: [VAULT_A, VAULT_B],
   approveSim: undefined,
   depositSim: { request: {} },
 };
@@ -100,7 +101,14 @@ vi.mock("wagmi", () => ({
     if (opts.functionName === "allowance") return { data: mockState.allowance, refetch: vi.fn() };
     if (opts.functionName === "previewDeposit")
       return { data: mockState.previewDepositLegs, error: null };
-    if (opts.functionName === "activeVaults") return { data: mockState.activeVaults };
+    if (opts.functionName === "getEffectiveWeights") {
+      if (mockState.effectiveWeightsVaults === undefined) return { data: undefined };
+      // Real getEffectiveWeights() returns (address[] vaults, uint256[] bps) —
+      // viem decodes a multi-output function as a positional tuple.
+      return {
+        data: [mockState.effectiveWeightsVaults, mockState.effectiveWeightsVaults.map(() => 0n)],
+      };
+    }
     return { data: undefined, error: null };
   },
   useSimulateContract: (opts: { functionName?: string; args?: readonly unknown[] }) => {
@@ -134,7 +142,7 @@ describe("RouterDepositTab shows per-leg split preview", () => {
     mockState.address = USER;
     mockState.allowance = 10_000_000n;
     mockState.previewDepositLegs = activeLegsPrev;
-    mockState.activeVaults = [VAULT_A, VAULT_B];
+    mockState.effectiveWeightsVaults = [VAULT_A, VAULT_B];
     mockState.depositSim = { request: {} };
   });
 
@@ -165,7 +173,7 @@ describe("RouterDepositTab shows unavailable-leg warning and disables submit whe
     mockState.address = USER;
     mockState.allowance = 10_000_000n;
     mockState.previewDepositLegs = legsWithUnavailable;
-    mockState.activeVaults = [VAULT_A, VAULT_B];
+    mockState.effectiveWeightsVaults = [VAULT_A, VAULT_B];
     mockState.depositSim = undefined; // disabled when unavailable leg
   });
 
@@ -184,7 +192,7 @@ describe("RouterDepositTab shows unavailable-leg warning and disables submit whe
     // Simulate vault list change: preview has [A, B] but activeVaults now has [A, C]
     const VAULT_C = "0xcccccccccccccccccccccccccccccccccccccccc" as Address;
     mockState.previewDepositLegs = activeLegsPrev; // preview: [A, B]
-    mockState.activeVaults = [VAULT_A, VAULT_C]; // live: [A, C] — mismatch
+    mockState.effectiveWeightsVaults = [VAULT_A, VAULT_C]; // live: [A, C] — mismatch
     mockState.depositSim = { request: {} }; // sim still returns but vault list changed
     renderTab();
     // The vault list changed guard disables submit even if sim passes
@@ -203,7 +211,7 @@ describe("RouterDepositTab submits non-zero per-leg minSharesPerLeg floors deriv
     mockState.address = USER;
     mockState.allowance = 10_000_000n;
     mockState.previewDepositLegs = activeLegsPrev;
-    mockState.activeVaults = [VAULT_A, VAULT_B];
+    mockState.effectiveWeightsVaults = [VAULT_A, VAULT_B];
     mockState.depositSim = { request: {} };
     capturedDepositArgs = undefined;
   });

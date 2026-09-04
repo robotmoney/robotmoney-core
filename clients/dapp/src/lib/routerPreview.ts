@@ -51,7 +51,7 @@ const BPS_DENOMINATOR = 10_000n;
  * `toleranceBps`; an unavailable leg gets a `0n` floor (the contract treats a
  * zero floor as "skip the check", and the deposit already reverts up-front when
  * any leg is unavailable). Floors are ordered identically to `legs`, which the
- * router requires to match `activeVaults()` order.
+ * router requires to match `getEffectiveWeights()` order.
  *
  * DAPP-2 (issue #1025): replaces the previous empty `[]` floor array that
  * disabled per-leg slippage protection.
@@ -68,9 +68,10 @@ export function deriveMinSharesPerLeg(
 }
 
 /**
- * Decide whether the live `activeVaults()` list still matches the preview's leg
- * vault list (AC §7). A mismatch means the deposit would revert (leg ordering or
- * membership changed between preview and submit), so the UI disables submit.
+ * Decide whether the live `getEffectiveWeights()` vault list still matches the
+ * preview's leg vault list (AC §7). A mismatch means the deposit would revert
+ * (leg ordering or membership changed between preview and submit), so the UI
+ * disables submit.
  *
  * Null-safety (issue #1036): a leg whose `vault` is undefined — which can occur
  * when `router.previewDeposit` decodes a partial/transition-state tuple in the

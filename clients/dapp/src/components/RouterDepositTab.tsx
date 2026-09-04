@@ -6,10 +6,12 @@
  * Replaces the issue #320 router deposit entrypoint and adds:
  *   - Per-leg preview shows destination vaults, weights, estimated receipts
  *     per leg, and unavailable-leg warnings (AC §6).
- *   - Submit disabled when `activeVaults()` result differs from the preview
- *     vault list — guards against vault-list changes between preview and sign
- *     (AC §7, docs/technical/portfolio-router-decisions.md §5 risk 2).
- *   - RouterContext integration for the active vault list.
+ *   - Submit disabled when `getEffectiveWeights()`'s vault list differs from
+ *     the preview vault list — guards against vault-list changes between
+ *     preview and sign (AC §7, docs/technical/portfolio-router-decisions.md
+ *     §5 risk 2). `getEffectiveWeights()` is the live read the router itself
+ *     routes `previewDeposit`/`deposit` by, read directly here via
+ *     `useReadContract`.
  *
  * All preview values sourced exclusively from useReadContract (AC §11).
  *
@@ -113,13 +115,16 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   const routerPreview =
     depositAssets !== null && legs.length > 0 ? buildRouterPreview(depositAssets, legs, ctx) : null;
 
-  // -------- activeVaults() live check (AC §7) --------
-  // Compare the vault list from preview to the current activeVaults() result.
-  // If the lists differ, the deposit would revert (leg ordering changed).
-  const { data: currentActiveVaults } = useReadContract({
+  // -------- getEffectiveWeights() live check (AC §7) --------
+  // Compare the vault list from preview to the router's current effective
+  // weight vector — the same vector `previewDeposit` itself routes by, so this
+  // detects exactly the leg-ordering/membership changes that would make the
+  // preview stale. Replaces the never-implemented `activeVaults()` selector
+  // (issue #1281).
+  const { data: effectiveWeights } = useReadContract({
     address: routerAddress,
     abi: routerAbi,
-    functionName: "activeVaults",
+    functionName: "getEffectiveWeights",
     query: {
       enabled: isConnected && legs.length > 0,
       // Refetch frequently to detect vault list changes in near-real-time.
@@ -127,13 +132,15 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     },
   });
 
-  // Check if the live activeVaults list matches the preview vault list (AC §7).
-  // Delegated to a null-safe helper (issue #1036): an undefined leg vault must
-  // not crash the component — it is treated as "list changed" (submit disabled).
-  const vaultListChanged = computeVaultListChanged(
-    legs,
-    currentActiveVaults as Address[] | undefined,
-  );
+  const currentActiveVaults = Array.isArray(effectiveWeights)
+    ? (effectiveWeights[0] as Address[] | undefined)
+    : undefined;
+
+  // Check if the live effective-weights vault list matches the preview vault
+  // list (AC §7). Delegated to a null-safe helper (issue #1036): an undefined
+  // leg vault must not crash the component — it is treated as "list changed"
+  // (submit disabled).
+  const vaultListChanged = computeVaultListChanged(legs, currentActiveVaults);
 
   const allowanceOk =
     depositAssets !== null && typeof allowance === "bigint" && allowance >= depositAssets;
