@@ -2308,36 +2308,91 @@ contract BasketVaultTest is Test {
         );
     }
 
-    // ─── IRetirableVault: retire/unretire (FS-VLT-19) ────────────────────────
+    // ─── IRetirableVault: retire/unretire (FS-VLT-19 / issue #1284) ──────────
 
-    /// @notice FS-VLT-19: retire() sets depositsPaused = true and emits Retired.
-    function test_retire_setsDepositsPaused() public {
+    /// @notice issue #1284: retire() sets the dedicated `retired` flag, NOT
+    ///         `depositsPaused` — the two are independent so ADMIN_ROLE's
+    ///         `unpause()` (which unconditionally clears `depositsPaused`) can
+    ///         never re-open deposits on a registry-retired vault. Matches
+    ///         RobotMoneyVault's / Vault's separate-flag model; superseded the
+    ///         old aliasing behavior this test used to pin.
+    function test_retire_setsRetired() public {
         address reg = makeAddr("registry");
         vm.prank(admin);
         vault.setRegistry(reg);
 
-        assertFalse(vault.depositsPaused(), "deposits must be open before retire");
+        assertFalse(vault.retired(), "vault must not be retired before retire()");
 
         vm.prank(reg);
         vault.retire();
 
-        assertTrue(vault.depositsPaused(), "retire() must set depositsPaused = true");
+        assertTrue(vault.retired(), "retire() must set retired = true");
+        assertFalse(vault.depositsPaused(), "retire() must not alias depositsPaused (issue #1284)");
     }
 
-    /// @notice FS-VLT-19: unretire() clears depositsPaused and emits Unretired.
-    function test_unretire_clearsDepositsPaused() public {
+    /// @notice issue #1284: unretire() clears the dedicated `retired` flag and
+    ///         emits Unretired.
+    function test_unretire_clearsRetired() public {
         address reg = makeAddr("registry");
         vm.prank(admin);
         vault.setRegistry(reg);
 
         vm.prank(reg);
         vault.retire();
-        assertTrue(vault.depositsPaused(), "deposits must be paused after retire");
+        assertTrue(vault.retired(), "vault must be retired before unretire()");
 
         vm.prank(reg);
         vault.unretire();
 
-        assertFalse(vault.depositsPaused(), "unretire() must clear depositsPaused");
+        assertFalse(vault.retired(), "unretire() must clear retired");
+    }
+
+    /// @notice issue #1284 (F-06 regression): retire() -> emergency pause() ->
+    ///         admin unpause() must leave deposits closed (the registry still
+    ///         records the vault Retired) while ERC-4626 redeem stays open
+    ///         (ADR-0009). Before this fix, BasketVault aliased retirement
+    ///         onto `depositsPaused`, so `unpause()` (which unconditionally
+    ///         calls `_setDepositsPaused(false)`) silently re-opened deposits
+    ///         on a vault the registry still recorded as Retired.
+    function test_retirePauseUnpause_leavesDepositsClosedButRedeemOpen() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        uint256 basketOut = 995 * ONE_USDC;
+        usdc.mint(stranger, depositAmount);
+        basketToken.mint(address(router), basketOut);
+        router.setAmountOut(basketOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        uint256 shares = vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        address reg = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(reg);
+
+        vm.prank(reg);
+        vault.retire();
+        assertTrue(vault.retired(), "vault must be retired");
+
+        vm.prank(emergencyResponder);
+        vault.pause();
+
+        vm.prank(admin);
+        vault.unpause();
+
+        assertTrue(vault.retired(), "unpause() must not clear retirement (issue #1284)");
+        assertEq(vault.maxDeposit(stranger), 0, "deposits must stay closed on a retired vault");
+
+        vm.prank(stranger);
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit — deposits gated by maxDeposit()
+        vault.deposit(1, stranger);
+
+        uint256 redeemOut = 990 * ONE_USDC;
+        usdc.mint(address(router), redeemOut);
+        router.setAmountOut(redeemOut);
+        vm.prank(stranger);
+        uint256 redeemed = vault.redeem(shares, stranger, stranger);
+        assertGt(redeemed, 0, "redeem must stay open on a retired vault (ADR-0009)");
     }
 
     /// @notice retire() reverts when caller is not the linked registry.
