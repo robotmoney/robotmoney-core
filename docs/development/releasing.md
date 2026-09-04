@@ -124,10 +124,11 @@ release can write a matching checksum beside a malicious archive. The attestatio
 is signed with an OIDC identity GitHub issues only to an Actions run in this
 repository, so release-write alone cannot forge it. It does **not** prove the
 commit was reviewed: whoever can push a ref here can trigger this workflow and
-get a genuine attestation for it — that residual gap is what review on
-`release-rmpc.yml` itself would close (tracked as a decision in #1342, since
-requiring it puts a human reviewer in a merge loop that runs fully automated
-today). Ref protection on `rmpc-v*` is done: the `protect-rmpc-release-tags`
+get a genuine attestation for it. Requiring human review on `release-rmpc.yml`
+itself would close that residual gap but was decided against (#1342): it
+would put a human reviewer in a merge loop that runs fully automated today,
+and the repo owner chose to keep it that way. Ref protection on `rmpc-v*` is
+done, and it's the sharper of the two: the `protect-rmpc-release-tags`
 repository ruleset restricts creating, updating, or deleting any
 `refs/tags/rmpc-v*` ref to organization admins, so minting a hostile release
 tag now requires that privilege level, not merely `contents: write`.
