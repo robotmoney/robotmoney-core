@@ -1,0 +1,57 @@
+---
+title: "DelegatecallProxyAdapter"
+---
+
+# DelegatecallProxyAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AdapterDelegatecallGuard.t.sol)
+
+<i>
+
+A contrived "proxy adapter" whose runtime bytecode contains a
+`DELEGATECALL` opcode. Mirrors the EIP-1167 minimal-proxy shape: a
+single delegatecall to a stored implementation. The point is purely
+that `address(this).code` contains opcode `0xF4`; the adapter is
+never actually wired to a vault.
+
+</i>
+
+## Constants
+
+### IMPLEMENTATION
+
+```solidity
+address public immutable IMPLEMENTATION;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address implementation_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| implementation_ | `address` |  |
+
+<a id="fallback"></a>
+
+### fallback
+
+<i>
+
+Fallback performs a `delegatecall`. The compiler emits a `0xF4`
+opcode in the runtime bytecode of this function.
+
+</i>
+
+```solidity
+fallback() external payable;
+```
+

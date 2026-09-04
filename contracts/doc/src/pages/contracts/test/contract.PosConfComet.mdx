@@ -1,0 +1,77 @@
+---
+title: "PosConfComet"
+---
+
+# PosConfComet
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AdapterPositionConformance.t.sol)
+
+<i>
+
+1:1 Compound V3 Comet mock: supply/withdraw credit/debit msg.sender and
+route USDC to/from msg.sender; supports the max full-balance sentinel.
+
+</i>
+
+## Constants
+
+### usdc
+
+```solidity
+IERC20 public immutable usdc;
+```
+
+## State Variables
+
+### balanceOf
+
+```solidity
+mapping(address => uint256) public balanceOf;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+
+<a id="supply-address-uint256"></a>
+
+### supply
+
+```solidity
+function supply(address asset, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+
+<a id="withdraw-address-uint256"></a>
+
+### withdraw
+
+```solidity
+function withdraw(address asset, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+

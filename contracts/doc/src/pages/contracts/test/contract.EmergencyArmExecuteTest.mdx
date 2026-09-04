@@ -1,0 +1,46 @@
+---
+title: "EmergencyArmExecuteTest"
+---
+
+# EmergencyArmExecuteTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/EmergencyModel.t.sol)
+
+**Inherits:** [EmergencyModelBase](/contracts/test/abstract.EmergencyModelBase)
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_emergencyrole_drainsandexcludesinonecall"></a>
+
+### test_emergencyRole_drainsAndExcludesInOneCall
+
+AC: an EMERGENCY_ROLE holder ARMS and EXECUTES an adapter
+drain+exclusion in a SINGLE transaction — no two-step, no ADMIN
+timelock wait in between. After the one call the adapter is both
+drained (its USDC recovered to the vault) AND excluded (deactivated,
+out of NAV counting).
+
+```solidity
+function test_emergencyRole_drainsAndExcludesInOneCall() public;
+```
+
+<a id="test_nonemergencycaller_reverts"></a>
+
+### test_nonEmergencyCaller_reverts
+
+AC: a non-EMERGENCY caller CANNOT arm+execute — it reverts. Even the
+ADMIN (timelock) key, which does NOT hold EMERGENCY_ROLE, is refused:
+the fast path is EMERGENCY-gated, not ADMIN-gated.
+
+```solidity
+function test_nonEmergencyCaller_reverts() public;
+```
+

@@ -1,0 +1,46 @@
+---
+title: "MockRetirableVault"
+description: "Minimal stand-in for `RobotMoneyVault` exposing the deposit-halt legs (`retire`/`unretire`) the registry's unified governance `retire` action drives. Records whether each was called so the registry test can assert the cross-contract call landed."
+---
+
+# MockRetirableVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/VaultRegistry.t.sol)
+
+Minimal stand-in for `RobotMoneyVault` exposing the deposit-halt legs
+(`retire`/`unretire`) the registry's unified governance `retire`
+action drives. Records whether each was called so the registry test
+can assert the cross-contract call landed.
+
+## State Variables
+
+### retiredCalled
+
+```solidity
+bool public retiredCalled;
+```
+
+### unretiredCalled
+
+```solidity
+bool public unretiredCalled;
+```
+
+## Functions
+
+<a id="retire"></a>
+
+### retire
+
+```solidity
+function retire() external;
+```
+
+<a id="unretire"></a>
+
+### unretire
+
+```solidity
+function unretire() external;
+```
+

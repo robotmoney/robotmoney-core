@@ -1,0 +1,51 @@
+---
+title: "GuardHarness"
+---
+
+# GuardHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AdapterDelegatecallGuard.t.sol)
+
+<i>
+
+Library-consumer harness so we can test `requireNoDelegatecall`
+with `vm.expectRevert` against the library's custom error.
+
+</i>
+
+## Functions
+
+<a id="requirenodelegatecall-address"></a>
+
+### requireNoDelegatecall
+
+```solidity
+function requireNoDelegatecall(address adapter_) external view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter_ | `address` |  |
+
+<a id="containsdelegatecall-bytes"></a>
+
+### containsDelegatecall
+
+```solidity
+function containsDelegatecall(bytes memory code) external pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| code | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+

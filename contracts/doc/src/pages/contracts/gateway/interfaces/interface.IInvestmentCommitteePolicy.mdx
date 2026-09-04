@@ -1,0 +1,401 @@
+---
+title: "IInvestmentCommitteePolicy"
+description: "Interface for the InvestmentCommitteePolicy contract."
+---
+
+# IInvestmentCommitteePolicy
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/gateway/interfaces/IInvestmentCommitteePolicy.sol)
+
+**Title:** IInvestmentCommitteePolicy
+
+Interface for the InvestmentCommitteePolicy contract.
+
+Design constraints (docs/product/20260623-product-proposal-investment-committee-v0.md §3):
+- All committee actions are **signalling only**: no treasury spend, no direct
+router-weight mutation.
+- Membership is admin-gated (ADMIN_ROLE). Permissionless onboarding is v1+.
+- All writes (register / voteSubmit) must be called through the
+RobotMoneyGateway (enforced by the `onlyGateway` modifier on the
+implementation).
+
+## Functions
+
+<a id="registeragent-address-string"></a>
+
+### registerAgent
+
+Allowlist a committee agent. Only ADMIN_ROLE.
+
+```solidity
+function registerAgent(address agent, string calldata agentId_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` | Address to grant COMMITTEE_AGENT_ROLE. |
+| agentId_ | `string` | Human-readable label (e.g. "athena-v1"). |
+
+<a id="revokeagent-address"></a>
+
+### revokeAgent
+
+Remove a committee agent from the allowlist. Only ADMIN_ROLE.
+
+```solidity
+function revokeAgent(address agent) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` | Address to revoke COMMITTEE_AGENT_ROLE from. |
+
+<a id="submitvote-voteparams"></a>
+
+### submitVote
+
+Submit a signed allocation vote for a vault.
+Must be called via the RobotMoneyGateway.
+
+```solidity
+function submitVote(VoteParams calldata p) external returns (uint256 voteId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `VoteParams` | All vote fields packed into a `VoteParams` struct. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| voteId | `uint256` | Index of the newly appended vote. |
+
+<a id="votecount"></a>
+
+### voteCount
+
+Total number of submitted votes.
+
+```solidity
+function voteCount() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="getvote-uint256"></a>
+
+### getVote
+
+Retrieve a single vote by index.
+
+```solidity
+function getVote(uint256 voteId) external view returns (Vote memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| voteId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Vote` |  |
+
+<a id="latestvotebyagent-address"></a>
+
+### latestVoteByAgent
+
+Latest vote index for a given agent, or type(uint256).max if none.
+
+```solidity
+function latestVoteByAgent(address agent) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="gateway"></a>
+
+### gateway
+
+The RobotMoneyGateway address. All committee writes must originate here.
+
+```solidity
+function gateway() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="agentid-address"></a>
+
+### agentId
+
+Human-readable label for each registered agent.
+
+```solidity
+function agentId(address agent) external view returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+## Events
+
+### AgentRegistered
+
+Emitted when ADMIN_ROLE registers a committee agent.
+
+```solidity
+event AgentRegistered(address indexed agent, string agentId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+| agentId | `string` |  |
+
+### AgentRevoked
+
+Emitted when ADMIN_ROLE revokes a committee agent.
+
+```solidity
+event AgentRevoked(address indexed agent);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+### VoteSubmitted
+
+Emitted when an allowlisted agent submits a signed vote.
+
+```solidity
+event VoteSubmitted(
+        uint256 indexed voteId,
+        address indexed agent,
+        address indexed vault,
+        Stance stance,
+        uint16 targetWeightBps,
+        uint8 confidence,
+        string rationaleUri,
+        bytes32 voteJsonHash,
+        uint64 timestamp
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| voteId | `uint256` |  |
+| agent | `address` |  |
+| vault | `address` |  |
+| stance | `Stance` |  |
+| targetWeightBps | `uint16` |  |
+| confidence | `uint8` |  |
+| rationaleUri | `string` |  |
+| voteJsonHash | `bytes32` |  |
+| timestamp | `uint64` |  |
+
+## Errors
+
+### ZeroAddress
+
+```solidity
+error ZeroAddress();
+```
+
+### CallerNotGateway
+
+```solidity
+error CallerNotGateway();
+```
+
+### AgentNotAllowlisted
+
+```solidity
+error AgentNotAllowlisted();
+```
+
+### EmptyVoteHash
+
+```solidity
+error EmptyVoteHash();
+```
+
+### InvalidStance
+
+```solidity
+error InvalidStance();
+```
+
+### WeightExceedsBps
+
+```solidity
+error WeightExceedsBps();
+```
+
+### ConfidenceOutOfRange
+
+```solidity
+error ConfidenceOutOfRange();
+```
+
+### EmptyRationaleUri
+
+```solidity
+error EmptyRationaleUri();
+```
+
+### ZeroVaultAddress
+
+```solidity
+error ZeroVaultAddress();
+```
+
+## Structs
+
+### Vote
+
+A single on-chain vote record.
+
+```solidity
+struct Vote {
+        address agent;
+        address vault;
+        Stance stance;
+        uint16 targetWeightBps;
+        uint8 confidence;
+        string rationaleUri;
+        bytes32 voteJsonHash;
+        bytes32 promptHash;
+        bytes32 inputsDigest;
+        string schemaVersion;
+        uint64 timestamp;
+        uint64 submittedAt;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+| vault | `address` |  |
+| stance | `Stance` |  |
+| targetWeightBps | `uint16` |  |
+| confidence | `uint8` |  |
+| rationaleUri | `string` |  |
+| voteJsonHash | `bytes32` |  |
+| promptHash | `bytes32` |  |
+| inputsDigest | `bytes32` |  |
+| schemaVersion | `string` |  |
+| timestamp | `uint64` |  |
+| submittedAt | `uint64` |  |
+
+### VoteParams
+
+Calldata bundle for `submitVote`.
+
+```solidity
+struct VoteParams {
+        address agent;
+        address vault;
+        Stance stance;
+        uint16 targetWeightBps;
+        uint8 confidence;
+        string rationaleUri;
+        bytes32 voteJsonHash;
+        bytes32 promptHash;
+        bytes32 inputsDigest;
+        string schemaVersion;
+        uint64 timestamp;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+| vault | `address` |  |
+| stance | `Stance` |  |
+| targetWeightBps | `uint16` |  |
+| confidence | `uint8` |  |
+| rationaleUri | `string` |  |
+| voteJsonHash | `bytes32` |  |
+| promptHash | `bytes32` |  |
+| inputsDigest | `bytes32` |  |
+| schemaVersion | `string` |  |
+| timestamp | `uint64` |  |
+
+## Enums
+
+### Stance
+
+Allocation stance for a single vault.
+
+<i>
+
+Must remain 3 values in this order — the Rust ABI binding and the
+vote JSON schema both encode Overweight=0, Neutral=1, Underweight=2.
+
+</i>
+
+```solidity
+enum Stance {
+        Overweight,
+        Neutral,
+        Underweight
+    }
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Overweight |  |
+| Neutral |  |
+| Underweight |  |
+

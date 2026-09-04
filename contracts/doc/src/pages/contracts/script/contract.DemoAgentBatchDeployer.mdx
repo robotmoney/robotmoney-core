@@ -1,0 +1,50 @@
+---
+title: "DemoAgentBatchDeployer"
+description: "Batch deployer #2b — the `AgentTokenVault` (PRD §11.3) alone. Split from the former `DemoAgentRwaBatchDeployer` to keep each batch deployer's initcode under EIP-3860's 49152-byte limit. All vaults constructed with admin = adminAddr. Demo-only."
+---
+
+# DemoAgentBatchDeployer
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployDemoExtraVaults.s.sol)
+
+Batch deployer #2b — the `AgentTokenVault` (PRD §11.3) alone.
+Split from the former `DemoAgentRwaBatchDeployer` to keep each
+batch deployer's initcode under EIP-3860's 49152-byte limit.
+All vaults constructed with admin = adminAddr. Demo-only.
+
+## Constants
+
+### agentVault
+
+```solidity
+AgentTokenVault public immutable agentVault;
+```
+
+## Functions
+
+<a id="constructor-address-address-address-address-uint256-uint256"></a>
+
+### constructor
+
+```solidity
+constructor(
+        address usdc,
+        address adminAddr,
+        address emergencyResponder,
+        address swapRouter,
+        uint256 tvlCap,
+        uint256 perDepositCap
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+| adminAddr | `address` |  |
+| emergencyResponder | `address` |  |
+| swapRouter | `address` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+

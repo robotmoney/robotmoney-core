@@ -1,0 +1,59 @@
+---
+title: "ShareLeakVault"
+---
+
+# ShareLeakVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RobotMoneyGateway.t.sol)
+
+**Inherits:** [MockVault](/contracts/gateway/contract.MockVault)
+
+<i>
+
+Vault that mints an extra share to `msg.sender` (the gateway) on
+deposit, simulating a malicious / buggy 4626 implementation that
+re-routes shares to the caller. Trips the post-call rmUSDC custody
+invariant.
+
+</i>
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address asset_) MockVault(asset_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `address` |  |
+
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+ERC-4626-style deposit. Pulls `assets` USDC from `msg.sender`
+via `transferFrom`, mints `shares == assets` to `receiver`.
+
+```solidity
+function deposit(uint256 assets, address receiver) external override returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` | Amount of USDC (6 decimals) to deposit. |
+| receiver | `address` | Recipient of the freshly minted `rmUSDC` shares. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Amount of `rmUSDC` minted (1:1 with assets). |
+

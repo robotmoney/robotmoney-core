@@ -1,0 +1,148 @@
+---
+title: "DeSpxaFreezeMockVenue"
+---
+
+# DeSpxaFreezeMockVenue
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeSpxaAssetPositionAdapter.t.sol)
+
+**Inherits:** [IBasketSwapAdapter](/contracts/interfaces/interface.IBasketSwapAdapter)
+
+<i>
+
+Freeze-aware IBasketSwapAdapter mock: identical pricing/execution to
+`DeSpxaPositionMockVenue` but works against the freezable TOKEN fixture.
+Its `swap` legitimately reverts (bubbling `TransfersFrozen`) when either
+leg moves the frozen token — this IS the expected fail-closed behavior
+the freeze test asserts on `deploy`/`withdraw`. TEST FIXTURE.
+
+</i>
+
+## Constants
+
+### PRICE
+
+```solidity
+uint256 public constant PRICE = 5e6;
+```
+
+### USDC
+
+```solidity
+address public immutable USDC;
+```
+
+### TOKEN
+
+```solidity
+address public immutable TOKEN;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_, address token_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+| token_ | `address` |  |
+
+<a id="_quote-address-address-uint256"></a>
+
+### _quote
+
+```solidity
+function _quote(address base, address quote, uint256 amount) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| base | `address` |  |
+| quote | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="twapprice-address-address-address-uint256-uint32"></a>
+
+### twapPrice
+
+```solidity
+function twapPrice(address, address base, address quote, uint256 amount, uint32)
+        external
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+| base | `address` |  |
+| quote | `address` |  |
+| amount | `uint256` |  |
+| _ | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="swap-address-address-uint24-uint256-uint256-address-uint256"></a>
+
+### swap
+
+```solidity
+function swap(
+        address tokenIn,
+        address tokenOut,
+        uint24,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint256
+    ) external returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| _ | `uint24` |  |
+| amountIn | `uint256` |  |
+| minAmountOut | `uint256` |  |
+| recipient | `address` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+
+## Errors
+
+### BadPair
+
+```solidity
+error BadPair();
+```
+

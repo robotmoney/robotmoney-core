@@ -1,0 +1,471 @@
+---
+title: "VaultRegistryTest"
+---
+
+# VaultRegistryTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/VaultRegistry.t.sol)
+
+**Inherits:** Test
+
+## State Variables
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### vault1
+
+```solidity
+address internal vault1 = makeAddr("vault1");
+```
+
+### vault2
+
+```solidity
+address internal vault2 = makeAddr("vault2");
+```
+
+### vault3
+
+```solidity
+address internal vault3 = makeAddr("vault3");
+```
+
+### meta1
+
+```solidity
+VaultRegistry.VaultMetadata internal meta1 = VaultRegistry.VaultMetadata({
+        name: "Robot Money USDC",
+        asset: makeAddr("usdc"),
+        registeredAt: 0 // populated by contract, ignored in fixture
+    });
+```
+
+### meta2
+
+```solidity
+VaultRegistry.VaultMetadata internal meta2 = VaultRegistry.VaultMetadata({
+        name: "Robot Money ETH", asset: makeAddr("weth"), registeredAt: 0
+    });
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_constructor_revertsonzeroadmin"></a>
+
+### test_constructor_revertsOnZeroAdmin
+
+```solidity
+function test_constructor_revertsOnZeroAdmin() public;
+```
+
+<a id="test_constructor_grantsadminrole"></a>
+
+### test_constructor_grantsAdminRole
+
+```solidity
+function test_constructor_grantsAdminRole() public view;
+```
+
+<a id="test_constructor_vaultcountiszero"></a>
+
+### test_constructor_vaultCountIsZero
+
+```solidity
+function test_constructor_vaultCountIsZero() public view;
+```
+
+<a id="test_registervault_succeeds"></a>
+
+### test_registerVault_succeeds
+
+```solidity
+function test_registerVault_succeeds() public;
+```
+
+<a id="test_registervault_emitsvaultregistered"></a>
+
+### test_registerVault_emitsVaultRegistered
+
+```solidity
+function test_registerVault_emitsVaultRegistered() public;
+```
+
+<a id="test_registervault_setsactivestatus"></a>
+
+### test_registerVault_setsActiveStatus
+
+```solidity
+function test_registerVault_setsActiveStatus() public;
+```
+
+<a id="test_registervault_storesmetadata"></a>
+
+### test_registerVault_storesMetadata
+
+```solidity
+function test_registerVault_storesMetadata() public;
+```
+
+<a id="test_registervault_multiplevaults_registrationorder"></a>
+
+### test_registerVault_multipleVaults_registrationOrder
+
+```solidity
+function test_registerVault_multipleVaults_registrationOrder() public;
+```
+
+<a id="test_registervault_revertsonzeroaddress"></a>
+
+### test_registerVault_revertsOnZeroAddress
+
+```solidity
+function test_registerVault_revertsOnZeroAddress() public;
+```
+
+<a id="test_registervault_revertsonduplicate"></a>
+
+### test_registerVault_revertsOnDuplicate
+
+```solidity
+function test_registerVault_revertsOnDuplicate() public;
+```
+
+<a id="test_registervault_revertsforunauthorizedcaller"></a>
+
+### test_registerVault_revertsForUnauthorizedCaller
+
+```solidity
+function test_registerVault_revertsForUnauthorizedCaller() public;
+```
+
+<a id="test_setvaultstatus_topaused"></a>
+
+### test_setVaultStatus_toPaused
+
+```solidity
+function test_setVaultStatus_toPaused() public;
+```
+
+<a id="test_setvaultstatus_toretired"></a>
+
+### test_setVaultStatus_toRetired
+
+```solidity
+function test_setVaultStatus_toRetired() public;
+```
+
+<a id="test_setvaultstatus_activeafterpaused"></a>
+
+### test_setVaultStatus_activeAfterPaused
+
+```solidity
+function test_setVaultStatus_activeAfterPaused() public;
+```
+
+<a id="test_setvaultstatus_emitsvaultstatuschanged"></a>
+
+### test_setVaultStatus_emitsVaultStatusChanged
+
+```solidity
+function test_setVaultStatus_emitsVaultStatusChanged() public;
+```
+
+<a id="test_setvaultstatus_revertsfornotregistered"></a>
+
+### test_setVaultStatus_revertsForNotRegistered
+
+```solidity
+function test_setVaultStatus_revertsForNotRegistered() public;
+```
+
+<a id="test_setvaultstatus_revertsforunauthorizedcaller"></a>
+
+### test_setVaultStatus_revertsForUnauthorizedCaller
+
+```solidity
+function test_setVaultStatus_revertsForUnauthorizedCaller() public;
+```
+
+<a id="test_retire_setsretiredstatusandhaltsvaultdeposits"></a>
+
+### test_retire_setsRetiredStatusAndHaltsVaultDeposits
+
+```solidity
+function test_retire_setsRetiredStatusAndHaltsVaultDeposits() public;
+```
+
+<a id="test_retire_emitsvaultstatuschanged"></a>
+
+### test_retire_emitsVaultStatusChanged
+
+```solidity
+function test_retire_emitsVaultStatusChanged() public;
+```
+
+<a id="test_retire_revertsfornotregistered"></a>
+
+### test_retire_revertsForNotRegistered
+
+```solidity
+function test_retire_revertsForNotRegistered() public;
+```
+
+<a id="test_retire_revertsforunauthorizedcaller"></a>
+
+### test_retire_revertsForUnauthorizedCaller
+
+```solidity
+function test_retire_revertsForUnauthorizedCaller() public;
+```
+
+<a id="test_reactivate_setsactivestatusandreopensvaultdeposits"></a>
+
+### test_reactivate_setsActiveStatusAndReopensVaultDeposits
+
+```solidity
+function test_reactivate_setsActiveStatusAndReopensVaultDeposits() public;
+```
+
+<a id="test_reactivate_revertsforunauthorizedcaller"></a>
+
+### test_reactivate_revertsForUnauthorizedCaller
+
+```solidity
+function test_reactivate_revertsForUnauthorizedCaller() public;
+```
+
+<a id="test_retire_succeedsforbasketlikevault"></a>
+
+### test_retire_succeedsForBasketLikeVault
+
+FS-VLT-19: VaultRegistry.retire(basketVaultAddress) completes
+without revert when the BasketVault has the registry address set
+(simulated via MockBasketLikeVault which mirrors BasketVault's
+registry-gated retire/unretire pattern).
+
+```solidity
+function test_retire_succeedsForBasketLikeVault() public;
+```
+
+<a id="test_setvaultstatus_revertswhenretirehookreverts"></a>
+
+### test_setVaultStatus_revertsWhenRetireHookReverts
+
+AZ-REG-1 fix: VaultRegistry.setVaultStatus on a vault whose
+retire hook reverts must propagate the revert to the caller so
+the registry never records the vault as Retired while its
+deposit-halt flag is unset.
+
+```solidity
+function test_setVaultStatus_revertsWhenRetireHookReverts() public;
+```
+
+<a id="test_retire_revertswhileroutereligible"></a>
+
+### test_retire_revertsWhileRouterEligible
+
+```solidity
+function test_retire_revertsWhileRouterEligible() public;
+```
+
+<a id="test_setvaultstatus_revertsretirewhileroutereligible"></a>
+
+### test_setVaultStatus_revertsRetireWhileRouterEligible
+
+```solidity
+function test_setVaultStatus_revertsRetireWhileRouterEligible() public;
+```
+
+<a id="test_retire_succeedsaftermadeineligible"></a>
+
+### test_retire_succeedsAfterMadeIneligible
+
+Positive path: dropping the vault from `routerEligibleCount`
+first (the documented ordering) lets `retire()` proceed, leaving
+no Retired vault counted in `routerEligibleCount`.
+
+```solidity
+function test_retire_succeedsAfterMadeIneligible() public;
+```
+
+<a id="test_setvaultstatus_pausednotblockedwhileroutereligible"></a>
+
+### test_setVaultStatus_pausedNotBlockedWhileRouterEligible
+
+The guard is scoped to the Retired transition only: `Paused` is a
+transient, reversible state, so `setVaultStatus(_, Paused)` is NOT
+blocked while the vault is still router-eligible.
+
+```solidity
+function test_setVaultStatus_pausedNotBlockedWhileRouterEligible() public;
+```
+
+<a id="test_getvault_revertsfornotregistered"></a>
+
+### test_getVault_revertsForNotRegistered
+
+```solidity
+function test_getVault_revertsForNotRegistered() public;
+```
+
+<a id="test_listvaults_emptyinitially"></a>
+
+### test_listVaults_emptyInitially
+
+```solidity
+function test_listVaults_emptyInitially() public view;
+```
+
+<a id="test_listvaults_lengthmatchesvaultcount_after_multiple"></a>
+
+### test_listVaults_lengthMatchesVaultCount_after_multiple
+
+```solidity
+function test_listVaults_lengthMatchesVaultCount_after_multiple() public;
+```
+
+<a id="testfuzz_listvaultslength_equalsvaultcount-uint8"></a>
+
+### testFuzz_listVaultsLength_equalsVaultCount
+
+Registers `n` distinct vaults and asserts `listVaults().length == vaultCount()`.
+
+```solidity
+function testFuzz_listVaultsLength_equalsVaultCount(uint8 n) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint8` |  |
+
+<a id="test_setroutereligible_trackscount"></a>
+
+### test_setRouterEligible_tracksCount
+
+setRouterEligible maintains `routerEligibleCount` as the number
+of vaults currently flagged eligible.
+
+```solidity
+function test_setRouterEligible_tracksCount() public;
+```
+
+<a id="test_setroutereligible_blocks_stale_defaultweights_length"></a>
+
+### test_setRouterEligible_blocks_stale_defaultWeights_length
+
+With a linked router carrying a non-empty default weight vector,
+a setRouterEligible change that would leave that vector with a
+stale length reverts. An empty default vector is exempt, and a
+re-set default that matches the new count is accepted.
+
+```solidity
+function test_setRouterEligible_blocks_stale_defaultWeights_length() public;
+```
+
+<a id="test_setrouter_adminonlyandemits"></a>
+
+### test_setRouter_adminOnlyAndEmits
+
+setRouter is gated by ADMIN_ROLE and emits RouterSet.
+
+```solidity
+function test_setRouter_adminOnlyAndEmits() public;
+```
+
+<a id="test_setrouter_unlinkreverts_whendefaultvectornonempty"></a>
+
+### test_setRouter_unlinkReverts_whenDefaultVectorNonEmpty
+
+setRouter(address(0)) reverts with RouterUnlinkBlocked when the
+currently-linked router still has a non-empty default weight
+vector. ADR-0002 bypass-prevention.
+
+```solidity
+function test_setRouter_unlinkReverts_whenDefaultVectorNonEmpty() public;
+```
+
+<a id="test_setrouter_unlink_succeedswithnodefaultvector"></a>
+
+### test_setRouter_unlink_succeedsWithNoDefaultVector
+
+setRouter(address(0)) succeeds when no default weight vector is
+set (initial deployment path).
+
+```solidity
+function test_setRouter_unlink_succeedsWithNoDefaultVector() public;
+```
+
+<a id="test_setrouter_unlink_succeeds_whennopriorrouter"></a>
+
+### test_setRouter_unlink_succeeds_whenNoPriorRouter
+
+setRouter(address(0)) when no router was ever linked succeeds
+unconditionally (idempotent unlink).
+
+```solidity
+function test_setRouter_unlink_succeeds_whenNoPriorRouter() public;
+```
+
+<a id="test_setroutereligible_norouter_countupdatesandinvariantholds"></a>
+
+### test_setRouterEligible_noRouter_countUpdatesAndInvariantHolds
+
+setRouterEligible() with router == address(0) (initial state,
+no default vector configured) decrements routerEligibleCount
+and leaves the stale-length invariant satisfied — there is no
+default weight vector to protect. ADR-0002.
+
+```solidity
+function test_setRouterEligible_noRouter_countUpdatesAndInvariantHolds() public;
+```
+
+<a id="test_bypasssequence_blockedatunlink"></a>
+
+### test_bypassSequence_blockedAtUnlink
+
+The full bypass sequence (setRouter(0) → revoke eligibility →
+re-link) is blocked at the setRouter(0) step when a non-empty
+default vector is present.
+
+```solidity
+function test_bypassSequence_blockedAtUnlink() public;
+```
+
+<a id="test_lastadminfloor_registry_cannotdropsoleadmin"></a>
+
+### test_lastAdminFloor_registry_cannotDropSoleAdmin
+
+The sole ADMIN_ROLE holder on VaultRegistry cannot renounce or
+revoke itself to zero admins (LastAdminFloor); after a second
+admin is granted, the original can be dropped.
+
+```solidity
+function test_lastAdminFloor_registry_cannotDropSoleAdmin() public;
+```
+

@@ -1,0 +1,71 @@
+---
+title: "Sup1OverpromisingVault"
+---
+
+# Sup1OverpromisingVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/fv/CustodyMultiVault.t.sol)
+
+<i>
+
+Intentionally violates SUP-1: one holder can redeem twice the assets.
+This test-only double proves the shared predicate is executed, not vacuous.
+
+</i>
+
+## Functions
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+```solidity
+function totalAssets() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="balanceof-address"></a>
+
+### balanceOf
+
+```solidity
+function balanceOf(address) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="converttoassets-uint256"></a>
+
+### convertToAssets
+
+```solidity
+function convertToAssets(uint256) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

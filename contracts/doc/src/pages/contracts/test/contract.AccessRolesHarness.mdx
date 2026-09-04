@@ -1,0 +1,74 @@
+---
+title: "AccessRolesHarness"
+---
+
+# AccessRolesHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AccessRoles.t.sol)
+
+**Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles)
+
+<i>
+
+Concrete harness exposing AccessRoles internals for test purposes.
+
+</i>
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address admin);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin | `address` |  |
+
+<a id="exposed_assertroleseparation-address"></a>
+
+### exposed_assertRoleSeparation
+
+```solidity
+function exposed_assertRoleSeparation(address account) external view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+<a id="unsafe_forgerole-bytes32-address"></a>
+
+### unsafe_forgeRole
+
+<i>
+
+Test-only escape hatch that forges a role assignment without
+going through the `_grantRole` override. Used to verify that
+`_assertRoleSeparation` still catches an overlap that somehow
+slipped past the grant-time check (defense-in-depth).
+
+</i>
+
+OZ AccessControl stores `mapping(bytes32 => RoleData) _roles`
+at slot 0; `RoleData.hasRole[address]` lives at
+`keccak256(account || keccak256(role || 0))`.
+
+```solidity
+function unsafe_forgeRole(bytes32 role, address account) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| account | `address` |  |
+

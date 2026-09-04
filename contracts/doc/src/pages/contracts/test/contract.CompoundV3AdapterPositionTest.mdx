@@ -1,0 +1,55 @@
+---
+title: "CompoundV3AdapterPositionTest"
+---
+
+# CompoundV3AdapterPositionTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AdapterPositionConformance.t.sol)
+
+**Inherits:** [PositionConformanceBase](/contracts/test/abstract.PositionConformanceBase)
+
+## State Variables
+
+### comet
+
+```solidity
+PosConfComet internal comet;
+```
+
+## Functions
+
+<a id="_setupadapter"></a>
+
+### _setUpAdapter
+
+<i>
+
+Deploy the concrete adapter + its mock venue. Sets `adapter`.
+
+</i>
+
+```solidity
+function _setUpAdapter() internal override;
+```
+
+<a id="_sharetoken"></a>
+
+### _shareToken
+
+<i>
+
+The adapter's protected venue receipt/share token (for the sweep
+protected-token assertion). address(0) if none applies.
+
+</i>
+
+```solidity
+function _shareToken() internal view override returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

@@ -1,0 +1,227 @@
+---
+title: "UniV3PositionMockVenue"
+---
+
+# UniV3PositionMockVenue
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/UniswapV3AssetPositionAdapter.t.sol)
+
+**Inherits:** [IBasketSwapAdapter](/contracts/interfaces/interface.IBasketSwapAdapter)
+
+<i>
+
+Deterministic IBasketSwapAdapter mock: a fixed-price USDC&lt;->TOKEN venue
+with a configurable execution-slippage haircut and an optional
+expected-window assertion (to prove the adapter threads the configured
+TWAP window into pricing). Pre-funded with both tokens. TEST FIXTURE.
+
+</i>
+
+## Constants
+
+### PRICE
+
+<i>
+
+USDC (6-dec) per 1e18 whole TOKEN.
+
+</i>
+
+```solidity
+uint256 public constant PRICE = 2000e6;
+```
+
+### BPS
+
+```solidity
+uint256 internal constant BPS = 10_000;
+```
+
+### USDC
+
+```solidity
+address public immutable USDC;
+```
+
+### TOKEN
+
+```solidity
+address public immutable TOKEN;
+```
+
+## State Variables
+
+### venueSlippageBps
+
+```solidity
+uint256 public venueSlippageBps;
+```
+
+### expectedWindow
+
+```solidity
+uint32 public expectedWindow;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_, address token_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+| token_ | `address` |  |
+
+<a id="setvenueslippagebps-uint256"></a>
+
+### setVenueSlippageBps
+
+```solidity
+function setVenueSlippageBps(uint256 bps) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256` |  |
+
+<a id="setexpectedwindow-uint32"></a>
+
+### setExpectedWindow
+
+```solidity
+function setExpectedWindow(uint32 window) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| window | `uint32` |  |
+
+<a id="_quote-address-address-uint256"></a>
+
+### _quote
+
+```solidity
+function _quote(address base, address quote, uint256 amount) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| base | `address` |  |
+| quote | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="twapprice-address-address-address-uint256-uint32"></a>
+
+### twapPrice
+
+```solidity
+function twapPrice(address, address base, address quote, uint256 amount, uint32 window)
+        external
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+| base | `address` |  |
+| quote | `address` |  |
+| amount | `uint256` |  |
+| window | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="swap-address-address-uint24-uint256-uint256-address-uint256"></a>
+
+### swap
+
+```solidity
+function swap(
+        address tokenIn,
+        address tokenOut,
+        uint24,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint256
+    ) external returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| _ | `uint24` |  |
+| amountIn | `uint256` |  |
+| minAmountOut | `uint256` |  |
+| recipient | `address` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+
+## Errors
+
+### WrongWindow
+
+```solidity
+error WrongWindow(uint32 got, uint32 want);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint32` |  |
+| want | `uint32` |  |
+
+### VenueMinOut
+
+```solidity
+error VenueMinOut(uint256 got, uint256 want);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+| want | `uint256` |  |
+
+### BadPair
+
+```solidity
+error BadPair();
+```
+

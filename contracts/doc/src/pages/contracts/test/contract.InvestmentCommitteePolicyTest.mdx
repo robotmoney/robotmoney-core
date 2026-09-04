@@ -1,0 +1,288 @@
+---
+title: "InvestmentCommitteePolicyTest"
+---
+
+# InvestmentCommitteePolicyTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/InvestmentCommitteePolicy.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### VOTE_JSON_HASH
+
+```solidity
+bytes32 constant VOTE_JSON_HASH = keccak256("valid-vote-json");
+```
+
+### PROMPT_HASH
+
+```solidity
+bytes32 constant PROMPT_HASH = keccak256("prompt-v1");
+```
+
+### INPUTS_DIGEST
+
+```solidity
+bytes32 constant INPUTS_DIGEST = keccak256("inputs-2026-06-23");
+```
+
+## State Variables
+
+### ic
+
+```solidity
+InvestmentCommitteePolicy public ic;
+```
+
+### gw
+
+```solidity
+MockGateway public gw;
+```
+
+### admin
+
+```solidity
+address admin = address(0xA0);
+```
+
+### agent1
+
+```solidity
+address agent1 = address(0xA1);
+```
+
+### agent2
+
+```solidity
+address agent2 = address(0xA2);
+```
+
+### vault1
+
+```solidity
+address vault1 = address(0xB1);
+```
+
+### notGateway
+
+```solidity
+address notGateway = address(0xDEAD);
+```
+
+## Functions
+
+<a id="_defaultparams"></a>
+
+### _defaultParams
+
+```solidity
+function _defaultParams() internal view returns (InvestmentCommitteePolicy.VoteParams memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `InvestmentCommitteePolicy.VoteParams` |  |
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="testregisteragent"></a>
+
+### testRegisterAgent
+
+```solidity
+function testRegisterAgent() public view;
+```
+
+<a id="testregisteragentemitsevent"></a>
+
+### testRegisterAgentEmitsEvent
+
+```solidity
+function testRegisterAgentEmitsEvent() public;
+```
+
+<a id="testregisteragentrevertsifnotadmin"></a>
+
+### testRegisterAgentRevertsIfNotAdmin
+
+```solidity
+function testRegisterAgentRevertsIfNotAdmin() public;
+```
+
+<a id="testregisteragentrevertsonzeroaddress"></a>
+
+### testRegisterAgentRevertsOnZeroAddress
+
+```solidity
+function testRegisterAgentRevertsOnZeroAddress() public;
+```
+
+<a id="testrevokeagent"></a>
+
+### testRevokeAgent
+
+```solidity
+function testRevokeAgent() public;
+```
+
+<a id="testrevokeagentemitsevent"></a>
+
+### testRevokeAgentEmitsEvent
+
+```solidity
+function testRevokeAgentEmitsEvent() public;
+```
+
+<a id="testrevokeagentrevertsifnotadmin"></a>
+
+### testRevokeAgentRevertsIfNotAdmin
+
+```solidity
+function testRevokeAgentRevertsIfNotAdmin() public;
+```
+
+<a id="testsubmitvoterevertsifcallernotgateway"></a>
+
+### testSubmitVoteRevertsIfCallerNotGateway
+
+<i>
+
+AC-1: committee actions revert unless routed through RobotMoneyGateway.
+
+</i>
+
+```solidity
+function testSubmitVoteRevertsIfCallerNotGateway() public;
+```
+
+<a id="testsubmitvoterevertsifcalleddirectlybyagent"></a>
+
+### testSubmitVoteRevertsIfCalledDirectlyByAgent
+
+<i>
+
+AC-1: direct call from agent (not via gateway) reverts.
+
+</i>
+
+```solidity
+function testSubmitVoteRevertsIfCalledDirectlyByAgent() public;
+```
+
+<a id="testsubmitvotehappypath"></a>
+
+### testSubmitVoteHappyPath
+
+```solidity
+function testSubmitVoteHappyPath() public;
+```
+
+<a id="testsubmitvoteemitsevent"></a>
+
+### testSubmitVoteEmitsEvent
+
+```solidity
+function testSubmitVoteEmitsEvent() public;
+```
+
+<a id="testmultiplevotesaccumulate"></a>
+
+### testMultipleVotesAccumulate
+
+```solidity
+function testMultipleVotesAccumulate() public;
+```
+
+<a id="testlatestvotebyagentreturnsmaxuintwhennone"></a>
+
+### testLatestVoteByAgentReturnsMaxUintWhenNone
+
+```solidity
+function testLatestVoteByAgentReturnsMaxUintWhenNone() public view;
+```
+
+<a id="testsubmitvoterevertsfornonallowlistedagent"></a>
+
+### testSubmitVoteRevertsForNonAllowlistedAgent
+
+```solidity
+function testSubmitVoteRevertsForNonAllowlistedAgent() public;
+```
+
+<a id="testsubmitvoterevertsafterrevoke"></a>
+
+### testSubmitVoteRevertsAfterRevoke
+
+```solidity
+function testSubmitVoteRevertsAfterRevoke() public;
+```
+
+<a id="testsubmitvoterevertsonemptyhash"></a>
+
+### testSubmitVoteRevertsOnEmptyHash
+
+```solidity
+function testSubmitVoteRevertsOnEmptyHash() public;
+```
+
+<a id="testsubmitvoterevertsonweightover10000"></a>
+
+### testSubmitVoteRevertsOnWeightOver10000
+
+```solidity
+function testSubmitVoteRevertsOnWeightOver10000() public;
+```
+
+<a id="testsubmitvoterevertsonconfidenceover100"></a>
+
+### testSubmitVoteRevertsOnConfidenceOver100
+
+```solidity
+function testSubmitVoteRevertsOnConfidenceOver100() public;
+```
+
+<a id="testsubmitvoterevertsonemptyrationaleuri"></a>
+
+### testSubmitVoteRevertsOnEmptyRationaleUri
+
+```solidity
+function testSubmitVoteRevertsOnEmptyRationaleUri() public;
+```
+
+<a id="testsubmitvoterevertsonzerovaultaddress"></a>
+
+### testSubmitVoteRevertsOnZeroVaultAddress
+
+```solidity
+function testSubmitVoteRevertsOnZeroVaultAddress() public;
+```
+
+<a id="testsignallingonlyboundary"></a>
+
+### testSignallingOnlyBoundary
+
+AC-4: InvestmentCommitteePolicy grants no treasury-spend or
+auto-apply authority. It holds no ERC-20 interface, cannot call
+`deposit()`, and has no function that mutates router weights.
+
+This test asserts the property structurally: any ETH sent to
+the contract reverts (no `receive`/`fallback`), and the contract
+bytecode contains none of the function selectors for
+`RouterGovernance.execute(uint256)` (0x168e3b1f),
+`RobotMoneyGateway.deposit(...)`, or ERC-20 `transfer`.
+
+```solidity
+function testSignallingOnlyBoundary() public;
+```
+

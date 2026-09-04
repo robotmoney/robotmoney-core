@@ -131,13 +131,11 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          # CURRENT.anvil-state uses the Anvil 1.6 serializer; anvil v1.7.1 loads it
-          # (verified locally against testing/fixtures/fork-state/CURRENT.anvil-state),
-          # so this site no longer needs the floating `nightly` channel.
-          # Pinned to the last release before 1.8.0 (issue #1263). Foundry 1.8.0
-          # switched `forge doc` from mdbook to vocs output and changed `forge fmt`,
-          # reddening the repo with no repo change. Unpin via issue #1264.
-          version: v1.7.1
+          # CURRENT.anvil-state uses the Anvil 1.6 serializer; anvil v1.7.1 and
+          # v1.8.1 both load it (verified locally against
+          # testing/fixtures/fork-state/CURRENT.anvil-state — issue #1264), so
+          # this site tracks `stable` like every other foundry-toolchain step.
+          version: stable
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

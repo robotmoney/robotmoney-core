@@ -1,0 +1,267 @@
+---
+title: "GovernanceSeparationInvariant"
+description: "Verifies the §3.4 decision that the committee and the RouterGovernance voter set are separate bodies: no address may hold both `COMMITTEE_AGENT_ROLE` on the InvestmentCommitteePolicy and non-zero voting power on `RouterGovernance`."
+---
+
+# GovernanceSeparationInvariant
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/GovernanceSeparationInvariant.t.sol)
+
+**Inherits:** Test
+
+**Title:** GovernanceSeparationInvariant
+
+Verifies the §3.4 decision that the committee and the
+RouterGovernance voter set are separate bodies: no address may
+hold both `COMMITTEE_AGENT_ROLE` on the InvestmentCommitteePolicy
+and non-zero voting power on `RouterGovernance`.
+
+The two bodies are separately administered (committee agents are
+allowlisted through the IC policy's `COMMITTEE_AGENT_ROLE`;
+governance voters are given power by `ADMIN_ROLE` via
+`RouterGovernance.setVotingPower`). There is deliberately no
+on-chain link between them — INV-4's signalling-only boundary
+(`docs/prd.md` §12) is a *control*, not a label, precisely because
+the parties that recommend and the parties that approve never
+overlap. The invariant asserted here is a deployment-level
+invariant over that live state.
+
+It is a security-model change (requiring a new ADR against INV-4)
+to grant a committee agent voting power or to grant a voter the
+COMMITTEE_AGENT_ROLE, so this test fails loudly if that overlap
+ever appears in the configured topology. It also pins that the
+approving body's quorum reflects a real (&lt; total voter power)
+threshold rather than the MVP default of one, resolving the §3.4
+open concern.
+
+## Constants
+
+### VOTER_POWER
+
+```solidity
+uint256 internal constant VOTER_POWER = 100e18;
+```
+
+### VOTING_PERIOD
+
+```solidity
+uint64 internal constant VOTING_PERIOD = 1 days;
+```
+
+### EXECUTION_DELAY
+
+```solidity
+uint64 internal constant EXECUTION_DELAY = 1 days;
+```
+
+### QUORUM_THRESHOLD
+
+```solidity
+uint256 internal constant QUORUM_THRESHOLD = 250e18;
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### committeeAthena
+
+```solidity
+address internal committeeAthena = makeAddr("committee-athena");
+```
+
+### committeeRobotMoney
+
+```solidity
+address internal committeeRobotMoney = makeAddr("committee-robotmoney");
+```
+
+### committeeWoon
+
+```solidity
+address internal committeeWoon = makeAddr("committee-woon");
+```
+
+### voter1
+
+```solidity
+address internal voter1 = makeAddr("gov-voter-1");
+```
+
+### voter2
+
+```solidity
+address internal voter2 = makeAddr("gov-voter-2");
+```
+
+### voter3
+
+```solidity
+address internal voter3 = makeAddr("gov-voter-3");
+```
+
+### intruder
+
+```solidity
+address internal intruder = makeAddr("intruder");
+```
+
+### ic
+
+```solidity
+InvestmentCommitteePolicy internal ic;
+```
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_separationholds"></a>
+
+### _separationHolds
+
+<i>
+
+True iff no address holds both COMMITTEE_AGENT_ROLE and non-zero
+RouterGovernance voting power. Written as a predicate so the whole
+topology can be swept in one place.
+
+</i>
+
+```solidity
+function _separationHolds() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_overlap-bytes32-address"></a>
+
+### _overlap
+
+<i>
+
+True iff `account` has COMMITTEE_AGENT_ROLE AND non-zero power.
+
+</i>
+
+```solidity
+function _overlap(bytes32 committeeRole, address account) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| committeeRole | `bytes32` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="test_committeeagentshavenovotingpower"></a>
+
+### test_committeeAgentsHaveNoVotingPower
+
+The configured committee agents hold COMMITTEE_AGENT_ROLE but
+have ZERO voting power.
+
+```solidity
+function test_committeeAgentsHaveNoVotingPower() public view;
+```
+
+<a id="test_votersarenotcommitteeagents"></a>
+
+### test_votersAreNotCommitteeAgents
+
+The configured governance voters hold non-zero power but do NOT
+hold COMMITTEE_AGENT_ROLE.
+
+```solidity
+function test_votersAreNotCommitteeAgents() public view;
+```
+
+<a id="test_committeeholdersarerecognisedbypolicy"></a>
+
+### test_committeeHoldersAreRecognisedByPolicy
+
+No committee agent holds COMMITTEE_AGENT_ROLE. It is a
+security-model change (new ADR against INV-4) for a committee
+agent to hold voting power, so the mutually-exclusive membership
+is asserted directly.
+
+```solidity
+function test_committeeHoldersAreRecognisedByPolicy() public view;
+```
+
+<a id="test_separationinvariantholds"></a>
+
+### test_separationInvariantHolds
+
+The full configured topology satisfies the separation invariant.
+
+```solidity
+function test_separationInvariantHolds() public view;
+```
+
+<a id="test_invariantflagscommitteeagentwithvotingpower"></a>
+
+### test_invariantFlagsCommitteeAgentWithVotingPower
+
+A committee agent who receives voting power (a security-model
+change needing an ADR against INV-4) is flagged by the
+invariant. This asserts the predicate catches the overlap it is
+supposed to prevent; it mutates only the test's own live state,
+never the shipped topology.
+
+```solidity
+function test_invariantFlagsCommitteeAgentWithVotingPower() public;
+```
+
+<a id="test_invariantflagsvotergivencommitteerole"></a>
+
+### test_invariantFlagsVoterGivenCommitteeRole
+
+A voter who is additionally granted COMMITTEE_AGENT_ROLE (a
+security-model change) is flagged by the invariant.
+
+```solidity
+function test_invariantFlagsVoterGivenCommitteeRole() public;
+```
+
+<a id="test_quorumreflectsthevoterset"></a>
+
+### test_quorumReflectsTheVoterSet
+
+The approving body's quorum is a meaningful fraction of the
+voter set, not the single-voter MVP default of 1 — resolving the
+§3.4 open concern ("the approving body's quorum is currently
+1"). One voter with any nonzero power can no longer carry a
+weight proposal.
+
+```solidity
+function test_quorumReflectsTheVoterSet() public view;
+```
+

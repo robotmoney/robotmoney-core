@@ -1,0 +1,442 @@
+---
+title: "VaultForkRegressions"
+description: "Fork-level regression suite for vault accounting attack paths."
+---
+
+# VaultForkRegressions
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/VaultForkRegressions.t.sol)
+
+**Inherits:** Test
+
+**Title:** VaultForkRegressions
+
+Fork-level regression suite for vault accounting attack paths.
+
+<i>
+
+CI boots the checked-in Base golden fixture at localhost:8545. A local
+live fork remains possible by overriding `FORK_RPC_URL`.
+
+</i>
+
+To run locally:
+FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/&lt;key> \
+forge test --match-path "contracts/test/VaultForkRegressions.t.sol" -vvv
+
+CI uses `CURRENT.anvil-state`; no live RPC secret is involved.
+
+Attack paths covered (per issue #209 acceptance criteria):
+AC1  Aave adapter donation cannot make a victim deposit mint zero/unfair shares.
+AC2  Morpho adapter donation cannot make a victim deposit mint zero/unfair shares.
+AC3  Compound adapter donation cannot make a victim deposit mint zero/unfair shares.
+AC4  Direct USDC transfer to vault is included in totalAssets / TVL-cap path.
+AC5  Unrouted deposit emits UnroutedDeposit and the idle balance is observable.
+AC6  MorphoAdapter.withdraw returns actual delivered USDC under fork conditions.
+
+## Constants
+
+### BASE_USDC
+
+<i>
+
+Real USDC on Base (Circle).
+
+</i>
+
+```solidity
+address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### AAVE_POOL
+
+<i>
+
+Aave V3 Pool on Base.
+
+</i>
+
+```solidity
+address internal constant AAVE_POOL = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+```
+
+### AAVE_A_TOKEN
+
+<i>
+
+aBasUSDC rebasing token — balanceOf returns live underlying USDC.
+
+</i>
+
+```solidity
+address internal constant AAVE_A_TOKEN = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
+```
+
+### MORPHO_VAULT
+
+<i>
+
+Morpho Gauntlet USDC Prime vault on Base (ERC-4626).
+
+</i>
+
+```solidity
+address internal constant MORPHO_VAULT = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
+```
+
+### COMPOUND_COMET
+
+<i>
+
+Compound V3 Comet (cUSDCv3) on Base.
+
+</i>
+
+```solidity
+address internal constant COMPOUND_COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F;
+```
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+### SEED_AMOUNT
+
+```solidity
+uint256 internal constant SEED_AMOUNT = 1_000 * ONE_USDC;
+```
+
+### DONATION_AMOUNT
+
+```solidity
+uint256 internal constant DONATION_AMOUNT = 1_000_000 * ONE_USDC;
+```
+
+### VICTIM_DEPOSIT
+
+```solidity
+uint256 internal constant VICTIM_DEPOSIT = 100_000 * ONE_USDC;
+```
+
+### TVL_CAP
+
+```solidity
+uint256 internal constant TVL_CAP = 1_000_000_000 * ONE_USDC;
+```
+
+### PER_DEPOSIT_CAP
+
+```solidity
+uint256 internal constant PER_DEPOSIT_CAP = 100_000_000 * ONE_USDC;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+IERC20 internal usdc;
+```
+
+### admin
+
+```solidity
+address internal admin;
+```
+
+### feeRecipient
+
+```solidity
+address internal feeRecipient;
+```
+
+### alice
+
+```solidity
+address internal alice;
+```
+
+### attacker
+
+```solidity
+address internal attacker;
+```
+
+## Functions
+
+<a id="_forkrpcurl"></a>
+
+### _forkRpcUrl
+
+<i>
+
+Use an explicit local override, otherwise the offline fixture RPC.
+
+</i>
+
+```solidity
+function _forkRpcUrl() internal view returns (string memory url);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| url | `string` |  |
+
+<a id="_tryselectfork"></a>
+
+### _trySelectFork
+
+<i>
+
+Select the already-running offline golden-fixture RPC.
+
+</i>
+
+```solidity
+function _trySelectFork() internal returns (bool selected);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| selected | `bool` |  |
+
+<a id="_setup"></a>
+
+### _setUp
+
+<i>
+
+Shared preamble: select fork, fund accounts.
+Returns false when the fork URL is absent (test should skip).
+
+</i>
+
+```solidity
+function _setUp() internal returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_deployvaultwithadapter-address"></a>
+
+### _deployVaultWithAdapter
+
+<i>
+
+Deploy a fresh RobotMoneyVault with a single adapter.
+Approves the vault from alice and attacker.
+
+</i>
+
+```solidity
+function _deployVaultWithAdapter(address adapter_) internal returns (RobotMoneyVault vault_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault_ | `RobotMoneyVault` |  |
+
+<a id="_allowadapter-robotmoneyvault-address"></a>
+
+### _allowAdapter
+
+```solidity
+function _allowAdapter(RobotMoneyVault vault_, address adapter_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault_ | `RobotMoneyVault` |  |
+| adapter_ | `address` |  |
+
+<a id="_assertdonationattackfails-robotmoneyvault-istrategyadapter-uint256-uint256"></a>
+
+### _assertDonationAttackFails
+
+<i>
+
+Core attack scenario:
+1. Attacker seeds the vault with 1 USDC.
+2. Attacker donates `donationAmt` USDC to the adapter via the protocol
+directly (bypassing the vault minting path), using `deal()` +
+adapter-level deposit.  The donation increases the adapter's
+reported `totalAssets()` without minting any vault shares.
+3. Victim deposits `victimDeposit` USDC.
+4. Asserts victim receives non-zero shares and can recover ≥ 90% of value.
+
+</i>
+
+The 90% floor is intentionally generous; the actual protection from the
+18-decimals offset makes the loss negligible, but a hard floor catches
+regressions that silently remove the offset.
+
+```solidity
+function _assertDonationAttackFails(
+        RobotMoneyVault vault_,
+        IStrategyAdapter adapter_,
+        uint256 donationAmt,
+        uint256 victimDeposit
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault_ | `RobotMoneyVault` |  |
+| adapter_ | `IStrategyAdapter` |  |
+| donationAmt | `uint256` |  |
+| victimDeposit | `uint256` |  |
+
+<a id="test_fork_aave_donationattack_victimsharesfair"></a>
+
+### test_fork_aave_donationAttack_victimSharesFair
+
+AC1: Aave adapter donation cannot make victim deposit mint zero/unfair shares.
+
+<i>
+
+Deploys vault + AaveV3Adapter against real Base Aave pool.
+Seeds vault, donates USDC directly into adapter balance, asserts victim fairness.
+
+</i>
+
+```solidity
+function test_fork_aave_donationAttack_victimSharesFair() public;
+```
+
+<a id="test_fork_morpho_donationattack_victimsharesfair"></a>
+
+### test_fork_morpho_donationAttack_victimSharesFair
+
+AC2: Morpho adapter donation cannot make victim deposit mint zero/unfair shares.
+
+<i>
+
+Deploys vault + MorphoAdapter against real Base Morpho Gauntlet USDC Prime vault.
+
+</i>
+
+```solidity
+function test_fork_morpho_donationAttack_victimSharesFair() public;
+```
+
+<a id="test_fork_compound_donationattack_victimsharesfair"></a>
+
+### test_fork_compound_donationAttack_victimSharesFair
+
+AC3: Compound adapter donation cannot make victim deposit mint zero/unfair shares.
+
+<i>
+
+Deploys vault + CompoundV3Adapter against real Base Compound Comet.
+
+</i>
+
+```solidity
+function test_fork_compound_donationAttack_victimSharesFair() public;
+```
+
+<a id="test_fork_directtransfer_countedintotalassets"></a>
+
+### test_fork_directTransfer_countedInTotalAssets
+
+AC4: A direct USDC transfer to the vault (not via deposit) is included
+in totalAssets() and the TVL-cap enforcement path.
+
+<i>
+
+Uses AaveV3Adapter for a realistic adapter setup; the idle-balance
+logic is independent of which adapter is present.
+
+</i>
+
+```solidity
+function test_fork_directTransfer_countedInTotalAssets() public;
+```
+
+<a id="test_fork_directtransfer_causescapenforcement"></a>
+
+### test_fork_directTransfer_causesCapEnforcement
+
+AC4 (TVL-cap path): idle USDC is counted when enforcing the cap.
+
+<i>
+
+Tightly-capped vault: caps chosen so idle balance pushes total close
+to the ceiling, and a further deposit should revert.
+
+</i>
+
+```solidity
+function test_fork_directTransfer_causesCapEnforcement() public;
+```
+
+<a id="test_fork_unrouteddeposit_emitseventandstaysidle"></a>
+
+### test_fork_unroutedDeposit_emitsEventAndStaysIdle
+
+AC5: When adapter caps are exhausted, the unrouted portion stays idle
+in the vault and the UnroutedDeposit event is emitted — not silent.
+
+<i>
+
+A single adapter capped at 50% leaves half the deposit unrouted.
+
+</i>
+
+```solidity
+function test_fork_unroutedDeposit_emitsEventAndStaysIdle() public;
+```
+
+<a id="test_fork_morphoadapter_withdrawreturnsactualdelivered"></a>
+
+### test_fork_morphoAdapter_withdrawReturnsActualDelivered
+
+AC6: MorphoAdapter.withdraw returns the actual USDC delivered to the
+vault under fork conditions (not a synthetic count).
+
+<i>
+
+Deploys the vault with MorphoAdapter, performs a deposit to push USDC
+into the Morpho vault, then triggers a withdrawal and verifies:
+- The returned value equals the actual USDC received by the vault.
+- No shortfall: Morpho delivers exactly what was requested.
+
+</i>
+
+```solidity
+function test_fork_morphoAdapter_withdrawReturnsActualDelivered() public;
+```
+
+<a id="test_fork_vaultinvariants_decimalsoffsetandshareminting"></a>
+
+### test_fork_vaultInvariants_decimalsOffsetAndShareMinting
+
+Confirm the fork harness does not weaken existing local coverage:
+decimals offset and share minting invariants hold on a live fork.
+
+```solidity
+function test_fork_vaultInvariants_decimalsOffsetAndShareMinting() public;
+```
+

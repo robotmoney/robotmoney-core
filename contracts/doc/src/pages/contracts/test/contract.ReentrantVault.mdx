@@ -1,0 +1,127 @@
+---
+title: "ReentrantVault"
+---
+
+# ReentrantVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RobotMoneyGateway.t.sol)
+
+**Inherits:** [MockVault](/contracts/gateway/contract.MockVault)
+
+<i>
+
+Vault that attempts to re-enter `gateway.deposit()` during its own
+`deposit()` call, simulating a malicious/compromised vault reentrant
+callback. Expects the `nonReentrant` guard to block the second entry.
+
+</i>
+
+## State Variables
+
+### gateway
+
+```solidity
+RobotMoneyGateway public gateway;
+```
+
+### attackArmed
+
+```solidity
+bool public attackArmed;
+```
+
+### reentrantOrderId
+
+```solidity
+bytes32 public reentrantOrderId;
+```
+
+### reentrantAmount
+
+```solidity
+uint256 public reentrantAmount;
+```
+
+### reentrantDeadline
+
+```solidity
+uint64 public reentrantDeadline;
+```
+
+### reentrantIdemKey
+
+```solidity
+bytes32 public reentrantIdemKey;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address asset_) MockVault(asset_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `address` |  |
+
+<a id="setgateway-robotmoneygateway"></a>
+
+### setGateway
+
+```solidity
+function setGateway(RobotMoneyGateway gw) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gw | `RobotMoneyGateway` |  |
+
+<a id="armattack-bytes32-uint256-uint64-bytes32"></a>
+
+### armAttack
+
+```solidity
+function armAttack(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idemKey) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| orderId | `bytes32` |  |
+| amount | `uint256` |  |
+| deadline | `uint64` |  |
+| idemKey | `bytes32` |  |
+
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+ERC-4626-style deposit. Pulls `assets` USDC from `msg.sender`
+via `transferFrom`, mints `shares == assets` to `receiver`.
+
+```solidity
+function deposit(uint256 assets, address receiver) external override returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` | Amount of USDC (6 decimals) to deposit. |
+| receiver | `address` | Recipient of the freshly minted `rmUSDC` shares. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Amount of `rmUSDC` minted (1:1 with assets). |
+

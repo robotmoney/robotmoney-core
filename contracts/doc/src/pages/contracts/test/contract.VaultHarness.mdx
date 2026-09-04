@@ -1,0 +1,63 @@
+---
+title: "VaultHarness"
+---
+
+# VaultHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RobotMoneyVault.t.sol)
+
+**Inherits:** [RobotMoneyVault](/contracts/contract.RobotMoneyVault)
+
+<i>
+
+Exposes internal helpers for tests.
+
+</i>
+
+## Functions
+
+<a id="constructor-ierc20-uint256-uint256-uint256-address-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(
+        IERC20 asset_,
+        uint256 tvlCap_,
+        uint256 perDepositCap_,
+        uint256 exitFeeBps_,
+        address feeRecipient_,
+        address admin_,
+        address emergencyResponder_
+    )
+        RobotMoneyVault(
+            asset_, tvlCap_, perDepositCap_, exitFeeBps_, feeRecipient_, admin_, emergencyResponder_
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `IERC20` |  |
+| tvlCap_ | `uint256` |  |
+| perDepositCap_ | `uint256` |  |
+| exitFeeBps_ | `uint256` |  |
+| feeRecipient_ | `address` |  |
+| admin_ | `address` |  |
+| emergencyResponder_ | `address` |  |
+
+<a id="exposed_decimalsoffset"></a>
+
+### exposed_decimalsOffset
+
+```solidity
+function exposed_decimalsOffset() external pure returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+

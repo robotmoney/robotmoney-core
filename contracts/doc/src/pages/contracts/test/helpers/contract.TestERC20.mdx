@@ -1,0 +1,84 @@
+---
+title: "TestERC20"
+description: "Minimal 6-decimal ERC20 used as a USDC stand-in by forge unit tests."
+---
+
+# TestERC20
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/helpers/TestERC20.sol)
+
+**Inherits:** ERC20
+
+**Title:** TestERC20
+
+Minimal 6-decimal ERC20 used as a USDC stand-in by forge unit tests.
+
+<i>
+
+Public, permissionless `mint`/`burn` — TEST FIXTURE ONLY. This contract
+lives under `contracts/test/` and is never deployed by production
+scripts. Production deploys bind the gateway to canonical Base USDC
+via the `USDC_ADDRESS` env var (see `script/Deploy.s.sol`).
+
+</i>
+
+## Functions
+
+<a id="constructor"></a>
+
+### constructor
+
+```solidity
+constructor() ERC20("Test USDC", "tUSDC");
+```
+
+<a id="decimals"></a>
+
+### decimals
+
+USDC uses 6 decimals; mirror that for parity with the real token.
+
+```solidity
+function decimals() public pure override returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="mint-address-uint256"></a>
+
+### mint
+
+Mint test tokens to any address. No access control by design.
+
+```solidity
+function mint(address to, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="burn-address-uint256"></a>
+
+### burn
+
+Burn test tokens from any address. No access control by design.
+
+```solidity
+function burn(address from, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| amount | `uint256` |  |
+

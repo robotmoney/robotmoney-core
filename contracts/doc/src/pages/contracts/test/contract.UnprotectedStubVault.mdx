@@ -1,0 +1,44 @@
+---
+title: "UnprotectedStubVault"
+---
+
+# UnprotectedStubVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/VaultFamilyInvariants.t.sol)
+
+**Inherits:** AccessControl
+
+<i>
+
+Deliberately unprotected mock "vault": bare `AccessControl` with a
+self-administered `ADMIN_ROLE`, mirroring the shape every real family
+member had before this issue (RobotMoneyVault) or would have if a
+future vault type forgot to inherit `AdminFloorAccessControlCounter`.
+Exists solely for the negative self-test below.
+
+</i>
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address admin_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin_ | `address` |  |
+

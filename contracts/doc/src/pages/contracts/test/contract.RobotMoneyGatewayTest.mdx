@@ -1,0 +1,724 @@
+---
+title: "RobotMoneyGatewayTest"
+---
+
+# RobotMoneyGatewayTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RobotMoneyGateway.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+### MAX_PER_PAYMENT
+
+```solidity
+uint256 internal constant MAX_PER_PAYMENT = 1_000 * ONE_USDC;
+```
+
+### MAX_PER_WINDOW
+
+```solidity
+uint256 internal constant MAX_PER_WINDOW = 5_000 * ONE_USDC;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vault
+
+```solidity
+MockVault internal vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("agent");
+```
+
+### otherAgent
+
+```solidity
+address internal otherAgent = makeAddr("otherAgent");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### shareReceiver
+
+```solidity
+address internal shareReceiver = makeAddr("shareReceiver");
+```
+
+### adminRole
+
+```solidity
+bytes32 internal adminRole;
+```
+
+### pauserRole
+
+```solidity
+bytes32 internal pauserRole;
+```
+
+### agentRole
+
+```solidity
+bytes32 internal agentRole;
+```
+
+### depositor
+
+<i>
+
+Default owner used by `_authorize` when none is specified.
+Now uses `admin` since `authorizeAgent` requires
+DEFAULT_ADMIN_ROLE (issue #753).
+
+</i>
+
+```solidity
+address internal depositor = makeAddr("depositor");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_defaultpolicy"></a>
+
+### _defaultPolicy
+
+```solidity
+function _defaultPolicy() internal view returns (IGateway.AgentPolicy memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IGateway.AgentPolicy` |  |
+
+<a id="_authorize-address-igateway-agentpolicy"></a>
+
+### _authorize
+
+```solidity
+function _authorize(address who, IGateway.AgentPolicy memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="_authorizeas-address-address-igateway-agentpolicy"></a>
+
+### _authorizeAs
+
+```solidity
+function _authorizeAs(address owner, address who, IGateway.AgentPolicy memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| who | `address` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="_fundandapprove-address-uint256"></a>
+
+### _fundAndApprove
+
+```solidity
+function _fundAndApprove(address who, uint256 amt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| amt | `uint256` |  |
+
+<a id="test_constructor_wiresimmutablesandroles"></a>
+
+### test_constructor_wiresImmutablesAndRoles
+
+```solidity
+function test_constructor_wiresImmutablesAndRoles() public view;
+```
+
+<a id="test_lastadminfloor_revokeadminrevertsforsoleholder"></a>
+
+### test_lastAdminFloor_revokeAdminRevertsForSoleHolder
+
+ACL-3 / F-06: revoking the sole ADMIN_ROLE holder reverts
+(last-admin floor) — gateway governance can never be bricked.
+
+```solidity
+function test_lastAdminFloor_revokeAdminRevertsForSoleHolder() public;
+```
+
+<a id="test_lastadminfloor_revokedefaultadminrevertsforsoleholder"></a>
+
+### test_lastAdminFloor_revokeDefaultAdminRevertsForSoleHolder
+
+ACL-3 / F-06: the floor also covers DEFAULT_ADMIN_ROLE, which the
+gateway uses as a privileged tier (it gates authorizeAgent).
+
+```solidity
+function test_lastAdminFloor_revokeDefaultAdminRevertsForSoleHolder() public;
+```
+
+<a id="test_lastadminfloor_renouncedefaultadminrevertsforsoleholder"></a>
+
+### test_lastAdminFloor_renounceDefaultAdminRevertsForSoleHolder
+
+ACL-3 / F-06: renouncing the sole DEFAULT_ADMIN_ROLE holder reverts.
+
+```solidity
+function test_lastAdminFloor_renounceDefaultAdminRevertsForSoleHolder() public;
+```
+
+<a id="test_lastadminfloor_revokedefaultadminsucceedswithtwoholders"></a>
+
+### test_lastAdminFloor_revokeDefaultAdminSucceedsWithTwoHolders
+
+ACL-3 / F-06: with a second DEFAULT_ADMIN granted, the original may
+be revoked — the floor only blocks dropping the final holder.
+
+```solidity
+function test_lastAdminFloor_revokeDefaultAdminSucceedsWithTwoHolders() public;
+```
+
+<a id="test_constructor_revertsonzeroaddresses"></a>
+
+### test_constructor_revertsOnZeroAddresses
+
+```solidity
+function test_constructor_revertsOnZeroAddresses() public;
+```
+
+<a id="test_constructor_revertsonassetmismatch"></a>
+
+### test_constructor_revertsOnAssetMismatch
+
+```solidity
+function test_constructor_revertsOnAssetMismatch() public;
+```
+
+<a id="test_authorizeagent_grantsroleandstorespolicy"></a>
+
+### test_authorizeAgent_grantsRoleAndStoresPolicy
+
+```solidity
+function test_authorizeAgent_grantsRoleAndStoresPolicy() public;
+```
+
+<a id="test_authorizeagent_permissionless"></a>
+
+### test_authorizeAgent_permissionless
+
+<i>
+
+AC: a non-`ADMIN_ROLE` EOA calling `authorizeAgent` must revert
+(issue #753 — commit/reveal is the only permissionless first-time
+authorization path; #965/F-01 moved the admin gate from
+DEFAULT_ADMIN_ROLE to ADMIN_ROLE so the Timelock keeps onboarding
+authority after the deploy handover revokes the deployer's
+DEFAULT_ADMIN_ROLE).
+
+</i>
+
+```solidity
+function test_authorizeAgent_permissionless() public;
+```
+
+<a id="test_authorizeagent_no_longer_requires_admin_role"></a>
+
+### test_authorizeAgent_no_longer_requires_admin_role
+
+<i>
+
+AC: commit/reveal is the permissionless alternative to the
+admin-only `authorizeAgent` (issue #753).
+
+</i>
+
+```solidity
+function test_authorizeAgent_no_longer_requires_admin_role() public;
+```
+
+<a id="test_authorizeagent_frontrunprotection"></a>
+
+### test_authorizeAgent_frontRunProtection
+
+<i>
+
+Front-run regression: an attacker observing a victim's
+`revealAuthorization` cannot pre-empt it via the direct
+`authorizeAgent` because that function requires `ADMIN_ROLE`
+(issue #753; admin gate moved DEFAULT_ADMIN_ROLE → ADMIN_ROLE in
+#965/F-01).
+
+</i>
+
+```solidity
+function test_authorizeAgent_frontRunProtection() public;
+```
+
+<a id="test_authorizeagent_revertsonroleseparation_grantingagenttoadmin"></a>
+
+### test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToAdmin
+
+```solidity
+function test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToAdmin() public;
+```
+
+<a id="test_authorizeagent_revertsonroleseparation_grantingagenttopauser"></a>
+
+### test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToPauser
+
+```solidity
+function test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToPauser() public;
+```
+
+<a id="test_authorizeagent_revertsonzerosharereceiver"></a>
+
+### test_authorizeAgent_revertsOnZeroShareReceiver
+
+```solidity
+function test_authorizeAgent_revertsOnZeroShareReceiver() public;
+```
+
+<a id="test_authorizeagent_revertsoninactivepolicy"></a>
+
+### test_authorizeAgent_revertsOnInactivePolicy
+
+```solidity
+function test_authorizeAgent_revertsOnInactivePolicy() public;
+```
+
+<a id="test_authorizeagent_revertsonzerocaps"></a>
+
+### test_authorizeAgent_revertsOnZeroCaps
+
+```solidity
+function test_authorizeAgent_revertsOnZeroCaps() public;
+```
+
+<a id="test_authorizeagent_revertswhenpaymentcapexceedswindowcap"></a>
+
+### test_authorizeAgent_revertsWhenPaymentCapExceedsWindowCap
+
+```solidity
+function test_authorizeAgent_revertsWhenPaymentCapExceedsWindowCap() public;
+```
+
+<a id="test_authorizeagent_revertswhenalreadyowned"></a>
+
+### test_authorizeAgent_revertsWhenAlreadyOwned
+
+<i>
+
+Re-authorizing an already-owned agent is rejected; the owner
+must `setPolicy` (or `revokeAgent` first).
+
+</i>
+
+```solidity
+function test_authorizeAgent_revertsWhenAlreadyOwned() public;
+```
+
+<a id="test_setpolicy_updatespolicykeepsroleandowner"></a>
+
+### test_setPolicy_updatesPolicyKeepsRoleAndOwner
+
+```solidity
+function test_setPolicy_updatesPolicyKeepsRoleAndOwner() public;
+```
+
+<a id="test_setpolicy_requires_recorded_owner"></a>
+
+### test_setPolicy_requires_recorded_owner
+
+<i>
+
+AC: only the recorded owner can update policy for an agent
+they authorized (issue #269).
+
+</i>
+
+```solidity
+function test_setPolicy_requires_recorded_owner() public;
+```
+
+<a id="test_setpolicy_revertsonzeroagent"></a>
+
+### test_setPolicy_revertsOnZeroAgent
+
+```solidity
+function test_setPolicy_revertsOnZeroAgent() public;
+```
+
+<a id="test_setpolicy_revertsbeforeauthorize"></a>
+
+### test_setPolicy_revertsBeforeAuthorize
+
+```solidity
+function test_setPolicy_revertsBeforeAuthorize() public;
+```
+
+<a id="test_setpolicy_validatespolicyshape"></a>
+
+### test_setPolicy_validatesPolicyShape
+
+```solidity
+function test_setPolicy_validatesPolicyShape() public;
+```
+
+<a id="test_revokeagent_clearspolicyandroleandowner"></a>
+
+### test_revokeAgent_clearsPolicyAndRoleAndOwner
+
+```solidity
+function test_revokeAgent_clearsPolicyAndRoleAndOwner() public;
+```
+
+<a id="test_revokeagent_requires_recorded_owner"></a>
+
+### test_revokeAgent_requires_recorded_owner
+
+<i>
+
+AC: only the recorded owner can revoke; a third-party caller
+reverts with NotAgentOwner (issue #269).
+
+</i>
+
+```solidity
+function test_revokeAgent_requires_recorded_owner() public;
+```
+
+<a id="test_revokeagent_then_authorizeagent_by_different_owner"></a>
+
+### test_revokeAgent_then_authorizeAgent_by_different_owner
+
+<i>
+
+After revoke, the agent address is releasable: a fresh depositor
+can claim it via commit/reveal (issue #753).
+
+</i>
+
+```solidity
+function test_revokeAgent_then_authorizeAgent_by_different_owner() public;
+```
+
+<a id="test_pause_bypauser_unpause_byadmin"></a>
+
+### test_pause_byPauser_unpause_byAdmin
+
+```solidity
+function test_pause_byPauser_unpause_byAdmin() public;
+```
+
+<a id="test_pause_nonpauserreverts"></a>
+
+### test_pause_nonPauserReverts
+
+```solidity
+function test_pause_nonPauserReverts() public;
+```
+
+<a id="test_unpause_nonadminreverts"></a>
+
+### test_unpause_nonAdminReverts
+
+```solidity
+function test_unpause_nonAdminReverts() public;
+```
+
+<a id="test_pause_revertsifalreadypaused"></a>
+
+### test_pause_revertsIfAlreadyPaused
+
+```solidity
+function test_pause_revertsIfAlreadyPaused() public;
+```
+
+<a id="test_unpause_revertsifnotpaused"></a>
+
+### test_unpause_revertsIfNotPaused
+
+```solidity
+function test_unpause_revertsIfNotPaused() public;
+```
+
+<a id="test_deposit_happypath_movesusdcmintssharesemitsevent"></a>
+
+### test_deposit_happyPath_movesUsdcMintsSharesEmitsEvent
+
+```solidity
+function test_deposit_happyPath_movesUsdcMintsSharesEmitsEvent() public;
+```
+
+<a id="test_deposit_revertswhenpaused"></a>
+
+### test_deposit_revertsWhenPaused
+
+```solidity
+function test_deposit_revertsWhenPaused() public;
+```
+
+<a id="test_deposit_revertsforunauthorizedcaller"></a>
+
+### test_deposit_revertsForUnauthorizedCaller
+
+```solidity
+function test_deposit_revertsForUnauthorizedCaller() public;
+```
+
+<a id="test_deposit_revertsafterrevokeagent"></a>
+
+### test_deposit_revertsAfterRevokeAgent
+
+```solidity
+function test_deposit_revertsAfterRevokeAgent() public;
+```
+
+<a id="test_deposit_revertsonzeroamount"></a>
+
+### test_deposit_revertsOnZeroAmount
+
+```solidity
+function test_deposit_revertsOnZeroAmount() public;
+```
+
+<a id="test_deposit_revertsonperpaymentcapexceeded"></a>
+
+### test_deposit_revertsOnPerPaymentCapExceeded
+
+```solidity
+function test_deposit_revertsOnPerPaymentCapExceeded() public;
+```
+
+<a id="test_deposit_revertsonexpireddeadline"></a>
+
+### test_deposit_revertsOnExpiredDeadline
+
+```solidity
+function test_deposit_revertsOnExpiredDeadline() public;
+```
+
+<a id="test_deposit_revertsondeadlinetoofar"></a>
+
+### test_deposit_revertsOnDeadlineTooFar
+
+```solidity
+function test_deposit_revertsOnDeadlineTooFar() public;
+```
+
+<a id="test_deposit_revertsonexpiredpolicy"></a>
+
+### test_deposit_revertsOnExpiredPolicy
+
+```solidity
+function test_deposit_revertsOnExpiredPolicy() public;
+```
+
+<a id="test_deposit_revertsonwindowcapexceeded_androllsover"></a>
+
+### test_deposit_revertsOnWindowCapExceeded_andRollsOver
+
+```solidity
+function test_deposit_revertsOnWindowCapExceeded_andRollsOver() public;
+```
+
+<a id="test_deposit_revertsonreplay_sameorderandidempotencykey"></a>
+
+### test_deposit_revertsOnReplay_sameOrderAndIdempotencyKey
+
+```solidity
+function test_deposit_revertsOnReplay_sameOrderAndIdempotencyKey() public;
+```
+
+<a id="test_deposit_peragentwindowsareindependent"></a>
+
+### test_deposit_perAgentWindowsAreIndependent
+
+```solidity
+function test_deposit_perAgentWindowsAreIndependent() public;
+```
+
+<a id="test_deposit_revertsonfeeontransfertoken"></a>
+
+### test_deposit_revertsOnFeeOnTransferToken
+
+```solidity
+function test_deposit_revertsOnFeeOnTransferToken() public;
+```
+
+<a id="test_deposit_still_gated_on_agent_role"></a>
+
+### test_deposit_still_gated_on_agent_role
+
+<i>
+
+AC: `deposit()` still reverts for non-AGENT_ROLE callers. The
+depositor-owned authorize redesign must not weaken the deposit
+surface in any way (issue #269).
+
+</i>
+
+```solidity
+function test_deposit_still_gated_on_agent_role() public;
+```
+
+<a id="test_role_separation_invariants_hold"></a>
+
+### test_role_separation_invariants_hold
+
+<i>
+
+AC: `_grantRole` and `_assertRoleSeparation` continue to reject
+overlap on the roles that survive (issue #269).
+
+</i>
+
+```solidity
+function test_role_separation_invariants_hold() public;
+```
+
+<a id="test_authorizeagent_revertsonzeroagent"></a>
+
+### test_authorizeAgent_revertsOnZeroAgent
+
+```solidity
+function test_authorizeAgent_revertsOnZeroAgent() public;
+```
+
+<a id="test_authorizeagent_revertsonexpiredvaliduntil"></a>
+
+### test_authorizeAgent_revertsOnExpiredValidUntil
+
+```solidity
+function test_authorizeAgent_revertsOnExpiredValidUntil() public;
+```
+
+<a id="test_revokeagent_revertsonzeroagent"></a>
+
+### test_revokeAgent_revertsOnZeroAgent
+
+```solidity
+function test_revokeAgent_revertsOnZeroAgent() public;
+```
+
+<a id="test_deposit_ignorespreexistingdonatedshares"></a>
+
+### test_deposit_ignoresPreexistingDonatedShares
+
+```solidity
+function test_deposit_ignoresPreexistingDonatedShares() public;
+```
+
+<a id="test_deposit_revertsonpostcallsharecustodyinvariant"></a>
+
+### test_deposit_revertsOnPostCallShareCustodyInvariant
+
+```solidity
+function test_deposit_revertsOnPostCallShareCustodyInvariant() public;
+```
+
+<a id="test_deposit_revertsonpostcallusdccustodyinvariant"></a>
+
+### test_deposit_revertsOnPostCallUsdcCustodyInvariant
+
+```solidity
+function test_deposit_revertsOnPostCallUsdcCustodyInvariant() public;
+```
+
+<a id="test_deposit_revertsonreentrancyattempt"></a>
+
+### test_deposit_revertsOnReentrancyAttempt
+
+```solidity
+function test_deposit_revertsOnReentrancyAttempt() public;
+```
+
+<a id="testfuzz_paymentid_opkinddiscriminates-bytes32-uint256-bytes32"></a>
+
+### testFuzz_paymentId_opKindDiscriminates
+
+<i>
+
+For any (orderId, amount, shares, idempotencyKey) with amount == shares,
+the three paymentId namespaces are pairwise distinct:
+depositPaymentId != depositToPaymentId
+depositPaymentId != withdrawPaymentId
+depositToPaymentId != withdrawPaymentId
+
+</i>
+
+```solidity
+function testFuzz_paymentId_opKindDiscriminates(
+        bytes32 orderId,
+        uint256 amount,
+        bytes32 idempotencyKey
+    ) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| orderId | `bytes32` |  |
+| amount | `uint256` |  |
+| idempotencyKey | `bytes32` |  |
+
