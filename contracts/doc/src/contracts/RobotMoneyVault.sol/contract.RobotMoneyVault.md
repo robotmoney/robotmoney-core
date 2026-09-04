@@ -1,8 +1,8 @@
 # RobotMoneyVault
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b01a1006295a36fa4f656f7aeda0a98b3de7411/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
-ERC4626, AccessControl, ReentrancyGuard
+ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/AdminFloorAccessControlCounter.sol/abstract.AdminFloorAccessControlCounter.md), ReentrancyGuard
 
 **Title:**
 RobotMoneyVault
@@ -18,6 +18,11 @@ Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun
 ## Constants
 ### ADMIN_ROLE
 Role that can manage adapters, set parameters, and rebalance.
+Self-administered, and floor-protected: the shared
+`AdminFloorAccessControlCounter` base forbids revoking or
+renouncing the final holder (ACL-3 / F-06), so admin functions
+(including this role's own grant path) can never be
+permanently bricked.
 
 
 ```solidity

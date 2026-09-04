@@ -1,8 +1,8 @@
 # Vault
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/efa707be563fbb6d1823fd15d523cb09e2f05d55/contracts/Vault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b01a1006295a36fa4f656f7aeda0a98b3de7411/contracts/Vault.sol)
 
 **Inherits:**
-ERC4626, AccessControl, ReentrancyGuard
+ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/AdminFloorAccessControlCounter.sol/abstract.AdminFloorAccessControlCounter.md), ReentrancyGuard
 
 **Title:**
 Vault (unified — ADR-0010)
@@ -374,18 +374,6 @@ bool public withdrawalsPaused
 ```
 
 
-### adminCount
-Live count of `ADMIN_ROLE` holders. Maintained by the
-`_grantRole`/`_revokeRole` hooks so the last admin can never be
-removed — guaranteeing a still-available authority can always
-reverse a withdrawal-blocking state (LIFE-4).
-
-
-```solidity
-uint256 public adminCount
-```
-
-
 ### _lastMintedShares
 Actual shares minted by the most recent `_deposit`; surfaced by the
 `deposit()` override so `PortfolioRouter.minSharesPerLeg` compares
@@ -460,28 +448,6 @@ resistance. See docs/technical/security-model.md.
 
 ```solidity
 function _decimalsOffset() internal pure override returns (uint8);
-```
-
-### _grantRole
-
-
-```solidity
-function _grantRole(bytes32 role, address account)
-    internal
-    virtual
-    override
-    returns (bool granted);
-```
-
-### _revokeRole
-
-
-```solidity
-function _revokeRole(bytes32 role, address account)
-    internal
-    virtual
-    override
-    returns (bool revoked);
 ```
 
 ### totalAssets
@@ -1787,12 +1753,6 @@ error DepositsPaused();
 
 ```solidity
 error WithdrawalsPaused();
-```
-
-### LastAdminFloor
-
-```solidity
-error LastAdminFloor();
 ```
 
 ### RedeemOnly

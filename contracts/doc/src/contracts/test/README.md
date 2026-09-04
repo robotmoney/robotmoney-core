@@ -187,6 +187,8 @@
 - [MigVault](V2MigrationIntegration.t.sol/contract.MigVault.md)
 - [V2MigrationIntegrationTest](V2MigrationIntegration.t.sol/contract.V2MigrationIntegrationTest.md)
 - [VaultCodeSizeGuard](VaultCodeSizeGuard.t.sol/contract.VaultCodeSizeGuard.md)
+- [UnprotectedStubVault](VaultFamilyInvariants.t.sol/contract.UnprotectedStubVault.md)
+- [VaultFamilyInvariantsTest](VaultFamilyInvariants.t.sol/contract.VaultFamilyInvariantsTest.md)
 - [VaultForkRegressions](VaultForkRegressions.t.sol/contract.VaultForkRegressions.md)
 - [MockDefaultWeightsRouter](VaultRegistry.t.sol/contract.MockDefaultWeightsRouter.md)
 - [MockRetirableVault](VaultRegistry.t.sol/contract.MockRetirableVault.md)

@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b01a1006295a36fa4f656f7aeda0a98b3de7411/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -996,22 +996,43 @@ priced during deposit — it does not alter the NAV accounting.
 function test_AZBSK3_totalAssetsUnchangedByExclusionFix() public;
 ```
 
-### test_retire_setsDepositsPaused
+### test_retire_setsRetired
 
-FS-VLT-19: retire() sets depositsPaused = true and emits Retired.
+issue #1284: retire() sets the dedicated `retired` flag, NOT
+`depositsPaused` — the two are independent so ADMIN_ROLE's
+`unpause()` (which unconditionally clears `depositsPaused`) can
+never re-open deposits on a registry-retired vault. Matches
+RobotMoneyVault's / Vault's separate-flag model; superseded the
+old aliasing behavior this test used to pin.
 
 
 ```solidity
-function test_retire_setsDepositsPaused() public;
+function test_retire_setsRetired() public;
 ```
 
-### test_unretire_clearsDepositsPaused
+### test_unretire_clearsRetired
 
-FS-VLT-19: unretire() clears depositsPaused and emits Unretired.
+issue #1284: unretire() clears the dedicated `retired` flag and
+emits Unretired.
 
 
 ```solidity
-function test_unretire_clearsDepositsPaused() public;
+function test_unretire_clearsRetired() public;
+```
+
+### test_retirePauseUnpause_leavesDepositsClosedButRedeemOpen
+
+issue #1284 (F-06 regression): retire() -> emergency pause() ->
+admin unpause() must leave deposits closed (the registry still
+records the vault Retired) while ERC-4626 redeem stays open
+(ADR-0009). Before this fix, BasketVault aliased retirement
+onto `depositsPaused`, so `unpause()` (which unconditionally
+calls `_setDepositsPaused(false)`) silently re-opened deposits
+on a vault the registry still recorded as Retired.
+
+
+```solidity
+function test_retirePauseUnpause_leavesDepositsClosedButRedeemOpen() public;
 ```
 
 ### test_retire_revertsForNonRegistry
