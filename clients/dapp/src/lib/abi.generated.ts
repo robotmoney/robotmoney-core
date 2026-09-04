@@ -3152,6 +3152,19 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "adminCount",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "adminRebalance",
     inputs: [
       {
@@ -5397,6 +5410,11 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "InvalidParam",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "LastAdminFloor",
     inputs: [],
   },
   {

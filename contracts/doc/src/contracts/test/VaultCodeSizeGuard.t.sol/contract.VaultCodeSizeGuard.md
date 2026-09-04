@@ -1,5 +1,5 @@
 # VaultCodeSizeGuard
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/98e21fa6ee5c881534f0ec43b14cc042ef89ab9c/contracts/test/VaultCodeSizeGuard.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b01a1006295a36fa4f656f7aeda0a98b3de7411/contracts/test/VaultCodeSizeGuard.t.sol)
 
 **Inherits:**
 Test
@@ -63,6 +63,19 @@ function test_RwaVault_underEip170() public;
 
 ```solidity
 function test_AgentTokenVault_underEip170() public;
+```
+
+### test_bytecodeSize_vaultFamilyUnderEip170
+
+Aggregate check matching issue #1284's test-plan command
+(`forge test --match-test test_bytecodeSize`) — the vault-family
+members already individually guarded above, asserted together
+after the last-admin-floor consolidation and BasketVault
+retirement-flag addition.
+
+
+```solidity
+function test_bytecodeSize_vaultFamilyUnderEip170() public;
 ```
 
 ### test_UnifiedVault_underEip170

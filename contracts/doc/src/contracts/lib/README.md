@@ -2,6 +2,7 @@
 
 # Contents
 - [AdminFloorAccessControl](AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md)
+- [AdminFloorAccessControlCounter](AdminFloorAccessControlCounter.sol/abstract.AdminFloorAccessControlCounter.md)
 - [BasketAssetConfigGuard](BasketAssetConfigGuard.sol/library.BasketAssetConfigGuard.md)
 - [IBasketVaultViews](BasketViews.sol/interface.IBasketVaultViews.md)
 - [BasketViews](BasketViews.sol/library.BasketViews.md)

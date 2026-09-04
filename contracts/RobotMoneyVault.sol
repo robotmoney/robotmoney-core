@@ -9,11 +9,11 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
 import {BpsMath} from "./lib/BpsMath.sol";
 import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
+import {AdminFloorAccessControlCounter} from "./lib/AdminFloorAccessControlCounter.sol";
 
 /// @title RobotMoneyVault
 /// @notice Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight target across active
@@ -23,13 +23,18 @@ import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
 ///
 /// Deployed: 0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd (Base mainnet)
 /// Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun
-contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
+contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
     // ─── Roles ─────────────────────────────────────────────────────────
 
     /// @notice Role that can manage adapters, set parameters, and rebalance.
+    ///         Self-administered, and floor-protected: the shared
+    ///         `AdminFloorAccessControlCounter` base forbids revoking or
+    ///         renouncing the final holder (ACL-3 / F-06), so admin functions
+    ///         (including this role's own grant path) can never be
+    ///         permanently bricked.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     /// @notice Role that can pause and perform emergency withdrawals.
     ///         Asymmetric with unpause by design: a compromised emergency key can

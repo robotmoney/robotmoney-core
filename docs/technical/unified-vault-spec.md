@@ -513,10 +513,13 @@ semantics unless a row in §4.3 or a subsection below says otherwise):
   pause/unpause and shutdown/restore trust asymmetry. There is no
   `KEEPER_ROLE` — rebalancing is `forceRebalance`-only (§5.6), so no keeper is
   granted or wired.
-- **Plus, imported from `BasketVault`:** the ACL-3/F-06 last-admin floor
-  (`adminCount` counter in `_grantRole`/`_revokeRole` hooks,
-  `LastAdminFloor`) — `RobotMoneyVault` lacks this today; the unified vault
-  gets it.
+- **Plus, shared with `BasketVault` and `RobotMoneyVault`:** the ACL-3/F-06
+  last-admin floor, consolidated into the single base contract
+  `lib/AdminFloorAccessControlCounter.sol` (`adminCount` counter in
+  `_grantRole`/`_revokeRole` hooks, `LastAdminFloor`) that all three
+  inherit — issue #1284 backported it to `RobotMoneyVault`, which had no
+  such protection before, and replaced the two independent hand-rolled
+  copies on `Vault`/`BasketVault` with one owner.
 - Views: `getAdapterInfo`, `getAdapterDrift`, `adapterCount`,
   `activeAdapterCount`, `currentTargetBps`, `isShutdown`, plus the
   pause/exactness views below. The throttle views `isRebalanceAvailable` /

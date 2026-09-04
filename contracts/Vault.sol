@@ -9,11 +9,11 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IPositionAdapter} from "./interfaces/IPositionAdapter.sol";
 import {BpsMath} from "./lib/BpsMath.sol";
 import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
+import {AdminFloorAccessControlCounter} from "./lib/AdminFloorAccessControlCounter.sol";
 
 /// @title Vault (unified — ADR-0010)
 /// @notice The single ERC-4626 USDC allocator that replaces both vault families.
@@ -46,7 +46,7 @@ import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
 ///         non-abstract contract composed with a set of adapters — never a
 ///         subclass. Swap/TWAP code lives entirely on the adapters, so the vault
 ///         stays a thin allocator well within the EIP-170 runtime-size limit.
-contract Vault is ERC4626, AccessControl, ReentrancyGuard {
+contract Vault is ERC4626, AdminFloorAccessControlCounter, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
@@ -228,14 +228,6 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     ///         withdrawals (LIFE-3).
     bool public withdrawalsPaused;
 
-    // ─── Last-admin floor (ACL-3 / F-06, imported from BasketVault) ────
-
-    /// @notice Live count of `ADMIN_ROLE` holders. Maintained by the
-    ///         `_grantRole`/`_revokeRole` hooks so the last admin can never be
-    ///         removed — guaranteeing a still-available authority can always
-    ///         reverse a withdrawal-blocking state (LIFE-4).
-    uint256 public adminCount;
-
     // ─── AZ-BSK-2 actual-value passthroughs ────────────────────────────
 
     /// @dev Actual shares minted by the most recent `_deposit`; surfaced by the
@@ -365,7 +357,6 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     error NoActiveAdapters();
     error DepositsPaused();
     error WithdrawalsPaused();
-    error LastAdminFloor();
     /// @notice `withdraw()` / `previewWithdraw()` are unavailable because the
     ///         vault is in INEXACT mode (`allExact() == false`). Use `redeem()`.
     error RedeemOnly();
@@ -467,31 +458,6 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     ///         resistance. See docs/technical/security-model.md.
     function _decimalsOffset() internal pure override returns (uint8) {
         return 18;
-    }
-
-    // ─── Last-admin floor hooks (ACL-3 / F-06) ─────────────────────────
-
-    function _grantRole(bytes32 role, address account)
-        internal
-        virtual
-        override
-        returns (bool granted)
-    {
-        granted = super._grantRole(role, account);
-        if (granted && role == ADMIN_ROLE) adminCount++;
-    }
-
-    function _revokeRole(bytes32 role, address account)
-        internal
-        virtual
-        override
-        returns (bool revoked)
-    {
-        if (role == ADMIN_ROLE && hasRole(role, account) && adminCount == 1) {
-            revert LastAdminFloor();
-        }
-        revoked = super._revokeRole(role, account);
-        if (revoked && role == ADMIN_ROLE) adminCount--;
     }
 
     // ─── NAV ────────────────────────────────────────────────────────────
