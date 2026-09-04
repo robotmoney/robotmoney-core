@@ -1,0 +1,45 @@
+---
+title: "EmergencyRevokedIdleTest"
+---
+
+# EmergencyRevokedIdleTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/EmergencyModel.t.sol)
+
+**Inherits:** [EmergencyModelBase](/contracts/test/abstract.EmergencyModelBase)
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_revoke_creditsrevokedidle_andreducesmintdenominator"></a>
+
+### test_revoke_creditsRevokedIdle_andReducesMintDenominator
+
+AC: draining an ADP-2 (allowlist-revoked, ineligible-but-active)
+adapter credits `revokedIdle` with the recovered USDC, and a
+subsequent deposit mints against the idle-EXCLUSIVE denominator
+`taBefore - revokedIdle + 1` — recovered idle is NOT repriced onto
+the new depositor. `redeployRevokedIdle` then decrements it.
+
+```solidity
+function test_revoke_creditsRevokedIdle_andReducesMintDenominator() public;
+```
+
+<a id="test_redeployrevokedidle_decrements"></a>
+
+### test_redeployRevokedIdle_decrements
+
+`redeployRevokedIdle` routes recovered idle back into the healthy
+active set and decrements `revokedIdle` by the amount routed.
+
+```solidity
+function test_redeployRevokedIdle_decrements() public;
+```
+

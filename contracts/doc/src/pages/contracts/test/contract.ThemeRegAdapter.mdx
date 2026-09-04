@@ -1,0 +1,193 @@
+---
+title: "ThemeRegAdapter"
+---
+
+# ThemeRegAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/PerThemeDeploy.t.sol)
+
+**Inherits:** [IPositionAdapter](/contracts/interfaces/interface.IPositionAdapter)
+
+<i>
+
+Minimal `IPositionAdapter` fixture bound to a vault, used only to exercise
+the deploy-time REGISTRATION path (allowlist + codehash + addAdapter). It
+never receives deposits in these tests, so `deploy`/`withdraw`/`totalAssets`
+are trivial. `isExact()` is a self-report (constructor-set) that the vault
+does NOT read at registration — the attested bool comes from the deploy
+script's `AdapterSpec` (spec §5.1, C2). UNIQUE name to avoid forge-doc
+re-link collisions with the other suites' fixtures.
+
+</i>
+
+## Constants
+
+### USDC
+
+The USDC token address this adapter denominates in. Consumed
+unchanged by the vault's `_isAdapterEligible` asset-match probe.
+
+```solidity
+address public immutable USDC;
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+### VAULT
+
+The single vault this adapter is bound to. Load-bearing identity
+binding that prevents cross-vault authority substitution; MUST NOT
+be relaxed for adapter reuse (spec §2, ADR-0010 §2).
+
+```solidity
+address public immutable VAULT;
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+### _exact
+
+```solidity
+bool internal immutable _exact;
+```
+
+## Functions
+
+<a id="constructor-address-address-bool"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_, address vault_, bool exact_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+| vault_ | `address` |  |
+| exact_ | `bool` |  |
+
+<a id="deploy-uint256-uint256"></a>
+
+### deploy
+
+```solidity
+function deploy(uint256 usdcIn, uint256) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcIn | `uint256` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="withdraw-uint256-uint256"></a>
+
+### withdraw
+
+```solidity
+function withdraw(uint256, uint256) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+Live USDC-denominated value of the position (principal + accrued
+interest for lending; TWAP/oracle-priced balance for assets).
+Spot (`slot0`) is never read here (ORA-1). MAY revert fail-closed
+when the price source is unusable; MUST return 0 (without touching
+the oracle) on a zero balance (SUP-5).
+
+```solidity
+function totalAssets() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="isexact"></a>
+
+### isExact
+
+Bytecode-level exactness declaration: `true` iff `deploy`/`withdraw`
+are 1:1 and `totalAssets()` is a hard redemption claim (lending),
+`false` for slippage-priced asset adapters.
+
+<i>
+
+At-registration cross-check + monitoring ONLY — never a per-call
+gate. Share-critical paths read the vault-attested
+`AdapterInfo.isExact` (spec §2.2, C2).
+
+</i>
+
+```solidity
+function isExact() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="harvestrewards"></a>
+
+### harvestRewards
+
+Permissionlessly claim venue rewards, convert to USDC, and credit
+the vault (never a caller-supplied address, INV-1; never stranded,
+INV-2). MUST NOT revert when there is nothing to claim.
+
+```solidity
+function harvestRewards() external;
+```
+
+<a id="sweepforeigntoken-address"></a>
+
+### sweepForeignToken
+
+```solidity
+function sweepForeignToken(address) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+

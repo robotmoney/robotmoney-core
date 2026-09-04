@@ -1,0 +1,176 @@
+---
+title: "MockObservablePool"
+---
+
+# MockObservablePool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/TwapTickMath.t.sol)
+
+**Inherits:** [IObservablePool](/contracts/interfaces/interface.IObservablePool)
+
+<i>
+
+Minimal mock implementing the `IObservablePool` surface. `observe()`
+returns a pre-set tickCumulatives pair so `meanTick` can be exercised
+across boundary inputs without a live pool.
+
+</i>
+
+## State Variables
+
+### _token0
+
+```solidity
+address private _token0;
+```
+
+### _token1
+
+```solidity
+address private _token1;
+```
+
+### _cum0
+
+```solidity
+int56 private _cum0;
+```
+
+### _cum1
+
+```solidity
+int56 private _cum1;
+```
+
+### _spotTick
+
+```solidity
+int24 private _spotTick;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address token0_, address token1_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token0_ | `address` |  |
+| token1_ | `address` |  |
+
+<a id="setcumulatives-int56-int56"></a>
+
+### setCumulatives
+
+```solidity
+function setCumulatives(int56 cum0, int56 cum1) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cum0 | `int56` |  |
+| cum1 | `int56` |  |
+
+<a id="setspottick-int24"></a>
+
+### setSpotTick
+
+```solidity
+function setSpotTick(int24 tick) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tick | `int24` |  |
+
+<a id="token0"></a>
+
+### token0
+
+Returns the address of token0 in the pool.
+
+```solidity
+function token0() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="token1"></a>
+
+### token1
+
+Returns the address of token1 in the pool.
+
+```solidity
+function token1() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="slot0"></a>
+
+### slot0
+
+<i>
+
+Truncated to the 4-field `IObservablePool.slot0()` surface (issue
+#1125) — unused here beyond satisfying the interface.
+
+</i>
+
+```solidity
+function slot0() external view returns (uint160, int24, uint16, uint16);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+| &lt;none&gt; | `int24` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+```solidity
+function observe(uint32[] calldata)
+        external
+        view
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidity);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickCumulatives | `int56[]` |  |
+| secondsPerLiquidity | `uint160[]` |  |
+

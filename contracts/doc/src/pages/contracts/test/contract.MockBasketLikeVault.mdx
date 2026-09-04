@@ -1,0 +1,69 @@
+---
+title: "MockBasketLikeVault"
+description: "Simulates the registry-gated retire pattern implemented by BasketVault (FS-VLT-19): retire()/unretire() are only callable by the linked registry, and they set/clear a `depositsPaused` flag. Used to assert that VaultRegistry.retire(basketVaultAddress) completes without revert when the vault has called setRegistry with the registry's address."
+---
+
+# MockBasketLikeVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/VaultRegistry.t.sol)
+
+Simulates the registry-gated retire pattern implemented by BasketVault
+(FS-VLT-19): retire()/unretire() are only callable by the linked
+registry, and they set/clear a `depositsPaused` flag. Used to assert
+that VaultRegistry.retire(basketVaultAddress) completes without revert
+when the vault has called setRegistry with the registry's address.
+
+## State Variables
+
+### registry
+
+```solidity
+address public registry;
+```
+
+### depositsPaused
+
+```solidity
+bool public depositsPaused;
+```
+
+## Functions
+
+<a id="setregistry-address"></a>
+
+### setRegistry
+
+```solidity
+function setRegistry(address reg) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reg | `address` |  |
+
+<a id="retire"></a>
+
+### retire
+
+```solidity
+function retire() external;
+```
+
+<a id="unretire"></a>
+
+### unretire
+
+```solidity
+function unretire() external;
+```
+
+## Errors
+
+### OnlyRegistry
+
+```solidity
+error OnlyRegistry();
+```
+

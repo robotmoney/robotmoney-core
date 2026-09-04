@@ -1,0 +1,45 @@
+---
+title: "EmergencySkipContinueTest"
+---
+
+# EmergencySkipContinueTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/EmergencyModel.t.sol)
+
+**Inherits:** [EmergencyModelBase](/contracts/test/abstract.EmergencyModelBase)
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_drainset_skipsrevertingadapter_processesrest"></a>
+
+### test_drainSet_skipsRevertingAdapter_processesRest
+
+AC: draining a SET where one adapter's `withdraw` reverts still
+EXCLUDES that adapter and PROCESSES the rest (skip-and-continue).
+
+```solidity
+function test_drainSet_skipsRevertingAdapter_processesRest() public;
+```
+
+<a id="test_keeperrole_doesnotexist"></a>
+
+### test_keeperRole_doesNotExist
+
+AC: KEEPER_ROLE no longer exists — no address holds it and its
+admin role is unconfigured (DEFAULT_ADMIN_ROLE == 0x00), i.e. the
+role was never wired into the vault. Rebalancing is
+`forceRebalance`-only (§5.6) — no keeper, scheduled, or flow-based
+rebalance exists.
+
+```solidity
+function test_keeperRole_doesNotExist() public view;
+```
+

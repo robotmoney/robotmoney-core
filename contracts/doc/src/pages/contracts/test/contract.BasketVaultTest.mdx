@@ -1,0 +1,1247 @@
+---
+title: "BasketVaultTest"
+---
+
+# BasketVaultTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/BasketVault.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### basketToken
+
+```solidity
+TestERC20 internal basketToken;
+```
+
+### router
+
+```solidity
+MockSwapRouter internal router;
+```
+
+### pool
+
+```solidity
+MockPool internal pool;
+```
+
+### vault
+
+```solidity
+BasketVaultHarness internal vault;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### emergencyResponder
+
+```solidity
+address internal emergencyResponder = makeAddr("emergencyResponder");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_emergencyunwind_revertswhenrouteroutputbelowconfiguredminimum"></a>
+
+### test_emergencyUnwind_revertsWhenRouterOutputBelowConfiguredMinimum
+
+```solidity
+function test_emergencyUnwind_revertsWhenRouterOutputBelowConfiguredMinimum() public;
+```
+
+<a id="test_emergencyunwind_succeedswhenrouteroutputsatisfiesconfiguredminimum"></a>
+
+### test_emergencyUnwind_succeedsWhenRouterOutputSatisfiesConfiguredMinimum
+
+```solidity
+function test_emergencyUnwind_succeedsWhenRouterOutputSatisfiesConfiguredMinimum() public;
+```
+
+<a id="test_emergencyunwindwithoverride_emitshighriskevent"></a>
+
+### test_emergencyUnwindWithOverride_emitsHighRiskEvent
+
+```solidity
+function test_emergencyUnwindWithOverride_emitsHighRiskEvent() public;
+```
+
+<a id="test_emergencyunwindwithoverride_requiresemergencyrole"></a>
+
+### test_emergencyUnwindWithOverride_requiresEmergencyRole
+
+```solidity
+function test_emergencyUnwindWithOverride_requiresEmergencyRole() public;
+```
+
+<a id="test_addasset_revertswhenpooldoesnotpairtokenwithusdc"></a>
+
+### test_addAsset_revertsWhenPoolDoesNotPairTokenWithUsdc
+
+```solidity
+function test_addAsset_revertsWhenPoolDoesNotPairTokenWithUsdc() public;
+```
+
+<a id="test_addasset_revertsforunvettedadapter"></a>
+
+### test_addAsset_revertsForUnvettedAdapter
+
+ADP-2 / NC-2: addAsset rejects a non-zero adapter whose codehash is
+not on the ADMIN-approved allowlist.
+
+```solidity
+function test_addAsset_revertsForUnvettedAdapter() public;
+```
+
+<a id="test_addasset_acceptsvettedadapterafterapproval"></a>
+
+### test_addAsset_acceptsVettedAdapterAfterApproval
+
+ADP-2 / NC-2: once ADMIN approves the adapter's codehash, addAsset
+accepts it.
+
+```solidity
+function test_addAsset_acceptsVettedAdapterAfterApproval() public;
+```
+
+<a id="test_addasset_revertsonexecutionpoolmismatch"></a>
+
+### test_addAsset_revertsOnExecutionPoolMismatch
+
+ORA-3 / F-09: addAsset reverts when the registered pool's fee tier
+(the execution pool resolved from swapFee_) does not match swapFee_.
+
+```solidity
+function test_addAsset_revertsOnExecutionPoolMismatch() public;
+```
+
+<a id="test_lastadminfloor_revokerevertsforsoleadmin"></a>
+
+### test_lastAdminFloor_revokeRevertsForSoleAdmin
+
+ACL-3 / F-06: revoking the last ADMIN_ROLE holder reverts
+(last-admin floor), so vault governance can never be bricked.
+
+```solidity
+function test_lastAdminFloor_revokeRevertsForSoleAdmin() public;
+```
+
+<a id="test_lastadminfloor_renouncerevertsforsoleadmin"></a>
+
+### test_lastAdminFloor_renounceRevertsForSoleAdmin
+
+ACL-3 / F-06: renouncing the last ADMIN_ROLE holder reverts.
+
+```solidity
+function test_lastAdminFloor_renounceRevertsForSoleAdmin() public;
+```
+
+<a id="test_lastadminfloor_revokesucceedswithtwoadmins"></a>
+
+### test_lastAdminFloor_revokeSucceedsWithTwoAdmins
+
+ACL-3 / F-06: with a second admin granted, the original may be
+revoked — the floor only blocks dropping the FINAL admin.
+
+```solidity
+function test_lastAdminFloor_revokeSucceedsWithTwoAdmins() public;
+```
+
+<a id="test_pause_doesnotfreezewithdrawals"></a>
+
+### test_pause_doesNotFreezeWithdrawals
+
+LIFE-3 / NC-3 / F-06: pause() freezes deposits but NOT withdrawals;
+a holder can still redeem while the vault is paused.
+
+```solidity
+function test_pause_doesNotFreezeWithdrawals() public;
+```
+
+<a id="test_sweepforeigntoken_revertsforactivebasketasset"></a>
+
+### test_sweepForeignToken_revertsForActiveBasketAsset
+
+INV-1: an ACTIVE basket asset may never be swept to quarantine —
+it is a protocol/depositor asset counted in NAV.
+
+```solidity
+function test_sweepForeignToken_revertsForActiveBasketAsset() public;
+```
+
+<a id="test_sweepforeigntoken_revertsforusdcandsharetoken"></a>
+
+### test_sweepForeignToken_revertsForUsdcAndShareToken
+
+INV-1: USDC (the vault asset) and the share token may never be swept.
+
+```solidity
+function test_sweepForeignToken_revertsForUsdcAndShareToken() public;
+```
+
+<a id="test_sweepforeigntoken_permissionlessfornonbasketasset"></a>
+
+### test_sweepForeignToken_permissionlessForNonBasketAsset
+
+INV-2: a genuinely foreign token is permissionlessly swept to the
+fixed quarantine address — no admin role, no caller-supplied
+recipient.
+
+```solidity
+function test_sweepForeignToken_permissionlessForNonBasketAsset() public;
+```
+
+<a id="test_sweepforeigntoken_revertsforinactivebasketasset"></a>
+
+### test_sweepForeignToken_revertsForInactiveBasketAsset
+
+INV-1: a removed (inactive) basket asset is STILL protected from the
+quarantine sweep — it is re-absorbed into NAV instead, never routed
+away (replaces the audit 2026-06-09 L-15 admin rescue path).
+
+```solidity
+function test_sweepForeignToken_revertsForInactiveBasketAsset() public;
+```
+
+<a id="test_reabsorbremovedasset_creditsnavpermissionlessly"></a>
+
+### test_reabsorbRemovedAsset_creditsNavPermissionlessly
+
+INV-2: a balance reappearing on a removed basket asset is
+permissionlessly re-absorbed — swapped to USDC into NAV — so it
+stays redeemable by holders, with no admin-routable path.
+
+```solidity
+function test_reabsorbRemovedAsset_creditsNavPermissionlessly() public;
+```
+
+<a id="test_reabsorbremovedasset_revertsforactiveasset"></a>
+
+### test_reabsorbRemovedAsset_revertsForActiveAsset
+
+An active asset cannot be re-absorbed (it is sold proportionally on
+withdrawal, not swept).
+
+```solidity
+function test_reabsorbRemovedAsset_revertsForActiveAsset() public;
+```
+
+<a id="test_life6_reabsorbsurvivesdegradedpool"></a>
+
+### test_LIFE6_reabsorbSurvivesDegradedPool
+
+LIFE-6 / NC-8 (FLIPPED GREEN by #970): re-absorbing a removed asset
+whose pool is DEGRADED (TWAP `observe()` reverts "OLD") never
+reverts-and-strands. Pre-fix, the swap-floor read reverted and the
+reappeared balance was stuck on the vault forever; post-fix the
+quarantine fallback sweeps it to the governed quarantine address, so
+the balance is always actionable (the reversible safety valve).
+Deep proof referenced by FvInvariants.t.sol::test_LIFE6_*.
+
+```solidity
+function test_LIFE6_reabsorbSurvivesDegradedPool() public;
+```
+
+<a id="test_life6_reabsorbzerobalanceisnoop"></a>
+
+### test_LIFE6_reabsorbZeroBalanceIsNoOp
+
+LIFE-6 / NC-8: a zero reappeared balance is an idempotent no-op,
+never a revert, even on a degraded pool.
+
+```solidity
+function test_LIFE6_reabsorbZeroBalanceIsNoOp() public;
+```
+
+<a id="test_az_bsk5_reabsorbremovedasset_revertsslippageexceeded"></a>
+
+### test_AZ_BSK5_reabsorbRemovedAsset_revertsSlippageExceeded
+
+AZ-BSK-5: reabsorbRemovedAsset reverts with SlippageExceeded when
+the caller-supplied minUsdcOut exceeds the actual swap output, so
+MEV sandwich attacks on NAV recovery cannot extract value below the
+caller's floor.
+
+```solidity
+function test_AZ_BSK5_reabsorbRemovedAsset_revertsSlippageExceeded() public;
+```
+
+<a id="test_az_bsk5_reabsorbremovedasset_succeedsandcreditsnav"></a>
+
+### test_AZ_BSK5_reabsorbRemovedAsset_succeedsAndCreditsNav
+
+AZ-BSK-5: reabsorbRemovedAsset succeeds and credits NAV when the
+caller-supplied minUsdcOut is at or below the actual swap output.
+
+```solidity
+function test_AZ_BSK5_reabsorbRemovedAsset_succeedsAndCreditsNav() public;
+```
+
+<a id="test_nc8_addasset_rejectsactiveduplicate"></a>
+
+### test_NC8_addAsset_rejectsActiveDuplicate
+
+NC-8: re-adding a token that already has an ACTIVE registry entry
+reverts rather than creating a duplicate AssetInfo (which would
+double-count it in NAV and corrupt the equal-weight split).
+
+```solidity
+function test_NC8_addAsset_rejectsActiveDuplicate() public;
+```
+
+<a id="test_nc8_addasset_reusesinactiveslotonreadd"></a>
+
+### test_NC8_addAsset_reusesInactiveSlotOnReAdd
+
+NC-8: re-adding a previously REMOVED token reuses its inactive
+registry slot in place (refreshing config + re-activating) instead
+of appending a second AssetInfo, so `assets` never holds two entries
+for one token.
+
+```solidity
+function test_NC8_addAsset_reusesInactiveSlotOnReAdd() public;
+```
+
+<a id="_assetslen"></a>
+
+### _assetsLen
+
+<i>
+
+Count the BasketVault `assets` registry by probing the public getter
+until it reverts (no dedicated length getter on-chain — kept off the
+EIP-170-tight basket bytecode).
+
+</i>
+
+```solidity
+function _assetsLen() internal view returns (uint256 n);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+
+<a id="test_inv3_setfeerecipient_revertsforhotemergencykey"></a>
+
+### test_INV3_setFeeRecipient_revertsForHotEmergencyKey
+
+```solidity
+function test_INV3_setFeeRecipient_revertsForHotEmergencyKey() public;
+```
+
+<a id="test_inv3_setexitfeebps_revertsforhotemergencykey"></a>
+
+### test_INV3_setExitFeeBps_revertsForHotEmergencyKey
+
+```solidity
+function test_INV3_setExitFeeBps_revertsForHotEmergencyKey() public;
+```
+
+<a id="test_inv3_feesetters_succeedforadminrole"></a>
+
+### test_INV3_feeSetters_succeedForAdminRole
+
+```solidity
+function test_INV3_feeSetters_succeedForAdminRole() public;
+```
+
+<a id="test_maxdeposit_reflectsperdepositcap"></a>
+
+### test_maxDeposit_reflectsPerDepositCap
+
+```solidity
+function test_maxDeposit_reflectsPerDepositCap() public view;
+```
+
+<a id="test_maxdeposit_zerowhenpaused"></a>
+
+### test_maxDeposit_zeroWhenPaused
+
+```solidity
+function test_maxDeposit_zeroWhenPaused() public;
+```
+
+<a id="test_maxdeposit_zerowhenshutdown"></a>
+
+### test_maxDeposit_zeroWhenShutdown
+
+```solidity
+function test_maxDeposit_zeroWhenShutdown() public;
+```
+
+<a id="test_f07_restorevaultreopensdeposits"></a>
+
+### test_F07_restoreVaultReopensDeposits
+
+LIFE-4 / F-07: an EMERGENCY-triggered `shutdownVault` permanently
+blocks deposits with no reverse path UNLESS the higher-trust
+ADMIN_ROLE can `restoreVault`. Proof: shutdown blocks deposits;
+ADMIN restore with a fresh cap re-opens them; a redeem in between
+confirms withdrawals were never frozen (LIFE-3).
+
+```solidity
+function test_F07_restoreVaultReopensDeposits() public;
+```
+
+<a id="test_f07_restorevault_emergencycannotrestore"></a>
+
+### test_F07_restoreVault_emergencyCannotRestore
+
+F-07: only ADMIN_ROLE may restore; the EMERGENCY hot key that can
+shut the vault down cannot reverse it (trust asymmetry, like unpause).
+
+```solidity
+function test_F07_restoreVault_emergencyCannotRestore() public;
+```
+
+<a id="test_f07_restorevault_revertsoninvalidinputs"></a>
+
+### test_F07_restoreVault_revertsOnInvalidInputs
+
+F-07: `restoreVault` rejects incoherent inputs — not-shut-down,
+zero cap, or a cap below `perDepositCap`.
+
+```solidity
+function test_F07_restoreVault_revertsOnInvalidInputs() public;
+```
+
+<a id="test_maxdeposit_zerowhennoactiveassets"></a>
+
+### test_maxDeposit_zeroWhenNoActiveAssets
+
+```solidity
+function test_maxDeposit_zeroWhenNoActiveAssets() public;
+```
+
+<a id="test_maxdeposit_reflectstvlheadroom"></a>
+
+### test_maxDeposit_reflectsTvlHeadroom
+
+```solidity
+function test_maxDeposit_reflectsTvlHeadroom() public;
+```
+
+<a id="test_setmaxslippagebps_revertsbelowpoolfeefloor"></a>
+
+### test_setMaxSlippageBps_revertsBelowPoolFeeFloor
+
+```solidity
+function test_setMaxSlippageBps_revertsBelowPoolFeeFloor() public;
+```
+
+<a id="test_setmaxslippagebps_acceptsvaluesatorabovefloor"></a>
+
+### test_setMaxSlippageBps_acceptsValuesAtOrAboveFloor
+
+```solidity
+function test_setMaxSlippageBps_acceptsValuesAtOrAboveFloor() public;
+```
+
+<a id="test_setmaxslippagebps_zeroallowedwhennoactiveassets"></a>
+
+### test_setMaxSlippageBps_zeroAllowedWhenNoActiveAssets
+
+```solidity
+function test_setMaxSlippageBps_zeroAllowedWhenNoActiveAssets() public;
+```
+
+<a id="test_emergencyunwindwithoverride_revertswhenbelowupperlosscap"></a>
+
+### test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap
+
+```solidity
+function test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap() public;
+```
+
+<a id="test_emergencyunwindwithoverride_succeedswithinupperlosscap"></a>
+
+### test_emergencyUnwindWithOverride_succeedsWithinUpperLossCap
+
+```solidity
+function test_emergencyUnwindWithOverride_succeedsWithinUpperLossCap() public;
+```
+
+<a id="test_setemergencyunwindguard_requiresadminrole"></a>
+
+### test_setEmergencyUnwindGuard_requiresAdminRole
+
+```solidity
+function test_setEmergencyUnwindGuard_requiresAdminRole() public;
+```
+
+<a id="test_setemergencyunwindguard_rejectsmaxlossbpsabovemaxbps"></a>
+
+### test_setEmergencyUnwindGuard_rejectsMaxLossBpsAboveMaxBps
+
+```solidity
+function test_setEmergencyUnwindGuard_rejectsMaxLossBpsAboveMaxBps() public;
+```
+
+<a id="test_pauseandshutdownemergencycontrolsremainfunctional"></a>
+
+### test_pauseAndShutdownEmergencyControlsRemainFunctional
+
+```solidity
+function test_pauseAndShutdownEmergencyControlsRemainFunctional() public;
+```
+
+<a id="test_totalassets_usestwapticknotslot0"></a>
+
+### test_totalAssets_usesTwapTickNotSlot0
+
+```solidity
+function test_totalAssets_usesTwapTickNotSlot0() public;
+```
+
+<a id="test_totalassets_revertsonspotpricemanipulationusingslot0"></a>
+
+### test_totalAssets_revertsOnSpotPriceManipulationUsingSlot0
+
+```solidity
+function test_totalAssets_revertsOnSpotPriceManipulationUsingSlot0() public;
+```
+
+<a id="test_settwapwindow_requiresadminrole"></a>
+
+### test_setTwapWindow_requiresAdminRole
+
+```solidity
+function test_setTwapWindow_requiresAdminRole() public;
+```
+
+<a id="test_settwapwindow_rejectsbelowminimum"></a>
+
+### test_setTwapWindow_rejectsBelowMinimum
+
+```solidity
+function test_setTwapWindow_rejectsBelowMinimum() public;
+```
+
+<a id="test_settwapwindow_rejectsabovemaximum"></a>
+
+### test_setTwapWindow_rejectsAboveMaximum
+
+```solidity
+function test_setTwapWindow_rejectsAboveMaximum() public;
+```
+
+<a id="test_settwapwindow_acceptsboundary"></a>
+
+### test_setTwapWindow_acceptsBoundary
+
+```solidity
+function test_setTwapWindow_acceptsBoundary() public;
+```
+
+<a id="test_effectivetwapwindow_fallsbacktodefault"></a>
+
+### test_effectiveTwapWindow_fallsBackToDefault
+
+```solidity
+function test_effectiveTwapWindow_fallsBackToDefault() public view;
+```
+
+<a id="test_emergencyunwindminimum_derivedfromtwapnotslot0"></a>
+
+### test_emergencyUnwindMinimum_derivedFromTwapNotSlot0
+
+```solidity
+function test_emergencyUnwindMinimum_derivedFromTwapNotSlot0() public;
+```
+
+<a id="test_emergencyunwind_stalefloor_usestwapfloor"></a>
+
+### test_emergencyUnwind_staleFloor_usesTwapFloor
+
+When minUsdcOut is stale (far below TWAP), emergencyUnwind uses the
+live TWAP-derived floor and rejects a swap that only satisfies the
+stale configured floor.
+
+```solidity
+function test_emergencyUnwind_staleFloor_usesTwapFloor() public;
+```
+
+<a id="test_emergencyunwind_configuredfloorabovetwap_configuredfloorwins"></a>
+
+### test_emergencyUnwind_configuredFloorAboveTwap_configuredFloorWins
+
+When minUsdcOut is above the TWAP-derived floor, the configured floor wins
+(max semantics). Attempting a swap at the TWAP-only level must revert.
+
+```solidity
+function test_emergencyUnwind_configuredFloorAboveTwap_configuredFloorWins() public;
+```
+
+<a id="test_emergencyunwind_bothfloorssatisfied_succeeds"></a>
+
+### test_emergencyUnwind_bothFloorsSatisfied_succeeds
+
+When a swap satisfies both the TWAP floor and the configured floor, the
+emergency unwind completes successfully.
+
+```solidity
+function test_emergencyUnwind_bothFloorsSatisfied_succeeds() public;
+```
+
+<a id="test_emergencyunwindwithoverride_isoracleindependent"></a>
+
+### test_emergencyUnwindWithOverride_isOracleIndependent
+
+Override execution remains available when the TWAP oracle is unavailable.
+
+```solidity
+function test_emergencyUnwindWithOverride_isOracleIndependent() public;
+```
+
+<a id="test_settwapwindow_emitsevent"></a>
+
+### test_setTwapWindow_emitsEvent
+
+```solidity
+function test_setTwapWindow_emitsEvent() public;
+```
+
+<a id="test_constructor_grantsadminroletoadminonly"></a>
+
+### test_constructor_grantsAdminRoleToAdminOnly
+
+Constructor with distinct addresses grants each role to the
+correct address and does NOT cross-assign.
+
+```solidity
+function test_constructor_grantsAdminRoleToAdminOnly() public view;
+```
+
+<a id="test_constructor_grantsemergencyroletoemergencyresponderonly"></a>
+
+### test_constructor_grantsEmergencyRoleToEmergencyResponderOnly
+
+```solidity
+function test_constructor_grantsEmergencyRoleToEmergencyResponderOnly() public view;
+```
+
+<a id="test_constructor_revertswhenadminiszero"></a>
+
+### test_constructor_revertsWhenAdminIsZero
+
+Constructor reverts when admin_ is address(0).
+
+```solidity
+function test_constructor_revertsWhenAdminIsZero() public;
+```
+
+<a id="test_constructor_revertswhenemergencyresponderiszero"></a>
+
+### test_constructor_revertsWhenEmergencyResponderIsZero
+
+Constructor reverts when emergencyResponder_ is address(0).
+
+```solidity
+function test_constructor_revertsWhenEmergencyResponderIsZero() public;
+```
+
+<a id="test_setmaxslippagebps_requiresadminrole"></a>
+
+### test_setMaxSlippageBps_requiresAdminRole
+
+ADMIN_ROLE holder can call setMaxSlippageBps; EMERGENCY_ROLE-only holder cannot.
+
+```solidity
+function test_setMaxSlippageBps_requiresAdminRole() public;
+```
+
+<a id="test_emergencyunwind_succeedswhenalreadypaused"></a>
+
+### test_emergencyUnwind_succeedsWhenAlreadyPaused
+
+emergencyUnwind succeeds when vault is already paused.
+
+```solidity
+function test_emergencyUnwind_succeedsWhenAlreadyPaused() public;
+```
+
+<a id="test_emergencyunwindwithoverride_succeedswhenalreadypaused"></a>
+
+### test_emergencyUnwindWithOverride_succeedsWhenAlreadyPaused
+
+emergencyUnwindWithOverride succeeds when vault is already paused.
+
+```solidity
+function test_emergencyUnwindWithOverride_succeedsWhenAlreadyPaused() public;
+```
+
+<a id="test_emergencyunwind_pausesdepositswhennotalreadypaused"></a>
+
+### test_emergencyUnwind_pausesDepositsWhenNotAlreadyPaused
+
+emergencyUnwind on an unpaused vault pauses deposits only.
+
+```solidity
+function test_emergencyUnwind_pausesDepositsWhenNotAlreadyPaused() public;
+```
+
+<a id="test_emergencyunwindwithoverride_pausesdepositswhennotalreadypaused"></a>
+
+### test_emergencyUnwindWithOverride_pausesDepositsWhenNotAlreadyPaused
+
+emergencyUnwindWithOverride on an unpaused vault pauses deposits only.
+
+```solidity
+function test_emergencyUnwindWithOverride_pausesDepositsWhenNotAlreadyPaused() public;
+```
+
+<a id="test_emergencyunwind_requiresemergencyrole_adminonlyreverts"></a>
+
+### test_emergencyUnwind_requiresEmergencyRole_adminOnlyReverts
+
+EMERGENCY_ROLE holder can call emergencyUnwind; ADMIN_ROLE-only holder cannot.
+
+```solidity
+function test_emergencyUnwind_requiresEmergencyRole_adminOnlyReverts() public;
+```
+
+<a id="test_addasset_revertswhenpoolcardinalityisone"></a>
+
+### test_addAsset_revertsWhenPoolCardinalityIsOne
+
+addAsset() reverts with InsufficientPoolCardinality when the
+pool's observationCardinality is 1 (Uniswap deployment default).
+
+```solidity
+function test_addAsset_revertsWhenPoolCardinalityIsOne() public;
+```
+
+<a id="test_addasset_revertswithoutfulltwaphistory"></a>
+
+### test_addAsset_revertsWithoutFullTwapHistory
+
+```solidity
+function test_addAsset_revertsWithoutFullTwapHistory() public;
+```
+
+<a id="test_emergencyunwind_usesconfiguredfloorwhenoracleunavailable"></a>
+
+### test_emergencyUnwind_usesConfiguredFloorWhenOracleUnavailable
+
+```solidity
+function test_emergencyUnwind_usesConfiguredFloorWhenOracleUnavailable() public;
+```
+
+<a id="test_emergencyunwind_blocksdepositsbutallowsredemption"></a>
+
+### test_emergencyUnwind_blocksDepositsButAllowsRedemption
+
+```solidity
+function test_emergencyUnwind_blocksDepositsButAllowsRedemption() public;
+```
+
+<a id="test_addasset_succeedswhencardinalitymeetsminimum"></a>
+
+### test_addAsset_succeedsWhenCardinalityMeetsMinimum
+
+addAsset() succeeds when pool cardinality equals MIN_POOL_CARDINALITY (2).
+
+```solidity
+function test_addAsset_succeedsWhenCardinalityMeetsMinimum() public;
+```
+
+<a id="test_totalassets_doesnotrevertaftervalidaddasset"></a>
+
+### test_totalAssets_doesNotRevertAfterValidAddAsset
+
+totalAssets() does not revert after a successful addAsset() call
+when cardinality satisfies the minimum.
+
+```solidity
+function test_totalAssets_doesNotRevertAfterValidAddAsset() public;
+```
+
+<a id="test_addasset_revertswhenpoolliquiditybelowminimum"></a>
+
+### test_addAsset_revertsWhenPoolLiquidityBelowMinimum
+
+addAsset() reverts with InsufficientPoolLiquidity when the
+pool's in-range liquidity is below MIN_POOL_LIQUIDITY.
+
+```solidity
+function test_addAsset_revertsWhenPoolLiquidityBelowMinimum() public;
+```
+
+<a id="test_addasset_succeedswhenpoolliquiditymeetsminimum"></a>
+
+### test_addAsset_succeedsWhenPoolLiquidityMeetsMinimum
+
+addAsset() succeeds when pool liquidity meets MIN_POOL_LIQUIDITY.
+
+```solidity
+function test_addAsset_succeedsWhenPoolLiquidityMeetsMinimum() public;
+```
+
+<a id="testfuzz_addasset_cardinalityboundary-uint16"></a>
+
+### testFuzz_addAsset_cardinalityBoundary
+
+Fuzz: addAsset() reverts exactly when pool cardinality is below
+MIN_POOL_CARDINALITY and succeeds at or above it.
+
+```solidity
+function testFuzz_addAsset_cardinalityBoundary(uint16 cardinality_) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cardinality_ | `uint16` |  |
+
+<a id="test_routedeposit_zeroresidualallowanceafterswap"></a>
+
+### test_routeDeposit_zeroResidualAllowanceAfterSwap
+
+After _routeDeposit, residual USDC allowance on the router is zero.
+
+```solidity
+function test_routeDeposit_zeroResidualAllowanceAfterSwap() public;
+```
+
+<a id="test_sellproportional_zeroresidualallowanceafterswap"></a>
+
+### test_sellProportional_zeroResidualAllowanceAfterSwap
+
+After _sellProportional (withdrawal), residual token allowance on the router is zero.
+
+```solidity
+function test_sellProportional_zeroResidualAllowanceAfterSwap() public;
+```
+
+<a id="test_emergencyunwindasset_zeroresidualallowanceafterswap"></a>
+
+### test_emergencyUnwindAsset_zeroResidualAllowanceAfterSwap
+
+After emergencyUnwindAsset, residual token allowance on the router is zero.
+
+```solidity
+function test_emergencyUnwindAsset_zeroResidualAllowanceAfterSwap() public;
+```
+
+<a id="test_emergencyunwindassetwithcap_zeroresidualallowanceafterswap"></a>
+
+### test_emergencyUnwindAssetWithCap_zeroResidualAllowanceAfterSwap
+
+After emergencyUnwindAssetWithCap, residual token allowance on the router is zero.
+
+```solidity
+function test_emergencyUnwindAssetWithCap_zeroResidualAllowanceAfterSwap() public;
+```
+
+<a id="test_previewredeem_returnsslippageandfeeadjustedfloor"></a>
+
+### test_previewRedeem_returnsSlippageAndFeeAdjustedFloor
+
+previewRedeem returns TWAP-minus-slippage-minus-exitFee floor.
+With tick=0 (1:1 price), 1 000 USDC of vault NAV, 1% maxSlippage, 0% fee:
+floor = 1 000 * 9 900/10 000 = 990 USDC.
+
+```solidity
+function test_previewRedeem_returnsSlippageAndFeeAdjustedFloor() public;
+```
+
+<a id="test_previewredeem_floorleqactualswapproceeds_underslippage"></a>
+
+### test_previewRedeem_floorLeqActualSwapProceeds_underSlippage
+
+Actual redeem proceeds are >= previewRedeem when slippage &lt; maxSlippageBps.
+This is the ERC-4626 guarantee: redeem must return at least previewRedeem.
+
+```solidity
+function test_previewRedeem_floorLeqActualSwapProceeds_underSlippage() public;
+```
+
+<a id="test_previewredeem_appliesexitfeeonslippageadjustedproceeds"></a>
+
+### test_previewRedeem_appliesExitFeeOnSlippageAdjustedProceeds
+
+previewRedeem with a non-zero exit fee applies fee on top of slippage.
+
+```solidity
+function test_previewRedeem_appliesExitFeeOnSlippageAdjustedProceeds() public;
+```
+
+<a id="test_previewdeposit_returnsslippageadjustedsharefloor"></a>
+
+### test_previewDeposit_returnsSlippageAdjustedShareFloor
+
+previewDeposit returns fewer shares than without slippage discount.
+With 1% maxSlippage, depositing 1 000 USDC should preview fewer
+shares than the raw convertToShares(1 000).
+
+```solidity
+function test_previewDeposit_returnsSlippageAdjustedShareFloor() public;
+```
+
+<a id="test_depositwithdrawroundtrip_correctbalancesandzeroallowances"></a>
+
+### test_depositWithdrawRoundTrip_correctBalancesAndZeroAllowances
+
+Deposit + withdrawal round-trip preserves correct token balances and zero allowances.
+
+```solidity
+function test_depositWithdrawRoundTrip_correctBalancesAndZeroAllowances() public;
+```
+
+<a id="test_previewmint_grossesupbyslippage"></a>
+
+### test_previewMint_grossesUpBySlippage
+
+previewMint grosses up raw NAV by the slippage factor so mint()
+charges the same haircut as deposit(). Without this override, mint()
+would undercharge relative to deposit(), enabling a value leak.
+
+```solidity
+function test_previewMint_grossesUpBySlippage() public;
+```
+
+<a id="test_previewmint_notcheaperthandeposit_dilutionprevented"></a>
+
+### test_previewMint_notCheaperThanDeposit_dilutionPrevented
+
+Mint is not cheaper than deposit for the same share count.
+Depositing the assets that previewMint requires must yield at
+least targetShares (ERC-4626 symmetry with slippage haircut).
+
+```solidity
+function test_previewMint_notCheaperThanDeposit_dilutionPrevented() public;
+```
+
+<a id="test_withdrawandpreviewwithdraw_revertredeemonly"></a>
+
+### test_withdrawAndPreviewWithdraw_revertRedeemOnly
+
+withdraw() and previewWithdraw() revert with RedeemOnly because
+BasketVault proportional-swap exits cannot guarantee the ERC-4626
+exactness guarantee. Users must use redeem() instead.
+
+```solidity
+function test_withdrawAndPreviewWithdraw_revertRedeemOnly() public;
+```
+
+<a id="_depositat1to1-address-uint256"></a>
+
+### _depositAt1to1
+
+<i>
+
+Deposit `amount` USDC into `vault`, executing the swap at 1:1
+(spot == TWAP) so the basket token received equals the USDC in.
+
+</i>
+
+```solidity
+function _depositAt1to1(address who, uint256 amount) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="test_sup3_roundtripneverprofits_fuzz-uint256-uint16"></a>
+
+### test_SUP3_roundTripNeverProfits_fuzz
+
+SUP-3 (pure-view floor): `previewRedeem(previewDeposit(x)) &lt;= x`
+holds across fuzzed slippage params and deposit sizes. The two
+floor-discounted previews compose to strictly below the deposit,
+so a round trip can never preview a profit.
+
+```solidity
+function test_SUP3_roundTripNeverProfits_fuzz(uint256 x, uint16 slip) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| x | `uint256` |  |
+| slip | `uint16` |  |
+
+<a id="test_sup3_statefuldepositredeemneverprofits"></a>
+
+### test_SUP3_statefulDepositRedeemNeverProfits
+
+SUP-3 (stateful): a real deposit → immediate redeem within the
+deviation band returns no more than was deposited. Exercises the
+mint-on-realized-proceeds accounting (F-16/NC-6): shares are minted
+on the realized post-swap NAV delta (AZ-BSK-1 fix), and
+redeem() returns the actual USDC received (AZ-BSK-2 fix).
+
+Router mock is set to return the stranger's proportional share at 1:1.
+AZ-BSK-1 fix: stranger is credited realizedDelta shares (not
+just slippageFloor shares). At 1:1 execution on a 10 000 USDC pool,
+stranger's fraction = 1000/(10000+1000) = 1/11, so their sell
+of 1/11 of the basket at 1:1 USDC yields exactly x. The invariant
+got &lt;= x holds (with equality at 1:1).
+
+```solidity
+function test_SUP3_statefulDepositRedeemNeverProfits() public;
+```
+
+<a id="test_ora4_deviationguardblockssettlement"></a>
+
+### test_ORA4_deviationGuardBlocksSettlement
+
+ORA-4: when the executable market (slot0 spot) price diverges from
+the NAV-pricing TWAP beyond `navDeviationGuardBps`, a deposit
+reverts `NavMarketDeviationExceeded` rather than minting at the
+stale/manipulated mark. With the guard disabled (0) the same
+deposit succeeds — proving the guard, not some other check, blocks.
+
+```solidity
+function test_ORA4_deviationGuardBlocksSettlement() public;
+```
+
+<a id="test_ora4_withinbandsettles"></a>
+
+### test_ORA4_withinBandSettles
+
+ORA-4: a deposit within the deviation band settles normally — the
+guard does not block ordinary, market-consistent settlement.
+
+```solidity
+function test_ORA4_withinBandSettles() public;
+```
+
+<a id="test_azbsk1_depositcreditsrealizeddeltanotslippagefloor"></a>
+
+### test_AZBSK1_depositCreditsRealizedDeltaNotSlippageFloor
+
+AZ-BSK-1: when realized NAV > slippage floor (swap beats the TWAP
+worst-case), the depositor is credited realizedDelta shares, not just
+the slippage-discounted floor.  Pre-fix, the floor capped credit even
+when swaps captured extra value; post-fix the full delta is minted.
+
+```solidity
+function test_AZBSK1_depositCreditsRealizedDeltaNotSlippageFloor() public;
+```
+
+<a id="test_azbsk1_depositatfloorcreditsfloor"></a>
+
+### test_AZBSK1_depositAtFloorCreditsFloor
+
+AZ-BSK-1: when realized NAV equals the slippage floor (worst-case
+execution), the depositor is still credited the realized delta
+(which equals the floor in this case).
+
+```solidity
+function test_AZBSK1_depositAtFloorCreditsFloor() public;
+```
+
+<a id="test_azbsk2_depositreturnsactualmintedshares"></a>
+
+### test_AZBSK2_depositReturnsActualMintedShares
+
+AZ-BSK-2: BasketVault.deposit() returns the ACTUAL minted share
+count, not OZ's previewDeposit estimate. When realized NAV > floor,
+previewDeposit underestimates; the override must return the true count.
+
+```solidity
+function test_AZBSK2_depositReturnsActualMintedShares() public;
+```
+
+<a id="test_azbsk2_redeemreturnsactualwithdrawnassets"></a>
+
+### test_AZBSK2_redeemReturnsActualWithdrawnAssets
+
+AZ-BSK-2: BasketVault.redeem() returns the ACTUAL USDC withdrawn,
+not OZ's previewRedeem estimate. Confirms PortfolioRouter slippage
+guards are evaluated against accurate amounts.
+
+```solidity
+function test_AZBSK2_redeemReturnsActualWithdrawnAssets() public;
+```
+
+<a id="test_azbsk3_depositexclusionwindowuseseligiblenav"></a>
+
+### test_AZBSK3_depositExclusionWindowUsesEligibleNAV
+
+AZ-BSK-3: when idle USDC is present (e.g. from an emergency-unwound
+adapter), a new deposit prices shares against the active-adapter-only
+NAV (taBefore − idleUSDC), not the full totalAssets. This prevents a
+new depositor from capturing recovery value that belongs to existing
+holders who bore the original loss.
+
+Setup: seed the vault at 1:1, inject idle USDC directly to simulate
+the proceeds of an excluded adapter sitting un-deployed, then deposit
+and verify the minted shares match the eligible-NAV formula.
+
+```solidity
+function test_AZBSK3_depositExclusionWindowUsesEligibleNAV() public;
+```
+
+<a id="test_azbsk3_totalassetsunchangedbyexclusionfix"></a>
+
+### test_AZBSK3_totalAssetsUnchangedByExclusionFix
+
+AZ-BSK-3: totalAssets() accounts for ALL vault USDC (including idle
+proceeds from excluded adapters). The fix only changes how shares are
+priced during deposit — it does not alter the NAV accounting.
+
+```solidity
+function test_AZBSK3_totalAssetsUnchangedByExclusionFix() public;
+```
+
+<a id="test_retire_setsretired"></a>
+
+### test_retire_setsRetired
+
+issue #1284: retire() sets the dedicated `retired` flag, NOT
+`depositsPaused` — the two are independent so ADMIN_ROLE's
+`unpause()` (which unconditionally clears `depositsPaused`) can
+never re-open deposits on a registry-retired vault. Matches
+RobotMoneyVault's / Vault's separate-flag model; superseded the
+old aliasing behavior this test used to pin.
+
+```solidity
+function test_retire_setsRetired() public;
+```
+
+<a id="test_unretire_clearsretired"></a>
+
+### test_unretire_clearsRetired
+
+issue #1284: unretire() clears the dedicated `retired` flag and
+emits Unretired.
+
+```solidity
+function test_unretire_clearsRetired() public;
+```
+
+<a id="test_retirepauseunpause_leavesdepositsclosedbutredeemopen"></a>
+
+### test_retirePauseUnpause_leavesDepositsClosedButRedeemOpen
+
+issue #1284 (F-06 regression): retire() -> emergency pause() ->
+admin unpause() must leave deposits closed (the registry still
+records the vault Retired) while ERC-4626 redeem stays open
+(ADR-0009). Before this fix, BasketVault aliased retirement
+onto `depositsPaused`, so `unpause()` (which unconditionally
+calls `_setDepositsPaused(false)`) silently re-opened deposits
+on a vault the registry still recorded as Retired.
+
+```solidity
+function test_retirePauseUnpause_leavesDepositsClosedButRedeemOpen() public;
+```
+
+<a id="test_retire_revertsfornonregistry"></a>
+
+### test_retire_revertsForNonRegistry
+
+retire() reverts when caller is not the linked registry.
+
+```solidity
+function test_retire_revertsForNonRegistry() public;
+```
+
+<a id="test_unretire_revertsfornonregistry"></a>
+
+### test_unretire_revertsForNonRegistry
+
+unretire() reverts when caller is not the linked registry.
+
+```solidity
+function test_unretire_revertsForNonRegistry() public;
+```
+
+<a id="test_setregistry_revertsonsecondcall"></a>
+
+### test_setRegistry_revertsOnSecondCall
+
+setRegistry() is set-once; a second call reverts RegistryAlreadySet.
+
+```solidity
+function test_setRegistry_revertsOnSecondCall() public;
+```
+
+## Events
+
+### EmergencyUnwindOverrideUsed
+
+```solidity
+event EmergencyUnwindOverrideUsed(
+        address indexed token,
+        uint256 amountIn,
+        uint256 minUsdcOut,
+        uint256 appliedFloor,
+        address indexed caller
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| amountIn | `uint256` |  |
+| minUsdcOut | `uint256` |  |
+| appliedFloor | `uint256` |  |
+| caller | `address` |  |
+
+### TwapWindowUpdated
+
+```solidity
+event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| oldWindow | `uint32` |  |
+| newWindow | `uint32` |  |
+

@@ -1,0 +1,234 @@
+---
+title: "RmToken"
+description: "A simple ERC-20 with an initial supply minted to a designated minter at deploy time. The minter address holds the total supply; no further minting is possible after deployment. Decimals: 18 (standard)."
+---
+
+# RmToken
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/RmToken.sol)
+
+**Title:** RmToken — ERC-20 governance voting token for Robot Money.
+
+A simple ERC-20 with an initial supply minted to a designated minter at
+deploy time. The minter address holds the total supply; no further minting
+is possible after deployment. Decimals: 18 (standard).
+
+This token is used in testing/devnet environments to provide voting power
+to test participants via the faucet tab. It is NOT designed for mainnet
+deployment without further audit.
+
+## Constants
+
+### decimals
+
+```solidity
+uint8 public constant decimals = 18;
+```
+
+## State Variables
+
+### name
+
+```solidity
+string public name;
+```
+
+### symbol
+
+```solidity
+string public symbol;
+```
+
+### totalSupply
+
+```solidity
+uint256 public totalSupply;
+```
+
+### _balances
+
+```solidity
+mapping(address => uint256) private _balances;
+```
+
+### _allowances
+
+```solidity
+mapping(address => mapping(address => uint256)) private _allowances;
+```
+
+## Functions
+
+<a id="constructor-string-string-address-uint256"></a>
+
+### constructor
+
+```solidity
+constructor(
+        string memory name_,
+        string memory symbol_,
+        address initialHolder,
+        uint256 initialSupply
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name_ | `string` | Token name, e.g. "Robot Money Token". |
+| symbol_ | `string` | Token symbol, e.g. "RM". |
+| initialHolder | `address` | Address that receives the entire initial supply. |
+| initialSupply | `uint256` | Total supply in base units (18 decimals). |
+
+<a id="balanceof-address"></a>
+
+### balanceOf
+
+```solidity
+function balanceOf(address account) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="allowance-address-address"></a>
+
+### allowance
+
+```solidity
+function allowance(address owner, address spender) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| spender | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="transfer-address-uint256"></a>
+
+### transfer
+
+```solidity
+function transfer(address to, uint256 amount) external returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="approve-address-uint256"></a>
+
+### approve
+
+```solidity
+function approve(address spender, uint256 amount) external returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spender | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="transferfrom-address-address-uint256"></a>
+
+### transferFrom
+
+```solidity
+function transferFrom(address from, address to, uint256 amount) external returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_transfer-address-address-uint256"></a>
+
+### _transfer
+
+```solidity
+function _transfer(address from, address to, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+## Events
+
+### Transfer
+
+```solidity
+event Transfer(address indexed from, address indexed to, uint256 value);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| to | `address` |  |
+| value | `uint256` |  |
+
+### Approval
+
+```solidity
+event Approval(address indexed owner, address indexed spender, uint256 value);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| spender | `address` |  |
+| value | `uint256` |  |
+

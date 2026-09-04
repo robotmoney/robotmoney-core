@@ -1,0 +1,124 @@
+---
+title: "AdapterDelegatecallGuardTest"
+---
+
+# AdapterDelegatecallGuardTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AdapterDelegatecallGuard.t.sol)
+
+**Inherits:** Test
+
+## State Variables
+
+### guard
+
+```solidity
+GuardHarness internal guard;
+```
+
+### usdc
+
+```solidity
+address internal usdc = makeAddr("usdc");
+```
+
+### vaultAddr
+
+```solidity
+address internal vaultAddr = makeAddr("vault");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_requirenodelegatecall_revertsforproxyadapter"></a>
+
+### test_requireNoDelegatecall_revertsForProxyAdapter
+
+```solidity
+function test_requireNoDelegatecall_revertsForProxyAdapter() public;
+```
+
+<a id="test_requirenodelegatecall_passesforaaveadapter"></a>
+
+### test_requireNoDelegatecall_passesForAaveAdapter
+
+```solidity
+function test_requireNoDelegatecall_passesForAaveAdapter() public;
+```
+
+<a id="test_requirenodelegatecall_passesforcompoundadapter"></a>
+
+### test_requireNoDelegatecall_passesForCompoundAdapter
+
+```solidity
+function test_requireNoDelegatecall_passesForCompoundAdapter() public;
+```
+
+<a id="test_requirenodelegatecall_passesformorphoadapter"></a>
+
+### test_requireNoDelegatecall_passesForMorphoAdapter
+
+```solidity
+function test_requireNoDelegatecall_passesForMorphoAdapter() public;
+```
+
+<a id="test_requirenodelegatecall_passesfornoyieldadapter"></a>
+
+### test_requireNoDelegatecall_passesForNoYieldAdapter
+
+```solidity
+function test_requireNoDelegatecall_passesForNoYieldAdapter() public;
+```
+
+<a id="test_containsdelegatecall_skipspushimmediate"></a>
+
+### test_containsDelegatecall_skipsPushImmediate
+
+<i>
+
+Bytecode `PUSH1 0xF4 STOP` contains byte `0xF4` but only as the
+immediate of a `PUSH1`, not as an opcode. The scan must skip it.
+
+</i>
+
+```solidity
+function test_containsDelegatecall_skipsPushImmediate() public view;
+```
+
+<a id="test_containsdelegatecall_detectsbareopcode"></a>
+
+### test_containsDelegatecall_detectsBareOpcode
+
+<i>
+
+Bytecode `STOP DELEGATECALL` should be detected.
+
+</i>
+
+```solidity
+function test_containsDelegatecall_detectsBareOpcode() public view;
+```
+
+<a id="test_containsdelegatecall_skipspush32immediate"></a>
+
+### test_containsDelegatecall_skipsPush32Immediate
+
+<i>
+
+`PUSH32 &lt;31 bytes> 0xF4` — the trailing `0xF4` is still immediate
+data for the PUSH32 and must not be flagged.
+
+</i>
+
+```solidity
+function test_containsDelegatecall_skipsPush32Immediate() public view;
+```
+

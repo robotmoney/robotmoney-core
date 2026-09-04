@@ -1,0 +1,76 @@
+---
+title: "MockSwapRouterForGuards"
+---
+
+# MockSwapRouterForGuards
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/ConfusedDeputyGuards.t.sol)
+
+**Inherits:** [ISwapRouter](/contracts/interfaces/interface.ISwapRouter)
+
+<i>
+
+Swap router stub. Returns a configurable amountOut and respects
+amountOutMinimum, reverting when output would be below the floor.
+
+</i>
+
+## State Variables
+
+### amountOut
+
+```solidity
+uint256 public amountOut;
+```
+
+## Functions
+
+<a id="setamountout-uint256"></a>
+
+### setAmountOut
+
+```solidity
+function setAmountOut(uint256 v) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="exactinputsingle-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(ExactInputSingleParams calldata params) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+## Errors
+
+### TooLittleReceived
+
+```solidity
+error TooLittleReceived(uint256 got, uint256 minimum);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+| minimum | `uint256` |  |
+

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Freshness check for generated contract NatSpec docs (contracts/doc/src/contracts/).
+"""Freshness check for generated contract NatSpec docs (contracts/doc/src/pages/contracts/).
 
 Generated contract docs are produced by `forge doc` from NatSpec comments in
-contracts/**/*.sol. They live under contracts/doc/src/contracts/ and must never be
-edited by hand — only regenerated.
+contracts/**/*.sol. They live under contracts/doc/src/pages/contracts/ and must
+never be edited by hand — only regenerated.
 
 This script:
   1. Runs `forge doc` (writing to contracts/doc/) in a temp working copy.
-  2. Diffs contracts/doc/src/contracts/ between the committed tree and the freshly
-     generated output.
+  2. Diffs contracts/doc/src/pages/contracts/ between the committed tree and the
+     freshly generated output.
   3. Exits 1 if any diff is found, printing the diff for diagnosis.
-  4. Exits 0 if the committed contracts/doc/src/contracts/ exactly matches `forge doc`
-     output.
+  4. Exits 0 if the committed contracts/doc/src/pages/contracts/ exactly matches
+     `forge doc` output.
 
 WHY THIS EXISTS
 The generated files carry a banner warning that they are machine-generated.
@@ -20,13 +20,24 @@ and the committed docs to diverge silently — e.g. a developer adds a new
 public function with NatSpec and forgets to commit the regenerated markdown.
 This script is the CI signal that closes that gap.
 
+SCOPE
+Only the per-contract pages under src/pages/contracts/ are diffed. The vocs
+scaffolding forge doc also writes alongside them — package.json,
+vocs.config.ts, vocs.sidebar.ts, .gitignore, src/pages/index.mdx,
+src/pages/.forge-doc-manifest — is committed (it is required to actually build
+the doc site) but intentionally excluded from this freshness comparison. That
+mirrors the pre-1.8.0 mdbook tree, where book.toml, book.css, solidity.min.js
+and src/SUMMARY.md/README.md were likewise committed but never diffed — only
+the per-contract page content was gated on freshness.
+
 PREREQUISITES
 - `forge` must be on PATH (installed via foundry-rs/foundry-toolchain@v1).
-- The generator version matters: the committed tree is the mdbook layout emitted
-  by Foundry <= 1.7.1. Foundry 1.8.0 replaced it with a vocs site and still exits
-  0, so CI pins foundry-toolchain to v1.7.1 (issue #1263) and this script refuses
-  to compare any layout it does not recognise. Adopting the vocs layout — and
-  removing the pin — is issue #1264.
+- The generator version matters: the committed tree is the vocs layout emitted
+  by Foundry >= 1.8.0 (issue #1264). Foundry <= 1.7.1 emits the older mdbook
+  layout instead and still exits 0, so this script classifies the freshly
+  generated output before diffing and refuses to compare a layout it does not
+  recognise — including the legacy mdbook layout, which would otherwise look
+  like every generated file was added/removed.
 - Script must be run from the repo root (same directory as foundry.toml).
 """
 
@@ -42,7 +53,7 @@ import tempfile
 from pathlib import Path
 
 
-GENERATED_DIR = Path("contracts/doc/src/contracts")
+GENERATED_DIR = Path("contracts/doc/src/pages/contracts")
 
 # forge doc embeds the current HEAD SHA in [Git Source] lines, e.g.:
 #   [Git Source](https://github.com/org/repo/blob/<sha>/contracts/Foo.sol)
@@ -116,12 +127,15 @@ def compare_trees(
 
 
 # `forge doc` output layouts. Foundry <= 1.7.1 emits an mdbook site whose
-# generated pages live under <out>/src/contracts/. Foundry 1.8.0 replaced that
-# generator with a vocs site (<out>/src/pages/**/*.mdx plus vocs.config.ts /
-# vocs.sidebar.ts / package.json scaffolding) and still exits 0. Without an
-# explicit classification step, "the generator wrote a shape we do not
-# understand" is indistinguishable from "the docs are fresh" — the failure mode
-# that reddened every job in issue #1263.
+# generated pages live under <out>/src/contracts/. Foundry >= 1.8.0 replaced
+# that generator with a vocs site (<out>/src/pages/contracts/**/*.mdx plus
+# vocs.config.ts / vocs.sidebar.ts / package.json scaffolding) and still exits
+# 0. Without an explicit classification step, "the generator wrote a shape we
+# do not understand" (or "wrote the wrong version's shape") is
+# indistinguishable from "the docs are fresh" — the failure mode that reddened
+# every job in issue #1263. The committed tree is the vocs layout; a fresh
+# mdbook layout (stale local Foundry) is therefore also a mismatch, not a
+# diffable pair.
 LAYOUT_MDBOOK = "mdbook"
 LAYOUT_VOCS = "vocs"
 LAYOUT_UNKNOWN = "unknown"
@@ -132,13 +146,14 @@ def classify_output(out_dir: Path) -> tuple[str, Path | None]:
 
     Returns ``(layout, generated_root)`` where ``generated_root`` is the
     directory this comparator knows how to diff, or ``None`` when the layout is
-    one it cannot compare.
+    recognised but has no comparable per-contract page directory.
     """
     mdbook_root = out_dir / "src" / "contracts"
     if mdbook_root.is_dir():
         return LAYOUT_MDBOOK, mdbook_root
+    vocs_root = out_dir / "src" / "pages" / "contracts"
     if (out_dir / "vocs.config.ts").is_file() or (out_dir / "src" / "pages").is_dir():
-        return LAYOUT_VOCS, None
+        return LAYOUT_VOCS, (vocs_root if vocs_root.is_dir() else None)
     return LAYOUT_UNKNOWN, None
 
 
@@ -147,7 +162,7 @@ def self_test() -> int:
 
     This is the codified version of issue #450's dry-run acceptance: it
     guarantees that if a future PR introduces a new public Solidity surface
-    without regenerating ``contracts/doc/src/contracts/``, the freshness gate will
+    without regenerating ``contracts/doc/src/pages/contracts/``, the freshness gate will
     detect the drift. Three synthetic scenarios are checked — added file,
     removed file, and content-changed file (the case that fires when a new
     ``function`` line appears in a contract's NatSpec output).
@@ -198,13 +213,14 @@ def self_test() -> int:
         "self-test sha-normalization failed — comparator would flag every PR"
     )
 
-    # Scenarios 6-8: the generator contract. `forge doc` exits 0 on every
-    # Foundry release, so the only thing standing between "1.8.0 rewrote the
-    # layout" and a false "docs are fresh" is classify_output(). Issue #1263.
+    # Scenarios 6-9: the generator contract. `forge doc` exits 0 on every
+    # Foundry release, so the only thing standing between a generator-version
+    # mismatch and a false "docs are fresh" is classify_output(). Issue #1263.
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # 6: the mdbook layout this comparator diffs (Foundry <= 1.7.1).
+        # 6: the legacy mdbook layout (Foundry <= 1.7.1) — must be named, not
+        # mistaken for the vocs layout this comparator diffs.
         mdbook = tmp / "mdbook"
         (mdbook / "src" / "contracts" / "Vault.sol").mkdir(parents=True)
         (mdbook / "src" / "contracts" / "Vault.sol" / "contract.Vault.md").write_text(
@@ -215,18 +231,30 @@ def self_test() -> int:
             f"self-test mdbook-layout scenario failed: {layout=} {root=}"
         )
 
-        # 7: the vocs layout Foundry 1.8.0 emits — must be named, not mistaken
-        # for fresh docs.
+        # 7: the vocs layout Foundry >= 1.8.0 emits (issue #1264) — the layout
+        # this comparator diffs.
         vocs = tmp / "vocs"
-        (vocs / "src" / "pages").mkdir(parents=True)
-        (vocs / "src" / "pages" / "contract.Vault.mdx").write_text("# Vault\n")
+        (vocs / "src" / "pages" / "contracts").mkdir(parents=True)
+        (vocs / "src" / "pages" / "contracts" / "contract.Vault.mdx").write_text(
+            "# Vault\n"
+        )
         (vocs / "vocs.config.ts").write_text("export default {}\n")
         layout, root = classify_output(vocs)
-        assert layout == LAYOUT_VOCS and root is None, (
+        assert layout == LAYOUT_VOCS and root == vocs / "src" / "pages" / "contracts", (
             f"self-test vocs-layout scenario failed: {layout=} {root=}"
         )
 
-        # 8: any other shape (a future generator rewrite) must also refuse to
+        # 8: a vocs-shaped tree with no contracts/ page directory (e.g. every
+        # .sol file failed to render) must be named as vocs but not diffable.
+        vocs_empty = tmp / "vocs_empty"
+        (vocs_empty / "src" / "pages").mkdir(parents=True)
+        (vocs_empty / "vocs.config.ts").write_text("export default {}\n")
+        layout, root = classify_output(vocs_empty)
+        assert layout == LAYOUT_VOCS and root is None, (
+            f"self-test vocs-no-contracts scenario failed: {layout=} {root=}"
+        )
+
+        # 9: any other shape (a future generator rewrite) must also refuse to
         # report freshness.
         other = tmp / "other"
         (other / "site").mkdir(parents=True)
@@ -238,7 +266,7 @@ def self_test() -> int:
 
     print(
         "OK: freshness-check self-test passed "
-        "(4 drift scenarios + SHA norm + 3 generator-layout scenarios)."
+        "(4 drift scenarios + SHA norm + 4 generator-layout scenarios)."
     )
     return 0
 
@@ -307,25 +335,25 @@ def main() -> int:
 
         out_dir = tmp_path / "docs"
         layout, regenerated_dir = classify_output(out_dir)
-        if layout == LAYOUT_VOCS:
+        if layout == LAYOUT_MDBOOK:
             print(
-                "FAIL: `forge doc` produced the vocs layout (Foundry >= 1.8.0), "
-                "which this comparator cannot diff against the committed mdbook "
-                f"tree at {GENERATED_DIR}.\n"
-                "This is a generator-version mismatch, NOT stale docs. CI pins "
-                "foundry-toolchain to v1.7.1 (issue #1263); install the same "
-                "release locally with `foundryup --install v1.7.1`. Adopting the "
-                "vocs layout is tracked in issue #1264.",
+                "FAIL: `forge doc` produced the legacy mdbook layout "
+                "(Foundry <= 1.7.1), but the committed tree at "
+                f"{GENERATED_DIR} is the vocs layout emitted by Foundry >= "
+                "1.8.0 (issue #1264).\n"
+                "This is a generator-version mismatch, NOT stale docs. "
+                "Upgrade your local Foundry install: `foundryup`.",
                 file=sys.stderr,
             )
             return 1
         if layout == LAYOUT_UNKNOWN or regenerated_dir is None:
             print(
                 f"FAIL: `forge doc` exited 0 but wrote an unrecognised layout to "
-                f"{out_dir} (no src/contracts/, no vocs scaffold). Top-level "
-                f"entries: {sorted(p.name for p in out_dir.iterdir()) if out_dir.is_dir() else '<missing>'}.\n"
-                "This is a generator-version mismatch, NOT stale docs. See issues "
-                "#1263 and #1264.",
+                f"{out_dir} (no src/contracts/, no src/pages/contracts/ under a "
+                "vocs scaffold). Top-level entries: "
+                f"{sorted(p.name for p in out_dir.iterdir()) if out_dir.is_dir() else '<missing>'}.\n"
+                "This is a generator-version mismatch, NOT stale docs. See "
+                "issues #1263 and #1264.",
                 file=sys.stderr,
             )
             return 1
@@ -337,13 +365,13 @@ def main() -> int:
 
     if not (added or removed or changed):
         print(
-            f"OK: contracts/doc/src/contracts/ is fresh ({len(fresh)} files match "
+            f"OK: {GENERATED_DIR}/ is fresh ({len(fresh)} files match "
             "`forge doc` output)."
         )
         return 0
 
     # Report drift.
-    print("FAIL: contracts/doc/src/contracts/ is stale relative to `forge doc` output.")
+    print(f"FAIL: {GENERATED_DIR}/ is stale relative to `forge doc` output.")
     print("Run `forge doc` from the repo root and commit the result.\n")
 
     if added:

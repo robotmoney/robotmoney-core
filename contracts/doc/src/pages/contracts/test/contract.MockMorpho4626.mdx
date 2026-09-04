@@ -1,0 +1,69 @@
+---
+title: "MockMorpho4626"
+description: "Only the surface `MorphoAdapter.totalAssets()` touches — `balanceOf` and `convertToAssets` — is implemented. An empty adapter holds zero shares, so `convertToAssets(0) == 0`."
+---
+
+# MockMorpho4626
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/ERC4626PreconditionChecks.t.sol)
+
+**Title:** Minimal ERC-4626 Morpho-vault stand-in.
+
+Only the surface `MorphoAdapter.totalAssets()` touches —
+`balanceOf` and `convertToAssets` — is implemented. An empty
+adapter holds zero shares, so `convertToAssets(0) == 0`.
+
+## Functions
+
+<a id="balanceof-address"></a>
+
+### balanceOf
+
+<i>
+
+Adapter holds no shares in any precondition scenario.
+
+</i>
+
+```solidity
+function balanceOf(address) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="converttoassets-uint256"></a>
+
+### convertToAssets
+
+<i>
+
+1:1 share↔asset stub; only ever called with `shares == 0` here.
+
+</i>
+
+```solidity
+function convertToAssets(uint256 shares) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

@@ -1,0 +1,78 @@
+---
+title: "UniV4PositionForkMockRouter"
+---
+
+# UniV4PositionForkMockRouter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/UniswapV4AssetPositionAdapter.t.sol)
+
+<i>
+
+V4-style router mock: pays a caller-set `amountOut`, pulling `amountIn`
+from the caller. Byte-identical in spirit to `MockUniswapV4Router` in
+BasketVault.t.sol (the repo's established V4-stub pattern). TEST FIXTURE.
+
+</i>
+
+## State Variables
+
+### amountOut
+
+```solidity
+uint256 public amountOut;
+```
+
+## Functions
+
+<a id="setamountout-uint256"></a>
+
+### setAmountOut
+
+```solidity
+function setAmountOut(uint256 amountOut_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut_ | `uint256` |  |
+
+<a id="exactinputsingle-iuniswapv4swaprouter-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(IUniswapV4SwapRouter.ExactInputSingleParams calldata params)
+        external
+        payable
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `IUniswapV4SwapRouter.ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+## Errors
+
+### TooLittleReceived
+
+```solidity
+error TooLittleReceived(uint256 amountOut, uint256 amountOutMinimum);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+| amountOutMinimum | `uint256` |  |
+

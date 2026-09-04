@@ -1,0 +1,106 @@
+---
+title: "CustodyInvariantGuardTest"
+---
+
+# CustodyInvariantGuardTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/CustodyInvariantGuard.t.sol)
+
+**Inherits:** Test
+
+## Functions
+
+<a id="_productionsources"></a>
+
+### _productionSources
+
+<i>
+
+Every production source file (NOT under contracts/test or
+contracts/doc). Kept as an explicit list so the guard is
+deterministic and a newly-added contract is a deliberate edit here.
+
+</i>
+
+```solidity
+function _productionSources() internal pure returns (string[] memory paths);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| paths | `string[]` |  |
+
+<a id="_contains-string-string"></a>
+
+### _contains
+
+<i>
+
+True if `haystack` contains `needle` (naive substring scan).
+
+</i>
+
+```solidity
+function _contains(string memory haystack, string memory needle) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| haystack | `string` |  |
+| needle | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="test_inv1_noarbitraryrecipientrescuefunctions"></a>
+
+### test_INV1_noArbitraryRecipientRescueFunctions
+
+INV-1: no production source declares an arbitrary-recipient
+rescue function. `rescueTokens`/`rescueUsdc` are deleted, and the
+IStrategyAdapter interface no longer declares them.
+
+```solidity
+function test_INV1_noArbitraryRecipientRescueFunctions() public view;
+```
+
+<a id="test_inv2_sweepforeigntokenreplacesrescue"></a>
+
+### test_INV2_sweepForeignTokenReplacesRescue
+
+INV-2: every balance-holding production contract that previously
+exposed a rescue function now exposes the permissionless
+`sweepForeignToken(token)` quarantine sweep instead.
+
+```solidity
+function test_INV2_sweepForeignTokenReplacesRescue() public view;
+```
+
+<a id="test_quarantinedestinationisconstant"></a>
+
+### test_quarantineDestinationIsConstant
+
+INV-1/INV-2: the quarantine destination is a hardcoded constant in
+the shared library, so no role or caller can steer the sweep.
+
+```solidity
+function test_quarantineDestinationIsConstant() public view;
+```
+
+<a id="test_prddocumentssecurityinvariants"></a>
+
+### test_prdDocumentsSecurityInvariants
+
+The PRD documents the three invariants (docs-first gate).
+
+```solidity
+function test_prdDocumentsSecurityInvariants() public view;
+```
+

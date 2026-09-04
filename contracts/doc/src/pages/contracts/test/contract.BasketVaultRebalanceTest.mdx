@@ -1,0 +1,189 @@
+---
+title: "BasketVaultRebalanceTest"
+---
+
+# BasketVaultRebalanceTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/BasketVault.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### tokenA
+
+```solidity
+TestERC20 internal tokenA;
+```
+
+### tokenB
+
+```solidity
+TestERC20 internal tokenB;
+```
+
+### router
+
+```solidity
+MockSwapRouter internal router;
+```
+
+### poolA
+
+```solidity
+MockPool internal poolA;
+```
+
+### poolB
+
+```solidity
+MockPool internal poolB;
+```
+
+### vault
+
+```solidity
+BasketVaultHarness internal vault;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### emergencyResponder
+
+```solidity
+address internal emergencyResponder = makeAddr("emergencyResponder");
+```
+
+### depositor
+
+```solidity
+address internal depositor = makeAddr("depositor");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_rebalance_revertswithnotimplemented"></a>
+
+### test_rebalance_revertsWithNotImplemented
+
+```solidity
+function test_rebalance_revertsWithNotImplemented() public;
+```
+
+<a id="test_rebalance_revertsforanycallernotjustadmin"></a>
+
+### test_rebalance_revertsForAnyCallerNotJustAdmin
+
+```solidity
+function test_rebalance_revertsForAnyCallerNotJustAdmin() public;
+```
+
+<a id="test_deposit_emitsweightsnapshot_singleasset"></a>
+
+### test_deposit_emitsWeightSnapshot_singleAsset
+
+```solidity
+function test_deposit_emitsWeightSnapshot_singleAsset() public;
+```
+
+<a id="test_deposit_emitsweightsnapshot_twoassets"></a>
+
+### test_deposit_emitsWeightSnapshot_twoAssets
+
+```solidity
+function test_deposit_emitsWeightSnapshot_twoAssets() public;
+```
+
+<a id="test_previewdepositweights_returnsactiveassetsonly"></a>
+
+### test_previewDepositWeights_returnsActiveAssetsOnly
+
+```solidity
+function test_previewDepositWeights_returnsActiveAssetsOnly() public;
+```
+
+<a id="test_previewdepositweights_splitequallyacrosstwoassets"></a>
+
+### test_previewDepositWeights_splitEquallyAcrossTwoAssets
+
+```solidity
+function test_previewDepositWeights_splitEquallyAcrossTwoAssets() public;
+```
+
+<a id="test_previewdepositweights_zeroamountreturnszeros"></a>
+
+### test_previewDepositWeights_zeroAmountReturnsZeros
+
+```solidity
+function test_previewDepositWeights_zeroAmountReturnsZeros() public;
+```
+
+<a id="test_realizedweights_returnszerosfornondepositor"></a>
+
+### test_realizedWeights_returnsZerosForNonDepositor
+
+```solidity
+function test_realizedWeights_returnsZerosForNonDepositor() public;
+```
+
+<a id="test_realizedweights_returnsequalweightsafterequaldeposit"></a>
+
+### test_realizedWeights_returnsEqualWeightsAfterEqualDeposit
+
+```solidity
+function test_realizedWeights_returnsEqualWeightsAfterEqualDeposit() public;
+```
+
+<a id="test_realizedweights_noactiveassets_returnsempty"></a>
+
+### test_realizedWeights_noActiveAssets_returnsEmpty
+
+```solidity
+function test_realizedWeights_noActiveAssets_returnsEmpty() public;
+```
+
+## Events
+
+### WeightSnapshot
+
+```solidity
+event WeightSnapshot(
+        address indexed depositor, address[] assets, uint256[] bpsWeights, uint256 timestamp
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| depositor | `address` |  |
+| assets | `address[]` |  |
+| bpsWeights | `uint256[]` |  |
+| timestamp | `uint256` |  |
+

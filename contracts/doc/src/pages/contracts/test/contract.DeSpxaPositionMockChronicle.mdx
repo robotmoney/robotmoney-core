@@ -1,0 +1,120 @@
+---
+title: "DeSpxaPositionMockChronicle"
+---
+
+# DeSpxaPositionMockChronicle
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeSpxaAssetPositionAdapter.t.sol)
+
+**Inherits:** [IChronicleOracle](/contracts/interfaces/interface.IChronicleOracle)
+
+<i>
+
+Mock Chronicle oracle: independently settable price and timestamp.
+
+</i>
+
+## State Variables
+
+### price
+
+```solidity
+uint256 public price;
+```
+
+### timestamp
+
+```solidity
+uint256 public timestamp;
+```
+
+## Functions
+
+<a id="constructor-uint256-uint256"></a>
+
+### constructor
+
+```solidity
+constructor(uint256 price_, uint256 timestamp_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| price_ | `uint256` |  |
+| timestamp_ | `uint256` |  |
+
+<a id="setprice-uint256"></a>
+
+### setPrice
+
+```solidity
+function setPrice(uint256 price_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| price_ | `uint256` |  |
+
+<a id="settimestamp-uint256"></a>
+
+### setTimestamp
+
+```solidity
+function setTimestamp(uint256 timestamp_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timestamp_ | `uint256` |  |
+
+<a id="latestanswer"></a>
+
+### latestAnswer
+
+Returns the latest pushed price, scaled to 18 decimals.
+
+<i>
+
+Reverts if the caller is not whitelisted ("kissed") by Chronicle.
+Reverts if no price has been pushed yet.
+
+</i>
+
+```solidity
+function latestAnswer() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | Latest NAV price, 18-decimal fixed-point (WAD). |
+
+<a id="latesttimestamp"></a>
+
+### latestTimestamp
+
+Returns the Unix timestamp of the last price push.
+
+<i>
+
+Used by the vault to enforce the staleness heartbeat check.
+
+</i>
+
+```solidity
+function latestTimestamp() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | Unix timestamp (seconds) when `latestAnswer` was last updated. |
+

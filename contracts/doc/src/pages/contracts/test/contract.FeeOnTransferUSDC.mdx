@@ -1,0 +1,62 @@
+---
+title: "FeeOnTransferUSDC"
+---
+
+# FeeOnTransferUSDC
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RobotMoneyGateway.t.sol)
+
+**Inherits:** [TestERC20](/contracts/test/helpers/contract.TestERC20)
+
+<i>
+
+Minimal fee-on-transfer token used to assert the gateway's
+balance-delta defense (`FeeOnTransferDetected`). Charges 1% on transfer.
+
+</i>
+
+## Functions
+
+<a id="transfer-address-uint256"></a>
+
+### transfer
+
+```solidity
+function transfer(address to, uint256 amount) public override returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="transferfrom-address-address-uint256"></a>
+
+### transferFrom
+
+```solidity
+function transferFrom(address from, address to, uint256 amount) public override returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+

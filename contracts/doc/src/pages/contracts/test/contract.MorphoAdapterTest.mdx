@@ -1,0 +1,253 @@
+---
+title: "MorphoAdapterTest"
+---
+
+# MorphoAdapterTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/MorphoAdapter.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### morphoVault
+
+```solidity
+MockMorphoVault internal morphoVault;
+```
+
+### adapter
+
+```solidity
+MorphoAdapter internal adapter;
+```
+
+### vault
+
+```solidity
+address internal vault = makeAddr("vault");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_constructor_wiresimmutables"></a>
+
+### test_constructor_wiresImmutables
+
+```solidity
+function test_constructor_wiresImmutables() public view;
+```
+
+<a id="test_constructor_revertsonzeroaddress"></a>
+
+### test_constructor_revertsOnZeroAddress
+
+```solidity
+function test_constructor_revertsOnZeroAddress() public;
+```
+
+<a id="test_deploy_movesusdcintomorphovault"></a>
+
+### test_deploy_movesUsdcIntoMorphoVault
+
+```solidity
+function test_deploy_movesUsdcIntoMorphoVault() public;
+```
+
+<a id="test_adp5_deployzeroesallowance"></a>
+
+### test_ADP5_deployZeroesAllowance
+
+ADP-5 / NC-12: `deploy` uses `forceApprove(_, amount)` then
+`forceApprove(_, 0)`, so the adapter's USDC allowance to the Morpho
+vault is exactly zero after the call — no residual approval lingers.
+
+```solidity
+function test_ADP5_deployZeroesAllowance() public;
+```
+
+<a id="test_deploy_revertsfornonvault"></a>
+
+### test_deploy_revertsForNonVault
+
+```solidity
+function test_deploy_revertsForNonVault() public;
+```
+
+<a id="test_withdraw_happypath_returnsactualandcreditsvault"></a>
+
+### test_withdraw_happyPath_returnsActualAndCreditsVault
+
+```solidity
+function test_withdraw_happyPath_returnsActualAndCreditsVault() public;
+```
+
+<a id="test_withdraw_revertsfornonvault"></a>
+
+### test_withdraw_revertsForNonVault
+
+```solidity
+function test_withdraw_revertsForNonVault() public;
+```
+
+<a id="test_withdraw_revertsonshortfall"></a>
+
+### test_withdraw_revertsOnShortfall
+
+```solidity
+function test_withdraw_revertsOnShortfall() public;
+```
+
+<a id="test_withdraw_typemaxdoesnotrevertonshortfall"></a>
+
+### test_withdraw_typeMaxDoesNotRevertOnShortfall
+
+```solidity
+function test_withdraw_typeMaxDoesNotRevertOnShortfall() public;
+```
+
+<a id="test_totalassets_reflectsdeployedshares"></a>
+
+### test_totalAssets_reflectsDeployedShares
+
+```solidity
+function test_totalAssets_reflectsDeployedShares() public;
+```
+
+<a id="test_sweepforeigntoken_revertsforprotectedusdc"></a>
+
+### test_sweepForeignToken_revertsForProtectedUSDC
+
+```solidity
+function test_sweepForeignToken_revertsForProtectedUSDC() public;
+```
+
+<a id="test_sweepforeigntoken_revertsforprotectedmorphoshares"></a>
+
+### test_sweepForeignToken_revertsForProtectedMorphoShares
+
+```solidity
+function test_sweepForeignToken_revertsForProtectedMorphoShares() public;
+```
+
+<a id="test_sweepforeigntoken_zerobalanceisnoop"></a>
+
+### test_sweepForeignToken_zeroBalanceIsNoop
+
+```solidity
+function test_sweepForeignToken_zeroBalanceIsNoop() public;
+```
+
+<a id="test_sweepforeigntoken_permissionlesstoquarantine"></a>
+
+### test_sweepForeignToken_permissionlessToQuarantine
+
+```solidity
+function test_sweepForeignToken_permissionlessToQuarantine() public;
+```
+
+<a id="test_deploy_uncappedbydefault"></a>
+
+### test_deploy_uncappedByDefault
+
+Default maxExposure is 0 (uncapped); deploy succeeds for any amount.
+
+```solidity
+function test_deploy_uncappedByDefault() public;
+```
+
+<a id="test_setmaxexposure_storescap"></a>
+
+### test_setMaxExposure_storesCap
+
+setMaxExposure stores the cap and can be read back.
+
+```solidity
+function test_setMaxExposure_storesCap() public;
+```
+
+<a id="test_setmaxexposure_revertsfornonvault"></a>
+
+### test_setMaxExposure_revertsForNonVault
+
+setMaxExposure reverts when called by a non-VAULT address.
+
+```solidity
+function test_setMaxExposure_revertsForNonVault() public;
+```
+
+<a id="test_deploy_revertswhencapexceeded"></a>
+
+### test_deploy_revertsWhenCapExceeded
+
+deploy() with maxExposure set below the attempted amount reverts
+with ExposureCapExceeded (FS-VLT-10 AC).
+
+```solidity
+function test_deploy_revertsWhenCapExceeded() public;
+```
+
+<a id="test_deploy_zerocapisuncapped"></a>
+
+### test_deploy_zeroCapIsUncapped
+
+deploy() with maxExposure = 0 succeeds regardless of amount
+(backward-compatible uncapped path, FS-VLT-10 AC).
+
+```solidity
+function test_deploy_zeroCapIsUncapped() public;
+```
+
+<a id="test_deploy_revertswhencumulative_exceedscap"></a>
+
+### test_deploy_revertsWhenCumulative_exceedsCap
+
+deploy() that would push the adapter's running balance above cap
+also reverts with ExposureCapExceeded.
+
+```solidity
+function test_deploy_revertsWhenCumulative_exceedsCap() public;
+```
+
+<a id="test_harvestrewards_ispermissionlessnoopformorpho"></a>
+
+### test_harvestRewards_isPermissionlessNoopForMorpho
+
+AC5: harvestRewards() is a permissionless no-op for MorphoAdapter.
+Morpho Gauntlet USDC Prime yield accrues automatically in the
+ERC-4626 share price — there are no discrete claimable rewards.
+Anyone may call; it must not revert and the vault asset is
+never moved (no value leakage through harvest).
+
+```solidity
+function test_harvestRewards_isPermissionlessNoopForMorpho() public;
+```
+

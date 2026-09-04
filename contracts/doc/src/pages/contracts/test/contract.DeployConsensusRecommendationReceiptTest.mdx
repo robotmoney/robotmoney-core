@@ -1,0 +1,143 @@
+---
+title: "DeployConsensusRecommendationReceiptTest"
+description: "AC10: the receipt contract deploys **alongside** InvestmentCommitteePolicy in one ceremony, and AC2: `ADMIN_ROLE` on the receipt contract lands on the `TimelockController` and nowhere else. This is a single greenfield rollout — no migration and no registered agent to preserve."
+---
+
+# DeployConsensusRecommendationReceiptTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeployConsensusRecommendationReceipt.t.sol)
+
+**Inherits:** Test
+
+**Title:** DeployConsensusRecommendationReceiptTest
+
+AC10: the receipt contract deploys **alongside**
+InvestmentCommitteePolicy in one ceremony, and AC2: `ADMIN_ROLE` on
+the receipt contract lands on the `TimelockController` and nowhere
+else. This is a single greenfield rollout — no migration and no
+registered agent to preserve.
+
+## State Variables
+
+### admin
+
+```solidity
+address admin = address(0xA0);
+```
+
+### pauser
+
+```solidity
+address pauser = address(0xA1);
+```
+
+### submitter
+
+```solidity
+address submitter = address(0xB1);
+```
+
+### proposer
+
+```solidity
+address proposer = address(0xC0);
+```
+
+### executor
+
+```solidity
+address executor = address(0xC1);
+```
+
+### usdc
+
+```solidity
+TestERC20 usdc;
+```
+
+### vault
+
+```solidity
+MockVault vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway gateway;
+```
+
+### timelock
+
+```solidity
+TimelockController timelock;
+```
+
+### script
+
+```solidity
+DeployInvestmentCommitteePolicy script;
+```
+
+### d
+
+```solidity
+DeployInvestmentCommitteePolicy.Deployed d;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="testoneceremonydeploysandwiresboth"></a>
+
+### testOneCeremonyDeploysAndWiresBoth
+
+<i>
+
+AC10: both contracts exist after a single ceremony, and both are
+wired into the gateway.
+
+</i>
+
+```solidity
+function testOneCeremonyDeploysAndWiresBoth() public view;
+```
+
+<a id="testreceiptadminroleistimelockonly"></a>
+
+### testReceiptAdminRoleIsTimelockOnly
+
+<i>
+
+AC2 / INV-3: `ADMIN_ROLE` on the receipt contract is held by the
+TimelockController — and by nobody else, including the gateway,
+the deployer, and the protocol admin.
+
+</i>
+
+```solidity
+function testReceiptAdminRoleIsTimelockOnly() public view;
+```
+
+<a id="testdeployedwiringanchorsandreleases"></a>
+
+### testDeployedWiringAnchorsAndReleases
+
+<i>
+
+The as-deployed wiring actually anchors: an allowlisted submitter
+records through the gateway and only the timelock can release.
+
+</i>
+
+```solidity
+function testDeployedWiringAnchorsAndReleases() public;
+```
+

@@ -1,0 +1,139 @@
+---
+title: "UnifiedVaultConformanceTestRedeemOnly"
+---
+
+# UnifiedVaultConformanceTestRedeemOnly
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/UnifiedVaultConformance.t.sol)
+
+**Inherits:** [UnifiedVaultConformanceBase](/contracts/test/abstract.UnifiedVaultConformanceBase)
+
+## Constants
+
+### EXIT_FEE_BPS
+
+```solidity
+uint256 internal constant EXIT_FEE_BPS = 50;
+```
+
+### HAIRCUT_BPS
+
+```solidity
+uint256 internal constant HAIRCUT_BPS = 100;
+```
+
+## State Variables
+
+### adapter
+
+```solidity
+ConformanceInexactAdapter internal adapter;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_composition_isredeemonlymode"></a>
+
+### test_composition_isRedeemOnlyMode
+
+```solidity
+function test_composition_isRedeemOnlyMode() public;
+```
+
+<a id="test_previewwithdraw_revertsredeemonly"></a>
+
+### test_previewWithdraw_revertsRedeemOnly
+
+```solidity
+function test_previewWithdraw_revertsRedeemOnly() public;
+```
+
+<a id="test_withdraw_revertsredeemonly"></a>
+
+### test_withdraw_revertsRedeemOnly
+
+```solidity
+function test_withdraw_revertsRedeemOnly() public;
+```
+
+<a id="test_withdrawzero_isnoop"></a>
+
+### test_withdrawZero_isNoOp
+
+E-4: `withdraw(maxWithdraw(owner)) == withdraw(0)` is a safe no-op
+(never `RedeemOnly`), because `maxWithdraw` is 0 in this mode.
+
+```solidity
+function test_withdrawZero_isNoOp() public;
+```
+
+<a id="test_maxviews_arezero"></a>
+
+### test_maxViews_areZero
+
+```solidity
+function test_maxViews_areZero() public;
+```
+
+<a id="test_redeem_islive_feeonrealized"></a>
+
+### test_redeem_isLive_feeOnRealized
+
+```solidity
+function test_redeem_isLive_feeOnRealized() public;
+```
+
+<a id="test_previewredeem_navhaircutfloor"></a>
+
+### test_previewRedeem_navHaircutFloor
+
+`previewRedeem` is the ADR-0007 NAV-haircut floor
+`gross × (1 − maxSlippageBps) × (1 − exitFeeBps)`.
+
+```solidity
+function test_previewRedeem_navHaircutFloor() public;
+```
+
+<a id="test_previewdeposit_slippagefloor"></a>
+
+### test_previewDeposit_slippageFloor
+
+`previewDeposit` is the slippage-discounted floor (&lt; OZ par).
+
+```solidity
+function test_previewDeposit_slippageFloor() public;
+```
+
+<a id="test_previewmint_ceilgrossup"></a>
+
+### test_previewMint_ceilGrossUp
+
+`previewMint` ceil-grosses-up the slippage haircut so `mint`
+cannot undercharge relative to `deposit` (H-1).
+
+```solidity
+function test_previewMint_ceilGrossUp() public;
+```
+
+<a id="testfuzz_redeem_realizesbelowpar_noprofit-uint256"></a>
+
+### testFuzz_redeem_realizesBelowPar_noProfit
+
+```solidity
+function testFuzz_redeem_realizesBelowPar_noProfit(uint256 assets) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+

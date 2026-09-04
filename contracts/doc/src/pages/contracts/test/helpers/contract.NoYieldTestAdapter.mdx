@@ -1,0 +1,211 @@
+---
+title: "NoYieldTestAdapter"
+description: "A test-only, no-yield IStrategyAdapter that simply holds deposited USDC in this contract with no external protocol calls. It exists purely to give RobotMoneyVault unit tests a lossless, deterministic adapter that satisfies the IStrategyAdapter interface without depending on real Aave/Compound/Morpho protocol state."
+---
+
+# NoYieldTestAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/helpers/NoYieldTestAdapter.sol)
+
+**Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter)
+
+**Title:** NoYieldTestAdapter
+
+A test-only, no-yield IStrategyAdapter that simply holds deposited
+USDC in this contract with no external protocol calls. It exists
+purely to give RobotMoneyVault unit tests a lossless, deterministic
+adapter that satisfies the IStrategyAdapter interface without
+depending on real Aave/Compound/Morpho protocol state.
+
+<i>
+
+Lives under `contracts/test/` so it is NOT part of the production
+artifact set (`foundry.toml` `src = "contracts"`, `test =
+"contracts/test"`). No interest accrues — `totalAssets()` always
+returns the raw USDC balance held by this contract.
+
+</i>
+
+This adapter must NEVER be deployed to a live chain — it provides zero
+yield and exists only as a unit-test fixture.
+
+## Constants
+
+### USDC
+
+USDC token address.
+
+```solidity
+IERC20 public immutable USDC;
+```
+
+### VAULT
+
+Address of the RobotMoneyVault that owns this adapter.
+
+```solidity
+address public immutable VAULT;
+```
+
+## Functions
+
+<a id="onlyvault"></a>
+
+### onlyVault
+
+```solidity
+modifier onlyVault();
+```
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_, address vault_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` | Address of the USDC token (6-decimal ERC-20). |
+| vault_ | `address` | Address of the RobotMoneyVault that owns this adapter. |
+
+<a id="deploy-uint256"></a>
+
+### deploy
+
+Receive `amount` USDC from the vault and deploy it into the underlying protocol.
+
+<i>
+
+USDC is already transferred to this contract by the vault before
+`deploy` is called — nothing further is needed.
+
+</i>
+
+```solidity
+function deploy(
+        uint256 /* amount */
+    )
+        external
+        onlyVault;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` | Amount of USDC (6-decimal units) to deploy into the protocol. |
+
+<a id="withdraw-uint256"></a>
+
+### withdraw
+
+Withdraw `amount` USDC from the underlying protocol and return it to the vault.
+
+<i>
+
+Transfers up to `amount` USDC back to the vault. If the balance
+is insufficient, transfers the entire remaining balance.
+
+</i>
+
+```solidity
+function withdraw(uint256 amount) external onlyVault returns (uint256 actual);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` | Amount of USDC to withdraw; pass `type(uint256).max` to withdraw all. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| actual | `uint256` | The amount of USDC actually withdrawn (may be ≤ amount on shortfall). |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+Live USDC value held by this adapter (principal + accrued interest).
+
+```solidity
+function totalAssets() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="sweepforeigntoken-address"></a>
+
+### sweepForeignToken
+
+Permissionlessly sweep a NON-protected foreign token to the fixed
+quarantine address (custody invariants INV-1/INV-2). Anyone may
+call; the destination is a hardcoded constant, never caller-supplied.
+Reverts when `token` is USDC or the adapter's strategy/share token.
+
+<i>
+
+USDC (the protected vault asset) cannot be swept. Any other token
+accidentally sent to this contract is permissionlessly quarantined.
+
+</i>
+
+```solidity
+function sweepForeignToken(address token) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` | Address of the foreign ERC-20 to quarantine. |
+
+<a id="harvestrewards"></a>
+
+### harvestRewards
+
+Claim any underlying-protocol reward tokens and forward them as
+USDC to the owning vault (custody invariant INV-2 — no emissions
+stranded on the adapter or router). Permissionless: anyone may
+trigger the harvest; the destination is always the vault, never a
+caller-supplied address (INV-1).
+
+<i>
+
+No-yield test adapter holds only raw USDC with no reward tokens —
+harvest is a no-op and always succeeds.
+
+</i>
+
+```solidity
+function harvestRewards() external;
+```
+
+## Errors
+
+### OnlyVault
+
+Caller is not the configured `VAULT` address.
+
+```solidity
+error OnlyVault();
+```
+
+### ZeroAddress
+
+Constructor received a zero address.
+
+```solidity
+error ZeroAddress();
+```
+

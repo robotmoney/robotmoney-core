@@ -1,0 +1,29 @@
+---
+title: "RehearsalSafe"
+description: "Minimal Safe stand-in for rehearsal ceremonies only. Exposes exactly the `getThreshold()` surface DeployTimelock._validate checks, returning a hard-coded threshold of 2."
+---
+
+# RehearsalSafe
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployRehearsalSafe.s.sol)
+
+Minimal Safe stand-in for rehearsal ceremonies only.
+Exposes exactly the `getThreshold()` surface DeployTimelock._validate
+checks, returning a hard-coded threshold of 2.
+
+## Functions
+
+<a id="getthreshold"></a>
+
+### getThreshold
+
+```solidity
+function getThreshold() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

@@ -1,0 +1,97 @@
+---
+title: "InvariantRegistry"
+---
+
+# InvariantRegistry
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/fv/InvariantRegistry.sol)
+
+## Functions
+
+<a id="entries"></a>
+
+### entries
+
+<i>
+
+The full catalogue. Order mirrors the spec's section order. NEVER
+reorder-and-renumber; append-only like the spec's IDs.
+
+</i>
+
+```solidity
+function entries() internal pure returns (Entry[] memory e);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| e | `Entry[]` |  |
+
+<a id="get-string"></a>
+
+### get
+
+<i>
+
+Look up a single entry by ID; reverts if absent.
+
+</i>
+
+```solidity
+function get(string memory id) internal pure returns (Entry memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Entry` |  |
+
+## Structs
+
+### Entry
+
+```solidity
+struct Entry {
+        string id; // stable invariant ID, e.g. "INV-1"
+        Status status; // HOLDS or RED
+        string strategy; // declared FV strategy (mirrors the spec)
+        uint256 remediationIssue; // downstream remediation issue for RED entries; 0 otherwise
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+| status | `Status` |  |
+| strategy | `string` |  |
+| remediationIssue | `uint256` |  |
+
+## Enums
+
+### Status
+
+```solidity
+enum Status {
+        HOLDS, // spec ✅/🟢/🟡/⚪ — a passing (or trivially-passing) FV test exists
+        RED // spec 🔴 — currently breakable; FV test skipped until remediation lands
+    }
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| HOLDS |  |
+| RED |  |
+

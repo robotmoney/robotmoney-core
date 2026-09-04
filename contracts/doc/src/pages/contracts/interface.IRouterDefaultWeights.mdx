@@ -1,0 +1,58 @@
+---
+title: "IRouterDefaultWeights"
+---
+
+# IRouterDefaultWeights
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/VaultRegistry.sol)
+
+<i>
+
+Minimal view the registry needs from `PortfolioRouter` to keep the
+default weight vector's length consistent with router eligibility.
+Declared as an interface (not an import) to avoid a circular
+compile-time dependency between the two contracts.
+
+</i>
+
+## Functions
+
+<a id="defaultweightslength"></a>
+
+### defaultWeightsLength
+
+Number of legs in the router's default weight vector.
+
+```solidity
+function defaultWeightsLength() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="applymigrationdefaultweights-address-uint256"></a>
+
+### applyMigrationDefaultWeights
+
+Registry-only entry point that sets the router's default-weight
+vector. Called by `migrateEligibility` after this registry has
+already updated `routerEligibleCount`, so the router's own
+length check sees the new count and the eligibility flip + weight
+write land in one transaction. ADR-0002 migration interlock fix
+(H-A1, issue #1128).
+
+```solidity
+function applyMigrationDefaultWeights(address[] calldata vaults, uint256[] calldata bps)
+        external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+

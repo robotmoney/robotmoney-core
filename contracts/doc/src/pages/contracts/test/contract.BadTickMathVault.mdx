@@ -1,0 +1,75 @@
+---
+title: "BadTickMathVault"
+---
+
+# BadTickMathVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/Deploy.t.sol)
+
+<i>
+
+Mimics the per-vault `tickMathLibrary()` accessor the deploy assertion
+reads, but returns a caller-chosen address — used to prove the deploy
+assertion fails on a wrong/zero linked library (finding L3-D1).
+
+</i>
+
+## Constants
+
+### _lib
+
+```solidity
+address private immutable _lib;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address lib_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lib_ | `address` |  |
+
+<a id="tickmathlibrary"></a>
+
+### tickMathLibrary
+
+```solidity
+function tickMathLibrary() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+<i>
+
+BasketVault(addr).totalAssets() is also probed by the assertion;
+return 0 so a passing codehash would still be exercised in range.
+
+</i>
+
+```solidity
+function totalAssets() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

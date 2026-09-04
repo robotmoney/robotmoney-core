@@ -1,0 +1,163 @@
+---
+title: "AgentTokenVaultTest"
+---
+
+# AgentTokenVaultTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AgentTokenVault.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+### N
+
+```solidity
+uint256 internal constant N = 6;
+```
+
+## State Variables
+
+### SYMBOLS
+
+```solidity
+string[6] internal SYMBOLS = ["JUNO", "RM", "BANKR", "ZYFAI", "GIZA", "DEUS"];
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### router
+
+```solidity
+RecordingSwapRouter internal router;
+```
+
+### vault
+
+```solidity
+AgentTokenVault internal vault;
+```
+
+### tokens
+
+```solidity
+TestERC20[6] internal tokens;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_seedsixtokenshortlist"></a>
+
+### _seedSixTokenShortlist
+
+<i>
+
+Seed the vault with the six MVP tokens, in canonical order, each
+paired with USDC via a 1:1 mock pool — mirrors the deploy seed.
+
+</i>
+
+```solidity
+function _seedSixTokenShortlist() internal;
+```
+
+<a id="test_shortlist_seeded_with_six_mvp_tokens"></a>
+
+### test_shortlist_seeded_with_six_mvp_tokens
+
+```solidity
+function test_shortlist_seeded_with_six_mvp_tokens() public view;
+```
+
+<a id="test_shortlist_ordering_matches_config"></a>
+
+### test_shortlist_ordering_matches_config
+
+```solidity
+function test_shortlist_ordering_matches_config() public view;
+```
+
+<a id="test_equal_weight_allocation_across_six_tokens"></a>
+
+### test_equal_weight_allocation_across_six_tokens
+
+```solidity
+function test_equal_weight_allocation_across_six_tokens() public;
+```
+
+<a id="test_shortlist_mutation_admin_only"></a>
+
+### test_shortlist_mutation_admin_only
+
+```solidity
+function test_shortlist_mutation_admin_only() public;
+```
+
+<a id="test_shortlist_mutation_rejected_for_non_admin"></a>
+
+### test_shortlist_mutation_rejected_for_non_admin
+
+```solidity
+function test_shortlist_mutation_rejected_for_non_admin() public;
+```
+
+<a id="test_governance_shortlist_add_delay_is_48h"></a>
+
+### test_governance_shortlist_add_delay_is_48h
+
+```solidity
+function test_governance_shortlist_add_delay_is_48h() public view;
+```
+
+<a id="test_governance_shortlist_remove_delay_is_24h"></a>
+
+### test_governance_shortlist_remove_delay_is_24h
+
+```solidity
+function test_governance_shortlist_remove_delay_is_24h() public view;
+```
+
+<a id="test_demo_seed_registers_agent_token_vault_with_shortlist"></a>
+
+### test_demo_seed_registers_agent_token_vault_with_shortlist
+
+Exercises the real demo seed chain: DeployDemoExtraVaults.run()
+deploys + seeds AgentTokenVault with the three real-asset demo
+tokens (BNKR/V3, JUNO/V4, RM/Aerodrome), registers it in
+VaultRegistry, and makes it router-eligible (issue #560).
+The vault is reachable via the same registry path the dapp uses.
+
+```solidity
+function test_demo_seed_registers_agent_token_vault_with_shortlist() public;
+```
+

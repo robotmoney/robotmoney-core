@@ -1,0 +1,73 @@
+---
+title: "ShortfallMorphoVault"
+---
+
+# ShortfallMorphoVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/MorphoAdapter.t.sol)
+
+**Inherits:** [MockMorphoVault](/contracts/test/contract.MockMorphoVault)
+
+<i>
+
+Vault that delivers fewer USDC than requested on withdraw (simulates shortfall).
+
+</i>
+
+## State Variables
+
+### shortfall
+
+```solidity
+uint256 public shortfall;
+```
+
+## Functions
+
+<a id="constructor-address-uint256"></a>
+
+### constructor
+
+```solidity
+constructor(address asset_, uint256 shortfall_) MockMorphoVault(asset_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `address` |  |
+| shortfall_ | `uint256` |  |
+
+<a id="withdraw-uint256-address-address"></a>
+
+### withdraw
+
+<i>
+
+Standard ERC-4626 withdraw: transfer `assets` USDC to `receiver`, burn shares from `owner`.
+Returns the number of shares burned (NOT the USDC amount).
+
+</i>
+
+```solidity
+function withdraw(uint256 assets, address receiver, address owner)
+        external
+        override
+        returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+| receiver | `address` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+

@@ -1,0 +1,63 @@
+---
+title: "IAerodromeSlipstreamRouter"
+---
+
+# IAerodromeSlipstreamRouter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/interfaces/IAerodromeSlipstreamRouter.sol)
+
+## Functions
+
+<a id="exactinputsingle-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(ExactInputSingleParams calldata params)
+        external
+        payable
+        returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+
+## Structs
+
+### ExactInputSingleParams
+
+```solidity
+struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        int24 tickSpacing;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| tickSpacing | `int24` |  |
+| recipient | `address` |  |
+| deadline | `uint256` |  |
+| amountIn | `uint256` |  |
+| amountOutMinimum | `uint256` |  |
+| sqrtPriceLimitX96 | `uint160` |  |
+

@@ -1,0 +1,203 @@
+---
+title: "PositionConformanceBase"
+---
+
+# PositionConformanceBase
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AdapterPositionConformance.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+### AMT
+
+```solidity
+uint256 internal constant AMT = 100 * ONE_USDC;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### adapter
+
+```solidity
+IPositionAdapter internal adapter;
+```
+
+### vault
+
+```solidity
+address internal vault = makeAddr("vault");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+## Functions
+
+<a id="_setupadapter"></a>
+
+### _setUpAdapter
+
+<i>
+
+Deploy the concrete adapter + its mock venue. Sets `adapter`.
+
+</i>
+
+```solidity
+function _setUpAdapter() internal virtual;
+```
+
+<a id="_sharetoken"></a>
+
+### _shareToken
+
+<i>
+
+The adapter's protected venue receipt/share token (for the sweep
+protected-token assertion). address(0) if none applies.
+
+</i>
+
+```solidity
+function _shareToken() internal view virtual returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_fundanddeploy-uint256"></a>
+
+### _fundAndDeploy
+
+<i>
+
+Simulate the vault's `safeTransfer` choreography then vault-deploy.
+
+</i>
+
+```solidity
+function _fundAndDeploy(uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="test_identityviews_returnconstructorbound"></a>
+
+### test_identityViews_returnConstructorBound
+
+```solidity
+function test_identityViews_returnConstructorBound() public view;
+```
+
+<a id="test_isexact_true"></a>
+
+### test_isExact_true
+
+```solidity
+function test_isExact_true() public view;
+```
+
+<a id="test_deploy_returnsusdcinandincreasestotalassets"></a>
+
+### test_deploy_returnsUsdcInAndIncreasesTotalAssets
+
+```solidity
+function test_deploy_returnsUsdcInAndIncreasesTotalAssets() public;
+```
+
+<a id="test_deploy_revertsbelowfloor"></a>
+
+### test_deploy_revertsBelowFloor
+
+```solidity
+function test_deploy_revertsBelowFloor() public;
+```
+
+<a id="test_deploy_revertsfornonvault"></a>
+
+### test_deploy_revertsForNonVault
+
+```solidity
+function test_deploy_revertsForNonVault() public;
+```
+
+<a id="test_withdraw_deliversatleastminouttovault"></a>
+
+### test_withdraw_deliversAtLeastMinOutToVault
+
+```solidity
+function test_withdraw_deliversAtLeastMinOutToVault() public;
+```
+
+<a id="test_withdraw_clampsoveraskatbalance"></a>
+
+### test_withdraw_clampsOverAskAtBalance
+
+```solidity
+function test_withdraw_clampsOverAskAtBalance() public;
+```
+
+<a id="test_withdraw_revertsbelowfloor"></a>
+
+### test_withdraw_revertsBelowFloor
+
+```solidity
+function test_withdraw_revertsBelowFloor() public;
+```
+
+<a id="test_withdraw_revertsfornonvault"></a>
+
+### test_withdraw_revertsForNonVault
+
+```solidity
+function test_withdraw_revertsForNonVault() public;
+```
+
+<a id="test_harvestrewards_permissionlessnoop"></a>
+
+### test_harvestRewards_permissionlessNoop
+
+```solidity
+function test_harvestRewards_permissionlessNoop() public;
+```
+
+<a id="test_sweepforeigntoken_quarantinesforeignrevertsonprotected"></a>
+
+### test_sweepForeignToken_quarantinesForeignRevertsOnProtected
+
+```solidity
+function test_sweepForeignToken_quarantinesForeignRevertsOnProtected() public;
+```
+

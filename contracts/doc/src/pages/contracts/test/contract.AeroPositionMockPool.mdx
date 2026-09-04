@@ -1,0 +1,155 @@
+---
+title: "AeroPositionMockPool"
+---
+
+# AeroPositionMockPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AerodromeAssetPositionAdapter.t.sol)
+
+<i>
+
+Duck-typed Aerodrome Slipstream CL pool for the constructor
+pool-usability check and the ORA-4 NAV-deviation guard. Exposes the
+identical `slot0`/`observe`/`liquidity`/`token0`/`token1` ABI as
+Uniswap V3 (per `IAerodromePool`), plus `tickSpacing()`. `spotTick`
+(slot0) and `meanTickVal` (observe cumulatives) are independently
+settable to synthesize a spot-vs-TWAP divergence. TEST FIXTURE.
+
+</i>
+
+## Constants
+
+### token0
+
+```solidity
+address public immutable token0;
+```
+
+### token1
+
+```solidity
+address public immutable token1;
+```
+
+### tickSpacing
+
+```solidity
+int24 public immutable tickSpacing;
+```
+
+## State Variables
+
+### liquidity
+
+```solidity
+uint128 public liquidity = 1e18;
+```
+
+### cardinality
+
+```solidity
+uint16 public cardinality = 2;
+```
+
+### spotTick
+
+```solidity
+int24 public spotTick;
+```
+
+### meanTickVal
+
+```solidity
+int24 public meanTickVal;
+```
+
+## Functions
+
+<a id="constructor-address-address-int24"></a>
+
+### constructor
+
+```solidity
+constructor(address a, address b, int24 tickSpacing_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+| b | `address` |  |
+| tickSpacing_ | `int24` |  |
+
+<a id="setspottick-int24"></a>
+
+### setSpotTick
+
+```solidity
+function setSpotTick(int24 t) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `int24` |  |
+
+<a id="setmeantick-int24"></a>
+
+### setMeanTick
+
+```solidity
+function setMeanTick(int24 t) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `int24` |  |
+
+<a id="slot0"></a>
+
+### slot0
+
+```solidity
+function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+| &lt;none&gt; | `int24` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint8` |  |
+| &lt;none&gt; | `bool` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidity);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secondsAgos | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickCumulatives | `int56[]` |  |
+| secondsPerLiquidity | `uint160[]` |  |
+

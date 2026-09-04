@@ -1,0 +1,44 @@
+---
+title: "ISafeProxyFactory"
+---
+
+# ISafeProxyFactory
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/SafeIntegration.t.sol)
+
+**Title:** ISafeProxyFactory — minimal interface for Safe`Wallet` ProxyFactory.
+
+<i>
+
+Address on Base mainnet (and many networks): 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67.
+
+</i>
+
+## Functions
+
+<a id="createproxywithnonce-address-bytes-uint256"></a>
+
+### createProxyWithNonce
+
+Deploy a new SafeProxy and call `initializer` on the singleton.
+
+```solidity
+function createProxyWithNonce(address singleton, bytes calldata initializer, uint256 saltNonce)
+        external
+        returns (address proxy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| singleton | `address` | The Safe singleton (implementation) address. |
+| initializer | `bytes` | `setup(...)` calldata. |
+| saltNonce | `uint256` | Salt for CREATE2 (allows deterministic addresses). |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+

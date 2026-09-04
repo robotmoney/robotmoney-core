@@ -1,0 +1,549 @@
+---
+title: "ConsensusRecommendationReceiptTest"
+description: "Full on-chain path for the consensus receipt anchor: gateway → receipt contract → event, plus the signalling-only boundary, the timelock-held `ADMIN_ROLE`, the 3-topic event limit, and the anchoring-digest assertion that closes issue #1280."
+---
+
+# ConsensusRecommendationReceiptTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/ConsensusRecommendationReceipt.t.sol)
+
+**Inherits:** Test
+
+**Title:** ConsensusRecommendationReceiptTest
+
+Full on-chain path for the consensus receipt anchor:
+gateway → receipt contract → event, plus the signalling-only
+boundary, the timelock-held `ADMIN_ROLE`, the 3-topic event limit,
+and the anchoring-digest assertion that closes issue #1280.
+
+## Constants
+
+### VALID_CANONICAL
+
+```solidity
+string constant VALID_CANONICAL = "tests/fixtures/consensus-receipt.valid.canonical.txt";
+```
+
+### ESCAPING_CANONICAL
+
+```solidity
+string constant ESCAPING_CANONICAL = "tests/fixtures/consensus-receipt.escaping.canonical.txt";
+```
+
+### VALID_JSON
+
+```solidity
+string constant VALID_JSON = "tests/fixtures/consensus-receipt.valid.json";
+```
+
+### ESCAPING_JSON
+
+```solidity
+string constant ESCAPING_JSON = "tests/fixtures/consensus-receipt.escaping.json";
+```
+
+### ANCHOR_DIGEST
+
+```solidity
+string constant ANCHOR_DIGEST = "tests/fixtures/consensus-receipt.anchor-digest.json";
+```
+
+### RECEIPT_ID_DOMAIN
+
+<i>
+
+Receipt-id domain separator, pinned by
+consensus-receipt.canonicalization.json#receipt_id_derivation.
+
+</i>
+
+```solidity
+string constant RECEIPT_ID_DOMAIN = "robotmoney:consensus-receipt-id:v1\n";
+```
+
+### MIN_DELAY
+
+```solidity
+uint256 constant MIN_DELAY = 1 hours;
+```
+
+### PAYLOAD_URI
+
+```solidity
+string constant PAYLOAD_URI = "https://robotmoney.net/api/swarm/receipts/session-1";
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address admin = address(0xA0);
+```
+
+### pauser
+
+```solidity
+address pauser = address(0xA1);
+```
+
+### shareReceiver
+
+```solidity
+address shareReceiver = address(0xA2);
+```
+
+### submitter
+
+```solidity
+address submitter = address(0xB1);
+```
+
+### stranger
+
+```solidity
+address stranger = address(0xDEAD);
+```
+
+### proposer
+
+```solidity
+address proposer = address(0xC0);
+```
+
+### executor
+
+```solidity
+address executor = address(0xC1);
+```
+
+### usdc
+
+```solidity
+TestERC20 usdc;
+```
+
+### vault
+
+```solidity
+MockVault vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway gateway;
+```
+
+### ic
+
+```solidity
+InvestmentCommitteePolicy ic;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt receipts;
+```
+
+### timelock
+
+```solidity
+TimelockController timelock;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_goldenbytes-string"></a>
+
+### _goldenBytes
+
+<i>
+
+Read the committed golden canonical bytes exactly — trailing
+newline included, nothing trimmed or re-encoded.
+
+</i>
+
+```solidity
+function _goldenBytes(string memory path) internal view returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| path | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_pinneddigest-uint256"></a>
+
+### _pinnedDigest
+
+<i>
+
+Read the pinned digest constant for `file` out of the core-only
+sidecar. The constant is COMPARED against a freshly derived hash;
+it is never the source of the value under test.
+
+</i>
+
+```solidity
+function _pinnedDigest(uint256 goldenIndex)
+        internal
+        view
+        returns (bytes32 digest, uint256 byteLength, string memory file);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| goldenIndex | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| digest | `bytes32` |  |
+| byteLength | `uint256` |  |
+| file | `string` |  |
+
+<a id="_receiptidfor-string"></a>
+
+### _receiptIdFor
+
+```solidity
+function _receiptIdFor(string memory receiptJsonPath) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptJsonPath | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_record-bytes32-bytes32"></a>
+
+### _record
+
+```solidity
+function _record(bytes32 receiptId, bytes32 digest) internal returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptId | `bytes32` |  |
+| digest | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="testdirectrecordreverts"></a>
+
+### testDirectRecordReverts
+
+<i>
+
+A direct call to `recordReceipt` reverts even from the allowlisted
+submitter: the gateway is the sole choke point.
+
+</i>
+
+```solidity
+function testDirectRecordReverts() public;
+```
+
+<a id="testdirectrecordfromtimelockreverts"></a>
+
+### testDirectRecordFromTimelockReverts
+
+<i>
+
+Even an ADMIN_ROLE holder cannot bypass the gateway.
+
+</i>
+
+```solidity
+function testDirectRecordFromTimelockReverts() public;
+```
+
+<a id="testnonagentcannotrecordviagateway"></a>
+
+### testNonAgentCannotRecordViaGateway
+
+<i>
+
+A gateway caller without `AGENT_ROLE` is rejected by the gateway.
+
+</i>
+
+```solidity
+function testNonAgentCannotRecordViaGateway() public;
+```
+
+<a id="testsubmitternotallowlistedreverts"></a>
+
+### testSubmitterNotAllowlistedReverts
+
+<i>
+
+A gateway agent that is not on the IC allowlist is rejected by the
+receipt contract — role administration stays on the IC policy.
+
+</i>
+
+```solidity
+function testSubmitterNotAllowlistedReverts() public;
+```
+
+<a id="testrecordrequiresconfiguredreceiptcontract"></a>
+
+### testRecordRequiresConfiguredReceiptContract
+
+```solidity
+function testRecordRequiresConfiguredReceiptContract() public;
+```
+
+<a id="testemptyreceiptidreverts"></a>
+
+### testEmptyReceiptIdReverts
+
+```solidity
+function testEmptyReceiptIdReverts() public;
+```
+
+<a id="testemptypayloaddigestreverts"></a>
+
+### testEmptyPayloadDigestReverts
+
+```solidity
+function testEmptyPayloadDigestReverts() public;
+```
+
+<a id="testemptypayloadurireverts"></a>
+
+### testEmptyPayloadUriReverts
+
+```solidity
+function testEmptyPayloadUriReverts() public;
+```
+
+<a id="testduplicatereceiptidreverts"></a>
+
+### testDuplicateReceiptIdReverts
+
+<i>
+
+One receipt per session per subject — the uniqueness property the
+receipt-id derivation exists to enforce.
+
+</i>
+
+```solidity
+function testDuplicateReceiptIdReverts() public;
+```
+
+<a id="testadminroleheldbytimelock"></a>
+
+### testAdminRoleHeldByTimelock
+
+<i>
+
+The timelock, and only the timelock, holds `ADMIN_ROLE`. The
+deployer, the gateway and the protocol admin all do not.
+
+</i>
+
+```solidity
+function testAdminRoleHeldByTimelock() public view;
+```
+
+<a id="testreleaserevertsunlessroutedthroughtimelock"></a>
+
+### testReleaseRevertsUnlessRoutedThroughTimelock
+
+<i>
+
+Test plan 3: `ADMIN_ROLE` operations revert unless routed through
+the timelock — and succeed when they are, only after `minDelay`.
+
+</i>
+
+```solidity
+function testReleaseRevertsUnlessRoutedThroughTimelock() public;
+```
+
+<a id="testdoublereleasereverts"></a>
+
+### testDoubleReleaseReverts
+
+```solidity
+function testDoubleReleaseReverts() public;
+```
+
+<a id="testreleaseunknownreceiptreverts"></a>
+
+### testReleaseUnknownReceiptReverts
+
+```solidity
+function testReleaseUnknownReceiptReverts() public;
+```
+
+<a id="testrecordstoreseveryfield"></a>
+
+### testRecordStoresEveryField
+
+```solidity
+function testRecordStoresEveryField() public;
+```
+
+<a id="testunreleasedreceiptneverexpires"></a>
+
+### testUnreleasedReceiptNeverExpires
+
+<i>
+
+The never-released case (issue #1247 task 4.0, third question): an
+unreleased receipt is a permanent public record. Nothing expires
+it, nothing deletes it, and no on-chain state changes with time.
+
+</i>
+
+```solidity
+function testUnreleasedReceiptNeverExpires() public;
+```
+
+<a id="testeventscarrynoindexedsignatureparameter"></a>
+
+### testEventsCarryNoIndexedSignatureParameter
+
+<i>
+
+AC3: no event may use an indexed signature parameter. The receipt
+events carry no signature parameter at all — analyst signatures are
+payload data, never event data — and both events stay within the
+EVM's 3-topic non-anonymous limit, which a `uint8[64] indexed`
+signature would blow past.
+
+</i>
+
+```solidity
+function testEventsCarryNoIndexedSignatureParameter() public;
+```
+
+<a id="testsignallingonlyboundary"></a>
+
+### testSignallingOnlyBoundary
+
+<i>
+
+AC1, mirroring `InvestmentCommitteePolicyTest.testSignallingOnlyBoundary`.
+No path from any receipt entrypoint reaches `setWeights` or moves
+value: the contract has no `receive`/`fallback`, no ERC-20 surface,
+no router or governance selector, and its only state effect is an
+append plus a boolean flip.
+
+</i>
+
+```solidity
+function testSignallingOnlyBoundary() public;
+```
+
+<a id="testcomputereceiptidmatchescanonicalizationcontract"></a>
+
+### testComputeReceiptIdMatchesCanonicalizationContract
+
+<i>
+
+The receipt-id derivation implemented on chain must agree with
+`consensus-receipt.canonicalization.json#receipt_id_derivation`,
+computed here from the fixture's own `session_id` / `subject_id`.
+
+</i>
+
+```solidity
+function testComputeReceiptIdMatchesCanonicalizationContract() public view;
+```
+
+<a id="testanchoringpathsubmitsthegoldendigest"></a>
+
+### testAnchoringPathSubmitsTheGoldenDigest
+
+<i>
+
+AC11 + AC12 — the assertion `robotmoney-frontend` structurally
+cannot make, because only this repo sees the transaction.
+
+</i>
+
+The digest is **derived** by hashing the committed golden bytes,
+never transcribed. It is then compared with the pinned constant in
+`consensus-receipt.anchor-digest.json` (so changing either side
+alone turns this red), and finally asserted to be exactly what the
+anchoring path carries: the `payloadDigest` in the emitted
+`ReceiptRecorded` topic set and in the stored receipt.
+
+```solidity
+function testAnchoringPathSubmitsTheGoldenDigest() public;
+```
+
+<a id="testanchoringpathsubmitstheescapinggoldendigest"></a>
+
+### testAnchoringPathSubmitsTheEscapingGoldenDigest
+
+<i>
+
+AC13 — the non-ASCII conformance receipt gets the same treatment.
+An ASCII-only digest check cannot detect a serializer that escapes
+non-ASCII, U+2028, or the HTML-sensitive characters, and the two
+most likely non-JS implementations each diverge that way BY
+DEFAULT while still reproducing an all-ASCII golden exactly.
+
+</i>
+
+```solidity
+function testAnchoringPathSubmitsTheEscapingGoldenDigest() public;
+```
+
+<a id="testgoldensanchordistinctdigests"></a>
+
+### testGoldensAnchorDistinctDigests
+
+<i>
+
+The two goldens are distinct receipts and must anchor distinct
+digests — a serializer that collapsed them would pass a
+single-fixture check.
+
+</i>
+
+```solidity
+function testGoldensAnchorDistinctDigests() public view;
+```
+

@@ -1,0 +1,299 @@
+---
+title: "MockVault"
+description: "Minimal `IERC4626`-shaped vault for gateway tests. Mints `rmUSDC` shares 1:1 against deposited USDC and redeems 1:1 with no exit fee. Covers the full deposit→redeem round-trip exercised by the dapp e2e (issue #257). This contract is a TEST FIXTURE only."
+---
+
+# MockVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/gateway/MockVault.sol)
+
+**Inherits:** ERC20, ReentrancyGuard
+
+**Title:** MockVault
+
+Minimal `IERC4626`-shaped vault for gateway tests. Mints `rmUSDC`
+shares 1:1 against deposited USDC and redeems 1:1 with no exit fee.
+Covers the full deposit→redeem round-trip exercised by the dapp e2e
+(issue #257). This contract is a TEST FIXTURE only.
+
+Implements `IRetirableVault` (retire/unretire) as no-ops so that
+`VaultRegistry.setVaultStatus` can call the deposit-halt hook without
+reverting. The mock has no registry link, so no access-control is
+enforced here — the stubs satisfy the interface only.
+
+## Constants
+
+### assetToken
+
+Underlying asset, pinned at construction.
+
+```solidity
+IERC20 public immutable assetToken;
+```
+
+### exitFeeBps
+
+No exit fee — mock fixture only.
+
+```solidity
+uint256 public constant exitFeeBps = 0;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address asset_) ERC20("Mock Robot Money USDC", "rmUSDC");
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `address` |  |
+
+<a id="retire"></a>
+
+### retire
+
+No-op retire stub. Satisfies `IRetirableVault` so
+`VaultRegistry.setVaultStatus(Paused/Retired)` can call the
+deposit-halt hook without reverting. The mock has no registry
+link and no deposit-halt flag; this is a test fixture only.
+
+```solidity
+function retire() external;
+```
+
+<a id="unretire"></a>
+
+### unretire
+
+No-op unretire stub. Mirror of `retire()` for the `Active`
+restore path of `VaultRegistry.setVaultStatus`.
+
+```solidity
+function unretire() external;
+```
+
+<a id="decimals"></a>
+
+### decimals
+
+Match the underlying USDC's 6 decimals (mirrors ERC-4626 default).
+
+```solidity
+function decimals() public pure override returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="asset"></a>
+
+### asset
+
+ERC-4626 `asset()` accessor.
+
+```solidity
+function asset() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+Total assets currently held by the vault.
+
+```solidity
+function totalAssets() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+ERC-4626-style deposit. Pulls `assets` USDC from `msg.sender`
+via `transferFrom`, mints `shares == assets` to `receiver`.
+
+```solidity
+function deposit(uint256 assets, address receiver)
+        external
+        virtual
+        nonReentrant
+        returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` | Amount of USDC (6 decimals) to deposit. |
+| receiver | `address` | Recipient of the freshly minted `rmUSDC` shares. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Amount of `rmUSDC` minted (1:1 with assets). |
+
+<a id="redeem-uint256-address-address"></a>
+
+### redeem
+
+ERC-4626-style redeem. Burns `shares` from `owner` and
+transfers `assets == shares` USDC (1:1, no exit fee) to `receiver`.
+
+```solidity
+function redeem(uint256 shares, address receiver, address owner)
+        external
+        virtual
+        nonReentrant
+        returns (uint256 assets);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Amount of `rmUSDC` shares to burn. |
+| receiver | `address` | Recipient of the redeemed USDC. |
+| owner | `address` | Share owner whose balance is debited. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |   Amount of USDC transferred (== shares, 1:1). |
+
+<a id="maxredeem-address"></a>
+
+### maxRedeem
+
+Maximum shares redeemable for `owner` (their full balance).
+
+```solidity
+function maxRedeem(address owner) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` | Address to query. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="previewredeem-uint256"></a>
+
+### previewRedeem
+
+Preview assets returned for redeeming `shares` (1:1, no exit fee).
+
+```solidity
+function previewRedeem(uint256 shares) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Amount of `rmUSDC` shares to preview. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+## Events
+
+### Deposit
+
+ERC-4626-shaped Deposit event.
+
+```solidity
+event Deposit(address indexed sender, address indexed receiver, uint256 assets, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sender | `address` | Address that called `deposit` and supplied the assets. |
+| receiver | `address` | Address that received the minted shares. |
+| assets | `uint256` | Amount of underlying USDC deposited. |
+| shares | `uint256` | Amount of `rmUSDC` shares minted (1:1 with assets). |
+
+### Withdraw
+
+ERC-4626-shaped Withdraw event.
+
+```solidity
+event Withdraw(
+        address indexed sender,
+        address indexed receiver,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sender | `address` | Address that called `redeem`. |
+| receiver | `address` | Address that received the USDC. |
+| owner | `address` | Address whose shares were burned. |
+| assets | `uint256` | Amount of USDC transferred to receiver. |
+| shares | `uint256` | Amount of `rmUSDC` shares burned. |
+
+## Errors
+
+### ZeroAmount
+
+Deposit amount is zero.
+
+```solidity
+error ZeroAmount();
+```
+
+### ZeroReceiver
+
+Share receiver is the zero address.
+
+```solidity
+error ZeroReceiver();
+```
+
+### InsufficientShares
+
+Owner has fewer shares than the requested redeem amount.
+
+```solidity
+error InsufficientShares();
+```
+

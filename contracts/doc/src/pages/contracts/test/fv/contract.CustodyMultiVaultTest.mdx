@@ -1,0 +1,115 @@
+---
+title: "CustodyMultiVaultTest"
+---
+
+# CustodyMultiVaultTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/fv/CustodyMultiVault.t.sol)
+
+**Inherits:** Test
+
+## State Variables
+
+### admin
+
+```solidity
+address internal admin = makeAddr("multiVaultAdmin");
+```
+
+## Functions
+
+<a id="_assertredeemableleqtotalassets-ierc4626-address"></a>
+
+### _assertRedeemableLeqTotalAssets
+
+<i>
+
+Shared SUP-1 predicate: the sum of the given holders' redeemable
+assets never exceeds totalAssets(). Reused by every per-family test so
+the property is defined once and applied uniformly across vaults.
+
+</i>
+
+```solidity
+function _assertRedeemableLeqTotalAssets(IERC4626 vault, address[] memory holders)
+        internal
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `IERC4626` |  |
+| holders | `address[]` |  |
+
+<a id="assertredeemableleqtotalassetsexternal-ierc4626-address"></a>
+
+### assertRedeemableLeqTotalAssetsExternal
+
+<i>
+
+External boundary lets the negative test assert that the complete
+shared predicate reverts, rather than merely one of its view calls.
+
+</i>
+
+```solidity
+function assertRedeemableLeqTotalAssetsExternal(IERC4626 vault, address[] memory holders)
+        external
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `IERC4626` |  |
+| holders | `address[]` |  |
+
+<a id="test_sup1_robotmoneyvault_redeemableleqtotalassets"></a>
+
+### test_SUP1_robotMoneyVault_redeemableLeqTotalAssets
+
+SUP-1 / CUST-4 / INV-2 (RobotMoneyVault, live). A single
+deposit/redeem round trip keeps Σ redeemable ≤ totalAssets. The
+exhaustive stateful-fuzz proof remains in CustodyInvariant.t.sol;
+this asserts the shared predicate against the one family wired live
+in the scout pass so the harness is not vacuous.
+
+```solidity
+function test_SUP1_robotMoneyVault_redeemableLeqTotalAssets() public;
+```
+
+<a id="test_sup1_basketfamily_redeemableleqtotalassets"></a>
+
+### test_SUP1_basketFamily_redeemableLeqTotalAssets
+
+SUP-1 (BasketVault family): a live V3-priced basket deposit keeps
+its holder's redeemable value within NAV.
+
+```solidity
+function test_SUP1_basketFamily_redeemableLeqTotalAssets() public;
+```
+
+<a id="test_sup1_rwavault_redeemableleqtotalassets"></a>
+
+### test_SUP1_rwaVault_redeemableLeqTotalAssets
+
+SUP-1 (RwaVault): a live Chronicle-priced RWA deposit keeps its
+holder's redeemable value within NAV.
+
+```solidity
+function test_SUP1_rwaVault_redeemableLeqTotalAssets() public;
+```
+
+<a id="test_sup1_predicaterejectsoverpromisingvault"></a>
+
+### test_SUP1_predicateRejectsOverpromisingVault
+
+SUP-1's predicate rejects a vault that overstates redemption value.
+
+```solidity
+function test_SUP1_predicateRejectsOverpromisingVault() public;
+```
+

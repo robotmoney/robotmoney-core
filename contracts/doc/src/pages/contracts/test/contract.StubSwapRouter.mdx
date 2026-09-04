@@ -1,0 +1,39 @@
+---
+title: "StubSwapRouter"
+---
+
+# StubSwapRouter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RwaVault.t.sol)
+
+**Inherits:** [ISwapRouter](/contracts/interfaces/interface.ISwapRouter)
+
+<i>
+
+Stub Uniswap V3 SwapRouter (required by BasketVault constructor but never called
+in the RWA vault since all swaps go through ChronicleOracleAdapter/Aerodrome).
+
+</i>
+
+## Functions
+
+<a id="exactinputsingle-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(ExactInputSingleParams calldata) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

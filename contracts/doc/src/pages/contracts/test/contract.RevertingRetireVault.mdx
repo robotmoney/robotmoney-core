@@ -1,0 +1,38 @@
+---
+title: "RevertingRetireVault"
+description: "Vault whose retire() always reverts — used to assert that VaultRegistry.setVaultStatus propagates the revert (AZ-REG-1 fix)."
+---
+
+# RevertingRetireVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/VaultRegistry.t.sol)
+
+Vault whose retire() always reverts — used to assert that
+VaultRegistry.setVaultStatus propagates the revert (AZ-REG-1 fix).
+
+## Functions
+
+<a id="retire"></a>
+
+### retire
+
+```solidity
+function retire() external pure;
+```
+
+<a id="unretire"></a>
+
+### unretire
+
+```solidity
+function unretire() external pure;
+```
+
+## Errors
+
+### RetireHookFailed
+
+```solidity
+error RetireHookFailed();
+```
+

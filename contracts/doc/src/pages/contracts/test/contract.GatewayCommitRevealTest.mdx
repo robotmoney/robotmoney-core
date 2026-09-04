@@ -1,0 +1,320 @@
+---
+title: "GatewayCommitRevealTest"
+---
+
+# GatewayCommitRevealTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RobotMoneyGateway.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+### MAX_PER_PAYMENT
+
+```solidity
+uint256 internal constant MAX_PER_PAYMENT = 1_000 * ONE_USDC;
+```
+
+### MAX_PER_WINDOW
+
+```solidity
+uint256 internal constant MAX_PER_WINDOW = 5_000 * ONE_USDC;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vault
+
+```solidity
+MockVault internal vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("agent");
+```
+
+### depositor
+
+```solidity
+address internal depositor = makeAddr("depositor");
+```
+
+### shareReceiver
+
+```solidity
+address internal shareReceiver = makeAddr("shareReceiver");
+```
+
+### agentRole
+
+```solidity
+bytes32 internal agentRole;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_defaultpolicy"></a>
+
+### _defaultPolicy
+
+<i>
+
+Returns a valid policy where `shareReceiver == depositor` so that
+commit/reveal tests pass the AZ-GW-1 shareReceiver consent check
+(issue #1055). Callers that need to test with a specific caller
+address other than `depositor` should build the policy inline with
+`shareReceiver` set to that caller.
+
+</i>
+
+```solidity
+function _defaultPolicy() internal view returns (IGateway.AgentPolicy memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IGateway.AgentPolicy` |  |
+
+<a id="_commithash-address-address-bytes32"></a>
+
+### _commitHash
+
+<i>
+
+Helper: build the commit hash the same way the gateway does.
+
+</i>
+
+```solidity
+function _commitHash(address agentAddr, address committer, bytes32 salt)
+        internal
+        pure
+        returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agentAddr | `address` |  |
+| committer | `address` |  |
+| salt | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="test_commitreveal_happypath_authorizesagent"></a>
+
+### test_commitReveal_happyPath_authorizesAgent
+
+<i>
+
+AC: valid commit followed by valid reveal (at least 1 block later)
+succeeds and sets agentOwner correctly.
+
+</i>
+
+```solidity
+function test_commitReveal_happyPath_authorizesAgent() public;
+```
+
+<a id="test_revealauthorization_revertswithoutpriorcommit"></a>
+
+### test_revealAuthorization_revertsWithoutPriorCommit
+
+<i>
+
+AC: reveal without a prior commit reverts CommitmentNotFound.
+
+</i>
+
+```solidity
+function test_revealAuthorization_revertsWithoutPriorCommit() public;
+```
+
+<a id="test_revealauthorization_revertsonwrongsalt"></a>
+
+### test_revealAuthorization_revertsOnWrongSalt
+
+<i>
+
+AC: reveal with wrong salt reverts CommitmentNotFound (hash mismatch
+means no matching commitment exists).
+
+</i>
+
+```solidity
+function test_revealAuthorization_revertsOnWrongSalt() public;
+```
+
+<a id="test_revealauthorization_revertsfromdifferentaddress"></a>
+
+### test_revealAuthorization_revertsFromDifferentAddress
+
+<i>
+
+AC: reveal from a different address than the committer reverts.
+(The hash includes msg.sender so a different caller produces a
+different hash → CommitmentNotFound.)
+
+</i>
+
+```solidity
+function test_revealAuthorization_revertsFromDifferentAddress() public;
+```
+
+<a id="test_revealauthorization_revertsafterexpiry"></a>
+
+### test_revealAuthorization_revertsAfterExpiry
+
+<i>
+
+AC: reveal after COMMIT_EXPIRY_BLOCKS reverts CommitmentExpired.
+
+</i>
+
+```solidity
+function test_revealAuthorization_revertsAfterExpiry() public;
+```
+
+<a id="test_revealauthorization_revertsinsameblock"></a>
+
+### test_revealAuthorization_revertsInSameBlock
+
+<i>
+
+AC: reveal in the same block as the commit reverts CommitmentTooRecent.
+
+</i>
+
+```solidity
+function test_revealAuthorization_revertsInSameBlock() public;
+```
+
+<a id="test_revealauthorization_frontrunnerblockedbyalreadyowned"></a>
+
+### test_revealAuthorization_frontRunnerBlockedByAlreadyOwned
+
+<i>
+
+AC: front-runner committing for same agent after legitimate commit
+cannot reveal (msg.sender mismatch means a different hash is used).
+Alice commits legitimately; Bob then commits a commitment binding
+himself to the same agent. Bob's reveal uses his own hash and
+succeeds from his perspective, but because each committer's hash
+independently encodes the committer, Bob authorizing the same agent
+address is blocked by AgentAlreadyOwned if Alice reveals first,
+and Bob's commitment simply uses a different hash than Alice's.
+
+</i>
+
+This test verifies that when Alice reveals first she wins, and Bob's
+subsequent reveal is blocked by AgentAlreadyOwned.
+
+```solidity
+function test_revealAuthorization_frontRunnerBlockedByAlreadyOwned() public;
+```
+
+<a id="test_commitauthorization_samehashcannotclobberanothercommitter"></a>
+
+### test_commitAuthorization_sameHashCannotClobberAnotherCommitter
+
+```solidity
+function test_commitAuthorization_sameHashCannotClobberAnotherCommitter() public;
+```
+
+<a id="test_revealauthorization_revertswhensharereceiverisnotself"></a>
+
+### test_revealAuthorization_revertsWhenShareReceiverIsNotSelf
+
+<i>
+
+Attack path: attacker names a victim as `shareReceiver` in the policy.
+The permissionless commit/reveal path must revert with
+`ShareReceiverNotAuthorized` because `msg.sender != p.shareReceiver`.
+Without this guard the attacker would obtain AGENT_ROLE for their own
+agent and drain the victim's vault-share allowances via
+`withdrawFromRouter` to an attacker-controlled `assetRecipient`.
+
+</i>
+
+```solidity
+function test_revealAuthorization_revertsWhenShareReceiverIsNotSelf() public;
+```
+
+<a id="test_revealauthorization_succeedswhensharereceiverisself"></a>
+
+### test_revealAuthorization_succeedsWhenShareReceiverIsSelf
+
+<i>
+
+Happy path: depositor names themselves as `shareReceiver`. The
+permissionless commit/reveal path must succeed because
+`msg.sender == p.shareReceiver`.
+
+</i>
+
+```solidity
+function test_revealAuthorization_succeedsWhenShareReceiverIsSelf() public;
+```
+
+<a id="test_commitauthorization_emitsevent"></a>
+
+### test_commitAuthorization_emitsEvent
+
+<i>
+
+Verify commitAuthorization emits CommitSubmitted with correct fields.
+
+</i>
+
+```solidity
+function test_commitAuthorization_emitsEvent() public;
+```
+

@@ -1,0 +1,40 @@
+---
+title: "DeployDemoExtraVaultsHarness"
+---
+
+# DeployDemoExtraVaultsHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/Deploy.t.sol)
+
+**Inherits:** [DeployDemoExtraVaults](/contracts/script/contract.DeployDemoExtraVaults)
+
+<i>
+
+Test-only subclass exposing the internal TickMath link-integrity
+assertion of `DeployDemoExtraVaults` so a deliberately wrong/zero
+linked address can be shown to fail the deploy assertion (finding L3-D1).
+
+</i>
+
+## Functions
+
+<a id="asserttickmathlinkintegrity-address-address-address"></a>
+
+### assertTickMathLinkIntegrity
+
+```solidity
+function assertTickMathLinkIntegrity(
+        address protocolVault,
+        address rwaVault,
+        address agentVault
+    ) external view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| protocolVault | `address` |  |
+| rwaVault | `address` |  |
+| agentVault | `address` |  |
+

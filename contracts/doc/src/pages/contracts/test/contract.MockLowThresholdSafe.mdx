@@ -1,0 +1,31 @@
+---
+title: "MockLowThresholdSafe"
+---
+
+# MockLowThresholdSafe
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeployTimelock.t.sol)
+
+<i>
+
+Minimal stub that mimics a 1-of-N Safe — `getThreshold()` returns 1.
+Used to prove DeployTimelock rejects low-threshold Safes.
+
+</i>
+
+## Functions
+
+<a id="getthreshold"></a>
+
+### getThreshold
+
+```solidity
+function getThreshold() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

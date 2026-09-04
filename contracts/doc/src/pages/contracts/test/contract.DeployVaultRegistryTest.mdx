@@ -1,0 +1,142 @@
+---
+title: "DeployVaultRegistryTest"
+---
+
+# DeployVaultRegistryTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeployVaultRegistry.t.sol)
+
+**Inherits:** Test
+
+<i>
+
+Exercises DeployVaultRegistry in-process and asserts the post-deploy
+invariants the smoke-test and downstream tooling rely on.
+
+</i>
+
+## State Variables
+
+### script
+
+```solidity
+DeployVaultRegistry internal script;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### vault
+
+```solidity
+address internal vault = makeAddr("vault");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_deploy_registersvault"></a>
+
+### test_deploy_registersVault
+
+Deploy deploys a registry and registers the vault.
+
+```solidity
+function test_deploy_registersVault() public;
+```
+
+<a id="test_deploy_emitsvaultregistered"></a>
+
+### test_deploy_emitsVaultRegistered
+
+Registry emits VaultRegistered for RobotMoneyVault.
+
+```solidity
+function test_deploy_emitsVaultRegistered() public;
+```
+
+<a id="test_deploy_vaultisactive"></a>
+
+### test_deploy_vaultIsActive
+
+Registered vault has Active status immediately.
+
+```solidity
+function test_deploy_vaultIsActive() public;
+```
+
+<a id="test_deploy_metadatastoredcorrectly"></a>
+
+### test_deploy_metadataStoredCorrectly
+
+Metadata stored matches what was passed in.
+
+```solidity
+function test_deploy_metadataStoredCorrectly() public;
+```
+
+<a id="test_deploy_adminaddressset"></a>
+
+### test_deploy_adminAddressSet
+
+Admin address returned matches what was passed in.
+
+```solidity
+function test_deploy_adminAddressSet() public;
+```
+
+<a id="test_deploy_idempotent_norevertonduplicate"></a>
+
+### test_deploy_idempotent_noRevertOnDuplicate
+
+Re-running with the same vault does not revert and does not
+emit a duplicate VaultRegistered event.
+
+The idempotency guard is exercised by calling runInProcessWith
+twice on the same registry instance via a custom helper that
+calls _registerIfAbsent directly.
+
+```solidity
+function test_deploy_idempotent_noRevertOnDuplicate() public;
+```
+
+<a id="test_deploy_revertsonzeroadmin"></a>
+
+### test_deploy_revertsOnZeroAdmin
+
+```solidity
+function test_deploy_revertsOnZeroAdmin() public;
+```
+
+<a id="test_deploy_revertsonzerovault"></a>
+
+### test_deploy_revertsOnZeroVault
+
+```solidity
+function test_deploy_revertsOnZeroVault() public;
+```
+
+<a id="test_deploy_revertsonzeroasset"></a>
+
+### test_deploy_revertsOnZeroAsset
+
+```solidity
+function test_deploy_revertsOnZeroAsset() public;
+```
+

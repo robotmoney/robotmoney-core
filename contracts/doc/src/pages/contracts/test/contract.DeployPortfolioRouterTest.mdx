@@ -1,0 +1,158 @@
+---
+title: "DeployPortfolioRouterTest"
+---
+
+# DeployPortfolioRouterTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeployPortfolioRouter.t.sol)
+
+**Inherits:** Test
+
+<i>
+
+Exercises DeployPortfolioRouter in-process and asserts post-deploy
+invariants the smoke-test and downstream tooling rely on.
+
+</i>
+
+## State Variables
+
+### script
+
+```solidity
+DeployPortfolioRouter internal script;
+```
+
+### registryScript
+
+```solidity
+DeployVaultRegistry internal registryScript;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### vault
+
+```solidity
+address internal vault;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_deploy_routerdeployed"></a>
+
+### test_deploy_routerDeployed
+
+Deploy deploys a router with the correct constructor args.
+
+```solidity
+function test_deploy_routerDeployed() public;
+```
+
+<a id="test_deploy_adminhasrole"></a>
+
+### test_deploy_adminHasRole
+
+Admin holds ADMIN_ROLE on the newly deployed router.
+
+```solidity
+function test_deploy_adminHasRole() public;
+```
+
+<a id="test_deploy_initialweightsset"></a>
+
+### test_deploy_initialWeightsSet
+
+Initial weights are 10 000 bps to RobotMoneyVault.
+
+```solidity
+function test_deploy_initialWeightsSet() public;
+```
+
+<a id="test_deploy_emitsweightsset"></a>
+
+### test_deploy_emitsWeightsSet
+
+setWeights emits WeightsSet event with the correct args.
+
+```solidity
+function test_deploy_emitsWeightsSet() public;
+```
+
+<a id="test_deploy_structfieldsmatchinputs"></a>
+
+### test_deploy_structFieldsMatchInputs
+
+Returned struct fields match input parameters.
+
+```solidity
+function test_deploy_structFieldsMatchInputs() public;
+```
+
+<a id="test_deploy_revertsonzeroadmin"></a>
+
+### test_deploy_revertsOnZeroAdmin
+
+```solidity
+function test_deploy_revertsOnZeroAdmin() public;
+```
+
+<a id="test_deploy_revertsonzeroregistry"></a>
+
+### test_deploy_revertsOnZeroRegistry
+
+```solidity
+function test_deploy_revertsOnZeroRegistry() public;
+```
+
+<a id="test_deploy_revertsonzerovault"></a>
+
+### test_deploy_revertsOnZeroVault
+
+```solidity
+function test_deploy_revertsOnZeroVault() public;
+```
+
+<a id="test_deploy_revertsonzerousdc"></a>
+
+### test_deploy_revertsOnZeroUsdc
+
+```solidity
+function test_deploy_revertsOnZeroUsdc() public;
+```
+
+<a id="test_deploy_revertsonunregisteredvault"></a>
+
+### test_deploy_revertsOnUnregisteredVault
+
+Deploying with a vault not in the registry reverts (setWeights
+calls registry.getVault which reverts with NotRegistered).
+
+```solidity
+function test_deploy_revertsOnUnregisteredVault() public;
+```
+

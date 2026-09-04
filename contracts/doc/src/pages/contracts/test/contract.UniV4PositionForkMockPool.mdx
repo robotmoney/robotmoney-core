@@ -1,0 +1,152 @@
+---
+title: "UniV4PositionForkMockPool"
+---
+
+# UniV4PositionForkMockPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/UniswapV4AssetPositionAdapter.t.sol)
+
+<i>
+
+V4-style pool mock for TWAP + NAV-deviation-guard reads. Independently
+settable spot/mean ticks, same shape as `UniV4PositionMockPool` above
+and `MockUniswapV4Pool` in BasketVault.t.sol. TEST FIXTURE.
+
+</i>
+
+## Constants
+
+### token0
+
+```solidity
+address public immutable token0;
+```
+
+### token1
+
+```solidity
+address public immutable token1;
+```
+
+### fee
+
+```solidity
+uint24 public immutable fee;
+```
+
+## State Variables
+
+### liquidity
+
+```solidity
+uint128 public liquidity = 1e18;
+```
+
+### cardinality
+
+```solidity
+uint16 public cardinality = 100;
+```
+
+### spotTick
+
+```solidity
+int24 public spotTick;
+```
+
+### meanTickVal
+
+```solidity
+int24 public meanTickVal;
+```
+
+## Functions
+
+<a id="constructor-address-address-uint24"></a>
+
+### constructor
+
+```solidity
+constructor(address a, address b, uint24 fee_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+| b | `address` |  |
+| fee_ | `uint24` |  |
+
+<a id="setspottick-int24"></a>
+
+### setSpotTick
+
+```solidity
+function setSpotTick(int24 t) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `int24` |  |
+
+<a id="setmeantick-int24"></a>
+
+### setMeanTick
+
+```solidity
+function setMeanTick(int24 t) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `int24` |  |
+
+<a id="slot0"></a>
+
+### slot0
+
+```solidity
+function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+| &lt;none&gt; | `int24` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint8` |  |
+| &lt;none&gt; | `bool` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidity);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secondsAgos | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickCumulatives | `int56[]` |  |
+| secondsPerLiquidity | `uint160[]` |  |
+
