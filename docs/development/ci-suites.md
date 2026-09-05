@@ -1001,29 +1001,39 @@ actual cost and resolved all five:
 **Why suite 14's matrix, not a push-to-`dev`-only tier or nightly:** the four
 wired targets only add a `Fixture::new()` boot plus a handful of RPC
 round-trips on top — no dapp-stack build, no indexer recompile, no reseed.
-Measured against suite 14's own `fixture_meta` row (closest analog: boot +
-several RPC/eth_call assertions, no heavier work), a completed CI run shows
-`fixture_meta` at 18m07s wall-clock (`smoke-test-devnet-fixture_meta`,
-[run 33935656916](https://github.com/robotmoney/robotmoney-core/actions/runs/33935656916)),
-against `cli_meta` at 25m20s, `demo_seeding` at 20m00s, and
-`full_stack_demo_tvl` at 46m27s in the same run. Locally (warm cargo cache,
-pre-pulled images), `Fixture::new()` boot-to-ready is dominated by beacon-chain
-finalization (~2 epochs at single-validator cadence), matching the ~13-minute
-CI figure `cli_meta`'s own header already documents (issue #988) rather than
-the 60-120s the boot log message claims. Because the devnet matrix runs in
-parallel (one runner per binary), adding four more rows does not change
-suite 14's total wall-clock — it stays bounded by `full_stack_demo_tvl`'s
-~46 min — but it does add roughly four more `fixture_meta`-sized runners
-(~15-20 min each) to every PR against `dev`, since suite 14 is a HEAVY-tier
-gate with no path filter (unlike suite 5, which skips drafts). That
-runner-minute cost is the deliberate trade being made here: real coverage of
-three faucet round-trips and one production-deploy governance-wiring gap,
-none of which any other suite tests, in exchange for accepting it on every PR
-rather than reserving it for a push-to-`dev`-only or nightly tier. A
-push-to-`dev`-only or nightly tier was considered and rejected: these targets
-guard code paths (faucet drips, governance admin wiring) that dapp/rmpc
-consumers exercise directly, so a regression should fail the PR that
-introduces it, not surface a day later on `dev` or in a nightly run.
+This PR's own first CI run against the new matrix
+([run 33938728232](https://github.com/robotmoney/robotmoney-core/actions/runs/33938728232))
+measured the four new rows directly: `faucet_eth` 17m33s, `faucet_rm` 17m49s,
+`fund_usdc` 18m01s, `governance` 17m28s — all landing right next to
+`fixture_meta`'s 18m19s in the same run (the closest existing analog: boot +
+several RPC/eth_call assertions, no heavier work), against `cli_meta` at
+25m20s, `demo_seeding` at 20m00s, and `full_stack_demo_tvl` at ~46 min.
+Locally (warm cargo cache, pre-pulled images), `Fixture::new()` boot-to-ready
+plus the full contract-deploy pipeline was measured at 14m27s-14m32s across
+two local runs of `governance` — consistent with the ~13-17 minute CI figures
+above and with `cli_meta`'s own header, which already documents ~13-minute
+CI chain-container readiness (issue #988) rather than the 60-120s the boot
+log message claims. Because the devnet matrix runs in parallel (one runner
+per binary), adding four more rows does not change suite 14's total
+wall-clock — it stays bounded by `full_stack_demo_tvl`'s ~46 min — but it
+does add roughly four more `fixture_meta`-sized runners (~17-18 min each) to
+every PR against `dev`, since suite 14 is a HEAVY-tier gate with no path
+filter (unlike suite 5, which skips drafts). That runner-minute cost is the
+deliberate trade being made here: real coverage of three faucet round-trips
+and one production-deploy governance-wiring gap, none of which any other
+suite tests, in exchange for accepting it on every PR rather than reserving
+it for a push-to-`dev`-only or nightly tier. A push-to-`dev`-only or nightly
+tier was considered and rejected: these targets guard code paths (faucet
+drips, governance admin wiring) that dapp/rmpc consumers exercise directly,
+so a regression should fail the PR that introduces it, not surface a day
+later on `dev` or in a nightly run.
+
+Wiring `governance` into CI for the first time immediately paid for itself:
+it surfaced a real bug (`read_voting_power`'s hardcoded `votingPower(address)`
+selector, `0x13c8a7f5`, matched no function on `RouterGovernance` — the
+correct selector is `0xc07473f6`), which had never been caught because the
+target had never executed anywhere. Fixed in the same PR; confirmed 4/4
+passing both locally and in CI.
 
 `vault_deposit_redeem` needed no cost measurement because it is deleted, not
 wired — its allowlist entry is removed along with the file.
