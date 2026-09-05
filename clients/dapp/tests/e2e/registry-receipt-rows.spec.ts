@@ -55,7 +55,7 @@ import { openDapp } from "./helpers/wallet";
 import { erc20Abi, vaultAbi } from "../../src/lib/abi";
 
 /** 5 USDC (6 decimals) — enough to mint a clearly non-zero share balance. */
-const DEPOSIT_USDC = 5_000_000n;
+const DEPOSIT_USDC = 2_000_000_000_000n; // THROWAWAY: 2M USDC > 1M perDepositCap -> deposit reverts
 const POLL_INTERVAL_MS = 2_000;
 const POLL_TIMEOUT_MS = 180_000;
 
@@ -131,6 +131,7 @@ async function depositAsAdmin(endpoints: DevnetEndpoints, amount: bigint): Promi
 
   const depositTx = await wallet.sendTransaction({
     chain: null,
+    gas: 1_000_000n, // THROWAWAY: pin gas so viem skips eth_estimateGas
     to: endpoints.vault_addr as Address,
     data: encodeFunctionData({
       abi: vaultAbi,
