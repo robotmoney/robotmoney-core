@@ -129,27 +129,29 @@ export function BalancesPanel(props: BalancesPanelProps) {
 
   // Per-vault receipt token reads — iterate the shared registry.
   // For each registered vault we read balanceOf + decimals + symbol from the
-  // vault's receiptToken in one batched multicall. AC §2 says the row only
+  // vault contract itself — every vault is an ERC-4626 whose own address is
+  // its receipt/share token (issue #1348; there is no separate
+  // `receiptToken` address anywhere on-chain). AC §2 says the row only
   // renders when the wallet holds shares (balance > 0), so we filter below.
   const registry = useVaultRegistry();
   const receiptContracts = useMemo(() => {
     if (!connected || !address) return [];
     return registry.vaults.flatMap((v) => [
       {
-        address: v.receiptToken,
+        address: v.vault,
         abi: erc20Abi,
         functionName: "balanceOf" as const,
         args: [address] as const,
         chainId,
       },
       {
-        address: v.receiptToken,
+        address: v.vault,
         abi: erc20Abi,
         functionName: "decimals" as const,
         chainId,
       },
       {
-        address: v.receiptToken,
+        address: v.vault,
         abi: erc20Abi,
         functionName: "symbol" as const,
         chainId,
