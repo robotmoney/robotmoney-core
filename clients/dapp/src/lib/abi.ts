@@ -359,24 +359,12 @@ export type VaultActionName = "deposit" | "redeem";
  * DestinationSelector (issue #320, extended issue #417).
  * Exposes:
  *   - `listVaults()` — enumerate all registered vault addresses.
- *   - `getVault(address)` — the vault's stored `VaultMetadata` (name, asset,
- *     registeredAt) plus its lifecycle `status`, exactly as
- *     `contracts/VaultRegistry.sol`'s `getVault` returns them (two separate
- *     outputs, NOT one merged tuple — see issue #1348).
- *
- *     `riskLabel`, `mandate`, `receiptToken`, `depositCap`, and `exitFeeBps`
- *     were an earlier, aspirational read shape from
- *     `docs/technical/vault-registry-decisions.md` §3.4 that the shipped
- *     contract (#329) never implemented — they do not exist on
- *     `VaultRegistry.sol` today. See `VaultRecord` below for where the real
- *     equivalents (if any) live instead.
+ *   - `getVault(address)` — per-vault metadata including status, name,
+ *     riskLabel, and depositCap (docs/technical/vault-registry-decisions.md §3.4).
  *
  * VaultRecord.status encodes as uint8: 0=Active, 1=Paused, 2=Retired.
  * The `VaultSelectorDepositTab` calls `getVault` live before submit to
- * guard against cached paused-vault state (issue #417 AC §4). Because
- * `getVault` returns two top-level outputs, viem's `decodeFunctionResult`
- * decodes it as a 2-element array `[metadata, status]` — NOT a
- * `{ metadata, status }` object — so callers must index positionally.
+ * guard against cached paused-vault state (issue #417 AC §4).
  */
 export const registryAbi = [
   {
@@ -393,15 +381,20 @@ export const registryAbi = [
     inputs: [{ name: "vault", type: "address" }],
     outputs: [
       {
-        name: "metadata",
+        name: "record",
         type: "tuple",
         components: [
+          { name: "vault", type: "address" },
           { name: "name", type: "string" },
-          { name: "asset", type: "address" },
-          { name: "registeredAt", type: "uint256" },
+          { name: "riskLabel", type: "string" },
+          { name: "mandate", type: "string" },
+          { name: "status", type: "uint8" },
+          { name: "receiptToken", type: "address" },
+          { name: "depositCap", type: "uint256" },
+          { name: "exitFeeBps", type: "uint16" },
+          { name: "registeredAt", type: "uint64" },
         ],
       },
-      { name: "status", type: "uint8" },
     ],
   },
 ] as const;
@@ -411,36 +404,19 @@ export const VaultStatus = { Active: 0, Paused: 1, Retired: 2 } as const;
 export type VaultStatusValue = (typeof VaultStatus)[keyof typeof VaultStatus];
 
 /**
- * Decoded on-chain vault record, assembled from `registry.getVault(address)`
- * (the two-output `metadata`/`status` shape above) plus the `vault` address
- * that was passed into the call (the return data itself doesn't repeat it).
- *
- * Trimmed to exactly what the registry returns (issue #1348) — the
- * previous, larger shape included fields the contract never returns:
- *   - `riskLabel` / `mandate`: no on-chain source exists anywhere in the
- *     contracts today; dropped. (A UI risk/mandate taxonomy, if wanted, is
- *     product scope for a future issue, not a mechanical field restore.)
- *   - `receiptToken`: redundant with `vault` — every vault contract
- *     (`RobotMoneyVault`, `BasketVault`, `RwaVault`, ...) is itself the
- *     ERC-4626 share token, so `receiptToken` always equals `vault`.
- *     Consumers that read the receipt token now use `.vault` directly.
- *   - `depositCap` / `exitFeeBps`: real per-vault getters (`tvlCap`/
- *     `perDepositCap`/`exitFeeBps`) exist on the vault contracts
- *     themselves, not the registry. `exitFeeBps` already has an
- *     established live-read pattern (`MultiVaultWithdrawalTab` reads it
- *     directly off the vault via `vaultAbi` right before a redemption
- *     preview, per issue #417 AC §11: preview values must be live, never
- *     cached). Caching either in `VaultRecord` would reintroduce exactly
- *     the staleness risk that pattern exists to avoid, so they're left out;
- *     a component that needs them should read them live off the vault
- *     contract the same way.
+ * Decoded on-chain vault record from `registry.getVault(address)`.
+ * The `status` field is a uint8 enum matching `VaultStatus` above.
  */
 export interface VaultRecord {
   vault: `0x${string}`;
   name: string;
-  asset: `0x${string}`;
-  registeredAt: bigint;
+  riskLabel: string;
+  mandate: string;
   status: VaultStatusValue;
+  receiptToken: `0x${string}`;
+  depositCap: bigint;
+  exitFeeBps: number;
+  registeredAt: bigint;
 }
 
 /**

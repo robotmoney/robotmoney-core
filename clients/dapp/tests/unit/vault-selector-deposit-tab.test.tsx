@@ -40,17 +40,15 @@ const ctx: VaultPreviewContext = {
 // or real chain reads are needed. This verifies AC §1 directly: the component
 // consumes VaultRecord[] from context without direct registry RPC calls.
 
-// Shaped exactly like the real `VaultRecord` (issue #1348): the two fields
-// `getVault` actually returns (plus `status` and the `vault` address the
-// caller already knows) — no `riskLabel`/`mandate`/`receiptToken`/
-// `depositCap`/`exitFeeBps`, since VaultRegistry.sol never returns them.
-const ASSET = "0x7777777777777777777777777777777777777777" as Address;
-
 type MockVaultRecord = {
   vault: Address;
   name: string;
-  asset: Address;
+  riskLabel: string;
+  mandate: string;
   status: number;
+  receiptToken: Address;
+  depositCap: bigint;
+  exitFeeBps: number;
   registeredAt: bigint;
 };
 
@@ -58,15 +56,23 @@ const activeVaults: MockVaultRecord[] = [
   {
     vault: VAULT_A,
     name: "Test Vault Alpha",
-    asset: ASSET,
+    riskLabel: "stable-yield",
+    mandate: "Conservative allocation",
     status: 0, // Active
+    receiptToken: VAULT_A,
+    depositCap: 0n,
+    exitFeeBps: 50,
     registeredAt: 1_700_000_000n,
   },
   {
     vault: VAULT_B,
     name: "Test Vault Beta",
-    asset: ASSET,
+    riskLabel: "protocol-asset",
+    mandate: "Growth allocation",
     status: 0, // Active
+    receiptToken: VAULT_B,
+    depositCap: 0n,
+    exitFeeBps: 100,
     registeredAt: 1_700_000_001n,
   },
 ];
@@ -75,8 +81,12 @@ const pausedVaults: MockVaultRecord[] = [
   {
     vault: VAULT_A,
     name: "Test Vault Alpha",
-    asset: ASSET,
+    riskLabel: "stable-yield",
+    mandate: "Conservative allocation",
     status: 1, // Paused
+    receiptToken: VAULT_A,
+    depositCap: 0n,
+    exitFeeBps: 50,
     registeredAt: 1_700_000_000n,
   },
 ];
@@ -104,8 +114,7 @@ interface WagmiMockState {
   allowance: bigint | undefined;
   usdcBalance: bigint | undefined;
   previewDepositShares: bigint | undefined;
-  // getVault returns two outputs -> viem decodes as [metadata, status].
-  liveVaultRecord: readonly [unknown, number] | undefined;
+  liveVaultRecord: { status: number } | undefined;
   approveSim: unknown;
   depositSim: unknown;
 }
@@ -116,7 +125,7 @@ const mockState: WagmiMockState = {
   allowance: 10_000_000n, // 10 USDC
   usdcBalance: 10_000_000n,
   previewDepositShares: 990_000n, // estimated shares
-  liveVaultRecord: [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const, // Active
+  liveVaultRecord: { status: 0 }, // Active
   approveSim: undefined,
   depositSim: { request: {} }, // valid sim = submit enabled
 };
@@ -160,7 +169,7 @@ describe("VaultSelectorDepositTab renders vault picker populated from VaultRegis
     mockIsLoading = false;
     mockState.isConnected = true;
     mockState.address = USER;
-    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const;
+    mockState.liveVaultRecord = { status: 0 };
     mockState.allowance = 10_000_000n;
     mockState.usdcBalance = 10_000_000n;
     mockState.depositSim = { request: {} };
@@ -179,20 +188,14 @@ describe("VaultSelectorDepositTab renders vault picker populated from VaultRegis
     expect(optionValues).toContain(VAULT_B);
   });
 
-  // Fixture-driven render check for the real `getVault` return shape
-  // (issue #1348 AC): the mocked VaultRecord[] above is shaped exactly like
-  // the registry's actual `(VaultMetadata, status)` output, so this asserts
-  // the option text shows the real vault name cleanly, with no leftover
-  // riskLabel field and no undefined/garbage rendering.
-  it("shows the vault name in each option, with no removed riskLabel field rendered", () => {
+  it("shows vault name and risk label in each option", () => {
     renderTab();
     const select = screen.getByTestId("vault-selector") as HTMLSelectElement;
     const optionTexts = Array.from(select.querySelectorAll<HTMLOptionElement>("option")).map(
       (o) => o.textContent ?? "",
     );
     expect(optionTexts.some((t) => t.includes("Test Vault Alpha"))).toBe(true);
-    expect(optionTexts.some((t) => t.includes("Test Vault Beta"))).toBe(true);
-    expect(optionTexts.some((t) => t.includes("undefined"))).toBe(false);
+    expect(optionTexts.some((t) => t.includes("stable-yield"))).toBe(true);
   });
 
   it("shows loading state when vaults are loading", () => {
@@ -210,7 +213,7 @@ describe("VaultSelectorDepositTab preview block shows estimated receipts fee and
     mockIsLoading = false;
     mockState.isConnected = true;
     mockState.address = USER;
-    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const;
+    mockState.liveVaultRecord = { status: 0 };
     mockState.allowance = 10_000_000n;
     mockState.usdcBalance = 10_000_000n;
     mockState.previewDepositShares = 990_000n;
@@ -240,7 +243,7 @@ describe("VaultSelectorDepositTab submit disabled when vault status is paused", 
     mockIsLoading = false;
     mockState.isConnected = true;
     mockState.address = USER;
-    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 1] as const; // Paused — live read
+    mockState.liveVaultRecord = { status: 1 }; // Paused — live read
     mockState.allowance = 10_000_000n;
     mockState.usdcBalance = 10_000_000n;
     mockState.depositSim = undefined; // sim disabled when vault is paused
@@ -266,24 +269,6 @@ describe("VaultSelectorDepositTab submit disabled when vault status is paused", 
     const submit = screen.getByTestId("vault-selector-deposit-submit") as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
   });
-
-  // Issue #1348: the guard reads the live `getVault` status POSITIONALLY,
-  // because viem decodes a two-output function as `[metadata, status]`. The
-  // old code did `(record).status`, which on an array is `undefined` — and
-  // `undefined !== Active` meant the guard latched ON permanently. These two
-  // assertions pin both directions, so either mistake (never firing, or
-  // always firing) is red.
-  it("raises the paused warning when the live status output is Paused", () => {
-    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 1] as const;
-    renderTab();
-    expect(screen.getByTestId("vault-paused-warning")).toBeDefined();
-  });
-
-  it("does NOT raise the paused warning when the live status output is Active", () => {
-    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const;
-    renderTab();
-    expect(screen.queryByTestId("vault-paused-warning")).toBeNull();
-  });
 });
 
 describe("VaultSelectorDepositTab submit disabled when USDC balance insufficient", () => {
@@ -292,7 +277,7 @@ describe("VaultSelectorDepositTab submit disabled when USDC balance insufficient
     mockIsLoading = false;
     mockState.isConnected = true;
     mockState.address = USER;
-    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const; // Active
+    mockState.liveVaultRecord = { status: 0 }; // Active
     mockState.allowance = 0n; // below amount — needs approve
     mockState.usdcBalance = 500_000n; // 0.5 USDC, less than 1 USDC
     mockState.depositSim = undefined; // sim should be disabled

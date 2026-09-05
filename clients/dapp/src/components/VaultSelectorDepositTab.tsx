@@ -71,11 +71,9 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
     },
   });
 
-  // `getVault` returns two outputs (metadata, status), so viem decodes it
-  // as a 2-element array — index 1 is the status, not a `.status` property.
   const vaultIsPaused =
     liveVaultRecord !== undefined &&
-    (liveVaultRecord as readonly [unknown, number])[1] !== VaultStatus.Active;
+    (liveVaultRecord as { status: number }).status !== VaultStatus.Active;
 
   // -------- live previewDeposit (AC §3) --------
   const { data: previewDepositShares } = useReadContract({
@@ -235,7 +233,7 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
           <option value="">{vaultsLoading ? "Loading vaults…" : "— choose a vault —"}</option>
           {vaults.map((v) => (
             <option key={v.vault} value={v.vault} disabled={v.status !== VaultStatus.Active}>
-              {v.name || v.vault}
+              {v.name || v.vault} ({v.riskLabel})
               {v.status !== VaultStatus.Active ? " [PAUSED/RETIRED]" : ""}
             </option>
           ))}
