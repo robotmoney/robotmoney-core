@@ -34,15 +34,17 @@ const ctx: VaultPreviewContext = {
 
 // ─── VaultRegistryContext mock ────────────────────────────────────────────────
 
+// Shaped exactly like the real `VaultRecord` (issue #1348) — no
+// `riskLabel`/`mandate`/`receiptToken`/`depositCap`/`exitFeeBps`, since
+// VaultRegistry.sol never returns them; this component only reads
+// `vault`/`name`/`status` off the record.
+const ASSET = "0x7777777777777777777777777777777777777777" as Address;
+
 type MockVaultRecord = {
   vault: Address;
   name: string;
-  riskLabel: string;
-  mandate: string;
+  asset: Address;
   status: number;
-  receiptToken: Address;
-  depositCap: bigint;
-  exitFeeBps: number;
   registeredAt: bigint;
 };
 
@@ -50,23 +52,15 @@ const registeredVaults: MockVaultRecord[] = [
   {
     vault: VAULT_A,
     name: "Test Vault Alpha",
-    riskLabel: "stable-yield",
-    mandate: "Conservative",
+    asset: ASSET,
     status: 0, // Active
-    receiptToken: VAULT_A,
-    depositCap: 0n,
-    exitFeeBps: 50,
     registeredAt: 1_700_000_000n,
   },
   {
     vault: VAULT_B,
     name: "Test Vault Beta",
-    riskLabel: "protocol-asset",
-    mandate: "Growth",
+    asset: ASSET,
     status: 0, // Active
-    receiptToken: VAULT_B,
-    depositCap: 0n,
-    exitFeeBps: 100,
     registeredAt: 1_700_000_001n,
   },
 ];

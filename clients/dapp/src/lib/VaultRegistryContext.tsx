@@ -91,37 +91,33 @@ export function VaultRegistryProvider({ registryAddress, children }: VaultRegist
     query: { enabled: addresses.length > 0 },
   });
 
-  // Decode the raw tuple results into typed VaultRecord objects.
+  // Decode the raw per-vault results into typed VaultRecord objects.
+  // `getVault` returns two top-level outputs (metadata, status), so viem
+  // decodes each result as a 2-element array, not an object — see abi.ts's
+  // registryAbi doc comment. The vault address itself isn't part of the
+  // return data, so it's zipped back in from `addresses` by position (the
+  // same order the `contracts` array above was built in).
   const vaults: readonly VaultRecord[] = useMemo(() => {
     if (!vaultRecordsRaw) return [];
     const records: VaultRecord[] = [];
-    for (const result of vaultRecordsRaw) {
-      if (result.status !== "success" || !result.result) continue;
-      const r = result.result as {
-        vault: Address;
-        name: string;
-        riskLabel: string;
-        mandate: string;
-        status: number;
-        receiptToken: Address;
-        depositCap: bigint;
-        exitFeeBps: number;
-        registeredAt: bigint;
-      };
+    for (let i = 0; i < vaultRecordsRaw.length; i++) {
+      const result = vaultRecordsRaw[i];
+      const vaultAddress = addresses[i];
+      if (!result || result.status !== "success" || !result.result || !vaultAddress) continue;
+      const [metadata, status] = result.result as readonly [
+        { name: string; asset: Address; registeredAt: bigint },
+        number,
+      ];
       records.push({
-        vault: r.vault,
-        name: r.name,
-        riskLabel: r.riskLabel,
-        mandate: r.mandate,
-        status: (r.status in [0, 1, 2] ? r.status : VaultStatus.Active) as VaultStatusValue,
-        receiptToken: r.receiptToken,
-        depositCap: r.depositCap,
-        exitFeeBps: Number(r.exitFeeBps),
-        registeredAt: r.registeredAt,
+        vault: vaultAddress,
+        name: metadata.name,
+        asset: metadata.asset,
+        registeredAt: metadata.registeredAt,
+        status: (status in [0, 1, 2] ? status : VaultStatus.Active) as VaultStatusValue,
       });
     }
     return records;
-  }, [vaultRecordsRaw]);
+  }, [vaultRecordsRaw, addresses]);
 
   const isLoading = listLoading || recordsLoading;
   const error = (listError ?? recordsError ?? null) as Error | null;
