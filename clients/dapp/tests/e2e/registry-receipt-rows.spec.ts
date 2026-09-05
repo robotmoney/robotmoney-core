@@ -28,7 +28,18 @@
  * demo seeder funds derived depositor EOAs rather than the admin EOA, so this
  * spec makes its own signed deposit first rather than depending on state left
  * behind by another spec.
+ *
+ * That setup deposit must be verified in two ways before the UI assertion can
+ * mean anything (issue #1366) — get either wrong and a setup failure is
+ * misreported as the registry regression this spec exists to catch:
+ *
+ *   1. Both transaction receipts are checked for `status === "success"`. viem
+ *      resolves `waitForTransactionReceipt` for REVERTED transactions too.
+ *   2. The share-balance read is POLLED, never sampled once. A confirmed
+ *      receipt does not imply readable state on this devnet — see
+ *      `docs/testing/geth-state-lag.md`.
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import { test, expect } from "@playwright/test";
 import {
   createPublicClient,
@@ -45,6 +56,8 @@ import { erc20Abi, vaultAbi } from "../../src/lib/abi";
 
 /** 5 USDC (6 decimals) — enough to mint a clearly non-zero share balance. */
 const DEPOSIT_USDC = 5_000_000n;
+const POLL_INTERVAL_MS = 2_000;
+const POLL_TIMEOUT_MS = 180_000;
 
 /** Raw `vault.balanceOf(who)` via eth_call — no wallet needed. */
 async function vaultBalanceOf(rpc: string, vault: string, who: string): Promise<bigint> {
@@ -67,7 +80,30 @@ async function vaultBalanceOf(rpc: string, vault: string, who: string): Promise<
   return j.result && j.result !== "0x" ? BigInt(j.result) : 0n;
 }
 
-/** Sign USDC.approve(vault, amount) + vault.deposit(amount, admin) and await both. */
+/**
+ * Poll `predicate` until it returns non-null, or throw naming what never
+ * settled. Same shape as multi-vault-withdrawal / router-deposit /
+ * vault-deposit-withdraw — see `docs/testing/geth-state-lag.md`.
+ */
+async function waitUntil<T>(predicate: () => Promise<T | null>, description: string): Promise<T> {
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const v = await predicate();
+    if (v !== null) return v;
+    await sleep(POLL_INTERVAL_MS);
+  }
+  throw new Error(`registry-receipt-rows: timed out waiting for ${description}`);
+}
+
+/**
+ * Sign USDC.approve(vault, amount) + vault.deposit(amount, admin) and await both.
+ *
+ * viem resolves `waitForTransactionReceipt` for REVERTED transactions too, so
+ * each receipt's `status` is asserted here. Without that, a reverted deposit
+ * (paused vault, deposit cap, insufficient USDC) passes silently and only
+ * surfaces downstream as a zero share balance — which reads as "the registry
+ * decode broke" and points at entirely the wrong defect (issue #1366).
+ */
 async function depositAsAdmin(endpoints: DevnetEndpoints, amount: bigint): Promise<void> {
   const account = privateKeyToAccount(endpoints.admin_private_key as Hex);
   const wallet = createWalletClient({ account, transport: http(endpoints.rpc_url) });
@@ -82,7 +118,16 @@ async function depositAsAdmin(endpoints: DevnetEndpoints, amount: bigint): Promi
       args: [endpoints.vault_addr as Address, amount],
     }),
   });
-  await publicClient.waitForTransactionReceipt({ hash: approveTx, timeout: 60_000 });
+  const approveReceipt = await publicClient.waitForTransactionReceipt({
+    hash: approveTx,
+    timeout: 60_000,
+  });
+  expect(
+    approveReceipt.status,
+    `USDC.approve(${endpoints.vault_addr}, ${amount}) REVERTED (tx=${approveTx}, ` +
+      `block=${approveReceipt.blockNumber}) — the deposit below cannot succeed, so this is an ` +
+      `approve failure, not a registry-decode failure`,
+  ).toBe("success");
 
   const depositTx = await wallet.sendTransaction({
     chain: null,
@@ -93,7 +138,17 @@ async function depositAsAdmin(endpoints: DevnetEndpoints, amount: bigint): Promi
       args: [amount, account.address],
     }),
   });
-  await publicClient.waitForTransactionReceipt({ hash: depositTx, timeout: 60_000 });
+  const depositReceipt = await publicClient.waitForTransactionReceipt({
+    hash: depositTx,
+    timeout: 60_000,
+  });
+  expect(
+    depositReceipt.status,
+    `vault.deposit(${amount}, ${account.address}) on ${endpoints.vault_addr} REVERTED ` +
+      `(tx=${depositTx}, block=${depositReceipt.blockNumber}) — likely a paused vault, a deposit ` +
+      `cap, or insufficient admin USDC. No shares were minted, so this is a deposit failure, ` +
+      `not a registry-decode failure`,
+  ).toBe("success");
 }
 
 test.describe("VaultRegistry getVault decode — live receipt rows", () => {
@@ -114,15 +169,30 @@ test.describe("VaultRegistry getVault decode — live receipt rows", () => {
     // Guard against a vacuous UI assertion: confirm on-chain that the wallet
     // really does hold shares, so a missing row means a decode/derivation
     // fault rather than an empty position.
-    const shares = await vaultBalanceOf(
-      endpoints.rpc_url,
-      endpoints.vault_addr,
-      endpoints.admin_addr,
+    //
+    // This read is POLLED, not sampled once. A confirmed receipt does not mean
+    // readable state: for a short window after the deposit is mined, a
+    // `latest`-pinned eth_call still resolves against pre-deposit state and
+    // returns 0. That is the documented geth read-after-write state-lag class
+    // (`docs/testing/geth-state-lag.md`), and sampling once here is what
+    // reddened unrelated PRs in issue #1366. The deposit itself is already
+    // proven non-reverted by depositAsAdmin's receipt assertions above, so a
+    // zero here can only be the lag — poll until it settles, and fail loudly
+    // naming the lag if it never does.
+    let reads = 0;
+    const shares = await waitUntil(async () => {
+      reads += 1;
+      const bal = await vaultBalanceOf(
+        endpoints.rpc_url,
+        endpoints.vault_addr,
+        endpoints.admin_addr,
+      );
+      return bal > 0n ? bal : null;
+    }, `vault.balanceOf(${endpoints.admin_addr}) on ${endpoints.vault_addr} to report the shares minted by the confirmed deposit (geth state-lag never settled)`);
+    console.log(
+      `registry-receipt-rows: admin holds ${shares} shares, visible after ${reads} read(s)` +
+        `${reads > 1 ? " — geth state-lag was hit and the poll absorbed it" : ""}.`,
     );
-    expect(
-      shares,
-      "admin must hold vault shares for the receipt row to be expected",
-    ).toBeGreaterThan(0n);
 
     await openDapp(page, endpoints, { role: "admin" });
 
