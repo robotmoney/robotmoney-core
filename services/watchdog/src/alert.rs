@@ -180,8 +180,10 @@ pub struct MissingReceiptDetails {
     pub alert_kind: &'static str,
     /// Chain ID.
     pub chain_id: i64,
-    /// Unix seconds of the most recently anchored receipt.
-    pub last_recorded_at: i64,
+    /// Unix seconds of the most recently anchored receipt; null on cold start.
+    pub last_recorded_at: Option<i64>,
+    /// Persisted timestamp from which the gap was measured.
+    pub gap_started_at: i64,
     /// Unix seconds at evaluation time.
     pub observed_at: i64,
     /// Observed anchoring gap, in seconds.
@@ -213,7 +215,8 @@ pub async fn dispatch_missing_receipt_alert(
     let body = MissingReceiptAlertPayload {
         event_action: "trigger",
         routing_key: "watchdog",
-        payload: MissingReceiptAlertInner {
+        dedup_key: missing_receipt_dedup_key(event.chain_id),
+        payload: Some(MissingReceiptAlertInner {
             summary,
             severity: "critical",
             source: "watchdog",
@@ -221,11 +224,12 @@ pub async fn dispatch_missing_receipt_alert(
                 alert_kind: "consensus_receipt_missing",
                 chain_id: event.chain_id,
                 last_recorded_at: event.last_recorded_at,
+                gap_started_at: event.gap_started_at,
                 observed_at: event.now,
                 seconds_since_last_receipt: event.seconds_since,
                 budget_secs: event.budget_secs,
             },
-        },
+        }),
     };
 
     let resp = client
@@ -247,11 +251,30 @@ pub async fn dispatch_missing_receipt_alert(
 }
 
 /// PagerDuty Events v2 -shaped envelope for a missing-receipt page.
+///
+/// `dedup_key` is what turns a condition that stays true into ONE incident.
+/// Without it every poll cycle (12 s by default) opened a fresh page, so a
+/// devnet that has never anchored a receipt produced roughly 7 200 pages a day
+/// and buried the very signal the monitor exists to raise. The same key carries
+/// the `"resolve"` event, which is how AC-CORE-09's "successful anchoring
+/// resolves the alert" is actually delivered.
 #[derive(Debug, Serialize)]
 struct MissingReceiptAlertPayload {
     event_action: &'static str,
     routing_key: &'static str,
-    payload: MissingReceiptAlertInner,
+    dedup_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<MissingReceiptAlertInner>,
+}
+
+/// Stable incident key for the consensus-receipt gap on one chain.
+pub fn missing_receipt_dedup_key(chain_id: i64) -> String {
+    format!("consensus_receipt_missing:{chain_id}")
+}
+
+/// Stable incident key for "the monitor is enabled but has no baseline at all".
+pub fn no_baseline_dedup_key(chain_id: i64) -> String {
+    format!("consensus_receipt_monitor_no_baseline:{chain_id}")
 }
 
 #[derive(Debug, Serialize)]
@@ -260,6 +283,114 @@ struct MissingReceiptAlertInner {
     severity: &'static str,
     source: &'static str,
     custom_details: MissingReceiptDetails,
+}
+
+/// Post the `"resolve"` event for a consensus-receipt gap on `chain_id`.
+///
+/// AC-CORE-09 requires that "successful anchoring resolves the alert". A
+/// trigger with no matching resolve leaves the incident open forever and
+/// teaches on-call to ignore the key, which is the same failure as not paging
+/// at all. Sent once, on the first cycle the gap comes back within budget.
+pub async fn dispatch_missing_receipt_resolve(
+    client: &Client,
+    webhook_url: &str,
+    chain_id: i64,
+) -> Result<(), WatchdogError> {
+    post_event(
+        client,
+        webhook_url,
+        &MissingReceiptAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: missing_receipt_dedup_key(chain_id),
+            payload: None,
+        },
+    )
+    .await
+}
+
+/// Page because the monitor is enabled but has no baseline to measure against.
+///
+/// `receipt_liveness` can only measure a gap from a persisted timestamp: the
+/// last anchored receipt, or failing that the earliest `indexer_runs.started_at`
+/// for the configured chain. When neither exists the check returns "no event",
+/// which is byte-identical to "healthy" at the call site — so a watchdog
+/// pointed at the wrong `--chain-id` (the CLI used to default to Base mainnet's
+/// 8453 while the Fusion devnet is 918453) reported perfect health while seeing
+/// nothing at all. That state is a fault, and it pages.
+pub async fn dispatch_no_baseline_alert(
+    client: &Client,
+    webhook_url: &str,
+    chain_id: i64,
+) -> Result<(), WatchdogError> {
+    post_event(
+        client,
+        webhook_url,
+        &MissingReceiptAlertPayload {
+            event_action: "trigger",
+            routing_key: "watchdog",
+            dedup_key: no_baseline_dedup_key(chain_id),
+            payload: Some(MissingReceiptAlertInner {
+                summary: format!(
+                    "RobotMoney watchdog: consensus-receipt monitor has NO baseline on chain \
+                     {chain_id} — no anchored receipt and no indexer run for this chain id. \
+                     The monitor is blind, not healthy; check WATCHDOG_CHAIN_ID."
+                ),
+                severity: "critical",
+                source: "watchdog",
+                custom_details: MissingReceiptDetails {
+                    alert_kind: "consensus_receipt_monitor_no_baseline",
+                    chain_id,
+                    last_recorded_at: None,
+                    gap_started_at: 0,
+                    observed_at: 0,
+                    seconds_since_last_receipt: 0,
+                    budget_secs: 0,
+                },
+            }),
+        },
+    )
+    .await
+}
+
+/// Resolve the no-baseline page once a baseline exists.
+pub async fn dispatch_no_baseline_resolve(
+    client: &Client,
+    webhook_url: &str,
+    chain_id: i64,
+) -> Result<(), WatchdogError> {
+    post_event(
+        client,
+        webhook_url,
+        &MissingReceiptAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: no_baseline_dedup_key(chain_id),
+            payload: None,
+        },
+    )
+    .await
+}
+
+async fn post_event(
+    client: &Client,
+    webhook_url: &str,
+    body: &MissingReceiptAlertPayload,
+) -> Result<(), WatchdogError> {
+    let resp = client
+        .post(webhook_url)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| WatchdogError::Alert(format!("webhook POST failed: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(WatchdogError::Alert(format!(
+            "webhook returned HTTP {status}: {text}"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -279,6 +410,41 @@ mod tests {
             unique.len(),
             labels.len(),
             "each ThresholdKind must have a unique label"
+        );
+    }
+
+    #[test]
+    fn dedup_keys_are_stable_per_chain_and_distinct_per_condition() {
+        assert_eq!(
+            missing_receipt_dedup_key(918_453),
+            "consensus_receipt_missing:918453"
+        );
+        assert_ne!(
+            missing_receipt_dedup_key(918_453),
+            missing_receipt_dedup_key(8_453),
+            "two chains must not collapse into one incident"
+        );
+        assert_ne!(
+            missing_receipt_dedup_key(918_453),
+            no_baseline_dedup_key(918_453),
+            "a blind monitor is a different incident from an observed gap"
+        );
+    }
+
+    #[test]
+    fn a_resolve_carries_the_same_key_and_no_payload() {
+        let body = MissingReceiptAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: missing_receipt_dedup_key(918_453),
+            payload: None,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["event_action"], "resolve");
+        assert_eq!(v["dedup_key"], "consensus_receipt_missing:918453");
+        assert!(
+            v.get("payload").is_none(),
+            "a resolve must not re-send the trigger body"
         );
     }
 

@@ -115,6 +115,12 @@ impl<'de> Deserialize<'de> for PauserKeyHex {
 /// and a clone would duplicate that secret into an allocation nothing zeroizes.
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    /// Chain id this profile monitors. Optional here because `--chain-id` /
+    /// `WATCHDOG_CHAIN_ID` may supply it instead, but one of the two must be
+    /// set: the daemon refuses to start with neither rather than fall back to
+    /// a default and monitor a chain nobody chose (Fusion devnet is 918453).
+    #[serde(default)]
+    pub chain_id: Option<i64>,
     /// Global mint/burn volume thresholds.
     pub global: GlobalThresholds,
     /// Action to take on threshold breach.
@@ -881,5 +887,30 @@ per_hour_mint_limit_usdc  = "400000"
                 "the redacted marker must show the field exists: {rendered}"
             );
         }
+    }
+
+    /// The committed staging profile is deployed verbatim to `rm-core-stage-1`
+    /// and is loaded by no test, no workflow and no deploy script — so an edit
+    /// that flipped `enabled` or misspelled a key would first be discovered on
+    /// the staging host. Parse the real file through the real parser here.
+    #[test]
+    fn the_committed_staging_profile_parses_and_monitors_receipts() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.staging.toml");
+        let cfg = Config::from_file(&path)
+            .unwrap_or_else(|e| panic!("config.staging.toml must load: {e}"));
+        assert!(
+            cfg.consensus_receipts.enabled,
+            "the staging profile exists to turn receipt-liveness monitoring ON (AC-CORE-09)"
+        );
+        assert_eq!(
+            cfg.chain_id,
+            Some(918_453),
+            "the staging profile must pin the Fusion devnet chain id, not inherit a default"
+        );
+        assert!(cfg.consensus_receipts.expected_cadence_secs > 0);
+        assert!(
+            cfg.action.webhook_url.is_some(),
+            "a page needs somewhere to go"
+        );
     }
 }
