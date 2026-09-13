@@ -111,6 +111,8 @@ async fn seed_indexer_run(pool: &sqlx::PgPool, chain_id: i64, last_block: i64) {
 /// Build a test config with a tight per-block mint threshold and alert mode.
 fn make_alert_config(per_block_mint: u64, webhook_url: &str) -> Config {
     Config {
+        // Not used by these tests: the chain id reaches the poll loop from the CLI.
+        chain_id: None,
         global: GlobalThresholds {
             per_block_mint_limit_usdc: per_block_mint.to_string(),
             per_hour_mint_limit_usdc: "999999999999".to_owned(), // effectively unlimited
@@ -226,6 +228,8 @@ fn config_missing_threshold_is_fatal() {
     use watchdog::receipt_liveness::ReceiptLivenessConfig;
 
     let bad = Config {
+        // Not used by these tests: the chain id reaches the poll loop from the CLI.
+        chain_id: None,
         global: GlobalThresholds {
             per_block_mint_limit_usdc: "0".to_owned(),
             per_hour_mint_limit_usdc: "2000000".to_owned(),

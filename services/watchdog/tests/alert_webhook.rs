@@ -161,7 +161,7 @@ async fn missing_consensus_receipt_pages_with_a_distinguishable_payload() {
         grace_secs: 21_600,
     };
     // Last receipt anchored 200_000s ago against a 108_000s budget.
-    let event = evaluate_receipt_liveness(&cfg, 8453, Some(1_000_000), 1_200_000)
+    let event = evaluate_receipt_liveness(&cfg, 8453, Some(1_000_000), None, 1_200_000)
         .expect("a gap this far past budget must be a missing receipt");
 
     let server = MockWebhookServer::start().await;
@@ -186,6 +186,7 @@ async fn missing_consensus_receipt_pages_with_a_distinguishable_payload() {
     );
     assert_eq!(details["chain_id"], 8453);
     assert_eq!(details["last_recorded_at"], 1_000_000);
+    assert_eq!(details["gap_started_at"], 1_000_000);
     assert_eq!(details["observed_at"], 1_200_000);
     assert_eq!(details["seconds_since_last_receipt"], 200_000);
     assert_eq!(details["budget_secs"], 108_000);

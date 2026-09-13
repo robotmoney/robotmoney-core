@@ -172,6 +172,8 @@ fn tx_hash(seed: u8) -> [u8; 32] {
 
 fn alert_only_config(per_block_mint: u64, per_block_burn: u64, webhook_url: &str) -> Config {
     Config {
+        // Not used by these tests: the chain id reaches the poll loop from the CLI.
+        chain_id: None,
         global: GlobalThresholds {
             per_block_mint_limit_usdc: per_block_mint.to_string(),
             per_hour_mint_limit_usdc: "999999999999".to_owned(),
@@ -209,6 +211,8 @@ fn per_vault_config(
     let mut vaults = HashMap::new();
     vaults.insert(vault_hex(vault), vt);
     Config {
+        // Not used by these tests: the chain id reaches the poll loop from the CLI.
+        chain_id: None,
         global: GlobalThresholds {
             per_block_mint_limit_usdc: global_limit.to_string(),
             per_hour_mint_limit_usdc: global_limit.to_string(),
@@ -496,6 +500,8 @@ async fn pause_rpc_timeout_does_not_starve_alert() {
 
     // pause_and_alert with a 1-second SLA; the hung RPC will exceed it.
     let mut config = Config {
+        // Not used by these tests: the chain id reaches the poll loop from the CLI.
+        chain_id: None,
         global: GlobalThresholds {
             per_block_mint_limit_usdc: "500000".to_owned(),
             per_hour_mint_limit_usdc: "999999999999".to_owned(),
@@ -566,4 +572,195 @@ async fn pause_rpc_timeout_does_not_starve_alert() {
 
     webhook.shutdown();
     hung_rpc.shutdown();
+}
+
+// ─── AC-CORE-09: cold-start receipt liveness is durable across a restart ─────
+//
+// The pure decision function is unit-tested in
+// `src/receipt_liveness.rs`. What CANNOT be tested there is the half that makes
+// the cold-start case survive a restart: the baseline is read back out of
+// Postgres, so the SQL in `receipt_liveness_baseline` has to be right about the
+// `indexer_runs` / `consensus_receipts` schema, and the value it returns must
+// not move when the process does.
+//
+// The "restart" here is a NEW connection pool over the same database, which is
+// exactly what a restarted watchdog has. If the observation window lived in
+// process memory, these assertions would read a fresh window and pass nothing.
+
+/// Open a second pool onto the same database — a restarted watchdog's view.
+async fn reconnect(pool: &sqlx::PgPool) -> sqlx::PgPool {
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(pool.connect_options().as_ref().clone())
+        .await
+        .expect("reconnect to the same database")
+}
+
+async fn seed_indexer_run(pool: &sqlx::PgPool, started_at_epoch: i64) {
+    sqlx::query(
+        "INSERT INTO indexer_runs (chain_id, started_at, from_block) \
+         VALUES ($1, to_timestamp($2), 0)",
+    )
+    .bind(CHAIN_ID)
+    .bind(started_at_epoch)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn seed_consensus_receipt(pool: &sqlx::PgPool, recorded_at: i64, seed: u8) {
+    sqlx::query(
+        "INSERT INTO consensus_receipts \
+         (chain_id, receipt_id, receipt_index, submitter, payload_digest, payload_uri, \
+          recorded_at, block_number, log_index, tx_hash) \
+         VALUES ($1, $2, $3, $4, $5, 'https://example.invalid/r.json', $6, 1, 0, $7)",
+    )
+    .bind(CHAIN_ID)
+    .bind(&[seed; 32][..])
+    .bind(i64::from(seed))
+    .bind(&[0xAAu8; 20][..])
+    .bind(&[seed; 32][..])
+    .bind(recorded_at)
+    .bind(&[seed; 32][..])
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn liveness_cfg() -> ReceiptLivenessConfig {
+    ReceiptLivenessConfig {
+        enabled: true,
+        expected_cadence_secs: 100,
+        grace_secs: 10,
+    }
+}
+
+#[tokio::test]
+async fn cold_start_pages_from_the_persisted_baseline_and_survives_a_restart() {
+    let fx = pg_fixture().await;
+    seed_chain(&fx.pool).await;
+
+    // The indexer has been running since t=1_000. No receipt has EVER been
+    // anchored — the cold-start case that used to be structurally unalertable.
+    seed_indexer_run(&fx.pool, 1_000).await;
+
+    let now = 1_000 + 500; // 500s against a 110s budget.
+    let event = watchdog::receipt_liveness::check_receipt_liveness(
+        &fx.pool,
+        &liveness_cfg(),
+        CHAIN_ID,
+        now,
+    )
+    .await
+    .expect("liveness query")
+    .expect("a 500s cold-start gap against a 110s budget must page");
+
+    assert_eq!(
+        event.last_recorded_at, None,
+        "cold start must report no last anchor rather than inventing one"
+    );
+    assert_eq!(
+        event.gap_started_at, 1_000,
+        "baseline is the earliest indexer run"
+    );
+    assert_eq!(event.seconds_since, 500);
+    assert_eq!(event.chain_id, CHAIN_ID);
+
+    // A restart mid-gap: new pool, same database, LATER wall clock. The window
+    // must still be measured from t=1_000, not from the restart.
+    let restarted = reconnect(&fx.pool).await;
+    let later = 1_000 + 900;
+    let after_restart = watchdog::receipt_liveness::check_receipt_liveness(
+        &restarted,
+        &liveness_cfg(),
+        CHAIN_ID,
+        later,
+    )
+    .await
+    .expect("liveness query after restart")
+    .expect("the gap must still page after a restart");
+    assert_eq!(
+        after_restart.gap_started_at, 1_000,
+        "a restart must not reset the observation window"
+    );
+    assert_eq!(
+        after_restart.seconds_since, 900,
+        "the gap must keep growing across the restart, not start over"
+    );
+
+    // A later indexer run must NOT become the baseline — MIN, not MAX. This is
+    // the restart-safety property at the SQL level: a watchdog that restarts
+    // opens a new indexer run, and taking the newest one would silence the page.
+    seed_indexer_run(&restarted, 1_800).await;
+    let still = watchdog::receipt_liveness::check_receipt_liveness(
+        &restarted,
+        &liveness_cfg(),
+        CHAIN_ID,
+        later,
+    )
+    .await
+    .expect("liveness query")
+    .expect("a newer indexer run must not silence the cold-start gap");
+    assert_eq!(still.gap_started_at, 1_000);
+}
+
+#[tokio::test]
+async fn an_anchored_receipt_takes_over_the_baseline_and_quiets_the_monitor() {
+    let fx = pg_fixture().await;
+    seed_chain(&fx.pool).await;
+    seed_indexer_run(&fx.pool, 1_000).await;
+
+    // Two receipts: the monitor must measure from the MOST RECENT one.
+    seed_consensus_receipt(&fx.pool, 2_000, 0x11).await;
+    seed_consensus_receipt(&fx.pool, 5_000, 0x22).await;
+
+    // 50s after the newest receipt — inside the 110s budget.
+    assert!(
+        watchdog::receipt_liveness::check_receipt_liveness(
+            &fx.pool,
+            &liveness_cfg(),
+            CHAIN_ID,
+            5_050,
+        )
+        .await
+        .expect("liveness query")
+        .is_none(),
+        "a receipt anchored 50s ago is within budget and must not page"
+    );
+
+    // 500s after it — past budget, and the event must name the receipt time,
+    // not the (much older) indexer baseline.
+    let event = watchdog::receipt_liveness::check_receipt_liveness(
+        &fx.pool,
+        &liveness_cfg(),
+        CHAIN_ID,
+        5_500,
+    )
+    .await
+    .expect("liveness query")
+    .expect("a 500s gap past the newest receipt must page");
+    assert_eq!(event.last_recorded_at, Some(5_000));
+    assert_eq!(
+        event.gap_started_at, 5_000,
+        "an anchor outranks the indexer baseline"
+    );
+    assert_eq!(event.seconds_since, 500);
+}
+
+#[tokio::test]
+async fn a_chain_the_indexer_has_never_touched_has_no_baseline() {
+    let fx = pg_fixture().await;
+    seed_chain(&fx.pool).await;
+    // No indexer_runs row, no receipt: the watchdog has observed nothing on this
+    // chain and has nothing to be late against. Documented in
+    // docs/technical/consensus-receipt-submitter-runbook.md §5.3.
+    assert!(watchdog::receipt_liveness::check_receipt_liveness(
+        &fx.pool,
+        &liveness_cfg(),
+        CHAIN_ID,
+        9_999_999,
+    )
+    .await
+    .expect("liveness query")
+    .is_none());
 }

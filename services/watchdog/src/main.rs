@@ -43,9 +43,14 @@ use std::time::Duration;
 use tracing::{error, info};
 
 use watchdog::{
-    alert::dispatch_missing_receipt_alert,
+    alert::{
+        dispatch_missing_receipt_alert, dispatch_missing_receipt_resolve,
+        dispatch_no_baseline_alert, dispatch_no_baseline_resolve,
+    },
     config::Config,
-    receipt_liveness::check_receipt_liveness,
+    receipt_liveness::{
+        check_receipt_liveness_status, AlertPager, PageAction, ReceiptLivenessStatus,
+    },
     watchdog::{latest_indexed_block, run_cycles_since_cursor, CycleResult},
 };
 
@@ -69,8 +74,14 @@ struct Args {
     database_url: String,
 
     /// Chain ID to monitor.
-    #[arg(long, env = "WATCHDOG_CHAIN_ID", default_value = "8453")]
-    chain_id: i64,
+    ///
+    /// No default on purpose. It used to default to `8453` (Base mainnet), so a
+    /// deployment on any other chain — the Fusion devnet is `918453` — silently
+    /// monitored a chain it had no rows for and reported health from an empty
+    /// query. Supply it on the command line, via `WATCHDOG_CHAIN_ID`, or as
+    /// `chain_id` in the config file; the daemon refuses to start otherwise.
+    #[arg(long, env = "WATCHDOG_CHAIN_ID")]
+    chain_id: Option<i64>,
 
     /// Seconds between poll cycles.
     #[arg(long, env = "WATCHDOG_POLL_INTERVAL_SECS", default_value = "12")]
@@ -110,9 +121,25 @@ async fn main() {
     // No further mutation: the config is read-only from here on.
     let config = config;
 
+    // Resolve the chain id explicitly: flag/env first, then the profile's
+    // `chain_id`, then refuse. A wrong chain id makes every chain-scoped query
+    // return nothing, which reads as health; that must not be reachable by
+    // omission.
+    let chain_id = match args.chain_id.or(config.chain_id) {
+        Some(id) => id,
+        None => {
+            error!(
+                "startup: chain id is not set — pass --chain-id, set WATCHDOG_CHAIN_ID, or add \
+                 `chain_id = <id>` to the config (Fusion devnet is 918453, Base mainnet 8453). \
+                 Refusing to start rather than monitor a chain nobody chose."
+            );
+            std::process::exit(1);
+        }
+    };
+
     info!(
         config = ?args.config,
-        chain_id = args.chain_id,
+        chain_id,
         poll_interval_secs = args.poll_interval_secs,
         sla_secs = config.sla.max_response_secs,
         "watchdog starting"
@@ -147,15 +174,19 @@ async fn main() {
         }
     };
 
+    // One incident per condition, not one per poll cycle.
+    let mut gap_pager = AlertPager::new(config.consensus_receipts.expected_cadence_secs);
+    let mut baseline_pager = AlertPager::new(config.consensus_receipts.expected_cadence_secs);
+
     // Main poll loop.
     loop {
-        match latest_indexed_block(&pool, args.chain_id).await {
+        match latest_indexed_block(&pool, chain_id).await {
             Ok(Some(block_number)) => {
                 match run_cycles_since_cursor(
                     &pool,
                     &config,
                     &client,
-                    args.chain_id,
+                    chain_id,
                     block_number,
                     pauser.as_ref(),
                 )
@@ -191,32 +222,97 @@ async fn main() {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or_default();
-            match check_receipt_liveness(&pool, &config.consensus_receipts, args.chain_id, now)
+            match check_receipt_liveness_status(&pool, &config.consensus_receipts, chain_id, now)
                 .await
             {
-                Ok(Some(event)) => {
+                Ok(ReceiptLivenessStatus::Missing(event)) => {
                     error!(
+                        chain_id,
                         seconds_since = event.seconds_since,
                         budget_secs = event.budget_secs,
                         "consensus receipt missing: a session that should have produced a receipt did not"
                     );
-                    match config.action.webhook_url.as_deref() {
-                        Some(url) => {
-                            if let Err(e) =
-                                dispatch_missing_receipt_alert(&client, url, &event).await
-                            {
-                                error!("missing-receipt alert dispatch failed: {e}");
+                    if let Some(url) = config.action.webhook_url.as_deref() {
+                        // The condition is permanent until the first anchor
+                        // lands, so the pager — not the poll interval — decides
+                        // how often it reaches a human.
+                        match gap_pager.on_firing(now) {
+                            PageAction::Trigger => {
+                                if let Err(e) =
+                                    dispatch_missing_receipt_alert(&client, url, &event).await
+                                {
+                                    error!("missing-receipt alert dispatch failed: {e}");
+                                }
                             }
+                            PageAction::None | PageAction::Resolve => {}
                         }
+                    } else {
                         // Never silent: if there is nowhere to page, say so
                         // every cycle rather than swallowing the condition.
-                        None => error!(
+                        error!(
                             "consensus receipt missing but action.webhook_url is unset — \
                              the alert had nowhere to go"
+                        );
+                    }
+                    if let PageAction::Resolve = baseline_pager.on_clear() {
+                        if let Some(url) = config.action.webhook_url.as_deref() {
+                            if let Err(e) =
+                                dispatch_no_baseline_resolve(&client, url, chain_id).await
+                            {
+                                error!("no-baseline resolve dispatch failed: {e}");
+                            }
+                        }
+                    }
+                }
+                Ok(ReceiptLivenessStatus::NoBaseline) => {
+                    // Enabled, and measuring nothing. Not health.
+                    error!(
+                        chain_id,
+                        "consensus receipt monitor has no baseline: no anchored receipt and no \
+                         indexer run for this chain id — the monitor is blind; check the chain id"
+                    );
+                    match config.action.webhook_url.as_deref() {
+                        Some(url) => match baseline_pager.on_firing(now) {
+                            PageAction::Trigger => {
+                                if let Err(e) =
+                                    dispatch_no_baseline_alert(&client, url, chain_id).await
+                                {
+                                    error!("no-baseline alert dispatch failed: {e}");
+                                }
+                            }
+                            PageAction::None | PageAction::Resolve => {}
+                        },
+                        None => error!(
+                            "consensus receipt monitor is blind but action.webhook_url is unset \
+                             — the alert had nowhere to go"
                         ),
                     }
                 }
-                Ok(None) => {}
+                Ok(ReceiptLivenessStatus::Healthy) => {
+                    // AC-CORE-09: "successful anchoring resolves the alert."
+                    for (action, resolve_gap) in [
+                        (gap_pager.on_clear(), true),
+                        (baseline_pager.on_clear(), false),
+                    ] {
+                        if action != PageAction::Resolve {
+                            continue;
+                        }
+                        let Some(url) = config.action.webhook_url.as_deref() else {
+                            continue;
+                        };
+                        let sent = if resolve_gap {
+                            dispatch_missing_receipt_resolve(&client, url, chain_id).await
+                        } else {
+                            dispatch_no_baseline_resolve(&client, url, chain_id).await
+                        };
+                        match sent {
+                            Ok(()) => {
+                                info!(chain_id, resolve_gap, "consensus receipt alert resolved")
+                            }
+                            Err(e) => error!("alert resolve dispatch failed: {e}"),
+                        }
+                    }
+                }
                 Err(e) => error!("consensus receipt liveness check failed: {e}"),
             }
         }
