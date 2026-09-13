@@ -21,7 +21,14 @@
 //!    `--to-block` range scanned via `eth_getLogs`. A receipt that has not
 //!    been released (`ConsensusRecommendationReceipt.isReleased == false`) is
 //!    refused — release is a human admin-discretion gate (D5) and this
-//!    command does not second-guess it.
+//!    command does not second-guess it. In **scan** mode a receipt that
+//!    cannot be drafted for a *content* reason — unfetchable payload,
+//!    tampered bytes, a receipt id that does not derive from the bytes — is
+//!    reported as a `"refused"` entry inside the range's own result and the
+//!    range still exits `0`. Non-zero in scan mode means transport, RPC or
+//!    configuration failure only. That distinction is what lets a watcher
+//!    advance its cursor past one poison receipt instead of rescanning the
+//!    same block forever (AC-GOV-01, AC-E2E-06).
 //! 2. **Fetches and validates the payload** at `--receipt-url` (mirrors
 //!    `rmpc receipt verify`). A receipt with no `weights` vector has nothing
 //!    to draft and is skipped, not treated as an error — most receipts are
@@ -130,10 +137,23 @@ pub struct Draft {
     pub receipt_id: String,
     pub session_id: String,
     pub subject_id: String,
-    /// `"skipped_no_weights"`, `"ready_for_review"`, or `"blocked_active_proposal"`.
+    /// `"skipped_no_weights"`, `"ready_for_review"`,
+    /// `"blocked_active_proposal"`, or `"refused"`.
+    ///
+    /// `"refused"` appears only in scan (`--from-block`) mode: one receipt in
+    /// the range could not be drafted for a content reason (unfetchable
+    /// payload, tampered bytes, receipt-id mismatch, every vault ineligible).
+    /// It is reported *inside* the range's result rather than aborting the
+    /// range, so a single poison receipt cannot wedge a watcher's cursor
+    /// forever (AC-GOV-01's "persistent, restart-safe", AC-E2E-06's tampered
+    /// receipt). Single-receipt mode still exits [`EXIT_REFUSAL`].
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Machine-readable refusal code (e.g. `ErrReceiptFetchFailed`). Set only
+    /// when `status == "refused"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     pub vaults: Vec<DraftVault>,
     pub excluded_vaults: Vec<DraftVault>,
     pub fallback_applied: bool,
@@ -355,11 +375,29 @@ pub fn run(args: Args) -> i32 {
             return EXIT_STARTUP_FAIL;
         };
 
+    // Scan mode drafts a *range*, not a receipt. A per-receipt content refusal
+    // there is data about that receipt, not a verdict on the range: reporting
+    // it as a non-zero exit made every caller that treats non-zero as "retry
+    // the same range" (scripts/fusion/watch-released-drafts.sh) wedge forever
+    // on the first unfetchable or tampered payload, so no later release was
+    // ever drafted. Non-zero in scan mode is now reserved for transport/RPC and
+    // configuration failures, where holding the cursor is the correct response.
+    let scan_mode = args.receipt_id.is_none();
     let mut drafts = Vec::with_capacity(receipt_ids.len());
     for (receipt_id, source) in receipt_ids {
         let source = match source {
             Some(s) => s,
             None => {
+                // Not per-receipt poison: in scan mode this means no
+                // --receipt-url-template was supplied at all, which is a
+                // startup misconfiguration affecting every receipt equally.
+                if scan_mode {
+                    log::error!(
+                        "rmpc governance draft-proposal: --from-block requires \
+                         --receipt-url-template so each released receipt can be fetched"
+                    );
+                    return EXIT_STARTUP_FAIL;
+                }
                 emit_failure(
                     &DraftFailure {
                         ok: false,
@@ -385,6 +423,26 @@ pub fn run(args: Args) -> i32 {
         )) {
             Ok(d) => drafts.push(d),
             Err(DraftError::Refusal { error, message }) => {
+                if scan_mode {
+                    log::warn!(
+                        "rmpc governance draft-proposal: receipt {receipt_id:#x} refused \
+                         ({error}): {message}; continuing the range"
+                    );
+                    drafts.push(Draft {
+                        receipt_id: format!("{receipt_id:#x}"),
+                        session_id: String::new(),
+                        subject_id: String::new(),
+                        status: "refused".to_string(),
+                        reason: Some(message),
+                        error: Some(error),
+                        vaults: Vec::new(),
+                        excluded_vaults: Vec::new(),
+                        fallback_applied: false,
+                        blocking_proposal_id: None,
+                        propose_calldata: None,
+                    });
+                    continue;
+                }
                 emit_failure(
                     &DraftFailure {
                         ok: false,
@@ -470,6 +528,7 @@ async fn draft_one(
                 session_id: receipt.session_id.clone(),
                 subject_id: receipt.subject_id.clone(),
                 status: "skipped_no_weights".to_string(),
+                error: None,
                 reason: Some(
                     "receipt carries no weights vector — most receipts are published, not \
                      applied (§2.1); nothing to draft"
@@ -549,6 +608,7 @@ async fn draft_one(
         subject_id: receipt.subject_id.clone(),
         status,
         reason: None,
+        error: None,
         vaults: kept,
         excluded_vaults: excluded,
         fallback_applied,
@@ -733,6 +793,60 @@ async fn current_blocking_proposal(
     })
 }
 
+/// Normalize a user-supplied `--to-block` into something `eth_getLogs` accepts.
+///
+/// `eth_getLogs` takes a **hex quantity** (`0x1f4`) or one of the named block
+/// tags. A plain decimal (`500`) is neither, and passing it through verbatim
+/// produced a per-cycle `-32602` from the node with no hint that the argument
+/// shape was wrong — the watcher in `scripts/fusion/watch-released-drafts.sh`
+/// derives its bound from `cast block-number`, which prints decimal. Accepting
+/// decimal here means the mistake cannot exist; an unrecognized value is a
+/// named error rather than an RPC round trip.
+fn normalize_block_tag(to_block: &str) -> Result<String, String> {
+    const TAGS: [&str; 4] = ["latest", "safe", "finalized", "pending"];
+    let t = to_block.trim();
+    if TAGS.contains(&t) {
+        return Ok(t.to_string());
+    }
+    if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+        if !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(format!("0x{}", hex.to_ascii_lowercase()));
+        }
+        return Err(format!("--to-block: {to_block:?} is not a hex quantity"));
+    }
+    if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+        let n: u64 = t
+            .parse()
+            .map_err(|_| format!("--to-block: {to_block:?} does not fit in a u64"))?;
+        return Ok(format!("0x{n:x}"));
+    }
+    Err(format!(
+        "--to-block: {to_block:?} is neither a block number nor one of {TAGS:?}"
+    ))
+}
+
+/// Build the `eth_getLogs` filter for `ReceiptReleased` over
+/// `[from_block, to_block]`.
+///
+/// Split out from [`scan_released`] purely so both bounds are assertable
+/// without a node: the bug this guards against (a decimal `toBlock`, which
+/// `eth_getLogs` rejects with `-32602`) lives entirely in this JSON object,
+/// and the RPC round trip added nothing to a test of it.
+fn released_filter(
+    receipt_addr: Address,
+    from_block: u64,
+    to_block: &str,
+) -> Result<serde_json::Value, String> {
+    let to_block = normalize_block_tag(to_block)?;
+    let topic0 = ConsensusRecommendationReceipt::ReceiptReleased::SIGNATURE_HASH;
+    Ok(json!({
+        "address": receipt_addr,
+        "fromBlock": format!("0x{from_block:x}"),
+        "toBlock": to_block,
+        "topics": [topic0],
+    }))
+}
+
 /// Scan `ReceiptReleased` logs in `[from_block, to_block]` and return every
 /// `receiptId` found, in emission order.
 async fn scan_released(
@@ -741,13 +855,7 @@ async fn scan_released(
     from_block: u64,
     to_block: &str,
 ) -> Result<Vec<alloy_primitives::B256>, String> {
-    let topic0 = ConsensusRecommendationReceipt::ReceiptReleased::SIGNATURE_HASH;
-    let filter = json!({
-        "address": receipt_addr,
-        "fromBlock": format!("0x{from_block:x}"),
-        "toBlock": to_block,
-        "topics": [topic0],
-    });
+    let filter = released_filter(receipt_addr, from_block, to_block)?;
     let logs: Vec<RawLog> = rpc
         .get_logs(filter)
         .await
@@ -1022,6 +1130,100 @@ keystore_path           = "{ks}"
         assert_eq!(code, EXIT_STARTUP_FAIL);
     }
 
+    // ─── --to-block shape (issue #1247 AC-GOV-01 watcher) ────────────────────
+
+    #[test]
+    fn normalize_block_tag_accepts_the_named_tags_verbatim() {
+        for tag in ["latest", "safe", "finalized", "pending"] {
+            assert_eq!(normalize_block_tag(tag).unwrap(), tag);
+        }
+        assert_eq!(normalize_block_tag("  latest  ").unwrap(), "latest");
+    }
+
+    #[test]
+    fn normalize_block_tag_converts_decimal_to_a_hex_quantity() {
+        // `cast block-number` prints decimal; eth_getLogs requires hex.
+        assert_eq!(normalize_block_tag("500").unwrap(), "0x1f4");
+        assert_eq!(normalize_block_tag("0").unwrap(), "0x0");
+        assert_eq!(
+            normalize_block_tag(&u64::MAX.to_string()).unwrap(),
+            format!("0x{:x}", u64::MAX)
+        );
+    }
+
+    #[test]
+    fn normalize_block_tag_passes_hex_through_lowercased() {
+        assert_eq!(normalize_block_tag("0x1F4").unwrap(), "0x1f4");
+        assert_eq!(normalize_block_tag("0X1f4").unwrap(), "0x1f4");
+    }
+
+    #[test]
+    fn normalize_block_tag_names_the_error_instead_of_calling_the_node() {
+        for bad in ["", "0x", "0xzz", "-1", "latest-1", "12a"] {
+            let err = normalize_block_tag(bad).expect_err("must refuse");
+            assert!(
+                err.starts_with("--to-block:"),
+                "error must name the argument, got: {err}"
+            );
+        }
+        // A decimal too large for u64 is refused, never silently truncated.
+        assert!(normalize_block_tag("184467440737095516160").is_err());
+    }
+
+    /// The bug this guards: `scan_released` forwarded `--to-block` verbatim, so
+    /// a decimal bound (what `cast block-number` prints) reached `eth_getLogs`
+    /// as `"300"` and the node answered `-32602` every cycle. Deleting the
+    /// `normalize_block_tag` call site reds this test.
+    #[test]
+    fn released_filter_sends_both_bounds_as_hex_quantities() {
+        let addr = Address::repeat_byte(0x11);
+        let f = released_filter(addr, 0, "300").expect("decimal to-block is accepted");
+        assert_eq!(f["fromBlock"], "0x0");
+        assert_eq!(f["toBlock"], "0x12c");
+        let f = released_filter(addr, 4_096, "0x1F4").expect("hex to-block is accepted");
+        assert_eq!(f["fromBlock"], "0x1000");
+        assert_eq!(f["toBlock"], "0x1f4");
+        assert!(f["topics"][0].is_string());
+    }
+
+    #[test]
+    fn released_filter_passes_named_tags_through_and_refuses_junk() {
+        let addr = Address::repeat_byte(0x11);
+        assert_eq!(
+            released_filter(addr, 1, "finalized").unwrap()["toBlock"],
+            "finalized"
+        );
+        assert!(released_filter(addr, 1, "yesterday").is_err());
+    }
+
+    /// A refused receipt inside a scanned range must serialize as data about
+    /// that receipt, so a watcher can advance its cursor past poison instead of
+    /// rescanning the same bad block forever.
+    #[test]
+    fn refused_draft_serializes_with_its_error_code() {
+        let out = DraftOutput {
+            ok: true,
+            drafts: vec![Draft {
+                receipt_id: "0xabc".to_string(),
+                session_id: String::new(),
+                subject_id: String::new(),
+                status: "refused".to_string(),
+                reason: Some("GET https://example.invalid/r.json returned 404".to_string()),
+                error: Some("ErrReceiptFetchFailed".to_string()),
+                vaults: vec![],
+                excluded_vaults: vec![],
+                fallback_applied: false,
+                blocking_proposal_id: None,
+                propose_calldata: None,
+            }],
+        };
+        let v: serde_json::Value = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["ok"], true, "the range itself succeeded");
+        assert_eq!(v["drafts"][0]["status"], "refused");
+        assert_eq!(v["drafts"][0]["error"], "ErrReceiptFetchFailed");
+        assert!(v["drafts"][0]["reason"].as_str().unwrap().contains("404"));
+    }
+
     #[test]
     fn run_fails_fast_without_receipt_id_or_from_block() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
@@ -1078,6 +1280,7 @@ rmRWA   = "0x0000000000000000000000000000000000000004"
                 subject_id: "subj1".to_string(),
                 status: "ready_for_review".to_string(),
                 reason: None,
+                error: None,
                 vaults: vec![vault("rmUSDC", 2, 10_000)],
                 excluded_vaults: vec![],
                 fallback_applied: false,
