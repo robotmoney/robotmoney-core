@@ -28,7 +28,8 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 ///           VOTING_PERIOD      — voting period in seconds (default: 3600 — 1 hour)
 ///           EXECUTION_DELAY    — delay from voting end to execution in seconds
 ///                                (default: 3600 — 1 hour, the contract's MIN_EXECUTION_DELAY)
-///           QUORUM_THRESHOLD   — minimum FOR voting power for quorum (default: 1)
+///           QUORUM_THRESHOLD   — minimum FOR voting power for quorum
+///                                (default: 2; must be greater than 1)
 ///           DEPLOYMENT_OUT     — path for the output JSON
 ///                                (default: "deployments/governance-<chain_id>.json")
 contract DeployRouterGovernance is Script {
@@ -42,8 +43,9 @@ contract DeployRouterGovernance is Script {
     ///         constructor reverts with ExecutionDelayBelowMinimum().
     uint64 public constant DEFAULT_EXECUTION_DELAY = 3600;
 
-    /// @notice Default quorum threshold: 1 unit of voting power.
-    uint256 public constant DEFAULT_QUORUM_THRESHOLD = 1;
+    /// @notice Default quorum threshold requires more than one unit of voting
+    ///         power, preserving Fusion's separate approving-body control.
+    uint256 public constant DEFAULT_QUORUM_THRESHOLD = 2;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
@@ -59,13 +61,23 @@ contract DeployRouterGovernance is Script {
     ///         RouterGovernance, and writes a deployment JSON.
     /// @return d Struct containing the deployed governance and key parameters.
     function run() external returns (Deployed memory d) {
+        // The quorum floor is checked FIRST, before any other env read. Two
+        // reasons, both deliberate: a refusal costs nothing, and a test of the
+        // refusal then needs to set only QUORUM_THRESHOLD — which nothing else
+        // reads — instead of also setting ADMIN_ADDRESS/ROUTER_ADDRESS.
+        // `vm.setEnv` mutates process-global state shared by concurrently
+        // scheduled test files, and this repo has already been burned by
+        // exactly that race on ADMIN_ADDRESS (see AgentTokenVault.t.sol's
+        // note and Deploy.t.sol::test_deploy_envDriven_runInProcessSucceeds).
+        uint256 quorumThreshold = vm.envOr("QUORUM_THRESHOLD", DEFAULT_QUORUM_THRESHOLD);
+        require(quorumThreshold > 1, "QUORUM_THRESHOLD must be greater than 1");
+
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address router = vm.envAddress("ROUTER_ADDRESS");
 
         uint64 votingPeriod = uint64(vm.envOr("VOTING_PERIOD", uint256(DEFAULT_VOTING_PERIOD)));
         uint64 executionDelay =
             uint64(vm.envOr("EXECUTION_DELAY", uint256(DEFAULT_EXECUTION_DELAY)));
-        uint256 quorumThreshold = vm.envOr("QUORUM_THRESHOLD", DEFAULT_QUORUM_THRESHOLD);
 
         vm.startBroadcast();
         d = _deploy(admin, router, votingPeriod, executionDelay, quorumThreshold);
@@ -90,6 +102,10 @@ contract DeployRouterGovernance is Script {
     ) external returns (Deployed memory d) {
         require(admin_ != address(0), "ADMIN_ADDRESS=0");
         require(router_ != address(0), "ROUTER_ADDRESS=0");
+        // Same floor as run(). The in-process path is the one fork tests and
+        // fixtures use, so leaving it unguarded would let a hollow single-voter
+        // quorum back in through the door the broadcast path closes.
+        require(quorumThreshold_ > 1, "QUORUM_THRESHOLD must be greater than 1");
 
         vm.startPrank(admin_);
         d = _deploy(admin_, router_, votingPeriod_, executionDelay_, quorumThreshold_);

@@ -340,7 +340,7 @@ cadence_json="$("$CAST" call --json "$GOVERNANCE" "cadenceParams()(uint64,uint64
 exec_delay="$(json_int_at "$cadence_json" 1)"
 quorum_onchain="$(json_int_at "$cadence_json" 2)"
 [[ "$exec_delay" -ge 3600 ]] || fail "governance executionDelay $exec_delay < MIN_EXECUTION_DELAY 3600 (got: $cadence_json)"
-[[ "$quorum_onchain" -gt 0 ]] || fail "governance quorumThreshold on chain is 0 (got: $cadence_json)"
+[[ "$quorum_onchain" -gt 1 ]] || fail "governance quorumThreshold must be greater than 1 (got: $quorum_onchain)"
 info "postcondition OK: governance executionDelay=$exec_delay quorum=$quorum_onchain (pinned $QUORUM_THRESHOLD)"
 
 # ─── 6. IC policy + consensus receipt — ONE ceremony, BEFORE timelock ────────
