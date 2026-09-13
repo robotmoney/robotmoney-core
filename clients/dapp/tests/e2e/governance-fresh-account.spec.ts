@@ -104,6 +104,12 @@ const GOVERNANCE_ABI = [
     name: "activeProposal",
     stateMutability: "view",
     inputs: [],
+    // Ten outputs, matching contracts/RouterGovernance.sol:513 exactly. This ABI
+    // used to stop at `executed` after eight, which made viem decode
+    // `snapshotQuorum` as the trailing bool. That worked only while the deployed
+    // quorum happened to be 1 (a valid bool byte); raising the deploy default to
+    // 2 (Project Fusion AC-GOV-03) turned the same stale ABI into
+    // `InvalidBytesBooleanError: Bytes value "2" is not a valid boolean`.
     outputs: [
       { name: "id", type: "uint256" },
       { name: "proposer", type: "address" },
@@ -112,7 +118,9 @@ const GOVERNANCE_ABI = [
       { name: "votingDeadline", type: "uint64" },
       { name: "executableAfter", type: "uint64" },
       { name: "votesFor", type: "uint256" },
+      { name: "snapshotQuorum", type: "uint256" },
       { name: "executed", type: "bool" },
+      { name: "cancelled", type: "bool" },
     ],
   },
   {
@@ -221,9 +229,10 @@ async function readProposalVotesFor(
     functionName: "activeProposal",
     data: raw as Hex,
   });
-  // viem returns named multiple-return-value functions as an object keyed by name.
-  // votesFor is the 7th output (index 6): id, proposer, vaults, bps, votingDeadline,
-  // executableAfter, votesFor, executed.
+  // viem returns multiple-return-value functions as a positional tuple.
+  // votesFor is the 7th output (index 6): id, proposer, vaults, bps,
+  // votingDeadline, executableAfter, votesFor, snapshotQuorum, executed,
+  // cancelled.
   const result = decoded as unknown as readonly [
     bigint, // id
     string, // proposer
@@ -232,7 +241,9 @@ async function readProposalVotesFor(
     bigint, // votingDeadline
     bigint, // executableAfter
     bigint, // votesFor
+    bigint, // snapshotQuorum
     boolean, // executed
+    boolean, // cancelled
   ];
   return result[6];
 }
