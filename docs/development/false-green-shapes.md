@@ -359,7 +359,11 @@ became `pg_fixture() -> PgFixture` in `services/watchdog/tests/common/mod.rs`,
 `try_raw_pg` became `pg_fixture` / `raw_pg` in
 `services/explorer-indexer/tests/common/mod.rs` (issue #1383, which also deleted
 that module's `skip_or_panic()` and `pg_is_required()`, leaving
-`EXPLORER_INDEXER_REQUIRE_PG` inert). All panic with a
+`EXPLORER_INDEXER_REQUIRE_PG` inert until task T30b re-wired it as a
+one-directional assertion: `check_require_pg()` accepts unset / `1` / `true` /
+`yes` and **refuses** any value asking for a skip-capable mode, because no such
+mode exists. `services/explorer-indexer/tests/require_pg_env.rs` covers it and
+needs no Docker). All panic with a
 `REQUIRED DEPENDENCY UNAVAILABLE` prefix naming Docker, so the `else { return; }`
 guard is not merely discouraged but **uncompilable** — a future caller cannot
 reintroduce the shape at these call sites without first re-adding the sentinel.
