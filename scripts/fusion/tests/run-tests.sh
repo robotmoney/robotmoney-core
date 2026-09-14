@@ -20,6 +20,34 @@
 set -uo pipefail
 
 FUSION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$FUSION_DIR/../.." && pwd)"
+
+# MINIMUM EXECUTED-ASSERTION FLOOR
+# -------------------------------
+# This suite runs under `set -uo pipefail` WITHOUT `-e`, and used to end at
+# `[[ "$FAIL" -eq 0 ]]`. That is a false-green generator: truncate the file, or
+# let a block abort early, and the run prints "42 passed, 0 failed" and exits 0.
+# Reproduced by deleting the 12-assertion devnet-acceptance.sh block. "Exit 0"
+# is not "tested" -- the number of assertions that ACTUALLY executed is the only
+# thing that distinguishes the two, so the exit code now depends on it.
+#
+# The floor is the FULL count as of the commit that introduced it. The harness
+# assertions that existed before this change number 54 (the figure T13 names);
+# the workflow-floor cross-check added at the bottom of this file is the 55th,
+# so the floor is 55 -- strictly tighter than 54, and exactly equal to what a
+# healthy run executes, leaving no slack a truncation could hide in. Raise it
+# whenever assertions are added; lowering it is a deliberate, reviewable act and
+# the workflow re-checks the same number independently (see below), so lowering
+# it here alone buys nothing.
+MIN_EXPECTED_ASSERTIONS=55
+
+# The workflow that runs this suite re-asserts the same floor against the
+# machine-readable FUSION_SELFTESTS_EXECUTED line, precisely so a silently
+# lowered MIN_EXPECTED_ASSERTIONS cannot buy a green on its own. Any slack
+# between the two numbers re-opens the window this guard exists to close, so the
+# drift is asserted here too -- red in CI on the commit that introduces it.
+FUSION_SELFTEST_WORKFLOW="$REPO_ROOT/.github/workflows/suite-25-fusion-harness-selftests.yml"
+
 PASS=0
 FAIL=0
 
@@ -556,6 +584,28 @@ chmod +x "$STUB_DIR/bin/curl"
 check "an unreleased receipt still broadcasts exactly one release" \
   "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "1"
 
+# ─── The workflow's independent floor must not trail this script's ──────────
+if [[ ! -f "$FUSION_SELFTEST_WORKFLOW" ]]; then
+  # Loud-skip policy: no workflow, no second opinion -- that is a red, not a pass.
+  bad "$FUSION_SELFTEST_WORKFLOW is missing — nothing re-checks this suite's executed count independently"
+else
+  WORKFLOW_FLOOR="$(grep -o 'count" -lt [0-9][0-9]*' "$FUSION_SELFTEST_WORKFLOW" \
+    | head -1 | grep -o '[0-9][0-9]*$' || true)"
+  if [[ -z "$WORKFLOW_FLOOR" ]]; then
+    bad "could not read the executed-assertion floor out of $(basename "$FUSION_SELFTEST_WORKFLOW") — the independent guard may have been removed"
+  elif [[ "$WORKFLOW_FLOOR" == "$MIN_EXPECTED_ASSERTIONS" ]]; then
+    ok "the workflow's floor ($WORKFLOW_FLOOR) equals MIN_EXPECTED_ASSERTIONS ($MIN_EXPECTED_ASSERTIONS)"
+  else
+    bad "the workflow's floor is $WORKFLOW_FLOOR but MIN_EXPECTED_ASSERTIONS is $MIN_EXPECTED_ASSERTIONS — raise both in the same commit"
+  fi
+fi
+
 echo
 echo "scripts/fusion self-tests: $PASS passed, $FAIL failed"
-[[ "$FAIL" -eq 0 ]]
+# Machine-readable contract line. The workflow greps THIS, not the exit code,
+# so a suite that asserted nothing cannot report a green.
+echo "FUSION_SELFTESTS_EXECUTED=$PASS"
+if [[ "$PASS" -lt "$MIN_EXPECTED_ASSERTIONS" ]]; then
+  echo "FAIL — only $PASS assertions executed, expected at least $MIN_EXPECTED_ASSERTIONS: a suite that asserts nothing is a false green" >&2
+fi
+[[ "$FAIL" -eq 0 && "$PASS" -ge "$MIN_EXPECTED_ASSERTIONS" ]]

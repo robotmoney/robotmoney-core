@@ -957,6 +957,72 @@ completes on a real chain with real gas and nonce behavior.
    deployment record is well-formed, chain_id=84532, rehearsal=true, all
    address fields present and lowercase hex
 
+### 25. Fusion harness self-tests (fusion-harness-selftests)
+**File:** `.github/workflows/suite-25-fusion-harness-selftests.yml`
+**CI class / tier:** `system-correctness` (offline, stub binaries, no network)
+**Environment:** `none`
+**Trigger:** every `pull_request` (no paths filter) + `push` to `releases-*` +
+`push` of a `v*.*.*` tag + `workflow_dispatch`.
+
+Runs `scripts/fusion/tests/run-tests.sh`, the only executor of `AC-CORE-09`'s
+retry/idempotency clause and `AC-GOV-01`'s draft-only watcher clause. Before this
+suite existed, `grep -rn 'scripts/fusion' .github/` returned nothing: no
+workflow, on any branch, on any event, ran it.
+
+The suite runs under `set -uo pipefail` without `-e`, so an exit code alone is
+not evidence. It ends at `FAIL == 0 && PASS >= MIN_EXPECTED_ASSERTIONS` (55) and
+prints `FUSION_SELFTESTS_EXECUTED=$PASS`; the workflow re-derives that count
+against its own literal so a silently lowered in-script floor cannot buy a green,
+and the script asserts the two literals are equal. Same convention as suite 17.
+No paths filter, deliberately: the failure it guards against is a rename, which
+is exactly what a paths filter stops matching. See
+[`false-green-shapes.md`](./false-green-shapes.md) and
+[`fusion-devnet-ci.md`](./fusion-devnet-ci.md).
+
+### 26. Fusion devnet acceptance (fusion-devnet-acceptance)
+**File:** `.github/workflows/suite-26-fusion-devnet-acceptance.yml`
+**CI class / tier:** `ignore` (operational, real devnet; never a merge gate)
+**Environment:** devnet `918453`, via repository variables and secrets
+**Trigger:** `workflow_dispatch` + nightly `schedule` (04:10 UTC). Never on
+`pull_request` — it needs live RPC and an ephemeral funded key.
+
+Runs `scripts/fusion/devnet-acceptance.sh` against the real devnet, satisfying
+`AC-E2E-05`'s "repeatable CI/devnet test, not only a one-off manual
+demonstration". Endpoints and addresses come from repository **variables**; the
+ephemeral devnet keystore, its password and the operator config come from
+repository **secrets** — no key material is committed and the workflow creates
+no keys. With any of them absent it exits 0 with an explicit
+`SKIPPED — not configured` summary naming each missing entry, and executes
+nothing. For every stage it requested it asserts the result JSON holds at least
+one non-`SKIP` assertion for that stage, so a run that skipped everything cannot
+report success. `release` is omitted from the default stage list: a nightly run
+must not broadcast an admin release transaction. Full secret/variable table and
+rotation rule: [`fusion-devnet-ci.md`](./fusion-devnet-ci.md).
+
+## release-tag dispatch
+**File:** `.github/workflows/release-tag-suite-dispatch.yml`
+**Trigger:** `push: tags: ['v*.*.*']` + `workflow_dispatch`.
+
+A `push:` trigger filtered by `branches:` **never matches a tag ref** — GitHub
+matches `branches:` against `refs/heads/*` only. Every `suite-*.yml` above is
+branches-only, and the only workflows declaring `push.tags` are
+`release-dapp.yml` (`v*.*.*`) and `release-rmpc.yml` (`rmpc-v*.*.*`). So pushing
+`v0.4.0-rc.8` or `v0.4.0-rc.9` dispatched exactly one run each, `release-dapp`.
+The ~18 extra runs visible on `v0.4.0-rc.6`/`rc.7` carry event
+`workflow_dispatch`, not `push`: a human dispatched each suite by hand against
+the tag. Automatic full-suite coverage on a tag never existed.
+
+This workflow mechanises that habit: on a `v*` tag it enumerates every active
+workflow from the API (never a hardcoded list), skips itself and the three
+publishers the tag already drives, dispatches the rest against the tag ref, then
+blocks until they complete and fails if any did not succeed. Dispatching zero
+workflows is an error, not a green. A suite added after a tag was cut does not
+exist on that tag and is reported as a named skip.
+
+The durable fix is `tags: ['v*.*.*']` on each suite; that is 18 edits to existing
+workflow files and is deferred.
+
+
 ---
 
 ## Integration-test target coverage

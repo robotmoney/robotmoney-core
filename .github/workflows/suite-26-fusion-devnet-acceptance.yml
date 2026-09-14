@@ -1,0 +1,225 @@
+# Canonical: docs/development/fusion-devnet-ci.md
+#
+# WHY THIS WORKFLOW EXISTS (Fusion R5 · AC-E2E-05)
+# ------------------------------------------------
+# AC-E2E-05 asks for "a repeatable cross-repo CI/devnet test, not only a one-off
+# manual demonstration". `scripts/fusion/devnet-acceptance.sh` and
+# `scripts/fusion/cross-repo-acceptance.sh` are that test, but until this file
+# they were only ever run by a human on a laptop against a hand-exported
+# environment, so the claim rested on a transcript rather than on a schedule.
+# This workflow makes the devnet path repeatable: dispatchable on demand and
+# run nightly, with its result JSON kept as an artifact.
+#
+# RELATIONSHIP TO suite-25
+# suite-25-fusion-harness-selftests.yml proves the HARNESS is correct, offline,
+# against stub binaries, on every PR. This one runs the harness against the real
+# devnet. They are deliberately separate: a network outage must never be able to
+# turn the PR gate red, and a green harness self-test must never be mistaken for
+# a green devnet run.
+#
+# CREDENTIALS — WHERE THEY COME FROM AND WHY NONE ARE IN THIS REPO
+# ----------------------------------------------------------------
+# Every value below is read from repository variables (non-secret endpoints and
+# addresses) or repository secrets (the ephemeral devnet keystore and its
+# password). NOTHING containing key material is committed, and this workflow
+# creates no keys. The keystore is an EPHEMERAL DEVNET key for chain 918453
+# with no mainnet value; it must never be a Base mainnet or Base Sepolia key.
+# See docs/development/fusion-devnet-ci.md for the full table, the rotation
+# rule, and how to populate them.
+#
+#   Repository VARIABLES (vars.*) — endpoints and addresses, not secret:
+#     FUSION_RPC_URL, FUSION_EXPLORER_API, FUSION_DAPP_URL,
+#     FUSION_RECEIPT_URL, FUSION_GATEWAY_ADDRESS, FUSION_RECEIPT_ADDRESS,
+#     FUSION_GOVERNANCE_ADDRESS, FUSION_ROUTER_ADDRESS,
+#     FUSION_VAULT_ADDRESSES, FUSION_SUBMITTER_ADDRESS,
+#     FUSION_RELEASE_ADDRESS, FUSION_UNAUTHORIZED_SUBMITTER,
+#     FUSION_UNAUTHORIZED_RELEASER
+#
+#   Repository SECRETS (secrets.*) — ephemeral devnet key material only:
+#     FUSION_RMPC_CONFIG          operator config TOML for the submitter
+#     FUSION_RELEASE_KEYSTORE     v3 keystore JSON for the admin releaser
+#     FUSION_RELEASE_PASSWORD     password that unlocks that keystore
+#
+# WHY IT SKIPS RATHER THAN FAILS WHEN SECRETS ARE ABSENT
+# A fork PR and a freshly-cloned repo have neither. Failing there would train
+# everyone to ignore this workflow's red. It exits 0 with an explicit
+# "SKIPPED — not configured" line naming every missing variable, AND writes that
+# to the job summary, so a skip is loud and attributable. The one thing it must
+# never do is run a degraded subset and report success: the stages it ran are
+# recorded in the result JSON and re-asserted below.
+#
+# GOTCHAS
+# - The keystore password reaches the script through a FILE
+#   (FUSION_RELEASE_PASSWORD_FILE), written under $RUNNER_TEMP and shredded in
+#   an `if: always()` step. It is never echoed and never an argument.
+# - `--stages` defaults to everything except `release`: a nightly run must not
+#   broadcast an admin release transaction unless someone asks for it. The
+#   dispatch input `stages` overrides that for a deliberate acceptance run.
+# - The devnet is a shared staging resource. `concurrency` is a single global
+#   lane with cancel-in-progress FALSE, so two runs never contend on chain.
+
+name: fusion-devnet-acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      stages:
+        description: "Comma-separated stages (verify,negative,record,index,release,dapp,govern). Default omits `release`."
+        required: false
+        default: "verify,negative,record,index,dapp,govern"
+        type: string
+      receipt_url:
+        description: "Receipt URL to accept. Defaults to the FUSION_RECEIPT_URL repository variable."
+        required: false
+        type: string
+  schedule:
+    # 04:10 UTC — after the 02:00 nightly and the 03:xx monitors, so a devnet
+    # already churning from those has settled.
+    - cron: "10 4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fusion-devnet-acceptance
+  cancel-in-progress: false
+
+jobs:
+  devnet-acceptance:
+    name: devnet-acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # --- non-secret endpoints / addresses ---
+      FUSION_RPC_URL: ${{ vars.FUSION_RPC_URL }}
+      FUSION_EXPLORER_API: ${{ vars.FUSION_EXPLORER_API }}
+      FUSION_DAPP_URL: ${{ vars.FUSION_DAPP_URL }}
+      FUSION_GATEWAY_ADDRESS: ${{ vars.FUSION_GATEWAY_ADDRESS }}
+      FUSION_RECEIPT_ADDRESS: ${{ vars.FUSION_RECEIPT_ADDRESS }}
+      FUSION_GOVERNANCE_ADDRESS: ${{ vars.FUSION_GOVERNANCE_ADDRESS }}
+      FUSION_ROUTER_ADDRESS: ${{ vars.FUSION_ROUTER_ADDRESS }}
+      FUSION_VAULT_ADDRESSES: ${{ vars.FUSION_VAULT_ADDRESSES }}
+      FUSION_SUBMITTER_ADDRESS: ${{ vars.FUSION_SUBMITTER_ADDRESS }}
+      FUSION_RELEASE_ADDRESS: ${{ vars.FUSION_RELEASE_ADDRESS }}
+      FUSION_UNAUTHORIZED_SUBMITTER: ${{ vars.FUSION_UNAUTHORIZED_SUBMITTER }}
+      FUSION_UNAUTHORIZED_RELEASER: ${{ vars.FUSION_UNAUTHORIZED_RELEASER }}
+      RECEIPT_URL_INPUT: ${{ inputs.receipt_url || vars.FUSION_RECEIPT_URL }}
+      STAGES: ${{ inputs.stages || 'verify,negative,record,index,dapp,govern' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide whether this environment is configured
+        id: gate
+        env:
+          HAVE_RMPC_CONFIG: ${{ secrets.FUSION_RMPC_CONFIG != '' }}
+          HAVE_KEYSTORE: ${{ secrets.FUSION_RELEASE_KEYSTORE != '' }}
+          HAVE_PASSWORD: ${{ secrets.FUSION_RELEASE_PASSWORD != '' }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for v in FUSION_RPC_URL FUSION_EXPLORER_API FUSION_DAPP_URL \
+                   FUSION_GATEWAY_ADDRESS FUSION_RECEIPT_ADDRESS \
+                   FUSION_GOVERNANCE_ADDRESS FUSION_ROUTER_ADDRESS \
+                   FUSION_VAULT_ADDRESSES FUSION_SUBMITTER_ADDRESS \
+                   FUSION_RELEASE_ADDRESS FUSION_UNAUTHORIZED_SUBMITTER \
+                   FUSION_UNAUTHORIZED_RELEASER; do
+            [[ -n "${!v:-}" ]] || missing+=("vars.$v")
+          done
+          [[ -n "${RECEIPT_URL_INPUT:-}" ]] || missing+=("vars.FUSION_RECEIPT_URL (or the receipt_url input)")
+          [[ "$HAVE_RMPC_CONFIG" == "true" ]] || missing+=("secrets.FUSION_RMPC_CONFIG")
+          [[ "$HAVE_KEYSTORE" == "true" ]]    || missing+=("secrets.FUSION_RELEASE_KEYSTORE")
+          [[ "$HAVE_PASSWORD" == "true" ]]    || missing+=("secrets.FUSION_RELEASE_PASSWORD")
+
+          if [[ "${#missing[@]}" -gt 0 ]]; then
+            {
+              echo "## fusion-devnet-acceptance: SKIPPED — not configured"
+              echo
+              echo "This repository/fork has no devnet acceptance credentials. Missing:"
+              for m in "${missing[@]}"; do echo "- \`$m\`"; done
+              echo
+              echo "See \`docs/development/fusion-devnet-ci.md\` to populate them."
+              echo "**Nothing was executed. This is not a passing acceptance run.**"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install foundry (cast)
+        if: steps.gate.outputs.configured == 'true'
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Build rmpc
+        if: steps.gate.outputs.configured == 'true'
+        run: cargo build --release -p rust-payment-client --bin rmpc
+
+      - name: Materialise the ephemeral devnet credentials
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          RMPC_CONFIG_TOML: ${{ secrets.FUSION_RMPC_CONFIG }}
+          RELEASE_KEYSTORE_JSON: ${{ secrets.FUSION_RELEASE_KEYSTORE }}
+          RELEASE_PASSWORD: ${{ secrets.FUSION_RELEASE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$RMPC_CONFIG_TOML"     > "$RUNNER_TEMP/rmpc.toml"
+          printf '%s' "$RELEASE_KEYSTORE_JSON" > "$RUNNER_TEMP/release-keystore.json"
+          printf '%s' "$RELEASE_PASSWORD"      > "$RUNNER_TEMP/release.pass"
+          # Nothing above is echoed. Only the byte counts are, as a liveness check.
+          echo "wrote rmpc.toml ($(wc -c <"$RUNNER_TEMP/rmpc.toml") bytes), keystore ($(wc -c <"$RUNNER_TEMP/release-keystore.json") bytes), password file"
+
+      - name: Run scripts/fusion/devnet-acceptance.sh against the devnet
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          FUSION_RMPC_CONFIG: ${{ runner.temp }}/rmpc.toml
+          FUSION_RELEASE_KEYSTORE: ${{ runner.temp }}/release-keystore.json
+          FUSION_RELEASE_PASSWORD_FILE: ${{ runner.temp }}/release.pass
+          FUSION_EVIDENCE_DIR: ${{ github.workspace }}/fusion-evidence
+          RMPC_BIN: ${{ github.workspace }}/target/release/rmpc
+        run: |
+          set -euo pipefail
+          mkdir -p "$FUSION_EVIDENCE_DIR"
+          bash scripts/fusion/devnet-acceptance.sh "$RECEIPT_URL_INPUT" \
+            --stages "$STAGES" \
+            --out fusion-acceptance-result.json | tee fusion-acceptance.log
+
+      - name: Assert the result JSON proves the requested stages actually ran
+        # A harness that skipped every stage and exited 0 is the false green this
+        # whole Fusion round exists to close. The exit code is not the evidence;
+        # the recorded per-stage assertions are.
+        if: steps.gate.outputs.configured == 'true' && always()
+        run: |
+          set -euo pipefail
+          test -s fusion-acceptance-result.json \
+            || { echo "::error::no result JSON was written — treating as zero assertions executed"; exit 1; }
+          echo "requested stages: $STAGES"
+          for s in ${STAGES//,/ }; do
+            n=$(jq --arg s "$s" '[.assertions[] | select(.stage == $s and .result != "SKIP")] | length' fusion-acceptance-result.json)
+            echo "  stage $s: $n executed assertion(s)"
+            if [[ "$n" -eq 0 ]]; then
+              echo "::error::stage '$s' was requested but executed zero assertions — a stage that asserts nothing is a false green"
+              exit 1
+            fi
+          done
+          fails=$(jq '[.assertions[] | select(.result == "FAIL")] | length' fusion-acceptance-result.json)
+          jq -r '.assertions[] | "\(.result)\t\(.stage)\t\(.assertion)"' fusion-acceptance-result.json \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "$fails" -eq 0 ]] || { echo "::error::$fails assertion(s) FAILED"; exit 1; }
+
+      - name: Shred the credential files
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/rmpc.toml" "$RUNNER_TEMP/release-keystore.json" "$RUNNER_TEMP/release.pass" || true
+
+      - name: Upload the acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusion-devnet-acceptance-evidence
+          path: |
+            fusion-acceptance-result.json
+            fusion-acceptance.log
+            fusion-evidence/
+          if-no-files-found: warn

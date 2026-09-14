@@ -1,0 +1,115 @@
+# Canonical: docs/development/ci-suites.md §25
+#
+# WHY THIS SUITE EXISTS (Fusion T13 · AC-E2E-05, AC-CORE-09, AC-GOV-01)
+# ---------------------------------------------------------------------
+# `scripts/fusion/tests/run-tests.sh` is the ONLY executor of AC-CORE-09's
+# retry/idempotency clause and AC-GOV-01's draft-only watcher clause. Those two
+# properties live entirely in shell, and before this workflow existed
+# `grep -rn 'scripts/fusion' .github/` returned nothing: no workflow, on any
+# branch, on any event, ran the suite. AC-E2E-05 requires "a repeatable
+# cross-repo CI/devnet test, not only a one-off manual demonstration" — a suite
+# that runs only when a human remembers to run it is the one-off case.
+#
+# WHY A NEW FILE RATHER THAN A STEP IN suite-13
+# The Fusion round-2 change protocol forbids editing existing workflow files.
+# The triggers below deliberately mirror suite-13's LIGHT tier (every
+# pull_request, no paths filter) and add `push: releases-*` so the RC branches
+# that Fusion tags are cut from are covered on every push, which is the event
+# class §12 acceptance is read against.
+#
+# WHY NO paths: FILTER
+# The failure this suite guards against is a rename or a truncation — exactly
+# the change a paths filter silently stops matching. A suite whose job is to
+# notice that the harness stopped executing must not be gated on a hardcoded
+# copy of the harness's current path. It is a ~1 minute job on the cheapest
+# host; it runs on every PR.
+#
+# WHY THE EXECUTED-ASSERTION FLOOR IS CHECKED TWICE
+# run-tests.sh runs under `set -uo pipefail` without `-e`. A truncated file or a
+# block that aborts early still prints "42 passed, 0 failed" and exits 0. The
+# script now ends at `FAIL == 0 && PASS >= MIN_EXPECTED_ASSERTIONS` and prints
+# `FUSION_SELFTESTS_EXECUTED=$PASS`; the job below re-derives the count from
+# that line against its OWN literal, so a silently lowered in-script floor
+# cannot buy a green on its own. The two numbers move together, in one commit —
+# run-tests.sh asserts that equality itself, so the drift is red here too.
+# This mirrors the suite-17 / plugins/robotmoney-swarm convention.
+#
+# GOTCHAS
+# - The suite shells out to stub `rmpc`/`cast`/`curl` binaries it writes into a
+#   mktemp PATH; it needs `jq` (present on ubuntu-latest) and touches no network
+#   and no chain. It must never be given devnet credentials — the devnet-facing
+#   workflow is suite-26-fusion-devnet-acceptance.yml.
+# - `pipefail` on the run step is mandatory: without it `tee` masks a non-zero
+#   exit from run-tests.sh and the job goes green on a failing suite.
+
+name: fusion-harness-selftests
+
+on:
+  push:
+    branches: ["releases-*"]
+    # AND on the RC tags themselves. A `branches:` filter NEVER matches a tag
+    # ref (refs/tags/...) — that is the R6 defect: every suite-* workflow in
+    # this repo is branches-only, so a `v0.4.0-rc.N` tag push dispatched
+    # exactly one workflow (release-dapp.yml, the only one with `tags:`).
+    # See .github/workflows/release-tag-suite-dispatch.yml.
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  fusion-selftests:
+    name: fusion-selftests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert the harness is where this workflow expects it
+        # A rename that moves the suite must fail loudly here rather than
+        # quietly running nothing. This is the shape issue #1199 was about.
+        run: |
+          test -f scripts/fusion/tests/run-tests.sh \
+            || { echo "::error::scripts/fusion/tests/run-tests.sh is missing — the Fusion harness moved without this workflow following it"; exit 1; }
+
+      - name: Run the Fusion harness self-tests
+        run: |
+          set -euo pipefail
+          bash scripts/fusion/tests/run-tests.sh | tee fusion-selftests.log
+
+      - name: Assert the executed-assertion floor independently
+        # `if: always()`: the step above runs under pipefail and fails first, so
+        # without this the diagnostic would be skipped exactly when it is most
+        # wanted — an aborted run would reach the log as a bare non-zero exit
+        # with no statement about how many assertions had executed.
+        if: always()
+        run: |
+          set -euo pipefail
+          line=$(grep -o 'FUSION_SELFTESTS_EXECUTED=[0-9]\+' fusion-selftests.log | tail -1 || true)
+          if [[ -z "$line" ]]; then
+            echo "::error::run-tests.sh printed no FUSION_SELFTESTS_EXECUTED line — treating as zero assertions executed"
+            exit 1
+          fi
+          count="${line#FUSION_SELFTESTS_EXECUTED=}"
+          echo "executed assertions: $count"
+          # KEEP THIS EQUAL TO run-tests.sh's MIN_EXPECTED_ASSERTIONS.
+          # Any slack between the two re-opens exactly the window this check
+          # exists to close. run-tests.sh asserts the equality from its side.
+          if [[ "$count" -lt 55 ]]; then
+            echo "::error::only $count assertions executed (expected >= 55, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
+            exit 1
+          fi
+
+      - name: Upload the self-test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusion-selftests-log
+          path: fusion-selftests.log
+          if-no-files-found: warn
