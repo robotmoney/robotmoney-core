@@ -132,9 +132,24 @@ integrity of the public record.
 4. **Scope it.** From the indexer, list every `ReceiptRecorded` from the
    compromised address. For each, re-fetch `payloadUri`, recompute the
    canonical digest, and re-verify every embedded analyst signature. Classify
-   each receipt as authentic or forged. The indexer already stores this
-   verification state, so the forged ones should be visible as
-   `verified = false` before anyone looks.
+   each receipt as authentic or forged.
+
+   **`verified = false` is not, on its own, evidence of forgery.** The flag
+   records one thing: whether the indexer could fetch `payloadUri` and reproduce
+   the on-chain `payloadDigest`. An unreachable or slow payload host produces the
+   same `false` as a forgery does. Read the two companion columns before drawing
+   any conclusion:
+
+   | Column | Reading |
+   | --- | --- |
+   | `last_verify_error` | `GET … returned 5xx`, a timeout, or a connection error → a HOST problem, not a forgery signal. A `digest mismatch …` message is the one that matters here. |
+   | `verify_attempts` | How many times the indexer has tried. A row at the ceiling with a transport error has simply been unreachable throughout. |
+   | `verified_at` | When verification last SUCCEEDED. `NULL` means it never has. |
+
+   The indexer re-verifies unverified rows on every tick and repairs them in
+   place (never downgrading a verified row), so a transient failure converges on
+   its own — a row that stays `verified = false` with a *digest mismatch* error
+   after the payload host is known-good is the one to escalate.
 5. **Publish the correction.** Blocked session ids are **not** recoverable:
    the contract refuses a duplicate `receiptId`. Re-anchor the affected
    sessions under new session ids from a clean key, and publish a public

@@ -131,6 +131,24 @@ Before any transaction is broadcast:
    to proceed on a mismatch (see `scripts/base-sepolia-rehearsal/live.sh`'s
    `RPC_CID` check for the pattern every network's runbook should follow).
 
+5. **Explorer-database migrations.** Check whether the release ships an
+   `services/explorer-indexer/migrations/` file that cannot backfill — i.e. one
+   that changes a primary key or adds a `NOT NULL` column with no derivable
+   value. Migration `0016_consensus_receipts_contract_scope.sql` is the first,
+   and it deliberately **raises an exception** rather than guessing. Such a
+   release requires the rebuild/reindex procedure in
+   `docs/operations/explorer-db-rebuild.md`, run inside the cutover window
+   (between the deploy and the manual QA pass), with:
+   - the pre-drop dump and row counts captured as release evidence (§2 there),
+   - the watchdog cold-start baseline `MIN(indexer_runs.started_at)` recorded
+     and its post-rebuild disposition decided **in advance** (§3 there) —
+     wiping it silently moves the baseline and the watchdog pages on the gap,
+   - the §6 verification output recorded before the watchdog is restarted.
+
+   Sequence this with any contract redeploy in the same ceremony so the
+   database is rebuilt **once**. Note that `docker compose down -v` is not the
+   sanctioned way to get a clean database — it also destroys `indexer_runs`.
+
 The preflight gate passes only when every check above passes with no
 failures and no silently-skipped check.
 

@@ -49,7 +49,36 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../services/explorer-indexer/migrations/0013_vote_power_tally.sql"),
     include_str!("../../../services/explorer-indexer/migrations/0014_committee_tables.sql"),
     include_str!("../../../services/explorer-indexer/migrations/0015_consensus_receipts.sql"),
+    // T20/T12: contract-scoped PK + repairable verification columns.
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0016_consensus_receipts_contract_scope.sql"
+    ),
 ];
+
+/// The `MIGRATIONS` list above is hand-maintained, and a migration missing from
+/// it does not fail loudly — it silently tests this API against a stale schema.
+/// (Exactly how T20's `contract_address` column first went missing here.) Pin the
+/// count against the migrations directory so the next migration cannot be
+/// forgotten.
+#[test]
+fn migration_list_covers_every_migration_file() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../services/explorer-indexer/migrations");
+    let on_disk = std::fs::read_dir(&dir)
+        .expect("read migrations dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "sql"))
+        .count();
+    assert_eq!(
+        MIGRATIONS.len(),
+        on_disk,
+        "MIGRATIONS in this test file lists {} migrations but {} .sql files exist in {}; \
+         add the new migration to the list",
+        MIGRATIONS.len(),
+        on_disk,
+        dir.display()
+    );
+}
 
 // Fixture identities.
 const SUBMITTER_A: &str = "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
@@ -163,10 +192,11 @@ async fn seed_receipt_fixture(pool: &sqlx::PgPool) {
     {
         sqlx::query(
             "INSERT INTO consensus_receipts \
-               (chain_id, receipt_id, receipt_index, submitter, payload_digest, payload_uri, \
-                recorded_at, block_number, log_index, tx_hash, verified, payload_bytes, \
+               (chain_id, contract_address, receipt_id, receipt_index, submitter, \
+                payload_digest, payload_uri, recorded_at, block_number, log_index, \
+                tx_hash, verified, payload_bytes, \
                 released, released_at, released_block_number, released_by) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,$9,$10,$11,$12,$13,$14,$15)",
+             VALUES ($1,$16,$2,$3,$4,$5,$6,$7,$8,0,$9,$10,$11,$12,$13,$14,$15)",
         )
         .bind(PRIMARY_CHAIN_ID)
         .bind(hex_bytes(receipt_id))
@@ -186,6 +216,8 @@ async fn seed_receipt_fixture(pool: &sqlx::PgPool) {
         .bind(*released_at)
         .bind(released_at.map(|_| block + 5))
         .bind(released_at.map(|_| hex_bytes(TIMELOCK)))
+        // T20: the emitting ConsensusRecommendationReceipt deployment.
+        .bind(vec![0xc7u8; 20])
         .execute(pool)
         .await
         .unwrap();
