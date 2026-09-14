@@ -3,7 +3,13 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { CSP_POLICY, CSP_META_POLICY, cspPlugin } from "../../src/lib/csp";
+import {
+  CSP_POLICY,
+  CSP_META_POLICY,
+  cspPlugin,
+  CLOUDFLARE_BEACON_SCRIPT_ORIGIN,
+  CLOUDFLARE_BEACON_CONNECT_ORIGIN,
+} from "../../src/lib/csp";
 
 describe("CSP policy", () => {
   it("defines script-src 'self' without unsafe-inline or unsafe-eval", () => {
@@ -28,6 +34,58 @@ describe("CSP policy", () => {
 
   it("allows the full-stack devnet receipt fixture origin", () => {
     expect(CSP_POLICY).toContain("http://receipt-fixtures:8097");
+  });
+
+  // QA finding R20. Cloudflare injects its Web Analytics beacon into the served
+  // HTML at the edge, after the origin's CSP header is written. Under
+  // `script-src 'self'` the browser blocks it and logs a console.error, which
+  // fails the e2e _consoleGuard on EVERY page load of a Cloudflare-fronted
+  // deployment (reproduced against https://stage-dapp.robotmoney-labs.dev).
+  describe("Cloudflare beacon (R20)", () => {
+    it("admits the beacon script origin in script-src", () => {
+      const scriptSrc = CSP_POLICY.split(";")
+        .map((d) => d.trim())
+        .find((d) => d.startsWith("script-src"));
+      expect(scriptSrc).toContain(CLOUDFLARE_BEACON_SCRIPT_ORIGIN);
+    });
+
+    it("admits the beacon RUM endpoint in connect-src", () => {
+      const connectSrc = CSP_POLICY.split(";")
+        .map((d) => d.trim())
+        .find((d) => d.startsWith("connect-src"));
+      expect(connectSrc).toContain(CLOUDFLARE_BEACON_CONNECT_ORIGIN);
+    });
+
+    it("carries the allowance into the meta-tag policy too", () => {
+      expect(CSP_META_POLICY).toContain(CLOUDFLARE_BEACON_SCRIPT_ORIGIN);
+    });
+
+    // The allowance must stay a NAMED host. Scoping the guard is the sanctioned
+    // fix; relaxing the script policy is not.
+    it("adds exactly one third-party script origin and no wildcard", () => {
+      const scriptSrc = (
+        CSP_POLICY.split(";")
+          .map((d) => d.trim())
+          .find((d) => d.startsWith("script-src")) ?? ""
+      )
+        .split(/\s+/)
+        .slice(1);
+      expect(scriptSrc).toEqual(["'self'", CLOUDFLARE_BEACON_SCRIPT_ORIGIN]);
+      expect(scriptSrc).not.toContain("https:");
+      expect(scriptSrc).not.toContain("*");
+    });
+  });
+
+  // QA finding R20, second half: a missing /favicon.ico is a 404 on every page
+  // load of every deployment. The file is a committed build input.
+  it("ships a favicon that the built bundle references", () => {
+    const publicIco = fileURLToPath(new URL("../../public/favicon.ico", import.meta.url));
+    expect(existsSync(publicIco)).toBe(true);
+    const indexHtml = readFileSync(
+      fileURLToPath(new URL("../../index.html", import.meta.url)),
+      "utf8",
+    );
+    expect(indexHtml).toMatch(/rel="icon"[^>]*href="\/favicon\.ico"/);
   });
 
   it("injects a CSP meta tag via transformIndexHtml", () => {

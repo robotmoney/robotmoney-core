@@ -325,6 +325,41 @@ in the `DevnetEndpoints` interface in `helpers/devnet.ts`.
 
 ---
 
+## Coverage that must never stop running
+
+A spec that degrades to "skipped" is indistinguishable from a spec that passed,
+in the exit code and in a CI summary line. That is not hypothetical: `b3ed4dc1`
+gated `tests/e2e/consensus-receipts.spec.ts` on `FUSION_RECEIPT_ID` /
+`FUSION_RECEIPT_URL`, variables nothing in `.github/`, `playwright.config.ts` or
+the smoke-test harness sets, and `AC-CORE-08`'s browser-coverage claim then went
+on standing while the spec executed on zero runs (QA finding T14).
+
+Two mechanisms keep that from recurring.
+
+**A standing spec and an optional spec, with different subjects.**
+
+| Spec | Subject | May skip? |
+| --- | --- | --- |
+| `consensus-receipts-seeded.spec.ts` | the two receipts `Fixture::seed_consensus_receipts` seeds on every `--full-stack` boot | **No** |
+| `consensus-receipts.spec.ts` | the receipt a Fusion QA run really anchored, named by `FUSION_RECEIPT_ID` / `FUSION_RECEIPT_URL` | Yes |
+
+The seeded pair is core's own fixture bytes — enough to prove the four rendered
+state dimensions and the required explanatory language are wired, never enough to
+prove a `robotmoney-frontend` receipt survives the round trip. The env-named spec
+proves the round trip and nothing else. Neither substitutes for the other, which
+is why the `receipt-fixtures` compose service, its `depends_on` health gate, the
+`--host-resolver-rules` mapping in `playwright.config.ts` and the `csp.ts`
+`http://receipt-fixtures:8097` allowance are all deliberately KEPT rather than
+retired: they are the standing gate's apparatus, not leftovers.
+
+**A reporter that fails a run with zero executed required tests.**
+`tests/e2e/reporters/required-coverage-reporter.ts` (decision logic in
+`requiredCoverage.ts`, unit-tested in `tests/unit/requiredCoverage.test.ts`) fails
+the run — with no test having failed — when a spec listed in `REQUIRED_SPECS`
+contributed zero executed tests, whether it skipped or was never collected at all.
+Add a spec to `REQUIRED_SPECS` when it is the standing proof of an acceptance
+criterion; never add one that is legitimately environment-gated.
+
 ## Relationship to existing harnesses
 
 | Harness | Devnet | Lifecycle owner | Scope |

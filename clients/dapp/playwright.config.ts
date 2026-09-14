@@ -29,6 +29,11 @@ export default defineConfig({
   outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? "test-results",
   reporter: [
     ["list"],
+    // QA finding T14: fails the run when a spec that must always execute
+    // collected zero executed tests. A required spec that silently degrades to
+    // "skipped" used to exit 0 and keep AC-CORE-08's coverage claim alive while
+    // nothing ran. See tests/e2e/reporters/requiredCoverage.ts.
+    ["./tests/e2e/reporters/required-coverage-reporter.ts"],
     [
       "html",
       { open: "never", outputFolder: process.env.PLAYWRIGHT_HTML_REPORT ?? "playwright-report" },
