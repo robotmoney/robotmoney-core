@@ -365,6 +365,73 @@ fi
 check "watcher passes --to-block as a hex quantity eth_getLogs accepts" \
   "$(grep -cE -- '--to-block 0x[0-9a-f]+' "$STUB_DIR/rmpc_calls")" "1"
 
+# ─── devnet-acceptance.sh ────────────────────────────────────────────────────
+# The orchestrator (AC-E2E-05). What is worth executing about it is not the
+# happy path — that needs a chain — but the three ways it could LIE: skipping a
+# stage and calling the run green, reaching a write path in the no-anchor mode,
+# and reporting a missing witness address as a pass.
+echo
+echo "devnet-acceptance.sh"
+
+acceptance_env() {
+  export PATH="$STUB_DIR/bin:$PATH"
+  export STUB_DIR
+  export RMPC_BIN=rmpc CAST_BIN=cast
+  export FUSION_RMPC_CONFIG="$STUB_DIR/config.toml"
+  export FUSION_RPC_URL="http://127.0.0.1:1"
+  export FUSION_GATEWAY_ADDRESS=0x0000000000000000000000000000000000000001
+  export FUSION_RECEIPT_ADDRESS=0x0000000000000000000000000000000000000002
+  export FUSION_GOVERNANCE_ADDRESS=0x0000000000000000000000000000000000000003
+  export FUSION_ROUTER_ADDRESS=0x0000000000000000000000000000000000000004
+  export FUSION_VAULT_ADDRESSES=0x0000000000000000000000000000000000000005
+  : >"$STUB_DIR/config.toml"
+  RESULT="$STUB_DIR/result.json"
+}
+
+# An unknown stage name is a typo in an acceptance invocation. Refusing is the
+# only safe answer: silently running a subset would report a green run that
+# never executed the stage the operator asked for.
+new_stubs; acceptance_env
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/r --stages verify,typo >/dev/null 2>&1
+check "an unknown stage name is refused" "$?" "64"
+
+# A missing witness address must refuse at startup, not turn an INV-4 assertion
+# into a silent skip.
+new_stubs; acceptance_env
+unset FUSION_ROUTER_ADDRESS
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/r --no-anchor >/dev/null 2>&1
+check "a missing INV-4 witness address refuses to start" "$?" "3"
+export FUSION_ROUTER_ADDRESS=0x0000000000000000000000000000000000000004
+
+# No receipt URL at all is a usage error, never an empty green run.
+new_stubs; acceptance_env
+"$FUSION_DIR/devnet-acceptance.sh" >/dev/null 2>&1
+check "no receipt URL is a usage error" "$?" "64"
+
+# THE NEGATIVE CONTROL. --no-anchor must never reach a write subcommand, and an
+# unreachable receipt URL must make the run FAIL rather than pass vacuously.
+new_stubs; acceptance_env
+: >"$STUB_DIR/rmpc_calls"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --no-anchor \
+  --out "$RESULT" >/dev/null 2>&1
+check "an unfetchable receipt URL fails the run" "$?" "1"
+if grep -Eq '(^| )(submit|propose|vote|deposit|withdraw|send)( |$)' "$STUB_DIR/rmpc_calls"; then
+  bad "--no-anchor reached a write subcommand: $(cat "$STUB_DIR/rmpc_calls")"
+else
+  ok "--no-anchor invoked no write subcommand"
+fi
+if [[ -s "$RESULT" ]] && jq -e '.ok == false and .summary.failed > 0' "$RESULT" >/dev/null 2>&1; then
+  ok "the machine-readable result records the failure"
+else
+  bad "the result file did not record a failure: $(cat "$RESULT" 2>/dev/null)"
+fi
+if [[ -s "$RESULT" ]] && jq -e '[.assertions[] | select(.stage=="record" or .stage=="release")] |
+      length > 0 and all(.result == "SKIP")' "$RESULT" >/dev/null 2>&1; then
+  ok "unselected stages are recorded as SKIP, never counted as passes"
+else
+  bad "unselected stages were not recorded as skipped"
+fi
+
 echo
 echo "scripts/fusion self-tests: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

@@ -253,7 +253,7 @@ trusting the exit status of the command that may have timed out.
 
 ### 5.5 The Fusion acceptance harnesses (`scripts/fusion/`)
 
-Three scripts implement the autonomous half of §5.2–5.4. None of them holds a
+Four scripts implement the autonomous half of §5.2–5.4. None of them holds a
 key on argv, and none of them signs a governance proposal.
 
 | Script | What it does | Idempotency / restart rule |
@@ -261,6 +261,7 @@ key on argv, and none of them signs a governance proposal.
 | `submit-receipt-worker.sh` | Verifies the receipt, then retries submission until the **exact** `(receiptId, payloadDigest)` pair is readable on chain. | Re-reads the chain before and after every attempt. An already-anchored id with the same digest exits `0` without broadcasting; an already-anchored id with a *different* digest is fatal and is never overwritten. |
 | `watch-released-drafts.sh` | Polls `ReceiptReleased` behind `FUSION_CONFIRMATIONS` and emits a human-review-only draft per released receipt. | The block cursor is a durable file, written atomically and advanced **only** after a whole confirmed range scanned successfully. A crash mid-range rescans it; drafts are read-only JSON, so a rescan costs nothing. |
 | `cross-repo-acceptance.sh` | The AC-E2E-05 seam: consumes a *frontend-generated* receipt, verifies the **public URL** and the local bytes and proves they agree, submits, releases, drafts, and asserts INV-4. | Reads `RouterGovernance.currentProposalId()`, `PortfolioRouter.getWeights()` and every mapped vault's `totalAssets()` before and after and fails if any moved. |
+| `devnet-acceptance.sh` | The AC-E2E-05 **run**: takes one frontend receipt URL and drives `verify → negative → record → index → release → dapp → govern`, writing a machine-readable result file. Exits non-zero on any failed assertion. | Stage selection is explicit (`--stages`, `--no-anchor`). An unselected stage is written to the result as `SKIP` and is never counted as a pass; an unknown stage name and a missing witness address both refuse to start. |
 
 **Poison cannot wedge the watcher.** One receipt in the confirmed range that can
 never be drafted — 404 payload URL, tampered bytes, a receipt id that does not
@@ -287,14 +288,33 @@ The draft watcher's read-only property is structural, not a convention:
 broadcast path (`clients/rust-payment-client/src/commands/governance_draft.rs`),
 so there is no code path from a `ReceiptReleased` log to a transaction.
 
+**Why the orchestrator is separate from `cross-repo-acceptance.sh`.** The older
+script is one straight line from artifact to draft and always anchors. The
+acceptance run needs two things it cannot give: a mode that verifies and refuses
+while touching the chain only through `eth_call` — used to dry-run the whole
+negative bundle before the first real receipt exists — and a durable result
+document naming every assertion, including the ones that did **not** run. A
+skipped stage reported as a pass is the failure shape this file exists to
+prevent, so `devnet-acceptance.sh` records `PASS`, `FAIL` and `SKIP` as three
+distinct outcomes and its own self-test asserts that unselected stages land as
+`SKIP`.
+
+**An absent `weights` array is a FAILED assertion, never a skipped one.** A
+receipt with no allocation vector cannot carry a recommendation; reporting that
+as "nothing to check" is exactly how the condition stays invisible.
+
 `scripts/fusion/tests/run-tests.sh` exercises all of it against stub `rmpc` and
 `cast` binaries — retry-then-succeed, already-anchored no-op, conflicting-digest
 refusal (including a conflicting digest whose `payloadUri` embeds the derived
 digest, which a substring comparison would wrongly accept), a submit that
 reports success without anchoring, a malformed `getReceiptById` tuple, cursor
 persistence across a restart, cursor non-advance on scan failure, the mandatory
-`FUSION_START_BLOCK`, and the negative control that the watcher never invokes a
-write subcommand.
+`FUSION_START_BLOCK`, the negative control that the watcher never invokes a
+write subcommand, and — for `devnet-acceptance.sh` — an unknown stage name, a
+missing INV-4 witness address, a missing receipt URL, an unfetchable receipt URL
+that must fail rather than pass vacuously, the negative control that
+`--no-anchor` reaches no write subcommand, and the assertion that unselected
+stages are recorded as `SKIP`.
 
 > **CI coverage, stated honestly.** `grep -rn "scripts/fusion" .github/` returns
 > nothing: no workflow runs this harness. It is the failure shape
