@@ -66,6 +66,13 @@
 #           FUSION_EVIDENCE_DIR (raw command output is written there)
 set -uo pipefail
 
+# T24: ONE envelope-unwrap rule, shared with every other consumer and pinned by
+# tests/fixtures/consensus-receipt.envelope.json. This script used to carry two
+# hand-written jq copies of it that had already diverged from each other.
+FUSION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)"
+# shellcheck source=lib/receipt-envelope.sh
+source "$FUSION_LIB_DIR/receipt-envelope.sh"
+
 ALL_STAGES="verify negative record index release dapp govern"
 STAGES="$ALL_STAGES"
 RECEIPT_URL=""
@@ -206,12 +213,7 @@ if have_stage verify; then
   # The publisher may serve the receipt inside an envelope. Normalise ONCE,
   # here, so every later stage reads the same object the digest was taken over.
   if [[ -s "$body1" ]]; then
-    if jq -e 'has("schema_version")' "$body1" >/dev/null 2>&1; then
-      cp "$body1" "$WORK/receipt.json"
-    else
-      jq -e '.receipt | has("schema_version")' "$body1" >/dev/null 2>&1 \
-        && jq '.receipt' "$body1" >"$WORK/receipt.json" || cp "$body1" "$WORK/receipt.json"
-    fi
+    receipt_unwrap_envelope "$body1" "$WORK/receipt.json" || true
   fi
 
   verify_out="$("$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" verify --receipt-url "$RECEIPT_URL" 2>&1)"
@@ -265,9 +267,7 @@ if have_stage negative; then
   if [[ ! -s "$WORK/receipt.json" ]]; then
     curl -fsS "$RECEIPT_URL" -o "$WORK/fetch1.json" || true
     if [[ -s "$WORK/fetch1.json" ]]; then
-      jq -e 'has("schema_version")' "$WORK/fetch1.json" >/dev/null 2>&1 \
-        && cp "$WORK/fetch1.json" "$WORK/receipt.json" \
-        || jq '.receipt' "$WORK/fetch1.json" >"$WORK/receipt.json"
+      receipt_unwrap_envelope "$WORK/fetch1.json" "$WORK/receipt.json" || true
     fi
   fi
   if [[ -s "$WORK/receipt.json" ]] && jq -e 'has("schema_version")' "$WORK/receipt.json" >/dev/null 2>&1; then
