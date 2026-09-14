@@ -153,10 +153,14 @@ inputs exist.
    contract in the ceremony's runtime set is `<= 24576` bytes before any
    transaction is sent (the `#865` class).
 2. **Env-default guard** — reject a ceremony that would deploy
-   `RouterGovernance` with `EXECUTION_DELAY`/`QUORUM_THRESHOLD` left at their
-   unsafe defaults of `3600`/`1` if the operator intends a real governance
-   round-trip, and reject `EXECUTION_DELAY=0` outright (the `#864` revert
-   class).
+   `RouterGovernance` with `EXECUTION_DELAY` left at its unsafe default of
+   `3600` if the operator intends a real governance round-trip, and reject
+   `EXECUTION_DELAY=0` outright (the `#864` revert class). `QUORUM_THRESHOLD`
+   no longer needs a preflight guard of its own — its default is `2` and the
+   contract's own `MIN_QUORUM_THRESHOLD = 2` refuses anything lower at the
+   constructor — but set it explicitly anyway to the value the voter roster
+   calls for (`docs/technical/router-governance-handoff-runbook.md` §1.1);
+   `2` is a floor, not a target.
 
 **Postcondition:** every size check passes and no `0`-delay env default is live,
 **before** any broadcast. The script exits non-zero otherwise, so the ceremony
@@ -216,7 +220,20 @@ explicitly, never left to the `EXECUTION_DELAY=0` default).
 
 **Postcondition:** the deployed `RouterGovernance` returns
 `executionDelay() >= RouterGovernance.MIN_EXECUTION_DELAY` and
-`quorumThreshold() > 0`.
+`quorumThreshold() > 1`.
+
+`> 0` was the old postcondition, and it was **weaker than the preflight the same
+ceremony already runs** — a by-the-book operator could pass Step 5 with a quorum
+of `1` that the preflight refuses, and be stopped mid-window by a rule stated in
+no document they were given. `> 1` is now the rule in all three places: the
+preflight, this postcondition, and `MIN_QUORUM_THRESHOLD` in the contract.
+
+**Also assert before leaving Step 5:** `PortfolioRouter.hasRole(ADMIN_ROLE,
+<governance>)` is true. `DeployRouterGovernance.s.sol` grants it and reads it
+back, so a failure here means the grant was skipped
+(`SKIP_ROUTER_ADMIN_GRANT=true`) and the grant is still owed as a timelock
+proposal. Without it `execute()` reverts inside `setWeights` and the approving
+body can approve without being able to act.
 
 ### Step 6 — IC policy + consensus receipt (one ceremony)
 

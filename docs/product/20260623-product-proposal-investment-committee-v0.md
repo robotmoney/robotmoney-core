@@ -567,14 +567,15 @@ label, not a control. Three consequences:
   own public artifact rather than a duplicate of who holds power — which is
   precisely the "live, per-agent track record" the GTM strategy asks for (§1).
 
-**Open concern: the approving body's quorum is currently 1.**
-`DeployRouterGovernance.s.sol` deploys `quorumThreshold = DEFAULT_QUORUM_THRESHOLD`
-= 1, and `MIN_QUORUM_THRESHOLD` is also 1 (`RouterGovernance.sol:54`). One voter
-with any nonzero power can therefore carry a weight proposal. That is a defensible
-MVP default when the voter set is a single trusted admin, but it is **not** a
-meaningful separate-body control. Before receipts drive real weight changes, set a
-quorum that reflects the intended voter set — otherwise "a different body
-approves" is true on paper and hollow in practice.
+**Closed (was: the approving body's quorum is 1).**
+`DeployRouterGovernance.s.sol` now deploys `quorumThreshold =
+DEFAULT_QUORUM_THRESHOLD` = 2, and `MIN_QUORUM_THRESHOLD` is 2 in the contract —
+enforced by both the constructor and `setQuorumThreshold`, so a single voter can
+neither carry a weight proposal nor be restored as a sufficient one afterwards.
+The floor is a lower bound, not a target: before receipts drive real weight
+changes, still set a quorum that reflects the intended voter set
+(`docs/technical/router-governance-handoff-runbook.md` §1.1), otherwise "a
+different body approves" is true on paper and thin in practice.
 
 ### 3.5 Drop / out of scope for v0
 
@@ -637,13 +638,15 @@ Remaining uncertainty is in §6.
   an influence the committee does not have; rendering it badly implies the
   committee is ignored. Mitigated by making applied vs. not-applied an explicit,
   per-recommendation state in the dapp rather than something a reader infers.
-- **Approving body with a quorum of 1 (new, from §3.4).** The committee and the
-  `RouterGovernance` voter set are deliberately separate bodies, but the deployed
-  default `quorumThreshold = 1` means a single voter can carry a weight proposal,
-  which hollows out that separation. Mitigated by setting a quorum that reflects
-  the real voter set before receipts drive weight changes, and by the disjointness
-  invariant in §3.4. Until then, treat the separation as an organisational control
-  rather than an enforced one.
+- **Approving body with a thin quorum (from §3.4, largely retired).** The
+  committee and the `RouterGovernance` voter set are deliberately separate
+  bodies. The deployed default was `quorumThreshold = 1`, which let a single
+  voter carry a weight proposal and hollowed out that separation; the contract
+  floor and the deploy default are now both `2`, so the separation is an
+  enforced control rather than an organisational one. What remains is a matter
+  of degree: `2` out of a large voter set is still a minority, so set a quorum
+  that reflects the real voter set before receipts drive weight changes. The
+  disjointness invariant in §3.4 covers the other half.
 - **`meanTakeWeights` as a single point of failure (new, from §2.1's derivation
   decision).** A rounding or normalization bug in
   `backend/src/swarm/domain.ts:1691-1710` now propagates into a signed artifact

@@ -341,7 +341,13 @@ exec_delay="$(json_int_at "$cadence_json" 1)"
 quorum_onchain="$(json_int_at "$cadence_json" 2)"
 [[ "$exec_delay" -ge 3600 ]] || fail "governance executionDelay $exec_delay < MIN_EXECUTION_DELAY 3600 (got: $cadence_json)"
 [[ "$quorum_onchain" -gt 1 ]] || fail "governance quorumThreshold must be greater than 1 (got: $quorum_onchain)"
-info "postcondition OK: governance executionDelay=$exec_delay quorum=$quorum_onchain (pinned $QUORUM_THRESHOLD)"
+# R7: the grant DeployRouterGovernance makes is what lets execute() reach
+# setWeights. Read it back here rather than trusting the script's own require:
+# this is the one postcondition whose absence produces a deployment that looks
+# healthy and only fails when the first real proposal tries to land.
+assert_role "$ROUTER" "$ADMIN_ROLE" "$GOVERNANCE" "true" \
+  "R7: RouterGovernance must hold router ADMIN_ROLE (else execute() reverts in setWeights)"
+info "postcondition OK: governance executionDelay=$exec_delay quorum=$quorum_onchain (pinned $QUORUM_THRESHOLD) router ADMIN_ROLE granted"
 
 # ─── 6. IC policy + consensus receipt — ONE ceremony, BEFORE timelock ────────
 IC_OUT="$CUR/ic-policy.json"

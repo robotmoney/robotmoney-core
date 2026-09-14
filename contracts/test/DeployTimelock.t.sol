@@ -4,6 +4,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {stdJson} from "forge-std/StdJson.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
@@ -121,8 +122,14 @@ contract DeployTimelockTest is Test {
             address(script),
             7 days, // votingPeriod
             1 days, // executionDelay
-            1 // quorumThreshold
+            2 // quorumThreshold — RouterGovernance.MIN_QUORUM_THRESHOLD (D16)
         );
+        // R7: DeployTimelock now refuses a handover that would leave the
+        // approving body unable to act, so the fixture must reflect what
+        // DeployRouterGovernance does at deploy time — grant governance
+        // ADMIN_ROLE on the router.
+        vm.prank(address(script));
+        router.grantRole(ADMIN_ROLE, address(governance));
 
         d = script.runInProcess(
             address(vault),
@@ -862,5 +869,124 @@ contract NaiveAgentGateway is AccessControl {
         // Only the default root is granted; AGENT_ROLE's admin stays
         // DEFAULT_ADMIN_ROLE (the bug condition). No _setRoleAdmin redirect.
         _grantRole(DEFAULT_ADMIN_ROLE, root);
+    }
+}
+
+// ─── R7: the deployment manifest ──────────────────────────────────────────────
+
+/// @dev Exposes the script's internal manifest writer. `_writeJson` runs only
+///      inside `run()`, which needs a broadcast context and a live chain — so
+///      without this seam the manifest is the one part of the deploy script
+///      that ships untested, and a serialization mistake in it surfaces as a
+///      malformed artifact during a real ceremony.
+contract ManifestHarness is DeployTimelock {
+    function exposedWriteJson(Deployed memory d) external {
+        _writeJson(d);
+    }
+}
+
+/// @notice The manifest must answer, from one file: which chain, which
+///         addresses, which bytecode, holding which roles.
+contract DeployTimelockManifestTest is Test {
+    using stdJson for string;
+
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
+    ManifestHarness internal harness;
+    string internal manifest;
+    string internal outPath;
+
+    function setUp() public {
+        // Build the topology the way DeployTimelockTest does, run the real
+        // handover, then write the manifest for the resulting state.
+        TestERC20 usdc = new TestERC20();
+        DeployTimelock script = new DeployTimelock();
+        address deployer = address(script);
+        address safe = address(new MockHighThresholdSafe());
+        address emergency = makeAddr("manifest-emergency");
+
+        RobotMoneyVault vault = new RobotMoneyVault(
+            usdc, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
+        );
+        RobotMoneyGateway gateway =
+            new RobotMoneyGateway(usdc, vault, deployer, makeAddr("manifest-pauser"), address(0));
+        VaultRegistry registry = new VaultRegistry(deployer);
+        PortfolioRouter router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        RouterGovernance governance =
+            new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+
+        vm.prank(deployer);
+        router.grantRole(ADMIN_ROLE, address(governance));
+
+        // Call the script FROM the script's own address so the roles it revokes
+        // from `msg.sender` are the roles it actually holds.
+        vm.prank(deployer);
+        DeployTimelock.Deployed memory d = script.runInProcess(
+            address(vault),
+            address(gateway),
+            address(registry),
+            address(router),
+            address(governance),
+            safe,
+            emergency,
+            2 days
+        );
+
+        harness = new ManifestHarness();
+        outPath = "/tmp/r7-manifest-test.json";
+        vm.setEnv("DEPLOYMENT_OUT", outPath);
+
+        // `_writeJson` reads `msg.sender` for the deployer role rows, so the
+        // harness call must carry the same deployer identity.
+        vm.prank(deployer);
+        harness.exposedWriteJson(d);
+        manifest = vm.readFile(outPath);
+    }
+
+    function test_manifestRecordsTheChainId() public view {
+        assertEq(manifest.readUint(".chain_id"), block.chainid);
+    }
+
+    function test_manifestRecordsAddresses() public view {
+        assertTrue(
+            manifest.readAddress(".addresses.router") != address(0), "router address missing"
+        );
+        assertTrue(
+            manifest.readAddress(".addresses.governance") != address(0),
+            "governance address missing"
+        );
+        // The flat keys existing readers index by are preserved.
+        assertEq(manifest.readAddress(".router"), manifest.readAddress(".addresses.router"));
+    }
+
+    /// @notice Code hashes are what make the manifest an identity record rather
+    ///         than an address list: two deployments at the same address on two
+    ///         chains are distinguishable only by bytecode.
+    function test_manifestRecordsCodeHashes() public view {
+        bytes32 routerHash = manifest.readBytes32(".code_hashes.router");
+        assertTrue(routerHash != bytes32(0), "router code hash missing");
+        assertEq(routerHash, manifest.readAddress(".addresses.router").codehash);
+        assertTrue(manifest.readBytes32(".code_hashes.governance") != bytes32(0));
+        assertTrue(manifest.readBytes32(".code_hashes.timelock") != bytes32(0));
+    }
+
+    /// @notice The two R7 conditions, recorded as booleans an auditor can grep.
+    function test_manifestRecordsTheR7RoleConditions() public view {
+        assertTrue(
+            manifest.readBool(".roles.governance_has_router_admin_role"),
+            "manifest says governance cannot reach setWeights"
+        );
+        assertFalse(
+            manifest.readBool(".roles.deployer_has_router_admin_role"),
+            "manifest says the deployer EOA can still move weights"
+        );
+        assertTrue(manifest.readBool(".roles.timelock_has_router_admin_role"));
+        assertTrue(manifest.readBool(".roles.safe_is_timelock_proposer"));
+        assertTrue(manifest.readBool(".roles.safe_is_timelock_executor"));
+    }
+
+    function test_manifestRecordsTheQuorumFloorItWasDeployedUnder() public view {
+        assertEq(manifest.readUint(".min_quorum_threshold"), 2);
+        assertGt(manifest.readUint(".quorum_threshold"), 1);
     }
 }

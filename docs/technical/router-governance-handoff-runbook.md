@@ -67,13 +67,36 @@ ordinary ops action and must never be performed by this runbook's steps.
 
 ### 1.1 Choosing the quorum (task 5.8)
 
-`DeployRouterGovernance.s.sol` deploys `quorumThreshold = 1` by default, and
-`MIN_QUORUM_THRESHOLD = 1` (`RouterGovernance.sol:54`) is the floor. **Before
-receipts drive real weight changes, set a quorum that reflects the intended
-voter set** — one voter with any nonzero power carrying a change is hollow
-separate-body control. The quorum is set at deploy time via the
-`QUORUM_THRESHOLD` env var (or after deploy via `setQuorumThreshold`, routed
-through the admin timelock).
+`DeployRouterGovernance.s.sol` deploys `quorumThreshold = 2` by default, and
+`MIN_QUORUM_THRESHOLD = 2` (`RouterGovernance.sol`) is the floor the contract
+itself enforces — at both doors, the constructor and `setQuorumThreshold`.
+
+**A quorum of 1 is not reachable, by deploy script or by setter.** Three refusals
+now agree, and an operator will meet whichever comes first:
+
+| Where | What refuses | How it reads |
+|---|---|---|
+| `DeployRouterGovernance.s.sol`, before any env read | `QUORUM_THRESHOLD <= 1` | `QUORUM_THRESHOLD must be greater than 1` |
+| `RouterGovernance` constructor | `_quorumThreshold < 2` | `QuorumBelowMinimum()` |
+| `RouterGovernance.setQuorumThreshold` | `threshold < 2` | `QuorumBelowMinimum()` |
+
+The Step 5 postcondition below is therefore `quorumThreshold() > 1`, not
+`> 0`: the weaker reading was the one that let the hollow default through.
+
+**The floor is a lower bound, not a target.** Before receipts drive real weight
+changes, set a quorum that reflects the intended voter set — two voters out of
+twenty is still a minority carrying a change. The quorum is set at deploy time
+via the `QUORUM_THRESHOLD` env var (or after deploy via `setQuorumThreshold`,
+routed through the admin timelock).
+
+**Migrating an existing deployment.** `MIN_QUORUM_THRESHOLD` is a `constant`, so
+raising it changed the contract's bytecode. A `RouterGovernance` deployed before
+this change keeps the old floor of 1 and cannot be upgraded into the new one:
+redeploy `RouterGovernance`, grant the new instance `ADMIN_ROLE` on the
+`PortfolioRouter`, revoke it from the old instance, and re-point every
+off-chain reader (explorer indexer, dapp, watchdog) at the new address. The
+`PortfolioRouter` and the receipt contract are untouched, so allocation state
+and anchored receipts survive.
 
 Selection rule: pick a quorum that **no minority subset of the voter set can
 reach**, so a change requires broad consent of the approving body. Concretely,

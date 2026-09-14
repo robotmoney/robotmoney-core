@@ -24,9 +24,9 @@ and `docs/prd.md` §"Allocation Governance"; `docs/development/open-questions.md
 > the shipped MVP uses **admin-configurable** `quorumThreshold` /
 > `votingPeriod` / `executionDelay` storage with `setQuorumThreshold` /
 > `setVotingPeriod` / `setExecutionDelay` setters, bounded only by the constant
-> floors `MIN_QUORUM_THRESHOLD = 1`, `MIN_VOTING_PERIOD = 1 hour`, and
+> floors `MIN_QUORUM_THRESHOLD = 2`, `MIN_VOTING_PERIOD = 1 hour`, and
 > `MIN_EXECUTION_DELAY = 1 hour`, with `DeployRouterGovernance.s.sol` defaulting
-> to 1 h / 1 h / quorum 1. The original 5 %-of-`RM.totalSupply()` quorum, 7-day
+> to 1 h / 1 h / quorum 2. The original 5 %-of-`RM.totalSupply()` quorum, 7-day
 > cadence, 5-day voting period, and 48 h execution delay were **ADR-recommended
 > targets that were never hard-coded**; they remain deferred token-holder-
 > governance goals. §4 onward describes that deferred RM-token-snapshot design,
@@ -80,7 +80,7 @@ issue begins:
 ### 3.1 Quorum threshold
 
 **Shipped (MVP): admin-configurable absolute voting-power threshold,
-`quorumThreshold`, bounded below by `MIN_QUORUM_THRESHOLD = 1`.**
+`quorumThreshold`, bounded below by `MIN_QUORUM_THRESHOLD = 2`.**
 
 As deployed in `contracts/RouterGovernance.sol`, quorum is an absolute amount of
 FOR voting power — the `quorumThreshold` storage variable — **not** a 5 %-of-
@@ -91,11 +91,22 @@ in-flight proposal.
 
 `ADMIN_ROLE` adjusts the live value via `setQuorumThreshold(uint256)`, which
 reverts (`QuorumBelowMinimum`) for any value below the constant floor
-`MIN_QUORUM_THRESHOLD = 1`; at least one vote must always be required so a
-proposal cannot pass with zero votes cast. `contracts/script/DeployRouterGovernance.s.sol`
-deploys with `quorumThreshold = 1` (`DEFAULT_QUORUM_THRESHOLD`). This matches the
+`MIN_QUORUM_THRESHOLD = 2`. The floor was `1` through the MVP, which required
+only that *some* vote be cast — a bar one voter clears alone, making the
+separate-body approval this contract exists to provide hollow. It is now `2`, so
+no single voter can carry a weight change, and the constructor and
+`setQuorumThreshold` enforce it identically: a configured deployment cannot be
+walked back down to a single-voter quorum after the fact.
+`contracts/script/DeployRouterGovernance.s.sol` deploys with
+`quorumThreshold = 2` (`DEFAULT_QUORUM_THRESHOLD`) and additionally refuses an
+explicit `QUORUM_THRESHOLD <= 1` before spending any gas. This matches the
 admin-assigned voting-power model of the MVP (voting power is assigned by
 `ADMIN_ROLE` via `setVotingPower`, not derived from RM balances).
+
+Raising the floor changed `RouterGovernance` bytecode. A governance contract
+deployed before the change keeps the old floor; the fix is a **redeploy** of
+`RouterGovernance` (and a re-grant of router `ADMIN_ROLE` to the new instance),
+not an upgrade. See `docs/technical/router-governance-handoff-runbook.md` §1.1.
 
 **Deferred target (not shipped).** The whitepaper's "5 % quorum" parameter
 (`docs/development/open-questions.md` §3.9) is a future *token-holder*-governance

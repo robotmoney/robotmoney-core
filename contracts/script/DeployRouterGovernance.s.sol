@@ -8,6 +8,8 @@ import {Script} from "forge-std/Script.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 
@@ -19,6 +21,16 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 ///         The smoke-test devnet startup sequence runs this script after
 ///         DeployPortfolioRouter so that the dapp's Governance tab reads
 ///         live on-chain data in CI.
+///
+///         It also grants the freshly deployed RouterGovernance `ADMIN_ROLE`
+///         on the PortfolioRouter. Without that grant the approving body can
+///         approve and cannot act: a proposal reaches quorum, clears its
+///         execution delay, and then `execute()` reverts inside
+///         `router.setWeights`, leaving the deployer EOA as the only address
+///         that can move allocation weights — the exact inversion
+///         project-fusion.md §4.3 names as the governance-topology gap. The
+///         caller must therefore hold `ADMIN_ROLE` on the router, which the
+///         deployer does until `DeployTimelock` hands it to the timelock.
 ///
 ///         Required env vars:
 ///           ADMIN_ADDRESS      — receives ADMIN_ROLE on the governance contract
@@ -32,6 +44,11 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 ///                                (default: 2; must be greater than 1)
 ///           DEPLOYMENT_OUT     — path for the output JSON
 ///                                (default: "deployments/governance-<chain_id>.json")
+///           SKIP_ROUTER_ADMIN_GRANT — set to true ONLY when the router's
+///                                ADMIN_ROLE has already moved to the timelock
+///                                and the grant will be scheduled through it.
+///                                The script then refuses to pretend the wiring
+///                                is complete and says so loudly.
 contract DeployRouterGovernance is Script {
     using stdJson for string;
 
@@ -79,8 +96,10 @@ contract DeployRouterGovernance is Script {
         uint64 executionDelay =
             uint64(vm.envOr("EXECUTION_DELAY", uint256(DEFAULT_EXECUTION_DELAY)));
 
+        // `msg.sender` is the broadcasting account under `forge script`, and it
+        // is that account whose router ADMIN_ROLE the grant below depends on.
         vm.startBroadcast();
-        d = _deploy(admin, router, votingPeriod, executionDelay, quorumThreshold);
+        d = _deploy(msg.sender, admin, router, votingPeriod, executionDelay, quorumThreshold);
         vm.stopBroadcast();
 
         _writeDeploymentJson(d);
@@ -107,8 +126,11 @@ contract DeployRouterGovernance is Script {
         // quorum back in through the door the broadcast path closes.
         require(quorumThreshold_ > 1, "QUORUM_THRESHOLD must be greater than 1");
 
+        // Under `vm.startPrank` the script's outgoing calls carry `admin_` as
+        // their sender, NOT this function's `msg.sender` (which is the test
+        // contract). The grant's precondition is therefore about `admin_`.
         vm.startPrank(admin_);
-        d = _deploy(admin_, router_, votingPeriod_, executionDelay_, quorumThreshold_);
+        d = _deploy(admin_, admin_, router_, votingPeriod_, executionDelay_, quorumThreshold_);
         vm.stopPrank();
 
         _logResult(d);
@@ -117,6 +139,7 @@ contract DeployRouterGovernance is Script {
     // ─── Internal ────────────────────────────────────────────────────────────
 
     function _deploy(
+        address granter_,
         address admin_,
         address router_,
         uint64 votingPeriod_,
@@ -131,6 +154,44 @@ contract DeployRouterGovernance is Script {
 
         d.governance =
             new RouterGovernance(router_, admin_, votingPeriod_, executionDelay_, quorumThreshold_);
+
+        _grantRouterAdmin(d, granter_);
+    }
+
+    /// @dev Give the governance contract the router `ADMIN_ROLE` its
+    ///      `execute()` needs, then read the role back. The read-back is the
+    ///      point: a silent failure here produces a deployment that looks
+    ///      complete, passes every liveness check, and only fails days later
+    ///      when the first real proposal tries to land its weights.
+    /// @param granter_ The account whose ADMIN_ROLE on the router authorises
+    ///                  the grant — the broadcaster under `run()`, the pranked
+    ///                  admin in-process.
+    function _grantRouterAdmin(Deployed memory d, address granter_) internal {
+        bytes32 routerAdminRole = d.router.ADMIN_ROLE();
+        address governance = address(d.governance);
+
+        if (vm.envOr("SKIP_ROUTER_ADMIN_GRANT", false)) {
+            // Deliberate opt-out: the router's ADMIN_ROLE has already left the
+            // deployer. Refuse to leave the operator believing the topology is
+            // wired; the grant is now a timelock proposal they must schedule.
+            console2.log(
+                "SKIP_ROUTER_ADMIN_GRANT=true: RouterGovernance has NOT been granted router"
+                " ADMIN_ROLE. execute() WILL revert until you schedule"
+                " router.grantRole(ADMIN_ROLE, governance) through the TimelockController."
+            );
+            return;
+        }
+
+        require(
+            IAccessControl(address(d.router)).hasRole(routerAdminRole, granter_),
+            "caller lacks router ADMIN_ROLE: cannot wire governance (set SKIP_ROUTER_ADMIN_GRANT=true to route the grant through the timelock instead)"
+        );
+
+        IAccessControl(address(d.router)).grantRole(routerAdminRole, governance);
+        require(
+            IAccessControl(address(d.router)).hasRole(routerAdminRole, governance),
+            "RouterGovernance missing router ADMIN_ROLE: execute() would revert in setWeights"
+        );
     }
 
     function _logResult(Deployed memory d) internal pure {

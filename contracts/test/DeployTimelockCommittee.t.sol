@@ -89,7 +89,11 @@ contract DeployTimelockCommitteeTest is Test {
         gateway = new RobotMoneyGateway(usdc, vault, address(script), pauser, address(0));
         registry = new VaultRegistry(address(script));
         router = new PortfolioRouter(address(usdc), address(registry), address(script));
-        governance = new RouterGovernance(address(router), address(script), 7 days, 1 days, 1);
+        governance = new RouterGovernance(address(router), address(script), 7 days, 1 days, 2);
+        // R7: mirror DeployRouterGovernance's router ADMIN_ROLE grant, which
+        // DeployTimelock now asserts before completing the handover.
+        vm.prank(address(script));
+        router.grantRole(keccak256("ADMIN_ROLE"), address(governance));
 
         // InvestmentCommitteePolicy: admin_ == address(this) (this test
         // contract), so that DeployTimelock's `revokeRole(ADMIN_ROLE,
