@@ -59,7 +59,9 @@
 #                                  address also lacks ADMIN_ROLE)
 # Required for the index stage:  FUSION_EXPLORER_API
 # Required for the dapp stage:   FUSION_DAPP_URL
-# Required for the release stage: FUSION_RELEASE_KEYSTORE, FUSION_RELEASE_PASSWORD_FILE
+# Required for the release stage: FUSION_RELEASE_KEYSTORE, FUSION_RELEASE_PASSWORD_FILE,
+#   FUSION_RELEASE_ADDRESS   the admin EOA that keystore unlocks — declared, not
+#                            scraped from the file, because keystore layouts differ
 # Optional: RMPC_BIN, CAST_BIN, FUSION_INDEX_TIMEOUT_SECS (default 180),
 #           FUSION_EVIDENCE_DIR (raw command output is written there)
 set -uo pipefail
@@ -132,6 +134,15 @@ have_stage() { [[ " $STAGES " == *" $1 "* ]]; }
 # three are read, because weights and proposal count alone would miss an asset
 # movement.
 IFS=',' read -r -a VAULTS <<<"$FUSION_VAULT_ADDRESSES"
+# EXACTLY FOUR, in canonical bucket order. AC-FMT-04 names four buckets and four
+# vaults; a short list would either index an unset array element (fatal under
+# `set -u`, so the run dies instead of reporting) or silently check fewer vaults
+# than the criterion requires. Refuse at startup instead.
+if (( ${#VAULTS[@]} != 4 )); then
+  echo "FUSION_VAULT_ADDRESSES must name EXACTLY 4 vaults in canonical bucket order \
+(conservative_defi_yield, protocol_tokens, agent_tokens, real_world_assets); got ${#VAULTS[@]}" >&2
+  exit 3
+fi
 witnesses() {
   local v out
   out="proposals=$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" 'currentProposalId()(uint256)' \
@@ -398,9 +409,11 @@ fi
 
 # ── stage: release ───────────────────────────────────────────────────────────
 if have_stage release; then
-  if [[ -z "${FUSION_RELEASE_KEYSTORE:-}" || -z "${FUSION_RELEASE_PASSWORD_FILE:-}" || -z "$RECEIPT_ID" ]]; then
+  if [[ -z "${FUSION_RELEASE_KEYSTORE:-}" || -z "${FUSION_RELEASE_PASSWORD_FILE:-}" \
+        || -z "${FUSION_RELEASE_ADDRESS:-}" || -z "$RECEIPT_ID" ]]; then
     record_assertion release "admin release" SKIP \
-      "needs FUSION_RELEASE_KEYSTORE, FUSION_RELEASE_PASSWORD_FILE and a recorded receipt"
+      "needs FUSION_RELEASE_KEYSTORE, FUSION_RELEASE_PASSWORD_FILE, FUSION_RELEASE_ADDRESS \
+and a recorded receipt"
   else
     "$CAST_BIN" send "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$RECEIPT_ID" \
       --rpc-url "$FUSION_RPC_URL" --keystore "$FUSION_RELEASE_KEYSTORE" \
@@ -416,9 +429,13 @@ if have_stage release; then
     expect release "AC-E2E-03 the receipt reads as released" $? "isReleased=$released"
 
     # The two duplicate refusals that cannot exist until something is anchored.
+    # `--from` is the OPERATOR-DECLARED admin address, not an address scraped out
+    # of the keystore file: keystore layouts differ (an `rmpc` keystore carries
+    # no `address` key at all), and an empty `--from` would make this assertion
+    # fail for the wrong reason — a diagnosable false failure, but still a lie
+    # about which check was exercised.
     out="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$RECEIPT_ID" \
-      --from "$(jq -r '.address // empty' "$FUSION_RELEASE_KEYSTORE" 2>/dev/null | sed 's/^\(0x\)\?/0x/')" \
-      --rpc-url "$FUSION_RPC_URL" 2>&1)"
+      --from "$FUSION_RELEASE_ADDRESS" --rpc-url "$FUSION_RPC_URL" 2>&1)"
     grep -q 'ReceiptAlreadyReleased' <<<"$out"
     expect release "AC-CORE-03 a duplicate release is rejected (ReceiptAlreadyReleased)" $? "$(tr -d '\n' <<<"$out" | head -c 300)"
 
