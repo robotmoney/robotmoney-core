@@ -53,6 +53,7 @@ new_stubs() {
   : >"$STUB_DIR/uri_embeds_digest"
   : >"$STUB_DIR/malformed_tuple"
   : >"$STUB_DIR/rpc_down"
+  : >"$STUB_DIR/verify_ok_false_exit_zero"
 
   cat >"$STUB_DIR/bin/rmpc" <<'STUB'
 #!/usr/bin/env bash
@@ -61,6 +62,13 @@ case "$1" in
   receipt)
     for a in "$@"; do [[ "$a" == "verify" ]] && sub=verify; [[ "$a" == "submit" ]] && sub=submit; done
     if [[ "${sub:-}" == "verify" ]]; then
+      # A refusal reported as `ok:false` WITH exit 0 — the shape rmpc's own
+      # governance scan mode uses on purpose, and the shape an exit-code-only
+      # assertion would read as a pass.
+      if [[ -s "$STUB_DIR/verify_ok_false_exit_zero" ]]; then
+        echo '{"ok":false,"error":"ErrReceiptSignatureInvalid"}'
+        exit 0
+      fi
       printf '{"ok":true,"action":"verify","receipt_id":"%s","payload_digest":"%s"}\n' \
         "$FUSION_TEST_RECEIPT_ID" "$FUSION_TEST_DIGEST"
       exit 0
@@ -414,6 +422,31 @@ new_stubs; acceptance_env
 export FUSION_VAULT_ADDRESSES=0x0000000000000000000000000000000000000005
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/r --no-anchor >/dev/null 2>&1
 check "a vault list that is not exactly four refuses to start" "$?" "3"
+
+# A REFUSAL REPORTED AS ok:false WITH EXIT 0 MUST NOT PASS. `rmpc governance
+# draft-proposal` uses exactly that shape on purpose, so an exit-code-only
+# assertion would read a refusal as a successful verification. Measured against
+# the real rc.1 stand-in during step 3.8, which is how the trap was found.
+new_stubs; acceptance_env
+: >"$STUB_DIR/receipt.json"
+printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
+echo 1 >"$STUB_DIR/verify_ok_false_exit_zero"
+cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
+#!/usr/bin/env bash
+out=""
+prev=""
+for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
+[[ -n "$out" ]] && cp "$STUB_DIR/receipt.json" "$out"
+exit 0
+CURLSTUB
+chmod +x "$STUB_DIR/bin/curl"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify   --out "$RESULT" >/dev/null 2>&1
+if [[ -s "$RESULT" ]] && jq -e '[.assertions[] | select(.stage=="verify" and (.assertion|test("AC-CORE-02")))] |
+      length == 1 and all(.result == "FAIL")' "$RESULT" >/dev/null 2>&1; then
+  ok "a verification that reports ok:false with exit 0 is recorded as a FAILURE"
+else
+  bad "an ok:false verification was not failed: $(jq -c '[.assertions[]|{a:.assertion,r:.result}]' "$RESULT" 2>/dev/null)"
+fi
 
 # THE NEGATIVE CONTROL. --no-anchor must never reach a write subcommand, and an
 # unreachable receipt URL must make the run FAIL rather than pass vacuously.

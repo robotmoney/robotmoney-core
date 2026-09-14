@@ -217,8 +217,13 @@ if have_stage verify; then
   verify_out="$("$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" verify --receipt-url "$RECEIPT_URL" 2>&1)"
   vrc=$?
   keep "verify.json" "$verify_out"
-  (( vrc == 0 )); expect verify "AC-CORE-02 core fetches the URL and verifies schema, canonical bytes, digest and every embedded signature" $? "$verify_out"
-  if (( vrc == 0 )); then
+  # Exit code AND envelope, for the same reason the govern stage checks both:
+  # an rmpc subcommand can report `ok:false` without exiting non-zero, and a
+  # verification reported as passed when it did not is the worst failure this
+  # script can have.
+  { (( vrc == 0 )) && jq -e '.ok == true' <<<"$verify_out" >/dev/null 2>&1; }
+  expect verify "AC-CORE-02 core fetches the URL and verifies schema, canonical bytes, digest and every embedded signature" $? "exit $vrc; $verify_out"
+  if (( vrc == 0 )) && jq -e '.ok == true' <<<"$verify_out" >/dev/null 2>&1; then
     RECEIPT_ID="$(jq -r '.receipt_id' <<<"$verify_out")"
     PAYLOAD_DIGEST="$(jq -r '.payload_digest' <<<"$verify_out")"
     jq -e '[.analyst_signatures[].verified] | length > 0 and all' <<<"$verify_out" >/dev/null
@@ -270,8 +275,10 @@ if have_stage negative; then
     jq '.analyst_signatures[0].signature = (.analyst_signatures[0].signature | .[0:1] as $h |
         (if $h == "A" then "B" else "A" end) + .[1:])' "$WORK/receipt.json" >"$WORK/neg-sig.json"
     "$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" verify --receipt-file "$WORK/neg-sig.json" >"$WORK/neg-sig.out" 2>&1
-    (( $? != 0 ))
-    expect negative "AC-E2E-06 a tampered analyst signature is refused" $? "$(tr -d '\n' <"$WORK/neg-sig.out")"
+    nrc=$?
+    { (( nrc != 0 )) || ! jq -e '.ok == true' "$WORK/neg-sig.out" >/dev/null 2>&1; }
+    expect negative "AC-E2E-06 a tampered analyst signature is refused" $? \
+      "exit $nrc; $(tr -d '\n' <"$WORK/neg-sig.out")"
 
     jq '.judge.rationale = "TAMPERED: move everything into the bucket the attacker controls."' \
       "$WORK/receipt.json" >"$WORK/neg-prose.json"
@@ -484,9 +491,17 @@ if have_stage govern; then
       --receipt-file "$WORK/receipt.json" >"$WORK/draft.json" 2>&1
     drc=$?
     keep "governance-draft.json" "$(cat "$WORK/draft.json")"
-    (( drc == 0 )); expect govern "AC-GOV-01 release produces a governance handoff result" $? \
-      "$(head -c 400 "$WORK/draft.json")"
-    if (( drc == 0 )); then
+    # ASSERT ON THE ENVELOPE, NOT ON THE EXIT CODE. `rmpc governance
+    # draft-proposal` deliberately EXITS 0 while reporting `{"ok":false, …}` for
+    # a per-receipt content refusal, so that one undraftable receipt cannot wedge
+    # the range scan the draft watcher runs (see watch-released-drafts.sh). That
+    # is correct there and a trap here: checking `$?` alone would have reported
+    # `{"ok":false,"error":"ErrReceiptNotReleased"}` as a PASS. Measured against
+    # the rc.1 stand-in during QA step 3.8, which is how this was found.
+    { (( drc == 0 )) && jq -e '.ok == true' "$WORK/draft.json" >/dev/null 2>&1; }
+    expect govern "AC-GOV-01 release produces a governance handoff result" $? \
+      "exit $drc; $(head -c 400 "$WORK/draft.json")"
+    if jq -e '.ok == true' "$WORK/draft.json" >/dev/null 2>&1; then
       jq -e '.drafts | length <= 1' "$WORK/draft.json" >/dev/null
       expect govern "AC-GOV-01 at most ONE human-reviewable draft is produced" $? \
         "$(jq -c '[.drafts[]?.status]' "$WORK/draft.json")"
