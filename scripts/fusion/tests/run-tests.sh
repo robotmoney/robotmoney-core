@@ -383,7 +383,7 @@ acceptance_env() {
   export FUSION_RECEIPT_ADDRESS=0x0000000000000000000000000000000000000002
   export FUSION_GOVERNANCE_ADDRESS=0x0000000000000000000000000000000000000003
   export FUSION_ROUTER_ADDRESS=0x0000000000000000000000000000000000000004
-  export FUSION_VAULT_ADDRESSES=0x0000000000000000000000000000000000000005
+  export FUSION_VAULT_ADDRESSES=0x0000000000000000000000000000000000000005,0x0000000000000000000000000000000000000006,0x0000000000000000000000000000000000000007,0x0000000000000000000000000000000000000008
   : >"$STUB_DIR/config.toml"
   RESULT="$STUB_DIR/result.json"
 }
@@ -407,6 +407,13 @@ export FUSION_ROUTER_ADDRESS=0x0000000000000000000000000000000000000004
 new_stubs; acceptance_env
 "$FUSION_DIR/devnet-acceptance.sh" >/dev/null 2>&1
 check "no receipt URL is a usage error" "$?" "64"
+
+# AC-FMT-04 names four buckets and four vaults. A short list must refuse rather
+# than check fewer vaults than the criterion requires.
+new_stubs; acceptance_env
+export FUSION_VAULT_ADDRESSES=0x0000000000000000000000000000000000000005
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/r --no-anchor >/dev/null 2>&1
+check "a vault list that is not exactly four refuses to start" "$?" "3"
 
 # THE NEGATIVE CONTROL. --no-anchor must never reach a write subcommand, and an
 # unreachable receipt URL must make the run FAIL rather than pass vacuously.
