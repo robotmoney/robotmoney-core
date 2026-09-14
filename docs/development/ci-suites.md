@@ -970,7 +970,7 @@ suite existed, `grep -rn 'scripts/fusion' .github/` returned nothing: no
 workflow, on any branch, on any event, ran it.
 
 The suite runs under `set -uo pipefail` without `-e`, so an exit code alone is
-not evidence. It ends at `FAIL == 0 && PASS >= MIN_EXPECTED_ASSERTIONS` (55) and
+not evidence. It ends at `FAIL == 0 && PASS >= MIN_EXPECTED_ASSERTIONS` (77) and
 prints `FUSION_SELFTESTS_EXECUTED=$PASS`; the workflow re-derives that count
 against its own literal so a silently lowered in-script floor cannot buy a green,
 and the script asserts the two literals are equal. Same convention as suite 17.
@@ -998,6 +998,35 @@ one non-`SKIP` assertion for that stage, so a run that skipped everything cannot
 report success. `release` is omitted from the default stage list: a nightly run
 must not broadcast an admin release transaction. Full secret/variable table and
 rotation rule: [`fusion-devnet-ci.md`](./fusion-devnet-ci.md).
+
+### 27. rmpc unit tests on release refs (rust-client-unit-tests-releases)
+**File:** `.github/workflows/suite-27-rmpc-unit-releases.yml`
+**CI class / tier:** `system-correctness` (offline, no network, no chain)
+**Environment:** `none`
+**Trigger:** `push` to `releases-*` + `push` of a `v*.*.*` tag +
+`pull_request` + `workflow_dispatch`.
+
+The same job as suite 6 on the refs suite 6 does not cover. Suite 6 triggers on
+`push: [dev, dev-phase-*]`, `pull_request` and `workflow_dispatch` only, so
+`gh run list --workflow suite-06-rmpc-unit.yml --branch releases-0.4.x` is empty:
+`cargo test --lib` for `clients/rust-payment-client` has never run on a release
+branch. It shipped red because of that. At `v0.4.0-rc.9` the suite was
+275 passed / **3 failed** / 1 ignored — the T03 (`deny_unknown_fields`) and T24
+(shared envelope fixture) merges were never reconciled, so three tests still
+asserted the pre-T03 "unknown fields are dropped" behaviour, and the one
+lib-level assertion of R27/D11 was `#[ignore]`d with a reason that had stopped
+being true. Four adversarial verifiers found it; no CI job on that branch could
+have.
+
+A NEW file rather than two lines added to suite 6's `on:` block, because release
+work must not modify an existing workflow, and because widening suite 6 would
+change what runs on `dev` as well.
+
+Like suite 25, the exit code is not the evidence: `cargo test --lib` on a crate
+whose tests stopped compiling into the binary prints `0 passed; 0 failed` and
+exits 0. The job re-reads the `test result:` line and fails below 275 executed,
+and fails on ANY `#[ignore]`d lib test — the shape that concealed the rc.9 gap.
+See [`false-green-shapes.md`](./false-green-shapes.md).
 
 ## release-tag dispatch
 **File:** `.github/workflows/release-tag-suite-dispatch.yml`
@@ -1427,3 +1456,6 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 22 | `suite-22-formal-verification.yml` | `forge-formal-verification` | `none` |
 | 23 | `suite-23-skill-url-reachability.yml` (live, sweep-only) + `suite-23-skill-url-monitor-selftest.yml` (`reachability-selftest`, every PR) | asserts every published raw `SKILL.md` URL returns 200, including the deprecated compat stubs; the selftest proves the monitor fails red (#1199) | `none` (live network) |
 | 24 | `suite-24-base-sepolia-rehearsal.yml` | `dry-run` \| `live` (nightly) \| `record-validator` | `none` (anvil) / `staging` |
+| 25 | `suite-25-fusion-harness-selftests.yml` | `fusion-harness-selftests` | `none` |
+| 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | devnet `918453` |
+| 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |
