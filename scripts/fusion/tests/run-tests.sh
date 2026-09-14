@@ -556,6 +556,44 @@ chmod +x "$STUB_DIR/bin/curl"
 check "an unreleased receipt still broadcasts exactly one release" \
   "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "1"
 
+# ─── T24: the one envelope-unwrap rule, driven by the SHARED fixture ─────────
+# Not an inline literal. tests/fixtures/consensus-receipt.envelope.json is
+# byte-identical to robotmoney-frontend's copy and pinned by both fixture
+# manifests, so this test and rmpc's test read the same bytes.
+source "$FUSION_DIR/lib/receipt-envelope.sh"
+REPO_ROOT="$(cd "$FUSION_DIR/../.." && pwd)"
+FX="$REPO_ROOT/tests/fixtures"
+UW="$(mktemp -d)"
+
+receipt_unwrap_envelope "$FX/consensus-receipt.envelope.json" "$UW/from-envelope.json"
+check "the shared envelope fixture unwraps (exit)" "$?" "0"
+receipt_unwrap_envelope "$FX/consensus-receipt.valid.json" "$UW/from-bare.json"
+check "a bare receipt passes through (exit)" "$?" "0"
+if cmp -s "$UW/from-envelope.json" "$UW/from-bare.json"; then
+  ok "unwrapping the envelope yields the bare receipt byte-for-byte"
+else
+  bad "the envelope's .receipt is not the shared valid fixture: $(diff <(jq -S . "$UW/from-envelope.json") <(jq -S . "$UW/from-bare.json") | head -5)"
+fi
+check "the unwrapped object carries schema_version" \
+  "$(jq -r '.schema_version' "$UW/from-envelope.json")" "1.0"
+
+# THE NEGATIVE THAT THE DELETED jq COPY GOT WRONG. The negative-stage copy had
+# dropped the `.receipt | has("schema_version")` guard, so a body that was
+# neither a receipt nor an envelope wrote the literal `null` into receipt.json
+# and every later assertion read that as real.
+printf '{"error":"not found"}' >"$UW/neither.json"
+receipt_unwrap_envelope "$UW/neither.json" "$UW/neither-out.json" 2>/dev/null
+check "a body that is neither receipt nor envelope is REFUSED" "$?" "1"
+check "and no receipt file is left behind" "$([[ -e "$UW/neither-out.json" ]] && echo yes || echo no)" "no"
+printf 'not json at all' >"$UW/garbage.json"
+receipt_unwrap_envelope "$UW/garbage.json" "$UW/garbage-out.json" 2>/dev/null
+check "non-JSON is REFUSED" "$?" "2"
+# An envelope whose .receipt is itself not a receipt must not be unwrapped.
+jq '.receipt = {"note":"no schema_version here"}' "$FX/consensus-receipt.envelope.json" >"$UW/bad-inner.json"
+receipt_unwrap_envelope "$UW/bad-inner.json" "$UW/bad-inner-out.json" 2>/dev/null
+check "an envelope carrying a non-receipt is REFUSED" "$?" "1"
+rm -rf "$UW"
+
 echo
 echo "scripts/fusion self-tests: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

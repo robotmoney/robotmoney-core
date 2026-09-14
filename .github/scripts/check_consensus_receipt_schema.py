@@ -76,6 +76,12 @@ SHARED_WITH_FRONTEND = [
     "consensus-receipt.escaping.json",
     "consensus-receipt.valid.canonical.txt",
     "consensus-receipt.escaping.canonical.txt",
+    # Added this cycle and handed to robotmoney-frontend in the same change:
+    # the read-time envelope shape (T24) and the unknown-field REFUSE vector
+    # (decision R27/D11). Nine became eleven; both are pinned here and in
+    # shared-fixtures/vendored/robotmoney-frontend.manifest.json.
+    "consensus-receipt.envelope.json",
+    "consensus-receipt.unknown-fields-refused.json",
 ]
 CORE_ONLY = [
     "consensus-receipt.anchor-digest.json",
