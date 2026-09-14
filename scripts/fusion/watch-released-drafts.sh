@@ -37,22 +37,22 @@
 #      the process if it ever does exit.
 set -euo pipefail
 
-fail() { echo "fusion-draft-watcher: $*" >&2; exit 1; }
+FUSION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)"
+# T25: one validated alert path, one dedup key PER CONDITION, delivery failures
+# logged rather than swallowed by `|| true`.
+# shellcheck source=lib/alert.sh
+source "$FUSION_LIB_DIR/alert.sh"
 
-# alert <dedup_key> <summary…>
-#
-# The dedup key is a parameter because a quarantined receipt and a stalled
-# cursor are different incidents: collapsing them onto one key means resolving
-# either one closes both, which is the failure `alert.rs` names outright.
-alert() {
-  local key="$1"; shift
-  echo "fusion-draft-watcher: ALERT $*" >&2
-  if [[ -n "${FUSION_ALERT_WEBHOOK:-}" ]] && command -v curl >/dev/null && command -v jq >/dev/null; then
-    curl -fsS -m 10 -X POST -H 'content-type: application/json' \
-      --data "$(jq -n --arg s "$*" --arg k "$key" '{event_action:"trigger",dedup_key:$k,payload:{summary:$s,severity:"critical",source:"fusion-draft-watcher"}}')" \
-      "$FUSION_ALERT_WEBHOOK" >/dev/null 2>&1 || true
-  fi
-}
+COMPONENT="fusion-draft-watcher"
+# A quarantined poison range and a wedged cursor are two different incidents.
+# They used to share one dedup key, so the second to fire was suppressed as a
+# duplicate of the first and an operator saw one page for two problems.
+DEDUP_STALLED="fusion_draft_watcher_stalled"
+DEDUP_QUARANTINED="fusion_draft_range_quarantined"
+
+fail() { echo "$COMPONENT: $*" >&2; exit 1; }
+alert()         { fusion_alert "$COMPONENT" "$@"; }
+alert_resolve() { fusion_alert_resolve "$COMPONENT" "$@"; }
 
 : "${FUSION_RMPC_CONFIG:?set FUSION_RMPC_CONFIG}"
 : "${FUSION_RPC_URL:?set FUSION_RPC_URL}"
@@ -86,7 +86,10 @@ command -v "$CAST_BIN" >/dev/null || fail "cast binary not found: $CAST_BIN"
 # jq is load-bearing now, not decorative: without it the refused entries inside
 # an ok:true range cannot be read at all, and the watcher would be back to
 # trusting an exit code. Refuse at startup rather than degrade silently.
+# (This is stricter than fusion_alert_startup_check, which needs jq only when
+# a webhook is configured; here jq is required unconditionally.)
 command -v jq >/dev/null || fail "jq not found; it is required to read the per-receipt draft results"
+fusion_alert_startup_check "$COMPONENT" || exit 1
 
 mkdir -p "$(dirname "$FUSION_DRAFT_CURSOR")" "$(dirname "$QUARANTINE")" "$(dirname "$RESULT_FILE")"
 if [[ ! -e "$FUSION_DRAFT_CURSOR" ]]; then
@@ -124,6 +127,10 @@ quarantined in $QUARANTINE"
 
 stalled_cycles=0
 read_failures=0
+# Whether the stall key currently has an OPEN incident. `stalled_cycles` resets
+# to 0 the moment a page is sent, so it cannot also be the thing that decides
+# whether a resolve is owed.
+stall_paged=0
 while true; do
   scan_failed=0
   from="$(tr -d '[:space:]' <"$FUSION_DRAFT_CURSOR")"
@@ -181,15 +188,26 @@ no release can be drafted while the chain is unreadable"
         stalled_cycles=0
       fi
       write_cursor $((to + 1))
+      # THE CONDITION CLEARED, SO SEND A RESOLVE. A stall that recovered used to
+      # leave an open incident forever — the rule alert.rs enforces for the
+      # watchdog and this loop did not.
+      if (( stall_paged )); then
+        alert_resolve "$DEDUP_STALLED" "cursor advanced to $((to + 1)); the scan that had stalled at $from succeeded"
+        stall_paged=0
+      fi
+      stalled_cycles=0
     elif (( rc == EXIT_REFUSAL )); then
       # Single-receipt-shaped content refusal escaping into range mode. Record
       # the range so a human can replay it, then move on: a poison receipt must
       # cost one range, never every future release.
       quarantine_refusals "$draft_out" "$from" "$to" || true
       printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$from" "$to" "range-refused exit $rc" >>"$QUARANTINE"
-      alert "fusion_draft_watcher_refused_receipt" \
-        "range $from-$to refused (exit $rc); quarantined in $QUARANTINE and skipped"
+      alert "$DEDUP_QUARANTINED" "range $from-$to refused (exit $rc); quarantined in $QUARANTINE and skipped"
       write_cursor $((to + 1))
+      if (( stall_paged )); then
+        alert_resolve "$DEDUP_STALLED" "cursor advanced past block $from (the refused range was quarantined, not retried)"
+        stall_paged=0
+      fi
       stalled_cycles=0
       scan_failed=1
     else
@@ -198,8 +216,8 @@ no release can be drafted while the chain is unreadable"
       stalled_cycles=$((stalled_cycles + 1))
       echo "fusion-draft-watcher: scan failed (exit $rc); cursor remains at $from and will retry" >&2
       if (( stalled_cycles >= STALL_CYCLES )); then
-        alert "fusion_draft_watcher_stalled" \
-          "cursor has not advanced past block $from for $stalled_cycles cycles (last exit $rc)"
+        alert "$DEDUP_STALLED" "cursor has not advanced past block $from for $stalled_cycles cycles (last exit $rc)"
+        stall_paged=1
         stalled_cycles=0
       fi
       scan_failed=1

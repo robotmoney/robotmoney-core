@@ -5,7 +5,19 @@
 # the same digest. A conflicting digest is fatal and is never overwritten.
 set -euo pipefail
 
-fail() { echo "fusion-submit-worker: $*" >&2; exit 1; }
+FUSION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)"
+# T25: this worker's "ALERT" was an `echo … >&2`, which under nohup reaches
+# nobody, while runbook §5.5 claimed both harnesses page. Same validated path,
+# same delivery-failure logging, its OWN dedup key.
+# shellcheck source=lib/alert.sh
+source "$FUSION_LIB_DIR/alert.sh"
+
+COMPONENT="fusion-submit-worker"
+DEDUP_READS_DOWN="fusion_submit_worker_chain_reads_down"
+
+fail() { echo "$COMPONENT: $*" >&2; exit 1; }
+alert()         { fusion_alert "$COMPONENT" "$@"; }
+alert_resolve() { fusion_alert_resolve "$COMPONENT" "$@"; }
 
 : "${FUSION_RMPC_CONFIG:?set FUSION_RMPC_CONFIG}"
 : "${FUSION_RECEIPT_URL:?set FUSION_RECEIPT_URL}"
@@ -26,6 +38,7 @@ READ_FAILURE_ALERT="${FUSION_READ_FAILURE_ALERT:-3}" # consecutive read outages 
 command -v "$RMPC_BIN" >/dev/null || fail "rmpc binary not found: $RMPC_BIN"
 command -v "$CAST_BIN" >/dev/null || fail "cast binary not found: $CAST_BIN"
 command -v jq >/dev/null || fail "jq is required"
+fusion_alert_startup_check "$COMPONENT" || exit 1
 for value in "$READ_RETRIES" "$POST_SUBMIT_READ_RETRIES" "$READ_RETRY_SECS" "$READ_FAILURE_ALERT"; do
   [[ "$value" =~ ^[0-9]+$ ]] || fail "read retry knobs must be integers"
 done
@@ -120,16 +133,23 @@ read_anchor_state() {
 
 attempt=0
 read_failures=0
+read_paged=0
 while true; do
   if read_anchor_state "$READ_RETRIES"; then
+    if (( read_paged )); then
+      alert_resolve "$DEDUP_READS_DOWN" "chain reads at $FUSION_RPC_URL answered again; anchor state \
+for $receipt_id is observable"
+      read_paged=0
+    fi
     read_failures=0
   else
     # The read side is down. Do NOT re-broadcast on a chain state we cannot
     # see: that burns nonces and gas against an unknown anchor state.
     read_failures=$((read_failures + 1))
     if (( read_failures >= READ_FAILURE_ALERT )); then
-      echo "fusion-submit-worker: ALERT chain reads have failed $read_failures consecutive \
-cycles at $FUSION_RPC_URL; anchor state for $receipt_id is unknown" >&2
+      alert "$DEDUP_READS_DOWN" "chain reads have failed $read_failures consecutive cycles at \
+$FUSION_RPC_URL; anchor state for $receipt_id is unknown"
+      read_paged=1
       read_failures=0
     fi
     sleep "$RETRY_SECS"

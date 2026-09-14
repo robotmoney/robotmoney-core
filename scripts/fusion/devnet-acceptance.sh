@@ -72,6 +72,11 @@ set -uo pipefail
 FUSION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)"
 # shellcheck source=lib/receipt-envelope.sh
 source "$FUSION_LIB_DIR/receipt-envelope.sh"
+# T10: ONE INV-4 witness reader, shared with cross-repo-acceptance.sh. This
+# script used to fold stderr into the compared values and discard every `cast`
+# exit status, so ten failed reads recorded a PASS.
+# shellcheck source=lib/inv4.sh
+source "$FUSION_LIB_DIR/inv4.sh"
 
 ALL_STAGES="verify negative record index release dapp govern"
 STAGES="$ALL_STAGES"
@@ -121,12 +126,34 @@ keep() { [[ -z "$EVIDENCE" ]] || printf '%s\n' "$2" >"$EVIDENCE/$1"; }
 # ── result accumulation ──────────────────────────────────────────────────────
 : >"$WORK/assertions.ndjson"
 FAILED=0
-record_assertion() { # <stage> <id> <PASS|FAIL|SKIP> <detail>
-  jq -cn --arg stage "$1" --arg id "$2" --arg result "$3" --arg detail "$4" \
-    '{stage:$stage,assertion:$id,result:$result,detail:$detail}' >>"$WORK/assertions.ndjson"
+SKIPPED_UNCONFIGURED=0
+# THE TWO SKIP REASONS ARE NOT THE SAME THING (T11).
+#   not_selected        the operator asked for a subset. Honest, and green.
+#   unconfigured        the stage WAS selected and its config is missing. The
+#                       assertion the operator asked for did not run, so the run
+#                       is NOT green — this used to be invisible to the verdict.
+#   prerequisite_failed an earlier assertion already FAILED; `failed>0` carries it.
+#   delegated           executed by a named other suite, never by this script.
+SKIP_REASONS="not_selected unconfigured prerequisite_failed delegated"
+record_assertion() { # <stage> <id> <PASS|FAIL|SKIP> <detail> [skip-reason]
+  local reason="${5:-}"
+  if [[ "$3" == "SKIP" ]]; then
+    # A SKIP with no declared reason is the bug this field exists to prevent, so
+    # it is not silently defaulted to the green one.
+    [[ " $SKIP_REASONS " == *" $reason "* ]] || reason="unconfigured"
+  else
+    reason=""
+  fi
+  jq -cn --arg stage "$1" --arg id "$2" --arg result "$3" --arg detail "$4" --arg reason "$reason" \
+    '{stage:$stage,assertion:$id,result:$result,reason:$reason,detail:$detail}' >>"$WORK/assertions.ndjson"
   case "$3" in
     PASS) printf 'PASS  [%s] %s\n' "$1" "$2" ;;
-    SKIP) printf 'SKIP  [%s] %s — %s\n' "$1" "$2" "$4" ;;
+    SKIP) if [[ "$reason" == "unconfigured" ]]; then
+            SKIPPED_UNCONFIGURED=$((SKIPPED_UNCONFIGURED + 1))
+            printf 'SKIP! [%s] %s — UNCONFIGURED (stage selected, config missing): %s\n' "$1" "$2" "$4" >&2
+          else
+            printf 'SKIP  [%s] %s — %s (%s)\n' "$1" "$2" "$4" "$reason"
+          fi ;;
     *)    FAILED=1; printf 'FAIL  [%s] %s — %s\n' "$1" "$2" "$4" >&2 ;;
   esac
 }
@@ -151,50 +178,50 @@ if (( ${#VAULTS[@]} != 4 )); then
   exit 3
 fi
 witnesses() {
-  local v out
-  out="proposals=$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" 'currentProposalId()(uint256)' \
-        --rpc-url "$FUSION_RPC_URL" 2>&1 | tr -d '[:space:]')"$'\n'
-  out+="weights=$("$CAST_BIN" call "$FUSION_ROUTER_ADDRESS" 'getWeights()(address[],uint256[])' \
-        --rpc-url "$FUSION_RPC_URL" 2>&1 | tr -d '[:space:]')"$'\n'
-  for v in "${VAULTS[@]}"; do
-    v="${v// /}"
-    out+="assets:$v=$("$CAST_BIN" call "$v" 'totalAssets()(uint256)' --rpc-url "$FUSION_RPC_URL" 2>&1 | tr -d '[:space:]')"$'\n'
-    out+="supply:$v=$("$CAST_BIN" call "$v" 'totalSupply()(uint256)' --rpc-url "$FUSION_RPC_URL" 2>&1 | tr -d '[:space:]')"$'\n'
-  done
-  printf '%s' "$out"
+  # Deliberately swallows the non-zero status: the SENTINEL is the signal, and
+  # `assert_witnesses_unchanged` refuses on it. Returning early here would leave
+  # the blocker assertion unrecorded, which is the same silence in a new place.
+  inv4_witnesses "$CAST_BIN" "$FUSION_RPC_URL" "$FUSION_GOVERNANCE_ADDRESS" \
+    "$FUSION_ROUTER_ADDRESS" "${VAULTS[@]}" || true
 }
 W_START="$(witnesses)"
 keep "witnesses-before.txt" "$W_START"
+# Fail LOUDLY at startup rather than carrying an unreadable baseline into every
+# later comparison. This is the same class as the missing-address refusal above.
+if inv4_unreadable "$W_START"; then
+  echo "INV-4 witnesses are not readable at startup — refusing to run a gate whose \
+blocker assertion could only compare one absence against another: $W_START" >&2
+  echo "check FUSION_RPC_URL, FUSION_GOVERNANCE_ADDRESS, FUSION_ROUTER_ADDRESS and \
+FUSION_VAULT_ADDRESSES against the deployment manifest" >&2
+  INV4_STARTUP_UNREADABLE=1
+else
+  INV4_STARTUP_UNREADABLE=0
+fi
 
 # `assert_witnesses_unchanged` compares against a BASELINE VARIABLE, not always
-# against the script's first reading, and the difference is deliberate. A mapped
-# vault with a live yield adapter accrues: rmUSDC on devnet 918453 was measured
-# moving 1000004 -> 1000008 (4 units of 1e-6 USDC) over about 50 idle minutes
-# with no receipt within a thousand blocks. Comparing the end of a long run
-# against a snapshot taken before the negative stage would therefore report
-# accrual as an INV-4 breach — a FALSE failure, which erodes the gate exactly as
-# badly as a false pass.
-#
-# The criterion is NOT softened: the comparison is still exact equality, and no
-# tolerance is introduced. What changes is the WINDOW. Record and release are
-# what INV-4 is about, so the witnesses bracketing them are read immediately
-# before the record stage and immediately after the last write stage, which is
-# the narrowest honest window. The failure message names the confound so a
-# one-unit drift on a yield-bearing vault is diagnosed rather than mistaken for
-# a signalling-path asset movement.
+# against the script's first reading, and the difference is deliberate: see
+# INV4_ACCRUAL_NOTE in lib/inv4.sh. Record and release are what INV-4 is about,
+# so the witnesses bracketing them are read immediately before the record stage
+# and immediately after the last write stage, which is the narrowest honest
+# window. The criterion is NOT softened — the comparison is still exact equality.
 assert_witnesses_unchanged() { # <stage> <label> [baseline]
-  local now diff baseline
+  local now diff baseline id
   baseline="${3:-$W_START}"
   now="$(witnesses)"
+  id="$2 — vault balances, router weights and proposal count unchanged (INV-4)"
+  keep "witnesses-after-$1.txt" "$now"
+  # AN UNREADABLE WITNESS IS A FAILED ASSERTION, NEVER A PASS. Two snapshots of
+  # the same error text diff clean, which is exactly how ten failed reads used
+  # to record "no allocation-state witness moved".
+  if inv4_unreadable "$baseline" || inv4_unreadable "$now"; then
+    record_assertion "$1" "$id" FAIL \
+      "INV-4 witnesses could not be READ, so nothing was compared. before: ${baseline:-<empty>} after: ${now:-<empty>}"
+    return 0
+  fi
   diff="$(diff <(printf '%s' "$baseline") <(printf '%s' "$now") || true)"
   [[ -z "$diff" ]]
-  expect "$1" "$2 — vault balances, router weights and proposal count unchanged (INV-4)" $? \
-    "${diff:-no allocation-state witness moved}${diff:+
-NOTE: a mapped vault with a yield adapter accrues on its own. If the ONLY \
-movement is a small totalAssets/totalSupply drift on a yield-bearing vault, \
-attribute it before calling it an INV-4 breach; proposal count and router \
-weights cannot drift and any movement there is real.}"
-  keep "witnesses-after-$1.txt" "$now"
+  expect "$1" "$id" $? "${diff:-no allocation-state witness moved}${diff:+
+$INV4_ACCRUAL_NOTE}"
 }
 
 # ── stage: verify ────────────────────────────────────────────────────────────
@@ -259,7 +286,7 @@ if have_stage verify; then
       "resolved $mapped/4${missing:+; unresolved: $missing}"
   fi
 else
-  record_assertion verify "stage not selected" SKIP "stages: $STAGES"
+  record_assertion verify "stage not selected" SKIP "stages: $STAGES" not_selected
 fi
 
 # ── stage: negative ──────────────────────────────────────────────────────────
@@ -290,7 +317,44 @@ if have_stage negative; then
       expect negative "AC-CORE-02 tampered judge prose is refused against the expected digest and NO transaction is sent" $? \
         "$(tr -d '\n' <"$WORK/neg-prose.out")"
     else
-      record_assertion negative "tampered judge prose" SKIP "no digest from the verify stage"
+      record_assertion negative "tampered judge prose" SKIP "no digest from the verify stage" prerequisite_failed
+    fi
+
+    # THE FOURTH NEGATIVE CASE: TAMPERED WEIGHTS (T15). The three cases above
+    # tamper a signature, prose and the schema version, and none of them touches
+    # the one field that becomes treasury calldata. 10000/0/0/0 is the whole
+    # treasury into one bucket — the attack this gate exists to refuse.
+    jq '.weights = [(.weights[0] | .weight_bps = 10000),
+                    (.weights[1] | .weight_bps = 0),
+                    (.weights[2] | .weight_bps = 0),
+                    (.weights[3] | .weight_bps = 0)]' \
+      "$WORK/receipt.json" >"$WORK/neg-weights.json" 2>/dev/null
+    if [[ -s "$WORK/neg-weights.json" ]] && jq -e '[.weights[].weight_bps] == [10000,0,0,0]' \
+         "$WORK/neg-weights.json" >/dev/null 2>&1; then
+      if [[ -n "$PAYLOAD_DIGEST" ]]; then
+        "$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" submit --receipt-file "$WORK/neg-weights.json" \
+          --receipt-url "$RECEIPT_URL" --expected-digest "$PAYLOAD_DIGEST" >"$WORK/neg-weights.out" 2>&1
+        wrc=$?
+        { (( wrc != 0 )) && ! grep -q tx_hash "$WORK/neg-weights.out"; }
+        expect negative "AC-FMT-03 a receipt whose weights were rewritten to 10000/0/0/0 is refused against the anchored digest and NO transaction is sent" $? \
+          "exit $wrc; $(tr -d '\n' <"$WORK/neg-weights.out" | head -c 300)"
+      else
+        record_assertion negative "tampered weights refused against the anchored digest" SKIP \
+          "no digest from the verify stage" prerequisite_failed
+      fi
+
+      # And it must never become a governance handoff: no propose_calldata.
+      "$RMPC_BIN" governance -c "$FUSION_RMPC_CONFIG" draft-proposal \
+        --receipt-id "${RECEIPT_ID:-0x}" --receipt-file "$WORK/neg-weights.json" \
+        >"$WORK/neg-weights-draft.json" 2>&1
+      ! jq -e '[.drafts[]? | select((.propose_calldata | type) == "string" and (.propose_calldata | length) > 0)]
+               | length > 0' "$WORK/neg-weights-draft.json" >/dev/null 2>&1
+      expect negative "AC-GOV-01 a weights-tampered receipt produces NO propose_calldata" $? \
+        "$(head -c 300 "$WORK/neg-weights-draft.json")"
+      keep "negative-tampered-weights.txt" "$(cat "$WORK/neg-weights.out" 2>/dev/null; cat "$WORK/neg-weights-draft.json" 2>/dev/null)"
+    else
+      record_assertion negative "tampered weights refused against the anchored digest" FAIL \
+        "could not build the weights-tamper case: the receipt does not carry four weights"
     fi
 
     jq '.schema_version = "2.0"' "$WORK/receipt.json" >"$WORK/neg-schema.json"
@@ -324,7 +388,9 @@ if have_stage negative; then
       expect negative "CONTROL the AUTHORIZED submitter's identical call is accepted, so the revert above is not vacuous" $? \
         "$(tr -d '\n' <<<"$out" | head -c 300)"
     else
-      record_assertion negative "authorized-submitter control" SKIP "FUSION_SUBMITTER_ADDRESS unset"
+      record_assertion negative "authorized-submitter control" SKIP \
+        "FUSION_SUBMITTER_ADDRESS unset — the negative stage was SELECTED, so the control that keeps \
+the unauthorized-submit revert non-vacuous did not run" unconfigured
     fi
 
     # A DIFFERENT IDENTITY FROM THE SUBMIT CASE, ON PURPOSE. Release is gated by
@@ -341,13 +407,21 @@ if have_stage negative; then
     expect negative "AC-E2E-06 an unauthorized release by $releaser reverts on AUTHORITY, before receipt existence is consulted" $? \
       "$(tr -d '\n' <<<"$out" | head -c 300)"
   else
-    record_assertion negative "unauthorized submit/release" SKIP \
-      "needs FUSION_UNAUTHORIZED_SUBMITTER and a verified receipt"
+    # T11: the negative stage was SELECTED. A missing FUSION_UNAUTHORIZED_SUBMITTER
+    # is unconfigured (the run is not green); a missing receipt id means an earlier
+    # assertion already FAILED and is carried by `failed > 0`.
+    if [[ -z "${FUSION_UNAUTHORIZED_SUBMITTER:-}" ]]; then
+      record_assertion negative "unauthorized submit/release" SKIP \
+        "FUSION_UNAUTHORIZED_SUBMITTER is unset and the negative stage was selected" unconfigured
+    else
+      record_assertion negative "unauthorized submit/release" SKIP \
+        "the verify stage produced no receipt id or digest" prerequisite_failed
+    fi
   fi
 
   assert_witnesses_unchanged negative "after every negative case"
 else
-  record_assertion negative "stage not selected" SKIP "stages: $STAGES"
+  record_assertion negative "stage not selected" SKIP "stages: $STAGES" not_selected
 fi
 
 # ── stage: record ────────────────────────────────────────────────────────────
@@ -378,19 +452,35 @@ if have_stage record; then
       'getReceiptById(bytes32)((bytes32,bytes32,string,address,uint64,uint64,bool))' "$RECEIPT_ID" \
       --rpc-url "$FUSION_RPC_URL" 2>&1)"
     keep "record-onchain-tuple.txt" "$tuple"
-    grep -qi -- "${PAYLOAD_DIGEST#0x}" <<<"$tuple"
-    expect record "the stored payloadDigest equals the digest core derived from the URL" $? "$(tr -d '\n' <<<"$tuple" | head -c 300)"
+    # T16: FIELD-EXACT, not a substring of the decoded struct. The tuple carries
+    # receiptId, payloadDigest AND the operator-supplied payloadUri, so
+    # `grep -qi -- "${PAYLOAD_DIGEST#0x}"` over the whole thing reports PASS for a
+    # tuple whose real digest field is wrong but whose content-addressed URI
+    # carries the right one — and this run's own watcher template is
+    # `{receipt_id}.json`, one convention change from exactly that. This is the
+    # comparison submit-receipt-worker.sh already implements and explains.
+    # Receipt(bytes32 receiptId, bytes32 payloadDigest, string payloadUri, ...):
+    # both leading fields are fixed-width hex, so the first two commas delimit
+    # payloadDigest regardless of what the URI contains.
+    anchored_digest="$(tr -d '() \n' <<<"$tuple" | cut -d, -f2 | tr '[:upper:]' '[:lower:]')"
+    { [[ "$anchored_digest" =~ ^0x[0-9a-f]{64}$ ]] && [[ "$anchored_digest" == "${PAYLOAD_DIGEST,,}" ]]; }
+    expect record "the stored payloadDigest FIELD equals the digest core derived from the URL" $? \
+      "payloadDigest field: ${anchored_digest:-<unparseable>}; derived: $PAYLOAD_DIGEST; tuple: $(tr -d '\n' <<<"$tuple" | head -c 200)"
     grep -qF -- "$RECEIPT_URL" <<<"$tuple"
     expect record "the stored payloadUri is the public URL that served those bytes" $? "$(tr -d '\n' <<<"$tuple" | head -c 300)"
   fi
 else
-  record_assertion record "stage not selected" SKIP "stages: $STAGES"
+  record_assertion record "stage not selected" SKIP "stages: $STAGES" not_selected
 fi
 
 # ── stage: index ─────────────────────────────────────────────────────────────
 if have_stage index; then
-  if [[ -z "${FUSION_EXPLORER_API:-}" || -z "$RECEIPT_ID" ]]; then
-    record_assertion index "indexer and API convergence" SKIP "needs FUSION_EXPLORER_API and a recorded receipt"
+  if [[ -z "${FUSION_EXPLORER_API:-}" ]]; then
+    record_assertion index "indexer and API convergence" SKIP \
+      "FUSION_EXPLORER_API is unset and the index stage was selected" unconfigured
+  elif [[ -z "$RECEIPT_ID" ]]; then
+    record_assertion index "indexer and API convergence" SKIP \
+      "no receipt id — an earlier stage already failed" prerequisite_failed
   else
     deadline=$(( $(date +%s) + INDEX_TIMEOUT ))
     api=""
@@ -404,10 +494,16 @@ if have_stage index; then
     expect index "AC-CORE-06 the record appears in the index under the declared confirmation policy" $? \
       "within ${INDEX_TIMEOUT}s"
     if [[ -n "$api" ]]; then
-      grep -qi -- "${PAYLOAD_DIGEST#0x}" <<<"$api"
-      expect index "AC-CORE-07 the explorer API reports the same payload digest as the chain" $? "$(head -c 300 <<<"$api")"
-      grep -qF -- "$RECEIPT_URL" <<<"$api"
-      expect index "AC-CORE-07 the explorer API reports the same payload URL as the chain" $? "$(head -c 300 <<<"$api")"
+      # T16: the API body echoes payload_uri too, so a substring match passes on a
+      # body whose payload_digest is wrong and whose URL happens to carry the digest.
+      jq -e --arg d "$PAYLOAD_DIGEST" \
+        '((.payload_digest // .receipt.payload_digest) | ascii_downcase) == ($d | ascii_downcase)' \
+        <<<"$api" >/dev/null 2>&1
+      expect index "AC-CORE-07 the explorer API reports the same payload digest FIELD as the chain" $? \
+        "api payload_digest: $(jq -r '.payload_digest // .receipt.payload_digest // "<absent>"' <<<"$api" 2>/dev/null); chain: $PAYLOAD_DIGEST"
+      jq -e --arg u "$RECEIPT_URL" '(.payload_uri // .receipt.payload_uri) == $u' <<<"$api" >/dev/null 2>&1
+      expect index "AC-CORE-07 the explorer API reports the same payload URL FIELD as the chain" $? \
+        "api payload_uri: $(jq -r '.payload_uri // .receipt.payload_uri // "<absent>"' <<<"$api" 2>/dev/null); chain: $RECEIPT_URL"
       # THE INDEXER'S OWN VERIFICATION, AND ITS ONE-SHOT TRAP. The indexer fetches
       # payload_uri and recomputes the digest on its FIRST scan of the
       # ReceiptRecorded event, and stores verified=false PERMANENTLY if that fetch
@@ -422,16 +518,19 @@ the anchored URL from inside its own network on the first scan, and the row will
     fi
   fi
 else
-  record_assertion index "stage not selected" SKIP "stages: $STAGES"
+  record_assertion index "stage not selected" SKIP "stages: $STAGES" not_selected
 fi
 
 # ── stage: release ───────────────────────────────────────────────────────────
 if have_stage release; then
   if [[ -z "${FUSION_RELEASE_KEYSTORE:-}" || -z "${FUSION_RELEASE_PASSWORD_FILE:-}" \
-        || -z "${FUSION_RELEASE_ADDRESS:-}" || -z "$RECEIPT_ID" ]]; then
+        || -z "${FUSION_RELEASE_ADDRESS:-}" ]]; then
     record_assertion release "admin release" SKIP \
-      "needs FUSION_RELEASE_KEYSTORE, FUSION_RELEASE_PASSWORD_FILE, FUSION_RELEASE_ADDRESS \
-and a recorded receipt"
+      "the release stage was SELECTED but FUSION_RELEASE_KEYSTORE / FUSION_RELEASE_PASSWORD_FILE / \
+FUSION_RELEASE_ADDRESS are not all set" unconfigured
+  elif [[ -z "$RECEIPT_ID" ]]; then
+    record_assertion release "admin release" SKIP \
+      "no receipt id — an earlier stage already failed" prerequisite_failed
   else
     # IDEMPOTENT, BECAUSE THIS SCRIPT IS REQUIRED TO BE RUN TWICE.
     # AC-E2E-05 asks for a repeatable test, and the bundle wording invokes this
@@ -483,7 +582,8 @@ and a recorded receipt"
       expect release "AC-E2E-06 a duplicate record of the same receipt id is rejected (ReceiptAlreadyRecorded)" $? \
         "$(tr -d '\n' <<<"$out" | head -c 300)"
     else
-      record_assertion release "duplicate record" SKIP "FUSION_SUBMITTER_ADDRESS unset"
+      record_assertion release "duplicate record" SKIP \
+        "FUSION_SUBMITTER_ADDRESS unset and the release stage was selected" unconfigured
     fi
 
     # AC-CORE-07's release clause: the public API must agree that it is released,
@@ -499,17 +599,19 @@ and a recorded receipt"
       [[ -n "$rel_api" ]]
       expect release "AC-CORE-07 the public API reports the receipt as released" $? "within ${INDEX_TIMEOUT}s"
     else
-      record_assertion release "API release state" SKIP "FUSION_EXPLORER_API unset"
+      record_assertion release "API release state" SKIP \
+        "FUSION_EXPLORER_API unset and the release stage was selected" unconfigured
     fi
   fi
 else
-  record_assertion release "stage not selected" SKIP "stages: $STAGES"
+  record_assertion release "stage not selected" SKIP "stages: $STAGES" not_selected
 fi
 
 # ── stage: dapp ──────────────────────────────────────────────────────────────
 if have_stage dapp; then
   if [[ -z "${FUSION_DAPP_URL:-}" ]]; then
-    record_assertion dapp "dapp surface" SKIP "FUSION_DAPP_URL unset"
+    record_assertion dapp "dapp surface" SKIP \
+      "FUSION_DAPP_URL unset and the dapp stage was selected" unconfigured
   else
     code="$(curl -s -o "$WORK/dapp.html" -w '%{http_code}' "$FUSION_DAPP_URL")"
     [[ "$code" == "200" ]]
@@ -519,16 +621,17 @@ if have_stage dapp; then
       "AC-CORE-08 released / not-applied rendering and signature labelling" SKIP \
       "requires the Playwright spec clients/dapp/tests/e2e/consensus-receipts.spec.ts against \
 this deployment; this script asserts reachability only and must not report the browser \
-assertions as passed"
+assertions as passed" delegated
   fi
 else
-  record_assertion dapp "stage not selected" SKIP "stages: $STAGES"
+  record_assertion dapp "stage not selected" SKIP "stages: $STAGES" not_selected
 fi
 
 # ── stage: govern ────────────────────────────────────────────────────────────
 if have_stage govern; then
   if [[ -z "$RECEIPT_ID" ]]; then
-    record_assertion govern "governance draft" SKIP "no receipt id"
+    record_assertion govern "governance draft" SKIP \
+      "no receipt id — an earlier stage already failed" prerequisite_failed
   else
     proposals_before="$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" 'currentProposalId()(uint256)' \
       --rpc-url "$FUSION_RPC_URL" 2>&1 | tr -d '[:space:]')"
@@ -555,9 +658,31 @@ if have_stage govern; then
     expect govern "AC-GOV-01 release produces a governance handoff result" $? \
       "exit $drc; $(head -c 400 "$WORK/draft.json")"
     if jq -e '.ok == true' "$WORK/draft.json" >/dev/null 2>&1; then
-      jq -e '.drafts | length <= 1' "$WORK/draft.json" >/dev/null
-      expect govern "AC-GOV-01 at most ONE human-reviewable draft is produced" $? \
-        "$(jq -c '[.drafts[]?.status]' "$WORK/draft.json")"
+      # T15. `length <= 1` exits 0 for `drafts: []` AND for
+      # `[{"status":"refused"}]`, so the headline claim — "the release produced
+      # exactly one reviewable draft whose calldata decodes to those same four
+      # vaults and four weights" — could not be distinguished from "the release
+      # produced no draft at all". Assert the SHAPE.
+      jq -e '(.drafts | length) == 1 and .drafts[0].status == "ready_for_review"
+             and (.drafts[0].vaults | length) == 4
+             and ([.drafts[0].vaults[].weight_bps] | add) == 10000
+             and (.drafts[0].propose_calldata | type) == "string"
+             and (.drafts[0].propose_calldata | length) > 0' "$WORK/draft.json" >/dev/null 2>&1
+      expect govern "AC-GOV-01 EXACTLY ONE ready_for_review draft over four vaults whose bps total 10000 and which carries propose_calldata" $? \
+        "$(jq -c '{n:(.drafts|length),status:[.drafts[]?.status],vaults:(.drafts[0].vaults|length?),
+                   bps:[.drafts[0].vaults[]?.weight_bps],calldata:(.drafts[0].propose_calldata|type?)}' \
+             "$WORK/draft.json" 2>/dev/null)"
+
+      # AND THE BPS MUST BE THE RECEIPT'S OWN, IN CANONICAL BUCKET ORDER. The
+      # weights are the one field that becomes treasury calldata and the one the
+      # analyst signature check cannot cover (T01, T02): a draft that totals
+      # 10000 over the WRONG four numbers satisfies every assertion above.
+      draft_bps="$(jq -c '[.drafts[0].vaults[]?.weight_bps]' "$WORK/draft.json" 2>/dev/null)"
+      receipt_bps="$(jq -c '[.weights[]?.weight_bps]' "$WORK/receipt.json" 2>/dev/null)"
+      { [[ -n "$receipt_bps" && "$receipt_bps" != "[]" && "$draft_bps" == "$receipt_bps" ]]; }
+      expect govern "AC-FMT-04 the drafted bps equal the receipt's weights in canonical bucket order" $? \
+        "draft: ${draft_bps:-<none>}; receipt: ${receipt_bps:-<none>} (canonical order: \
+conservative_defi_yield, protocol_tokens, agent_tokens, real_world_assets)"
     fi
     proposals_after="$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" 'currentProposalId()(uint256)' \
       --rpc-url "$FUSION_RPC_URL" 2>&1 | tr -d '[:space:]')"
@@ -566,7 +691,7 @@ if have_stage govern; then
       "currentProposalId $proposals_before -> $proposals_after"
   fi
 else
-  record_assertion govern "stage not selected" SKIP "stages: $STAGES"
+  record_assertion govern "stage not selected" SKIP "stages: $STAGES" not_selected
 fi
 
 # ── final INV-4 comparison across the whole run ──────────────────────────────
@@ -585,10 +710,31 @@ jq -s --arg url "$RECEIPT_URL" --arg receipt_id "$RECEIPT_ID" --arg digest "$PAY
     summary:{total:length,
              passed:[.[]|select(.result=="PASS")]|length,
              failed:[.[]|select(.result=="FAIL")]|length,
-             skipped:[.[]|select(.result=="SKIP")]|length},
-    ok:([.[]|select(.result=="FAIL")]|length==0)}' \
+             skipped:[.[]|select(.result=="SKIP")]|length,
+             skipped_not_selected:[.[]|select(.result=="SKIP" and .reason=="not_selected")]|length,
+             skipped_unconfigured:[.[]|select(.result=="SKIP" and .reason=="unconfigured")]|length,
+             skipped_prerequisite_failed:[.[]|select(.result=="SKIP" and .reason=="prerequisite_failed")]|length,
+             skipped_delegated:[.[]|select(.result=="SKIP" and .reason=="delegated")]|length},
+    # T11: THE VERDICT DERIVES FROM EVERY SELECTED STAGE, NOT FROM THE FAIL COUNT.
+    # `ok:([.[]|select(.result=="FAIL")]|length==0)` made SKIP invisible: four
+    # stages selected with none of their config supplied SKIPped every assertion
+    # and reported {failed:0, ok:true, exit 0}. A stage the operator ASKED FOR
+    # whose config is missing did not run, and a run that did not run the gate is
+    # not a green gate.
+    ok:(([.[]|select(.result=="FAIL")]|length==0)
+        and ([.[]|select(.result=="SKIP" and .reason=="unconfigured")]|length==0))}' \
   "$WORK/assertions.ndjson" >"$RESULT_FILE"
 
 printf '\n%s\n' "result: $RESULT_FILE"
 jq -c '.summary' "$RESULT_FILE"
-exit "$FAILED"
+if (( SKIPPED_UNCONFIGURED > 0 )); then
+  echo "$SKIPPED_UNCONFIGURED selected stage(s) were SKIPPED for missing configuration — \
+the assertions you asked for did not run; this is NOT a pass" >&2
+fi
+if (( INV4_STARTUP_UNREADABLE != 0 )); then
+  echo "INV-4 witnesses were unreadable at startup (see above)" >&2
+fi
+if (( FAILED != 0 || SKIPPED_UNCONFIGURED != 0 || INV4_STARTUP_UNREADABLE != 0 )); then
+  exit 1
+fi
+exit 0

@@ -25,6 +25,22 @@ RMPC_BIN="${RMPC_BIN:-rmpc}"
 CAST_BIN="${CAST_BIN:-cast}"
 command -v jq >/dev/null || fail "jq is required"
 
+# T10: ONE INV-4 witness reader, shared with devnet-acceptance.sh. This script
+# used to read only `totalAssets` (no `totalSupply`) over an unbounded window,
+# so it and its sibling could disagree about the same chain.
+FUSION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)"
+# shellcheck source=lib/inv4.sh
+source "$FUSION_LIB_DIR/inv4.sh"
+
+# T25: the alert path is validated the way rmpc/cast are, not discovered at the
+# moment it is needed. Runbook §5.5 claims both harnesses page.
+if [[ -n "${FUSION_ALERT_WEBHOOK:-}" ]]; then
+  command -v curl >/dev/null || fail "FUSION_ALERT_WEBHOOK is set but curl is not on PATH: pages would be silently dropped"
+  command -v jq   >/dev/null || fail "FUSION_ALERT_WEBHOOK is set but jq is not on PATH: pages would be silently dropped"
+else
+  echo "fusion-cross-repo: WARNING FUSION_ALERT_WEBHOOK is unset — failures will be stderr-only and will page nobody" >&2
+fi
+
 EVIDENCE_DIR="${FUSION_EVIDENCE_DIR:-}"
 record() { # record <name> <content>
   [[ -n "$EVIDENCE_DIR" ]] || return 0
@@ -57,43 +73,65 @@ url_digest="$(jq -er '.payload_digest' <<<"$verify_url")"
 [[ "$url_receipt_id" == "$receipt_id" ]] \
   || fail "the URL being anchored derives receipt_id $url_receipt_id, file derives $receipt_id"
 
-# INV-4 "before" witnesses, read before anything is submitted.
-proposals_before="$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" \
-  'currentProposalId()(uint256)' --rpc-url "$FUSION_RPC_URL")" \
-  || fail "could not read RouterGovernance.currentProposalId()"
-weights_before="$("$CAST_BIN" call "$FUSION_ROUTER_ADDRESS" \
-  'getWeights()(address[],uint256[])' --rpc-url "$FUSION_RPC_URL")" \
-  || fail "could not read PortfolioRouter.getWeights()"
-
 IFS=',' read -r -a VAULTS <<<"$FUSION_VAULT_ADDRESSES"
 (( ${#VAULTS[@]} > 0 )) || fail "FUSION_VAULT_ADDRESSES is empty"
-read_balances() {
-  local v out=""
-  for v in "${VAULTS[@]}"; do
-    v="${v// /}"
-    local ta
-    ta="$("$CAST_BIN" call "$v" 'totalAssets()(uint256)' --rpc-url "$FUSION_RPC_URL")" \
-      || fail "could not read totalAssets() for vault $v"
-    out+="$v=$(tr -d '[:space:]' <<<"$ta")"$'\n'
-  done
-  printf '%s' "$out"
-}
-balances_before="$(read_balances)"
 
-FUSION_RECEIPT_FILE="$FUSION_FRONTEND_RECEIPT_FILE" \
-FUSION_RECEIPT_URL="$FUSION_FRONTEND_RECEIPT_URL" \
-FUSION_MAX_ATTEMPTS="${FUSION_MAX_ATTEMPTS:-5}" \
-"$(dirname "$0")/submit-receipt-worker.sh"
+witnesses() {
+  inv4_witnesses "$CAST_BIN" "$FUSION_RPC_URL" "$FUSION_GOVERNANCE_ADDRESS" \
+    "$FUSION_ROUTER_ADDRESS" "${VAULTS[@]}" || true
+}
+
+# THE INV-4 WINDOW BRACKETS THE WRITE STAGES, and opens here rather than at
+# script start (T10, matching ddbbe895 on the sibling). A mapped vault with a
+# live yield adapter accrues on its own; comparing the end of a long run against
+# a snapshot taken before verification would report accrual as an INV-4 breach.
+# The comparison itself stays exact equality — only the window narrows.
+witnesses_before="$(witnesses)"
+inv4_unreadable "$witnesses_before" \
+  && fail "INV-4 witnesses are not readable: refusing to run a gate whose blocker \
+assertion could only compare one absence against another — $witnesses_before"
+record "inv4-witnesses-before.txt" "$witnesses_before"
+
+# The worker's own JSON goes to the evidence dir and to stderr, NOT to this
+# script's stdout: stdout is the single evidence document this script produces,
+# and a second JSON object on it makes every downstream `jq` read the wrong one.
+worker_out="$(FUSION_RECEIPT_FILE="$FUSION_FRONTEND_RECEIPT_FILE" \
+  FUSION_RECEIPT_URL="$FUSION_FRONTEND_RECEIPT_URL" \
+  FUSION_MAX_ATTEMPTS="${FUSION_MAX_ATTEMPTS:-5}" \
+  "$(dirname "$0")/submit-receipt-worker.sh")" \
+  || fail "the submit worker did not anchor the receipt"
+record "submit-worker.json" "$worker_out"
+printf '%s\n' "$worker_out" >&2
 
 # D9 permits a local/devnet release ceremony. Use a keystore, never a private
 # key on argv. Timelock-controlled staging must perform its normal schedule /
 # delay / execute ceremony externally, then rerun with FUSION_SKIP_RELEASE=1.
-if [[ "${FUSION_SKIP_RELEASE:-0}" != "1" ]]; then
-  : "${FUSION_RELEASE_KEYSTORE:?required for direct local/devnet release}"
-  : "${FUSION_RELEASE_PASSWORD_FILE:?required for direct local/devnet release}"
-  "$CAST_BIN" send "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$receipt_id" \
-    --rpc-url "$FUSION_RPC_URL" --keystore "$FUSION_RELEASE_KEYSTORE" \
-    --password-file "$FUSION_RELEASE_PASSWORD_FILE" >/dev/null
+#
+# T29: IDEMPOTENT, BECAUSE THIS SCRIPT IS THE AC-E2E-05 SEAM AND IS RUN TWICE.
+# `releaseReceipt` is a one-shot state transition: a second `cast send` reverts
+# ReceiptAlreadyReleased, and under `set -euo pipefail` that aborts the script at
+# this line — so the INV-4 comparison, the draft assertion and the evidence JSON
+# after it never execute, and a real INV-4 regression between the two runs would
+# be invisible behind the false failure. Read the state first, which is also what
+# an operator does. The post-condition read below stays the actual assertion.
+release_action="sent"
+if [[ "${FUSION_SKIP_RELEASE:-0}" == "1" ]]; then
+  release_action="skipped_external_ceremony"
+else
+  already_released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool)' \
+    "$receipt_id" --rpc-url "$FUSION_RPC_URL")" \
+    || fail "could not read isReleased() before the release broadcast"
+  already_released="$(tr -d '[:space:]' <<<"$already_released")"
+  if [[ "$already_released" == "true" ]]; then
+    release_action="already_released"
+    echo "fusion-cross-repo: receipt $receipt_id is already released; no second broadcast" >&2
+  else
+    : "${FUSION_RELEASE_KEYSTORE:?required for direct local/devnet release}"
+    : "${FUSION_RELEASE_PASSWORD_FILE:?required for direct local/devnet release}"
+    "$CAST_BIN" send "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$receipt_id" \
+      --rpc-url "$FUSION_RPC_URL" --keystore "$FUSION_RELEASE_KEYSTORE" \
+      --password-file "$FUSION_RELEASE_PASSWORD_FILE" >/dev/null
+  fi
 fi
 
 released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool)' \
@@ -103,49 +141,65 @@ released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool
 draft="$("$RMPC_BIN" governance -c "$FUSION_RMPC_CONFIG" draft-proposal \
   --receipt-id "$receipt_id" --receipt-file "$FUSION_FRONTEND_RECEIPT_FILE")" \
   || fail "released frontend receipt did not produce a governance handoff result"
+# T15. `skipped_no_weights` is NOT an accepted outcome: runbook §5.5 already says
+# an absent `weights` array is a FAILED assertion, never a skipped one — a receipt
+# with no allocation vector cannot carry a recommendation. A ready_for_review
+# draft must additionally name four vaults whose bps total 10000 and carry the
+# calldata a human reviews, and those bps must be the RECEIPT's own weights in
+# canonical bucket order: the weights are the one field that becomes treasury
+# calldata and the one the analyst signature check cannot cover.
 jq -e --arg id "$receipt_id" \
   '.ok == true and (.drafts | length == 1) and .drafts[0].receipt_id == $id and
-   (.drafts[0].status == "ready_for_review" or .drafts[0].status == "blocked_active_proposal" or .drafts[0].status == "skipped_no_weights")' \
-  <<<"$draft" >/dev/null || fail "unexpected governance draft output"
+   (.drafts[0].status == "ready_for_review" or .drafts[0].status == "blocked_active_proposal")' \
+  <<<"$draft" >/dev/null || fail "unexpected governance draft output: $(jq -c '{ok,n:(.drafts|length),status:[.drafts[]?.status]}' <<<"$draft" 2>/dev/null)"
 
-# INV-4 "after" witnesses. Record and release are signalling-only: a drafted
-# proposal is a JSON document for a human, so nothing here may have moved.
-proposals_after="$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" \
-  'currentProposalId()(uint256)' --rpc-url "$FUSION_RPC_URL")" \
-  || fail "could not re-read RouterGovernance.currentProposalId()"
-weights_after="$("$CAST_BIN" call "$FUSION_ROUTER_ADDRESS" \
-  'getWeights()(address[],uint256[])' --rpc-url "$FUSION_RPC_URL")" \
-  || fail "could not re-read PortfolioRouter.getWeights()"
-balances_after="$(read_balances)"
+if jq -e '.drafts[0].status == "ready_for_review"' <<<"$draft" >/dev/null 2>&1; then
+  jq -e '(.drafts[0].vaults | length) == 4
+         and ([.drafts[0].vaults[].weight_bps] | add) == 10000
+         and (.drafts[0].propose_calldata | type) == "string"
+         and (.drafts[0].propose_calldata | length) > 0' <<<"$draft" >/dev/null \
+    || fail "a ready_for_review draft must name four vaults whose bps total 10000 and carry propose_calldata: \
+$(jq -c '{vaults:(.drafts[0].vaults|length?),bps:[.drafts[0].vaults[]?.weight_bps],calldata:(.drafts[0].propose_calldata|type?)}' <<<"$draft" 2>/dev/null)"
+  draft_bps="$(jq -c '[.drafts[0].vaults[].weight_bps]' <<<"$draft")"
+  receipt_bps="$(jq -c '[.weights[]?.weight_bps]' "$FUSION_FRONTEND_RECEIPT_FILE" 2>/dev/null)"
+  [[ -n "$receipt_bps" && "$receipt_bps" != "[]" && "$draft_bps" == "$receipt_bps" ]] \
+    || fail "the drafted bps do not equal the receipt's weights in canonical bucket order \
+(draft: $draft_bps, receipt: ${receipt_bps:-<none>})"
+fi
 
-[[ "$balances_after" == "$balances_before" ]] \
-  || fail "INV-4 violated: mapped vault totalAssets changed across record/release
-before:
-$balances_before
-after:
-$balances_after"
+# INV-4 "after" witnesses, closing the window opened before the submit. Record
+# and release are signalling-only: a drafted proposal is a JSON document for a
+# human, so nothing here may have moved.
+witnesses_after="$(witnesses)"
+record "inv4-witnesses-after.txt" "$witnesses_after"
+inv4_unreadable "$witnesses_after" \
+  && fail "INV-4 witnesses became unreadable after the write stages, so NOTHING was \
+compared — $witnesses_after"
 
-[[ "$proposals_after" == "$proposals_before" ]] \
-  || fail "INV-4 violated: RouterGovernance.currentProposalId moved \
-$proposals_before -> $proposals_after; release submitted a proposal"
-[[ "$weights_after" == "$weights_before" ]] \
-  || fail "INV-4 violated: PortfolioRouter weights changed across record/release"
+if [[ "$witnesses_after" != "$witnesses_before" ]]; then
+  fail "INV-4 violated: an allocation-state witness moved across record/release
+$(diff <(printf '%s' "$witnesses_before") <(printf '%s' "$witnesses_after") || true)
+$INV4_ACCRUAL_NOTE"
+fi
 
-balances_json() { # name=value lines -> {"0x..":"123"}
-  jq -Rn '[inputs | select(length>0) | split("=") | {key:.[0],value:.[1]}] | from_entries'
+witnesses_json() { # `key=value` lines -> {"key":"value"}
+  jq -Rn '[inputs | select(length>0) | (index("=")) as $i |
+           {key:.[0:$i], value:.[$i+1:]}] | from_entries'
 }
 
 jq -n --arg receipt_id "$receipt_id" --arg payload_digest "$digest" \
   --arg receipt_url "$FUSION_FRONTEND_RECEIPT_URL" --arg url_digest "$url_digest" \
-  --arg proposal_id_before "$proposals_before" --arg proposal_id_after "$proposals_after" \
-  --argjson balances_before "$(balances_json <<<"$balances_before")" \
-  --argjson balances_after "$(balances_json <<<"$balances_after")" \
+  --arg release_action "$release_action" \
+  --argjson witnesses_before "$(witnesses_json <<<"$witnesses_before")" \
+  --argjson witnesses_after "$(witnesses_json <<<"$witnesses_after")" \
   '{ok:true,
-    stages:["frontend_artifact","core_verify_file","core_verify_url","submit","release","proposal_drafted","inv4_unchanged"],
+    stages:["frontend_artifact","core_verify_file","core_verify_url","submit",
+            ("release:" + $release_action),"proposal_drafted","inv4_unchanged"],
+    release:{action:$release_action,
+             broadcast:($release_action == "sent")},
     receipt_id:$receipt_id,payload_digest:$payload_digest,
     anchored_url:{url:$receipt_url,payload_digest:$url_digest,matches_submitted_bytes:true},
-    inv4:{proposal_id_before:$proposal_id_before,proposal_id_after:$proposal_id_after,
-          router_weights_unchanged:true,
-          vault_total_assets_before:$balances_before,
-          vault_total_assets_after:$balances_after,
-          vault_balances_unchanged:true}}'
+    inv4:{witnesses_before:$witnesses_before,
+          witnesses_after:$witnesses_after,
+          window:"immediately before submit .. immediately after release and draft",
+          unchanged:true}}'

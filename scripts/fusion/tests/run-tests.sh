@@ -31,22 +31,31 @@ REPO_ROOT="$(cd "$FUSION_DIR/../.." && pwd)"
 # is not "tested" -- the number of assertions that ACTUALLY executed is the only
 # thing that distinguishes the two, so the exit code now depends on it.
 #
-# The floor is the FULL count as of the commit that introduced it. The harness
-# assertions that existed before this change number 54 (the figure T13 names);
-# the workflow-floor cross-check added at the bottom of this file is the 55th,
-# so the floor is 55 -- strictly tighter than 54, and exactly equal to what a
-# healthy run executes, leaving no slack a truncation could hide in. Raise it
-# whenever assertions are added; lowering it is a deliberate, reviewable act and
-# the workflow re-checks the same number independently (see below), so lowering
-# it here alone buys nothing.
-MIN_EXPECTED_ASSERTIONS=63
+# The floor is the FULL count as of the commit that last raised it, so it is
+# exactly equal to what a healthy run executes and leaves no slack a truncation
+# could hide in. It was 55, then 63; the round-2 harness cycle (T10, T11, T15,
+# T16, T25, T29) adds the guards below; merging the T01/T07/T09 watcher guards with them at
+# integration takes the union to 156. Raise it whenever
+# assertions are added; lowering it is a deliberate, reviewable act and the
+# workflow re-checks the same number independently (see below), so lowering it
+# here alone buys nothing.
+MIN_EXPECTED_ASSERTIONS=156
 
 # The workflow that runs this suite re-asserts the same floor against the
 # machine-readable FUSION_SELFTESTS_EXECUTED line, precisely so a silently
 # lowered MIN_EXPECTED_ASSERTIONS cannot buy a green on its own. Any slack
 # between the two numbers re-opens the window this guard exists to close, so the
 # drift is asserted here too -- red in CI on the commit that introduces it.
-FUSION_SELFTEST_WORKFLOW="$REPO_ROOT/.github/workflows/suite-25-fusion-harness-selftests.yml"
+#
+# INTEGRATION NOTE (round-2): the paired workflow is suite-27-fusion-assertion-
+# floor.yml, NOT suite-25-fusion-harness-selftests.yml. suite-25 carries the
+# floor as of the commit that created it (63) and the round-2 change protocol
+# (§4/§10) forbids modifying an existing workflow file, so suite-25 is left
+# untouched -- its 63 remains a true lower bound and stays green. suite-27 is a
+# NEW file (which the protocol permits) holding the real floor, and it is the
+# one this equality is asserted against. Fold suite-27 back into suite-25 and
+# repoint this variable when the freeze lifts.
+FUSION_SELFTEST_WORKFLOW="$REPO_ROOT/.github/workflows/suite-27-fusion-assertion-floor.yml"
 
 PASS=0
 FAIL=0
@@ -74,6 +83,14 @@ check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want: $3, got: $2)";
 # STUB_DIR/rpc_down           — non-empty: every `cast call` fails like an outage
 # STUB_DIR/released           — non-empty: isReleased reports true
 # STUB_DIR/release_sends      — one line per `cast send` (a release broadcast)
+# STUB_DIR/cast_calls         — every `cast` argv, one line each
+# STUB_DIR/witness_drift      — non-empty: totalAssets moves one unit per read
+# STUB_DIR/draft_json         — what rmpc governance draft-proposal prints
+# STUB_DIR/draft_tamper_json  — what it prints for a --receipt-file naming neg-weights
+# STUB_DIR/submit_refuses_tampered — non-empty: rmpc receipt submit refuses neg-* files
+# STUB_DIR/api_json           — body curl returns for an explorer-API GET
+# STUB_DIR/alert_posts        — one line per webhook POST body
+# STUB_DIR/alert_post_fail    — non-empty: every webhook POST fails
 new_stubs() {
   STUB_DIR="$(mktemp -d)"
   mkdir -p "$STUB_DIR/bin"
@@ -95,6 +112,15 @@ new_stubs() {
   : >"$STUB_DIR/verify_ok_false_exit_zero"
   : >"$STUB_DIR/released"
   : >"$STUB_DIR/release_sends"
+  : >"$STUB_DIR/cast_calls"
+  : >"$STUB_DIR/witness_drift"
+  : >"$STUB_DIR/witness_reads"
+  : >"$STUB_DIR/alert_posts"
+  : >"$STUB_DIR/alert_post_fail"
+  : >"$STUB_DIR/curl_fetch_fail"
+  : >"$STUB_DIR/submit_refuses_tampered"
+  echo 7 >"$STUB_DIR/proposal_id"
+  echo "([0xaa],[10000])" >"$STUB_DIR/weights"
 
   cat >"$STUB_DIR/bin/rmpc" <<'STUB'
 #!/usr/bin/env bash
@@ -110,9 +136,23 @@ case "$1" in
         echo '{"ok":false,"error":"ErrReceiptSignatureInvalid"}'
         exit 0
       fi
-      printf '{"ok":true,"action":"verify","receipt_id":"%s","payload_digest":"%s"}\n' \
+      if [[ -s "$STUB_DIR/submit_refuses_tampered" && "$*" == *neg-* ]]; then
+        echo '{"ok":false,"error":"ErrReceiptTampered"}'
+        exit 1
+      fi
+      printf '{"ok":true,"action":"verify","receipt_id":"%s","payload_digest":"%s","analyst_signatures":[{"member_id":"a1","verified":true},{"member_id":"a2","verified":true}]}\n' \
         "$FUSION_TEST_RECEIPT_ID" "$FUSION_TEST_DIGEST"
       exit 0
+    fi
+    # A tampered receipt file must be refused against the anchored digest, and
+    # must never reach a broadcast. `neg-` is how the orchestrator names them.
+    if [[ -s "$STUB_DIR/submit_refuses_tampered" && "$*" == *neg-* ]]; then
+      if [[ "$*" == *neg-schema* ]]; then
+        echo '{"ok":false,"error":"ErrUnsupportedSchema","detail":"schema_version 2.0 is not supported"}' >&2
+      else
+        echo '{"ok":false,"error":"ErrPayloadDigestMismatch"}' >&2
+      fi
+      exit 1
     fi
     echo "submit" >>"$STUB_DIR/attempts"
     n="$(cat "$STUB_DIR/submit_fail_n")"
@@ -145,6 +185,14 @@ case "$1" in
         "$FUSION_TEST_RECEIPT_ID"
       exit 0
     fi
+    # T15 govern-stage fixtures: the tampered-weights negative case and the
+    # canonical draft the govern assertions read.
+    if [[ "$*" == *neg-weights* && -s "$STUB_DIR/draft_tamper_json" ]]; then
+      cat "$STUB_DIR/draft_tamper_json"; exit 0
+    fi
+    if [[ -s "$STUB_DIR/draft_json" ]]; then
+      cat "$STUB_DIR/draft_json"; exit 0
+    fi
     echo '{"ok":true,"drafts":[]}'
     exit 0
     ;;
@@ -155,6 +203,7 @@ STUB
 
   cat >"$STUB_DIR/bin/cast" <<'STUB'
 #!/usr/bin/env bash
+echo "$*" >>"$STUB_DIR/cast_calls"
 case "$1" in
   block-number)
     echo call >>"$STUB_DIR/blocknum_calls"
@@ -166,6 +215,7 @@ case "$1" in
       exit 1
     fi
     cat "$STUB_DIR/block_number"; exit 0 ;;
+  code) echo "0x60006000fd"; exit 0 ;;
   chain-id) echo 918453; exit 0 ;;
   send)
     echo "send $*" >>"$STUB_DIR/release_sends"
@@ -181,6 +231,21 @@ case "$1" in
       exit 1
     fi
     case "$sig" in
+      currentProposalId*) cat "$STUB_DIR/proposal_id"; exit 0 ;;
+      getWeights*)        cat "$STUB_DIR/weights"; exit 0 ;;
+      totalAssets*)
+        # One unit of drift per read when asked for: the accrual shape INV-4 has
+        # to distinguish from a signalling-path asset movement, and the shape
+        # BOTH harnesses must reach the same verdict on.
+        if [[ -s "$STUB_DIR/witness_drift" ]]; then
+          n="$(wc -l <"$STUB_DIR/witness_reads" | tr -d ' ')"
+          echo "read" >>"$STUB_DIR/witness_reads"
+          echo $((1000000 + n))
+        else
+          echo 1000000
+        fi
+        exit 0 ;;
+      totalSupply*) echo 999000; exit 0 ;;
       isRecorded*) [[ -n "$d" ]] && echo true || echo false; exit 0 ;;
       isReleased*) [[ -s "$STUB_DIR/released" ]] && echo true || echo false; exit 0 ;;
       releaseReceipt*)
@@ -222,6 +287,63 @@ STUB
   FUSION_TEST_RECEIPT_ID="0x$(printf 'ab%.0s' {1..32})"
   FUSION_TEST_DIGEST="0x$(printf 'cd%.0s' {1..32})"
   export FUSION_TEST_RECEIPT_ID FUSION_TEST_DIGEST
+  printf '{"ok":true,"drafts":[]}' >"$STUB_DIR/draft_json"
+  : >"$STUB_DIR/draft_tamper_json"
+  : >"$STUB_DIR/api_json"
+}
+
+# A curl stub every acceptance test shares, so the three hand-copied inline
+# heredocs cannot drift. It serves the receipt for `-o FILE`, the explorer-API
+# body for a consensus-receipts GET, and records webhook POSTs.
+new_curl_stub() {
+  cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
+#!/usr/bin/env bash
+out=""; prev=""; post=0; data=""; url=""
+for a in "$@"; do
+  [[ "$prev" == "-o" ]] && out="$a"
+  [[ "$prev" == "-X" && "$a" == "POST" ]] && post=1
+  [[ "$prev" == "--data" ]] && data="$a"
+  [[ "$a" == http* ]] && url="$a"
+  prev="$a"
+done
+if (( post )); then
+  printf '%s\n' "$data" >>"$STUB_DIR/alert_posts"
+  [[ -s "$STUB_DIR/alert_post_fail" ]] && { echo "stub curl: webhook refused" >&2; exit 22; }
+  exit 0
+fi
+if [[ -n "$out" ]]; then
+  [[ -s "$STUB_DIR/curl_fetch_fail" ]] && exit 22
+  cp "$STUB_DIR/receipt.json" "$out"
+  exit 0
+fi
+if [[ "$url" == *consensus-receipts* ]]; then
+  [[ -s "$STUB_DIR/api_json" ]] || exit 22
+  cat "$STUB_DIR/api_json"
+  exit 0
+fi
+exit 0
+CURLSTUB
+  chmod +x "$STUB_DIR/bin/curl"
+}
+
+# A receipt with the four canonical bucket weights, so the weights assertions
+# (T15) have something real to bind to.
+receipt_fixture() {
+  cat >"$STUB_DIR/receipt.json" <<'RJSON'
+{"schema_version":"1.0",
+ "weights":[{"bucket":"conservative_defi_yield","weight_bps":4000},
+            {"bucket":"protocol_tokens","weight_bps":3000},
+            {"bucket":"agent_tokens","weight_bps":2000},
+            {"bucket":"real_world_assets","weight_bps":1000}]}
+RJSON
+}
+
+draft_fixture() { # <bps-json-array> [status]
+  local bps="${1:-[4000,3000,2000,1000]}" status="${2:-ready_for_review}"
+  jq -n --arg id "$FUSION_TEST_RECEIPT_ID" --arg st "$status" --argjson bps "$bps" \
+    '{ok:true,drafts:[{receipt_id:$id,status:$st,
+       vaults:[$bps[] | {vault:"0x00",weight_bps:.}],
+       propose_calldata:"0xdeadbeef"}]}' >"$STUB_DIR/draft_json"
 }
 
 worker_env() {
@@ -335,7 +457,7 @@ export FUSION_MAX_ATTEMPTS=1
 err="$(timeout 10 "$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"; rc=$?
 check "an unreadable chain never broadcasts" "$(wc -l <"$STUB_DIR/attempts" | tr -d ' ')" "0"
 check "an unreadable chain keeps waiting rather than exiting success" "$rc" "124"
-if grep -q "ALERT chain reads have failed" <<<"$err"; then
+if grep -q "ALERT \[fusion_submit_worker_chain_reads_down\] chain reads have failed" <<<"$err"; then
   ok "consecutive read outages page"
 else
   bad "a read-side outage was silent: $err"
@@ -418,7 +540,7 @@ echo 3 >"$STUB_DIR/scan_exit"
 export FUSION_STALL_ALERT_CYCLES=1
 err="$("$FUSION_DIR/watch-released-drafts.sh" 2>&1 >/dev/null)"; rc=$?
 check "a transport failure holds the cursor" "$(cat "$FUSION_DRAFT_CURSOR")" "10"
-if grep -q "ALERT cursor has not advanced" <<<"$err"; then
+if grep -q "ALERT \[fusion_draft_watcher_stalled\] cursor has not advanced" <<<"$err"; then
   ok "a motionless cursor pages"
 else
   bad "the cursor stalled with no alert: $err"
@@ -724,6 +846,427 @@ chmod +x "$STUB_DIR/bin/curl"
   --out "$RESULT" >/dev/null 2>&1
 check "an unreleased receipt still broadcasts exactly one release" \
   "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "1"
+
+# ─── T10: one shared INV-4 witness reader, failing LOUDLY ────────────────────
+# `witnesses()` built each reading as `out="proposals=$(cast call … 2>&1 | …)"`:
+# stderr folded into the compared value, exit status eaten by the pipe. With a
+# `cast` that failed every read, the blocker INV-4 assertion recorded PASS with
+# the detail "no allocation-state witness moved". Ten failed reads, one green
+# gate. These tests execute that.
+echo
+echo "T10 — INV-4 witnesses (lib/inv4.sh)"
+
+inv4_results() { jq -r '[.assertions[]|select(.assertion|test("INV-4"))|.result]|unique|join(",")' "$RESULT" 2>/dev/null; }
+
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+echo 1 >"$STUB_DIR/rpc_down"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --no-anchor --out "$RESULT" >/dev/null 2>&1
+check "an unreadable chain fails the run" "$?" "1"
+check "the INV-4 assertion is FAIL, not a PASS over two identical error texts" "$(inv4_results)" "FAIL"
+check "an unreadable-witness run is not ok" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "false"
+if jq -e '[.assertions[]|select(.assertion|test("INV-4"))]|length>0 and all(.detail|test("could not be READ"))' \
+     "$RESULT" >/dev/null 2>&1; then
+  ok "the INV-4 failure says the witnesses were not read, not that nothing moved"
+else
+  bad "the unreadable INV-4 witnesses were not named: $(jq -c '[.assertions[]|select(.assertion|test("INV-4"))|{r:.result,d:.detail}]' "$RESULT" 2>/dev/null)"
+fi
+
+# THE NEGATIVE CONTROL. With the same stubs answering, the very same assertion
+# must PASS — otherwise the test above would pass on a script that always fails.
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+echo 1 >"$STUB_DIR/submit_refuses_tampered"
+export FUSION_UNAUTHORIZED_SUBMITTER=0x00000000000000000000000000000000000000ee
+export FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --no-anchor --out "$RESULT" >/dev/null 2>&1
+check "a readable chain records the INV-4 assertion as PASS" "$(inv4_results)" "PASS"
+for q in currentProposalId getWeights totalAssets totalSupply; do
+  if grep -q "$q" "$STUB_DIR/cast_calls"; then ok "devnet-acceptance reads $q as an INV-4 witness"
+  else bad "devnet-acceptance never read $q"; fi
+done
+unset FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS
+
+# A ONE-UNIT DRIFT MUST REACH THE SAME VERDICT IN BOTH HARNESSES.
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+echo 1 >"$STUB_DIR/witness_drift"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --no-anchor --out "$RESULT" >/dev/null 2>&1
+devnet_drift_rc=$?
+check "devnet-acceptance fails on a one-unit witness drift" "$devnet_drift_rc" "1"
+check "and records it as a FAILED INV-4 assertion" "$(inv4_results)" "FAIL"
+if jq -e '[.assertions[]|select(.assertion|test("INV-4"))]|all(.detail|test("yield adapter accrues"))' \
+     "$RESULT" >/dev/null 2>&1; then
+  ok "the drift failure carries the accrual note so it can be attributed"
+else
+  bad "the drift failure dropped the accrual note"
+fi
+
+cross_repo_env() {
+  export FUSION_FRONTEND_RECEIPT_FILE="$STUB_DIR/receipt.json"
+  export FUSION_FRONTEND_RECEIPT_URL="https://example.invalid/receipt.json"
+  export FUSION_RMPC_CONFIG="$STUB_DIR/config.toml"; : >"$FUSION_RMPC_CONFIG"
+  export FUSION_RECEIPT_ADDRESS=0x0000000000000000000000000000000000000002
+  export FUSION_RPC_URL="http://127.0.0.1:1"
+  export FUSION_GOVERNANCE_ADDRESS=0x0000000000000000000000000000000000000003
+  export FUSION_ROUTER_ADDRESS=0x0000000000000000000000000000000000000004
+  export FUSION_VAULT_ADDRESSES=0x0000000000000000000000000000000000000005,0x0000000000000000000000000000000000000006,0x0000000000000000000000000000000000000007,0x0000000000000000000000000000000000000008
+  export FUSION_RELEASE_KEYSTORE="$STUB_DIR/ks.json"
+  export FUSION_RELEASE_PASSWORD_FILE="$STUB_DIR/pass"
+  : >"$STUB_DIR/ks.json"; : >"$STUB_DIR/pass"
+  export FUSION_EVIDENCE_DIR="$STUB_DIR/evidence"
+  export FUSION_MAX_ATTEMPTS=3
+  export RMPC_BIN=rmpc CAST_BIN=cast
+  export PATH="$STUB_DIR/bin:$PATH"
+  export STUB_DIR
+  unset FUSION_SKIP_RELEASE FUSION_ALERT_WEBHOOK FUSION_RECEIPT_URL FUSION_RECEIPT_FILE || true
+  : >"$STUB_DIR/config.toml"
+}
+
+new_stubs; cross_repo_env; new_curl_stub; receipt_fixture; draft_fixture
+echo 1 >"$STUB_DIR/witness_drift"
+"$FUSION_DIR/cross-repo-acceptance.sh" >/dev/null 2>&1
+check "cross-repo-acceptance reaches the SAME verdict on the same one-unit drift" "$?" "$devnet_drift_rc"
+for q in currentProposalId getWeights totalAssets totalSupply; do
+  if grep -q "$q" "$STUB_DIR/cast_calls"; then ok "cross-repo-acceptance reads $q as an INV-4 witness"
+  else bad "cross-repo-acceptance never read $q (it used to read only totalAssets)"; fi
+done
+
+# ─── T11: the verdict derives from every SELECTED stage ─────────────────────
+# `ok:([.[]|select(.result=="FAIL")]|length==0)` then `exit "$FAILED"` — SKIP was
+# invisible to both. Stages selected with none of their config supplied SKIPped
+# every assertion and reported {failed:0, ok:true, exit 0}.
+echo
+echo "T11 — the acceptance verdict"
+
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+unset FUSION_RELEASE_KEYSTORE FUSION_RELEASE_PASSWORD_FILE FUSION_RELEASE_ADDRESS \
+      FUSION_EXPLORER_API FUSION_DAPP_URL FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS || true
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages release --out "$RESULT" >/dev/null 2>&1
+check "a SELECTED but unconfigured release stage exits non-zero" "$?" "1"
+check "…and the run is not ok" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "false"
+check "…while the FAIL count is still zero, which is the whole point" \
+  "$(jq -r '.summary.failed' "$RESULT" 2>/dev/null)" "0"
+check "…because the skip is counted as unconfigured, not as not_selected" \
+  "$(jq -r '.summary.skipped_unconfigured' "$RESULT" 2>/dev/null)" "1"
+
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+echo 1 >"$STUB_DIR/submit_refuses_tampered"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,negative --out "$RESULT" >/dev/null 2>&1
+check "an unset FUSION_UNAUTHORIZED_SUBMITTER on a SELECTED negative stage exits non-zero" "$?" "1"
+check "…with ok false" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "false"
+check "…and zero FAILs, so only the SKIP reason can have produced the verdict" \
+  "$(jq -r '.summary.failed' "$RESULT" 2>/dev/null)" "0"
+
+# NEGATIVE CONTROL 1: the same unconfigured variable, with the stage NOT selected.
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify --out "$RESULT" >/dev/null 2>&1
+check "a run whose unconfigured stages were never SELECTED exits 0" "$?" "0"
+check "…is ok" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "true"
+check "…counts no unconfigured skips" "$(jq -r '.summary.skipped_unconfigured' "$RESULT" 2>/dev/null)" "0"
+check "…and records the other six stages as not_selected" \
+  "$(jq -r '.summary.skipped_not_selected' "$RESULT" 2>/dev/null)" "6"
+
+# NEGATIVE CONTROL 2: configure the variable and the unconfigured count must drop
+# to zero for the very same selected stage.
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+echo 1 >"$STUB_DIR/submit_refuses_tampered"
+export FUSION_UNAUTHORIZED_SUBMITTER=0x00000000000000000000000000000000000000ee
+export FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,negative --out "$RESULT" >/dev/null 2>&1
+check "configuring the variable removes the unconfigured skip" \
+  "$(jq -r '.summary.skipped_unconfigured' "$RESULT" 2>/dev/null)" "0"
+unset FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS
+
+# ─── T15: governance draft shape and the weights binding ────────────────────
+# The only draft-shape assertion was `jq -e '.drafts | length <= 1'`, which exits
+# 0 for `drafts: []` and for `[{"status":"refused"}]` — so "the release produced
+# exactly one reviewable draft" could not be distinguished from "the release
+# produced no draft at all".
+echo
+echo "T15 — governance draft and weights assertions"
+
+assertion_result() { jq -r --arg t "$1" '[.assertions[]|select(.assertion|test($t))|.result]|join(",")' "$RESULT" 2>/dev/null; }
+
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture; draft_fixture
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
+check "one ready_for_review draft over four vaults totalling 10000 passes" "$(assertion_result 'EXACTLY ONE ready_for_review')" "PASS"
+check "…and its bps bind to the receipt's weights" "$(assertion_result 'drafted bps equal the receipt')" "PASS"
+
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+printf '{"ok":true,"drafts":[]}' >"$STUB_DIR/draft_json"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
+check "NO draft at all is a FAILURE (the length-lte-1 hole)" "$(assertion_result 'EXACTLY ONE ready_for_review')" "FAIL"
+check "…and fails the run" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "false"
+
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture; draft_fixture '[4000,3000,2000,1000]' refused
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
+check "a single REFUSED draft is a FAILURE, not 'at most one draft'" "$(assertion_result 'EXACTLY ONE ready_for_review')" "FAIL"
+
+# THE WEIGHTS ARE THE ALLOCATION. A draft that totals 10000 over the WRONG four
+# numbers satisfies every shape assertion and is the calldata a human signs.
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture; draft_fixture '[10000,0,0,0]'
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
+check "a well-shaped draft over the WRONG weights still passes the shape check" "$(assertion_result 'EXACTLY ONE ready_for_review')" "PASS"
+check "…and is caught by the weights binding" "$(assertion_result 'drafted bps equal the receipt')" "FAIL"
+
+# The fourth negative case: weights rewritten to 10000/0/0/0.
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+echo 1 >"$STUB_DIR/submit_refuses_tampered"
+printf '{"ok":true,"drafts":[{"status":"refused"}]}' >"$STUB_DIR/draft_tamper_json"
+export FUSION_UNAUTHORIZED_SUBMITTER=0x00000000000000000000000000000000000000ee
+export FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,negative --out "$RESULT" >/dev/null 2>&1
+check "a weights-tampered receipt is refused against the anchored digest" "$(assertion_result 'rewritten to 10000/0/0/0')" "PASS"
+check "…and produces no propose_calldata" "$(assertion_result 'NO propose_calldata')" "PASS"
+if grep -q 'neg-weights' "$STUB_DIR/rmpc_calls"; then
+  ok "the weights-tamper case actually reached rmpc"
+else
+  bad "the weights-tamper negative case never ran"
+fi
+
+# NEGATIVE CONTROL: a stack that ACCEPTS the tampered weights must FAIL the gate.
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+: >"$STUB_DIR/submit_refuses_tampered"          # rmpc accepts everything
+draft_fixture '[10000,0,0,0]'
+cp "$STUB_DIR/draft_json" "$STUB_DIR/draft_tamper_json"
+export FUSION_UNAUTHORIZED_SUBMITTER=0x00000000000000000000000000000000000000ee
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,negative --out "$RESULT" >/dev/null 2>&1
+check "a stack that accepts tampered weights FAILS the refusal assertion" "$(assertion_result 'rewritten to 10000/0/0/0')" "FAIL"
+check "…and FAILS the no-calldata assertion" "$(assertion_result 'NO propose_calldata')" "FAIL"
+unset FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS
+
+# cross-repo-acceptance.sh's first self-tests, including `skipped_no_weights`.
+new_stubs; cross_repo_env; new_curl_stub; receipt_fixture; draft_fixture
+"$FUSION_DIR/cross-repo-acceptance.sh" >/dev/null 2>&1
+check "cross-repo-acceptance accepts a well-formed ready_for_review draft" "$?" "0"
+
+new_stubs; cross_repo_env; new_curl_stub; receipt_fixture; draft_fixture '[4000,3000,2000,1000]' skipped_no_weights
+"$FUSION_DIR/cross-repo-acceptance.sh" >/dev/null 2>&1
+check "cross-repo-acceptance REFUSES skipped_no_weights (an absent weights array is a FAIL)" "$?" "1"
+
+new_stubs; cross_repo_env; new_curl_stub; receipt_fixture; draft_fixture '[10000,0,0,0]'
+err="$("$FUSION_DIR/cross-repo-acceptance.sh" 2>&1 >/dev/null)"
+check "cross-repo-acceptance refuses a draft whose bps are not the receipt's" "$?" "1"
+if grep -q "canonical bucket order" <<<"$err"; then
+  ok "the cross-repo weights mismatch names the canonical-order binding"
+else
+  bad "the cross-repo weights mismatch was not diagnosable: $err"
+fi
+
+# ─── T16: the anchored digest is compared FIELD-EXACTLY ─────────────────────
+# The orchestrator did `grep -qi -- "${PAYLOAD_DIGEST#0x}"` against the whole
+# decoded tuple — which carries receiptId, payloadDigest AND the
+# operator-supplied payloadUri — and against the whole explorer-API body.
+echo
+echo "T16 — field-exact digest comparison"
+
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+printf '0x%s\n' "$(printf 'ef%.0s' {1..32})" >"$STUB_DIR/chain_digest"   # WRONG digest field
+echo 1 >"$STUB_DIR/uri_embeds_digest"                                    # right digest in the URI
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,record --out "$RESULT" >/dev/null 2>&1
+check "a wrong payloadDigest hidden behind a content-addressed URI FAILS" "$(assertion_result 'stored payloadDigest FIELD')" "FAIL"
+check "…and fails the run" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "false"
+
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
+echo 1 >"$STUB_DIR/uri_embeds_digest"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,record --out "$RESULT" >/dev/null 2>&1
+check "the matching payloadDigest field still PASSES with the same URI" "$(assertion_result 'stored payloadDigest FIELD')" "PASS"
+
+api_body() { # <digest> <uri>
+  jq -n --arg id "$FUSION_TEST_RECEIPT_ID" --arg d "$1" --arg u "$2" \
+    '{receipt_id:$id,payload_digest:$d,payload_uri:$u,verified:true,released:true}' >"$STUB_DIR/api_json"
+}
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
+export FUSION_EXPLORER_API="https://explorer.invalid" FUSION_INDEX_TIMEOUT_SECS=3
+api_body "0x$(printf 'ef%.0s' {1..32})" "https://example.invalid/$FUSION_TEST_DIGEST.json"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,index --out "$RESULT" >/dev/null 2>&1
+check "an API body whose payload_digest is wrong but whose payload_uri carries the digest FAILS" \
+  "$(assertion_result 'same payload digest FIELD')" "FAIL"
+
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
+export FUSION_EXPLORER_API="https://explorer.invalid" FUSION_INDEX_TIMEOUT_SECS=3
+api_body "$FUSION_TEST_DIGEST" "https://example.invalid/receipt"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,index --out "$RESULT" >/dev/null 2>&1
+check "an API body that agrees field-for-field PASSES" "$(assertion_result 'same payload digest FIELD')" "PASS"
+check "…including the payload URL field" "$(assertion_result 'same payload URL FIELD')" "PASS"
+unset FUSION_EXPLORER_API FUSION_INDEX_TIMEOUT_SECS
+
+# ─── T29: cross-repo-acceptance.sh's release stage is idempotent ────────────
+# The script the runbook calls "the AC-E2E-05 seam" sent unconditionally under
+# `set -euo pipefail`, so the SECOND run aborted at that line: the INV-4
+# comparison, the draft assertion and the evidence JSON after it never ran, and
+# a real INV-4 regression between the two runs would be invisible behind it.
+echo
+echo "T29 — cross-repo release idempotency"
+
+new_stubs; cross_repo_env; new_curl_stub; receipt_fixture; draft_fixture
+out="$("$FUSION_DIR/cross-repo-acceptance.sh" 2>/dev/null)"
+check "an unreleased receipt broadcasts exactly one release" \
+  "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "1"
+check "…and reports the release as sent" "$(jq -r '.release.action' <<<"$out" 2>/dev/null)" "sent"
+
+out="$("$FUSION_DIR/cross-repo-acceptance.sh" 2>/dev/null)"; rc=$?
+check "a second run against the same receipt still exits 0" "$rc" "0"
+check "…broadcasts NO second release" "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "1"
+check "…names the no-op in the evidence JSON" "$(jq -r '.release.action' <<<"$out" 2>/dev/null)" "already_released"
+check "…and still reaches the INV-4 comparison after it" \
+  "$(jq -r '.inv4.unchanged' <<<"$out" 2>/dev/null)" "true"
+if jq -e '[.stages[]|select(test("already_released"))]|length==1' <<<"$out" >/dev/null 2>&1; then
+  ok "the already_released no-op is a named stage entry"
+else
+  bad "the second run's stages do not name the no-op: $(jq -c '.stages' <<<"$out" 2>/dev/null)"
+fi
+
+# ─── T25: the alert path is validated, split by condition, and POSTED ───────
+# submit-receipt-worker.sh had NO alerting code: its "ALERT" was an `echo … >&2`,
+# which under nohup reaches nobody, while runbook §5.5 claimed both harnesses
+# page. The other posted only if curl and jq happened to be present, shared one
+# dedup key across two conditions, never resolved, and discarded delivery
+# failures with `|| true`.
+echo
+echo "T25 — the Fusion harness alert path"
+
+# A PATH with every binary these scripts need EXCEPT curl, so the startup
+# validation is exercised for real rather than simulated.
+path_without_curl() {
+  local d="$STUB_DIR/nocurl" b src
+  mkdir -p "$d"
+  for b in bash env jq mktemp tr sleep dirname cat rm mv wc grep date sed cut diff timeout basename mkdir touch printf; do
+    src="$(command -v "$b" 2>/dev/null)" && ln -sf "$src" "$d/$b"
+  done
+  cp "$STUB_DIR/bin/rmpc" "$STUB_DIR/bin/cast" "$d/"
+  printf '%s' "$d"
+}
+
+new_stubs; worker_env
+NOCURL="$(path_without_curl)"
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+export FUSION_MAX_ATTEMPTS=1
+printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
+err="$(PATH="$NOCURL" bash "$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"; rc=$?
+check "the worker refuses to start when the webhook is set but curl is missing" "$rc" "1"
+if grep -q "curl is not on PATH" <<<"$err"; then
+  ok "the undeliverable alert path is named at startup"
+else
+  bad "the worker started with an undeliverable alert path: $err"
+fi
+# NEGATIVE CONTROL: the same PATH with no webhook must START and warn.
+unset FUSION_ALERT_WEBHOOK
+err="$(PATH="$NOCURL" bash "$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"; rc=$?
+check "…but an unset webhook still starts" "$rc" "0"
+if grep -q "WARNING FUSION_ALERT_WEBHOOK is unset" <<<"$err"; then
+  ok "an unset webhook logs one explicit stderr-only warning"
+else
+  bad "the stderr-only alert path was silent: $err"
+fi
+
+new_stubs; watcher_env
+NOCURL="$(path_without_curl)"
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+err="$(PATH="$NOCURL" bash "$FUSION_DIR/watch-released-drafts.sh" 2>&1 >/dev/null)"; rc=$?
+check "the watcher refuses to start when the webhook is set but curl is missing" "$rc" "1"
+check "…and scans nothing first" "$(wc -l <"$STUB_DIR/rmpc_calls" | tr -d ' ')" "0"
+unset FUSION_ALERT_WEBHOOK
+
+# THE PAGE MUST BE POSTED, NOT ECHOED.
+new_stubs; worker_env; new_curl_stub
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+echo 1 >"$STUB_DIR/rpc_down"
+export FUSION_MAX_ATTEMPTS=1
+timeout 8 "$FUSION_DIR/submit-receipt-worker.sh" >/dev/null 2>&1
+if jq -e 'select(.event_action=="trigger" and .dedup_key=="fusion_submit_worker_chain_reads_down")' \
+     "$STUB_DIR/alert_posts" >/dev/null 2>&1; then
+  ok "the worker POSTs its read-outage page under its own dedup key"
+else
+  bad "the worker's ALERT never reached the webhook: $(cat "$STUB_DIR/alert_posts")"
+fi
+# NEGATIVE CONTROL: no outage, no page.
+new_stubs; worker_env; new_curl_stub
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
+export FUSION_MAX_ATTEMPTS=1
+timeout 8 "$FUSION_DIR/submit-receipt-worker.sh" >/dev/null 2>&1
+check "a healthy worker pages nobody" "$(wc -l <"$STUB_DIR/alert_posts" | tr -d ' ')" "0"
+
+# ONE DEDUP KEY PER CONDITION.
+new_stubs; watcher_env; new_curl_stub
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+echo 1 >"$STUB_DIR/scan_fail"; echo 3 >"$STUB_DIR/scan_exit"
+export FUSION_STALL_ALERT_CYCLES=1
+"$FUSION_DIR/watch-released-drafts.sh" >/dev/null 2>&1
+stall_key="$(jq -r 'select(.event_action=="trigger")|.dedup_key' "$STUB_DIR/alert_posts" 2>/dev/null | head -1)"
+check "a wedged cursor pages under the stall key" "$stall_key" "fusion_draft_watcher_stalled"
+
+new_stubs; watcher_env; new_curl_stub
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+export FUSION_DRAFT_QUARANTINE="$STUB_DIR/state/quarantine"
+echo 1 >"$STUB_DIR/scan_fail"; echo 2 >"$STUB_DIR/scan_exit"
+"$FUSION_DIR/watch-released-drafts.sh" >/dev/null 2>&1
+quar_key="$(jq -r 'select(.event_action=="trigger")|.dedup_key' "$STUB_DIR/alert_posts" 2>/dev/null | head -1)"
+check "a quarantined poison range pages under its OWN key" "$quar_key" "fusion_draft_range_quarantined"
+if [[ -n "$stall_key" && "$quar_key" != "$stall_key" ]]; then
+  ok "the two conditions do not collapse into one incident"
+else
+  bad "the quarantine and stall conditions still share a dedup key ($quar_key)"
+fi
+
+# A DELIVERY FAILURE IS LOGGED, NOT SWALLOWED BY `|| true`.
+new_stubs; watcher_env; new_curl_stub
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+echo 1 >"$STUB_DIR/alert_post_fail"
+echo 1 >"$STUB_DIR/scan_fail"; echo 3 >"$STUB_DIR/scan_exit"
+export FUSION_STALL_ALERT_CYCLES=1
+err="$("$FUSION_DIR/watch-released-drafts.sh" 2>&1 >/dev/null)"
+if grep -q "ALERT DELIVERY FAILED" <<<"$err"; then
+  ok "a page that could not be delivered is reported, not discarded"
+else
+  bad "the undelivered page was swallowed: $err"
+fi
+# NEGATIVE CONTROL: a webhook that accepts must not log a delivery failure.
+new_stubs; watcher_env; new_curl_stub
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+echo 1 >"$STUB_DIR/scan_fail"; echo 3 >"$STUB_DIR/scan_exit"
+export FUSION_STALL_ALERT_CYCLES=1
+err="$("$FUSION_DIR/watch-released-drafts.sh" 2>&1 >/dev/null)"
+if grep -q "ALERT DELIVERY FAILED" <<<"$err"; then
+  bad "a successful delivery was reported as failed: $err"
+else
+  ok "a delivered page logs no delivery failure"
+fi
+unset FUSION_STALL_ALERT_CYCLES
+
+# A STALL THAT RECOVERS MUST RESOLVE. Two cycles in ONE process, because the
+# open-incident flag is in-memory: FUSION_RUN_ONCE cannot express this.
+new_stubs; watcher_env; new_curl_stub
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+export FUSION_STALL_ALERT_CYCLES=1 FUSION_POLL_SECS=1 FUSION_RUN_ONCE=0
+echo 1 >"$STUB_DIR/scan_fail"; echo 3 >"$STUB_DIR/scan_exit"
+"$FUSION_DIR/watch-released-drafts.sh" >/dev/null 2>&1 &
+watcher_pid=$!
+sleep 3
+: >"$STUB_DIR/scan_fail"          # the transport recovers
+sleep 3
+kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
+if jq -e 'select(.event_action=="resolve" and .dedup_key=="fusion_draft_watcher_stalled")' \
+     "$STUB_DIR/alert_posts" >/dev/null 2>&1; then
+  ok "the stall key is RESOLVED once the cursor advances"
+else
+  bad "the recovered stall left an incident open forever: $(cat "$STUB_DIR/alert_posts")"
+fi
+# NEGATIVE CONTROL: a stall that never recovers must NOT resolve.
+new_stubs; watcher_env; new_curl_stub
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+export FUSION_STALL_ALERT_CYCLES=1 FUSION_POLL_SECS=1 FUSION_RUN_ONCE=0
+echo 1 >"$STUB_DIR/scan_fail"; echo 3 >"$STUB_DIR/scan_exit"
+"$FUSION_DIR/watch-released-drafts.sh" >/dev/null 2>&1 &
+watcher_pid=$!
+sleep 4
+kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
+check "a stall that never recovers sends no resolve" \
+  "$(jq -r 'select(.event_action=="resolve")|.dedup_key' "$STUB_DIR/alert_posts" 2>/dev/null | wc -l | tr -d ' ')" "0"
+unset FUSION_ALERT_WEBHOOK FUSION_STALL_ALERT_CYCLES FUSION_POLL_SECS
+export FUSION_RUN_ONCE=1
 
 # ─── T24: the one envelope-unwrap rule, driven by the SHARED fixture ─────────
 # Not an inline literal. tests/fixtures/consensus-receipt.envelope.json is
