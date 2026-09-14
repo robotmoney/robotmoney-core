@@ -35,11 +35,12 @@ REPO_ROOT="$(cd "$FUSION_DIR/../.." && pwd)"
 # exactly equal to what a healthy run executes and leaves no slack a truncation
 # could hide in. It was 55, then 63; the round-2 harness cycle (T10, T11, T15,
 # T16, T25, T29) adds the guards below; merging the T01/T07/T09 watcher guards with them at
-# integration takes the union to 156. Raise it whenever
+# integration took the union to 156, and merging with r2/wf1-verify-fixes (the decoy check
+# and explorer-API block) raises the total to 170. Raise it whenever
 # assertions are added; lowering it is a deliberate, reviewable act and the
 # workflow re-checks the same number independently (see below), so lowering it
 # here alone buys nothing.
-MIN_EXPECTED_ASSERTIONS=156
+MIN_EXPECTED_ASSERTIONS=170
 
 # The workflow that runs this suite re-asserts the same floor against the
 # machine-readable FUSION_SELFTESTS_EXECUTED line, precisely so a silently
@@ -1304,7 +1305,78 @@ check "non-JSON is REFUSED" "$?" "2"
 jq '.receipt = {"note":"no schema_version here"}' "$FX/consensus-receipt.envelope.json" >"$UW/bad-inner.json"
 receipt_unwrap_envelope "$UW/bad-inner.json" "$UW/bad-inner-out.json" 2>/dev/null
 check "an envelope carrying a non-receipt is REFUSED" "$?" "1"
+
+# THE DECOY THE TWO IMPLEMENTATIONS DISAGREED ON (VERIFY/T24-refuter1.md).
+# This literal is the SAME one rmpc's unit test uses
+# (clients/rust-payment-client/src/consensus_receipt.rs,
+# a_published_envelope_is_unwrapped_to_the_same_bytes_as_the_bare_receipt).
+# Before this fix, bash exited 0 and wrote the whole decoy as receipt.json
+# while rmpc refused it with `unknown field \`receipt\`` — the acceptance
+# gate accepted a body the verifier refuses. "One rule" means one behaviour.
+printf '{"schema_version":"1.0","receipt":{"schema_version":"1.0"}}' >"$UW/decoy.json"
+receipt_unwrap_envelope "$UW/decoy.json" "$UW/decoy-out.json" 2>/dev/null
+check "the receipt-shaped-AND-envelope-shaped decoy is REFUSED, as rmpc refuses it" "$?" "4"
+check "and the decoy leaves no receipt file behind" \
+  "$([[ -e "$UW/decoy-out.json" ]] && echo yes || echo no)" "no"
 rm -rf "$UW"
+
+# ─── The ONE explorer-API row rule (lib/explorer-api.sh) ────────────────────
+# Replaces three inline `a // b` dual-shape idioms in devnet-acceptance.sh that
+# disagreed with each other about which object wins (:399 preferred the bare
+# field, :418/:495 preferred the wrapped one) and that collapsed an explicit
+# `false` into a lookup of a different key.
+# shellcheck source=../lib/explorer-api.sh
+source "$FUSION_DIR/lib/explorer-api.sh"
+EX="$(mktemp -d)"
+
+printf '{"receipt_id":"0xabc","verified":true,"released":false}' >"$EX/bare.json"
+check "a bare explorer row resolves its receipt_id" \
+  "$(explorer_api_field "$EX/bare.json" receipt_id)" "0xabc"
+explorer_api_flag_is_true "$EX/bare.json" verified
+check "a bare row reporting verified=true is TRUE" "$?" "0"
+explorer_api_flag_is_true "$EX/bare.json" released
+check "a bare row reporting released=false is FALSE" "$?" "1"
+
+printf '{"receipt":{"receipt_id":"0xabc","verified":true,"released":true}}' >"$EX/wrapped.json"
+check "a wrapped explorer row resolves its receipt_id" \
+  "$(explorer_api_field "$EX/wrapped.json" receipt_id)" "0xabc"
+explorer_api_flag_is_true "$EX/wrapped.json" released
+check "a wrapped row reporting released=true is TRUE" "$?" "0"
+
+# THE AMBIGUITY THE OLD IDIOMS RESOLVED INCONSISTENTLY: with both shapes
+# present, :399 read the top level and :418 read `.receipt`. Refuse instead.
+printf '{"receipt_id":"0xTOP","receipt":{"receipt_id":"0xNESTED"}}' >"$EX/both.json"
+explorer_api_row "$EX/both.json" >/dev/null 2>&1
+check "a row carrying BOTH shapes is REFUSED rather than silently picked" "$?" "4"
+
+printf '{"error":"not found"}' >"$EX/neither.json"
+explorer_api_row "$EX/neither.json" >/dev/null 2>&1
+check "a body that is no explorer row at all is REFUSED" "$?" "1"
+printf 'not json' >"$EX/garbage.json"
+explorer_api_row "$EX/garbage.json" >/dev/null 2>&1
+check "non-JSON is REFUSED by the explorer helper too" "$?" "2"
+
+# The false-y collapse `a // b` produced: an explicit verified=false with an
+# unrelated sibling `verified` on the other shape used to read as true.
+# The false-y collapse `(.receipt.verified // .verified)` produced: the row's
+# OWN verified is an explicit `false`, and `//` treats false as "absent" and
+# falls through to an unrelated top-level sibling that says true. The helper
+# resolves the row ONCE (here: `.receipt`, since only it carries receipt_id)
+# and reads the flag off that row and nothing else.
+printf '{"receipt":{"receipt_id":"0xabc","verified":false},"verified":true}' >"$EX/collapse.json"
+check "the collapse body resolves to the row that owns receipt_id" \
+  "$(explorer_api_field "$EX/collapse.json" receipt_id)" "0xabc"
+explorer_api_flag_is_true "$EX/collapse.json" verified
+check "an explicit verified=false is NOT collapsed into a sibling key saying true" "$?" "1"
+
+# A flag that is the STRING "true" is not the boolean true.
+printf '{"receipt_id":"0xabc","verified":"true"}' >"$EX/stringy.json"
+explorer_api_flag_is_true "$EX/stringy.json" verified
+check "a stringy \"true\" is not JSON true" "$?" "1"
+# An absent flag reads as false, never as an error swallowed into a pass.
+explorer_api_flag_is_true "$EX/stringy.json" released
+check "an absent flag is FALSE" "$?" "1"
+rm -rf "$EX"
 
 # ─── The workflow's independent floor must not trail this script's ──────────
 if [[ ! -f "$FUSION_SELFTEST_WORKFLOW" ]]; then

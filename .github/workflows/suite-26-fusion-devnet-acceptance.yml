@@ -189,7 +189,17 @@ jobs:
         # A harness that skipped every stage and exited 0 is the false green this
         # whole Fusion round exists to close. The exit code is not the evidence;
         # the recorded per-stage assertions are.
-        if: steps.gate.outputs.configured == 'true' && always()
+        # always() FIRST. GitHub evaluates the whole expression, but a reader —
+        # and the earlier version of this file — took `X && always()` to mean
+        # "run when X, even after a failure". It does not read that way round:
+        # always() is what suppresses the implicit success() check, and putting
+        # it after the guard invited the misreading that produced the observed
+        # symptom (VERIFY/R5-refuter2.md DEFECT 3): after a Build-rmpc failure
+        # this step still ran and emitted a second, misleading "no result JSON
+        # was written" error on top of the real one. Stated always()-first, the
+        # intent is explicit: run in every completion state, but ONLY when the
+        # devnet credentials are configured.
+        if: always() && steps.gate.outputs.configured == 'true'
         run: |
           set -euo pipefail
           test -s fusion-acceptance-result.json \

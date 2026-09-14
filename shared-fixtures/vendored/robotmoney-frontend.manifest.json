@@ -1,10 +1,10 @@
 {
-  "$comment": "VENDORED FROM robotmoney-frontend. Do not hand-edit a sha256 in this file. Regenerate with `.github/scripts/check_cross_repo_fixture_drift.py --regenerate --frontend <robotmoney-frontend checkout> --frontend-ref <tag>` and commit the result together with the coordinated fixture change.",
-  "why_this_file_exists": "AC-FMT-01 / §9A R4. tests/fixtures/consensus-receipt.anchor-digest.json is authored in THIS repo, so re-hashing core's fixtures against it is self-referential: at v0.4.0-rc.3 eight of the nine shared fixtures had drifted from robotmoney-frontend and that check still exited 0. This manifest is generated from the OTHER repo's bytes at a pinned commit, so a one-sided edit cannot be green.",
+  "$comment": "VENDORED FROM robotmoney-frontend. Do not hand-edit a sha256 or byte_length in this file, and do not hand-edit frontend_commit. Regenerate with `.github/scripts/check_cross_repo_fixture_drift.py --regenerate --frontend <robotmoney-frontend checkout> --frontend-ref <commit>` and commit the result together with the coordinated fixture change. THIS FILE IS NOT AUTHENTICATED AT CHECK TIME: CI does not re-fetch robotmoney-frontend, so a commit that edits a fixture AND its row here exits 0. Review is the control -- see the PROCESS CONTROL section of .github/scripts/check_cross_repo_fixture_drift.py and docs/development/cross-repo-fixture-vendoring.md.",
+  "why_this_file_exists": "AC-FMT-01 / \u00a79A R4. tests/fixtures/consensus-receipt.anchor-digest.json is authored in THIS repo, so re-hashing core's fixtures against it is self-referential: at v0.4.0-rc.3 eight of the nine shared fixtures had drifted from robotmoney-frontend and that check still exited 0. This manifest is generated from the OTHER repo's bytes at a pinned commit, so a one-sided edit cannot be green.",
   "frontend_repo": "robotmoney-frontend",
   "frontend_fixture_dir": "contract/src/__fixtures__",
-  "frontend_ref": "v0.5.0-rc.2",
-  "frontend_commit": "0c7ad943872f9ad7336e549d2588803abf72619d",
+  "frontend_ref": "releases-0.5.x @ c8c85ec0 (v0.5.0-rc.2-2-gc8c85ec0)",
+  "frontend_commit": "c8c85ec01a219ef7a990ab37303c7dde4973a59a",
   "core_fixture_dir": "tests/fixtures",
   "core_only_not_shared": [
     "consensus-receipt.anchor-digest.json",
@@ -13,8 +13,7 @@
     "consensus-receipt.run1-anchored.json"
   ],
   "core_only_not_shared_note": "These fixtures live in core's tests/fixtures but are NOT part of the cross-repo shared-fixture contract, so the drift check must not compare them against the frontend. consensus-receipt.run1-anchored.json is core's captured copy of the run-1 anchored receipt (session a31ecf60-bb8f-44c0-8b69-23d3e9c2562f), pinned so the governance-draft tests can bind a draft to a real on-chain payloadDigest offline; the frontend ships no such file and adding it to `files` would assert a cross-repo comparison that was never made.",
-  "pending_frontend_adoption_note": "A row flagged pending_frontend_adoption was authored in core this cycle and handed to robotmoney-frontend (T24 envelope fixture, R27 unknown-field vector). Until the frontend lands its byte-identical copy and this manifest is re-vendored, that row is core-authored and the check prints it as PENDING-FE rather than claiming a cross-repo comparison it did not make.",
-  "release_process": "docs/product/20260623-product-proposal-investment-committee-v0.md §7.4",
+  "release_process": "docs/product/20260623-product-proposal-investment-committee-v0.md \u00a77.4",
   "files": [
     {
       "file": "consensus-receipt.schema.json",
@@ -64,21 +63,18 @@
     {
       "file": "consensus-receipt.envelope.json",
       "byte_length": 7212,
-      "sha256": "0x6f1706f450d18d027ab33d430e2fc43d0ac8aeeecd30c097f8f2ac107846fe11",
-      "pending_frontend_adoption": true,
-      "handed_to_frontend_at": "contract/src/__fixtures__/consensus-receipt.envelope.json"
+      "sha256": "0x6f1706f450d18d027ab33d430e2fc43d0ac8aeeecd30c097f8f2ac107846fe11"
     },
     {
       "file": "consensus-receipt.unknown-fields-refused.json",
       "byte_length": 3455,
-      "sha256": "0x2c69763e77b9b047d5a65aaef2d75befbf3ceb580c0b50f3fdd7023e348bc14a",
-      "pending_frontend_adoption": true,
-      "handed_to_frontend_at": "contract/src/__fixtures__/consensus-receipt.unknown-fields-refused.json"
+      "sha256": "0x2c69763e77b9b047d5a65aaef2d75befbf3ceb580c0b50f3fdd7023e348bc14a"
     },
     {
       "file": "consensus-receipt.bps-conversion.conformance.json",
       "byte_length": 2977,
       "sha256": "0x55ccd38e99a181eb9c179ad085db653f7c23703dc9840443a77dfa7ffe6dda45"
     }
-  ]
+  ],
+  "no_core_authored_rows": "Every row below is robotmoney-frontend's bytes at frontend_commit. There are no core-authored rows: the T24 envelope fixture and the R27 unknown-field vector were PENDING-FE at v0.4.0-rc.9 and are now adopted upstream and cross-checked. check_cross_repo_fixture_drift.py --regenerate REFUSES to self-pin a fixture the frontend does not carry, so a self-referential row cannot be reintroduced by running it."
 }

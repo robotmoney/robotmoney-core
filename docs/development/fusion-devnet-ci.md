@@ -106,7 +106,95 @@ A skip is never a pass: it says so, in those words. The one thing it must not do
 is run a degraded subset and report success, which is what the per-stage
 assertion floor above prevents.
 
+## STATUS: suite-26 and release-tag-suite-dispatch CANNOT RUN TODAY
+
+Read this before citing a green — or an absence of red — from either workflow.
+
+### They are not registered, so `workflow_dispatch` and `schedule` cannot reach them
+
+GitHub registers a workflow for `workflow_dispatch`, and schedules its `cron`,
+**only from the repository default branch**. This repository's default branch is
+`dev`:
+
+```
+$ gh api repos/robotmoney/robotmoney-core --jq .default_branch
+dev
+$ gh api repos/robotmoney/robotmoney-core/contents/.github/workflows/suite-26-fusion-devnet-acceptance.yml?ref=dev
+HTTP 404
+$ gh run list --workflow=suite-26-fusion-devnet-acceptance.yml
+HTTP 404: workflow ... not found on the default branch
+$ gh api repos/robotmoney/robotmoney-core/actions/workflows --paginate | grep fusion-devnet
+(empty)
+```
+
+`suite-26-fusion-devnet-acceptance.yml` and `release-tag-suite-dispatch.yml`
+exist **only on `releases-0.4.x`**. Consequences, stated flatly:
+
+- The nightly `cron: "10 4 * * *"` at suite-26 **will never fire.**
+- suite-26 **cannot be dispatched**, including by the `gh workflow run` command
+  below, until the file is on `dev`.
+- `release-tag-suite-dispatch.yml` is likewise inert for `workflow_dispatch`.
+  Its `push: tags: ['v*.*.*']` trigger is also unreachable while the file is
+  absent from the default branch.
+
+`suite-25-fusion-harness-selftests.yml` and `fusion-cross-repo-drift.yml` ARE
+registered and DO run — not because they are on `dev`, but because they carry
+`push`/`pull_request` triggers, which fire from any branch that holds the file.
+suite-26 has neither, which is exactly why it is inert.
+
+So **AC-E2E-05's "repeatable CI/devnet test, not only a one-off manual
+demonstration" is NOT met** at `v0.4.0-rc.9`. Recorded in
+`fusion-evidence/20260914T-run2/phase2-ci/VERIFY/R5-refuter1.md` (D1, D2) and
+`R5-refuter2.md` (DEFECT 1).
+
+**Remedy:** the workflow files must land on `dev`. A draft pull request carrying
+only the five new workflow files and this document is open for that purpose:
+
+> **robotmoney/robotmoney-core#1444** — <https://github.com/robotmoney/robotmoney-core/pull/1444>
+> (branch `r2/workflows-to-dev`, cut from `origin/dev`)
+
+Merging it is a human decision, not an automated one. Its body names the two
+jobs that will be RED on `dev` until the `releases-0.4.x` content lands
+(`suite-25-fusion-harness-selftests` and `fusion-cross-repo-drift`, whose
+scripts and fixtures are not on `dev`) and the two clean orderings that avoid
+that. Registration alone does not make suite-26 meaningful — see the credentials
+section immediately below.
+
+### Even once registered, every credential is unset
+
+```
+$ gh api repos/robotmoney/robotmoney-core/actions/variables  -> {"variables":[],"total_count":0}
+$ gh api repos/robotmoney/robotmoney-core/actions/secrets    -> {"secrets":[],"total_count":0}
+```
+
+**All 13 repository variables and all 3 repository secrets documented above are
+unset.** The workflow declares no `environment:`, so repository scope is the only
+source. A run today would therefore take the `SKIPPED — not configured` branch,
+every subsequent step is guarded by
+`if: steps.gate.outputs.configured == 'true'`, and the **job would conclude
+success having executed zero devnet assertions**. The skip is loud in the job
+summary to a human who opens the run; the API, the badge and a branch-protection
+check all see a plain pass.
+
+Until the 16 entries are populated, a green suite-26 run is evidence of nothing.
+See `R5-refuter2.md` DEFECT 2.
+
+### The order of work
+
+1. Land suite-26 and `release-tag-suite-dispatch.yml` on `dev` (registration).
+2. Populate the 13 variables and 3 secrets (§ Repository configuration above).
+3. Dispatch one run by hand and confirm the per-stage assertion floor actually
+   fired rather than the skip branch.
+4. Only then may a green run be cited as evidence for AC-E2E-05.
+
+A further hardening worth doing at step 2, not done here: make the
+not-configured path a **failure** on `schedule`, keeping the soft skip only for
+fork `pull_request` contexts. A nightly that cannot run should be red, not green.
+
 ## Running it by hand
+
+> Blocked until the workflow is on `dev` — see the STATUS section above.
+
 
 ```
 gh workflow run suite-26-fusion-devnet-acceptance.yml -R robotmoney/robotmoney-core \

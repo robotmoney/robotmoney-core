@@ -78,6 +78,14 @@ source "$FUSION_LIB_DIR/receipt-envelope.sh"
 # shellcheck source=lib/inv4.sh
 source "$FUSION_LIB_DIR/inv4.sh"
 
+# The explorer API row is a DIFFERENT object from the published envelope, and it
+# had its own inline dual-shape idiom in three places here (`.receipt_id? //
+# .receipt?.receipt_id?`, `(.receipt.verified // .verified)`,
+# `(.receipt.released // .released)`) that disagreed with each other about which
+# object wins. One helper, one rule, self-tested.
+# shellcheck source=lib/explorer-api.sh
+source "$FUSION_LIB_DIR/explorer-api.sh"
+
 ALL_STAGES="verify negative record index release dapp govern"
 STAGES="$ALL_STAGES"
 RECEIPT_URL=""
@@ -486,7 +494,8 @@ if have_stage index; then
     api=""
     while (( $(date +%s) < deadline )); do
       api="$(curl -fsS "${FUSION_EXPLORER_API%/}/v1/consensus-receipts/$RECEIPT_ID" 2>/dev/null)" && \
-        jq -e '.receipt_id? // .receipt?.receipt_id? // empty' <<<"$api" >/dev/null 2>&1 && break
+        printf '%s' "$api" >"$WORK/index-api-poll.json" && \
+        explorer_api_row "$WORK/index-api-poll.json" >/dev/null 2>&1 && break
       api=""; sleep 5
     done
     keep "index-api.json" "${api:-<no answer within ${INDEX_TIMEOUT}s>}"
@@ -511,9 +520,10 @@ if have_stage index; then
       # INSIDE the indexer's container network before the anchor is indexed, not
       # merely from the machine running this script. A false here is not a
       # transient: it is a row that will never become true without a reindex.
-      jq -e '(.receipt.verified // .verified) == true' <<<"$api" >/dev/null 2>&1
+      printf '%s' "$api" >"$WORK/index-api.json"
+      explorer_api_flag_is_true "$WORK/index-api.json" verified
       expect index "AC-CORE-07 the indexer independently re-fetched the payload URL and reproduced the digest (verified=true)" $? \
-        "verified=$(jq -r '.receipt.verified // .verified' <<<"$api" 2>/dev/null); if false, the indexer could not reach \
+        "verified=$(explorer_api_field "$WORK/index-api.json" verified 2>/dev/null); if false, the indexer could not reach \
 the anchored URL from inside its own network on the first scan, and the row will NOT self-heal"
     fi
   fi
@@ -592,7 +602,8 @@ FUSION_RELEASE_ADDRESS are not all set" unconfigured
       deadline=$(( $(date +%s) + INDEX_TIMEOUT )); rel_api=""
       while (( $(date +%s) < deadline )); do
         rel_api="$(curl -fsS "${FUSION_EXPLORER_API%/}/v1/consensus-receipts/$RECEIPT_ID" 2>/dev/null)" && \
-          jq -e '(.receipt.released // .released) == true' <<<"$rel_api" >/dev/null 2>&1 && break
+          printf '%s' "$rel_api" >"$WORK/release-api-poll.json" && \
+          explorer_api_flag_is_true "$WORK/release-api-poll.json" released && break
         rel_api=""; sleep 5
       done
       keep "release-api.json" "${rel_api:-<not released in the API within ${INDEX_TIMEOUT}s>}"

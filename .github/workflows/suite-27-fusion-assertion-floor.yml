@@ -4,7 +4,7 @@
 # ---------------------------------------------------------------------------
 # suite-25-fusion-harness-selftests.yml carries an independent executed-assertion
 # floor of 63 — the count as of the commit that created it. The round-2 harness
-# cycle takes the real count to 156, and run-tests.sh asserts that its
+# cycle takes the real count to 170, and run-tests.sh asserts that its
 # MIN_EXPECTED_ASSERTIONS EQUALS the floor of the workflow it names, precisely so
 # a silently lowered in-script floor cannot buy a green on its own.
 #
@@ -72,8 +72,8 @@ jobs:
           # KEEP THIS EQUAL TO run-tests.sh's MIN_EXPECTED_ASSERTIONS.
           # Any slack between the two re-opens exactly the window this check
           # exists to close. run-tests.sh asserts the equality from its side.
-          if [[ "$count" -lt 156 ]]; then
-            echo "::error::only $count assertions executed (expected >= 156, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
+          if [[ "$count" -lt 170 ]]; then
+            echo "::error::only $count assertions executed (expected >= 170, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
             exit 1
           fi
 
