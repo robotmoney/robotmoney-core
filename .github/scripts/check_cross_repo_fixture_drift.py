@@ -20,11 +20,84 @@ recorded inside it. Changing a fixture here without a coordinated cross-repo
 release now fails, because the vendored row can only be moved by re-vendoring
 from the other repo at a new pinned commit.
 
-Two of the eleven rows are marked `pending_frontend_adoption`: the envelope and
-unknown-field vectors added by T24/R27 were authored here and handed to the
-frontend in the same cycle. Those rows are core-authored until the frontend
-lands its byte-identical copies and this manifest is re-vendored — the check
-says so out loud on every run rather than pretending they are cross-checked.
+All eleven rows are now robotmoney-frontend's bytes. Two of them (the T24
+envelope fixture and the R27 unknown-field vector) were `pending_frontend_adoption`
+at `v0.4.0-rc.9` — core-authored, so self-referential — and the frontend has
+since landed byte-identical copies, so the manifest is re-vendored at
+`c8c85ec0` and those rows are real cross-repo comparisons. `--regenerate` now
+REFUSES to self-pin: a fixture the frontend does not carry is an error, not a
+`pending` row, so the self-referential shape cannot be reintroduced by running
+the tool.
+
+PROCESS CONTROL — THE RESIDUAL THIS CHECK DOES NOT CLOSE
+--------------------------------------------------------
+READ THIS BEFORE TRUSTING A GREEN FROM THIS SCRIPT.
+
+**The vendored manifest is NOT authenticated at check time.** Nothing in CI
+contacts robotmoney-frontend. `frontend_commit` is a string in a JSON file in
+this repo, and the sha256 column beside it is a string in the same file. So a
+single commit that drifts a fixture AND edits its matching row in
+`shared-fixtures/vendored/robotmoney-frontend.manifest.json` exits 0 and prints
+"ok: 11 shared fixtures are byte-identical to robotmoney-frontend". That is
+demonstrated, not hypothetical: `VERIFY/R4-core-refuter2.md` DEFECT 1 and
+`VERIFY/T24-refuter2.md` ATTACK B each performed it.
+
+This is stated plainly rather than papered over. §9A R4 permits "the other
+repo's manifest vendored at a pinned commit", and a vendored manifest is a
+real, large improvement over the self-referential
+`consensus-receipt.anchor-digest.json` it replaced (a ONE-SIDED fixture edit —
+by far the likelier accident — is caught). What it is not is a cryptographic
+control, and a green from this script must not be cited as one.
+
+**The control that does hold is HUMAN REVIEW OF THE MANIFEST DIFF.** Stated
+exactly: this repository has NO `.github/CODEOWNERS` file at the time of
+writing (`ls .github/CODEOWNERS` -> absent), so the control today is ordinary
+pull-request review, and it is only as strong as whether the reviewer performs
+the re-derivation below. Making it a named control needs one line in a
+CODEOWNERS file that does not yet exist:
+
+    /shared-fixtures/vendored/   @<the team that owns cross-repo releases>
+
+Adding it is the outstanding follow-up; it is named here rather than asserted,
+because claiming an enforcement that is not configured is the same false green
+this whole check exists to close.
+
+**WHAT A RE-VENDOR MUST DO — every clause is load-bearing:**
+
+1. Land the coordinated change in robotmoney-frontend FIRST, and let it merge.
+   Re-vendoring from an unmerged branch pins bytes that may never exist.
+2. Re-vendor ONLY by running this script against a real checkout:
+     check_cross_repo_fixture_drift.py --regenerate \
+       --frontend <robotmoney-frontend checkout> --frontend-ref <full commit sha>
+   Never hand-edit a `sha256`, a `byte_length` or `frontend_commit`. The sha
+   column is OUTPUT, never input.
+3. Use a full 40-character COMMIT SHA as `--frontend-ref`, never a branch name
+   and never a tag. Branches move and tags can be re-pointed; a commit sha is
+   the only ref that pins bytes.
+4. The checkout must be a clean `git` checkout of the upstream repository —
+   `--regenerate` reads via `git show <ref>:<path>`, so a dirty worktree cannot
+   leak in, but a fork or a rewritten history can. Confirm the remote.
+5. Commit the manifest change in the SAME commit as the core fixture change it
+   accompanies, and say in the message which upstream PR landed the other half.
+   A manifest-only commit, or a fixture-only commit, is the shape of the bypass.
+6. A row `--regenerate` refuses (the frontend does not carry the file) is an
+   ERROR. Do not re-add `pending_frontend_adoption` by hand. Either wait for the
+   frontend, or add the file to `core_only_not_shared` because it is not shared.
+
+**WHAT A REVIEWER MUST DO:** for every changed row, independently re-derive the
+hash from the upstream repo and compare:
+
+    git -C <robotmoney-frontend> show <frontend_commit>:contract/src/__fixtures__/<file> \
+      | sha256sum
+
+If that does not reproduce the `sha256` in the diff, the manifest is forged or
+stale — reject it. Do not take the author's word, and do not take this script's
+exit code: it cannot make this check.
+
+Closing the residual for real needs a CI step that re-fetches robotmoney-frontend
+at `frontend_commit` and re-runs `--regenerate` to a zero diff. That requires
+cross-repo read credentials in core's CI, which this branch does not have.
+Tracked in docs/development/cross-repo-fixture-vendoring.md.
 
 Usage:
   check_cross_repo_fixture_drift.py [--fixtures-dir DIR] [--manifest FILE]
@@ -121,6 +194,7 @@ def regenerate(frontend: Path, ref: str, manifest_path: Path) -> int:
         check=True, capture_output=True, text=True,
     ).stdout.strip()
     files = []
+    missing: list[str] = []
     for row in manifest["files"]:
         name = str(row["file"])
         blob = subprocess.run(
@@ -128,15 +202,18 @@ def regenerate(frontend: Path, ref: str, manifest_path: Path) -> int:
             capture_output=True,
         )
         if blob.returncode != 0:
-            # Not yet adopted upstream: pin core's own bytes and say so out loud.
-            local = (DEFAULT_FIXTURES / name).read_bytes()
-            files.append({
-                "file": name,
-                "byte_length": len(local),
-                "sha256": sha256_hex(local),
-                "pending_frontend_adoption": True,
-                "handed_to_frontend_at": f"{FRONTEND_FIXTURE_DIR}/{name}",
-            })
+            # REFUSE TO SELF-PIN.
+            # This branch used to fall back to core's OWN bytes and flag the row
+            # `pending_frontend_adoption`. That made the row self-referential,
+            # and VERIFY/T24-refuter2.md ATTACK B turned it into a working
+            # bypass: drift the fixture, patch its row, exit 0, and still print
+            # "ok: 11 shared fixtures are byte-identical to robotmoney-frontend".
+            # A manifest whose whole purpose is to hold bytes THIS repo does not
+            # author cannot have rows this repo authors. A fixture with no
+            # counterpart in the other repo is an ERROR: either it is not shared
+            # (list it in `core_only_not_shared`) or the other repo has not
+            # landed it yet and the re-vendor is premature.
+            missing.append(name)
             continue
         payload = blob.stdout
         files.append({
@@ -144,6 +221,19 @@ def regenerate(frontend: Path, ref: str, manifest_path: Path) -> int:
             "byte_length": len(payload),
             "sha256": sha256_hex(payload),
         })
+    if missing:
+        listed = "\n".join(f"  - {FRONTEND_FIXTURE_DIR}/{n}" for n in missing)
+        raise SystemExit(
+            "re-vendor REFUSED: robotmoney-frontend @ "
+            f"{ref} ({commit[:12]}) does not carry:\n{listed}\n\n"
+            "Pinning core's own bytes for those rows would make this manifest "
+            "self-referential, which is the exact bypass it exists to close "
+            "(edit the fixture and its row in one commit -> exit 0). Either the "
+            "frontend has not landed its copy yet (wait, and re-vendor at the "
+            "commit that has it), or the fixture is not shared at all (add it to "
+            "`core_only_not_shared`)."
+        )
+
     manifest["frontend_commit"] = commit
     manifest["frontend_ref"] = ref
     manifest["files"] = files
