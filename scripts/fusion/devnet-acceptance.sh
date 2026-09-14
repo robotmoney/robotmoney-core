@@ -148,13 +148,34 @@ witnesses() {
 W_START="$(witnesses)"
 keep "witnesses-before.txt" "$W_START"
 
-assert_witnesses_unchanged() { # <stage> <label>
-  local now diff
+# `assert_witnesses_unchanged` compares against a BASELINE VARIABLE, not always
+# against the script's first reading, and the difference is deliberate. A mapped
+# vault with a live yield adapter accrues: rmUSDC on devnet 918453 was measured
+# moving 1000004 -> 1000008 (4 units of 1e-6 USDC) over about 50 idle minutes
+# with no receipt within a thousand blocks. Comparing the end of a long run
+# against a snapshot taken before the negative stage would therefore report
+# accrual as an INV-4 breach — a FALSE failure, which erodes the gate exactly as
+# badly as a false pass.
+#
+# The criterion is NOT softened: the comparison is still exact equality, and no
+# tolerance is introduced. What changes is the WINDOW. Record and release are
+# what INV-4 is about, so the witnesses bracketing them are read immediately
+# before the record stage and immediately after the last write stage, which is
+# the narrowest honest window. The failure message names the confound so a
+# one-unit drift on a yield-bearing vault is diagnosed rather than mistaken for
+# a signalling-path asset movement.
+assert_witnesses_unchanged() { # <stage> <label> [baseline]
+  local now diff baseline
+  baseline="${3:-$W_START}"
   now="$(witnesses)"
-  diff="$(diff <(printf '%s' "$W_START") <(printf '%s' "$now") || true)"
+  diff="$(diff <(printf '%s' "$baseline") <(printf '%s' "$now") || true)"
   [[ -z "$diff" ]]
   expect "$1" "$2 — vault balances, router weights and proposal count unchanged (INV-4)" $? \
-    "${diff:-no allocation-state witness moved}"
+    "${diff:-no allocation-state witness moved}${diff:+
+NOTE: a mapped vault with a yield adapter accrues on its own. If the ONLY \
+movement is a small totalAssets/totalSupply drift on a yield-bearing vault, \
+attribute it before calling it an INV-4 breach; proposal count and router \
+weights cannot drift and any movement there is real.}"
   keep "witnesses-after-$1.txt" "$now"
 }
 
@@ -312,6 +333,13 @@ else
 fi
 
 # ── stage: record ────────────────────────────────────────────────────────────
+# The INV-4 window for the write stages opens here, not at script start.
+W_PRE_WRITE="$W_START"
+if have_stage record || have_stage release; then
+  W_PRE_WRITE="$(witnesses)"
+  keep "witnesses-before-writes.txt" "$W_PRE_WRITE"
+fi
+
 if have_stage record; then
   if [[ -z "$RECEIPT_ID" ]]; then
     record_assertion record "anchor the digest" FAIL "the verify stage did not produce a receipt id"
@@ -458,7 +486,7 @@ fi
 
 # ── final INV-4 comparison across the whole run ──────────────────────────────
 if have_stage record || have_stage release; then
-  assert_witnesses_unchanged final "across record and release (AC-CORE-04, AC-E2E-03)"
+  assert_witnesses_unchanged final "across record and release (AC-CORE-04, AC-E2E-03)" "$W_PRE_WRITE"
 fi
 
 # ── machine-readable result ──────────────────────────────────────────────────
