@@ -63,6 +63,11 @@ check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want: $3, got: $2)";
 # STUB_DIR/block_number   — what `cast block-number` reports
 # STUB_DIR/scan_fail      — non-empty makes rmpc governance draft-proposal fail
 # STUB_DIR/scan_exit      — exit code that failure uses (default 1)
+# STUB_DIR/scan_refused   — non-empty: draft-proposal EXITS 0 and reports a
+#                           per-receipt content refusal inside .drafts[], which
+#                           is the contract the real binary now emits
+# STUB_DIR/scan_garbage   — non-empty: draft-proposal exits 0 printing non-JSON
+# STUB_DIR/blocknum_fail_n — number of leading `cast block-number` calls that fail
 # STUB_DIR/submit_no_anchor   — non-empty: submit exits 0 WITHOUT anchoring
 # STUB_DIR/uri_embeds_digest  — non-empty: payloadUri contains the derived digest
 # STUB_DIR/malformed_tuple    — non-empty: getReceiptById emits a garbage tuple
@@ -79,6 +84,10 @@ new_stubs() {
   echo 100 >"$STUB_DIR/block_number"
   : >"$STUB_DIR/scan_fail"
   echo 1 >"$STUB_DIR/scan_exit"
+  : >"$STUB_DIR/scan_refused"
+  : >"$STUB_DIR/scan_garbage"
+  echo 0 >"$STUB_DIR/blocknum_fail_n"
+  : >"$STUB_DIR/blocknum_calls"
   : >"$STUB_DIR/submit_no_anchor"
   : >"$STUB_DIR/uri_embeds_digest"
   : >"$STUB_DIR/malformed_tuple"
@@ -122,6 +131,20 @@ case "$1" in
     ;;
   governance)
     [[ -s "$STUB_DIR/scan_fail" ]] && { echo "stub: scan failed" >&2; exit "$(cat "$STUB_DIR/scan_exit")"; }
+    if [[ -s "$STUB_DIR/scan_garbage" ]]; then
+      echo 'not json at all'
+      exit 0
+    fi
+    # THE SHAPE THE REAL BINARY EMITS for a content refusal: the RANGE
+    # succeeded (ok:true, exit 0) and the poison receipt is reported inside it.
+    # An exit-code-only reader sees a clean cycle here, which is exactly the
+    # defect. `scan_exit=2` is NOT this case: the real binary can no longer
+    # return 2 from scan mode at all.
+    if [[ -s "$STUB_DIR/scan_refused" ]]; then
+      printf '{"ok":true,"drafts":[{"receipt_id":"%s","status":"refused","error":"ErrReceiptDigestMismatch","reason":"the bytes at the anchored payloadUri do not derive the anchored payloadDigest"}]}\n' \
+        "$FUSION_TEST_RECEIPT_ID"
+      exit 0
+    fi
     echo '{"ok":true,"drafts":[]}'
     exit 0
     ;;
@@ -133,7 +156,16 @@ STUB
   cat >"$STUB_DIR/bin/cast" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in
-  block-number) cat "$STUB_DIR/block_number"; exit 0 ;;
+  block-number)
+    echo call >>"$STUB_DIR/blocknum_calls"
+    n="$(cat "$STUB_DIR/blocknum_fail_n" 2>/dev/null || echo 0)"
+    if (( $(wc -l <"$STUB_DIR/blocknum_calls") <= n )); then
+      # A geth restart, a reset connection, a 502 from a proxy. Under the old
+      # bare assignment this killed the whole watcher loop.
+      echo "stub cast: error sending request" >&2
+      exit 1
+    fi
+    cat "$STUB_DIR/block_number"; exit 0 ;;
   chain-id) echo 918453; exit 0 ;;
   send)
     echo "send $*" >>"$STUB_DIR/release_sends"
@@ -392,6 +424,115 @@ else
   bad "the cursor stalled with no alert: $err"
 fi
 unset FUSION_STALL_ALERT_CYCLES
+
+# T07. THE REFUSAL THAT LOOKS LIKE A CLEAN CYCLE. The real binary reports a
+# per-receipt content refusal as a `"refused"` entry inside an `ok:true` range
+# and exits 0, precisely so the cursor can pass it. A watcher that reads only
+# the exit code therefore sees a perfect cycle: no quarantine, no alert, and a
+# released receipt that was never drafted and never will be. All three defences
+# its own header advertises were unreachable for exactly the cases it names.
+new_stubs; watcher_env
+echo 1 >"$STUB_DIR/scan_refused"
+export FUSION_DRAFT_QUARANTINE="$STUB_DIR/state/quarantine"
+export FUSION_DRAFT_RESULT="$STUB_DIR/state/last-result.json"
+err="$("$FUSION_DIR/watch-released-drafts.sh" 2>&1 >/dev/null)"; rc=$?
+check "a refused receipt inside an ok:true range is not reported as a clean cycle" "$rc" "1"
+check "the refused receipt is quarantined by id, not just by range" \
+  "$(grep -c "$FUSION_TEST_RECEIPT_ID" "$FUSION_DRAFT_QUARANTINE" 2>/dev/null || echo 0)" "1"
+check "the quarantine row carries the machine-readable refusal code" \
+  "$(grep -c 'ErrReceiptDigestMismatch' "$FUSION_DRAFT_QUARANTINE" 2>/dev/null || echo 0)" "1"
+if grep -q "ALERT .*REFUSED" <<<"$err"; then
+  ok "a refused receipt pages"
+else
+  bad "a receipt was refused with no alert: $err"
+fi
+check "the cursor still advances past the poison receipt" \
+  "$(cat "$FUSION_DRAFT_CURSOR")" "99"
+check "the cycle's draft result is persisted for the operator" \
+  "$(jq -r '.drafts[0].error' "$FUSION_DRAFT_RESULT" 2>/dev/null)" "ErrReceiptDigestMismatch"
+
+# ORDER MATTERS: the quarantine row must exist by the time the cursor moves,
+# because once it has moved that receipt is never examined again. Asserted by
+# modification time rather than by reading the code.
+if [[ "$FUSION_DRAFT_QUARANTINE" -ot "$FUSION_DRAFT_CURSOR" || "$FUSION_DRAFT_QUARANTINE" -nt "$FUSION_DRAFT_CURSOR" ]]; then
+  if [[ "$FUSION_DRAFT_QUARANTINE" -nt "$FUSION_DRAFT_CURSOR" ]]; then
+    bad "the cursor advanced BEFORE the refusal was recorded"
+  else
+    ok "the refusal is recorded before the cursor advances"
+  fi
+else
+  ok "the refusal is recorded before the cursor advances"
+fi
+
+# A range result that cannot be parsed is not "no refusals": it is a range that
+# could not be checked at all, and reading it is the whole defence.
+new_stubs; watcher_env
+echo 1 >"$STUB_DIR/scan_garbage"
+export FUSION_DRAFT_QUARANTINE="$STUB_DIR/state/quarantine"
+err="$("$FUSION_DIR/watch-released-drafts.sh" 2>&1 >/dev/null)"; rc=$?
+if grep -q "ALERT .*not JSON" <<<"$err"; then
+  ok "an unreadable range result pages instead of passing silently"
+else
+  bad "an unreadable range result was treated as clean: $err"
+fi
+check "an unreadable range result is not reported as a clean cycle" "$rc" "1"
+unset FUSION_DRAFT_RESULT
+
+# T09. A FAILED CHAIN READ MUST NOT KILL THE LOOP. `head="$(cast block-number)"`
+# was a bare assignment under `set -euo pipefail`: one failed read terminated
+# the whole watcher with no alert, no stall increment, and an exit 1
+# indistinguishable from a config failure. Every existing self-test exported
+# FUSION_RUN_ONCE=1, so the loop's resilience was structurally untestable — this
+# one runs the REAL loop, without FUSION_RUN_ONCE, and expects it to be alive
+# after the failure.
+new_stubs; watcher_env
+unset FUSION_RUN_ONCE
+echo 1 >"$STUB_DIR/blocknum_fail_n"
+export FUSION_POLL_SECS=1
+export FUSION_STALL_ALERT_CYCLES=1
+err="$(timeout 5 "$FUSION_DIR/watch-released-drafts.sh" 2>&1 >/dev/null)"; rc=$?
+check "the loop survives a failed cast block-number and is still running" "$rc" "124"
+check "it drafted the range on the cycle after the failed read" \
+  "$(cat "$FUSION_DRAFT_CURSOR")" "99"
+if grep -q "ALERT .*block-number has failed" <<<"$err"; then
+  ok "a failed chain read pages instead of dying silently"
+else
+  bad "a failed chain read was silent: $err"
+fi
+check "the failed read was retried rather than fatal" \
+  "$(( $(wc -l <"$STUB_DIR/blocknum_calls") >= 2 ))" "1"
+unset FUSION_POLL_SECS FUSION_STALL_ALERT_CYCLES
+export FUSION_RUN_ONCE=1
+
+# A chain read that returns junk instead of failing must not reach the
+# arithmetic: `to=$((head - CONFIRMATIONS))` on "error: connection refused"
+# is a shell error, not a scan.
+new_stubs; watcher_env
+echo 'not-a-number' >"$STUB_DIR/block_number"
+err="$("$FUSION_DIR/watch-released-drafts.sh" 2>&1 >/dev/null)"; rc=$?
+check "a non-numeric chain head is refused before any arithmetic" "$rc" "1"
+check "a non-numeric chain head never advances the cursor" \
+  "$(cat "$FUSION_DRAFT_CURSOR")" "10"
+
+# THE SUPERVISOR. AC-GOV-01's PASS rests on a *persistent* watcher, and §5.5's
+# restart column presumed a restarter that did not exist.
+WATCHER_UNIT="$FUSION_DIR/fusion-draft-watcher.service"
+if [[ -f "$WATCHER_UNIT" ]]; then
+  ok "a supervisor unit ships with the watcher"
+else
+  bad "no supervisor unit at $WATCHER_UNIT"
+fi
+check "the supervisor restarts the watcher unconditionally" \
+  "$(grep -c '^Restart=always' "$WATCHER_UNIT" 2>/dev/null || echo 0)" "1"
+check "the supervisor never stops retrying after a crash burst" \
+  "$(grep -c '^StartLimitIntervalSec=0' "$WATCHER_UNIT" 2>/dev/null || echo 0)" "1"
+check "a crash loop pages rather than only restarting quietly" \
+  "$(grep -c '^OnFailure=' "$WATCHER_UNIT" 2>/dev/null || echo 0)" "1"
+if [[ -f "$REPO_ROOT/docs/operations/fusion-draft-watcher.md" ]]; then
+  ok "the supervisor has an install document"
+else
+  bad "no install document at docs/operations/fusion-draft-watcher.md"
+fi
 
 # The scan window is capped, so a held cursor can never grow an unbounded range.
 new_stubs; watcher_env
