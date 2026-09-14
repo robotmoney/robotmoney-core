@@ -442,6 +442,35 @@ pub fn run_submit(args: SubmitArgs) -> i32 {
     };
 
     let block_number = receipt.block_number.unwrap_or(0);
+
+    // A MINED TRANSACTION IS NOT AN ANCHORED RECEIPT. `consensusRecordReceipt`
+    // is `onlyRole(AGENT_ROLE)` and the receipt contract additionally requires
+    // `COMMITTEE_AGENT_ROLE` on the IC policy, so an unauthorized submitter's
+    // transaction is accepted by the node, mined, and reverted — status 0, no
+    // `ReceiptRecorded` log, `receiptCount()` unchanged. Without this check the
+    // command printed `{"ok":true, tx_hash, block_number}` and exited 0 for
+    // exactly that case, which is the "transaction failure is silent" condition
+    // project-fusion.md AC-CORE-09 forbids. `propose.rs` and `vote.rs` already
+    // apply this check after `wait_for_receipt_with`; the anchoring path did
+    // not. Observed on devnet 918453 during QA step 3.7 with two reverted
+    // anchors both reported as successes.
+    if !receipt.inner.status() {
+        emit_failure(
+            &ReceiptFailure {
+                ok: false,
+                error: "ErrReceiptRecordReverted".to_string(),
+                message: Some(format!(
+                    "the anchor transaction was mined but REVERTED (tx_hash={tx_hash:#x}, \
+                     block={block_number}); nothing was recorded — the caller may lack \
+                     AGENT_ROLE on the gateway or COMMITTEE_AGENT_ROLE on the IC policy, or \
+                     this receipt_id is already recorded"
+                )),
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
+
     log::info!("rmpc receipt submit: ok tx_hash={tx_hash:#x} block={block_number}");
     emit_output(
         &ReceiptOutput {
