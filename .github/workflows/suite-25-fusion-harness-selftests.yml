@@ -101,8 +101,8 @@ jobs:
           # KEEP THIS EQUAL TO run-tests.sh's MIN_EXPECTED_ASSERTIONS.
           # Any slack between the two re-opens exactly the window this check
           # exists to close. run-tests.sh asserts the equality from its side.
-          if [[ "$count" -lt 63 ]]; then
-            echo "::error::only $count assertions executed (expected >= 63, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
+          if [[ "$count" -lt 136 ]]; then
+            echo "::error::only $count assertions executed (expected >= 136, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
             exit 1
           fi
 

@@ -260,8 +260,8 @@ key on argv, and none of them signs a governance proposal.
 |---|---|---|
 | `submit-receipt-worker.sh` | Verifies the receipt, then retries submission until the **exact** `(receiptId, payloadDigest)` pair is readable on chain. | Re-reads the chain before and after every attempt. An already-anchored id with the same digest exits `0` without broadcasting; an already-anchored id with a *different* digest is fatal and is never overwritten. |
 | `watch-released-drafts.sh` | Polls `ReceiptReleased` behind `FUSION_CONFIRMATIONS` and emits a human-review-only draft per released receipt. | The block cursor is a durable file, written atomically and advanced **only** after a whole confirmed range scanned successfully. A crash mid-range rescans it; drafts are read-only JSON, so a rescan costs nothing. |
-| `cross-repo-acceptance.sh` | The AC-E2E-05 seam: consumes a *frontend-generated* receipt, verifies the **public URL** and the local bytes and proves they agree, submits, releases, drafts, and asserts INV-4. | Reads `RouterGovernance.currentProposalId()`, `PortfolioRouter.getWeights()` and every mapped vault's `totalAssets()` before and after and fails if any moved. |
-| `devnet-acceptance.sh` | The AC-E2E-05 **run**: takes one frontend receipt URL and drives `verify → negative → record → index → release → dapp → govern`, writing a machine-readable result file. Exits non-zero on any failed assertion. | Stage selection is explicit (`--stages`, `--no-anchor`). An unselected stage is written to the result as `SKIP` and is never counted as a pass; an unknown stage name and a missing witness address both refuse to start. |
+| `cross-repo-acceptance.sh` | The AC-E2E-05 seam: consumes a *frontend-generated* receipt, verifies the **public URL** and the local bytes and proves they agree, submits, releases, drafts, and asserts INV-4. | Both write stages are idempotent. The worker reports `already_anchored` and broadcasts nothing; the release stage reads `isReleased(bytes32)` **before** the send and records a named `already_released` no-op, so a second run still reaches the INV-4 comparison, the draft assertion and the evidence JSON instead of aborting at a `ReceiptAlreadyReleased` revert. INV-4 witnesses come from the shared `lib/inv4.sh`. |
+| `devnet-acceptance.sh` | The AC-E2E-05 **run**: takes one frontend receipt URL and drives `verify → negative → record → index → release → dapp → govern`, writing a machine-readable result file. Exits non-zero on any failed assertion **and on any selected-but-unconfigured stage**. | Stage selection is explicit (`--stages`, `--no-anchor`). Every `SKIP` carries a `reason`: `not_selected` (green), `unconfigured` (**not** green), `prerequisite_failed`, `delegated`. An unknown stage name and a missing witness address refuse to start. |
 
 **Poison cannot wedge the watcher.** One receipt in the confirmed range that can
 never be drafted — 404 payload URL, tampered bytes, a receipt id that does not
@@ -301,9 +301,87 @@ distinct outcomes and its own self-test asserts that unselected stages land as
 
 **An absent `weights` array is a FAILED assertion, never a skipped one.** A
 receipt with no allocation vector cannot carry a recommendation; reporting that
-as "nothing to check" is exactly how the condition stays invisible.
+as "nothing to check" is exactly how the condition stays invisible. Both
+harnesses enforce it: `skipped_no_weights` is not an accepted governance draft
+status in either.
 
-`scripts/fusion/tests/run-tests.sh` exercises all of it against stub `rmpc` and
+**The verdict derives from every SELECTED stage, not from the FAIL count.**
+`devnet-acceptance.sh` used to compute `ok` as "no assertion is FAIL" and exit on
+the same number, so four stages selected with none of their config supplied
+SKIPped every assertion and reported `{failed: 0, ok: true}` with exit 0. One
+dropped export after a host rebuild or a credential rotation was enough. A stage
+the operator **asked for** whose configuration is missing is now recorded as
+`SKIP` with `reason: "unconfigured"`, and `ok` requires both
+`summary.failed == 0` **and** `summary.skipped_unconfigured == 0`.
+
+**The governance draft is asserted by shape and bound to the receipt's weights.**
+The govern stage requires exactly one draft, `status == "ready_for_review"`, four
+vaults, `weight_bps` summing to 10000, a non-empty `propose_calldata`, **and**
+that those bps equal the receipt's own `weights` in canonical bucket order
+(`conservative_defi_yield`, `protocol_tokens`, `agent_tokens`,
+`real_world_assets`). The weights are the one field that becomes treasury
+calldata and the one the analyst signature check cannot cover, so the negative
+bundle includes a fourth case that rewrites them to 10000/0/0/0 and asserts both
+that the stack refuses it against the anchored digest and that it produces no
+`propose_calldata`.
+
+**The anchored digest is compared FIELD-EXACTLY.** `getReceiptById` returns
+`(receiptId, payloadDigest, payloadUri, …)` and the explorer API echoes
+`payload_uri`, so a substring match over either accepts a wrong digest that
+appears anywhere in the record — and with a content-addressed receipt URL
+(`{receipt_id}.json` is one convention change away from `{digest}.json`) that is
+not hypothetical. Both harnesses cut the `payloadDigest` field out of the tuple,
+require `^0x[0-9a-f]{64}$`, and compare the API's `payload_digest` and
+`payload_uri` as JSON fields.
+
+**INV-4 witnesses come from one shared reader and fail loudly.**
+`scripts/fusion/lib/inv4.sh` reads all four quantities —
+`RouterGovernance.currentProposalId()`, `PortfolioRouter.getWeights()`, and per
+mapped vault `totalAssets()` **and** `totalSupply()` — with no `2>&1` anywhere
+near a compared value and every `cast call` exit status checked. A read that did
+not answer emits a sentinel that the comparison records as a **FAILED**
+assertion; it can never diff clean against another unreadable snapshot. The
+comparison window brackets the write stages only, because a mapped vault with a
+live yield adapter accrues on its own (rmUSDC on devnet 918453 was measured
+moving 1000004 → 1000008 over ~50 idle minutes with no receipt within a thousand
+blocks). The comparison itself is still exact equality — only the window narrows.
+
+### 5.5.1 Paging (`FUSION_ALERT_WEBHOOK`)
+
+`FUSION_ALERT_WEBHOOK` is the PagerDuty-style Events-API endpoint both
+long-running harnesses POST to. **It is the precondition for every claim in this
+section that a harness "pages".** Its handling is validated at startup, the same
+way `rmpc` and `cast` are:
+
+| State | Behaviour |
+|---|---|
+| set, with `curl` **and** `jq` on `PATH` | Pages are POSTed *and* echoed to stderr. |
+| set, with `curl` or `jq` missing | The script **refuses to start** — a page that could never be delivered must not be discovered at 3am. |
+| unset | The script starts and logs one explicit warning that every page will be **stderr-only**, which under `nohup`/systemd reaches nobody without a log sink. |
+
+A delivery failure is logged as `ALERT DELIVERY FAILED` with the `curl` exit
+status and the dedup key; it is never discarded with `|| true`.
+
+Each condition has its **own** dedup key, so two incidents are two incidents:
+
+| Key | Raised by | Resolved |
+|---|---|---|
+| `fusion_draft_watcher_stalled` | `watch-released-drafts.sh`, cursor motionless for `FUSION_STALL_ALERT_CYCLES` cycles | yes, when the cursor advances |
+| `fusion_draft_range_quarantined` | `watch-released-drafts.sh`, a refused range written to `$FUSION_DRAFT_QUARANTINE` | no — the quarantined range needs a human replay |
+| `fusion_submit_worker_chain_reads_down` | `submit-receipt-worker.sh`, `FUSION_READ_FAILURE_ALERT` consecutive read outages | yes, when the chain answers again |
+
+`scripts/fusion/tests/run-tests.sh` exercises all of it — including, for the
+round-2 guards above, an unreadable chain that must record the INV-4 assertion as
+`FAIL` (with a readable-chain control that must record `PASS`), a one-unit witness
+drift that both harnesses must reach the same verdict on, a selected-but-
+unconfigured stage that must exit non-zero with `failed == 0`, a `drafts: []` and
+a single `refused` draft that must both FAIL the "exactly one ready_for_review"
+assertion, a well-shaped draft over the wrong weights that only the canonical-order
+binding catches, a wrong `payloadDigest` hidden behind a content-addressed
+`payloadUri` in both the tuple and the API body, a second `cross-repo-acceptance.sh`
+run that must broadcast nothing and still produce its evidence JSON, and the alert
+path's startup refusal, per-condition dedup keys, resolve and delivery-failure
+logging. Every one of them has a negative control that must FAIL — against stub `rmpc` and
 `cast` binaries — retry-then-succeed, already-anchored no-op, conflicting-digest
 refusal (including a conflicting digest whose `payloadUri` embeds the derived
 digest, which a substring comparison would wrongly accept), a submit that
