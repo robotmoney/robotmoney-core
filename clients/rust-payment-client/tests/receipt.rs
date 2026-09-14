@@ -283,8 +283,8 @@ fn valid_fixture_reproduces_the_golden_canonical_bytes() {
 
     assert_eq!(
         golden.len(),
-        2818,
-        "the committed golden is 2818 bytes; a different length means the pinned \
+        2861,
+        "the committed golden is 2861 bytes; a different length means the pinned \
          fixture itself changed"
     );
     assert_eq!(
@@ -323,7 +323,7 @@ fn escaping_fixture_reproduces_the_golden_canonical_bytes() {
     .expect("the escaping fixture canonicalizes");
     let golden = fixture("consensus-receipt.escaping.canonical.txt");
 
-    assert_eq!(golden.len(), 3046, "the committed golden is 3046 bytes");
+    assert_eq!(golden.len(), 3105, "the committed golden is 3105 bytes");
     assert_eq!(
         produced.len(),
         golden.len(),

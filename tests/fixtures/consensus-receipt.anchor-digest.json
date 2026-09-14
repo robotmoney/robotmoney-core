@@ -7,20 +7,20 @@
   "goldens": [
     {
       "file": "consensus-receipt.valid.canonical.txt",
-      "byte_length": 2818,
-      "keccak256": "0xeecdaf43ef720ec445b8fe9c405be84a550c77fc43cfaf4be975795e8c491177",
-      "sha256": "0x1d3b073e34fd14d744267360afc2c9273b3a787512a8f90cbafcbbf068cf34b0",
+      "byte_length": 2861,
+      "keccak256": "0xd3e85fdd5fdbc7da72d0853bfeaa3f3a4288ad5392c39f2e0dee0d82c7f7b2d1",
+      "sha256": "0x04033d6a56cad116c725434cff4e0c3d13db898568a0b954aaf1d0bcdcafed0c",
       "role": "The payload_digest a consensusRecordReceipt call must carry for this fixture receipt."
     },
     {
       "file": "consensus-receipt.escaping.canonical.txt",
-      "byte_length": 3046,
-      "keccak256": "0xf01d4bc09f8240bf310b450ad098961dd8e1a6698c97b97e45a54508b19887af",
-      "sha256": "0x097f811bae8e3b4ea9d1ec7ea06c35a601d2a863e81ae08939c5a3598668f0c1",
+      "byte_length": 3105,
+      "keccak256": "0x44dd33cb615ecb95d5fca26f983f2374382529ad20d236ab720b0fe421d5cb17",
+      "sha256": "0xc292b8faaa26c5b11b18ac456e11a1a7409f36f1ebddeea0cb7517d0d3127a98",
       "role": "The same, for the non-ASCII conformance receipt. Pinned separately because an ASCII-only digest check cannot detect a serializer that escapes non-ASCII, U+2028, or the HTML-sensitive characters — the two most likely non-JS implementations (Go's encoding/json, Python's json.dumps) each diverge that way BY DEFAULT while still reproducing an all-ASCII golden exactly."
     }
   ],
-  "still_open": "robotmoney-core#1280 is now DISCHARGED IN FULL. The digest half is asserted here and in CI. The second half \u2014 that the anchoring path actually SUBMITS this digest for this fixture receipt \u2014 landed with the on-chain anchor in robotmoney-core#1247. Two independent assertions, at the two places the digest can go wrong: contracts/test/ConsensusRecommendationReceipt.t.sol (testAnchoringPathSubmitsTheGoldenDigest, testAnchoringPathSubmitsTheEscapingGoldenDigest) derives keccak256 from the golden file, compares it with the constant below, and asserts the same value is what ReceiptRecorded emits and what the contract stores; clients/rust-payment-client/tests/receipt.rs (submitted_calldata_carries_the_derived_digest_and_receipt_id, receipt_submit_anchors_the_pinned_digest_through_the_gateway) ABI-decodes the real consensusRecordReceipt calldata and asserts its payloadDigest argument equals this constant. Both read the constant out of THIS file at test time and compare it against a freshly derived hash, so changing either side alone still turns the suite red.",
+  "still_open": "robotmoney-core#1280 is now DISCHARGED IN FULL. The digest half is asserted here and in CI. The second half — that the anchoring path actually SUBMITS this digest for this fixture receipt — landed with the on-chain anchor in robotmoney-core#1247. Two independent assertions, at the two places the digest can go wrong: contracts/test/ConsensusRecommendationReceipt.t.sol (testAnchoringPathSubmitsTheGoldenDigest, testAnchoringPathSubmitsTheEscapingGoldenDigest) derives keccak256 from the golden file, compares it with the constant below, and asserts the same value is what ReceiptRecorded emits and what the contract stores; clients/rust-payment-client/tests/receipt.rs (submitted_calldata_carries_the_derived_digest_and_receipt_id, receipt_submit_anchors_the_pinned_digest_through_the_gateway) ABI-decodes the real consensusRecordReceipt calldata and asserts its payloadDigest argument equals this constant. Both read the constant out of THIS file at test time and compare it against a freshly derived hash, so changing either side alone still turns the suite red.",
   "shared_fixture_manifest": {
     "purpose": "THE CROSS-REPO PIN, IN ONE COMPARABLE VALUE (issue #1246). Every file below is byte-identical to contract/src/__fixtures__/<same name> in robotmoney-frontend. Neither repo's CI can fetch the other, so what makes that identity CHECKABLE rather than asserted is this manifest: either side re-hashes its own nine files and compares the list. A single differing sha256 names the drifted file.",
     "why_sha256_here_and_keccak256_above": "keccak256 pins the goldens because that is what an EVM anchor computes. This manifest is aimed at the other repo, where contract/ has zero runtime and zero dev dependencies and cannot reach a keccak256 implementation at all — but sha256 is in its runtime (Bun.CryptoHasher, node:crypto). Pinning the shared set in sha256 is what lets the frontend check cross-repo identity with one command and no new dependency.",
@@ -30,13 +30,13 @@
     "files": [
       {
         "file": "consensus-receipt.schema.json",
-        "byte_length": 15768,
-        "sha256": "0xb179fce879be180b2532a1aa11987fb679952a17b2e0b7c454f2d0b181d2fab9"
+        "byte_length": 19005,
+        "sha256": "0xbf9fa2f0e9ea19dfd245fd837e6f7f87a0a155a13732248528b040560cd17d38"
       },
       {
         "file": "consensus-receipt.canonicalization.json",
-        "byte_length": 21183,
-        "sha256": "0x80f5182ec508181e8e3bf0a579beb2825e560cbba872e8729be2f1c71c2d5022"
+        "byte_length": 35475,
+        "sha256": "0x38e07170eeaaacf5fb321cf2a5d00fcbc88ec1f6cef178a29e293e9fa0bbad0c"
       },
       {
         "file": "consensus-receipt.bucket-vault-map.json",
@@ -45,33 +45,33 @@
       },
       {
         "file": "consensus-receipt.valid.json",
-        "byte_length": 3315,
-        "sha256": "0x0c86a88aa88829b2be20839103e06ef97301abb335a828a76042b4e6c9f5f26d"
+        "byte_length": 3380,
+        "sha256": "0x5ef2cc46bdbb06cad96e2c15cf359cfe008e152954248479f1d12ca4698bde85"
       },
       {
         "file": "consensus-receipt.valid-no-weights.json",
-        "byte_length": 1724,
-        "sha256": "0x68a111c76cc322d999f2e6d7b4d249471f05cc2f6a062bcdda4bde59c9d706f6"
+        "byte_length": 1768,
+        "sha256": "0x66296ddcd4def06f1cd2cd7ef5b69ee1844ef1cbabb61babab3199b7b3153935"
       },
       {
         "file": "consensus-receipt.invalid.json",
-        "byte_length": 1003,
-        "sha256": "0x273c01396b385e8384a3f252ae52aa6421c2ab89d84c184887ca328530e30331"
+        "byte_length": 1022,
+        "sha256": "0xa396756f40a676b01527ba79d1fa315333b34ff5fe98311e5df54fdbe73b912c"
       },
       {
         "file": "consensus-receipt.escaping.json",
-        "byte_length": 3457,
-        "sha256": "0xbc35235d2d6ba8731d5453b19bc5cf026619f0a512ce2e008b7fd0a189faa5b2"
+        "byte_length": 3538,
+        "sha256": "0x8f49186fe803037f9dd8a44bab2ffeb920cc923c40585579e4084af662e84ae3"
       },
       {
         "file": "consensus-receipt.valid.canonical.txt",
-        "byte_length": 2818,
-        "sha256": "0x1d3b073e34fd14d744267360afc2c9273b3a787512a8f90cbafcbbf068cf34b0"
+        "byte_length": 2861,
+        "sha256": "0x04033d6a56cad116c725434cff4e0c3d13db898568a0b954aaf1d0bcdcafed0c"
       },
       {
         "file": "consensus-receipt.escaping.canonical.txt",
-        "byte_length": 3046,
-        "sha256": "0x097f811bae8e3b4ea9d1ec7ea06c35a601d2a863e81ae08939c5a3598668f0c1"
+        "byte_length": 3105,
+        "sha256": "0xc292b8faaa26c5b11b18ac456e11a1a7409f36f1ebddeea0cb7517d0d3127a98"
       }
     ]
   }
