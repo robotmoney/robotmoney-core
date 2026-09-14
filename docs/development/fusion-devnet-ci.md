@@ -147,9 +147,18 @@ demonstration" is NOT met** at `v0.4.0-rc.9`. Recorded in
 `fusion-evidence/20260914T-run2/phase2-ci/VERIFY/R5-refuter1.md` (D1, D2) and
 `R5-refuter2.md` (DEFECT 1).
 
-**Remedy:** the workflow files must land on `dev`. A pull request carrying only
-the new workflow files and this document is open for that purpose; merging it is
-a human decision, not an automated one.
+**Remedy:** the workflow files must land on `dev`. A draft pull request carrying
+only the five new workflow files and this document is open for that purpose:
+
+> **robotmoney/robotmoney-core#1444** — <https://github.com/robotmoney/robotmoney-core/pull/1444>
+> (branch `r2/workflows-to-dev`, cut from `origin/dev`)
+
+Merging it is a human decision, not an automated one. Its body names the two
+jobs that will be RED on `dev` until the `releases-0.4.x` content lands
+(`suite-25-fusion-harness-selftests` and `fusion-cross-repo-drift`, whose
+scripts and fixtures are not on `dev`) and the two clean orderings that avoid
+that. Registration alone does not make suite-26 meaningful — see the credentials
+section immediately below.
 
 ### Even once registered, every credential is unset
 
