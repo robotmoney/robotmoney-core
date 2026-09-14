@@ -214,7 +214,7 @@ pub struct ReleaseSafety {
     pub concerns: Vec<String>,
 }
 
-/// `judge` — `["rationale","disagreements","release_safety","source"]`.
+/// `judge` — `["rationale","disagreements","release_safety","source","mode"]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Judge {
     /// Judge-authored explanation. Never empty.
@@ -226,10 +226,20 @@ pub struct Judge {
     /// `"model"` or `"fallback"` — the ONLY field separating model prose from
     /// template prose.
     pub source: String,
+    /// `"shadow"` or `"enforce"` — whether the session ADOPTED this opinion or
+    /// merely recorded it. In `shadow` the judgement row is written and the
+    /// session keeps its aggregator-authored prose, so without this field the
+    /// anchored bytes could carry a rationale the session never showed. Only
+    /// `"enforce"` is publishable; `"shadow"` stays expressible so that refusal
+    /// is a recomputable invariant rather than a parse error.
+    ///
+    /// LAST in the object, per `nested_field_order` in
+    /// `consensus-receipt.canonicalization.json`.
+    pub mode: String,
 }
 
 /// `analyst_signatures[]` —
-/// `["member_id","public_key","canonical_submission","signature"]`.
+/// `["member_id","public_key","canonical_submission","signature","revision"]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnalystSignature {
     /// The signing member.
@@ -242,6 +252,14 @@ pub struct AnalystSignature {
     /// Standard padded base64 of the raw 64-byte Ed25519 signature over
     /// `canonical_submission`.
     pub signature: String,
+    /// `swarm_recommendations.revision` of the take this entry carries. Takes
+    /// are amendable, so "member X's take in session S" does not name a unique
+    /// object; the set of `(member_id, revision)` pairs is the receipt's
+    /// statement of exactly which take set it attests to. At least 1.
+    ///
+    /// LAST in the object, per `nested_field_order` in
+    /// `consensus-receipt.canonicalization.json`.
+    pub revision: u64,
 }
 
 /// `weights[]` — `["bucket","weight_bps"]`.
@@ -332,8 +350,41 @@ impl ConsensusReceipt {
     /// A missing required field is an error here, never a silently omitted key
     /// later. An explicit `"weights": null` is refused for the same reason.
     pub fn from_json_slice(raw: &[u8]) -> Result<Self, ReceiptError> {
-        let value: serde_json::Value = serde_json::from_slice(raw)
+        let parsed: serde_json::Value = serde_json::from_slice(raw)
             .map_err(|e| ReceiptError::ErrReceiptParse(format!("not valid JSON: {e}")))?;
+
+        // THE PUBLISHED URL SERVES AN ENVELOPE, NOT A BARE RECEIPT.
+        // robotmoney-frontend's public, read-time-verifying route
+        // (`/api/swarm/sessions/:id/consensus-receipt`) answers
+        // `{sessionId, subjectId, schemaVersion, publishedAt, receipt,
+        //   canonicalBytes, verified, signatures, unverifiedReasons}` — the
+        // receipt is one FIELD of it, and the surrounding fields are the
+        // read-time verification result AC-FE-08 requires the publisher to
+        // expose. `rmpc receipt verify --receipt-url` previously refused that
+        // body with "missing field `schema_version`", so the one URL the
+        // criterion names could not be consumed at all; the route rmpc's help
+        // text assumes (`/api/swarm/receipts/{session_id}`) returns 404 on the
+        // shipped frontend. Unwrapping here is safe because the digest preimage
+        // was never the served bytes: `canonical_bytes()` re-serializes the
+        // parsed receipt under the canonicalization contract, so an envelope
+        // and a bare receipt carrying the same object produce the same digest.
+        // Only an UNAMBIGUOUS envelope is unwrapped — a top level that is
+        // itself a receipt always wins — so this can never silently pick the
+        // wrong object.
+        let value = if parsed.get("schema_version").is_some() {
+            parsed
+        } else if parsed
+            .get("receipt")
+            .and_then(|r| r.get("schema_version"))
+            .is_some()
+        {
+            parsed
+                .get("receipt")
+                .cloned()
+                .expect("the receipt field was just observed")
+        } else {
+            parsed
+        };
 
         if matches!(value.get("weights"), Some(serde_json::Value::Null)) {
             return Err(ReceiptError::ErrReceiptSchema(
@@ -623,6 +674,21 @@ impl ConsensusReceipt {
             )));
         }
 
+        // `shadow` parses so the refusal is expressible; it is never anchorable.
+        if self.judge.mode != "shadow" && self.judge.mode != "enforce" {
+            return Err(bad(format!(
+                "judge.mode must be \"shadow\" or \"enforce\", got {:?}",
+                self.judge.mode
+            )));
+        }
+        if self.judge.mode != "enforce" {
+            return Err(bad(format!(
+                "judge.mode is {:?}, not \"enforce\" — the opinion was recorded but never \
+                 adopted by the session, so these bytes carry prose the session never showed",
+                self.judge.mode
+            )));
+        }
+
         // ── analyst_signatures ───────────────────────────────────────────────
         if self.analyst_signatures.is_empty() {
             return Err(bad(
@@ -661,6 +727,12 @@ impl ConsensusReceipt {
                 return Err(bad(format!(
                     "analyst_signatures[{i}].signature does not match ^[A-Za-z0-9+/]{{86}}==$ \
                      (standard padded base64 of a raw 64-byte Ed25519 signature)"
+                )));
+            }
+            if s.revision < 1 {
+                return Err(bad(format!(
+                    "analyst_signatures[{i}].revision must be at least 1; revision 0 names no \
+                     take in the amendable take store"
                 )));
             }
         }
@@ -869,7 +941,11 @@ mod tests {
     fn valid_fixture_canonicalizes_to_the_committed_golden_bytes() {
         let produced = valid_receipt().canonical_bytes().expect("canonicalizes");
         let golden = fixture("consensus-receipt.valid.canonical.txt");
-        assert_eq!(golden.len(), 2818, "golden length pinned by #1244");
+        assert_eq!(
+            golden.len(),
+            2861,
+            "golden length pinned by #1244 and #1246"
+        );
         assert_eq!(
             produced, golden,
             "canonical bytes diverged from the committed golden"
@@ -883,10 +959,99 @@ mod tests {
                 .expect("the escaping fixture parses");
         let produced = receipt.canonical_bytes().expect("canonicalizes");
         let golden = fixture("consensus-receipt.escaping.canonical.txt");
-        assert_eq!(golden.len(), 3046, "golden length pinned by #1244");
+        assert_eq!(
+            golden.len(),
+            3105,
+            "golden length pinned by #1244 and #1246"
+        );
         assert_eq!(
             produced, golden,
             "non-ASCII canonical bytes diverged from the committed golden"
+        );
+    }
+
+    /// The two fields robotmoney-frontend's schema 1.0 requires and this repo
+    /// did not carry until #1246's late landing: `judge.mode` and
+    /// `analyst_signatures[].revision`. QA step 3.1 measured the consequence on
+    /// the real staged receipt — core derived 19148 bytes / keccak
+    /// 0x0478984a…, the frontend published 19204 / 0x684d22a3… — because core
+    /// dropped both as unknown fields and hashed the remainder, with
+    /// `rmpc receipt verify` still exiting 0. Both must now be REQUIRED (a
+    /// receipt missing either is refused, never silently canonicalized) and
+    /// both must appear LAST in their object.
+    #[test]
+    fn mode_and_revision_are_required_and_canonicalize_last_in_their_object() {
+        let bytes = valid_receipt().canonical_bytes().expect("canonicalizes");
+        let text = std::str::from_utf8(&bytes).expect("utf-8");
+        assert!(
+            text.contains(r#""source":"model","mode":"enforce"}"#),
+            "judge.mode must be emitted immediately after judge.source and close the object"
+        );
+        assert!(
+            text.contains(r#""revision":1}"#),
+            "analyst_signatures[].revision must be emitted last in its object"
+        );
+
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fixture("consensus-receipt.valid.json")).expect("json");
+        value["judge"]
+            .as_object_mut()
+            .expect("judge is an object")
+            .remove("mode");
+        let err = ConsensusReceipt::from_json_slice(value.to_string().as_bytes())
+            .expect_err("a receipt without judge.mode must be REFUSED, not canonicalized");
+        assert!(format!("{err}").contains("mode"), "{err}");
+
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fixture("consensus-receipt.valid.json")).expect("json");
+        value["analyst_signatures"][0]
+            .as_object_mut()
+            .expect("entry is an object")
+            .remove("revision");
+        let err = ConsensusReceipt::from_json_slice(value.to_string().as_bytes())
+            .expect_err("a receipt without analyst revision must be REFUSED");
+        assert!(format!("{err}").contains("revision"), "{err}");
+    }
+
+    /// `shadow` parses so the refusal is expressible, and is then refused: a
+    /// shadow judgement's prose was never shown by the session, so anchoring it
+    /// would commit to text nobody saw.
+    #[test]
+    fn a_shadow_mode_judgement_parses_and_is_then_refused() {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fixture("consensus-receipt.valid.json")).expect("json");
+        value["judge"]["mode"] = serde_json::json!("shadow");
+        let receipt =
+            ConsensusReceipt::from_json_slice(value.to_string().as_bytes()).expect("parses");
+        let err = receipt
+            .canonical_bytes()
+            .expect_err("a shadow receipt must never produce anchorable bytes");
+        assert!(format!("{err}").contains("enforce"), "{err}");
+    }
+
+    /// The publisher's route serves the receipt inside a read-time-verification
+    /// envelope. Core must consume the one URL the criteria name.
+    #[test]
+    fn a_published_envelope_is_unwrapped_to_the_same_bytes_as_the_bare_receipt() {
+        let bare = fixture("consensus-receipt.valid.json");
+        let receipt: serde_json::Value = serde_json::from_slice(&bare).expect("json");
+        let envelope = serde_json::json!({
+            "sessionId": "12440000-0000-4000-8000-000000000001",
+            "subjectId": "treasury-allocation",
+            "schemaVersion": "1.0",
+            "publishedAt": "2026-08-26T16:00:00.000Z",
+            "receipt": receipt,
+            "verified": true,
+            "unverifiedReasons": [],
+        });
+        let from_envelope =
+            ConsensusReceipt::canonical_bytes_from_json_slice(envelope.to_string().as_bytes())
+                .expect("the envelope is unwrapped");
+        let from_bare =
+            ConsensusReceipt::canonical_bytes_from_json_slice(&bare).expect("bare parses");
+        assert_eq!(
+            from_envelope, from_bare,
+            "unwrapping must not change one byte of the preimage"
         );
     }
 
