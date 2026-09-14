@@ -195,6 +195,7 @@ fn alert_only_config(per_block_mint: u64, per_block_burn: u64, webhook_url: &str
         // The consensus-receipt liveness monitor is off by default, so these
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
+        governance: Default::default(),
     }
 }
 
@@ -234,6 +235,7 @@ fn per_vault_config(
         // The consensus-receipt liveness monitor is off by default, so these
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
+        governance: Default::default(),
     }
 }
 
@@ -525,6 +527,7 @@ async fn pause_rpc_timeout_does_not_starve_alert() {
         // The consensus-receipt liveness monitor is off by default, so these
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
+        governance: Default::default(),
     };
     // Derive the signing state the way the daemon does — once, at "startup" —
     // and confirm the raw hex is gone from the config afterwards (issue #1357).
@@ -635,6 +638,33 @@ fn liveness_cfg() -> ReceiptLivenessConfig {
     }
 }
 
+/// Classify one cycle the way the daemon does.
+///
+/// T30a: the six Postgres-backed tests below used to call the retired
+/// `check_receipt_liveness`, which the daemon does **not** run. The classifier
+/// the daemon runs — including the `NoBaseline` branch the whole change exists
+/// for — therefore had no Postgres coverage at all, and a change to the
+/// baseline SQL passed six green tests through a function nobody called.
+async fn status(
+    pool: &sqlx::PgPool,
+    now: i64,
+) -> watchdog::receipt_liveness::ReceiptLivenessStatus {
+    watchdog::receipt_liveness::check_receipt_liveness_status(pool, &liveness_cfg(), CHAIN_ID, now)
+        .await
+        .expect("liveness query")
+}
+
+/// Unwrap a `Missing` status, failing with the actual variant otherwise.
+fn expect_missing(
+    s: watchdog::receipt_liveness::ReceiptLivenessStatus,
+    why: &str,
+) -> watchdog::receipt_liveness::MissingReceiptEvent {
+    match s {
+        watchdog::receipt_liveness::ReceiptLivenessStatus::Missing(e) => e,
+        other => panic!("{why}: expected Missing, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn cold_start_pages_from_the_persisted_baseline_and_survives_a_restart() {
     let fx = pg_fixture().await;
@@ -645,15 +675,10 @@ async fn cold_start_pages_from_the_persisted_baseline_and_survives_a_restart() {
     seed_indexer_run(&fx.pool, 1_000).await;
 
     let now = 1_000 + 500; // 500s against a 110s budget.
-    let event = watchdog::receipt_liveness::check_receipt_liveness(
-        &fx.pool,
-        &liveness_cfg(),
-        CHAIN_ID,
-        now,
-    )
-    .await
-    .expect("liveness query")
-    .expect("a 500s cold-start gap against a 110s budget must page");
+    let event = expect_missing(
+        status(&fx.pool, now).await,
+        "a 500s cold-start gap against a 110s budget must page",
+    );
 
     assert_eq!(
         event.last_recorded_at, None,
@@ -670,15 +695,10 @@ async fn cold_start_pages_from_the_persisted_baseline_and_survives_a_restart() {
     // must still be measured from t=1_000, not from the restart.
     let restarted = reconnect(&fx.pool).await;
     let later = 1_000 + 900;
-    let after_restart = watchdog::receipt_liveness::check_receipt_liveness(
-        &restarted,
-        &liveness_cfg(),
-        CHAIN_ID,
-        later,
-    )
-    .await
-    .expect("liveness query after restart")
-    .expect("the gap must still page after a restart");
+    let after_restart = expect_missing(
+        status(&restarted, later).await,
+        "the gap must still page after a restart",
+    );
     assert_eq!(
         after_restart.gap_started_at, 1_000,
         "a restart must not reset the observation window"
@@ -692,15 +712,10 @@ async fn cold_start_pages_from_the_persisted_baseline_and_survives_a_restart() {
     // the restart-safety property at the SQL level: a watchdog that restarts
     // opens a new indexer run, and taking the newest one would silence the page.
     seed_indexer_run(&restarted, 1_800).await;
-    let still = watchdog::receipt_liveness::check_receipt_liveness(
-        &restarted,
-        &liveness_cfg(),
-        CHAIN_ID,
-        later,
-    )
-    .await
-    .expect("liveness query")
-    .expect("a newer indexer run must not silence the cold-start gap");
+    let still = expect_missing(
+        status(&restarted, later).await,
+        "a newer indexer run must not silence the cold-start gap",
+    );
     assert_eq!(still.gap_started_at, 1_000);
 }
 
@@ -715,30 +730,18 @@ async fn an_anchored_receipt_takes_over_the_baseline_and_quiets_the_monitor() {
     seed_consensus_receipt(&fx.pool, 5_000, 0x22).await;
 
     // 50s after the newest receipt — inside the 110s budget.
-    assert!(
-        watchdog::receipt_liveness::check_receipt_liveness(
-            &fx.pool,
-            &liveness_cfg(),
-            CHAIN_ID,
-            5_050,
-        )
-        .await
-        .expect("liveness query")
-        .is_none(),
+    assert_eq!(
+        status(&fx.pool, 5_050).await,
+        watchdog::receipt_liveness::ReceiptLivenessStatus::Healthy,
         "a receipt anchored 50s ago is within budget and must not page"
     );
 
     // 500s after it — past budget, and the event must name the receipt time,
     // not the (much older) indexer baseline.
-    let event = watchdog::receipt_liveness::check_receipt_liveness(
-        &fx.pool,
-        &liveness_cfg(),
-        CHAIN_ID,
-        5_500,
-    )
-    .await
-    .expect("liveness query")
-    .expect("a 500s gap past the newest receipt must page");
+    let event = expect_missing(
+        status(&fx.pool, 5_500).await,
+        "a 500s gap past the newest receipt must page",
+    );
     assert_eq!(event.last_recorded_at, Some(5_000));
     assert_eq!(
         event.gap_started_at, 5_000,
@@ -751,16 +754,143 @@ async fn an_anchored_receipt_takes_over_the_baseline_and_quiets_the_monitor() {
 async fn a_chain_the_indexer_has_never_touched_has_no_baseline() {
     let fx = pg_fixture().await;
     seed_chain(&fx.pool).await;
-    // No indexer_runs row, no receipt: the watchdog has observed nothing on this
-    // chain and has nothing to be late against. Documented in
-    // docs/technical/consensus-receipt-submitter-runbook.md §5.3.
-    assert!(watchdog::receipt_liveness::check_receipt_liveness(
-        &fx.pool,
-        &liveness_cfg(),
-        CHAIN_ID,
-        9_999_999,
-    )
-    .await
-    .expect("liveness query")
-    .is_none());
+    // No indexer_runs row, no receipt: there is no timestamp to measure a gap
+    // from. T30a: the retired function returned `None` here, which is
+    // byte-identical to "healthy" at the call site — a watchdog pointed at the
+    // wrong chain id reported perfect health while seeing nothing at all. The
+    // classifier the daemon actually runs must call it blindness.
+    assert_eq!(
+        status(&fx.pool, 9_999_999).await,
+        watchdog::receipt_liveness::ReceiptLivenessStatus::NoBaseline,
+        "no receipt and no indexer run is a fault, never health"
+    );
+}
+
+#[tokio::test]
+async fn an_indexer_run_alone_is_a_baseline_so_the_monitor_is_not_blind() {
+    let fx = pg_fixture().await;
+    seed_chain(&fx.pool).await;
+    seed_indexer_run(&fx.pool, 1_000).await;
+    // Inside budget, with no receipt ever anchored: a baseline exists, so this
+    // is Healthy — distinguishable from NoBaseline, which the retired function
+    // could not express.
+    assert_eq!(
+        status(&fx.pool, 1_050).await,
+        watchdog::receipt_liveness::ReceiptLivenessStatus::Healthy
+    );
+}
+
+#[tokio::test]
+async fn a_disabled_monitor_reports_healthy_against_a_real_database() {
+    let fx = pg_fixture().await;
+    seed_chain(&fx.pool).await;
+    let off = ReceiptLivenessConfig {
+        enabled: false,
+        ..liveness_cfg()
+    };
+    assert_eq!(
+        watchdog::receipt_liveness::check_receipt_liveness_status(
+            &fx.pool, &off, CHAIN_ID, 9_999_999,
+        )
+        .await
+        .expect("liveness query"),
+        watchdog::receipt_liveness::ReceiptLivenessStatus::Healthy,
+        "a disabled monitor must not report blindness"
+    );
+}
+
+// ---- T08: the incident survives a restart ---------------------------------
+
+#[tokio::test]
+async fn pager_state_is_persisted_and_restores_an_open_incident_across_a_restart() {
+    use watchdog::pager_state::{ensure_pager_state_table, load_pager_state, save_pager_state};
+    use watchdog::receipt_liveness::{AlertPager, PageAction};
+
+    let fx = pg_fixture().await;
+    seed_chain(&fx.pool).await;
+    ensure_pager_state_table(&fx.pool).await.expect("ddl");
+    // Idempotent: the daemon runs it on every start.
+    ensure_pager_state_table(&fx.pool).await.expect("ddl twice");
+
+    let key = watchdog::alert::missing_receipt_dedup_key(CHAIN_ID);
+    assert!(
+        load_pager_state(&fx.pool, CHAIN_ID, &key)
+            .await
+            .expect("load")
+            .is_none(),
+        "nothing has paged yet, so there is no state to restore"
+    );
+
+    // Process 1 pages and confirms delivery.
+    let mut p1 = AlertPager::new(100);
+    let action = p1.on_firing(1_000);
+    assert_eq!(action, PageAction::Trigger);
+    assert!(p1.on_page_result(1_000, action, true));
+    save_pager_state(&fx.pool, CHAIN_ID, &key, p1.state())
+        .await
+        .expect("save");
+
+    // Process 2 is a cold restart mid-incident.
+    let restored = load_pager_state(&reconnect(&fx.pool).await, CHAIN_ID, &key)
+        .await
+        .expect("load")
+        .expect("the open incident must survive the restart");
+    assert!(restored.firing);
+    assert_eq!(restored.last_paged_at, Some(1_000));
+
+    let mut p2 = AlertPager::from_state(100, restored);
+    assert_eq!(
+        p2.on_firing(1_050),
+        PageAction::None,
+        "the re-page floor is carried across the restart, not reset by it"
+    );
+    let action = p2.on_clear(1_060);
+    assert_eq!(
+        action,
+        PageAction::Resolve,
+        "AC-CORE-09: the restarted process must still close the incident it inherited"
+    );
+    assert!(p2.on_page_result(1_060, action, true));
+    save_pager_state(&fx.pool, CHAIN_ID, &key, p2.state())
+        .await
+        .expect("save resolve");
+
+    let after = load_pager_state(&fx.pool, CHAIN_ID, &key)
+        .await
+        .expect("load")
+        .expect("row is upserted, not deleted");
+    assert!(!after.firing);
+    assert_eq!(after.last_paged_at, None);
+}
+
+#[tokio::test]
+async fn a_failed_delivery_persists_nothing_so_the_restart_pages_again() {
+    use watchdog::pager_state::{ensure_pager_state_table, load_pager_state};
+    use watchdog::receipt_liveness::{AlertPager, PageAction};
+
+    let fx = pg_fixture().await;
+    seed_chain(&fx.pool).await;
+    ensure_pager_state_table(&fx.pool).await.expect("ddl");
+    let key = watchdog::alert::no_baseline_dedup_key(CHAIN_ID);
+
+    let mut pager = AlertPager::new(86_400);
+    let action = pager.on_firing(1_000);
+    assert_eq!(action, PageAction::Trigger);
+    // The receiver is down. Nothing is committed, so nothing is written.
+    assert!(
+        !pager.on_page_result(1_000, action, false),
+        "an undelivered page must not dirty the durable state"
+    );
+    assert!(
+        load_pager_state(&fx.pool, CHAIN_ID, &key)
+            .await
+            .expect("load")
+            .is_none(),
+        "the database must not record a page the receiver never got"
+    );
+    assert_eq!(
+        pager.on_firing(1_060),
+        PageAction::Trigger,
+        "the retry is due one failure floor later, not one 86 400s cadence later"
+    );
 }

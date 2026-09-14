@@ -183,20 +183,6 @@ pub async fn receipt_liveness_baseline(
     Ok(row)
 }
 
-/// Read the last anchoring time and evaluate the gap against `cfg`.
-pub async fn check_receipt_liveness(
-    pool: &PgPool,
-    cfg: &ReceiptLivenessConfig,
-    chain_id: i64,
-    now: i64,
-) -> Result<Option<MissingReceiptEvent>, WatchdogError> {
-    if !cfg.enabled {
-        return Ok(None);
-    }
-    let (last, started) = receipt_liveness_baseline(pool, chain_id).await?;
-    Ok(evaluate_receipt_liveness(cfg, chain_id, last, started, now))
-}
-
 /// What one liveness cycle actually observed.
 ///
 /// The previous shape — `Option<MissingReceiptEvent>` — could not express
@@ -259,6 +245,30 @@ pub enum PageAction {
     Resolve,
 }
 
+/// Durable part of an [`AlertPager`]: what the alert receiver believes.
+///
+/// Persisted per `(chain_id, dedup_key)` so a restart mid-incident does not
+/// forget that a trigger was delivered. Before this existed the pager lived in
+/// two `let mut` bindings in `main()`: a watchdog restarted during an open
+/// incident returned `PageAction::None` from `on_clear()` forever, so
+/// `consensus_receipt_missing:<chain>` never closed — the exact "trigger with
+/// no matching resolve" failure [`crate::alert`] names as equivalent to not
+/// paging at all. The same restart also reset the re-page floor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PagerState {
+    /// True while a delivered trigger has no delivered resolve.
+    pub firing: bool,
+    /// Unix seconds of the last **confirmed** trigger delivery.
+    pub last_paged_at: Option<i64>,
+}
+
+/// Upper bound on the post-failure retry floor, in seconds.
+///
+/// A hard-down receiver must not be re-POSTed at the poll rate (12 s), but it
+/// must also not be left alone for a 24 h cadence: the floor is
+/// `min(min_repage_secs, RETRY_FLOOR_CEILING_SECS)`.
+pub const RETRY_FLOOR_CEILING_SECS: u64 = 60;
+
 /// Rate-limits one alert condition into one incident.
 ///
 /// Why this exists: the missing-receipt condition is *permanent* until the
@@ -268,47 +278,115 @@ pub enum PageAction {
 /// completely. The poll interval must not set the page rate: at most one
 /// trigger per `min_repage_secs` (the configured publishing cadence), and
 /// exactly one resolve when the condition clears.
+///
+/// # Deliver first, commit second
+///
+/// [`on_firing`](Self::on_firing) and [`on_clear`](Self::on_clear) take `&self`
+/// and only *decide*. State moves in [`on_page_result`](Self::on_page_result),
+/// and only when the dispatcher returned `Ok(())`. The previous shape stamped
+/// `last_paged_at` before any I/O and the caller merely logged the dispatch
+/// error, so a single transient non-2xx silenced the page for a whole
+/// `expected_cadence_secs` — 86 400 s on the committed staging profile,
+/// including the `no_baseline` page whose entire job is to say the monitor is
+/// blind.
 #[derive(Debug, Clone)]
 pub struct AlertPager {
-    firing: bool,
-    last_paged_at: Option<i64>,
+    state: PagerState,
     min_repage_secs: u64,
+    /// Earliest time a retry may be attempted after a failed delivery. Never
+    /// persisted: a restart is itself a fresh attempt.
+    retry_not_before: Option<i64>,
 }
 
 impl AlertPager {
     /// `min_repage_secs` is the floor between two triggers for the same key.
     pub fn new(min_repage_secs: u64) -> Self {
+        Self::from_state(min_repage_secs, PagerState::default())
+    }
+
+    /// Reconstruct a pager over state restored from the database.
+    pub fn from_state(min_repage_secs: u64, state: PagerState) -> Self {
         Self {
-            firing: false,
-            last_paged_at: None,
+            state,
             min_repage_secs,
+            retry_not_before: None,
         }
     }
 
-    /// The condition is true right now.
-    pub fn on_firing(&mut self, now: i64) -> PageAction {
-        let due = match self.last_paged_at {
+    /// The durable state to persist.
+    pub fn state(&self) -> PagerState {
+        self.state
+    }
+
+    /// True while a delivered trigger is still unresolved.
+    pub fn is_firing(&self) -> bool {
+        self.state.firing
+    }
+
+    /// Seconds to wait after a failed delivery before trying again.
+    pub fn retry_floor_secs(&self) -> u64 {
+        self.min_repage_secs.min(RETRY_FLOOR_CEILING_SECS)
+    }
+
+    fn blocked_by_retry_floor(&self, now: i64) -> bool {
+        matches!(self.retry_not_before, Some(t) if now < t)
+    }
+
+    /// The condition is true right now — what should be sent? Pure.
+    pub fn on_firing(&self, now: i64) -> PageAction {
+        if self.blocked_by_retry_floor(now) {
+            return PageAction::None;
+        }
+        let due = match self.state.last_paged_at {
             None => true,
             Some(prev) => now.saturating_sub(prev) >= self.min_repage_secs as i64,
         };
-        self.firing = true;
         if due {
-            self.last_paged_at = Some(now);
             PageAction::Trigger
         } else {
             PageAction::None
         }
     }
 
-    /// The condition is false right now.
-    pub fn on_clear(&mut self) -> PageAction {
-        if self.firing {
-            self.firing = false;
-            self.last_paged_at = None;
+    /// The condition is false right now — what should be sent? Pure.
+    pub fn on_clear(&self, now: i64) -> PageAction {
+        if self.blocked_by_retry_floor(now) {
+            return PageAction::None;
+        }
+        if self.state.firing {
             PageAction::Resolve
         } else {
             PageAction::None
         }
+    }
+
+    /// Commit the outcome of dispatching `action`.
+    ///
+    /// Returns `true` when the durable [`PagerState`] changed and should be
+    /// persisted. On `ok == false` nothing is committed: the pager stays armed
+    /// and simply refuses to retry before the failure floor.
+    pub fn on_page_result(&mut self, now: i64, action: PageAction, ok: bool) -> bool {
+        if action == PageAction::None {
+            return false;
+        }
+        if !ok {
+            self.retry_not_before = Some(now.saturating_add(self.retry_floor_secs() as i64));
+            return false;
+        }
+        self.retry_not_before = None;
+        let before = self.state;
+        match action {
+            PageAction::Trigger => {
+                self.state.firing = true;
+                self.state.last_paged_at = Some(now);
+            }
+            PageAction::Resolve => {
+                self.state.firing = false;
+                self.state.last_paged_at = None;
+            }
+            PageAction::None => {}
+        }
+        self.state != before
     }
 }
 
@@ -360,12 +438,18 @@ mod tests {
         }
     }
 
+    /// Deliver `action` successfully and commit it, as the daemon does.
+    fn deliver(pager: &mut AlertPager, now: i64, action: PageAction) {
+        pager.on_page_result(now, action, true);
+    }
+
     #[test]
     fn the_poll_interval_does_not_set_the_page_rate() {
         // 12 s poll interval, 100 s minimum re-page: the second and third
         // cycles must send nothing at all.
         let mut pager = AlertPager::new(100);
         assert_eq!(pager.on_firing(1_000), PageAction::Trigger);
+        deliver(&mut pager, 1_000, PageAction::Trigger);
         assert_eq!(pager.on_firing(1_012), PageAction::None);
         assert_eq!(pager.on_firing(1_024), PageAction::None);
         assert_eq!(pager.on_firing(1_099), PageAction::None);
@@ -380,22 +464,145 @@ mod tests {
     fn anchoring_resolves_the_incident_exactly_once() {
         let mut pager = AlertPager::new(100);
         assert_eq!(
-            pager.on_clear(),
+            pager.on_clear(900),
             PageAction::None,
             "never fired, nothing to resolve"
         );
         assert_eq!(pager.on_firing(1_000), PageAction::Trigger);
-        assert_eq!(pager.on_clear(), PageAction::Resolve);
+        deliver(&mut pager, 1_000, PageAction::Trigger);
+        assert_eq!(pager.on_clear(1_001), PageAction::Resolve);
+        deliver(&mut pager, 1_001, PageAction::Resolve);
         assert_eq!(
-            pager.on_clear(),
+            pager.on_clear(1_002),
             PageAction::None,
             "resolve is not repeated"
         );
         assert_eq!(
-            pager.on_firing(1_001),
+            pager.on_firing(1_002),
             PageAction::Trigger,
             "a gap that re-opens after a resolve pages immediately"
         );
+    }
+
+    // ---- T08: deliver first, commit second ---------------------------------
+
+    #[test]
+    fn a_failed_trigger_dispatch_leaves_the_pager_armed() {
+        // Regression for the defect this test was written to reproduce: the old
+        // pager stamped `last_paged_at` inside `on_firing`, so ONE transient
+        // non-2xx silenced the page for a whole `min_repage_secs`.
+        let mut pager = AlertPager::new(86_400);
+        assert_eq!(pager.on_firing(1_000), PageAction::Trigger);
+        pager.on_page_result(1_000, PageAction::Trigger, false);
+
+        assert!(
+            !pager.is_firing(),
+            "an undelivered trigger must not be recorded as an open incident"
+        );
+        assert_eq!(
+            pager.state().last_paged_at,
+            None,
+            "nothing was delivered, so nothing may be committed"
+        );
+        assert_eq!(
+            pager.on_firing(1_000 + RETRY_FLOOR_CEILING_SECS as i64),
+            PageAction::Trigger,
+            "the retry is due one failure floor later, not one cadence later"
+        );
+    }
+
+    #[test]
+    fn a_hard_down_receiver_is_not_hammered_at_the_poll_rate() {
+        let mut pager = AlertPager::new(86_400);
+        assert_eq!(pager.retry_floor_secs(), RETRY_FLOOR_CEILING_SECS);
+        assert_eq!(pager.on_firing(1_000), PageAction::Trigger);
+        pager.on_page_result(1_000, PageAction::Trigger, false);
+        // The 12 s poll cycles inside the floor send nothing.
+        for t in [1_012, 1_024, 1_036, 1_048, 1_059] {
+            assert_eq!(
+                pager.on_firing(t),
+                PageAction::None,
+                "poll at {t} must be inside the failure floor"
+            );
+        }
+        assert_eq!(pager.on_firing(1_060), PageAction::Trigger);
+    }
+
+    #[test]
+    fn the_failure_floor_never_exceeds_the_repage_cadence() {
+        // A profile with a cadence shorter than the ceiling keeps its cadence.
+        assert_eq!(AlertPager::new(30).retry_floor_secs(), 30);
+        assert_eq!(AlertPager::new(0).retry_floor_secs(), 0);
+    }
+
+    #[test]
+    fn a_failed_resolve_is_retried_and_the_incident_stays_open() {
+        let mut pager = AlertPager::new(100);
+        deliver(&mut pager, 1_000, PageAction::Trigger);
+        assert_eq!(pager.on_clear(1_010), PageAction::Resolve);
+        pager.on_page_result(1_010, PageAction::Resolve, false);
+        assert!(
+            pager.is_firing(),
+            "an undelivered resolve must leave the incident open so it is retried"
+        );
+        assert_eq!(pager.on_clear(1_069), PageAction::None, "inside the floor");
+        assert_eq!(pager.on_clear(1_070), PageAction::Resolve);
+        deliver(&mut pager, 1_070, PageAction::Resolve);
+        assert!(!pager.is_firing());
+    }
+
+    #[test]
+    fn a_pager_reconstructed_over_restored_state_still_resolves() {
+        // The restart case: the process that delivered the trigger is gone.
+        let mut before = AlertPager::new(100);
+        assert_eq!(before.on_firing(1_000), PageAction::Trigger);
+        assert!(before.on_page_result(1_000, PageAction::Trigger, true));
+        let persisted = before.state();
+        assert_eq!(
+            persisted,
+            PagerState {
+                firing: true,
+                last_paged_at: Some(1_000)
+            }
+        );
+        let mut after_restart = AlertPager::from_state(100, persisted);
+        assert_eq!(
+            after_restart.on_clear(1_050),
+            PageAction::Resolve,
+            "a restart mid-incident must not lose the open incident"
+        );
+        assert!(after_restart.on_page_result(1_050, PageAction::Resolve, true));
+        assert_eq!(after_restart.state(), PagerState::default());
+    }
+
+    #[test]
+    fn a_restart_does_not_bypass_the_repage_floor() {
+        let restored = AlertPager::from_state(
+            100,
+            PagerState {
+                firing: true,
+                last_paged_at: Some(1_000),
+            },
+        );
+        assert_eq!(
+            restored.on_firing(1_050),
+            PageAction::None,
+            "the re-page floor is carried across the restart, not reset by it"
+        );
+        assert_eq!(restored.on_firing(1_100), PageAction::Trigger);
+    }
+
+    #[test]
+    fn committing_a_no_op_action_never_marks_state_dirty() {
+        let mut pager = AlertPager::new(100);
+        assert!(!pager.on_page_result(1_000, PageAction::None, true));
+        assert_eq!(pager.state(), PagerState::default());
+        deliver(&mut pager, 1_000, PageAction::Trigger);
+        assert!(
+            pager.on_page_result(1_100, PageAction::Trigger, true),
+            "a re-page moves last_paged_at, which is durable state"
+        );
+        assert_eq!(pager.state().last_paged_at, Some(1_100));
     }
 
     #[test]

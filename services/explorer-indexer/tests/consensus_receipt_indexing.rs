@@ -16,8 +16,13 @@
 //!      root are DELETED by `Db::delete_above_block`, rows at/below survive,
 //!      and a release that landed above the root is rolled back in place.
 //!
-//! All tests skip cleanly when Docker is not available (the shared
-//! `pg_fixture` convention).
+//! These tests do **not** skip when Docker is unavailable: the shared
+//! `pg_fixture` panics, naming the missing dependency. That is the convention
+//! (issue #1377) — a test that returns early because its fixture handed it
+//! `None` still reports as passed, so an absent dependency must red the job.
+//! The doc that used to stand here claimed the opposite and invited a
+//! maintainer to "restore" an `Option`-returning fixture, which would make
+//! every PG-backed indexer test green on a runner without Docker.
 
 mod common;
 

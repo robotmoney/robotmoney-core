@@ -17,11 +17,17 @@
 //! - [`watchdog`] — core polling loop and breach detection logic.
 //! - [`receipt_liveness`] — consensus-receipt anchoring-gap monitor (issue
 //!   #1247 task 4.13). Alert-only; it never pauses the gateway.
+//! - [`pager_state`] — durable per-incident pager state, so a restart mid-incident
+//!   still sends the matching resolve (task T08).
+//! - [`governance`] — standing `RouterGovernance.quorumThreshold()` floor check
+//!   (task T22, decision D16). Read-only; it never pauses the gateway.
 
 #![warn(missing_docs)]
 
 pub mod alert;
 pub mod config;
+pub mod governance;
+pub mod pager_state;
 pub mod pause;
 pub mod receipt_liveness;
 /// Dev-scout seam map for the off-chain scan-remediation phase (issue #994) —

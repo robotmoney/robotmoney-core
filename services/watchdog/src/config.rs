@@ -66,6 +66,7 @@ use std::fmt;
 use std::path::Path;
 use zeroize::Zeroizing;
 
+use crate::governance::QuorumMonitorConfig;
 use crate::pause::PauserSigningKey;
 use crate::receipt_liveness::ReceiptLivenessConfig;
 use crate::WatchdogError;
@@ -134,6 +135,11 @@ pub struct Config {
     /// Absent means disabled, so pre-existing configs keep parsing unchanged.
     #[serde(default)]
     pub consensus_receipts: ReceiptLivenessConfig,
+    /// Standing `RouterGovernance.quorumThreshold()` floor check (task T22,
+    /// decision D16). Absent means disabled, so pre-existing configs keep
+    /// parsing unchanged.
+    #[serde(default)]
+    pub governance: QuorumMonitorConfig,
 }
 
 /// Global per-block and per-hour mint/burn volume limits (USDC units, 6-decimal integer strings).
@@ -303,6 +309,10 @@ impl Config {
         // A zero receipt cadence would page on every poll; refuse it rather
         // than silently disable the control (issue #1247 task 4.13).
         self.consensus_receipts.validate()?;
+
+        // An enabled quorum-floor check with nowhere to read from would log an
+        // error every cycle and page never (task T22 / decision D16).
+        self.governance.validate()?;
 
         // Validate global thresholds.
         validate_threshold(
