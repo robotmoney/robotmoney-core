@@ -116,6 +116,29 @@ pub enum ReceiptError {
     #[error("ErrReceiptSchema: {0}")]
     ErrReceiptSchema(String),
 
+    /// The input was the publisher's envelope and the `canonicalBytes` it
+    /// claims are not the bytes core re-derives from the receipt object inside
+    /// it. Two producers that disagree about the preimage would anchor two
+    /// digests for one receipt, so this is a refusal and never a warning.
+    #[error(
+        "ErrReceiptCanonicalBytesMismatch: the envelope's canonicalBytes \
+         (keccak256 {published_digest}, {published_len} bytes) are not core's \
+         re-derivation (keccak256 {derived_digest}, {derived_len} bytes): {detail}"
+    )]
+    ErrReceiptCanonicalBytesMismatch {
+        /// keccak256 of the envelope's own `canonicalBytes`, 0x-prefixed.
+        published_digest: String,
+        /// Length in bytes of the envelope's own `canonicalBytes`.
+        published_len: usize,
+        /// keccak256 of core's re-derivation, 0x-prefixed.
+        derived_digest: String,
+        /// Length in bytes of core's re-derivation.
+        derived_len: usize,
+        /// First concrete difference, so an operator sees the divergence
+        /// without diffing two multi-kilobyte strings by hand.
+        detail: String,
+    },
+
     /// One `analyst_signatures[]` entry failed Ed25519 verification, or its key
     /// or signature could not be decoded.
     #[error("ErrReceiptSignatureInvalid: analyst_signatures[member_id={member_id}]: {reason}")]
@@ -134,6 +157,9 @@ impl ReceiptError {
         match self {
             ReceiptError::ErrReceiptParse(_) => "ErrReceiptParse",
             ReceiptError::ErrReceiptSchema(_) => "ErrReceiptSchema",
+            ReceiptError::ErrReceiptCanonicalBytesMismatch { .. } => {
+                "ErrReceiptCanonicalBytesMismatch"
+            }
             ReceiptError::ErrReceiptSignatureInvalid { .. } => "ErrReceiptSignatureInvalid",
         }
     }
@@ -150,6 +176,7 @@ impl ReceiptError {
 
 /// `quorum` — `["active","submitted","absent","participation_bps"]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Quorum {
     /// Active committee members at session time. At least 1.
     pub active: u64,
@@ -165,6 +192,7 @@ pub struct Quorum {
 /// `stances` — a FIXED FIVE-KEY object; the assembler zero-fills the stances
 /// the sparse rollup never set, so a short object is never emitted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Stances {
     /// Count of bearish takes.
     pub bearish: u64,
@@ -180,6 +208,7 @@ pub struct Stances {
 
 /// `judge.disagreements[].positions[]` — `["member_id","view"]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Position {
     /// The member this view is attributed to.
     pub member_id: String,
@@ -189,6 +218,7 @@ pub struct Position {
 
 /// `judge.disagreements[]` — `["topic","positions","what_settles"]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Disagreement {
     /// What the members disagree about.
     pub topic: String,
@@ -201,6 +231,7 @@ pub struct Disagreement {
 /// `judge.release_safety` —
 /// `["release","thinly_supported","take_count","min_takes","concerns"]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReleaseSafety {
     /// `"safe"` or `"hold"`. Advice only — nothing refuses to publish on hold.
     pub release: String,
@@ -216,6 +247,7 @@ pub struct ReleaseSafety {
 
 /// `judge` — `["rationale","disagreements","release_safety","source","mode"]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Judge {
     /// Judge-authored explanation. Never empty.
     pub rationale: String,
@@ -241,6 +273,7 @@ pub struct Judge {
 /// `analyst_signatures[]` —
 /// `["member_id","public_key","canonical_submission","signature","revision"]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnalystSignature {
     /// The signing member.
     pub member_id: String,
@@ -264,6 +297,7 @@ pub struct AnalystSignature {
 
 /// `weights[]` — `["bucket","weight_bps"]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BucketWeight {
     /// One of [`CANONICAL_BUCKET_ORDER`].
     pub bucket: String,
@@ -273,12 +307,20 @@ pub struct BucketWeight {
 
 /// A consensus recommendation receipt, schema 1.0.
 ///
-/// Unknown input fields are dropped rather than refused, matching the
-/// canonicalization contract's `evolution_rule` ("Unknown input fields are
-/// never serialized"). An explicit `"weights": null` IS refused — omitting the
-/// key and nulling it would otherwise canonicalize identically, which is the
-/// silently-omitted-key failure mode the contract exists to prevent.
+/// Unknown input fields are REFUSED, not dropped (decision R27), at every
+/// nesting level: `deny_unknown_fields` on this struct and on every struct it
+/// contains turns an unmodelled key into `ErrReceiptSchema` naming the key.
+/// Dropping it is what produced the rc.3 divergence — core hashed the
+/// remainder, the publisher hashed the whole, both exited 0 and the two repos
+/// anchored different digests for one receipt. The canonicalization contract's
+/// `evolution_rule` ("Unknown input fields are never serialized") is satisfied
+/// the strict way: they are never serialized because the receipt carrying them
+/// never parses. An explicit `"weights": null` IS refused for the same family
+/// of reasons — omitting the key and nulling it would otherwise canonicalize
+/// identically, which is the silently-omitted-key failure mode the contract
+/// exists to prevent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConsensusReceipt {
     /// Always [`SCHEMA_VERSION`] for this document.
     pub schema_version: String,
@@ -348,7 +390,13 @@ impl ConsensusReceipt {
     /// Parse a receipt from raw JSON bytes.
     ///
     /// A missing required field is an error here, never a silently omitted key
-    /// later. An explicit `"weights": null` is refused for the same reason.
+    /// later; so is an UNKNOWN field, at any nesting level. An explicit
+    /// `"weights": null` is refused for the same reason.
+    ///
+    /// When the input is the publisher's envelope and it carries
+    /// `canonicalBytes`, those bytes are compared against core's own
+    /// re-derivation and a difference is
+    /// [`ReceiptError::ErrReceiptCanonicalBytesMismatch`].
     pub fn from_json_slice(raw: &[u8]) -> Result<Self, ReceiptError> {
         let parsed: serde_json::Value = serde_json::from_slice(raw)
             .map_err(|e| ReceiptError::ErrReceiptParse(format!("not valid JSON: {e}")))?;
@@ -371,6 +419,16 @@ impl ConsensusReceipt {
         // Only an UNAMBIGUOUS envelope is unwrapped — a top level that is
         // itself a receipt always wins — so this can never silently pick the
         // wrong object.
+        //
+        // CROSS-CHECK THE PUBLISHER'S OWN `canonicalBytes` (T03 / R27).
+        // When the envelope carries the preimage it claims to have hashed, core
+        // re-derives the bytes from the receipt object and REFUSES on any
+        // difference. That is the one free cross-repo drift detector: it is the
+        // only place the two independent canonicalizers meet on the same input,
+        // and the rc.3 failure (core dropping `judge.mode` and
+        // `analyst_signatures[].revision`, hashing the remainder, exiting 0)
+        // would have been caught here even without `deny_unknown_fields`.
+        let mut published_canonical: Option<String> = None;
         let value = if parsed.get("schema_version").is_some() {
             parsed
         } else if parsed
@@ -378,6 +436,10 @@ impl ConsensusReceipt {
             .and_then(|r| r.get("schema_version"))
             .is_some()
         {
+            published_canonical = parsed
+                .get("canonicalBytes")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             parsed
                 .get("receipt")
                 .cloned()
@@ -394,8 +456,36 @@ impl ConsensusReceipt {
             ));
         }
 
-        serde_json::from_value(value)
-            .map_err(|e| ReceiptError::ErrReceiptParse(format!("not a schema-1.0 receipt: {e}")))
+        let receipt: Self = serde_json::from_value(value).map_err(|e| {
+            let msg = e.to_string();
+            // An unmodelled field is a SCHEMA refusal naming the key, not a
+            // parse failure: it is the exact shape of the rc.3 divergence, and
+            // `deny_unknown_fields` on every struct is what surfaces it.
+            if msg.starts_with("unknown field") {
+                ReceiptError::ErrReceiptSchema(format!(
+                    "{msg} — a field this schema does not model is REFUSED, never dropped: \
+                     dropping it would hash a different preimage than the publisher did \
+                     while both sides reported success"
+                ))
+            } else {
+                ReceiptError::ErrReceiptParse(format!("not a schema-1.0 receipt: {msg}"))
+            }
+        })?;
+
+        if let Some(published) = published_canonical {
+            let derived = receipt.canonical_bytes()?;
+            if published.as_bytes() != derived.as_slice() {
+                return Err(ReceiptError::ErrReceiptCanonicalBytesMismatch {
+                    published_digest: format!("{:?}", payload_digest(published.as_bytes())),
+                    published_len: published.len(),
+                    derived_digest: format!("{:?}", payload_digest(&derived)),
+                    derived_len: derived.len(),
+                    detail: first_difference(published.as_bytes(), &derived),
+                });
+            }
+        }
+
+        Ok(receipt)
     }
 
     /// Parse, validate and canonicalize in one step, returning the exact bytes
@@ -883,6 +973,34 @@ fn is_seconds_precision_utc(s: &str) -> bool {
         && hour <= 23
         && minute <= 59
         && second <= 59
+}
+
+/// Describe the first byte at which two canonical preimages differ, as a short
+/// bounded window around the offset. Bounded on purpose: a canonical receipt is
+/// kilobytes of embedded submissions and base64 signatures, and an error message
+/// is not a place to reprint them.
+fn first_difference(published: &[u8], derived: &[u8]) -> String {
+    let at = published
+        .iter()
+        .zip(derived.iter())
+        .position(|(a, b)| a != b);
+    match at {
+        Some(i) => {
+            let start = i.saturating_sub(24);
+            let end_p = (i + 24).min(published.len());
+            let end_d = (i + 24).min(derived.len());
+            format!(
+                "first difference at byte {i}: published {:?} vs derived {:?}",
+                String::from_utf8_lossy(&published[start..end_p]),
+                String::from_utf8_lossy(&derived[start..end_d]),
+            )
+        }
+        None => format!(
+            "one is a prefix of the other ({} vs {} bytes)",
+            published.len(),
+            derived.len()
+        ),
+    }
 }
 
 /// `^[A-Za-z0-9+/]{body}={pad}$` — standard padded base64 of a fixed-length

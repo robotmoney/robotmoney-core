@@ -1141,3 +1141,175 @@ fn the_anchor_call_targets_the_gateway_abi_not_the_receipt_contract() {
         "the test fixture must configure a real gateway address"
     );
 }
+
+// ─── T03: unknown fields are refused, and the publisher's canonicalBytes are
+//         cross-checked ───────────────────────────────────────────────────────
+//
+// Decision R27: an unknown field is a REFUSAL in every consumer, never a drop.
+// The rc.3 divergence is the proof of why: core dropped `judge.mode` and
+// `analyst_signatures[].revision`, hashed the remainder to 19148 bytes /
+// 0x0478984a…, the publisher hashed the whole to 19204 / 0x684d22a3…, and BOTH
+// sides exited 0. `--expected-digest` could not catch it because both sides of
+// that comparison derive the value from the same `rmpc verify`.
+//
+// Two independent controls are asserted below:
+//   1. `deny_unknown_fields` on `ConsensusReceipt` and every nested struct, so
+//      an unmodelled key at ANY nesting level is `ErrReceiptSchema` naming it;
+//   2. when the input is the publisher's envelope, `keccak256(canonicalBytes)`
+//      is compared against core's own re-derivation and a difference refuses.
+//
+// The last test is the deployability evidence for §12.7.5: the REAL receipt
+// this stack published in run 1 still parses, carries no unknown field, and
+// re-derives byte-for-byte to the `canonicalBytes` the publisher served — so
+// core can ship this change without the frontend and no live digest moves.
+
+/// The live envelope saved from the staged publisher in run 1
+/// (`GET /api/swarm/sessions/a31ecf60…/consensus-receipt`), committed verbatim.
+fn live_envelope() -> Vec<u8> {
+    fixture("consensus-receipt.live-envelope.json")
+}
+
+fn valid_receipt_json() -> serde_json::Value {
+    serde_json::from_slice(&fixture("consensus-receipt.valid.json")).expect("valid fixture is JSON")
+}
+
+/// Insert `field` into the object at `pointer` and assert the receipt is
+/// refused as `ErrReceiptSchema` naming that field.
+fn assert_unknown_field_refused(pointer: &str, field: &str) {
+    let mut value = valid_receipt_json();
+    let target = if pointer.is_empty() {
+        &mut value
+    } else {
+        value
+            .pointer_mut(pointer)
+            .unwrap_or_else(|| panic!("fixture has no node at {pointer:?}"))
+    };
+    target
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("node at {pointer:?} is not an object"))
+        .insert(field.to_string(), json!("additive"));
+
+    let raw = serde_json::to_vec(&value).expect("re-serializes");
+    let err = ConsensusReceipt::from_json_slice(&raw).expect_err(&format!(
+        "an unknown field at {pointer:?} must be REFUSED, never dropped — dropping it \
+         hashes a different preimage than the publisher while both sides report success"
+    ));
+    assert_eq!(
+        err.code(),
+        "ErrReceiptSchema",
+        "unknown field at {pointer:?} must surface as ErrReceiptSchema, got: {err}"
+    );
+    assert!(
+        err.to_string().contains(field),
+        "the error must NAME the offending key {field:?} at {pointer:?}, got: {err}"
+    );
+}
+
+#[test]
+fn unknown_top_level_field_is_refused_naming_the_key() {
+    assert_unknown_field_refused("", "settlement_hint");
+}
+
+#[test]
+fn unknown_nested_field_is_refused_at_every_nesting_level() {
+    // One key at each nesting level the canonicalization contract pins.
+    for (pointer, field) in [
+        ("/quorum", "eligible"),
+        ("/stances", "abstain"),
+        ("/judge", "confidence"),
+        ("/judge/release_safety", "severity"),
+        ("/judge/disagreements/0", "weight"),
+        ("/judge/disagreements/0/positions/0", "stance"),
+        ("/analyst_signatures/0", "signed_at"),
+        ("/weights/0", "target_bps"),
+    ] {
+        assert_unknown_field_refused(pointer, field);
+    }
+}
+
+#[test]
+fn unknown_field_inside_an_envelope_is_refused_too() {
+    // The envelope's OWN fields are not the receipt's, so the unwrap must not
+    // become a hole through which an unmodelled receipt key walks in.
+    let mut envelope: serde_json::Value =
+        serde_json::from_slice(&live_envelope()).expect("envelope is JSON");
+    envelope["receipt"]
+        .as_object_mut()
+        .expect("receipt is an object")
+        .insert("settlement_hint".to_string(), json!("additive"));
+    // Keep the claimed canonicalBytes consistent with the untouched fields, so
+    // the ONLY reason to refuse is the unknown key.
+    let raw = serde_json::to_vec(&envelope).expect("re-serializes");
+    let err = ConsensusReceipt::from_json_slice(&raw)
+        .expect_err("an unknown receipt field inside an envelope is still refused");
+    assert_eq!(err.code(), "ErrReceiptSchema", "got: {err}");
+    assert!(err.to_string().contains("settlement_hint"), "got: {err}");
+}
+
+#[test]
+fn envelope_canonical_bytes_that_disagree_with_core_are_refused() {
+    let mut envelope: serde_json::Value =
+        serde_json::from_slice(&live_envelope()).expect("envelope is JSON");
+    let published = envelope["canonicalBytes"]
+        .as_str()
+        .expect("the envelope carries canonicalBytes")
+        .to_string();
+    // Simulate the rc.3 shape: the publisher hashed a preimage carrying one
+    // more field than core would re-derive.
+    let tampered = published.replace(
+        r#""source":"model""#,
+        r#""source":"model","confidence":0.9"#,
+    );
+    assert_ne!(tampered, published, "the tamper must actually change bytes");
+    envelope["canonicalBytes"] = json!(tampered);
+
+    let raw = serde_json::to_vec(&envelope).expect("re-serializes");
+    let err = ConsensusReceipt::from_json_slice(&raw).expect_err(
+        "core must refuse an envelope whose claimed canonicalBytes are not its own \
+         re-derivation — that disagreement is two anchored digests for one receipt",
+    );
+    assert_eq!(
+        err.code(),
+        "ErrReceiptCanonicalBytesMismatch",
+        "got: {err}"
+    );
+    let text = err.to_string();
+    assert!(
+        text.contains("first difference at byte"),
+        "the error must locate the divergence, got: {text}"
+    );
+}
+
+#[test]
+fn the_live_run1_receipt_envelope_is_still_accepted_and_reproduces_its_published_bytes() {
+    let raw = live_envelope();
+    let envelope: serde_json::Value = serde_json::from_slice(&raw).expect("envelope is JSON");
+    let published = envelope["canonicalBytes"]
+        .as_str()
+        .expect("the envelope carries canonicalBytes");
+
+    // Accepted: the real published receipt carries NO unknown field at any
+    // nesting level, so `deny_unknown_fields` does not move a live digest.
+    let receipt = ConsensusReceipt::from_json_slice(&raw).unwrap_or_else(|e| {
+        panic!(
+            "the REAL receipt published by the staged frontend must still parse — \
+             a refusal here means deploying core alone breaks the live path: {e}"
+        )
+    });
+
+    let derived = receipt.canonical_bytes().expect("canonicalizes");
+    assert_eq!(
+        std::str::from_utf8(&derived).expect("utf-8"),
+        published,
+        "core's re-derivation must be byte-identical to the bytes the publisher served"
+    );
+    assert!(
+        derived.starts_with(DOMAIN_SEPARATOR.as_bytes()),
+        "the preimage is domain-separated by its own first line"
+    );
+    assert_eq!(
+        payload_digest(&derived),
+        payload_digest(published.as_bytes()),
+        "one receipt, one digest, on both sides of the repo boundary"
+    );
+}
