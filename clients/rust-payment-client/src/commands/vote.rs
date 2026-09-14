@@ -39,7 +39,8 @@ use crate::rpc::{CallRequest, FailoverRpcClient};
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
 use crate::tx::{
-    broadcast, build_eip1559, encode_signed, signing_hash, wait_for_receipt_with, Eip1559Inputs,
+    broadcast, build_eip1559, encode_signed, signing_hash, wait_for_successful_receipt,
+    Eip1559Inputs,
 };
 
 const EXIT_OK: i32 = 0;
@@ -428,8 +429,10 @@ pub fn run(args: Args) -> i32 {
     };
 
     let max_attempts = args.receipt_timeout_secs.min(u32::MAX as u64) as u32;
+    // T23: the revert check is the shared write seam's (see propose.rs).
     let receipt = match rt.block_on(async {
-        wait_for_receipt_with(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1)).await
+        wait_for_successful_receipt(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1))
+            .await
     }) {
         Ok(r) => r,
         Err(e) => {
@@ -444,20 +447,6 @@ pub fn run(args: Args) -> i32 {
             return EXIT_REFUSAL;
         }
     };
-
-    if !receipt.inner.status() {
-        emit_failure(
-            &VoteFailure {
-                ok: false,
-                error: "ErrTxReverted".to_string(),
-                message: Some(format!(
-                    "vote transaction reverted on-chain (tx_hash={tx_hash:#x})"
-                )),
-            },
-            args.pretty,
-        );
-        return EXIT_REFUSAL;
-    }
 
     let block_number = receipt.block_number.unwrap_or(0);
     emit(

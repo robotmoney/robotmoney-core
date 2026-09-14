@@ -119,6 +119,46 @@ pub fn encode_signed(tx: TxEip1559, signature: Signature) -> Bytes {
 /// the right entry point for tx-envelope signing. The MVP signer
 /// surface for envelope signing is added by the deposit issue (#16);
 /// this helper is the test seam used in the meantime.
+/// THE SHARED WRITE SEAM: wait for the receipt, and refuse a reverted one.
+///
+/// **A MINED TRANSACTION IS NOT A SUCCESSFUL ONE.** Every role-gated call in
+/// this client — `consensusRecordReceipt`, `consensusVoteSubmit`, the committee
+/// register call, `RouterGovernance.propose`, the governance vote — is accepted
+/// by the node, mined into a block, and reverted by the EVM when the caller
+/// lacks the role. The receipt exists; `status` is 0; no event log is emitted;
+/// nothing changed on chain. A command that reports `{"ok":true, tx_hash,
+/// block_number}` for that has told an operator their write landed when it did
+/// not, which is the "transaction failure is silent" condition
+/// `project-fusion.md` AC-CORE-09 forbids.
+///
+/// **WHY THIS IS A SEAM AND NOT A FIFTH COPY.** `WriteSession::submit` enforced
+/// this centrally while five commands polled `wait_for_receipt_with` directly
+/// and hand-rolled their own `if !receipt.inner.status()` — except that two of
+/// them (`committee register`, `committee vote-submit`) never wrote one, and
+/// commit `1854fe6e` fixed the anchoring path by adding a SIXTH copy rather than
+/// moving the check. The structural cause of §E.4 is that the helper everything
+/// went through documented in its own doc comment that it deliberately did not
+/// check status. It does now, here, once.
+///
+/// [`wait_for_receipt_with`] stays status-neutral for the readers that legitimately
+/// want a reverted receipt — `rmpc get-tx` reports `status` as data, and
+/// `WriteSession::submit` catches [`RmpcError::ErrTxReverted`] to finalize its
+/// replay-cache entry before re-raising.
+pub async fn wait_for_successful_receipt(
+    rpc: &FailoverRpcClient,
+    tx_hash: B256,
+    interval: std::time::Duration,
+    max_attempts: u32,
+) -> Result<TransactionReceipt> {
+    let receipt = wait_for_receipt_with(rpc, tx_hash, interval, max_attempts).await?;
+    if !receipt.inner.status() {
+        return Err(RmpcError::ErrTxReverted {
+            tx_hash: format!("{tx_hash:#x}"),
+        });
+    }
+    Ok(receipt)
+}
+
 #[cfg(test)]
 pub(crate) fn sign_eip1559_with_key(
     tx: TxEip1559,
