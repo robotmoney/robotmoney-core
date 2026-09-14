@@ -16,6 +16,7 @@ import {
   ConsensusReceiptApiClient,
   parseVaultAddressMap,
   payloadSignatureCount,
+  unwrapReceiptPayload,
   type ReceiptPayload,
 } from "../../src/lib/consensusReceiptApi";
 
@@ -159,6 +160,55 @@ describe("payloadSignatureCount", () => {
 
   it("returns null rather than 0 when the payload is unavailable", () => {
     expect(payloadSignatureCount(null)).toBeNull();
+  });
+});
+
+describe("unwrapReceiptPayload", () => {
+  // robotmoney-frontend's public route serves the receipt inside a read-time
+  // verification envelope. Read as a bare receipt it carries no
+  // `analyst_signatures` and no `weights`, so the panel said the payload
+  // "could not be fetched" for a payload it had just fetched (HTTP 200) and
+  // withheld the applied/not-applied answer. Both consumers on the core side
+  // (rmpc, the explorer indexer) already unwrap it; this is the third.
+  const ENVELOPE = {
+    sessionId: PAYLOAD.session_id,
+    subjectId: PAYLOAD.subject_id,
+    schemaVersion: PAYLOAD.schema_version,
+    publishedAt: "2026-09-14T00:00:00.000Z",
+    receipt: PAYLOAD,
+    canonicalBytes: "robotmoney:consensus-receipt:v1\n{}\n",
+    verified: true,
+    signatures: [],
+    unverifiedReasons: [],
+  };
+
+  it("unwraps the frontend's verification envelope to the receipt it carries", () => {
+    expect(unwrapReceiptPayload(ENVELOPE)).toEqual(PAYLOAD);
+    expect(payloadSignatureCount(unwrapReceiptPayload(ENVELOPE))).toBe(2);
+  });
+
+  it("passes a bare receipt through unchanged", () => {
+    expect(unwrapReceiptPayload(PAYLOAD)).toEqual(PAYLOAD);
+  });
+
+  it("prefers a top level that is itself a receipt, so the wrong object is never picked", () => {
+    const ambiguous = { ...PAYLOAD, receipt: { ...PAYLOAD, subject_id: "not-this-one" } };
+    expect(unwrapReceiptPayload(ambiguous)?.subject_id).toBe(PAYLOAD.subject_id);
+  });
+
+  it("returns null for a body that is neither, rather than a zero signature count", () => {
+    expect(unwrapReceiptPayload({ error: "no consensus receipt published" })).toBeNull();
+    expect(unwrapReceiptPayload(null)).toBeNull();
+    expect(unwrapReceiptPayload("nope")).toBeNull();
+  });
+
+  it("fetchPayload unwraps the envelope end to end", async () => {
+    const client = new ConsensusReceiptApiClient("https://api.test", (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ENVELOPE,
+    })) as never);
+    await expect(client.fetchPayload("https://rm.test/receipt")).resolves.toEqual(PAYLOAD);
   });
 });
 
