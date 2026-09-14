@@ -1,0 +1,77 @@
+# Canonical: project-fusion.md §12 AC-FMT-01 · fusion-qa-plan-checklist.md §9A R4, T24
+#
+# WHY THIS WORKFLOW EXISTS
+# The nine (now eleven) consensus-receipt fixtures in tests/fixtures/ must stay
+# byte-identical to contract/src/__fixtures__/ in robotmoney-frontend. Until now
+# the only thing checking that was check_consensus_receipt_schema.py, which
+# re-hashes the fixtures against a manifest authored IN THIS REPO. That is
+# self-referential: at v0.4.0-rc.3 eight of the nine had drifted away from the
+# frontend and the check exited 0 with
+# "ok: all 9 cross-repo shared fixtures reproduce their committed sha256"
+# (fusion-evidence/20260913T-run1/phase3/3.1-core-ci-fixture-check-GREEN-while-drifted.txt).
+# Editing a fixture and its own manifest row in one commit is green by
+# construction, and that false green is how core came to drop two fields the
+# frontend required (C-16).
+#
+# WHAT IS DIFFERENT HERE
+# check_cross_repo_fixture_drift.py compares the same bytes against
+# shared-fixtures/vendored/robotmoney-frontend.manifest.json — generated from
+# the OTHER repo's fixture bytes at a pinned commit recorded inside it. A
+# one-sided edit cannot be green, because the vendored row can only move by
+# re-vendoring from robotmoney-frontend at a new pinned commit.
+#
+# WHY A NEW FILE RATHER THAN AN EDIT
+# Existing workflow files are frozen for the Fusion acceptance run
+# (fusion-qa-plan-checklist.md §4). Adding one is allowed; editing one is not.
+#
+# WHY THE NEGATIVE SELF-TEST RUNS IN CI TOO (C-21)
+# A green harness is not evidence until the harness itself has been attacked.
+# test_cross_repo_fixture_drift.sh reconstructs the real v0.4.0-rc.3 drifted
+# state out of the tag and requires the check to FAIL on it, so a check that
+# silently stops asserting anything fails this job rather than passing it.
+# It needs full history and tags, hence fetch-depth: 0.
+
+name: fusion-cross-repo-drift
+
+on:
+  push:
+    branches:
+      - 'releases*'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - 'releases*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fusion-cross-repo-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cross-repo-fixture-drift:
+    # CI_CLASS: correctness — deterministic, no network, no secrets.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out with full history and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cross-repo shared-fixture drift vs the vendored frontend manifest
+        run: python3 .github/scripts/check_cross_repo_fixture_drift.py
+
+      - name: Negative self-test — the check must FAIL on the v0.4.0-rc.3 drifted state
+        run: .github/scripts/test_cross_repo_fixture_drift.sh
+
+      - name: Envelope-unwrap rule, driven by the shared envelope fixture (T24)
+        run: scripts/fusion/tests/run-tests.sh
