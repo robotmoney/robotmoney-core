@@ -128,11 +128,14 @@ contract DeployRouterGovernanceDefaultsTest is Test {
         script.runInProcessWith(admin, address(router), period, delay, 1);
     }
 
-    /// @notice The contract's own `MIN_QUORUM_THRESHOLD` is `1`, which is why
-    ///         the deploy floor has to be stricter than the constructor's. This
-    ///         test fails loudly if someone later "simplifies" by deleting the
-    ///         script guard in favour of the constructor check.
-    function test_theContractMinimumAloneWouldNotSatisfyTheCriterion() public {
+    /// @notice The contract floor and the deploy default now agree (T22 /
+    ///         D16: `MIN_QUORUM_THRESHOLD` was raised from 1 to 2). The script
+    ///         guard is kept anyway — it refuses BEFORE spending gas on a
+    ///         deployment and gives the operator a sentence instead of a
+    ///         four-byte selector — but it is no longer the only thing standing
+    ///         between the topology and a hollow quorum. This test fails loudly
+    ///         if the two ever drift apart in the weaker direction.
+    function test_theDeployDefaultIsNotBelowTheContractFloor() public {
         DeployRouterGovernance.Deployed memory d = script.runInProcessWith(
             admin,
             address(router),
@@ -140,11 +143,22 @@ contract DeployRouterGovernanceDefaultsTest is Test {
             script.DEFAULT_EXECUTION_DELAY(),
             script.DEFAULT_QUORUM_THRESHOLD()
         );
-        assertEq(d.governance.MIN_QUORUM_THRESHOLD(), 1);
-        assertGt(
+        assertEq(d.governance.MIN_QUORUM_THRESHOLD(), 2, "contract floor is no longer 2 (D16)");
+        assertGe(
             script.DEFAULT_QUORUM_THRESHOLD(),
             d.governance.MIN_QUORUM_THRESHOLD(),
-            "the deploy default must be stricter than the constructor floor"
+            "the deploy default must never be below the constructor floor"
         );
+    }
+
+    /// @notice The constructor now refuses a quorum of 1 on its own, so the
+    ///         guarantee survives a caller that bypasses this script entirely.
+    function test_theContractItselfRefusesAQuorumOfOne() public {
+        // Read the defaults BEFORE arming expectRevert — they are external
+        // calls on `script` and the cheatcode applies to the next call it sees.
+        uint64 period = script.DEFAULT_VOTING_PERIOD();
+        uint64 delay = script.DEFAULT_EXECUTION_DELAY();
+        vm.expectRevert(RouterGovernance.QuorumBelowMinimum.selector);
+        new RouterGovernance(address(router), admin, period, delay, 1);
     }
 }

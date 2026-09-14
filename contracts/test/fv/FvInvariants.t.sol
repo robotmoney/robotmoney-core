@@ -576,7 +576,7 @@ contract FvInvariantsTest is Test {
         // Stand up governance and hand it ADMIN_ROLE on the router so propose →
         // execute → setWeights is the only weight-setting path.
         RouterGovernance gov =
-            new RouterGovernance(address(router), address(this), 1 hours, 1 hours, 1);
+            new RouterGovernance(address(router), address(this), 1 hours, 1 hours, 2);
         router.grantRole(router.ADMIN_ROLE(), address(gov));
 
         address[] memory vaults = new address[](1);
