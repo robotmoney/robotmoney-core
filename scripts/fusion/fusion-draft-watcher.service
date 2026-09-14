@@ -1,0 +1,51 @@
+# systemd supervisor for scripts/fusion/watch-released-drafts.sh.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# AC-GOV-01's PASS rests on "the persistent watcher". A loop is only persistent
+# if something restarts it: the script defends itself against a failed chain
+# read, but a process can still die for reasons it cannot catch (OOM, a node
+# reboot, an unhandled signal), and until this unit existed the runbook's
+# restart column presumed a restarter that did not exist. Restart=always plus a
+# rate limit that never gives up is the whole point — StartLimitIntervalSec=0
+# is deliberate, because a watcher that stops retrying after five crashes is a
+# watcher that is silently off.
+#
+# Install: see docs/operations/fusion-draft-watcher.md.
+[Unit]
+Description=Fusion released-receipt draft watcher (read-only)
+Documentation=file:///opt/fusion/docs/operations/fusion-draft-watcher.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Every FUSION_* setting lives in the environment file, never on argv: argv is
+# world-readable through /proc, and this keeps the unit identical across hosts.
+EnvironmentFile=/etc/fusion/draft-watcher.env
+ExecStart=/opt/fusion/scripts/fusion/watch-released-drafts.sh
+Restart=always
+RestartSec=10s
+# A crash loop must be visible, not just survivable.
+OnFailure=fusion-draft-watcher-failed.service
+
+User=fusion
+Group=fusion
+# The cursor, the quarantine file and the per-cycle result document are the
+# watcher's durable state; everything else can be read-only.
+StateDirectory=fusion-draft-watcher
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+# This process never signs and never writes to the chain.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=512M
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fusion-draft-watcher
+
+[Install]
+WantedBy=multi-user.target

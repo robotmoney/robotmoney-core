@@ -259,21 +259,49 @@ key on argv, and none of them signs a governance proposal.
 | Script | What it does | Idempotency / restart rule |
 |---|---|---|
 | `submit-receipt-worker.sh` | Verifies the receipt, then retries submission until the **exact** `(receiptId, payloadDigest)` pair is readable on chain. | Re-reads the chain before and after every attempt. An already-anchored id with the same digest exits `0` without broadcasting; an already-anchored id with a *different* digest is fatal and is never overwritten. |
-| `watch-released-drafts.sh` | Polls `ReceiptReleased` behind `FUSION_CONFIRMATIONS` and emits a human-review-only draft per released receipt. | The block cursor is a durable file, written atomically and advanced **only** after a whole confirmed range scanned successfully. A crash mid-range rescans it; drafts are read-only JSON, so a rescan costs nothing. |
+| `watch-released-drafts.sh` | Polls `ReceiptReleased` behind `FUSION_CONFIRMATIONS` and emits a human-review-only draft per released receipt. | The block cursor is a durable file, written atomically and advanced **only** after a whole confirmed range was actually examined. A crash mid-range rescans it; drafts are read-only JSON, so a rescan costs nothing. **Restarted by `scripts/fusion/fusion-draft-watcher.service`** (`Restart=always`, `StartLimitIntervalSec=0`, `OnFailure=` pages `fusion_draft_watcher_process_down`); install per `docs/operations/fusion-draft-watcher.md`. |
 | `cross-repo-acceptance.sh` | The AC-E2E-05 seam: consumes a *frontend-generated* receipt, verifies the **public URL** and the local bytes and proves they agree, submits, releases, drafts, and asserts INV-4. | Reads `RouterGovernance.currentProposalId()`, `PortfolioRouter.getWeights()` and every mapped vault's `totalAssets()` before and after and fails if any moved. |
 | `devnet-acceptance.sh` | The AC-E2E-05 **run**: takes one frontend receipt URL and drives `verify → negative → record → index → release → dapp → govern`, writing a machine-readable result file. Exits non-zero on any failed assertion. | Stage selection is explicit (`--stages`, `--no-anchor`). An unselected stage is written to the result as `SKIP` and is never counted as a pass; an unknown stage name and a missing witness address both refuse to start. |
 
-**Poison cannot wedge the watcher.** One receipt in the confirmed range that can
-never be drafted — 404 payload URL, tampered bytes, a receipt id that does not
-derive from the bytes — used to fail the whole scan, so the cursor never
-advanced, the rescanned range grew without bound and every later release went
-undrafted with nothing alerting. Three defences now apply, in order: scan mode
-reports per-receipt content refusals as `"refused"` entries inside the range
-result and exits `0`; an `EXIT_REFUSAL` (2) that reaches the shell anyway writes
-the range to `$FUSION_DRAFT_QUARANTINE` and advances the cursor past it; and a
-cursor that has not moved for `FUSION_STALL_ALERT_CYCLES` cycles pages, with the
-scan window capped at `FUSION_MAX_SCAN_BLOCKS`. Only exit `3` (startup /
-transport) holds the cursor, which is where holding is the correct response.
+**Poison cannot wedge the watcher, and a blip cannot skip a release.** These
+are two different failures with opposite fixes, and the split between them is
+the *cause* of the refusal.
+
+A **content** refusal — tampered bytes, a digest that does not equal the
+anchored `payloadDigest`, a receipt id that does not derive from the bytes, an
+invalid analyst signature, no eligible vault — is a property of that receipt
+and reproduces forever. Scan mode reports it as a `"refused"` entry inside the
+range result and exits `0`. The watcher reads `.drafts[]` with `jq`, appends
+each refused `receipt_id`/error to `$FUSION_DRAFT_QUARANTINE`, pages
+`fusion_draft_watcher_refused_receipt`, and **only then** advances the cursor:
+once the cursor has moved that receipt is never looked at again, so the record
+has to be written first. An `EXIT_REFUSAL` (2) that reaches the shell anyway is
+quarantined the same way.
+
+A **transport** refusal — an unreachable payload URL, an unreadable file, an
+RPC that is down — is a property of the moment, and the receipts behind it were
+never examined at all. `rmpc` exits non-zero for those (after a bounded retry
+with backoff on the payload GET), and the cursor is **held** and the range
+retried. Absorbing them was the shipped defect: one 503 or one 10 s timeout
+permanently un-drafted a released receipt, and because the cursor advanced,
+`stalled_cycles` reset and the stall alert could not fire either.
+
+A cursor that has not moved for `FUSION_STALL_ALERT_CYCLES` cycles pages, with
+the scan window capped at `FUSION_MAX_SCAN_BLOCKS`. A failed `cast block-number`
+is handled as a transport failure too — guarded, shape-checked, counted and
+retried — rather than killing the loop under `set -euo pipefail` with no alert
+at all, and every cycle's draft result is persisted to `$FUSION_DRAFT_RESULT`.
+
+**The draft is bound to the on-chain commitment.** `draft-proposal` reads the
+anchored tuple with `getReceiptById`, fetches the bytes from the **anchored
+`payloadUri`** (a `--receipt-url` that disagrees is refused, not preferred),
+and refuses unless `keccak256(canonical_bytes) == payloadDigest` and every
+analyst signature verifies — the same checks `rmpc receipt submit` runs before
+anchoring. Without that comparison a weights-only edit of the published receipt
+produced an identical `receipt_id`, signatures still `verified:true`, and a
+`ready_for_review` draft whose calldata moved the treasury wherever the editor
+chose: `receipt_id` is `keccak256(sep + session_id + subject_id)` and `weights`
+is not in that preimage.
 
 **The submitter distinguishes "no anchor" from "cannot read the chain."** The
 read RPC is a different endpoint from the write path's failover client, so those

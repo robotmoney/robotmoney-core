@@ -536,13 +536,21 @@ if have_stage govern; then
       --receipt-file "$WORK/receipt.json" >"$WORK/draft.json" 2>&1
     drc=$?
     keep "governance-draft.json" "$(cat "$WORK/draft.json")"
-    # ASSERT ON THE ENVELOPE, NOT ON THE EXIT CODE. `rmpc governance
-    # draft-proposal` deliberately EXITS 0 while reporting `{"ok":false, …}` for
-    # a per-receipt content refusal, so that one undraftable receipt cannot wedge
-    # the range scan the draft watcher runs (see watch-released-drafts.sh). That
-    # is correct there and a trap here: checking `$?` alone would have reported
-    # `{"ok":false,"error":"ErrReceiptNotReleased"}` as a PASS. Measured against
-    # the rc.1 stand-in during QA step 3.8, which is how this was found.
+    # ASSERT ON THE ENVELOPE, NOT ON THE EXIT CODE.
+    #
+    # In SCAN mode (`--from-block`, what the draft watcher runs) `rmpc
+    # governance draft-proposal` exits 0 for the range while reporting each
+    # undraftable receipt as a `"refused"` entry inside `.drafts[]`, so one
+    # poison receipt cannot wedge the cursor; the watcher reads those entries
+    # rather than the exit code (see watch-released-drafts.sh). In
+    # SINGLE-RECEIPT mode, which is what this stage uses, a content refusal
+    # exits 2 and a transport/RPC failure exits 3.
+    #
+    # Neither shape may be read from `$?` alone here: an ok:false envelope with
+    # a zero exit was measured against the rc.1 stand-in during QA step 3.8,
+    # which is how this was found, and the exit codes are the producer's
+    # contract rather than this script's. Both are therefore checked — the exit
+    # code AND `.ok`.
     { (( drc == 0 )) && jq -e '.ok == true' "$WORK/draft.json" >/dev/null 2>&1; }
     expect govern "AC-GOV-01 release produces a governance handoff result" $? \
       "exit $drc; $(head -c 400 "$WORK/draft.json")"
