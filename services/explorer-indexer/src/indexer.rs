@@ -1357,8 +1357,44 @@ async fn fetch_and_verify_payload(
         ));
     }
 
-    let actual = alloy_primitives::keccak256(&body);
-    Ok((actual.0 == expected_digest, body.len() as i64))
+    // TWO ADMISSIBLE PREIMAGES, IN THIS ORDER, AND NEVER A THIRD.
+    //
+    // 1. The served bytes themselves. This is the literal reading of the
+    //    commitment and stays the first thing tried, so a `payload_uri` that
+    //    serves the exact canonical bytes is verified without parsing anything.
+    //
+    // 2. The canonical bytes RE-DERIVED from the served JSON by the same parser
+    //    and canonicalizer `rmpc` uses (`ConsensusReceipt::from_json_slice` ->
+    //    `canonical_bytes()`), which also unwraps an unambiguous envelope.
+    //    robotmoney-frontend's public route serves that envelope
+    //    (`{sessionId, …, receipt, canonicalBytes, verified, …}`), so its
+    //    keccak256 is NOT the anchored digest even though the receipt inside is
+    //    exactly the anchored object. Without this branch the indexer stores
+    //    `verified = false` PERMANENTLY for every real frontend receipt — on the
+    //    first scan, with no retry — while `rmpc` (which was taught the same
+    //    unwrap at af878e46) reports the anchor as correct. That split would let
+    //    the explorer call a correctly anchored receipt unverified for ever.
+    //
+    // This can never accept a wrong digest: the comparison is still against the
+    // on-chain `expected_digest`, the canonicalization is deterministic, and the
+    // re-derivation reads only the receipt object — never the envelope's own
+    // `canonicalBytes` or `verified` fields, which are the server's claims and
+    // are deliberately not trusted here.
+    if alloy_primitives::keccak256(&body).0 == expected_digest {
+        return Ok((true, body.len() as i64));
+    }
+
+    match rust_payment_client::consensus_receipt::ConsensusReceipt::canonical_bytes_from_json_slice(
+        &body,
+    ) {
+        Ok(canonical) => Ok((
+            alloy_primitives::keccak256(&canonical).0 == expected_digest,
+            body.len() as i64,
+        )),
+        // Not parseable as a schema-1.0 receipt (or an envelope carrying one)
+        // and not a byte match either: unverified, and the row still stores.
+        Err(_) => Ok((false, body.len() as i64)),
+    }
 }
 
 /// Fetch the JSON memo from `rationale_uri` and verify its keccak256 against

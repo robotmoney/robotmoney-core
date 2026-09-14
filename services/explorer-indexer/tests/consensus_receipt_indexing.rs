@@ -325,6 +325,176 @@ async fn receipt_recorded_creates_row_with_digest_verified() {
     assert_eq!(row.12, None, "released_at must be NULL before release");
 }
 
+// --- AC-CORE-07 / AC-E2E-02: the published URL serves an ENVELOPE ------------
+
+/// THE URL THAT GETS ANCHORED DOES NOT SERVE THE BYTES THAT GET ANCHORED.
+///
+/// robotmoney-frontend's public, read-time-verifying route answers
+/// `{sessionId, subjectId, schemaVersion, publishedAt, receipt, canonicalBytes,
+///   verified, signatures, unverifiedReasons}`. The anchored `payloadDigest` is
+/// keccak256 of the CANONICAL BYTES of the `receipt` field, which is not
+/// keccak256 of the served body. `rmpc` was taught to unwrap that envelope at
+/// af878e46 so it could verify before submitting; the indexer was not, so it
+/// recomputed keccak256 over the envelope, missed, and stored
+/// `verified = false` -- permanently, because verification happens once on the
+/// first scan of `ReceiptRecorded` and is never retried.
+///
+/// This test serves the real envelope shape around the repo's own committed
+/// `consensus-receipt.valid.json` and anchors that receipt's canonical digest.
+/// Without the canonicalizing fallback in `fetch_and_verify_payload` it fails on
+/// the final assertion with `verified = false`.
+#[tokio::test]
+async fn receipt_recorded_verifies_when_the_url_serves_the_frontend_envelope() {
+    let fx = pg_fixture().await;
+
+    let fixture_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/consensus-receipt.valid.json"
+    );
+    let receipt_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture_path).unwrap()).unwrap();
+
+    // The digest is derived from the RECEIPT, exactly as the submitter derives it.
+    let canonical =
+        rust_payment_client::consensus_receipt::ConsensusReceipt::canonical_bytes_from_json_slice(
+            &serde_json::to_vec(&receipt_json).unwrap(),
+        )
+        .expect("the committed valid fixture must canonicalize");
+    let digest = alloy_primitives::keccak256(&canonical);
+
+    // The envelope the public route actually serves.
+    let envelope = serde_json::json!({
+        "sessionId": receipt_json["session_id"],
+        "subjectId": receipt_json["subject_id"],
+        "schemaVersion": receipt_json["schema_version"],
+        "publishedAt": "2026-09-14T00:00:00.000Z",
+        "receipt": receipt_json,
+        "canonicalBytes": String::from_utf8(canonical.clone()).unwrap(),
+        "verified": true,
+        "signatures": [],
+        "unverifiedReasons": [],
+    });
+    let served = serde_json::to_vec(&envelope).unwrap();
+
+    // The defect this test exists for: the served body is NOT the preimage.
+    assert_ne!(
+        alloy_primitives::keccak256(&served).0,
+        digest.0,
+        "the envelope must not hash to the anchored digest, or this test proves nothing"
+    );
+
+    let srv = PayloadServer::start(served.clone()).await;
+
+    let receipt_id = [0x9fu8; 32];
+    let tx: [u8; 32] = [0x0f; 32];
+    let rec_log = encode_receipt_recorded_log(
+        receipt_addr(),
+        receipt_id,
+        submitter_addr(),
+        0,
+        digest.0,
+        &srv.url,
+        1_700_000_500,
+        10,
+        tx,
+        0,
+    );
+
+    let stub = StubRpcServer::start().await;
+    program_stub(&stub, 10, 0xaa, 0x00);
+    stub.set("eth_getLogs", serde_json::json!([rec_log]));
+
+    let rpc = JsonRpc::new(&stub.url);
+    let outcome = run_once(&fx.db, &rpc, &base_cfg(10)).await.unwrap();
+    assert!(
+        outcome.error.is_none(),
+        "indexer error: {:?}",
+        outcome.error
+    );
+
+    let (verified, bytes): (bool, Option<i64>) = sqlx::query_as(
+        "SELECT verified, payload_bytes FROM consensus_receipts \
+         WHERE chain_id = $1 AND receipt_id = $2",
+    )
+    .bind(CHAIN)
+    .bind(&receipt_id[..])
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+
+    assert!(
+        verified,
+        "the indexer must re-derive the canonical bytes from the envelope's receipt \
+         and reproduce the anchored digest"
+    );
+    assert_eq!(
+        bytes,
+        Some(served.len() as i64),
+        "payload_bytes records the fetched body length, envelope included"
+    );
+}
+
+/// The fallback must not become a blanket pass: a body that parses as a receipt
+/// but canonicalizes to something else is still unverified.
+#[tokio::test]
+async fn receipt_recorded_envelope_with_the_wrong_receipt_stays_unverified() {
+    let fx = pg_fixture().await;
+
+    let fixture_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/consensus-receipt.valid.json"
+    );
+    let mut receipt_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture_path).unwrap()).unwrap();
+    let honest =
+        rust_payment_client::consensus_receipt::ConsensusReceipt::canonical_bytes_from_json_slice(
+            &serde_json::to_vec(&receipt_json).unwrap(),
+        )
+        .unwrap();
+    let anchored = alloy_primitives::keccak256(&honest);
+
+    // One field changed after the digest was anchored.
+    receipt_json["judge"]["rationale"] =
+        serde_json::Value::String("a different opinion entirely".to_string());
+    let envelope = serde_json::json!({ "receipt": receipt_json });
+    let srv = PayloadServer::start(serde_json::to_vec(&envelope).unwrap()).await;
+
+    let receipt_id = [0x9eu8; 32];
+    let rec_log = encode_receipt_recorded_log(
+        receipt_addr(),
+        receipt_id,
+        submitter_addr(),
+        0,
+        anchored.0,
+        &srv.url,
+        1_700_000_600,
+        10,
+        [0x0e; 32],
+        0,
+    );
+
+    let stub = StubRpcServer::start().await;
+    program_stub(&stub, 10, 0xaa, 0x00);
+    stub.set("eth_getLogs", serde_json::json!([rec_log]));
+
+    let rpc = JsonRpc::new(&stub.url);
+    run_once(&fx.db, &rpc, &base_cfg(10)).await.unwrap();
+
+    let (verified,): (bool,) = sqlx::query_as(
+        "SELECT verified FROM consensus_receipts WHERE chain_id = $1 AND receipt_id = $2",
+    )
+    .bind(CHAIN)
+    .bind(&receipt_id[..])
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+
+    assert!(
+        !verified,
+        "a tampered receipt inside a well-formed envelope must stay unverified"
+    );
+}
+
 // ─── AC-3: digest mismatch stores the row with verified = false ──────────────
 
 #[tokio::test]
