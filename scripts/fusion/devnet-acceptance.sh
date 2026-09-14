@@ -433,13 +433,31 @@ if have_stage release; then
       "needs FUSION_RELEASE_KEYSTORE, FUSION_RELEASE_PASSWORD_FILE, FUSION_RELEASE_ADDRESS \
 and a recorded receipt"
   else
-    "$CAST_BIN" send "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$RECEIPT_ID" \
-      --rpc-url "$FUSION_RPC_URL" --keystore "$FUSION_RELEASE_KEYSTORE" \
-      --password-file "$FUSION_RELEASE_PASSWORD_FILE" --json >"$WORK/release.json" 2>&1
-    rel=$?
-    keep "release-tx.json" "$(cat "$WORK/release.json")"
-    { (( rel == 0 )) && [[ "$(jq -r '.status // empty' "$WORK/release.json" 2>/dev/null)" == "0x1" ]]; }
-    expect release "AC-CORE-03 the admin release transaction succeeds" $? "$(head -c 300 "$WORK/release.json")"
+    # IDEMPOTENT, BECAUSE THIS SCRIPT IS REQUIRED TO BE RUN TWICE.
+    # AC-E2E-05 asks for a repeatable test, and the bundle wording invokes this
+    # path twice against the SAME receipt. `releaseReceipt` is a one-shot state
+    # transition: a second send reverts ReceiptAlreadyReleased, and asserting on
+    # a fresh status 0x1 would have failed the second run for doing exactly what
+    # a released receipt should do. The record stage has been idempotent from the
+    # start (submit-receipt-worker.sh reports `already_anchored` and broadcasts
+    # nothing); the release stage was not, and that asymmetry only shows up on a
+    # second run. Reading the state FIRST is also what an operator does.
+    already_released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool)' \
+      "$RECEIPT_ID" --rpc-url "$FUSION_RPC_URL" 2>/dev/null | tr -d '[:space:]')"
+    if [[ "$already_released" == "true" ]]; then
+      keep "release-tx.json" "{\"action\":\"already_released\",\"receipt_id\":\"$RECEIPT_ID\"}"
+      record_assertion release \
+        "AC-CORE-03 the admin release transaction succeeds (idempotent no-op: already released, no second transaction sent)" \
+        PASS "isReleased=true before this run; releaseReceipt was NOT re-broadcast"
+    else
+      "$CAST_BIN" send "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$RECEIPT_ID" \
+        --rpc-url "$FUSION_RPC_URL" --keystore "$FUSION_RELEASE_KEYSTORE" \
+        --password-file "$FUSION_RELEASE_PASSWORD_FILE" --json >"$WORK/release.json" 2>&1
+      rel=$?
+      keep "release-tx.json" "$(cat "$WORK/release.json")"
+      { (( rel == 0 )) && [[ "$(jq -r '.status // empty' "$WORK/release.json" 2>/dev/null)" == "0x1" ]]; }
+      expect release "AC-CORE-03 the admin release transaction succeeds" $? "$(head -c 300 "$WORK/release.json")"
+    fi
 
     released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool)' "$RECEIPT_ID" \
       --rpc-url "$FUSION_RPC_URL" 2>&1 | tr -d '[:space:]')"
