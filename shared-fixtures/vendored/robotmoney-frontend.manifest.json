@@ -8,7 +8,8 @@
   "core_fixture_dir": "tests/fixtures",
   "core_only_not_shared": [
     "consensus-receipt.anchor-digest.json",
-    "consensus-receipt.legacy-weights.json"
+    "consensus-receipt.legacy-weights.json",
+    "consensus-receipt.live-envelope.json"
   ],
   "pending_frontend_adoption_note": "A row flagged pending_frontend_adoption was authored in core this cycle and handed to robotmoney-frontend (T24 envelope fixture, R27 unknown-field vector). Until the frontend lands its byte-identical copy and this manifest is re-vendored, that row is core-authored and the check prints it as PENDING-FE rather than claiming a cross-repo comparison it did not make.",
   "release_process": "docs/product/20260623-product-proposal-investment-committee-v0.md \u00a77.4",

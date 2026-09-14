@@ -86,6 +86,11 @@ SHARED_WITH_FRONTEND = [
 CORE_ONLY = [
     "consensus-receipt.anchor-digest.json",
     "consensus-receipt.legacy-weights.json",
+    # T03 deployability evidence (§12.7.5): the REAL run-1 published envelope,
+    # kept so a schema change that would move a LIVE digest turns the suite red.
+    # Core-only by construction — it is one repo's captured production bytes,
+    # not a spec artifact, so the frontend has nothing byte-identical to hold.
+    "consensus-receipt.live-envelope.json",
 ]
 
 EXPECTED_BUCKETS = [

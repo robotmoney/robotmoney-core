@@ -25,8 +25,9 @@ TWO INVARIANTS
     `docs/**` or `.github/workflows/**` must exist on disk. Only
     `.github/scripts/` is in scope -- see "WHY .github/scripts/ ONLY" below.
 
-(B) REACHABILITY. Every script file directly under `.github/scripts/tests/`
-    (the evidence/negative-control home) must be invoked by a non-comment
+(B) REACHABILITY. Every script file directly under any registered
+    evidence-script root (`EVIDENCE_SCRIPT_ROOTS`: `.github/scripts/tests/`
+    and `scripts/fusion/tests/`) must be invoked by a non-comment
     line in at least one `.github/workflows/*.yml` file. A script that sits
     there named by a doc but touched by no workflow step contributes zero
     executed coverage.
@@ -82,6 +83,23 @@ SCRIPT_PATH_RE = re.compile(r"\.github/scripts/[\w./-]+\.(?:sh|py)")
 # is checked. Excludes the `fixtures/` subdirectory, which holds data files
 # consumed BY the scripts here, not scripts themselves.
 TESTS_DIR = ".github/scripts/tests"
+
+# EXPLICIT REGISTRY OF EVIDENCE-SCRIPT ROOTS (issue: Fusion T13)
+# ---------------------------------------------------------------
+# Invariant (B) used to enumerate `TESTS_DIR` alone. That made the guard
+# structurally unable to see the exact defect it exists to catch whenever the
+# evidence suite lives somewhere else: `scripts/fusion/tests/run-tests.sh` is
+# the ONLY executor of AC-CORE-09's retry/idempotency clause and AC-GOV-01's
+# watcher clause, and `grep -rn 'scripts/fusion' .github/` returned nothing --
+# no workflow, on any branch, on any event, ran it, and this sweep reported OK.
+# A guard that enumerates one hardcoded directory silently excuses every
+# evidence tree outside it. The roots are listed here explicitly so adding a
+# new evidence suite is a deliberate, reviewable registry edit rather than an
+# accident of where the file happened to be placed.
+EVIDENCE_SCRIPT_ROOTS: tuple[str, ...] = (
+    TESTS_DIR,
+    "scripts/fusion/tests",
+)
 
 WORKFLOWS_DIR = ".github/workflows"
 
@@ -161,16 +179,22 @@ def check_missing(
     return failures
 
 
-def list_tests_dir_scripts(root: Path) -> list[str]:
-    """Every .sh/.py file directly under TESTS_DIR, relative to root."""
-    tests_dir = root / TESTS_DIR
-    if not tests_dir.is_dir():
-        return []
-    return sorted(
-        str(p.relative_to(root))
-        for p in tests_dir.iterdir()
-        if p.is_file() and p.suffix in (".sh", ".py")
-    )
+def list_tests_dir_scripts(
+    root: Path, roots: tuple[str, ...] = EVIDENCE_SCRIPT_ROOTS
+) -> list[str]:
+    """Every .sh/.py file directly under each registered evidence-script root,
+    relative to `root`. A registered root that does not exist contributes
+    nothing (a repo may legitimately not have one), but a root that exists and
+    holds scripts puts every one of them under invariant (B)."""
+    found: set[str] = set()
+    for rel_root in roots:
+        d = root / rel_root
+        if not d.is_dir():
+            continue
+        for p in d.iterdir():
+            if p.is_file() and p.suffix in (".sh", ".py"):
+                found.add(str(p.relative_to(root)))
+    return sorted(found)
 
 
 def _non_comment_lines(text: str) -> list[str]:
@@ -350,6 +374,53 @@ def self_test() -> int:
         else:
             print("  self-test OK: a comment-only mention does not count as invocation")
 
+    # (5) SHAPE 6 IN A NON-DEFAULT EVIDENCE ROOT -- the registry widening.
+    #     This is the case the pre-registry guard structurally could not see:
+    #     an evidence suite that lives outside `.github/scripts/tests/`,
+    #     invoked by no workflow. It must be flagged exactly like an orphan in
+    #     the default root, and a root the repo does not have must not fire.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _seed_compliant(root)
+        fusion_tests = root / "scripts" / "fusion" / "tests"
+        fusion_tests.mkdir(parents=True, exist_ok=True)
+        (fusion_tests / "run-tests.sh").write_text(
+            "#!/usr/bin/env bash\necho never run\n", encoding="utf-8"
+        )
+        uninvoked = check_uninvoked(root)
+        if not any("scripts/fusion/tests/run-tests.sh" in f for f in uninvoked):
+            print(
+                "SELF-TEST FAIL [registry]: an uninvoked script in a "
+                "registered non-default evidence root was not flagged -- "
+                "invariant B is still enumerating one hardcoded directory.",
+                file=sys.stderr,
+            )
+            ok = 1
+        else:
+            print(
+                "  self-test OK: shape 6 fires in a non-default registered "
+                "evidence root (scripts/fusion/tests/)"
+            )
+        # ...and once a workflow really invokes it, it must go quiet.
+        (root / WORKFLOWS_DIR / "fusion.yml").write_text(
+            "name: fusion\n"
+            "on: [pull_request]\n"
+            "jobs:\n"
+            "  test:\n"
+            "    steps:\n"
+            "      - run: bash scripts/fusion/tests/run-tests.sh\n",
+            encoding="utf-8",
+        )
+        if any("scripts/fusion/tests/run-tests.sh" in f for f in check_uninvoked(root)):
+            print(
+                "SELF-TEST FAIL [registry]: a genuinely invoked script in a "
+                "registered evidence root was still flagged.",
+                file=sys.stderr,
+            )
+            ok = 1
+        else:
+            print("  self-test OK: invoking that script clears the finding")
+
     if ok == 0:
         print(
             "SELF-TEST PASS: the guard fires on both shapes, respects the "
@@ -377,7 +448,9 @@ def main(argv: list[str]) -> int:
     tested = len(list_tests_dir_scripts(root))
     print(
         f"OK: every named .github/scripts/ path exists ({referenced} referenced), "
-        f"and every .github/scripts/tests/ script is invoked by a workflow "
+        f"and every evidence-script root "
+        f"({', '.join(EVIDENCE_SCRIPT_ROOTS)}) has each of its scripts "
+        f"invoked by a workflow "
         f"({tested} scripts checked)."
     )
     return 0

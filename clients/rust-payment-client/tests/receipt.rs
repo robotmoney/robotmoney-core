@@ -1268,11 +1268,7 @@ fn envelope_canonical_bytes_that_disagree_with_core_are_refused() {
         "core must refuse an envelope whose claimed canonicalBytes are not its own \
          re-derivation — that disagreement is two anchored digests for one receipt",
     );
-    assert_eq!(
-        err.code(),
-        "ErrReceiptCanonicalBytesMismatch",
-        "got: {err}"
-    );
+    assert_eq!(err.code(), "ErrReceiptCanonicalBytesMismatch", "got: {err}");
     let text = err.to_string();
     assert!(
         text.contains("first difference at byte"),

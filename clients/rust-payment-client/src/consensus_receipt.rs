@@ -1240,10 +1240,11 @@ mod tests {
             );
         };
         let from_vector = receipt.canonical_bytes().expect("canonical bytes");
-        let from_clean = ConsensusReceipt::from_json_slice(&fixture("consensus-receipt.valid.json"))
-            .expect("the valid fixture parses")
-            .canonical_bytes()
-            .expect("canonical bytes");
+        let from_clean =
+            ConsensusReceipt::from_json_slice(&fixture("consensus-receipt.valid.json"))
+                .expect("the valid fixture parses")
+                .canonical_bytes()
+                .expect("canonical bytes");
         assert_eq!(
             from_vector, from_clean,
             "OPEN GAP (R27/D11, task T03): core drops unknown fields instead of refusing them, \
@@ -1292,12 +1293,11 @@ mod tests {
                 // silently discarding the unknown keys, producing bytes the
                 // publisher never signed.
                 let bytes = receipt.canonical_bytes().expect("canonical bytes");
-                let bare = ConsensusReceipt::from_json_slice(&fixture(
-                    "consensus-receipt.valid.json",
-                ))
-                .expect("the valid fixture parses")
-                .canonical_bytes()
-                .expect("canonical bytes");
+                let bare =
+                    ConsensusReceipt::from_json_slice(&fixture("consensus-receipt.valid.json"))
+                        .expect("the valid fixture parses")
+                        .canonical_bytes()
+                        .expect("canonical bytes");
                 panic!(
                     "unknown fields were DROPPED, not refused (R27/D11): the vector produced \
                      {} canonical bytes and the clean receipt {} — this is exactly the rc.3 \
