@@ -46,7 +46,7 @@ name: fusion-harness-selftests
 
 on:
   push:
-    branches: ["releases-*", "fusion/**"]
+    branches: ["releases-*"]
     # AND on the RC tags themselves. A `branches:` filter NEVER matches a tag
     # ref (refs/tags/...) — that is the R6 defect: every suite-* workflow in
     # this repo is branches-only, so a `v0.4.0-rc.N` tag push dispatched
