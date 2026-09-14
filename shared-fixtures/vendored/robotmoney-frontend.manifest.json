@@ -1,6 +1,6 @@
 {
   "$comment": "VENDORED FROM robotmoney-frontend. Do not hand-edit a sha256 in this file. Regenerate with `.github/scripts/check_cross_repo_fixture_drift.py --regenerate --frontend <robotmoney-frontend checkout> --frontend-ref <tag>` and commit the result together with the coordinated fixture change.",
-  "why_this_file_exists": "AC-FMT-01 / \u00a79A R4. tests/fixtures/consensus-receipt.anchor-digest.json is authored in THIS repo, so re-hashing core's fixtures against it is self-referential: at v0.4.0-rc.3 eight of the nine shared fixtures had drifted from robotmoney-frontend and that check still exited 0. This manifest is generated from the OTHER repo's bytes at a pinned commit, so a one-sided edit cannot be green.",
+  "why_this_file_exists": "AC-FMT-01 / §9A R4. tests/fixtures/consensus-receipt.anchor-digest.json is authored in THIS repo, so re-hashing core's fixtures against it is self-referential: at v0.4.0-rc.3 eight of the nine shared fixtures had drifted from robotmoney-frontend and that check still exited 0. This manifest is generated from the OTHER repo's bytes at a pinned commit, so a one-sided edit cannot be green.",
   "frontend_repo": "robotmoney-frontend",
   "frontend_fixture_dir": "contract/src/__fixtures__",
   "frontend_ref": "v0.5.0-rc.2",
@@ -9,10 +9,12 @@
   "core_only_not_shared": [
     "consensus-receipt.anchor-digest.json",
     "consensus-receipt.legacy-weights.json",
-    "consensus-receipt.live-envelope.json"
+    "consensus-receipt.live-envelope.json",
+    "consensus-receipt.run1-anchored.json"
   ],
+  "core_only_not_shared_note": "These fixtures live in core's tests/fixtures but are NOT part of the cross-repo shared-fixture contract, so the drift check must not compare them against the frontend. consensus-receipt.run1-anchored.json is core's captured copy of the run-1 anchored receipt (session a31ecf60-bb8f-44c0-8b69-23d3e9c2562f), pinned so the governance-draft tests can bind a draft to a real on-chain payloadDigest offline; the frontend ships no such file and adding it to `files` would assert a cross-repo comparison that was never made.",
   "pending_frontend_adoption_note": "A row flagged pending_frontend_adoption was authored in core this cycle and handed to robotmoney-frontend (T24 envelope fixture, R27 unknown-field vector). Until the frontend lands its byte-identical copy and this manifest is re-vendored, that row is core-authored and the check prints it as PENDING-FE rather than claiming a cross-repo comparison it did not make.",
-  "release_process": "docs/product/20260623-product-proposal-investment-committee-v0.md \u00a77.4",
+  "release_process": "docs/product/20260623-product-proposal-investment-committee-v0.md §7.4",
   "files": [
     {
       "file": "consensus-receipt.schema.json",

@@ -98,6 +98,13 @@ CORE_ONLY = [
     # Core-only by construction — it is one repo's captured production bytes,
     # not a spec artifact, so the frontend has nothing byte-identical to hold.
     "consensus-receipt.live-envelope.json",
+    # T01/T07 (integration): core's captured copy of the run-1 ANCHORED receipt
+    # (session a31ecf60-bb8f-44c0-8b69-23d3e9c2562f), pinned so the
+    # governance-draft tests can bind a draft to a real on-chain payloadDigest
+    # without a chain or a network. Core-only for the same reason as
+    # live-envelope.json: it is one repo's captured production bytes, not a spec
+    # artifact, so the frontend has nothing byte-identical to hold.
+    "consensus-receipt.run1-anchored.json",
 ]
 
 EXPECTED_BUCKETS = [
