@@ -27,7 +27,7 @@ use crate::abi::{
     IPortfolioRouterEvents, IRouterGovernanceEvents, IVaultEvents, IVaultReads,
     IVaultRegistryEvents, Topics,
 };
-use crate::db::{Db, DbError};
+use crate::db::{Db, DbError, ReceiptVerification};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
 use crate::{CONFIRMATIONS, SNAPSHOT_HEARTBEAT_BLOCKS};
 use alloy_primitives::{Address, Bytes, U256};
@@ -191,6 +191,18 @@ pub async fn run_once(
     // the error arm persists `root` (the durable cursor) rather than the
     // pre-reorg value captured above.
     let mut rollback_cursor = last_indexed;
+
+    // T12: drain a bounded batch of the unverified-receipt backlog every tick.
+    // Deliberately BEFORE `run_inner`, so it runs on a tick whose log scan later
+    // fails: repairing a stale `verified = false` must not depend on the chain
+    // being reachable, and the payload host and the RPC fail independently.
+    let repaired = sweep_unverified_receipts(db, cfg).await;
+    if repaired > 0 {
+        tracing::info!(
+            repaired,
+            "consensus receipt re-verification sweep repaired rows this tick"
+        );
+    }
 
     let outcome = match run_inner(db, rpc, cfg, last_indexed, &mut rollback_cursor).await {
         Ok(mut o) => {
@@ -1240,6 +1252,28 @@ pub async fn handle_log(
     // Neither carries a signature parameter — the analysts' ed25519 signatures
     // are payload data, never event data.
 
+    // T20 — GATE ON THE EMITTING CONTRACT.
+    //
+    // `handle_log` dispatches on `topic0` alone, over a watched-address set that
+    // also carries the gateway, the vaults, the registry, the router, governance
+    // and the IC policy. `ReceiptRecorded`'s topic0 is just a hash: ANY watched
+    // contract that emits an event with that signature lands in the branches
+    // below. Only the configured ConsensusRecommendationReceipt deployment may
+    // write the receipt register, so check the address before decoding rather
+    // than trusting the topic.
+    if (topic0 == topics.consensus_receipt_recorded || topic0 == topics.consensus_receipt_released)
+        && Some(log.address) != cfg.consensus_receipt
+    {
+        tracing::warn!(
+            log_address = %log.address,
+            configured = ?cfg.consensus_receipt,
+            block_number = log.block_number,
+            log_index = log.log_index,
+            "ignoring consensus-receipt-shaped log from an unconfigured contract"
+        );
+        return Ok(0);
+    }
+
     if topic0 == topics.consensus_receipt_recorded {
         let decoded = IConsensusRecommendationReceiptEvents::ReceiptRecorded::decode_log(
             &into_alloy_log(log),
@@ -1257,33 +1291,44 @@ pub async fn handle_log(
         // silently absent (architecture §4.9: the record's whole point is that it
         // cannot be quietly withheld).
         //
+        // T12: the fetch is now BOUNDED-RETRY, and the row it writes is
+        // REPAIRABLE. A `verified = false` written here is a provisional state
+        // that `sweep_unverified_receipts` (below) and any re-index both
+        // converge out of — it is not the permanent verdict it used to be.
+        //
         // SCOPE: this verifies the payload DIGEST only.  Per-analyst ed25519
         // verification of the signatures embedded in the payload is `rmpc`'s job
         // at submit time (architecture §4.9.1 answer 1: rmpc refuses to submit a
         // receipt whose digest or embedded signatures do not verify) and a future
         // indexer pass.  The EVM has no ed25519 precompile and ADR-0012 §5 closes
         // that seam, so nothing on chain asserts it either.
-        let (verified, payload_bytes) = if decoded.payloadUri.is_empty() {
-            (false, None)
-        } else {
-            match fetch_and_verify_payload(&decoded.payloadUri, payload_digest).await {
-                Ok((v, len)) => (v, Some(len)),
-                Err(e) => {
-                    tracing::warn!(
-                        receipt_id = %alloy_primitives::hex::encode(receipt_id),
-                        payload_uri = %decoded.payloadUri,
-                        error = %e,
-                        "consensus receipt payload fetch/verify failed; \
-                         storing receipt with verified=false"
-                    );
-                    (false, None)
-                }
+        let verification = if decoded.payloadUri.is_empty() {
+            ReceiptVerification {
+                verified: false,
+                payload_bytes: None,
+                attempts: 0,
+                last_error: Some("payload_uri is empty".to_string()),
             }
+        } else {
+            let outcome = fetch_and_verify_payload(&decoded.payloadUri, payload_digest).await;
+            if let Some(err) = outcome.last_error.as_deref() {
+                tracing::warn!(
+                    receipt_id = %alloy_primitives::hex::encode(receipt_id),
+                    payload_uri = %decoded.payloadUri,
+                    attempts = outcome.attempts,
+                    error = %err,
+                    "consensus receipt payload fetch/verify did not verify; \
+                     storing receipt with verified=false (repairable — the \
+                     re-verification sweep will retry)"
+                );
+            }
+            outcome
         };
 
         let r = db
             .insert_consensus_receipt(
                 cfg.chain_id,
+                log.address.into_array(),
                 receipt_id,
                 receipt_index,
                 decoded.submitter.into_array(),
@@ -1293,8 +1338,7 @@ pub async fn handle_log(
                 log.block_number as i64,
                 log.log_index as i32,
                 log.tx_hash.0,
-                verified,
-                payload_bytes,
+                verification,
             )
             .await?;
         return Ok(r);
@@ -1309,6 +1353,7 @@ pub async fn handle_log(
         let r = db
             .mark_consensus_receipt_released(
                 cfg.chain_id,
+                log.address.into_array(),
                 decoded.receiptId.0,
                 decoded.releasedBy.into_array(),
                 decoded.releasedAt as i64,
@@ -1321,20 +1366,169 @@ pub async fn handle_log(
     Ok(0)
 }
 
+/// T12: how many times one pass of [`fetch_and_verify_payload`] will try.
+const PAYLOAD_FETCH_ATTEMPTS: u32 = 3;
+/// T12: per-attempt HTTP timeout. 3 attempts plus the backoff below stay inside
+/// the ~30 s budget the review asked for, so one tick cannot stall on one URI.
+const PAYLOAD_FETCH_TIMEOUT_SECS: u64 = 5;
+/// T12: backoff before attempts 2 and 3.
+const PAYLOAD_FETCH_BACKOFF: [u64; 2] = [2, 6];
+
+/// T12: how many receipts one tick's re-verification sweep may re-fetch.
+const SWEEP_BATCH: i64 = 16;
+/// T12: attempts after which the sweep gives up on a receipt.
+///
+/// This is what makes the sweep TERMINATE. Without a ceiling, a receipt whose
+/// payload host is permanently gone is re-fetched on every tick for the life of
+/// the database — the sweep would become a self-inflicted, unbounded outbound
+/// request loop against a dead host. A row that hits the ceiling keeps its
+/// `last_verify_error` and stays publicly visible as unverified; a deliberate
+/// operator re-index (which resets nothing but re-runs the insert path) is the
+/// escape hatch.
+const SWEEP_MAX_ATTEMPTS: i32 = 12;
+
+/// T12 — the re-verification sweep.
+///
+/// One 502 from the payload host during a frontend redeploy used to pin an
+/// authentic, correctly-signed receipt at `verified = false` FOR THE LIFE OF THE
+/// DATABASE: the fetch was single-attempt, every error was swallowed, no code
+/// path anywhere updated `verified`, and the insert ended
+/// `ON CONFLICT DO NOTHING` so even a full deliberate re-index changed nothing.
+/// The only remedy was wiping the explorer database — which is also where the
+/// watchdog's un-resettable cold-start baseline `MIN(indexer_runs.started_at)`
+/// lives, so the remedy paged.
+///
+/// This closes it: every tick, re-fetch a bounded batch of rows that are still
+/// unverified, and repair the ones that now verify. Repair NEVER downgrades (see
+/// [`Db::repair_receipt_verification`]) and the digest is still compared against
+/// the on-chain `payload_digest`, so convergence cannot admit a wrong preimage.
+///
+/// A sweep failure is never fatal to the tick: the receipts are already stored,
+/// and the next tick tries again.
+async fn sweep_unverified_receipts(db: &Db, cfg: &IndexerConfig) -> u64 {
+    if cfg.consensus_receipt.is_none() {
+        return 0;
+    }
+    let pending = match db
+        .list_unverified_receipts(cfg.chain_id, SWEEP_MAX_ATTEMPTS, SWEEP_BATCH)
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "consensus receipt re-verification sweep: query failed");
+            return 0;
+        }
+    };
+
+    let mut repaired = 0u64;
+    for row in pending {
+        let mut digest = [0u8; 32];
+        if row.payload_digest.len() != 32 {
+            tracing::warn!(
+                receipt_id = %alloy_primitives::hex::encode(&row.receipt_id),
+                "consensus receipt re-verification sweep: payload_digest is not 32 bytes; skipping"
+            );
+            continue;
+        }
+        digest.copy_from_slice(&row.payload_digest);
+
+        let outcome = fetch_and_verify_payload(&row.payload_uri, digest).await;
+        match db
+            .repair_receipt_verification(
+                cfg.chain_id,
+                &row.contract_address,
+                &row.receipt_id,
+                outcome.verified,
+                outcome.payload_bytes,
+                outcome.last_error.as_deref(),
+            )
+            .await
+        {
+            Ok(_) if outcome.verified => {
+                repaired += 1;
+                tracing::info!(
+                    receipt_id = %alloy_primitives::hex::encode(&row.receipt_id),
+                    "consensus receipt re-verification sweep: repaired to verified=true"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                receipt_id = %alloy_primitives::hex::encode(&row.receipt_id),
+                "consensus receipt re-verification sweep: repair write failed"
+            ),
+        }
+    }
+    repaired
+}
+
 /// Fetch the canonical receipt bytes from `payload_uri` and verify their
-/// keccak256 against the on-chain `expected_digest`.  Returns
-/// `(digest_matches, body_len)`.  Errors on network failure, non-200 HTTP, or
-/// a response body over the 1 MiB cap — every error is non-fatal at the call
-/// site, which stores the receipt with `verified = false`.
+/// keccak256 against the on-chain `expected_digest`.
+///
+/// T12 — BOUNDED RETRY. The previous shape was one 10 s GET, no retry, every
+/// error swallowed into `(false, None)`. A transient 502 (a frontend redeploy
+/// is enough) therefore decided an authentic receipt's public `verified` flag
+/// for ever. This retries [`PAYLOAD_FETCH_ATTEMPTS`] times with the
+/// [`PAYLOAD_FETCH_BACKOFF`] delays, and only for TRANSPORT failures: a body
+/// that is fetched successfully and does not hash to the digest is a
+/// deterministic answer, and re-fetching it is pure load. The returned
+/// [`ReceiptVerification`] carries the attempt count and the last error so the
+/// stored row says *why* it is unverified — which is what the compromise
+/// runbook needs to distinguish an unreachable host from a forgery.
+///
+/// Never errors: every failure mode is represented in the returned value,
+/// because the commitment row is stored either way.
 async fn fetch_and_verify_payload(
     payload_uri: &str,
     expected_digest: [u8; 32],
-) -> Result<(bool, i64), String> {
-    // Mirrors `fetch_and_verify_memo`: 10s timeout, 1 MiB body cap.
+) -> ReceiptVerification {
+    let mut attempts: i32 = 0;
+    let mut last_error: Option<String> = None;
+
+    for attempt in 0..PAYLOAD_FETCH_ATTEMPTS {
+        if attempt > 0 {
+            let backoff = PAYLOAD_FETCH_BACKOFF
+                .get(attempt as usize - 1)
+                .copied()
+                .unwrap_or(*PAYLOAD_FETCH_BACKOFF.last().unwrap());
+            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+        }
+        attempts += 1;
+
+        match fetch_payload_once(payload_uri).await {
+            // Transport succeeded. Whatever the digest comparison says is the
+            // final answer for this pass — a mismatching body will mismatch
+            // again, so do not spend the remaining attempts on it.
+            Ok(body) => {
+                let (verified, err) = digest_matches(&body, expected_digest);
+                return ReceiptVerification {
+                    verified,
+                    payload_bytes: Some(body.len() as i64),
+                    attempts,
+                    last_error: err,
+                };
+            }
+            Err(e) => {
+                last_error = Some(e);
+            }
+        }
+    }
+
+    ReceiptVerification {
+        verified: false,
+        payload_bytes: None,
+        attempts,
+        last_error: last_error.or_else(|| Some("payload fetch failed".to_string())),
+    }
+}
+
+/// One HTTP attempt at the payload. Transport-level errors only.
+async fn fetch_payload_once(payload_uri: &str) -> Result<Vec<u8>, String> {
+    // 1 MiB body cap, as `fetch_and_verify_memo`.
     const MAX_BODY: usize = 1024 * 1024;
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(PAYLOAD_FETCH_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("build client: {e}"))?;
 
@@ -1356,50 +1550,69 @@ async fn fetch_and_verify_payload(
             body.len()
         ));
     }
+    Ok(body.to_vec())
+}
 
-    // TWO ADMISSIBLE PREIMAGES, IN THIS ORDER, AND NEVER A THIRD.
-    //
-    // 1. The served bytes themselves. This is the literal reading of the
-    //    commitment and stays the first thing tried, so a `payload_uri` that
-    //    serves the exact canonical bytes is verified without parsing anything.
-    //
-    // 2. The canonical bytes RE-DERIVED from the served JSON by the same parser
-    //    and canonicalizer `rmpc` uses (`ConsensusReceipt::from_json_slice` ->
-    //    `canonical_bytes()`), which also unwraps an unambiguous envelope.
-    //    robotmoney-frontend's public route serves that envelope
-    //    (`{sessionId, …, receipt, canonicalBytes, verified, …}`), so its
-    //    keccak256 is NOT the anchored digest even though the receipt inside is
-    //    exactly the anchored object. Without this branch the indexer stores
-    //    `verified = false` PERMANENTLY for every real frontend receipt — on the
-    //    first scan, with no retry — while `rmpc` (which was taught the same
-    //    unwrap at af878e46) reports the anchor as correct. That split would let
-    //    the explorer call a correctly anchored receipt unverified for ever.
-    //
-    // This can never accept a wrong digest: the comparison is still against the
-    // on-chain `expected_digest`, the canonicalization is deterministic, and the
-    // re-derivation reads only the receipt object. The envelope's `verified`
-    // flag is still never trusted — it is the server's own claim. Its
-    // `canonicalBytes` are no longer ignored either, but they are used only as a
-    // CROSS-CHECK, never as a source: `from_json_slice` compares them against
-    // core's own re-derivation and returns `ErrReceiptCanonicalBytesMismatch`
-    // when the two producers disagree (T03/R27), which lands in the `Err` arm
-    // below as `verified = false`. So a publisher that hashes a preimage core
-    // would not re-derive can never be recorded verified by agreeing with
-    // itself.
-    if alloy_primitives::keccak256(&body).0 == expected_digest {
-        return Ok((true, body.len() as i64));
+/// Compare a fetched body against the on-chain digest.
+///
+/// TWO ADMISSIBLE PREIMAGES, IN THIS ORDER, AND NEVER A THIRD.
+///
+/// 1. The served bytes themselves. This is the literal reading of the
+///    commitment and stays the first thing tried, so a `payload_uri` that
+///    serves the exact canonical bytes is verified without parsing anything.
+///
+/// 2. The canonical bytes RE-DERIVED from the served JSON by the same parser
+///    and canonicalizer `rmpc` uses (`ConsensusReceipt::from_json_slice` ->
+///    `canonical_bytes()`), which also unwraps an unambiguous envelope.
+///    robotmoney-frontend's public route serves that envelope
+///    (`{sessionId, …, receipt, canonicalBytes, verified, …}`), so its
+///    keccak256 is NOT the anchored digest even though the receipt inside is
+///    exactly the anchored object. Without this branch the indexer stores
+///    `verified = false` for every real frontend receipt while `rmpc` (which
+///    was taught the same unwrap at af878e46) reports the anchor as correct.
+///
+/// This can never accept a wrong digest: the comparison is still against the
+/// on-chain `expected_digest`, the canonicalization is deterministic, and the
+/// re-derivation reads only the receipt object. The envelope's `verified` flag
+/// is still never trusted — it is the server's own claim. Its `canonicalBytes`
+/// are used only as a CROSS-CHECK, never as a source: `from_json_slice` compares
+/// them against core's own re-derivation and returns
+/// `ErrReceiptCanonicalBytesMismatch` when the two producers disagree
+/// (T03/R27), which lands here as `verified = false`. So a publisher that hashes
+/// a preimage core would not re-derive can never be recorded verified by
+/// agreeing with itself.
+///
+/// Returns `(verified, explanation_when_not_verified)`.
+fn digest_matches(body: &[u8], expected_digest: [u8; 32]) -> (bool, Option<String>) {
+    if alloy_primitives::keccak256(body).0 == expected_digest {
+        return (true, None);
     }
 
     match rust_payment_client::consensus_receipt::ConsensusReceipt::canonical_bytes_from_json_slice(
-        &body,
+        body,
     ) {
-        Ok(canonical) => Ok((
-            alloy_primitives::keccak256(&canonical).0 == expected_digest,
-            body.len() as i64,
-        )),
+        Ok(canonical) => {
+            if alloy_primitives::keccak256(&canonical).0 == expected_digest {
+                (true, None)
+            } else {
+                (
+                    false,
+                    Some(
+                        "digest mismatch: neither the served bytes nor the re-derived \
+                          canonical bytes hash to the on-chain payloadDigest"
+                            .to_string(),
+                    ),
+                )
+            }
+        }
         // Not parseable as a schema-1.0 receipt (or an envelope carrying one)
         // and not a byte match either: unverified, and the row still stores.
-        Err(_) => Ok((false, body.len() as i64)),
+        Err(e) => (
+            false,
+            Some(format!(
+                "digest mismatch and payload is not a parseable consensus receipt: {e}"
+            )),
+        ),
     }
 }
 
