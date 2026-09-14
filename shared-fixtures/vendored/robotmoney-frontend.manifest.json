@@ -72,6 +72,11 @@
       "sha256": "0x2c69763e77b9b047d5a65aaef2d75befbf3ceb580c0b50f3fdd7023e348bc14a",
       "pending_frontend_adoption": true,
       "handed_to_frontend_at": "contract/src/__fixtures__/consensus-receipt.unknown-fields-refused.json"
+    },
+    {
+      "file": "consensus-receipt.bps-conversion.conformance.json",
+      "byte_length": 2977,
+      "sha256": "0x55ccd38e99a181eb9c179ad085db653f7c23703dc9840443a77dfa7ffe6dda45"
     }
   ]
 }

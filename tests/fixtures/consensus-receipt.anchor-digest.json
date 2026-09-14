@@ -82,6 +82,11 @@
         "file": "consensus-receipt.unknown-fields-refused.json",
         "byte_length": 3455,
         "sha256": "0x2c69763e77b9b047d5a65aaef2d75befbf3ceb580c0b50f3fdd7023e348bc14a"
+      },
+      {
+        "file": "consensus-receipt.bps-conversion.conformance.json",
+        "byte_length": 2977,
+        "sha256": "0x55ccd38e99a181eb9c179ad085db653f7c23703dc9840443a77dfa7ffe6dda45"
       }
     ],
     "not_self_referential": "THIS MANIFEST IS AUTHORED IN THIS REPO AND IS THEREFORE NOT A CROSS-REPO CHECK ON ITS OWN \u2014 at v0.4.0-rc.3 eight of the nine shared fixtures had drifted and this check still exited 0. The cross-repo check is .github/scripts/check_cross_repo_fixture_drift.py, which compares the same bytes against shared-fixtures/vendored/robotmoney-frontend.manifest.json, vendored from the other repo at a pinned commit."

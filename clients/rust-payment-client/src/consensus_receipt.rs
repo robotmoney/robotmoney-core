@@ -93,6 +93,23 @@ pub const CANONICAL_BUCKET_ORDER: [&str; 4] = [
     "real_world_assets",
 ];
 
+/// The five stance keys, in the fixed order `stances` declares them.
+/// A submission carrying anything else is a refusal, never a sixth bucket.
+pub const RECEIPT_STANCE_KEYS: [&str; 5] = [
+    "bearish",
+    "cautious",
+    "neutral",
+    "constructive",
+    "bullish",
+];
+
+/// `bps_conversion#denominator`.
+const BPS_DENOMINATOR: f64 = 10_000.0;
+
+/// How far a share vector may miss 1 before it stops being a share vector.
+/// Doubles as the bound of `negative_dust_clamp` — it is NOT widened for it.
+const SHARE_SUM_TOLERANCE: f64 = 1e-6;
+
 /// Raw Ed25519 public key length.
 const ED25519_PUBLIC_KEY_LEN: usize = 32;
 /// Raw Ed25519 signature length.
@@ -827,6 +844,135 @@ impl ConsensusReceipt {
             }
         }
 
+        // ── analyst_signatures.len() == quorum.submitted ─────────────────────
+        // THE thinly_supported BYPASS, CLOSED. `take_count`, `min_takes` and so
+        // `thinly_supported` are all recomputed above — but only against
+        // `quorum.submitted`, an integer nothing else was bound to. Truncating
+        // the signature list to one entry while leaving `submitted` at 3 kept
+        // the release "safe" on the strength of one analyst, and the run-1
+        // review demonstrated exactly that against the shipped binary.
+        if self.analyst_signatures.len() as u64 != q.submitted {
+            return Err(bad(format!(
+                "analyst_signatures carries {} entr{} but quorum.submitted is {} — the two must \
+                 agree or `thinly_supported`, and every other count recomputed from \
+                 quorum.submitted, describes a take set the receipt does not carry",
+                self.analyst_signatures.len(),
+                if self.analyst_signatures.len() == 1 { "y" } else { "ies" },
+                q.submitted
+            )));
+        }
+
+        // ── each carried submission belongs to the entry it sits in ──────────
+        // The assembler asserts this at WRITE time; nothing asserted it on the
+        // read side, so a receipt filing member B's genuinely-signed submission
+        // under member A's entry verified clean. The signature check cannot
+        // catch it — it verifies the carried STRING and never looks inside.
+        //
+        // PARSING HERE IS NOT A SUBSTITUTE FOR THE SIGNATURE CHECK, and does not
+        // weaken it: `verify_analyst_signatures` still verifies over the raw
+        // carried bytes, never over a re-serialization of what is parsed here.
+        // Whether `0.15` survives a JSON round trip is a property of one
+        // serializer rather than of the signed bytes.
+        let mut submissions: Vec<serde_json::Value> =
+            Vec::with_capacity(self.analyst_signatures.len());
+        for (i, entry) in self.analyst_signatures.iter().enumerate() {
+            let payload: serde_json::Value = serde_json::from_str(&entry.canonical_submission)
+                .map_err(|e| {
+                    bad(format!(
+                        "analyst_signatures[{i}].canonical_submission is not parseable JSON: {e}"
+                    ))
+                })?;
+            if !payload.is_object() {
+                return Err(bad(format!(
+                    "analyst_signatures[{i}].canonical_submission is not a JSON object"
+                )));
+            }
+            let signed_as = payload.get("memberId").and_then(|v| v.as_str());
+            if signed_as != Some(entry.member_id.as_str()) {
+                return Err(bad(format!(
+                    "analyst_signatures[{i}].canonical_submission was signed as {:?} but is \
+                     filed under {:?} — the signature verifies the carried string and never \
+                     looks inside it, so this binding is the only thing that catches a \
+                     relabelled submission",
+                    signed_as.unwrap_or("<missing>"),
+                    entry.member_id
+                )));
+            }
+            let concerns = payload.get("subjectId").and_then(|v| v.as_str());
+            if concerns != Some(self.subject_id.as_str()) {
+                return Err(bad(format!(
+                    "analyst_signatures[{i}].canonical_submission concerns subject {:?}, not \
+                     {:?}",
+                    concerns.unwrap_or("<missing>"),
+                    self.subject_id
+                )));
+            }
+            submissions.push(payload);
+        }
+
+        // ── stances, RECOMPUTED rather than counted ──────────────────────────
+        // Until this existed the only cross-check between the aggregation-time
+        // rollup and the publish-time signature set was CARDINALITY, so any
+        // change preserving member count while changing content passed silently.
+        let carried = [
+            self.stances.bearish,
+            self.stances.cautious,
+            self.stances.neutral,
+            self.stances.constructive,
+            self.stances.bullish,
+        ];
+        let stance_total: u64 = carried.iter().sum();
+        if stance_total != q.submitted {
+            return Err(bad(format!(
+                "stances sum to {stance_total} but quorum.submitted is {}",
+                q.submitted
+            )));
+        }
+        let mut recomputed = [0u64; RECEIPT_STANCE_KEYS.len()];
+        for (i, payload) in submissions.iter().enumerate() {
+            let stance = payload.get("stance").and_then(|v| v.as_str());
+            match stance.and_then(|s| RECEIPT_STANCE_KEYS.iter().position(|k| *k == s)) {
+                Some(k) => recomputed[k] += 1,
+                None => {
+                    return Err(bad(format!(
+                        "stances: the submission of {:?} carries stance {:?}, which is not one \
+                         of the five",
+                        self.analyst_signatures[i].member_id,
+                        stance.unwrap_or("<missing>")
+                    )))
+                }
+            }
+        }
+        for (k, key) in RECEIPT_STANCE_KEYS.iter().enumerate() {
+            if carried[k] != recomputed[k] {
+                return Err(bad(format!(
+                    "stances.{key} is {} but the embedded submissions carry {} — `stances` is \
+                     written by the aggregator and the submissions are the frozen take set; a \
+                     disagreement means one of the two does not describe this receipt",
+                    carried[k], recomputed[k]
+                )));
+            }
+        }
+
+        // ── every attributed position names a member the receipt carries ─────
+        // A disagreement attributed to `nobody-at-all` is prose the receipt
+        // cannot substantiate, and it was accepted.
+        for (i, d) in self.judge.disagreements.iter().enumerate() {
+            for (j, p) in d.positions.iter().enumerate() {
+                if !self
+                    .analyst_signatures
+                    .iter()
+                    .any(|s| s.member_id == p.member_id)
+                {
+                    return Err(bad(format!(
+                        "judge.disagreements[{i}].positions[{j}] attributes a view to {:?}, who \
+                         is not among the members carried in analyst_signatures",
+                        p.member_id
+                    )));
+                }
+            }
+        }
+
         // ── weights (optional, last) ─────────────────────────────────────────
         if let Some(weights) = &self.weights {
             if weights.len() != CANONICAL_BUCKET_ORDER.len() {
@@ -856,10 +1002,257 @@ impl ConsensusReceipt {
             if sum != 10_000 {
                 return Err(bad(format!("weights sum to {sum} bps, must sum to 10000")));
             }
+
+            // ── weights, RECOMPUTED from the same submissions (invariant 8) ──
+            // The one field that becomes `RouterGovernance.propose` calldata and
+            // the one no analyst signature covers. OMISSION is not checkable and
+            // is not checked — a `position_actions` subject produces no vector
+            // however many members submitted one, and the receipt does not carry
+            // the subject's recommendation type. PRESENCE is a claim about the
+            // takes carried beside it, and that claim is recomputable by anyone
+            // holding nothing but the receipt.
+            let vectors: Vec<Vec<(String, f64)>> = submissions
+                .iter()
+                .filter_map(|payload| normalized_submission_weights(payload.get("weights")))
+                .collect();
+            let expected = mean_weights_bps(&vectors).map_err(|reason| {
+                bad(format!(
+                    "weights cannot be recomputed from the embedded submissions — {reason}"
+                ))
+            })?;
+            for (i, w) in weights.iter().enumerate() {
+                if w.weight_bps != expected[i] {
+                    return Err(bad(format!(
+                        "weights[{i}] ({}) is {} bps but the embedded submissions mean to {} bps                          under weights_recomputation + bps_conversion (largest remainder,                          tie-broken by canonical bucket order, in IEEE-754 binary64) — `weights`                          is outside receipt_id and outside every analyst signature, so                          recomputing it is the only thing standing between a compromised                          assembler and treasury calldata",
+                        w.bucket, w.weight_bps, expected[i]
+                    )));
+                }
+            }
         }
 
         Ok(())
     }
+}
+
+// ─── bps_conversion: the Hare-quota clause, ported ───────────────────────────
+//
+// `weights` is the ONE field of a receipt that becomes treasury calldata and the
+// one no analyst signature covers: each signature is over that member's own
+// `canonical_submission`, and `receipt_id` is keccak over session + subject
+// only. Until this was ported, `weights` validation stopped at cardinality,
+// order, `<= 10000` and `sum == 10000`, and the run-1 review anchored that fact
+// by handing the shipped binary a receipt whose allocation it had chosen freely.
+//
+// Everything below is pinned by `bps_conversion` and `weights_recomputation` in
+// `consensus-receipt.canonicalization.json`, byte-identical to the frontend's
+// copy, whose `bucketSharesToBps()` / `meanWeightsBps()` in
+// `contract/src/consensus-receipt.js` are the reference implementations. A
+// change here that is not also a change there anchors a different digest for the
+// same receipt.
+
+/// JavaScript's `Math.round`: nearest integer, ties toward POSITIVE INFINITY.
+///
+/// NOT `f64::round`, which rounds half AWAY FROM ZERO and so disagrees on every
+/// negative half (`Math.round(-0.5)` is `-0`, `(-0.5f64).round()` is `-1.0`),
+/// and NOT `(x + 0.5).floor()`, which the spec rules out by name: for
+/// `0.49999999999999994` the addition rounds up to exactly `0.5` and floor
+/// returns 1 where the rule returns 0. Computing the fractional part first and
+/// comparing it against a half is the rule stated directly.
+fn js_round(x: f64) -> f64 {
+    let floored = x.floor();
+    if x - floored >= 0.5 {
+        floored + 1.0
+    } else {
+        floored
+    }
+}
+
+/// `Math.round(v * 1e8) / 1e8` — the producer's 8-decimal rounding.
+fn round8(v: f64) -> f64 {
+    js_round(v * 1e8) / 1e8
+}
+
+/// LARGEST REMAINDER (Hare quota) over the four canonical buckets, tie-broken by
+/// canonical bucket order.
+///
+/// The arithmetic domain is **IEEE-754 binary64 and nothing else**: the
+/// multiply, the floor, the subtraction that yields the fractional part and the
+/// comparison that orders the remainders all happen on `f64`. A decimal,
+/// rational or fixed-point recomputation of this same prose produces DIFFERENT
+/// BYTES on real vectors — `bps_conversion.divergent_example` publishes one,
+/// and one divergence is a verification failure against an anchored digest.
+///
+/// The tie-break is a TOTAL ORDER — `(remainder descending, bucket index
+/// ascending)` — stated rather than inherited from a sort's stability, because
+/// this repo and the frontend sort independently-constructed arrays and
+/// stability guarantees nothing about agreement between them. It fires only on
+/// BITWISE-EQUAL remainders; one ULP apart is not a tie and the larger wins.
+///
+/// A share in `-SHARE_SUM_TOLERANCE..0` is producer settle dust and is floored
+/// to POSITIVE zero (`negative_dust_clamp`); anything more negative is a real
+/// negative allocation and is refused by name. The clamp is written `> 0.0`,
+/// never `< 0.0`, because `-0.0 < 0.0` is FALSE in IEEE-754.
+///
+/// Returns the reason as a `String` rather than panicking: every caller is on an
+/// attacker-supplied path and must report, not unwind.
+pub fn bucket_shares_to_bps(shares: &[f64; CANONICAL_BUCKET_ORDER.len()]) -> Result<[u32; CANONICAL_BUCKET_ORDER.len()], String> {
+    let mut total = 0.0f64;
+    let mut floors = [0u32; CANONICAL_BUCKET_ORDER.len()];
+    let mut remainders = [0.0f64; CANONICAL_BUCKET_ORDER.len()];
+
+    for (i, bucket) in CANONICAL_BUCKET_ORDER.iter().enumerate() {
+        let supplied = shares[i];
+        // NaN fails `contains`, so it is refused here rather than sliding
+        // through every comparison below as "neither less nor greater".
+        if !(-SHARE_SUM_TOLERANCE..=1.0).contains(&supplied) {
+            return Err(format!(
+                "bucket {bucket:?} holds {supplied} — every bucket in canonical_bucket_order must \
+                 hold a finite share in 0..1 (a share in -{SHARE_SUM_TOLERANCE}..0 is producer \
+                 settle dust and is floored to 0; anything more negative is refused by name)"
+            ));
+        }
+        let share = if supplied > 0.0 { supplied } else { 0.0 };
+        // Accumulated IN CANONICAL BUCKET ORDER: binary64 addition is not
+        // associative and the other implementations accumulate in this order.
+        total += share;
+        let raw = share * BPS_DENOMINATOR;
+        let floored = raw.floor();
+        floors[i] = floored as u32;
+        remainders[i] = raw - floored;
+    }
+
+    if (total - 1.0).abs() > SHARE_SUM_TOLERANCE {
+        return Err(format!(
+            "the shares sum to {total}, not 1 — normalize the vector before converting it; this \
+             conversion changes representation and never authors a weight"
+        ));
+    }
+
+    let mut order: Vec<usize> = (0..CANONICAL_BUCKET_ORDER.len()).collect();
+    order.sort_by(|&a, &b| {
+        remainders[b]
+            .partial_cmp(&remainders[a])
+            .expect("remainders are finite")
+            .then(a.cmp(&b))
+    });
+
+    let mut leftover = 10_000i64 - floors.iter().map(|&f| i64::from(f)).sum::<i64>();
+    for &i in &order {
+        if leftover <= 0 {
+            break;
+        }
+        floors[i] += 1;
+        leftover -= 1;
+    }
+    // THE HEADLINE INVARIANT, ASSERTED RATHER THAN ARGUED. Every remainder is
+    // below 1, so the leftover is below the bucket count and one bp per bucket
+    // always suffices — but that is a proof, and a proof stops holding when
+    // someone widens SHARE_SUM_TOLERANCE. A vector that does not close on 10000
+    // must never leave this function: `RouterGovernance.propose` reverts on one,
+    // and by then it is signed.
+    if leftover != 0 {
+        return Err(format!(
+            "{leftover} basis point(s) could not be apportioned across \
+             {} buckets — the shares summed to {total}, which is not a share vector",
+            CANONICAL_BUCKET_ORDER.len()
+        ));
+    }
+    Ok(floors)
+}
+
+/// One analyst's carried `weights` vector, normalized to sum 1.
+///
+/// `None` for a submission that carries no usable vector — that is a LEGAL take
+/// (`weights` is optional on a submission), so it is dropped from the mean
+/// rather than turned into an error.
+fn normalized_submission_weights(value: Option<&serde_json::Value>) -> Option<Vec<(String, f64)>> {
+    let array = value?.as_array()?;
+    if array.is_empty() {
+        return None;
+    }
+    let mut entries: Vec<(String, f64)> = Vec::with_capacity(array.len());
+    let mut total = 0.0f64;
+    for candidate in array {
+        let object = candidate.as_object()?;
+        let bucket = object.get("bucket")?.as_str()?;
+        if bucket.trim().is_empty() || entries.iter().any(|(b, _)| b == bucket) {
+            return None;
+        }
+        let weight = object.get("weight")?.as_f64()?;
+        if !weight.is_finite() || weight < 0.0 {
+            return None;
+        }
+        entries.push((bucket.to_string(), weight));
+        total += weight;
+    }
+    if total <= 0.0 || !total.is_finite() {
+        return None;
+    }
+    Some(
+        entries
+            .into_iter()
+            .map(|(bucket, weight)| (bucket, weight / total))
+            .collect(),
+    )
+}
+
+/// `weights_recomputation`: the deterministic mean of already-normalized
+/// vectors, in bps.
+///
+/// Sum per bucket, divide by the number of surviving vectors, refuse unless the
+/// bucket union is EXACTLY `CANONICAL_BUCKET_ORDER`, renormalize by the mean's
+/// own total at 8 decimal places, settle the positionally last entry to
+/// `round8(1 - prefix)`, then apply [`bucket_shares_to_bps`].
+///
+/// THE VECTORS ARRIVE IN THE RECEIPT'S OWN ORDER (`member_id` ascending), which
+/// is normative: float addition is not associative, so the producer's
+/// received-at order and this one can differ by an ulp before `round8`.
+pub fn mean_weights_bps(vectors: &[Vec<(String, f64)>]) -> Result<[u32; CANONICAL_BUCKET_ORDER.len()], String> {
+    if vectors.is_empty() {
+        return Err(
+            "no carried submission has a weight vector over exactly the canonical buckets"
+                .to_string(),
+        );
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    let mut totals = [0.0f64; CANONICAL_BUCKET_ORDER.len()];
+    for vector in vectors {
+        for (bucket, weight) in vector {
+            match CANONICAL_BUCKET_ORDER.iter().position(|b| b == bucket) {
+                Some(i) => totals[i] += *weight,
+                None => {
+                    return Err(format!(
+                        "a carried submission names bucket {bucket:?}, which is not one of the \
+                         four canonical buckets — schema 1.0 cannot carry that vector"
+                    ))
+                }
+            }
+            if !seen.contains(&bucket.as_str()) {
+                seen.push(bucket);
+            }
+        }
+    }
+    if seen.len() != CANONICAL_BUCKET_ORDER.len() {
+        return Err(format!(
+            "the carried submissions cover {} of the {} canonical buckets — the union must be \
+             exactly canonical_bucket_order",
+            seen.len(),
+            CANONICAL_BUCKET_ORDER.len()
+        ));
+    }
+
+    let count = vectors.len() as f64;
+    let averaged: Vec<f64> = totals.iter().map(|t| t / count).collect();
+    let average_total: f64 = averaged.iter().sum();
+    let mut result = [0.0f64; CANONICAL_BUCKET_ORDER.len()];
+    for (i, weight) in averaged.iter().enumerate() {
+        result[i] = round8(weight / average_total);
+    }
+    let last = result.len() - 1;
+    let prefix: f64 = result[..last].iter().sum();
+    result[last] = round8(1.0 - prefix);
+
+    bucket_shares_to_bps(&result)
 }
 
 // ─── Pinned pattern helpers ──────────────────────────────────────────────────
@@ -1198,58 +1591,18 @@ mod tests {
         });
         let err = ConsensusReceipt::from_json_slice(decoy.to_string().as_bytes())
             .expect_err("the top-level object is the one parsed, and it is not a whole receipt");
+        // The refusal NAMES `receipt` as an unknown field, which is the proof
+        // that the TOP-LEVEL object was the one parsed: had the unwrap fired,
+        // `receipt` would have been consumed as the envelope key and the error
+        // would be about the object inside it instead. Since T03 the shape of
+        // that refusal is `deny_unknown_fields` rather than a missing-field
+        // parse error; both are refusals, and the load-bearing part is which
+        // object produced it.
+        let text = format!("{err}");
+        assert_eq!(err.code(), "ErrReceiptSchema", "got: {text}");
         assert!(
-            format!("{err}").contains("schema-1.0 receipt"),
-            "the top level must win over `.receipt`, got: {err}"
-        );
-    }
-
-    /// The conformance vector is NON-VACUOUS, and core's behaviour today is
-    /// recorded rather than assumed.
-    ///
-    /// Decision R27/D11 says an unknown field must be REFUSED, never dropped.
-    /// Core does not do that yet — `deny_unknown_fields` is task T03's runtime
-    /// half — and this test is the executable record of that gap: it asserts
-    /// the vector really does carry an unknown field at two nesting levels, and
-    /// that core currently produces bytes IDENTICAL to the clean receipt from
-    /// it. That byte identity is precisely the `rc.3` cross-repo divergence
-    /// (C-16): the publisher signs a preimage that includes the fields, core
-    /// hashes one that does not, and both sides report success.
-    ///
-    /// When T03 lands, this test fails loudly and is replaced by
-    /// `the_unknown_field_conformance_vector_is_refused_at_every_nesting_level`
-    /// below, which is the assertion R27/D11 actually asks for.
-    #[test]
-    fn the_unknown_field_conformance_vector_is_not_vacuous() {
-        let raw = fixture("consensus-receipt.unknown-fields-refused.json");
-        let json: serde_json::Value = serde_json::from_slice(&raw).expect("the vector is JSON");
-        assert!(
-            json.get("experimental_confidence").is_some(),
-            "the vector must carry its unknown TOP-LEVEL field"
-        );
-        assert!(
-            json["judge"].get("fallback_reason").is_some(),
-            "the vector must carry its unknown NESTED field"
-        );
-
-        let Ok(receipt) = ConsensusReceipt::from_json_slice(&raw) else {
-            panic!(
-                "core now REFUSES the unknown-field vector — R27/D11 is satisfied. \
-                 Delete this test and un-ignore \
-                 `the_unknown_field_conformance_vector_is_refused_at_every_nesting_level`."
-            );
-        };
-        let from_vector = receipt.canonical_bytes().expect("canonical bytes");
-        let from_clean =
-            ConsensusReceipt::from_json_slice(&fixture("consensus-receipt.valid.json"))
-                .expect("the valid fixture parses")
-                .canonical_bytes()
-                .expect("canonical bytes");
-        assert_eq!(
-            from_vector, from_clean,
-            "OPEN GAP (R27/D11, task T03): core drops unknown fields instead of refusing them, \
-             so the vector and the clean receipt hash the same preimage while the publisher \
-             signed a different one. Recorded, not softened."
+            text.contains("unknown field `receipt`"),
+            "the top level must win over `.receipt`, got: {text}"
         );
     }
 
@@ -1259,15 +1612,18 @@ mod tests {
     /// and `rmpc` exited 0 (C-16). The vector is a shared fixture so both repos
     /// refuse the same bytes.
     ///
-    /// IGNORED, and the reason is a missing implementation, not a flaky test:
-    /// `deny_unknown_fields` is task T03 and is not in this change. The vector,
-    /// the shared fixture and the cross-repo pin are; the runtime refusal is
-    /// not. `the_unknown_field_conformance_vector_is_not_vacuous` above runs on
-    /// every CI and records the gap in executable form so this ignore cannot
-    /// quietly become a false green.
+    /// NO LONGER IGNORED. T03 landed `#[serde(deny_unknown_fields)]` on the
+    /// receipt and on every struct it contains, so the runtime refusal this
+    /// test asks for exists. The placeholder it superseded —
+    /// `the_unknown_field_conformance_vector_is_not_vacuous`, which asserted
+    /// the OPPOSITE (that the vector and the clean receipt hash identical
+    /// preimages) and whose own doc comment said "when T03 lands, this test
+    /// fails loudly and is replaced by" this one — is deleted rather than
+    /// weakened. The non-vacuity it guarded is kept below: this test still
+    /// asserts the vector really carries an unknown field at two nesting levels
+    /// before asserting the refusal, so it cannot pass against a vector that
+    /// has quietly lost them.
     #[test]
-    #[ignore = "R27/D11 runtime refusal is task T03 (#[serde(deny_unknown_fields)]); \
-                the gap is asserted by the_unknown_field_conformance_vector_is_not_vacuous"]
     fn the_unknown_field_conformance_vector_is_refused_at_every_nesting_level() {
         let raw = fixture("consensus-receipt.unknown-fields-refused.json");
         let json: serde_json::Value = serde_json::from_slice(&raw).expect("the vector is JSON");
@@ -1411,7 +1767,13 @@ mod tests {
     }
 
     #[test]
-    fn unknown_input_fields_are_dropped_not_serialized() {
+    fn an_unknown_input_field_is_refused_rather_than_dropped() {
+        // RENAMED FROM `unknown_input_fields_are_dropped_not_serialized`, whose
+        // name was the pre-T03 behaviour and whose body asserted the receipt
+        // still parsed. `evolution_rule` ("unknown input fields are never
+        // serialized") is now satisfied the strict way — they are never
+        // serialized because the receipt carrying one never parses — and
+        // asserting the old shape would assert the rc.3 divergence back in.
         let mut value: serde_json::Value =
             serde_json::from_slice(&fixture("consensus-receipt.valid.json")).unwrap();
         value
@@ -1419,14 +1781,12 @@ mod tests {
             .unwrap()
             .insert("model".to_string(), serde_json::json!("gpt-nonexistent"));
         let raw = serde_json::to_vec(&value).unwrap();
-        let produced = ConsensusReceipt::from_json_slice(&raw)
-            .expect("unknown fields are ignored")
-            .canonical_bytes()
-            .expect("canonicalizes");
-        assert_eq!(
-            produced,
-            fixture("consensus-receipt.valid.canonical.txt"),
-            "an unknown input field must never reach the canonical bytes"
+        let err = ConsensusReceipt::from_json_slice(&raw)
+            .expect_err("an unknown input field is REFUSED, never dropped (R27/D11)");
+        assert_eq!(err.code(), "ErrReceiptSchema", "{err}");
+        assert!(
+            format!("{err}").contains("model"),
+            "the refusal must NAME the offending key, got: {err}"
         );
     }
 

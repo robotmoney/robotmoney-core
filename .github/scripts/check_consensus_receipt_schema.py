@@ -82,6 +82,13 @@ SHARED_WITH_FRONTEND = [
     # shared-fixtures/vendored/robotmoney-frontend.manifest.json.
     "consensus-receipt.envelope.json",
     "consensus-receipt.unknown-fields-refused.json",
+    # T02: the standalone bps_conversion vector. The whole-receipt goldens have a
+    # whole-basis-point mean, so their remainders are all exactly 0 and neither
+    # the apportionment loop nor the tie-break ever runs; this vector has a
+    # nonzero leftover AND an exact three-way tie, and so is the only artifact
+    # that tells LARGEST REMAINDER apart from the superseded settle-the-last
+    # rule. Eleven became twelve.
+    "consensus-receipt.bps-conversion.conformance.json",
 ]
 CORE_ONLY = [
     "consensus-receipt.anchor-digest.json",

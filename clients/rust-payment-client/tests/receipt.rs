@@ -44,7 +44,8 @@ use assert_cmd::Command;
 use mockito::Matcher;
 use rust_payment_client::commands::receipt::encode_record_receipt_call;
 use rust_payment_client::consensus_receipt::{
-    derive_receipt_id, payload_digest, ConsensusReceipt, DOMAIN_SEPARATOR,
+    bucket_shares_to_bps, derive_receipt_id, payload_digest, ConsensusReceipt,
+    CANONICAL_BUCKET_ORDER, DOMAIN_SEPARATOR,
 };
 use rust_payment_client::gateway::RobotMoneyGateway;
 use rust_payment_client::signer::software::PASSPHRASE_ENV_VAR;
@@ -1308,4 +1309,287 @@ fn the_live_run1_receipt_envelope_is_still_accepted_and_reproduces_its_published
         payload_digest(published.as_bytes()),
         "one receipt, one digest, on both sides of the repo boundary"
     );
+}
+
+// ─── T02 · the remaining verifier_invariants, recomputed rather than trusted ──
+//
+// `validate()` used to implement invariants 0, 5, 7 and half of 2. The run-1
+// code review took the REAL receipt this stack anchored and produced THREE
+// independent tampers that the shipped binary accepted with exit 0:
+//
+//   1. FREE-CHOSEN WEIGHTS. `weights` was outside everything the receipt binds:
+//      `receipt_id` is keccak over session+subject only, and each analyst
+//      signature covers that member's own `canonical_submission`, never the
+//      aggregate. `[10000,0,0,0]` passed cardinality, order, `<=10000` and
+//      `sum == 10000` — and that vector is what `governance-draft` turns into
+//      `RouterGovernance.propose` calldata.
+//   2. SWAPPED MEMBER LABELS. Filing member B's genuinely-signed submission
+//      under member A's entry left every signature `verified: true`, because the
+//      check verifies the carried string and never looks inside it. Fabricated
+//      `stances` and a disagreement attributed to `nobody-at-all` rode along.
+//   3. TRUNCATED SIGNATURES. Dropping two of three entries while leaving
+//      `quorum.submitted` at 3 kept `thinly_supported` false — the one
+//      automatic brake on a one-analyst recommendation, defeated by editing an
+//      integer.
+//
+// Each tamper below is the refusal for one of those, and
+// `the_live_run1_receipt_satisfies_every_added_invariant` is the §12.7.5
+// deployability evidence: the real receipt still validates, so no live digest
+// moves and core can ship ahead of the frontend.
+
+/// The `receipt` object out of the live run-1 envelope, as a mutable `Value`.
+fn live_receipt_value() -> serde_json::Value {
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&live_envelope()).expect("envelope is JSON");
+    envelope["receipt"].clone()
+}
+
+/// Parse a receipt `Value` as a bare receipt and return `validate()`'s verdict.
+fn validate_value(value: &serde_json::Value) -> Result<(), String> {
+    let raw = serde_json::to_vec(value).expect("re-serializes");
+    let receipt = ConsensusReceipt::from_json_slice(&raw)
+        .map_err(|e| format!("{}: {e}", e.code()))?;
+    receipt.validate().map_err(|e| format!("{}: {e}", e.code()))
+}
+
+/// Assert a tampered receipt is REFUSED and that the refusal names the reason.
+fn assert_tamper_refused(what: &str, value: &serde_json::Value, needle: &str) {
+    let err = validate_value(value).expect_err(&format!(
+        "{what} must be REFUSED — the run-1 review accepted this exact tamper with exit 0"
+    ));
+    assert!(
+        err.starts_with("ErrReceiptSchema"),
+        "{what} must surface as ErrReceiptSchema, got: {err}"
+    );
+    assert!(
+        err.contains(needle),
+        "{what}: the refusal must name {needle:?}, got: {err}"
+    );
+}
+
+#[test]
+fn tamper_1_free_chosen_weights_are_refused() {
+    // The tamper the review ran: replace the anchored allocation with an
+    // all-in-one-bucket vector that still satisfies every cardinality rule.
+    let mut value = live_receipt_value();
+    value["weights"] = json!([
+        {"bucket": "agent_tokens", "weight_bps": 10000},
+        {"bucket": "conservative_defi_yield", "weight_bps": 0},
+        {"bucket": "protocol_tokens", "weight_bps": 0},
+        {"bucket": "real_world_assets", "weight_bps": 0},
+    ]);
+    assert_tamper_refused("free-chosen weights", &value, "weights");
+}
+
+#[test]
+fn tamper_1b_a_single_basis_point_of_weight_drift_is_refused() {
+    // One bp moved between two buckets keeps the sum at 10000 and the order
+    // canonical. Only the recomputation catches it.
+    let mut value = live_receipt_value();
+    let first = value["weights"][0]["weight_bps"].as_u64().expect("bps");
+    let second = value["weights"][1]["weight_bps"].as_u64().expect("bps");
+    value["weights"][0]["weight_bps"] = json!(first + 1);
+    value["weights"][1]["weight_bps"] = json!(second - 1);
+    assert_tamper_refused("one basis point of weight drift", &value, "weights");
+}
+
+#[test]
+fn tamper_2_swapped_member_labels_are_refused() {
+    // File entry 0's genuinely-signed submission under entry 1's member_id.
+    // Every signature still verifies: the check reads the carried string.
+    let mut value = live_receipt_value();
+    let borrowed = value["analyst_signatures"][0]["canonical_submission"].clone();
+    value["analyst_signatures"][1]["canonical_submission"] = borrowed;
+    assert_tamper_refused(
+        "a submission filed under another member's entry",
+        &value,
+        "filed under",
+    );
+}
+
+#[test]
+fn tamper_2b_a_fabricated_stance_histogram_is_refused() {
+    // `stances` is written by the aggregator; the submissions carry the truth.
+    let mut value = live_receipt_value();
+    let submitted = value["quorum"]["submitted"].as_u64().expect("submitted");
+    value["stances"] = json!({
+        "bearish": submitted,
+        "cautious": 0,
+        "neutral": 0,
+        "constructive": 0,
+        "bullish": 0,
+    });
+    assert_tamper_refused("a fabricated stance histogram", &value, "stances");
+}
+
+#[test]
+fn tamper_2c_a_disagreement_attributed_to_nobody_is_refused() {
+    let mut value = live_receipt_value();
+    value["judge"]["disagreements"] = json!([{
+        "topic": "how much stable yield the treasury should hold",
+        "positions": [{"member_id": "nobody-at-all", "view": "a view no member expressed"}],
+        "what_settles": "a vote",
+    }]);
+    assert_tamper_refused(
+        "a disagreement naming a member the receipt does not carry",
+        &value,
+        "nobody-at-all",
+    );
+}
+
+#[test]
+fn tamper_3_truncated_signatures_with_an_intact_quorum_are_refused() {
+    // THE thinly_supported BYPASS. Drop two of three entries and leave
+    // quorum.submitted at 3: take_count == submitted == 3, min_takes unchanged,
+    // so thinly_supported stays false and the release stays "safe" on the
+    // strength of ONE analyst.
+    let mut value = live_receipt_value();
+    let all = value["analyst_signatures"]
+        .as_array()
+        .expect("analyst_signatures is an array")
+        .clone();
+    assert!(
+        all.len() > 1,
+        "the live receipt must carry more than one signature for this tamper to mean anything"
+    );
+    value["analyst_signatures"] = json!([all[0].clone()]);
+    assert_tamper_refused(
+        "signatures truncated while quorum.submitted stayed put",
+        &value,
+        "quorum.submitted",
+    );
+}
+
+#[test]
+fn the_live_run1_receipt_satisfies_every_added_invariant() {
+    // §12.7.5 deployability: core refuses receipts it used to accept, but NOT
+    // this one. If this goes red, shipping core alone breaks the live path.
+    let value = live_receipt_value();
+    validate_value(&value).expect(
+        "the REAL run-1 receipt must still validate under the added invariants — \
+         a refusal here moves an already-anchored digest",
+    );
+}
+
+#[test]
+fn the_shared_fixtures_satisfy_every_added_invariant() {
+    for name in [
+        "consensus-receipt.valid.json",
+        "consensus-receipt.valid-no-weights.json",
+    ] {
+        let value: serde_json::Value =
+            serde_json::from_slice(&fixture(name)).expect("fixture is JSON");
+        validate_value(&value)
+            .unwrap_or_else(|e| panic!("shared fixture {name} must still validate: {e}"));
+    }
+}
+
+// ─── bps_conversion, against the published conformance vector ────────────────
+//
+// `consensus-receipt.bps-conversion.conformance.json` is the frontend-authored
+// vector for this one clause, committed here byte-identical. It exists because
+// the whole-receipt goldens have a whole-basis-point mean — every remainder is
+// exactly 0, the leftover is 0, and neither the apportionment loop nor the
+// tie-break ever runs — so they cannot tell LARGEST REMAINDER apart from the
+// superseded settle-the-last rule. This vector can: it has a nonzero leftover
+// AND an exact three-way tie, and the two rules disagree on it.
+
+fn bps_conformance_vector() -> serde_json::Value {
+    serde_json::from_slice(&fixture("consensus-receipt.bps-conversion.conformance.json"))
+        .expect("the bps-conversion conformance vector is valid JSON")
+}
+
+fn shares_from(value: &serde_json::Value) -> [f64; 4] {
+    let mut out = [0.0f64; 4];
+    for (i, bucket) in CANONICAL_BUCKET_ORDER.iter().enumerate() {
+        out[i] = value[bucket]
+            .as_f64()
+            .unwrap_or_else(|| panic!("the vector holds a numeric share for {bucket}"));
+    }
+    out
+}
+
+#[test]
+fn bps_conversion_reproduces_the_published_conformance_vector() {
+    let vector = bps_conformance_vector();
+    assert_eq!(
+        vector["canonical_bucket_order"]
+            .as_array()
+            .expect("the vector pins the bucket order")
+            .iter()
+            .map(|v| v.as_str().expect("bucket name"))
+            .collect::<Vec<_>>(),
+        CANONICAL_BUCKET_ORDER.to_vec(),
+        "the vector's bucket order must be the one this crate compiles in"
+    );
+
+    let expected: Vec<u32> = vector["expected_weight_bps"]["weights"]
+        .as_array()
+        .expect("expected weights")
+        .iter()
+        .map(|v| v.as_u64().expect("integer bps") as u32)
+        .collect();
+    let got = bucket_shares_to_bps(&shares_from(&vector["shares"]))
+        .expect("the conformance vector IS a share vector");
+    assert_eq!(got.to_vec(), expected, "largest remainder, tie-broken by canonical order");
+
+    // NON-VACUITY. The superseded rule reproduces every whole-bps golden in the
+    // repo; this assertion is what proves the check above discriminates.
+    let superseded: Vec<u32> = vector["discriminates_from"]["weights"]
+        .as_array()
+        .expect("the superseded rule's output")
+        .iter()
+        .map(|v| v.as_u64().expect("integer bps") as u32)
+        .collect();
+    assert_ne!(
+        got.to_vec(),
+        superseded,
+        "this vector exists to tell largest remainder apart from settle-the-last; \
+         if the two agree here the conformance check proves nothing"
+    );
+}
+
+#[test]
+fn bps_conversion_is_binary64_and_not_decimal() {
+    // The spec's own self-test for `arithmetic_domain`: the same prose over
+    // decimal or rational arithmetic awards the contested bp to a different
+    // bucket, and one divergence is a verification failure against an anchored
+    // digest.
+    let vector: serde_json::Value = serde_json::from_slice(&fixture(
+        "consensus-receipt.canonicalization.json",
+    ))
+    .expect("the canonicalization spec is valid JSON");
+    let example = &vector["bps_conversion"]["divergent_example"];
+    let expected: Vec<u32> = example["bps_binary64"]
+        .as_array()
+        .expect("bps_binary64")
+        .iter()
+        .map(|v| v.as_u64().expect("integer bps") as u32)
+        .collect();
+    let wrong: Vec<u32> = example["bps_decimal_WRONG"]
+        .as_array()
+        .expect("bps_decimal_WRONG")
+        .iter()
+        .map(|v| v.as_u64().expect("integer bps") as u32)
+        .collect();
+    let got = bucket_shares_to_bps(&shares_from(&example["shares"]))
+        .expect("the divergent example IS a share vector");
+    assert_eq!(got.to_vec(), expected, "this pipeline must be IEEE-754 binary64");
+    assert_ne!(got.to_vec(), wrong, "a decimal recomputation anchors different bytes");
+}
+
+#[test]
+fn bps_conversion_absorbs_producer_settle_dust_and_refuses_a_real_negative() {
+    // `negative_dust_clamp`: the producer emits exactly -1e-8 on ~12.4% of
+    // zero-RWA sessions, and refusing it would reintroduce the defect largest
+    // remainder was adopted to remove.
+    let dust = [0.33333333, 0.33333333, 0.33333334, -1e-8];
+    let got = bucket_shares_to_bps(&dust).expect("settle dust is absorbed, not refused");
+    assert_eq!(got.iter().sum::<u32>(), 10_000);
+    assert_eq!(got[3], 0, "-1e-8 of a vault is not an allocation");
+
+    // A share more negative than the tolerance is a REAL negative allocation.
+    let real_negative = [0.5, 0.5, 0.1, -0.1];
+    bucket_shares_to_bps(&real_negative)
+        .expect_err("a share more negative than the tolerance is refused BY NAME");
 }

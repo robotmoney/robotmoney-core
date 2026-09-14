@@ -55,7 +55,8 @@ use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
 use crate::tx::{
-    broadcast, build_eip1559, encode_signed, signing_hash, wait_for_receipt_with, Eip1559Inputs,
+    broadcast, build_eip1559, encode_signed, signing_hash, wait_for_successful_receipt,
+    Eip1559Inputs,
 };
 
 const EXIT_OK: i32 = 0;
@@ -424,10 +425,43 @@ pub fn run_submit(args: SubmitArgs) -> i32 {
     };
 
     let max_attempts = args.receipt_timeout_secs.min(u32::MAX as u64) as u32;
+    // A MINED TRANSACTION IS NOT AN ANCHORED RECEIPT. `consensusRecordReceipt`
+    // is `onlyRole(AGENT_ROLE)` and the receipt contract additionally requires
+    // `COMMITTEE_AGENT_ROLE` on the IC policy, so an unauthorized submitter's
+    // transaction is accepted by the node, mined, and reverted — status 0, no
+    // `ReceiptRecorded` log, `receiptCount()` unchanged. Before `1854fe6e` this
+    // command printed `{"ok":true, tx_hash, block_number}` and exited 0 for
+    // exactly that case, which is the "transaction failure is silent" condition
+    // project-fusion.md AC-CORE-09 forbids. Observed on devnet 918453 during QA
+    // step 3.7 with two reverted anchors both reported as successes.
+    //
+    // T23: `1854fe6e` closed it by adding a SIXTH inline copy of the status
+    // check; the copy is gone and the refusal now comes from the shared write
+    // seam. The COMMAND-SPECIFIC ERROR CODE STAYS — `ErrReceiptRecordReverted`
+    // is part of the agent-visible CLI contract and says which write reverted,
+    // which the generic `ErrTxReverted` does not — so this call site maps the
+    // seam's error rather than forwarding `e.name()` the way propose and vote do.
     let receipt = match rt.block_on(async {
-        wait_for_receipt_with(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1)).await
+        wait_for_successful_receipt(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1))
+            .await
     }) {
         Ok(r) => r,
+        Err(RmpcError::ErrTxReverted { .. }) => {
+            emit_failure(
+                &ReceiptFailure {
+                    ok: false,
+                    error: "ErrReceiptRecordReverted".to_string(),
+                    message: Some(format!(
+                        "the anchor transaction was mined but REVERTED \
+                         (tx_hash={tx_hash:#x}); nothing was recorded — the caller may lack \
+                         AGENT_ROLE on the gateway or COMMITTEE_AGENT_ROLE on the IC policy, or \
+                         this receipt_id is already recorded"
+                    )),
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
         Err(e) => {
             emit_failure(
                 &ReceiptFailure {
@@ -442,34 +476,6 @@ pub fn run_submit(args: SubmitArgs) -> i32 {
     };
 
     let block_number = receipt.block_number.unwrap_or(0);
-
-    // A MINED TRANSACTION IS NOT AN ANCHORED RECEIPT. `consensusRecordReceipt`
-    // is `onlyRole(AGENT_ROLE)` and the receipt contract additionally requires
-    // `COMMITTEE_AGENT_ROLE` on the IC policy, so an unauthorized submitter's
-    // transaction is accepted by the node, mined, and reverted — status 0, no
-    // `ReceiptRecorded` log, `receiptCount()` unchanged. Without this check the
-    // command printed `{"ok":true, tx_hash, block_number}` and exited 0 for
-    // exactly that case, which is the "transaction failure is silent" condition
-    // project-fusion.md AC-CORE-09 forbids. `propose.rs` and `vote.rs` already
-    // apply this check after `wait_for_receipt_with`; the anchoring path did
-    // not. Observed on devnet 918453 during QA step 3.7 with two reverted
-    // anchors both reported as successes.
-    if !receipt.inner.status() {
-        emit_failure(
-            &ReceiptFailure {
-                ok: false,
-                error: "ErrReceiptRecordReverted".to_string(),
-                message: Some(format!(
-                    "the anchor transaction was mined but REVERTED (tx_hash={tx_hash:#x}, \
-                     block={block_number}); nothing was recorded — the caller may lack \
-                     AGENT_ROLE on the gateway or COMMITTEE_AGENT_ROLE on the IC policy, or \
-                     this receipt_id is already recorded"
-                )),
-            },
-            args.pretty,
-        );
-        return EXIT_REFUSAL;
-    }
 
     log::info!("rmpc receipt submit: ok tx_hash={tx_hash:#x} block={block_number}");
     emit_output(

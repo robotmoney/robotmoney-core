@@ -83,3 +83,33 @@ discarding the two keys, has reproduced that failure.
 
 A conforming refusal names the offending key. In core the error is
 `ErrReceiptSchema`.
+
+## `consensus-receipt.bps-conversion.conformance.json` — expected outcome: REPRODUCE (T02)
+
+Frontend-authored (`contract/src/__fixtures__/`, issue #823) and vendored here
+byte-identical at `v0.5.0-rc.2`. It isolates **one clause** — `bps_conversion`
+in `consensus-receipt.canonicalization.json` — so a foreign implementation can
+check the part it is most likely to get wrong without first reimplementing the
+rest of schema 1.0.
+
+**Why a second vector was needed.** The whole-receipt goldens
+(`consensus-receipt.valid.json`) have a whole-basis-point mean — raw
+`[1250, 6000, 1750, 1000]` — so every remainder is exactly `0`, the leftover is
+`0`, and **neither the apportionment loop nor the tie-break ever executes**.
+That golden therefore cannot tell LARGEST REMAINDER apart from the superseded
+settle-the-last rule: an implementation still doing settle-the-last reproduces
+it byte for byte. This vector has a nonzero leftover **and** an exact three-way
+tie, so the two rules disagree on it — and the file publishes the superseded
+rule's output under `discriminates_from` precisely so a test can assert the two
+differ. A conformance assertion that does not also assert that non-vacuity is
+proving nothing.
+
+Consumers: `bucket_shares_to_bps()` in
+`clients/rust-payment-client/src/consensus_receipt.rs` (core) and
+`bucketSharesToBps()` in `contract/src/consensus-receipt.js` (frontend, the
+reference implementation). The companion self-test for
+`bps_conversion.arithmetic_domain` lives inside the canonicalization spec itself
+as `divergent_example`: convert its share vector and you must get
+`bps_binary64`, never `bps_decimal_WRONG`. Getting the second one means the
+implementation left IEEE-754 binary64 — typically by reaching for exact decimal
+arithmetic — and its receipts will not verify against an anchored digest.
