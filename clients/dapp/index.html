@@ -3,6 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- QA finding R20: without these, every page load requests /favicon.ico,
+         the static host answers 404, and the browser logs a failed-resource
+         error. Both files live in public/ and are copied verbatim into dist/
+         by `vite build`. -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" type="image/png" href="/favicon.png" sizes="32x32" />
     <title>RobotMoney Admin Dapp</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

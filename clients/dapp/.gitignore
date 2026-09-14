@@ -3,6 +3,9 @@ dist/
 .vite/
 test-results/
 playwright-report/
+# R20: outputs of the read-only public-deployment run (playwright.public.config.ts).
+test-results-public/
+playwright-report-public/
 playwright/.cache/
 *.log
 tsconfig.tsbuildinfo

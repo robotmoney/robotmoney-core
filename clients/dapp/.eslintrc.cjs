@@ -137,6 +137,8 @@ module.exports = {
       files: [
         "tests/e2e/**/*.ts",
         "playwright.config.ts",
+        // R20: the read-only public-deployment config, same Playwright convention.
+        "playwright.public.config.ts",
         "vite.config.ts",
         "vitest.config.ts",
         "vitest.workspace.ts",
