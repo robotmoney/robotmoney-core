@@ -1377,9 +1377,15 @@ async fn fetch_and_verify_payload(
     //
     // This can never accept a wrong digest: the comparison is still against the
     // on-chain `expected_digest`, the canonicalization is deterministic, and the
-    // re-derivation reads only the receipt object — never the envelope's own
-    // `canonicalBytes` or `verified` fields, which are the server's claims and
-    // are deliberately not trusted here.
+    // re-derivation reads only the receipt object. The envelope's `verified`
+    // flag is still never trusted — it is the server's own claim. Its
+    // `canonicalBytes` are no longer ignored either, but they are used only as a
+    // CROSS-CHECK, never as a source: `from_json_slice` compares them against
+    // core's own re-derivation and returns `ErrReceiptCanonicalBytesMismatch`
+    // when the two producers disagree (T03/R27), which lands in the `Err` arm
+    // below as `verified = false`. So a publisher that hashes a preimage core
+    // would not re-derive can never be recorded verified by agreeing with
+    // itself.
     if alloy_primitives::keccak256(&body).0 == expected_digest {
         return Ok((true, body.len() as i64));
     }
