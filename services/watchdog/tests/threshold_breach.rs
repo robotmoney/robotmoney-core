@@ -134,6 +134,7 @@ fn make_alert_config(per_block_mint: u64, webhook_url: &str) -> Config {
         // The consensus-receipt liveness monitor is off by default, so these
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
+        governance: Default::default(),
     }
 }
 
@@ -251,6 +252,7 @@ fn config_missing_threshold_is_fatal() {
         // The consensus-receipt liveness monitor is off by default, so these
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
+        governance: Default::default(),
     };
 
     let err = bad.validate().unwrap_err();

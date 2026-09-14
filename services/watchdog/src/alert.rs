@@ -212,42 +212,35 @@ pub async fn dispatch_missing_receipt_alert(
         event.seconds_since, event.budget_secs, event.chain_id,
     );
 
-    let body = MissingReceiptAlertPayload {
-        event_action: "trigger",
-        routing_key: "watchdog",
-        dedup_key: missing_receipt_dedup_key(event.chain_id),
-        payload: Some(MissingReceiptAlertInner {
-            summary,
-            severity: "critical",
-            source: "watchdog",
-            custom_details: MissingReceiptDetails {
-                alert_kind: "consensus_receipt_missing",
-                chain_id: event.chain_id,
-                last_recorded_at: event.last_recorded_at,
-                gap_started_at: event.gap_started_at,
-                observed_at: event.now,
-                seconds_since_last_receipt: event.seconds_since,
-                budget_secs: event.budget_secs,
-            },
-        }),
-    };
-
-    let resp = client
-        .post(webhook_url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| WatchdogError::Alert(format!("webhook POST failed: {e}")))?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(WatchdogError::Alert(format!(
-            "webhook returned HTTP {status}: {text}"
-        )));
-    }
-
-    Ok(())
+    // One POST helper for all four consensus-receipt events (T30c). The inline
+    // copy this replaces was the odd one out: the next hardening applied to
+    // `post_event` — a timeout, a retry, an auth header — would have reached
+    // three call sites and silently missed the missing-receipt trigger, which
+    // is the one that matters most.
+    post_event(
+        client,
+        webhook_url,
+        &MissingReceiptAlertPayload {
+            event_action: "trigger",
+            routing_key: "watchdog",
+            dedup_key: missing_receipt_dedup_key(event.chain_id),
+            payload: Some(MissingReceiptAlertInner {
+                summary,
+                severity: "critical",
+                source: "watchdog",
+                custom_details: MissingReceiptDetails {
+                    alert_kind: "consensus_receipt_missing",
+                    chain_id: event.chain_id,
+                    last_recorded_at: event.last_recorded_at,
+                    gap_started_at: event.gap_started_at,
+                    observed_at: event.now,
+                    seconds_since_last_receipt: event.seconds_since,
+                    budget_secs: event.budget_secs,
+                },
+            }),
+        },
+    )
+    .await
 }
 
 /// PagerDuty Events v2 -shaped envelope for a missing-receipt page.
@@ -275,6 +268,133 @@ pub fn missing_receipt_dedup_key(chain_id: i64) -> String {
 /// Stable incident key for "the monitor is enabled but has no baseline at all".
 pub fn no_baseline_dedup_key(chain_id: i64) -> String {
     format!("consensus_receipt_monitor_no_baseline:{chain_id}")
+}
+
+/// Stable incident key for "the router's quorum threshold is below the floor".
+pub fn quorum_below_floor_dedup_key(chain_id: i64) -> String {
+    format!("router_quorum_below_floor:{chain_id}")
+}
+
+/// Details for the no-baseline page.
+///
+/// Its own type rather than a reuse of [`MissingReceiptDetails`] (T30c): a
+/// blind monitor has measured nothing, so it has no gap, no budget and no
+/// observation time. The reused shape asserted a 0-second gap observed at Unix
+/// epoch 0 — three numbers that are not merely absent but wrong, and that read
+/// on the receiver as a healthy instantaneous check.
+#[derive(Debug, Serialize)]
+pub struct NoBaselineDetails {
+    /// Always `"consensus_receipt_monitor_no_baseline"`.
+    pub alert_kind: &'static str,
+    /// Chain ID the monitor is blind on.
+    pub chain_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct NoBaselineAlertPayload {
+    event_action: &'static str,
+    routing_key: &'static str,
+    dedup_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<NoBaselineAlertInner>,
+}
+
+#[derive(Debug, Serialize)]
+struct NoBaselineAlertInner {
+    summary: String,
+    severity: &'static str,
+    source: &'static str,
+    custom_details: NoBaselineDetails,
+}
+
+/// Details for the router quorum-floor page (task T22, decision D16).
+#[derive(Debug, Serialize)]
+pub struct QuorumBelowFloorDetails {
+    /// Always `"router_quorum_below_floor"`.
+    pub alert_kind: &'static str,
+    /// Chain the router lives on.
+    pub chain_id: i64,
+    /// Router address that was read.
+    pub router_address: String,
+    /// The threshold read from the chain.
+    pub quorum_threshold: u64,
+    /// The configured floor.
+    pub min_quorum_threshold: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct QuorumAlertPayload {
+    event_action: &'static str,
+    routing_key: &'static str,
+    dedup_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<QuorumAlertInner>,
+}
+
+#[derive(Debug, Serialize)]
+struct QuorumAlertInner {
+    summary: String,
+    severity: &'static str,
+    source: &'static str,
+    custom_details: QuorumBelowFloorDetails,
+}
+
+/// Page because `RouterGovernance.quorumThreshold()` is at or below the floor.
+///
+/// Decision D16: the contract floor stops a *new* deployment from being wired
+/// this way; this stops an already-deployed router from being quietly lowered
+/// by an `ADMIN_ROLE` holder after `AC-GOV-03`'s evidence was collected.
+pub async fn dispatch_quorum_below_floor_alert(
+    client: &Client,
+    webhook_url: &str,
+    breach: &crate::governance::QuorumBreach,
+) -> Result<(), WatchdogError> {
+    post_event(
+        client,
+        webhook_url,
+        &QuorumAlertPayload {
+            event_action: "trigger",
+            routing_key: "watchdog",
+            dedup_key: quorum_below_floor_dedup_key(breach.chain_id),
+            payload: Some(QuorumAlertInner {
+                summary: format!(
+                    "RobotMoney watchdog: RouterGovernance.quorumThreshold() is {} on chain {} \
+                     (floor {}) — one voter is a quorum. AC-GOV-03 was accepted on two-of-two; \
+                     check who called setQuorumThreshold and restore the threshold.",
+                    breach.threshold, breach.chain_id, breach.min_threshold,
+                ),
+                severity: "critical",
+                source: "watchdog",
+                custom_details: QuorumBelowFloorDetails {
+                    alert_kind: "router_quorum_below_floor",
+                    chain_id: breach.chain_id,
+                    router_address: breach.router_address.clone(),
+                    quorum_threshold: breach.threshold,
+                    min_quorum_threshold: breach.min_threshold,
+                },
+            }),
+        },
+    )
+    .await
+}
+
+/// Resolve the quorum-floor page once the threshold is back at or above it.
+pub async fn dispatch_quorum_below_floor_resolve(
+    client: &Client,
+    webhook_url: &str,
+    chain_id: i64,
+) -> Result<(), WatchdogError> {
+    post_event(
+        client,
+        webhook_url,
+        &QuorumAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: quorum_below_floor_dedup_key(chain_id),
+            payload: None,
+        },
+    )
+    .await
 }
 
 #[derive(Debug, Serialize)]
@@ -326,11 +446,11 @@ pub async fn dispatch_no_baseline_alert(
     post_event(
         client,
         webhook_url,
-        &MissingReceiptAlertPayload {
+        &NoBaselineAlertPayload {
             event_action: "trigger",
             routing_key: "watchdog",
             dedup_key: no_baseline_dedup_key(chain_id),
-            payload: Some(MissingReceiptAlertInner {
+            payload: Some(NoBaselineAlertInner {
                 summary: format!(
                     "RobotMoney watchdog: consensus-receipt monitor has NO baseline on chain \
                      {chain_id} — no anchored receipt and no indexer run for this chain id. \
@@ -338,14 +458,9 @@ pub async fn dispatch_no_baseline_alert(
                 ),
                 severity: "critical",
                 source: "watchdog",
-                custom_details: MissingReceiptDetails {
+                custom_details: NoBaselineDetails {
                     alert_kind: "consensus_receipt_monitor_no_baseline",
                     chain_id,
-                    last_recorded_at: None,
-                    gap_started_at: 0,
-                    observed_at: 0,
-                    seconds_since_last_receipt: 0,
-                    budget_secs: 0,
                 },
             }),
         },
@@ -362,7 +477,7 @@ pub async fn dispatch_no_baseline_resolve(
     post_event(
         client,
         webhook_url,
-        &MissingReceiptAlertPayload {
+        &NoBaselineAlertPayload {
             event_action: "resolve",
             routing_key: "watchdog",
             dedup_key: no_baseline_dedup_key(chain_id),
@@ -372,10 +487,13 @@ pub async fn dispatch_no_baseline_resolve(
     .await
 }
 
-async fn post_event(
+/// The single POST seam every consensus-receipt and governance event goes
+/// through. Generic over the payload so there is exactly one place to add a
+/// timeout, a retry or an auth header (T30c).
+async fn post_event<B: Serialize>(
     client: &Client,
     webhook_url: &str,
-    body: &MissingReceiptAlertPayload,
+    body: &B,
 ) -> Result<(), WatchdogError> {
     let resp = client
         .post(webhook_url)
@@ -446,6 +564,62 @@ mod tests {
             v.get("payload").is_none(),
             "a resolve must not re-send the trigger body"
         );
+    }
+
+    #[test]
+    fn the_no_baseline_payload_asserts_no_numbers_it_never_measured() {
+        // T30c regression: the no-baseline page used to reuse MissingReceiptDetails
+        // and ship gap_started_at=0, observed_at=0, seconds_since_last_receipt=0,
+        // budget_secs=0 — a 0-second gap observed at the Unix epoch.
+        let v = serde_json::to_value(NoBaselineDetails {
+            alert_kind: "consensus_receipt_monitor_no_baseline",
+            chain_id: 918_453,
+        })
+        .unwrap();
+        assert_eq!(v["alert_kind"], "consensus_receipt_monitor_no_baseline");
+        assert_eq!(v["chain_id"], 918_453);
+        for absent in [
+            "gap_started_at",
+            "observed_at",
+            "seconds_since_last_receipt",
+            "budget_secs",
+            "last_recorded_at",
+        ] {
+            assert!(
+                v.get(absent).is_none(),
+                "a blind monitor must not report {absent}: it measured nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn quorum_dedup_key_is_its_own_incident_per_chain() {
+        assert_eq!(
+            quorum_below_floor_dedup_key(918_453),
+            "router_quorum_below_floor:918453"
+        );
+        assert_ne!(
+            quorum_below_floor_dedup_key(918_453),
+            missing_receipt_dedup_key(918_453)
+        );
+        assert_ne!(
+            quorum_below_floor_dedup_key(918_453),
+            quorum_below_floor_dedup_key(8_453)
+        );
+    }
+
+    #[test]
+    fn a_quorum_resolve_carries_the_key_and_no_payload() {
+        let v = serde_json::to_value(QuorumAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: quorum_below_floor_dedup_key(918_453),
+            payload: None,
+        })
+        .unwrap();
+        assert_eq!(v["event_action"], "resolve");
+        assert_eq!(v["dedup_key"], "router_quorum_below_floor:918453");
+        assert!(v.get("payload").is_none());
     }
 
     #[test]

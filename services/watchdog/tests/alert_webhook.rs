@@ -199,3 +199,194 @@ async fn missing_consensus_receipt_pages_with_a_distinguishable_payload() {
         "a missing receipt is not a USDC volume breach"
     );
 }
+
+// ---- T08: nothing is committed before the receiver confirmed ---------------
+
+/// A non-2xx receiver must leave the pager armed and must not silence the page
+/// for a whole publishing cadence.
+///
+/// This is the regression for the defect as it stood: `on_firing` stamped
+/// `last_paged_at` before any I/O and `main()` only logged the dispatch error,
+/// so ONE transient non-2xx silenced the missing-receipt page for
+/// `expected_cadence_secs` — 86 400 s on the committed staging profile,
+/// including the `no_baseline` page whose whole job is to say the monitor is
+/// blind. Driven through the real dispatcher and a real HTTP failure, not a
+/// mocked `Result`.
+#[tokio::test]
+async fn a_non_2xx_receiver_leaves_the_missing_receipt_pager_armed() {
+    use common::FailingWebhookServer;
+    use watchdog::alert::dispatch_missing_receipt_alert;
+    use watchdog::receipt_liveness::{
+        AlertPager, MissingReceiptEvent, PageAction, RETRY_FLOOR_CEILING_SECS,
+    };
+
+    let down = FailingWebhookServer::start(503).await;
+    let client = Client::new();
+
+    // The committed staging cadence, so the silence this used to cause is the
+    // silence being asserted against.
+    let mut pager = AlertPager::new(86_400);
+    let event = MissingReceiptEvent {
+        chain_id: 918_453,
+        last_recorded_at: None,
+        gap_started_at: 1_000,
+        now: 90_000,
+        seconds_since: 89_000,
+        budget_secs: 108_000,
+    };
+
+    let action = pager.on_firing(event.now);
+    assert_eq!(action, PageAction::Trigger);
+    let sent = dispatch_missing_receipt_alert(&client, &down.url, &event).await;
+    assert!(
+        sent.is_err(),
+        "a 503 receiver must be reported as a failure"
+    );
+    pager.on_page_result(event.now, action, sent.is_ok());
+
+    assert!(
+        !pager.is_firing(),
+        "an undelivered trigger must not be recorded as an open incident"
+    );
+    assert_eq!(
+        pager.state().last_paged_at,
+        None,
+        "nothing reached a human, so nothing may be committed"
+    );
+    assert_eq!(
+        pager.on_firing(event.now + RETRY_FLOOR_CEILING_SECS as i64),
+        PageAction::Trigger,
+        "the retry is due one 60s failure floor later, not 86 400s later"
+    );
+    // ...and the poll cycles inside the floor do not hammer the down receiver.
+    assert_eq!(pager.on_firing(event.now + 12), PageAction::None);
+    assert_eq!(pager.on_firing(event.now + 48), PageAction::None);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        down.request_count(),
+        1,
+        "exactly one POST was attempted against the down receiver"
+    );
+    down.shutdown();
+}
+
+/// A recovered receiver commits the trigger, and the resolve then closes it.
+#[tokio::test]
+async fn a_confirmed_delivery_commits_and_the_resolve_closes_the_incident() {
+    use watchdog::alert::{dispatch_missing_receipt_alert, dispatch_missing_receipt_resolve};
+    use watchdog::receipt_liveness::{AlertPager, MissingReceiptEvent, PageAction};
+
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+    let mut pager = AlertPager::new(300);
+    let event = MissingReceiptEvent {
+        chain_id: 918_453,
+        last_recorded_at: Some(1_000),
+        gap_started_at: 1_000,
+        now: 1_500,
+        seconds_since: 500,
+        budget_secs: 360,
+    };
+
+    let action = pager.on_firing(event.now);
+    assert_eq!(action, PageAction::Trigger);
+    let sent = dispatch_missing_receipt_alert(&client, &server.url, &event).await;
+    assert!(sent.is_ok());
+    assert!(pager.on_page_result(event.now, action, true));
+    assert!(pager.is_firing());
+
+    let action = pager.on_clear(1_600);
+    assert_eq!(action, PageAction::Resolve);
+    let sent = dispatch_missing_receipt_resolve(&client, &server.url, 918_453).await;
+    assert!(sent.is_ok());
+    assert!(pager.on_page_result(1_600, action, true));
+    assert!(!pager.is_firing());
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    let caps = server.drain_captures();
+    assert_eq!(caps.len(), 2, "one trigger, one resolve");
+    let trigger: serde_json::Value = serde_json::from_slice(&caps[0].body).unwrap();
+    let resolve: serde_json::Value = serde_json::from_slice(&caps[1].body).unwrap();
+    assert_eq!(trigger["event_action"], "trigger");
+    assert_eq!(resolve["event_action"], "resolve");
+    assert_eq!(
+        trigger["dedup_key"], resolve["dedup_key"],
+        "the resolve must carry the same incident key, or on-call sees an \
+         incident that never closes"
+    );
+    server.shutdown();
+}
+
+/// The no-baseline page reports only what a blind monitor actually knows (T30c).
+#[tokio::test]
+async fn the_no_baseline_page_reports_no_gap_numbers_it_never_measured() {
+    use watchdog::alert::dispatch_no_baseline_alert;
+
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+    dispatch_no_baseline_alert(&client, &server.url, 918_453)
+        .await
+        .expect("dispatch");
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    let caps = server.drain_captures();
+    assert_eq!(caps.len(), 1);
+    let v: serde_json::Value = serde_json::from_slice(&caps[0].body).unwrap();
+    assert_eq!(
+        v["dedup_key"],
+        "consensus_receipt_monitor_no_baseline:918453"
+    );
+    let d = &v["payload"]["custom_details"];
+    assert_eq!(d["alert_kind"], "consensus_receipt_monitor_no_baseline");
+    assert_eq!(d["chain_id"], 918_453);
+    for absent in [
+        "gap_started_at",
+        "observed_at",
+        "seconds_since_last_receipt",
+        "budget_secs",
+        "last_recorded_at",
+    ] {
+        assert!(
+            d.get(absent).is_none(),
+            "the wire payload must not assert {absent}: the monitor measured nothing"
+        );
+    }
+    server.shutdown();
+}
+
+/// The quorum-floor page is its own incident with the numbers on it (T22/D16).
+#[tokio::test]
+async fn a_quorum_below_the_floor_pages_with_the_observed_threshold() {
+    use watchdog::alert::dispatch_quorum_below_floor_alert;
+    use watchdog::governance::QuorumBreach;
+
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+    let breach = QuorumBreach {
+        chain_id: 918_453,
+        router_address: format!("0x{}", "ab".repeat(20)),
+        threshold: 1,
+        min_threshold: 2,
+    };
+    dispatch_quorum_below_floor_alert(&client, &server.url, &breach)
+        .await
+        .expect("dispatch");
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    let caps = server.drain_captures();
+    assert_eq!(caps.len(), 1);
+    let v: serde_json::Value = serde_json::from_slice(&caps[0].body).unwrap();
+    assert_eq!(v["event_action"], "trigger");
+    assert_eq!(v["dedup_key"], "router_quorum_below_floor:918453");
+    let d = &v["payload"]["custom_details"];
+    assert_eq!(d["alert_kind"], "router_quorum_below_floor");
+    assert_eq!(d["quorum_threshold"], 1);
+    assert_eq!(d["min_quorum_threshold"], 2);
+    assert_eq!(d["router_address"], breach.router_address);
+    assert!(v["payload"]["summary"]
+        .as_str()
+        .unwrap()
+        .contains("one voter is a quorum"));
+    server.shutdown();
+}
