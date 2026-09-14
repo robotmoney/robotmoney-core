@@ -39,6 +39,8 @@ check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want: $3, got: $2)";
 # STUB_DIR/uri_embeds_digest  — non-empty: payloadUri contains the derived digest
 # STUB_DIR/malformed_tuple    — non-empty: getReceiptById emits a garbage tuple
 # STUB_DIR/rpc_down           — non-empty: every `cast call` fails like an outage
+# STUB_DIR/released           — non-empty: isReleased reports true
+# STUB_DIR/release_sends      — one line per `cast send` (a release broadcast)
 new_stubs() {
   STUB_DIR="$(mktemp -d)"
   mkdir -p "$STUB_DIR/bin"
@@ -54,6 +56,8 @@ new_stubs() {
   : >"$STUB_DIR/malformed_tuple"
   : >"$STUB_DIR/rpc_down"
   : >"$STUB_DIR/verify_ok_false_exit_zero"
+  : >"$STUB_DIR/released"
+  : >"$STUB_DIR/release_sends"
 
   cat >"$STUB_DIR/bin/rmpc" <<'STUB'
 #!/usr/bin/env bash
@@ -102,6 +106,13 @@ STUB
 #!/usr/bin/env bash
 case "$1" in
   block-number) cat "$STUB_DIR/block_number"; exit 0 ;;
+  chain-id) echo 918453; exit 0 ;;
+  send)
+    echo "send $*" >>"$STUB_DIR/release_sends"
+    printf '%s\n' "$STUB_DIR/released" >/dev/null
+    echo 1 >"$STUB_DIR/released"
+    echo '{"status":"0x1","transactionHash":"0xdeadbeef"}'
+    exit 0 ;;
   call)
     sig="$3"
     d="$(cat "$STUB_DIR/chain_digest")"
@@ -111,6 +122,20 @@ case "$1" in
     fi
     case "$sig" in
       isRecorded*) [[ -n "$d" ]] && echo true || echo false; exit 0 ;;
+      isReleased*) [[ -s "$STUB_DIR/released" ]] && echo true || echo false; exit 0 ;;
+      releaseReceipt*)
+        # An eth_call of releaseReceipt: already-released receipts revert.
+        if [[ -s "$STUB_DIR/released" ]]; then
+          echo "server returned an error response: execution reverted: ReceiptAlreadyReleased()" >&2
+          exit 1
+        fi
+        exit 0 ;;
+      consensusRecordReceipt*)
+        if [[ -n "$d" ]]; then
+          echo "server returned an error response: execution reverted: ReceiptAlreadyRecorded()" >&2
+          exit 1
+        fi
+        exit 0 ;;
       getReceiptById*)
         [[ -n "$d" ]] || exit 1
         if [[ -s "$STUB_DIR/malformed_tuple" ]]; then
@@ -471,6 +496,65 @@ if [[ -s "$RESULT" ]] && jq -e '[.assertions[] | select(.stage=="record" or .sta
 else
   bad "unselected stages were not recorded as skipped"
 fi
+
+# THE RELEASE STAGE MUST BE IDEMPOTENT, BECAUSE THE SCRIPT IS RUN TWICE.
+# AC-E2E-05's bundle wording invokes this path twice against the SAME receipt.
+# `releaseReceipt` is a one-shot transition: a second send reverts
+# ReceiptAlreadyReleased, so asserting on a fresh status 0x1 would fail the
+# second run for doing exactly what a released receipt should do. The record
+# stage has always been idempotent (submit-receipt-worker.sh reports
+# `already_anchored` and broadcasts nothing); the release stage was not, and the
+# asymmetry only appears on a second run.
+new_stubs; acceptance_env
+printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
+printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"   # already anchored
+echo 1 >"$STUB_DIR/released"                                     # already released
+export FUSION_RELEASE_KEYSTORE="$STUB_DIR/ks.json" \
+       FUSION_RELEASE_PASSWORD_FILE="$STUB_DIR/pass" \
+       FUSION_RELEASE_ADDRESS=0x00000000000000000000000000000000000000cc \
+       FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
+: >"$STUB_DIR/ks.json"; : >"$STUB_DIR/pass"
+cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
+#!/usr/bin/env bash
+out=""; prev=""
+for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
+[[ -n "$out" ]] && cp "$STUB_DIR/receipt.json" "$out"
+exit 0
+CURLSTUB
+chmod +x "$STUB_DIR/bin/curl"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,release \
+  --out "$RESULT" >/dev/null 2>&1
+check "a second run broadcasts NO release transaction" \
+  "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "0"
+if [[ -s "$RESULT" ]] && jq -e '[.assertions[] | select(.stage=="release" and (.assertion|test("the admin release transaction succeeds")))]
+      | length == 1 and all(.result == "PASS" and (.assertion|test("idempotent no-op")))' "$RESULT" >/dev/null 2>&1; then
+  ok "an already-released receipt is recorded as an idempotent no-op, named as one"
+else
+  bad "the second release was not an idempotent no-op: $(jq -c '[.assertions[]|select(.stage=="release")|{a:.assertion,r:.result}]' "$RESULT" 2>/dev/null)"
+fi
+
+# AND THE FIRST RUN MUST STILL SEND ONE. The no-op must not become a blanket
+# pass that never releases anything.
+new_stubs; acceptance_env
+printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
+printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
+export FUSION_RELEASE_KEYSTORE="$STUB_DIR/ks.json" \
+       FUSION_RELEASE_PASSWORD_FILE="$STUB_DIR/pass" \
+       FUSION_RELEASE_ADDRESS=0x00000000000000000000000000000000000000cc \
+       FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
+: >"$STUB_DIR/ks.json"; : >"$STUB_DIR/pass"
+cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
+#!/usr/bin/env bash
+out=""; prev=""
+for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
+[[ -n "$out" ]] && cp "$STUB_DIR/receipt.json" "$out"
+exit 0
+CURLSTUB
+chmod +x "$STUB_DIR/bin/curl"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,release \
+  --out "$RESULT" >/dev/null 2>&1
+check "an unreleased receipt still broadcasts exactly one release" \
+  "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "1"
 
 echo
 echo "scripts/fusion self-tests: $PASS passed, $FAIL failed"
