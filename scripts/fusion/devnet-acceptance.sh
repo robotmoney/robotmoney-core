@@ -408,6 +408,17 @@ if have_stage index; then
       expect index "AC-CORE-07 the explorer API reports the same payload digest as the chain" $? "$(head -c 300 <<<"$api")"
       grep -qF -- "$RECEIPT_URL" <<<"$api"
       expect index "AC-CORE-07 the explorer API reports the same payload URL as the chain" $? "$(head -c 300 <<<"$api")"
+      # THE INDEXER'S OWN VERIFICATION, AND ITS ONE-SHOT TRAP. The indexer fetches
+      # payload_uri and recomputes the digest on its FIRST scan of the
+      # ReceiptRecorded event, and stores verified=false PERMANENTLY if that fetch
+      # fails — it does not retry. So the anchored URL must be reachable FROM
+      # INSIDE the indexer's container network before the anchor is indexed, not
+      # merely from the machine running this script. A false here is not a
+      # transient: it is a row that will never become true without a reindex.
+      jq -e '(.receipt.verified // .verified) == true' <<<"$api" >/dev/null 2>&1
+      expect index "AC-CORE-07 the indexer independently re-fetched the payload URL and reproduced the digest (verified=true)" $? \
+        "verified=$(jq -r '.receipt.verified // .verified' <<<"$api" 2>/dev/null); if false, the indexer could not reach \
+the anchored URL from inside its own network on the first scan, and the row will NOT self-heal"
     fi
   fi
 else
@@ -455,6 +466,22 @@ and a recorded receipt"
         "$(tr -d '\n' <<<"$out" | head -c 300)"
     else
       record_assertion release "duplicate record" SKIP "FUSION_SUBMITTER_ADDRESS unset"
+    fi
+
+    # AC-CORE-07's release clause: the public API must agree that it is released,
+    # under the same confirmation policy the index stage waited on.
+    if [[ -n "${FUSION_EXPLORER_API:-}" ]]; then
+      deadline=$(( $(date +%s) + INDEX_TIMEOUT )); rel_api=""
+      while (( $(date +%s) < deadline )); do
+        rel_api="$(curl -fsS "${FUSION_EXPLORER_API%/}/v1/consensus-receipts/$RECEIPT_ID" 2>/dev/null)" && \
+          jq -e '(.receipt.released // .released) == true' <<<"$rel_api" >/dev/null 2>&1 && break
+        rel_api=""; sleep 5
+      done
+      keep "release-api.json" "${rel_api:-<not released in the API within ${INDEX_TIMEOUT}s>}"
+      [[ -n "$rel_api" ]]
+      expect release "AC-CORE-07 the public API reports the receipt as released" $? "within ${INDEX_TIMEOUT}s"
+    else
+      record_assertion release "API release state" SKIP "FUSION_EXPLORER_API unset"
     fi
   fi
 else
