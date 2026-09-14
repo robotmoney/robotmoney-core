@@ -139,6 +139,17 @@ pub enum ReceiptError {
         detail: String,
     },
 
+    /// The input was RECOGNISED as the publisher's envelope, but it does not
+    /// carry a usable `canonicalBytes` string. An envelope without the preimage
+    /// it claims to have hashed disables core's only free cross-repo drift
+    /// detector, so it is refused rather than accepted with the cross-check
+    /// silently skipped (T03 residual gap, R27/D11).
+    #[error("ErrReceiptEnvelopeCanonicalBytesMissing: {detail}")]
+    ErrReceiptEnvelopeCanonicalBytesMissing {
+        /// Why the envelope's `canonicalBytes` is unusable.
+        detail: String,
+    },
+
     /// One `analyst_signatures[]` entry failed Ed25519 verification, or its key
     /// or signature could not be decoded.
     #[error("ErrReceiptSignatureInvalid: analyst_signatures[member_id={member_id}]: {reason}")]
@@ -151,6 +162,19 @@ pub enum ReceiptError {
     },
 }
 
+/// The JSON type name of a value, for refusal messages that must name what the
+/// publisher actually sent rather than just saying "wrong type".
+fn json_type_name(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
 impl ReceiptError {
     /// Stable machine-readable code for the CLI's JSON `error` field.
     pub fn code(&self) -> &'static str {
@@ -159,6 +183,9 @@ impl ReceiptError {
             ReceiptError::ErrReceiptSchema(_) => "ErrReceiptSchema",
             ReceiptError::ErrReceiptCanonicalBytesMismatch { .. } => {
                 "ErrReceiptCanonicalBytesMismatch"
+            }
+            ReceiptError::ErrReceiptEnvelopeCanonicalBytesMissing { .. } => {
+                "ErrReceiptEnvelopeCanonicalBytesMissing"
             }
             ReceiptError::ErrReceiptSignatureInvalid { .. } => "ErrReceiptSignatureInvalid",
         }
@@ -428,6 +455,17 @@ impl ConsensusReceipt {
         // and the rc.3 failure (core dropping `judge.mode` and
         // `analyst_signatures[].revision`, hashing the remainder, exiting 0)
         // would have been caught here even without `deny_unknown_fields`.
+        //
+        // THE CROSS-CHECK IS MANDATORY ON AN ENVELOPE, NOT OPT-IN ON ITS SHAPE.
+        // Reading `canonicalBytes` with `.and_then(|v| v.as_str())` and
+        // treating `None` as "nothing to check" made the detector opt-in on
+        // publisher data: a publisher that stopped emitting the field, or
+        // emitted it as a number, silently disabled the one place the two
+        // canonicalizers meet, and core went back to the rc.3 blind spot while
+        // still exiting 0. So: once the input is RECOGNISED as an envelope,
+        // `canonicalBytes` MUST be present and MUST be a string, or the body is
+        // refused by name. A bare receipt is unaffected — it carries no
+        // envelope and makes no claim to have hashed anything.
         let mut published_canonical: Option<String> = None;
         let value = if parsed.get("schema_version").is_some() {
             parsed
@@ -436,10 +474,32 @@ impl ConsensusReceipt {
             .and_then(|r| r.get("schema_version"))
             .is_some()
         {
-            published_canonical = parsed
-                .get("canonicalBytes")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            published_canonical = Some(match parsed.get("canonicalBytes") {
+                None => {
+                    return Err(ReceiptError::ErrReceiptEnvelopeCanonicalBytesMissing {
+                        detail: "this body is a published envelope (`.receipt` is a schema-1.0 \
+                                 receipt) but it carries no `canonicalBytes`. The envelope's \
+                                 whole purpose is to publish the preimage it claims to have \
+                                 hashed; without it core cannot cross-check its own \
+                                 canonicalization against the publisher's, which is the only \
+                                 free detector for the rc.3 divergence. REFUSED rather than \
+                                 accepted with the check silently skipped."
+                            .to_string(),
+                    });
+                }
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(other) => {
+                    return Err(ReceiptError::ErrReceiptEnvelopeCanonicalBytesMissing {
+                        detail: format!(
+                            "this body is a published envelope but its `canonicalBytes` is a \
+                             {}, not a string. The canonical preimage is a byte string; any \
+                             other JSON type is a publisher defect, and accepting it would \
+                             skip the cross-check exactly as a missing key did. REFUSED.",
+                            json_type_name(other)
+                        ),
+                    });
+                }
+            });
             parsed
                 .get("receipt")
                 .cloned()
@@ -1191,34 +1251,124 @@ mod tests {
         );
 
         // Rule 1 of the unwrap rule: a top level that is itself a receipt always
-        // wins, so the wrong object can never be picked silently.
+        // wins, so the wrong object can never be picked silently. Since T03 the
+        // consequence of that precedence is sharper than it used to be: the
+        // decoy's top level IS the object parsed, and `deny_unknown_fields`
+        // then refuses it BY NAME for carrying `receipt`. The old assertion
+        // expected the vaguer "not a schema-1.0 receipt" parse error and became
+        // stale the moment T03 landed. The precedence is still exactly what is
+        // asserted here — a refusal naming `receipt` is only reachable if the
+        // TOP LEVEL was the object handed to serde.
         let decoy = serde_json::json!({
             "schema_version": "1.0",
             "receipt": serde_json::json!({"schema_version": "1.0"}),
         });
         let err = ConsensusReceipt::from_json_slice(decoy.to_string().as_bytes())
             .expect_err("the top-level object is the one parsed, and it is not a whole receipt");
+        assert_eq!(
+            err.code(),
+            "ErrReceiptSchema",
+            "the decoy must be a SCHEMA refusal (top level parsed, unknown key), got: {err}"
+        );
+        let text = format!("{err}");
         assert!(
-            format!("{err}").contains("schema-1.0 receipt"),
-            "the top level must win over `.receipt`, got: {err}"
+            text.contains("unknown field `receipt`"),
+            "the top level must win over `.receipt`, and the refusal must name the key \
+             that proves it did; got: {err}"
+        );
+        // scripts/fusion/lib/receipt-envelope.sh must refuse this same body, and
+        // scripts/fusion/tests/run-tests.sh asserts that it does. One rule, two
+        // implementations, one behaviour (T24).
+    }
+
+    /// T03 residual gap (refuter #2 findings E and F): an envelope that omits
+    /// `canonicalBytes` entirely is REFUSED, not accepted with the cross-check
+    /// silently skipped.
+    ///
+    /// The cross-check is the only place core's canonicalizer and the
+    /// publisher's meet on one input. While it was opt-in on the presence of a
+    /// key the PUBLISHER controls, a publisher that simply stopped emitting the
+    /// field handed core back the rc.3 blind spot and core still exited 0.
+    #[test]
+    fn an_envelope_without_canonical_bytes_is_refused_not_silently_skipped() {
+        let mut envelope: serde_json::Value =
+            serde_json::from_slice(&fixture("consensus-receipt.live-envelope.json"))
+                .expect("the live envelope fixture is JSON");
+
+        // Control: untouched, the live envelope is accepted and the cross-check
+        // runs and passes. Without this the refusal below proves nothing.
+        ConsensusReceipt::from_json_slice(envelope.to_string().as_bytes())
+            .expect("the unmodified live envelope is accepted");
+
+        // jq 'del(.canonicalBytes)'
+        envelope
+            .as_object_mut()
+            .expect("the envelope is a JSON object")
+            .remove("canonicalBytes")
+            .expect("the live envelope carries canonicalBytes to begin with");
+
+        let err = ConsensusReceipt::from_json_slice(envelope.to_string().as_bytes()).expect_err(
+            "an envelope with no canonicalBytes must be REFUSED: accepting it disables the \
+             cross-repo drift detector on publisher say-so",
+        );
+        assert_eq!(err.code(), "ErrReceiptEnvelopeCanonicalBytesMissing", "{err}");
+        assert!(
+            format!("{err}").contains("canonicalBytes"),
+            "the refusal must name the missing key; got: {err}"
         );
     }
 
-    /// The conformance vector is NON-VACUOUS, and core's behaviour today is
-    /// recorded rather than assumed.
+    /// T03 residual gap: a `canonicalBytes` of any non-string JSON type is
+    /// REFUSED. `.and_then(|v| v.as_str())` used to turn a number, array or
+    /// object into `None`, i.e. into "nothing to cross-check" — the same
+    /// silent bypass as omitting the key, reachable by a publisher typo.
+    #[test]
+    fn an_envelope_with_non_string_canonical_bytes_is_refused() {
+        let base: serde_json::Value =
+            serde_json::from_slice(&fixture("consensus-receipt.live-envelope.json"))
+                .expect("the live envelope fixture is JSON");
+
+        for (label, bad) in [
+            // jq '.canonicalBytes = 12345'
+            ("number", serde_json::json!(12345)),
+            ("null", serde_json::Value::Null),
+            ("boolean", serde_json::json!(true)),
+            ("array", serde_json::json!([])),
+            ("object", serde_json::json!({})),
+        ] {
+            let mut envelope = base.clone();
+            envelope["canonicalBytes"] = bad;
+            let err = match ConsensusReceipt::from_json_slice(envelope.to_string().as_bytes()) {
+                Err(err) => err,
+                Ok(_) => panic!(
+                    "canonicalBytes as a {label} was ACCEPTED — the cross-check was silently \
+                     skipped on a publisher-controlled type"
+                ),
+            };
+            assert_eq!(
+                err.code(),
+                "ErrReceiptEnvelopeCanonicalBytesMissing",
+                "{label}: {err}"
+            );
+            assert!(
+                format!("{err}").contains(label),
+                "{label}: the refusal must name the type the publisher actually sent; got: {err}"
+            );
+        }
+    }
+
+    /// The conformance vector is NON-VACUOUS: it is refused BECAUSE of its
+    /// unknown fields and for no other reason.
     ///
-    /// Decision R27/D11 says an unknown field must be REFUSED, never dropped.
-    /// Core does not do that yet — `deny_unknown_fields` is task T03's runtime
-    /// half — and this test is the executable record of that gap: it asserts
-    /// the vector really does carry an unknown field at two nesting levels, and
-    /// that core currently produces bytes IDENTICAL to the clean receipt from
-    /// it. That byte identity is precisely the `rc.3` cross-repo divergence
-    /// (C-16): the publisher signs a preimage that includes the fields, core
-    /// hashes one that does not, and both sides report success.
-    ///
-    /// When T03 lands, this test fails loudly and is replaced by
-    /// `the_unknown_field_conformance_vector_is_refused_at_every_nesting_level`
-    /// below, which is the assertion R27/D11 actually asks for.
+    /// T03 has landed, so the old form of this test — which recorded core
+    /// DROPPING the unknown fields and producing bytes identical to the clean
+    /// receipt — asserted behaviour that no longer exists and made
+    /// `cargo test --lib` red. Non-vacuity is still worth asserting, but the
+    /// honest form of it now is a differential: the clean fixture is ACCEPTED
+    /// and the vector, which differs from it only by the two unknown keys, is
+    /// REFUSED. That rules out the vacuous pass where the vector is refused for
+    /// some unrelated schema defect and the unknown-field control is never
+    /// exercised at all.
     #[test]
     fn the_unknown_field_conformance_vector_is_not_vacuous() {
         let raw = fixture("consensus-receipt.unknown-fields-refused.json");
@@ -1232,24 +1382,34 @@ mod tests {
             "the vector must carry its unknown NESTED field"
         );
 
-        let Ok(receipt) = ConsensusReceipt::from_json_slice(&raw) else {
-            panic!(
-                "core now REFUSES the unknown-field vector — R27/D11 is satisfied. \
-                 Delete this test and un-ignore \
-                 `the_unknown_field_conformance_vector_is_refused_at_every_nesting_level`."
-            );
-        };
-        let from_vector = receipt.canonical_bytes().expect("canonical bytes");
-        let from_clean =
-            ConsensusReceipt::from_json_slice(&fixture("consensus-receipt.valid.json"))
-                .expect("the valid fixture parses")
-                .canonical_bytes()
-                .expect("canonical bytes");
-        assert_eq!(
-            from_vector, from_clean,
-            "OPEN GAP (R27/D11, task T03): core drops unknown fields instead of refusing them, \
-             so the vector and the clean receipt hash the same preimage while the publisher \
-             signed a different one. Recorded, not softened."
+        // The control arm: strip the two unknown keys and the SAME bytes are
+        // accepted. If this ever fails, the vector has drifted into carrying an
+        // unrelated defect and the refusal below would prove nothing.
+        let mut control = json.clone();
+        control
+            .as_object_mut()
+            .expect("the vector is a JSON object")
+            .remove("experimental_confidence");
+        control["judge"]
+            .as_object_mut()
+            .expect("judge is a JSON object")
+            .remove("fallback_reason");
+        ConsensusReceipt::from_json_slice(control.to_string().as_bytes()).expect(
+            "the vector minus its two unknown keys must be an ACCEPTED receipt — otherwise \
+             the refusal below is caused by something other than the unknown fields and \
+             this vector is vacuous",
+        );
+
+        // The experimental arm: the unmodified vector is REFUSED, naming a key.
+        let err = ConsensusReceipt::from_json_slice(&raw).expect_err(
+            "R27/D11: an unknown field is REFUSED, never dropped — dropping it would hash a \
+             preimage the publisher never signed while both sides reported success (rc.3, C-16)",
+        );
+        assert_eq!(err.code(), "ErrReceiptSchema", "{err}");
+        let text = format!("{err}");
+        assert!(
+            text.contains("experimental_confidence") || text.contains("fallback_reason"),
+            "the refusal must name the offending key; got: {text}"
         );
     }
 
@@ -1259,15 +1419,13 @@ mod tests {
     /// and `rmpc` exited 0 (C-16). The vector is a shared fixture so both repos
     /// refuse the same bytes.
     ///
-    /// IGNORED, and the reason is a missing implementation, not a flaky test:
-    /// `deny_unknown_fields` is task T03 and is not in this change. The vector,
-    /// the shared fixture and the cross-repo pin are; the runtime refusal is
-    /// not. `the_unknown_field_conformance_vector_is_not_vacuous` above runs on
-    /// every CI and records the gap in executable form so this ignore cannot
-    /// quietly become a false green.
+    /// Task T03 has landed: `#[serde(deny_unknown_fields)]` is on every struct
+    /// in the deserialize graph, so the runtime refusal this test asserts now
+    /// exists and the test RUNS. It was `#[ignore]`d while only the vector, the
+    /// shared fixture and the cross-repo pin existed; leaving the ignore in
+    /// place after T03 shipped meant the one lib-level assertion of R27/D11
+    /// never executed in CI.
     #[test]
-    #[ignore = "R27/D11 runtime refusal is task T03 (#[serde(deny_unknown_fields)]); \
-                the gap is asserted by the_unknown_field_conformance_vector_is_not_vacuous"]
     fn the_unknown_field_conformance_vector_is_refused_at_every_nesting_level() {
         let raw = fixture("consensus-receipt.unknown-fields-refused.json");
         let json: serde_json::Value = serde_json::from_slice(&raw).expect("the vector is JSON");
@@ -1410,24 +1568,63 @@ mod tests {
         assert_eq!(err.code(), "ErrReceiptSchema", "{err}");
     }
 
+    /// An unknown input field is REFUSED, not dropped — at the top level and at
+    /// every nesting depth.
+    ///
+    /// This test previously asserted the opposite (that `model` was silently
+    /// ignored and the canonical bytes came out equal to the clean fixture).
+    /// T03 replaced that behaviour and this assertion went red. "Dropped but
+    /// absent from the bytes" was never actually safe: the publisher hashed a
+    /// preimage that INCLUDED the field, so identical-looking success on both
+    /// sides is precisely the rc.3 divergence (C-16).
     #[test]
-    fn unknown_input_fields_are_dropped_not_serialized() {
-        let mut value: serde_json::Value =
+    fn an_unknown_input_field_is_refused_not_dropped_at_any_depth() {
+        // Each entry: a JSON pointer-ish path to plant an unknown key at, and
+        // the key name the refusal must name.
+        let clean: serde_json::Value =
             serde_json::from_slice(&fixture("consensus-receipt.valid.json")).unwrap();
-        value
+
+        // Sanity: the unmodified fixture is accepted, so every refusal below is
+        // attributable to the planted key alone.
+        ConsensusReceipt::from_json_slice(clean.to_string().as_bytes())
+            .expect("the clean fixture is accepted");
+
+        let mut top = clean.clone();
+        top.as_object_mut()
+            .unwrap()
+            .insert("model".to_string(), serde_json::json!("gpt-nonexistent"));
+
+        let mut nested = clean.clone();
+        nested["judge"]
             .as_object_mut()
             .unwrap()
             .insert("model".to_string(), serde_json::json!("gpt-nonexistent"));
-        let raw = serde_json::to_vec(&value).unwrap();
-        let produced = ConsensusReceipt::from_json_slice(&raw)
-            .expect("unknown fields are ignored")
-            .canonical_bytes()
-            .expect("canonicalizes");
-        assert_eq!(
-            produced,
-            fixture("consensus-receipt.valid.canonical.txt"),
-            "an unknown input field must never reach the canonical bytes"
-        );
+
+        let mut deep = clean.clone();
+        deep["quorum"]
+            .as_object_mut()
+            .unwrap()
+            .insert("model".to_string(), serde_json::json!("gpt-nonexistent"));
+
+        for (label, value) in [
+            ("top level", top),
+            ("judge (depth 2)", nested),
+            ("quorum (depth 2)", deep),
+        ] {
+            let err = match ConsensusReceipt::from_json_slice(value.to_string().as_bytes()) {
+                Err(err) => err,
+                Ok(_) => panic!(
+                    "{label}: the unknown field `model` was ACCEPTED. Dropping it hashes a \
+                     different preimage than the publisher signed while both sides report \
+                     success — the rc.3 divergence (C-16, R27/D11)."
+                ),
+            };
+            assert_eq!(err.code(), "ErrReceiptSchema", "{label}: {err}");
+            assert!(
+                format!("{err}").contains("unknown field `model`"),
+                "{label}: the refusal must name the offending key; got: {err}"
+            );
+        }
     }
 
     #[test]
