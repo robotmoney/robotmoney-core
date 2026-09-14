@@ -704,6 +704,122 @@ async fn receipt_submit_anchors_the_pinned_digest_through_the_gateway() {
     send.assert_async().await;
 }
 
+/// The anchor transaction is MINED BUT REVERTS: `consensusRecordReceipt` is
+/// `onlyRole(AGENT_ROLE)` and the receipt contract additionally requires
+/// `COMMITTEE_AGENT_ROLE` on the IC policy, so an unauthorized submitter's
+/// transaction is accepted by the node, mined, and reverted — status 0, no
+/// `ReceiptRecorded` log, `receiptCount()` unchanged.
+///
+/// This is the exact condition observed on devnet 918453 during QA step 3.7:
+/// two submissions from EOAs lacking the roles produced transactions
+/// 0x4ec5d3bc… and 0xbe9d502a…, both mined with status 0 and no logs, and
+/// `rmpc receipt submit` printed `{"ok":true, tx_hash, block_number}` and
+/// exited 0 for both. project-fusion.md AC-CORE-09 requires that "neither
+/// transaction failure nor missing expected anchor is silent", so a mined
+/// revert must be a refusal.
+///
+/// The mock differs from the happy path in ONE field — `status` 0x1 -> 0x0 —
+/// so a failure here can only be the status check.
+#[tokio::test]
+async fn receipt_submit_refuses_when_the_anchor_transaction_reverts_on_chain() {
+    let mut server = mockito::Server::new_async().await;
+    let body = fixture_str("consensus-receipt.valid.json");
+    server
+        .mock("GET", RECEIPT_PATH)
+        .with_status(200)
+        .with_body(&body)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    // Everything the happy path needs EXCEPT the receipt mock, which is
+    // replaced below by the reverted one.
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{CHAIN_ID:x}")))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_feeHistory"})))
+        .with_status(200)
+        .with_body(jrpc_result_raw(&fee_history_body()))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getTransactionCount"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result("0x0"))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getTransactionReceipt"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result_raw(
+            &simple_receipt_body().replace("\"status\":\"0x1\"", "\"status\":\"0x0\""),
+        ))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let send = server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .expect(1)
+        .create_async()
+        .await;
+
+    let fix = ReceiptFixture::build(&server.url());
+    let url = format!("{}{RECEIPT_PATH}", server.url());
+
+    let output = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .args([
+            "receipt",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "submit",
+            "--receipt-url",
+            &url,
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    let v = stdout_json(&output);
+    assert!(
+        !output.status.success(),
+        "a mined-but-reverted anchor must not exit 0"
+    );
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"], "ErrReceiptRecordReverted");
+    let message = v["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("REVERTED") && message.contains(&format!("{TX_HASH:#x}")),
+        "the refusal must name the reverted transaction: {message}"
+    );
+    // The transaction WAS broadcast — this is not a preflight refusal, it is a
+    // mined revert, which is the case that used to be reported as a success.
+    send.assert_async().await;
+}
+
 /// 6(a). A receipt whose payload has been tampered with fails the digest check
 /// against `--expected-digest`, and **no transaction is sent**.
 ///
