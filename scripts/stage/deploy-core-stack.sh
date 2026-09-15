@@ -14,7 +14,7 @@
 # than forging an env from a stale manifest.
 #
 # Usage (run from the repo root on the stage host):
-#   deploy-core-stack.sh <build|up|down|env> [--record FILE] [--tag TAG]
+#   deploy-core-stack.sh <smoke|build|up|down|env> [--record FILE] [--tag TAG]
 #                          [--out-dir DIR] [--dapp-compose FILE] [--chain-compose FILE]
 #
 # Actions:
@@ -24,6 +24,8 @@
 #   up         ensure the chain is up, then bring the dapp stack up with the
 #              PINNED images (docker compose up --no-build). No rebuild.
 #   down       tear the dapp stack down (data volumes preserved).
+#   smoke      run the repository's full devnet smoke harness on the canonical
+#              stage ports; stays attached until signalled.
 #
 # Exit codes: 0 = ok; 64 = usage; 65 = record invalid; 66 = docker action failed.
 set -euo pipefail
@@ -50,7 +52,7 @@ usage() {
 
 while (( $# )); do
   case "$1" in
-    build|up|down|env) ACTION="$1"; shift ;;
+    smoke|build|up|down|env) ACTION="$1"; shift ;;
     --record) RECORD_PATH="$2"; shift 2 ;;
     --tag) TAG="$2"; shift 2 ;;
     --out-dir) OUT_DIR="$2"; shift 2 ;;
@@ -67,6 +69,18 @@ done
 for tool in jq docker curl; do
   command -v "$tool" >/dev/null 2>&1 || fail "required tool '$tool' not on PATH" 3
 done
+
+if [[ "$ACTION" == "smoke" ]]; then
+  command -v cargo >/dev/null 2>&1 || fail "required tool 'cargo' not on PATH" 3
+  exec cargo run -p smoke-test -- \
+    --full-stack \
+    --rpc-port 18545 \
+    --explorer-port 18546 \
+    --dapp-port 5173 \
+    --public-rpc-url https://stage-rpc.robotmoney-labs.dev \
+    --public-explorer-url https://stage-explorer.robotmoney-labs.dev \
+    --public-dapp-url https://stage-dapp.robotmoney-labs.dev
+fi
 
 # ─── Record validation (fail before any docker action) ───────────────────────
 [[ -f "$RECORD_PATH" ]] || fail "deployment record not found: $RECORD_PATH" 65
@@ -229,8 +243,22 @@ case "$ACTION" in
       || fail "dapp stack up failed" 66
     ;;
   down)
+    if [[ -f "$OUT_DIR/core-smoke.pid" ]]; then
+      smoke_pid="$(cat "$OUT_DIR/core-smoke.pid")"
+      if [[ "$smoke_pid" =~ ^[0-9]+$ ]] && kill -0 "$smoke_pid" 2>/dev/null; then
+        kill -INT "$smoke_pid"
+        for _attempt in $(seq 1 60); do
+          kill -0 "$smoke_pid" 2>/dev/null || break
+          sleep 1
+        done
+        kill -0 "$smoke_pid" 2>/dev/null && fail "core smoke harness did not stop" 66
+      fi
+      rm -f "$OUT_DIR/core-smoke.pid"
+    fi
     compose "$DAPP_PROJECT" "$DAPP_COMPOSE" down \
       || fail "dapp stack down failed" 66
+    GETH_RPC_PORT=18545 docker compose --project-name "$CHAIN_PROJECT" -f "$CHAIN_COMPOSE" down \
+      || fail "chain stack down failed" 66
     ;;
 esac
 
