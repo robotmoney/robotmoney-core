@@ -64,7 +64,7 @@ done
 [[ -n "$ACTION" ]] || usage
 [[ -z "$RECORD_PATH" ]] && RECORD_PATH="$REPO_ROOT/deployments/timelock-918453.json"
 
-for tool in jq docker; do
+for tool in jq docker curl; do
   command -v "$tool" >/dev/null 2>&1 || fail "required tool '$tool' not on PATH" 3
 done
 
@@ -196,6 +196,25 @@ chain_up() {
     || fail "chain compose up failed" 66
 }
 
+wait_ready() {
+  local expected_chain_id rpc_result
+  expected_chain_id="0x$(printf '%x' "$chain_id")"
+  for _attempt in $(seq 1 120); do
+    rpc_result="$(curl -fsS --max-time 3 -X POST http://127.0.0.1:18545 \
+      -H 'content-type: application/json' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' 2>/dev/null \
+      | jq -r '.result // empty' 2>/dev/null || true)"
+    if [[ "$rpc_result" == "$expected_chain_id" ]] \
+      && curl -fsS --max-time 3 http://127.0.0.1:18546/health >/dev/null 2>&1 \
+      && curl -fsS --max-time 3 http://127.0.0.1:5173/ >/dev/null 2>&1; then
+      info "stage origins ready (rpc, explorer, dapp)"
+      return 0
+    fi
+    sleep 2
+  done
+  fail "stage origins did not become ready" 66
+}
+
 case "$ACTION" in
   build)
     chain_up
@@ -214,5 +233,7 @@ case "$ACTION" in
       || fail "dapp stack down failed" 66
     ;;
 esac
+
+[[ "$ACTION" == "build" || "$ACTION" == "up" ]] && wait_ready
 
 info "$ACTION done"
