@@ -190,7 +190,9 @@ compose() {
 
 chain_up() {
   # The chain ships are idempotent; already-running containers are left alone.
-  docker compose --project-name "$CHAIN_PROJECT" -f "$CHAIN_COMPOSE" up -d \
+  # 18545 is the repo-owned stage ingress contract: cloudflared routes the
+  # public stage RPC hostname to this host port.
+  GETH_RPC_PORT=18545 docker compose --project-name "$CHAIN_PROJECT" -f "$CHAIN_COMPOSE" up -d \
     || fail "chain compose up failed" 66
 }
 
