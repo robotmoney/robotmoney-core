@@ -138,9 +138,12 @@ services:
       # is stored with verified=false and never re-verified, so the receipt-
       # fixtures server MUST be accepting connections before the indexer's first
       # tick. depends_on service_healthy turns that ordering requirement into a
-      # hard gate instead of a race.
+      # hard gate instead of a race. The service sits behind the
+      # `receipt-fixtures` profile: acceptance stacks index real frontend
+      # receipts only, so the gate is `required: false` when the profile is off.
       receipt-fixtures:
         condition: service_healthy
+        required: false
     # Issue #775: join the ethereum-testnet_default network so the indexer
     # can reach Geth directly via the `geth` service hostname (port 8545
     # inside the chain network) instead of relying on host.docker.internal,
@@ -313,6 +316,7 @@ services:
   # Static, non-secret test fixtures only — no dynamic content, no request
   # handling beyond serving files from disk.
   receipt-fixtures:
+    profiles: ["receipt-fixtures"]
     image: python:3-alpine
     container_name: dapp-receipt-fixtures
     labels: *testnet-labels

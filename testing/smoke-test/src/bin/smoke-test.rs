@@ -89,6 +89,12 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     print_test_keys: bool,
 
+    /// Boot without the seeded fixture consensus receipts and without the
+    /// `receipt-fixtures` compose service. Acceptance stacks use this so the
+    /// chain, indexer and dapp only ever carry receipts a frontend produced.
+    #[arg(long, default_value_t = false)]
+    no_receipt_fixtures: bool,
+
     /// Rotate the unified log file after it grows beyond this many bytes.
     /// Defaults to 10 MiB.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
@@ -172,6 +178,9 @@ fn run() -> i32 {
         return 1;
     }
 
+    if cli.no_receipt_fixtures {
+        std::env::set_var(smoke_test::NO_RECEIPT_FIXTURES_ENV, "1");
+    }
     eprintln!("smoke-test: booting devnet (this takes 60-120 seconds)...");
     smoke_test::logging::info("smoke-test", "booting devnet");
     let fixture = match smoke_test::Fixture::new() {
@@ -283,6 +292,7 @@ fn run() -> i32 {
         // hard-coding devnet addresses.
         println!("ic_policy_addr={:#x}", fixture.ic_policy());
         println!("consensus_receipt_addr={:#x}", fixture.consensus_receipt());
+        println!("vault_addresses_json={}", fixture.vault_address_map_json());
         // Issue #363: surface real adapter addresses for dapp e2e tests.
         println!("aave_adapter_addr={:#x}", fixture.aave_adapter());
         println!("compound_adapter_addr={:#x}", fixture.compound_adapter());

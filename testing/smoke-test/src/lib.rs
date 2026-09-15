@@ -89,6 +89,28 @@ pub const HARNESS_USDC_HOLDER_ADDRESS_HEX: &str = "0xaE67A1B2A267a124Cf762098E3C
 /// `Fixture::seed_consensus_receipts`.
 pub const RECEIPT_FIXTURES_PORT: u16 = 8097;
 
+/// Compose profile that gates the `receipt-fixtures` service.
+pub const RECEIPT_FIXTURES_PROFILE: &str = "receipt-fixtures";
+
+/// Setting this env var (any value) boots the devnet without the seeded
+/// fixture receipts and without the `receipt-fixtures` service, so an
+/// acceptance stack indexes only receipts a real frontend produced.
+pub const NO_RECEIPT_FIXTURES_ENV: &str = "SMOKE_TEST_NO_RECEIPT_FIXTURES";
+
+/// Whether this process seeds and serves the fixture consensus receipts.
+pub fn receipt_fixtures_enabled() -> bool {
+    std::env::var_os(NO_RECEIPT_FIXTURES_ENV).is_none()
+}
+
+/// `COMPOSE_PROFILES` value for bringing the dapp stack up.
+fn dapp_compose_profiles_for_up() -> &'static str {
+    if receipt_fixtures_enabled() {
+        RECEIPT_FIXTURES_PROFILE
+    } else {
+        ""
+    }
+}
+
 /// 32-byte secp256k1 private key for the test agent EOA. Test-only —
 /// never use on a real chain.
 /// Derives `0xf93Ee4Cf8c6c40b329b0c0626F28333c132CF241`.
@@ -1176,21 +1198,23 @@ impl Fixture {
         // first tick fetches `payload_uri` — well after `--full-stack` brings
         // up the `receipt-fixtures` compose service — so seeding here (before
         // that service exists) is safe.
-        fx.seed_consensus_receipts().inspect_err(|err| {
-            logging::error(
-                "smoke-test",
-                format!("consensus receipt fixture seeding failed: {err}"),
-            );
-            log_compose_state(
-                &fx.compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "consensus receipt fixture seeding failure",
-                200,
-            );
-            cleanup();
-        })?;
+        if receipt_fixtures_enabled() {
+            fx.seed_consensus_receipts().inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("consensus receipt fixture seeding failed: {err}"),
+                );
+                log_compose_state(
+                    &fx.compose_dir,
+                    &compose_files_owned,
+                    &compose_log_env,
+                    "chain-compose",
+                    "consensus receipt fixture seeding failure",
+                    200,
+                );
+                cleanup();
+            })?;
+        }
 
         Ok(fx)
     }
@@ -3151,6 +3175,7 @@ fn purge_stale_dapp_compose_state(
             "-v",
             "--remove-orphans",
         ])
+        .env("COMPOSE_PROFILES", RECEIPT_FIXTURES_PROFILE)
         // Satisfy the mandatory ?:-substitutions in docker-compose.dapp.yaml.
         // compose down does not bind ports, so port env vars are not required.
         .env("VITE_GATEWAY_ADDRESS", gateway_hex)
@@ -4370,6 +4395,7 @@ impl DappStack {
                     "-v",
                     "--remove-orphans",
                 ])
+                .env("COMPOSE_PROFILES", RECEIPT_FIXTURES_PROFILE)
                 .env("VITE_GATEWAY_ADDRESS", &cleanup_gateway_hex)
                 .env("VITE_VAULT_ADDRESS", &cleanup_vault_hex)
                 .env("VITE_GATEWAY_EXPECTED_CODE_HASH", &cleanup_runtime_hash)
@@ -4568,6 +4594,7 @@ impl DappStack {
             .arg("up")
             .arg("-d")
             .arg("--build")
+            .env("COMPOSE_PROFILES", dapp_compose_profiles_for_up())
             .env("POSTGRES_PORT", ports.postgres_port.to_string())
             .env("EXPLORER_API_PORT", ports.explorer_api_port.to_string())
             .env("DAPP_PORT", ports.dapp_port.to_string())
@@ -4971,6 +4998,7 @@ impl Drop for DappStack {
                 "-v",
                 "--remove-orphans",
             ])
+            .env("COMPOSE_PROFILES", RECEIPT_FIXTURES_PROFILE)
             .env("VITE_GATEWAY_ADDRESS", &self.gateway_hex)
             .env("VITE_VAULT_ADDRESS", &self.vault_hex)
             .env(
