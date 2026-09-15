@@ -114,6 +114,7 @@ new_stubs() {
   : >"$STUB_DIR/released"
   : >"$STUB_DIR/release_sends"
   : >"$STUB_DIR/cast_calls"
+  : >"$STUB_DIR/record.json"
   : >"$STUB_DIR/witness_drift"
   : >"$STUB_DIR/witness_reads"
   : >"$STUB_DIR/alert_posts"
@@ -201,6 +202,30 @@ esac
 echo "stub rmpc: unexpected argv: $*" >&2
 exit 2
 STUB
+
+  # B10: devnet-acceptance.sh's release stage now schedules+executes the
+  # release through a Safe -> Timelock ceremony script instead of a direct
+  # `cast send`, so the fake ceremony binary — not `cast send` — is what
+  # records a release broadcast and flips `released`. `cast send` itself is
+  # never called for a release any more; the fake `cast`'s own `send` case
+  # below stays only for other stages that still send directly (record).
+  cat >"$STUB_DIR/bin/fusion-ceremony.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"$STUB_DIR/cast_calls"
+if [[ "$1" == "release" ]]; then
+  if [[ -s "$STUB_DIR/released" ]]; then
+    echo '{"action":"already_released"}'
+    exit 0
+  fi
+  echo "release $*" >>"$STUB_DIR/release_sends"
+  echo 1 >"$STUB_DIR/released"
+  echo '{"action":"released_via_timelock","operation":"0xop","schedule_tx":"0xsch","execute_tx":"0xexec"}'
+  exit 0
+fi
+echo "stub fusion-ceremony.sh: unexpected argv: $*" >&2
+exit 2
+STUB
+  chmod +x "$STUB_DIR/bin/fusion-ceremony.sh"
 
   cat >"$STUB_DIR/bin/cast" <<'STUB'
 #!/usr/bin/env bash
@@ -801,11 +826,10 @@ new_stubs; acceptance_env
 printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
 printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"   # already anchored
 echo 1 >"$STUB_DIR/released"                                     # already released
-export FUSION_RELEASE_KEYSTORE="$STUB_DIR/ks.json" \
-       FUSION_RELEASE_PASSWORD_FILE="$STUB_DIR/pass" \
+export FUSION_CEREMONY_SCRIPT="$STUB_DIR/bin/fusion-ceremony.sh" \
+       FUSION_CEREMONY_RECORD="$STUB_DIR/record.json" \
        FUSION_RELEASE_ADDRESS=0x00000000000000000000000000000000000000cc \
        FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
-: >"$STUB_DIR/ks.json"; : >"$STUB_DIR/pass"
 cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
 #!/usr/bin/env bash
 out=""; prev=""
@@ -830,11 +854,10 @@ fi
 new_stubs; acceptance_env
 printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
 printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
-export FUSION_RELEASE_KEYSTORE="$STUB_DIR/ks.json" \
-       FUSION_RELEASE_PASSWORD_FILE="$STUB_DIR/pass" \
+export FUSION_CEREMONY_SCRIPT="$STUB_DIR/bin/fusion-ceremony.sh" \
+       FUSION_CEREMONY_RECORD="$STUB_DIR/record.json" \
        FUSION_RELEASE_ADDRESS=0x00000000000000000000000000000000000000cc \
        FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
-: >"$STUB_DIR/ks.json"; : >"$STUB_DIR/pass"
 cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
 #!/usr/bin/env bash
 out=""; prev=""
@@ -939,6 +962,7 @@ echo "T11 — the acceptance verdict"
 
 new_stubs; acceptance_env; new_curl_stub; receipt_fixture
 unset FUSION_RELEASE_KEYSTORE FUSION_RELEASE_PASSWORD_FILE FUSION_RELEASE_ADDRESS \
+      FUSION_CEREMONY_SCRIPT FUSION_CEREMONY_RECORD \
       FUSION_EXPLORER_API FUSION_DAPP_URL FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS || true
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages release --out "$RESULT" >/dev/null 2>&1
 check "a SELECTED but unconfigured release stage exits non-zero" "$?" "1"

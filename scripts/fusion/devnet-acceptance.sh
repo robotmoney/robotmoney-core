@@ -59,9 +59,14 @@
 #                                  address also lacks ADMIN_ROLE)
 # Required for the index stage:  FUSION_EXPLORER_API
 # Required for the dapp stage:   FUSION_DAPP_URL
-# Required for the release stage: FUSION_RELEASE_KEYSTORE, FUSION_RELEASE_PASSWORD_FILE,
-#   FUSION_RELEASE_ADDRESS   the admin EOA that keystore unlocks — declared, not
-#                            scraped from the file, because keystore layouts differ
+# Required for the release stage: FUSION_CEREMONY_SCRIPT (path to
+#   scripts/stage/fusion-ceremony.sh), FUSION_CEREMONY_RECORD (the deployment
+#   record it verified/generated), FUSION_RELEASE_ADDRESS (the approver EOA,
+#   used only for the direct-call duplicate-release probe below — the actual
+#   release itself goes through that record's Safe -> Timelock, per B10: a
+#   raw `releaseReceipt` send from any EOA reverts on authority once a
+#   ceremony deployment gives the receipt contract's ADMIN_ROLE to the
+#   TimelockController, not to any EOA)
 # Optional: RMPC_BIN, CAST_BIN, FUSION_INDEX_TIMEOUT_SECS (default 180),
 #           FUSION_EVIDENCE_DIR (raw command output is written there)
 set -uo pipefail
@@ -533,10 +538,10 @@ fi
 
 # ── stage: release ───────────────────────────────────────────────────────────
 if have_stage release; then
-  if [[ -z "${FUSION_RELEASE_KEYSTORE:-}" || -z "${FUSION_RELEASE_PASSWORD_FILE:-}" \
+  if [[ -z "${FUSION_CEREMONY_SCRIPT:-}" || -z "${FUSION_CEREMONY_RECORD:-}" \
         || -z "${FUSION_RELEASE_ADDRESS:-}" ]]; then
     record_assertion release "admin release" SKIP \
-      "the release stage was SELECTED but FUSION_RELEASE_KEYSTORE / FUSION_RELEASE_PASSWORD_FILE / \
+      "the release stage was SELECTED but FUSION_CEREMONY_SCRIPT / FUSION_CEREMONY_RECORD / \
 FUSION_RELEASE_ADDRESS are not all set" unconfigured
   elif [[ -z "$RECEIPT_ID" ]]; then
     record_assertion release "admin release" SKIP \
@@ -559,13 +564,22 @@ FUSION_RELEASE_ADDRESS are not all set" unconfigured
         "AC-CORE-03 the admin release transaction succeeds (idempotent no-op: already released, no second transaction sent)" \
         PASS "isReleased=true before this run; releaseReceipt was NOT re-broadcast"
     else
-      "$CAST_BIN" send "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$RECEIPT_ID" \
-        --rpc-url "$FUSION_RPC_URL" --keystore "$FUSION_RELEASE_KEYSTORE" \
-        --password-file "$FUSION_RELEASE_PASSWORD_FILE" --json >"$WORK/release.json" 2>&1
+      # B10: release is a timelocked Safe operation, not a direct EOA send.
+      # fusion-ceremony.sh release schedules `releaseReceipt` through the
+      # record's Safe -> Timelock, waits out the record's min_delay, then
+      # executes — exactly the path a real admin release takes under a
+      # ceremony deployment. Idempotent: it checks isReleased() first and
+      # returns {"action":"already_released"} without sending anything, which
+      # this stage already handles above via its own isReleased() pre-check.
+      "$FUSION_CEREMONY_SCRIPT" release --record "$FUSION_CEREMONY_RECORD" \
+        --receipt-id "$RECEIPT_ID" --rpc-url "$FUSION_RPC_URL" \
+        >"$WORK/release.json" 2>"$WORK/release.stderr"
       rel=$?
-      keep "release-tx.json" "$(cat "$WORK/release.json")"
-      { (( rel == 0 )) && [[ "$(jq -r '.status // empty' "$WORK/release.json" 2>/dev/null)" == "0x1" ]]; }
-      expect release "AC-CORE-03 the admin release transaction succeeds" $? "$(head -c 300 "$WORK/release.json")"
+      keep "release-tx.json" "$(cat "$WORK/release.json" 2>/dev/null)"
+      keep "release-stderr.txt" "$(cat "$WORK/release.stderr" 2>/dev/null)"
+      { (( rel == 0 )) && jq -e '.action == "released_via_timelock"' "$WORK/release.json" >/dev/null 2>&1; }
+      expect release "AC-CORE-03 the admin release transaction succeeds" $? \
+        "$(head -c 300 "$WORK/release.json" 2>/dev/null) $(tail -c 300 "$WORK/release.stderr" 2>/dev/null)"
     fi
 
     released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool)' "$RECEIPT_ID" \
