@@ -156,8 +156,9 @@ export USDC_ADDRESS="${USDC_ADDRESS:-0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913}
 DEPLOYMENT_OUT_TMP=$(mktemp -t deploy.full-stack.XXXXXX.json)
 export DEPLOYMENT_OUT="$DEPLOYMENT_OUT_TMP"
 
-# Foundry test mnemonic index 0 (matches devnet ADMIN_ADDRESS).
-DEPLOYER_PK="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+# Deployer credential must be supplied out of band (it must match ADMIN_ADDRESS).
+: "${DEVNET_DEPLOYER_KEY:?DEVNET_DEPLOYER_KEY must be provided in the environment}"
+DEPLOYER_PK="$DEVNET_DEPLOYER_KEY"
 
 # 3-pre. Advance the fork's next-block timestamp to wall-clock now.
 #

@@ -9,6 +9,13 @@ coverage/
 !.env.example
 .ows/
 
+# Local adhoc Fusion deployment experiments; never commit.
+/deploy-timelock.sh
+/devnet-deploy-flow.sh
+/run-deploys.sh
+/run-qa.sh
+/devnet_acceptance_output.json
+
 # Secrets, keystores, and credential files (security-model.md §13)
 *.pem
 *.key
