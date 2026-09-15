@@ -159,5 +159,8 @@ baseline; set_state rpclogs "[{\"address\":\"$VAULT\",\"topics\":[\"0x00\",\"$AD
 if run_verify; then PASSED=$((PASSED + 1)); echo "ok   a role granted and later revoked is not a failure"
 else FAILED=$((FAILED + 1)); echo "FAIL a revoked role was reported as held"; grep FAIL "$WORK/out" | head -3; fi
 
+baseline; jq --arg rwa "$(a 16)" '.vault_addresses.rmRWA = $rwa' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
+expect_fail "a demo vault the timelock does not administer" "timelock holds ADMIN_ROLE on vault $(a 16)"
+
 echo "fusion-ceremony selftest: $PASSED passed, $FAILED failed"
-(( FAILED == 0 && PASSED == 12 ))
+(( FAILED == 0 && PASSED == 13 ))

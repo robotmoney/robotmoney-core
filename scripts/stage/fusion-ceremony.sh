@@ -14,6 +14,7 @@
 #   fusion-ceremony.sh verify  --record FILE [--rpc-url URL]
 #   fusion-ceremony.sh release --record FILE --receipt-id 0x.. [--rpc-url URL]
 #   fusion-ceremony.sh discard --record FILE
+#   fusion-ceremony.sh handover-vaults --record FILE [--rpc-url URL]
 #
 # run      provisions fresh submitter / approver / two voters / emergency keys
 #          (host-local keystores, 0600, never printed), registers the submitter
@@ -26,6 +27,10 @@
 #          drives Safe -> TimelockController.schedule, waits the delay, then
 #          execute. Idempotent on an already-released receipt.
 # discard  shreds the run's keystores (AC-ID-06: discarded after the run).
+# handover-vaults  moves ADMIN_ROLE (to the timelock) and EMERGENCY_ROLE (to the
+#          emergency key) off the deployer on every vault DeployTimelock does not
+#          cover (the demo rmPROTO / rmAGENT / rmRWA vaults). `run` does this
+#          itself; the action exists so an interrupted ceremony can finish.
 #
 # The genesis deployer key is the public repo test constant
 # `DEPLOYER_PRIVATE_KEY_HEX` (testing/smoke-test/src/lib.rs); after `run` that
@@ -47,7 +52,7 @@ MIN_DELAY=120
 RECORD=""
 RECEIPT_ID=""
 
-usage() { sed -n '2,33p' "$0" >&2; exit 64; }
+usage() { sed -n '2,38p' "$0" >&2; exit 64; }
 die() { echo "FAIL: [fusion-ceremony] $1" >&2; exit "${2:-66}"; }
 info() { echo "==> [fusion-ceremony] $*" >&2; }
 
@@ -69,6 +74,7 @@ DEFAULT_ADMIN_ROLE="0x0000000000000000000000000000000000000000000000000000000000
 AGENT_ROLE="$("$CAST" keccak "AGENT_ROLE" 2>/dev/null || true)"
 COMMITTEE_AGENT_ROLE="$("$CAST" keccak "COMMITTEE_AGENT_ROLE" 2>/dev/null || true)"
 PROPOSER_ROLE="$("$CAST" keccak "PROPOSER_ROLE" 2>/dev/null || true)"
+EMERGENCY_ROLE="$("$CAST" keccak "EMERGENCY_ROLE" 2>/dev/null || true)"
 ROLE_GRANTED_TOPIC="$("$CAST" keccak "RoleGranted(bytes32,address,address)" 2>/dev/null || true)"
 EXECUTOR_ROLE="$("$CAST" keccak "EXECUTOR_ROLE" 2>/dev/null || true)"
 
@@ -186,6 +192,10 @@ verify_record() {
     check "AC-CORE-05 timelock holds ADMIN_ROLE on $contract" "$(has_role "$(rec ".addresses.$contract")" "$ADMIN_ROLE" "$timelock")"
     check "AC-CORE-05 deployer holds no ADMIN_ROLE on $contract" "$(not_role "$(rec ".addresses.$contract")" "$ADMIN_ROLE" "$deployer")"
   done
+  local each_vault
+  while read -r each_vault; do
+    check "AC-CORE-05 timelock holds ADMIN_ROLE on vault $each_vault" "$(has_role "$each_vault" "$ADMIN_ROLE" "$timelock")"
+  done < <(jq -r '.vault_addresses[]' "$RECORD" | sort -u)
   check "AC-CORE-05 deployer holds no gateway DEFAULT_ADMIN_ROLE" "$(not_role "$gateway" "$DEFAULT_ADMIN_ROLE" "$deployer")"
 
   # Every role ever granted to the deployer, on ANY contract, must be gone: the
@@ -221,6 +231,14 @@ verify_record() {
 }
 
 # ─── run ─────────────────────────────────────────────────────────────────────
+repo_deployer_key() {
+  local key
+  key="$(sed -n '/pub const DEPLOYER_PRIVATE_KEY_HEX/{n;p}' "$REPO_ROOT/testing/smoke-test/src/lib.rs" | tr -d ' ";')"
+  [[ "$(lower "$("$CAST" wallet address --private-key "$key")")" == "$(lower "$1")" ]] \
+    || die "repo deployer constant does not derive the expected deployer $1" 65
+  printf '%s' "$key"
+}
+
 send() {
   # send <key-args...> -- <cast send args...>; refuses a mined-but-reverted tx (C-17).
   local out status
@@ -252,9 +270,7 @@ run_ceremony() {
   fi
 
   local deployer_key
-  deployer_key="$(sed -n '/pub const DEPLOYER_PRIVATE_KEY_HEX/{n;p}' "$REPO_ROOT/testing/smoke-test/src/lib.rs" | tr -d ' ";')"
-  [[ "$(lower "$("$CAST" wallet address --private-key "$deployer_key")")" == "$(lower "$admin")" ]] \
-    || die "repo deployer constant does not derive the summary's admin_addr" 65
+  deployer_key="$(repo_deployer_key "$admin")"
 
   local run_id keydir
   run_id="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -343,7 +359,34 @@ run_ceremony() {
   info "wrote $out"
 
   RECORD="$out"
+  handover_vaults
   verify_record
+}
+
+# ─── handover of vaults outside DeployTimelock ────────────────────────────────
+handover_vaults() {
+  [[ -f "$RECORD" ]] || die "record not found: $RECORD" 65
+  local deployer timelock emergency primary key vault
+  deployer="$(rec .deployer)"; timelock="$(rec .addresses.timelock)"
+  emergency="$(rec .ephemeral.emergency)"; primary="$(lower "$(rec .addresses.vault)")"
+  key="$(repo_deployer_key "$deployer")"
+  while read -r vault; do
+    is_address "$vault" || die "record vault_addresses carries a non-address: $vault" 65
+    [[ "$(lower "$vault")" == "$primary" ]] && continue
+    if [[ "$(has_role "$vault" "$ADMIN_ROLE" "$deployer")" != 1 ]]; then
+      info "vault $vault: deployer already holds no ADMIN_ROLE"
+      continue
+    fi
+    # EMERGENCY_ROLE is administered by ADMIN_ROLE, so it moves first (as in DeployTimelock).
+    if [[ "$(has_role "$vault" "$EMERGENCY_ROLE" "$deployer")" == 1 ]]; then
+      send --private-key "$key" "$vault" 'grantRole(bytes32,address)' "$EMERGENCY_ROLE" "$emergency" >/dev/null
+      send --private-key "$key" "$vault" 'revokeRole(bytes32,address)' "$EMERGENCY_ROLE" "$deployer" >/dev/null
+    fi
+    send --private-key "$key" "$vault" 'grantRole(bytes32,address)' "$ADMIN_ROLE" "$timelock" >/dev/null
+    [[ "$(has_role "$vault" "$ADMIN_ROLE" "$timelock")" == 1 ]] || die "timelock missing ADMIN_ROLE on $vault after grant"
+    send --private-key "$key" "$vault" 'revokeRole(bytes32,address)' "$ADMIN_ROLE" "$deployer" >/dev/null
+    info "vault $vault: ADMIN_ROLE -> timelock, EMERGENCY_ROLE -> emergency key, deployer revoked"
+  done < <(jq -r '.vault_addresses[]' "$RECORD" | sort -u)
 }
 
 # ─── release ─────────────────────────────────────────────────────────────────
@@ -395,5 +438,6 @@ case "$ACTION" in
   verify) [[ -n "$RECORD" ]] || usage; verify_record ;;
   release) [[ -n "$RECORD" ]] || usage; release_receipt ;;
   discard) [[ -n "$RECORD" ]] || usage; discard_keys ;;
+  handover-vaults) [[ -n "$RECORD" ]] || usage; handover_vaults; verify_record ;;
   *) usage ;;
 esac
