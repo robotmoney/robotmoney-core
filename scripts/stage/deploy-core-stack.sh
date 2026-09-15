@@ -25,7 +25,17 @@
 #              PINNED images (docker compose up --no-build). No rebuild.
 #   down       tear the dapp stack down (data volumes preserved).
 #   smoke      run the repository's full devnet smoke harness on the canonical
-#              stage ports; stays attached until signalled.
+#              stage ports, WITHOUT fixture consensus receipts (acceptance
+#              stacks index real frontend receipts only); stays attached until
+#              signalled.
+#   ceremony   provision the acceptance topology on the running smoke devnet
+#              (scripts/stage/fusion-ceremony.sh run): ephemeral submitter /
+#              approver / voters, RehearsalSafe, TimelockController handover,
+#              on-chain verification, and a GENERATED record at
+#              $OUT_DIR/fusion-stage-record.json.
+#
+# --record defaults to $OUT_DIR/fusion-stage-record.json when the ceremony has
+# produced one, otherwise to the committed deployments/timelock-918453.json.
 #
 # Exit codes: 0 = ok; 64 = usage; 65 = record invalid; 66 = docker action failed.
 set -euo pipefail
@@ -46,13 +56,13 @@ fail() { echo "FAIL: [deploy-core-stack] $*" >&2; exit "$2"; }
 info() { echo "==> [deploy-core-stack] $*"; }
 
 usage() {
-  sed -n '2,30p' "$0" >&2
+  sed -n '2,40p' "$0" >&2
   exit 64
 }
 
 while (( $# )); do
   case "$1" in
-    smoke|build|up|down|env) ACTION="$1"; shift ;;
+    smoke|build|up|down|env|ceremony) ACTION="$1"; shift ;;
     --record) RECORD_PATH="$2"; shift 2 ;;
     --tag) TAG="$2"; shift 2 ;;
     --out-dir) OUT_DIR="$2"; shift 2 ;;
@@ -64,7 +74,13 @@ while (( $# )); do
 done
 
 [[ -n "$ACTION" ]] || usage
-[[ -z "$RECORD_PATH" ]] && RECORD_PATH="$REPO_ROOT/deployments/timelock-918453.json"
+if [[ -z "$RECORD_PATH" ]]; then
+  if [[ -f "$OUT_DIR/fusion-stage-record.json" ]]; then
+    RECORD_PATH="$OUT_DIR/fusion-stage-record.json"
+  else
+    RECORD_PATH="$REPO_ROOT/deployments/timelock-918453.json"
+  fi
+fi
 
 for tool in jq docker curl; do
   command -v "$tool" >/dev/null 2>&1 || fail "required tool '$tool' not on PATH" 3
@@ -79,7 +95,13 @@ if [[ "$ACTION" == "smoke" ]]; then
     --dapp-port 5173 \
     --public-rpc-url https://stage-rpc.robotmoney-labs.dev \
     --public-explorer-url https://stage-explorer.robotmoney-labs.dev \
-    --public-dapp-url https://stage-dapp.robotmoney-labs.dev
+    --public-dapp-url https://stage-dapp.robotmoney-labs.dev \
+    --no-receipt-fixtures
+fi
+
+if [[ "$ACTION" == "ceremony" ]]; then
+  exec "$REPO_ROOT/scripts/stage/fusion-ceremony.sh" run --out-dir "$OUT_DIR" \
+    --summary "$OUT_DIR/core-smoke.log"
 fi
 
 # ─── Record validation (fail before any docker action) ───────────────────────
@@ -255,7 +277,7 @@ case "$ACTION" in
       fi
       rm -f "$OUT_DIR/core-smoke.pid"
     fi
-    compose "$DAPP_PROJECT" "$DAPP_COMPOSE" down \
+    COMPOSE_PROFILES=receipt-fixtures compose "$DAPP_PROJECT" "$DAPP_COMPOSE" down \
       || fail "dapp stack down failed" 66
     GETH_RPC_PORT=18545 docker compose --project-name "$CHAIN_PROJECT" -f "$CHAIN_COMPOSE" down \
       || fail "chain stack down failed" 66
