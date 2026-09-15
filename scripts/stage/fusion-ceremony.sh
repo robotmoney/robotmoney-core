@@ -69,6 +69,7 @@ DEFAULT_ADMIN_ROLE="0x0000000000000000000000000000000000000000000000000000000000
 AGENT_ROLE="$("$CAST" keccak "AGENT_ROLE" 2>/dev/null || true)"
 COMMITTEE_AGENT_ROLE="$("$CAST" keccak "COMMITTEE_AGENT_ROLE" 2>/dev/null || true)"
 PROPOSER_ROLE="$("$CAST" keccak "PROPOSER_ROLE" 2>/dev/null || true)"
+ROLE_GRANTED_TOPIC="$("$CAST" keccak "RoleGranted(bytes32,address,address)" 2>/dev/null || true)"
 EXECUTOR_ROLE="$("$CAST" keccak "EXECUTOR_ROLE" 2>/dev/null || true)"
 
 is_address() { [[ "$1" =~ ^0x[0-9a-fA-F]{40}$ ]]; }
@@ -186,6 +187,23 @@ verify_record() {
     check "AC-CORE-05 deployer holds no ADMIN_ROLE on $contract" "$(not_role "$(rec ".addresses.$contract")" "$ADMIN_ROLE" "$deployer")"
   done
   check "AC-CORE-05 deployer holds no gateway DEFAULT_ADMIN_ROLE" "$(not_role "$gateway" "$DEFAULT_ADMIN_ROLE" "$deployer")"
+
+  # Every role ever granted to the deployer, on ANY contract, must be gone: the
+  # deployer key is a public repo constant, so any role it keeps is a bypass.
+  local deployer_topic granted held="" c r
+  deployer_topic="0x000000000000000000000000$(lower "${deployer#0x}")"
+  granted="$("$CAST" rpc --rpc-url "$RPC_URL" eth_getLogs \
+    "{\"fromBlock\":\"0x0\",\"toBlock\":\"latest\",\"topics\":[\"$ROLE_GRANTED_TOPIC\",null,\"$deployer_topic\"]}" \
+    | jq -r '.[] | .address + " " + .topics[1]' | sort -u)" || granted="__rpc_failed__"
+  if [[ "$granted" == "__rpc_failed__" ]]; then
+    check "AC-CORE-05 deployer EOA holds no role on any contract" 0 "eth_getLogs failed"
+  else
+    while read -r c r; do
+      [[ -n "$c" ]] || continue
+      [[ "$(has_role "$c" "$r" "$deployer")" == 1 ]] && held+="$c:${r:0:10} "
+    done <<<"$granted"
+    check "AC-CORE-05 deployer EOA holds no role on any contract" "$([[ -z "$held" ]] && echo 1 || echo 0)" "${held:-none}"
+  fi
   check "AC-CORE-05 approver holds no receipt ADMIN_ROLE directly" "$(not_role "$receipt" "$ADMIN_ROLE" "$approver")"
   check "AC-CORE-05 safe is the timelock proposer" "$(has_role "$timelock" "$PROPOSER_ROLE" "$safe")"
   check "AC-CORE-05 safe is the timelock executor" "$(has_role "$timelock" "$EXECUTOR_ROLE" "$safe")"

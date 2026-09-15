@@ -38,6 +38,7 @@ case "${pos[0]}" in
   chain-id) state chain ;;
   codehash) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
   balance) state "balance:$(lower "${pos[1]}")" || echo 0 ;;
+  rpc) state rpclogs || echo '[]' ;;
   logs) key="logs:$(lower "$addr"):${pos[2]:-none}"
         accts="$(state "$key" || true)"
         printf '['; sep=""
@@ -150,5 +151,13 @@ expect_fail "timelock code hash drift" "code hash of timelock"
 baseline; set_state "role:$(lc "$TIMELOCK"):$PROPOSER:$(lc "$SAFE")" false
 expect_fail "timelock without the safe as proposer" "safe is the timelock proposer"
 
+baseline; set_state rpclogs "[{\"address\":\"$VAULT\",\"topics\":[\"0x00\",\"$ADMIN\",\"0x00\"]}]"
+set_state "role:$(lc "$VAULT"):$ADMIN:$(lc "$DEPLOYER")" true
+expect_fail "deployer keeping a role on a contract outside the handover" "deployer EOA holds no role on any contract"
+
+baseline; set_state rpclogs "[{\"address\":\"$VAULT\",\"topics\":[\"0x00\",\"$ADMIN\",\"0x00\"]}]"
+if run_verify; then PASSED=$((PASSED + 1)); echo "ok   a role granted and later revoked is not a failure"
+else FAILED=$((FAILED + 1)); echo "FAIL a revoked role was reported as held"; grep FAIL "$WORK/out" | head -3; fi
+
 echo "fusion-ceremony selftest: $PASSED passed, $FAILED failed"
-(( FAILED == 0 && PASSED == 10 ))
+(( FAILED == 0 && PASSED == 12 ))
