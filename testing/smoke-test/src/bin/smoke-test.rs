@@ -83,6 +83,12 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     log_file: Option<PathBuf>,
 
+    /// Include the deterministic test-EOA private keys in the endpoint
+    /// summary. Only the Playwright harness needs them; staging runs leave
+    /// this off so their retained logs carry addresses, never key material.
+    #[arg(long, default_value_t = false)]
+    print_test_keys: bool,
+
     /// Rotate the unified log file after it grows beyond this many bytes.
     /// Defaults to 10 MiB.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
@@ -236,10 +242,9 @@ fn run() -> i32 {
         }
 
         // Structured endpoint summary — printed after all health checks pass.
-        // Includes the deterministic test-EOA private keys so the Playwright
-        // harness can inject a window.ethereum provider without re-deriving
-        // them. These keys are test-only fixtures hardcoded in lib.rs and
-        // are not secrets.
+        // With --print-test-keys it also carries the deterministic test-EOA
+        // private keys, so the Playwright harness can inject a window.ethereum
+        // provider without re-deriving them.
         println!("--- endpoint summary ---");
         println!("rpc_url={}", stack.endpoints.rpc_url);
         println!("dapp_url={}", stack.endpoints.dapp_url);
@@ -255,12 +260,14 @@ fn run() -> i32 {
             "share_receiver_addr={}",
             smoke_test::SHARE_RECEIVER_ADDRESS_HEX
         );
-        println!("admin_private_key={}", smoke_test::DEPLOYER_PRIVATE_KEY_HEX);
-        println!("pauser_private_key={}", smoke_test::PAUSER_PRIVATE_KEY_HEX);
-        println!(
-            "agent_private_key=0x{}",
-            hex::encode(smoke_test::AGENT_PRIVATE_KEY)
-        );
+        if cli.print_test_keys {
+            println!("admin_private_key={}", smoke_test::DEPLOYER_PRIVATE_KEY_HEX);
+            println!("pauser_private_key={}", smoke_test::PAUSER_PRIVATE_KEY_HEX);
+            println!(
+                "agent_private_key=0x{}",
+                hex::encode(smoke_test::AGENT_PRIVATE_KEY)
+            );
+        }
         println!("gateway_runtime_hash={}", fixture.gateway_runtime_hash());
         // Issue #320: surface registry and router addresses so dapp e2e
         // tests can drive the vault-selector and router deposit flow.
@@ -293,10 +300,12 @@ fn run() -> i32 {
             "harness_usdc_holder_addr={}",
             smoke_test::HARNESS_USDC_HOLDER_ADDRESS_HEX
         );
-        println!(
-            "harness_usdc_holder_private_key={}",
-            smoke_test::HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX
-        );
+        if cli.print_test_keys {
+            println!(
+                "harness_usdc_holder_private_key={}",
+                smoke_test::HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX
+            );
+        }
         println!("--- end endpoint summary ---");
 
         Some(stack)

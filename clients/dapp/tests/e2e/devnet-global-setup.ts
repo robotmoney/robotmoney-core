@@ -148,11 +148,15 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   console.log(`devnet-global-setup: cargo workspace root = ${cargoRoot}`);
   console.log("devnet-global-setup: spawning smoke-test --full-stack …");
 
-  smokeTestProc = spawn("cargo", ["run", "-p", "smoke-test", "--", "--full-stack"], {
-    cwd: cargoRoot,
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: false,
-  });
+  smokeTestProc = spawn(
+    "cargo",
+    ["run", "-p", "smoke-test", "--", "--full-stack", "--print-test-keys"],
+    {
+      cwd: cargoRoot,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: false,
+    },
+  );
 
   // 25 minutes: chain-seed takes ~9 min on GH-hosted runners after the #488
   // batch-deployer perf work (#484 RWA vault, #485 Router governance, #486
