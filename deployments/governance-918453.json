@@ -1,0 +1,9 @@
+{
+  "admin": "0x8943545177806ED17B9F23F0a21ee5948eCaa776",
+  "chain_id": 918453,
+  "execution_delay": 3600,
+  "governance": "0x4b01b6B5fA707Ad2762fb3ACd2dC7C85F7c6745a",
+  "quorum_threshold": 2,
+  "router": "0x8b867B46793A978847E1254781579867Fb129a13",
+  "voting_period": 3600
+}
