@@ -265,10 +265,23 @@ jobs:
       # RED, never silent-green.
       - name: rmpc receipt verify / submit (consensus receipt anchoring)
         run: |
+          echo "::group::clients/rust-payment-client/tests/receipt.rs:"
           bash .github/scripts/cargo_test_require_executed.sh \
             --release \
             --manifest-path clients/rust-payment-client/Cargo.toml \
             --test receipt -- --nocapture
+          echo "::endgroup::"
+
+      # The governance-draft integration target was previously dark. It is the
+      # only executable proof that released receipts draft rather than submit.
+      - name: rmpc governance draft refusal and review-envelope
+        run: |
+          echo "::group::clients/rust-payment-client/tests/governance_draft.rs:"
+          bash .github/scripts/cargo_test_require_executed.sh \
+            --release \
+            --manifest-path clients/rust-payment-client/Cargo.toml \
+            --test governance_draft -- --nocapture
+          echo "::endgroup::"
 
       # Investment-Committee MCP identity: create / show-public-key / sign
       # (issue #1111). No RPC, no chain, no external resource — pure local
