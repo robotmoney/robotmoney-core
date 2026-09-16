@@ -51,6 +51,7 @@ RPC_URL="http://127.0.0.1:18545"
 MIN_DELAY=120
 RECORD=""
 RECEIPT_ID=""
+DRAFT_FILE=""
 
 usage() { sed -n '2,38p' "$0" >&2; exit 64; }
 die() { echo "FAIL: [fusion-ceremony] $1" >&2; exit "${2:-66}"; }
@@ -64,6 +65,7 @@ while (( $# )); do
     --min-delay) MIN_DELAY="$2"; shift 2 ;;
     --record) RECORD="$2"; shift 2 ;;
     --receipt-id) RECEIPT_ID="$2"; shift 2 ;;
+    --draft-file) DRAFT_FILE="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
@@ -406,6 +408,10 @@ release_receipt() {
   zero="0x0000000000000000000000000000000000000000000000000000000000000000"
   salt="$RECEIPT_ID"
   op="$(call "$timelock" 'hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)' "$receipt" 0 "$data" "$zero" "$salt")"
+  if [[ "$(call "$timelock" 'isOperationDone(bytes32)(bool)' "$op")" == "true" ]]; then
+    jq -n --arg op "$op" '{action:"already_proposed", operation:$op}'
+    return 0
+  fi
   local schedule_tx="" execute_tx
   if [[ "$(call "$timelock" 'isOperation(bytes32)(bool)' "$op")" != "true" ]]; then
     schedule_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
@@ -437,6 +443,65 @@ case "$ACTION" in
   run) run_ceremony ;;
   verify) [[ -n "$RECORD" ]] || usage; verify_record ;;
   release) [[ -n "$RECORD" ]] || usage; release_receipt ;;
+  discard) [[ -n "$RECORD" ]] || usage; discard_keys ;;
+  handover-vaults) [[ -n "$RECORD" ]] || usage; handover_vaults; verify_record ;;
+  *) usage ;;
+esac
+
+propose_governance() {
+  [[ -f "$RECORD" ]] || die "record not found: $RECORD" 65
+
+propose_governance() {
+  [[ -f "$RECORD" ]] || die "record not found: $RECORD" 65
+  [[ -n "${DRAFT_FILE:-}" ]] || die "--draft-file is required" 64
+  [[ -f "$DRAFT_FILE" ]] || die "draft file not found: $DRAFT_FILE" 65
+  local governance timelock safe keydir delay data salt zero op
+  governance="$(rec .addresses.governance)"; timelock="$(rec .addresses.timelock)"
+  safe="$(rec .addresses.safe)"; keydir="$(rec .ephemeral.keystore_dir)"; delay="$(rec .min_delay)"
+  [[ -f "$keydir/approver" ]] || die "approver keystore is gone (discarded?): $keydir" 65
+
+  data="$(jq -r '.drafts[0].propose_calldata // empty' "$DRAFT_FILE")"
+  [[ -n "$data" ]] || die "no propose_calldata in $DRAFT_FILE" 65
+
+  local proposals_before proposals_after schedule_tx="" execute_tx=""
+  proposals_before="$(call "$governance" 'currentProposalId()(uint256)')"
+
+  local as_approver=(--keystore "$keydir/approver" --password-file "$keydir/approver.pw")
+  zero="0x0000000000000000000000000000000000000000000000000000000000000000"
+  salt="$(jq -r '.drafts[0].receipt_id // "0x00"' "$DRAFT_FILE")"
+  
+  op="$(call "$timelock" 'hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)' "$governance" 0 "$data" "$zero" "$salt")"
+  if [[ "$(call "$timelock" 'isOperationDone(bytes32)(bool)' "$op")" == "true" ]]; then
+    jq -n --arg op "$op" '{action:"already_proposed", operation:$op}'
+    return 0
+  fi
+  
+  if [[ "$(call "$timelock" 'isOperation(bytes32)(bool)' "$op")" != "true" ]]; then
+    schedule_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
+      "$("$CAST" calldata 'schedule(address,uint256,bytes,bytes32,bytes32,uint256)' "$governance" 0 "$data" "$zero" "$salt" "$delay")")"
+    info "scheduled propose $op; waiting ${delay}s"
+  fi
+  for _ in $(seq 1 $(( delay / 5 + 60 ))); do
+    [[ "$(call "$timelock" 'isOperationReady(bytes32)(bool)' "$op")" == "true" ]] && break
+    sleep 5
+  done
+  [[ "$(call "$timelock" 'isOperationReady(bytes32)(bool)' "$op")" == "true" ]] || die "timelock operation never became ready: $op"
+  execute_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
+    "$("$CAST" calldata 'execute(address,uint256,bytes,bytes32,bytes32)' "$governance" 0 "$data" "$zero" "$salt")")"
+  
+  proposals_after="$(call "$governance" 'currentProposalId()(uint256)')"
+  [[ "$proposals_before" != "$proposals_after" ]] || die "execute mined but the proposal was not created"
+  
+  discard_keys
+  jq -n --arg op "$op" --arg s "$schedule_tx" --arg e "$execute_tx" --arg pid "$proposals_after" \
+    '{action:"proposed_via_timelock", operation:$op, schedule_tx:$s, execute_tx:$e, proposal_id:$pid}'
+}
+
+case "$ACTION" in
+  run) run_ceremony ;;
+  verify) [[ -n "$RECORD" ]] || usage; verify_record ;;
+  release) [[ -n "$RECORD" ]] || usage; release_receipt ;;
+  propose) [[ -n "$RECORD" ]] || usage; propose_governance ;;
   discard) [[ -n "$RECORD" ]] || usage; discard_keys ;;
   handover-vaults) [[ -n "$RECORD" ]] || usage; handover_vaults; verify_record ;;
   *) usage ;;
