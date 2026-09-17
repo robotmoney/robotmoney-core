@@ -419,11 +419,22 @@ pub enum FloorCheck {
     /// The chain now answering still shows code at the remembered block, so it
     /// is a claim about THIS chain.
     Holds,
-    /// The remembered block does not describe this chain: either the address
-    /// has no code there (a different deployment) or the chain cannot serve
-    /// that height at all (a different, or re-provisioned, chain). Clear it and
-    /// re-detect.
+    /// The chain served the block and there is no code at it. The address was
+    /// deployed elsewhere, so the value was recorded against a different chain.
+    /// Clear it and re-detect.
     Stale,
+    /// The chain could not serve the block at all. Measured on the live
+    /// `anvil --load-state` devnet: it retains a rolling window of roughly
+    /// 3,600 blocks, so a correctly detected floor drops out of history a few
+    /// blocks later through nothing but time passing. Treating that as
+    /// [`FloorCheck::Stale`] made every tick clear all five contracts,
+    /// re-detect, and warn that the chain was "gone" while it was serving
+    /// requests normally — about 130 probes a tick, for ever, and an alarm that
+    /// was false every time it fired.
+    ///
+    /// A pruned floor still needs raising, because the old value names a block
+    /// nothing can read. It is not evidence of a replaced chain.
+    HistoryMoved,
     /// The probe said nothing about the block. Keep the remembered value: there
     /// is no evidence against it, and discarding a good floor on a flaky round
     /// trip would re-run the full search every tick.
@@ -435,10 +446,15 @@ pub enum FloorCheck {
 pub fn classify_floor_check(probe: CodeProbe) -> FloorCheck {
     match probe {
         CodeProbe::Present => FloorCheck::Holds,
-        // Both "no code here" and "cannot serve this height" say the same
-        // thing about a block we recorded as the one the contract came into
-        // existence at: it was not recorded against this chain.
-        CodeProbe::Empty | CodeProbe::BelowHistory => FloorCheck::Stale,
+        // These two do NOT say the same thing, and collapsing them cost a
+        // per-tick re-detect on every pruning chain. "The chain served that
+        // height and there is no code" means the address was deployed
+        // somewhere else — a different chain. "The chain cannot serve that
+        // height" means only that its retained history no longer reaches back
+        // that far, which is ordinary behaviour for a rolling-window node and
+        // says nothing about which chain is answering.
+        CodeProbe::Empty => FloorCheck::Stale,
+        CodeProbe::BelowHistory => FloorCheck::HistoryMoved,
         CodeProbe::Unusable => FloorCheck::Inconclusive,
     }
 }
@@ -476,7 +492,12 @@ pub fn classify_floor_check(probe: CodeProbe) -> FloorCheck {
 /// DEGRADATION: every failure path returns `0`, which is today's behaviour, and
 /// says why at WARN. Detection that cannot run must never become "start at the
 /// head".
-pub async fn resolve_deploy_floor(db: &Db, rpc: &JsonRpc, cfg: &IndexerConfig) -> u64 {
+pub async fn resolve_deploy_floor(
+    db: &Db,
+    rpc: &JsonRpc,
+    cfg: &IndexerConfig,
+    stored_cursor: Option<i64>,
+) -> u64 {
     let contracts = cfg.configured_contracts();
     if contracts.is_empty() {
         tracing::warn!(
@@ -508,6 +529,20 @@ pub async fn resolve_deploy_floor(db: &Db, rpc: &JsonRpc, cfg: &IndexerConfig) -
         }
     }
 
+    // A floor only matters while the cursor is BELOW it. `from_block` is
+    // `max(cursor + 1, floor)`, so once the cursor has caught up, the floor
+    // cannot change what this tick reads and revalidating it is pure cost —
+    // which on a rolling-window node is also a probe that fails every tick by
+    // construction, because the recorded block keeps ageing out of history.
+    // Steady state is therefore one SELECT per contract and no probe at all.
+    if to_detect.is_empty() {
+        if let Some(&(_, _, min_block)) = cached.iter().min_by_key(|(_, _, b)| *b) {
+            if stored_cursor.is_some_and(|c| c >= 0 && (c as u64).saturating_add(1) >= min_block) {
+                return min_block;
+            }
+        }
+    }
+
     // Make the remembered floor prove it belongs to the chain now answering,
     // before anything is derived from it. One probe, at the minimum — see
     // REVALIDATION above for why that one is enough and why trusting it blindly
@@ -523,17 +558,33 @@ pub async fn resolve_deploy_floor(db: &Db, rpc: &JsonRpc, cfg: &IndexerConfig) -
                  for this tick, because there is no evidence against it and discarding a good \
                  floor on a flaky round trip would re-run the whole search every tick"
             ),
-            FloorCheck::Stale => {
-                tracing::warn!(
-                    contract = %address,
-                    stale_deployed_block = block,
-                    chain_id = cfg.chain_id,
-                    "the chain now answering shows no contract code at the persisted deploy \
-                     block, so these values were recorded against a chain that is gone (the \
-                     chain id is reused across backends); clearing contracts.deployed_block \
-                     for every watched contract on this chain and re-detecting now — the \
-                     newly detected numbers are logged per contract below"
-                );
+            outcome @ (FloorCheck::Stale | FloorCheck::HistoryMoved) => {
+                // Same mechanics either way — the old value names a block that
+                // cannot be read, so it has to be replaced. Only the diagnosis
+                // differs, and saying "the chain is gone" about a node that is
+                // simply pruning is an alarm that is false every time it fires.
+                if outcome == FloorCheck::Stale {
+                    tracing::warn!(
+                        contract = %address,
+                        stale_deployed_block = block,
+                        chain_id = cfg.chain_id,
+                        "the chain now answering serves this block but shows no contract code \
+                         at it, so these values were recorded against a chain that is gone (the \
+                         chain id is reused across backends); clearing contracts.deployed_block \
+                         for every watched contract on this chain and re-detecting now — the \
+                         newly detected numbers are logged per contract below"
+                    );
+                } else {
+                    tracing::info!(
+                        contract = %address,
+                        pruned_deployed_block = block,
+                        chain_id = cfg.chain_id,
+                        "the chain's retained history no longer reaches the recorded deploy \
+                         block, which is ordinary for a rolling-window node and is NOT evidence \
+                         of a replaced chain; raising the floor to the earliest block still \
+                         readable and re-detecting now"
+                    );
+                }
                 for (address, kind, stale) in std::mem::take(&mut cached) {
                     if let Err(e) = db
                         .clear_deployed_block(cfg.chain_id, address.into_array())
@@ -740,9 +791,11 @@ pub async fn run_once(
     // Ask the chain where its own history usefully begins.  Cheap after the
     // first tick (one SELECT per contract) and never fatal: every failure path
     // returns 0, which is exactly how this indexer behaved before.
-    let deploy_floor = resolve_deploy_floor(db, rpc, cfg).await;
-
+    // Read the cursor FIRST: a floor only matters while the cursor is below it,
+    // and resolve_deploy_floor skips its revalidation probe entirely once the
+    // cursor has caught up.
     let stored_cursor = db.last_indexed_block(cfg.chain_id).await?;
+    let deploy_floor = resolve_deploy_floor(db, rpc, cfg, stored_cursor).await;
     // Reconcile the stored cursor with the derived floor BEFORE anything reads
     // it — before the reorg check, and before `rollback_cursor` is seeded from
     // it.
@@ -2713,15 +2766,19 @@ mod tests {
 
     #[test]
     fn a_remembered_block_this_chain_cannot_show_is_stale_not_authoritative() {
-        // Both shapes of the stage failure. `Empty`: the addresses are
-        // deterministic, so the same address on a re-provisioned chain has no
-        // code at the block the old chain deployed it in. `BelowHistory`: the
-        // replacement is a fork-state chain whose earliest servable block is
-        // far above the remembered one.
+        // `Empty` is the only one that proves a different chain: this chain
+        // SERVED the block and the address has no code at it, so the addresses
+        // being deterministic means it was deployed somewhere else.
         assert_eq!(classify_floor_check(CodeProbe::Empty), FloorCheck::Stale);
+        // `BelowHistory` proves nothing about which chain is answering. The
+        // live `anvil --load-state` devnet retains ~3,600 blocks, so a floor
+        // this code detected correctly ages out of history within a minute
+        // through nothing but time passing. Calling that "the chain is gone"
+        // cleared all five contracts and re-searched on EVERY tick, and the
+        // alarm was false every time it fired.
         assert_eq!(
             classify_floor_check(CodeProbe::BelowHistory),
-            FloorCheck::Stale
+            FloorCheck::HistoryMoved
         );
     }
 

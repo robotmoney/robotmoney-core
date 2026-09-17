@@ -60,6 +60,14 @@ pub fn bitmap_from_env() -> u64 {
 mod tests {
     use super::*;
 
+    /// `FEATURE_FLAGS` is process-global, and the three tests below set and
+    /// remove it. Cargo runs tests in parallel threads, so without this they
+    /// race: one test's `remove_var` lands between another's `set_var` and its
+    /// read, and the bitmap comes back 0. It surfaced intermittently, and only
+    /// when unrelated work changed how many tests share the binary — which is
+    /// the worst way for a flake to be found.
+    static ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Flag ID constants must match config/feature-flags.json.
     #[test]
     fn flag_id_constants_match_registry() {
@@ -115,6 +123,7 @@ mod tests {
 
     #[test]
     fn bitmap_from_env_missing_var() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         // Ensure the variable is not set in this test process.
         std::env::remove_var("FEATURE_FLAGS");
         assert_eq!(bitmap_from_env(), 0);
@@ -122,6 +131,7 @@ mod tests {
 
     #[test]
     fn bitmap_from_env_valid_value() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("FEATURE_FLAGS", "5");
         let bitmap = bitmap_from_env();
         std::env::remove_var("FEATURE_FLAGS");
@@ -134,6 +144,7 @@ mod tests {
 
     #[test]
     fn bitmap_from_env_invalid_value() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("FEATURE_FLAGS", "notanumber");
         let bitmap = bitmap_from_env();
         std::env::remove_var("FEATURE_FLAGS");

@@ -323,8 +323,10 @@ async fn derives_persists_and_then_reuses_the_start_block() {
     assert_eq!(second.from_block, LOWEST_SERVABLE as i64 + 10);
     assert_eq!(
         chain.method_counts("eth_getCode"),
-        1,
-        "a steady-state tick re-checks the floor once and searches never"
+        0,
+        "a steady-state tick spends NO probe: the cursor has caught up, so the floor cannot \
+         change what this tick reads, and re-checking it would be pure cost — on a \
+         rolling-window node it is also a probe that fails every tick by construction"
     );
 
     chain.shutdown();
