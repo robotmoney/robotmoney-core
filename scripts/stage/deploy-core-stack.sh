@@ -111,8 +111,40 @@ for tool in jq docker curl; do
   command -v "$tool" >/dev/null 2>&1 || fail "required tool '$tool' not on PATH" 3
 done
 
+# ─── rmpc, always rebuilt from the pinned checkout ────────────────────────────
+# NOT a conditional check. The staged binary and the pinned tag drift silently:
+# on 2026-09-16 the binary here had been built three days before the tag commit,
+# `rmpc --version` could not discriminate because the rc declared an older
+# version, and it derived a different payload digest — so every core-side verdict
+# from that run, independent verification and seam checks included, was
+# stale-binary output that had to be thrown away and re-proven.
+#
+# `checks/binary-provenance.ts` in the QA driver only DETECTS that afterwards,
+# by mtime and tag-string fingerprints, and refuses the record stage. Detection
+# turns the drift into a late, confusing failure. Building here removes it.
+#
+# Defined here, ABOVE the `smoke` action below, not beside `chain_up` further
+# down: `smoke` is the QA driver's actual default invocation (fusion-qa's
+# build-remote), and it `exec`s before ever reaching the action dispatch that
+# `chain_up`/`up` live in. A definition below that point would never be seen,
+# and the "always rebuilt" promise would be true only for the `up` path nobody
+# but a prebuilt-image deploy uses.
+#
+# cargo is incremental, so a checkout that has not moved costs seconds.
+rebuild_rmpc() {
+  command -v cargo >/dev/null 2>&1 || fail "required tool 'cargo' not on PATH (needed to rebuild rmpc)" 3
+  info "rebuilding rmpc from $(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo 'this checkout')"
+  (cd "$REPO_ROOT" && cargo build -p rust-payment-client --bin rmpc --bin rmpc-keystore-import) \
+    || fail "rmpc rebuild failed; refusing to run against whatever binary was already there" 66
+}
+
 if [[ "$ACTION" == "smoke" ]]; then
   command -v cargo >/dev/null 2>&1 || fail "required tool 'cargo' not on PATH" 3
+  # This is the driver's actual default path (fusion-qa's build-remote), not
+  # `up` — `rebuild_rmpc` living only on `up` would have made the "always
+  # rebuilt" promise false for every QA run, which invokes `smoke` directly and
+  # never reaches the `up` branch below.
+  rebuild_rmpc
   exec cargo run -p smoke-test -- \
     --full-stack \
     --chain "$CHAIN_BACKEND" \
@@ -281,26 +313,6 @@ info "wrote $OUT_DIR/dapp.images.override.yaml (tag $TAG)"
 # ─── Actions ─────────────────────────────────────────────────────────────────
 compose() {
   docker compose --project-name "$1" --env-file "$OUT_DIR/dapp.env" -f "$2" "${@:3}"
-}
-
-# ─── rmpc, always rebuilt from the pinned checkout ────────────────────────────
-# NOT a conditional check. The staged binary and the pinned tag drift silently:
-# on 2026-09-16 the binary here had been built three days before the tag commit,
-# `rmpc --version` could not discriminate because the rc declared an older
-# version, and it derived a different payload digest — so every core-side verdict
-# from that run, independent verification and seam checks included, was
-# stale-binary output that had to be thrown away and re-proven.
-#
-# `checks/binary-provenance.ts` in the QA driver only DETECTS that afterwards,
-# by mtime and tag-string fingerprints, and refuses the record stage. Detection
-# turns the drift into a late, confusing failure. Building here removes it.
-#
-# cargo is incremental, so a checkout that has not moved costs seconds.
-rebuild_rmpc() {
-  command -v cargo >/dev/null 2>&1 || fail "required tool 'cargo' not on PATH (needed to rebuild rmpc)" 3
-  info "rebuilding rmpc from $(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo 'this checkout')"
-  (cd "$REPO_ROOT" && cargo build -p rust-payment-client --bin rmpc --bin rmpc-keystore-import) \
-    || fail "rmpc rebuild failed; refusing to run against whatever binary was already there" 66
 }
 
 chain_up() {
