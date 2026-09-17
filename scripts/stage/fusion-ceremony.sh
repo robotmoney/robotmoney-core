@@ -14,10 +14,10 @@
 #   fusion-ceremony.sh ensure  [--record FILE] [--summary FILE] [--out-dir DIR] [--rpc-url URL]
 #   fusion-ceremony.sh verify  --record FILE [--rpc-url URL]
 #   fusion-ceremony.sh release --record FILE --receipt-id 0x.. [--rpc-url URL]
-#   fusion-ceremony.sh propose --record FILE --draft-file FILE [--rpc-url URL]
+#   fusion-ceremony.sh propose --record FILE --draft-file FILE [--rpc-url URL] [--out-dir DIR]
 #   fusion-ceremony.sh propose-negative --record FILE --draft-file FILE [--rpc-url URL]
-#   fusion-ceremony.sh vote    --record FILE [--rpc-url URL]
-#   fusion-ceremony.sh execute --record FILE [--rpc-url URL]
+#   fusion-ceremony.sh vote    --record FILE [--rpc-url URL] [--out-dir DIR]
+#   fusion-ceremony.sh execute --record FILE [--rpc-url URL] [--out-dir DIR]
 #   fusion-ceremony.sh discard --record FILE
 #   fusion-ceremony.sh handover-vaults --record FILE [--rpc-url URL]
 #
@@ -57,7 +57,10 @@
 #          and rolled straight back so voter-b can still vote — then voter-b
 #          votes and the tally is asserted against the proposal's snapshotQuorum.
 #          Idempotent: a voter that already voted is skipped and said so in the
-#          result rather than being sent into AlreadyVoted.
+#          result rather than being sent into AlreadyVoted. Each vote that lands
+#          is followed by a G08 weight witness (see `execute`), and a witness
+#          that could not be taken or written is reported in the result's own
+#          weight_witness field rather than lost in passing.
 # execute  the transition G08 grades: the Queued proposal's weight vector applied
 #          to PortfolioRouter. execute(uint256) has no role guard, so an
 #          unprivileged ephemeral key sends it. The router's vector and the
@@ -70,6 +73,16 @@
 #          router weights are then graded PER VAULT and exactly against the
 #          receipt - 833/8167/667/333 bps for rmAGENT/rmUSDC/rmPROTO/rmRWA -
 #          never as a sum. Idempotent on an already-executed proposal.
+#          G08 also asks that ONLY this transition change those weights, which a
+#          single pre-execute reading cannot show. propose and vote each append a
+#          WITNESS of the router's vector — per vault, with chain time and block —
+#          to $OUT_DIR/weight-witness/<run>-cycle-<proposal>.jsonl, and execute
+#          compares every witness of its own cycle against the others and against
+#          its live reading before it moves the clock, reporting
+#          weights_unchanged_until_execute. Equal witnesses with the propose one
+#          among them assert it; a disagreement is the breach G08 exists to catch
+#          and stops the ceremony; no witness, a missing propose witness, or a
+#          line this run cannot read is reported unproven, never as a pass.
 # discard  shreds the run's keystores (AC-ID-06: discarded after the run).
 # handover-vaults  moves ADMIN_ROLE (to the timelock) and EMERGENCY_ROLE (to the
 #          emergency key) off the deployer on every vault DeployTimelock does not
@@ -692,13 +705,250 @@ grade_stored_proposal() {
     || die "proposal $pid names proposer $stored_proposer, not the timelock $timelock: the ADMIN_ROLE path was not the one used" 1
 }
 
+# ─── G08: the router vector, witnessed across the whole cycle ────────────────
+# G08's wording is that ONLY the execute transition may change PortfolioRouter
+# weights. One reading taken just before execute cannot say that: it says
+# nothing about what the vector did while the proposal was being created and
+# voted on, which is the whole of what the rule asks. propose, vote and execute
+# are three separate CLI invocations, so a reading taken during propose only
+# survives to execute on disk.
+#
+# These are those readings: append-only witness records, one per stage, keyed to
+# the cycle (the governance proposal id) so a second cycle is never graded
+# against the first cycle's vector, and to the record's run id so a rebooted
+# devnet — which restarts proposal ids at 1 while the old file sits on disk —
+# cannot have its history read as this run's.
+GET_WEIGHTS_SIG='getWeights()(address[],uint256[])'
+WITNESS_STAGES='propose vote-a vote-b'
+
+# `<address>\t<bps>` lines from a parallel address list and bps list. A length
+# mismatch is a corrupt vector, not something to zip short and keep going.
+zip_pairs() {
+  local vaults="$1" bps="$2" label="$3" nv nb
+  nv="$(grep -c '[^[:space:]]' <<<"$vaults" || true)"
+  nb="$(grep -c '[^[:space:]]' <<<"$bps" || true)"
+  [[ "$nv" == "$nb" ]] || die "$label pairs $nv vaults with $nb bps" 1
+  (( nv > 0 )) || return 0
+  paste -d'\t' <(printf '%s\n' "$vaults") <(printf '%s\n' "$bps")
+}
+
+# One of the router's weight views as `<address>\t<bps>` lines. Empty output is a
+# real answer: the voted vector is empty until a proposal has passed.
+router_weight_pairs() {
+  local router="$1" sig="$2" out
+  out="$("$CAST" call --rpc-url "$RPC_URL" "$router" "$sig")" \
+    || die "could not read ${sig%%(*}() from router $router"
+  zip_pairs "$(cast_array_lines "$(sed -n '1p' <<<"$out")")" \
+            "$(cast_array_lines "$(sed -n '2p' <<<"$out")")" "router ${sig%%(*}()"
+}
+
+# One vault's bps out of a pair list: the value when the list names the vault
+# exactly once, and an empty string when it does not name it at all. A vault
+# named twice is a corrupt vector, never a silent first hit.
+weight_lookup() {
+  local pairs="$1" vault="$2" hits count
+  hits="$(awk -F'\t' -v v="$(lower "$vault")" '$1 == v { print $2 }' <<<"$pairs")"
+  count="$(grep -c '[^[:space:]]' <<<"$hits" || true)"
+  (( count <= 1 )) || die "a weight vector names vault $vault $count times: [$(tr '\n' ' ' <<<"$pairs")]" 1
+  printf '%s' "$(tr -d '[:space:]' <<<"$hits")"
+}
+
+# This cycle's witness file. $OUT_DIR is where the ceremony already keeps the
+# record, and every action defaults to the same one, so propose, vote and
+# execute all find it without being told.
+witness_file() {
+  local pid="$1" run
+  [[ "$pid" =~ ^[0-9]+$ ]] || die "a weight witness is keyed on a numeric proposal id, got '$pid'" 64
+  run="$(jq -r '.run_id // "unkeyed"' "$RECORD" | tr -cd '[:alnum:]._-')"
+  printf '%s/weight-witness/%s-cycle-%s.jsonl' "$OUT_DIR" "${run:-unkeyed}" "$pid"
+}
+
+# The latest block number as a decimal, or the JSON literal `null` when the
+# chain will not say. A witness carries it so an auditor can place the reading
+# in chain history rather than in wall-clock time.
+chain_block() {
+  local n=""
+  n="$("$CAST" block-number --rpc-url "$RPC_URL" 2>/dev/null | tr -cd '[:alnum:]')" || n=""
+  if [[ "$n" == 0x* ]]; then n="$("$CAST" to-dec "$n" 2>/dev/null || true)"; fi
+  [[ "$n" =~ ^[0-9]+$ ]] || { printf 'null'; return 0; }
+  printf '%s' "$n"
+}
+
+# The router's weight for every vault the record names, as one sorted line of
+# `<key>=<address>=<bps>` tokens. A vault the vector does not name reads as
+# `absent`, which is a value like any other: it has to stay absent until execute
+# too, so a bucket appearing out of nowhere counts as a change.
+router_vector_fingerprint() {
+  local pairs="$1" key vault bps out="" sep=""
+  while read -r key; do
+    [[ -n "$key" ]] || continue
+    vault="$(lower "$(rec ".vault_addresses.$key")")"
+    is_address "$vault" || die "record carries no address for vault $key" 65
+    bps="$(weight_lookup "$pairs" "$vault")" || exit $?
+    out+="$sep$key=$vault=${bps:-absent}"
+    sep=" "
+  done < <(jq -r '.vault_addresses | keys[]' "$RECORD")
+  printf '%s' "$out"
+}
+
+# One fingerprint as the JSON array a reader can audit: {vault_key, vault,
+# router_bps}, with a bucket the vector does not name reported as null rather
+# than as a weight of 0.
+witness_weights_json() {
+  tr ' ' '\n' <<<"$1" | awk -F= 'NF == 3 { print $1; print $2; print $3 }' \
+    | jq -Rn '[inputs] as $a
+      | [range(0; ($a | length); 3)
+         | {vault_key: $a[.], vault: $a[. + 1],
+            router_bps: (if $a[. + 2] == "absent" then null else ($a[. + 2] | tonumber) end)}]'
+}
+
+# record_weight_witness <stage> <router> <proposal-id>: append ONE witness — the
+# stage, the chain time and block it was taken at, and the router's weight for
+# every vault the record names — to this cycle's witness file.
+#
+# A witness is never faked, and a lost one is never swallowed either: this
+# returns non-zero and leaves $WITNESS_RESULT describing the loss, which propose
+# and vote both carry in their own JSON so a driver reading the result sees a
+# degraded proof instead of a whole one.
+#
+# What it must NOT do is die. Every caller records AFTER its transactions are
+# mined, so a failed READING here would throw away the JSON evidence of chain
+# work that already landed — one RPC blip on getWeights() would cost the whole
+# propose record, ProposalCreated decode included, with the proposal itself
+# irreversibly on chain. A read failure is therefore contained exactly like a
+# write failure: the run loses one witness and execute grades
+# weights_unchanged_until_execute unproven, which is the honest answer.
+WITNESS_RESULT='{"recorded":false,"stage":null,"reason":"no weight witness was attempted"}'
+
+# Say the loss on stderr and leave it in $WITNESS_RESULT for the caller's JSON.
+witness_lost() {
+  local stage="$1" pid="$2" file="$3" why="$4"
+  WITNESS_RESULT="$(jq -cn --arg s "$stage" --arg f "$file" --arg why "$why" \
+    '{recorded:false, stage:$s, witness_file:$f, reason:$why}')"
+  info "$why (cycle $pid, $file): execute will report weights_unchanged_until_execute unproven rather than claim a proof it does not have"
+}
+
+record_weight_witness() {
+  local stage="$1" router="$2" pid="$3" file dir pairs fingerprint weights now block line
+  file="$(witness_file "$pid")" || exit $?
+  dir="$(dirname "$file")"
+  # Every read in one condition, so a router that will not answer — or a record
+  # whose vault list no longer matches it — costs this witness and nothing else.
+  if ! pairs="$(router_weight_pairs "$router" "$GET_WEIGHTS_SIG")" \
+     || ! fingerprint="$(router_vector_fingerprint "$pairs")" \
+     || ! weights="$(witness_weights_json "$fingerprint")" \
+     || ! now="$(chain_time)"; then
+    witness_lost "$stage" "$pid" "$file" "could not read the router vector for the $stage weight witness"
+    return 1
+  fi
+  block="$(chain_block)"
+  if ! line="$(jq -cn --arg stage "$stage" --arg pid "$pid" --arg router "$router" \
+    --arg fp "$fingerprint" --argjson weights "$weights" \
+    --argjson t "$now" --argjson b "$block" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{stage:$stage, proposal_id:$pid, router:$router, chain_time:$t, block_number:$b,
+      recorded_at:$at, fingerprint:$fp, weights:$weights}')"; then
+    witness_lost "$stage" "$pid" "$file" "could not build the $stage weight witness record"
+    return 1
+  fi
+  if ! mkdir -p "$dir" 2>/dev/null || ! printf '%s\n' "$line" >>"$file" 2>/dev/null; then
+    witness_lost "$stage" "$pid" "$file" "could not write the $stage weight witness"
+    return 1
+  fi
+  WITNESS_RESULT="$(jq -cn --arg s "$stage" --arg f "$file" --arg fp "$fingerprint" \
+    --argjson t "$now" --argjson b "$block" \
+    '{recorded:true, stage:$s, witness_file:$f, fingerprint:$fp, chain_time:$t, block_number:$b}')"
+  info "witnessed the router vector at stage $stage of cycle $pid (chain time $now, block $block): [$fingerprint]"
+}
+
+# grade_weight_witnesses <proposal-id> <live-fingerprint>: every witness this
+# cycle recorded, compared to each other AND to the caller's own live reading.
+# Prints ONE JSON object, and there are exactly three answers:
+#
+#   • every witness agrees with every other and with the live vector, the
+#     PROPOSE witness is among them, and the file held nothing this run could
+#     not read -> {"asserted":true, ...}, the only shape a reader may read as a
+#     proof.
+#   • any disagreement -> the ceremony DIES. A router vector that moved before
+#     execute is precisely the breach G08 exists to detect, so it is never
+#     swallowed into a false verdict or a quiet skip.
+#   • a record this run cannot stand behind -> {"asserted":false, reason:…}.
+#     "This run could not test it" is said out loud, never dressed up as a pass.
+#     Three things land here, each named in its own reason: no witness at all
+#     (an execute run standalone against a cycle whose propose and vote ran
+#     before this feature); a line this run cannot read as a witness, which a
+#     truncated append leaves behind and which may have said anything; and a
+#     file with no propose witness in it, which can only show the vector held
+#     from the first vote onward while G08 asks about the whole cycle.
+#
+# A file that cannot be read is NOT a reason to die. Only a weights
+# DISAGREEMENT is, because only that is evidence of the breach; an unreadable
+# record is the "could not test this" case, and killing execute over it would
+# cost the transition's own grading too.
+grade_weight_witnesses() {
+  local pid="$1" live_fp="$2"
+  local file line stage fp count=0 corrupt=0 stages_seen=""
+  local first_fp="" first_stage="" disagreements="" witnesses='[]'
+  file="$(witness_file "$pid")" || exit $?
+  if [[ -s "$file" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      if ! jq -e . >/dev/null 2>&1 <<<"$line"; then
+        corrupt=$(( corrupt + 1 )); continue
+      fi
+      stage="$(jq -r '.stage // ""' <<<"$line")"
+      [[ " $WITNESS_STAGES " == *" $stage "* ]] || continue
+      fp="$(jq -r '.fingerprint // ""' <<<"$line")"
+      if [[ -z "$fp" ]]; then
+        corrupt=$(( corrupt + 1 )); continue
+      fi
+      count=$(( count + 1 ))
+      stages_seen+=" $stage"
+      if (( count == 1 )); then first_fp="$fp"; first_stage="$stage"; fi
+      [[ "$fp" == "$first_fp" ]] \
+        || disagreements+="the $stage witness reads [$fp] where the $first_stage witness read [$first_fp]; "
+      [[ "$fp" == "$live_fp" ]] \
+        || disagreements+="the $stage witness reads [$fp] where the router reads [$live_fp] at execute; "
+      witnesses="$(jq -c --argjson acc "$witnesses" '$acc + [.]' <<<"$line")"
+    done <"$file"
+  fi
+  # Graded first, and whatever else the file holds: a vector that moved before
+  # execute is the breach, and no amount of missing record excuses it.
+  if [[ -n "$disagreements" ]]; then
+    die "PortfolioRouter weights changed before execute in governance cycle $pid: ${disagreements%; } — G08 grades this transition as the ONLY thing that may change the router's weights, so a vector that moved during propose or voting is that breach, not a clause to report as unproven" 1
+  fi
+  local reason=""
+  if (( count == 0 )); then
+    reason="no propose or vote weight witness was recorded for governance cycle $pid, so this run cannot say whether the router vector held across propose and both votes"
+  elif (( corrupt > 0 )); then
+    reason="weight witness file $file carries $corrupt line(s) this run cannot read as a witness (a truncated append leaves exactly that), so the record of governance cycle $pid is partial and cannot carry the claim"
+  elif [[ " $stages_seen " != *" propose "* ]]; then
+    reason="no propose weight witness was recorded for governance cycle $pid (only:${stages_seen}), so this run can say nothing about the router vector between the proposal being created and the first vote"
+  fi
+  if [[ -n "$reason" ]]; then
+    info "$reason; the weights-unchanged-until-execute clause is reported UNPROVEN, never passed"
+    jq -cn --arg pid "$pid" --arg file "$file" --arg live "$live_fp" --arg reason "$reason" \
+      --argjson n "$count" --argjson c "$corrupt" --argjson w "$witnesses" \
+      '{asserted:false, proposal_id:$pid, witnesses:$w, witness_file:$file, witness_count:$n,
+        corrupt_lines:$c, live_fingerprint:$live, reason:$reason}'
+    return 0
+  fi
+  info "the router vector held across $count witnessed stage(s) of cycle $pid and still reads the same at execute: [$live_fp]"
+  jq -cn --arg pid "$pid" --arg file "$file" --arg live "$live_fp" --argjson n "$count" \
+    --argjson c "$corrupt" --argjson w "$witnesses" \
+    '{asserted:true, proposal_id:$pid, witness_file:$file, witness_count:$n,
+      corrupt_lines:$c, live_fingerprint:$live, witnesses:$w,
+      claim:"every propose and vote witness of this cycle read the same PortfolioRouter vector, and the router still reads it at execute: only this transition can have changed it"}'
+}
+
 propose_governance() {
   [[ -f "$RECORD" ]] || die "record not found: $RECORD" 65
   [[ -n "${DRAFT_FILE:-}" ]] || die "--draft-file is required" 64
   [[ -f "$DRAFT_FILE" ]] || die "draft file not found: $DRAFT_FILE" 65
-  local governance timelock safe keydir delay data salt zero op receipt_id
+  local governance timelock safe keydir delay data salt zero op receipt_id router
   governance="$(rec .addresses.governance)"; timelock="$(rec .addresses.timelock)"
   safe="$(rec .addresses.safe)"; keydir="$(rec .ephemeral.keystore_dir)"; delay="$(rec .min_delay)"
+  router="$(rec .addresses.router)"
+  is_address "$router" || die "record carries no router address to witness weights against: '$router'" 65
   [[ -f "$keydir/approver" ]] || die "approver keystore is gone (discarded?): $keydir" 65
   require_contract "$governance" governance
   require_contract "$timelock" timelock
@@ -744,8 +994,12 @@ propose_governance() {
         || die "could not read activeProposal() from governance $governance"
       grade_stored_proposal "$live_proposal" "$timelock" "$pid_before" "$draft_vaults" "$draft_bps"
       info "proposal $pid_before is already $state_name on $governance and matches the draft; scheduling nothing"
-      jq -n --arg pid "$pid_before" --arg st "$state_name" \
-        '{action:"already_proposed", proposal_id:$pid, proposal_state:$st}'
+      # G08 starts here, not at execute: the vector the router carries while the
+      # proposal is merely Active is the first thing execute compares against.
+      record_weight_witness propose "$router" "$pid_before" || true
+      jq -n --arg pid "$pid_before" --arg st "$state_name" --argjson witness "$WITNESS_RESULT" \
+        '{action:"already_proposed", proposal_id:$pid, proposal_state:$st,
+          weight_witness:$witness}'
       return 0
     fi
   fi
@@ -841,6 +1095,11 @@ propose_governance() {
     '{event:"ProposalCreated", proposal_id:$pid, proposer:$proposer, vaults:$vaults,
       bps:$bps, voting_deadline:$deadline, tx:$tx}')"
 
+  # ── the G08 witness: the router vector at the moment the proposal exists ──
+  # Recorded now, kept on disk, and compared by `execute` against the vote-stage
+  # witnesses and its own live reading. Nothing but execute may move it.
+  record_weight_witness propose "$router" "$pid_after" || true
+
   # The keystore stays: vote and execute still need the approver and the voters.
   # Shredding is the standalone `discard` action, run when the ceremony is over.
   jq -n --arg op "$op" --arg s "$schedule_tx" --arg e "$execute_tx" --arg pid "$pid_after" \
@@ -849,10 +1108,11 @@ propose_governance() {
     --argjson vaults "$(json_str_array <<<"$stored_vaults")" \
     --argjson bps "$(json_num_array <<<"$stored_bps")" \
     --argjson sum "$stored_sum" --argjson created "$created_json" \
+    --argjson witness "$WITNESS_RESULT" \
     '{action:"proposed_via_timelock", operation:$op, salt:$salt, receipt_id:$rid,
       schedule_tx:$s, execute_tx:$e, proposal_id:$pid, proposal_id_before:$before,
       proposer:$proposer, timelock:$timelock, vaults:$vaults, bps:$bps, bps_total:$sum,
-      proposal_created:$created}'
+      proposal_created:$created, weight_witness:$witness}'
 }
 
 # ─── governance propose: the negative control ────────────────────────────────
@@ -1039,10 +1299,11 @@ read_proposal_state() {
 # ephemeral voters, one power each, against the quorum of 2 `run` provisions.
 vote_governance() {
   [[ -f "$RECORD" ]] || die "record not found: $RECORD" 65
-  local governance keydir voter_a voter_b powerless acct who
+  local governance keydir voter_a voter_b powerless acct who router
   governance="$(rec .addresses.governance)"; keydir="$(rec .ephemeral.keystore_dir)"
   voter_a="$(rec '.ephemeral.voters[0]')"; voter_b="$(rec '.ephemeral.voters[1]')"
-  powerless="$(rec .ephemeral.emergency)"
+  powerless="$(rec .ephemeral.emergency)"; router="$(rec .addresses.router)"
+  is_address "$router" || die "record carries no router address to witness weights against: '$router'" 65
   for acct in "$governance" "$voter_a" "$voter_b" "$powerless"; do
     is_address "$acct" || die "record carries a non-address where the vote path needs one: '$acct'" 65
   done
@@ -1087,6 +1348,13 @@ vote_governance() {
   voter_a_json="$(jq -n --arg addr "$voter_a" --arg outcome "$a_outcome" --arg tx "$tx_a" \
     --argjson cast "$vote_cast_a" \
     '{address:$addr, outcome:$outcome, tx:(if $tx == "" then null else $tx end), vote_cast:$cast}')"
+
+  # G08: the router vector with voter-a's vote on chain. Taken BEFORE the
+  # closed-window probe below, so it witnesses the real chain and never the
+  # throwaway state the snapshot rolls back.
+  local witness_a witness_b
+  record_weight_witness vote-a "$router" "$pid" || true
+  witness_a="$WITNESS_RESULT"
 
   # ── 4. one vote is not enough, against the error the live state dictates ──
   # While the window is open execute() reverts VotingStillOpen; once it closes
@@ -1176,6 +1444,11 @@ vote_governance() {
     --argjson cast "$vote_cast_b" \
     '{address:$addr, outcome:$outcome, tx:(if $tx == "" then null else $tx end), vote_cast:$cast}')"
 
+  # G08: the router vector with the quorum now on chain. Voting is the last
+  # thing that happens before execute, so this is the witness closest to it.
+  record_weight_witness vote-b "$router" "$pid" || true
+  witness_b="$WITNESS_RESULT"
+
   # ── 6. the tally now meets the proposal's own snapshot quorum ─────────────
   local votes_final quorum_final state_after state_after_name
   tally="$(proposal_tally "$governance")" || exit $?
@@ -1191,6 +1464,7 @@ vote_governance() {
     --arg state "$state_after_name" --argjson a "$voter_a_json" --argjson b "$voter_b_json" \
     --arg neg_caller "$powerless" --arg neg_err "$neg_error" --arg neg_matched "$neg_matched" \
     --arg neg_payload "$neg_payload" --argjson insufficient "$insufficient_json" \
+    --argjson wa "$witness_a" --argjson wb "$witness_b" \
     '{action:"voted_to_quorum", governance:$gov, proposal_id:$pid, votes_for:$votes,
       snapshot_quorum:$quorum, quorum_reached:($votes >= $quorum), voting_deadline:$deadline,
       proposal_state_after:$state,
@@ -1198,7 +1472,8 @@ vote_governance() {
       no_voting_power_control:{caller:$neg_caller, expected_error:"NoVotingPower",
                                observed_error:$neg_err, matched_by:$neg_matched,
                                revert_data:$neg_payload},
-      one_vote_insufficient:$insufficient}'
+      one_vote_insufficient:$insufficient,
+      weight_witness:{vote_a:$wa, vote_b:$wb}}'
 }
 
 # ─── governance execute ──────────────────────────────────────────────────────
@@ -1207,7 +1482,6 @@ PROPOSAL_EXECUTED_SIG='ProposalExecuted(uint256,address)'
 WEIGHTS_APPLIED_SIG='WeightsApplied(uint256,address[],uint256[])'
 EXECUTION_DELAY_NOT_ELAPSED_SIG='ExecutionDelayNotElapsed()'
 ALREADY_EXECUTED_SIG='AlreadyExecuted()'
-GET_WEIGHTS_SIG='getWeights()(address[],uint256[])'
 GET_EFFECTIVE_WEIGHTS_SIG='getEffectiveWeights()(address[],uint256[])'
 
 # The one vector this transition is allowed to end on, keyed by the record's
@@ -1219,42 +1493,10 @@ rmUSDC 8167
 rmPROTO 667
 rmRWA 333'
 
-# `<address>\t<bps>` lines from a parallel address list and bps list. A length
-# mismatch is a corrupt vector, not something to zip short and keep going.
-zip_pairs() {
-  local vaults="$1" bps="$2" label="$3" nv nb
-  nv="$(grep -c '[^[:space:]]' <<<"$vaults" || true)"
-  nb="$(grep -c '[^[:space:]]' <<<"$bps" || true)"
-  [[ "$nv" == "$nb" ]] || die "$label pairs $nv vaults with $nb bps" 1
-  (( nv > 0 )) || return 0
-  paste -d'\t' <(printf '%s\n' "$vaults") <(printf '%s\n' "$bps")
-}
-
-# One of the router's weight views as `<address>\t<bps>` lines. Empty output is a
-# real answer: the voted vector is empty until a proposal has passed.
-router_weight_pairs() {
-  local router="$1" sig="$2" out
-  out="$("$CAST" call --rpc-url "$RPC_URL" "$router" "$sig")" \
-    || die "could not read ${sig%%(*}() from router $router"
-  zip_pairs "$(cast_array_lines "$(sed -n '1p' <<<"$out")")" \
-            "$(cast_array_lines "$(sed -n '2p' <<<"$out")")" "router ${sig%%(*}()"
-}
-
 # `<address>\t<bps>` lines as a JSON array of {vault, bps}.
 pairs_json() {
   awk -F'\t' 'NF { print $1; print $2 }' <<<"$1" \
     | jq -Rn '[inputs] as $a | [range(0; ($a | length); 2) | {vault: $a[.], bps: ($a[. + 1] | tonumber)}]'
-}
-
-# One vault's bps out of a pair list: the value when the list names the vault
-# exactly once, and an empty string when it does not name it at all. A vault
-# named twice is a corrupt vector, never a silent first hit.
-weight_lookup() {
-  local pairs="$1" vault="$2" hits count
-  hits="$(awk -F'\t' -v v="$(lower "$vault")" '$1 == v { print $2 }' <<<"$pairs")"
-  count="$(grep -c '[^[:space:]]' <<<"$hits" || true)"
-  (( count <= 1 )) || die "a weight vector names vault $vault $count times: [$(tr '\n' ' ' <<<"$pairs")]" 1
-  printf '%s' "$(tr -d '[:space:]' <<<"$hits")"
 }
 
 # weight_must_be <label> <pairs> <vault> <expected-bps>: exact per-vault equality
@@ -1346,21 +1588,30 @@ execute_governance() {
   # The weights are still graded, and execute() is still shown to refuse, so a
   # rerun proves the end state rather than quietly skipping it.
   if [[ "$state" == "3" ]]; then
-    local idem idem_err idem_matched idem_payload idem_json
+    local idem idem_err idem_matched idem_payload idem_json idem_unchanged
     idem="$(assert_call_reverts "execute($pid_before) on the already-executed proposal" \
              "$ALREADY_EXECUTED_SIG" "$executor" "$governance" "$EXECUTE_SIG" "$pid_before")" || exit $?
     IFS=$'\t' read -r idem_err idem_matched idem_payload <<<"$idem"
     idem_json="$(assert_canonical_weights "$voted_before" "$effective_before" "")" || exit $?
+    # The transition already happened, so the vector on the router is the one it
+    # applied and no witness can be compared against it any more. That is an
+    # untested clause, and it is reported as one: an explicit false verdict, so a
+    # reader grades it unproven instead of reading a pass into a rerun.
+    idem_unchanged="$(jq -cn --arg pid "$pid_before" \
+      '{asserted:false,
+        reason:("proposal " + $pid + " was already executed before this run, so the router already carries the vector that transition applied and this run cannot witness the vector holding across propose and both votes")}')"
     info "proposal $pid_before was already executed; the canonical vector is live and execute() is refused: $idem_err"
     jq -n --arg gov "$governance" --arg router "$router" --arg pid "$pid_before" \
       --arg executor "$executor" --arg err "$idem_err" --arg matched "$idem_matched" \
       --arg payload "$idem_payload" --argjson weights "$idem_json" \
       --argjson before "$(pairs_json "$voted_before")" \
       --argjson before_eff "$(pairs_json "$effective_before")" \
+      --argjson unchanged "$idem_unchanged" \
       '{action:"already_executed", governance:$gov, router:$router, proposal_id:$pid,
         executor:null, tx:null, proposal_state_before:"Executed", proposal_state_after:"Executed",
         weights_before:{voted:$before, effective:$before_eff},
-        weights_after:$weights, proposal_executed:null, weights_applied:null,
+        weights_after:$weights, weights_unchanged_until_execute:$unchanged,
+        proposal_executed:null, weights_applied:null,
         already_executed_control:{caller:$executor, expected_error:"AlreadyExecuted",
                                   observed_error:$err, matched_by:$matched, revert_data:$payload}}'
     return 0
@@ -1370,6 +1621,16 @@ execute_governance() {
   # that THIS transition is what changed it.
   (( canonical_before == 0 )) \
     || die "router $router already carries the canonical vector before this execute: G08 grades this transition as the only thing that changes PortfolioRouter weights, and that claim cannot be made about weights already applied" 1
+
+  # ── 1b. the G08 clause itself: the vector held across propose and the votes ─
+  # Every witness propose and vote left on disk for THIS cycle, compared to each
+  # other and to the reading above — before the clock is touched and long before
+  # execute() is sent, so nothing this action does can be what kept them equal.
+  # A disagreement dies inside grade_weight_witnesses; an absent witness comes
+  # back as an explicit false verdict rather than as a pass.
+  local live_fingerprint unchanged_json
+  live_fingerprint="$(router_vector_fingerprint "$voted_before")" || exit $?
+  unchanged_json="$(grade_weight_witnesses "$pid_before" "$live_fingerprint")" || exit $?
 
   local proposal stored_id deadline executable votes quorum n
   proposal="$("$CAST" call --rpc-url "$RPC_URL" "$governance" "$ACTIVE_PROPOSAL_SIG")" \
@@ -1504,12 +1765,14 @@ execute_governance() {
     --argjson before "$(pairs_json "$voted_before")" \
     --argjson before_eff "$(pairs_json "$effective_before")" \
     --argjson after "$after_json" --argjson pe "$pe_json" --argjson wa "$wa_json" \
+    --argjson unchanged "$unchanged_json" \
     '{action:"executed", governance:$gov, router:$router, proposal_id:$pid,
       executor:$executor, tx:$tx,
       proposal_state_before:$state_before, proposal_state_after:"Executed",
       votes_for:$votes, snapshot_quorum:$quorum,
       weights_before:{voted:$before, effective:$before_eff},
       weights_after:$after,
+      weights_unchanged_until_execute:$unchanged,
       proposal_executed:$pe, weights_applied:$wa,
       too_early_control:{caller:$executor, expected_error:$neg_expected, observed_error:$neg_err,
                          matched_by:$neg_matched, revert_data:$neg_payload,

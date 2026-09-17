@@ -317,6 +317,7 @@ done
 case "${pos[0]}" in
   keccak|calldata|sig|abi-encode|abi-decode|to-dec) exec "$REAL_CAST" "${pos[@]}" ;;
   chain-id) state chain ;;
+  block-number) state blocknum || echo 0 ;;
   codehash) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
   code) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
   balance) state "balance:$(lower "${pos[1]}")" || echo 0 ;;
@@ -331,7 +332,7 @@ case "${pos[0]}" in
         set_state clock "${pos[2]}" ;;
       evm_mine)
         [[ "$(state anvil_reject || echo false)" != "true" ]] || { echo "fake cast: rpc refused (chain is not anvil-backed)" >&2; exit 1; }
-        ;;
+        set_state blocknum "$(( $(state blocknum || echo 0) + 1 ))" ;;
       evm_snapshot)
         # A snapshot is the whole state table copied aside; evm_revert puts it
         # back, exactly as anvil restores state AND block time.
@@ -377,7 +378,12 @@ case "${pos[0]}" in
         'proposalState(uint256)(uint8)') proposal_state_of "${pos[3]}" ;;
         'hasVoted(uint256,address)(bool)') state "voted:${pos[3]}:$(lower "${pos[4]}")" || echo false ;;
         'activeProposal()(uint256,address,address[],uint256[],uint64,uint64,uint256,uint256,bool,bool)') print_active_proposal ;;
-        'getWeights()(address[],uint256[])') print_weight_pairs voted ;;
+        'getWeights()(address[],uint256[])')
+          # `getweights_fails`: a router read that times out, which is what the
+          # witness has to survive without killing the action that took it.
+          [[ "$(state getweights_fails || echo false)" != "true" ]] \
+            || { echo "fake cast: getWeights() read failed" >&2; exit 1; }
+          print_weight_pairs voted ;;
         'getEffectiveWeights()(address[],uint256[])') print_weight_pairs effective ;;
         'hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)') hash_op "${pos[3]}" "${pos[4]}" "${pos[5]}" "${pos[6]}" "${pos[7]}" ;;
         'isOperation(bytes32)(bool)') op_flag "${pos[3]}" is_operation ;;
@@ -538,7 +544,7 @@ json_field_c() { jq -c "$1" "$WORK/out.json" 2>/dev/null; }
 # a vault named twice in one vector).
 gov_baseline() {
   {
-    printf 'chain\t918453\nquorum\t2\ntotal\t2\ndelay\t120\nclock\t1000000000\ntxseq\t0\nproposalid\t0\n'
+    printf 'chain\t918453\nquorum\t2\ntotal\t2\ndelay\t120\nclock\t1000000000\ntxseq\t0\nproposalid\t0\nblocknum\t100\n'
     printf 'owner:%s\t%s\n' "$SAFE" "$APPROVER"
     for r in "$GOVERNANCE" "$TIMELOCK" "$SAFE" "$ROUTER"; do printf 'codehash:%s\t%s\n' "$r" "$HASH"; done
     printf 'power:%s\t1\npower:%s\t1\n' "$VOTER_A" "$VOTER_B"
@@ -546,15 +552,17 @@ gov_baseline() {
     printf 'keystore:voter-a\t%s\n' "$VOTER_A"
     printf 'keystore:voter-b\t%s\n' "$VOTER_B"
   } >"$WORK/state"
+  rm -rf "$WORK/out-dir"
+  mkdir -p "$WORK/out-dir"
   mkdir -p "$WORK/keys"
   : >"$WORK/keys/approver"; : >"$WORK/keys/approver.pw"
   : >"$WORK/keys/voter-a"; : >"$WORK/keys/voter-a.pw"
   : >"$WORK/keys/voter-b"; : >"$WORK/keys/voter-b.pw"
   jq -n --arg gov "$GOVERNANCE" --arg t "$TIMELOCK" --arg s "$SAFE" --arg r "$ROUTER" --arg d "$DEPLOYER" \
     --arg sub "$SUBMITTER" --arg ap "$APPROVER" --arg va "$VOTER_A" --arg vb "$VOTER_B" --arg e "$EMERGENCY" \
-    --arg keydir "$WORK/keys" \
+    --arg keydir "$WORK/keys" --arg run "selftest" \
     --arg vagent "$VAULT_AGENT" --arg vusdc "$VAULT_USDC" --arg vproto "$VAULT_PROTO" --arg vrwa "$VAULT_RWA" \
-    '{chain_id: 918453, min_delay: 120, deployer: $d,
+    '{chain_id: 918453, min_delay: 120, deployer: $d, run_id: $run,
       addresses: {gateway: $t, router: $r, governance: $gov, consensus_receipt: $t, ic_policy: $t,
                   timelock: $t, safe: $s, registry: $t, vault: $vusdc, emergency: $e},
       code_hashes: {},
@@ -583,7 +591,8 @@ RECEIPT_A=0x$(printf '%064x' 101)
 run_action() {
   set +e
   FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" \
-    "$CEREMONY" "$ACTION" --record "$WORK/record.json" --draft-file "$WORK/draft.json" --rpc-url http://fake \
+    "$CEREMONY" "$ACTION" --record "$WORK/record.json" --draft-file "$WORK/draft.json" \
+    --out-dir "$WORK/out-dir" --rpc-url http://fake \
     >"$WORK/out" 2>"$WORK/err"
   local rc=$?
   set -e
@@ -676,7 +685,7 @@ run_release() {
   set +e
   FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" \
     "$CEREMONY" release --record "$WORK/record.json" --receipt-id "$RECEIPT_TO_RELEASE" \
-    --rpc-url http://fake >"$WORK/out" 2>"$WORK/err"
+    --out-dir "$WORK/out-dir" --rpc-url http://fake >"$WORK/out" 2>"$WORK/err"
   local rc=$?
   set -e
   cat "$WORK/out" "$WORK/err" >"$WORK/out.combined" 2>/dev/null || true
@@ -758,6 +767,20 @@ done
 if (( weights_ok )); then GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   every vault got its exact canonical bps (router, effective, event)"
 else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL a vault's weight was not exactly canonical: $(json_field '.weights_after')"; fi
 
+# G08 asks that ONLY this transition change the router's weights. propose and
+# both votes each left a witness of the vector they saw; execute compared them
+# to each other and to its own live reading before it moved the clock, and the
+# clause is only proved when it SAYS so with an explicit true verdict.
+[[ "$(json_field .weights_unchanged_until_execute.asserted)" == "true" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   a clean cycle asserts weights_unchanged_until_execute"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL weights_unchanged_until_execute was $(json_field_c '.weights_unchanged_until_execute')"; }
+# `unique`: the vote action ran twice above (once for real, once for its
+# idempotent rerun), and every run that leaves a vote on chain witnesses the
+# vector again. What matters is that all three stages are represented.
+[[ "$(json_field_c '[.weights_unchanged_until_execute.witnesses[].stage] | unique')" == '["propose","vote-a","vote-b"]' ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   the assertion rests on the propose and both vote witnesses"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL witnessed stages were $(json_field_c '[.weights_unchanged_until_execute.witnesses[].stage]')"; }
+
 gov_ok "execute is idempotent on an already-executed proposal (AlreadyExecuted)"
 [[ "$(json_field .action)" == "already_executed" && "$(json_field .already_executed_control.observed_error)" == "AlreadyExecuted" ]] \
   && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   rerun reports already_executed and refuses AlreadyExecuted"; } \
@@ -771,6 +794,13 @@ done
 (( weights_ok )) \
   && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   the canonical vector is still live after the idempotent rerun"; } \
   || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL the canonical vector regressed on the idempotent rerun"; }
+# The transition already happened, so no witness can be compared against the
+# vector the router now carries. That is an untested clause, and the rerun has
+# to say so rather than re-claim the proof its predecessor earned.
+[[ "$(json_field .weights_unchanged_until_execute.asserted)" == "false" \
+   && -n "$(json_field .weights_unchanged_until_execute.reason)" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   the rerun reports weights_unchanged_until_execute unproven, with a reason"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL rerun claimed $(json_field_c '.weights_unchanged_until_execute')"; }
 
 echo "--- propose: a second cycle after the first one executed ---"
 # The timelock stamps an executed operation Done forever, so an operation id
@@ -803,6 +833,121 @@ ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>
 set_state no_quorum_rule true
 ACTION=vote
 gov_fail_needle "vote refuses a governance with no quorum rule" "not with QuorumNotReached"
+
+echo "--- execute: the weights-unchanged witness across the whole cycle ---"
+# propose, vote and execute are three separate invocations, so the witness that
+# propose took only reaches execute on disk. These two cases are what makes that
+# file worth reading: one where a witness disagrees, and one where there is none.
+seed_witnessed_cycle() {
+  ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
+  ACTION=vote; run_action >/dev/null 2>&1
+  ACTION=execute
+}
+witness_file_path() { ls "$WORK/out-dir/weight-witness/"*.jsonl 2>/dev/null | head -1; }
+
+# A witness that disagrees is a router whose weights MOVED before execute —
+# exactly the breach G08 exists to detect. It must stop the ceremony, never come
+# back as a false verdict or a quiet skip.
+seed_witnessed_cycle
+WF="$(witness_file_path)"
+if [[ -s "$WF" ]]; then
+  GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   propose and vote left a witness file for the cycle"
+else
+  GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL no witness file was written under $WORK/out-dir"
+fi
+jq -c 'if .stage == "propose" then .fingerprint = (.fingerprint | sub("=absent"; "=10000")) else . end' \
+  "$WF" >"$WF.tampered" && mv "$WF.tampered" "$WF"
+gov_fail_needle "execute dies when a witness says the weights moved before it" \
+  "weights changed before execute in governance cycle"
+
+# No witness at all: an execute run standalone against a cycle whose propose and
+# vote predate this feature. The transition still runs and is still graded; the
+# clause it cannot test is reported UNPROVEN and never as a pass.
+seed_witnessed_cycle
+rm -f "$(witness_file_path)"
+gov_ok "execute still runs the transition when the cycle left no witness"
+[[ "$(json_field .action)" == "executed" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   a witnessless cycle still executes and grades the applied vector"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL witnessless execute reported action=$(json_field .action)"; }
+[[ "$(json_field .weights_unchanged_until_execute.asserted)" == "false" \
+   && "$(json_field .weights_unchanged_until_execute.reason)" == *"no propose or vote weight witness"* ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   a witnessless cycle reports the clause unproven and names why"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL witnessless execute claimed $(json_field_c '.weights_unchanged_until_execute')"; }
+
+echo "--- the weight witness that is lost: said out loud, never swallowed ---"
+# A lost witness degrades the proof, so no action may end up looking whole
+# without it: propose and vote report what they recorded, and execute refuses
+# to build a true verdict on a partial file. None of it may cost the chain work
+# the action already did.
+
+# A clean run first, so the reported shape is known before anything breaks.
+ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"
+gov_ok "propose reports the weight witness it took"
+[[ "$(json_field .weight_witness.recorded)" == "true" && "$(json_field .weight_witness.stage)" == "propose" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   propose's JSON carries its recorded witness"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL propose reported weight_witness $(json_field_c .weight_witness)"; }
+ACTION=vote
+gov_ok "vote reports both of the weight witnesses it took"
+[[ "$(json_field .weight_witness.vote_a.recorded)" == "true" \
+   && "$(json_field .weight_witness.vote_b.recorded)" == "true" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   vote's JSON carries both recorded witnesses"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL vote reported weight_witness $(json_field_c .weight_witness)"; }
+
+# A witness that cannot be WRITTEN: a plain file sitting where the witness
+# directory has to go, which no uid can mkdir -p over. The proposal still goes
+# on chain, so the record of it must still come back — carrying the loss.
+ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"
+rm -rf "$WORK/out-dir/weight-witness"; : >"$WORK/out-dir/weight-witness"
+gov_ok "propose still reports its chain work when the witness cannot be written"
+[[ "$(json_field .action)" == "proposed_via_timelock" \
+   && -n "$(json_field .proposal_created.tx)" \
+   && "$(json_field .weight_witness.recorded)" == "false" \
+   && "$(json_field .weight_witness.reason)" == *"could not write"* ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   an unwritable witness is reported, and propose's evidence survives it"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL unwritable-witness propose reported action=$(json_field .action) witness=$(json_field_c .weight_witness)"; }
+rm -f "$WORK/out-dir/weight-witness"
+
+# A witness that cannot be READ: the router stops answering getWeights() at the
+# instant vote-b's vote is already mined. Both votes are irreversible, so the
+# action has to come back with them rather than exit on the reading.
+ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
+ACTION=vote; set_state getweights_fails true
+gov_ok "vote still reports both votes when the router will not answer the witness read"
+set_state getweights_fails false
+[[ "$(json_field .voter_a.outcome)" == "voted" && "$(json_field .voter_b.outcome)" == "voted" \
+   && "$(json_field .weight_witness.vote_a.recorded)" == "false" \
+   && "$(json_field .weight_witness.vote_b.reason)" == *"could not read the router vector"* ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   an unreadable router costs the witness and not the votes"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL unreadable-witness vote reported a=$(json_field .voter_a.outcome) b=$(json_field .voter_b.outcome) witness=$(json_field_c .weight_witness)"; }
+
+# A witness file with a TRUNCATED line — what a half-finished append leaves,
+# with the next stage's record concatenated onto it. That is a witness this run
+# cannot read, not a weights disagreement, so execute must still run the
+# transition and must still refuse to call the clause proved.
+seed_witnessed_cycle
+WF="$(witness_file_path)"
+{ head -1 "$WF" | cut -c1-30 | tr -d '\n'; tail -n +2 "$WF"; } >"$WF.truncated"
+mv "$WF.truncated" "$WF"
+gov_ok "execute still runs the transition over a truncated witness line"
+[[ "$(json_field .action)" == "executed" \
+   && "$(json_field .weights_unchanged_until_execute.asserted)" == "false" \
+   && "$(json_field .weights_unchanged_until_execute.corrupt_lines)" != "0" \
+   && "$(json_field .weights_unchanged_until_execute.reason)" == *"cannot read as a witness"* ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   a truncated witness line is unproven, not a dead ceremony and not a pass"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL truncated-witness execute reported action=$(json_field .action) verdict=$(json_field_c .weights_unchanged_until_execute)"; }
+
+# A file with the VOTE witnesses but no propose one — what a propose whose write
+# failed leaves behind. Two agreeing witnesses say the vector held from the
+# first vote onward; G08 asks about the whole cycle, so that is not the claim.
+seed_witnessed_cycle
+WF="$(witness_file_path)"
+grep -v '"stage":"propose"' "$WF" >"$WF.votes-only" && mv "$WF.votes-only" "$WF"
+gov_ok "execute still runs the transition over a propose-less witness file"
+[[ "$(json_field .action)" == "executed" \
+   && "$(json_field .weights_unchanged_until_execute.asserted)" == "false" \
+   && "$(json_field .weights_unchanged_until_execute.reason)" == *"no propose weight witness"* ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   vote witnesses alone cannot carry the weights-unchanged claim"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL propose-less execute claimed $(json_field_c .weights_unchanged_until_execute)"; }
 
 echo "governance actions selftest: $GOV_PASSED passed, $GOV_FAILED failed"
 
@@ -879,6 +1024,64 @@ else
   echo "FAIL (test-the-test) execute too-early negative: still refused with the assertion stubbed out — $(tail -3 "$WORK/out.combined")"
 fi
 restore_ceremony
+
+echo "--- test-the-test: execute weights-unchanged, the disagreement ---"
+# Same shape as the two above: arrange the tampered witness the unstubbed action
+# dies on, stub the comparison that dies, and confirm the SAME chain is now
+# accepted without a word. A case that still refused would be grading something
+# else.
+MISMATCH_CHECK='  if [[ -n "$disagreements" ]]; then'
+patch_literal "$MISMATCH_CHECK" '  if [[ -n "" ]]; then # STUBBED for selftest test-the-test'
+seed_witnessed_cycle
+WF="$(witness_file_path)"
+jq -c 'if .stage == "propose" then .fingerprint = (.fingerprint | sub("=absent"; "=10000")) else . end' \
+  "$WF" >"$WF.tampered" && mv "$WF.tampered" "$WF"
+if run_action; then
+  STUB_PASSED=$((STUB_PASSED + 1))
+  echo "ok   (test-the-test) execute weights-unchanged: stubbing the comparison turns the refusal into a silent accept"
+else
+  STUB_FAILED=$((STUB_FAILED + 1))
+  echo "FAIL (test-the-test) execute weights-unchanged: still refused with the comparison stubbed out — $(tail -3 "$WORK/out.combined")"
+fi
+restore_ceremony
+
+echo "--- test-the-test: execute weights-unchanged, the missing witness ---"
+# The other half of the contract: "I could not test this" must never be dressed
+# up as a pass. Flip the no-witness verdict to true and the witnessless case has
+# to notice — otherwise it was never reading the verdict at all.
+UNPROVEN_VERDICT="'{asserted:false, proposal_id:\$pid, witnesses:\$w, witness_file:\$file, witness_count:\$n,"
+patch_literal "$UNPROVEN_VERDICT" "'{asserted:true, proposal_id:\$pid, witnesses:\$w, witness_file:\$file, witness_count:\$n,"
+seed_witnessed_cycle
+rm -f "$(witness_file_path)"
+run_action >/dev/null 2>&1 || true
+if [[ "$(json_field .weights_unchanged_until_execute.asserted)" == "true" ]]; then
+  STUB_PASSED=$((STUB_PASSED + 1))
+  echo "ok   (test-the-test) execute weights-unchanged: a stubbed verdict turns the missing witness into a claimed pass"
+else
+  STUB_FAILED=$((STUB_FAILED + 1))
+  echo "FAIL (test-the-test) execute weights-unchanged: the witnessless case did not flip with the verdict stubbed — $(json_field_c '.weights_unchanged_until_execute')"
+fi
+restore_ceremony
+
+echo "--- test-the-test: execute weights-unchanged, the missing propose witness ---"
+# The gate that keeps two agreeing VOTE witnesses from carrying a whole-cycle
+# claim. Drop the gate and the same propose-less file has to turn green, or the
+# case above was never reading it.
+PROPOSE_GATE='  elif [[ " $stages_seen " != *" propose "* ]]; then'
+patch_literal "$PROPOSE_GATE" '  elif false; then # STUBBED for selftest test-the-test'
+seed_witnessed_cycle
+WF="$(witness_file_path)"
+grep -v '"stage":"propose"' "$WF" >"$WF.votes-only" && mv "$WF.votes-only" "$WF"
+run_action >/dev/null 2>&1 || true
+if [[ "$(json_field .weights_unchanged_until_execute.asserted)" == "true" ]]; then
+  STUB_PASSED=$((STUB_PASSED + 1))
+  echo "ok   (test-the-test) execute weights-unchanged: stubbing the propose gate turns a vote-only file into a claimed pass"
+else
+  STUB_FAILED=$((STUB_FAILED + 1))
+  echo "FAIL (test-the-test) execute weights-unchanged: the vote-only file did not flip with the propose gate stubbed — $(json_field_c '.weights_unchanged_until_execute')"
+fi
+restore_ceremony
+
 trap 'rm -rf "$WORK"' EXIT
 
 echo "test-the-test: $STUB_PASSED passed, $STUB_FAILED failed"
