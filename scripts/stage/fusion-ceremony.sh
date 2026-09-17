@@ -11,6 +11,7 @@
 #
 # Usage (repo root, on the stage host):
 #   fusion-ceremony.sh run     [--summary FILE] [--out-dir DIR] [--rpc-url URL] [--min-delay SECS]
+#   fusion-ceremony.sh ensure  [--record FILE] [--summary FILE] [--out-dir DIR] [--rpc-url URL]
 #   fusion-ceremony.sh verify  --record FILE [--rpc-url URL]
 #   fusion-ceremony.sh release --record FILE --receipt-id 0x.. [--rpc-url URL]
 #   fusion-ceremony.sh discard --record FILE
@@ -22,6 +23,11 @@
 #          RehearsalSafe owned by the approver and the TimelockController
 #          handover, then runs `verify` and writes a GENERATED record to
 #          $OUT_DIR/fusion-stage-record-<run>.json (+ fusion-stage-record.json).
+# ensure   the idempotent form of `run`: verifies the record against the live
+#          chain and re-provisions only when the ceremony is actually absent
+#          (a devnet reboot wipes the Safe, the timelock and the key funding
+#          while leaving a plausible-looking record behind). Callers use this
+#          so environment setup is never a manual prerequisite.
 # verify   asserts the acceptance topology on chain; exit 1 on any failure.
 # release  releases a receipt the way a timelocked stage must: the approver
 #          drives Safe -> TimelockController.schedule, waits the delay, then
@@ -108,6 +114,15 @@ check() {
 call() { "$CAST" call --rpc-url "$RPC_URL" "$@" 2>/dev/null | awk '{print $1; exit}'; }
 has_role() { [[ "$(call "$1" 'hasRole(bytes32,address)(bool)' "$2" "$3")" == "true" ]] && echo 1 || echo 0; }
 not_role() { [[ "$(call "$1" 'hasRole(bytes32,address)(bool)' "$2" "$3")" == "false" ]] && echo 1 || echo 0; }
+
+# `call` swallows stderr so the boolean helpers above can treat a revert as
+# false. That turns a call against a codeless address into an empty string,
+# which `set -e` then reports as a bare exit 1 with no diagnostic at all.
+# Anything that MUST have code gets named here first.
+has_code() { [[ -n "$("$CAST" code "$1" --rpc-url "$RPC_URL" 2>/dev/null | tr -d '[:space:]0x')" ]]; }
+require_contract() {
+  has_code "$1" || die "$2 $1 has no code on $RPC_URL — the record predates this chain; run \`fusion-ceremony.sh ensure\`" 65
+}
 
 # Accounts named in topic 2 of every `event` log at `address` matching topic 1.
 log_accounts() {
@@ -399,6 +414,8 @@ release_receipt() {
   receipt="$(rec .addresses.consensus_receipt)"; timelock="$(rec .addresses.timelock)"
   safe="$(rec .addresses.safe)"; keydir="$(rec .ephemeral.keystore_dir)"; delay="$(rec .min_delay)"
   [[ -f "$keydir/approver" ]] || die "approver keystore is gone (discarded?): $keydir" 65
+  require_contract "$timelock" timelock
+  require_contract "$safe" safe
   if [[ "$(call "$receipt" 'isReleased(bytes32)(bool)' "$RECEIPT_ID")" == "true" ]]; then
     echo '{"action":"already_released"}'
     return 0
@@ -439,18 +456,6 @@ discard_keys() {
   echo "discarded $keydir"
 }
 
-case "$ACTION" in
-  run) run_ceremony ;;
-  verify) [[ -n "$RECORD" ]] || usage; verify_record ;;
-  release) [[ -n "$RECORD" ]] || usage; release_receipt ;;
-  discard) [[ -n "$RECORD" ]] || usage; discard_keys ;;
-  handover-vaults) [[ -n "$RECORD" ]] || usage; handover_vaults; verify_record ;;
-  *) usage ;;
-esac
-
-propose_governance() {
-  [[ -f "$RECORD" ]] || die "record not found: $RECORD" 65
-
 propose_governance() {
   [[ -f "$RECORD" ]] || die "record not found: $RECORD" 65
   [[ -n "${DRAFT_FILE:-}" ]] || die "--draft-file is required" 64
@@ -459,6 +464,8 @@ propose_governance() {
   governance="$(rec .addresses.governance)"; timelock="$(rec .addresses.timelock)"
   safe="$(rec .addresses.safe)"; keydir="$(rec .ephemeral.keystore_dir)"; delay="$(rec .min_delay)"
   [[ -f "$keydir/approver" ]] || die "approver keystore is gone (discarded?): $keydir" 65
+  require_contract "$timelock" timelock
+  require_contract "$safe" safe
 
   data="$(jq -r '.drafts[0].propose_calldata // empty' "$DRAFT_FILE")"
   [[ -n "$data" ]] || die "no propose_calldata in $DRAFT_FILE" 65
@@ -497,8 +504,46 @@ propose_governance() {
     '{action:"proposed_via_timelock", operation:$op, schedule_tx:$s, execute_tx:$e, proposal_id:$pid}'
 }
 
+# ─── ensure ──────────────────────────────────────────────────────────────────
+# A devnet reboot redeploys the base stack at the same deterministic addresses
+# but takes the ceremony with it: the Safe and the TimelockController are gone,
+# the ephemeral keys hold no gas, and nothing is anchored. The record left on
+# disk still looks plausible, so every downstream step fails as an unrelated
+# authorization error instead of as a missing environment. These are the
+# preconditions `run` establishes and a reboot destroys; anything subtler is
+# drift for `verify` to grade, not a reason to redeploy.
+ceremony_is_live() {
+  local timelock safe keydir who
+  [[ -f "$RECORD" ]] || { info "no record at $RECORD"; return 1; }
+  jq -e . "$RECORD" >/dev/null 2>&1 || { info "record is not readable json: $RECORD"; return 1; }
+  [[ "$(rec .chain_id)" == "$("$CAST" chain-id --rpc-url "$RPC_URL")" ]] \
+    || { info "record is for chain $(rec .chain_id), not this one"; return 1; }
+  timelock="$(rec .addresses.timelock)"; safe="$(rec .addresses.safe)"
+  has_code "$timelock" || { info "timelock $timelock has no code on this chain"; return 1; }
+  has_code "$safe" || { info "safe $safe has no code on this chain"; return 1; }
+  keydir="$(rec .ephemeral.keystore_dir)"
+  for who in submitter approver; do
+    [[ -f "$keydir/$who" ]] || { info "$who keystore is gone: $keydir"; return 1; }
+    [[ "$("$CAST" balance "$(rec ".ephemeral.$who")" --rpc-url "$RPC_URL" 2>/dev/null)" != "0" ]] \
+      || { info "$who holds no gas on this chain"; return 1; }
+  done
+  return 0
+}
+
+ensure_ceremony() {
+  RECORD="${RECORD:-$OUT_DIR/fusion-stage-record.json}"
+  if ceremony_is_live; then
+    info "ceremony is live on this chain; provisioning nothing"
+    verify_record
+    return
+  fi
+  info "provisioning a fresh ceremony against the live chain"
+  run_ceremony
+}
+
 case "$ACTION" in
   run) run_ceremony ;;
+  ensure) ensure_ceremony ;;
   verify) [[ -n "$RECORD" ]] || usage; verify_record ;;
   release) [[ -n "$RECORD" ]] || usage; release_receipt ;;
   propose) [[ -n "$RECORD" ]] || usage; propose_governance ;;

@@ -117,6 +117,25 @@ for s in $STAGES; do
   [[ " $ALL_STAGES " == *" $s "* ]] || { echo "unknown stage: $s" >&2; exit 64; }
 done
 
+# record/index/release/govern all key off the receipt id that only the verify
+# stage derives. Selecting one without it used to run the whole harness and
+# then SKIP the thing under test as `prerequisite_failed`, which reads like a
+# chain problem rather than a stage list that cannot work. Pull it in instead,
+# preserving ALL_STAGES order so the dependency runs first.
+if [[ " $STAGES " != *" verify "* ]]; then
+  for s in record index release govern; do
+    if [[ " $STAGES " == *" $s "* ]]; then
+      echo "note: stage '$s' needs the receipt id; adding 'verify'" >&2
+      ordered=""
+      for a in $ALL_STAGES; do
+        [[ " verify $STAGES " == *" $a "* ]] && ordered="${ordered:+$ordered }$a"
+      done
+      STAGES="$ordered"
+      break
+    fi
+  done
+fi
+
 RMPC_BIN="${RMPC_BIN:-rmpc}"
 CAST_BIN="${CAST_BIN:-cast}"
 INDEX_TIMEOUT="${FUSION_INDEX_TIMEOUT_SECS:-180}"
