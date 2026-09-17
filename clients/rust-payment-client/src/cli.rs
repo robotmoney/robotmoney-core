@@ -99,6 +99,16 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
+    /// Print the exact source commit this binary was compiled from
+    /// (embedded at build time), plus its cargo version. No config file
+    /// or chain access needed. Exists so provenance checks (fusion-qa's
+    /// AC-ID-03) can compare against the pinned tag's commit directly
+    /// instead of inferring staleness from the binary's mtime.
+    BuildInfo {
+        /// Pretty-print the JSON output (multi-line, indented).
+        #[arg(long)]
+        pretty: bool,
+    },
     /// Print the signer-backend self-check report (v0 §9.2 JSON).
     SelfCheck {
         /// Path to the operator config TOML.
