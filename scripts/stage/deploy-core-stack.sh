@@ -283,6 +283,26 @@ compose() {
   docker compose --project-name "$1" --env-file "$OUT_DIR/dapp.env" -f "$2" "${@:3}"
 }
 
+# ─── rmpc, always rebuilt from the pinned checkout ────────────────────────────
+# NOT a conditional check. The staged binary and the pinned tag drift silently:
+# on 2026-09-16 the binary here had been built three days before the tag commit,
+# `rmpc --version` could not discriminate because the rc declared an older
+# version, and it derived a different payload digest — so every core-side verdict
+# from that run, independent verification and seam checks included, was
+# stale-binary output that had to be thrown away and re-proven.
+#
+# `checks/binary-provenance.ts` in the QA driver only DETECTS that afterwards,
+# by mtime and tag-string fingerprints, and refuses the record stage. Detection
+# turns the drift into a late, confusing failure. Building here removes it.
+#
+# cargo is incremental, so a checkout that has not moved costs seconds.
+rebuild_rmpc() {
+  command -v cargo >/dev/null 2>&1 || fail "required tool 'cargo' not on PATH (needed to rebuild rmpc)" 3
+  info "rebuilding rmpc from $(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo 'this checkout')"
+  (cd "$REPO_ROOT" && cargo build -p rust-payment-client --bin rmpc --bin rmpc-keystore-import) \
+    || fail "rmpc rebuild failed; refusing to run against whatever binary was already there" 66
+}
+
 chain_up() {
   # 18545 is the repo-owned stage ingress contract either way: cloudflared routes
   # the public stage RPC hostname to this host port.
@@ -337,6 +357,7 @@ case "$ACTION" in
       || fail "dapp stack up (build) failed" 66
     ;;
   up)
+    rebuild_rmpc
     chain_up
     compose "$DAPP_PROJECT" "$DAPP_COMPOSE" -f "$OUT_DIR/dapp.images.override.yaml" up --no-build -d \
       || fail "dapp stack up failed" 66
