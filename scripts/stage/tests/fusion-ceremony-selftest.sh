@@ -3,6 +3,15 @@
 # is not evidence until it has been shown to fail). A fake `cast` answers every
 # chain read from a state table; the baseline topology must pass, and each
 # single broken fact must make `verify` exit 1 naming that fact.
+#
+# The same fake `cast` also plays a minimal stateful chain for `propose`,
+# `propose-negative`, `vote`, `execute` and the `jump_to` helper they all use:
+# `send` mutates a proposal/timelock-operation table the way the real
+# contracts would (currentProposalId, hasVoted, applied weights, timelock
+# operation timestamps), and `call` answers eth_call negative controls with
+# the exact custom error the live state owes. `rpc` answers
+# anvil_setNextBlockTimestamp / evm_mine so `jump_to` can fast-forward it, and
+# can be told to refuse them so the die-if-not-anvil path is exercised too.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -15,30 +24,330 @@ a() { printf '0x%040x' "$1"; }
 GATEWAY=$(a 1); ROUTER=$(a 2); GOVERNANCE=$(a 3); RECEIPT=$(a 4); IC=$(a 5); TIMELOCK=$(a 6)
 SAFE=$(a 7); REGISTRY=$(a 8); VAULT=$(a 9); DEPLOYER=$(a 10); SUBMITTER=$(a 11); APPROVER=$(a 12)
 VOTER_A=$(a 13); VOTER_B=$(a 14); EMERGENCY=$(a 15)
+VAULT_AGENT=$(a 20); VAULT_USDC=$(a 21); VAULT_PROTO=$(a 22); VAULT_RWA=$(a 23)
 ADMIN=$("$REAL_CAST" keccak ADMIN_ROLE); AGENT=$("$REAL_CAST" keccak AGENT_ROLE)
 COMMITTEE=$("$REAL_CAST" keccak COMMITTEE_AGENT_ROLE)
 PROPOSER=$("$REAL_CAST" keccak PROPOSER_ROLE); EXECUTOR=$("$REAL_CAST" keccak EXECUTOR_ROLE)
 HASH=0x$(printf 'ab%.0s' {1..32})
 
+# ─── the fake chain ──────────────────────────────────────────────────────────
+# `verify` only ever reads, so the original fake cast was a pure table lookup.
+# propose/vote/execute also SEND, so this fake now also mutates $FAKE_STATE the
+# way the real contracts would: a proposal table (id, proposer, vaults, bps,
+# deadline, executableAfter, votes, quorum, executed), a hasVoted table, a
+# timelock-operation table keyed by the real hashOperation() formula (computed
+# with the real cast, since it is pure keccak/abi.encode with no chain state
+# of its own), and the router's applied weights. Everything pure (keccak,
+# calldata, sig, abi-encode, abi-decode, to-dec) is delegated to the real cast.
 cat >"$WORK/cast" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
+VOTING_PERIOD=1000
+EXEC_DELAY=500
 state() { awk -F'\t' -v k="$1" '$1 == k { v = $2; f = 1 } END { if (f) print v; else exit 1 }' "$FAKE_STATE"; }
+set_state() {
+  grep -v -F "$1"$'\t' "$FAKE_STATE" >"$FAKE_STATE.new" 2>/dev/null || true
+  printf '%s\t%s\n' "$1" "$2" >>"$FAKE_STATE.new"
+  mv "$FAKE_STATE.new" "$FAKE_STATE"
+}
 lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
-pos=()
+current_clock() { state clock || echo 0; }
+next_tx() { local n; n="$(state txseq || echo 0)"; n=$((n + 1)); set_state txseq "$n"; printf '0x%064x' "$n"; }
+emit_send_result() { printf '{"status":"0x1","transactionHash":"%s"}\n' "$1"; }
+revert_send() { echo "fake cast: send reverted: $1" >&2; exit 1; }
+pad_uint() { printf '0x%064x' "$1"; }
+pad_addr() { printf '0x000000000000000000000000%s' "$(lower "${1#0x}")"; }
+bracket_list() {
+  local out="" tok first=1
+  for tok in $1; do
+    if (( first )); then out="$tok"; first=0; else out="$out,$tok"; fi
+  done
+  printf '[%s]' "$out"
+}
+paste_pairs() {
+  local vaults="$1" bps="$2" v b out="" first=1
+  local -a va=($vaults) ba=($bps)
+  for ((i = 0; i < ${#va[@]}; i++)); do
+    if (( first )); then out="${va[i]}:${ba[i]}"; first=0; else out="$out ${va[i]}:${ba[i]}"; fi
+  done
+  printf '%s' "$out"
+}
+hash_op() {
+  "$REAL_CAST" keccak "$("$REAL_CAST" abi-encode 'f(address,uint256,bytes,bytes32,bytes32)' "$1" "$2" "$3" "$4" "$5")"
+}
+# selector -> custom-error revert, in the exact `data: "0x.."` shape the
+# script's own revert_payload()/propose_negative parse out of `cast call`.
+revert_with() {
+  local sig="$1"; shift
+  local sel body types
+  sel="$("$REAL_CAST" sig "$sig")"
+  if (( $# > 0 )); then
+    types="${sig#*(}"; types="${types%)}"
+    body="$("$REAL_CAST" abi-encode "f($types)" "$@")"; body="${body#0x}"
+  else
+    body=""
+  fi
+  echo "Error: execution reverted, data: \"${sel}${body}\"" >&2
+  exit 1
+}
+proposal_state_of() {
+  local pid="$1" executed deadline votes quorum now
+  executed="$(state "proposal:$pid:executed" || echo false)"
+  if [[ "$executed" == "true" ]]; then echo 3; return; fi
+  deadline="$(state "proposal:$pid:deadline" || echo 0)"
+  votes="$(state "proposal:$pid:votes" || echo 0)"
+  quorum="$(state "proposal:$pid:quorum" || echo 0)"
+  now="$(current_clock)"
+  if (( now <= deadline )); then echo 0; return; fi
+  if (( votes >= quorum )); then echo 2; else echo 1; fi
+}
+print_active_proposal() {
+  local pid vaults bps deadline executable votes quorum executed proposer
+  pid="$(state proposalid || echo 0)"
+  proposer="$(state "proposal:$pid:proposer" || echo 0x0000000000000000000000000000000000000000)"
+  vaults="$(bracket_list "$(state "proposal:$pid:vaults" || echo '')")"
+  bps="$(bracket_list "$(state "proposal:$pid:bps" || echo '')")"
+  deadline="$(state "proposal:$pid:deadline" || echo 0)"
+  executable="$(state "proposal:$pid:executable" || echo 0)"
+  votes="$(state "proposal:$pid:votes" || echo 0)"
+  quorum="$(state "proposal:$pid:quorum" || echo 0)"
+  executed="$(state "proposal:$pid:executed" || echo false)"
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$pid" "$proposer" "$vaults" "$bps" "$deadline" "$executable" "$votes" "$quorum" "$executed" false
+}
+print_weight_pairs() {
+  local raw addrs="" bpsl="" pair v b first=1
+  raw="$(state "weights:$1" || echo '')"
+  for pair in $raw; do
+    v="${pair%%:*}"; b="${pair##*:}"
+    if (( first )); then addrs="$v"; bpsl="$b"; first=0; else addrs="$addrs, $v"; bpsl="$bpsl, $b"; fi
+  done
+  printf '[%s]\n[%s]\n' "$addrs" "$bpsl"
+}
+op_flag() {
+  local op ts done_
+  op="$(lower "$1")"
+  ts="$(state "timelockop:$op:ts" || echo 0)"
+  done_="$(state "timelockop:$op:done" || echo false)"
+  case "$2" in
+    is_operation) [[ "$ts" != "0" ]] && echo true || echo false ;;
+    is_done) echo "$done_" ;;
+    is_ready)
+      if [[ "$done_" == "true" || "$ts" == "0" ]]; then echo false
+      elif (( $(current_clock) >= ts )); then echo true
+      else echo false; fi ;;
+  esac
+}
+vote_call_check() {
+  local power; power="$(state "power:$(lower "${1:-}")" || echo 0)"
+  [[ "$power" != "0" ]] || revert_with 'NoVotingPower()'
+  echo true
+}
+execute_call_check() {
+  local pid="$1" executed now deadline exec_after votes quorum
+  # `never_reverts_execute`: a governance whose execute() refuses nothing at all,
+  # so the too-early control has something real to catch.
+  [[ "$(state never_reverts_execute || echo false)" != "true" ]] || { echo true; return; }
+  executed="$(state "proposal:$pid:executed" || echo false)"
+  [[ "$executed" != "true" ]] || revert_with 'AlreadyExecuted()'
+  now="$(current_clock)"
+  deadline="$(state "proposal:$pid:deadline" || echo 0)"
+  exec_after="$(state "proposal:$pid:executable" || echo 0)"
+  votes="$(state "proposal:$pid:votes" || echo 0)"
+  quorum="$(state "proposal:$pid:quorum" || echo 0)"
+  (( now > deadline )) || revert_with 'VotingStillOpen()'
+  # `no_quorum_rule`: a governance that never enforces the tally. The one-vote
+  # control must refuse such a chain instead of reporting a proof.
+  if [[ "$(state no_quorum_rule || echo false)" != "true" ]]; then
+    (( votes >= quorum )) || revert_with 'QuorumNotReached()'
+  fi
+  (( now >= exec_after )) || revert_with 'ExecutionDelayNotElapsed()'
+  echo true
+}
+handle_raw_data_call() {
+  local from="$1" admin_role
+  admin_role="$("$REAL_CAST" keccak 'ADMIN_ROLE')"
+  revert_with 'AccessControlUnauthorizedAccount(address,bytes32)' "$from" "$admin_role"
+}
+do_propose() {
+  local governance="$1" calldata="$2" proposer="$3" body decoded vaults bps
+  body="0x${calldata:10}"
+  decoded="$("$REAL_CAST" abi-decode --input 'propose(address[],uint256[])' "$body")"
+  vaults="$(tr -d '[]' <<<"$(sed -n '1p' <<<"$decoded")" | tr ',' '\n' | awk 'NF{print tolower($1)}' | tr '\n' ' ')"
+  bps="$(tr -d '[]' <<<"$(sed -n '2p' <<<"$decoded")" | tr ',' '\n' | awk 'NF{print $1}' | tr '\n' ' ')"
+  vaults="${vaults% }"; bps="${bps% }"
+  local pid_before pid now quorum deadline executable
+  pid_before="$(state proposalid || echo 0)"; pid=$((pid_before + 1))
+  now="$(current_clock)"; quorum="$(state quorum || echo 0)"
+  deadline=$((now + VOTING_PERIOD)); executable=$((deadline + EXEC_DELAY))
+  # `impersonate_proposer`, when set, makes the STORED proposal (but not the
+  # ProposalCreated event below) claim a different proposer than the timelock
+  # that actually drove this call — a corruption no correctly wired contract
+  # would produce, but exactly what propose_governance's own
+  # proposer-must-be-the-timelock assertion exists to catch.
+  local stored_proposer; stored_proposer="$(state impersonate_proposer || echo "$proposer")"
+  set_state proposalid "$pid"
+  set_state "proposal:$pid:proposer" "$(lower "$stored_proposer")"
+  set_state "proposal:$pid:vaults" "$vaults"
+  set_state "proposal:$pid:bps" "$bps"
+  set_state "proposal:$pid:deadline" "$deadline"
+  set_state "proposal:$pid:executable" "$executable"
+  set_state "proposal:$pid:votes" "0"
+  set_state "proposal:$pid:quorum" "$quorum"
+  set_state "proposal:$pid:executed" "false"
+  local topic0 t1 t2 evdata log tx
+  topic0="$(lower "$("$REAL_CAST" keccak 'ProposalCreated(uint256,address,address[],uint256[],uint64)')")"
+  t1="$(pad_uint "$pid")"; t2="$(pad_addr "$proposer")"
+  evdata="$("$REAL_CAST" abi-encode 'f(address[],uint256[],uint64)' "$(bracket_list "$vaults")" "$(bracket_list "$bps")" "$deadline")"
+  log="$(jq -n --arg addr "$(lower "$governance")" --arg t0 "$topic0" --arg t1 "$t1" --arg t2 "$t2" --arg data "$evdata" \
+    '{address:$addr, topics:[$t0,$t1,$t2], data:$data}')"
+  tx="$(next_tx)"
+  set_state "receiptlogs:$(lower "$tx")" "$(jq -c -n --argjson l "$log" '[$l]')"
+  emit_send_result "$tx"
+}
+handle_safe_exec() {
+  local timelock="$1" calldata="$2" sel schedule_sel execute_sel body
+  sel="$(lower "${calldata:0:10}")"
+  schedule_sel="$(lower "$("$REAL_CAST" sig 'schedule(address,uint256,bytes,bytes32,bytes32,uint256)')")"
+  execute_sel="$(lower "$("$REAL_CAST" sig 'execute(address,uint256,bytes,bytes32,bytes32)')")"
+  body="0x${calldata:10}"
+  if [[ "$sel" == "$schedule_sel" ]]; then
+    local out tgt val data pred salt delay op ts
+    mapfile -t out < <("$REAL_CAST" abi-decode --input 'schedule(address,uint256,bytes,bytes32,bytes32,uint256)' "$body")
+    tgt="${out[0]}"; val="${out[1]%% *}"; data="${out[2]}"; pred="${out[3]}"; salt="${out[4]}"; delay="${out[5]%% *}"
+    op="$(lower "$(hash_op "$tgt" "$val" "$data" "$pred" "$salt")")"
+    ts=$(( $(current_clock) + delay ))
+    set_state "timelockop:$op:ts" "$ts"
+    set_state "timelockop:$op:done" "false"
+    emit_send_result "$(next_tx)"
+  elif [[ "$sel" == "$execute_sel" ]]; then
+    local out tgt val data pred salt op ready done_ inner_sel propose_sel
+    mapfile -t out < <("$REAL_CAST" abi-decode --input 'execute(address,uint256,bytes,bytes32,bytes32)' "$body")
+    tgt="${out[0]}"; val="${out[1]%% *}"; data="${out[2]}"; pred="${out[3]}"; salt="${out[4]}"
+    op="$(lower "$(hash_op "$tgt" "$val" "$data" "$pred" "$salt")")"
+    ready="$(state "timelockop:$op:ts" || echo 0)"
+    done_="$(state "timelockop:$op:done" || echo false)"
+    [[ "$done_" != "true" ]] || revert_send "timelock operation $op already done"
+    [[ "$ready" != "0" ]] && (( $(current_clock) >= ready )) || revert_send "timelock operation $op not ready"
+    set_state "timelockop:$op:done" "true"
+    inner_sel="$(lower "${data:0:10}")"
+    propose_sel="$(lower "$("$REAL_CAST" sig 'propose(address[],uint256[])')")"
+    local release_sel; release_sel="$(lower "$("$REAL_CAST" sig 'releaseReceipt(bytes32)')")"
+    if [[ "$inner_sel" == "$propose_sel" ]]; then
+      do_propose "$tgt" "$data" "$timelock"
+    elif [[ "$inner_sel" == "$release_sel" ]]; then
+      local rid
+      rid="$(lower "$("$REAL_CAST" abi-decode --input 'releaseReceipt(bytes32)' "0x${data:10}" | head -1 | awk '{print $1}')")"
+      set_state "released:$rid" true
+      emit_send_result "$(next_tx)"
+    else
+      revert_send "unhandled inner selector $inner_sel on $tgt"
+    fi
+  else
+    revert_send "unhandled timelock selector $sel"
+  fi
+}
+handle_vote() {
+  local governance="$1" pid="$2" voter="$3" power votes tx topic0 t1 t2 evdata log
+  power="$(state "power:$(lower "$voter")" || echo 0)"
+  [[ "$power" != "0" ]] || revert_send "NoVotingPower"
+  [[ "$(state "voted:$pid:$(lower "$voter")" || echo false)" != "true" ]] || revert_send "AlreadyVoted"
+  set_state "voted:$pid:$(lower "$voter")" "true"
+  votes="$(state "proposal:$pid:votes" || echo 0)"; votes=$((votes + power))
+  set_state "proposal:$pid:votes" "$votes"
+  topic0="$(lower "$("$REAL_CAST" keccak 'VoteCast(uint256,address,uint256,uint256)')")"
+  t1="$(pad_uint "$pid")"; t2="$(pad_addr "$voter")"
+  evdata="$("$REAL_CAST" abi-encode 'f(uint256,uint256)' "$power" "$votes")"
+  log="$(jq -n --arg addr "$(lower "$governance")" --arg t0 "$topic0" --arg t1 "$t1" --arg t2 "$t2" --arg data "$evdata" \
+    '{address:$addr, topics:[$t0,$t1,$t2], data:$data}')"
+  tx="$(next_tx)"
+  set_state "receiptlogs:$(lower "$tx")" "$(jq -c -n --argjson l "$log" '[$l]')"
+  emit_send_result "$tx"
+}
+handle_execute() {
+  local governance="$1" pid="$2" caller="$3"
+  local executed now deadline exec_after votes quorum vaults bps pairs tx
+  executed="$(state "proposal:$pid:executed" || echo false)"
+  [[ "$executed" != "true" ]] || revert_send "AlreadyExecuted"
+  now="$(current_clock)"
+  deadline="$(state "proposal:$pid:deadline" || echo 0)"
+  exec_after="$(state "proposal:$pid:executable" || echo 0)"
+  votes="$(state "proposal:$pid:votes" || echo 0)"
+  quorum="$(state "proposal:$pid:quorum" || echo 0)"
+  (( now > deadline )) || revert_send "VotingStillOpen"
+  (( votes >= quorum )) || revert_send "QuorumNotReached"
+  (( now >= exec_after )) || revert_send "ExecutionDelayNotElapsed"
+  set_state "proposal:$pid:executed" "true"
+  vaults="$(state "proposal:$pid:vaults" || echo '')"
+  bps="$(state "proposal:$pid:bps" || echo '')"
+  pairs="$(paste_pairs "$vaults" "$bps")"
+  set_state "weights:voted" "$pairs"
+  set_state "weights:effective" "$pairs"
+  tx="$(next_tx)"
+  local pe_topic pe_t1 pe_t2 pe_log wa_topic wa_t1 wa_data wa_log
+  pe_topic="$(lower "$("$REAL_CAST" keccak 'ProposalExecuted(uint256,address)')")"
+  pe_t1="$(pad_uint "$pid")"; pe_t2="$(pad_addr "$caller")"
+  pe_log="$(jq -n --arg addr "$(lower "$governance")" --arg t0 "$pe_topic" --arg t1 "$pe_t1" --arg t2 "$pe_t2" \
+    '{address:$addr, topics:[$t0,$t1,$t2], data:"0x"}')"
+  wa_topic="$(lower "$("$REAL_CAST" keccak 'WeightsApplied(uint256,address[],uint256[])')")"
+  wa_t1="$(pad_uint "$pid")"
+  wa_data="$("$REAL_CAST" abi-encode 'f(address[],uint256[])' "$(bracket_list "$vaults")" "$(bracket_list "$bps")")"
+  wa_log="$(jq -n --arg addr "$(lower "$governance")" --arg t0 "$wa_topic" --arg t1 "$wa_t1" --arg data "$wa_data" \
+    '{address:$addr, topics:[$t0,$t1], data:$data}')"
+  set_state "receiptlogs:$(lower "$tx")" "$(jq -c -n --argjson a "$pe_log" --argjson b "$wa_log" '[$a,$b]')"
+  emit_send_result "$tx"
+}
+
+pos=(); data=""; field=""; keystore=""; privkey=""
 while (( $# )); do
   case "$1" in
     --rpc-url|--from|--from-block|--address) [[ "$1" == "--address" ]] && addr="$2"; [[ "$1" == "--from" ]] && from="$2"; shift 2 ;;
     --json) shift ;;
+    --data) data="$2"; shift 2 ;;
+    --field) field="$2"; shift 2 ;;
+    --keystore) keystore="$2"; shift 2 ;;
+    --password-file) shift 2 ;;
+    --private-key) privkey="$2"; shift 2 ;;
     *) pos+=("$1"); shift ;;
   esac
 done
+[[ -n "$keystore" ]] && from="$(state "keystore:$(basename "$keystore")" || true)"
+[[ -n "$privkey" ]] && from="$(state "privkey:$(lower "$privkey")" || true)"
+
 case "${pos[0]}" in
-  keccak|calldata) exec "$REAL_CAST" "${pos[@]}" ;;
+  keccak|calldata|sig|abi-encode|abi-decode|to-dec) exec "$REAL_CAST" "${pos[@]}" ;;
   chain-id) state chain ;;
   codehash) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
+  code) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
   balance) state "balance:$(lower "${pos[1]}")" || echo 0 ;;
-  rpc) state rpclogs || echo '[]' ;;
+  block)
+    [[ "$field" == "timestamp" ]] || { echo "fake cast: unhandled block field '$field'" >&2; exit 1; }
+    current_clock ;;
+  rpc)
+    case "${pos[1]:-}" in
+      eth_getLogs) state rpclogs || echo '[]' ;;
+      anvil_setNextBlockTimestamp)
+        [[ "$(state anvil_reject || echo false)" != "true" ]] || { echo "fake cast: rpc refused (chain is not anvil-backed)" >&2; exit 1; }
+        set_state clock "${pos[2]}" ;;
+      evm_mine)
+        [[ "$(state anvil_reject || echo false)" != "true" ]] || { echo "fake cast: rpc refused (chain is not anvil-backed)" >&2; exit 1; }
+        ;;
+      evm_snapshot)
+        # A snapshot is the whole state table copied aside; evm_revert puts it
+        # back, exactly as anvil restores state AND block time.
+        [[ "$(state anvil_reject || echo false)" != "true" ]] || { echo "fake cast: rpc refused (chain is not anvil-backed)" >&2; exit 1; }
+        n="$(state snapseq || echo 0)"; n=$((n + 1)); set_state snapseq "$n"
+        cp "$FAKE_STATE" "$FAKE_STATE.snap.$n"
+        printf '"0x%x"\n' "$n" ;;
+      evm_revert)
+        n="$("$REAL_CAST" to-dec "${pos[2]}" 2>/dev/null || echo "${pos[2]}")"
+        if [[ -f "$FAKE_STATE.snap.$n" ]]; then
+          cp "$FAKE_STATE.snap.$n" "$FAKE_STATE"; rm -f "$FAKE_STATE.snap.$n"; echo true
+        else
+          echo false
+        fi ;;
+      *) echo "fake cast: unhandled rpc method ${pos[1]:-}" >&2; exit 1 ;;
+    esac ;;
   logs) key="logs:$(lower "$addr"):${pos[2]:-none}"
         accts="$(state "$key" || true)"
         printf '['; sep=""
@@ -47,17 +356,47 @@ case "${pos[0]}" in
           sep=","
         done
         printf ']\n' ;;
-  call) c="$(lower "${pos[1]}")"; sig="${pos[2]}"
-        case "$sig" in
-          'hasRole(bytes32,address)(bool)') state "role:$c:${pos[3]}:$(lower "${pos[4]}")" || echo false ;;
-          'quorumThreshold()(uint256)') state quorum ;;
-          'totalVotingPower()(uint256)') state total ;;
-          'votingPower(address)(uint256)') state "power:$(lower "${pos[3]}")" || echo 0 ;;
-          'owner()(address)') state "owner:$c" ;;
-          'getMinDelay()(uint256)') state delay ;;
-          'setWeights(address[],uint256[])') [[ "$(state "setweights:$(lower "${from:-}")" || echo revert)" == ok ]] ;;
-          *) echo "fake cast: unhandled call $sig" >&2; exit 1 ;;
-        esac ;;
+  receipt)
+    tx="$(lower "${pos[1]}")"
+    jq -n --argjson logs "$(state "receiptlogs:$tx" || echo '[]')" '{logs:$logs}' ;;
+  call)
+    c="$(lower "${pos[1]}")"; sig="${pos[2]:-}"
+    if [[ -z "$sig" && -n "$data" ]]; then
+      handle_raw_data_call "${from:-}"
+    else
+      case "$sig" in
+        'hasRole(bytes32,address)(bool)') state "role:$c:${pos[3]}:$(lower "${pos[4]}")" || echo false ;;
+        'quorumThreshold()(uint256)') state quorum ;;
+        'totalVotingPower()(uint256)') state total ;;
+        'votingPower(address)(uint256)') state "power:$(lower "${pos[3]}")" || echo 0 ;;
+        'owner()(address)') state "owner:$c" ;;
+        'getMinDelay()(uint256)') state delay ;;
+        'setWeights(address[],uint256[])') [[ "$(state "setweights:$(lower "${from:-}")" || echo revert)" == ok ]] ;;
+        'isReleased(bytes32)(bool)') state "released:$(lower "${pos[3]}")" || echo false ;;
+        'currentProposalId()(uint256)') state proposalid || echo 0 ;;
+        'proposalState(uint256)(uint8)') proposal_state_of "${pos[3]}" ;;
+        'hasVoted(uint256,address)(bool)') state "voted:${pos[3]}:$(lower "${pos[4]}")" || echo false ;;
+        'activeProposal()(uint256,address,address[],uint256[],uint64,uint64,uint256,uint256,bool,bool)') print_active_proposal ;;
+        'getWeights()(address[],uint256[])') print_weight_pairs voted ;;
+        'getEffectiveWeights()(address[],uint256[])') print_weight_pairs effective ;;
+        'hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)') hash_op "${pos[3]}" "${pos[4]}" "${pos[5]}" "${pos[6]}" "${pos[7]}" ;;
+        'isOperation(bytes32)(bool)') op_flag "${pos[3]}" is_operation ;;
+        'isOperationReady(bytes32)(bool)') op_flag "${pos[3]}" is_ready ;;
+        'isOperationDone(bytes32)(bool)') op_flag "${pos[3]}" is_done ;;
+        'getTimestamp(bytes32)(uint256)') state "timelockop:$(lower "${pos[3]}"):ts" || echo 0 ;;
+        'vote(uint256)') vote_call_check "${from:-}" ;;
+        'execute(uint256)') execute_call_check "${pos[3]}" ;;
+        *) echo "fake cast: unhandled call $sig" >&2; exit 1 ;;
+      esac
+    fi ;;
+  send)
+    target="${pos[1]}"; sig="${pos[2]}"
+    case "$sig" in
+      'exec(address,uint256,bytes)') handle_safe_exec "${pos[3]}" "${pos[5]}" ;;
+      'vote(uint256)') handle_vote "$target" "${pos[3]}" "${from:-}" ;;
+      'execute(uint256)') handle_execute "$target" "${pos[3]}" "${from:-}" ;;
+      *) echo "fake cast: unhandled send $sig" >&2; exit 1 ;;
+    esac ;;
   *) echo "fake cast: unhandled ${pos[0]}" >&2; exit 1 ;;
 esac
 FAKE
@@ -163,4 +502,387 @@ baseline; jq --arg rwa "$(a 16)" '.vault_addresses.rmRWA = $rwa' "$WORK/record.j
 expect_fail "a demo vault the timelock does not administer" "timelock holds ADMIN_ROLE on vault $(a 16)"
 
 echo "fusion-ceremony selftest: $PASSED passed, $FAILED failed"
-(( FAILED == 0 && PASSED == 13 ))
+
+# ─── propose / propose-negative / vote / execute / jump_to ──────────────────
+# These five actions share one chain, provisioned once per lifecycle (unlike
+# `verify` above, propose->vote->execute is a sequence: execute needs a voted
+# proposal, and idempotency needs the state its own predecessor left behind).
+# The fake cast's `send` case plays the contracts well enough to make that
+# sequence real: currentProposalId advances, hasVoted/votes accumulate,
+# timelock operations gate on their own scheduled timestamp, and the router's
+# weights only change through governance's own execute().
+GOV_PASSED=0; GOV_FAILED=0
+gov_ok() {
+  local name="$1" rc=0
+  run_action || rc=$?
+  if [[ "$rc" == 0 ]]; then GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   $name"
+  else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: exited $rc — $(tail -5 "$WORK/out" "$WORK/err")"; fi
+}
+gov_fail_needle() {
+  local name="$1" needle="$2" rc=0
+  run_action || rc=$?
+  if [[ "$rc" == 0 ]]; then
+    GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: exited 0"
+  elif grep -qF "$needle" "$WORK/out.combined"; then
+    GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   $name is refused"
+  else
+    GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: exited non-zero without naming '$needle'"; tail -5 "$WORK/out.combined"
+  fi
+}
+json_field() { jq -r "$1" "$WORK/out.json" 2>/dev/null; }
+json_field_c() { jq -c "$1" "$WORK/out.json" 2>/dev/null; }
+
+# A four-vault topology distinct from `verify`'s (which collapses all four
+# canonical buckets onto one address on purpose — `verify` never grades a
+# per-vault weight, but execute's G08 grading does, and weight_lookup dies on
+# a vault named twice in one vector).
+gov_baseline() {
+  {
+    printf 'chain\t918453\nquorum\t2\ntotal\t2\ndelay\t120\nclock\t1000000000\ntxseq\t0\nproposalid\t0\n'
+    printf 'owner:%s\t%s\n' "$SAFE" "$APPROVER"
+    for r in "$GOVERNANCE" "$TIMELOCK" "$SAFE" "$ROUTER"; do printf 'codehash:%s\t%s\n' "$r" "$HASH"; done
+    printf 'power:%s\t1\npower:%s\t1\n' "$VOTER_A" "$VOTER_B"
+    printf 'keystore:approver\t%s\n' "$APPROVER"
+    printf 'keystore:voter-a\t%s\n' "$VOTER_A"
+    printf 'keystore:voter-b\t%s\n' "$VOTER_B"
+  } >"$WORK/state"
+  mkdir -p "$WORK/keys"
+  : >"$WORK/keys/approver"; : >"$WORK/keys/approver.pw"
+  : >"$WORK/keys/voter-a"; : >"$WORK/keys/voter-a.pw"
+  : >"$WORK/keys/voter-b"; : >"$WORK/keys/voter-b.pw"
+  jq -n --arg gov "$GOVERNANCE" --arg t "$TIMELOCK" --arg s "$SAFE" --arg r "$ROUTER" --arg d "$DEPLOYER" \
+    --arg sub "$SUBMITTER" --arg ap "$APPROVER" --arg va "$VOTER_A" --arg vb "$VOTER_B" --arg e "$EMERGENCY" \
+    --arg keydir "$WORK/keys" \
+    --arg vagent "$VAULT_AGENT" --arg vusdc "$VAULT_USDC" --arg vproto "$VAULT_PROTO" --arg vrwa "$VAULT_RWA" \
+    '{chain_id: 918453, min_delay: 120, deployer: $d,
+      addresses: {gateway: $t, router: $r, governance: $gov, consensus_receipt: $t, ic_policy: $t,
+                  timelock: $t, safe: $s, registry: $t, vault: $vusdc, emergency: $e},
+      code_hashes: {},
+      vault_addresses: {rmUSDC: $vusdc, rmPROTO: $vproto, rmAGENT: $vagent, rmRWA: $vrwa},
+      ephemeral: {submitter: $sub, approver: $ap, voters: [$va, $vb], emergency: $e, keystore_dir: $keydir}}' \
+    >"$WORK/record.json"
+}
+
+# A draft naming the four canonical buckets in the canonical bps G08 grades:
+# 833/8167/667/333 for rmAGENT/rmUSDC/rmPROTO/rmRWA.
+write_draft() {
+  local receipt_id="$1"
+  local calldata
+  calldata="$("$REAL_CAST" calldata 'propose(address[],uint256[])' \
+    "[$VAULT_AGENT,$VAULT_USDC,$VAULT_PROTO,$VAULT_RWA]" "[833,8167,667,333]")"
+  jq -n --arg rid "$receipt_id" --arg cd "$calldata" \
+    --arg vagent "$VAULT_AGENT" --arg vusdc "$VAULT_USDC" --arg vproto "$VAULT_PROTO" --arg vrwa "$VAULT_RWA" \
+    '{drafts: [{receipt_id: $rid, propose_calldata: $cd,
+                vaults: [{vault: $vagent, weight_bps: 833}, {vault: $vusdc, weight_bps: 8167},
+                         {vault: $vproto, weight_bps: 667}, {vault: $vrwa, weight_bps: 333}]}]}' \
+    >"$WORK/draft.json"
+}
+
+RECEIPT_A=0x$(printf '%064x' 101)
+
+run_action() {
+  set +e
+  FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" \
+    "$CEREMONY" "$ACTION" --record "$WORK/record.json" --draft-file "$WORK/draft.json" --rpc-url http://fake \
+    >"$WORK/out" 2>"$WORK/err"
+  local rc=$?
+  set -e
+  cat "$WORK/out" "$WORK/err" >"$WORK/out.combined" 2>/dev/null || true
+  # `propose` prints one JSON object on stdout; the other actions do too.
+  cp "$WORK/out" "$WORK/out.json" 2>/dev/null || true
+  return $rc
+}
+# gov_fail_needle greps stdout+stderr combined, since `die` writes to stderr.
+run_action_combined() { run_action; local rc=$?; mv "$WORK/out.combined" "$WORK/out"; return $rc; }
+
+echo "--- propose / propose-negative ---"
+
+# propose-negative: the operator EOA can never call propose(), whatever else
+# is true on chain. No state to arrange beyond the contracts existing.
+ACTION=propose-negative
+gov_baseline; write_draft "$RECEIPT_A"
+if run_action_combined; then GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   propose-negative refuses the operator EOA"
+else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL propose-negative: exited nonzero"; tail -5 "$WORK/out"; fi
+[[ "$(json_field .action)" == "propose_refused_from_eoa" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   propose-negative names AccessControlUnauthorizedAccount"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL propose-negative did not report the refusal"; }
+
+# propose: selector, +1, stored vaults/bps, proposer==timelock, domain
+# separation, all off ONE run against a proposal-free governance.
+ACTION=propose
+gov_baseline; write_draft "$RECEIPT_A"
+gov_ok "propose creates the proposal via the timelock"
+[[ "$(json_field .action)" == "proposed_via_timelock" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   propose reports proposed_via_timelock"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL propose action was $(json_field .action)"; }
+[[ "$(json_field .proposal_id)" == "1" && "$(json_field .proposal_id_before)" == "0" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   currentProposalId advanced by exactly one"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL proposal_id $(json_field .proposal_id) from before $(json_field .proposal_id_before)"; }
+[[ "$(lc "$(json_field .proposer)")" == "$(lc "$TIMELOCK")" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   stored proposer is the timelock"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL stored proposer $(json_field .proposer) is not the timelock"; }
+[[ "$(json_field_c '.vaults | sort')" == "$(jq -nc --arg a "$(lc "$VAULT_AGENT")" --arg u "$(lc "$VAULT_USDC")" --arg p "$(lc "$VAULT_PROTO")" --arg r "$(lc "$VAULT_RWA")" '[$a,$u,$p,$r] | sort')" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   stored vaults equal the draft's four buckets"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL stored vaults $(json_field_c '.vaults') do not match the draft"; }
+[[ "$(json_field '.bps_total')" == "10000" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   stored bps total 10000"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL stored bps totalled $(json_field '.bps_total')"; }
+[[ -n "$(json_field .salt)" && "$(lc "$(json_field .salt)")" != "$(lc "$RECEIPT_A")" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   propose salt is domain separated from the bare receipt id"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL propose salt $(json_field .salt) is not distinguished from receipt_id $RECEIPT_A"; }
+
+# propose again on the SAME (now Active) proposal: ActiveProposalExists
+# idempotency. Nothing gets scheduled a second time.
+gov_ok "propose is idempotent on an Active proposal"
+[[ "$(json_field .action)" == "already_proposed" && "$(json_field .proposal_state)" == "Active" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   rerun reports already_proposed / Active, schedules nothing"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL rerun reported action=$(json_field .action) state=$(json_field .proposal_state)"; }
+
+# Idempotency is a claim about THIS draft. An Active proposal left by a
+# different draft must be refused, never reported as "already proposed": the
+# acceptance evidence would otherwise name a draft that is nowhere on chain.
+ACTION=propose; gov_baseline
+write_draft "$RECEIPT_A"
+jq '.drafts[0].vaults[0].weight_bps = 834 | .drafts[0].vaults[1].weight_bps = 8166' "$WORK/draft.json" >"$WORK/d2" && mv "$WORK/d2" "$WORK/draft.json"
+other_calldata="$("$REAL_CAST" calldata 'propose(address[],uint256[])' \
+  "[$VAULT_AGENT,$VAULT_USDC,$VAULT_PROTO,$VAULT_RWA]" "[834,8166,667,333]")"
+jq --arg cd "$other_calldata" '.drafts[0].propose_calldata = $cd' "$WORK/draft.json" >"$WORK/d2" && mv "$WORK/d2" "$WORK/draft.json"
+run_action >/dev/null 2>&1   # a live Active proposal from ANOTHER draft
+write_draft "$RECEIPT_A"
+gov_fail_needle "propose refuses to call another draft's live proposal its own" "stored proposal bps do not equal the draft's"
+
+# The proposer==timelock assertion is load-bearing, not decorative: on a
+# chain where the stored proposal names someone else (a corruption no
+# correctly wired RouterGovernance would produce, but exactly the shape this
+# assertion exists to catch), propose must refuse rather than shrug.
+ACTION=propose
+gov_baseline; write_draft "$RECEIPT_A"
+set_state impersonate_proposer "$SUBMITTER"
+gov_fail_needle "propose dies when the stored proposer is not the timelock" "not the timelock"
+
+echo "--- jump_to: die if the chain refuses the Anvil RPCs ---"
+ACTION=propose
+gov_baseline; write_draft "$RECEIPT_A"
+set_state anvil_reject true
+gov_fail_needle "propose dies when the chain is not Anvil-backed" "not Anvil-backed"
+
+echo "--- release ---"
+# G04: the receipt released through Safe -> Timelock. The action schedules the
+# operation, reads back WHEN that operation becomes ready (getTimestamp takes the
+# operation id — reading it without one used to leave the wait empty and the
+# action dead), jumps the clock there, and executes.
+RECEIPT_TO_RELEASE="$RECEIPT_A"
+run_release() {
+  set +e
+  FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" \
+    "$CEREMONY" release --record "$WORK/record.json" --receipt-id "$RECEIPT_TO_RELEASE" \
+    --rpc-url http://fake >"$WORK/out" 2>"$WORK/err"
+  local rc=$?
+  set -e
+  cat "$WORK/out" "$WORK/err" >"$WORK/out.combined" 2>/dev/null || true
+  cp "$WORK/out" "$WORK/out.json" 2>/dev/null || true
+  return $rc
+}
+
+gov_baseline
+if run_release; then GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   release drives the receipt through the Safe and the timelock"
+else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL release: exited nonzero — $(tail -5 "$WORK/out.combined")"; fi
+[[ "$(json_field .action)" == "released_via_timelock" && -n "$(json_field .execute_tx)" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   release reports released_via_timelock with both txs"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL release reported action=$(json_field .action) execute_tx=$(json_field .execute_tx)"; }
+[[ "$(awk -F'\t' -v k="released:$(lc "$RECEIPT_A")" '$1 == k { print $2 }' "$WORK/state")" == "true" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   the receipt is released on chain"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL the receipt was never released on chain"; }
+
+if run_release; then GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   release is idempotent on an already-released receipt"
+else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL release rerun: exited nonzero — $(tail -5 "$WORK/out.combined")"; fi
+[[ "$(json_field .action)" == "already_released" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   the rerun reports already_released and sends nothing"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL release rerun reported $(json_field .action)"; }
+
+echo "--- vote ---"
+gov_baseline; write_draft "$RECEIPT_A"
+ACTION=propose; run_action >/dev/null 2>&1   # seed a fresh Active proposal first
+ACTION=vote
+gov_ok "vote drives both voters to quorum"
+[[ "$(json_field .quorum_reached)" == "true" && "$(json_field .votes_for)" == "2" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   tally reaches the snapshot quorum"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL tally $(json_field .votes_for) of $(json_field .snapshot_quorum)"; }
+[[ "$(json_field .no_voting_power_control.observed_error)" == "NoVotingPower" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   the powerless key is refused NoVotingPower"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL no_voting_power_control reported $(json_field .no_voting_power_control.observed_error)"; }
+[[ "$(json_field .one_vote_insufficient.asserted)" == "true" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   one vote is shown insufficient before voter-b votes"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL one_vote_insufficient was not asserted: $(json_field '.one_vote_insufficient')"; }
+# The clause has to name the TALLY rule. VotingStillOpen is what execute()
+# answers while the window is open whatever the tally is, so only
+# QuorumNotReached, probed past the deadline, is evidence of a quorum rule.
+[[ "$(json_field .one_vote_insufficient.expected_error)" == "QuorumNotReached" \
+   && "$(json_field .one_vote_insufficient.window)" == "closed" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   the one-vote clause names QuorumNotReached past the deadline"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL one_vote_insufficient claimed $(json_field .one_vote_insufficient.expected_error) with the window $(json_field .one_vote_insufficient.window)"; }
+# ... and the probe must be rolled back, or voter-b could not have voted.
+[[ "$(json_field .one_vote_insufficient.rolled_back)" == "true" \
+   && "$(json_field .one_vote_insufficient.chain_time)" -le "$(json_field .one_vote_insufficient.voting_deadline)" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   the closed-window probe is rolled back before voter-b votes"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL the probe left chain time at $(json_field .one_vote_insufficient.chain_time) (deadline $(json_field .one_vote_insufficient.voting_deadline))"; }
+[[ "$(json_field .voter_a.outcome)" == "voted" && "$(json_field .voter_b.outcome)" == "voted" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   both voters are reported voted"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL voter outcomes a=$(json_field .voter_a.outcome) b=$(json_field .voter_b.outcome)"; }
+
+gov_ok "vote is idempotent once both voters have already voted (AlreadyVoted)"
+[[ "$(json_field .voter_a.outcome)" == "already_voted" && "$(json_field .voter_b.outcome)" == "already_voted" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   rerun skips both voters as already_voted"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL rerun outcomes a=$(json_field .voter_a.outcome) b=$(json_field .voter_b.outcome)"; }
+[[ "$(json_field .one_vote_insufficient.asserted)" == "false" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   rerun does not re-claim the one-vote-insufficient proof"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL rerun re-asserted one_vote_insufficient with both votes already cast"; }
+
+echo "--- execute ---"
+ACTION=execute
+gov_ok "execute is refused too early (VotingStillOpen, before the deadline)"
+[[ "$(json_field .too_early_control.observed_error)" == "VotingStillOpen" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   too-early control names VotingStillOpen before the deadline"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL too_early_control reported $(json_field .too_early_control.observed_error)"; }
+[[ "$(json_field .action)" == "executed" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   execute mines once the delay has elapsed"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL execute action was $(json_field .action)"; }
+weights_ok=1
+for row in "rmAGENT:833" "rmUSDC:8167" "rmPROTO:667" "rmRWA:333"; do
+  key="${row%%:*}"; want="${row##*:}"
+  got_router="$(json_field ".weights_after[] | select(.vault_key==\"$key\") | .router_bps")"
+  got_eff="$(json_field ".weights_after[] | select(.vault_key==\"$key\") | .effective_bps")"
+  got_ev="$(json_field ".weights_after[] | select(.vault_key==\"$key\") | .weights_applied_bps")"
+  [[ "$got_router" == "$want" && "$got_eff" == "$want" && "$got_ev" == "$want" ]] || weights_ok=0
+done
+if (( weights_ok )); then GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   every vault got its exact canonical bps (router, effective, event)"
+else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL a vault's weight was not exactly canonical: $(json_field '.weights_after')"; fi
+
+gov_ok "execute is idempotent on an already-executed proposal (AlreadyExecuted)"
+[[ "$(json_field .action)" == "already_executed" && "$(json_field .already_executed_control.observed_error)" == "AlreadyExecuted" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   rerun reports already_executed and refuses AlreadyExecuted"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL rerun action=$(json_field .action) control=$(json_field .already_executed_control.observed_error)"; }
+weights_ok=1
+for row in "rmAGENT:833" "rmUSDC:8167" "rmPROTO:667" "rmRWA:333"; do
+  key="${row%%:*}"; want="${row##*:}"
+  got_router="$(json_field ".weights_after[] | select(.vault_key==\"$key\") | .router_bps")"
+  [[ "$got_router" == "$want" ]] || weights_ok=0
+done
+(( weights_ok )) \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   the canonical vector is still live after the idempotent rerun"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL the canonical vector regressed on the idempotent rerun"; }
+
+echo "--- propose: a second cycle after the first one executed ---"
+# The timelock stamps an executed operation Done forever, so an operation id
+# keyed on the receipt alone would make this impossible: nothing to schedule,
+# nothing ever ready, and a "never became ready" that names the wrong cause.
+# This runs straight off the executed proposal the section above left behind.
+ACTION=propose
+gov_ok "propose opens a second cycle once the first proposal is Executed"
+[[ "$(json_field .proposal_id)" == "2" && "$(json_field .proposal_id_before)" == "1" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   the second cycle gets its own proposal id"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL second cycle reported id $(json_field .proposal_id) from before $(json_field .proposal_id_before)"; }
+
+echo "--- propose: calldata that disagrees with the draft ---"
+# The timelock executes the bytes it was handed, so calldata that encodes a
+# different vector than the draft's own vaults/bps must be refused BEFORE it is
+# scheduled — not after it has created a live Active proposal that blocks every
+# later propose with ActiveProposalExists.
+ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"
+bad_calldata="$("$REAL_CAST" calldata 'propose(address[],uint256[])' "[$VAULT_USDC]" "[10000]")"
+jq --arg cd "$bad_calldata" '.drafts[0].propose_calldata = $cd' "$WORK/draft.json" >"$WORK/d2" && mv "$WORK/d2" "$WORK/draft.json"
+gov_fail_needle "propose refuses calldata that does not encode the draft's vector" "not the draft's own list"
+
+echo "--- vote: the quorum rule itself has to be on chain ---"
+# The point of the one-vote clause: on a governance that never compares votesFor
+# with the quorum, `vote` must refuse rather than emit the same green evidence.
+# The fake chain's execute() keeps its VotingStillOpen and its delay checks and
+# drops only the tally check, which is exactly the contract a VotingStillOpen
+# assertion would have passed.
+ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
+set_state no_quorum_rule true
+ACTION=vote
+gov_fail_needle "vote refuses a governance with no quorum rule" "not with QuorumNotReached"
+
+echo "governance actions selftest: $GOV_PASSED passed, $GOV_FAILED failed"
+
+# ─── test-the-test: prove two of the new assertions actually gate something ──
+# C-21 again, now against fusion-ceremony.sh itself: stub the assertion,
+# rerun the EXACT scenario that is supposed to catch it, confirm the case
+# flips from refused to silently accepted, then restore the file byte for
+# byte. A case that still refuses with the assertion gone would be worthless.
+STUB_PASSED=0; STUB_FAILED=0
+CEREMONY_BACKUP="$WORK/fusion-ceremony.sh.orig"
+cp "$CEREMONY" "$CEREMONY_BACKUP"
+restore_ceremony() { cp "$CEREMONY_BACKUP" "$CEREMONY"; }
+trap 'restore_ceremony; rm -rf "$WORK"' EXIT
+
+patch_literal() {
+  # patch_literal <needle> <replacement>: exact, non-regex text substitution,
+  # so nothing here depends on getting a regex dialect's escaping right.
+  python3 - "$CEREMONY" "$1" "$2" <<'PY'
+import sys
+path, needle, repl = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(path).read()
+if needle not in text:
+    sys.exit("needle not found: " + needle)
+open(path, "w").write(text.replace(needle, repl, 1))
+PY
+}
+
+echo "--- test-the-test: propose proposer==timelock ---"
+PROPOSER_CHECK='  [[ "$(lower "$stored_proposer")" == "$(lower "$timelock")" ]] \
+    || die "proposal $pid names proposer $stored_proposer, not the timelock $timelock: the ADMIN_ROLE path was not the one used" 1'
+patch_literal "$PROPOSER_CHECK" '  true # STUBBED for selftest test-the-test'
+ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"
+set_state impersonate_proposer "$SUBMITTER"
+if run_action; then
+  STUB_PASSED=$((STUB_PASSED + 1))
+  echo "ok   (test-the-test) propose proposer==timelock: stubbing it turns the refusal into a silent accept"
+else
+  STUB_FAILED=$((STUB_FAILED + 1))
+  echo "FAIL (test-the-test) propose proposer==timelock: still refused with the assertion stubbed out"
+fi
+restore_ceremony
+
+echo "--- test-the-test: execute too-early negative ---"
+# Mirror the proposer case: arrange a chain where execute() refuses NOTHING (so
+# the control's own eth_call succeeds where it must revert), confirm the
+# unstubbed action refuses it, then stub the assertion and confirm the SAME
+# scenario is now silently accepted. A check on the reported error string would
+# be a tautology — the stub is the only thing that produces that string.
+seed_too_early_chain() {
+  ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
+  ACTION=vote; run_action >/dev/null 2>&1
+  set_state never_reverts_execute true
+  ACTION=execute
+}
+seed_too_early_chain
+if run_action; then
+  STUB_FAILED=$((STUB_FAILED + 1))
+  echo "FAIL (test-the-test) execute too-early negative: an execute() that refuses nothing was accepted"
+else
+  STUB_PASSED=$((STUB_PASSED + 1))
+  echo "ok   (test-the-test) execute too-early negative: an execute() that refuses nothing is refused"
+fi
+
+TOO_EARLY_CHECK='  neg="$(assert_call_reverts "execute($pid_before) at chain time $now_before" \
+          "$expected_sig" "$executor" "$governance" "$EXECUTE_SIG" "$pid_before")" || exit $?'
+TOO_EARLY_REPL='  neg="STUBBED$(printf "\t")stub$(printf "\t")0x"'
+patch_literal "$TOO_EARLY_CHECK" "$TOO_EARLY_REPL"
+seed_too_early_chain
+if run_action; then
+  STUB_PASSED=$((STUB_PASSED + 1))
+  echo "ok   (test-the-test) execute too-early negative: stubbing it turns the refusal into a silent accept"
+else
+  STUB_FAILED=$((STUB_FAILED + 1))
+  echo "FAIL (test-the-test) execute too-early negative: still refused with the assertion stubbed out — $(tail -3 "$WORK/out.combined")"
+fi
+restore_ceremony
+trap 'rm -rf "$WORK"' EXIT
+
+echo "test-the-test: $STUB_PASSED passed, $STUB_FAILED failed"
+
+TOTAL_FAILED=$((FAILED + GOV_FAILED + STUB_FAILED))
+echo "fusion-ceremony selftest TOTAL: $((PASSED + GOV_PASSED + STUB_PASSED)) passed, $TOTAL_FAILED failed"
+(( TOTAL_FAILED == 0 ))

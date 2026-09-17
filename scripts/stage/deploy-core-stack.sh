@@ -16,6 +16,15 @@
 # Usage (run from the repo root on the stage host):
 #   deploy-core-stack.sh <smoke|build|up|down|env> [--record FILE] [--tag TAG]
 #                          [--out-dir DIR] [--dapp-compose FILE] [--chain-compose FILE]
+#                          [--chain anvil|geth]
+#
+# --chain picks the chain backend, and EVERY action honours it — the stage runs
+# one chain, not one per action. `anvil` (the default) is the Fusion acceptance
+# backend: the smoke harness owns a host-side Anvil on 18545 whose clock can be
+# moved, which is what fusion-ceremony.sh's timelock jumps need; `up`/`build`
+# then start no chain compose stack and point the indexer at that host chain.
+# `geth` is the original PoS devnet compose stack, whose clock tracks wall time
+# 1:1 — G06-G08 cannot run on it, because jump_to refuses to sleep out an hour.
 #
 # Actions:
 #   env        generate $OUT_DIR/dapp.env and $OUT_DIR/dapp.images.override.yaml
@@ -51,12 +60,23 @@ DAPP_COMPOSE="$REPO_ROOT/testing/ethereum-testnet/config/docker-compose.dapp.yam
 CHAIN_COMPOSE="$REPO_ROOT/testing/ethereum-testnet/config/docker-compose.yaml"
 DAPP_PROJECT="robotmoney-dapp"
 CHAIN_PROJECT="ethereum-testnet"
+# The chain backend every action shares. Anvil is the acceptance default: its
+# clock is movable, which is the whole reason the Fusion governance stages can
+# run at all (scripts/stage/fusion-ceremony.sh jump_to).
+CHAIN_BACKEND="anvil"
+# The external docker network docker-compose.dapp.yaml attaches the indexer to.
+# In geth mode the chain compose stack creates it; in anvil mode the smoke
+# harness does (testing/smoke-test/src/anvil_fixture.rs CHAIN_NET_NAME).
+CHAIN_NET="ethereum-testnet_default"
+RPC_PORT=18545
 
 fail() { echo "FAIL: [deploy-core-stack] $*" >&2; exit "$2"; }
 info() { echo "==> [deploy-core-stack] $*"; }
 
+# The whole leading comment block, so an added action or flag never falls off
+# the end of a hardcoded line range.
 usage() {
-  sed -n '2,40p' "$0" >&2
+  awk 'NR > 1 { if (!/^#/) exit; print }' "$0" >&2
   exit 64
 }
 
@@ -68,12 +88,17 @@ while (( $# )); do
     --out-dir) OUT_DIR="$2"; shift 2 ;;
     --dapp-compose) DAPP_COMPOSE="$2"; shift 2 ;;
     --chain-compose) CHAIN_COMPOSE="$2"; shift 2 ;;
+    --chain) CHAIN_BACKEND="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
 done
 
 [[ -n "$ACTION" ]] || usage
+case "$CHAIN_BACKEND" in
+  anvil|geth) ;;
+  *) echo "--chain must be anvil or geth, got '$CHAIN_BACKEND'" >&2; usage ;;
+esac
 if [[ -z "$RECORD_PATH" ]]; then
   if [[ -f "$OUT_DIR/fusion-stage-record.json" ]]; then
     RECORD_PATH="$OUT_DIR/fusion-stage-record.json"
@@ -90,7 +115,8 @@ if [[ "$ACTION" == "smoke" ]]; then
   command -v cargo >/dev/null 2>&1 || fail "required tool 'cargo' not on PATH" 3
   exec cargo run -p smoke-test -- \
     --full-stack \
-    --rpc-port 18545 \
+    --chain "$CHAIN_BACKEND" \
+    --rpc-port "$RPC_PORT" \
     --explorer-port 18546 \
     --dapp-port 5173 \
     --public-rpc-url https://stage-rpc.robotmoney-labs.dev \
@@ -143,6 +169,31 @@ chain_id=$(jq -r '.chain_id // 0' "$RECORD_PATH")
 # ─── Input generation: dapp.env + image override ─────────────────────────────
 mkdir -p "$OUT_DIR"
 
+# The address a container uses to reach the host-side Anvil. Mirrors
+# testing/smoke-test/src/anvil_fixture.rs container_host_addr(): the docker
+# bridge gateway is routable from every bridge network on Linux, with
+# host.docker.internal as the fallback (made resolvable by the extra_hosts entry
+# the override below writes in anvil mode).
+container_host_addr() {
+  local gw
+  if [[ -n "${SMOKE_TEST_ANVIL_HOST_ADDR:-}" ]]; then
+    printf '%s' "$SMOKE_TEST_ANVIL_HOST_ADDR"; return 0
+  fi
+  gw="$(docker network inspect bridge -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null || true)"
+  if [[ -n "$gw" ]]; then printf '%s' "$gw"; else printf 'host.docker.internal'; fi
+}
+
+# In geth mode the indexer reaches the chain by compose service name over the
+# shared chain network. In anvil mode there is no chain container at all: the
+# chain is a host process the smoke harness owns, so the indexer has to cross
+# the docker bridge to reach it.
+if [[ "$CHAIN_BACKEND" == "anvil" ]]; then
+  INDEXER_RPC_URL="http://$(container_host_addr):$RPC_PORT"
+else
+  INDEXER_RPC_URL="http://geth:8545"
+fi
+info "chain backend $CHAIN_BACKEND; indexer RPC $INDEXER_RPC_URL"
+
 # Vault-address map for the dapp's applied/not-applied panel and the INV-4
 # witnesses. Lowercased to match consensusReceiptApi.ts parseVaultAddressMap.
 vault_map="$(jq -c '.vault_addresses | {rmUSDC: (.rmUSDC|ascii_downcase), rmPROTO: (.rmPROTO|ascii_downcase), rmAGENT: (.rmAGENT|ascii_downcase), rmRWA: (.rmRWA|ascii_downcase)}' "$RECORD_PATH")"
@@ -171,7 +222,7 @@ RECEIPT_FIXTURES_PORT=8097
 INDEXER_CHAIN_ID=918453
 INDEXER_CHAIN_NAME=devnet
 EXPLORER_API_CHAIN_ID=918453
-INDEXER_RPC_URL=http://geth:8545
+INDEXER_RPC_URL=$INDEXER_RPC_URL
 FEATURE_FLAGS=4
 
 # --- indexer topology (from the deployment record) ---
@@ -201,6 +252,14 @@ VITE_FAUCET_DRIP_ETH_WEI=10000000000000000
 EOF
 info "wrote $OUT_DIR/dapp.env (from record $RECORD_PATH)"
 
+# In anvil mode the indexer may fall back to host.docker.internal, which Linux
+# does not resolve on its own. The override is this script's own file, so the
+# extra_hosts entry goes here rather than into the compose file suite-14 pins.
+indexer_extra_hosts=""
+if [[ "$CHAIN_BACKEND" == "anvil" ]]; then
+  indexer_extra_hosts=$'\n    extra_hosts:\n      - "host.docker.internal:host-gateway"'
+fi
+
 cat > "$OUT_DIR/dapp.images.override.yaml" <<EOF
 # Generated by scripts/stage/deploy-core-stack.sh from $RECORD_PATH (tag $TAG)
 # Pin the dapp-stack images to the release tag so no service builds on the
@@ -209,7 +268,7 @@ services:
   explorer-migrate:
     image: robotmoney-explorer-indexer:$TAG
   explorer-indexer:
-    image: robotmoney-explorer-indexer:$TAG
+    image: robotmoney-explorer-indexer:$TAG$indexer_extra_hosts
   explorer-api:
     image: robotmoney-explorer-api:$TAG
   dapp:
@@ -225,10 +284,28 @@ compose() {
 }
 
 chain_up() {
+  # 18545 is the repo-owned stage ingress contract either way: cloudflared routes
+  # the public stage RPC hostname to this host port.
+  if [[ "$CHAIN_BACKEND" == "anvil" ]]; then
+    # The chain is the smoke harness's host-side Anvil, not a container this
+    # script may start. Bringing the geth stack up here would bind the same port
+    # and put the dapp on a chain whose clock cannot be moved, so this only
+    # checks that the chain the ceremony needs is the one actually listening.
+    local rpc_result expected_chain_id
+    expected_chain_id="0x$(printf '%x' "$chain_id")"
+    rpc_result="$(curl -fsS --max-time 3 -X POST "http://127.0.0.1:$RPC_PORT" \
+      -H 'content-type: application/json' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' 2>/dev/null \
+      | jq -r '.result // empty' 2>/dev/null || true)"
+    [[ "$rpc_result" == "$expected_chain_id" ]] \
+      || fail "no chain answering $expected_chain_id on 127.0.0.1:$RPC_PORT (got '${rpc_result:-nothing}') — with --chain anvil the chain is the smoke harness's own Anvil: start \`deploy-core-stack.sh smoke\` first, or pass --chain geth" 66
+    docker network inspect "$CHAIN_NET" >/dev/null 2>&1 \
+      || fail "docker network $CHAIN_NET does not exist — the dapp compose stack attaches the indexer to it, and in anvil mode the smoke harness creates it; start \`deploy-core-stack.sh smoke\` first" 66
+    info "chain backend anvil: host chain on $RPC_PORT is live, $CHAIN_NET exists; starting no chain containers"
+    return 0
+  fi
   # The chain ships are idempotent; already-running containers are left alone.
-  # 18545 is the repo-owned stage ingress contract: cloudflared routes the
-  # public stage RPC hostname to this host port.
-  GETH_RPC_PORT=18545 docker compose --project-name "$CHAIN_PROJECT" -f "$CHAIN_COMPOSE" up -d \
+  GETH_RPC_PORT="$RPC_PORT" docker compose --project-name "$CHAIN_PROJECT" -f "$CHAIN_COMPOSE" up -d \
     || fail "chain compose up failed" 66
 }
 
@@ -236,7 +313,7 @@ wait_ready() {
   local expected_chain_id rpc_result
   expected_chain_id="0x$(printf '%x' "$chain_id")"
   for _attempt in $(seq 1 120); do
-    rpc_result="$(curl -fsS --max-time 3 -X POST http://127.0.0.1:18545 \
+    rpc_result="$(curl -fsS --max-time 3 -X POST "http://127.0.0.1:$RPC_PORT" \
       -H 'content-type: application/json' \
       -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' 2>/dev/null \
       | jq -r '.result // empty' 2>/dev/null || true)"
@@ -279,8 +356,14 @@ case "$ACTION" in
     fi
     COMPOSE_PROFILES=receipt-fixtures compose "$DAPP_PROJECT" "$DAPP_COMPOSE" down \
       || fail "dapp stack down failed" 66
-    GETH_RPC_PORT=18545 docker compose --project-name "$CHAIN_PROJECT" -f "$CHAIN_COMPOSE" down \
-      || fail "chain stack down failed" 66
+    if [[ "$CHAIN_BACKEND" == "anvil" ]]; then
+      # The chain is the smoke harness process signalled above; it removes the
+      # docker network it created on its way out. There is no chain stack here.
+      info "chain backend anvil: the smoke harness owns the chain; no chain compose stack to stop"
+    else
+      GETH_RPC_PORT="$RPC_PORT" docker compose --project-name "$CHAIN_PROJECT" -f "$CHAIN_COMPOSE" down \
+        || fail "chain stack down failed" 66
+    fi
     ;;
 esac
 
