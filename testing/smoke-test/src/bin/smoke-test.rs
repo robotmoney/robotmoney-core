@@ -99,6 +99,17 @@ struct Cli {
     /// Defaults to 10 MiB.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     log_max_bytes: Option<u64>,
+
+    /// Chain backend to boot the contracts on.
+    ///
+    /// `geth` (the default) is the Geth+Lighthouse Docker devnet: real
+    /// proof-of-stake, so `block.timestamp` tracks wall clock and cannot be
+    /// moved. `anvil` boots a host-side `anvil --load-state` from the same
+    /// committed Base fork state and brings up NO chain compose stack; its
+    /// clock can be jumped (`evm_setNextBlockTimestamp`), which is what a run
+    /// that has to clear a governance timelock delay needs.
+    #[arg(long, value_name = "BACKEND", default_value = "geth")]
+    chain: String,
 }
 
 fn main() {
@@ -138,6 +149,13 @@ fn run() -> i32 {
         eprintln!("smoke-test: --public-*-url flags require --full-stack.");
         return 2;
     }
+    let backend: smoke_test::ChainBackend = match cli.chain.parse() {
+        Ok(backend) => backend,
+        Err(err) => {
+            eprintln!("smoke-test: {err}");
+            return 2;
+        }
+    };
     if let Some(rpc_port) = cli.rpc_port {
         std::env::set_var("SMOKE_TEST_GETH_RPC_PORT", rpc_port.to_string());
     }
@@ -152,9 +170,10 @@ fn run() -> i32 {
     smoke_test::logging::info(
         "smoke-test",
         format!(
-            "CLI starting: full_stack={} tunnel={} log_file={} log_max_bytes={} genesis_timestamp={}",
+            "CLI starting: full_stack={} tunnel={} chain={} log_file={} log_max_bytes={} genesis_timestamp={}",
             cli.full_stack,
             cli.tunnel,
+            cli.chain,
             smoke_test::logging::log_path().display(),
             smoke_test::logging::max_bytes(),
             genesis_timestamp
@@ -182,8 +201,8 @@ fn run() -> i32 {
         std::env::set_var(smoke_test::NO_RECEIPT_FIXTURES_ENV, "1");
     }
     eprintln!("smoke-test: booting devnet (this takes 60-120 seconds)...");
-    smoke_test::logging::info("smoke-test", "booting devnet");
-    let fixture = match smoke_test::Fixture::new() {
+    smoke_test::logging::info("smoke-test", format!("booting devnet backend={backend:?}"));
+    let fixture = match smoke_test::Fixture::with_backend(backend, &[]) {
         Ok(fixture) => fixture,
         Err(err) => {
             smoke_test::logging::error("smoke-test", format!("devnet boot failed: {err}"));
