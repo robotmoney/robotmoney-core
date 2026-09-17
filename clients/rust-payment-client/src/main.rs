@@ -50,6 +50,9 @@ fn main() {
         // No operator config TOML — this is a local-only Ed25519 identity
         // helper with no RPC/chain surface (issue #1111).
         Command::CommitteeIdentity { .. } => None,
+        // No operator config TOML — a static property of the compiled
+        // artifact, readable before any config exists.
+        Command::BuildInfo { .. } => None,
     };
     init_logging_best_effort(config_path);
 
@@ -79,6 +82,7 @@ fn main() {
             min_shares_per_leg,
             pretty,
         }),
+        Command::BuildInfo { pretty } => commands::build_info::run(pretty),
         Command::SelfCheck { config, pretty } => commands::self_check::run(&config, pretty),
         Command::Status {
             config,
