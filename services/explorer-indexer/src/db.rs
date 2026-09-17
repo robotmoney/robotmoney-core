@@ -530,6 +530,29 @@ impl Db {
     }
 
     /// Idempotent insert for a watched contract row.
+    ///
+    /// The conflict arm is DO NOTHING in every column **except**
+    /// `deployed_block`, which a later call may fill in while the stored value
+    /// is still NULL. That exception is load-bearing rather than cosmetic:
+    /// deploy-block detection ([`crate::indexer::resolve_deploy_floor`])
+    /// necessarily runs AFTER the row exists — `run_once` registers every
+    /// configured contract on its first tick with the block still unknown, and
+    /// only then probes the chain for it. Under a plain DO NOTHING the detected
+    /// value would be discarded on every tick and the column would stay NULL
+    /// for ever, which is exactly what it has been since the migration created
+    /// it.
+    ///
+    /// The update is one-directional and never overwrites. `kind` is left
+    /// alone, so the `portfolio_router == router_governance` case keeps the
+    /// kind it was first registered under, exactly as before. A
+    /// `deployed_block` already on the row also wins over any later detection,
+    /// so re-probing a chain that has since pruned further can never silently
+    /// raise a floor that was recorded when more history was available.
+    ///
+    /// Replacing a value is therefore two explicit steps, not a silent one:
+    /// [`Self::clear_deployed_block`] nulls the stale number where the caller
+    /// has evidence the chain it was recorded against is gone, and the next
+    /// detection fills it back in.
     pub async fn upsert_contract(
         &self,
         chain_id: i64,
@@ -539,12 +562,69 @@ impl Db {
     ) -> Result<u64, DbError> {
         let r = sqlx::query(
             "INSERT INTO contracts (chain_id, address, kind, deployed_block) \
-             VALUES ($1, $2, $3, $4) ON CONFLICT (chain_id, address) DO NOTHING",
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (chain_id, address) DO UPDATE \
+                 SET deployed_block = EXCLUDED.deployed_block \
+                 WHERE contracts.deployed_block IS NULL \
+                   AND EXCLUDED.deployed_block IS NOT NULL",
         )
         .bind(chain_id)
         .bind(&address[..])
         .bind(kind)
         .bind(deployed_block)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// The persisted deploy block for one contract — `None` when the row is
+    /// absent or the column is still NULL.
+    ///
+    /// This is the cost control on detection: probing one address costs ~26
+    /// `eth_getCode` round trips on a 48.9M-block chain, so a tick reads this
+    /// first and probes only the addresses that are still unknown.
+    pub async fn deployed_block(
+        &self,
+        chain_id: i64,
+        address: [u8; 20],
+    ) -> Result<Option<i64>, DbError> {
+        let row: Option<(Option<i64>,)> = sqlx::query_as(
+            "SELECT deployed_block FROM contracts WHERE chain_id = $1 AND address = $2",
+        )
+        .bind(chain_id)
+        .bind(&address[..])
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|(b,)| b))
+    }
+
+    /// Null out a contract's remembered deploy block so detection runs again.
+    ///
+    /// The upsert above deliberately cannot overwrite a non-NULL
+    /// `deployed_block`, which is right for the case it guards — a later probe
+    /// against a more heavily pruned chain must not raise a floor and skip
+    /// events. But that made a WRONG value permanent: the column is keyed by
+    /// `(chain_id, address)`, and a chain id plus a deterministic address is
+    /// not a chain identity, so a block detected against the Geth devnet
+    /// survives the swap to `anvil --load-state` on the same Postgres and
+    /// wedges the indexer below the new chain's servable range with no way out
+    /// but manual SQL.
+    ///
+    /// So the only way to replace one is to clear it first, and the caller
+    /// ([`crate::indexer::resolve_deploy_floor`]) does that only when a probe
+    /// shows the persisted block does not describe the chain now answering.
+    /// Returns rows affected, so a clear that matched nothing is visible.
+    pub async fn clear_deployed_block(
+        &self,
+        chain_id: i64,
+        address: [u8; 20],
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "UPDATE contracts SET deployed_block = NULL \
+             WHERE chain_id = $1 AND address = $2",
+        )
+        .bind(chain_id)
+        .bind(&address[..])
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
