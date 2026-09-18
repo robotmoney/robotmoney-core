@@ -37,7 +37,7 @@
 # drift-gated block above. Only `MockVault.json` remains, and its divergence is
 # not drift — it is an open product question that #1362 was explicitly scoped
 # not to pre-empt.
-#   clients/rust-payment-client/abi/MockVault.json — adds paused(), absent from the artifact; rmpc reads real deployed vaults through this "TEST FIXTURE only" contract's ABI (contracts/gateway/MockVault.sol:14). Whether the clients should instead bind to a compiler-owned contracts/interfaces/IVault.sol is #1286's Q3, which owns the decision and the follow-on work; answering it resolves this file (tracking issue #1286)
+#   clients/rust-payment-client/abi/MockVault.json — adds paused(), absent from the artifact; rmpc reads real deployed vaults through this "TEST FIXTURE only" contract's ABI (contracts/gateway/MockVault.sol:14). Whether the clients should instead bind to a compiler-owned contracts/interfaces/IVault.sol is #1464's Q3 (#1464 replaces #1286, deleted from GitHub), which owns the decision and the follow-on work; answering it resolves this file (tracking issue #1464)
 #
 # WHY `ProtocolAssetVault` IS NOT GENERATED HERE (issue #1346 AC4)
 # The dapp's `BASKET_VAULT_SHORTLIST_ABI` names both basket vaults, so both were
@@ -232,4 +232,5 @@ echo "      have and is the ABI rmpc reads real deployed vaults through. It is"
 echo "      listed in this script's header and must cite an OPEN tracking issue;"
 echo "      the inventory is enforced by"
 echo "      .github/scripts/check_abi_binding_inventory.py in suite-16. It is"
-echo "      tracked by issue #1286 (Q3: a compiler-owned IVault.sol)."
+echo "      tracked by issue #1464 (Q3: a compiler-owned IVault.sol; #1464"
+echo "      replaces #1286, deleted from GitHub)."

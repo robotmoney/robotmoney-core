@@ -625,9 +625,10 @@ decoded a `VaultRegistry` shape that no longer existed (#1348).
    schema drift, tracked separately" and named no issue for four files — while
    two more had joined the directory unlisted. #1362 then regenerated six of the
    seven un-gated files from their artifacts and moved them into gate 2. The one
-   still un-gated is `MockVault.json`, tracked by #1286 (Q3: should clients bind
-   to a compiler-owned `IVault.sol` rather than to a declared test fixture?);
-   closing that issue without doing the work turns this suite red. Self-tested
+   still un-gated is `MockVault.json`, tracked by #1464 (Q3: should clients bind
+   to a compiler-owned `IVault.sol` rather than to a declared test fixture?;
+   #1464 replaces #1286, which was deleted from GitHub); closing that issue
+   without doing the work turns this suite red. Self-tested
    (`--self-test`) against seven synthetic defect shapes before the real run.
 2. **Regenerate and diff.** `forge build`, then `generate_abi_bindings.sh`, then
    `git diff --exit-code` over `Erc20.json`, `RobotMoneyGateway.json`,
