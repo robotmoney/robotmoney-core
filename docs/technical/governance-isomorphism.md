@@ -1,9 +1,10 @@
 # Governance isomorphism: CI, Stage and Production
 
-**Status: proposed.** This document specifies the governance topology every
-environment must present, and the verification that proves it. It exists because
-one environment currently does not comply, and the non-compliance is invisible to
-every check we run.
+**Status: proposed.** Tracked by issue #1447.
+
+This document specifies the governance topology every environment must present,
+and the verification that proves it. It exists because one environment currently
+does not comply, and the non-compliance is invisible to every check we run.
 
 Companion to [security-model.md](./security-model.md) §4 (Access control &
 admin), which states the production requirement, and to
