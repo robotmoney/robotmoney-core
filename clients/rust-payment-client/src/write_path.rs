@@ -61,7 +61,8 @@ use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
 use crate::tx::{
-    broadcast, build_eip1559, encode_signed, signing_hash, wait_for_receipt_with, Eip1559Inputs,
+    broadcast, build_eip1559, encode_signed, signing_hash, wait_for_successful_receipt,
+    Eip1559Inputs,
 };
 
 /// Process exit code for a completed write.
@@ -524,11 +525,14 @@ pub async fn fee_bid(
     .map_err(EnvelopeError::FeeCap)
 }
 
-/// Broadcast a signed envelope and poll for its receipt.
+/// Broadcast a signed envelope, poll for its receipt, and REFUSE a reverted one.
 ///
-/// The receipt is returned regardless of its `status` field; deciding
-/// what a `status == 0` receipt means for the replay cache belongs to
-/// [`WriteSession::submit`].
+/// A mined transaction is not a successful one: on `status == 0` this fails with
+/// [`RmpcError::ErrTxReverted`] carrying the `tx_hash` the operator has to
+/// inspect. The check lives in [`wait_for_successful_receipt`], which is the one
+/// place it exists — see that function for why it is a seam and not a sixth
+/// copy. `tx_hash` is returned alongside the error's own copy so a caller that
+/// wants to keep its command-specific error code can still name the transaction.
 pub async fn broadcast_and_confirm(
     rpc: &FailoverRpcClient,
     raw: &Bytes,
@@ -537,7 +541,8 @@ pub async fn broadcast_and_confirm(
     let tx_hash = broadcast(rpc, raw).await?;
     let max_attempts = receipt_timeout_secs.min(u32::MAX as u64) as u32;
     let receipt =
-        wait_for_receipt_with(rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1)).await?;
+        wait_for_successful_receipt(rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1))
+            .await?;
     Ok((tx_hash, receipt))
 }
 
@@ -654,13 +659,33 @@ impl WriteSession {
 
         // -- Receipt ------------------------------------------------------
         let max_attempts = receipt_timeout_secs.min(u32::MAX as u64) as u32;
-        let receipt = match self.rt.block_on(wait_for_receipt_with(
+        // THE REVERT CHECK IS THE SEAM'S, NOT THIS FUNCTION'S. `submit` keeps
+        // only what is genuinely its own: the replay-cache decision that
+        // follows from the refusal. The two outcomes below differ in exactly
+        // that, which is why they are still two branches.
+        let receipt = match self.rt.block_on(wait_for_successful_receipt(
             &self.rpc,
             tx_hash,
             Duration::from_secs(1),
             max_attempts.max(1),
         )) {
             Ok(r) => r,
+            Err(err @ RmpcError::ErrTxReverted { .. }) => {
+                // RPC-2 (finalize-on-confirmed-failure): the tx reverted, so
+                // nothing was recorded on chain. Remove the optimistic entry
+                // so a legitimate retry is not permanently refused.
+                if let Err(e) = self.replay_remove() {
+                    log::warn!(
+                        "rmpc {cmd}: replay cache finalize-on-failure remove failed (non-fatal): {e}"
+                    );
+                }
+                self.record(AuditDecision::Reverted, Some(err.name().to_string()));
+                return Err(WriteAbort::refused(
+                    self.refusal(err.name())
+                        .message(format!("{err}"))
+                        .tx_hash(tx_hash_hex.clone()),
+                ));
+            }
             Err(e) => {
                 // AZ-RPC-1 (timeout ≠ failure): the budget ran out but the
                 // transaction may still land. Do NOT remove the
@@ -675,26 +700,6 @@ impl WriteSession {
                 ));
             }
         };
-
-        if !receipt.inner.status() {
-            // RPC-2 (finalize-on-confirmed-failure): the tx reverted, so
-            // nothing was recorded on chain. Remove the optimistic entry
-            // so a legitimate retry is not permanently refused.
-            if let Err(e) = self.replay_remove() {
-                log::warn!(
-                    "rmpc {cmd}: replay cache finalize-on-failure remove failed (non-fatal): {e}"
-                );
-            }
-            let err = RmpcError::ErrTxReverted {
-                tx_hash: tx_hash_hex.clone(),
-            };
-            self.record(AuditDecision::Reverted, Some(err.name().to_string()));
-            return Err(WriteAbort::refused(
-                self.refusal(err.name())
-                    .message(format!("{err}"))
-                    .tx_hash(tx_hash_hex.clone()),
-            ));
-        }
 
         Ok(Confirmed {
             tx_hash_hex,

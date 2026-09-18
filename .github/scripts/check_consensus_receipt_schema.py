@@ -76,10 +76,35 @@ SHARED_WITH_FRONTEND = [
     "consensus-receipt.escaping.json",
     "consensus-receipt.valid.canonical.txt",
     "consensus-receipt.escaping.canonical.txt",
+    # Added this cycle and handed to robotmoney-frontend in the same change:
+    # the read-time envelope shape (T24) and the unknown-field REFUSE vector
+    # (decision R27/D11). Nine became eleven; both are pinned here and in
+    # shared-fixtures/vendored/robotmoney-frontend.manifest.json.
+    "consensus-receipt.envelope.json",
+    "consensus-receipt.unknown-fields-refused.json",
+    # T02: the standalone bps_conversion vector. The whole-receipt goldens have a
+    # whole-basis-point mean, so their remainders are all exactly 0 and neither
+    # the apportionment loop nor the tie-break ever runs; this vector has a
+    # nonzero leftover AND an exact three-way tie, and so is the only artifact
+    # that tells LARGEST REMAINDER apart from the superseded settle-the-last
+    # rule. Eleven became twelve.
+    "consensus-receipt.bps-conversion.conformance.json",
 ]
 CORE_ONLY = [
     "consensus-receipt.anchor-digest.json",
     "consensus-receipt.legacy-weights.json",
+    # T03 deployability evidence (§12.7.5): the REAL run-1 published envelope,
+    # kept so a schema change that would move a LIVE digest turns the suite red.
+    # Core-only by construction — it is one repo's captured production bytes,
+    # not a spec artifact, so the frontend has nothing byte-identical to hold.
+    "consensus-receipt.live-envelope.json",
+    # T01/T07 (integration): core's captured copy of the run-1 ANCHORED receipt
+    # (session a31ecf60-bb8f-44c0-8b69-23d3e9c2562f), pinned so the
+    # governance-draft tests can bind a draft to a real on-chain payloadDigest
+    # without a chain or a network. Core-only for the same reason as
+    # live-envelope.json: it is one repo's captured production bytes, not a spec
+    # artifact, so the frontend has nothing byte-identical to hold.
+    "consensus-receipt.run1-anchored.json",
 ]
 
 EXPECTED_BUCKETS = [

@@ -16,8 +16,13 @@
 //!      root are DELETED by `Db::delete_above_block`, rows at/below survive,
 //!      and a release that landed above the root is rolled back in place.
 //!
-//! All tests skip cleanly when Docker is not available (the shared
-//! `pg_fixture` convention).
+//! These tests do **not** skip when Docker is unavailable: the shared
+//! `pg_fixture` panics, naming the missing dependency. That is the convention
+//! (issue #1377) — a test that returns early because its fixture handed it
+//! `None` still reports as passed, so an absent dependency must red the job.
+//! The doc that used to stand here claimed the opposite and invited a
+//! maintainer to "restore" an `Option`-returning fixture, which would make
+//! every PG-backed indexer test green on a runner without Docker.
 
 mod common;
 
@@ -26,7 +31,7 @@ use alloy_sol_types::SolEvent as _;
 use common::{pg_fixture, StubRpcServer};
 use explorer_indexer::{
     abi::IConsensusRecommendationReceiptEvents,
-    db::CountTable,
+    db::{CountTable, ReceiptVerification},
     indexer::{run_once, IndexerConfig},
     rpc::JsonRpc,
 };
@@ -72,6 +77,16 @@ fn submitter_addr() -> Address {
 }
 fn timelock_addr() -> Address {
     Address::from([0x7Bu8; 20])
+}
+
+/// A successful digest verification, as the indexer would produce it.
+fn verified_now(bytes: i64) -> ReceiptVerification {
+    ReceiptVerification {
+        verified: true,
+        payload_bytes: Some(bytes),
+        attempts: 1,
+        last_error: None,
+    }
 }
 
 fn stub_block(number: u64, hash_byte: u8, parent_byte: u8) -> serde_json::Value {
@@ -325,6 +340,176 @@ async fn receipt_recorded_creates_row_with_digest_verified() {
     assert_eq!(row.12, None, "released_at must be NULL before release");
 }
 
+// --- AC-CORE-07 / AC-E2E-02: the published URL serves an ENVELOPE ------------
+
+/// THE URL THAT GETS ANCHORED DOES NOT SERVE THE BYTES THAT GET ANCHORED.
+///
+/// robotmoney-frontend's public, read-time-verifying route answers
+/// `{sessionId, subjectId, schemaVersion, publishedAt, receipt, canonicalBytes,
+///   verified, signatures, unverifiedReasons}`. The anchored `payloadDigest` is
+/// keccak256 of the CANONICAL BYTES of the `receipt` field, which is not
+/// keccak256 of the served body. `rmpc` was taught to unwrap that envelope at
+/// af878e46 so it could verify before submitting; the indexer was not, so it
+/// recomputed keccak256 over the envelope, missed, and stored
+/// `verified = false` -- permanently, because verification happens once on the
+/// first scan of `ReceiptRecorded` and is never retried.
+///
+/// This test serves the real envelope shape around the repo's own committed
+/// `consensus-receipt.valid.json` and anchors that receipt's canonical digest.
+/// Without the canonicalizing fallback in `fetch_and_verify_payload` it fails on
+/// the final assertion with `verified = false`.
+#[tokio::test]
+async fn receipt_recorded_verifies_when_the_url_serves_the_frontend_envelope() {
+    let fx = pg_fixture().await;
+
+    let fixture_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/consensus-receipt.valid.json"
+    );
+    let receipt_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture_path).unwrap()).unwrap();
+
+    // The digest is derived from the RECEIPT, exactly as the submitter derives it.
+    let canonical =
+        rust_payment_client::consensus_receipt::ConsensusReceipt::canonical_bytes_from_json_slice(
+            &serde_json::to_vec(&receipt_json).unwrap(),
+        )
+        .expect("the committed valid fixture must canonicalize");
+    let digest = alloy_primitives::keccak256(&canonical);
+
+    // The envelope the public route actually serves.
+    let envelope = serde_json::json!({
+        "sessionId": receipt_json["session_id"],
+        "subjectId": receipt_json["subject_id"],
+        "schemaVersion": receipt_json["schema_version"],
+        "publishedAt": "2026-09-14T00:00:00.000Z",
+        "receipt": receipt_json,
+        "canonicalBytes": String::from_utf8(canonical.clone()).unwrap(),
+        "verified": true,
+        "signatures": [],
+        "unverifiedReasons": [],
+    });
+    let served = serde_json::to_vec(&envelope).unwrap();
+
+    // The defect this test exists for: the served body is NOT the preimage.
+    assert_ne!(
+        alloy_primitives::keccak256(&served).0,
+        digest.0,
+        "the envelope must not hash to the anchored digest, or this test proves nothing"
+    );
+
+    let srv = PayloadServer::start(served.clone()).await;
+
+    let receipt_id = [0x9fu8; 32];
+    let tx: [u8; 32] = [0x0f; 32];
+    let rec_log = encode_receipt_recorded_log(
+        receipt_addr(),
+        receipt_id,
+        submitter_addr(),
+        0,
+        digest.0,
+        &srv.url,
+        1_700_000_500,
+        10,
+        tx,
+        0,
+    );
+
+    let stub = StubRpcServer::start().await;
+    program_stub(&stub, 10, 0xaa, 0x00);
+    stub.set("eth_getLogs", serde_json::json!([rec_log]));
+
+    let rpc = JsonRpc::new(&stub.url);
+    let outcome = run_once(&fx.db, &rpc, &base_cfg(10)).await.unwrap();
+    assert!(
+        outcome.error.is_none(),
+        "indexer error: {:?}",
+        outcome.error
+    );
+
+    let (verified, bytes): (bool, Option<i64>) = sqlx::query_as(
+        "SELECT verified, payload_bytes FROM consensus_receipts \
+         WHERE chain_id = $1 AND receipt_id = $2",
+    )
+    .bind(CHAIN)
+    .bind(&receipt_id[..])
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+
+    assert!(
+        verified,
+        "the indexer must re-derive the canonical bytes from the envelope's receipt \
+         and reproduce the anchored digest"
+    );
+    assert_eq!(
+        bytes,
+        Some(served.len() as i64),
+        "payload_bytes records the fetched body length, envelope included"
+    );
+}
+
+/// The fallback must not become a blanket pass: a body that parses as a receipt
+/// but canonicalizes to something else is still unverified.
+#[tokio::test]
+async fn receipt_recorded_envelope_with_the_wrong_receipt_stays_unverified() {
+    let fx = pg_fixture().await;
+
+    let fixture_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/consensus-receipt.valid.json"
+    );
+    let mut receipt_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture_path).unwrap()).unwrap();
+    let honest =
+        rust_payment_client::consensus_receipt::ConsensusReceipt::canonical_bytes_from_json_slice(
+            &serde_json::to_vec(&receipt_json).unwrap(),
+        )
+        .unwrap();
+    let anchored = alloy_primitives::keccak256(&honest);
+
+    // One field changed after the digest was anchored.
+    receipt_json["judge"]["rationale"] =
+        serde_json::Value::String("a different opinion entirely".to_string());
+    let envelope = serde_json::json!({ "receipt": receipt_json });
+    let srv = PayloadServer::start(serde_json::to_vec(&envelope).unwrap()).await;
+
+    let receipt_id = [0x9eu8; 32];
+    let rec_log = encode_receipt_recorded_log(
+        receipt_addr(),
+        receipt_id,
+        submitter_addr(),
+        0,
+        anchored.0,
+        &srv.url,
+        1_700_000_600,
+        10,
+        [0x0e; 32],
+        0,
+    );
+
+    let stub = StubRpcServer::start().await;
+    program_stub(&stub, 10, 0xaa, 0x00);
+    stub.set("eth_getLogs", serde_json::json!([rec_log]));
+
+    let rpc = JsonRpc::new(&stub.url);
+    run_once(&fx.db, &rpc, &base_cfg(10)).await.unwrap();
+
+    let (verified,): (bool,) = sqlx::query_as(
+        "SELECT verified FROM consensus_receipts WHERE chain_id = $1 AND receipt_id = $2",
+    )
+    .bind(CHAIN)
+    .bind(&receipt_id[..])
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+
+    assert!(
+        !verified,
+        "a tampered receipt inside a well-formed envelope must stay unverified"
+    );
+}
+
 // ─── AC-3: digest mismatch stores the row with verified = false ──────────────
 
 #[tokio::test]
@@ -547,6 +732,7 @@ async fn reorg_rollback_deletes_receipts_above_root_and_keeps_the_rest() {
     {
         db.insert_consensus_receipt(
             CHAIN,
+            receipt_addr().into_array(),
             [id_byte; 32],
             i as i64,
             submitter_addr().into_array(),
@@ -556,8 +742,7 @@ async fn reorg_rollback_deletes_receipts_above_root_and_keeps_the_rest() {
             block,
             0,
             [id_byte; 32],
-            true,
-            Some(64),
+            verified_now(64),
         )
         .await
         .unwrap();
@@ -568,6 +753,7 @@ async fn reorg_rollback_deletes_receipts_above_root_and_keeps_the_rest() {
     // the in-place release must be rolled back even though the row survives.
     db.mark_consensus_receipt_released(
         CHAIN,
+        receipt_addr().into_array(),
         [0xa1u8; 32],
         timelock_addr().into_array(),
         1_700_000_102,
@@ -622,6 +808,7 @@ async fn reorg_rollback_deletes_receipts_above_root_and_keeps_the_rest() {
     let again = db
         .insert_consensus_receipt(
             CHAIN,
+            receipt_addr().into_array(),
             [0xa2u8; 32],
             1,
             submitter_addr().into_array(),
@@ -631,8 +818,7 @@ async fn reorg_rollback_deletes_receipts_above_root_and_keeps_the_rest() {
             100,
             0,
             [0xa2u8; 32],
-            true,
-            Some(64),
+            verified_now(64),
         )
         .await
         .unwrap();
@@ -708,4 +894,559 @@ async fn run_once_reorg_at_safe_head_rewrites_receipt_rows() {
         "block 10 must be re-persisted at its canonical hash after the rewrite"
     );
     post.shutdown();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Fusion round-2 code review — T20 (contract-scoped key, log.address gate)
+//                              T12 (bounded retry, repairable row)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// A payload server that answers 502 until it is told to serve the body.
+///
+/// Stands in for the real failure T12 exists for: a frontend redeploy makes the
+/// `payloadUri` route 502 for a few seconds, and the receipt is anchored in that
+/// window.
+struct FlakyPayloadServer {
+    pub url: String,
+    healthy: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    _shutdown: tokio::sync::oneshot::Sender<()>,
+}
+
+impl FlakyPayloadServer {
+    async fn start(body: Vec<u8>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}/api/swarm/receipts/session-flaky");
+        let healthy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = healthy.clone();
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut rx => break,
+                    accept = listener.accept() => {
+                        let Ok((mut stream, _)) = accept else { continue };
+                        let body = body.clone();
+                        let flag = flag.clone();
+                        tokio::spawn(async move {
+                            let mut buf = [0u8; 4096];
+                            let _ = stream.read(&mut buf).await;
+                            if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                                let head = format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n",
+                                    body.len()
+                                );
+                                let _ = stream.write_all(head.as_bytes()).await;
+                                let _ = stream.write_all(&body).await;
+                            } else {
+                                let _ = stream
+                                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                                    .await;
+                            }
+                        });
+                    }
+                }
+            }
+        });
+        FlakyPayloadServer {
+            url,
+            healthy,
+            _shutdown: tx,
+        }
+    }
+
+    fn recover(&self) {
+        self.healthy
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// T12 — THE REGRESSION THIS TASK EXISTS FOR.
+///
+/// Before the fix: verification was one 10 s GET with no retry, every error was
+/// swallowed into `(false, None)`, no code path anywhere ever updated
+/// `verified`, and the insert ended `ON CONFLICT … DO NOTHING`. So a transient
+/// 502 pinned an authentic, correctly-signed receipt at `verified = false` for
+/// the LIFE OF THE DATABASE, and the only remedy was wiping the explorer
+/// database — which also wipes the watchdog's deliberately un-resettable
+/// cold-start baseline `MIN(indexer_runs.started_at)`, so the remedy pages.
+///
+/// After the fix: the row converges WITHOUT A DELETE, via the re-verification
+/// sweep, on a later tick.
+#[tokio::test]
+async fn unfetchable_payload_is_repaired_to_verified_on_a_later_tick() {
+    let fx = pg_fixture().await;
+
+    let payload = canonical_payload();
+    let digest = alloy_primitives::keccak256(&payload);
+    let srv = FlakyPayloadServer::start(payload.clone()).await;
+
+    let receipt_id = [0x71u8; 32];
+    let rec_log = encode_receipt_recorded_log(
+        receipt_addr(),
+        receipt_id,
+        submitter_addr(),
+        0,
+        digest.0,
+        &srv.url,
+        1_700_000_700,
+        10,
+        [0x71; 32],
+        0,
+    );
+
+    let stub = StubRpcServer::start().await;
+    program_stub(&stub, 10, 0xaa, 0x00);
+    stub.set("eth_getLogs", serde_json::json!([rec_log]));
+    let rpc = JsonRpc::new(&stub.url);
+
+    // ── Tick 1: the payload host is down. ──
+    let o = run_once(&fx.db, &rpc, &base_cfg(10)).await.unwrap();
+    assert!(o.error.is_none(), "tick 1 error: {:?}", o.error);
+    assert_eq!(
+        fx.db.count(CountTable::ConsensusReceipts).await.unwrap(),
+        1,
+        "the commitment row is stored even when the payload host is down"
+    );
+
+    let (verified, attempts, last_error): (bool, i32, Option<String>) = sqlx::query_as(
+        "SELECT verified, verify_attempts, last_verify_error FROM consensus_receipts \
+         WHERE chain_id = $1 AND receipt_id = $2",
+    )
+    .bind(CHAIN)
+    .bind(&receipt_id[..])
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert!(!verified, "a 502 must leave the row unverified");
+    assert!(
+        attempts >= 3,
+        "the fetch must be BOUNDED-RETRY, not single-shot: got {attempts} attempt(s)"
+    );
+    assert!(
+        last_error.is_some_and(|e| e.contains("502")),
+        "the row must record WHY it is unverified, so `verified = false` is not \
+         mistaken for evidence of forgery during a compromise investigation"
+    );
+
+    // ── The host comes back. ──
+    srv.recover();
+
+    // ── Tick 2: the SAME chain state (no reorg), no new logs. Nothing about
+    //    the chain can repair this row — only the re-verification sweep can. ──
+    stub.set("eth_getLogs", serde_json::json!([]));
+    let o = run_once(&fx.db, &rpc, &base_cfg(10)).await.unwrap();
+    assert!(o.error.is_none(), "tick 2 error: {:?}", o.error);
+    assert!(
+        !o.reorg_detected,
+        "tick 2 must not reorg — the repair has to come from the sweep"
+    );
+
+    let (verified, verified_at, bytes): (bool, Option<chrono::DateTime<chrono::Utc>>, Option<i64>) =
+        sqlx::query_as(
+            "SELECT verified, verified_at, payload_bytes FROM consensus_receipts \
+             WHERE chain_id = $1 AND receipt_id = $2",
+        )
+        .bind(CHAIN)
+        .bind(&receipt_id[..])
+        .fetch_one(fx.db.pool())
+        .await
+        .unwrap();
+
+    assert!(
+        verified,
+        "the re-verification sweep must repair the row once the payload is reachable"
+    );
+    assert!(
+        verified_at.is_some(),
+        "verified_at must be stamped on repair"
+    );
+    assert_eq!(
+        bytes,
+        Some(payload.len() as i64),
+        "the repaired row must record the fetched body length"
+    );
+    assert_eq!(
+        fx.db.count(CountTable::ConsensusReceipts).await.unwrap(),
+        1,
+        "the repair must happen IN PLACE — no delete, no duplicate row"
+    );
+}
+
+/// T12 — a repair must never run backwards.
+///
+/// A verified row is authentic: the indexer itself recomputed keccak256 of the
+/// preimage and matched the on-chain digest. A later fetch failure says
+/// something about the payload HOST, never about the commitment, so it must not
+/// be able to flip the public flag back to false.
+#[tokio::test]
+async fn replay_and_sweep_never_downgrade_a_verified_receipt() {
+    let fx = pg_fixture().await;
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+
+    let receipt_id = [0x72u8; 32];
+    db.insert_consensus_receipt(
+        CHAIN,
+        receipt_addr().into_array(),
+        receipt_id,
+        0,
+        submitter_addr().into_array(),
+        [0xd0u8; 32],
+        "https://example.invalid/api/swarm/receipts/s",
+        1_700_000_000,
+        10,
+        0,
+        [0x72u8; 32],
+        verified_now(64),
+    )
+    .await
+    .unwrap();
+
+    // A replay whose fetch failed.
+    let failed = ReceiptVerification {
+        verified: false,
+        payload_bytes: None,
+        attempts: 3,
+        last_error: Some("GET … returned 502".to_string()),
+    };
+    db.insert_consensus_receipt(
+        CHAIN,
+        receipt_addr().into_array(),
+        receipt_id,
+        0,
+        submitter_addr().into_array(),
+        [0xd0u8; 32],
+        "https://example.invalid/api/swarm/receipts/s",
+        1_700_000_000,
+        10,
+        0,
+        [0x72u8; 32],
+        failed,
+    )
+    .await
+    .unwrap();
+
+    // And a direct sweep repair reporting failure.
+    db.repair_receipt_verification(
+        CHAIN,
+        receipt_addr().as_slice(),
+        &receipt_id[..],
+        false,
+        None,
+        Some("GET … returned 502"),
+    )
+    .await
+    .unwrap();
+
+    let (verified, bytes): (bool, Option<i64>) = sqlx::query_as(
+        "SELECT verified, payload_bytes FROM consensus_receipts \
+         WHERE chain_id = $1 AND receipt_id = $2",
+    )
+    .bind(CHAIN)
+    .bind(&receipt_id[..])
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+
+    assert!(
+        verified,
+        "a failed replay or sweep must NEVER downgrade an already-verified receipt"
+    );
+    assert_eq!(
+        bytes,
+        Some(64),
+        "the recorded payload length must survive a failed replay too"
+    );
+    assert_eq!(
+        db.count(CountTable::ConsensusReceipts).await.unwrap(),
+        1,
+        "duplicate delivery of the same receipt writes exactly one row"
+    );
+
+    // The sweep must not pick this row up again at all.
+    let pending = db.list_unverified_receipts(CHAIN, 12, 16).await.unwrap();
+    assert!(
+        pending.is_empty(),
+        "a verified receipt must leave the sweep's working set"
+    );
+}
+
+/// T12 — the sweep must TERMINATE.
+///
+/// A receipt whose payload host is permanently gone must stop being re-fetched,
+/// or the indexer turns into an unbounded outbound request loop against a dead
+/// host for the life of the database.
+#[tokio::test]
+async fn the_sweep_gives_up_after_the_attempt_ceiling() {
+    let fx = pg_fixture().await;
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+
+    db.insert_consensus_receipt(
+        CHAIN,
+        receipt_addr().into_array(),
+        [0x73u8; 32],
+        0,
+        submitter_addr().into_array(),
+        [0xd0u8; 32],
+        "https://example.invalid/api/swarm/receipts/s",
+        1_700_000_000,
+        10,
+        0,
+        [0x73u8; 32],
+        ReceiptVerification {
+            verified: false,
+            payload_bytes: None,
+            attempts: 3,
+            last_error: Some("GET … returned 502".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        db.list_unverified_receipts(CHAIN, 12, 16)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "an unverified receipt below the ceiling is in the sweep's working set"
+    );
+    assert!(
+        db.list_unverified_receipts(CHAIN, 3, 16)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a receipt at the attempt ceiling must leave the working set"
+    );
+}
+
+/// T20 — TWO DEPLOYMENTS ON ONE CHAIN MUST NOT COLLIDE.
+///
+/// `receipt_id = keccak256(domain || session_id || "\n" || subject_id)` is
+/// byte-identical across every deployment of ConsensusRecommendationReceipt, and
+/// devnet 918453 already carries two live ones. Under the old
+/// `(chain_id, receipt_id)` key with `ON CONFLICT DO NOTHING`, re-anchoring the
+/// same session+subject against a redeployed contract was SILENTLY DISCARDED and
+/// the explorer kept serving the superseded contract's digest, uri, verified and
+/// released state for ever. `delete_above_block` cannot repair that — nothing was
+/// written above a reorg root.
+#[tokio::test]
+async fn two_receipt_contracts_on_one_chain_keep_separate_rows() {
+    let fx = pg_fixture().await;
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+
+    // The SAME receipt id, anchored by two different deployments, with
+    // different digests — the redeploy-and-re-anchor case.
+    let receipt_id = [0x74u8; 32];
+    let old_contract = Address::from([0xC7u8; 20]);
+    let new_contract = Address::from([0xC8u8; 20]);
+
+    for (contract, digest_byte, block) in
+        [(old_contract, 0xd0u8, 10i64), (new_contract, 0xd1u8, 20i64)]
+    {
+        db.insert_consensus_receipt(
+            CHAIN,
+            contract.into_array(),
+            receipt_id,
+            0,
+            submitter_addr().into_array(),
+            [digest_byte; 32],
+            "https://example.invalid/api/swarm/receipts/s",
+            1_700_000_000 + block,
+            block,
+            0,
+            [digest_byte; 32],
+            verified_now(64),
+        )
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(
+        db.count(CountTable::ConsensusReceipts).await.unwrap(),
+        2,
+        "the re-anchored commitment must NOT be discarded: the emitting contract \
+         is part of the key"
+    );
+
+    let rows: Vec<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT contract_address, payload_digest FROM consensus_receipts \
+         WHERE chain_id = $1 AND receipt_id = $2 ORDER BY block_number",
+    )
+    .bind(CHAIN)
+    .bind(&receipt_id[..])
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(rows[0].0, old_contract.as_slice());
+    assert_eq!(rows[0].1, vec![0xd0u8; 32]);
+    assert_eq!(rows[1].0, new_contract.as_slice());
+    assert_eq!(
+        rows[1].1,
+        vec![0xd1u8; 32],
+        "each deployment keeps its own digest"
+    );
+
+    // A release emitted by the NEW contract must flip only the NEW row.
+    let flipped = db
+        .mark_consensus_receipt_released(
+            CHAIN,
+            new_contract.into_array(),
+            receipt_id,
+            timelock_addr().into_array(),
+            1_700_000_030,
+            21,
+        )
+        .await
+        .unwrap();
+    assert_eq!(flipped, 1, "exactly one row may be released");
+
+    let released: Vec<(Vec<u8>, bool)> = sqlx::query_as(
+        "SELECT contract_address, released FROM consensus_receipts \
+         WHERE chain_id = $1 AND receipt_id = $2 ORDER BY block_number",
+    )
+    .bind(CHAIN)
+    .bind(&receipt_id[..])
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert!(
+        !released[0].1,
+        "the superseded deployment's row must NOT be released by the new \
+         deployment's ReceiptReleased"
+    );
+    assert!(released[1].1, "the emitting deployment's row is released");
+}
+
+/// T20 — `handle_log` must gate on `log.address`.
+///
+/// Dispatch is on `topic0` alone, over a watched-address set that also carries
+/// the gateway, the vaults, the registry, the router, governance and the IC
+/// policy. A `ReceiptRecorded`-shaped event from any of those used to be written
+/// straight into the receipt register as though the receipt contract had emitted
+/// it.
+#[tokio::test]
+async fn receipt_shaped_log_from_an_unconfigured_contract_is_ignored() {
+    let fx = pg_fixture().await;
+
+    let payload = canonical_payload();
+    let digest = alloy_primitives::keccak256(&payload);
+    let srv = PayloadServer::start(payload).await;
+
+    // Emitted by the GATEWAY, which is watched but is not the receipt contract.
+    let impostor = encode_receipt_recorded_log(
+        gateway_addr(),
+        [0x75u8; 32],
+        submitter_addr(),
+        0,
+        digest.0,
+        &srv.url,
+        1_700_000_800,
+        10,
+        [0x75; 32],
+        0,
+    );
+    // And a genuine one from the configured contract, in the same batch, so the
+    // test also proves the gate is not a blanket refusal.
+    let genuine = encode_receipt_recorded_log(
+        receipt_addr(),
+        [0x76u8; 32],
+        submitter_addr(),
+        1,
+        digest.0,
+        &srv.url,
+        1_700_000_801,
+        10,
+        [0x76; 32],
+        1,
+    );
+
+    let stub = StubRpcServer::start().await;
+    program_stub(&stub, 10, 0xaa, 0x00);
+    stub.set("eth_getLogs", serde_json::json!([impostor, genuine]));
+
+    let rpc = JsonRpc::new(&stub.url);
+    let outcome = run_once(&fx.db, &rpc, &base_cfg(10)).await.unwrap();
+    assert!(
+        outcome.error.is_none(),
+        "an impostor log must be ignored, not fatal: {:?}",
+        outcome.error
+    );
+
+    let ids: Vec<(Vec<u8>, Vec<u8>)> =
+        sqlx::query_as("SELECT contract_address, receipt_id FROM consensus_receipts")
+            .fetch_all(fx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        ids.len(),
+        1,
+        "only the configured ConsensusRecommendationReceipt deployment may write \
+         the receipt register; got {ids:?}"
+    );
+    assert_eq!(ids[0].0, receipt_addr().as_slice());
+    assert_eq!(ids[0].1, vec![0x76u8; 32]);
+}
+
+/// T20 — a `ReceiptReleased` from an unconfigured contract must not flip a row.
+#[tokio::test]
+async fn release_from_an_unconfigured_contract_cannot_flip_a_receipt() {
+    let fx = pg_fixture().await;
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+
+    let receipt_id = [0x77u8; 32];
+    db.insert_consensus_receipt(
+        CHAIN,
+        receipt_addr().into_array(),
+        receipt_id,
+        0,
+        submitter_addr().into_array(),
+        [0xd0u8; 32],
+        "",
+        1_700_000_000,
+        5,
+        0,
+        [0x77u8; 32],
+        verified_now(64),
+    )
+    .await
+    .unwrap();
+
+    let impostor_release = encode_receipt_released_log(
+        gateway_addr(),
+        receipt_id,
+        timelock_addr(),
+        1_700_000_900,
+        10,
+        [0x78; 32],
+        0,
+    );
+
+    let stub = StubRpcServer::start().await;
+    program_stub(&stub, 10, 0xaa, 0x00);
+    stub.set("eth_getLogs", serde_json::json!([impostor_release]));
+
+    let rpc = JsonRpc::new(&stub.url);
+    run_once(db, &JsonRpc::new(&stub.url), &base_cfg(10))
+        .await
+        .unwrap();
+    drop(rpc);
+
+    let (released,): (bool,) = sqlx::query_as(
+        "SELECT released FROM consensus_receipts WHERE chain_id = $1 AND receipt_id = $2",
+    )
+    .bind(CHAIN)
+    .bind(&receipt_id[..])
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert!(
+        !released,
+        "a ReceiptReleased emitted by a contract that is not the configured \
+         receipt contract must not release anything"
+    );
 }

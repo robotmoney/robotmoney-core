@@ -1,0 +1,86 @@
+# Canonical: docs/development/ci-suites.md §27
+#
+# WHY THIS SUITE EXISTS (Fusion round-2 integration · T10/T11/T15/T16/T25/T29)
+# ---------------------------------------------------------------------------
+# suite-25-fusion-harness-selftests.yml carries an independent executed-assertion
+# floor of 63 — the count as of the commit that created it. The round-2 harness
+# cycle takes the real count to 170, and run-tests.sh asserts that its
+# MIN_EXPECTED_ASSERTIONS EQUALS the floor of the workflow it names, precisely so
+# a silently lowered in-script floor cannot buy a green on its own.
+#
+# WHY A NEW FILE RATHER THAN RAISING suite-25's LITERAL
+# The Fusion round-2 change protocol (§4/§10) forbids modifying an EXISTING
+# workflow file and permits adding new ones. suite-25 exists on this branch, so
+# its 63 is left exactly as it is: it remains a TRUE lower bound and stays green.
+# This file is the one run-tests.sh is paired with, and it holds the real floor.
+# When the protocol's freeze lifts, fold this back into suite-25 and delete it.
+#
+# THE TWO NUMBERS MOVE TOGETHER, IN ONE COMMIT. run-tests.sh reads the literal
+# below out of this file by name and goes red on any drift.
+#
+# GOTCHAS
+# - `pipefail` on the run step is mandatory: without it `tee` masks a non-zero
+#   exit from run-tests.sh and the job goes green on a failing suite.
+# - The suite writes stub rmpc/cast/curl binaries into a mktemp PATH. It touches
+#   no network and no chain and must never be given devnet credentials.
+
+name: fusion-assertion-floor
+
+on:
+  push:
+    branches: ["releases-*", "fusion/**"]
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  fusion-assertion-floor:
+    name: fusion-assertion-floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert the harness is where this workflow expects it
+        run: |
+          test -f scripts/fusion/tests/run-tests.sh \
+            || { echo "::error::scripts/fusion/tests/run-tests.sh is missing — the Fusion harness moved without this workflow following it"; exit 1; }
+
+      - name: Run the Fusion harness self-tests
+        run: |
+          set -euo pipefail
+          bash scripts/fusion/tests/run-tests.sh | tee fusion-assertion-floor.log
+
+      - name: Assert the executed-assertion floor independently
+        if: always()
+        run: |
+          set -euo pipefail
+          line=$(grep -o 'FUSION_SELFTESTS_EXECUTED=[0-9]\+' fusion-assertion-floor.log | tail -1 || true)
+          if [[ -z "$line" ]]; then
+            echo "::error::run-tests.sh printed no FUSION_SELFTESTS_EXECUTED line — treating as zero assertions executed"
+            exit 1
+          fi
+          count="${line#FUSION_SELFTESTS_EXECUTED=}"
+          echo "executed assertions: $count"
+          # KEEP THIS EQUAL TO run-tests.sh's MIN_EXPECTED_ASSERTIONS.
+          # Any slack between the two re-opens exactly the window this check
+          # exists to close. run-tests.sh asserts the equality from its side.
+          if [[ "$count" -lt 170 ]]; then
+            echo "::error::only $count assertions executed (expected >= 170, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
+            exit 1
+          fi
+
+      - name: Upload the self-test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusion-assertion-floor-log
+          path: fusion-assertion-floor.log
+          if-no-files-found: warn

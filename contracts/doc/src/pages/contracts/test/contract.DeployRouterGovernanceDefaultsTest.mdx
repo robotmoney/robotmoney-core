@@ -1,0 +1,177 @@
+---
+title: "DeployRouterGovernanceDefaultsTest"
+---
+
+# DeployRouterGovernanceDefaultsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/test/DeployRouterGovernanceDefaults.t.sol)
+
+**Inherits:** Test
+
+<i>
+
+Why this file exists separately from GovernanceSeparationInvariant.t.sol:
+that suite proves the quorum is meaningful for a fixture it configures
+itself (`QUORUM_THRESHOLD = 250e18`). It says nothing about what a
+deployment does when nobody passes a quorum — which is exactly how the
+devnet ended up reporting `quorumThreshold() == 1`. The gap was a
+DEFAULT, so the test has to be about the default.
+
+</i>
+
+## State Variables
+
+### script
+
+```solidity
+DeployRouterGovernance internal script;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("gov-admin");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_defaultquorumthresholdisabovetheplaceholder"></a>
+
+### test_defaultQuorumThresholdIsAboveThePlaceholder
+
+The shipped default is greater than the placeholder `1`.
+
+```solidity
+function test_defaultQuorumThresholdIsAboveThePlaceholder() public view;
+```
+
+<a id="test_deployingwiththedefaultyieldsameaningfulonchainquorum"></a>
+
+### test_deployingWithTheDefaultYieldsAMeaningfulOnChainQuorum
+
+Deploying with the default produces on-chain state that agrees
+with it. The criterion is about `quorumThreshold()` as READ FROM
+THE CHAIN, so assert the deployed value, not the constant.
+
+```solidity
+function test_deployingWithTheDefaultYieldsAMeaningfulOnChainQuorum() public;
+```
+
+<a id="test_defaultquorumexceedsoneunitofvotingpower"></a>
+
+### test_defaultQuorumExceedsOneUnitOfVotingPower
+
+The default quorum is strictly more than one unit of voting
+power, so a holder of one unit cannot constitute quorum alone.
+
+<i>
+
+Named for what it actually asserts. It does NOT drive a
+propose/vote/execute attempt, and a single voter granted two
+units would still reach the default quorum — the stronger
+voter-set form lives in
+GovernanceSeparationInvariant.t.sol::test_quorumReflectsTheVoterSet.
+
+</i>
+
+```solidity
+function test_defaultQuorumExceedsOneUnitOfVotingPower() public;
+```
+
+<a id="test_runrefusesanexplicitquorumofone"></a>
+
+### test_runRefusesAnExplicitQuorumOfOne
+
+An explicit `QUORUM_THRESHOLD=1` is refused by the broadcast
+entrypoint before anything is deployed.
+
+<i>
+
+Sets ONLY `QUORUM_THRESHOLD`. `vm.setEnv` writes process-global
+state that concurrently scheduled test files share, and
+`Deploy.t.sol::test_deploy_envDriven_runInProcessSucceeds` both
+sets and asserts on `ADMIN_ADDRESS`; setting it here too raced
+that test and intermittently deployed with the wrong admin
+(AgentTokenVault.t.sol:238 records the prior incident). The
+script now checks the quorum floor before reading any address,
+so those two writes are unnecessary. `QUORUM_THRESHOLD` is read
+by nothing else in the suite. Restored afterwards so no later
+test in this file inherits it.
+
+</i>
+
+```solidity
+function test_runRefusesAnExplicitQuorumOfOne() public;
+```
+
+<a id="test_runrefusesaquorumofzero"></a>
+
+### test_runRefusesAQuorumOfZero
+
+`QUORUM_THRESHOLD=0` — the #864 env-default hazard — is refused
+by the same guard rather than by the contract's own minimum.
+
+<i>
+
+See the note on test_runRefusesAnExplicitQuorumOfOne: only
+`QUORUM_THRESHOLD` is touched, and it is restored.
+
+</i>
+
+```solidity
+function test_runRefusesAQuorumOfZero() public;
+```
+
+<a id="test_inprocessdeployrefusesaquorumofone"></a>
+
+### test_inProcessDeployRefusesAQuorumOfOne
+
+The in-process path enforces the same floor. It is the entrypoint
+fork tests and fixtures call, so an unguarded variant would be a
+second, quieter way to deploy a hollow quorum.
+
+```solidity
+function test_inProcessDeployRefusesAQuorumOfOne() public;
+```
+
+<a id="test_thedeploydefaultisnotbelowthecontractfloor"></a>
+
+### test_theDeployDefaultIsNotBelowTheContractFloor
+
+The contract floor and the deploy default now agree (T22 /
+D16: `MIN_QUORUM_THRESHOLD` was raised from 1 to 2). The script
+guard is kept anyway — it refuses BEFORE spending gas on a
+deployment and gives the operator a sentence instead of a
+four-byte selector — but it is no longer the only thing standing
+between the topology and a hollow quorum. This test fails loudly
+if the two ever drift apart in the weaker direction.
+
+```solidity
+function test_theDeployDefaultIsNotBelowTheContractFloor() public;
+```
+
+<a id="test_thecontractitselfrefusesaquorumofone"></a>
+
+### test_theContractItselfRefusesAQuorumOfOne
+
+The constructor now refuses a quorum of 1 on its own, so the
+guarantee survives a caller that bypasses this script entirely.
+
+```solidity
+function test_theContractItselfRefusesAQuorumOfOne() public;
+```
+

@@ -5,7 +5,7 @@ description: "Foundry deploy script for the RouterGovernance contract. Deploys R
 
 # DeployRouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/script/DeployRouterGovernance.s.sol)
 
 **Inherits:** Script
 
@@ -19,6 +19,16 @@ The smoke-test devnet startup sequence runs this script after
 DeployPortfolioRouter so that the dapp's Governance tab reads
 live on-chain data in CI.
 
+It also grants the freshly deployed RouterGovernance `ADMIN_ROLE`
+on the PortfolioRouter. Without that grant the approving body can
+approve and cannot act: a proposal reaches quorum, clears its
+execution delay, and then `execute()` reverts inside
+`router.setWeights`, leaving the deployer EOA as the only address
+that can move allocation weights — the exact inversion
+project-fusion.md §4.3 names as the governance-topology gap. The
+caller must therefore hold `ADMIN_ROLE` on the router, which the
+deployer does until `DeployTimelock` hands it to the timelock.
+
 Required env vars:
 ADMIN_ADDRESS      — receives ADMIN_ROLE on the governance contract
 ROUTER_ADDRESS     — deployed PortfolioRouter address
@@ -27,9 +37,15 @@ Optional env vars:
 VOTING_PERIOD      — voting period in seconds (default: 3600 — 1 hour)
 EXECUTION_DELAY    — delay from voting end to execution in seconds
 (default: 3600 — 1 hour, the contract's MIN_EXECUTION_DELAY)
-QUORUM_THRESHOLD   — minimum FOR voting power for quorum (default: 1)
+QUORUM_THRESHOLD   — minimum FOR voting power for quorum
+(default: 2; must be greater than 1)
 DEPLOYMENT_OUT     — path for the output JSON
 (default: "deployments/governance-&lt;chain_id>.json")
+SKIP_ROUTER_ADMIN_GRANT — set to true ONLY when the router's
+ADMIN_ROLE has already moved to the timelock
+and the grant will be scheduled through it.
+The script then refuses to pretend the wiring
+is complete and says so loudly.
 
 ## Constants
 
@@ -53,10 +69,11 @@ uint64 public constant DEFAULT_EXECUTION_DELAY = 3600;
 
 ### DEFAULT_QUORUM_THRESHOLD
 
-Default quorum threshold: 1 unit of voting power.
+Default quorum threshold requires more than one unit of voting
+power, preserving Fusion's separate approving-body control.
 
 ```solidity
-uint256 public constant DEFAULT_QUORUM_THRESHOLD = 1;
+uint256 public constant DEFAULT_QUORUM_THRESHOLD = 2;
 ```
 
 ## Functions
@@ -110,12 +127,13 @@ function runInProcessWith(
 | ---- | ---- | ----------- |
 | d | `Deployed` | Struct containing the deployed governance and key parameters. |
 
-<a id="_deploy-address-address-uint64-uint64-uint256"></a>
+<a id="_deploy-address-address-address-uint64-uint64-uint256"></a>
 
 ### _deploy
 
 ```solidity
 function _deploy(
+        address granter_,
         address admin_,
         address router_,
         uint64 votingPeriod_,
@@ -128,6 +146,7 @@ function _deploy(
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
+| granter_ | `address` |  |
 | admin_ | `address` |  |
 | router_ | `address` |  |
 | votingPeriod_ | `uint64` |  |
@@ -139,6 +158,31 @@ function _deploy(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+
+<a id="_grantrouteradmin-deployed-address"></a>
+
+### _grantRouterAdmin
+
+<i>
+
+Give the governance contract the router `ADMIN_ROLE` its
+`execute()` needs, then read the role back. The read-back is the
+point: a silent failure here produces a deployment that looks
+complete, passes every liveness check, and only fails days later
+when the first real proposal tries to land its weights.
+
+</i>
+
+```solidity
+function _grantRouterAdmin(Deployed memory d, address granter_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| granter_ | `address` | The account whose ADMIN_ROLE on the router authorises<br/>the grant — the broadcaster under `run()`, the pranked<br/>admin in-process. |
 
 <a id="_logresult-deployed"></a>
 

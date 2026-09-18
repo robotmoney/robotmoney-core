@@ -1,0 +1,57 @@
+{
+  "addresses": {
+    "consensus_receipt": "0x6A04B767f15055aebFFd21157D12aB12e8B764Ed",
+    "emergency": "0x6313e8B68C7C3617255C60C28F5384A43a6b1d07",
+    "gateway": "0x9c63682FC2d397Aa47471c046cE57b095d7195D7",
+    "governance": "0x4b01b6B5fA707Ad2762fb3ACd2dC7C85F7c6745a",
+    "ic_policy": "0x0000000000000000000000000000000000000000",
+    "registry": "0xD9BFe39BA99503baA8cBA3DF08e3C9421889Fd44",
+    "router": "0x8b867B46793A978847E1254781579867Fb129a13",
+    "safe": "0x6313e8B68C7C3617255C60C28F5384A43a6b1d07",
+    "timelock": "0xefeB749B1cbE69895eED7c001b5244b8342f10Cc",
+    "vault": "0x97b20dE03D78Db78fB59C9c92769ECabb183d1bA"
+  },
+  "chain_id": 918453,
+  "code_hashes": {
+    "consensus_receipt": "0x999c993bbe48445e80ff51f3fd6a4d9fbbdebe22061553f6b19b46eba5e071d9",
+    "gateway": "0xdb777f227335f2c8f8586b44774f257a1f6be187aa8b28a0ca6f1c4e46bebb6a",
+    "governance": "0xd444b9ee656c594f74876c6491115e6e24a9d74c0bf5a48f1dce999b51762057",
+    "ic_policy": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+    "registry": "0xe1f7ee983aee6675e70ae65d36363471b398afb2f55b52c6161a8482cf62244a",
+    "router": "0x94587139ef1b90e03a983ed60a1d5034a0953aa17cf80ad17b797ca7fbc27111",
+    "safe": "0xe052beae0b149768bef433ad96223d341bd342fa8ec60c93c61ff0dfc7d1c1ca",
+    "timelock": "0x4642004028c8b48f6a5b7b9763e013289c33bf2f9460f45ac16784e18f017197",
+    "vault": "0x360dab2ca1cffeeea23a69adb66337777a47a69bc7e64d9e5f8e99a3cdfa5268"
+  },
+  "emergency": "0x6313e8B68C7C3617255C60C28F5384A43a6b1d07",
+  "gateway": "0x9c63682FC2d397Aa47471c046cE57b095d7195D7",
+  "governance": "0x4b01b6B5fA707Ad2762fb3ACd2dC7C85F7c6745a",
+  "min_delay": 86400,
+  "min_quorum_threshold": 2,
+  "quorum_threshold": 2,
+  "registry": "0xD9BFe39BA99503baA8cBA3DF08e3C9421889Fd44",
+  "roles": {
+    "admin_role_holder": "0xefeB749B1cbE69895eED7c001b5244b8342f10Cc",
+    "deployer_has_router_admin_role": false,
+    "deployer_has_vault_emergency_role": false,
+    "emergency_key_has_vault_emergency_role": true,
+    "governance_has_router_admin_role": true,
+    "safe_is_timelock_executor": true,
+    "safe_is_timelock_proposer": true,
+    "timelock_has_gateway_default_admin_role": true,
+    "timelock_has_governance_admin_role": true,
+    "timelock_has_registry_admin_role": true,
+    "timelock_has_router_admin_role": true,
+    "timelock_has_vault_admin_role": true
+  },
+  "router": "0x8b867B46793A978847E1254781579867Fb129a13",
+  "safe": "0x6313e8B68C7C3617255C60C28F5384A43a6b1d07",
+  "timelock": "0xefeB749B1cbE69895eED7c001b5244b8342f10Cc",
+  "vault": "0x97b20dE03D78Db78fB59C9c92769ECabb183d1bA",
+  "vault_addresses": {
+    "rmUSDC": "0x97b20dE03D78Db78fB59C9c92769ECabb183d1bA",
+    "rmPROTO": "0x36ea47C4c345F33c09d9063582629283a7430a41",
+    "rmAGENT": "0x6820B41D89198d98D2b76c2f48b8512aA1a13Bd5",
+    "rmRWA": "0x2aA58584700CA8FFfbeeB54256b5499792e45D92"
+  }
+}

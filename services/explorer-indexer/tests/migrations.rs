@@ -87,7 +87,7 @@ async fn migrate_only_mode_runs_migrations_and_exits_zero() {
     // The exit code alone would also be satisfied by a binary that connected
     // and did nothing, so assert the schema is actually there. `indexer_runs`
     // is the table explorer-api's /health probe reads, and `consensus_receipts`
-    // comes from the LAST migration (0015) — together they prove the whole
+    // comes from migration 0015 — together they prove the whole
     // migration set ran, not just the first file.
     let db = Db::connect(&pg.url)
         .await
@@ -225,8 +225,8 @@ async fn indexer_run_count(db: &Db) -> i64 {
 ///
 /// The staleness is real, not simulated: the database is migrated in full, then
 /// rolled back to the state it would have been in before the newest migration
-/// ran — the table migration 0015 creates is dropped and its `_sqlx_migrations`
-/// row deleted. That is exactly the shape of a deploy whose migrate step was
+/// ran — the `consensus_receipts` table is dropped and the newest
+/// `_sqlx_migrations` row deleted. That is exactly the shape of a deploy whose migrate step was
 /// skipped while a newer indexer image rolled out.
 #[tokio::test]
 async fn boot_refuses_a_stale_schema_and_names_both_versions() {
@@ -248,7 +248,7 @@ async fn boot_refuses_a_stale_schema_and_names_both_versions() {
     sqlx::query("DROP TABLE IF EXISTS consensus_receipts CASCADE")
         .execute(db.pool())
         .await
-        .expect("drop the table migration 0015 creates");
+        .expect("drop the consensus_receipts table");
     sqlx::query("DELETE FROM _sqlx_migrations WHERE version = $1")
         .bind(embedded)
         .execute(db.pool())
@@ -606,4 +606,92 @@ async fn every_row_has_chain_id_and_block_number() {
         .unwrap();
         assert_eq!(row.0, 1, "{t} must have a block_number column");
     }
+}
+
+// ─── T20/T12 — migration 0016 must REFUSE rather than fabricate provenance ────
+
+/// Migration `0016` changes the `consensus_receipts` primary key to include the
+/// emitting `contract_address`, and there is no sound backfill: the address was
+/// never recorded, and inferring it from `contracts` would stamp rows written by
+/// a SUPERSEDED deployment with the address of the current one — manufacturing
+/// exactly the false provenance the migration exists to prevent.
+///
+/// So it raises. This test is the guard that it keeps raising: a future edit
+/// that "helpfully" backfills a default (the zero address, or whatever
+/// `contracts` happens to hold) turns this RED. The operator remedy is the
+/// documented rebuild, `docs/operations/explorer-db-rebuild.md`.
+#[tokio::test]
+async fn migration_0016_refuses_a_populated_consensus_receipts_table() {
+    let pg = raw_pg().await;
+    let pool = sqlx::PgPool::connect(&pg.url)
+        .await
+        .expect("connect to the raw database");
+
+    // The pre-0016 world: 0015's table, standing alone (it has no FKs).
+    sqlx::raw_sql(include_str!("../migrations/0015_consensus_receipts.sql"))
+        .execute(&pool)
+        .await
+        .expect("apply 0015");
+
+    // One row whose emitting contract is unknowable — the real situation.
+    sqlx::query(
+        "INSERT INTO consensus_receipts \
+           (chain_id, receipt_id, receipt_index, submitter, payload_digest, payload_uri, \
+            recorded_at, block_number, log_index, tx_hash) \
+         VALUES (8453, $1, 0, $2, $3, 'https://example.invalid/r', 1, 1, 0, $1)",
+    )
+    .bind(vec![0x11u8; 32])
+    .bind(vec![0x22u8; 20])
+    .bind(vec![0x33u8; 32])
+    .execute(&pool)
+    .await
+    .expect("seed one pre-migration receipt");
+
+    let err = sqlx::raw_sql(include_str!(
+        "../migrations/0016_consensus_receipts_contract_scope.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect_err(
+        "0016 MUST refuse a populated consensus_receipts table — silently \
+         backfilling contract_address fabricates provenance",
+    );
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cannot backfill consensus_receipts.contract_address"),
+        "the refusal must say what it refused: {msg}"
+    );
+    assert!(
+        msg.contains("explorer-db-rebuild.md"),
+        "the refusal must name the operator remedy runbook: {msg}"
+    );
+
+    // And the negative half: on an EMPTY table it applies cleanly, so the
+    // refusal above is a real guard and not a migration that never works.
+    sqlx::query("TRUNCATE consensus_receipts")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../migrations/0016_consensus_receipts_contract_scope.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("0016 must apply cleanly to an empty table");
+
+    let (pk,): (String,) = sqlx::query_as(
+        "SELECT string_agg(a.attname, ',' ORDER BY k.ord) \
+         FROM pg_constraint c \
+         JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE \
+         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum \
+         WHERE c.conrelid = 'consensus_receipts'::regclass AND c.contype = 'p'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        pk, "chain_id,contract_address,receipt_id",
+        "T20: the emitting contract must be part of the primary key"
+    );
 }

@@ -77,6 +77,12 @@ sol_binding!(
     "abi/ConsensusRecommendationReceipt.json"
 );
 
+/// The `IConsensusRecommendationReceipt.Receipt` tuple `getReceiptById`
+/// returns. Re-exported by name because `rmpc governance draft-proposal` binds
+/// every draft to the anchored `payloadDigest` and `payloadUri` carried in it
+/// (T01), and the generated struct otherwise lives in a private module.
+pub use consensus_recommendation_receipt::IConsensusRecommendationReceipt::Receipt as AnchoredReceipt;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,25 @@
+# Staging watchdog profile. Deployment automation may replace the loopback
+# webhook with the staging alert receiver, but must not disable receipt liveness.
+#
+# chain_id is REQUIRED (here or as WATCHDOG_CHAIN_ID): every query the monitor
+# runs is chain-scoped, so a wrong id returns empty result sets that read as
+# health. 918453 is the Fusion devnet; Base mainnet is 8453.
+chain_id = 918453
+
+[global]
+per_block_mint_limit_usdc = "1000000000"
+per_hour_mint_limit_usdc = "10000000000"
+per_block_burn_limit_usdc = "1000000000"
+per_hour_burn_limit_usdc = "10000000000"
+
+[action]
+mode = "alert"
+webhook_url = "http://127.0.0.1:9093/watchdog"
+
+[sla]
+max_response_secs = 300
+
+[consensus_receipts]
+enabled = true
+expected_cadence_secs = 86400
+grace_secs = 21600

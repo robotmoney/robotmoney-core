@@ -346,7 +346,16 @@ contract DeployAssertionsTest is Test {
             new RobotMoneyGateway(usdc, _aclVault, _aclDeployer, makeAddr("fv-pauser"), address(0));
         _aclRegistry = new VaultRegistry(_aclDeployer);
         _aclRouter = new PortfolioRouter(address(usdc), address(_aclRegistry), _aclDeployer);
-        _aclGovernance = new RouterGovernance(address(_aclRouter), _aclDeployer, 7 days, 1 days, 1);
+        _aclGovernance = new RouterGovernance(address(_aclRouter), _aclDeployer, 7 days, 1 days, 2);
+        // R7: DeployRouterGovernance grants this at deploy time and
+        // DeployTimelock asserts it before handing over. Without it the
+        // handover refuses — correctly, because the approving body would be
+        // left unable to reach setWeights.
+        // Read the role id BEFORE the prank: `ADMIN_ROLE()` is itself an
+        // external call and would consume the single-shot prank.
+        bytes32 routerAdminRole = _aclRouter.ADMIN_ROLE();
+        vm.prank(_aclDeployer);
+        _aclRouter.grantRole(routerAdminRole, address(_aclGovernance));
 
         // The script's grant calls run as `address(script)`, so it needs ADMIN on
         // each contract (and the gateway DEFAULT_ADMIN_ROLE to hand the timelock

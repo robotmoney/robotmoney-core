@@ -20,9 +20,19 @@
 // HSTS cannot be set via a <meta> tag — browsers ignore it there.
 //
 // Notes on CSP directives:
-// - `script-src 'self'` only. Vite's production bundle emits external module
-//   scripts, never inline `<script>` blocks, so no nonce/hash or
-//   'unsafe-inline'/'unsafe-eval' is required.
+// - `script-src 'self' https://static.cloudflareinsights.com` — Vite's
+//   production bundle emits external module scripts, never inline `<script>`
+//   blocks, so no nonce/hash or 'unsafe-inline'/'unsafe-eval' is required. The
+//   one exception is a single named host: any deployment fronted by Cloudflare
+//   has the Web Analytics beacon (`static.cloudflareinsights.com/beacon.min.js`)
+//   injected into the served HTML by the edge, AFTER the origin's CSP header is
+//   written. Under `script-src 'self'` the browser blocks it and logs a
+//   `console.error`, which fails the e2e `_consoleGuard` on every page load of a
+//   Cloudflare-fronted deployment (QA finding R20, reproduced against
+//   https://stage-dapp.robotmoney-labs.dev). The fix names that one origin
+//   explicitly; it does NOT relax the guard and does NOT add 'unsafe-inline',
+//   'unsafe-eval', or a wildcard. Deployments not behind Cloudflare simply never
+//   load it.
 // - `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com` — Tailwind
 //   ships static CSS, but injected style attributes and the Google Fonts
 //   stylesheet require inline styles. 'unsafe-inline' for *styles* does not
@@ -31,11 +41,26 @@
 //   the dapp can reach user-configured chains and the indexer.
 import type { Plugin } from "vite";
 
+/**
+ * Cloudflare Web Analytics beacon origins (QA finding R20).
+ *
+ * Cloudflare injects `<script src="https://static.cloudflareinsights.com/beacon.min.js/...">`
+ * into the HTML at the edge, after the origin has already emitted its CSP
+ * header, so no origin-side configuration can avoid the injection. Exported so
+ * tests and the CI CSP guard can assert these exact two hosts are the only
+ * third-party script/connect origins added.
+ */
+export const CLOUDFLARE_BEACON_SCRIPT_ORIGIN = "https://static.cloudflareinsights.com";
+export const CLOUDFLARE_BEACON_CONNECT_ORIGIN = "https://cloudflareinsights.com";
+
 // Ordered directive list. Keep `script-src` free of 'unsafe-inline' and
 // 'unsafe-eval' — the CI guard (scripts/check-csp.mjs) and tests assert this.
 const CSP_DIRECTIVES: Array<[string, string[]]> = [
   ["default-src", ["'self'"]],
-  ["script-src", ["'self'"]],
+  // See module header: `static.cloudflareinsights.com` is the Cloudflare Web
+  // Analytics beacon, edge-injected into the HTML of any Cloudflare-fronted
+  // deployment. Named explicitly rather than relaxing the script policy (R20).
+  ["script-src", ["'self'", CLOUDFLARE_BEACON_SCRIPT_ORIGIN]],
   ["style-src", ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]],
   ["font-src", ["'self'", "https://fonts.gstatic.com", "data:"]],
   ["img-src", ["'self'", "data:", "blob:"]],
@@ -53,6 +78,10 @@ const CSP_DIRECTIVES: Array<[string, string[]]> = [
       "http://localhost:*",
       "http://127.0.0.1:*",
       "http://receipt-fixtures:8097",
+      // The beacon POSTs its RUM payload to `cloudflareinsights.com/cdn-cgi/rum`.
+      // `https:` above already admits it; naming it keeps the allowance legible
+      // and survives any future tightening of the blanket `https:` source (R20).
+      CLOUDFLARE_BEACON_CONNECT_ORIGIN,
     ],
   ],
   ["worker-src", ["'self'", "blob:"]],

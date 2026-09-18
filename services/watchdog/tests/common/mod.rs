@@ -168,6 +168,70 @@ impl MockWebhookServer {
     }
 }
 
+/// An HTTP server that answers every POST with a fixed non-2xx status.
+///
+/// Task T08: the pager must commit `last_paged_at` only on a **confirmed**
+/// delivery, so the failure path needs a receiver that really returns a non-2xx
+/// rather than a mocked `Result`.
+pub struct FailingWebhookServer {
+    /// Full URL (e.g. `http://127.0.0.1:12345`).
+    pub url: String,
+    requests: Arc<Mutex<usize>>,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+}
+
+impl FailingWebhookServer {
+    /// Start a server that replies `status` (e.g. 503) to everything.
+    pub async fn start(status: u16) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}");
+        let requests: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let counter = requests.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    accept = listener.accept() => {
+                        let Ok((mut sock, _)) = accept else { break };
+                        let counter = counter.clone();
+                        tokio::spawn(async move {
+                            let mut buf = vec![0u8; 32 * 1024];
+                            if matches!(sock.read(&mut buf).await, Ok(0) | Err(_)) {
+                                return;
+                            }
+                            *counter.lock().unwrap() += 1;
+                            let resp = format!(
+                                "HTTP/1.1 {status} Service Unavailable\r\nContent-Length:                                  9\r\nConnection: close\r\n\r\nreceiver!"
+                            );
+                            let _ = sock.write_all(resp.as_bytes()).await;
+                            let _ = sock.shutdown().await;
+                        });
+                    }
+                }
+            }
+        });
+
+        Self {
+            url,
+            requests,
+            shutdown: shutdown_tx,
+        }
+    }
+
+    /// How many requests the server has answered.
+    pub fn request_count(&self) -> usize {
+        *self.requests.lock().unwrap()
+    }
+
+    /// Shut down the server.
+    pub fn shutdown(self) {
+        let _ = self.shutdown.send(());
+    }
+}
+
 /// A TCP server that accepts a connection and then never responds, holding the
 /// socket open until shutdown. Used to simulate a hung RPC endpoint so the
 /// watchdog's SLA timeout can be exercised: a pause RPC against this URL never

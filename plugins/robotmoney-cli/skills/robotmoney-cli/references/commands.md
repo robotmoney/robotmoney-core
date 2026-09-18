@@ -286,8 +286,13 @@ BYTES, the URL is what gets anchored as `payloadUri`.
 `submit` **refuses to broadcast** — before loading the signer, before taking
 the nonce lock, before any RPC call — when:
 
-- the receipt fails schema or assembler validation (`ErrReceiptSchema`);
+- the receipt fails schema or assembler validation (`ErrReceiptSchema`) —
+  including an UNKNOWN field at any nesting level, which is refused and never
+  dropped, with the offending key named;
 - a required field is missing (`ErrReceiptParse`);
+- the input is the publisher's envelope and its own `canonicalBytes` are not
+  the bytes rmpc re-derives from the receipt inside it
+  (`ErrReceiptCanonicalBytesMismatch`);
 - `--expected-digest` was supplied and does not equal the derived digest
   (`ErrReceiptDigestMismatch`);
 - any embedded analyst Ed25519 signature fails

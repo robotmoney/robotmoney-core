@@ -1,0 +1,16 @@
+# OnFailure target for fusion-draft-watcher.service.
+#
+# Restart=always means the watcher comes back; it does NOT mean anyone finds
+# out that it went away. This unit turns "the supervisor had to intervene" into
+# the same alert channel the watcher's own alert() uses, so a crash loop is an
+# incident rather than a quiet line in the journal.
+[Unit]
+Description=Page that the Fusion draft watcher failed
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/fusion/draft-watcher.env
+ExecStart=/bin/sh -c 'test -n "$FUSION_ALERT_WEBHOOK" && curl -fsS -m 10 -X POST \
+  -H "content-type: application/json" \
+  --data "{\"event_action\":\"trigger\",\"dedup_key\":\"fusion_draft_watcher_process_down\",\"payload\":{\"summary\":\"fusion-draft-watcher.service failed and is being restarted by systemd\",\"severity\":\"critical\",\"source\":\"fusion-draft-watcher\"}}" \
+  "$FUSION_ALERT_WEBHOOK" || true'

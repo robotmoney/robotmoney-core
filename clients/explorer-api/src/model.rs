@@ -604,6 +604,15 @@ pub struct RegimeFeedResponse {
 /// A single consensus recommendation receipt commitment.
 #[derive(Debug, Serialize)]
 pub struct ConsensusReceipt {
+    /// The ConsensusRecommendationReceipt deployment that emitted
+    /// `ReceiptRecorded`, 0x-prefixed hex.
+    ///
+    /// T20: `receipt_id` is `keccak256(domain || session_id || "\n" ||
+    /// subject_id)` and is therefore byte-identical across every deployment of
+    /// the contract. Without the emitting address the public surface cannot say
+    /// WHICH contract a commitment belongs to, and devnet 918453 already carries
+    /// two live deployments.
+    pub contract_address: String,
     /// bytes32 receiptId, 0x-prefixed hex.
     pub receipt_id: String,
     /// uint256 append index from `ReceiptRecorded`.

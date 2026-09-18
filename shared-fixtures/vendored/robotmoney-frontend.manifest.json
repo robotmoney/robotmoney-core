@@ -1,0 +1,80 @@
+{
+  "$comment": "VENDORED FROM robotmoney-frontend. Do not hand-edit a sha256 or byte_length in this file, and do not hand-edit frontend_commit. Regenerate with `.github/scripts/check_cross_repo_fixture_drift.py --regenerate --frontend <robotmoney-frontend checkout> --frontend-ref <commit>` and commit the result together with the coordinated fixture change. THIS FILE IS NOT AUTHENTICATED AT CHECK TIME: CI does not re-fetch robotmoney-frontend, so a commit that edits a fixture AND its row here exits 0. Review is the control -- see the PROCESS CONTROL section of .github/scripts/check_cross_repo_fixture_drift.py and docs/development/cross-repo-fixture-vendoring.md.",
+  "why_this_file_exists": "AC-FMT-01 / \u00a79A R4. tests/fixtures/consensus-receipt.anchor-digest.json is authored in THIS repo, so re-hashing core's fixtures against it is self-referential: at v0.4.0-rc.3 eight of the nine shared fixtures had drifted from robotmoney-frontend and that check still exited 0. This manifest is generated from the OTHER repo's bytes at a pinned commit, so a one-sided edit cannot be green.",
+  "frontend_repo": "robotmoney-frontend",
+  "frontend_fixture_dir": "contract/src/__fixtures__",
+  "frontend_ref": "releases-0.5.x @ c8c85ec0 (v0.5.0-rc.2-2-gc8c85ec0)",
+  "frontend_commit": "c8c85ec01a219ef7a990ab37303c7dde4973a59a",
+  "core_fixture_dir": "tests/fixtures",
+  "core_only_not_shared": [
+    "consensus-receipt.anchor-digest.json",
+    "consensus-receipt.legacy-weights.json",
+    "consensus-receipt.live-envelope.json",
+    "consensus-receipt.run1-anchored.json"
+  ],
+  "core_only_not_shared_note": "These fixtures live in core's tests/fixtures but are NOT part of the cross-repo shared-fixture contract, so the drift check must not compare them against the frontend. consensus-receipt.run1-anchored.json is core's captured copy of the run-1 anchored receipt (session a31ecf60-bb8f-44c0-8b69-23d3e9c2562f), pinned so the governance-draft tests can bind a draft to a real on-chain payloadDigest offline; the frontend ships no such file and adding it to `files` would assert a cross-repo comparison that was never made.",
+  "release_process": "docs/product/20260623-product-proposal-investment-committee-v0.md \u00a77.4",
+  "files": [
+    {
+      "file": "consensus-receipt.schema.json",
+      "byte_length": 19005,
+      "sha256": "0xbf9fa2f0e9ea19dfd245fd837e6f7f87a0a155a13732248528b040560cd17d38"
+    },
+    {
+      "file": "consensus-receipt.canonicalization.json",
+      "byte_length": 35475,
+      "sha256": "0x38e07170eeaaacf5fb321cf2a5d00fcbc88ec1f6cef178a29e293e9fa0bbad0c"
+    },
+    {
+      "file": "consensus-receipt.bucket-vault-map.json",
+      "byte_length": 1193,
+      "sha256": "0xd9bdf399f5ff1879c230914aa001b7b04ebd6d593c006eb9c2fb1def03ece323"
+    },
+    {
+      "file": "consensus-receipt.valid.json",
+      "byte_length": 3380,
+      "sha256": "0x5ef2cc46bdbb06cad96e2c15cf359cfe008e152954248479f1d12ca4698bde85"
+    },
+    {
+      "file": "consensus-receipt.valid-no-weights.json",
+      "byte_length": 1768,
+      "sha256": "0x66296ddcd4def06f1cd2cd7ef5b69ee1844ef1cbabb61babab3199b7b3153935"
+    },
+    {
+      "file": "consensus-receipt.invalid.json",
+      "byte_length": 1022,
+      "sha256": "0xa396756f40a676b01527ba79d1fa315333b34ff5fe98311e5df54fdbe73b912c"
+    },
+    {
+      "file": "consensus-receipt.escaping.json",
+      "byte_length": 3538,
+      "sha256": "0x8f49186fe803037f9dd8a44bab2ffeb920cc923c40585579e4084af662e84ae3"
+    },
+    {
+      "file": "consensus-receipt.valid.canonical.txt",
+      "byte_length": 2861,
+      "sha256": "0x04033d6a56cad116c725434cff4e0c3d13db898568a0b954aaf1d0bcdcafed0c"
+    },
+    {
+      "file": "consensus-receipt.escaping.canonical.txt",
+      "byte_length": 3105,
+      "sha256": "0xc292b8faaa26c5b11b18ac456e11a1a7409f36f1ebddeea0cb7517d0d3127a98"
+    },
+    {
+      "file": "consensus-receipt.envelope.json",
+      "byte_length": 7212,
+      "sha256": "0x6f1706f450d18d027ab33d430e2fc43d0ac8aeeecd30c097f8f2ac107846fe11"
+    },
+    {
+      "file": "consensus-receipt.unknown-fields-refused.json",
+      "byte_length": 3455,
+      "sha256": "0x2c69763e77b9b047d5a65aaef2d75befbf3ceb580c0b50f3fdd7023e348bc14a"
+    },
+    {
+      "file": "consensus-receipt.bps-conversion.conformance.json",
+      "byte_length": 2977,
+      "sha256": "0x55ccd38e99a181eb9c179ad085db653f7c23703dc9840443a77dfa7ffe6dda45"
+    }
+  ],
+  "no_core_authored_rows": "Every row below is robotmoney-frontend's bytes at frontend_commit. There are no core-authored rows: the T24 envelope fixture and the R27 unknown-field vector were PENDING-FE at v0.4.0-rc.9 and are now adopted upstream and cross-checked. check_cross_repo_fixture_drift.py --regenerate REFUSES to self-pin a fixture the frontend does not carry, so a self-referential row cannot be reintroduced by running it."
+}

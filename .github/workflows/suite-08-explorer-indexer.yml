@@ -111,11 +111,26 @@ jobs:
 
       - name: Block ingestion idempotency
         working-directory: services/explorer-indexer
-        run: cargo test --test idempotency -- --nocapture
+        run: |
+          echo "::group::services/explorer-indexer/tests/idempotency.rs:"
+          cargo test --test idempotency -- --nocapture
+          echo "::endgroup::"
 
       - name: RPC failure recovery
         working-directory: services/explorer-indexer
         run: cargo test --test rpc_failure -- --nocapture
+
+      # Two targets that landed on fusion/deployment-workflow without a job
+      # naming them. cargo-test-target-coverage refuses a tests/<name>.rs that
+      # no workflow executes, which is how they surfaced when the branch came
+      # back to dev — that branch only ran `releases-*` suites.
+      - name: Deploy-block detection
+        working-directory: services/explorer-indexer
+        run: cargo test --test deploy_block_detection -- --nocapture
+
+      - name: Postgres env requirement
+        working-directory: services/explorer-indexer
+        run: cargo test --test require_pg_env -- --nocapture
 
       # CONSENSUS RECOMMENDATION RECEIPT INDEXING (issue #1247, docs/architecture.md §4.9)
       # A `tests/<name>.rs` file is executed by NOTHING unless a job names it with an
@@ -170,9 +185,15 @@ jobs:
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
+          echo "::group::services/explorer-indexer/tests/cursor_header_reorg.rs:"
           bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test cursor_header_reorg \
+            -- --test-threads=1 --nocapture
+          echo "::endgroup::"
+          echo "::group::services/explorer-indexer/tests/reorg_cursor_vault_status.rs:"
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer \
             --test reorg_cursor_vault_status \
             --test account_history \
             --test account_position_vote_power \
@@ -180,6 +201,7 @@ jobs:
             --test multi_vault \
             --test vault_detail \
             --test vault_registry -- --test-threads=1 --nocapture
+          echo "::endgroup::"
 
   # EXPLORER-API IC COMMITTEE / REGIME / CONSENSUS-RECEIPT ENDPOINT TESTS (issues #1105, #1247)
   # The clients/explorer-api crate (the read API the dApp queries) shipped IC committee
@@ -224,11 +246,13 @@ jobs:
 
       - name: explorer-api committee + regime + consensus-receipt endpoint tests
         run: |
+          echo "::group::clients/explorer-api/tests/consensus_receipt_api.rs:"
           bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test committee_api \
             --test regime_api \
             --test consensus_receipt_api -- --nocapture
+          echo "::endgroup::"
 
       # THE FOUR SIBLING EXPLORER-API SUITES LEFT DARK (issue #1282)
       # The comment above this job records the team finding committee_api.rs and

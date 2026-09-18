@@ -1,0 +1,150 @@
+# Canonical: docs/development/ci-suites.md (release-tag dispatch)
+#
+# WHY THIS WORKFLOW EXISTS (Fusion R6 · AC-ID-01)
+# ----------------------------------------------
+# Pushing `v0.4.0-rc.8` and `v0.4.0-rc.9` each dispatched exactly ONE workflow
+# run. The other ~18 suites never ran. The cause is not a bug in any suite and
+# not a permissions problem:
+#
+#   A `push:` trigger with a `branches:` filter NEVER matches a tag ref.
+#   GitHub matches `branches:`/`branches-ignore:` against `refs/heads/*` only;
+#   matching `refs/tags/*` requires `tags:`/`tags-ignore:`.
+#
+# Every `suite-*.yml` in this repo is `push: branches: [dev, dev-phase-*]`
+# (plus `pull_request`). None declares `tags:`. `release-dapp.yml` declares
+# `push: tags: ['v*.*.*']` — so it is the one run a `v*` tag produces, exactly
+# what rc.8 and rc.9 show. rc.6 and rc.7 DID carry 18 more runs, but their
+# event is `workflow_dispatch`, not `push`: a human dispatched each suite by
+# hand against the tag ref. Automatic full-suite coverage on a tag has never
+# existed in this repo; rc.8/rc.9 are what it always looked like without the
+# manual step. Evidence:
+# fusion-evidence/20260914T-run2/phase2-ci/C-core-ci/R6-evidence.txt.
+#
+# WHY A NEW FILE AND NOT A `tags:` LINE IN EACH SUITE
+# The obvious fix — add `tags: ['v*.*.*']` to all 18 suites — is 18 edits to
+# existing workflow files, which the Fusion round-2 change protocol forbids.
+# This dispatcher is purely additive and achieves the same coverage: it fires
+# on the tag push and dispatches every suite workflow against the TAG REF, the
+# same thing the human was doing by hand for rc.6/rc.7 — then blocks until they
+# finish and fails if any failed, so the tag has a real gate rather than a
+# fan-out nobody reads.
+#
+# WHY IT ENUMERATES RATHER THAN HARDCODES
+# A hardcoded suite list is the failure this repo has been bitten by twice
+# (#1199, and R6 itself): the list drifts, the omission is invisible, and the
+# job stays green. It asks the API for every workflow that has a
+# `workflow_dispatch` trigger and dispatches all of them, so a suite added
+# later is covered without touching this file. `EXCLUDE` is the only list, it
+# is short, and each entry carries its reason.
+#
+# GOTCHAS
+# - `workflow_dispatch` against a tag ref requires the workflow file to exist
+#   ON THAT TAG. A suite added after the tag was cut cannot be dispatched
+#   against it; that is reported as a skip with the reason, never as a pass.
+# - `actions: write` is required to dispatch, and `actions: read` to poll.
+# - Dispatched runs appear under their own workflow name with event
+#   `workflow_dispatch` and `headBranch` = the tag, exactly like rc.6/rc.7.
+# - This workflow excludes itself; dispatching itself would recurse.
+
+name: release-tag-suite-dispatch
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag (or ref) to dispatch the full suite against."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch-full-suite:
+    name: dispatch-full-suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dispatch every dispatchable workflow against the tag, then gate on the results
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REF: ${{ inputs.ref || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Self, and the release publishers that the tag push already triggers
+          # directly (re-dispatching them would double-publish a release).
+          EXCLUDE="release-tag-suite-dispatch.yml release-dapp.yml release-rmpc.yml deploy-contracts.yml"
+
+          echo "target ref: $TARGET_REF"
+          mapfile -t CANDIDATES < <(
+            gh api "repos/$REPO/actions/workflows" --paginate \
+              --jq '.workflows[] | select(.state=="active") | .path' | sed 's#^.github/workflows/##'
+          )
+          if [[ "${#CANDIDATES[@]}" -eq 0 ]]; then
+            echo "::error::the API returned zero active workflows — refusing to report a green dispatch that dispatched nothing"
+            exit 1
+          fi
+
+          dispatched=(); skipped=()
+          for wf in "${CANDIDATES[@]}"; do
+            case " $EXCLUDE " in *" $wf "*) skipped+=("$wf (excluded: publisher or self)"); continue;; esac
+            # A workflow with no workflow_dispatch trigger cannot be dispatched;
+            # say so by name rather than swallowing it.
+            if ! gh api "repos/$REPO/contents/.github/workflows/$wf?ref=$TARGET_REF" \
+                 --jq '.content' 2>/dev/null | base64 -d | grep -q 'workflow_dispatch'; then
+              skipped+=("$wf (no workflow_dispatch trigger on $TARGET_REF, or absent from that tag)")
+              continue
+            fi
+            if gh workflow run "$wf" -R "$REPO" --ref "$TARGET_REF" >/dev/null 2>&1; then
+              dispatched+=("$wf")
+            else
+              skipped+=("$wf (dispatch call was rejected)")
+            fi
+          done
+
+          {
+            echo "## release-tag suite dispatch — \`$TARGET_REF\`"
+            echo
+            echo "Dispatched ${#dispatched[@]} workflow(s):"
+            for w in "${dispatched[@]:-}"; do [[ -n "$w" ]] && echo "- $w"; done
+            echo
+            echo "Not dispatched (${#skipped[@]}):"
+            for w in "${skipped[@]:-}"; do [[ -n "$w" ]] && echo "- $w"; done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${#dispatched[@]}" -eq 0 ]]; then
+            echo "::error::dispatched zero workflows for $TARGET_REF — a tag gate that runs nothing is a false green"
+            exit 1
+          fi
+
+          # ---- gate: wait for the dispatched runs and fail if any failed ----
+          echo "waiting for dispatched runs on $TARGET_REF ..."
+          sleep 30
+          deadline=$(( $(date +%s) + 100 * 60 ))
+          while :; do
+            runs=$(gh run list -R "$REPO" -b "$TARGET_REF" -e workflow_dispatch --limit 200 \
+                     --json name,status,conclusion,databaseId)
+            pending=$(echo "$runs" | jq '[.[] | select(.status != "completed")] | length')
+            [[ "$pending" -eq 0 ]] && break
+            if [[ $(date +%s) -ge $deadline ]]; then
+              echo "::error::timed out with $pending dispatched run(s) still in flight on $TARGET_REF"
+              exit 1
+            fi
+            echo "  $pending still running ..."
+            sleep 60
+          done
+
+          echo "$runs" | jq -r '.[] | "\(.conclusion)\t\(.name)\t\(.databaseId)"' | sort | tee -a "$GITHUB_STEP_SUMMARY"
+          bad=$(echo "$runs" | jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped")] | length')
+          if [[ "$bad" -gt 0 ]]; then
+            echo "::error::$bad dispatched run(s) did not succeed for $TARGET_REF"
+            exit 1
+          fi
+          echo "all ${#dispatched[@]} dispatched run(s) succeeded for $TARGET_REF"

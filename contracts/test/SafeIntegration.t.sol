@@ -213,7 +213,7 @@ contract SafeIntegrationTest is Test {
 
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
 
-        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 1);
+        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
 
         // Deploy 2-of-3 Safe proxy via the canonical factory on Base mainnet.
         // Owners must be sorted ascending for the Safe setup call.

@@ -140,6 +140,7 @@ contracts/test/contract.DeployDemoExtraVaultsHarness.mdx
 contracts/test/contract.DeployDemoExtraVaultsTest.mdx
 contracts/test/contract.DeployPortfolioRouterTest.mdx
 contracts/test/contract.DeployProtocolAssetVaultTest.mdx
+contracts/test/contract.DeployRouterGovernanceDefaultsTest.mdx
 contracts/test/contract.DeploySeedDeposit.mdx
 contracts/test/contract.DeployTest.mdx
 contracts/test/contract.DeployTimelockCommitteeTest.mdx

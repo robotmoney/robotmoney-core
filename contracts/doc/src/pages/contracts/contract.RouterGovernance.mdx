@@ -5,7 +5,7 @@ description: "Admin-weighted MVP governance module that controls Portfolio Route
 
 # RouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/RouterGovernance.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -60,11 +60,26 @@ uint256 public constant BPS_DENOMINATOR = BpsMath.BPS_DENOMINATOR;
 
 ### MIN_QUORUM_THRESHOLD
 
-Minimum quorum threshold. At least 1 vote must be required for
-quorum so that proposals cannot pass with zero votes cast.
+Minimum quorum threshold. More than one unit of voting power
+must be required, so a single voter can never carry a weight
+proposal on their own.
+
+The floor was 1 through the MVP, which made this contract's
+separate-body approval hollow: one voter with any nonzero power
+moved portfolio weights, and an `ADMIN_ROLE` holder could
+`setQuorumThreshold(1)` a configured deployment back down to
+that state at any time. The deploy script's `QUORUM_THRESHOLD >
+1` guard covers only the deployment instant; this constant is
+the floor the chain itself enforces, at both doors that write
+`quorumThreshold` (the constructor and `setQuorumThreshold`).
+
+Raising it is a bytecode change: a deployment made before the
+change keeps the old floor and must be redeployed, not upgraded.
+See project-fusion.md §5 D16 and
+docs/technical/router-governance-handoff-runbook.md §1.1.
 
 ```solidity
-uint256 public constant MIN_QUORUM_THRESHOLD = 1;
+uint256 public constant MIN_QUORUM_THRESHOLD = 2;
 ```
 
 ### MIN_VOTING_PERIOD

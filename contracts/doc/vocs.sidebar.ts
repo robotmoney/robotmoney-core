@@ -247,6 +247,7 @@ export const sidebar = [
             { text: "DeployDemoExtraVaultsTest", link: "/contracts/test/contract.DeployDemoExtraVaultsTest" },
             { text: "DeployPortfolioRouterTest", link: "/contracts/test/contract.DeployPortfolioRouterTest" },
             { text: "DeployProtocolAssetVaultTest", link: "/contracts/test/contract.DeployProtocolAssetVaultTest" },
+            { text: "DeployRouterGovernanceDefaultsTest", link: "/contracts/test/contract.DeployRouterGovernanceDefaultsTest" },
             { text: "DeploySeedDeposit", link: "/contracts/test/contract.DeploySeedDeposit" },
             { text: "DeployTest", link: "/contracts/test/contract.DeployTest" },
             { text: "DeployTimelockCommitteeTest", link: "/contracts/test/contract.DeployTimelockCommitteeTest" },

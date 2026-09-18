@@ -5,11 +5,9 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** Script
-
-**Title:** DeployTimelock
 
 Deploy an OZ TimelockController and complete the privileged-role
 handover on all five Robot Money contracts (RobotMoneyVault,
@@ -272,6 +270,19 @@ function _logResult(Deployed memory d) internal pure;
 
 ### _writeJson
 
+<i>
+
+The deployment manifest (R7). One JSON, four sections:
+chain id, addresses, code hashes and the role table — so an
+auditor reading it later can answer "which bytecode, at which
+address, holding which role, on which chain" without a second
+artifact and without an archive node. The code hashes are read
+from the chain (`address.codehash`), not from build artifacts, so
+the manifest describes what was actually deployed rather than what
+the local `out/` directory happened to contain.
+
+</i>
+
 ```solidity
 function _writeJson(Deployed memory d) internal;
 ```
@@ -281,6 +292,34 @@ function _writeJson(Deployed memory d) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+
+<a id="_serializeroles-deployed"></a>
+
+### _serializeRoles
+
+<i>
+
+The role table, read back from the chain after the handover.
+Every entry is a live `hasRole` read, so a manifest that records
+the intended topology instead of the actual one cannot be written.
+
+</i>
+
+```solidity
+function _serializeRoles(Deployed memory d) internal returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
 
 ## Structs
 

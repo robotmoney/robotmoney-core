@@ -30,6 +30,14 @@ interface IRetirableVaultLink {
 }
 
 /// @title DeployTimelock
+/// @dev Minimal read surface on RouterGovernance, so the manifest can record
+///      the quorum the topology actually landed on without importing the whole
+///      contract into this script.
+interface IRouterGovernanceQuorum {
+    function quorumThreshold() external view returns (uint256);
+    function MIN_QUORUM_THRESHOLD() external view returns (uint256);
+}
+
 /// @notice Deploy an OZ TimelockController and complete the privileged-role
 ///         handover on all five Robot Money contracts (RobotMoneyVault,
 ///         RobotMoneyGateway, VaultRegistry, PortfolioRouter, RouterGovernance)
@@ -363,6 +371,26 @@ contract DeployTimelock is Script {
         );
 
         // PortfolioRouter
+        //
+        // R7 / §4.3: the router's ADMIN_ROLE is what gates `setWeights`, so
+        // this block decides who can move allocation weights afterwards. Two
+        // conditions must BOTH hold when it finishes, and neither is implied
+        // by the other:
+        //
+        //   (a) RouterGovernance holds the role, or the approving body can
+        //       approve and cannot act — every proposal that reaches quorum
+        //       reverts inside `execute()`;
+        //   (b) the deployer EOA does NOT hold it, or a single key can move
+        //       weights directly and the whole propose/vote/delay path is
+        //       decorative.
+        //
+        // Before the grant is asserted, because a governance contract that
+        // cannot act is a broken deployment, not a safer one.
+        require(
+            IAccessControl(d.router).hasRole(ADMIN_ROLE, d.governance),
+            "R7: RouterGovernance lacks router ADMIN_ROLE - execute() cannot reach setWeights"
+        );
+
         IAccessControl(d.router).grantRole(ADMIN_ROLE, address(timelock));
         require(
             IAccessControl(d.router).hasRole(ADMIN_ROLE, address(timelock)),
@@ -372,6 +400,23 @@ contract DeployTimelock is Script {
         require(
             !IAccessControl(d.router).hasRole(ADMIN_ROLE, msg.sender),
             "Deployer still has ADMIN_ROLE on router"
+        );
+
+        // (b), stated as the capability rather than as the role: after this
+        // point `setWeights` from the deployer EOA reverts. `setWeights` is
+        // `onlyRole(ADMIN_ROLE)` on the router, so the role read IS the
+        // capability — asserted separately from the revoke above so the
+        // failure message names what an operator actually cares about.
+        require(
+            !IAccessControl(d.router).hasRole(ADMIN_ROLE, msg.sender),
+            "R7: deployer EOA can still call router.setWeights directly"
+        );
+        // And the grant survived the handover: nothing above touched it, but
+        // this is the invariant the ceremony exists to establish, so read it
+        // back at the end rather than trusting the order of the lines.
+        require(
+            IAccessControl(d.router).hasRole(ADMIN_ROLE, d.governance),
+            "R7: RouterGovernance lost router ADMIN_ROLE during handover"
         );
 
         // RouterGovernance
@@ -471,6 +516,14 @@ contract DeployTimelock is Script {
         }
     }
 
+    /// @dev The deployment manifest (R7). One JSON, four sections:
+    ///      chain id, addresses, code hashes and the role table — so an
+    ///      auditor reading it later can answer "which bytecode, at which
+    ///      address, holding which role, on which chain" without a second
+    ///      artifact and without an archive node. The code hashes are read
+    ///      from the chain (`address.codehash`), not from build artifacts, so
+    ///      the manifest describes what was actually deployed rather than what
+    ///      the local `out/` directory happened to contain.
     function _writeJson(Deployed memory d) internal {
         string memory outPath;
         try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
@@ -479,19 +532,128 @@ contract DeployTimelock is Script {
             outPath = "artifacts/timelock.json";
         }
 
+        string memory addrs = "manifest_addresses";
+        vm.serializeAddress(addrs, "timelock", address(d.timelock));
+        vm.serializeAddress(addrs, "safe", d.safe);
+        vm.serializeAddress(addrs, "emergency", d.emergency);
+        vm.serializeAddress(addrs, "vault", d.vault);
+        vm.serializeAddress(addrs, "gateway", d.gateway);
+        vm.serializeAddress(addrs, "registry", d.registry);
+        vm.serializeAddress(addrs, "router", d.router);
+        vm.serializeAddress(addrs, "ic_policy", d.icPolicy);
+        vm.serializeAddress(addrs, "consensus_receipt", d.consensusReceipt);
+        string memory addrsJson = vm.serializeAddress(addrs, "governance", d.governance);
+
+        string memory hashes = "manifest_code_hashes";
+        vm.serializeBytes32(hashes, "timelock", address(d.timelock).codehash);
+        vm.serializeBytes32(hashes, "safe", d.safe.codehash);
+        vm.serializeBytes32(hashes, "vault", d.vault.codehash);
+        vm.serializeBytes32(hashes, "gateway", d.gateway.codehash);
+        vm.serializeBytes32(hashes, "registry", d.registry.codehash);
+        vm.serializeBytes32(hashes, "router", d.router.codehash);
+        vm.serializeBytes32(hashes, "ic_policy", d.icPolicy.codehash);
+        vm.serializeBytes32(hashes, "consensus_receipt", d.consensusReceipt.codehash);
+        string memory hashesJson = vm.serializeBytes32(hashes, "governance", d.governance.codehash);
+
+        string memory rolesJson = _serializeRoles(d);
+
         string memory obj = "timelock";
         vm.serializeUint(obj, "chain_id", block.chainid);
+        vm.serializeUint(obj, "min_delay", d.minDelay);
+        vm.serializeUint(
+            obj, "quorum_threshold", IRouterGovernanceQuorum(d.governance).quorumThreshold()
+        );
+        vm.serializeUint(
+            obj,
+            "min_quorum_threshold",
+            IRouterGovernanceQuorum(d.governance).MIN_QUORUM_THRESHOLD()
+        );
+        // Kept flat as well as inside `addresses`: existing readers (the
+        // smoke-test fixture, the explorer env writer) index this file by these
+        // top-level keys, and a manifest that breaks them is a manifest nobody
+        // reads.
         vm.serializeAddress(obj, "timelock", address(d.timelock));
         vm.serializeAddress(obj, "safe", d.safe);
         vm.serializeAddress(obj, "emergency", d.emergency);
-        vm.serializeUint(obj, "min_delay", d.minDelay);
         vm.serializeAddress(obj, "vault", d.vault);
         vm.serializeAddress(obj, "gateway", d.gateway);
         vm.serializeAddress(obj, "registry", d.registry);
         vm.serializeAddress(obj, "router", d.router);
-        string memory json = vm.serializeAddress(obj, "governance", d.governance);
+        vm.serializeAddress(obj, "governance", d.governance);
+        vm.serializeString(obj, "addresses", addrsJson);
+        vm.serializeString(obj, "code_hashes", hashesJson);
+        string memory json = vm.serializeString(obj, "roles", rolesJson);
 
         vm.writeJson(json, outPath);
-        console2.log("Wrote timelock deployment JSON to", outPath);
+        console2.log("Wrote timelock deployment manifest to", outPath);
+    }
+
+    /// @dev The role table, read back from the chain after the handover.
+    ///      Every entry is a live `hasRole` read, so a manifest that records
+    ///      the intended topology instead of the actual one cannot be written.
+    function _serializeRoles(Deployed memory d) internal returns (string memory) {
+        string memory roles = "manifest_roles";
+
+        // Who administers each contract now.
+        vm.serializeAddress(roles, "admin_role_holder", address(d.timelock));
+
+        // The two R7 conditions, recorded as booleans an auditor can grep.
+        vm.serializeBool(
+            roles,
+            "governance_has_router_admin_role",
+            IAccessControl(d.router).hasRole(ADMIN_ROLE, d.governance)
+        );
+        vm.serializeBool(
+            roles,
+            "deployer_has_router_admin_role",
+            IAccessControl(d.router).hasRole(ADMIN_ROLE, msg.sender)
+        );
+        vm.serializeBool(
+            roles,
+            "timelock_has_router_admin_role",
+            IAccessControl(d.router).hasRole(ADMIN_ROLE, address(d.timelock))
+        );
+        vm.serializeBool(
+            roles,
+            "timelock_has_governance_admin_role",
+            IAccessControl(d.governance).hasRole(ADMIN_ROLE, address(d.timelock))
+        );
+        vm.serializeBool(
+            roles,
+            "timelock_has_vault_admin_role",
+            IAccessControl(d.vault).hasRole(ADMIN_ROLE, address(d.timelock))
+        );
+        vm.serializeBool(
+            roles,
+            "timelock_has_registry_admin_role",
+            IAccessControl(d.registry).hasRole(ADMIN_ROLE, address(d.timelock))
+        );
+        vm.serializeBool(
+            roles,
+            "timelock_has_gateway_default_admin_role",
+            IAccessControl(d.gateway).hasRole(DEFAULT_ADMIN_ROLE, address(d.timelock))
+        );
+        vm.serializeBool(
+            roles,
+            "emergency_key_has_vault_emergency_role",
+            IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, d.emergency)
+        );
+        vm.serializeBool(
+            roles,
+            "deployer_has_vault_emergency_role",
+            IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, msg.sender)
+        );
+
+        // The Safe's standing on the timelock itself.
+        vm.serializeBool(
+            roles,
+            "safe_is_timelock_proposer",
+            d.timelock.hasRole(d.timelock.PROPOSER_ROLE(), d.safe)
+        );
+        return vm.serializeBool(
+            roles,
+            "safe_is_timelock_executor",
+            d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), d.safe)
+        );
     }
 }

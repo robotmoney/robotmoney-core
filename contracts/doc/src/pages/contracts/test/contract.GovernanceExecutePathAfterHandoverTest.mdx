@@ -1,0 +1,340 @@
+---
+title: "GovernanceExecutePathAfterHandoverTest"
+description: "R7's two halves, proved on one topology built the way the deploy scripts build it — not on a hand-wired fixture."
+---
+
+# GovernanceExecutePathAfterHandoverTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+
+**Inherits:** Test
+
+**Title:** GovernanceExecutePathAfterHandover
+
+R7's two halves, proved on one topology built the way the deploy
+scripts build it — not on a hand-wired fixture.
+
+Before this task, `DeployRouterGovernance` deployed the governance
+contract and stopped. Nothing ever granted it `ADMIN_ROLE` on the
+`PortfolioRouter`, so a proposal that passed quorum and cleared its
+execution delay still reverted inside `router.setWeights` — the
+approving body could approve and could not act. The only thing that
+COULD move weights was the deployer EOA, which is exactly the
+inversion §4.3 describes as the gap.
+
+`DeployTimelock` then revokes the deployer's router `ADMIN_ROLE`,
+so after a complete ceremony the honest end state is: governance
+can act, the deployer cannot, and the timelock administers both.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### VOTING_PERIOD
+
+```solidity
+uint64 internal constant VOTING_PERIOD = 1 days;
+```
+
+### EXECUTION_DELAY
+
+```solidity
+uint64 internal constant EXECUTION_DELAY = 1 days;
+```
+
+### QUORUM
+
+```solidity
+uint256 internal constant QUORUM = 2;
+```
+
+### MIN_DELAY
+
+```solidity
+uint256 internal constant MIN_DELAY = 2 days;
+```
+
+## State Variables
+
+### govScript
+
+```solidity
+DeployRouterGovernance internal govScript;
+```
+
+### timelockScript
+
+```solidity
+DeployTimelock internal timelockScript;
+```
+
+### deployer
+
+<i>
+
+Every privileged role starts here. Inside `DeployTimelock`'s
+internal calls the EVM records `msg.sender` as the script address,
+so the script address IS the deployer EOA for this fixture.
+
+</i>
+
+```solidity
+address internal deployer;
+```
+
+### usdc
+
+```solidity
+MockUsdc internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
+
+### vault
+
+```solidity
+RobotMoneyVault internal vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### icPolicy
+
+```solidity
+InvestmentCommitteePolicy internal icPolicy;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### vaultA
+
+```solidity
+MockGovVault internal vaultA;
+```
+
+### vaultB
+
+```solidity
+MockGovVault internal vaultB;
+```
+
+### safe
+
+<i>
+
+The REAL rehearsal Safe stand-in, not a local mock: the
+post-handover path is only proved if the artifact a rehearsal
+actually deploys can drive the timelock.
+
+</i>
+
+```solidity
+RehearsalSafe internal safe;
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### voter1
+
+```solidity
+address internal voter1 = makeAddr("gov-voter-1");
+```
+
+### voter2
+
+```solidity
+address internal voter2 = makeAddr("gov-voter-2");
+```
+
+### agentAthena
+
+```solidity
+address internal agentAthena = makeAddr("committee-athena");
+```
+
+### agentWoon
+
+```solidity
+address internal agentWoon = makeAddr("committee-woon");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_governanceholdsrouteradminrole"></a>
+
+### test_governanceHoldsRouterAdminRole
+
+The deploy script leaves governance able to call setWeights.
+
+```solidity
+function test_governanceHoldsRouterAdminRole() public view;
+```
+
+<a id="test_executereachessetweightsonafreshdeployment"></a>
+
+### test_executeReachesSetWeightsOnAFreshDeployment
+
+THE R7 regression: propose (routed through the timelock, which
+now holds governance ADMIN_ROLE) → both voters vote → delay
+elapses → execute() lands the weights on the router.
+
+```solidity
+function test_executeReachesSetWeightsOnAFreshDeployment() public;
+```
+
+<a id="test_deployereoacannotcallsetweightsdirectly"></a>
+
+### test_deployerEoaCannotCallSetWeightsDirectly
+
+After the ceremony a direct setWeights from the deployer EOA
+reverts. This is the assertion the deploy script now makes too.
+
+```solidity
+function test_deployerEoaCannotCallSetWeightsDirectly() public;
+```
+
+<a id="test_deployereoahasnorouteradminrole"></a>
+
+### test_deployerEoaHasNoRouterAdminRole
+
+```solidity
+function test_deployerEoaHasNoRouterAdminRole() public view;
+```
+
+<a id="test_votersetisdisjointfromthecommittee"></a>
+
+### test_voterSetIsDisjointFromTheCommittee
+
+The voters that carried the executed proposal hold no
+COMMITTEE_AGENT_ROLE, and the committee agents hold no power.
+
+```solidity
+function test_voterSetIsDisjointFromTheCommittee() public view;
+```
+
+<a id="test_quorumistwooftotalvotingpowertwo"></a>
+
+### test_quorumIsTwoOfTotalVotingPowerTwo
+
+The quorum that carried it is the D16 floor, and it is not
+satisfiable by one voter.
+
+```solidity
+function test_quorumIsTwoOfTotalVotingPowerTwo() public view;
+```
+
+<a id="test_rehearsalsafecandrivethetimelock"></a>
+
+### test_rehearsalSafeCanDriveTheTimelock
+
+Without a call forwarder the handover bricks the environment:
+the stand-in is the timelock's only proposer and executor, and
+a contract that can only answer `getThreshold()` can do neither.
+
+```solidity
+function test_rehearsalSafeCanDriveTheTimelock() public view;
+```
+
+<a id="test_rehearsalsafeforwarderrefusesanonowner"></a>
+
+### test_rehearsalSafeForwarderRefusesANonOwner
+
+The forwarder is owner-gated — it stands in for a signer set,
+not for an open door.
+
+```solidity
+function test_rehearsalSafeForwarderRefusesANonOwner() public;
+```
+
+<a id="_sixtyforty"></a>
+
+### _sixtyForty
+
+```solidity
+function _sixtyForty() internal view returns (address[] memory vaults, uint256[] memory bps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+
+<a id="_proposeviatimelock-address-uint256"></a>
+
+### _proposeViaTimelock
+
+<i>
+
+`propose` is ADMIN_ROLE-gated and ADMIN_ROLE now lives on the
+timelock, so a proposal is scheduled by the Safe and executed after
+the min delay — the real post-handover route.
+
+</i>
+
+```solidity
+function _proposeViaTimelock(address[] memory vaults, uint256[] memory bps)
+        internal
+        returns (uint256 proposalId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proposalId | `uint256` |  |
+
