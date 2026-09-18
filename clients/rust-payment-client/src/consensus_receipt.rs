@@ -95,13 +95,8 @@ pub const CANONICAL_BUCKET_ORDER: [&str; 4] = [
 
 /// The five stance keys, in the fixed order `stances` declares them.
 /// A submission carrying anything else is a refusal, never a sixth bucket.
-pub const RECEIPT_STANCE_KEYS: [&str; 5] = [
-    "bearish",
-    "cautious",
-    "neutral",
-    "constructive",
-    "bullish",
-];
+pub const RECEIPT_STANCE_KEYS: [&str; 5] =
+    ["bearish", "cautious", "neutral", "constructive", "bullish"];
 
 /// `bps_conversion#denominator`.
 const BPS_DENOMINATOR: f64 = 10_000.0;
@@ -917,7 +912,11 @@ impl ConsensusReceipt {
                  agree or `thinly_supported`, and every other count recomputed from \
                  quorum.submitted, describes a take set the receipt does not carry",
                 self.analyst_signatures.len(),
-                if self.analyst_signatures.len() == 1 { "y" } else { "ies" },
+                if self.analyst_signatures.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                },
                 q.submitted
             )));
         }
@@ -1155,7 +1154,9 @@ fn round8(v: f64) -> f64 {
 ///
 /// Returns the reason as a `String` rather than panicking: every caller is on an
 /// attacker-supplied path and must report, not unwind.
-pub fn bucket_shares_to_bps(shares: &[f64; CANONICAL_BUCKET_ORDER.len()]) -> Result<[u32; CANONICAL_BUCKET_ORDER.len()], String> {
+pub fn bucket_shares_to_bps(
+    shares: &[f64; CANONICAL_BUCKET_ORDER.len()],
+) -> Result<[u32; CANONICAL_BUCKET_ORDER.len()], String> {
     let mut total = 0.0f64;
     let mut floors = [0u32; CANONICAL_BUCKET_ORDER.len()];
     let mut remainders = [0.0f64; CANONICAL_BUCKET_ORDER.len()];
@@ -1267,7 +1268,9 @@ fn normalized_submission_weights(value: Option<&serde_json::Value>) -> Option<Ve
 /// THE VECTORS ARRIVE IN THE RECEIPT'S OWN ORDER (`member_id` ascending), which
 /// is normative: float addition is not associative, so the producer's
 /// received-at order and this one can differ by an ulp before `round8`.
-pub fn mean_weights_bps(vectors: &[Vec<(String, f64)>]) -> Result<[u32; CANONICAL_BUCKET_ORDER.len()], String> {
+pub fn mean_weights_bps(
+    vectors: &[Vec<(String, f64)>],
+) -> Result<[u32; CANONICAL_BUCKET_ORDER.len()], String> {
     if vectors.is_empty() {
         return Err(
             "no carried submission has a weight vector over exactly the canonical buckets"
@@ -1704,7 +1707,11 @@ mod tests {
             "an envelope with no canonicalBytes must be REFUSED: accepting it disables the \
              cross-repo drift detector on publisher say-so",
         );
-        assert_eq!(err.code(), "ErrReceiptEnvelopeCanonicalBytesMissing", "{err}");
+        assert_eq!(
+            err.code(),
+            "ErrReceiptEnvelopeCanonicalBytesMissing",
+            "{err}"
+        );
         assert!(
             format!("{err}").contains("canonicalBytes"),
             "the refusal must name the missing key; got: {err}"

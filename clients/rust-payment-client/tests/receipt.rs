@@ -1347,8 +1347,8 @@ fn live_receipt_value() -> serde_json::Value {
 /// Parse a receipt `Value` as a bare receipt and return `validate()`'s verdict.
 fn validate_value(value: &serde_json::Value) -> Result<(), String> {
     let raw = serde_json::to_vec(value).expect("re-serializes");
-    let receipt = ConsensusReceipt::from_json_slice(&raw)
-        .map_err(|e| format!("{}: {e}", e.code()))?;
+    let receipt =
+        ConsensusReceipt::from_json_slice(&raw).map_err(|e| format!("{}: {e}", e.code()))?;
     receipt.validate().map_err(|e| format!("{}: {e}", e.code()))
 }
 
@@ -1495,8 +1495,10 @@ fn the_shared_fixtures_satisfy_every_added_invariant() {
 // AND an exact three-way tie, and the two rules disagree on it.
 
 fn bps_conformance_vector() -> serde_json::Value {
-    serde_json::from_slice(&fixture("consensus-receipt.bps-conversion.conformance.json"))
-        .expect("the bps-conversion conformance vector is valid JSON")
+    serde_json::from_slice(&fixture(
+        "consensus-receipt.bps-conversion.conformance.json",
+    ))
+    .expect("the bps-conversion conformance vector is valid JSON")
 }
 
 fn shares_from(value: &serde_json::Value) -> [f64; 4] {
@@ -1531,7 +1533,11 @@ fn bps_conversion_reproduces_the_published_conformance_vector() {
         .collect();
     let got = bucket_shares_to_bps(&shares_from(&vector["shares"]))
         .expect("the conformance vector IS a share vector");
-    assert_eq!(got.to_vec(), expected, "largest remainder, tie-broken by canonical order");
+    assert_eq!(
+        got.to_vec(),
+        expected,
+        "largest remainder, tie-broken by canonical order"
+    );
 
     // NON-VACUITY. The superseded rule reproduces every whole-bps golden in the
     // repo; this assertion is what proves the check above discriminates.
@@ -1555,10 +1561,9 @@ fn bps_conversion_is_binary64_and_not_decimal() {
     // decimal or rational arithmetic awards the contested bp to a different
     // bucket, and one divergence is a verification failure against an anchored
     // digest.
-    let vector: serde_json::Value = serde_json::from_slice(&fixture(
-        "consensus-receipt.canonicalization.json",
-    ))
-    .expect("the canonicalization spec is valid JSON");
+    let vector: serde_json::Value =
+        serde_json::from_slice(&fixture("consensus-receipt.canonicalization.json"))
+            .expect("the canonicalization spec is valid JSON");
     let example = &vector["bps_conversion"]["divergent_example"];
     let expected: Vec<u32> = example["bps_binary64"]
         .as_array()
@@ -1574,8 +1579,16 @@ fn bps_conversion_is_binary64_and_not_decimal() {
         .collect();
     let got = bucket_shares_to_bps(&shares_from(&example["shares"]))
         .expect("the divergent example IS a share vector");
-    assert_eq!(got.to_vec(), expected, "this pipeline must be IEEE-754 binary64");
-    assert_ne!(got.to_vec(), wrong, "a decimal recomputation anchors different bytes");
+    assert_eq!(
+        got.to_vec(),
+        expected,
+        "this pipeline must be IEEE-754 binary64"
+    );
+    assert_ne!(
+        got.to_vec(),
+        wrong,
+        "a decimal recomputation anchors different bytes"
+    );
 }
 
 #[test]
