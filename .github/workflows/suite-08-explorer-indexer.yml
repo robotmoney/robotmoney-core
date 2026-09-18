@@ -120,6 +120,18 @@ jobs:
         working-directory: services/explorer-indexer
         run: cargo test --test rpc_failure -- --nocapture
 
+      # Two targets that landed on fusion/deployment-workflow without a job
+      # naming them. cargo-test-target-coverage refuses a tests/<name>.rs that
+      # no workflow executes, which is how they surfaced when the branch came
+      # back to dev — that branch only ran `releases-*` suites.
+      - name: Deploy-block detection
+        working-directory: services/explorer-indexer
+        run: cargo test --test deploy_block_detection -- --nocapture
+
+      - name: Postgres env requirement
+        working-directory: services/explorer-indexer
+        run: cargo test --test require_pg_env -- --nocapture
+
       # CONSENSUS RECOMMENDATION RECEIPT INDEXING (issue #1247, docs/architecture.md §4.9)
       # A `tests/<name>.rs` file is executed by NOTHING unless a job names it with an
       # explicit `--test <name>`. This step wires the receipt-event ingestion tests

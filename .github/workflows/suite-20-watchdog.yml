@@ -157,6 +157,16 @@ jobs:
         working-directory: services/watchdog
         run: cargo test --test threshold_breach -- --nocapture
 
+      # Two more targets that landed on fusion/deployment-workflow with no job
+      # naming them — same cause as the indexer pair above.
+      - name: Governance quorum RPC integration test
+        working-directory: services/watchdog
+        run: cargo test --test governance_quorum_rpc -- --nocapture
+
+      - name: Watchdog profiles integration test
+        working-directory: services/watchdog
+        run: cargo test --test profiles -- --nocapture
+
       # THE THIRD WATCHDOG TARGET NOTHING EXECUTED (issue #1282)
       # tests/cursor_and_volume.rs is 569 lines and the largest test file in the
       # crate -- it covers the indexer-cursor staleness alarm and the deposit
