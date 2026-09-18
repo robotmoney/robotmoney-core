@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: docs/operations/base-sepolia-deployment.md §Step 1 — Preflight guards
+# Canonical: docs/operations/contract-release-runbooks.md §4.2 — Preflight
 # Implements: issue #1303 acceptance criterion 4 — EIP-170 size and env-default
 #             guards (#865, #864 classes) checked against the exact broadcast
 #             artifacts BEFORE any transaction is sent.
@@ -34,7 +34,7 @@ EIP3860_INITCODE_LIMIT=49152
 SIZE_WARN_MARGIN=1000
 
 # The ceremony's runtime set: every contract a deploy script in the ceremony
-# creates. Sourced from docs/operations/base-sepolia-deployment.md.
+# creates. Sourced from docs/operations/contract-release-runbooks.md §4.2.
 CEREMONY_CONTRACTS=(
   "RobotMoneyVault"
   "AaveV3Adapter"

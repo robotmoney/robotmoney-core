@@ -50,7 +50,7 @@ canonical Base mainnet addresses `Deploy.s.sol` hardcodes
 there is for Base Sepolia.
 
 ```bash
-scripts/base-sepolia-rehearsal/preflight-guards.sh
+scripts/release/preflight-guards.sh
 ```
 
 runs the EIP-170 size gate and env-default guard against the current build
