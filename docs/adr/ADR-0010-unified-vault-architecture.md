@@ -1,6 +1,6 @@
 # ADR-0010: Unified Vault architecture — one Vault class, position adapters for every theme
 
-- **Status:** Proposed
+- **Status:** Rejected — the three deployed vault families stay as they are; the current design is audited and migrating it is not worth the reversibility cost (2026-09-18, product owner).
 - **Date:** 2026-07-16
 - **Deciders:** Product owner
 - **Related:**
