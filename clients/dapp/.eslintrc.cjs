@@ -139,6 +139,9 @@ module.exports = {
         "playwright.config.ts",
         // R20: the read-only public-deployment config, same Playwright convention.
         "playwright.public.config.ts",
+        // The Fusion acceptance config, same Playwright convention. It landed on
+        // the fusion branch without this entry, where dapp-lint-build never ran.
+        "playwright.fusion.config.ts",
         "vite.config.ts",
         "vitest.config.ts",
         "vitest.workspace.ts",
