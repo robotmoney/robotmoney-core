@@ -1,0 +1,48 @@
+---
+title: "IRouterGovernanceQuorum"
+---
+
+# IRouterGovernanceQuorum
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/script/DeployTimelock.s.sol)
+
+**Title:** DeployTimelock
+
+<i>
+
+Minimal read surface on RouterGovernance, so the manifest can record
+the quorum the topology actually landed on without importing the whole
+contract into this script.
+
+</i>
+
+## Functions
+
+<a id="quorumthreshold"></a>
+
+### quorumThreshold
+
+```solidity
+function quorumThreshold() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="min_quorum_threshold"></a>
+
+### MIN_QUORUM_THRESHOLD
+
+```solidity
+function MIN_QUORUM_THRESHOLD() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

@@ -4,7 +4,7 @@ title: "DeployRouterGovernanceDefaultsTest"
 
 # DeployRouterGovernanceDefaultsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e65b6ed66e52049fe2218a5d6eb8d6ac48a03443/contracts/test/DeployRouterGovernanceDefaults.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/test/DeployRouterGovernanceDefaults.t.sol)
 
 **Inherits:** Test
 
@@ -148,16 +148,30 @@ second, quieter way to deploy a hollow quorum.
 function test_inProcessDeployRefusesAQuorumOfOne() public;
 ```
 
-<a id="test_thecontractminimumalonewouldnotsatisfythecriterion"></a>
+<a id="test_thedeploydefaultisnotbelowthecontractfloor"></a>
 
-### test_theContractMinimumAloneWouldNotSatisfyTheCriterion
+### test_theDeployDefaultIsNotBelowTheContractFloor
 
-The contract's own `MIN_QUORUM_THRESHOLD` is `1`, which is why
-the deploy floor has to be stricter than the constructor's. This
-test fails loudly if someone later "simplifies" by deleting the
-script guard in favour of the constructor check.
+The contract floor and the deploy default now agree (T22 /
+D16: `MIN_QUORUM_THRESHOLD` was raised from 1 to 2). The script
+guard is kept anyway — it refuses BEFORE spending gas on a
+deployment and gives the operator a sentence instead of a
+four-byte selector — but it is no longer the only thing standing
+between the topology and a hollow quorum. This test fails loudly
+if the two ever drift apart in the weaker direction.
 
 ```solidity
-function test_theContractMinimumAloneWouldNotSatisfyTheCriterion() public;
+function test_theDeployDefaultIsNotBelowTheContractFloor() public;
+```
+
+<a id="test_thecontractitselfrefusesaquorumofone"></a>
+
+### test_theContractItselfRefusesAQuorumOfOne
+
+The constructor now refuses a quorum of 1 on its own, so the
+guarantee survives a caller that bypasses this script entirely.
+
+```solidity
+function test_theContractItselfRefusesAQuorumOfOne() public;
 ```
 

@@ -1,0 +1,36 @@
+---
+title: "ManifestHarness"
+---
+
+# ManifestHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** [DeployTimelock](/contracts/script/contract.DeployTimelock)
+
+<i>
+
+Exposes the script's internal manifest writer. `_writeJson` runs only
+inside `run()`, which needs a broadcast context and a live chain — so
+without this seam the manifest is the one part of the deploy script
+that ships untested, and a serialization mistake in it surfaces as a
+malformed artifact during a real ceremony.
+
+</i>
+
+## Functions
+
+<a id="exposedwritejson-deployed"></a>
+
+### exposedWriteJson
+
+```solidity
+function exposedWriteJson(Deployed memory d) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+

@@ -1,0 +1,174 @@
+---
+title: "QuorumFloorInvariantTest"
+description: "The quorum floor is a property of the CONTRACT, not of the deploy script. `DeployRouterGovernance` already refuses `QUORUM_THRESHOLD &lt;= 1` on both entrypoints, but that guard only covers the deployment instant: `setQuorumThreshold(1)` afterwards succeeded for any `ADMIN_ROLE` holder, and so did a constructor call that bypassed the script entirely (every fixture, every fork test, and any hand-rolled `forge create`). AC-GOV-03's \"quorum 2 of total voting power 2\" was therefore reversible with one transaction and no on-chain refusal."
+---
+
+# QuorumFloorInvariantTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/test/QuorumFloorInvariant.t.sol)
+
+**Inherits:** Test
+
+**Title:** QuorumFloorInvariant
+
+The quorum floor is a property of the CONTRACT, not of the deploy
+script. `DeployRouterGovernance` already refuses
+`QUORUM_THRESHOLD &lt;= 1` on both entrypoints, but that guard only
+covers the deployment instant: `setQuorumThreshold(1)` afterwards
+succeeded for any `ADMIN_ROLE` holder, and so did a constructor
+call that bypassed the script entirely (every fixture, every fork
+test, and any hand-rolled `forge create`). AC-GOV-03's "quorum 2 of
+total voting power 2" was therefore reversible with one
+transaction and no on-chain refusal.
+
+These tests pin the floor at both doors — constructor and setter —
+because those are the only two ways `quorumThreshold` is ever
+written.
+
+## Constants
+
+### VOTING_PERIOD
+
+```solidity
+uint64 internal constant VOTING_PERIOD = 1 days;
+```
+
+### EXECUTION_DELAY
+
+```solidity
+uint64 internal constant EXECUTION_DELAY = 1 days;
+```
+
+### QUORUM_THRESHOLD
+
+```solidity
+uint256 internal constant QUORUM_THRESHOLD = 2;
+```
+
+## State Variables
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("gov-admin");
+```
+
+### outsider
+
+```solidity
+address internal outsider = makeAddr("outsider");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_minquorumthresholdistwo"></a>
+
+### test_minQuorumThresholdIsTwo
+
+D16: the floor is 2, not the MVP placeholder 1.
+
+```solidity
+function test_minQuorumThresholdIsTwo() public view;
+```
+
+<a id="test_constructorrefusesquorumone"></a>
+
+### test_constructorRefusesQuorumOne
+
+A constructor call with quorum 1 must revert. This is the door
+every test fixture and every `forge create` uses, and the one
+the deploy-script guard does not cover.
+
+```solidity
+function test_constructorRefusesQuorumOne() public;
+```
+
+<a id="test_constructorrefusesquorumzero"></a>
+
+### test_constructorRefusesQuorumZero
+
+```solidity
+function test_constructorRefusesQuorumZero() public;
+```
+
+<a id="test_constructoracceptsexactlythefloor"></a>
+
+### test_constructorAcceptsExactlyTheFloor
+
+The floor itself is still deployable — the refusal is a floor,
+not a ban on the boundary value.
+
+```solidity
+function test_constructorAcceptsExactlyTheFloor() public;
+```
+
+<a id="test_setquorumthresholdrefusesone"></a>
+
+### test_setQuorumThresholdRefusesOne
+
+THE regression this task exists for: an ADMIN_ROLE holder could
+walk a live deployment back down to a hollow quorum of 1 after
+the acceptance evidence was collected.
+
+```solidity
+function test_setQuorumThresholdRefusesOne() public;
+```
+
+<a id="test_setquorumthresholdrefuseszero"></a>
+
+### test_setQuorumThresholdRefusesZero
+
+```solidity
+function test_setQuorumThresholdRefusesZero() public;
+```
+
+<a id="test_setquorumthresholdacceptsthefloorandabove"></a>
+
+### test_setQuorumThresholdAcceptsTheFloorAndAbove
+
+```solidity
+function test_setQuorumThresholdAcceptsTheFloorAndAbove() public;
+```
+
+<a id="test_setquorumthresholdstillrequiresadminrole"></a>
+
+### test_setQuorumThresholdStillRequiresAdminRole
+
+The floor does not replace the access-control check.
+
+```solidity
+function test_setQuorumThresholdStillRequiresAdminRole() public;
+```
+
+<a id="test_livequorumisalwaysabovetheplaceholder"></a>
+
+### test_liveQuorumIsAlwaysAboveThePlaceholder
+
+Whatever path wrote it, a live deployment always reads back a
+quorum above the placeholder. This is the assertion the
+watchdog mirrors off chain (D16, second half).
+
+```solidity
+function test_liveQuorumIsAlwaysAboveThePlaceholder() public view;
+```
+
