@@ -2,8 +2,8 @@
 //!
 //! Minimal async JSON-RPC client. Only the methods the indexer needs:
 //! `eth_blockNumber`, `eth_chainId`, `eth_getBlockByNumber` (with and
-//! without txs), `eth_getLogs`, `eth_call`. Mirrors the blocking
-//! variant in `testing/fork-e2e-rust/src/lib.rs`.
+//! without txs), `eth_getLogs`, `eth_call`, `eth_getCode`. Mirrors the
+//! blocking variant in `testing/fork-e2e-rust/src/lib.rs`.
 
 use alloy_primitives::{Address, Bytes, B256};
 use serde::{Deserialize, Serialize};
@@ -346,6 +346,24 @@ impl JsonRpc {
         ]);
         let s: String = self.call("eth_call", params).await?;
         decode_hex_bytes("eth_call", &s)
+    }
+
+    /// `eth_getCode` against `to` at a specific block.
+    ///
+    /// Used only by deploy-block detection
+    /// ([`crate::indexer::detect_deploy_block`]), which reads the ERROR as
+    /// information rather than as a failure: below the earliest block a chain
+    /// can serve, this call does not answer "no code", it fails
+    /// (`BlockOutOfRangeError` on `anvil --load-state`, `header not found` on
+    /// Geth). A pruned-state failure (`missing trie node`) looks similar and
+    /// means something else entirely, and telling those apart is the caller's
+    /// job. The error therefore has to reach the caller intact, so nothing here
+    /// maps a server error to an empty result — see
+    /// [`crate::indexer::classify_code_probe`].
+    pub async fn get_code_at(&self, address: Address, block: u64) -> Result<Bytes, RpcError> {
+        let params = serde_json::json!([format!("{:#x}", address), format!("0x{:x}", block),]);
+        let s: String = self.call("eth_getCode", params).await?;
+        decode_hex_bytes("eth_getCode", &s)
     }
 }
 

@@ -36,8 +36,9 @@ OUT_DIR="${BASE_SEPOLIA_REHEARSAL_OUT_DIR:-/tmp/base-sepolia-rehearsal}"
 RECORD="$OUT_DIR/base-sepolia.json"
 MISORDER_OUT="$OUT_DIR/misordered-router.json"
 
-# Anvil dev account #0 — the deployer for the throwaway fork.
-DEPLOYER_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+# Deployer for the throwaway fork; provide credentials out of band.
+: "${BASE_SEPOLIA_REHEARSAL_DEPLOYER_KEY:?BASE_SEPOLIA_REHEARSAL_DEPLOYER_KEY must be provided in the environment}"
+DEPLOYER_KEY="$BASE_SEPOLIA_REHEARSAL_DEPLOYER_KEY"
 DEPLOYER_ADDRESS="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 
 cleanup() {

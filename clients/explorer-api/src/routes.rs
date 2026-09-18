@@ -1624,10 +1624,15 @@ fn clamp_receipt_limit(limit: Option<i64>) -> ApiResult<i64> {
     }
 }
 
-// (receipt_id, receipt_index, submitter, payload_digest, payload_uri,
-//  recorded_at, block_number, tx_hash, verified, payload_bytes,
+// (contract_address, receipt_id, receipt_index, submitter, payload_digest,
+//  payload_uri, recorded_at, block_number, tx_hash, verified, payload_bytes,
 //  released, released_at)
+//
+// T20: `contract_address` leads, because `receipt_id` alone does not identify a
+// row any more — it is deployment-independent, and one chain can carry several
+// ConsensusRecommendationReceipt deployments.
 type ConsensusReceiptRow = (
+    Vec<u8>,
     Vec<u8>,
     i64,
     Vec<u8>,
@@ -1644,12 +1649,14 @@ type ConsensusReceiptRow = (
 
 /// Columns selected by every consensus-receipt query, in `ConsensusReceiptRow`
 /// order. Kept in one constant so the three handlers cannot drift apart.
-const CONSENSUS_RECEIPT_COLUMNS: &str = "receipt_id, receipt_index, submitter, payload_digest, \
+const CONSENSUS_RECEIPT_COLUMNS: &str =
+    "contract_address, receipt_id, receipt_index, submitter, payload_digest, \
      payload_uri, recorded_at, block_number, tx_hash, verified, payload_bytes, \
      released, released_at";
 
 fn receipt_from_row(row: ConsensusReceiptRow) -> ConsensusReceipt {
     let (
+        contract_address,
         receipt_id,
         index,
         submitter,
@@ -1664,6 +1671,7 @@ fn receipt_from_row(row: ConsensusReceiptRow) -> ConsensusReceipt {
         released_at,
     ) = row;
     ConsensusReceipt {
+        contract_address: format!("0x{}", hex::encode(contract_address)),
         receipt_id: format!("0x{}", hex::encode(receipt_id)),
         index,
         submitter: format!("0x{}", hex::encode(submitter)),
@@ -1715,6 +1723,14 @@ async fn list_consensus_receipts(
 /// GET /v1/consensus-receipts/:receipt_id
 ///
 /// Protocol scope. One commitment by its bytes32 receipt id.
+///
+/// T20: `receipt_id` is no longer unique within a chain — it is
+/// deployment-independent, and the primary key is now
+/// `(chain_id, contract_address, receipt_id)`. This route keeps its
+/// address-free URL for compatibility and resolves the ambiguity
+/// DETERMINISTICALLY, serving the most recently anchored commitment; the
+/// response's `contract_address` says which deployment that was. The list
+/// routes show every deployment's row.
 async fn get_consensus_receipt(
     State(state): State<AppState>,
     Path(receipt_id): Path<String>,
@@ -1724,7 +1740,9 @@ async fn get_consensus_receipt(
     let sql = format!(
         "SELECT {CONSENSUS_RECEIPT_COLUMNS} \
          FROM consensus_receipts \
-         WHERE chain_id = $1 AND receipt_id = $2"
+         WHERE chain_id = $1 AND receipt_id = $2 \
+         ORDER BY block_number DESC, log_index DESC \
+         LIMIT 1"
     );
     let row: Option<ConsensusReceiptRow> = sqlx::query_as(&sql)
         .bind(state.chain_id)

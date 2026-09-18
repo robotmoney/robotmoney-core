@@ -5,7 +5,7 @@ description: "Foundry deploy script for the RouterGovernance contract. Deploys R
 
 # DeployRouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e65b6ed66e52049fe2218a5d6eb8d6ac48a03443/contracts/script/DeployRouterGovernance.s.sol)
 
 **Inherits:** Script
 
@@ -27,7 +27,8 @@ Optional env vars:
 VOTING_PERIOD      — voting period in seconds (default: 3600 — 1 hour)
 EXECUTION_DELAY    — delay from voting end to execution in seconds
 (default: 3600 — 1 hour, the contract's MIN_EXECUTION_DELAY)
-QUORUM_THRESHOLD   — minimum FOR voting power for quorum (default: 1)
+QUORUM_THRESHOLD   — minimum FOR voting power for quorum
+(default: 2; must be greater than 1)
 DEPLOYMENT_OUT     — path for the output JSON
 (default: "deployments/governance-&lt;chain_id>.json")
 
@@ -53,10 +54,11 @@ uint64 public constant DEFAULT_EXECUTION_DELAY = 3600;
 
 ### DEFAULT_QUORUM_THRESHOLD
 
-Default quorum threshold: 1 unit of voting power.
+Default quorum threshold requires more than one unit of voting
+power, preserving Fusion's separate approving-body control.
 
 ```solidity
-uint256 public constant DEFAULT_QUORUM_THRESHOLD = 1;
+uint256 public constant DEFAULT_QUORUM_THRESHOLD = 2;
 ```
 
 ## Functions

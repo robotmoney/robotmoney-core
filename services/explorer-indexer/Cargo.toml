@@ -41,6 +41,11 @@ tracing = "0.1"
 # Logging is initialised via the workspace-shared facade (issue #247) so
 # operator output matches `rmpc` and `explorer-api` byte-for-byte.
 rmpc-logging = { path = "../../crates/rmpc-logging" }
+# The consensus-receipt parser/canonicalizer, shared with `rmpc` ON PURPOSE:
+# the indexer re-derives the anchored preimage with the SAME code that decided
+# what to anchor, so the submitter's view and the explorer's view of a receipt
+# cannot drift apart (see `fetch_and_verify_payload`).
+rust-payment-client = { path = "../../clients/rust-payment-client" }
 hex = "0.4"
 
 [dev-dependencies]

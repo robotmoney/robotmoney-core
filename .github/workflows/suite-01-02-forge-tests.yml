@@ -108,6 +108,17 @@ jobs:
           --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions}.t.sol"
           --no-match-contract "UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
 
+      # Fusion's named evidence files need an execution boundary in the CI log.
+      # A whole-suite `forge test` is not enough for a fail-closed external
+      # evidence reader to know that an individual file actually ran.
+      - name: Fusion contract evidence targets
+        run: |
+          for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant GovernanceExecutePathAfterHandover QuorumFloorInvariant; do
+            echo "::group::contracts/test/${f}.t.sol:"
+            forge test -vvv --match-path "contracts/test/${f}.t.sol"
+            echo "::endgroup::"
+          done
+
       - name: forge test (four-vault real-TVL pyramid — issue #592)
         # Explicit, named guard for the four-vault real-TVL end state so it
         # cannot silently regress (the suite above already runs these, but a

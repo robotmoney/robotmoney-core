@@ -17,6 +17,10 @@
 //! - [`fork_manifest::ForkManifest`] — typed view over
 //!   `testing/ethereum-testnet/config/fork-block.json` (issue #255).
 
+/// Anvil chain backend (task F10). Booted instead of the Geth+Lighthouse
+/// compose stack when [`ChainBackend::Anvil`] is selected, so a run can jump
+/// `block.timestamp` past a governance timelock delay.
+pub mod anvil_fixture;
 /// Dev-scout module for Base testnet fixture support (issue #842).
 /// Automated account funding seams for Base testnet e2e tests (issue #839).
 pub mod base_testnet;
@@ -88,6 +92,28 @@ pub const HARNESS_USDC_HOLDER_ADDRESS_HEX: &str = "0xaE67A1B2A267a124Cf762098E3C
 /// See `testing/ethereum-testnet/config/docker-compose.dapp.yaml` and
 /// `Fixture::seed_consensus_receipts`.
 pub const RECEIPT_FIXTURES_PORT: u16 = 8097;
+
+/// Compose profile that gates the `receipt-fixtures` service.
+pub const RECEIPT_FIXTURES_PROFILE: &str = "receipt-fixtures";
+
+/// Setting this env var (any value) boots the devnet without the seeded
+/// fixture receipts and without the `receipt-fixtures` service, so an
+/// acceptance stack indexes only receipts a real frontend produced.
+pub const NO_RECEIPT_FIXTURES_ENV: &str = "SMOKE_TEST_NO_RECEIPT_FIXTURES";
+
+/// Whether this process seeds and serves the fixture consensus receipts.
+pub fn receipt_fixtures_enabled() -> bool {
+    std::env::var_os(NO_RECEIPT_FIXTURES_ENV).is_none()
+}
+
+/// `COMPOSE_PROFILES` value for bringing the dapp stack up.
+fn dapp_compose_profiles_for_up() -> &'static str {
+    if receipt_fixtures_enabled() {
+        RECEIPT_FIXTURES_PROFILE
+    } else {
+        ""
+    }
+}
 
 /// 32-byte secp256k1 private key for the test agent EOA. Test-only —
 /// never use on a real chain.
@@ -272,10 +298,51 @@ struct ComposePsEntry {
 
 // -- Fixture ----------------------------------------------------------
 
+/// Which chain the fixture boots under the contracts (task F10).
+///
+/// [`ChainBackend::Geth`] is the default and is byte-identical to the
+/// historical behaviour: the Geth+Lighthouse Docker devnet, real
+/// proof-of-stake, `block.timestamp` pinned to wall clock.
+///
+/// [`ChainBackend::Anvil`] boots [`anvil_fixture::AnvilFixture`] instead and
+/// brings up NO chain compose stack. Pick it when the run has to move
+/// `block.timestamp` — a governance timelock delay, for instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChainBackend {
+    #[default]
+    Geth,
+    Anvil,
+}
+
+impl ChainBackend {
+    /// True iff no `ethereum-testnet` compose stack backs this chain.
+    fn is_anvil(self) -> bool {
+        matches!(self, ChainBackend::Anvil)
+    }
+}
+
+impl std::str::FromStr for ChainBackend {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "geth" => Ok(ChainBackend::Geth),
+            "anvil" => Ok(ChainBackend::Anvil),
+            other => Err(format!("unknown chain backend `{other}` (want geth|anvil)")),
+        }
+    }
+}
+
 /// A fully-wired devnet fixture. Boot by calling [`Fixture::new`];
 /// Drop tears down the Docker Compose stack.
 pub struct Fixture {
     compose_dir: PathBuf,
+    /// Which chain backend this fixture booted. Gates every compose action
+    /// against the `ethereum-testnet` project, including teardown.
+    backend: ChainBackend,
+    /// The Anvil chain, when `backend` is [`ChainBackend::Anvil`]. Held here
+    /// so it dies with the fixture, exactly as the compose stack does.
+    anvil: Option<anvil_fixture::AnvilFixture>,
     /// Tempdir for harness artifacts (deployment JSON, etc.).
     /// Exposed via [`Fixture::tempdir`] so callers can write
     /// additional files (keystores, configs) into the same directory.
@@ -577,6 +644,21 @@ impl Fixture {
     /// Like [`Self::new`] but passes extra env vars to `forge script Deploy`.
     /// Used to override deploy-time parameters (e.g. `AGENT_MAX_PER_WINDOW`).
     pub fn with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
+        Self::with_backend(ChainBackend::Geth, extra_deploy_env)
+    }
+
+    /// Like [`Self::with_deploy_env`] but picks the chain backend (task F10).
+    ///
+    /// With [`ChainBackend::Geth`] this is exactly [`Self::with_deploy_env`].
+    /// With [`ChainBackend::Anvil`] the `ethereum-testnet` compose stack is
+    /// never brought up: [`anvil_fixture::AnvilFixture`] supplies the chain and
+    /// everything downstream — funding, `forge script Deploy`, the dapp
+    /// stack — runs unchanged against its RPC.
+    pub fn with_backend(
+        backend: ChainBackend,
+        extra_deploy_env: &[(&str, &str)],
+    ) -> Result<Self, HarnessError> {
+        let anvil_mode = backend.is_anvil();
         if which::which("docker").is_err() {
             return Err(HarnessError::FoundryMissing("docker"));
         }
@@ -604,21 +686,27 @@ impl Fixture {
         // genesis.json. If rendering fails (missing fixture, malformed
         // manifest), fall back to the legacy clean-room genesis path —
         // verbose-logging the reason so the operator can fix it offline.
-        let alloc_overlay_path = match render_genesis_alloc_overlay(&repo_root, tmp.path()) {
-            Ok(Some(p)) => Some(p),
-            Ok(None) => {
-                eprintln!(
-                    "smoke-test: skipping genesis alloc overlay (fixture or manifest absent); \
+        // The alloc overlay is a Geth-genesis concern: Anvil gets the same
+        // Base state from `--load-state` instead.
+        let alloc_overlay_path = if anvil_mode {
+            None
+        } else {
+            match render_genesis_alloc_overlay(&repo_root, tmp.path()) {
+                Ok(Some(p)) => Some(p),
+                Ok(None) => {
+                    eprintln!(
+                        "smoke-test: skipping genesis alloc overlay (fixture or manifest absent); \
                      booting with clean-room genesis (legacy behaviour)"
-                );
-                None
-            }
-            Err(e) => {
-                eprintln!(
-                    "smoke-test: genesis alloc overlay rendering failed: {e}; \
+                    );
+                    None
+                }
+                Err(e) => {
+                    eprintln!(
+                        "smoke-test: genesis alloc overlay rendering failed: {e}; \
                      falling back to clean-room genesis"
-                );
-                None
+                    );
+                    None
+                }
             }
         };
 
@@ -670,13 +758,20 @@ impl Fixture {
         let (run_id, _run_created) = ensure_run_identity();
         logging::info("smoke-test", format!("boot run-id={run_id}"));
         reap_stale_testnet_containers(&run_id);
-        ensure_compose_project_idle(&compose_dir, &compose_files_owned)?;
+        if !anvil_mode {
+            ensure_compose_project_idle(&compose_dir, &compose_files_owned)?;
+        }
         let cleanup_compose_files = compose_files_owned.clone();
         let cleanup_compose_dir = compose_dir.clone();
         let cleanup_alloc_overlay_path = alloc_overlay_path
             .as_ref()
             .map(|p| p.to_string_lossy().to_string());
         let cleanup = move || {
+            // Nothing to tear down in Anvil mode — the chain compose project
+            // was never brought up, and `AnvilFixture`'s own Drop kills anvil.
+            if anvil_mode {
+                return;
+            }
             let mut c = Command::new("docker");
             c.arg("compose");
             for f in &cleanup_compose_files {
@@ -690,140 +785,154 @@ impl Fixture {
             let _ = c.status();
         };
 
-        let mut up_cmd = Command::new("docker");
-        up_cmd.arg("compose");
-        for f in &compose_files_owned {
-            up_cmd.arg(f);
-        }
-        up_cmd
-            .arg("up")
-            .arg("-d")
-            .arg("--build")
-            .env("GETH_RPC_PORT", chain_ports.rpc_port.to_string())
-            .env("GETH_WS_PORT", chain_ports.ws_port.to_string())
-            .env("GETH_AUTHRPC_PORT", chain_ports.authrpc_port.to_string())
-            .env("BEACON_PORT", chain_ports.beacon_port.to_string())
-            .current_dir(&compose_dir);
-        if let Some(ref p) = alloc_overlay_path {
-            up_cmd.env("SMOKE_GENESIS_ALLOC_FILE", p);
-        }
-        logging::info("smoke-test", "bringing up chain compose stack");
-        let up_out = up_cmd.output().map_err(HarnessError::from)?;
-        logging::log_command_output("compose", &up_out);
-        if !up_out.status.success() {
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "compose up failed",
-                200,
-            );
-            cleanup();
-            return Err(HarnessError::Docker(format!(
-                "compose up devnet failed: {:?}",
-                up_out.status
-            )));
-        }
-
+        // Anvil mode brings up NO chain compose stack (task F10): the chain is
+        // a host-side `anvil --load-state`, already ready by the time
+        // `AnvilFixture::boot` returns, so the compose up / log-follower /
+        // block-production gates below have nothing to gate.
         let mut compose_log_followers = Vec::new();
-        let chain_log_follower = start_compose_log_follower(
-            &compose_dir,
-            &compose_files_owned,
-            &compose_log_env,
-            "chain-compose",
-        )
-        .inspect_err(|err| {
-            logging::error(
+        let mut anvil: Option<anvil_fixture::AnvilFixture> = None;
+        if anvil_mode {
+            let chain = anvil_fixture::AnvilFixture::boot(&repo_root, chain_ports.rpc_port)?;
+            logging::info(
                 "smoke-test",
-                format!("chain compose log follower failed: {err}"),
+                format!("anvil chain ready at {}", chain.rpc_url()),
             );
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "log follower startup failure",
-                200,
-            );
-            cleanup();
-        })?;
-        compose_log_followers.push(chain_log_follower);
+            anvil = Some(chain);
+        } else {
+            let mut up_cmd = Command::new("docker");
+            up_cmd.arg("compose");
+            for f in &compose_files_owned {
+                up_cmd.arg(f);
+            }
+            up_cmd
+                .arg("up")
+                .arg("-d")
+                .arg("--build")
+                .env("GETH_RPC_PORT", chain_ports.rpc_port.to_string())
+                .env("GETH_WS_PORT", chain_ports.ws_port.to_string())
+                .env("GETH_AUTHRPC_PORT", chain_ports.authrpc_port.to_string())
+                .env("BEACON_PORT", chain_ports.beacon_port.to_string())
+                .current_dir(&compose_dir);
+            if let Some(ref p) = alloc_overlay_path {
+                up_cmd.env("SMOKE_GENESIS_ALLOC_FILE", p);
+            }
+            logging::info("smoke-test", "bringing up chain compose stack");
+            let up_out = up_cmd.output().map_err(HarnessError::from)?;
+            logging::log_command_output("compose", &up_out);
+            if !up_out.status.success() {
+                log_compose_state(
+                    &compose_dir,
+                    &compose_files_owned,
+                    &compose_log_env,
+                    "chain-compose",
+                    "compose up failed",
+                    200,
+                );
+                cleanup();
+                return Err(HarnessError::Docker(format!(
+                    "compose up devnet failed: {:?}",
+                    up_out.status
+                )));
+            }
 
-        eprintln!("smoke-test: waiting for chain containers to become ready...");
-        logging::info("smoke-test", "waiting for chain containers to become ready");
-        let chain_probe_dir = compose_dir.clone();
-        let mut chain_health_probe = compose_health_probe(
-            &chain_probe_dir,
-            &compose_files_owned,
-            &compose_log_env,
-            "chain-compose",
-        );
-        wait_for_rpc_with_probe(
-            &rpc_url,
-            Duration::from_secs(180),
-            Some(&mut chain_health_probe),
-        )
-        .inspect_err(|err| {
-            logging::error("smoke-test", format!("chain RPC readiness failed: {err}"));
-            log_compose_state(
+            let chain_log_follower = start_compose_log_follower(
                 &compose_dir,
                 &compose_files_owned,
                 &compose_log_env,
                 "chain-compose",
-                "RPC readiness timeout",
-                200,
-            );
-            cleanup();
-        })?;
-        logging::info(
-            "smoke-test",
-            "chain RPC ready; waiting for EL/CL block production",
-        );
+            )
+            .inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("chain compose log follower failed: {err}"),
+                );
+                log_compose_state(
+                    &compose_dir,
+                    &compose_files_owned,
+                    &compose_log_env,
+                    "chain-compose",
+                    "log follower startup failure",
+                    200,
+                );
+                cleanup();
+            })?;
+            compose_log_followers.push(chain_log_follower);
 
-        // Wait for real block production: RPC up != consensus up.
-        wait_for_block_height_with_probe(
-            &rpc_url,
-            1,
-            Duration::from_secs(240),
-            Some(&mut chain_health_probe),
-        )
-        .inspect_err(|err| {
-            logging::error(
-                "smoke-test",
-                format!("chain block-production readiness failed: {err}"),
-            );
-            log_compose_state(
-                &compose_dir,
+            eprintln!("smoke-test: waiting for chain containers to become ready...");
+            logging::info("smoke-test", "waiting for chain containers to become ready");
+            let chain_probe_dir = compose_dir.clone();
+            let mut chain_health_probe = compose_health_probe(
+                &chain_probe_dir,
                 &compose_files_owned,
                 &compose_log_env,
                 "chain-compose",
-                "block-production timeout",
-                200,
             );
-            cleanup();
-        })?;
-        logging::info("smoke-test", "chain EL/CL stack ready");
-        wait_for_rpc_with_probe(
-            &rpc_url,
-            Duration::from_secs(60),
-            Some(&mut chain_health_probe),
-        )
-        .inspect_err(|err| {
-            logging::error(
+            wait_for_rpc_with_probe(
+                &rpc_url,
+                Duration::from_secs(180),
+                Some(&mut chain_health_probe),
+            )
+            .inspect_err(|err| {
+                logging::error("smoke-test", format!("chain RPC readiness failed: {err}"));
+                log_compose_state(
+                    &compose_dir,
+                    &compose_files_owned,
+                    &compose_log_env,
+                    "chain-compose",
+                    "RPC readiness timeout",
+                    200,
+                );
+                cleanup();
+            })?;
+            logging::info(
                 "smoke-test",
-                format!("post-readiness RPC stability check failed: {err}"),
+                "chain RPC ready; waiting for EL/CL block production",
             );
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "post-readiness RPC stability failure",
-                200,
-            );
-            cleanup();
-        })?;
+
+            // Wait for real block production: RPC up != consensus up.
+            wait_for_block_height_with_probe(
+                &rpc_url,
+                1,
+                Duration::from_secs(240),
+                Some(&mut chain_health_probe),
+            )
+            .inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("chain block-production readiness failed: {err}"),
+                );
+                log_compose_state(
+                    &compose_dir,
+                    &compose_files_owned,
+                    &compose_log_env,
+                    "chain-compose",
+                    "block-production timeout",
+                    200,
+                );
+                cleanup();
+            })?;
+            logging::info("smoke-test", "chain EL/CL stack ready");
+            wait_for_rpc_with_probe(
+                &rpc_url,
+                Duration::from_secs(60),
+                Some(&mut chain_health_probe),
+            )
+            .inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("post-readiness RPC stability check failed: {err}"),
+                );
+                log_compose_state(
+                    &compose_dir,
+                    &compose_files_owned,
+                    &compose_log_env,
+                    "chain-compose",
+                    "post-readiness RPC stability failure",
+                    200,
+                );
+                cleanup();
+            })?;
+        }
         logging::info(
             "smoke-test",
             "post-readiness chain RPC stable; starting deployment",
@@ -1129,6 +1238,8 @@ impl Fixture {
 
         let fx = Fixture {
             compose_dir,
+            backend,
+            anvil,
             tmp,
             compose_log_followers,
             chain_ports,
@@ -1176,21 +1287,23 @@ impl Fixture {
         // first tick fetches `payload_uri` — well after `--full-stack` brings
         // up the `receipt-fixtures` compose service — so seeding here (before
         // that service exists) is safe.
-        fx.seed_consensus_receipts().inspect_err(|err| {
-            logging::error(
-                "smoke-test",
-                format!("consensus receipt fixture seeding failed: {err}"),
-            );
-            log_compose_state(
-                &fx.compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "consensus receipt fixture seeding failure",
-                200,
-            );
-            cleanup();
-        })?;
+        if receipt_fixtures_enabled() {
+            fx.seed_consensus_receipts().inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("consensus receipt fixture seeding failed: {err}"),
+                );
+                log_compose_state(
+                    &fx.compose_dir,
+                    &compose_files_owned,
+                    &compose_log_env,
+                    "chain-compose",
+                    "consensus receipt fixture seeding failure",
+                    200,
+                );
+                cleanup();
+            })?;
+        }
 
         Ok(fx)
     }
@@ -1202,6 +1315,21 @@ impl Fixture {
     }
     pub fn rpc_port(&self) -> u16 {
         self.rpc_port
+    }
+    /// Which chain this fixture booted (task F10).
+    pub fn backend(&self) -> ChainBackend {
+        self.backend
+    }
+    /// RPC endpoint the explorer-indexer container must dial.
+    ///
+    /// Geth mode: the `geth` compose service over the shared chain network
+    /// (issue #775). Anvil mode: there is no `geth` service, so the indexer
+    /// crosses the Docker bridge to the host-side anvil instead.
+    pub fn indexer_rpc_url(&self) -> String {
+        match self.anvil.as_ref() {
+            Some(anvil) => anvil.container_rpc_url(),
+            None => "http://geth:8545".to_string(),
+        }
     }
     fn occupied_ports(&self) -> [u16; 4] {
         [
@@ -2576,6 +2704,13 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
+        // Anvil mode never brought the chain compose project up, so there is
+        // nothing to compose-down here; the `AnvilFixture` in `self.anvil`
+        // kills the chain when it drops right after this body returns.
+        if self.backend.is_anvil() {
+            logging::info("anvil", "chain fixture dropping; anvil teardown follows");
+            return;
+        }
         logging::info("chain-compose", "tearing down chain compose stack");
         for child in &mut self.compose_log_followers {
             child.terminate();
@@ -3151,6 +3286,7 @@ fn purge_stale_dapp_compose_state(
             "-v",
             "--remove-orphans",
         ])
+        .env("COMPOSE_PROFILES", RECEIPT_FIXTURES_PROFILE)
         // Satisfy the mandatory ?:-substitutions in docker-compose.dapp.yaml.
         // compose down does not bind ports, so port env vars are not required.
         .env("VITE_GATEWAY_ADDRESS", gateway_hex)
@@ -4370,6 +4506,7 @@ impl DappStack {
                     "-v",
                     "--remove-orphans",
                 ])
+                .env("COMPOSE_PROFILES", RECEIPT_FIXTURES_PROFILE)
                 .env("VITE_GATEWAY_ADDRESS", &cleanup_gateway_hex)
                 .env("VITE_VAULT_ADDRESS", &cleanup_vault_hex)
                 .env("VITE_GATEWAY_EXPECTED_CODE_HASH", &cleanup_runtime_hash)
@@ -4383,6 +4520,9 @@ impl DappStack {
         let local_dapp_url = ports.dapp_url();
         let local_explorer_api_url = ports.explorer_api_url();
         let local_rpc_url = fixture.rpc_url().to_string();
+        // Task F10: `geth:8545` over the chain network in Geth mode, the
+        // Docker-bridge host address in Anvil mode (no `geth` service exists).
+        let indexer_rpc_url = fixture.indexer_rpc_url();
         let dapp_compose_files = vec!["-f".to_string(), "docker-compose.dapp.yaml".to_string()];
         let dapp_log_env = vec![
             ("POSTGRES_PORT", ports.postgres_port.to_string()),
@@ -4430,7 +4570,7 @@ impl DappStack {
             // Issue #775: indexer reaches Geth via the chain Docker network
             // (ethereum-testnet_default) using the service name, not via
             // host.docker.internal which is unreachable on some Docker configs.
-            ("INDEXER_RPC_URL", "http://geth:8545".to_string()),
+            ("INDEXER_RPC_URL", indexer_rpc_url.clone()),
             ("VITE_DEVNET_RPC_URL", "".to_string()),
             ("VITE_EXPLORER_API_URL", "".to_string()),
             ("VITE_DAPP_URL", "".to_string()),
@@ -4542,7 +4682,7 @@ impl DappStack {
                 RECEIPT_FIXTURES_PORT.to_string(),
             ),
             // Issue #775: see dapp_log_env comment above.
-            ("INDEXER_RPC_URL".into(), "http://geth:8545".to_string()),
+            ("INDEXER_RPC_URL".into(), indexer_rpc_url.clone()),
             ("VITE_DEVNET_RPC_URL".into(), vite_rpc_url.clone()),
             (
                 "VITE_EXPLORER_API_URL".into(),
@@ -4568,6 +4708,7 @@ impl DappStack {
             .arg("up")
             .arg("-d")
             .arg("--build")
+            .env("COMPOSE_PROFILES", dapp_compose_profiles_for_up())
             .env("POSTGRES_PORT", ports.postgres_port.to_string())
             .env("EXPLORER_API_PORT", ports.explorer_api_port.to_string())
             .env("DAPP_PORT", ports.dapp_port.to_string())
@@ -4602,7 +4743,7 @@ impl DappStack {
             // (ethereum-testnet_default) using the `geth` service name — no
             // host port needed. The dapp compose connects to that network via
             // the chain-net external network reference in docker-compose.dapp.yaml.
-            .env("INDEXER_RPC_URL", "http://geth:8545")
+            .env("INDEXER_RPC_URL", &indexer_rpc_url)
             // VITE_FORK_RPC_URL intentionally NOT set: the dapp routes all
             // chain reads through the user's wallet RPC (see
             // docs/technical/dapp-topology.md §2). VITE_DEVNET_RPC_URL is
@@ -4971,6 +5112,7 @@ impl Drop for DappStack {
                 "-v",
                 "--remove-orphans",
             ])
+            .env("COMPOSE_PROFILES", RECEIPT_FIXTURES_PROFILE)
             .env("VITE_GATEWAY_ADDRESS", &self.gateway_hex)
             .env("VITE_VAULT_ADDRESS", &self.vault_hex)
             .env(

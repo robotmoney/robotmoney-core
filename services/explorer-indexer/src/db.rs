@@ -242,6 +242,38 @@ impl TryFrom<&str> for CountTable {
     }
 }
 
+/// T12: the digest-verification outcome for one consensus receipt, as produced
+/// by the indexer's bounded-retry fetch and consumed by
+/// [`Db::insert_consensus_receipt`].
+///
+/// This is a struct rather than a `(bool, Option<i64>)` tuple because the
+/// insert now also records *how hard the indexer tried* and *why it failed* —
+/// the state that makes `verified = false` interpretable. The compromise
+/// runbook depends on that distinction: `verified = false` with
+/// `verify_attempts = 3` and `last_verify_error = "GET … returned 502"` is an
+/// unreachable host, NOT evidence of forgery.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReceiptVerification {
+    /// keccak256(payload preimage) == the on-chain `payloadDigest`.
+    pub verified: bool,
+    /// Byte length of the fetched body; `None` when no fetch succeeded.
+    pub payload_bytes: Option<i64>,
+    /// Attempts spent on this receipt in this pass (0 when `payload_uri` is
+    /// empty and nothing was ever tried).
+    pub attempts: i32,
+    /// Last transport/verification failure, for operators. `None` on success.
+    pub last_error: Option<String>,
+}
+
+/// T12: one row of the re-verification sweep's working set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnverifiedReceipt {
+    pub contract_address: Vec<u8>,
+    pub receipt_id: Vec<u8>,
+    pub payload_uri: String,
+    pub payload_digest: Vec<u8>,
+}
+
 /// Marker column that makes a table **block-scoped**: every row belongs to one
 /// block of one chain, so an orphaned block must take its rows with it.
 ///
@@ -498,6 +530,29 @@ impl Db {
     }
 
     /// Idempotent insert for a watched contract row.
+    ///
+    /// The conflict arm is DO NOTHING in every column **except**
+    /// `deployed_block`, which a later call may fill in while the stored value
+    /// is still NULL. That exception is load-bearing rather than cosmetic:
+    /// deploy-block detection ([`crate::indexer::resolve_deploy_floor`])
+    /// necessarily runs AFTER the row exists — `run_once` registers every
+    /// configured contract on its first tick with the block still unknown, and
+    /// only then probes the chain for it. Under a plain DO NOTHING the detected
+    /// value would be discarded on every tick and the column would stay NULL
+    /// for ever, which is exactly what it has been since the migration created
+    /// it.
+    ///
+    /// The update is one-directional and never overwrites. `kind` is left
+    /// alone, so the `portfolio_router == router_governance` case keeps the
+    /// kind it was first registered under, exactly as before. A
+    /// `deployed_block` already on the row also wins over any later detection,
+    /// so re-probing a chain that has since pruned further can never silently
+    /// raise a floor that was recorded when more history was available.
+    ///
+    /// Replacing a value is therefore two explicit steps, not a silent one:
+    /// [`Self::clear_deployed_block`] nulls the stale number where the caller
+    /// has evidence the chain it was recorded against is gone, and the next
+    /// detection fills it back in.
     pub async fn upsert_contract(
         &self,
         chain_id: i64,
@@ -507,12 +562,69 @@ impl Db {
     ) -> Result<u64, DbError> {
         let r = sqlx::query(
             "INSERT INTO contracts (chain_id, address, kind, deployed_block) \
-             VALUES ($1, $2, $3, $4) ON CONFLICT (chain_id, address) DO NOTHING",
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (chain_id, address) DO UPDATE \
+                 SET deployed_block = EXCLUDED.deployed_block \
+                 WHERE contracts.deployed_block IS NULL \
+                   AND EXCLUDED.deployed_block IS NOT NULL",
         )
         .bind(chain_id)
         .bind(&address[..])
         .bind(kind)
         .bind(deployed_block)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// The persisted deploy block for one contract — `None` when the row is
+    /// absent or the column is still NULL.
+    ///
+    /// This is the cost control on detection: probing one address costs ~26
+    /// `eth_getCode` round trips on a 48.9M-block chain, so a tick reads this
+    /// first and probes only the addresses that are still unknown.
+    pub async fn deployed_block(
+        &self,
+        chain_id: i64,
+        address: [u8; 20],
+    ) -> Result<Option<i64>, DbError> {
+        let row: Option<(Option<i64>,)> = sqlx::query_as(
+            "SELECT deployed_block FROM contracts WHERE chain_id = $1 AND address = $2",
+        )
+        .bind(chain_id)
+        .bind(&address[..])
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|(b,)| b))
+    }
+
+    /// Null out a contract's remembered deploy block so detection runs again.
+    ///
+    /// The upsert above deliberately cannot overwrite a non-NULL
+    /// `deployed_block`, which is right for the case it guards — a later probe
+    /// against a more heavily pruned chain must not raise a floor and skip
+    /// events. But that made a WRONG value permanent: the column is keyed by
+    /// `(chain_id, address)`, and a chain id plus a deterministic address is
+    /// not a chain identity, so a block detected against the Geth devnet
+    /// survives the swap to `anvil --load-state` on the same Postgres and
+    /// wedges the indexer below the new chain's servable range with no way out
+    /// but manual SQL.
+    ///
+    /// So the only way to replace one is to clear it first, and the caller
+    /// ([`crate::indexer::resolve_deploy_floor`]) does that only when a probe
+    /// shows the persisted block does not describe the chain now answering.
+    /// Returns rows affected, so a clear that matched nothing is visible.
+    pub async fn clear_deployed_block(
+        &self,
+        chain_id: i64,
+        address: [u8; 20],
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "UPDATE contracts SET deployed_block = NULL \
+             WHERE chain_id = $1 AND address = $2",
+        )
+        .bind(chain_id)
+        .bind(&address[..])
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
@@ -1594,11 +1706,26 @@ impl Db {
     /// embedded signatures is `rmpc`'s job at submit time (architecture §4.9.1)
     /// and a future indexer pass.
     ///
-    /// Uses `ON CONFLICT DO NOTHING` so re-indexing the same range is a no-op.
+    /// **T20 — the emitting contract is part of the key.** `receipt_id` is
+    /// `keccak256(domain || session_id || "\n" || subject_id)`: it is identical
+    /// across every deployment of the contract, so `contract_address` (the
+    /// `log.address` the event was emitted by) is what makes the row unique.
+    /// The caller must have already checked that address against the configured
+    /// receipt contract; this function does not re-check it.
+    ///
+    /// **T12 — a replay REPAIRS, and never downgrades.** The conflict arm
+    /// upserts only `WHERE consensus_receipts.verified = FALSE`, so a re-index
+    /// of a range whose payload host was down at first pass can flip the row to
+    /// verified, while a row that is already verified is never touched by a
+    /// later fetch failure. The digest comparison behind `verified` is still
+    /// against the on-chain `payload_digest`, so repairability cannot admit a
+    /// wrong preimage. Release state is deliberately absent from the conflict
+    /// arm: it is owned by [`Db::mark_consensus_receipt_released`].
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_consensus_receipt(
         &self,
         chain_id: i64,
+        contract_address: [u8; 20],
         receipt_id: [u8; 32],
         receipt_index: i64,
         submitter: [u8; 20],
@@ -1608,18 +1735,29 @@ impl Db {
         block_number: i64,
         log_index: i32,
         tx_hash: [u8; 32],
-        verified: bool,
-        payload_bytes: Option<i64>,
+        verification: ReceiptVerification,
     ) -> Result<u64, DbError> {
         let r = sqlx::query(
             "INSERT INTO consensus_receipts \
-               (chain_id, receipt_id, receipt_index, submitter, payload_digest, \
-                payload_uri, recorded_at, block_number, log_index, tx_hash, \
-                verified, payload_bytes) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
-             ON CONFLICT (chain_id, receipt_id) DO NOTHING",
+               (chain_id, contract_address, receipt_id, receipt_index, submitter, \
+                payload_digest, payload_uri, recorded_at, block_number, log_index, \
+                tx_hash, verified, payload_bytes, verified_at, verify_attempts, \
+                last_verify_error) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, \
+                     CASE WHEN $12 THEN now() ELSE NULL END, $14, $15) \
+             ON CONFLICT (chain_id, contract_address, receipt_id) DO UPDATE SET \
+                 verified          = EXCLUDED.verified, \
+                 payload_bytes     = COALESCE(EXCLUDED.payload_bytes, \
+                                              consensus_receipts.payload_bytes), \
+                 verified_at       = EXCLUDED.verified_at, \
+                 verify_attempts   = consensus_receipts.verify_attempts \
+                                     + EXCLUDED.verify_attempts, \
+                 last_verify_error = EXCLUDED.last_verify_error, \
+                 indexed_at        = now() \
+             WHERE consensus_receipts.verified = FALSE",
         )
         .bind(chain_id)
+        .bind(&contract_address[..])
         .bind(&receipt_id[..])
         .bind(receipt_index)
         .bind(&submitter[..])
@@ -1629,8 +1767,10 @@ impl Db {
         .bind(block_number)
         .bind(log_index)
         .bind(&tx_hash[..])
-        .bind(verified)
-        .bind(payload_bytes)
+        .bind(verification.verified)
+        .bind(verification.payload_bytes)
+        .bind(verification.attempts)
+        .bind(verification.last_error.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
@@ -1642,9 +1782,14 @@ impl Db {
     /// event may not have been indexed yet on a partial re-index).
     /// `released_block_number` is stored so [`Db::delete_above_block`] can
     /// un-release a receipt whose release landed on an orphaned block.
+    ///
+    /// T20: scoped to `contract_address` so a release emitted by one deployment
+    /// can never flip the row anchored by a different deployment that happens
+    /// to share the (deployment-independent) `receipt_id`.
     pub async fn mark_consensus_receipt_released(
         &self,
         chain_id: i64,
+        contract_address: [u8; 20],
         receipt_id: [u8; 32],
         released_by: [u8; 20],
         released_at: i64,
@@ -1653,17 +1798,104 @@ impl Db {
         let r = sqlx::query(
             "UPDATE consensus_receipts SET \
                  released = TRUE, \
-                 released_at = $3, \
-                 released_block_number = $4, \
-                 released_by = $5, \
+                 released_at = $4, \
+                 released_block_number = $5, \
+                 released_by = $6, \
                  indexed_at = now() \
-             WHERE chain_id = $1 AND receipt_id = $2",
+             WHERE chain_id = $1 AND contract_address = $2 AND receipt_id = $3",
         )
         .bind(chain_id)
+        .bind(&contract_address[..])
         .bind(&receipt_id[..])
         .bind(released_at)
         .bind(block_number)
         .bind(&released_by[..])
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// T12: the re-verification sweep's working set.
+    ///
+    /// Rows whose digest verification has not yet succeeded, that carry a URI
+    /// worth re-fetching, and that have not exhausted `max_attempts`. Oldest
+    /// block first so a backlog drains in anchor order; `limit` bounds the work
+    /// one tick may do.
+    ///
+    /// Returns `(contract_address, receipt_id, payload_uri, payload_digest)`.
+    pub async fn list_unverified_receipts(
+        &self,
+        chain_id: i64,
+        max_attempts: i32,
+        limit: i64,
+    ) -> Result<Vec<UnverifiedReceipt>, DbError> {
+        /// `(contract_address, receipt_id, payload_uri, payload_digest)`.
+        type SweepRow = (Vec<u8>, Vec<u8>, String, Vec<u8>);
+        let rows: Vec<SweepRow> = sqlx::query_as(
+            "SELECT contract_address, receipt_id, payload_uri, payload_digest \
+             FROM consensus_receipts \
+             WHERE chain_id = $1 \
+               AND verified = FALSE \
+               AND payload_uri <> '' \
+               AND verify_attempts < $2 \
+             ORDER BY block_number ASC, log_index ASC \
+             LIMIT $3",
+        )
+        .bind(chain_id)
+        .bind(max_attempts)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(contract_address, receipt_id, payload_uri, payload_digest)| UnverifiedReceipt {
+                    contract_address,
+                    receipt_id,
+                    payload_uri,
+                    payload_digest,
+                },
+            )
+            .collect())
+    }
+
+    /// T12: record the outcome of one re-verification attempt.
+    ///
+    /// **Never downgrades.** The `WHERE … verified = FALSE` guard means a row
+    /// that is already verified is not writable by this path at all, so a later
+    /// transient failure cannot un-verify an authentic receipt. `verify_attempts`
+    /// increments on every attempt — success included — which is what makes the
+    /// sweep terminate instead of hammering a permanently-missing payload host
+    /// for the life of the database.
+    ///
+    /// Returns the number of rows repaired (0 or 1).
+    pub async fn repair_receipt_verification(
+        &self,
+        chain_id: i64,
+        contract_address: &[u8],
+        receipt_id: &[u8],
+        verified: bool,
+        payload_bytes: Option<i64>,
+        last_error: Option<&str>,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "UPDATE consensus_receipts SET \
+                 verified          = $4, \
+                 payload_bytes     = COALESCE($5, payload_bytes), \
+                 verified_at       = CASE WHEN $4 THEN now() ELSE verified_at END, \
+                 verify_attempts   = verify_attempts + 1, \
+                 last_verify_error = $6, \
+                 indexed_at        = now() \
+             WHERE chain_id = $1 AND contract_address = $2 AND receipt_id = $3 \
+               AND verified = FALSE",
+        )
+        .bind(chain_id)
+        .bind(contract_address)
+        .bind(receipt_id)
+        .bind(verified)
+        .bind(payload_bytes)
+        .bind(last_error)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())

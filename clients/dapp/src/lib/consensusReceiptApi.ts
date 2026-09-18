@@ -154,11 +154,51 @@ export class ConsensusReceiptApiClient {
     try {
       const res = await this.fetchImpl(payloadUri);
       if (!res.ok) return null;
-      return (await res.json()) as ReceiptPayload;
+      return unwrapReceiptPayload(await res.json());
     } catch {
       return null;
     }
   }
+}
+
+/**
+ * The published URL may serve a bare receipt or a verification ENVELOPE.
+ *
+ * robotmoney-frontend's public, read-time-verifying route answers
+ * `{sessionId, subjectId, schemaVersion, publishedAt, receipt, canonicalBytes,
+ *   verified, signatures, unverifiedReasons}` -- the receipt is one FIELD of
+ * it, and the surrounding fields are the publisher's own read-time
+ * verification result. Read as a bare receipt it has no `analyst_signatures`
+ * and no `weights`, so the surface reported "Payload signatures: unavailable
+ * -- the published payload could not be fetched" for a payload it had just
+ * fetched successfully (HTTP 200), and "Cannot determine whether this
+ * recommendation was applied" for a receipt carrying a complete four-bucket
+ * allocation. Both statements were false, and the second withheld the
+ * applied/not-applied answer AC-CORE-08 requires.
+ *
+ * Only an UNAMBIGUOUS envelope is unwrapped -- a top level that is itself a
+ * receipt always wins -- so the wrong object can never be picked silently.
+ * This mirrors, deliberately, what `rmpc` (`ConsensusReceipt::from_json_slice`)
+ * and the explorer indexer (`fetch_and_verify_payload`) already do, so all
+ * three consumers of `payload_uri` read the same object.
+ *
+ * Nothing here is trusted for verification: the rendered `verified` state
+ * still comes from the INDEXER's own re-derivation of the digest, never from
+ * the envelope's own `verified` field.
+ */
+export function unwrapReceiptPayload(body: unknown): ReceiptPayload | null {
+  if (typeof body !== "object" || body === null) return null;
+  const top = body as Record<string, unknown>;
+  if (typeof top.schema_version === "string") return top as unknown as ReceiptPayload;
+  const inner = top.receipt;
+  if (
+    typeof inner === "object" &&
+    inner !== null &&
+    typeof (inner as Record<string, unknown>).schema_version === "string"
+  ) {
+    return inner as unknown as ReceiptPayload;
+  }
+  return null;
 }
 
 // ─── Applied vs not-applied (issue #1247 task 4.14) ─────────────────────────

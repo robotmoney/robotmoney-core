@@ -342,7 +342,7 @@ cap, concurrent lock, receipt timeout, duplicate replay and revert. Wrapped in
 4. `cargo_test_require_executed.sh -p explorer-api --test committee_api --test regime_api --test consensus_receipt_api` — IC endpoint handlers (issues #1105, #1247)
 5. `cargo_test_require_executed.sh -p explorer-api --test endpoints --test router_introspection --test cors --test canonical_schema` — the four sibling suites left dark when the two above were wired up (issue #1282). `endpoints.rs` is the only executor of the HTTP contract the dApp reads; `router_introspection.rs` is the guard for §11 "the API does not sign, authorize, or write".
 
-Steps 9 and 10 run through `.github/scripts/cargo_test_require_executed.sh`, which fails the step when zero tests were collected — a `tests/<name>.rs` file cargo was never told to run is a silent skip, not coverage. Step 10 additionally sets `EXPLORER_INDEXER_REQUIRE_PG=1`, which turns an unavailable Postgres testcontainer into a panic: the executed-count guard cannot distinguish a real pass from a test that returned early because its fixture handed it `None`, and that shape counted as passed.
+Steps 9 and 10 run through `.github/scripts/cargo_test_require_executed.sh`, which fails the step when zero tests were collected — a `tests/<name>.rs` file cargo was never told to run is a silent skip, not coverage. Step 10 additionally sets `EXPLORER_INDEXER_REQUIRE_PG=1`. The fixture panics on an unavailable Postgres testcontainer regardless — the executed-count guard cannot distinguish a real pass from a test that returned early because its fixture handed it `None`, and that shape counted as passed — so the variable is an *assertion* of that mode, not a switch into it: `common::check_require_pg()` (task T30b) accepts unset, `1`, `true` and `yes`, and panics on any value asking for a skip-capable mode, which does not exist.
 
 **Steps — `devnet` job:**
 1. Checkout repository
@@ -957,6 +957,101 @@ completes on a real chain with real gas and nonce behavior.
    deployment record is well-formed, chain_id=84532, rehearsal=true, all
    address fields present and lowercase hex
 
+### 25. Fusion harness self-tests (fusion-harness-selftests)
+**File:** `.github/workflows/suite-25-fusion-harness-selftests.yml`
+**CI class / tier:** `system-correctness` (offline, stub binaries, no network)
+**Environment:** `none`
+**Trigger:** every `pull_request` (no paths filter) + `push` to `releases-*` +
+`push` of a `v*.*.*` tag + `workflow_dispatch`.
+
+Runs `scripts/fusion/tests/run-tests.sh`, the only executor of `AC-CORE-09`'s
+retry/idempotency clause and `AC-GOV-01`'s draft-only watcher clause. Before this
+suite existed, `grep -rn 'scripts/fusion' .github/` returned nothing: no
+workflow, on any branch, on any event, ran it.
+
+The suite runs under `set -uo pipefail` without `-e`, so an exit code alone is
+not evidence. It ends at `FAIL == 0 && PASS >= MIN_EXPECTED_ASSERTIONS` (77) and
+prints `FUSION_SELFTESTS_EXECUTED=$PASS`; the workflow re-derives that count
+against its own literal so a silently lowered in-script floor cannot buy a green,
+and the script asserts the two literals are equal. Same convention as suite 17.
+No paths filter, deliberately: the failure it guards against is a rename, which
+is exactly what a paths filter stops matching. See
+[`false-green-shapes.md`](./false-green-shapes.md) and
+[`fusion-devnet-ci.md`](./fusion-devnet-ci.md).
+
+### 26. Fusion devnet acceptance (fusion-devnet-acceptance)
+**File:** `.github/workflows/suite-26-fusion-devnet-acceptance.yml`
+**CI class / tier:** `ignore` (operational, real devnet; never a merge gate)
+**Environment:** devnet `918453`, via repository variables and secrets
+**Trigger:** `workflow_dispatch` + nightly `schedule` (04:10 UTC). Never on
+`pull_request` — it needs live RPC and an ephemeral funded key.
+
+Runs `scripts/fusion/devnet-acceptance.sh` against the real devnet, satisfying
+`AC-E2E-05`'s "repeatable CI/devnet test, not only a one-off manual
+demonstration". Endpoints and addresses come from repository **variables**; the
+ephemeral devnet keystore, its password and the operator config come from
+repository **secrets** — no key material is committed and the workflow creates
+no keys. With any of them absent it exits 0 with an explicit
+`SKIPPED — not configured` summary naming each missing entry, and executes
+nothing. For every stage it requested it asserts the result JSON holds at least
+one non-`SKIP` assertion for that stage, so a run that skipped everything cannot
+report success. `release` is omitted from the default stage list: a nightly run
+must not broadcast an admin release transaction. Full secret/variable table and
+rotation rule: [`fusion-devnet-ci.md`](./fusion-devnet-ci.md).
+
+### 27. rmpc unit tests on release refs (rust-client-unit-tests-releases)
+**File:** `.github/workflows/suite-27-rmpc-unit-releases.yml`
+**CI class / tier:** `system-correctness` (offline, no network, no chain)
+**Environment:** `none`
+**Trigger:** `push` to `releases-*` + `push` of a `v*.*.*` tag +
+`pull_request` + `workflow_dispatch`.
+
+The same job as suite 6 on the refs suite 6 does not cover. Suite 6 triggers on
+`push: [dev, dev-phase-*]`, `pull_request` and `workflow_dispatch` only, so
+`gh run list --workflow suite-06-rmpc-unit.yml --branch releases-0.4.x` is empty:
+`cargo test --lib` for `clients/rust-payment-client` has never run on a release
+branch. It shipped red because of that. At `v0.4.0-rc.9` the suite was
+275 passed / **3 failed** / 1 ignored — the T03 (`deny_unknown_fields`) and T24
+(shared envelope fixture) merges were never reconciled, so three tests still
+asserted the pre-T03 "unknown fields are dropped" behaviour, and the one
+lib-level assertion of R27/D11 was `#[ignore]`d with a reason that had stopped
+being true. Four adversarial verifiers found it; no CI job on that branch could
+have.
+
+A NEW file rather than two lines added to suite 6's `on:` block, because release
+work must not modify an existing workflow, and because widening suite 6 would
+change what runs on `dev` as well.
+
+Like suite 25, the exit code is not the evidence: `cargo test --lib` on a crate
+whose tests stopped compiling into the binary prints `0 passed; 0 failed` and
+exits 0. The job re-reads the `test result:` line and fails below 275 executed,
+and fails on ANY `#[ignore]`d lib test — the shape that concealed the rc.9 gap.
+See [`false-green-shapes.md`](./false-green-shapes.md).
+
+## release-tag dispatch
+**File:** `.github/workflows/release-tag-suite-dispatch.yml`
+**Trigger:** `push: tags: ['v*.*.*']` + `workflow_dispatch`.
+
+A `push:` trigger filtered by `branches:` **never matches a tag ref** — GitHub
+matches `branches:` against `refs/heads/*` only. Every `suite-*.yml` above is
+branches-only, and the only workflows declaring `push.tags` are
+`release-dapp.yml` (`v*.*.*`) and `release-rmpc.yml` (`rmpc-v*.*.*`). So pushing
+`v0.4.0-rc.8` or `v0.4.0-rc.9` dispatched exactly one run each, `release-dapp`.
+The ~18 extra runs visible on `v0.4.0-rc.6`/`rc.7` carry event
+`workflow_dispatch`, not `push`: a human dispatched each suite by hand against
+the tag. Automatic full-suite coverage on a tag never existed.
+
+This workflow mechanises that habit: on a `v*` tag it enumerates every active
+workflow from the API (never a hardcoded list), skips itself and the three
+publishers the tag already drives, dispatches the rest against the tag ref, then
+blocks until they complete and fails if any did not succeed. Dispatching zero
+workflows is an error, not a green. A suite added after a tag was cut does not
+exist on that tag and is reported as a named skip.
+
+The durable fix is `tags: ['v*.*.*']` on each suite; that is 18 edits to existing
+workflow files and is deferred.
+
+
 ---
 
 ## Integration-test target coverage
@@ -1361,3 +1456,6 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 22 | `suite-22-formal-verification.yml` | `forge-formal-verification` | `none` |
 | 23 | `suite-23-skill-url-reachability.yml` (live, sweep-only) + `suite-23-skill-url-monitor-selftest.yml` (`reachability-selftest`, every PR) | asserts every published raw `SKILL.md` URL returns 200, including the deprecated compat stubs; the selftest proves the monitor fails red (#1199) | `none` (live network) |
 | 24 | `suite-24-base-sepolia-rehearsal.yml` | `dry-run` \| `live` (nightly) \| `record-validator` | `none` (anvil) / `staging` |
+| 25 | `suite-25-fusion-harness-selftests.yml` | `fusion-harness-selftests` | `none` |
+| 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | devnet `918453` |
+| 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |

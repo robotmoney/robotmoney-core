@@ -18,14 +18,43 @@
 //!
 //! 1. **Observes `ReceiptReleased`.** Either a single `--receipt-id` (as a
 //!    log-watcher would receive from the event) or a `--from-block` /
-//!    `--to-block` range scanned via `eth_getLogs`. A receipt that has not
-//!    been released (`ConsensusRecommendationReceipt.isReleased == false`) is
-//!    refused — release is a human admin-discretion gate (D5) and this
-//!    command does not second-guess it.
-//! 2. **Fetches and validates the payload** at `--receipt-url` (mirrors
-//!    `rmpc receipt verify`). A receipt with no `weights` vector has nothing
-//!    to draft and is skipped, not treated as an error — most receipts are
-//!    published, not applied (§2.1), and that is the intended design.
+//!    `--to-block` range scanned via `eth_getLogs`. The anchored tuple is
+//!    then read back with `getReceiptById`: a receipt that is not recorded, or
+//!    that has not been released, is refused — release is a human
+//!    admin-discretion gate (D5) and this command does not second-guess it.
+//!
+//!    In **scan** mode a receipt that cannot be drafted for a *content*
+//!    reason — tampered bytes, a digest that does not equal the anchored
+//!    `payloadDigest`, a receipt id that does not derive from the bytes, an
+//!    analyst signature that does not verify — is reported as a `"refused"`
+//!    entry inside the range's own result and the range still exits `0`, so a
+//!    watcher can advance its cursor past one poison receipt instead of
+//!    rescanning the same block forever (AC-GOV-01, AC-E2E-06). A *transport*
+//!    reason — an unreachable payload URL, an unreadable file, an RPC that is
+//!    down — is the opposite case: those receipts were never examined, so the
+//!    command exits non-zero and the range must be retried, NOT absorbed.
+//!    Content refusals are absorbed; transport refusals hold the range.
+//! 2. **Binds the draft to the on-chain commitment.** The bytes are fetched
+//!    from the **anchored `payloadUri`** — never from a locally templated URL,
+//!    and a supplied `--receipt-url` that disagrees with the anchored one is
+//!    refused rather than preferred. They are then parsed, validated,
+//!    canonicalized, and refused unless
+//!    `keccak256(canonical_bytes) == onchain.payloadDigest`, and unless every
+//!    embedded analyst signature verifies — the same checks, in the same
+//!    order, that `rmpc receipt submit` performs before anchoring.
+//!
+//!    This is the whole point of the command's existence. `receipt_id` is
+//!    `keccak256(sep + session_id + "\n" + subject_id)`; `weights` — the one
+//!    field that becomes treasury calldata — is outside that preimage, and the
+//!    analyst signatures cover each member's own `canonical_submission`, never
+//!    the aggregate. Without the digest comparison an edited weights vector
+//!    produces an identical `receipt_id`, every signature still `verified`,
+//!    and a `ready_for_review` draft whose calldata moves the treasury
+//!    wherever the editor chose.
+//!
+//!    A receipt with no `weights` vector has nothing to draft and is skipped,
+//!    not treated as an error — most receipts are published, not applied
+//!    (§2.1), and that is the intended design.
 //! 3. **Maps buckets to vaults** through the operator config's
 //!    `[vault_addresses]` table
 //!    (`tests/fixtures/consensus-receipt.bucket-vault-map.json`).
@@ -59,8 +88,12 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::config::Config;
-use crate::consensus_receipt::{BucketWeight, ConsensusReceipt, CANONICAL_BUCKET_ORDER};
-use crate::gateway::{ConsensusRecommendationReceipt, PortfolioRouter, RouterGovernance};
+use crate::consensus_receipt::{
+    payload_digest, BucketWeight, ConsensusReceipt, CANONICAL_BUCKET_ORDER,
+};
+use crate::gateway::{
+    AnchoredReceipt, ConsensusRecommendationReceipt, PortfolioRouter, RouterGovernance,
+};
 use crate::output::emit;
 use crate::rpc::{CallRequest, FailoverRpcClient, RawLog};
 
@@ -90,6 +123,15 @@ fn bucket_to_symbol(bucket: &str) -> Option<&'static str> {
 /// Where the receipt bytes come from — mirrors `commands::receipt::ReceiptSource`.
 #[derive(Debug, Clone)]
 pub enum ReceiptSource {
+    Url(String),
+    File(std::path::PathBuf),
+}
+
+/// Where the bytes are actually read from, after the anchored `payloadUri` has
+/// had the last word (T01). Distinct from [`ReceiptSource`] so the "what the
+/// operator asked for" and "what the chain says" cannot be confused.
+#[derive(Debug, Clone)]
+enum ResolvedSource {
     Url(String),
     File(std::path::PathBuf),
 }
@@ -130,10 +172,23 @@ pub struct Draft {
     pub receipt_id: String,
     pub session_id: String,
     pub subject_id: String,
-    /// `"skipped_no_weights"`, `"ready_for_review"`, or `"blocked_active_proposal"`.
+    /// `"skipped_no_weights"`, `"ready_for_review"`,
+    /// `"blocked_active_proposal"`, or `"refused"`.
+    ///
+    /// `"refused"` appears only in scan (`--from-block`) mode: one receipt in
+    /// the range could not be drafted for a content reason (unfetchable
+    /// payload, tampered bytes, receipt-id mismatch, every vault ineligible).
+    /// It is reported *inside* the range's result rather than aborting the
+    /// range, so a single poison receipt cannot wedge a watcher's cursor
+    /// forever (AC-GOV-01's "persistent, restart-safe", AC-E2E-06's tampered
+    /// receipt). Single-receipt mode still exits [`EXIT_REFUSAL`].
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Machine-readable refusal code (e.g. `ErrReceiptFetchFailed`). Set only
+    /// when `status == "refused"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     pub vaults: Vec<DraftVault>,
     pub excluded_vaults: Vec<DraftVault>,
     pub fallback_applied: bool,
@@ -144,6 +199,15 @@ pub struct Draft {
     /// broadcast by this command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub propose_calldata: Option<String>,
+    /// The URL the bytes were actually fetched from — always the **anchored**
+    /// `payloadUri` read back from `getReceiptById`, never a locally templated
+    /// one (T01). Absent when the bytes came from `--receipt-file`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_uri: Option<String>,
+    /// `keccak256(canonical_bytes)` of the fetched payload, proved equal to the
+    /// anchored `payloadDigest` before any calldata was produced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_digest: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -355,25 +419,20 @@ pub fn run(args: Args) -> i32 {
             return EXIT_STARTUP_FAIL;
         };
 
+    // Scan mode drafts a *range*, not a receipt. A per-receipt content refusal
+    // there is data about that receipt, not a verdict on the range: reporting
+    // it as a non-zero exit made every caller that treats non-zero as "retry
+    // the same range" (scripts/fusion/watch-released-drafts.sh) wedge forever
+    // on the first unfetchable or tampered payload, so no later release was
+    // ever drafted. Non-zero in scan mode is now reserved for transport/RPC and
+    // configuration failures, where holding the cursor is the correct response.
+    let scan_mode = args.receipt_id.is_none();
     let mut drafts = Vec::with_capacity(receipt_ids.len());
+    // A source is now OPTIONAL at this layer: the authoritative location of the
+    // bytes is the anchored `payloadUri`, which draft_one reads from the chain
+    // (T01). A supplied --receipt-url/--receipt-url-template is kept only so a
+    // disagreement with the anchored URI can be refused out loud.
     for (receipt_id, source) in receipt_ids {
-        let source = match source {
-            Some(s) => s,
-            None => {
-                emit_failure(
-                    &DraftFailure {
-                        ok: false,
-                        error: "ErrReceiptSourceMissing".to_string(),
-                        message: Some(format!(
-                            "receipt {receipt_id:#x}: no --receipt-url/--receipt-file/\
-                             --receipt-url-template supplied"
-                        )),
-                    },
-                    args.pretty,
-                );
-                return EXIT_REFUSAL;
-            }
-        };
         match rt.block_on(draft_one(
             &rpc,
             receipt_addr,
@@ -381,10 +440,60 @@ pub fn run(args: Args) -> i32 {
             governance_addr,
             &vault_addresses,
             receipt_id,
-            &source,
+            source.as_ref(),
         )) {
             Ok(d) => drafts.push(d),
-            Err(DraftError::Refusal { error, message }) => {
+            Err(DraftError::Refusal {
+                kind: RefusalKind::Transport,
+                error,
+                message,
+            }) => {
+                // Retryable. In scan mode this must NOT become a "refused"
+                // entry: the watcher would advance its cursor past a range
+                // whose receipts were never actually examined. Exit
+                // EXIT_STARTUP_FAIL, which is the code the watcher holds on.
+                log::error!(
+                    "rmpc governance draft-proposal: receipt {receipt_id:#x} could not be \
+                     read ({error}): {message}; this is a transport failure, the range is \
+                     NOT complete and must be retried"
+                );
+                emit_failure(
+                    &DraftFailure {
+                        ok: false,
+                        error,
+                        message: Some(message),
+                    },
+                    args.pretty,
+                );
+                return EXIT_STARTUP_FAIL;
+            }
+            Err(DraftError::Refusal {
+                kind: RefusalKind::Content,
+                error,
+                message,
+            }) => {
+                if scan_mode {
+                    log::warn!(
+                        "rmpc governance draft-proposal: receipt {receipt_id:#x} refused \
+                         ({error}): {message}; continuing the range"
+                    );
+                    drafts.push(Draft {
+                        receipt_id: format!("{receipt_id:#x}"),
+                        session_id: String::new(),
+                        subject_id: String::new(),
+                        status: "refused".to_string(),
+                        reason: Some(message),
+                        error: Some(error),
+                        vaults: Vec::new(),
+                        excluded_vaults: Vec::new(),
+                        fallback_applied: false,
+                        blocking_proposal_id: None,
+                        propose_calldata: None,
+                        payload_uri: None,
+                        payload_digest: None,
+                    });
+                    continue;
+                }
                 emit_failure(
                     &DraftFailure {
                         ok: false,
@@ -406,9 +515,47 @@ pub fn run(args: Args) -> i32 {
     EXIT_OK
 }
 
+/// Why a receipt could not be drafted, and therefore what the caller should do
+/// about it (T07).
+///
+/// The distinction is the watcher's cursor policy, not cosmetics. A **content**
+/// refusal is a property of that receipt's bytes: rescanning the same range a
+/// thousand times reproduces it exactly, so the range is absorbed, reported and
+/// passed. A **transport** refusal is a property of the moment — a 503, a
+/// timeout, a reset connection — and the receipt it hid may be perfectly
+/// draftable one second later, so the range must be HELD and retried. Folding
+/// the two together is what let one 10 s timeout permanently un-draft a
+/// released receipt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefusalKind {
+    Content,
+    Transport,
+}
+
 enum DraftError {
-    Refusal { error: String, message: String },
+    Refusal {
+        kind: RefusalKind,
+        error: String,
+        message: String,
+    },
     StartupFail(String),
+}
+
+impl DraftError {
+    fn content(error: &str, message: String) -> Self {
+        DraftError::Refusal {
+            kind: RefusalKind::Content,
+            error: error.to_string(),
+            message,
+        }
+    }
+    fn transport(error: &str, message: String) -> Self {
+        DraftError::Refusal {
+            kind: RefusalKind::Transport,
+            error: error.to_string(),
+            message,
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -419,48 +566,124 @@ async fn draft_one(
     governance_addr: Address,
     vault_addresses: &BTreeMap<String, Address>,
     receipt_id: alloy_primitives::B256,
-    source: &ReceiptSource,
+    source: Option<&ReceiptSource>,
 ) -> Result<Draft, DraftError> {
-    // 1. Observe: the receipt must actually be released. Release is an admin
-    //    discretion gate (D5); this worker never second-guesses it.
-    let released = call_is_released(rpc, receipt_addr, receipt_id)
+    // 1. Observe: read the ANCHORED tuple, not just the release flag. This one
+    //    read supplies all three things the draft must be bound to — that the
+    //    receipt is recorded and released, the `payloadDigest` the committee
+    //    committed to, and the `payloadUri` those bytes live at (T01).
+    let anchored = call_get_receipt_by_id(rpc, receipt_addr, receipt_id)
         .await
-        .map_err(DraftError::StartupFail)?;
-    if !released {
-        return Err(DraftError::Refusal {
-            error: "ErrReceiptNotReleased".to_string(),
-            message: format!("receipt {receipt_id:#x} is not released; refusing to draft"),
-        });
+        .map_err(|e| DraftError::transport("ErrReceiptChainReadFailed", e))?;
+    if anchored.receiptId != receipt_id || anchored.receiptId.is_zero() {
+        return Err(DraftError::content(
+            "ErrReceiptNotRecorded",
+            format!(
+                "getReceiptById({receipt_id:#x}) returned receiptId {:#x}; no such receipt is \
+                 recorded on {receipt_addr:#x}",
+                anchored.receiptId
+            ),
+        ));
+    }
+    if !anchored.released {
+        return Err(DraftError::content(
+            "ErrReceiptNotReleased",
+            format!("receipt {receipt_id:#x} is not released; refusing to draft"),
+        ));
     }
 
-    // 2. Fetch and validate the payload.
-    let raw = match source {
-        ReceiptSource::File(p) => std::fs::read(p).map_err(|e| DraftError::Refusal {
-            error: "ErrReceiptReadFailed".to_string(),
-            message: format!("read {}: {e}", p.display()),
-        })?,
-        ReceiptSource::Url(url) => fetch_url(url).await.map_err(|e| DraftError::Refusal {
-            error: "ErrReceiptFetchFailed".to_string(),
-            message: e,
-        })?,
+    // 2. Decide WHERE the bytes come from. The anchored `payloadUri` is the
+    //    only URL a draft may be built from: a locally templated URL is a
+    //    statement about the operator's shell, not about what the committee
+    //    published, and the two can differ without anything noticing. A
+    //    supplied --receipt-url that disagrees is refused rather than ignored.
+    let anchored_uri = anchored.payloadUri.trim().to_string();
+    let resolved: ResolvedSource = match source {
+        // A file is admitted for offline drafting; it is bound by the digest
+        // comparison below exactly as a fetch is, so it cannot widen anything.
+        Some(ReceiptSource::File(p)) => ResolvedSource::File(p.clone()),
+        Some(ReceiptSource::Url(url)) => {
+            if url.trim() != anchored_uri {
+                return Err(DraftError::content(
+                    "ErrReceiptUriMismatch",
+                    format!(
+                        "asked to draft receipt {receipt_id:#x} from {url:?}, but the anchored \
+                         payloadUri is {anchored_uri:?}; a draft is only ever built from the \
+                         URL the receipt itself commits to"
+                    ),
+                ));
+            }
+            ResolvedSource::Url(anchored_uri.clone())
+        }
+        None => ResolvedSource::Url(anchored_uri.clone()),
     };
-    let receipt = ConsensusReceipt::from_json_slice(&raw).map_err(|e| DraftError::Refusal {
-        error: e.code().to_string(),
-        message: format!("{e}"),
-    })?;
-    receipt.validate().map_err(|e| DraftError::Refusal {
-        error: e.code().to_string(),
-        message: format!("{e}"),
-    })?;
+    if let ResolvedSource::Url(u) = &resolved {
+        if !(u.starts_with("http://") || u.starts_with("https://")) {
+            return Err(DraftError::content(
+                "ErrReceiptUriUnusable",
+                format!(
+                    "anchored payloadUri {u:?} for receipt {receipt_id:#x} is not an http(s) \
+                     URL this command can fetch; supply --receipt-file with the published bytes"
+                ),
+            ));
+        }
+    }
+
+    // 3. Fetch and validate the payload.
+    let raw = match &resolved {
+        ResolvedSource::File(p) => std::fs::read(p).map_err(|e| {
+            DraftError::transport("ErrReceiptReadFailed", format!("read {}: {e}", p.display()))
+        })?,
+        ResolvedSource::Url(url) => fetch_url(url)
+            .await
+            .map_err(|e| DraftError::transport("ErrReceiptFetchFailed", e))?,
+    };
+    let receipt = ConsensusReceipt::from_json_slice(&raw)
+        .map_err(|e| DraftError::content(e.code(), format!("{e}")))?;
+    // `canonical_bytes()` validates first (VALIDATE, THEN CANONICALIZE), so
+    // this is the submit path's own order, not a second one.
+    let canonical = receipt
+        .canonical_bytes()
+        .map_err(|e| DraftError::content(e.code(), format!("{e}")))?;
+    let derived_digest = payload_digest(&canonical);
     let derived_id = receipt.receipt_id();
     if derived_id != receipt_id {
-        return Err(DraftError::Refusal {
-            error: "ErrReceiptIdMismatch".to_string(),
-            message: format!(
-                "fetched payload derives receipt_id {derived_id:#x}, expected {receipt_id:#x}"
-            ),
-        });
+        return Err(DraftError::content(
+            "ErrReceiptIdMismatch",
+            format!("fetched payload derives receipt_id {derived_id:#x}, expected {receipt_id:#x}"),
+        ));
     }
+
+    // 4. THE BINDING. `receipt_id` is keccak256(sep + session_id + subject_id)
+    //    and `weights` is outside that preimage, so an id match proves nothing
+    //    about the numbers that become treasury calldata. The anchored
+    //    `payloadDigest` covers every byte, and this comparison is the only
+    //    thing standing between an edited weights vector and a human reviewer
+    //    reading a document core has labelled ready_for_review.
+    if derived_digest != anchored.payloadDigest {
+        return Err(DraftError::content(
+            "ErrReceiptDigestMismatch",
+            format!(
+                "receipt {receipt_id:#x}: the bytes at the anchored payloadUri derive \
+                 payload_digest {derived_digest:#x}, but the anchored payloadDigest is {:#x} \
+                 — the published bytes are not the bytes the committee committed to",
+                anchored.payloadDigest
+            ),
+        ));
+    }
+
+    // 5. Verify every embedded analyst signature, exactly as the submit path's
+    //    `check_receipt` does before anchoring. These cover each member's own
+    //    canonical_submission, so they do NOT subsume step 4 — both are needed.
+    receipt
+        .verify_analyst_signatures()
+        .map_err(|e| DraftError::content(e.code(), format!("{e}")))?;
+
+    let payload_uri_out = match &resolved {
+        ResolvedSource::Url(u) => Some(u.clone()),
+        ResolvedSource::File(_) => None,
+    };
+    let payload_digest_out = Some(format!("{derived_digest:#x}"));
 
     let weights = match &receipt.weights {
         Some(w) => w,
@@ -470,6 +693,9 @@ async fn draft_one(
                 session_id: receipt.session_id.clone(),
                 subject_id: receipt.subject_id.clone(),
                 status: "skipped_no_weights".to_string(),
+                payload_uri: payload_uri_out,
+                payload_digest: payload_digest_out,
+                error: None,
                 reason: Some(
                     "receipt carries no weights vector — most receipts are published, not \
                      applied (§2.1); nothing to draft"
@@ -487,12 +713,7 @@ async fn draft_one(
     // 3. Map buckets to vaults.
     let entries = match resolve_vault_entries(weights, vault_addresses) {
         Ok(e) => e,
-        Err(msg) => {
-            return Err(DraftError::Refusal {
-                error: "ErrVaultMapIncomplete".to_string(),
-                message: msg,
-            })
-        }
+        Err(msg) => return Err(DraftError::content("ErrVaultMapIncomplete", msg)),
     };
 
     // 4. Re-check eligibility at draft time, block tag pinned once for a
@@ -514,12 +735,12 @@ async fn draft_one(
 
     let (kept, excluded) =
         redistribute_excluding_ineligible(entries, &eligibility).map_err(|()| {
-            DraftError::Refusal {
-                error: "ErrNoEligibleVaults".to_string(),
-                message: "every vault in the drafted vector is ineligible or non-Active; \
-                      nothing left to propose"
+            DraftError::content(
+                "ErrNoEligibleVaults",
+                "every vault in the drafted vector is ineligible or non-Active; nothing left \
+                 to propose"
                     .to_string(),
-            }
+            )
         })?;
     let fallback_applied = !excluded.is_empty();
 
@@ -549,11 +770,14 @@ async fn draft_one(
         subject_id: receipt.subject_id.clone(),
         status,
         reason: None,
+        error: None,
         vaults: kept,
         excluded_vaults: excluded,
         fallback_applied,
         blocking_proposal_id: blocking_id,
         propose_calldata: calldata,
+        payload_uri: payload_uri_out,
+        payload_digest: payload_digest_out,
     })
 }
 
@@ -620,12 +844,19 @@ fn parse_b256(s: &str) -> Result<alloy_primitives::B256, String> {
     Ok(alloy_primitives::B256::from(arr))
 }
 
-async fn call_is_released(
+/// Read the anchored `Receipt` tuple for `receipt_id`.
+///
+/// This is deliberately ONE read rather than `isReleased` plus a later fetch of
+/// the digest: the release flag, the `payloadDigest` the draft must equal and
+/// the `payloadUri` the bytes must come from are all properties of the same
+/// row, and reading them separately invites drafting against a digest from one
+/// block and a URI from another.
+async fn call_get_receipt_by_id(
     rpc: &FailoverRpcClient,
     receipt_addr: Address,
     receipt_id: alloy_primitives::B256,
-) -> Result<bool, String> {
-    let data = ConsensusRecommendationReceipt::isReleasedCall {
+) -> Result<AnchoredReceipt, String> {
+    let data = ConsensusRecommendationReceipt::getReceiptByIdCall {
         receiptId: receipt_id,
     }
     .abi_encode();
@@ -639,9 +870,9 @@ async fn call_is_released(
             Some("latest"),
         )
         .await
-        .map_err(|e| format!("eth_call(isReleased) failed: {e}"))?;
-    let r = ConsensusRecommendationReceipt::isReleasedCall::abi_decode_returns(&out, true)
-        .map_err(|e| format!("isReleased abi decode: {e}"))?;
+        .map_err(|e| format!("eth_call(getReceiptById) failed: {e}"))?;
+    let r = ConsensusRecommendationReceipt::getReceiptByIdCall::abi_decode_returns(&out, true)
+        .map_err(|e| format!("getReceiptById abi decode: {e}"))?;
     Ok(r._0)
 }
 
@@ -733,6 +964,60 @@ async fn current_blocking_proposal(
     })
 }
 
+/// Normalize a user-supplied `--to-block` into something `eth_getLogs` accepts.
+///
+/// `eth_getLogs` takes a **hex quantity** (`0x1f4`) or one of the named block
+/// tags. A plain decimal (`500`) is neither, and passing it through verbatim
+/// produced a per-cycle `-32602` from the node with no hint that the argument
+/// shape was wrong — the watcher in `scripts/fusion/watch-released-drafts.sh`
+/// derives its bound from `cast block-number`, which prints decimal. Accepting
+/// decimal here means the mistake cannot exist; an unrecognized value is a
+/// named error rather than an RPC round trip.
+fn normalize_block_tag(to_block: &str) -> Result<String, String> {
+    const TAGS: [&str; 4] = ["latest", "safe", "finalized", "pending"];
+    let t = to_block.trim();
+    if TAGS.contains(&t) {
+        return Ok(t.to_string());
+    }
+    if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+        if !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(format!("0x{}", hex.to_ascii_lowercase()));
+        }
+        return Err(format!("--to-block: {to_block:?} is not a hex quantity"));
+    }
+    if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+        let n: u64 = t
+            .parse()
+            .map_err(|_| format!("--to-block: {to_block:?} does not fit in a u64"))?;
+        return Ok(format!("0x{n:x}"));
+    }
+    Err(format!(
+        "--to-block: {to_block:?} is neither a block number nor one of {TAGS:?}"
+    ))
+}
+
+/// Build the `eth_getLogs` filter for `ReceiptReleased` over
+/// `[from_block, to_block]`.
+///
+/// Split out from [`scan_released`] purely so both bounds are assertable
+/// without a node: the bug this guards against (a decimal `toBlock`, which
+/// `eth_getLogs` rejects with `-32602`) lives entirely in this JSON object,
+/// and the RPC round trip added nothing to a test of it.
+fn released_filter(
+    receipt_addr: Address,
+    from_block: u64,
+    to_block: &str,
+) -> Result<serde_json::Value, String> {
+    let to_block = normalize_block_tag(to_block)?;
+    let topic0 = ConsensusRecommendationReceipt::ReceiptReleased::SIGNATURE_HASH;
+    Ok(json!({
+        "address": receipt_addr,
+        "fromBlock": format!("0x{from_block:x}"),
+        "toBlock": to_block,
+        "topics": [topic0],
+    }))
+}
+
 /// Scan `ReceiptReleased` logs in `[from_block, to_block]` and return every
 /// `receiptId` found, in emission order.
 async fn scan_released(
@@ -741,13 +1026,7 @@ async fn scan_released(
     from_block: u64,
     to_block: &str,
 ) -> Result<Vec<alloy_primitives::B256>, String> {
-    let topic0 = ConsensusRecommendationReceipt::ReceiptReleased::SIGNATURE_HASH;
-    let filter = json!({
-        "address": receipt_addr,
-        "fromBlock": format!("0x{from_block:x}"),
-        "toBlock": to_block,
-        "topics": [topic0],
-    });
+    let filter = released_filter(receipt_addr, from_block, to_block)?;
     let logs: Vec<RawLog> = rpc
         .get_logs(filter)
         .await
@@ -763,7 +1042,40 @@ async fn scan_released(
     Ok(ids)
 }
 
+/// How many times a payload GET is attempted before the range is held.
+///
+/// A released receipt is a durable fact; a 503 is not. One GET with no retry
+/// meant a single blip permanently un-drafted a release, because the caller
+/// then advanced its cursor past it. The backoff is bounded and short: this
+/// runs inside a poll loop that will come round again anyway, so the retries
+/// exist to absorb a blip, not to wait out an outage.
+const FETCH_ATTEMPTS: u32 = 3;
+const FETCH_BACKOFF_BASE_MS: u64 = 500;
+
 async fn fetch_url(url: &str) -> Result<Vec<u8>, String> {
+    let mut last = String::new();
+    for attempt in 1..=FETCH_ATTEMPTS {
+        match fetch_url_once(url).await {
+            Ok(body) => return Ok(body),
+            Err(e) => {
+                last = e;
+                if attempt < FETCH_ATTEMPTS {
+                    let delay = FETCH_BACKOFF_BASE_MS * 2u64.pow(attempt - 1);
+                    log::warn!(
+                        "rmpc governance draft-proposal: attempt {attempt}/{FETCH_ATTEMPTS} \
+                         failed ({last}); retrying in {delay}ms"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                }
+            }
+        }
+    }
+    Err(format!(
+        "{last} (after {FETCH_ATTEMPTS} attempts with backoff)"
+    ))
+}
+
+async fn fetch_url_once(url: &str) -> Result<Vec<u8>, String> {
     const MAX_BODY_BYTES: usize = 1024 * 1024;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -1022,6 +1334,102 @@ keystore_path           = "{ks}"
         assert_eq!(code, EXIT_STARTUP_FAIL);
     }
 
+    // ─── --to-block shape (issue #1247 AC-GOV-01 watcher) ────────────────────
+
+    #[test]
+    fn normalize_block_tag_accepts_the_named_tags_verbatim() {
+        for tag in ["latest", "safe", "finalized", "pending"] {
+            assert_eq!(normalize_block_tag(tag).unwrap(), tag);
+        }
+        assert_eq!(normalize_block_tag("  latest  ").unwrap(), "latest");
+    }
+
+    #[test]
+    fn normalize_block_tag_converts_decimal_to_a_hex_quantity() {
+        // `cast block-number` prints decimal; eth_getLogs requires hex.
+        assert_eq!(normalize_block_tag("500").unwrap(), "0x1f4");
+        assert_eq!(normalize_block_tag("0").unwrap(), "0x0");
+        assert_eq!(
+            normalize_block_tag(&u64::MAX.to_string()).unwrap(),
+            format!("0x{:x}", u64::MAX)
+        );
+    }
+
+    #[test]
+    fn normalize_block_tag_passes_hex_through_lowercased() {
+        assert_eq!(normalize_block_tag("0x1F4").unwrap(), "0x1f4");
+        assert_eq!(normalize_block_tag("0X1f4").unwrap(), "0x1f4");
+    }
+
+    #[test]
+    fn normalize_block_tag_names_the_error_instead_of_calling_the_node() {
+        for bad in ["", "0x", "0xzz", "-1", "latest-1", "12a"] {
+            let err = normalize_block_tag(bad).expect_err("must refuse");
+            assert!(
+                err.starts_with("--to-block:"),
+                "error must name the argument, got: {err}"
+            );
+        }
+        // A decimal too large for u64 is refused, never silently truncated.
+        assert!(normalize_block_tag("184467440737095516160").is_err());
+    }
+
+    /// The bug this guards: `scan_released` forwarded `--to-block` verbatim, so
+    /// a decimal bound (what `cast block-number` prints) reached `eth_getLogs`
+    /// as `"300"` and the node answered `-32602` every cycle. Deleting the
+    /// `normalize_block_tag` call site reds this test.
+    #[test]
+    fn released_filter_sends_both_bounds_as_hex_quantities() {
+        let addr = Address::repeat_byte(0x11);
+        let f = released_filter(addr, 0, "300").expect("decimal to-block is accepted");
+        assert_eq!(f["fromBlock"], "0x0");
+        assert_eq!(f["toBlock"], "0x12c");
+        let f = released_filter(addr, 4_096, "0x1F4").expect("hex to-block is accepted");
+        assert_eq!(f["fromBlock"], "0x1000");
+        assert_eq!(f["toBlock"], "0x1f4");
+        assert!(f["topics"][0].is_string());
+    }
+
+    #[test]
+    fn released_filter_passes_named_tags_through_and_refuses_junk() {
+        let addr = Address::repeat_byte(0x11);
+        assert_eq!(
+            released_filter(addr, 1, "finalized").unwrap()["toBlock"],
+            "finalized"
+        );
+        assert!(released_filter(addr, 1, "yesterday").is_err());
+    }
+
+    /// A refused receipt inside a scanned range must serialize as data about
+    /// that receipt, so a watcher can advance its cursor past poison instead of
+    /// rescanning the same bad block forever.
+    #[test]
+    fn refused_draft_serializes_with_its_error_code() {
+        let out = DraftOutput {
+            ok: true,
+            drafts: vec![Draft {
+                receipt_id: "0xabc".to_string(),
+                session_id: String::new(),
+                subject_id: String::new(),
+                status: "refused".to_string(),
+                reason: Some("GET https://example.invalid/r.json returned 404".to_string()),
+                error: Some("ErrReceiptFetchFailed".to_string()),
+                vaults: vec![],
+                excluded_vaults: vec![],
+                fallback_applied: false,
+                blocking_proposal_id: None,
+                propose_calldata: None,
+                payload_uri: None,
+                payload_digest: None,
+            }],
+        };
+        let v: serde_json::Value = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["ok"], true, "the range itself succeeded");
+        assert_eq!(v["drafts"][0]["status"], "refused");
+        assert_eq!(v["drafts"][0]["error"], "ErrReceiptFetchFailed");
+        assert!(v["drafts"][0]["reason"].as_str().unwrap().contains("404"));
+    }
+
     #[test]
     fn run_fails_fast_without_receipt_id_or_from_block() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
@@ -1078,11 +1486,14 @@ rmRWA   = "0x0000000000000000000000000000000000000004"
                 subject_id: "subj1".to_string(),
                 status: "ready_for_review".to_string(),
                 reason: None,
+                error: None,
                 vaults: vec![vault("rmUSDC", 2, 10_000)],
                 excluded_vaults: vec![],
                 fallback_applied: false,
                 blocking_proposal_id: None,
                 propose_calldata: Some("0xdeadbeef".to_string()),
+                payload_uri: Some("https://example.invalid/r.json".to_string()),
+                payload_digest: Some("0xfeed".to_string()),
             }],
         };
         let v: serde_json::Value = serde_json::to_value(&out).unwrap();

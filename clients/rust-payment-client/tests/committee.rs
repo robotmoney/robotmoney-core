@@ -572,3 +572,157 @@ keystore_path           = "{ks}"
         v["error"]
     );
 }
+
+// ─── T23 · a mined transaction is not a successful one ────────────────────────
+//
+// §E.4 recorded `committee.rs` as the symptom and the five hand-rolled copies of
+// the status check as the cause. `rmpc committee register` and
+// `rmpc committee vote-submit` were the two of the seven write paths that had NO
+// copy at all: both printed `{"ok":true, tx_hash, block_number}` and exited 0
+// for a transaction the node mined and the EVM reverted — the false success
+// AC-CORE-09 forbids, and the same one commit `1854fe6e` had just spent a commit
+// removing from the anchoring path by adding a SIXTH copy rather than moving it.
+//
+// `consensusVoteSubmit` and the register call are both role-gated, so this is
+// not a hypothetical: an agent without `COMMITTEE_AGENT_ROLE` produces exactly
+// this receipt, and the operator was told the vote was recorded.
+
+/// The happy-path receipt with `status` flipped to `0x0` — mined, and reverted.
+fn reverted_receipt_body() -> String {
+    let body = simple_receipt_body();
+    let flipped = body.replace(r#""status":"0x1""#, r#""status":"0x0""#);
+    assert_ne!(
+        flipped, body,
+        "the status field must actually change, or this fixture tests nothing"
+    );
+    flipped
+}
+
+/// Install the five RPC mocks a committee write needs, with the receipt the
+/// caller chooses.
+async fn install_committee_mocks(server: &mut mockito::Server, receipt_body: &str) {
+    for (method, body) in [
+        ("eth_chainId", jrpc_result(&format!("0x{CHAIN_ID:x}"))),
+        ("eth_feeHistory", jrpc_result_raw(&fee_history_body())),
+        ("eth_getTransactionCount", jrpc_result("0x0")),
+        (
+            "eth_sendRawTransaction",
+            jrpc_result(&format!("{TX_HASH:#x}")),
+        ),
+        ("eth_getTransactionReceipt", jrpc_result_raw(receipt_body)),
+    ] {
+        server
+            .mock("POST", "/")
+            .match_body(Matcher::PartialJson(json!({ "method": method })))
+            .with_status(200)
+            .with_body(body)
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+}
+
+/// Assert a committee command refused a reverted transaction rather than
+/// reporting it as a success.
+fn assert_refused_as_reverted(output: &std::process::Output, action: &str) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    eprintln!("STDOUT: {stdout}");
+    eprintln!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        !output.status.success(),
+        "`committee {action}` exited 0 for a MINED-BUT-REVERTED transaction — that is the \
+         false success AC-CORE-09 forbids, got {:?}",
+        output.status
+    );
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON on stdout");
+    assert_eq!(v["ok"], false, "ok field");
+    assert_eq!(
+        v["error"], "ErrTxReverted",
+        "the refusal must carry the shared write-seam error code"
+    );
+    assert_eq!(
+        v["tx_hash"],
+        format!("{TX_HASH:#x}"),
+        "the refusal must name the transaction the operator has to inspect"
+    );
+}
+
+#[tokio::test]
+async fn test_committee_register_refuses_a_reverted_transaction() {
+    let mut server = mockito::Server::new_async().await;
+    install_committee_mocks(&mut server, &reverted_receipt_body()).await;
+    let fix = CommitteeFixture::build(&server.url());
+
+    let output = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .args([
+            "committee",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "register",
+            "--agent",
+            &format!("{COMMITTEE_AGENT:#x}"),
+            "--agent-id",
+            "athena-v1",
+            "--order-id",
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    assert_refused_as_reverted(&output, "register");
+}
+
+#[tokio::test]
+async fn test_committee_vote_submit_refuses_a_reverted_transaction() {
+    let mut server = mockito::Server::new_async().await;
+    install_committee_mocks(&mut server, &reverted_receipt_body()).await;
+    let fix = CommitteeFixture::build(&server.url());
+
+    let vote_hash = format!("{VOTE_JSON_HASH:#x}");
+    let prompt = format!("{PROMPT_HASH:#x}");
+    let inputs = format!("{INPUTS_DIGEST:#x}");
+
+    let output = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .args([
+            "committee",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "vote-submit",
+            "--vault",
+            "0x1111111111111111111111111111111111111111",
+            "--stance",
+            "overweight",
+            "--weight-bps",
+            "6000",
+            "--confidence",
+            "85",
+            "--rationale-uri",
+            "https://gist.github.com/robotmoney/test123",
+            "--vote-json-hash",
+            &vote_hash,
+            "--prompt-hash",
+            &prompt,
+            "--inputs-digest",
+            &inputs,
+            "--schema-version",
+            "1.0",
+            "--timestamp",
+            "1750000000",
+            "--order-id",
+            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    assert_refused_as_reverted(&output, "vote-submit");
+}

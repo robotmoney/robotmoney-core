@@ -1,0 +1,76 @@
+# ACCEPTANCE PROFILE — Project Fusion round 2, task R8 (correction C-14).
+#
+# WHAT THIS IS. A *candidate* watchdog profile whose receipt-liveness cadence is
+# short enough to be exercised inside one acceptance run. It exists so
+# AC-CORE-09's "a missing receipt pages, and successful anchoring resolves the
+# alert" can be proved end to end — alert → anchor → resolve — on the staging
+# profile itself rather than argued from unit tests.
+#
+# WHY IT IS A SEPARATE FILE. `config.staging.toml` commits
+# expected_cadence_secs = 86400 and grace_secs = 21600: a 28-hour budget. No
+# acceptance run can wait that long, so on the committed profile the "resolves
+# the alert" clause has no subject — §B4 already records that. This file is NOT
+# an edit to that pinned profile and must never replace it: the pinned profile
+# is what the staging deployment runs outside an acceptance window, and editing
+# a pinned profile in place would destroy the very evidence the run collects.
+#
+# WHAT DIFFERS FROM config.staging.toml. Exactly three values, all in
+# [consensus_receipts], plus the [governance] section:
+#   expected_cadence_secs  86400 -> 300
+#   grace_secs             21600 ->  60
+#   (budget 28 h -> 6 min)
+# Every threshold, the chain id, the action mode and the SLA are byte-identical
+# to config.staging.toml, so the only behaviour this profile changes is how long
+# the monitor waits before it is allowed to page.
+#
+# HOW IT IS USED. The Deploy phase mounts this file as the watchdog's --config
+# for the duration of one recorded acceptance step and restores the pinned
+# profile afterwards. The exact steps, and the evidence each one produces, are
+# in fusion-evidence/20260914T-run2/phase3-core/C4-watchdog/R8-PROOF-PLAN.md.
+# The geth stack is never restarted; only the watchdog unit is.
+#
+# WHAT IT MUST NOT BE USED FOR. A normal staging deployment. A six-minute budget
+# against a committee that publishes daily pages continuously and by design.
+
+# chain_id is REQUIRED (here or as WATCHDOG_CHAIN_ID): every query the monitor
+# runs is chain-scoped, so a wrong id returns empty result sets that read as
+# health. 918453 is the Fusion devnet; Base mainnet is 8453.
+chain_id = 918453
+
+[global]
+per_block_mint_limit_usdc = "1000000000"
+per_hour_mint_limit_usdc = "10000000000"
+per_block_burn_limit_usdc = "1000000000"
+per_hour_burn_limit_usdc = "10000000000"
+
+[action]
+mode = "alert"
+webhook_url = "http://127.0.0.1:9093/watchdog"
+
+[sla]
+max_response_secs = 300
+
+[consensus_receipts]
+enabled = true
+# 5 minutes + 1 minute grace = a 6-minute budget, so one acceptance window can
+# observe the gap open, the anchor land, and the incident close.
+expected_cadence_secs = 300
+grace_secs = 60
+
+# Standing quorum floor (task T22, decision D16). Read-only: one eth_call per
+# poll against the deployed RouterGovernance. The contract's MIN_QUORUM_THRESHOLD
+# stops a NEW deployment from being wired below the floor; this is the only thing
+# that catches an ADMIN_ROLE holder lowering quorumThreshold on the router that is
+# already live, after AC-GOV-03's evidence was collected.
+#
+# router_address is left unset here on purpose: the Deploy phase fills in the
+# address from the run's own deployment manifest (phase2/2.7) rather than this
+# file carrying a stale one. Leaving `enabled = true` with no address is refused
+# at startup, which is the intended failure — a blind check must not be reachable
+# by omission.
+[governance]
+enabled = false
+rpc_url = "http://127.0.0.1:18545"
+# router_address = "0x…"   # supplied by the Deploy phase
+min_quorum_threshold = 2
+repage_secs = 300

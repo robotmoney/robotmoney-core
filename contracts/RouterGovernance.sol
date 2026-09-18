@@ -49,9 +49,24 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     ///         shared `BpsMath.BPS_DENOMINATOR` so weight-sum math cannot drift.
     uint256 public constant BPS_DENOMINATOR = BpsMath.BPS_DENOMINATOR;
 
-    /// @notice Minimum quorum threshold. At least 1 vote must be required for
-    ///         quorum so that proposals cannot pass with zero votes cast.
-    uint256 public constant MIN_QUORUM_THRESHOLD = 1;
+    /// @notice Minimum quorum threshold. More than one unit of voting power
+    ///         must be required, so a single voter can never carry a weight
+    ///         proposal on their own.
+    ///
+    ///         The floor was 1 through the MVP, which made this contract's
+    ///         separate-body approval hollow: one voter with any nonzero power
+    ///         moved portfolio weights, and an `ADMIN_ROLE` holder could
+    ///         `setQuorumThreshold(1)` a configured deployment back down to
+    ///         that state at any time. The deploy script's `QUORUM_THRESHOLD >
+    ///         1` guard covers only the deployment instant; this constant is
+    ///         the floor the chain itself enforces, at both doors that write
+    ///         `quorumThreshold` (the constructor and `setQuorumThreshold`).
+    ///
+    ///         Raising it is a bytecode change: a deployment made before the
+    ///         change keeps the old floor and must be redeployed, not upgraded.
+    ///         See project-fusion.md §5 D16 and
+    ///         docs/technical/router-governance-handoff-runbook.md §1.1.
+    uint256 public constant MIN_QUORUM_THRESHOLD = 2;
 
     /// @notice Minimum voting period in seconds (1 hour). Prevents proposals
     ///         from being created and immediately executed within the same block.

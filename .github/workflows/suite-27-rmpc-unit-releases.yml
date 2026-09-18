@@ -1,0 +1,121 @@
+# Canonical: docs/development/ci-suites.md §27, docs/development/fusion-devnet-ci.md
+#
+# WHY THIS SUITE EXISTS
+# ---------------------
+# It is the same job as suite-06 (rust-client-unit-tests) on a DIFFERENT set of
+# refs. suite-06 triggers only on `push: [dev, dev-phase-*]`, `pull_request` and
+# `workflow_dispatch`. Release work happens on `releases-*` branches and is cut
+# as `v*.*.*` tags, and NONE of those refs is in that list:
+#
+#   $ gh run list --workflow suite-06-rmpc-unit.yml --branch releases-0.4.x
+#   (empty — it has never run there)
+#
+# So `cargo test --lib` for clients/rust-payment-client was unguarded on exactly
+# the branch that ships. It shipped red: at v0.4.0-rc.9 (833ddcf2) the suite was
+# 275 passed / 3 FAILED / 1 ignored, because the T03 (deny_unknown_fields) and
+# T24 (shared envelope fixture) merges were never reconciled and three tests
+# still asserted the pre-T03 "unknown fields are dropped" behaviour. Four
+# independent adversarial verifiers found it (see
+# fusion-evidence/.../phase2-ci/VERIFY/{T03,T24,R4-core}-refuter*.md); no CI job
+# on that branch could have. This workflow is the control that makes that
+# specific red impossible to ship again.
+#
+# WHY A NEW FILE AND NOT A TRIGGER EDIT TO suite-06
+# -------------------------------------------------
+# The release-branch work carries a hard constraint: never modify an EXISTING
+# .github/workflows file. Adding `releases-*` and `v*.*.*` to suite-06's `on:`
+# block would be a one-line edit to a file the release branch does not own, and
+# would change what runs on `dev` too. A new file changes nothing that exists.
+#
+# WHY IT DUPLICATES suite-06's STEPS RATHER THAN CALLING IT
+# ---------------------------------------------------------
+# `workflow_call` would couple the release branch's gate to a file on whatever
+# ref resolves it, and the point here is that the release branch must carry its
+# own guard. The steps are deliberately a mirror of suite-06's; keep them in
+# step.
+#
+# WHY cargo test --lib (NOT --tests)
+# ----------------------------------
+# Same reason as suite-06: --lib runs only the in-crate unit tests. The
+# integration binaries in tests/ need a chain and belong to suite 7. They are
+# still TYPE-CHECKED here by the `--all-targets` clippy step, so a tests/ binary
+# that went stale fails in this job rather than nowhere.
+
+name: rust-client-unit-tests-releases
+
+on:
+  # The refs suite-06 does NOT cover. `pull_request` is included so a PR that
+  # would introduce the red is red before it is merged anywhere, not only after
+  # it lands on a release branch.
+  push:
+    branches: ["releases-*", "fusion/**"]
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: rmpc-unit-releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      # A crate's tests/ binaries are compiled by NOTHING in `cargo test --lib`
+      # (issue #1295). `--all-targets` type-checks them here so a struct literal
+      # that went short of a newly-required field fails in THIS job.
+      - name: cargo clippy -p rust-payment-client --all-targets (compiles tests/ binaries)
+        run: cargo clippy -p rust-payment-client --all-targets -- -D warnings
+
+      - name: cargo test --lib
+        working-directory: clients/rust-payment-client
+        run: cargo test --lib -- --nocapture
+
+      # ANTI-VACUITY. `cargo test --lib` on a crate whose tests all vanished, or
+      # whose test module stopped compiling into the binary, prints
+      # "0 passed; 0 failed" and exits 0. That is the same false-green shape the
+      # Fusion harness's assertion floor exists to close, so this job asserts the
+      # executed count too rather than trusting the exit code. The floor is the
+      # full count at the commit that introduced it; raise it with the tests.
+      - name: Assert the lib suite actually executed its assertions
+        working-directory: clients/rust-payment-client
+        run: |
+          set -uo pipefail
+          out="$(cargo test --lib 2>&1)"
+          echo "$out"
+          line="$(grep -E '^test result: ' <<<"$out" | tail -1)"
+          if [[ -z "$line" ]]; then
+            echo "::error::cargo test --lib printed no 'test result:' line — the suite did not run"
+            exit 1
+          fi
+          passed="$(sed -E 's/.* ([0-9]+) passed.*/\1/' <<<"$line")"
+          ignored="$(sed -E 's/.* ([0-9]+) ignored.*/\1/' <<<"$line")"
+          echo "rmpc lib: $passed passed, $ignored ignored"
+          if [[ "$passed" -lt 275 ]]; then
+            echo "::error::only $passed lib tests executed (expected >= 275) — a suite that asserts nothing is a false green"
+            exit 1
+          fi
+          # An #[ignore] is how the v0.4.0-rc.9 red hid the one assertion that
+          # covered R27/D11: the behaviour had landed and the ignore reason was
+          # false, so the test never ran. Ignores are not banned, but they must
+          # be a deliberate, visible act rather than a quiet default.
+          if [[ "$ignored" -gt 0 ]]; then
+            echo "::error::$ignored lib test(s) are #[ignore]d. An ignored test asserts nothing; at v0.4.0-rc.9 exactly one ignore concealed the only lib-level R27/D11 assertion while its stated reason ('task T03 is not in this change') was already false. Remove the ignore or raise this bound deliberately."
+            exit 1
+          fi
+          echo "rmpc-lib-executed=$passed" >> "$GITHUB_STEP_SUMMARY"

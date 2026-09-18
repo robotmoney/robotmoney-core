@@ -38,7 +38,8 @@ use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
 use crate::tx::{
-    broadcast, build_eip1559, encode_signed, signing_hash, wait_for_receipt_with, Eip1559Inputs,
+    broadcast, build_eip1559, encode_signed, signing_hash, wait_for_successful_receipt,
+    Eip1559Inputs,
 };
 
 const EXIT_OK: i32 = 0;
@@ -140,6 +141,13 @@ pub struct CommitteeFailure {
     pub error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// The broadcast transaction, present on every refusal raised AFTER the
+    /// envelope reached the chain. An operator handed `ErrTxReverted` with no
+    /// hash cannot tell which transaction to inspect, and these two commands
+    /// are role-gated: a revert is the expected shape of "you are not an
+    /// allowlisted committee agent", not a rare fault.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
 }
 
 // ─── Public entry points ─────────────────────────────────────────────────────
@@ -194,6 +202,7 @@ pub fn run_register(args: RegisterArgs) -> i32 {
                     message: Some(format!(
                         "another rmpc invocation already holds the lock for {caller:#x}"
                     )),
+                    tx_hash: None,
                 },
                 args.pretty,
             );
@@ -269,6 +278,7 @@ pub fn run_register(args: RegisterArgs) -> i32 {
                     ok: false,
                     error: "ErrBroadcastFailed".to_string(),
                     message: Some(format!("{e}")),
+                    tx_hash: None,
                 },
                 args.pretty,
             );
@@ -277,16 +287,39 @@ pub fn run_register(args: RegisterArgs) -> i32 {
     };
 
     let max_attempts = args.receipt_timeout_secs.min(u32::MAX as u64) as u32;
+    // T23 / R9: THE TWO WRITE PATHS THAT HAD NO STATUS CHECK AT ALL. §E.4
+    // recorded this file as the symptom — `register` and `vote-submit` both
+    // printed `{"ok":true, tx_hash, block_number}` and exited 0 for a
+    // transaction the node mined and the EVM reverted, which is precisely what
+    // an agent without `COMMITTEE_AGENT_ROLE` produces. Both now go through the
+    // shared write seam, so the refusal is `ErrTxReverted` with the tx_hash an
+    // operator has to inspect, and a genuine receipt-poll timeout keeps its own
+    // `ErrReceiptTimeout` code: they are different facts and the agent-visible
+    // contract distinguishes them.
     let receipt = match rt.block_on(async {
-        wait_for_receipt_with(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1)).await
+        wait_for_successful_receipt(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1))
+            .await
     }) {
         Ok(r) => r,
+        Err(err @ RmpcError::ErrTxReverted { .. }) => {
+            emit_failure(
+                &CommitteeFailure {
+                    ok: false,
+                    error: err.name().to_string(),
+                    message: Some(format!("{err}")),
+                    tx_hash: Some(format!("{tx_hash:#x}")),
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
         Err(e) => {
             emit_failure(
                 &CommitteeFailure {
                     ok: false,
                     error: "ErrReceiptTimeout".to_string(),
                     message: Some(format!("{e}")),
+                    tx_hash: Some(format!("{tx_hash:#x}")),
                 },
                 args.pretty,
             );
@@ -349,6 +382,7 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
                 ok: false,
                 error: e.name().to_string(),
                 message: Some(format!("{e}")),
+                tx_hash: None,
             },
             args.pretty,
         );
@@ -386,6 +420,7 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
                     message: Some(format!(
                         "another rmpc invocation already holds the lock for {caller:#x}"
                     )),
+                    tx_hash: None,
                 },
                 args.pretty,
             );
@@ -493,6 +528,7 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
                     ok: false,
                     error: error_name.to_string(),
                     message,
+                    tx_hash: None,
                 },
                 args.pretty,
             );
@@ -501,16 +537,39 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
     };
 
     let max_attempts = args.receipt_timeout_secs.min(u32::MAX as u64) as u32;
+    // T23 / R9: THE TWO WRITE PATHS THAT HAD NO STATUS CHECK AT ALL. §E.4
+    // recorded this file as the symptom — `register` and `vote-submit` both
+    // printed `{"ok":true, tx_hash, block_number}` and exited 0 for a
+    // transaction the node mined and the EVM reverted, which is precisely what
+    // an agent without `COMMITTEE_AGENT_ROLE` produces. Both now go through the
+    // shared write seam, so the refusal is `ErrTxReverted` with the tx_hash an
+    // operator has to inspect, and a genuine receipt-poll timeout keeps its own
+    // `ErrReceiptTimeout` code: they are different facts and the agent-visible
+    // contract distinguishes them.
     let receipt = match rt.block_on(async {
-        wait_for_receipt_with(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1)).await
+        wait_for_successful_receipt(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1))
+            .await
     }) {
         Ok(r) => r,
+        Err(err @ RmpcError::ErrTxReverted { .. }) => {
+            emit_failure(
+                &CommitteeFailure {
+                    ok: false,
+                    error: err.name().to_string(),
+                    message: Some(format!("{err}")),
+                    tx_hash: Some(format!("{tx_hash:#x}")),
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
         Err(e) => {
             emit_failure(
                 &CommitteeFailure {
                     ok: false,
                     error: "ErrReceiptTimeout".to_string(),
                     message: Some(format!("{e}")),
+                    tx_hash: Some(format!("{tx_hash:#x}")),
                 },
                 args.pretty,
             );
@@ -555,6 +614,7 @@ fn resolve_ic_address(cfg: &Config, subcommand: &str, pretty: bool) -> Result<Ad
                          add `ic_policy_address = \"0x...\"` to the TOML"
                             .to_string(),
                     ),
+                    tx_hash: None,
                 },
                 pretty,
             );
@@ -616,6 +676,7 @@ fn load_signer(cfg: &Config, subcommand: &str, pretty: bool) -> Result<SoftwareS
                         "[signer].allow_software_fallback must be true to use the software keystore"
                             .to_string(),
                     ),
+                    tx_hash: None,
                 },
                 pretty,
             );
@@ -664,6 +725,7 @@ fn fetch_fees(
                 ok: false,
                 error: e.name().to_string(),
                 message: Some(format!("{e}")),
+                tx_hash: None,
             },
             pretty,
         );

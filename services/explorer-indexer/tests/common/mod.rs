@@ -1,12 +1,16 @@
 //! Shared helpers for the explorer-indexer integration tests.
 //!
-//! - `pg_fixture()` boots a Postgres testcontainer and returns a
-//!   ready-to-use `Db` (with migrations applied). On a developer machine
-//!   without Docker it returns `None` and the caller returns early. **In CI it
-//!   panics instead** (issue #1283): a silent skip there is a false green, and
-//!   the executed-count guard cannot see the difference because a test that
+//! - `pg_fixture()` boots a Postgres testcontainer and returns a ready-to-use
+//!   `Db` (with migrations applied). It **panics** when Docker or Postgres is
+//!   unavailable — everywhere, not only in CI. A silent skip is a false green,
+//!   and the executed-count guard cannot see the difference because a test that
 //!   returns early still reports as passed. See
 //!   `skills/_shared/test-coverage-policy.md` (loud-skip, never silent-skip).
+//! - [`EXPLORER_INDEXER_REQUIRE_PG`] is read here (task T30b). It used to be set
+//!   by three CI steps and honoured by nothing, so a maintainer reading the
+//!   workflow believed a control existed that did not. It is now a real, and
+//!   deliberately one-directional, control: it can only *assert* the
+//!   Postgres-required mode this fixture always runs in, never relax it.
 //! - `StubRpcServer` is an in-process tokio TCP listener that returns
 //!   canned JSON-RPC responses keyed by method name, plus a forced-failure
 //!   knob. Used to exercise the failure path without a real chain.
@@ -46,6 +50,50 @@ fn pg_panic(reason: &str) -> ! {
     );
 }
 
+/// Environment variable three CI steps set to assert that these tests must have
+/// a real Postgres. See [`check_require_pg`].
+pub const REQUIRE_PG_ENV: &str = "EXPLORER_INDEXER_REQUIRE_PG";
+
+/// Decide what a value of [`REQUIRE_PG_ENV`] means (task T30b).
+///
+/// Pure, so the meaning is covered by a test that needs no Docker.
+///
+/// The fixture is Postgres-required unconditionally, so the only honest reading
+/// of this variable is one that cannot weaken that:
+///
+/// - unset, `1`, `true`, `yes` → `Ok(())`. The caller asserts what is already
+///   true, which is exactly what the CI steps intend.
+/// - anything else → `Err(reason)`. A value like `0` is a request for an
+///   opt-out mode that does not exist and must not be invented; answering it
+///   with a green run is the false green the whole fixture design forbids. The
+///   caller turns it into a panic naming the variable.
+pub fn check_require_pg(raw: Option<&str>) -> Result<(), String> {
+    match raw.map(str::trim) {
+        None | Some("") => Ok(()),
+        Some(v)
+            if v.eq_ignore_ascii_case("1")
+                || v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("yes") =>
+        {
+            Ok(())
+        }
+        Some(v) => Err(format!(
+            "{REQUIRE_PG_ENV}={v:?} asks these tests to run without a required Postgres. \
+             There is no such mode: every test behind `pg_fixture()` asserts on real schema \
+             and real rollback SQL, and a skip would report as a pass. Unset the variable \
+             (or set it to 1) and give the runner Docker."
+        )),
+    }
+}
+
+/// Apply [`check_require_pg`] to the process environment, panicking on a value
+/// that asks for a weaker mode.
+fn enforce_require_pg() {
+    if let Err(reason) = check_require_pg(std::env::var(REQUIRE_PG_ENV).ok().as_deref()) {
+        panic!("[explorer-indexer-tests] {reason}");
+    }
+}
+
 /// An **unmigrated** Postgres testcontainer: the database is empty, not even
 /// `_sqlx_migrations` exists.
 ///
@@ -63,6 +111,7 @@ pub struct RawPg {
 
 /// Boots Postgres and returns it **without applying migrations**.
 pub async fn raw_pg() -> RawPg {
+    enforce_require_pg();
     if which::which("docker").is_err() {
         pg_panic("docker not on PATH");
     }

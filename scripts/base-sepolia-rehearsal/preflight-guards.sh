@@ -12,8 +12,9 @@
 #      are reported loudly (the #1298 growth risk) but do not fail the gate.
 #   2. Env-default guard — EXECUTION_DELAY and TIMELOCK_MIN_DELAY must not be
 #      left at the unsafe `0` default (the #864 revert class), and
-#      QUORUM_THRESHOLD must be non-zero (router-governance-handoff-runbook §1.1:
-#      quorum 0/1 is hollow separate-body control).
+#      QUORUM_THRESHOLD must be set and greater than 1
+#      (router-governance-handoff-runbook §1.1: quorum 0/1 is hollow
+#      separate-body control, so 1 is refused exactly like 0).
 #
 # Usage:
 #   preflight-guards.sh [--contract NAME ...]
@@ -69,6 +70,9 @@ for var in EXECUTION_DELAY TIMELOCK_MIN_DELAY QUORUM_THRESHOLD; do
     fail "${var}=0 is the unsafe env-default hazard (#864) — set a non-zero value before the ceremony"
   fi
 done
+
+[[ "${QUORUM_THRESHOLD:-}" =~ ^[0-9]+$ && "${QUORUM_THRESHOLD:-0}" -gt 1 ]] \
+  || fail "QUORUM_THRESHOLD must be an integer greater than 1 (got: ${QUORUM_THRESHOLD:-unset})"
 if [[ -n "${EXECUTION_DELAY:-}" ]] && [[ "$EXECUTION_DELAY" =~ ^[0-9]+$ ]] \
   && [[ "$EXECUTION_DELAY" -lt 3600 ]]; then
   warn "EXECUTION_DELAY=${EXECUTION_DELAY} < RouterGovernance.MIN_EXECUTION_DELAY (3600); the constructor will revert ExecutionDelayBelowMinimum"

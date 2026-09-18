@@ -37,10 +37,18 @@ burn_per_hour_units = "10000000000000"
 
 # Consensus-receipt anchoring-gap monitor (issue #1247 task 4.13).
 # Alert-only: a missing receipt pages an operator and NEVER pauses the gateway.
-# Absent or `enabled = false` disables the control. Cold start is not alertable —
-# the monitor stays quiet until the first receipt is anchored on the chain.
+# Absent or `enabled = false` disables the control.
+#
+# NOTE (2026-09-13): this example file is DOCUMENTATION ONLY and the running
+# daemon cannot load it — its section names ([thresholds.global], [alerts],
+# [indexer], [gateway]) predate services/watchdog/src/config.rs, which expects
+# [global] / [action] / [sla], so `watchdog --config config.example.toml` exits
+# with "missing field `global`". That divergence is pre-existing and out of
+# scope for the Fusion remediation; services/watchdog/config.staging.toml is
+# the profile that is actually parsed and deployed. Fixing the example's schema
+# is tracked separately.
 [consensus_receipts]
-enabled = false
+enabled = true
 # Expected seconds between anchored receipts (the committee's publishing cadence).
 expected_cadence_secs = 86400
 # Extra seconds tolerated on top of the cadence before paging.
