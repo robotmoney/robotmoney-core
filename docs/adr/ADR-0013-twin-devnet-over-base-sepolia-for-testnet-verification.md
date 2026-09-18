@@ -2,6 +2,15 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-03
+- **Follow-up (2026-09-18):** the Base Sepolia rehearsal path this ADR kept
+  "available ... for real network conditions" has since been REMOVED — the
+  workflow, `scripts/base-sepolia-rehearsal/`, the example deployment record
+  and `docs/operations/base-sepolia-deployment.md`. Sepolia is not a
+  deployment target. The ADR body below is left as written: it records the
+  decision as taken on 2026-09-03, and this note records that the secondary
+  path it preserved was later dropped rather than kept. The network-agnostic
+  `preflight-guards.sh` survived the removal at
+  `scripts/release/preflight-guards.sh`.
 - **Deciders:** Product owner
 - **Related:**
   - `docs/technical/full-stack-devnet.md` — the Robot Money Devnet ("Twin")
