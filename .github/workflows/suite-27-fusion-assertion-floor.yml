@@ -28,7 +28,7 @@ name: fusion-assertion-floor
 
 on:
   push:
-    branches: ["releases-*"]
+    branches: ["releases-*", "fusion/**"]
     tags: ["v*.*.*"]
   pull_request:
   workflow_dispatch:
