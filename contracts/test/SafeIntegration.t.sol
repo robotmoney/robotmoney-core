@@ -215,6 +215,14 @@ contract SafeIntegrationTest is Test {
 
         governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
 
+        // RouterGovernance must hold the router's ADMIN_ROLE before the handover:
+        // ADMIN_ROLE is what gates setWeights, so without it every proposal that
+        // reaches quorum reverts inside execute(). DeployRouterGovernance performs
+        // this grant for a real deployment; this fixture constructs RouterGovernance
+        // directly, so it must do the same. DeployTimelock's R7 precondition asserts
+        // it below.
+        IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(governance));
+
         // Deploy 2-of-3 Safe proxy via the canonical factory on Base mainnet.
         // Owners must be sorted ascending for the Safe setup call.
         address[] memory owners = _sortedOwners();
