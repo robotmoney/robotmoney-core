@@ -63,9 +63,8 @@ cargo run -p smoke-test -- --full-stack
 ```
 
 **What this does.** Boots `docker compose` (Geth + Lighthouse), waits for
-chain RPC readiness and real block production, then runs the same
-`forge script` ceremony `docs/operations/base-sepolia-deployment.md`
-documents (`Deploy.s.sol` → `DeployVaultRegistry.s.sol` →
+chain RPC readiness and real block production, then runs the standard
+`forge script` deploy ceremony (`Deploy.s.sol` → `DeployVaultRegistry.s.sol` →
 `DeployPortfolioRouter.s.sol` → `DeployRouterGovernance.s.sol` →
 `DeployInvestmentCommitteePolicy.s.sol`), seeds four demo depositors, then
 boots the dapp, explorer-api, explorer-indexer, and Postgres containers.
@@ -204,4 +203,3 @@ itself consume a `vA.B.C` mainnet/testnet slot.
 - [`docs/operations/contract-release-runbooks.md`](../operations/contract-release-runbooks.md) — the policy this runbook implements.
 - [ADR-0013](../adr/ADR-0013-twin-devnet-over-base-sepolia-for-testnet-verification.md) — why the Devnet, not Base Sepolia, is the default target.
 - [`docs/technical/full-stack-devnet.md`](../technical/full-stack-devnet.md) — the Devnet mechanism this runbook drives.
-- [`docs/operations/base-sepolia-deployment.md`](../operations/base-sepolia-deployment.md) — the sibling runbook for a real network, same ceremony order.
