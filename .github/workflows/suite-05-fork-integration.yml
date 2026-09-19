@@ -195,17 +195,17 @@ jobs:
         working-directory: testing/ethereum-testnet/config
         run: docker compose down -v --remove-orphans || true
 
-  # Base testnet (Sepolia) live-service adapter e2e (issue #839).
+  # Base's public testnet (currently Sepolia) live-service adapter e2e (issue #839).
   #
-  # Validates all adapter types against LIVE Aave/Uniswap/Curve pools on Base
-  # Sepolia, plus the eth_getBalance funding assertion. This job needs no Docker
-  # devnet and no anvil — it talks directly to the Base Sepolia RPC named by the
-  # BASE_TESTNET_RPC_URL secret, funding ephemeral accounts from
+  # Validates all adapter types against LIVE Aave/Uniswap/Curve pools on Base's
+  # public testnet, plus the eth_getBalance funding assertion. This job needs no
+  # Docker devnet and no anvil — it talks directly to the Base public testnet RPC
+  # named by the BASE_TESTNET_RPC_URL secret, funding ephemeral accounts from
   # BASE_TESTNET_FUNDER_KEY.
   #
   # GRACEFUL SKIP CONTRACT: when BASE_TESTNET_RPC_URL is unset (the secret has
   # not been provisioned, or the Robot Money contracts have not yet been deployed
-  # to Base Sepolia — both prerequisites are out of scope for #839), the
+  # to Base's public testnet — both prerequisites are out of scope for #839), the
   # parameterized tests skip the testnet network and pass. So this job is green
   # both before and after the testnet environment is provisioned; provisioning
   # the secret flips it from "skipped" to "live-exercised" with no code change.
@@ -216,11 +216,11 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     env:
       CI_CLASS: system-correctness
-      # Live Base Sepolia RPC + faucet-funded EOA key. Absent ⇒ tests skip.
+      # Live Base public testnet RPC + faucet-funded EOA key. Absent ⇒ tests skip.
       BASE_TESTNET_RPC_URL: ${{ secrets.BASE_TESTNET_RPC_URL }}
       BASE_TESTNET_FUNDER_KEY: ${{ secrets.BASE_TESTNET_FUNDER_KEY }}
       BASE_TESTNET_FUNDER_ADDR: ${{ secrets.BASE_TESTNET_FUNDER_ADDR }}
-      # Robot Money contracts deployed to Base Sepolia (deploy is a prerequisite,
+      # Robot Money contracts deployed to Base's public testnet (deploy is a prerequisite,
       # out of scope for #839). Absent ⇒ the vault-stack adapter sub-test skips
       # while the live Aave/Uniswap legs still run.
       RM_TESTNET_VAULT_ADDR: ${{ secrets.RM_TESTNET_VAULT_ADDR }}

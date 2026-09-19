@@ -4,12 +4,12 @@
 //!
 //! Validates that the Robot Money strategy adapters and the surrounding
 //! third-party DeFi services behave consistently across **Robot Money Devnet** and
-//! **Base testnet (Sepolia)**. A single test body runs once per
+//! **Base's public testnet (currently Sepolia)**. A single test body runs once per
 //! [`rmpc_fork_e2e::Network`] via the `parameterized_e2e!` macro (decision D3 —
 //! comprehensive adapter coverage with shared templates, no copy-paste):
 //!
 //! - devnet runs against an anvil-fork / the checked-in fixture (existing path);
-//! - testnet runs against the live Base Sepolia RPC named by
+//! - testnet runs against the live Base public testnet RPC named by
 //!   `BASE_TESTNET_RPC_URL`, funded from `BASE_TESTNET_FUNDER_KEY`.
 //!
 //! Each network whose RPC endpoint is unset is **skipped gracefully** (never a
@@ -82,7 +82,7 @@ sol! {
     }
 }
 
-const SWAP_USDC: u64 = 5_000_000; // 5 USDC — small to survive thin Sepolia liquidity
+const SWAP_USDC: u64 = 5_000_000; // 5 USDC — small to survive thin testnet liquidity
 const SUPPLY_USDC: u64 = 5_000_000; // 5 USDC into Aave
 
 /// One funded account on the network under test.
