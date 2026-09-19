@@ -106,7 +106,6 @@ the chain id at query time. The stable string values are:
 | `network_env`      | Chain id | Description                        |
 |--------------------|----------|------------------------------------|
 | `local_devnet`     | 31337    | Anvil / local devnet               |
-| `rm_testnet`       | 84532    | Robot Money testnet (Base Sepolia) |
 | `production_base`  | 8453     | Production Base mainnet            |
 | `unknown`          | other    | Unrecognised chain                 |
 

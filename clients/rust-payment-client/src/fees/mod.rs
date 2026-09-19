@@ -48,15 +48,14 @@ pub const ONE_GWEI: u128 = 1_000_000_000;
 /// |----------------------|--------|---------------|
 /// | Ethereum mainnet     | 1      | 100 gwei      |
 /// | Base mainnet         | 8453   | 1 gwei        |
-/// | Base Sepolia         | 84532  | 1 gwei        |
 /// | Other (unknown)      | —      | 100 gwei + warn |
 pub fn default_max_fee_per_gas_cap_wei(chain_id: u64) -> Option<u64> {
     match chain_id {
         // L1 mainnet — 100 gwei keeps us out of fee spikes.
         1 => Some(100 * ONE_GWEI as u64),
-        // Base mainnet and Base Sepolia — typical fees are sub-gwei,
-        // so 1 gwei is the right "loud" ceiling.
-        8453 | 84532 => Some(ONE_GWEI as u64),
+        // Base mainnet — typical fees are sub-gwei, so 1 gwei is the
+        // right "loud" ceiling.
+        8453 => Some(ONE_GWEI as u64),
         // Unknown chain id — caller falls back with a warning. Test
         // environments that need a different cap must set it explicitly
         // via `[fees].max_fee_per_gas_cap` in the harness config; the

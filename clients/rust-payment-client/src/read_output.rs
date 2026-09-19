@@ -115,9 +115,9 @@ pub struct Envelope<T: Serialize> {
     pub source: Source,
     /// Machine-readable network environment label derived from [`chain_id`].
     ///
-    /// Stable values: `"local_devnet"`, `"rm_testnet"`, `"production_base"`,
-    /// `"unknown"`. Consumers MUST NOT match on the integer `chain_id`; they
-    /// SHOULD match on this string so the mapping can be extended without
+    /// Stable values: `"local_devnet"`, `"production_base"`, `"unknown"`.
+    /// Consumers MUST NOT match on the integer `chain_id`; they SHOULD
+    /// match on this string so the mapping can be extended without
     /// breaking consumers.
     pub network_env: NetworkEnv,
     /// `true` if any sub-read in a multi-read command failed. `false`
@@ -279,10 +279,11 @@ mod tests {
         let v = serde_json::to_value(&env).unwrap();
         assert_eq!(v["network_env"], "local_devnet");
 
-        // RM testnet (84532)
+        // Base Sepolia (84532) — no dedicated variant; falls through to
+        // Unknown like any other unrecognized chain.
         let env: Envelope<EmptyData> = PartialBuilder::new(84532, 1, EmptyData {}).finish();
         let v = serde_json::to_value(&env).unwrap();
-        assert_eq!(v["network_env"], "rm_testnet");
+        assert_eq!(v["network_env"], "unknown");
 
         // Unknown chain
         let env: Envelope<EmptyData> = PartialBuilder::new(424_242, 1, EmptyData {}).finish();

@@ -16,7 +16,7 @@
 #
 # USAGE
 #   BASESCAN_API_KEY=<key> \
-#   NETWORK=base              \  # "base" (mainnet) or "base-sepolia"
+#   NETWORK=base              \  # "base" (mainnet)
 #   TIMEOUT_SECONDS=3600      \  # default 3600 s (1 h)
 #   POLL_INTERVAL_SECONDS=30  \  # default 30 s
 #   bash scripts/assert-basescan-verified.sh <addr1> [addr2 ...]
@@ -31,7 +31,6 @@
 #
 # NETWORK → BaseScan API base URL
 #   base          → https://api.basescan.org/api
-#   base-sepolia  → https://api-sepolia.basescan.org/api
 #
 # EXIT CODES
 #   0  — all supplied addresses are verified on BaseScan
@@ -59,12 +58,12 @@ fail() { log "ERROR: $*"; exit 1; }
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  BASESCAN_API_KEY=<key> [NETWORK=base|base-sepolia] \
+  BASESCAN_API_KEY=<key> [NETWORK=base] \
     bash scripts/assert-basescan-verified.sh <address> [address ...]
 
 Environment variables:
   BASESCAN_API_KEY       BaseScan API key (required unless MOCK_BASESCAN_VERIFIED is set)
-  NETWORK                "base" (mainnet, default) or "base-sepolia"
+  NETWORK                "base" (mainnet, default)
   TIMEOUT_SECONDS        Total wait budget in seconds (default: 3600)
   POLL_INTERVAL_SECONDS  How long to wait between retries (default: 30)
   MOCK_BASESCAN_VERIFIED     Comma-separated addresses to treat as verified (test mode)
@@ -89,11 +88,8 @@ case "${NETWORK}" in
   base)
     API_BASE="https://api.basescan.org/api"
     ;;
-  base-sepolia)
-    API_BASE="https://api-sepolia.basescan.org/api"
-    ;;
   *)
-    fail "Unknown NETWORK '${NETWORK}'. Use 'base' or 'base-sepolia'."
+    fail "Unknown NETWORK '${NETWORK}'. Use 'base'."
     ;;
 esac
 

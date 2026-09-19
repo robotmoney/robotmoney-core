@@ -131,7 +131,6 @@ Stable label values:
 | `network_env` value  | Meaning                                    |
 |----------------------|--------------------------------------------|
 | `local_devnet`       | Anvil / local devnet (chain id 31337)      |
-| `rm_testnet`         | Robot Money testnet — Base Sepolia (84532) |
 | `production_base`    | Production Base mainnet (8453)             |
 | `unknown`            | Unrecognised chain id                      |
 

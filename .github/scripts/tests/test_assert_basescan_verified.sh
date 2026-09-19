@@ -126,21 +126,6 @@ test_invalid_network_exits_nonzero() {
 }
 
 # ---------------------------------------------------------------------------
-# Test: base-sepolia network accepted (exits 0 when mock-verified)
-# ---------------------------------------------------------------------------
-test_base_sepolia_network_ok() {
-  local addr="0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-  local exit_code
-  MOCK_BASESCAN_VERIFIED="${addr}" \
-    NETWORK=base-sepolia \
-    TIMEOUT_SECONDS=5 \
-    POLL_INTERVAL_SECONDS=1 \
-    bash "${SCRIPT}" "${addr}" 2>/dev/null \
-    && exit_code=$? || exit_code=$?
-  [[ ${exit_code} -eq 0 ]]
-}
-
-# ---------------------------------------------------------------------------
 # Run all tests
 # ---------------------------------------------------------------------------
 run_test "no_addresses_exits_2"                test_no_addresses_exits_2
@@ -150,7 +135,6 @@ run_test "unverified_timeout_exits_1"          test_unverified_timeout_exits_1
 run_test "mixed_timeout_exits_1"               test_mixed_timeout_exits_1
 run_test "unverified_timeout_logs_address"     test_unverified_timeout_logs_address
 run_test "invalid_network_exits_nonzero"       test_invalid_network_exits_nonzero
-run_test "base_sepolia_network_ok"             test_base_sepolia_network_ok
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"

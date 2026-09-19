@@ -55,8 +55,8 @@ pub struct SelfCheckOutput {
     pub chain_id: u64,
     /// Machine-readable network environment label derived from `chain_id`.
     ///
-    /// Stable values: `"local_devnet"`, `"rm_testnet"`, `"production_base"`,
-    /// `"unknown"`. Consumers MUST NOT match on `chain_id` directly.
+    /// Stable values: `"local_devnet"`, `"production_base"`, `"unknown"`.
+    /// Consumers MUST NOT match on `chain_id` directly.
     pub network_env: NetworkEnv,
     pub gateway: String,
     pub software_fallback_allowed: bool,
