@@ -48,7 +48,7 @@ on:
   # would introduce the red is red before it is merged anywhere, not only after
   # it lands on a release branch.
   push:
-    branches: ["releases-*", "fusion/**"]
+    branches: ["releases-*"]
     tags: ["v*.*.*"]
   pull_request:
   workflow_dispatch:

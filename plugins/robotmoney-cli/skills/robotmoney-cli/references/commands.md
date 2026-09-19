@@ -5,6 +5,16 @@ Complete flag reference for all `rmpc` subcommands. Every command requires
 
 ## Read commands
 
+### `rmpc build-info`
+
+Print the exact source commit this binary was compiled from (embedded at
+build time), plus its cargo version. No `--config` needed — this is a
+static property of the binary on disk, not a chain read.
+
+```
+rmpc build-info [--pretty]
+```
+
 ### `rmpc self-check`
 
 Print the signer-backend self-check report.
