@@ -117,19 +117,18 @@ Before any transaction is broadcast:
    contract in the ceremony's runtime set, and the env-default guard against
    an unsafe `RouterGovernance` `EXECUTION_DELAY`/`QUORUM_THRESHOLD`.
 2. **Role and address validation.** `Deploy.s.sol`'s and every companion
-   deploy script's own `_validate` step (P2-P6 in
-   each deploy script's own `_validate`)
-   — distinct non-zero role addresses, canonical asset address with deployed
-   bytecode, a real timelock/Safe destination for the eventual role handover.
+   deploy script's own `_validate` step enforces distinct non-zero role
+   addresses, a canonical asset address with deployed bytecode, and a real
+   timelock/Safe destination for the eventual role handover.
 3. **Funding.** The deployer EOA holds enough native gas token and enough of
    the seed asset (`SEED_DEPOSIT_AMOUNT` in `Deploy.s.sol` — see
    `docs/future/review-usdc-seed.md` for its current temporary value) for the
    mandatory seed deposit.
 4. **Network identity.** Confirm the RPC's reported chain id matches the
-   target network's expected chain id before broadcasting anything — every
+   target network's expected chain id before broadcasting anything. Every
    deploy script in this repo that broadcasts checks this itself and refuses
-   to proceed on a mismatch each script's own chain-id assertion is the pattern every network's runbook
-   should follow.
+   to proceed on a mismatch — each script's own chain-id assertion is the
+   pattern every network's runbook should follow.
 
 5. **Explorer-database migrations.** Check whether the release ships an
    `services/explorer-indexer/migrations/` file that cannot backfill — i.e. one

@@ -115,7 +115,6 @@ Measured against the live stage chain and the committed sources, 2026-09-18.
 | Environment | Safe | Quorum enforced | Drives the timelock |
 |---|---|---|---|
 | **CI** (`.github/workflows/suite-01-02-forge-tests.yml:254`) | real proxy, 2-of-3, via canonical factory | **yes** | `execTransaction`, two packed signatures |
-| **Base Sepolia** (`scripts/base-sepolia-rehearsal/rehearsal.sh:169`) | real when `--safe` given, stand-in otherwise | conditional | conditional |
 | **Stage** (`scripts/stage/fusion-ceremony.sh:479`) | `RehearsalSafe` stand-in, unconditional | **no** | one EOA calls `exec()` |
 | **Production** (`docs/technical/security-model.md:89`) | real 2-of-N, hardware wallets | yes | N signers |
 
@@ -280,8 +279,9 @@ is a port, not new cryptographic work.
 single-signature negative control (R13). Update `AC-ID-06`'s clause labels in
 `devops/fusion-qa/src/checks/ceremony-verify.ts` to match.
 
-**Step 5 — Base Sepolia (R8).** Remove the `rehearsal.sh:169` fallback so `--safe`
-becomes required, or have it create a real proxy the same way step 3 does.
+**Step 5 — Base Sepolia (R8): moot.** The Base Sepolia rehearsal path this step
+would have changed was removed outright (issue #1458, PR #1451); there is no
+`rehearsal.sh` fallback left to fix.
 
 ---
 
