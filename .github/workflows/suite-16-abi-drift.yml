@@ -40,8 +40,9 @@
 #    either drift-gated or recorded against an OPEN tracking issue, so an
 #    un-gated file can no longer persist untracked. #1362 then regenerated six
 #    of the seven and moved them into the diff below. The one still un-gated is
-#    MockVault.json, tracked by #1286 (Q3: should the clients bind to a
-#    compiler-owned IVault.sol instead of a declared test fixture?).
+#    MockVault.json, tracked by #1464 (Q3: should the clients bind to a
+#    compiler-owned IVault.sol instead of a declared test fixture?). #1464
+#    replaces #1286, which was deleted from GitHub.
 #
 # 2. SOLIDITY-TRUTH EVENT TOPICS. services/explorer-indexer/src/abi.rs keeps
 #    three hand-maintained copies of every event signature, and its

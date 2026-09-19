@@ -31,7 +31,8 @@ Exit code 0 means success; non-zero means a named, structured error. Add
 ## Reference docs
 
 - **[Commands](references/commands.md)** — complete flag reference for every
-  subcommand: `deposit`, `withdraw`, `status`, `self-check`, `get-vault`,
+  subcommand: `deposit`, `withdraw`, `status`, `self-check`, `build-info`,
+  `get-vault`,
   `get-vaults`, `get-router`, `get-governance`, `get-timelock`, `get-gateway`,
   `get-agent`, `get-roles`, `get-balance`, `get-allowance`, `get-deposit`,
   `get-tx`, `propose`, `vote`, `committee`, `receipt`, `committee-identity`.
@@ -45,6 +46,7 @@ rmpc deposit         Sign and broadcast a USDC deposit through the gateway
 rmpc withdraw        Redeem vault shares through the gateway (agent-initiated)
 rmpc status          Look up a previously submitted payment by its on-chain paymentId
 rmpc self-check      Print the signer-backend self-check report (v0 §9.2 JSON)
+rmpc build-info      Print the git commit this binary was compiled from (JSON)
 rmpc get-vault       Read vault state directly from chain
 rmpc get-vaults      List all vaults registered in the VaultRegistry
 rmpc get-router      Read PortfolioRouter state: vault addresses, weight bps, and router cap

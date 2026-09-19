@@ -613,10 +613,14 @@ async fn seed_indexer_run(pool: &sqlx::PgPool, started_at_epoch: i64) {
 
 async fn seed_consensus_receipt(pool: &sqlx::PgPool, recorded_at: i64, seed: u8) {
     sqlx::query(
+        // contract_address is NOT NULL with no default since migration 0016
+        // (consensus_receipts_contract_scope), and it is part of the primary key.
+        // The receipt-liveness query reads MAX(recorded_at) filtered on chain_id
+        // alone (receipt_liveness.rs:176), so the value only has to exist.
         "INSERT INTO consensus_receipts \
          (chain_id, receipt_id, receipt_index, submitter, payload_digest, payload_uri, \
-          recorded_at, block_number, log_index, tx_hash) \
-         VALUES ($1, $2, $3, $4, $5, 'https://example.invalid/r.json', $6, 1, 0, $7)",
+          recorded_at, block_number, log_index, tx_hash, contract_address) \
+         VALUES ($1, $2, $3, $4, $5, 'https://example.invalid/r.json', $6, 1, 0, $7, $8)",
     )
     .bind(CHAIN_ID)
     .bind(&[seed; 32][..])
@@ -625,6 +629,7 @@ async fn seed_consensus_receipt(pool: &sqlx::PgPool, recorded_at: i64, seed: u8)
     .bind(&[seed; 32][..])
     .bind(recorded_at)
     .bind(&[seed; 32][..])
+    .bind(&[0xCCu8; 20][..])
     .execute(pool)
     .await
     .unwrap();

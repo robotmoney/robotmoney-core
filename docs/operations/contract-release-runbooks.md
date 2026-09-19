@@ -16,7 +16,7 @@ This is not the process for landing ordinary feature work — that is PR review
 against `dev`, covered by the repo's CI taxonomy. This document is
 specifically about the step where a set of already-merged `dev` history is
 packaged, rehearsed, and cut over into a real chain deployment — Robot Money
-Devnet, Base Sepolia, or Base mainnet.
+Devnet or Base mainnet.
 
 ## 1. Scope and authority
 
@@ -35,7 +35,7 @@ sign-off.
 
 Each contract release is identified by a semantic version `vA.B.C`, minted
 **only for a change that actually ships** — i.e. a real, addressed deployment
-to a real network (Robot Money Devnet, Base Sepolia, or Base mainnet). A
+to a real network (Robot Money Devnet or Base mainnet). A
 rehearsal that does not produce a lasting, addressed deployment record does
 not consume a version number.
 
@@ -49,7 +49,7 @@ dance, because there is no long-lived release branch to keep in sync.
 
 A version tag is **network-scoped**: `vA.B.C` alone always means the Robot
 Money Devnet (§8's default target), and a network suffix names anything
-else — `vA.B.C-base-sepolia`, `vA.B.C-base` (mainnet). A given `vA.B.C` may
+else — `vA.B.C-base` (mainnet). A given `vA.B.C` may
 exist for multiple networks (a Devnet verification pass, later followed by a
 Base mainnet deployment of the identical commit), and each network's tag is
 its own go/no-go cycle through §4.
@@ -111,14 +111,14 @@ of the above is incomplete.
 
 Before any transaction is broadcast:
 
-1. **Guard scripts.** Run `scripts/base-sepolia-rehearsal/preflight-guards.sh`
-   (network-agnostic despite the directory name — it checks the exact `forge
+1. **Guard scripts.** Run `scripts/release/preflight-guards.sh`
+   (network-agnostic — it checks the exact `forge
    build` artifacts, not a specific chain): the EIP-170 size gate on every
    contract in the ceremony's runtime set, and the env-default guard against
    an unsafe `RouterGovernance` `EXECUTION_DELAY`/`QUORUM_THRESHOLD`.
 2. **Role and address validation.** `Deploy.s.sol`'s and every companion
    deploy script's own `_validate` step (P2-P6 in
-   `docs/operations/base-sepolia-deployment.md`'s Preconditions table)
+   each deploy script's own `_validate`)
    — distinct non-zero role addresses, canonical asset address with deployed
    bytecode, a real timelock/Safe destination for the eventual role handover.
 3. **Funding.** The deployer EOA holds enough native gas token and enough of
@@ -128,8 +128,8 @@ Before any transaction is broadcast:
 4. **Network identity.** Confirm the RPC's reported chain id matches the
    target network's expected chain id before broadcasting anything — every
    deploy script in this repo that broadcasts checks this itself and refuses
-   to proceed on a mismatch (see `scripts/base-sepolia-rehearsal/live.sh`'s
-   `RPC_CID` check for the pattern every network's runbook should follow).
+   to proceed on a mismatch each script's own chain-id assertion is the pattern every network's runbook
+   should follow.
 
 5. **Explorer-database migrations.** Check whether the release ships an
    `services/explorer-indexer/migrations/` file that cannot backfill — i.e. one
@@ -154,8 +154,7 @@ failures and no silently-skipped check.
 
 ### 4.3. Cutover — the deploy ceremony
 
-Run the ordered deploy-script sequence documented in
-`docs/operations/base-sepolia-deployment.md`'s "Ceremony steps" section (the
+Run the ordered deploy-script sequence the deploy scripts themselves define (the
 canonical step order and postcondition set — this policy does not restate it,
 since the deploy scripts and their order are the same regardless of target
 network): core stack (vault, adapters, gateway, seed deposit) → vault
@@ -173,8 +172,7 @@ the deployment is usable, not just that the transactions didn't revert. At
 minimum:
 
 1. **Role wiring.** Re-run every `cast call ... hasRole(...)` postcondition
-   named in `docs/operations/base-sepolia-deployment.md`'s per-step
-   postconditions — do not trust that broadcast success implies correct role
+   named in each deploy script's per-step postconditions — do not trust that broadcast success implies correct role
    state.
 2. **Functional smoke test.** Execute one real deposit and one real
    withdrawal against the deployed vault (through the gateway, using a
@@ -221,7 +219,7 @@ failure's mitigation depends on how far the ceremony got:
   state cannot be transplanted onto fixed contract code.
 
 The rollback/mitigation procedure must be written into the per-release
-runbook and rehearsed on the Devnet at least once before a Base Sepolia or
+runbook and rehearsed on the Devnet at least once before a
 mainnet deployment.
 
 ### 4.7. Production rollout report
@@ -279,5 +277,4 @@ no release branch to backport from, since every deployment runs the same
 | Network | Chain id | Default per ADR-0013 | Notes |
 | --- | --- | --- | --- |
 | Robot Money Devnet | `918453` | **Yes — the default verification target.** | Local `docker compose` stack, genesis forked from real Base-mainnet state (`docs/technical/full-stack-devnet.md`). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record; a version tag against the Devnet documents a verification pass, not a persistent deployment. |
-| Base Sepolia | `84532` | Rehearsal only, real network conditions. | `docs/operations/base-sepolia-deployment.md`. Compound V3 and Morpho lack production-parity deployments here (ADR-0013) — a full three-adapter ceremony cannot complete; Aave V3-only ceremonies are possible. |
-| Base mainnet | `8453` | The eventual real target — a separate, deliberately-costed decision (D9). | Requires an audit pass, Safe/hardware-wallet signers, and a funded submitter key per `docs/operations/base-sepolia-deployment.md` §"Why this exists." |
+| Base mainnet | `8453` | The eventual real target — a separate, deliberately-costed decision (D9). | Requires an audit pass, Safe/hardware-wallet signers, and a funded submitter key. |

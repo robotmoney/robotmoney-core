@@ -2,20 +2,25 @@
 
 ## What changed
 
+> **The reason for this change no longer exists.** The Base Sepolia rehearsal
+> path was removed — we do not deploy to Sepolia. `SEED_DEPOSIT_AMOUNT` is
+> still `1 * 1e6`, so a production deploy constant remains weakened for a
+> network that is no longer a target. Restoring `1_000 * 1e6` is a deploy
+> behaviour change and needs its own decision; it is deliberately NOT bundled
+> into the Sepolia removal.
+
 `Deploy.s.sol`'s `SEED_DEPOSIT_AMOUNT` was temporarily lowered from
 `1_000 * 1e6` (1,000 USDC) to `1 * 1e6` (1 USDC) to unblock the Base Sepolia
-live deployment rehearsal (docs/operations/base-sepolia-deployment.md):
-testnet USDC faucets (Circle) cap requests at 20 USDC per claim, making it
-impractical to accumulate 1,000 USDC on a throwaway deployer key just to
-exercise the deploy tooling.
+live deployment rehearsal: testnet USDC faucets (Circle) cap requests at
+20 USDC per claim, making it impractical to accumulate 1,000 USDC on a
+throwaway deployer key just to exercise the deploy tooling.
 
 Files touched:
 
 - `contracts/script/Deploy.s.sol` — `SEED_DEPOSIT_AMOUNT` constant.
 - `contracts/test/Deploy.t.sol` — unit assertion of the constant's value.
 - `scripts/base-sepolia-rehearsal/rehearsal.sh` — `seed_deposit_min` postcondition
-  threshold (99.9% of `SEED_DEPOSIT_AMOUNT`), which drifted stale on the first
-  cut of this change and broke the rehearsal CI job.
+  threshold (99.9% of `SEED_DEPOSIT_AMOUNT`). **Removed with the rehearsal path.**
 
 ## Why this matters
 

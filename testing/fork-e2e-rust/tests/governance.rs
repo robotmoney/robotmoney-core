@@ -350,7 +350,7 @@ fn governance_propose_vote_execute() {
         deployer.address,
         3600,             // votingPeriod — MIN_VOTING_PERIOD enforced by constructor
         3600,             // executionDelay — MIN_EXECUTION_DELAY enforced by constructor
-        U256::from(1u64), // quorumThreshold
+        U256::from(2u64), // quorumThreshold — MIN_QUORUM_THRESHOLD is 2 (RouterGovernance.sol:69)
     );
 
     eprintln!(
@@ -696,7 +696,7 @@ fn governance_execute_before_delay_reverts() {
         deployer.address,
         3600,             // votingPeriod — MIN_VOTING_PERIOD enforced by constructor
         7200,             // executionDelay — large so we can trigger before it elapses
-        U256::from(1u64), // quorumThreshold
+        U256::from(2u64), // quorumThreshold — MIN_QUORUM_THRESHOLD is 2 (RouterGovernance.sol:69)
     );
 
     eprintln!(

@@ -23,6 +23,18 @@
 //! canonicalize to the `payloadDigest` anchored beside the receipt, and they
 //! must have been fetched from the anchored `payloadUri`.
 //!
+//! `weights_recomputation` (`bps_conversion`, invariant 8, landed alongside
+//! this file) now refuses to canonicalize ANY receipt whose `weights` field
+//! disagrees with the mean of its own embedded analyst submissions — a defense
+//! that fires earlier than, and independently of, the `payloadDigest` binding
+//! above. A weights-only tamper can therefore no longer produce a
+//! self-consistent `canonicalBytes` at all: there is nothing left to reseal,
+//! so `a_weights_only_tamper_is_refused_and_never_drafted` below asserts the
+//! refusal at canonicalization (`ErrReceiptSchema`) rather than at the digest
+//! comparison. The digest binding remains the test's second line of defense
+//! and is still exercised directly (`a_url_that_is_not_the_anchored_payload_uri_is_refused`,
+//! `an_unfetchable_payload_in_scan_mode_holds_the_range`, etc.).
+//!
 //! The receipt used is the REAL one from run `20260913T-run1` — session
 //! `a31ecf60-bb8f-44c0-8b69-23d3e9c2562f`, anchored and released on devnet
 //! 918453 — served in the publisher's envelope form exactly as
@@ -94,14 +106,14 @@ fn derive(body: &str) -> (B256, B256) {
     (receipt.receipt_id(), payload_digest(&canonical))
 }
 
-/// The run-1 receipt with its `weights` rewritten to put 100% in one bucket —
-/// the exact tamper reproduced against the shipped binary, which it drafted.
-/// `receipt_id` is unchanged by construction: `weights` is not in its preimage.
 /// Re-seal an edited envelope: recompute the publisher's own `canonicalBytes`
 /// so the envelope is internally consistent. A tamperer who edits the receipt
 /// and forgets this is already caught by `ErrReceiptCanonicalBytesMismatch`
 /// (T03); the interesting adversary is the one who does not forget, and for
-/// that one the anchored `payloadDigest` is the only remaining defence.
+/// that one the anchored `payloadDigest` is the only remaining defence — for
+/// any edit `weights_recomputation` cannot itself detect (see
+/// `weights_tampered_body`, which cannot use this helper at all: canonicalizing
+/// a weights-only tamper fails before there is anything left to reseal).
 fn reseal(env: &mut serde_json::Value) {
     let bare = serde_json::to_vec(&env["receipt"]).expect("serializes");
     let canonical = ConsensusReceipt::from_json_slice(&bare)
@@ -111,6 +123,15 @@ fn reseal(env: &mut serde_json::Value) {
     env["canonicalBytes"] = json!(String::from_utf8(canonical).expect("canonical bytes are utf-8"));
 }
 
+/// The run-1 receipt with `weights` rewritten to put 100% in one bucket,
+/// WITHOUT touching the embedded `analyst_signatures[*].canonical_submission`
+/// this bucket split is supposed to average. Deliberately not resealed: a
+/// receipt whose `weights` disagrees with the mean of its own submissions
+/// cannot canonicalize at all (`weights_recomputation`), so there is no
+/// self-consistent `canonicalBytes` to compute — the envelope's stale, honest
+/// `canonicalBytes` is left in place and is never reached, because
+/// `ConsensusReceipt::from_json_slice`'s own T03 cross-check calls
+/// `canonical_bytes()` before ever comparing it.
 fn weights_tampered_body() -> String {
     let mut env = run1_envelope();
     env["receipt"]["weights"] = json!([
@@ -119,8 +140,22 @@ fn weights_tampered_body() -> String {
         {"bucket": "protocol_tokens", "weight_bps": 0},
         {"bucket": "real_world_assets", "weight_bps": 0},
     ]);
-    reseal(&mut env);
     serde_json::to_string(&env).expect("serializes")
+}
+
+/// `receipt_id()` for an enveloped receipt body, computed WITHOUT
+/// canonicalizing it. `receipt_id` is `keccak256(sep + session_id + subject_id)`
+/// and never depends on `weights` or on canonicalization succeeding, so this
+/// is the only way to read it back off a body whose `weights` cannot
+/// canonicalize (see `weights_tampered_body`). Passing just the bare `receipt`
+/// object (no sibling `canonicalBytes`) is what makes `from_json_slice` skip
+/// the T03 envelope cross-check that would otherwise fail first.
+fn bare_receipt_id(envelope_json: &str) -> B256 {
+    let env: serde_json::Value = serde_json::from_str(envelope_json).expect("valid json");
+    let bare = serde_json::to_vec(&env["receipt"]).expect("serializes");
+    ConsensusReceipt::from_json_slice(&bare)
+        .expect("a weights tamper alone is still a structurally valid schema-1.0 receipt")
+        .receipt_id()
 }
 
 /// The run-1 receipt with one analyst's signature corrupted in a way that
@@ -302,31 +337,40 @@ fn stdout_json(out: &[u8]) -> serde_json::Value {
 // ─── T01 ─────────────────────────────────────────────────────────────────────
 
 /// THE REGRESSION. A weights-only tamper of the real anchored run-1 receipt
-/// must be refused with `ErrReceiptDigestMismatch` and must never reach
-/// `ready_for_review` or emit calldata.
+/// must be refused with `ErrReceiptSchema` (`weights_recomputation` refusing
+/// to canonicalize it) and must never reach `ready_for_review` or emit
+/// calldata.
 #[tokio::test]
 async fn a_weights_only_tamper_is_refused_and_never_drafted() {
     let mut server = mockito::Server::new_async().await;
     let good = untampered_body();
     let (receipt_id, anchored_digest) = derive(&good);
     let tampered = weights_tampered_body();
-    let (tampered_id, tampered_digest) = derive(&tampered);
 
     // The premise of the whole finding: the tamper is invisible to receipt_id.
     assert_eq!(
-        tampered_id, receipt_id,
+        bare_receipt_id(&tampered),
+        receipt_id,
         "weights are outside the receipt_id preimage — if this ever fails, the \
          finding this test exists for has changed shape"
     );
-    assert_ne!(
-        tampered_digest, anchored_digest,
-        "the tamper must move the digest"
-    );
+
+    // The tamper must move the digest — except there is no longer a digest to
+    // move: `weights_recomputation` refuses to canonicalize a receipt whose
+    // `weights` disagrees with the mean of its own embedded submissions, so a
+    // weights-only tamper cannot produce ANY `canonicalBytes`, resealed or
+    // not. This is the earlier, more fundamental defense; assert it directly.
+    let err = ConsensusReceipt::from_json_slice(tampered.as_bytes())
+        .and_then(|r| r.canonical_bytes())
+        .expect_err("a weights-only tamper must not canonicalize");
+    assert_eq!(err.code(), "ErrReceiptSchema", "unexpected error: {err}");
 
     let uri = format!("{}{PAYLOAD_PATH}", server.url());
     install_chain_mocks(&mut server, receipt_id, anchored_digest, &uri, true).await;
     // The URL serves the TAMPERED bytes while the chain still commits to the
-    // honest digest — the publisher-compromise case, exactly.
+    // honest digest — the publisher-compromise case, exactly. The command
+    // never gets far enough to compare digests: canonicalizing the tampered
+    // payload fails first, per the direct assertion above.
     server
         .mock("GET", PAYLOAD_PATH)
         .with_status(200)
@@ -352,7 +396,7 @@ async fn a_weights_only_tamper_is_refused_and_never_drafted() {
     assert_eq!(out.status.code(), Some(2), "a refusal exits EXIT_REFUSAL");
     let v = stdout_json(&out.stdout);
     assert_eq!(v["ok"], false);
-    assert_eq!(v["error"], "ErrReceiptDigestMismatch");
+    assert_eq!(v["error"], "ErrReceiptSchema");
     let all = String::from_utf8_lossy(&out.stdout);
     assert!(
         !all.contains("ready_for_review"),
@@ -604,7 +648,10 @@ async fn a_content_refusal_in_scan_mode_is_reported_inside_an_ok_range() {
     let v = stdout_json(&out.stdout);
     assert_eq!(v["ok"], true);
     assert_eq!(v["drafts"][0]["status"], "refused");
-    assert_eq!(v["drafts"][0]["error"], "ErrReceiptDigestMismatch");
+    // `weights_recomputation` refuses to canonicalize this weights-tampered
+    // payload before the digest comparison is ever reached — see
+    // `a_weights_only_tamper_is_refused_and_never_drafted`.
+    assert_eq!(v["drafts"][0]["error"], "ErrReceiptSchema");
 }
 
 /// A TRANSPORT refusal in scan mode must NOT be absorbed. Before T07 a single
