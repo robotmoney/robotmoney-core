@@ -162,7 +162,7 @@ impl FundingError {
     }
 }
 
-/// A funded test account on Base testnet (Sepolia). Constructed against a live
+/// A funded test account on Base's public testnet (currently Sepolia). Constructed against a live
 /// RPC endpoint; provides the `eth_getBalance` validation the acceptance
 /// criteria require ("assert by … checking account balances via eth_getBalance").
 ///

@@ -60,7 +60,7 @@ pub const UNISWAP_V3_SWAP_ROUTER: Address = address!("94cc0aac535ccdb3c01d6787d6
 pub const AAVE_V3_POOL: Address = address!("07ea79f68b2b3df564d0a34f8e19d9b1e339814b");
 
 /// Base Sepolia chain id. Mirrors [`crate::BASE_CHAIN_ID`] (Base, 8453).
-pub const BASE_SEPOLIA_CHAIN_ID: u64 = 84532;
+pub const BASE_TESTNET_CHAIN_ID: u64 = 84532;
 
 // -- Robot Money contracts (deploy is a prerequisite, out of scope) ---
 //
@@ -91,13 +91,13 @@ fn parse_env_addr(var: &str) -> Option<Address> {
 /// All live third-party Base Sepolia addresses in canonical order. Used to
 /// derive a stable address-set hash that adapter scenarios print at the top
 /// of their output, mirroring [`crate::addresses::address_set_hash`].
-pub const BASE_SEPOLIA_ADDRESSES: &[Address] = &[USDC, WETH9, UNISWAP_V3_SWAP_ROUTER, AAVE_V3_POOL];
+pub const BASE_TESTNET_ADDRESSES: &[Address] = &[USDC, WETH9, UNISWAP_V3_SWAP_ROUTER, AAVE_V3_POOL];
 
-/// keccak256 of all addresses in [`BASE_SEPOLIA_ADDRESSES`] concatenated in
+/// keccak256 of all addresses in [`BASE_TESTNET_ADDRESSES`] concatenated in
 /// declaration order. Stable so a single tampered address fails loudly.
 pub fn address_set_hash() -> B256 {
-    let mut buf = Vec::with_capacity(20 * BASE_SEPOLIA_ADDRESSES.len());
-    for a in BASE_SEPOLIA_ADDRESSES {
+    let mut buf = Vec::with_capacity(20 * BASE_TESTNET_ADDRESSES.len());
+    for a in BASE_TESTNET_ADDRESSES {
         buf.extend_from_slice(a.as_slice());
     }
     keccak256(&buf)
@@ -114,8 +114,8 @@ mod tests {
     }
 
     #[test]
-    fn sepolia_chain_id_is_84532() {
-        assert_eq!(BASE_SEPOLIA_CHAIN_ID, 84532);
+    fn base_testnet_chain_id_is_84532() {
+        assert_eq!(BASE_TESTNET_CHAIN_ID, 84532);
     }
 
     #[test]
@@ -124,10 +124,10 @@ mod tests {
         let h = address_set_hash();
         assert_eq!(h, address_set_hash());
         // All four live-service addresses are distinct.
-        let mut sorted = BASE_SEPOLIA_ADDRESSES.to_vec();
+        let mut sorted = BASE_TESTNET_ADDRESSES.to_vec();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(sorted.len(), BASE_SEPOLIA_ADDRESSES.len());
+        assert_eq!(sorted.len(), BASE_TESTNET_ADDRESSES.len());
     }
 
     #[test]

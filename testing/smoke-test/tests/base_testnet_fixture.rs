@@ -107,6 +107,7 @@ fn account_funding_assertion_custom() {
 /// Verify fixed RPC endpoint configuration (for hardcoded testnet URLs).
 #[test]
 fn rpc_endpoint_fixed() {
+    // Illustrative example URL; Base's public testnet currently happens to be Sepolia.
     let testnet_url = "https://base-sepolia.g.alchemy.com/v2/your-api-key";
     let ep = RpcEndpoint::Fixed(testnet_url.to_string());
     assert_eq!(ep.resolve(), Some(testnet_url.to_string()));
@@ -162,7 +163,7 @@ fn base_testnet_account_funding_assertion() {
     use alloy_primitives::Address;
 
     let endpoint = RpcEndpoint::EnvVar("BASE_TESTNET_RPC_URL".to_string());
-    // USDC on Base Sepolia (Circle testnet); overridable for non-default setups.
+    // USDC on Base's public testnet (Circle testnet); overridable for non-default setups.
     let usdc: Address = std::env::var("BASE_TESTNET_USDC_ADDR")
         .ok()
         .and_then(|s| s.parse().ok())

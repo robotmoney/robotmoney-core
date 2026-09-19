@@ -12,13 +12,13 @@
 
 ## Overview
 
-Base testnet is a Sepolia-linked test network where Robot Money contracts have been deployed (or will be) alongside live third-party services (Aave, Curve, Uniswap). Parallel e2e tests against Base testnet validate multi-network adapter behavior without relying on devnet-only deployment machinery.
+Base testnet is Base's public testnet (currently Sepolia) where Robot Money contracts have been deployed (or will be) alongside live third-party services (Aave, Curve, Uniswap). Parallel e2e tests against Base testnet validate multi-network adapter behavior without relying on devnet-only deployment machinery.
 
 ### Key differences from devnet tests
 
 | Aspect | Devnet (smoke-test) | Base testnet (fork-e2e) |
 |--------|-----|-----|
-| **Chain lifecycle** | Fresh boots via Docker Compose + Geth/Lighthouse | Pre-existing chain (Base Sepolia) |
+| **Chain lifecycle** | Fresh boots via Docker Compose + Geth/Lighthouse | Pre-existing chain (Base's public testnet) |
 | **Contract deployment** | `forge script` at fixture time | Pre-deployed or deployed once at test startup |
 | **Account funding** | `forge script` + storage-slot writes | Faucet API or seeded transfers |
 | **RPC connectivity** | Hardcoded localhost ports | `BASE_TESTNET_RPC_URL` env var |
@@ -30,9 +30,10 @@ Base testnet is a Sepolia-linked test network where Robot Money contracts have b
 
 ### RPC endpoint
 
-Set `BASE_TESTNET_RPC_URL` to point to a Base Sepolia node:
+Set `BASE_TESTNET_RPC_URL` to point to a node on Base's public testnet:
 
 ```bash
+# Example — Base's public testnet currently happens to be Sepolia.
 export BASE_TESTNET_RPC_URL="https://base-sepolia.g.alchemy.com/v2/YOUR_API_KEY"
 # or
 export BASE_TESTNET_RPC_URL="http://localhost:8545"  # local node
@@ -44,10 +45,10 @@ Tests gracefully skip if the env var is unset.
 
 | Variable | Purpose | Example |
 |----------|---------|---------|
-| `BASE_TESTNET_RPC_URL` | Base Sepolia RPC endpoint (required for live testnet tests) | `https://base-sepolia.g.alchemy.com/v2/...` |
-| `BASE_TESTNET_FUNDER_KEY` | Private key of a faucet-funded Base Sepolia EOA; seeds ephemeral test accounts via signed transfers (`ForkFixture::ephemeral_testnet`). Unset ⇒ testnet legs skip. | `0xabc…` |
+| `BASE_TESTNET_RPC_URL` | RPC endpoint for Base's public testnet (required for live testnet tests) | `https://base-sepolia.g.alchemy.com/v2/...` |
+| `BASE_TESTNET_FUNDER_KEY` | Private key of a faucet-funded EOA on Base's public testnet; seeds ephemeral test accounts via signed transfers (`ForkFixture::ephemeral_testnet`). Unset ⇒ testnet legs skip. | `0xabc…` |
 | `BASE_TESTNET_FUNDER_ADDR` | Address asserted by the smoke-test `eth_getBalance` funding gate (`base_testnet_account_funding_assertion`). | `0x1234…` |
-| `BASE_TESTNET_USDC_ADDR` | Override for Base Sepolia USDC (defaults to Circle's `0x036C…cF7e`). | `0x036C…cF7e` |
+| `BASE_TESTNET_USDC_ADDR` | Override for USDC on Base's public testnet (defaults to Circle's `0x036C…cF7e`). | `0x036C…cF7e` |
 | `RM_TESTNET_VAULT_ADDR` | Deployed `RobotMoneyVault` on Base Sepolia (deploy is a prerequisite, out of scope for #839). Unset ⇒ the vault-stack adapter leg (Compound/Morpho/Curve) skips. | `0x…` |
 | `RM_TESTNET_<PROTO>_ADAPTER_ADDR` | Deployed strategy-adapter addresses (`AAVE_V3`, `COMPOUND_V3`, `MORPHO`). | `0x…` |
 | `RMPC_FORK_RPC_URL` | Base archive RPC for local fork — required for the Robot Money Devnet leg of the parameterized adapter test (fixture-only is skipped). | `https://base.g.alchemy.com/v2/...` |
@@ -132,13 +133,13 @@ Deployment addresses will be stored in a registry module (e.g., `base_testnet::a
 
 ## Known divergences from Base
 
-1. **Block timing:** Base Sepolia produces blocks slower than Base (~12s vs ~2s). Increase test timeouts if polling for block production.
+1. **Block timing:** Base's public testnet produces blocks slower than Base (~12s vs ~2s on Sepolia today). Increase test timeouts if polling for block production.
 
 2. **Faucet availability:** Test account funding depends on external faucet APIs. Tests should skip gracefully if faucet is down (return `HarnessError::SkipNoRpc` or similar).
 
-3. **Gas prices:** Base Sepolia gas prices fluctuate less predictably. Hard-coded gas estimates from Base may fail; use dynamic `eth_estimateGas`.
+3. **Gas prices:** Base's public testnet gas prices fluctuate less predictably. Hard-coded gas estimates from Base may fail; use dynamic `eth_estimateGas`.
 
-4. **Service availability:** Live Aave/Curve/Uniswap pools on Sepolia may have low liquidity. Test swap sizes appropriately (smoke amounts, not real deposit sizes).
+4. **Service availability:** Live Aave/Curve/Uniswap pools on the public testnet may have low liquidity. Test swap sizes appropriately (smoke amounts, not real deposit sizes).
 
 ---
 
@@ -187,7 +188,7 @@ curl -X POST "$BASE_TESTNET_RPC_URL" \
 
 ### Account funding fails
 
-Verify faucet is operational. Base Sepolia faucet status:
+Verify faucet is operational. Base's public testnet faucet status (Sepolia today):
 - **Alchemy Faucet:** https://www.alchemy.com/faucets/base-sepolia (requires Alchemy account)
 - **Dripcode Faucet:** https://dripcode.io/ (requires Twitter verification)
 
@@ -201,7 +202,7 @@ Verify the adapter is deployed to the expected address and has correct ABI. Chec
 
 Done in PR #849:
 
-- [x] Base Sepolia live-service address registry —
+- [x] Base public testnet live-service address registry —
   `testing/fork-e2e-rust/src/base_testnet_addresses.rs` (USDC, WETH9, Uniswap
   V3 SwapRouter02, Aave V3 Pool) + `Network::{chain_id,usdc,weth9,…}` accessors.
 - [x] `BaseTestnetAccount::new()` + `assert_funded()` — real `eth_getBalance`

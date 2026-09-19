@@ -46,7 +46,7 @@ pub mod addresses;
 /// Dev-scout module for Base testnet e2e infrastructure (issue #842).
 /// Multi-network parameter configuration and integration seams for issue #839.
 pub mod base_testnet;
-/// Deployed contract addresses for Base Sepolia (testnet, chain 84532).
+/// Deployed contract addresses for Base's public testnet (currently Sepolia, chain 84532).
 /// Mirror of [`addresses`] for the parameterized multi-network e2e tests
 /// (issue #839).
 pub mod base_testnet_addresses;
@@ -648,8 +648,9 @@ impl ForkFixture {
     ///
     /// - [`Network::RobotMoneyDevnet`] delegates to [`Self::new`] — anvil-fork or the
     ///   checked-in fixture, exactly as the existing Phase 2 scenarios use.
-    /// - [`Network::BaseTestnet`] connects **directly** to the live Base Sepolia
-    ///   RPC named by `BASE_TESTNET_RPC_URL` (no anvil, no fork). The connected
+    /// - [`Network::BaseTestnet`] connects **directly** to the live Base
+    ///   public testnet (currently Sepolia) RPC named by `BASE_TESTNET_RPC_URL`
+    ///   (no anvil, no fork). The connected
     ///   endpoint's chain id is verified to equal [`Network::chain_id`] so a
     ///   mis-pointed RPC fails loudly.
     ///
@@ -693,7 +694,7 @@ impl ForkFixture {
         }
     }
 
-    /// Connect to a live external chain at `url` (e.g. Base Sepolia). No anvil
+    /// Connect to a live external chain at `url` (e.g. Base's public testnet). No anvil
     /// is spawned and no admin RPCs (`anvil_*`) are used — only standard
     /// JSON-RPC. Account funding on such a chain must go through a pre-funded
     /// EOA / faucet (see [`Self::ephemeral_testnet`]); the `anvil_setBalance`
@@ -824,10 +825,10 @@ impl ForkFixture {
         })
     }
 
-    /// Build a fresh ephemeral account on a **live external chain** (Base
-    /// Sepolia), funded by seeded transfers from a pre-funded funder EOA.
+    /// Build a fresh ephemeral account on a **live external chain** (Base's
+    /// public testnet), funded by seeded transfers from a pre-funded funder EOA.
     ///
-    /// On Base Sepolia there are no anvil admin RPCs and the genesis-funded
+    /// On Base's public testnet there are no anvil admin RPCs and the genesis-funded
     /// `HARNESS_USDC_HOLDER` does not exist, so the funder key is supplied via
     /// the `BASE_TESTNET_FUNDER_KEY` env var (a faucet-funded testnet EOA's
     /// private key). The funder sends `eth_wei` native ETH and, when

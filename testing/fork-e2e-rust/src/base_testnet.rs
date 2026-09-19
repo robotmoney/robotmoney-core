@@ -34,7 +34,7 @@ use std::env;
 pub enum Network {
     /// Robot Money Devnet (forked Base block via anvil or direct RPC).
     RobotMoneyDevnet,
-    /// Base testnet (Sepolia-linked, faucet-funded).
+    /// Base's public testnet (currently Sepolia, faucet-funded).
     BaseTestnet,
 }
 
@@ -84,15 +84,15 @@ impl Network {
         }
     }
 
-    /// EVM chain id for this network. Base = 8453, Base Sepolia
-    /// (testnet) = 84532. The parameterized adapter tests assert the
+    /// EVM chain id for this network. Base = 8453, Base's public testnet
+    /// (currently Sepolia) = 84532. The parameterized adapter tests assert the
     /// connected RPC reports this chain id before exercising any adapter,
     /// so a misconfigured endpoint fails loudly rather than silently
     /// testing the wrong chain.
     pub fn chain_id(&self) -> u64 {
         match self {
             Network::RobotMoneyDevnet => crate::BASE_CHAIN_ID,
-            Network::BaseTestnet => crate::base_testnet_addresses::BASE_SEPOLIA_CHAIN_ID,
+            Network::BaseTestnet => crate::base_testnet_addresses::BASE_TESTNET_CHAIN_ID,
         }
     }
 
@@ -200,7 +200,7 @@ mod tests {
         assert_ne!(
             Network::RobotMoneyDevnet.usdc(),
             Network::BaseTestnet.usdc(),
-            "Base and Sepolia USDC must be different contracts"
+            "Base and Base testnet USDC must be different contracts"
         );
         assert_eq!(
             Network::RobotMoneyDevnet.weth9(),
