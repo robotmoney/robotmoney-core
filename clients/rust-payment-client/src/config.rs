@@ -512,12 +512,6 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
     }
 
     #[test]
-    fn fee_cap_default_for_base_sepolia_is_one_gwei() {
-        let cfg = cfg_for_chain(84532, "");
-        assert_eq!(cfg.effective_max_fee_per_gas_cap(None), 1_000_000_000);
-    }
-
-    #[test]
     fn fee_cap_default_for_ethereum_mainnet_is_one_hundred_gwei() {
         let cfg = cfg_for_chain(1, "");
         assert_eq!(cfg.effective_max_fee_per_gas_cap(None), 100_000_000_000);

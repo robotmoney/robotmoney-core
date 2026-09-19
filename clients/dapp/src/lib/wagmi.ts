@@ -29,7 +29,7 @@
  * loads — no test-only branches in this file.
  */
 import { unstable_connector, http, createConfig, fallback } from "wagmi";
-import { foundry, mainnet, sepolia } from "wagmi/chains";
+import { foundry, mainnet } from "wagmi/chains";
 import { injected } from "wagmi/connectors";
 import { defineChain } from "viem";
 
@@ -98,12 +98,11 @@ export function makeConfig(env: Record<string, string | undefined>) {
     : unstable_connector(injected);
 
   return createConfig({
-    chains: [devnet, foundry, sepolia, mainnet],
+    chains: [devnet, foundry, mainnet],
     connectors: [injected()],
     transports: {
       [devnet.id]: devnetTransport,
       [foundry.id]: unstable_connector(injected),
-      [sepolia.id]: unstable_connector(injected),
       [mainnet.id]: unstable_connector(injected),
     },
   });

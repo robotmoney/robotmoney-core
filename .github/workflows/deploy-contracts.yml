@@ -14,8 +14,8 @@
 #      BASESCAN_TIMEOUT_SECONDS (default 3600 s / 1 h).
 #
 # WHY DISPATCH-ONLY
-# Contract deployments to Base mainnet and Base Sepolia are rare, deliberate
-# operations performed by an operator with the deploy key.  Automating them on
+# Contract deployments to Base mainnet are rare, deliberate operations
+# performed by an operator with the deploy key.  Automating them on
 # every tag push would increase risk.  Manual workflow_dispatch provides an
 # auditable trigger with required reviewer sign-off (GitHub environment protection
 # rules) and lets the operator choose the commit SHA and network per deployment.
@@ -25,9 +25,11 @@
 # referenced below.  Absent the secret, the verification step emits a workflow
 # error and the job fails.
 #
-# WHY BOTH NETWORKS ARE PARAMETERISED
-# Base Sepolia is used for pre-production validation; Base mainnet for production.
-# The same workflow handles both — the operator selects via the `network` input.
+# WHY THE NETWORK INPUT EXISTS
+# Robot Money deploys only to Base mainnet — there is no Sepolia deployment
+# and none is planned. The `network` input is kept as a single-choice field
+# so the workflow's shape stays stable if a future non-Sepolia testnet is
+# ever added; today `base` is the only option.
 #
 # MOCK TESTS
 # The unit tests in .github/scripts/tests/test_assert_basescan_verified.sh
@@ -42,13 +44,12 @@ on:
   workflow_dispatch:
     inputs:
       network:
-        description: "Target network: 'base' (mainnet) or 'base-sepolia'"
+        description: "Target network: 'base' (mainnet)"
         required: true
         type: choice
         options:
-          - base-sepolia
           - base
-        default: base-sepolia
+        default: base
       commit_hash:
         description: "Commit SHA to deploy from (defaults to the dispatched ref HEAD)"
         required: false
@@ -100,10 +101,6 @@ jobs:
               echo "chain_id=8453" >> "$GITHUB_OUTPUT"
               echo "rpc_url_env=BASE_MAINNET_RPC_URL" >> "$GITHUB_OUTPUT"
               ;;
-            base-sepolia)
-              echo "chain_id=84532" >> "$GITHUB_OUTPUT"
-              echo "rpc_url_env=BASE_SEPOLIA_RPC_URL" >> "$GITHUB_OUTPUT"
-              ;;
             *)
               echo "::error::Unknown network: ${{ inputs.network }}"
               exit 1
@@ -114,7 +111,7 @@ jobs:
         env:
           NETWORK: ${{ inputs.network }}
           CHAIN_ID: ${{ steps.chain.outputs.chain_id }}
-          RPC_URL: ${{ steps.chain.outputs.rpc_url_env == 'BASE_MAINNET_RPC_URL' && secrets.BASE_MAINNET_RPC_URL || secrets.BASE_SEPOLIA_RPC_URL }}
+          RPC_URL: ${{ secrets.BASE_MAINNET_RPC_URL }}
           PRIVATE_KEY: ${{ secrets.DEPLOY_PRIVATE_KEY }}
           ADMIN_ADDRESS: ${{ secrets.DEPLOY_ADMIN_ADDRESS }}
           PAUSER_ADDRESS: ${{ secrets.DEPLOY_PAUSER_ADDRESS }}

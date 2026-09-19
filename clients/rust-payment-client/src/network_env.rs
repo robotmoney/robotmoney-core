@@ -9,10 +9,10 @@
 //! # Rationale
 //!
 //! Users and autonomous agents need an unmistakable signal when they are
-//! interacting with Robot Money testnet, local devnet, or production Base.
-//! Chain id is authoritative — this module maps it to a friendly label
-//! without replacing the chain-id or code-hash preflight checks, which
-//! remain the safety gate.
+//! interacting with local devnet or production Base. Chain id is
+//! authoritative — this module maps it to a friendly label without
+//! replacing the chain-id or code-hash preflight checks, which remain the
+//! safety gate.
 //!
 //! # Wire values
 //!
@@ -23,7 +23,6 @@
 //! | Chain id | Label              |
 //! |----------|--------------------|
 //! | 31337    | `local_devnet`     |
-//! | 84532    | `rm_testnet`       |
 //! | 8453     | `production_base`  |
 //! | other    | `unknown`          |
 //!
@@ -50,8 +49,6 @@ use serde::Serialize;
 pub enum NetworkEnv {
     /// Anvil / Hardhat local devnet (chain id 31337).
     LocalDevnet,
-    /// Robot Money testnet — Base Sepolia (chain id 84532).
-    RmTestnet,
     /// Production Base mainnet (chain id 8453). Requires an explicit
     /// production warning before any write action.
     ProductionBase,
@@ -69,7 +66,6 @@ impl NetworkEnv {
     pub fn from_chain_id(chain_id: u64) -> Self {
         match chain_id {
             31337 => Self::LocalDevnet,
-            84532 => Self::RmTestnet,
             8453 => Self::ProductionBase,
             _ => Self::Unknown,
         }
@@ -80,7 +76,6 @@ impl NetworkEnv {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::LocalDevnet => "local_devnet",
-            Self::RmTestnet => "rm_testnet",
             Self::ProductionBase => "production_base",
             Self::Unknown => "unknown",
         }
@@ -94,7 +89,6 @@ impl NetworkEnv {
     pub const fn human_label(self) -> &'static str {
         match self {
             Self::LocalDevnet => "local devnet",
-            Self::RmTestnet => "Robot Money testnet (Base Sepolia)",
             Self::ProductionBase => "[PRODUCTION] Base mainnet",
             Self::Unknown => "unknown chain",
         }
@@ -142,10 +136,13 @@ mod tests {
     }
 
     #[test]
-    fn rm_testnet_chain_id() {
+    fn base_sepolia_chain_id_is_unknown() {
+        // Robot Money has no Base Sepolia deployment and none is planned —
+        // 84532 must fall through to Unknown like any other unrecognized
+        // chain, not get a dedicated variant.
         let env = NetworkEnv::from_chain_id(84532);
-        assert_eq!(env, NetworkEnv::RmTestnet);
-        assert_eq!(env.as_str(), "rm_testnet");
+        assert_eq!(env, NetworkEnv::Unknown);
+        assert_eq!(env.as_str(), "unknown");
         assert!(!env.is_production());
         assert!(env.production_warning().is_none());
     }
@@ -182,7 +179,6 @@ mod tests {
     fn as_str_values_are_stable() {
         // These strings are part of the operator-visible wire contract.
         assert_eq!(NetworkEnv::LocalDevnet.as_str(), "local_devnet");
-        assert_eq!(NetworkEnv::RmTestnet.as_str(), "rm_testnet");
         assert_eq!(NetworkEnv::ProductionBase.as_str(), "production_base");
         assert_eq!(NetworkEnv::Unknown.as_str(), "unknown");
     }
@@ -194,9 +190,6 @@ mod tests {
 
         let v = serde_json::to_value(NetworkEnv::LocalDevnet).unwrap();
         assert_eq!(v, serde_json::json!("local_devnet"));
-
-        let v = serde_json::to_value(NetworkEnv::RmTestnet).unwrap();
-        assert_eq!(v, serde_json::json!("rm_testnet"));
 
         let v = serde_json::to_value(NetworkEnv::Unknown).unwrap();
         assert_eq!(v, serde_json::json!("unknown"));
@@ -217,7 +210,6 @@ mod tests {
     fn display_matches_human_label() {
         for env in [
             NetworkEnv::LocalDevnet,
-            NetworkEnv::RmTestnet,
             NetworkEnv::ProductionBase,
             NetworkEnv::Unknown,
         ] {
