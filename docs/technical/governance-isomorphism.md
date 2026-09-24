@@ -116,11 +116,29 @@ it works, but the event stream production tooling expects is absent.
 
 | Requirement | Where it is now enforced |
 |---|---|
-| R2, R3 | The fork fixture carries all five §2.2 contracts. `scripts/devnet/snapshot-fork.sh` warms them in a step that aborts on a missing one, and `scripts/devnet/check-fork-safe-set.sh` (run by `check-fork-manifest.sh`, so by every golden fork suite and suite-14) fails with exit 14 naming any that is absent. |
+| R2, R3 | The fork fixture carries all five §2.2 contracts with their canonical code, and both singletons carry the lock their constructor writes (threshold = 1 in storage slot 4, so `setup()` on the singleton reverts `GS200`, as on Base). `scripts/devnet/snapshot-fork.sh` warms the five in a step that aborts on a missing one, writes the singletons' slot 4 read from Base at the pin block, checks every `anvil_setCode`/`anvil_setStorageAt` response, and runs the gate on what it captured. `scripts/devnet/check-fork-safe-set.sh` fails with exit 14 naming any contract that is absent, whose code does not hash to its pinned keccak256 (table below), or (singletons) whose slot 4 is not 1. The gate runs inside `check-fork-manifest.sh`, which is run by `run-golden-forge-forks.sh` — the suite-01-02 `forge-fork-vault-regressions` job, once per fork target (VaultForkRegressions, DeploySeedDeposit, SafeIntegration, GovernanceExecutePathAfterHandover) — and by suite-14 (smoke test). It does **not** run in suite-05's `anvil-goldens`/`anvil-governance` groups, which load `CURRENT.anvil-state` directly and verify only its sha256 digest. Its offline self-test runs in the same suite-01-02 job. |
 | R4 | `SafeIntegration.t.sol` and the stage ceremony both use `SafeL2` (`0x29fcB43b…`); the test asserts the proxy's `masterCopy` slot, and `verify` checks the same slot on stage. |
 | R5–R8 | `fusion-ceremony.sh run` creates a `SafeProxy` via `SafeProxyFactory.createProxyWithNonce` on `SafeL2` with the canonical fallback handler, threshold 2. It refuses a chain without the Safe set; there is no stand-in. `RehearsalSafe` and `DeployRehearsalSafe.s.sol` are deleted. |
-| R9–R11 | Every Safe operation (`release`, `propose`) goes through `execTransaction` with two owner signatures over the Safe's own `getTransactionHash`, from keystores via `cast wallet sign --no-hash`, packed ascending by owner. |
-| R12–R14 | `verify` reads threshold, owner set and singleton from the Safe, eth_calls one signature (must revert `GS020`) and two signatures (must succeed), and no longer carries the single-key check. The devops driver grades these as `AC-ID-06#safe-quorum`, now a required AC-ID-06 clause. CI adds the GS020 negative control with its positive twin and a GS026 same-owner-twice control. |
+| R9–R11 | Every Safe operation (`release`, `propose`) goes through `execTransaction` with two owner signatures over the Safe's own `getTransactionHash`, from keystores via `cast wallet sign --no-hash`, packed ascending by owner; each signature's `v` must be 27/28. A missing keystore or password stops the operation with exit 65 before anything is sent. Keystore passwords reach `cast wallet new` as `CAST_PASSWORD`, never on the command line, and a `run` that dies before its record is written shreds the keys it minted. |
+| R12–R14 | `verify` reads everything from the Safe: its runtime code must hash to the canonical SafeProxy's (table below), threshold 2, owner set equal to the record's signers, `SafeL2` as singleton, no module (`getModulesPaginated(0x1, 10)` empty), no guard (slot `keccak256("guard_manager.guard.address")` zero), and the canonical fallback handler in slot `keccak256("fallback_manager.handler.address")`. Quorum is proved enforced by four eth_calls of one harmless SafeTx: one owner signature must revert `GS020`; the lowest owner's signature twice, and two non-owner signatures (the existing submitter and voter-a keystores), must each revert `GS026`; threshold signatures must return `true`. Every unreadable fact is a FAIL line and `verify` always reaches its summary. It no longer carries the single-key check. The devops driver grades these as `AC-ID-06#safe-quorum`, now a required AC-ID-06 clause. CI adds the GS020 negative control with its positive twin and a GS026 same-owner-twice control, asserts the fallback handler slot and that the handler and MultiSend carry code, and cancels a timelock operation through a two-signature `execTransaction`. |
+| Provisioning | `ensure` provisions only a fresh chain. A recorded timelock or Safe that still has code, a `ProxyCreation` from the canonical factory, or (in `run`) a deployer that no longer holds gateway `ADMIN_ROLE` makes it exit 65 with "reboot the devnet (chain down/up)". A ceremony is live only with all three Safe owner keystores and their `.pw` files. |
+| Self-test | `scripts/stage/tests/fusion-ceremony-selftest.sh` drives all of the above against a fake chain and a fake 2-of-3 Safe (digest over every SafeTx field, DELEGATECALL refused, owners recorded in descending address order). It runs as the suite-01-02 `fusion-ceremony-selftest` job on every non-draft PR, which fails unless the run prints its tally with 0 failures and at least the executed-assertion floor. |
+
+Pinned code hashes (keccak256 of runtime code), derived from the committed fixture
+and cross-checked with `cast codehash` on anvil loaded from it:
+
+| Contract | Code hash | Pinned in |
+|---|---|---|
+| `SafeProxy` v1.4.1 (every proxy the factory creates) | `0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c` | `fusion-ceremony.sh` (`verify`) |
+| `Safe` singleton (L1) | `0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4` | `check-fork-safe-set.sh` |
+| `SafeL2` singleton | `0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff` | `check-fork-safe-set.sh` |
+| `SafeProxyFactory` | `0x50c3cdc4074750a7a974204a716c999edd37482f907608d960b2b025ee0b3317` | `check-fork-safe-set.sh` |
+| `CompatibilityFallbackHandler` | `0x7c6007a5d711cea8dfd5d91f5940ec29c7f200fe511eb1fc1397b367af3c42f9` | `check-fork-safe-set.sh` |
+| `MultiSend` | `0x0e4f7fc66550a322d1e7688e181b75e217e662a4f3f4d6a29b22bc61217c4b77` | `check-fork-safe-set.sh` |
+
+The SafeProxy hash was measured on a proxy created by the canonical factory on
+anvil loaded from the committed fixture; SafeProxy has no immutables, so every
+proxy carries the same runtime code.
 
 The stage Safe's owners are three dedicated keys — `approver`, `approver-b`,
 `approver-c` — minted with the other ephemeral keys (§7 Q1).
@@ -138,7 +156,7 @@ Measured against the live stage chain and the committed sources, 2026-09-18.
 
 | Environment | Safe | Quorum enforced | Drives the timelock |
 |---|---|---|---|
-| **CI** (`.github/workflows/suite-01-02-forge-tests.yml:254`) | real proxy, 2-of-3, via canonical factory | **yes** | `execTransaction`, two packed signatures |
+| **CI** (`suite-01-02-forge-tests.yml`, step "forge test (Safe multisig integration — issue 422)") | real proxy, 2-of-3, via canonical factory | **yes** | `execTransaction`, two packed signatures |
 | **Stage** (`scripts/stage/fusion-ceremony.sh:479`) | `RehearsalSafe` stand-in, unconditional | **no** | one EOA calls `exec()` |
 | **Production** (`docs/technical/security-model.md:89`) | real 2-of-N, hardware wallets | yes | N signers |
 
@@ -348,7 +366,8 @@ would have changed was removed outright (issue #1458, PR #1451); there is no
    `anvil_impersonateAccount` rather than ECDSA. This is strictly more
    isomorphic and should be revisited after the first mainnet deployment.
 3. **Fixture size.** *Measured:* adding the three missing contracts grew
-   `CURRENT.anvil-state` from 2,835,711 to 2,897,392 bytes (+2.2%).
+   `CURRENT.anvil-state` from 2,835,711 to 2,897,392 bytes (+2.2%); the two
+   singleton locks (slot 4 = 1) add 274 bytes, to 2,897,666.
 4. **Scope of R9.** This document covers the Safe → TimelockController path. It
    does not yet say anything about the `RouterGovernance` voter set, which is a
    separate governing body with its own quorum. Whether the two need a single
