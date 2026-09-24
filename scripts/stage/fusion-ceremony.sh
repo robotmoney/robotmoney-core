@@ -2255,6 +2255,12 @@ ceremony_is_live() {
       || { info "record names no Safe signer $who"; return 1; }
     [[ -f "$keydir/$who" && -f "$keydir/$who.pw" ]] || { info "safe signer $who keystore or password is gone: $keydir"; return 1; }
   done
+  # verify's GS026 non-owner control signs with these keys. Without one, that
+  # control is unproven and verify can never pass, so the ceremony is not live.
+  for who in "${SAFE_NON_OWNER_ROLES[@]}"; do
+    [[ -f "$keydir/$who" && -f "$keydir/$who.pw" ]] \
+      || { info "non-owner control key $who keystore or password is gone: $keydir"; return 1; }
+  done
   for who in submitter approver; do
     [[ -f "$keydir/$who" && -f "$keydir/$who.pw" ]] || { info "$who keystore or password is gone: $keydir"; return 1; }
     [[ "$("$CAST" balance "$(rec ".ephemeral.$who")" --rpc-url "$RPC_URL" 2>/dev/null)" != "0" ]] \

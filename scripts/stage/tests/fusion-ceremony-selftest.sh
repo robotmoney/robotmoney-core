@@ -928,6 +928,10 @@ baseline; rm -f "$WORK/vkeys/approver-c.pw"
 ensure_refused "a used chain whose approver-c password is gone"
 baseline; rm -f "$WORK/vkeys/approver-c"; set_state "codehash:$(lc "$TIMELOCK")" 0x00
 ensure_refused "a used chain where only the recorded Safe still has code"
+# voter-a is not a Safe owner, but verify's GS026 non-owner control signs with
+# its keystore. A ceremony missing it can never verify, so it is not live.
+baseline; rm -f "$WORK/vkeys/voter-a.pw"
+ensure_refused "a used chain whose voter-a password (a non-owner control key) is gone"
 # Code at the recorded timelock ADDRESS is evidence only when it is the recorded
 # ceremony's timelock. The deployer CREATEs the timelock, so a rebooted chain
 # whose deployer nonce reaches the same count puts another contract there.
@@ -1770,7 +1774,7 @@ TOTAL_PASSED=$((PASSED + GOV_PASSED + STUB_PASSED))
 # Executed-assertion floor. Every `ok` line above is an assertion that RAN; a
 # run that silently skips a section prints fewer and must not pass. Raise the
 # floor whenever cases are added (CI checks the same line: suite-01-02).
-ASSERTION_FLOOR=127
+ASSERTION_FLOOR=128
 echo "fusion-ceremony selftest TOTAL: $TOTAL_PASSED passed, $TOTAL_FAILED failed (floor $ASSERTION_FLOOR)"
 SELFTEST_COMPLETE=1
 if (( TOTAL_PASSED < ASSERTION_FLOOR )); then
