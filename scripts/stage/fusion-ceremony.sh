@@ -635,19 +635,26 @@ safe_exec() {
     "$to" 0 "$data" 0 0 0 0 "$ZERO_ADDRESS" "$ZERO_ADDRESS" "$sigs"
 }
 
-# create_safe <salt-nonce> <owner>...: a SafeProxy on SafeL2 via the canonical
-# factory, threshold $SAFE_THRESHOLD, the canonical fallback handler (R5).
-# Prints the new Safe's address. No fallback of any kind when the Safe set is
-# absent (R8): the fixture is what has to change, and check-fork-safe-set.sh
-# says so at fixture-build time.
-create_safe() {
-  local salt="$1" owners setup predicted name
-  shift
+# require_safe_set: the canonical Safe v1.4.1 contracts create_safe needs all
+# carry code. No fallback of any kind when they are absent (R8): the fixture is
+# what has to change, and check-fork-safe-set.sh says so at fixture-build time.
+# `run` calls this BEFORE it mints a single key, so a chain that cannot hold the
+# Safe never leaves keystores behind.
+require_safe_set() {
+  local name
   for name in "SafeL2 singleton:$SAFE_L2_SINGLETON" "SafeProxyFactory:$SAFE_PROXY_FACTORY" \
               "CompatibilityFallbackHandler:$SAFE_FALLBACK_HANDLER"; do
     has_code "${name#*:}" \
       || die "canonical ${name%%:*} ${name#*:} has no code on $RPC_URL: this chain lacks the Safe v1.4.1 set (governance-isomorphism.md R2) and the ceremony has no stand-in (R8)" 65
   done
+}
+
+# create_safe <salt-nonce> <owner>...: a SafeProxy on SafeL2 via the canonical
+# factory, threshold $SAFE_THRESHOLD, the canonical fallback handler (R5).
+# Prints the new Safe's address. The caller has run require_safe_set.
+create_safe() {
+  local salt="$1" owners setup predicted
+  shift
   owners="[$(IFS=,; echo "$*")]"
   setup="$("$CAST" calldata 'setup(address[],uint256,address,bytes,address,address,uint256,address)' \
     "$owners" "$SAFE_THRESHOLD" "$ZERO_ADDRESS" 0x "$SAFE_FALLBACK_HANDLER" "$ZERO_ADDRESS" 0 "$ZERO_ADDRESS")"
@@ -782,6 +789,20 @@ refuse_used_chain() {
   die "this chain already carries a governance ceremony that is not live (${evidence%; }). Refusing to provision a second one on it: reboot the devnet (chain down/up), then run \`fusion-ceremony.sh ensure\` again" 65
 }
 
+# shred_unrecorded_keys: the EXIT trap `run` holds while it has minted keys no
+# record names yet. Keeps the exit status it was called with.
+UNRECORDED_KEYDIR=""
+shred_unrecorded_keys() {
+  local rc=$?
+  if [[ -n "$UNRECORDED_KEYDIR" && "$UNRECORDED_KEYDIR" == */keys/* && -d "$UNRECORDED_KEYDIR" ]]; then
+    find "$UNRECORDED_KEYDIR" -type f -exec shred -u -z -n 3 {} + 2>/dev/null || find "$UNRECORDED_KEYDIR" -type f -delete
+    rmdir "$UNRECORDED_KEYDIR" 2>/dev/null || true
+    echo "==> [fusion-ceremony] run failed before its record was written; shredded the unrecorded keys in $UNRECORDED_KEYDIR" >&2
+  fi
+  UNRECORDED_KEYDIR=""
+  exit "$rc"
+}
+
 run_ceremony() {
   command -v jq >/dev/null || die "jq is required" 65
   [[ -f "$SUMMARY" ]] || die "summary not found: $SUMMARY" 65
@@ -806,6 +827,8 @@ run_ceremony() {
   [[ "$(has_role "$gateway" "$ADMIN_ROLE" "$admin")" == 1 ]] \
     || die "the deployer $admin no longer holds gateway ADMIN_ROLE: this chain was already handed over to a timelock. Refusing to provision a second ceremony on it: reboot the devnet (chain down/up)" 65
 
+  require_safe_set
+
   local deployer_key
   deployer_key="$(repo_deployer_key "$admin")"
 
@@ -815,13 +838,24 @@ run_ceremony() {
   umask 077
   mkdir -p "$keydir"
   chmod 700 "$OUT_DIR/keys" "$keydir"
+  # From here until the record names them, these keys belong to nothing: a run
+  # that dies in between must not leave funded keystores (and their passwords)
+  # behind on the host. The trap shreds them; it is lifted once the record is
+  # written, after which `discard` owns them.
+  UNRECORDED_KEYDIR="$keydir"
+  trap shred_unrecorded_keys EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   declare -A addr
   local role pw
   for role in submitter "${SAFE_OWNER_ROLES[@]}" voter-a voter-b emergency; do
     pw="$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n')"
     printf '%s' "$pw" >"$keydir/$role.pw"
-    "$CAST" wallet new "$keydir" "$role" --unsafe-password "$pw" >/dev/null
+    # The password reaches cast through its environment (CAST_PASSWORD, the
+    # env form of --unsafe-password), never through argv, which every user on
+    # the host can read in the process table.
+    CAST_PASSWORD="$pw" "$CAST" wallet new "$keydir" "$role" >/dev/null
     chmod 600 "$keydir/$role" "$keydir/$role.pw"
     addr[$role]="$("$CAST" wallet address --keystore "$keydir/$role" --password-file "$keydir/$role.pw")"
     info "provisioned $role ${addr[$role]}"
@@ -895,6 +929,8 @@ run_ceremony() {
   chmod 644 "$out"
   cp "$out" "$OUT_DIR/fusion-stage-record.json"
   info "wrote $out"
+  UNRECORDED_KEYDIR=""
+  trap - EXIT INT TERM
 
   RECORD="$out"
   handover_vaults

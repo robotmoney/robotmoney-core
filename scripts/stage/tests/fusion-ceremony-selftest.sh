@@ -383,7 +383,25 @@ case "${pos[0]}" in
   wallet)
     # `wallet new` is how `run` mints a key. No case here may reach it
     # unless it means to provision, so it leaves a mark and refuses.
-    if [[ "${pos[1]:-}" == "new" ]]; then set_state wallet_new_called true; echo "fake cast: wallet new refused" >&2; exit 1; fi
+    if [[ "${pos[1]:-}" == "new" ]]; then
+      set_state wallet_new_called true
+      [[ "$(state wallet_new_ok || echo false)" == true ]] || { echo "fake cast: wallet new refused" >&2; exit 1; }
+      # A keystore password on the command line is readable by every user on
+      # the host (ps); `run` must hand it over in CAST_PASSWORD instead.
+      if [[ " ${pos[*]} " == *" --unsafe-password "* || -z "${CAST_PASSWORD:-}" ]]; then
+        set_state wallet_new_argv_password true
+        echo "fake cast: keystore password passed on argv (or not at all)" >&2; exit 1
+      fi
+      n="$(state walletseq || echo 0)"; n=$((n + 1)); set_state walletseq "$n"
+      printf '{"fake":"keystore"}' >"${pos[2]}/${pos[3]}"
+      set_state "keystore:${pos[3]}" "$(printf '0x%040x' $((0x5000 + n)))"
+      echo "Created new encrypted keystore file: ${pos[2]}/${pos[3]}" >&2
+      exit 0
+    fi
+    if [[ "${pos[1]:-}" == "address" ]]; then
+      [[ -n "${from:-}" ]] || { echo "fake cast: wallet address with no known key" >&2; exit 1; }
+      echo "$from"; exit 0
+    fi
     [[ "${pos[1]:-}" == "sign" ]] || { echo "fake cast: unhandled wallet ${pos[1]:-}" >&2; exit 1; }
     [[ " ${pos[*]} " == *" --no-hash "* ]] || { echo "fake cast: SafeTx digests must be signed --no-hash" >&2; exit 1; }
     [[ -n "${from:-}" ]] || { echo "fake cast: wallet sign with no known keystore" >&2; exit 1; }
@@ -471,6 +489,7 @@ case "${pos[0]}" in
         'getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)')
           safe_digest "${pos[3]}" "${pos[5]}" "${pos[12]}" ;;
         'getMinDelay()(uint256)') state delay ;;
+        'receiptCount()(uint256)') state "receiptcount:$c" || echo 0 ;;
         'setWeights(address[],uint256[])') [[ "$(state "setweights:$(lower "${from:-}")" || echo revert)" == ok ]] ;;
         'isReleased(bytes32)(bool)') state "released:$(lower "${pos[3]}")" || echo false ;;
         'currentProposalId()(uint256)') state proposalid || echo 0 ;;
@@ -551,6 +570,7 @@ baseline() {
 }
 
 lc() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
+state_of() { awk -F'\t' -v k="$1" '$1 == k { v = $2 } END { print v }' "$WORK/state"; }
 set_state() { grep -v -F "$1"$'\t' "$WORK/state" >"$WORK/state.new" || true; printf '%s\t%s\n' "$1" "$2" >>"$WORK/state.new"; mv "$WORK/state.new" "$WORK/state"; }
 
 run_verify() {
@@ -724,6 +744,66 @@ if grep -q "summary not found" "$WORK/out" && ! grep -q "reboot the devnet" "$WO
   PASSED=$((PASSED + 1)); echo "ok   ensure on a rebooted chain goes on to provision (exit $rc at the missing summary)"
 else
   FAILED=$((FAILED + 1)); echo "FAIL ensure on a rebooted chain: exit $rc"; tail -3 "$WORK/out"
+fi
+
+# ─── run: the key-minting preflight and the unrecorded-key trap ──────────────
+# `run` mints seven funded keys. A chain that cannot hold the Safe, or that was
+# already handed over, must be refused before the first one; and a run that
+# dies after minting but before its record names them must shred them.
+DEPLOYER_KEY="$(sed -n '/pub const DEPLOYER_PRIVATE_KEY_HEX/{n;p}' "$HERE/../../../testing/smoke-test/src/lib.rs" | tr -d ' ";')"
+run_baseline() {
+  baseline
+  set_state "privkey:$(lc "$DEPLOYER_KEY")" "$DEPLOYER"
+  set_state "role:$(lc "$GATEWAY"):$ADMIN:$(lc "$DEPLOYER")" true
+  local s
+  for s in 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99; do
+    set_state "codehash:$(lc "$s")" "$HASH"
+  done
+  {
+    printf 'gateway_addr=%s\nvault_addr=%s\nregistry_addr=%s\nrouter_addr=%s\n' "$GATEWAY" "$VAULT" "$REGISTRY" "$ROUTER"
+    printf 'governance_addr=%s\nic_policy_addr=%s\nconsensus_receipt_addr=%s\nadmin_addr=%s\n' "$GOVERNANCE" "$IC" "$RECEIPT" "$DEPLOYER"
+    printf 'vault_addresses_json={"rmUSDC":"%s","rmPROTO":"%s","rmAGENT":"%s","rmRWA":"%s"}\n' "$VAULT" "$VAULT" "$VAULT" "$VAULT"
+    printf -- '--- end endpoint summary ---\n'
+  } >"$WORK/summary.log"
+  rm -rf "$WORK/run-out"; mkdir -p "$WORK/run-out"
+}
+run_run() {
+  set +e
+  FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" \
+    "$CEREMONY" run --summary "$WORK/summary.log" --out-dir "$WORK/run-out" --rpc-url http://fake >"$WORK/out" 2>&1
+  local rc=$?
+  set -e
+  return $rc
+}
+key_files_left() { find "$WORK/run-out" -path '*/keys/*' -type f 2>/dev/null | wc -l | tr -d ' '; }
+run_refused_before_keys() {
+  local name="$1" needle="$2" rc=0
+  run_run || rc=$?
+  if [[ "$rc" == 65 ]] && grep -qF -- "$needle" "$WORK/out" && [[ "$(key_files_left)" == 0 ]] \
+     && ! grep -q '^wallet_new_called' "$WORK/state"; then
+    PASSED=$((PASSED + 1)); echo "ok   run on $name is refused before any key is minted"
+  else
+    FAILED=$((FAILED + 1)); echo "FAIL run on $name: exit $rc, $(key_files_left) key file(s) left"; tail -3 "$WORK/out"
+  fi
+}
+
+run_baseline; set_state "codehash:0x29fcb43b46531bca003ddc8fcb67ffe91900c762" 0x00
+run_refused_before_keys "a chain without the SafeL2 singleton" "lacks the Safe v1.4.1 set"
+run_baseline; set_state "role:$(lc "$GATEWAY"):$ADMIN:$(lc "$DEPLOYER")" false
+run_refused_before_keys "a chain already handed over to a timelock" "reboot the devnet (chain down/up)"
+run_baseline; set_state "logs:0x4e1dcf7ad4e460cfd30791ccc4f9c8a4f820ec67:none" "$SAFE"
+run_refused_before_keys "a chain where the factory already created a Safe" "reboot the devnet (chain down/up)"
+# Every key is minted, then funding them fails (the fake chain refuses a bare
+# value transfer): the run dies before its record exists, and must leave no
+# keystore and no password behind.
+run_baseline; set_state wallet_new_ok true
+rc=0; run_run || rc=$?
+if [[ "$rc" != 0 && "$(state_of walletseq)" == 7 && "$(key_files_left)" == 0 ]] \
+   && grep -q "shredded the unrecorded keys" "$WORK/out" && ! grep -q '^wallet_new_argv_password' "$WORK/state"; then
+  PASSED=$((PASSED + 1)); echo "ok   a run that dies after minting 7 keys shreds them all (exit $rc; passwords never on argv)"
+else
+  FAILED=$((FAILED + 1)); echo "FAIL failed run: exit $rc, $(state_of walletseq) keys minted, $(key_files_left) key file(s) left, argv password: $(state_of wallet_new_argv_password)"
+  tail -3 "$WORK/out"
 fi
 
 echo "fusion-ceremony selftest: $PASSED passed, $FAILED failed"
