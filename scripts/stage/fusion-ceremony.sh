@@ -757,19 +757,39 @@ mine_one_at() {
 
 # ─── a chain that already carries a ceremony ─────────────────────────────────
 # `run` provisions a FRESH devnet only. Evidence that this chain already carries
-# a ceremony: a recorded timelock or Safe that still has code, or any Safe the
-# canonical SafeProxyFactory ever created here (ProxyCreation logs). `run`
-# additionally checks that the deployer still holds gateway ADMIN_ROLE, which
-# the handover removes. A history that cannot be read is not proof of a fresh
-# chain, so it refuses too.
+# a ceremony: the recorded ceremony's own timelock, a recorded Safe that still
+# has code, or any Safe the canonical SafeProxyFactory ever created here
+# (ProxyCreation logs). `run` additionally checks that the deployer still holds
+# gateway ADMIN_ROLE, which the handover removes. A history that cannot be read
+# is not proof of a fresh chain, so it refuses too.
+#
+# Code at the recorded timelock ADDRESS is not enough on its own. The deployer
+# CREATEs the timelock, so its address is fixed by the deployer's nonce, and a
+# rebooted chain whose deployer reaches the same nonce puts some other contract
+# there. Counting that as a used chain would refuse every fresh chain after it
+# forever. It counts only when it is the recorded ceremony's timelock: its code
+# hash is the record's code_hashes.timelock, or it grants PROPOSER_ROLE to the
+# recorded Safe.
 PROXY_CREATION_SIG='ProxyCreation(address,address)'
 used_chain_evidence() {
-  local record="$1" name a n evidence=""
+  local record="$1" a n evidence="" safe recorded_hash live_hash
   if [[ -n "$record" && -f "$record" ]] && jq -e . "$record" >/dev/null 2>&1; then
-    for name in timelock safe; do
-      a="$(jq -r ".addresses.$name // empty" "$record")"
-      if is_address "$a" && has_code "$a"; then evidence+="recorded $name $a still has code; "; fi
-    done
+    a="$(jq -r '.addresses.timelock // empty' "$record")"
+    safe="$(jq -r '.addresses.safe // empty' "$record")"
+    if is_address "$a" && has_code "$a"; then
+      recorded_hash="$(jq -r '.code_hashes.timelock // empty' "$record")"
+      live_hash="$("$CAST" codehash --rpc-url "$RPC_URL" "$a" 2>/dev/null)" || live_hash=""
+      if [[ -n "$recorded_hash" && -z "$live_hash" ]]; then
+        evidence+="the code hash at recorded timelock $a is unreadable, so it cannot be shown to be another contract; "
+      elif [[ -n "$recorded_hash" && "$(lower "$live_hash")" == "$(lower "$recorded_hash")" ]]; then
+        evidence+="recorded timelock $a still carries the record's timelock code; "
+      elif is_address "$safe" && [[ "$(has_role "$a" "$PROPOSER_ROLE" "$safe")" == 1 ]]; then
+        evidence+="recorded timelock $a still grants PROPOSER_ROLE to the recorded Safe $safe; "
+      else
+        info "the recorded timelock address $a holds other code (not the recorded ceremony's timelock); not counted as a used chain"
+      fi
+    fi
+    if is_address "$safe" && has_code "$safe"; then evidence+="recorded safe $safe still has code; "; fi
   fi
   n="$("$CAST" logs --rpc-url "$RPC_URL" --from-block 0 --address "$SAFE_PROXY_FACTORY" --json "$PROXY_CREATION_SIG" 2>/dev/null \
     | jq 'length' 2>/dev/null)" || n=""
@@ -781,12 +801,14 @@ used_chain_evidence() {
   printf '%s' "$evidence"
 }
 
-# refuse_used_chain <record>: exit 65 when this chain already carries a ceremony.
+# refuse_used_chain <record>: exit 65 when this chain already carries a
+# ceremony, naming the record that no longer describes a drivable one.
 refuse_used_chain() {
-  local evidence
+  local evidence stale
   evidence="$(used_chain_evidence "$1")"
   [[ -z "$evidence" ]] && return 0
-  die "this chain already carries a governance ceremony that is not live (${evidence%; }). Refusing to provision a second one on it: reboot the devnet (chain down/up), then run \`fusion-ceremony.sh ensure\` again" 65
+  if [[ -f "$1" ]]; then stale="stale record: $1"; else stale="no record at $1"; fi
+  die "this chain already carries a governance ceremony that is not live (${evidence%; }; $stale). Refusing to provision a second one on it: reboot the devnet (chain down/up), then run \`fusion-ceremony.sh ensure\` again" 65
 }
 
 # shred_unrecorded_keys: the EXIT trap `run` holds while it has minted keys no

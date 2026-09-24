@@ -896,8 +896,9 @@ ensure_refused() {
   rm -rf "$WORK/ensure-out"; mkdir -p "$WORK/ensure-out"
   run_ensure || rc=$?
   if [[ "$rc" == 65 ]] && grep -q "reboot the devnet (chain down/up)" "$WORK/out" \
+     && grep -qF "stale record: $WORK/record.json" "$WORK/out" \
      && ! grep -q '^wallet_new_called' "$WORK/state" && [[ ! -e "$WORK/ensure-out/keys" ]]; then
-    PASSED=$((PASSED + 1)); echo "ok   ensure on $name is refused (exit 65, reboot the devnet, no key minted)"
+    PASSED=$((PASSED + 1)); echo "ok   ensure on $name is refused (exit 65, names the stale record, reboot the devnet, no key minted)"
   else
     FAILED=$((FAILED + 1)); echo "FAIL ensure on $name: exit $rc"; tail -3 "$WORK/out"
   fi
@@ -918,6 +919,26 @@ baseline; rm -f "$WORK/vkeys/approver-c.pw"
 ensure_refused "a used chain whose approver-c password is gone"
 baseline; rm -f "$WORK/vkeys/approver-c"; set_state "codehash:$(lc "$TIMELOCK")" 0x00
 ensure_refused "a used chain where only the recorded Safe still has code"
+# Code at the recorded timelock ADDRESS is evidence only when it is the recorded
+# ceremony's timelock. The deployer CREATEs the timelock, so a rebooted chain
+# whose deployer nonce reaches the same count puts another contract there.
+# Refusing that chain would refuse every fresh chain after it forever.
+baseline; rm -f "$WORK/vkeys/approver-c"; set_state "codehash:$(lc "$SAFE")" 0x00
+set_state "role:$(lc "$TIMELOCK"):$PROPOSER:$(lc "$SAFE")" false
+ensure_refused "a used chain whose recorded timelock still carries the record's code hash"
+baseline; rm -f "$WORK/vkeys/approver-c"; set_state "codehash:$(lc "$SAFE")" 0x00
+set_state "codehash:$(lc "$TIMELOCK")" 0xbeef
+jq 'del(.code_hashes.timelock)' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
+ensure_refused "a used chain whose recorded timelock (no recorded hash) still makes the recorded Safe its proposer"
+baseline; rm -f "$WORK/vkeys/approver-c"; set_state "codehash:$(lc "$SAFE")" 0x00
+set_state "codehash:$(lc "$TIMELOCK")" 0xbeef; set_state "role:$(lc "$TIMELOCK"):$PROPOSER:$(lc "$SAFE")" false
+rc=0; rm -rf "$WORK/ensure-out"; mkdir -p "$WORK/ensure-out"; run_ensure || rc=$?
+if grep -q "summary not found" "$WORK/out" && ! grep -q "reboot the devnet" "$WORK/out" \
+   && grep -q "holds other code (not the recorded ceremony's timelock)" "$WORK/out"; then
+  PASSED=$((PASSED + 1)); echo "ok   ensure on a fresh chain with other code at the recorded timelock address goes on to provision (exit $rc at the missing summary)"
+else
+  FAILED=$((FAILED + 1)); echo "FAIL ensure on a fresh chain with other code at the recorded timelock address: exit $rc"; tail -3 "$WORK/out"
+fi
 # The positive twin: the same missing keystore on a REBOOTED chain (neither the
 # timelock nor the Safe has code) is not refused as used; ensure goes on to
 # provision, which in this harness stops at the missing summary.
@@ -1730,7 +1751,7 @@ TOTAL_PASSED=$((PASSED + GOV_PASSED + STUB_PASSED))
 # Executed-assertion floor. Every `ok` line above is an assertion that RAN; a
 # run that silently skips a section prints fewer and must not pass. Raise the
 # floor whenever cases are added (CI checks the same line: suite-01-02).
-ASSERTION_FLOOR=123
+ASSERTION_FLOOR=126
 echo "fusion-ceremony selftest TOTAL: $TOTAL_PASSED passed, $TOTAL_FAILED failed (floor $ASSERTION_FLOOR)"
 SELFTEST_COMPLETE=1
 if (( TOTAL_PASSED < ASSERTION_FLOOR )); then
