@@ -4,6 +4,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
@@ -14,6 +15,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {RoleHolders} from "./helpers/RoleHolders.sol";
 
 /// @title ISafe — minimal interface for the Safe (Gnosis Safe) multisig contract.
 ///
@@ -174,6 +176,16 @@ contract SafeIntegrationTest is Test {
     /// Snapshot id used for per-test isolation.
     uint256 internal _snap;
 
+    /// The deploy script and its deployer (the script's own address; see setUp).
+    DeployTimelock internal script;
+    address internal deployer;
+
+    /// Who holds what after the handover, replayed from every RoleGranted /
+    /// RoleRevoked log since before the contracts were built. The contracts are
+    /// not AccessControlEnumerable, so this is the only complete member list.
+    mapping(address => address[]) internal adminHolders;
+    address[] internal gatewayRootHolders;
+
     // ─── Set-up ────────────────────────────────────────────────────────────────
 
     /// @dev Select an override URL or the offline golden-fixture RPC.
@@ -191,6 +203,7 @@ contract SafeIntegrationTest is Test {
     ///      whose PROPOSER is the deployed 2-of-3 Safe proxy.
     function setUp() public {
         _trySelectFork();
+        vm.recordLogs();
 
         // Generate 3 deterministic signing keys.
         ownerPk1 = uint256(keccak256("owner1-pk"));
@@ -203,8 +216,14 @@ contract SafeIntegrationTest is Test {
         // Deploy token + contracts.
         usdc = new TestERC20();
 
-        // Temporary admin for deployment — will be replaced by timelock.
-        address deployer = address(this);
+        // The deployer is the DeployTimelock script's own address. In a real
+        // `forge script --broadcast` run the broadcaster both sends the grants
+        // and revokes and is the `msg.sender` the script revokes from. In process
+        // the script's calls come from address(script), so only when the deployer
+        // IS address(script), and runInProcess is called from it, does the
+        // handover revoke the roles the deployer actually holds (issue #1447).
+        script = new DeployTimelock();
+        deployer = address(script);
 
         vault = new RobotMoneyVault(
             usdc,
@@ -236,6 +255,7 @@ contract SafeIntegrationTest is Test {
         // this grant for a real deployment; this fixture constructs RouterGovernance
         // directly, so it must do the same. DeployTimelock's R7 precondition asserts
         // it below.
+        vm.prank(deployer);
         IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(governance));
 
         // Deploy 2-of-3 Safe proxy via the canonical factory on Base mainnet.
@@ -285,14 +305,9 @@ contract SafeIntegrationTest is Test {
         assertGt(SAFE_FALLBACK_HANDLER.code.length, 0, "fallback handler has no code on this fork");
         assertGt(SAFE_MULTISEND.code.length, 0, "MultiSend has no code on this fork");
 
-        // Deploy TimelockController and wire ADMIN_ROLE on all five contracts.
-        DeployTimelock script = new DeployTimelock();
-        IAccessControl(address(vault)).grantRole(ADMIN_ROLE, address(script));
-        IAccessControl(address(gateway)).grantRole(ADMIN_ROLE, address(script));
-        IAccessControl(address(gateway)).grantRole(bytes32(0), address(script));
-        IAccessControl(address(registry)).grantRole(ADMIN_ROLE, address(script));
-        IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(script));
-        IAccessControl(address(governance)).grantRole(ADMIN_ROLE, address(script));
+        // Deploy TimelockController and wire ADMIN_ROLE on all five contracts,
+        // called from the deployer so its roles are the ones revoked.
+        vm.prank(deployer);
         d = script.runInProcess(
             address(vault),
             address(gateway),
@@ -326,8 +341,69 @@ contract SafeIntegrationTest is Test {
             "timelock missing ADMIN_ROLE on governance"
         );
 
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        address[5] memory governed = _governed();
+        for (uint256 i = 0; i < governed.length; i++) {
+            adminHolders[governed[i]] = RoleHolders.holders(logs, governed[i], ADMIN_ROLE);
+        }
+        gatewayRootHolders = RoleHolders.holders(logs, address(gateway), bytes32(0));
+
         // Take a snapshot for per-test revert.
         _snap = vm.snapshot();
+    }
+
+    function _governed() internal view returns (address[5] memory) {
+        return
+            [
+                address(vault),
+                address(gateway),
+                address(registry),
+                address(router),
+                address(governance)
+            ];
+    }
+
+    // ─── The handover leaves no second admin ──────────────────────────────────
+
+    /// @notice After the handover the timelock is the ONLY ADMIN_ROLE holder on
+    ///         every governed contract, the router excepted: RouterGovernance
+    ///         also holds router ADMIN_ROLE by design (R7). The lists are complete
+    ///         member sets replayed from the role logs, so an admin nobody thought
+    ///         to name (the deploy script's contract, the test) cannot hide.
+    function test_handover_timelockIsTheOnlyAdminOnEveryGovernedContract() public withSnap {
+        address[5] memory governed = _governed();
+        for (uint256 i = 0; i < governed.length; i++) {
+            address[] memory h = adminHolders[governed[i]];
+            bool isRouter = governed[i] == address(router);
+            assertEq(h.length, isRouter ? 2 : 1, "unexpected number of ADMIN_ROLE holders");
+            for (uint256 j = 0; j < h.length; j++) {
+                bool allowed =
+                    h[j] == address(d.timelock) || (isRouter && h[j] == address(governance));
+                assertTrue(allowed, "an address other than the timelock holds ADMIN_ROLE");
+                assertTrue(
+                    IAccessControl(governed[i]).hasRole(ADMIN_ROLE, h[j]),
+                    "replay disagrees with hasRole"
+                );
+            }
+            assertFalse(
+                IAccessControl(governed[i]).hasRole(ADMIN_ROLE, deployer),
+                "deployer (the script contract) kept ADMIN_ROLE"
+            );
+            assertFalse(
+                IAccessControl(governed[i]).hasRole(ADMIN_ROLE, address(this)),
+                "the test contract holds ADMIN_ROLE"
+            );
+        }
+    }
+
+    /// @notice No address other than the timelock holds the gateway root.
+    function test_handover_timelockIsTheOnlyGatewayRootHolder() public withSnap {
+        assertEq(
+            gatewayRootHolders.length, 1, "gateway DEFAULT_ADMIN_ROLE has more than one holder"
+        );
+        assertEq(gatewayRootHolders[0], address(d.timelock), "gateway root is not the timelock");
+        assertFalse(gateway.hasRole(bytes32(0), deployer), "deployer kept the gateway root");
+        assertFalse(gateway.hasRole(bytes32(0), address(this)), "the test holds the gateway root");
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────────

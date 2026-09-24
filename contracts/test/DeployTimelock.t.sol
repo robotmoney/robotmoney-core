@@ -4,6 +4,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
@@ -17,6 +18,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {RoleHolders} from "./helpers/RoleHolders.sol";
 
 /// @dev Fork-style unit tests for DeployTimelock.s.sol (issue #414).
 ///
@@ -74,26 +76,46 @@ contract DeployTimelockTest is Test {
     DeployTimelock internal script;
     DeployTimelock.Deployed internal d;
 
+    /// The deployer: the address that holds every role before the handover and
+    /// that the script revokes them from. See setUp for why it is the script's
+    /// own address.
+    address internal deployer;
+
+    /// Who holds what after the handover, replayed from every RoleGranted /
+    /// RoleRevoked log since before the contracts were built (the contracts are
+    /// not AccessControlEnumerable, so this is the only complete list).
+    mapping(address => address[]) internal adminHolders;
+    address[] internal gatewayRootHolders;
+    address[] internal vaultEmergencyHolders;
+    /// Contracts on which the logs show the deployer losing ADMIN_ROLE.
+    mapping(address => bool) internal deployerAdminRevoked;
+    bool internal deployerRootRevoked;
+
     // ─── Constants ────────────────────────────────────────────────────────────
 
     uint256 public constant MIN_DELAY = 2 days;
 
     function setUp() public {
+        vm.recordLogs();
         usdc = new TestERC20();
         script = new DeployTimelock();
+        deployer = address(script);
 
         // Deploy a mock Safe contract with threshold=2 so DeployTimelock's new
         // code-length and threshold guards (issue #422) are satisfied.
         safe = address(new MockHighThresholdSafe());
 
-        // In Forge, when the test calls script.runInProcess() (external call),
-        // msg.sender inside the script's functions is address(this) (the test).
-        // But when the script's internal functions call the target contracts
-        // (e.g. registry.grantRole), the EVM records msg.sender as the script
-        // contract address (address(script)), not the test contract.
-        //
-        // Therefore we must grant ADMIN_ROLE to address(script) at construction
-        // so the grantRole/revokeRole calls inside _deployAndWire succeed.
+        // In a real `forge script --broadcast` run one address does both jobs:
+        // the broadcaster sends every grant and revoke, and it is also the
+        // `msg.sender` the script revokes from. In process they come apart. The
+        // script's calls to the target contracts come from address(script),
+        // while `msg.sender` inside runInProcess is whoever called it. So the
+        // deployer here is address(script): it gets every role at construction,
+        // and runInProcess is called FROM address(script) (vm.prank below), so
+        // the address the script revokes from is the one that holds the roles.
+        // Calling it from this test contract instead would revoke from an
+        // address that never held anything and leave the script contract as a
+        // second admin on every contract (issue #1447).
         //
         // RobotMoneyVault and RobotMoneyGateway are instantiated as real
         // contracts (issue #420 — replacing the registry placeholder that was
@@ -128,9 +150,10 @@ contract DeployTimelockTest is Test {
         // approving body unable to act, so the fixture must reflect what
         // DeployRouterGovernance does at deploy time — grant governance
         // ADMIN_ROLE on the router.
-        vm.prank(address(script));
+        vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
 
+        vm.prank(deployer);
         d = script.runInProcess(
             address(vault),
             address(gateway),
@@ -141,6 +164,29 @@ contract DeployTimelockTest is Test {
             emergency,
             MIN_DELAY
         );
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        address[5] memory governed = _governed();
+        for (uint256 i = 0; i < governed.length; i++) {
+            adminHolders[governed[i]] = RoleHolders.holders(logs, governed[i], ADMIN_ROLE);
+            deployerAdminRevoked[governed[i]] =
+                RoleHolders.wasRevoked(logs, governed[i], ADMIN_ROLE, deployer);
+        }
+        deployerRootRevoked =
+            RoleHolders.wasRevoked(logs, address(gateway), DEFAULT_ADMIN_ROLE, deployer);
+        gatewayRootHolders = RoleHolders.holders(logs, address(gateway), DEFAULT_ADMIN_ROLE);
+        vaultEmergencyHolders = RoleHolders.holders(logs, address(vault), EMERGENCY_ROLE);
+    }
+
+    function _governed() internal view returns (address[5] memory) {
+        return
+            [
+                address(vault),
+                address(gateway),
+                address(registry),
+                address(router),
+                address(governance)
+            ];
     }
 
     // ─── AC1: Timelock holds ADMIN_ROLE on all five contracts ─────────────────
@@ -186,27 +232,92 @@ contract DeployTimelockTest is Test {
         );
     }
 
-    /// @notice After role transfer, the deployer (admin EOA) no longer holds
-    ///         ADMIN_ROLE on any contract.
-    function test_deployer_noLongerHasAdminRoleOnRegistry() public view {
+    /// @notice After role transfer, the deployer — the address that held
+    ///         ADMIN_ROLE and sent the handover — no longer holds it anywhere.
+    ///         Each check is preceded by proof that the deployer DID hold the
+    ///         role, so it cannot pass against an address that never had it.
+    function test_deployer_heldAndLostAdminRoleOnEveryGovernedContract() public view {
+        address[5] memory governed = _governed();
+        for (uint256 i = 0; i < governed.length; i++) {
+            assertTrue(
+                deployerAdminRevoked[governed[i]],
+                "the handover never revoked ADMIN_ROLE from the deployer (it never held it?)"
+            );
+        }
+        assertTrue(deployerRootRevoked, "the handover never revoked the deployer's gateway root");
+    }
+
+    function test_deployer_noLongerHasAdminRoleOnAnyGovernedContract() public view {
+        address[5] memory governed = _governed();
+        for (uint256 i = 0; i < governed.length; i++) {
+            assertFalse(
+                IAccessControl(governed[i]).hasRole(ADMIN_ROLE, deployer),
+                "deployer still has ADMIN_ROLE on a governed contract"
+            );
+        }
         assertFalse(
-            IAccessControl(address(registry)).hasRole(ADMIN_ROLE, admin),
-            "deployer still has ADMIN_ROLE on registry"
+            gateway.hasRole(DEFAULT_ADMIN_ROLE, deployer),
+            "deployer still has DEFAULT_ADMIN_ROLE on gateway"
+        );
+        assertFalse(
+            vault.hasRole(EMERGENCY_ROLE, deployer), "deployer still has EMERGENCY_ROLE on vault"
         );
     }
 
-    function test_deployer_noLongerHasAdminRoleOnRouter() public view {
-        assertFalse(
-            IAccessControl(address(router)).hasRole(ADMIN_ROLE, admin),
-            "deployer still has ADMIN_ROLE on router"
-        );
+    /// @notice After the handover the timelock is the ONLY ADMIN_ROLE holder on
+    ///         every governed contract, the router excepted: RouterGovernance
+    ///         also holds router ADMIN_ROLE, by design (R7 — it is what lets an
+    ///         executed proposal reach setWeights). The member lists are the
+    ///         complete sets, replayed from every RoleGranted/RoleRevoked log
+    ///         since before construction, not a check of a few named addresses.
+    function test_handover_timelockIsTheOnlyAdminOnEveryGovernedContract() public view {
+        address[5] memory governed = _governed();
+        for (uint256 i = 0; i < governed.length; i++) {
+            address[] memory h = adminHolders[governed[i]];
+            bool isRouter = governed[i] == address(router);
+            assertEq(h.length, isRouter ? 2 : 1, "unexpected number of ADMIN_ROLE holders");
+            for (uint256 j = 0; j < h.length; j++) {
+                bool allowed =
+                    h[j] == address(d.timelock) || (isRouter && h[j] == address(governance));
+                assertTrue(allowed, "an address other than the timelock holds ADMIN_ROLE");
+                assertTrue(
+                    IAccessControl(governed[i]).hasRole(ADMIN_ROLE, h[j]),
+                    "replay disagrees with hasRole"
+                );
+            }
+            assertTrue(
+                IAccessControl(governed[i]).hasRole(ADMIN_ROLE, address(d.timelock)),
+                "timelock missing ADMIN_ROLE"
+            );
+            // The named suspects, read directly as well.
+            assertFalse(
+                IAccessControl(governed[i]).hasRole(ADMIN_ROLE, address(script)),
+                "script kept ADMIN_ROLE"
+            );
+            assertFalse(
+                IAccessControl(governed[i]).hasRole(ADMIN_ROLE, address(this)),
+                "test kept ADMIN_ROLE"
+            );
+            assertFalse(
+                IAccessControl(governed[i]).hasRole(ADMIN_ROLE, admin), "pauser holds ADMIN_ROLE"
+            );
+        }
     }
 
-    function test_deployer_noLongerHasAdminRoleOnGovernance() public view {
-        assertFalse(
-            IAccessControl(address(governance)).hasRole(ADMIN_ROLE, admin),
-            "deployer still has ADMIN_ROLE on governance"
+    /// @notice No address other than the timelock holds the gateway root
+    ///         (DEFAULT_ADMIN_ROLE), and only the independent hot key holds the
+    ///         vault EMERGENCY_ROLE.
+    function test_handover_timelockIsTheOnlyGatewayRootHolder() public view {
+        assertEq(
+            gatewayRootHolders.length, 1, "gateway DEFAULT_ADMIN_ROLE has more than one holder"
         );
+        assertEq(gatewayRootHolders[0], address(d.timelock), "gateway root is not the timelock");
+        assertFalse(
+            gateway.hasRole(DEFAULT_ADMIN_ROLE, address(script)), "script kept gateway root"
+        );
+        assertFalse(gateway.hasRole(DEFAULT_ADMIN_ROLE, address(this)), "test holds gateway root");
+        assertEq(vaultEmergencyHolders.length, 1, "vault EMERGENCY_ROLE has more than one holder");
+        assertEq(vaultEmergencyHolders[0], emergency, "vault EMERGENCY_ROLE is not the hot key");
     }
 
     // ─── AC2: Safe holds PROPOSER_ROLE and EXECUTOR_ROLE ─────────────────────
@@ -599,20 +710,12 @@ contract DeployTimelockTest is Test {
     // contracts/test/fv/DeployAssertions.t.sol::test_ACL1_*; these tests pin the
     // individual legs and the fix-interaction guarantees.
     //
-    // In setUp the deployer EOA is `address(script)` (the broadcaster inside
-    // runInProcess). `admin` is the gateway PAUSER but never held DEFAULT_ADMIN
-    // there; `emergency` is the independent emergency hot key.
-
-    // NOTE on the in-process model: when these tests call `script.runInProcess()`
-    // directly, the script's grant calls execute as `address(script)` while
-    // `revokeRole(..., msg.sender)` targets the TEST contract (the external
-    // caller). So in this suite neither a single EOA cleanly demonstrates "holds
-    // no role" — `address(script)` is the grantor (keeps roles), and the test
-    // contract never held them. The faithful end-to-end ACL-1 "deployer EOA holds
-    // NO privileged role" proof — where one address both grants and is revoked —
-    // lives in contracts/test/fv/DeployAssertions.t.sol::test_ACL1_*. Here we pin
-    // the post-handover POSITIVE end-state: the timelock holds the gateway root +
-    // vault ADMIN, and the independent hot key holds the vault EMERGENCY_ROLE.
+    // In setUp the deployer EOA is `address(script)`: it holds every role at
+    // construction, sends every grant and revoke, and is the `msg.sender` the
+    // script revokes from, as the broadcaster is in a real run. `admin` is the
+    // gateway PAUSER but never held DEFAULT_ADMIN there; `emergency` is the
+    // independent emergency hot key. The complete post-handover member sets are
+    // asserted in test_handover_* above.
 
     /// @notice ACL-1: the Timelock receives BOTH ADMIN_ROLE and DEFAULT_ADMIN_ROLE
     ///         on the Gateway (so it can rotate roles / authorizeAgent), and holds
