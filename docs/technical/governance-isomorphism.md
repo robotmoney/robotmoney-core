@@ -1,6 +1,10 @@
 # Governance isomorphism: CI, Stage and Production
 
-**Status: proposed.** Tracked by issue #1447.
+**Status: implemented in source; not yet on the stage host.** Tracked by issue
+#1447. Migration steps 1–4 (§5) have landed in this repository and the devops
+acceptance driver; §3.0 says what changed. The stage host keeps running the
+single-key stand-in until it is redeployed from a tag that carries them, so the
+§3.1–§3.4 measurements still describe the live stage chain until then.
 
 This document specifies the governance topology every environment must present,
 and the verification that proves it. It exists because one environment currently
@@ -107,6 +111,26 @@ it works, but the event stream production tooling expects is absent.
 ---
 
 ## 3. Current state
+
+### 3.0 What issue #1447 changed
+
+| Requirement | Where it is now enforced |
+|---|---|
+| R2, R3 | The fork fixture carries all five §2.2 contracts. `scripts/devnet/snapshot-fork.sh` warms them in a step that aborts on a missing one, and `scripts/devnet/check-fork-safe-set.sh` (run by `check-fork-manifest.sh`, so by every golden fork suite and suite-14) fails with exit 14 naming any that is absent. |
+| R4 | `SafeIntegration.t.sol` and the stage ceremony both use `SafeL2` (`0x29fcB43b…`); the test asserts the proxy's `masterCopy` slot, and `verify` checks the same slot on stage. |
+| R5–R8 | `fusion-ceremony.sh run` creates a `SafeProxy` via `SafeProxyFactory.createProxyWithNonce` on `SafeL2` with the canonical fallback handler, threshold 2. It refuses a chain without the Safe set; there is no stand-in. `RehearsalSafe` and `DeployRehearsalSafe.s.sol` are deleted. |
+| R9–R11 | Every Safe operation (`release`, `propose`) goes through `execTransaction` with two owner signatures over the Safe's own `getTransactionHash`, from keystores via `cast wallet sign --no-hash`, packed ascending by owner. |
+| R12–R14 | `verify` reads threshold, owner set and singleton from the Safe, eth_calls one signature (must revert `GS020`) and two signatures (must succeed), and no longer carries the single-key check. The devops driver grades these as `AC-ID-06#safe-quorum`, now a required AC-ID-06 clause. CI adds the GS020 negative control with its positive twin and a GS026 same-owner-twice control. |
+
+The stage Safe's owners are three dedicated keys — `approver`, `approver-b`,
+`approver-c` — minted with the other ephemeral keys (§7 Q1).
+
+The fixture change adds the three missing contracts to the committed block
+48896605 fixture rather than re-pinning it; see §7 Q5 for why.
+
+The subsections below are the measurements that motivated the change. They
+describe the stage chain as it was on 2026-09-18, and still describe it until it
+is redeployed.
 
 Measured against the live stage chain and the committed sources, 2026-09-18.
 
@@ -254,6 +278,11 @@ Normative. "Must" is binding; a violation is a release blocker.
 
 Ordered by dependency. Each step is independently reviewable.
 
+Steps 1–4 are done (issue #1447); §3.0 lists where each requirement now lives.
+Two places deviate from the plan as written: step 1 augmented the committed
+fixture instead of regenerating it (§7 Q5), and step 3's owners are three
+dedicated approver keys rather than three of the existing ephemeral keys (§7 Q1).
+
 **Step 1 — make the fixture carry Safe (R2, R3).** Add a Safe warming step to
 `snapshot-fork.sh` touching all five §2.2 addresses. Add the assertion to
 `check-fork-manifest.sh`. Regenerate the fixture. Nothing downstream is safe to
@@ -295,26 +324,44 @@ would have changed was removed outright (issue #1458, PR #1451); there is no
   no longer run the ceremony at all — deliberately, per R8. The recourse is to
   deploy Safe to that chain through Safe's own published process, not to
   substitute a stand-in.
-- CI gains a negative control (R13) it does not have today. `SafeIntegration.t.sol`
-  proves a valid 2-of-3 succeeds; nothing yet proves a 1-of-3 fails.
+- CI gains a negative control (R13) that means something. `SafeIntegration.t.sol`
+  had a 1-of-3 case, but it accepted any revert (`vm.expectRevert()`); it now
+  requires Safe's own `GS020` and then executes the same SafeTx with two
+  signatures, and a same-owner-twice case requires `GS026`.
+- AC-ID-06 cannot PASS on a stage still running the pre-#1447 stand-in: the
+  devops driver requires `AC-ID-06#safe-quorum`, which only this `verify` prints.
 
 ---
 
 ## 7. Open questions
 
-1. **Owner set composition on stage.** The three ephemeral ceremony keys are
-   available at zero cost and satisfy R7. A production-shaped set — distinct
-   roles, one deliberately withheld — would exercise more of the real topology.
-   Which set do we want?
+1. **Owner set composition on stage.** *Decided for #1447:* three dedicated
+   keys, `approver`, `approver-b`, `approver-c`, minted like every other
+   ephemeral key. Reusing existing keys would fuse governing bodies: the
+   submitter is the agent whose receipts the Safe releases, the voters are
+   RouterGovernance's approving body, and the emergency key is the independent
+   hot key. `verify` asserts all of them are distinct. Still open: a
+   production-shaped set with one key deliberately withheld from the host.
 2. **Inheriting a production Safe.** Once a Robot Money Safe exists on Base
    mainnet, a fork could inherit it directly, giving stage the real owner set and
    threshold. Signatures would come from `approveHash` under
    `anvil_impersonateAccount` rather than ECDSA. This is strictly more
    isomorphic and should be revisited after the first mainnet deployment.
-3. **Fixture size.** Warming five more contracts grows `CURRENT.anvil-state`.
-   The singleton alone is ~47 KB of bytecode. Worth measuring against the
-   fixture's current size before committing to R2.
+3. **Fixture size.** *Measured:* adding the three missing contracts grew
+   `CURRENT.anvil-state` from 2,835,711 to 2,897,392 bytes (+2.2%).
 4. **Scope of R9.** This document covers the Safe → TimelockController path. It
    does not yet say anything about the `RouterGovernance` voter set, which is a
    separate governing body with its own quorum. Whether the two need a single
    unified isomorphism statement is unresolved.
+5. **Re-pinning the fixture.** Step 1 did run `snapshot-fork.sh` end to end
+   (mainnet.base.org, tip-100 = block 51734246, `foundry:latest` = anvil 1.8.1).
+   The capture succeeded and carried all five Safe contracts, but its dump
+   omitted EIP-1967 implementation contracts the committed fixture carries
+   (Aave V3 Pool implementation `0xa4ab…`, aUSDC implementation `0x273e…`,
+   Compound and Morpho implementations). Loaded offline, `aUSDC.totalSupply()`
+   and `Pool.getReserveNormalizedIncome()` returned empty data; the same calls
+   succeed on the committed fixture. That re-pin would have broken every offline
+   fork suite, so step 1 instead added the three contracts (code, nonce and
+   balance read from Base at block 48896605) to the committed fixture, leaving
+   every other account byte-identical. The next re-pin needs `snapshot-fork.sh`
+   to warm proxy implementations (or a pinned foundry image) first.

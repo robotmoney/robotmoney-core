@@ -37,6 +37,11 @@
 #          while leaving a plausible-looking record behind). Callers use this
 #          so environment setup is never a manual prerequisite.
 # verify   asserts the acceptance topology on chain; exit 1 on any failure.
+#          The Safe is read from the Safe, never from the record (R12):
+#          threshold 2, owner set equal to the record's signers, SafeL2 as its
+#          singleton, and quorum ENFORCED rather than configured (R13): one
+#          owner signature must revert GS020 while the same SafeTx with
+#          threshold signatures would execute (both eth_call; no state change).
 # release  releases a receipt the way a timelocked stage must: the Safe
 #          schedules on the TimelockController through execTransaction signed
 #          by two distinct owners, waits the delay, then executes the same way.
@@ -207,6 +212,62 @@ log_accounts() {
   "$CAST" "${args[@]}" | jq -r '.[] | .topics[if (.topics|length) > 2 then 2 else 1 end] | "0x" + .[26:]' | sort -u
 }
 
+# verify_safe_quorum <safe> <timelock> <relayer>: the Safe checks of
+# governance-isomorphism.md §4.4. Every fact is read from the Safe.
+verify_safe_quorum() {
+  local safe="$1" timelock="$2" relayer="$3" threshold on_chain in_record singleton
+  threshold="$(call "$safe" 'getThreshold()(uint256)')"
+  check "AC-ID-06 safe threshold is 2" "$([[ "$threshold" == "$SAFE_THRESHOLD" ]] && echo 1 || echo 0)" "threshold=${threshold:-unreadable}"
+
+  on_chain="$("$CAST" call --rpc-url "$RPC_URL" "$safe" 'getOwners()(address[])' 2>/dev/null \
+    | tr -d '[] ' | tr ',' '\n' | tr '[:upper:]' '[:lower:]' | sed '/^$/d' | LC_ALL=C sort)"
+  in_record="$(jq -r '.ephemeral.safe_signers // [] | .[].address | ascii_downcase' "$RECORD" | LC_ALL=C sort)"
+  check "AC-ID-06 safe owners are exactly the record's signers" \
+    "$([[ -n "$on_chain" && "$on_chain" == "$in_record" ]] && echo 1 || echo 0)" \
+    "$(wc -l <<<"$on_chain" | tr -d ' ') on chain, $(jq '.ephemeral.safe_signers // [] | length' "$RECORD") in record"
+
+  # SafeProxy keeps its singleton (`masterCopy`) in storage slot 0 (R4).
+  singleton="$("$CAST" storage --rpc-url "$RPC_URL" "$safe" 0 2>/dev/null || true)"
+  singleton="0x${singleton: -40}"
+  check "AC-ID-06 safe delegates to the SafeL2 singleton" \
+    "$([[ "$(lower "$singleton")" == "$(lower "$SAFE_L2_SINGLETON")" ]] && echo 1 || echo 0)" "$singleton"
+
+  # R13: quorum enforced, not merely configured. A harmless SafeTx (the Safe
+  # CALLs timelock.getMinDelay(), a view) is eth_call'd twice at the Safe's
+  # current nonce: with ONE owner signature it must revert GS020 (no single key
+  # drives the Safe, R10), and with threshold signatures it must succeed — the
+  # positive twin that makes the revert evidence of quorum rather than of some
+  # other failure.
+  # eth_call only: no nonce is spent and no state changes.
+  local keydir role missing="" data digest one full out
+  keydir="$(rec .ephemeral.keystore_dir)"
+  for role in $(jq -r '.ephemeral.safe_signers // [] | .[].role' "$RECORD"); do
+    [[ -f "$keydir/$role" && -f "$keydir/$role.pw" ]] || missing+="$role "
+  done
+  if [[ -n "$missing" || ! "$threshold" =~ ^[0-9]+$ ]] || (( threshold < 1 )); then
+    check "AC-ID-06 one owner signature cannot drive the safe" 0 "unproven: signer keystores unavailable (${missing:-threshold unreadable})"
+    check "AC-ID-06 threshold owner signatures can drive the safe" 0 "unproven: signer keystores unavailable (${missing:-threshold unreadable})"
+    return 0
+  fi
+  data="$("$CAST" calldata 'getMinDelay()')"
+  digest="$(safe_tx_hash "$safe" "$timelock" "$data")"
+  one="$(safe_signatures "$digest" 1)"
+  full="$(safe_signatures "$digest" "$threshold")"
+  local exec_sig='execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)(bool)'
+  if out="$("$CAST" call --rpc-url "$RPC_URL" --from "$relayer" "$safe" "$exec_sig" \
+      "$timelock" 0 "$data" 0 0 0 0 "$ZERO_ADDRESS" "$ZERO_ADDRESS" "$one" 2>&1)"; then
+    check "AC-ID-06 one owner signature cannot drive the safe" 0 "eth_call with one signature succeeded (threshold=$threshold)"
+  elif grep -q "GS020" <<<"$out"; then
+    check "AC-ID-06 one owner signature cannot drive the safe" 1 "reverts GS020"
+  else
+    check "AC-ID-06 one owner signature cannot drive the safe" 0 "reverted, but not GS020: $(tail -1 <<<"$out" | cut -c1-120)"
+  fi
+  out="$("$CAST" call --rpc-url "$RPC_URL" --from "$relayer" "$safe" "$exec_sig" \
+      "$timelock" 0 "$data" 0 0 0 0 "$ZERO_ADDRESS" "$ZERO_ADDRESS" "$full" 2>&1)" || true
+  check "AC-ID-06 threshold owner signatures can drive the safe" \
+    "$([[ "$(awk '{print $1; exit}' <<<"$out")" == "true" ]] && echo 1 || echo 0)" "$(tail -1 <<<"$out" | cut -c1-120)"
+}
+
 verify_record() {
   [[ -f "$RECORD" ]] || die "record not found: $RECORD" 65
   local gateway router governance receipt ic_policy timelock safe deployer submitter approver voter_a voter_b emergency
@@ -238,9 +299,17 @@ verify_record() {
   check "AC-GOV-03 quorumThreshold >= 2" "$([[ "$quorum" =~ ^[0-9]+$ ]] && (( quorum >= 2 )) && echo 1 || echo 0)" "quorum=$quorum"
   check "totalVotingPower can reach quorum" "$([[ "$total" =~ ^[0-9]+$ && "$quorum" =~ ^[0-9]+$ ]] && (( total >= quorum )) && echo 1 || echo 0)" "total=$total"
 
-  local distinct
-  distinct="$(printf '%s\n' "$deployer" "$submitter" "$approver" "$voter_a" "$voter_b" "$emergency" | tr '[:upper:]' '[:lower:]' | sort -u | wc -l)"
-  check "AC-ID-06 deployer/submitter/approver/voters/emergency are distinct" "$([[ "$distinct" == "6" ]] && echo 1 || echo 0)"
+  # Every ceremony key is distinct, the Safe signers included, and the approver
+  # (the relayer every Safe call is sent from) is one of those signers.
+  local distinct signers expected approver_signs
+  signers="$(jq -r '.ephemeral.safe_signers // [] | .[].address' "$RECORD" | tr '[:upper:]' '[:lower:]')"
+  distinct="$(printf '%s\n' "$deployer" "$submitter" "$voter_a" "$voter_b" "$emergency" "$signers" \
+    | tr '[:upper:]' '[:lower:]' | sed '/^$/d' | sort -u | wc -l)"
+  expected="$(( 5 + $(sed '/^$/d' <<<"$signers" | wc -l) ))"
+  approver_signs=0; grep -qxF "$(lower "$approver")" <<<"$signers" && approver_signs=1
+  check "AC-ID-06 deployer/submitter/safe signers/voters/emergency are distinct" \
+    "$([[ "$distinct" == "$expected" && "$approver_signs" == 1 ]] && echo 1 || echo 0)" \
+    "$distinct of $expected distinct; approver is a signer: $([[ "$approver_signs" == 1 ]] && echo yes || echo no)"
 
   check "submitter holds gateway AGENT_ROLE" "$(has_role "$gateway" "$AGENT_ROLE" "$submitter")"
   check "submitter holds COMMITTEE_AGENT_ROLE" "$(has_role "$ic_policy" "$COMMITTEE_AGENT_ROLE" "$submitter")"
@@ -309,9 +378,8 @@ verify_record() {
   check "AC-CORE-05 approver holds no receipt ADMIN_ROLE directly" "$(not_role "$receipt" "$ADMIN_ROLE" "$approver")"
   check "AC-CORE-05 safe is the timelock proposer" "$(has_role "$timelock" "$PROPOSER_ROLE" "$safe")"
   check "AC-CORE-05 safe is the timelock executor" "$(has_role "$timelock" "$EXECUTOR_ROLE" "$safe")"
-  local owner delay
-  owner="$(call "$safe" 'owner()(address)')"
-  check "AC-ID-06 the approver is the only key that drives the safe" "$([[ "$(lower "$owner")" == "$(lower "$approver")" ]] && echo 1 || echo 0)"
+  verify_safe_quorum "$safe" "$timelock" "$approver"
+  local delay
   delay="$(call "$timelock" 'getMinDelay()(uint256)')"
   check "timelock min delay matches the record" "$([[ "$delay" == "$(rec .min_delay)" ]] && echo 1 || echo 0)" "delay=$delay"
 

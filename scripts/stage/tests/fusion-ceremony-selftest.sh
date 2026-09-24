@@ -376,6 +376,9 @@ case "${pos[0]}" in
   codehash) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
   code) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
   balance) state "balance:$(lower "${pos[1]}")" || echo 0 ;;
+  storage)
+    # Only slot 0 of a Safe proxy is ever read: its masterCopy (singleton).
+    printf '0x000000000000000000000000%s\n' "$(lower "$(state "singleton:$(lower "${pos[1]}")" || echo 0x0000000000000000000000000000000000000000)" | sed 's/^0x//')" ;;
   block)
     [[ "$field" == "timestamp" ]] || { echo "fake cast: unhandled block field '$field'" >&2; exit 1; }
     current_clock ;;
@@ -428,6 +431,12 @@ case "${pos[0]}" in
         'owner()(address)') state "owner:$c" ;;
         'nonce()(uint256)') state "safenonce:$c" || echo 0 ;;
         'getThreshold()(uint256)') state "threshold:$c" || echo 2 ;;
+        'getOwners()(address[])')
+          owners_list="$(state "owners:$c" || true)"
+          printf '[%s]\n' "$(tr ' ' '\n' <<<"$owners_list" | sed '/^$/d' | paste -sd, - | sed 's/,/, /g')" ;;
+        'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)(bool)')
+          [[ "$(state safe_accepts_anything || echo false)" == "true" ]] || check_safe_signatures "$c" "${pos[3]}" "${pos[5]}" "${pos[12]}"
+          echo true ;;
         'getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)')
           safe_digest "${pos[3]}" "${pos[5]}" "${pos[12]}" ;;
         'getMinDelay()(uint256)') state delay ;;
@@ -472,7 +481,10 @@ baseline() {
   local r
   {
     printf 'chain\t918453\nquorum\t2\ntotal\t2\ndelay\t120\n'
-    printf 'owner:%s\t%s\n' "$SAFE" "$APPROVER"
+    printf 'owners:%s\t%s %s %s\n' "$(lc "$SAFE")" "$(lc "$APPROVER")" "$(lc "$APPROVER_B")" "$(lc "$APPROVER_C")"
+    printf 'threshold:%s\t2\n' "$(lc "$SAFE")"
+    printf 'singleton:%s\t%s\n' "$(lc "$SAFE")" "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"
+    printf 'keystore:%s\t%s\n' approver "$APPROVER" approver-b "$APPROVER_B" approver-c "$APPROVER_C"
     for r in "$GATEWAY" "$ROUTER" "$GOVERNANCE" "$RECEIPT" "$IC" "$TIMELOCK" "$SAFE" "$REGISTRY" "$VAULT"; do
       printf 'codehash:%s\t%s\n' "$r" "$HASH"
     done
@@ -489,13 +501,19 @@ baseline() {
   jq -n --arg g "$GATEWAY" --arg r "$ROUTER" --arg gov "$GOVERNANCE" --arg rc "$RECEIPT" --arg ic "$IC" \
     --arg t "$TIMELOCK" --arg s "$SAFE" --arg reg "$REGISTRY" --arg v "$VAULT" --arg d "$DEPLOYER" \
     --arg sub "$SUBMITTER" --arg ap "$APPROVER" --arg va "$VOTER_A" --arg vb "$VOTER_B" --arg e "$EMERGENCY" --arg h "$HASH" \
+    --arg apb "$APPROVER_B" --arg apc "$APPROVER_C" --arg keydir "$WORK/vkeys" \
     '{chain_id: 918453, min_delay: 120, deployer: $d,
       addresses: {gateway: $g, router: $r, governance: $gov, consensus_receipt: $rc, ic_policy: $ic,
                   timelock: $t, safe: $s, registry: $reg, vault: $v, emergency: $e},
       code_hashes: {gateway: $h, router: $h, governance: $h, consensus_receipt: $h, ic_policy: $h,
                     timelock: $h, safe: $h, registry: $h, vault: $h},
       vault_addresses: {rmUSDC: $v, rmPROTO: $v, rmAGENT: $v, rmRWA: $v},
-      ephemeral: {submitter: $sub, approver: $ap, voters: [$va, $vb], emergency: $e}}' >"$WORK/record.json"
+      ephemeral: {submitter: $sub, approver: $ap, voters: [$va, $vb], emergency: $e, keystore_dir: $keydir,
+                 safe_signers: [{role: "approver", address: $ap}, {role: "approver-b", address: $apb},
+                                {role: "approver-c", address: $apc}]}}' >"$WORK/record.json"
+  rm -rf "$WORK/vkeys"; mkdir -p "$WORK/vkeys"
+  local role
+  for role in approver approver-b approver-c; do : >"$WORK/vkeys/$role"; : >"$WORK/vkeys/$role.pw"; done
 }
 
 lc() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
@@ -541,8 +559,23 @@ expect_fail "placeholder quorum of 1" "quorumThreshold >= 2"
 baseline; set_state "logs:$(lc "$IC"):$COMMITTEE" "$SUBMITTER $VOTER_A"; set_state "role:$(lc "$IC"):$COMMITTEE:$(lc "$VOTER_A")" true
 expect_fail "a voter who is also a committee agent" "committee agents and non-zero voters are disjoint"
 
-baseline; set_state "owner:$(lc "$SAFE")" "$DEPLOYER"
-expect_fail "a safe the approver does not drive" "approver is the only key"
+# governance-isomorphism.md §4.4: the Safe is graded from the Safe.
+baseline; set_state "threshold:$(lc "$SAFE")" 1
+expect_fail "a 1-of-3 Safe" "safe threshold is 2"
+baseline; set_state "threshold:$(lc "$SAFE")" 1
+expect_fail "a 1-of-3 Safe that one key can drive" "one owner signature cannot drive the safe"
+baseline; set_state "owners:$(lc "$SAFE")" "$(lc "$APPROVER") $(lc "$APPROVER_B") $(lc "$DEPLOYER")"
+expect_fail "a Safe whose owners are not the record's signers" "safe owners are exactly the record's signers"
+baseline; set_state "singleton:$(lc "$SAFE")" "0x41675C099F32341bf84BFc5382aF534df5C7461a"
+expect_fail "a Safe on the L1 singleton" "safe delegates to the SafeL2 singleton"
+baseline; set_state safe_accepts_anything true
+expect_fail "a Safe that executes on one signature (quorum configured, not enforced)" "one owner signature cannot drive the safe"
+baseline; rm -f "$WORK/vkeys/approver-b"
+expect_fail "signer keystores gone: quorum enforcement unproven, not assumed" "one owner signature cannot drive the safe"
+baseline; set_state "owners:$(lc "$SAFE")" ""
+expect_fail "a Safe with no readable owner set" "safe owners are exactly the record's signers"
+baseline; jq --arg d "$DEPLOYER" '.ephemeral.safe_signers[2].address = $d' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
+expect_fail "the deployer reused as a Safe signer" "are distinct"
 
 baseline; set_state "role:$(lc "$RECEIPT"):$ADMIN:$(lc "$DEPLOYER")" true
 expect_fail "deployer keeping receipt ADMIN_ROLE" "deployer holds no ADMIN_ROLE on consensus_receipt"
