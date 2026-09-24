@@ -41,6 +41,14 @@ STATE_MANIFEST="$REPO_ROOT/testing/fixtures/fork-state/CURRENT.json"
 echo "[check-fork-manifest] verifying fork-state blob integrity (state_sha256)"
 "$REPO_ROOT/scripts/devnet/fork-state-digest.sh" verify "$SNAPSHOT" "$STATE_MANIFEST"
 
+# Safe-set presence (governance-isomorphism.md R3, issue #1447). The ceremony
+# creates its governing Safe through the canonical SafeProxyFactory on SafeL2,
+# and stage/CI load this fixture with no --fork-url, so an absent Safe contract
+# is absent for good. Fail here, naming it, rather than forty minutes into a
+# ceremony. Hard failure by design: R8 allows no stand-in to paper over it.
+echo "[check-fork-manifest] verifying the canonical Safe v1.4.1 set is in the fixture"
+"$REPO_ROOT/scripts/devnet/check-fork-safe-set.sh" "$SNAPSHOT"
+
 # Pin-age visibility (issue #1386). The digest check above proves the blob
 # matches its manifest; it says nothing about whether the pin still describes
 # anything like the present. The devnet's chain clock is wall-clock now while

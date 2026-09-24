@@ -400,9 +400,6 @@ WARM_ADDRESSES=(
   "0xf52D010c7d4ecBfda92c2509900593CE34535D86"  # USDC PriceCapAdapter (getSourceOfAsset)
   "0x1550207eAeB590D1557a6E6C066D3d57B5A4Dc65"  # USDC/USD EACAggregatorProxy
   "0x0fB39aE1d48Faf8CA5ea8DbF7e134e07386A7877"  # USDC/USD underlying aggregator
-  # Safe v1.4.1 singleton and proxy factory (used by DeployTimelock.s.sol).
-  "0x41675C099F32341bf84BFc5382aF534df5C7461a"  # Safe singleton v1.4.1
-  "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"  # SafeProxyFactory v1.4.1
   # Four-vault basket assets: tokens + primary pool contracts (issue #556).
   # AgentTokenVault (rmAGENT) assets.
   "0x4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07"  # JUNO token on Base
@@ -434,6 +431,39 @@ for addr in "${WARM_ADDRESSES[@]}"; do
       '{jsonrpc:"2.0",id:1,method:"anvil_setCode",params:[$a,$c]}')" \
     "$ANVIL_RPC" >/dev/null
   echo "[snapshot]   $addr: cached $(printf '%s' "$CODE" | wc -c) hex chars of bytecode"
+done
+
+# 3b-safe. Warm the complete canonical Safe v1.4.1 set
+#     (docs/technical/governance-isomorphism.md §2.2, R2; issue #1447).
+#
+#     Separate from WARM_ADDRESSES on purpose: that loop SKIPS an address with
+#     no upstream code, which is right for a demo pool and wrong here. The
+#     stage ceremony creates its Safe via SafeProxyFactory.createProxyWithNonce
+#     on the SafeL2 singleton, with CompatibilityFallbackHandler as the
+#     fallback; CI's SafeIntegration.t.sol does the same. None of them may be
+#     missing, and R8 forbids a stand-in, so a missing one aborts the snapshot.
+#     Code only: these are CREATE2-deployed and immutable, and a proxy's state
+#     lives in the proxy, never in the singleton or the factory.
+#     scripts/devnet/check-fork-safe-set.sh asserts the result (R3).
+SAFE_SET=(
+  "0x41675C099F32341bf84BFc5382aF534df5C7461a"  # Safe singleton (L1) v1.4.1
+  "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"  # SafeL2 singleton v1.4.1
+  "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"  # SafeProxyFactory v1.4.1
+  "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99"  # CompatibilityFallbackHandler v1.4.1
+  "0x38869bf66a61cF6bDB996A6aE40D5853FD43B526"  # MultiSend v1.4.1
+)
+echo "[snapshot] warming the canonical Safe v1.4.1 set"
+for addr in "${SAFE_SET[@]}"; do
+  CODE=$(cast code "$addr" --rpc-url "$ANVIL_RPC")
+  if [ -z "$CODE" ] || [ "$CODE" = "0x" ]; then
+    echo "ERROR: canonical Safe contract $addr has no code upstream at block $PIN_BLOCK" >&2
+    exit 1
+  fi
+  curl -sS -X POST -H 'content-type: application/json' \
+    --data "$(jq -n --arg a "$addr" --arg c "$CODE" \
+      '{jsonrpc:"2.0",id:1,method:"anvil_setCode",params:[$a,$c]}')" \
+    "$ANVIL_RPC" >/dev/null
+  echo "[snapshot]   $addr: cached $(printf '%s' "$CODE" | wc -c) hex chars of Safe bytecode"
 done
 
 # 3c. Warm slot0 storage for each Uniswap V3 price-strip pool.

@@ -228,6 +228,13 @@ jobs:
         # is never exercised is the same silence that let the pin reach 48 days.
         run: scripts/devnet/check-fork-pin-age-selftest.sh
 
+      - name: Fork Safe-set gate behaviour self-test (issue #1447)
+        # Offline, no network/Docker: drives scripts/devnet/check-fork-safe-set.sh
+        # against synthetic state files so a fixture missing any canonical Safe
+        # contract is proven to fail (governance-isomorphism.md R3) before
+        # check-fork-manifest.sh judges the real fixture with it.
+        run: scripts/devnet/check-fork-safe-set-selftest.sh
+
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
