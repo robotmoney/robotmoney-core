@@ -2265,6 +2265,10 @@ ceremony_is_live() {
 
 ensure_ceremony() {
   RECORD="${RECORD:-$OUT_DIR/fusion-stage-record.json}"
+  # An RPC that does not answer says nothing about the chain behind it. Every
+  # read below would fail, "not live" and "used" would both follow, and the
+  # operator would be told to reboot a devnet that may be fine. Ask first.
+  "$CAST" chain-id --rpc-url "$RPC_URL" >/dev/null 2>&1 || die "rpc unreachable: $RPC_URL" 66
   if ceremony_is_live; then
     info "ceremony is live on this chain; provisioning nothing"
     verify_record

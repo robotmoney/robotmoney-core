@@ -482,6 +482,15 @@ done
 [[ -n "$keystore" ]] && from="$(state "keystore:$(basename "$keystore")" || true)"
 [[ -n "$privkey" ]] && from="$(state "privkey:$(lower "$privkey")" || true)"
 
+# `rpc_down`: the node does not answer. Everything that needs it fails the way
+# cast does against a closed port; pure encoding and local keystores still work.
+if [[ "$(state rpc_down || echo false)" == true ]]; then
+  case "${pos[0]}" in
+    keccak|calldata|sig|abi-encode|abi-decode|to-dec|wallet) ;;
+    *) echo "fake cast: error sending request: tcp connect error: Connection refused (os error 111)" >&2; exit 1 ;;
+  esac
+fi
+
 case "${pos[0]}" in
   keccak|calldata|sig|abi-encode|abi-decode|to-dec) exec "$REAL_CAST" "${pos[@]}" ;;
   wallet)
@@ -938,6 +947,16 @@ if grep -q "summary not found" "$WORK/out" && ! grep -q "reboot the devnet" "$WO
   PASSED=$((PASSED + 1)); echo "ok   ensure on a fresh chain with other code at the recorded timelock address goes on to provision (exit $rc at the missing summary)"
 else
   FAILED=$((FAILED + 1)); echo "FAIL ensure on a fresh chain with other code at the recorded timelock address: exit $rc"; tail -3 "$WORK/out"
+fi
+# An RPC that does not answer is exit 66 naming the URL, never the reboot
+# instruction: an unreachable node says nothing about the chain behind it.
+baseline; set_state rpc_down true
+rc=0; rm -rf "$WORK/ensure-out"; mkdir -p "$WORK/ensure-out"; run_ensure || rc=$?
+if [[ "$rc" == 66 ]] && grep -qF "rpc unreachable: http://fake" "$WORK/out" && ! grep -q "reboot the devnet" "$WORK/out" \
+   && ! grep -q '^wallet_new_called' "$WORK/state"; then
+  PASSED=$((PASSED + 1)); echo "ok   ensure on an unreachable RPC exits 66 naming the URL, not the reboot instruction"
+else
+  FAILED=$((FAILED + 1)); echo "FAIL ensure on an unreachable RPC: exit $rc"; tail -3 "$WORK/out"
 fi
 # The positive twin: the same missing keystore on a REBOOTED chain (neither the
 # timelock nor the Safe has code) is not refused as used; ensure goes on to
@@ -1751,7 +1770,7 @@ TOTAL_PASSED=$((PASSED + GOV_PASSED + STUB_PASSED))
 # Executed-assertion floor. Every `ok` line above is an assertion that RAN; a
 # run that silently skips a section prints fewer and must not pass. Raise the
 # floor whenever cases are added (CI checks the same line: suite-01-02).
-ASSERTION_FLOOR=126
+ASSERTION_FLOOR=127
 echo "fusion-ceremony selftest TOTAL: $TOTAL_PASSED passed, $TOTAL_FAILED failed (floor $ASSERTION_FLOOR)"
 SELFTEST_COMPLETE=1
 if (( TOTAL_PASSED < ASSERTION_FLOOR )); then
