@@ -397,6 +397,67 @@ handle_execute() {
   emit_send_result "$tx"
 }
 
+# `pause_on_value`: the first value transfer (run's key funding, after every key
+# is minted) marks "$FAKE_STATE.paused" and hangs until "$FAKE_STATE.release"
+# appears, so the harness can signal a `run` that is blocked inside cast.
+# Bounded, so a harness that never releases it fails instead of hanging CI.
+pause_here() {
+  touch "$FAKE_STATE.paused"
+  local i
+  for (( i = 0; i < 600; i++ )); do
+    [[ ! -e "$FAKE_STATE.release" ]] || { echo "fake cast: released while paused" >&2; exit 1; }
+    sleep 0.1
+  done
+  echo "fake cast: paused for 60s and nobody signalled" >&2
+  exit 1
+}
+append_state() {
+  local cur; cur="$(state "$1" || true)"
+  [[ " $cur " == *" $2 "* ]] || set_state "$1" "${cur:+$cur }$2"
+}
+# `accept_sends`: the writes `run` makes before the handover, applied the way
+# the contracts would, so a whole `run` can reach its record and its verify.
+# Without it every one of these sends is refused, as before.
+handle_run_send() {
+  local target sig; target="$(lower "$1")"; sig="$2"; shift 2
+  [[ "$(state accept_sends || echo false)" == true ]] || revert_send "unhandled send $sig"
+  local agent committee
+  agent="$(lower "$("$REAL_CAST" keccak AGENT_ROLE)")"
+  committee="$(lower "$("$REAL_CAST" keccak COMMITTEE_AGENT_ROLE)")"
+  case "$sig" in
+    authorizeAgent\(*)
+      set_state "role:$target:$agent:$(lower "$1")" true
+      append_state "logs:$target:$agent" "$(lower "$1")" ;;
+    'committeeRegister(address,string)')
+      # Sent to the gateway, which forwards it to the IC policy (`ic_policy`).
+      local ic; ic="$(lower "$(state ic_policy)")"
+      set_state "role:$ic:$committee:$(lower "$1")" true
+      append_state "logs:$ic:$committee" "$(lower "$1")" ;;
+    'setVotingPower(address,uint256)')
+      set_state "power:$(lower "$1")" "$2"
+      append_state "logs:$target:none" "$(lower "$1")" ;;
+    'setQuorumThreshold(uint256)') set_state quorum "$1" ;;
+    'grantRole(bytes32,address)') set_state "role:$target:$1:$(lower "$2")" true ;;
+    'revokeRole(bytes32,address)') set_state "role:$target:$1:$(lower "$2")" false ;;
+    'createProxyWithNonce(address,bytes,uint256)')
+      # A SafeProxy at the address the eth_call predicted, set up exactly as
+      # the initializer says: its owners, threshold and fallback handler.
+      local safe setup out owners
+      safe="$(lower "$(state create_safe_at)")"
+      setup="$2"
+      mapfile -t out < <("$REAL_CAST" abi-decode --input 'setup(address[],uint256,address,bytes,address,address,uint256,address)' "0x${setup:10}")
+      owners="$(tr -d '[],' <<<"${out[0]}")"
+      set_state "owners:$safe" "$(lower "$owners" | xargs)"
+      set_state "threshold:$safe" "${out[1]%% *}"
+      set_state "handler:$safe" "${out[4]}"
+      set_state "singleton:$safe" "$1"
+      set_state "codehash:$safe" "$(state safe_proxy_hash)"
+      append_state "logs:$target:none" "$safe" ;;
+    *) revert_send "unhandled send $sig" ;;
+  esac
+  emit_send_result "$(next_tx)"
+}
+
 # `unreadable:<address>`: every read of that account fails, as an RPC that
 # times out or a node that lost the account would.
 unreadable() {
@@ -404,7 +465,7 @@ unreadable() {
     || { echo "fake cast: request for $1 timed out" >&2; exit 1; }
 }
 
-pos=(); data=""; field=""; keystore=""; privkey=""
+pos=(); data=""; field=""; keystore=""; privkey=""; value=""
 while (( $# )); do
   case "$1" in
     --rpc-url|--from|--from-block|--address) [[ "$1" == "--address" ]] && addr="$2"; [[ "$1" == "--from" ]] && from="$2"; shift 2 ;;
@@ -414,6 +475,7 @@ while (( $# )); do
     --keystore) keystore="$2"; shift 2 ;;
     --password-file) shift 2 ;;
     --private-key) privkey="$2"; shift 2 ;;
+    --value) value="$2"; shift 2 ;;
     *) pos+=("$1"); shift ;;
   esac
 done
@@ -532,6 +594,7 @@ case "${pos[0]}" in
         'getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)')
           safe_digest "${pos[@]:3:10}" ;;
         'getMinDelay()(uint256)') state delay ;;
+        'createProxyWithNonce(address,bytes,uint256)(address)') state create_safe_at ;;
         'receiptCount()(uint256)') state "receiptcount:$c" || echo 0 ;;
         'setWeights(address[],uint256[])') [[ "$(state "setweights:$(lower "${from:-}")" || echo revert)" == ok ]] ;;
         'isReleased(bytes32)(bool)') state "released:$(lower "${pos[3]}")" || echo false ;;
@@ -557,18 +620,82 @@ case "${pos[0]}" in
       esac
     fi ;;
   send)
-    target="${pos[1]}"; sig="${pos[2]}"
+    target="${pos[1]}"; sig="${pos[2]:-}"
     case "$sig" in
       'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)')
         handle_exec_transaction "$target" "${pos[@]:3:10}" ;;
       'vote(uint256)') handle_vote "$target" "${pos[3]}" "${from:-}" ;;
       'execute(uint256)') handle_execute "$target" "${pos[3]}" "${from:-}" ;;
-      *) echo "fake cast: unhandled send $sig" >&2; exit 1 ;;
+      '')
+        # A bare value transfer (run funding a key it minted).
+        [[ "$(state pause_on_value || echo false)" != true ]] || pause_here
+        [[ "$(state accept_sends || echo false)" == true ]] || revert_send "value transfer to $target refused"
+        set_state "balance:$(lower "$target")" 2000000000000000000
+        emit_send_result "$(next_tx)" ;;
+      *) handle_run_send "$target" "$sig" "${pos[@]:3}" ;;
     esac ;;
   *) echo "fake cast: unhandled ${pos[0]}" >&2; exit 1 ;;
 esac
 FAKE
 chmod +x "$WORK/cast"
+
+# ─── the fake forge ──────────────────────────────────────────────────────────
+# Plays `forge script DeployTimelock.s.sol --broadcast` for a `run` that gets
+# that far: the handover the script performs on the fake chain (the timelock
+# takes ADMIN_ROLE on every contract it covers, the Safe becomes its proposer
+# and executor, the deployer loses its roles) and the manifest it writes to
+# DEPLOYMENT_OUT. The timelock's address and code hash come from the state
+# table (forge_timelock, forge_codehash); everything else comes from the same
+# environment the real script reads.
+cat >"$WORK/forge" <<'FAKEFORGE'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-} ${2:-}" == "script contracts/script/DeployTimelock.s.sol:DeployTimelock" ]] \
+  || { echo "fake forge: unexpected invocation: $*" >&2; exit 1; }
+state() { awk -F'\t' -v k="$1" '$1 == k { v = $2; f = 1 } END { if (f) print v; else exit 1 }' "$FAKE_STATE"; }
+set_state() {
+  grep -v -F "$1"$'\t' "$FAKE_STATE" >"$FAKE_STATE.new" 2>/dev/null || true
+  printf '%s\t%s\n' "$1" "$2" >>"$FAKE_STATE.new"
+  mv "$FAKE_STATE.new" "$FAKE_STATE"
+}
+lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
+key=""
+while (( $# )); do
+  case "$1" in --private-key) key="$2"; shift 2 ;; *) shift ;; esac
+done
+deployer="$(lower "$(state "privkey:$(lower "$key")")")"
+tl="$(lower "$(state forge_timelock)")"; hash="$(state forge_codehash)"
+admin="$(lower "$("$REAL_CAST" keccak ADMIN_ROLE)")"
+proposer="$(lower "$("$REAL_CAST" keccak PROPOSER_ROLE)")"
+executor="$(lower "$("$REAL_CAST" keccak EXECUTOR_ROLE)")"
+root=0x0000000000000000000000000000000000000000000000000000000000000000
+safe="$(lower "$SAFE_ADDRESS")"
+set_state "codehash:$tl" "$hash"
+set_state delay "$TIMELOCK_MIN_DELAY"
+set_state "role:$tl:$proposer:$safe" true
+set_state "role:$tl:$executor:$safe" true
+for c in "$VAULT_ADDRESS" "$GATEWAY_ADDRESS" "$REGISTRY_ADDRESS" "$ROUTER_ADDRESS" "$GOVERNANCE_ADDRESS" \
+         "$IC_POLICY_ADDRESS" "$CONSENSUS_RECEIPT_ADDRESS"; do
+  set_state "role:$(lower "$c"):$admin:$tl" true
+  set_state "role:$(lower "$c"):$admin:$deployer" false
+done
+set_state "role:$(lower "$GATEWAY_ADDRESS"):$root:$deployer" false
+codehash_of() { state "codehash:$(lower "$1")"; }
+jq -n --argjson chain "$(state chain)" --argjson delay "$TIMELOCK_MIN_DELAY" --arg t "$tl" --arg s "$safe" \
+  --arg e "$EMERGENCY_ADDRESS" --arg v "$VAULT_ADDRESS" --arg g "$GATEWAY_ADDRESS" --arg reg "$REGISTRY_ADDRESS" \
+  --arg r "$ROUTER_ADDRESS" --arg ic "$IC_POLICY_ADDRESS" --arg rc "$CONSENSUS_RECEIPT_ADDRESS" --arg gov "$GOVERNANCE_ADDRESS" \
+  --arg th "$hash" --arg sh "$(codehash_of "$safe")" --arg vh "$(codehash_of "$VAULT_ADDRESS")" \
+  --arg gh "$(codehash_of "$GATEWAY_ADDRESS")" --arg regh "$(codehash_of "$REGISTRY_ADDRESS")" \
+  --arg rh "$(codehash_of "$ROUTER_ADDRESS")" --arg ich "$(codehash_of "$IC_POLICY_ADDRESS")" \
+  --arg rch "$(codehash_of "$CONSENSUS_RECEIPT_ADDRESS")" --arg govh "$(codehash_of "$GOVERNANCE_ADDRESS")" \
+  '{chain_id: $chain, min_delay: $delay, timelock: $t, safe: $s,
+    addresses: {timelock: $t, safe: $s, emergency: $e, vault: $v, gateway: $g, registry: $reg, router: $r,
+                ic_policy: $ic, consensus_receipt: $rc, governance: $gov},
+    code_hashes: {timelock: $th, safe: $sh, vault: $vh, gateway: $gh, registry: $regh, router: $rh,
+                  ic_policy: $ich, consensus_receipt: $rch, governance: $govh}}' >"$DEPLOYMENT_OUT"
+echo "fake forge: handover done, manifest at $DEPLOYMENT_OUT"
+FAKEFORGE
+chmod +x "$WORK/forge"
 
 baseline() {
   local r
@@ -826,7 +953,7 @@ run_baseline() {
 }
 run_run() {
   set +e
-  FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" \
+  FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" FORGE="$WORK/forge" \
     "$CEREMONY" run --summary "$WORK/summary.log" --out-dir "$WORK/run-out" --rpc-url http://fake >"$WORK/out" 2>&1
   local rc=$?
   set -e
@@ -860,6 +987,81 @@ if [[ "$rc" != 0 && "$(state_of walletseq)" == 7 && "$(key_files_left)" == 0 ]] 
   PASSED=$((PASSED + 1)); echo "ok   a run that dies after minting 7 keys shreds them all (exit $rc; passwords never on argv)"
 else
   FAILED=$((FAILED + 1)); echo "FAIL failed run: exit $rc, $(state_of walletseq) keys minted, $(key_files_left) key file(s) left, argv password: $(state_of wallet_new_argv_password)"
+  tail -3 "$WORK/out"
+fi
+
+# The other side of the trap: a run that DOES write its record keeps every key
+# it names. The fake chain accepts run's writes and the fake forge performs the
+# handover, so `run` goes all the way through its own verify. Every keystore
+# and password must survive under the recorded keystore_dir, and the record
+# must name each key's address. Deleting the trap-lift lines in `run` shreds
+# them on the way out and fails this case.
+RUN_ROLES=(submitter approver approver-b approver-c voter-a voter-b emergency)
+NEW_SAFE=$(a 48); NEW_TIMELOCK=$(a 49)
+run_baseline; set_state wallet_new_ok true; set_state accept_sends true
+set_state create_safe_at "$NEW_SAFE"; set_state safe_proxy_hash "$SAFE_PROXY_HASH"; set_state ic_policy "$IC"
+set_state forge_timelock "$NEW_TIMELOCK"; set_state forge_codehash "$HASH"
+rc=0; run_run || rc=$?
+RUN_RECORD="$WORK/run-out/fusion-stage-record.json"
+RUN_KEYDIR="$(jq -r '.ephemeral.keystore_dir // empty' "$RUN_RECORD" 2>/dev/null || true)"
+missing=""; unnamed=""
+for role in "${RUN_ROLES[@]}"; do
+  [[ -n "$RUN_KEYDIR" && -s "$RUN_KEYDIR/$role" && -s "$RUN_KEYDIR/$role.pw" ]] || missing+="$role "
+  role_addr="$(state_of "keystore:$role")"
+  [[ -n "$role_addr" ]] && jq -e --arg a "$(lc "$role_addr")" \
+      '[.. | strings | ascii_downcase] | index($a) != null' "$RUN_RECORD" >/dev/null 2>&1 || unnamed+="$role "
+done
+if [[ "$rc" == 0 && "$RUN_KEYDIR" == "$WORK/run-out/keys/"* && -z "$missing" && -z "$unnamed" \
+      && "$(key_files_left)" == $(( 2 * ${#RUN_ROLES[@]} )) ]] \
+   && grep -q "^verify: every assertion passed" "$WORK/out" && ! grep -q "shredded" "$WORK/out"; then
+  PASSED=$((PASSED + 1)); echo "ok   a run that writes its record keeps all ${#RUN_ROLES[@]} keystores and passwords, and the record names each"
+else
+  FAILED=$((FAILED + 1))
+  echo "FAIL successful run: exit $rc, keydir '${RUN_KEYDIR}', missing: ${missing:-none}, unnamed: ${unnamed:-none}, $(key_files_left) key file(s)"
+  grep -E "^FAIL|shredded" "$WORK/out" | head -5; tail -3 "$WORK/out"
+fi
+
+# SIGTERM to a `run` that is blocked inside cast, after every key is minted and
+# before any record names them. The TERM trap must turn the signal into a
+# normal exit 143, and the EXIT trap must then shred every key.
+#
+# How the run ENDS is asserted, not only its status. Bash runs an EXIT trap
+# even when a signal kills it, so the keys are shredded either way; what the
+# TERM trap adds is that the run exits 143 on its own terms (the EXIT trap
+# sees 143) instead of dying by the signal (the EXIT trap sees whatever $? was
+# last, and bash re-raises SIGTERM). A shell `wait` reports 143 for both, so a
+# perl waiter reports which one happened. Deleting the INT/TERM traps turns
+# "exited 143" into "signaled 15": this case fails.
+RUN_WAITER='my ($pidfile, $statusfile, @cmd) = @ARGV;
+my $pid = fork; defined $pid or die "fork: $!";
+if (!$pid) { exec { $cmd[0] } @cmd or die "exec: $!" }
+open(my $p, ">", $pidfile) or die; print $p $pid; close $p;
+waitpid($pid, 0); my $s = $?;
+open(my $o, ">", $statusfile) or die;
+print $o (($s & 127) ? "signaled " . ($s & 127) : "exited " . ($s >> 8)); close $o;
+exit(($s & 127) ? 128 + ($s & 127) : $s >> 8);'
+run_baseline; set_state wallet_new_ok true; set_state pause_on_value true
+rm -f "$WORK/state.paused" "$WORK/state.release" "$WORK/run.pid" "$WORK/run.status"
+FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" FORGE="$WORK/forge" \
+  perl -e "$RUN_WAITER" "$WORK/run.pid" "$WORK/run.status" \
+  "$CEREMONY" run --summary "$WORK/summary.log" --out-dir "$WORK/run-out" --rpc-url http://fake >"$WORK/out" 2>&1 &
+WAITER_PID=$!
+for _ in $(seq 1 300); do [[ -e "$WORK/state.paused" && -s "$WORK/run.pid" ]] && break; sleep 0.1; done
+paused=0; [[ -e "$WORK/state.paused" && -s "$WORK/run.pid" ]] && paused=1
+keys_before="$(key_files_left)"
+if (( paused )); then kill -TERM "$(cat "$WORK/run.pid")" 2>/dev/null || true; fi
+sleep 0.5
+touch "$WORK/state.release"
+rc=0; wait "$WAITER_PID" || rc=$?
+sleep 0.3   # let a released fake cast finish before the next case touches its state
+ended="$(cat "$WORK/run.status" 2>/dev/null || echo "no status")"
+rm -f "$WORK/state.paused" "$WORK/state.release"
+if [[ "$paused" == 1 && "$keys_before" == $(( 2 * ${#RUN_ROLES[@]} )) && "$rc" == 143 && "$ended" == "exited 143" \
+      && "$(key_files_left)" == 0 ]] && grep -q "shredded the unrecorded keys" "$WORK/out"; then
+  PASSED=$((PASSED + 1)); echo "ok   SIGTERM to a run paused inside cast exits 143 and shreds all ${keys_before} key files"
+else
+  FAILED=$((FAILED + 1))
+  echo "FAIL SIGTERM to a paused run: paused=$paused, $keys_before key file(s) before, exit $rc ($ended), $(key_files_left) key file(s) left"
   tail -3 "$WORK/out"
 fi
 
@@ -1528,7 +1730,7 @@ TOTAL_PASSED=$((PASSED + GOV_PASSED + STUB_PASSED))
 # Executed-assertion floor. Every `ok` line above is an assertion that RAN; a
 # run that silently skips a section prints fewer and must not pass. Raise the
 # floor whenever cases are added (CI checks the same line: suite-01-02).
-ASSERTION_FLOOR=121
+ASSERTION_FLOOR=123
 echo "fusion-ceremony selftest TOTAL: $TOTAL_PASSED passed, $TOTAL_FAILED failed (floor $ASSERTION_FLOOR)"
 SELFTEST_COMPLETE=1
 if (( TOTAL_PASSED < ASSERTION_FLOOR )); then
