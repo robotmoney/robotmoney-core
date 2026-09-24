@@ -21,21 +21,38 @@
 #   fusion-ceremony.sh discard --record FILE
 #   fusion-ceremony.sh handover-vaults --record FILE [--rpc-url URL]
 #
-# run      provisions fresh submitter / approver / two voters / emergency keys
-#          (host-local keystores, 0600, never printed), registers the submitter
-#          as the one committee agent, gives the two voters power, deploys a
-#          RehearsalSafe owned by the approver and the TimelockController
+# run      provisions fresh submitter / approver / approver-b / approver-c /
+#          two voters / emergency keys (host-local keystores, 0600, never
+#          printed), registers the submitter as the one committee agent, gives
+#          the two voters power, creates a real 2-of-3 Safe (a SafeProxy on the
+#          canonical SafeL2 singleton via the canonical SafeProxyFactory; owners
+#          approver, approver-b, approver-c) and the TimelockController
 #          handover, then runs `verify` and writes a GENERATED record to
 #          $OUT_DIR/fusion-stage-record-<run>.json (+ fusion-stage-record.json).
+#          There is no fallback: a chain without the canonical Safe set cannot
+#          run the ceremony (docs/technical/governance-isomorphism.md R8).
 # ensure   the idempotent form of `run`: verifies the record against the live
 #          chain and re-provisions only when the ceremony is actually absent
 #          (a devnet reboot wipes the Safe, the timelock and the key funding
 #          while leaving a plausible-looking record behind). Callers use this
-#          so environment setup is never a manual prerequisite.
+#          so environment setup is never a manual prerequisite. A chain that
+#          still carries a ceremony it cannot drive (a recorded timelock or
+#          Safe with code, but a keystore or password gone) is never
+#          provisioned again: ensure exits 65 and says to reboot the devnet.
 # verify   asserts the acceptance topology on chain; exit 1 on any failure.
-# release  releases a receipt the way a timelocked stage must: the approver
-#          drives Safe -> TimelockController.schedule, waits the delay, then
-#          execute. Idempotent on an already-released receipt.
+#          The Safe is read from the Safe, never from the record (R12):
+#          runtime code equal to the canonical SafeProxy v1.4.1's, threshold 2,
+#          owner set equal to the record's signers, SafeL2 as its singleton, no
+#          module, no guard, the canonical fallback handler, and quorum ENFORCED
+#          rather than configured (R13): one owner signature must revert GS020,
+#          one owner's signature twice and two non-owner signatures must each
+#          revert GS026, while the same SafeTx with threshold signatures would
+#          execute (all eth_call; no state change). A Safe read that fails is a
+#          FAIL line; verify always reaches its summary line.
+# release  releases a receipt the way a timelocked stage must: the Safe
+#          schedules on the TimelockController through execTransaction signed
+#          by two distinct owners, waits the delay, then executes the same way.
+#          Idempotent on an already-released receipt.
 # propose  puts a governance draft's propose(address[],uint256[]) calldata through
 #          the same Safe -> TimelockController path, then PROVES the authority it
 #          used: currentProposalId must advance by exactly one, the stored
@@ -139,6 +156,45 @@ EMERGENCY_ROLE="$("$CAST" keccak "EMERGENCY_ROLE" 2>/dev/null || true)"
 ROLE_GRANTED_TOPIC="$("$CAST" keccak "RoleGranted(bytes32,address,address)" 2>/dev/null || true)"
 EXECUTOR_ROLE="$("$CAST" keccak "EXECUTOR_ROLE" 2>/dev/null || true)"
 
+# Canonical Safe v1.4.1 (docs/technical/governance-isomorphism.md §2.2). Safe is
+# third-party infrastructure the fork fixture carries; this script never deploys
+# a Safe implementation, only creates an account (a SafeProxy) on it (R1, R5).
+# SafeL2, not the L1 singleton: the stage chain is a Base fork, and Base is an
+# L2 (R4).
+SAFE_L2_SINGLETON="0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"
+SAFE_PROXY_FACTORY="0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"
+SAFE_FALLBACK_HANDLER="0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99"
+ZERO_ADDRESS="0x0000000000000000000000000000000000000000"
+# keccak256 of a SafeProxy v1.4.1's RUNTIME code. SafeProxy keeps its singleton
+# in storage slot 0 and has no immutables, so every proxy the canonical factory
+# creates carries byte-identical runtime code, whatever its owners or singleton.
+# Derived (issue #1447) by booting
+#   anvil --load-state testing/fixtures/fork-state/CURRENT.anvil-state --chain-id 918453
+# creating a proxy with SafeProxyFactory.createProxyWithNonce(SafeL2,
+# setup([3 owners], 2, 0, 0x, CompatibilityFallbackHandler, 0, 0, 0), 7) and
+# reading `cast codehash <proxy>` (171 bytes of runtime code). The PR review
+# measured the same value independently. Anything else at the Safe address is
+# not a Safe, however it answers getThreshold()/getOwners() (R12).
+SAFE_PROXY_RUNTIME_CODEHASH="0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c"
+# Safe v1.4.1 keeps its guard and its fallback handler at fixed keccak slots
+# (GuardManager.GUARD_STORAGE_SLOT, FallbackManager.FALLBACK_HANDLER_STORAGE_SLOT)
+# and its modules in a linked list that starts at SENTINEL_MODULES (0x1). A
+# module or a guard can drive or veto the Safe without the owners' signatures,
+# so verify requires none of either.
+SAFE_GUARD_SLOT="0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8"             # keccak256("guard_manager.guard.address")
+SAFE_FALLBACK_HANDLER_SLOT="0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5"  # keccak256("fallback_manager.handler.address")
+SAFE_SENTINEL="0x0000000000000000000000000000000000000001"
+# Two ceremony keys that are NOT Safe owners, used by verify's non-owner
+# negative control. Existing keystores; no key is minted for the control.
+SAFE_NON_OWNER_ROLES=(submitter voter-a)
+# The Safe's owners are three dedicated approver keys, not keys that already
+# hold another role: the submitter is the agent whose receipts the Safe
+# releases, the voters are RouterGovernance's approving body, and the
+# emergency key is the independent hot key. Owning the Safe with any of them
+# would fuse two governing bodies into one signer set.
+SAFE_OWNER_ROLES=(approver approver-b approver-c)
+SAFE_THRESHOLD=2
+
 is_address() { [[ "$1" =~ ^0x[0-9a-fA-F]{40}$ ]]; }
 lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
 
@@ -185,6 +241,152 @@ log_accounts() {
   "$CAST" "${args[@]}" | jq -r '.[] | .topics[if (.topics|length) > 2 then 2 else 1 end] | "0x" + .[26:]' | sort -u
 }
 
+# verify_safe_quorum <safe> <timelock> <relayer>: the Safe checks of
+# governance-isomorphism.md §4.4. Every fact is read from the Safe, and every
+# read that fails is a FAIL line, never an abort: verify always reaches its
+# summary line, so an unreadable Safe is reported as one, not as a bare exit.
+verify_safe_quorum() {
+  local safe="$1" timelock="$2" relayer="$3" threshold on_chain in_record singleton codehash
+  local modules guard handler
+  local l_one="AC-ID-06 one owner signature cannot drive the safe"
+  local l_dup="AC-ID-06 one owner's signature twice cannot drive the safe"
+  local l_non="AC-ID-06 two non-owner signatures cannot drive the safe"
+  local l_full="AC-ID-06 threshold owner signatures can drive the safe"
+
+  # R12: a contract that merely answers getThreshold()/getOwners() is not a
+  # Safe. The runtime code must be the canonical SafeProxy's, byte for byte.
+  codehash="$("$CAST" codehash --rpc-url "$RPC_URL" "$safe" 2>/dev/null)" || codehash=""
+  check "AC-ID-06 safe runtime code is the canonical SafeProxy v1.4.1" \
+    "$([[ "$(lower "$codehash")" == "$SAFE_PROXY_RUNTIME_CODEHASH" ]] && echo 1 || echo 0)" "codehash=${codehash:-unreadable}"
+
+  threshold="$(call "$safe" 'getThreshold()(uint256)')" || threshold=""
+  check "AC-ID-06 safe threshold is 2" "$([[ "$threshold" == "$SAFE_THRESHOLD" ]] && echo 1 || echo 0)" "threshold=${threshold:-unreadable}"
+
+  on_chain="$("$CAST" call --rpc-url "$RPC_URL" "$safe" 'getOwners()(address[])' 2>/dev/null \
+    | tr -d '[] ' | tr ',' '\n' | tr '[:upper:]' '[:lower:]' | sed '/^$/d' | LC_ALL=C sort)" || on_chain=""
+  in_record="$(jq -r '.ephemeral.safe_signers // [] | .[].address | ascii_downcase' "$RECORD" | LC_ALL=C sort)" || in_record=""
+  check "AC-ID-06 safe owners are exactly the record's signers" \
+    "$([[ -n "$on_chain" && "$on_chain" == "$in_record" ]] && echo 1 || echo 0)" \
+    "$(sed '/^$/d' <<<"$on_chain" | wc -l | tr -d ' ') on chain, $(jq '.ephemeral.safe_signers // [] | length' "$RECORD") in record"
+
+  # SafeProxy keeps its singleton (`masterCopy`) in storage slot 0 (R4).
+  singleton="$("$CAST" storage --rpc-url "$RPC_URL" "$safe" 0 2>/dev/null)" || singleton=""
+  [[ -n "$singleton" ]] && singleton="0x${singleton: -40}"
+  check "AC-ID-06 safe delegates to the SafeL2 singleton" \
+    "$([[ "$(lower "$singleton")" == "$(lower "$SAFE_L2_SINGLETON")" ]] && echo 1 || echo 0)" "${singleton:-unreadable}"
+
+  # No module and no guard: either one drives or vetoes the Safe without the
+  # owners' signatures, so a Safe carrying one is not the 2-of-3 it looks like.
+  # getModulesPaginated prints the page on its first line and `next` on the
+  # second; awk reads both lines so the pipe never closes early.
+  modules="$("$CAST" call --rpc-url "$RPC_URL" "$safe" 'getModulesPaginated(address,uint256)(address[],address)' \
+    "$SAFE_SENTINEL" 10 2>/dev/null | awk 'NR == 1 { print }')" || modules=""
+  check "AC-ID-06 safe has no modules enabled" "$([[ "$modules" == "[]" ]] && echo 1 || echo 0)" "modules=${modules:-unreadable}"
+  guard="$("$CAST" storage --rpc-url "$RPC_URL" "$safe" "$SAFE_GUARD_SLOT" 2>/dev/null)" || guard=""
+  check "AC-ID-06 safe has no guard set" "$([[ "$guard" =~ ^0x0{64}$ ]] && echo 1 || echo 0)" "guard slot=${guard:-unreadable}"
+  handler="$("$CAST" storage --rpc-url "$RPC_URL" "$safe" "$SAFE_FALLBACK_HANDLER_SLOT" 2>/dev/null)" || handler=""
+  check "AC-ID-06 safe fallback handler is the canonical CompatibilityFallbackHandler" \
+    "$([[ "$handler" =~ ^0x0{24}[0-9a-fA-F]{40}$ && "$(lower "0x${handler: -40}")" == "$(lower "$SAFE_FALLBACK_HANDLER")" ]] && echo 1 || echo 0)" \
+    "handler slot=${handler:-unreadable}"
+
+  # R13: quorum enforced, not merely configured. A harmless SafeTx (the Safe
+  # CALLs timelock.getMinDelay(), a view) is eth_call'd at the Safe's current
+  # nonce four times:
+  #   one owner signature              must revert GS020 (no single key drives the Safe, R10)
+  #   one owner's signature twice      must revert GS026 (two DISTINCT owners, §1.1)
+  #   two non-owner signatures         must revert GS026 (only owners count)
+  #   threshold owner signatures       must return true — the positive twin that
+  #                                    makes the three reverts evidence of quorum
+  #                                    rather than of some other failure.
+  # eth_call only: no nonce is spent and no state changes.
+  local keydir role missing="" non_missing="" data digest reason non_reason="" one dup non full out rc
+  keydir="$(rec .ephemeral.keystore_dir)" || keydir=""
+  for role in $(jq -r '.ephemeral.safe_signers // [] | .[].role' "$RECORD"); do
+    [[ -f "$keydir/$role" && -f "$keydir/$role.pw" ]] || missing+="$role "
+  done
+  for role in "${SAFE_NON_OWNER_ROLES[@]}"; do
+    [[ -f "$keydir/$role" && -f "$keydir/$role.pw" ]] || non_missing+="$role "
+  done
+  reason=""
+  if [[ ! "$threshold" =~ ^[0-9]+$ ]] || (( threshold < 1 )); then
+    reason="unproven: threshold unreadable"
+  else
+    data="$("$CAST" calldata 'getMinDelay()')" || data=""
+    if ! digest="$(safe_tx_hash "$safe" "$timelock" "$data" 2>&1)"; then
+      reason="unproven: ${digest:-SafeTx digest unreadable}"
+      digest=""
+    fi
+  fi
+  if [[ -n "$reason" ]]; then
+    check "$l_one" 0 "$reason"; check "$l_dup" 0 "$reason"
+    check "$l_non" 0 "$reason"; check "$l_full" 0 "$reason"
+    return 0
+  fi
+
+  # Each control's signatures, or the reason there are none. A control with no
+  # signatures is unproven and FAILs; it never passes by default.
+  if [[ -n "$missing" ]]; then
+    one="" dup="" full=""
+    reason="unproven: signer keystores unavailable ($missing)"
+  else
+    reason=""
+    one="$(safe_signatures "$digest" 1 2>&1)" || { reason="unproven: ${one}"; one=""; }
+    full="$(safe_signatures "$digest" "$threshold" 2>&1)" || { reason="unproven: ${full}"; full=""; }
+    # The lowest owner's own signature, packed twice.
+    [[ -n "$one" ]] && dup="0x${one#0x}${one#0x}" || dup=""
+  fi
+  if [[ -n "$non_missing" ]]; then
+    non=""; non_reason="unproven: non-owner keystores unavailable ($non_missing)"
+  else
+    non="$(non_owner_signatures "$digest" 2>&1)" || { non_reason="unproven: ${non}"; non=""; }
+  fi
+
+  safe_control_reverts "$l_one" GS020 "$safe" "$timelock" "$data" "$relayer" "$one" "${reason:-no signature}"
+  safe_control_reverts "$l_dup" GS026 "$safe" "$timelock" "$data" "$relayer" "$dup" "${reason:-no signature}"
+  safe_control_reverts "$l_non" GS026 "$safe" "$timelock" "$data" "$relayer" "$non" "${non_reason:-no signature}"
+
+  if [[ -z "$full" ]]; then
+    check "$l_full" 0 "${reason:-no signature}"
+    return 0
+  fi
+  # stdout only: the decoded bool is the whole answer. A revert's text on
+  # stderr must never be mistaken for it.
+  rc=0
+  out="$("$CAST" call --rpc-url "$RPC_URL" --from "$relayer" "$safe" "$SAFE_EXEC_SIG" \
+      "$timelock" 0 "$data" 0 0 0 0 "$ZERO_ADDRESS" "$ZERO_ADDRESS" "$full" 2>/dev/null)" || rc=$?
+  if (( rc != 0 )); then
+    # Only on failure: ask again with stderr, for the revert reason alone.
+    out="$("$CAST" call --rpc-url "$RPC_URL" --from "$relayer" "$safe" "$SAFE_EXEC_SIG" \
+        "$timelock" 0 "$data" 0 0 0 0 "$ZERO_ADDRESS" "$ZERO_ADDRESS" "$full" 2>&1 >/dev/null | tail -1 | cut -c1-120)" || true
+    check "$l_full" 0 "eth_call reverted: ${out:-no reason}"
+    return 0
+  fi
+  out="$(awk '{print $1; exit}' <<<"$out")"
+  check "$l_full" "$([[ "$out" == "true" ]] && echo 1 || echo 0)" "returns ${out:-nothing}"
+}
+
+SAFE_EXEC_SIG='execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)(bool)'
+
+# safe_control_reverts <label> <GSxxx> <safe> <to> <data> <relayer> <signatures> <why-none>:
+# a negative control passes only when execTransaction with these signatures
+# reverts with exactly the named Safe error. Success, any other revert, or no
+# signatures to try is a FAIL.
+safe_control_reverts() {
+  local label="$1" code="$2" safe="$3" to="$4" data="$5" relayer="$6" sigs="$7" none="$8" out
+  if [[ -z "$sigs" ]]; then
+    check "$label" 0 "$none"
+    return 0
+  fi
+  if out="$("$CAST" call --rpc-url "$RPC_URL" --from "$relayer" "$safe" "$SAFE_EXEC_SIG" \
+      "$to" 0 "$data" 0 0 0 0 "$ZERO_ADDRESS" "$ZERO_ADDRESS" "$sigs" 2>&1)"; then
+    check "$label" 0 "eth_call succeeded where it must revert $code"
+  elif grep -qw "$code" <<<"$out"; then
+    check "$label" 1 "reverts $code"
+  else
+    check "$label" 0 "reverted, but not $code: $(tail -1 <<<"$out" | cut -c1-120)"
+  fi
+}
+
 verify_record() {
   [[ -f "$RECORD" ]] || die "record not found: $RECORD" 65
   local gateway router governance receipt ic_policy timelock safe deployer submitter approver voter_a voter_b emergency
@@ -211,14 +413,22 @@ verify_record() {
   done < <(jq -r '.code_hashes | to_entries[] | select(.value != "0x0000000000000000000000000000000000000000000000000000000000000000") | [.key, .value] | @tsv' "$RECORD")
 
   local quorum total
-  quorum="$(call "$governance" 'quorumThreshold()(uint256)')"
-  total="$(call "$governance" 'totalVotingPower()(uint256)')"
+  quorum="$(call "$governance" 'quorumThreshold()(uint256)')" || quorum=""
+  total="$(call "$governance" 'totalVotingPower()(uint256)')" || total=""
   check "AC-GOV-03 quorumThreshold >= 2" "$([[ "$quorum" =~ ^[0-9]+$ ]] && (( quorum >= 2 )) && echo 1 || echo 0)" "quorum=$quorum"
   check "totalVotingPower can reach quorum" "$([[ "$total" =~ ^[0-9]+$ && "$quorum" =~ ^[0-9]+$ ]] && (( total >= quorum )) && echo 1 || echo 0)" "total=$total"
 
-  local distinct
-  distinct="$(printf '%s\n' "$deployer" "$submitter" "$approver" "$voter_a" "$voter_b" "$emergency" | tr '[:upper:]' '[:lower:]' | sort -u | wc -l)"
-  check "AC-ID-06 deployer/submitter/approver/voters/emergency are distinct" "$([[ "$distinct" == "6" ]] && echo 1 || echo 0)"
+  # Every ceremony key is distinct, the Safe signers included, and the approver
+  # (the relayer every Safe call is sent from) is one of those signers.
+  local distinct signers expected approver_signs
+  signers="$(jq -r '.ephemeral.safe_signers // [] | .[].address' "$RECORD" | tr '[:upper:]' '[:lower:]')"
+  distinct="$(printf '%s\n' "$deployer" "$submitter" "$voter_a" "$voter_b" "$emergency" "$signers" \
+    | tr '[:upper:]' '[:lower:]' | sed '/^$/d' | sort -u | wc -l)"
+  expected="$(( 5 + $(sed '/^$/d' <<<"$signers" | wc -l) ))"
+  approver_signs=0; grep -qxF "$(lower "$approver")" <<<"$signers" && approver_signs=1
+  check "AC-ID-06 deployer/submitter/safe signers/voters/emergency are distinct" \
+    "$([[ "$distinct" == "$expected" && "$approver_signs" == 1 ]] && echo 1 || echo 0)" \
+    "$distinct of $expected distinct; approver is a signer: $([[ "$approver_signs" == 1 ]] && echo yes || echo no)"
 
   check "submitter holds gateway AGENT_ROLE" "$(has_role "$gateway" "$AGENT_ROLE" "$submitter")"
   check "submitter holds COMMITTEE_AGENT_ROLE" "$(has_role "$ic_policy" "$COMMITTEE_AGENT_ROLE" "$submitter")"
@@ -236,12 +446,12 @@ verify_record() {
                log_accounts "$gateway" 'RoleGranted(bytes32,address,address)' "$AGENT_ROLE"; } \
              | while read -r acct; do
                  if [[ "$(has_role "$ic_policy" "$COMMITTEE_AGENT_ROLE" "$acct")" == 1 || "$(has_role "$gateway" "$AGENT_ROLE" "$acct")" == 1 ]]; then lower "$acct"; fi
-               done | sed '/^$/d' | sort -u)"
+               done | sed '/^$/d' | sort -u)" || agents=""
   voters="$(log_accounts "$governance" 'VotingPowerSet(address,uint256,uint256)' \
              | while read -r acct; do
-                 p="$(call "$governance" 'votingPower(address)(uint256)' "$acct")"
+                 p="$(call "$governance" 'votingPower(address)(uint256)' "$acct")" || p=""
                  if [[ "$p" =~ ^[0-9]+$ ]] && (( p > 0 )); then lower "$acct"; fi
-               done | sed '/^$/d' | sort -u)"
+               done | sed '/^$/d' | sort -u)" || voters=""
   check "at least one committee agent is enumerable" "$([[ -n "$agents" ]] && echo 1 || echo 0)" "$(wc -w <<<"$agents") agents"
   check "at least two voters are enumerable" "$([[ "$(wc -w <<<"$voters")" -ge 2 ]] && echo 1 || echo 0)" "$(wc -w <<<"$voters") voters"
   overlap="$(comm -12 <(printf '%s\n' "$agents") <(printf '%s\n' "$voters") | sed '/^$/d')"
@@ -287,10 +497,9 @@ verify_record() {
   check "AC-CORE-05 approver holds no receipt ADMIN_ROLE directly" "$(not_role "$receipt" "$ADMIN_ROLE" "$approver")"
   check "AC-CORE-05 safe is the timelock proposer" "$(has_role "$timelock" "$PROPOSER_ROLE" "$safe")"
   check "AC-CORE-05 safe is the timelock executor" "$(has_role "$timelock" "$EXECUTOR_ROLE" "$safe")"
-  local owner delay
-  owner="$(call "$safe" 'owner()(address)')"
-  check "AC-ID-06 the approver is the only key that drives the safe" "$([[ "$(lower "$owner")" == "$(lower "$approver")" ]] && echo 1 || echo 0)"
-  delay="$(call "$timelock" 'getMinDelay()(uint256)')"
+  verify_safe_quorum "$safe" "$timelock" "$approver"
+  local delay
+  delay="$(call "$timelock" 'getMinDelay()(uint256)')" || delay=""
   check "timelock min delay matches the record" "$([[ "$delay" == "$(rec .min_delay)" ]] && echo 1 || echo 0)" "delay=$delay"
 
   if (( FAILURES > 0 )); then
@@ -316,6 +525,148 @@ send() {
   status="$(jq -r '.status // empty' <<<"$out")"
   [[ "$status" == "0x1" ]] || die "transaction reverted or unconfirmed (status=$status): ${*: -3}"
   jq -r '.transactionHash' <<<"$out"
+}
+
+# ─── the Safe signing path (governance-isomorphism.md R9-R11) ────────────────
+# Every privileged operation goes through Safe.execTransaction with `threshold`
+# distinct owner signatures over the EIP-712 SafeTx digest the Safe itself
+# computes (getTransactionHash), packed ascending by owner address — the port of
+# contracts/test/SafeIntegration.t.sol's _buildTwoOwnerSigs. Signatures come
+# from the keystores (`cast wallet sign --no-hash`), never from a key on a
+# command line. --no-hash signs the digest as-is, which Safe verifies as a plain
+# ECDSA signature (v 27/28).
+#
+# These helpers never `die`: they run inside $(...), where an exit only ends the
+# subshell and errexit is off, so a die there would be lost. Each one says why
+# on stderr and returns non-zero — 65 for a missing keystore or a record that
+# names too few signers, 66 for anything the chain or cast refused — and every
+# caller handles that status explicitly (safe_exec dies with it, verify turns it
+# into a FAIL line).
+
+# safe_tx_hash <safe> <to> <data>: the SafeTx digest for a value-0 CALL with no
+# gas refund, at the Safe's current nonce.
+safe_tx_hash() {
+  local safe="$1" to="$2" data="$3" nonce digest
+  nonce="$(call "$safe" 'nonce()(uint256)')" || nonce=""
+  [[ "$nonce" =~ ^[0-9]+$ ]] || { echo "could not read nonce() from safe $safe" >&2; return 66; }
+  digest="$(call "$safe" 'getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)' \
+    "$to" 0 "$data" 0 0 0 0 "$ZERO_ADDRESS" "$ZERO_ADDRESS" "$nonce")" || digest=""
+  [[ "$digest" =~ ^0x[0-9a-fA-F]{64}$ ]] \
+    || { echo "could not read getTransactionHash() from safe $safe at nonce $nonce" >&2; return 66; }
+  printf '%s' "$digest"
+}
+
+# sign_digest <digest> <keydir> <role>: one 65-byte signature over `digest`
+# from the keystore named `role`, printed as bare hex (no 0x). The v byte must
+# be 27 or 28 (0x1b/0x1c): Safe reads v 0/1 as a contract or approved-hash
+# signature and v > 30 as an eth_sign one, so any other v is not the plain
+# ECDSA signature the ceremony means to give.
+sign_digest() {
+  local digest="$1" keydir="$2" role="$3" out sig v
+  [[ -f "$keydir/$role" && -f "$keydir/$role.pw" ]] \
+    || { echo "safe signer keystore is gone (discarded?): $keydir/$role" >&2; return 65; }
+  # cast may print warnings on stderr; the signature is the last 0x.. line.
+  out="$("$CAST" wallet sign --no-hash --keystore "$keydir/$role" --password-file "$keydir/$role.pw" "$digest" 2>&1)" \
+    || { echo "could not sign the SafeTx digest as $role: $(tail -1 <<<"$out" | cut -c1-120)" >&2; return 66; }
+  sig="$(grep -E '^0x[0-9a-fA-F]{130}$' <<<"$out" | tail -1)" || sig=""
+  [[ -n "$sig" ]] || { echo "signature from $role is not 65 bytes: $(tail -1 <<<"$out" | cut -c1-140)" >&2; return 66; }
+  v="$(lower "${sig: -2}")"
+  [[ "$v" == 1b || "$v" == 1c ]] || { echo "signature from $role has v=0x$v, not 0x1b/0x1c" >&2; return 66; }
+  printf '%s' "${sig#0x}"
+}
+
+# sign_ascending <digest> <keydir> <count>: reads `address<TAB>role` lines on
+# stdin, signs with the first `count` of them in ascending address order (Safe
+# rejects anything not strictly ascending, GS026) and prints the packed
+# 0x-prefixed signatures.
+sign_ascending() {
+  local digest="$1" keydir="$2" count="$3" addr role sig packed="" n=0
+  while IFS=$'\t' read -r addr role; do
+    (( n < count )) || break
+    sig="$(sign_digest "$digest" "$keydir" "$role")" || return $?
+    packed+="$sig"
+    n=$((n + 1))
+  done < <(tr '[:upper:]' '[:lower:]' | LC_ALL=C sort)
+  (( n == count )) || { echo "the record names $n Safe signers; $count are needed" >&2; return 65; }
+  printf '0x%s' "$packed"
+}
+
+# safe_signatures <digest> <count>: `count` signatures over `digest` from the
+# record's Safe signers, lowest owner address first, packed as one byte string.
+safe_signatures() {
+  local digest="$1" count="$2" keydir signers
+  keydir="$(rec .ephemeral.keystore_dir)" || { echo "record names no keystore directory" >&2; return 65; }
+  signers="$(jq -r '.ephemeral.safe_signers // [] | .[] | [.address, .role] | @tsv' "$RECORD")" \
+    || { echo "record's safe_signers are unreadable" >&2; return 65; }
+  sign_ascending "$digest" "$keydir" "$count" <<<"$signers"
+}
+
+# non_owner_signatures <digest>: two signatures over `digest` from ceremony
+# keys that are NOT Safe owners (SAFE_NON_OWNER_ROLES), ascending, for verify's
+# negative control. Only existing keystores are used.
+non_owner_signatures() {
+  local digest="$1" keydir submitter voter_a
+  keydir="$(rec .ephemeral.keystore_dir)" || { echo "record names no keystore directory" >&2; return 65; }
+  submitter="$(rec .ephemeral.submitter)"; voter_a="$(rec '.ephemeral.voters[0]')"
+  printf '%s\t%s\n%s\t%s\n' "$submitter" "${SAFE_NON_OWNER_ROLES[0]}" "$voter_a" "${SAFE_NON_OWNER_ROLES[1]}" \
+    | sign_ascending "$digest" "$keydir" 2
+}
+
+# safe_exec <safe> <to> <data>: one Safe transaction, signed by exactly the
+# threshold the Safe reports, sent by the approver (any account may relay a
+# fully-signed SafeTx; the signatures are the authority, not the sender).
+# Prints the transaction hash. A Safe whose threshold is below 2 is refused
+# rather than driven (R6). Every step's failure stops here with its own exit
+# code: a missing keystore is 65 and names the keystore.
+safe_exec() {
+  local safe="$1" to="$2" data="$3" threshold digest sigs keydir rc=0
+  threshold="$(call "$safe" 'getThreshold()(uint256)')" || threshold=""
+  [[ "$threshold" =~ ^[0-9]+$ ]] && (( threshold >= 2 )) \
+    || die "safe $safe reports threshold '$threshold'; refusing to drive a Safe that cannot enforce quorum (R6)"
+  digest="$(safe_tx_hash "$safe" "$to" "$data")" || rc=$?
+  (( rc == 0 )) || die "no SafeTx digest from safe $safe (reason above)" "$rc"
+  sigs="$(safe_signatures "$digest" "$threshold")" || rc=$?
+  (( rc == 0 )) || die "could not collect $threshold Safe owner signatures (reason above)" "$rc"
+  keydir="$(rec .ephemeral.keystore_dir)"
+  [[ -f "$keydir/approver" && -f "$keydir/approver.pw" ]] \
+    || die "relayer keystore is gone (discarded?): $keydir/approver" 65
+  send --keystore "$keydir/approver" --password-file "$keydir/approver.pw" "$safe" \
+    'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)' \
+    "$to" 0 "$data" 0 0 0 0 "$ZERO_ADDRESS" "$ZERO_ADDRESS" "$sigs"
+}
+
+# require_safe_set: the canonical Safe v1.4.1 contracts create_safe needs all
+# carry code. No fallback of any kind when they are absent (R8): the fixture is
+# what has to change, and check-fork-safe-set.sh says so at fixture-build time.
+# `run` calls this BEFORE it mints a single key, so a chain that cannot hold the
+# Safe never leaves keystores behind.
+require_safe_set() {
+  local name
+  for name in "SafeL2 singleton:$SAFE_L2_SINGLETON" "SafeProxyFactory:$SAFE_PROXY_FACTORY" \
+              "CompatibilityFallbackHandler:$SAFE_FALLBACK_HANDLER"; do
+    has_code "${name#*:}" \
+      || die "canonical ${name%%:*} ${name#*:} has no code on $RPC_URL: this chain lacks the Safe v1.4.1 set (governance-isomorphism.md R2) and the ceremony has no stand-in (R8)" 65
+  done
+}
+
+# create_safe <salt-nonce> <owner>...: a SafeProxy on SafeL2 via the canonical
+# factory, threshold $SAFE_THRESHOLD, the canonical fallback handler (R5).
+# Prints the new Safe's address. The caller has run require_safe_set.
+create_safe() {
+  local salt="$1" owners setup predicted
+  shift
+  owners="[$(IFS=,; echo "$*")]"
+  setup="$("$CAST" calldata 'setup(address[],uint256,address,bytes,address,address,uint256,address)' \
+    "$owners" "$SAFE_THRESHOLD" "$ZERO_ADDRESS" 0x "$SAFE_FALLBACK_HANDLER" "$ZERO_ADDRESS" 0 "$ZERO_ADDRESS")"
+  # The factory's CREATE2 address depends only on (singleton, initializer,
+  # salt), so an eth_call names the proxy before the transaction creates it.
+  predicted="$("$CAST" call --rpc-url "$RPC_URL" "$SAFE_PROXY_FACTORY" \
+    'createProxyWithNonce(address,bytes,uint256)(address)' "$SAFE_L2_SINGLETON" "$setup" "$salt" 2>/dev/null | awk '{print $1; exit}')"
+  is_address "$predicted" || die "SafeProxyFactory.createProxyWithNonce would not create a proxy (eth_call answered '$predicted')"
+  send "${CREATE_SAFE_SENDER[@]}" "$SAFE_PROXY_FACTORY" 'createProxyWithNonce(address,bytes,uint256)' \
+    "$SAFE_L2_SINGLETON" "$setup" "$salt" >/dev/null
+  has_code "$predicted" || die "createProxyWithNonce mined but $predicted has no code"
+  printf '%s' "$predicted"
 }
 
 # ─── chain time ──────────────────────────────────────────────────────────────
@@ -404,6 +755,76 @@ mine_one_at() {
     || die "evm_mine rejected by $RPC_URL: this chain is not Anvil-backed"
 }
 
+# ─── a chain that already carries a ceremony ─────────────────────────────────
+# `run` provisions a FRESH devnet only. Evidence that this chain already carries
+# a ceremony: the recorded ceremony's own timelock, a recorded Safe that still
+# has code, or any Safe the canonical SafeProxyFactory ever created here
+# (ProxyCreation logs). `run` additionally checks that the deployer still holds
+# gateway ADMIN_ROLE, which the handover removes. A history that cannot be read
+# is not proof of a fresh chain, so it refuses too.
+#
+# Code at the recorded timelock ADDRESS is not enough on its own. The deployer
+# CREATEs the timelock, so its address is fixed by the deployer's nonce, and a
+# rebooted chain whose deployer reaches the same nonce puts some other contract
+# there. Counting that as a used chain would refuse every fresh chain after it
+# forever. It counts only when it is the recorded ceremony's timelock: its code
+# hash is the record's code_hashes.timelock, or it grants PROPOSER_ROLE to the
+# recorded Safe.
+PROXY_CREATION_SIG='ProxyCreation(address,address)'
+used_chain_evidence() {
+  local record="$1" a n evidence="" safe recorded_hash live_hash
+  if [[ -n "$record" && -f "$record" ]] && jq -e . "$record" >/dev/null 2>&1; then
+    a="$(jq -r '.addresses.timelock // empty' "$record")"
+    safe="$(jq -r '.addresses.safe // empty' "$record")"
+    if is_address "$a" && has_code "$a"; then
+      recorded_hash="$(jq -r '.code_hashes.timelock // empty' "$record")"
+      live_hash="$("$CAST" codehash --rpc-url "$RPC_URL" "$a" 2>/dev/null)" || live_hash=""
+      if [[ -n "$recorded_hash" && -z "$live_hash" ]]; then
+        evidence+="the code hash at recorded timelock $a is unreadable, so it cannot be shown to be another contract; "
+      elif [[ -n "$recorded_hash" && "$(lower "$live_hash")" == "$(lower "$recorded_hash")" ]]; then
+        evidence+="recorded timelock $a still carries the record's timelock code; "
+      elif is_address "$safe" && [[ "$(has_role "$a" "$PROPOSER_ROLE" "$safe")" == 1 ]]; then
+        evidence+="recorded timelock $a still grants PROPOSER_ROLE to the recorded Safe $safe; "
+      else
+        info "the recorded timelock address $a holds other code (not the recorded ceremony's timelock); not counted as a used chain"
+      fi
+    fi
+    if is_address "$safe" && has_code "$safe"; then evidence+="recorded safe $safe still has code; "; fi
+  fi
+  n="$("$CAST" logs --rpc-url "$RPC_URL" --from-block 0 --address "$SAFE_PROXY_FACTORY" --json "$PROXY_CREATION_SIG" 2>/dev/null \
+    | jq 'length' 2>/dev/null)" || n=""
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    evidence+="the SafeProxyFactory's ProxyCreation history is unreadable, so this chain cannot be shown fresh; "
+  elif (( n > 0 )); then
+    evidence+="the canonical SafeProxyFactory already created $n Safe(s) here; "
+  fi
+  printf '%s' "$evidence"
+}
+
+# refuse_used_chain <record>: exit 65 when this chain already carries a
+# ceremony, naming the record that no longer describes a drivable one.
+refuse_used_chain() {
+  local evidence stale
+  evidence="$(used_chain_evidence "$1")"
+  [[ -z "$evidence" ]] && return 0
+  if [[ -f "$1" ]]; then stale="stale record: $1"; else stale="no record at $1"; fi
+  die "this chain already carries a governance ceremony that is not live (${evidence%; }; $stale). Refusing to provision a second one on it: reboot the devnet (chain down/up), then run \`fusion-ceremony.sh ensure\` again" 65
+}
+
+# shred_unrecorded_keys: the EXIT trap `run` holds while it has minted keys no
+# record names yet. Keeps the exit status it was called with.
+UNRECORDED_KEYDIR=""
+shred_unrecorded_keys() {
+  local rc=$?
+  if [[ -n "$UNRECORDED_KEYDIR" && "$UNRECORDED_KEYDIR" == */keys/* && -d "$UNRECORDED_KEYDIR" ]]; then
+    find "$UNRECORDED_KEYDIR" -type f -exec shred -u -z -n 3 {} + 2>/dev/null || find "$UNRECORDED_KEYDIR" -type f -delete
+    rmdir "$UNRECORDED_KEYDIR" 2>/dev/null || true
+    echo "==> [fusion-ceremony] run failed before its record was written; shredded the unrecorded keys in $UNRECORDED_KEYDIR" >&2
+  fi
+  UNRECORDED_KEYDIR=""
+  exit "$rc"
+}
+
 run_ceremony() {
   command -v jq >/dev/null || die "jq is required" 65
   [[ -f "$SUMMARY" ]] || die "summary not found: $SUMMARY" 65
@@ -424,6 +845,11 @@ run_ceremony() {
   if [[ "$(call "$receipt" 'receiptCount()(uint256)')" != "0" ]]; then
     die "receipt contract already holds receipts: boot the smoke with --no-receipt-fixtures" 65
   fi
+  refuse_used_chain "${RECORD:-$OUT_DIR/fusion-stage-record.json}"
+  [[ "$(has_role "$gateway" "$ADMIN_ROLE" "$admin")" == 1 ]] \
+    || die "the deployer $admin no longer holds gateway ADMIN_ROLE: this chain was already handed over to a timelock. Refusing to provision a second ceremony on it: reboot the devnet (chain down/up)" 65
+
+  require_safe_set
 
   local deployer_key
   deployer_key="$(repo_deployer_key "$admin")"
@@ -434,13 +860,27 @@ run_ceremony() {
   umask 077
   mkdir -p "$keydir"
   chmod 700 "$OUT_DIR/keys" "$keydir"
+  # From here until the record names them, these keys belong to nothing: a run
+  # that dies in between must not leave funded keystores (and their passwords)
+  # behind on the host. The trap shreds them; it is lifted once the record is
+  # written, after which `discard` owns them.
+  UNRECORDED_KEYDIR="$keydir"
+  trap shred_unrecorded_keys EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   declare -A addr
   local role pw
-  for role in submitter approver voter-a voter-b emergency; do
+  for role in submitter "${SAFE_OWNER_ROLES[@]}" voter-a voter-b emergency; do
     pw="$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n')"
+    # Never hand cast an empty CAST_PASSWORD: a funded key must not sit in a
+    # keystore under an empty password, or wait on a prompt nobody answers.
+    [[ -n "$pw" ]] || die "could not generate a keystore password for $role (/dev/urandom unreadable?)"
     printf '%s' "$pw" >"$keydir/$role.pw"
-    "$CAST" wallet new "$keydir" "$role" --unsafe-password "$pw" >/dev/null
+    # The password reaches cast through its environment (CAST_PASSWORD, the
+    # env form of --unsafe-password), never through argv, which every user on
+    # the host can read in the process table.
+    CAST_PASSWORD="$pw" "$CAST" wallet new "$keydir" "$role" >/dev/null
     chmod 600 "$keydir/$role" "$keydir/$role.pw"
     addr[$role]="$("$CAST" wallet address --keystore "$keydir/$role" --password-file "$keydir/$role.pw")"
     info "provisioned $role ${addr[$role]}"
@@ -448,7 +888,7 @@ run_ceremony() {
   local as_deployer=(--private-key "$deployer_key")
   local as_approver=(--keystore "$keydir/approver" --password-file "$keydir/approver.pw")
 
-  for role in submitter approver voter-a voter-b emergency; do
+  for role in submitter "${SAFE_OWNER_ROLES[@]}" voter-a voter-b emergency; do
     send "${as_deployer[@]}" --value 2ether "${addr[$role]}" >/dev/null
   done
 
@@ -473,15 +913,16 @@ run_ceremony() {
   fi
   info "two voters with power 1 each; quorum $(call "$governance" 'quorumThreshold()(uint256)')"
 
-  local work safe
+  local work safe owner_addrs=() signers_json
   work="$(mktemp -d /tmp/fusion-ceremony.XXXXXX)"
   trap 'rm -rf "$work"' RETURN
-  (cd "$REPO_ROOT" && "$FORGE" script contracts/script/DeployRehearsalSafe.s.sol:DeployRehearsalSafe \
-      --rpc-url "$RPC_URL" "${as_approver[@]}" --sender "${addr[approver]}" --broadcast --slow) >"$work/safe.log" 2>&1 \
-    || { tail -20 "$work/safe.log" >&2; die "DeployRehearsalSafe failed"; }
-  safe="$(awk '/RehearsalSafe deployed:/ { print $3 }' "$work/safe.log" | tail -1)"
-  is_address "$safe" || die "could not read the RehearsalSafe address"
-  info "rehearsal safe $safe owned by the approver"
+  for role in "${SAFE_OWNER_ROLES[@]}"; do owner_addrs+=("${addr[$role]}"); done
+  CREATE_SAFE_SENDER=("${as_approver[@]}")
+  safe="$(create_safe "$("$CAST" keccak "fusion-stage-safe-$run_id")" "${owner_addrs[@]}")"
+  info "safe $safe: ${SAFE_THRESHOLD}-of-${#owner_addrs[@]} on SafeL2, owners ${SAFE_OWNER_ROLES[*]}"
+  signers_json="$(for role in "${SAFE_OWNER_ROLES[@]}"; do
+      jq -n --arg r "$role" --arg a "${addr[$role]}" '{role: $r, address: $a}'
+    done | jq -s .)"
 
   (cd "$REPO_ROOT" && \
     VAULT_ADDRESS="$vault" GATEWAY_ADDRESS="$gateway" REGISTRY_ADDRESS="$registry" ROUTER_ADDRESS="$router" \
@@ -501,18 +942,20 @@ run_ceremony() {
      --argjson delay "$MIN_DELAY" --argjson vaults "$vault_json" --arg deployer "$admin" \
      --arg submitter "${addr[submitter]}" --arg approver "${addr[approver]}" \
      --arg voter_a "${addr[voter-a]}" --arg voter_b "${addr[voter-b]}" --arg emergency "${addr[emergency]}" \
-     --arg keydir "$keydir" \
+     --arg keydir "$keydir" --argjson safe_signers "$signers_json" \
      '. + {
         generated_by: "scripts/stage/fusion-ceremony.sh", run_id: $run, core_tag: $tag, core_sha: $sha,
         generated_at: (now | todate), chain_id: $chain, min_delay: $delay, deployer: $deployer,
         vault_addresses: $vaults,
         ephemeral: {submitter: $submitter, approver: $approver, voters: [$voter_a, $voter_b],
-                    emergency: $emergency, keystore_dir: $keydir}
+                    emergency: $emergency, keystore_dir: $keydir, safe_signers: $safe_signers}
       }' "$work/timelock.json" >"$out"
   umask 022
   chmod 644 "$out"
   cp "$out" "$OUT_DIR/fusion-stage-record.json"
   info "wrote $out"
+  UNRECORDED_KEYDIR=""
+  trap - EXIT INT TERM
 
   RECORD="$out"
   handover_vaults
@@ -559,7 +1002,6 @@ release_receipt() {
     echo '{"action":"already_released"}'
     return 0
   fi
-  local as_approver=(--keystore "$keydir/approver" --password-file "$keydir/approver.pw")
   data="$("$CAST" calldata 'releaseReceipt(bytes32)' "$RECEIPT_ID")"
   zero="0x0000000000000000000000000000000000000000000000000000000000000000"
   salt="$RECEIPT_ID"
@@ -570,8 +1012,8 @@ release_receipt() {
   fi
   local schedule_tx="" execute_tx
   if [[ "$(call "$timelock" 'isOperation(bytes32)(bool)' "$op")" != "true" ]]; then
-    schedule_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
-      "$("$CAST" calldata 'schedule(address,uint256,bytes,bytes32,bytes32,uint256)' "$receipt" 0 "$data" "$zero" "$salt" "$delay")")"
+    schedule_tx="$(safe_exec "$safe" "$timelock" \
+      "$("$CAST" calldata 'schedule(address,uint256,bytes,bytes32,bytes32,uint256)' "$receipt" 0 "$data" "$zero" "$salt" "$delay")")" || exit $?
     info "scheduled release $op; jumping chain time past the ${delay}s delay"
   fi
   # Devnet time is ours to move: read when the timelock says the operation is
@@ -582,8 +1024,8 @@ release_receipt() {
     jump_to "$(( ready + 1 ))"
   fi
   [[ "$(call "$timelock" 'isOperationReady(bytes32)(bool)' "$op")" == "true" ]] || die "timelock operation never became ready: $op"
-  execute_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
-    "$("$CAST" calldata 'execute(address,uint256,bytes,bytes32,bytes32)' "$receipt" 0 "$data" "$zero" "$salt")")"
+  execute_tx="$(safe_exec "$safe" "$timelock" \
+    "$("$CAST" calldata 'execute(address,uint256,bytes,bytes32,bytes32)' "$receipt" 0 "$data" "$zero" "$salt")")" || exit $?
   [[ "$(call "$receipt" 'isReleased(bytes32)(bool)' "$RECEIPT_ID")" == "true" ]] || die "execute mined but the receipt is not released"
   jq -n --arg op "$op" --arg s "$schedule_tx" --arg e "$execute_tx" '{action:"released_via_timelock", operation:$op, schedule_tx:$s, execute_tx:$e}'
 }
@@ -1004,7 +1446,6 @@ propose_governance() {
     fi
   fi
 
-  local as_approver=(--keystore "$keydir/approver" --password-file "$keydir/approver.pw")
   zero="0x0000000000000000000000000000000000000000000000000000000000000000"
   salt="$(propose_salt "$receipt_id" "$pid_before")"
   [[ "$salt" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "derived propose salt is not a bytes32: $salt"
@@ -1022,8 +1463,8 @@ propose_governance() {
 
   local schedule_tx="" execute_tx=""
   if [[ "$(call "$timelock" 'isOperation(bytes32)(bool)' "$op")" != "true" ]]; then
-    schedule_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
-      "$("$CAST" calldata 'schedule(address,uint256,bytes,bytes32,bytes32,uint256)' "$governance" 0 "$data" "$zero" "$salt" "$delay")")"
+    schedule_tx="$(safe_exec "$safe" "$timelock" \
+      "$("$CAST" calldata 'schedule(address,uint256,bytes,bytes32,bytes32,uint256)' "$governance" 0 "$data" "$zero" "$salt" "$delay")")" || exit $?
     info "scheduled propose $op (salt $salt); jumping chain time past the ${delay}s delay"
   fi
   # Devnet time is ours to move: read when the timelock says the operation is
@@ -1034,8 +1475,8 @@ propose_governance() {
     jump_to "$(( ready + 1 ))"
   fi
   [[ "$(call "$timelock" 'isOperationReady(bytes32)(bool)' "$op")" == "true" ]] || die "timelock operation never became ready: $op"
-  execute_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
-    "$("$CAST" calldata 'execute(address,uint256,bytes,bytes32,bytes32)' "$governance" 0 "$data" "$zero" "$salt")")"
+  execute_tx="$(safe_exec "$safe" "$timelock" \
+    "$("$CAST" calldata 'execute(address,uint256,bytes,bytes32,bytes32)' "$governance" 0 "$data" "$zero" "$salt")")" || exit $?
 
   # ── the authority path, proved rather than assumed ────────────────────────
   # A changed currentProposalId only says something happened. propose() sets it
@@ -1789,6 +2230,13 @@ execute_governance() {
 # authorization error instead of as a missing environment. These are the
 # preconditions `run` establishes and a reboot destroys; anything subtler is
 # drift for `verify` to grade, not a reason to redeploy.
+#
+# "Not live" is only a reason to provision on a chain that carries no ceremony
+# at all. A record whose timelock or Safe still has code here, with a keystore
+# gone or a record gone stale, is a USED chain: the deployer's roles are
+# already handed over, so a second `run` would mint and fund keys and create a
+# second Safe before failing in the handover. ensure refuses that (exit 65)
+# and names the only way back: a devnet reboot.
 ceremony_is_live() {
   local timelock safe keydir who
   [[ -f "$RECORD" ]] || { info "no record at $RECORD"; return 1; }
@@ -1799,8 +2247,25 @@ ceremony_is_live() {
   has_code "$timelock" || { info "timelock $timelock has no code on this chain"; return 1; }
   has_code "$safe" || { info "safe $safe has no code on this chain"; return 1; }
   keydir="$(rec .ephemeral.keystore_dir)"
+  # A record from before issue #1447 names a single-key stand-in and no Safe
+  # signers; it can never drive a real Safe, so it is re-provisioned.
+  [[ "$(jq '.ephemeral.safe_signers // [] | length' "$RECORD")" -ge "$SAFE_THRESHOLD" ]] \
+    || { info "record names no Safe signer set (it predates the real Safe)"; return 1; }
+  # All three owners, keystore AND password: a 2-of-3 whose third key is gone
+  # has lost its margin, and a keystore without its .pw signs nothing.
+  for who in "${SAFE_OWNER_ROLES[@]}"; do
+    jq -e --arg r "$who" '[.ephemeral.safe_signers[].role] | index($r) != null' "$RECORD" >/dev/null \
+      || { info "record names no Safe signer $who"; return 1; }
+    [[ -f "$keydir/$who" && -f "$keydir/$who.pw" ]] || { info "safe signer $who keystore or password is gone: $keydir"; return 1; }
+  done
+  # verify's GS026 non-owner control signs with these keys. Without one, that
+  # control is unproven and verify can never pass, so the ceremony is not live.
+  for who in "${SAFE_NON_OWNER_ROLES[@]}"; do
+    [[ -f "$keydir/$who" && -f "$keydir/$who.pw" ]] \
+      || { info "non-owner control key $who keystore or password is gone: $keydir"; return 1; }
+  done
   for who in submitter approver; do
-    [[ -f "$keydir/$who" ]] || { info "$who keystore is gone: $keydir"; return 1; }
+    [[ -f "$keydir/$who" && -f "$keydir/$who.pw" ]] || { info "$who keystore or password is gone: $keydir"; return 1; }
     [[ "$("$CAST" balance "$(rec ".ephemeral.$who")" --rpc-url "$RPC_URL" 2>/dev/null)" != "0" ]] \
       || { info "$who holds no gas on this chain"; return 1; }
   done
@@ -1809,11 +2274,16 @@ ceremony_is_live() {
 
 ensure_ceremony() {
   RECORD="${RECORD:-$OUT_DIR/fusion-stage-record.json}"
+  # An RPC that does not answer says nothing about the chain behind it. Every
+  # read below would fail, "not live" and "used" would both follow, and the
+  # operator would be told to reboot a devnet that may be fine. Ask first.
+  "$CAST" chain-id --rpc-url "$RPC_URL" >/dev/null 2>&1 || die "rpc unreachable: $RPC_URL" 66
   if ceremony_is_live; then
     info "ceremony is live on this chain; provisioning nothing"
     verify_record
     return
   fi
+  refuse_used_chain "$RECORD"
   info "provisioning a fresh ceremony against the live chain"
   run_ceremony
 }

@@ -162,7 +162,6 @@ export const sidebar = [
             { text: "DeployInvestmentCommitteePolicy", link: "/contracts/script/contract.DeployInvestmentCommitteePolicy" },
             { text: "DeployPortfolioRouter", link: "/contracts/script/contract.DeployPortfolioRouter" },
             { text: "DeployProtocolAssetVault", link: "/contracts/script/contract.DeployProtocolAssetVault" },
-            { text: "DeployRehearsalSafe", link: "/contracts/script/contract.DeployRehearsalSafe" },
             { text: "DeployRmToken", link: "/contracts/script/contract.DeployRmToken" },
             { text: "DeployRouterGovernance", link: "/contracts/script/contract.DeployRouterGovernance" },
             { text: "DeployTimelock", link: "/contracts/script/contract.DeployTimelock" },
@@ -170,7 +169,6 @@ export const sidebar = [
             { text: "DeployVaultThemes", link: "/contracts/script/contract.DeployVaultThemes" },
             { text: "ProtocolBasketStubDeployer", link: "/contracts/script/contract.ProtocolBasketStubDeployer" },
             { text: "ProtocolVaultBatchDeployer", link: "/contracts/script/contract.ProtocolVaultBatchDeployer" },
-            { text: "RehearsalSafe", link: "/contracts/script/contract.RehearsalSafe" },
           ],
         },
         {

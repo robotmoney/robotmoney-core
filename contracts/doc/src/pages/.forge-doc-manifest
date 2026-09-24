@@ -73,7 +73,6 @@ contracts/script/contract.DeployDemoUniswapV3Stubs.mdx
 contracts/script/contract.DeployInvestmentCommitteePolicy.mdx
 contracts/script/contract.DeployPortfolioRouter.mdx
 contracts/script/contract.DeployProtocolAssetVault.mdx
-contracts/script/contract.DeployRehearsalSafe.mdx
 contracts/script/contract.DeployRmToken.mdx
 contracts/script/contract.DeployRouterGovernance.mdx
 contracts/script/contract.DeployTimelock.mdx
@@ -81,7 +80,6 @@ contracts/script/contract.DeployVaultRegistry.mdx
 contracts/script/contract.DeployVaultThemes.mdx
 contracts/script/contract.ProtocolBasketStubDeployer.mdx
 contracts/script/contract.ProtocolVaultBatchDeployer.mdx
-contracts/script/contract.RehearsalSafe.mdx
 contracts/script/interface.IRetirableVaultLink.mdx
 contracts/script/interface.ISafeMinimal.mdx
 contracts/script/library.AdapterBytecodeGuard.mdx

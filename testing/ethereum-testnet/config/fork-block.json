@@ -47,12 +47,15 @@
     "0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156",
     "0xf52D010c7d4ecBfda92c2509900593CE34535D86",
     "0x1550207eAeB590D1557a6E6C066D3d57B5A4Dc65",
-    "0x0fB39aE1d48Faf8CA5ea8DbF7e134e07386A7877"
+    "0x0fB39aE1d48Faf8CA5ea8DbF7e134e07386A7877",
+    "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762",
+    "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99",
+    "0x38869bf66a61cF6bDB996A6aE40D5853FD43B526"
   ],
   "harness_usdc_holder": "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5",
   "harness_usdc_grant_units": "1000000000000",
   "pinned": true,
-  "snapshot_sha256": "0x530c5903c91f8c663bbd83f2628f8059b1c7b193210384b82094f92881d8d3fc",
+  "snapshot_sha256": "0x72e4a3ecacc60716270baff87d6c3f797e0f137037ab4a8e694ea692a6d2a0ce",
   "$comment_snapshot_sha256": "HARN-5 (off-chain scan remediation, issue #1026): SHA-256 content digest of the Anvil state snapshot the genesis ingester ingests (testing/fixtures/fork-state/CURRENT.anvil-state). `pinned` authenticates `block_hash` against an archive RPC but says nothing about the snapshot BYTES; this digest closes that gap. The ingester verifies the snapshot hashes to this value before constructing genesis `alloc` and rejects a substituted/corrupted snapshot. Recompute with `sha256sum testing/fixtures/fork-state/CURRENT.anvil-state` whenever the fixture is refreshed (scripts/devnet/snapshot-fork.sh).",
   "$comment_pinned": "When `pinned` is false the manifest is structurally valid but `block_hash` has not been verified against an archive RPC. The genesis ingester refuses to build a final devnet image unless `pinned` is true. Flipping this flag to true requires (a) populating `block_hash` with the real Base block hash at `block_number` and (b) updating `snapshot_uri` to point at a snapshot artifact derived from that exact block."
 }

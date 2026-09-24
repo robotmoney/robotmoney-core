@@ -5,7 +5,7 @@ description: "These tests run in-process using Forge cheatcodes so they do not r
 
 # DeployTimelockTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6a5a4efb7af758963b9507b608985ed6f60e373a/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** Test
 
@@ -149,6 +149,52 @@ DeployTimelock internal script;
 DeployTimelock.Deployed internal d;
 ```
 
+### deployer
+
+The deployer: the address that holds every role before the handover and
+that the script revokes them from. See setUp for why it is the script's
+own address.
+
+```solidity
+address internal deployer;
+```
+
+### adminHolders
+
+Who holds what after the handover, replayed from every RoleGranted /
+RoleRevoked log since before the contracts were built (the contracts are
+not AccessControlEnumerable, so this is the only complete list).
+
+```solidity
+mapping(address => address[]) internal adminHolders;
+```
+
+### gatewayRootHolders
+
+```solidity
+address[] internal gatewayRootHolders;
+```
+
+### vaultEmergencyHolders
+
+```solidity
+address[] internal vaultEmergencyHolders;
+```
+
+### deployerAdminRevoked
+
+Contracts on which the logs show the deployer losing ADMIN_ROLE.
+
+```solidity
+mapping(address => bool) internal deployerAdminRevoked;
+```
+
+### deployerRootRevoked
+
+```solidity
+bool internal deployerRootRevoked;
+```
+
 ## Functions
 
 <a id="setup"></a>
@@ -158,6 +204,20 @@ DeployTimelock.Deployed internal d;
 ```solidity
 function setUp() public;
 ```
+
+<a id="_governed"></a>
+
+### _governed
+
+```solidity
+function _governed() internal view returns (address[5] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[5]` |  |
 
 <a id="test_timelock_holdsadminroleonregistry"></a>
 
@@ -208,31 +268,52 @@ the real RobotMoneyGateway instance (not a registry placeholder).
 function test_timelock_holdsAdminRoleOnGateway() public view;
 ```
 
-<a id="test_deployer_nolongerhasadminroleonregistry"></a>
+<a id="test_deployer_heldandlostadminroleoneverygovernedcontract"></a>
 
-### test_deployer_noLongerHasAdminRoleOnRegistry
+### test_deployer_heldAndLostAdminRoleOnEveryGovernedContract
 
-After role transfer, the deployer (admin EOA) no longer holds
-ADMIN_ROLE on any contract.
+After role transfer, the deployer — the address that held
+ADMIN_ROLE and sent the handover — no longer holds it anywhere.
+Each check is preceded by proof that the deployer DID hold the
+role, so it cannot pass against an address that never had it.
 
 ```solidity
-function test_deployer_noLongerHasAdminRoleOnRegistry() public view;
+function test_deployer_heldAndLostAdminRoleOnEveryGovernedContract() public view;
 ```
 
-<a id="test_deployer_nolongerhasadminroleonrouter"></a>
+<a id="test_deployer_nolongerhasadminroleonanygovernedcontract"></a>
 
-### test_deployer_noLongerHasAdminRoleOnRouter
+### test_deployer_noLongerHasAdminRoleOnAnyGovernedContract
 
 ```solidity
-function test_deployer_noLongerHasAdminRoleOnRouter() public view;
+function test_deployer_noLongerHasAdminRoleOnAnyGovernedContract() public view;
 ```
 
-<a id="test_deployer_nolongerhasadminroleongovernance"></a>
+<a id="test_handover_timelockistheonlyadminoneverygovernedcontract"></a>
 
-### test_deployer_noLongerHasAdminRoleOnGovernance
+### test_handover_timelockIsTheOnlyAdminOnEveryGovernedContract
+
+After the handover the timelock is the ONLY ADMIN_ROLE holder on
+every governed contract, the router excepted: RouterGovernance
+also holds router ADMIN_ROLE, by design (R7 — it is what lets an
+executed proposal reach setWeights). The member lists are the
+complete sets, replayed from every RoleGranted/RoleRevoked log
+since before construction, not a check of a few named addresses.
 
 ```solidity
-function test_deployer_noLongerHasAdminRoleOnGovernance() public view;
+function test_handover_timelockIsTheOnlyAdminOnEveryGovernedContract() public view;
+```
+
+<a id="test_handover_timelockistheonlygatewayrootholder"></a>
+
+### test_handover_timelockIsTheOnlyGatewayRootHolder
+
+No address other than the timelock holds the gateway root
+(DEFAULT_ADMIN_ROLE), and only the independent hot key holds the
+vault EMERGENCY_ROLE.
+
+```solidity
+function test_handover_timelockIsTheOnlyGatewayRootHolder() public view;
 ```
 
 <a id="test_safe_holdsproposerrole"></a>

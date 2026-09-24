@@ -39,7 +39,7 @@
 #              signalled.
 #   ceremony   provision the acceptance topology on the running smoke devnet
 #              (scripts/stage/fusion-ceremony.sh run): ephemeral submitter /
-#              approver / voters, RehearsalSafe, TimelockController handover,
+#              approver / voters, a real 2-of-3 Safe on SafeL2, TimelockController handover,
 #              on-chain verification, and a GENERATED record at
 #              $OUT_DIR/fusion-stage-record.json.
 #

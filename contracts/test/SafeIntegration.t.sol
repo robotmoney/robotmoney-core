@@ -4,6 +4,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
@@ -14,6 +15,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {RoleHolders} from "./helpers/RoleHolders.sol";
 
 /// @title ISafe — minimal interface for the Safe (Gnosis Safe) multisig contract.
 ///
@@ -71,6 +73,9 @@ interface ISafe {
 
     /// @notice Returns the on-chain nonce (number of executed transactions).
     function nonce() external view returns (uint256);
+
+    /// @notice Whether `owner` is in the Safe's owner set.
+    function isOwner(address owner) external view returns (bool);
 }
 
 /// @title ISafeProxyFactory — minimal interface for Safe{Wallet} ProxyFactory.
@@ -99,9 +104,12 @@ interface ISafeProxyFactory {
 ///          forge test --match-contract SafeIntegration -vvv
 ///
 /// @dev Safe deployment approach:
-///      We call `SafeProxyFactory.createProxyWithNonce` against the live Base-mainnet
-///      factory (0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67) which points to the
-///      canonical Safe singleton (0x29fcB43b46531BcA003ddC8FCB67FFE91900C762 — L2 variant).
+///      We call `SafeProxyFactory.createProxyWithNonce` against the canonical Base-mainnet
+///      factory (0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67) with the canonical
+///      `SafeL2` singleton (0x29fcB43b46531BcA003ddC8FCB67FFE91900C762). Base is an L2,
+///      so `SafeL2` is the singleton production uses (governance-isomorphism.md §2.2, R4).
+///      The golden fixture carries it because snapshot-fork.sh warms the whole Safe set
+///      and check-fork-safe-set.sh refuses a fixture without it (R2, R3).
 ///      This proves the quorum is enforced by actual Safe contract code, not vm.prank.
 ///
 /// @dev EIP-712 signing:
@@ -117,10 +125,19 @@ contract SafeIntegrationTest is Test {
 
     /// @dev Safe L2 singleton (implementation) on Base mainnet.
     ///      This is the SafeL2.sol variant that emits extra events for L2 indexers.
-    address internal constant SAFE_SINGLETON_L2 = 0x41675C099F32341bf84BFc5382aF534df5C7461a;
+    ///      Until issue #1447 this constant held 0x41675C09…, the L1 `Safe` singleton,
+    ///      despite its name (governance-isomorphism.md §3.4).
+    address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
 
     /// @dev Safe Compatibility Fallback Handler on Base mainnet.
     address internal constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+
+    /// @dev Safe MultiSend v1.4.1 on Base mainnet (governance-isomorphism.md §2.2).
+    address internal constant SAFE_MULTISEND = 0x38869bf66a61cF6bDB996A6aE40D5853Fd43B526;
+
+    /// @dev FallbackManager's handler slot: keccak256("fallback_manager.handler.address").
+    bytes32 internal constant FALLBACK_HANDLER_STORAGE_SLOT =
+        0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
 
     // ─── Role constant ────────────────────────────────────────────────────────
 
@@ -159,6 +176,16 @@ contract SafeIntegrationTest is Test {
     /// Snapshot id used for per-test isolation.
     uint256 internal _snap;
 
+    /// The deploy script and its deployer (the script's own address; see setUp).
+    DeployTimelock internal script;
+    address internal deployer;
+
+    /// Who holds what after the handover, replayed from every RoleGranted /
+    /// RoleRevoked log since before the contracts were built. The contracts are
+    /// not AccessControlEnumerable, so this is the only complete member list.
+    mapping(address => address[]) internal adminHolders;
+    address[] internal gatewayRootHolders;
+
     // ─── Set-up ────────────────────────────────────────────────────────────────
 
     /// @dev Select an override URL or the offline golden-fixture RPC.
@@ -176,6 +203,7 @@ contract SafeIntegrationTest is Test {
     ///      whose PROPOSER is the deployed 2-of-3 Safe proxy.
     function setUp() public {
         _trySelectFork();
+        vm.recordLogs();
 
         // Generate 3 deterministic signing keys.
         ownerPk1 = uint256(keccak256("owner1-pk"));
@@ -188,8 +216,14 @@ contract SafeIntegrationTest is Test {
         // Deploy token + contracts.
         usdc = new TestERC20();
 
-        // Temporary admin for deployment — will be replaced by timelock.
-        address deployer = address(this);
+        // The deployer is the DeployTimelock script's own address. In a real
+        // `forge script --broadcast` run the broadcaster both sends the grants
+        // and revokes and is the `msg.sender` the script revokes from. In process
+        // the script's calls come from address(script), so only when the deployer
+        // IS address(script), and runInProcess is called from it, does the
+        // handover revoke the roles the deployer actually holds (issue #1447).
+        script = new DeployTimelock();
+        deployer = address(script);
 
         vault = new RobotMoneyVault(
             usdc,
@@ -221,6 +255,7 @@ contract SafeIntegrationTest is Test {
         // this grant for a real deployment; this fixture constructs RouterGovernance
         // directly, so it must do the same. DeployTimelock's R7 precondition asserts
         // it below.
+        vm.prank(deployer);
         IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(governance));
 
         // Deploy 2-of-3 Safe proxy via the canonical factory on Base mainnet.
@@ -245,18 +280,34 @@ contract SafeIntegrationTest is Test {
             .createProxyWithNonce(SAFE_SINGLETON_L2, safeSetup, uint256(keccak256("safe-salt-422")));
         safe = ISafe(safeProxy);
 
-        // Verify Safe deployed correctly.
+        // Verify the Safe from the Safe itself, never from what this test asked
+        // for (governance-isomorphism.md R12).
         assertEq(safe.getThreshold(), 2, "safe threshold must be 2");
         assertEq(safe.getOwners().length, 3, "safe must have 3 owners");
+        for (uint256 i = 0; i < owners.length; i++) {
+            assertTrue(safe.isOwner(owners[i]), "every intended signer must be a safe owner");
+        }
+        // SafeProxy keeps its singleton in storage slot 0 (`masterCopy`): the proxy
+        // must delegate to SafeL2, not the L1 singleton (R4).
+        assertEq(
+            address(uint160(uint256(vm.load(safeProxy, bytes32(0))))),
+            SAFE_SINGLETON_L2,
+            "safe proxy must delegate to the SafeL2 singleton"
+        );
+        // setup() stored the canonical fallback handler, and the handler and
+        // MultiSend the Safe set promises are real code on this fork, not empty
+        // accounts a call would silently succeed against (R2).
+        assertEq(
+            address(uint160(uint256(vm.load(safeProxy, FALLBACK_HANDLER_STORAGE_SLOT)))),
+            SAFE_FALLBACK_HANDLER,
+            "safe fallback handler must be the canonical CompatibilityFallbackHandler"
+        );
+        assertGt(SAFE_FALLBACK_HANDLER.code.length, 0, "fallback handler has no code on this fork");
+        assertGt(SAFE_MULTISEND.code.length, 0, "MultiSend has no code on this fork");
 
-        // Deploy TimelockController and wire ADMIN_ROLE on all five contracts.
-        DeployTimelock script = new DeployTimelock();
-        IAccessControl(address(vault)).grantRole(ADMIN_ROLE, address(script));
-        IAccessControl(address(gateway)).grantRole(ADMIN_ROLE, address(script));
-        IAccessControl(address(gateway)).grantRole(bytes32(0), address(script));
-        IAccessControl(address(registry)).grantRole(ADMIN_ROLE, address(script));
-        IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(script));
-        IAccessControl(address(governance)).grantRole(ADMIN_ROLE, address(script));
+        // Deploy TimelockController and wire ADMIN_ROLE on all five contracts,
+        // called from the deployer so its roles are the ones revoked.
+        vm.prank(deployer);
         d = script.runInProcess(
             address(vault),
             address(gateway),
@@ -290,8 +341,69 @@ contract SafeIntegrationTest is Test {
             "timelock missing ADMIN_ROLE on governance"
         );
 
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        address[5] memory governed = _governed();
+        for (uint256 i = 0; i < governed.length; i++) {
+            adminHolders[governed[i]] = RoleHolders.holders(logs, governed[i], ADMIN_ROLE);
+        }
+        gatewayRootHolders = RoleHolders.holders(logs, address(gateway), bytes32(0));
+
         // Take a snapshot for per-test revert.
         _snap = vm.snapshot();
+    }
+
+    function _governed() internal view returns (address[5] memory) {
+        return
+            [
+                address(vault),
+                address(gateway),
+                address(registry),
+                address(router),
+                address(governance)
+            ];
+    }
+
+    // ─── The handover leaves no second admin ──────────────────────────────────
+
+    /// @notice After the handover the timelock is the ONLY ADMIN_ROLE holder on
+    ///         every governed contract, the router excepted: RouterGovernance
+    ///         also holds router ADMIN_ROLE by design (R7). The lists are complete
+    ///         member sets replayed from the role logs, so an admin nobody thought
+    ///         to name (the deploy script's contract, the test) cannot hide.
+    function test_handover_timelockIsTheOnlyAdminOnEveryGovernedContract() public withSnap {
+        address[5] memory governed = _governed();
+        for (uint256 i = 0; i < governed.length; i++) {
+            address[] memory h = adminHolders[governed[i]];
+            bool isRouter = governed[i] == address(router);
+            assertEq(h.length, isRouter ? 2 : 1, "unexpected number of ADMIN_ROLE holders");
+            for (uint256 j = 0; j < h.length; j++) {
+                bool allowed =
+                    h[j] == address(d.timelock) || (isRouter && h[j] == address(governance));
+                assertTrue(allowed, "an address other than the timelock holds ADMIN_ROLE");
+                assertTrue(
+                    IAccessControl(governed[i]).hasRole(ADMIN_ROLE, h[j]),
+                    "replay disagrees with hasRole"
+                );
+            }
+            assertFalse(
+                IAccessControl(governed[i]).hasRole(ADMIN_ROLE, deployer),
+                "deployer (the script contract) kept ADMIN_ROLE"
+            );
+            assertFalse(
+                IAccessControl(governed[i]).hasRole(ADMIN_ROLE, address(this)),
+                "the test contract holds ADMIN_ROLE"
+            );
+        }
+    }
+
+    /// @notice No address other than the timelock holds the gateway root.
+    function test_handover_timelockIsTheOnlyGatewayRootHolder() public withSnap {
+        assertEq(
+            gatewayRootHolders.length, 1, "gateway DEFAULT_ADMIN_ROLE has more than one holder"
+        );
+        assertEq(gatewayRootHolders[0], address(d.timelock), "gateway root is not the timelock");
+        assertFalse(gateway.hasRole(bytes32(0), deployer), "deployer kept the gateway root");
+        assertFalse(gateway.hasRole(bytes32(0), address(this)), "the test holds the gateway root");
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -498,7 +610,11 @@ contract SafeIntegrationTest is Test {
     // Sad-path: quorum not met (1-of-3 signature)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @notice AC2: One signature from a 2-of-3 Safe reverts inside execTransaction.
+    /// @notice AC2 / governance-isomorphism.md R13: threshold - 1 valid owner signatures
+    ///         revert with Safe's own GS020, and the very same SafeTx then succeeds with
+    ///         threshold signatures. The positive twin is what makes the revert evidence
+    ///         of quorum enforcement rather than of some unrelated failure that a bare
+    ///         `expectRevert()` would also have accepted.
     function test_sadPath_quorumNotMet_oneSignerReverts() public withSnap {
         bytes memory callData = abi.encodeCall(
             VaultRegistry.registerVault,
@@ -528,11 +644,65 @@ contract SafeIntegrationTest is Test {
         );
         bytes memory sigs = _buildOneOwnerSig(txHash);
 
-        // Safe.execTransaction reverts (or returns false) when quorum not met.
-        // The Safe contract reverts with GS020 (not enough valid signatures).
-        vm.expectRevert();
+        // GS020: signatures data too short for the threshold.
+        vm.expectRevert(bytes("GS020"));
         safe.execTransaction(
             address(d.timelock), 0, scheduleCall, 0, 0, 0, 0, address(0), payable(address(0)), sigs
+        );
+
+        // The revert consumed no nonce, so the identical SafeTx is still the pending
+        // one: with a second owner's signature it must now go through.
+        assertTrue(
+            safe.execTransaction(
+                address(d.timelock),
+                0,
+                scheduleCall,
+                0,
+                0,
+                0,
+                0,
+                address(0),
+                payable(address(0)),
+                _buildTwoOwnerSigs(txHash)
+            ),
+            "the same SafeTx must execute once quorum is met"
+        );
+    }
+
+    /// @notice R13 / §1.1 "two DISTINCT owner signatures": one owner signing twice has
+    ///         the right byte length but only one owner's authority. Safe requires
+    ///         strictly ascending signers, so the repeat reverts GS026.
+    function test_sadPath_sameOwnerTwice_reverts() public withSnap {
+        bytes memory scheduleCall = abi.encodeCall(
+            d.timelock.schedule,
+            (address(registry), 0, hex"", bytes32(0), keccak256("salt-dup"), MIN_DELAY)
+        );
+        bytes32 txHash = safe.getTransactionHash(
+            address(d.timelock),
+            0,
+            scheduleCall,
+            0,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            safe.nonce()
+        );
+        bytes memory one = _buildOneOwnerSig(txHash);
+
+        vm.expectRevert(bytes("GS026"));
+        safe.execTransaction(
+            address(d.timelock),
+            0,
+            scheduleCall,
+            0,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            bytes.concat(one, one)
         );
     }
 
@@ -570,7 +740,8 @@ contract SafeIntegrationTest is Test {
         );
         bytes memory sigs = _buildWrongSignerSigs(txHash);
 
-        vm.expectRevert();
+        // GS026: a recovered signer that is not an owner.
+        vm.expectRevert(bytes("GS026"));
         safe.execTransaction(
             address(d.timelock), 0, scheduleCall, 0, 0, 0, 0, address(0), payable(address(0)), sigs
         );
@@ -885,14 +1056,31 @@ contract SafeIntegrationTest is Test {
             _buildTwoOwnerSigs(scheduleTxHash)
         );
 
-        // Cancel via Safe (CANCELLER_ROLE is held by the TimelockController admin —
-        // in OZ v5 the deployer is granted CANCELLER_ROLE too; the Safe can also
-        // be granted it. Here we use vm.prank on the timelock itself since it holds
-        // DEFAULT_ADMIN_ROLE and can self-cancel, OR we prank the Safe address since
-        // it holds PROPOSER_ROLE which in OZ v5 TimelockController also acts as
-        // CANCELLER_ROLE by default).
-        vm.prank(address(safe));
-        d.timelock.cancel(opId);
+        // Cancel through the Safe itself, with two owner signatures: OZ v5's
+        // TimelockController grants every proposer CANCELLER_ROLE, so the Safe
+        // holds it, and only a quorum of owners can make the Safe use it. A
+        // vm.prank here would prove the role, not the quorum.
+        assertTrue(
+            d.timelock.hasRole(d.timelock.CANCELLER_ROLE(), address(safe)),
+            "safe must hold CANCELLER_ROLE"
+        );
+        bytes memory cancelCall = abi.encodeCall(d.timelock.cancel, (opId));
+        bytes32 cancelTxHash = safe.getTransactionHash(
+            address(d.timelock),
+            0,
+            cancelCall,
+            0,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            safe.nonce()
+        );
+        assertTrue(
+            _safeExec(address(d.timelock), cancelCall, _buildTwoOwnerSigs(cancelTxHash)),
+            "safe.execTransaction(cancel) failed"
+        );
 
         // Verify operation is cancelled (state = Unset).
         assertEq(

@@ -12,23 +12,60 @@
 # the exact custom error the live state owes. `rpc` answers
 # anvil_setNextBlockTimestamp / evm_mine so `jump_to` can fast-forward it, and
 # can be told to refuse them so the die-if-not-anvil path is exercised too.
+#
+# The Safe is played as a real 2-of-3 would behave (issue #1447): `wallet sign`
+# returns a signature that names its signer and the digest it signed, the
+# SafeTx digest covers every field (to, value, data, operation, gas terms,
+# nonce), and `execTransaction` refuses a DELEGATECALL, too few signatures
+# (GS020), a signature over the wrong digest or from a non-owner, or signers
+# not strictly ascending (GS026), before it forwards anything to the timelock.
+# The record lists the owners in DESCENDING address order, so the ceremony
+# only passes if it collects `threshold` distinct owner signatures over the
+# digest the Safe itself reports, sorted into the order the Safe demands.
+#
+# The run ends with an executed-assertion floor, and any exit before the final
+# tally (an abort, a truncated file) is a failure, so a run that silently did
+# less cannot pass.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CEREMONY="$HERE/../fusion-ceremony.sh"
 REAL_CAST="$(command -v cast)" || { echo "selftest needs foundry's cast for keccak" >&2; exit 2; }
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# A run that ends before its final tally — an abort under set -e, an early
+# exit, a truncated file — must never exit 0, whatever its last command was.
+SELFTEST_COMPLETE=0
+RESTORE_ON_EXIT=0
+on_exit() {
+  local rc=$?
+  if [[ "$RESTORE_ON_EXIT" == 1 ]]; then restore_ceremony; fi
+  rm -rf "$WORK"
+  if [[ "$SELFTEST_COMPLETE" != 1 ]]; then
+    echo "fusion-ceremony selftest: ended before its final tally (aborted or truncated run)" >&2
+    exit 1
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
 
 a() { printf '0x%040x' "$1"; }
 GATEWAY=$(a 1); ROUTER=$(a 2); GOVERNANCE=$(a 3); RECEIPT=$(a 4); IC=$(a 5); TIMELOCK=$(a 6)
-SAFE=$(a 7); REGISTRY=$(a 8); VAULT=$(a 9); DEPLOYER=$(a 10); SUBMITTER=$(a 11); APPROVER=$(a 12)
+SAFE=$(a 7); REGISTRY=$(a 8); VAULT=$(a 9); DEPLOYER=$(a 10); SUBMITTER=$(a 11)
 VOTER_A=$(a 13); VOTER_B=$(a 14); EMERGENCY=$(a 15)
+# The Safe's three owners. Record order is approver, approver-b, approver-c,
+# and by address it is exactly the reverse: approver-c (0x..11) < approver-b
+# (0x..1001) < approver (0x..2000). Any two signers taken in record order are
+# therefore DESCENDING, so a ceremony that does not sort by address (GS026)
+# fails every Safe transaction here rather than passing by luck.
+APPROVER=$(a 8192); APPROVER_B=$(a 4097); APPROVER_C=$(a 17)
 VAULT_AGENT=$(a 20); VAULT_USDC=$(a 21); VAULT_PROTO=$(a 22); VAULT_RWA=$(a 23)
 ADMIN=$("$REAL_CAST" keccak ADMIN_ROLE); AGENT=$("$REAL_CAST" keccak AGENT_ROLE)
 COMMITTEE=$("$REAL_CAST" keccak COMMITTEE_AGENT_ROLE)
 PROPOSER=$("$REAL_CAST" keccak PROPOSER_ROLE); EXECUTOR=$("$REAL_CAST" keccak EXECUTOR_ROLE)
 HASH=0x$(printf 'ab%.0s' {1..32})
+# The canonical SafeProxy v1.4.1 runtime code hash verify pins (R12).
+SAFE_PROXY_HASH=0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c
+SAFE_HANDLER=0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99
 
 # ─── the fake chain ──────────────────────────────────────────────────────────
 # `verify` only ever reads, so the original fake cast was a pure table lookup.
@@ -205,6 +242,68 @@ do_propose() {
   set_state "receiptlogs:$(lower "$tx")" "$(jq -c -n --argjson l "$log" '[$l]')"
   emit_send_result "$tx"
 }
+safe_digest() {
+  # safe_digest <to> <value> <data> <operation> <safeTxGas> <baseGas> <gasPrice>
+  #             <gasToken> <refundReceiver> <nonce>: keccak over EVERY SafeTx
+  # field, as Safe's EIP-712 hash is, so signatures over one SafeTx never
+  # authorize another that differs only in its operation, value or gas terms.
+  "$REAL_CAST" keccak "$("$REAL_CAST" abi-encode 'f(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)' "$@")"
+}
+safe_revert() {
+  # The Safe's own revert string, the way `cast send` / `cast call` report it.
+  echo "Error: server returned an error response: error code 3: execution reverted: $1" >&2
+  exit 1
+}
+check_safe_signatures() {
+  # check_safe_signatures <safe> <9 SafeTx fields> <sigs>: Safe.checkSignatures,
+  # ECDSA branch only, with the fake signature layout r=signer, s=digest.
+  local safe; safe="$(lower "$1")"; shift
+  local fields=("${@:1:9}") sigs="${10#0x}" threshold nonce digest owners i chunk signer signed last=""
+  threshold="$(state "threshold:$safe" || echo 2)"
+  nonce="$(state "safenonce:$safe" || echo 0)"
+  digest="$(lower "$(safe_digest "${fields[@]}" "$nonce")")"
+  owners=" $(state "owners:$safe" || true) "
+  (( ${#sigs} >= threshold * 130 )) || safe_revert GS020
+  for (( i = 0; i < threshold; i++ )); do
+    chunk="${sigs:$((i * 130)):130}"
+    signer="0x${chunk:24:40}"; signed="0x${chunk:64:64}"
+    [[ "$(lower "$signed")" == "$digest" ]] || safe_revert GS026
+    # `safe_accepts_non_owners` / `safe_accepts_duplicates`: a Safe whose
+    # owner or ordering check is broken, for verify's GS026 controls to catch.
+    [[ "$owners" == *" $(lower "$signer") "* || "$(state safe_accepts_non_owners || echo false)" == true ]] \
+      || safe_revert GS026
+    if ! [[ "$(lower "$signer")" == "$last" && "$(state safe_accepts_duplicates || echo false)" == true ]]; then
+      [[ -z "$last" || "$(lower "$signer")" > "$last" ]] || safe_revert GS026
+    fi
+    last="$(lower "$signer")"
+  done
+}
+safe_exec_checks() {
+  # safe_exec_checks <safe> <9 SafeTx fields> <sigs>: everything execTransaction
+  # does before its call lands. Knobs:
+  #   safe_reverts_all     a Safe that reverts every execTransaction with no GS
+  #                        code at all (so a control that only looks for "a
+  #                        revert" is caught);
+  #   safe_accepts_anything  a Safe that checks no signature;
+  #   safe_inner_revert    signatures pass, then the inner call reverts (GS013),
+  #                        so the positive twin has something to catch.
+  # A DELEGATECALL (operation 1) is always refused: the ceremony never means one.
+  local safe="$1"; shift
+  local fields=("${@:1:9}") sigs="${10}"
+  [[ "$(state safe_reverts_all || echo false)" != true ]] \
+    || { echo "Error: server returned an error response: error code 3: execution reverted" >&2; exit 1; }
+  [[ "${fields[3]}" == 0 ]] || safe_revert "fake Safe: operation ${fields[3]} (DELEGATECALL) refused"
+  [[ "$(state safe_accepts_anything || echo false)" == "true" ]] || check_safe_signatures "$safe" "${fields[@]}" "$sigs"
+  [[ "$(state safe_inner_revert || echo false)" != true ]] || safe_revert GS013
+}
+handle_exec_transaction() {
+  # handle_exec_transaction <safe> <9 SafeTx fields> <sigs>
+  local safe="$1" n; shift
+  safe_exec_checks "$safe" "$@"
+  n="$(state "safenonce:$(lower "$safe")" || echo 0)"
+  set_state "safenonce:$(lower "$safe")" "$((n + 1))"
+  handle_safe_exec "$1" "$3"
+}
 handle_safe_exec() {
   local timelock="$1" calldata="$2" sel schedule_sel execute_sel body
   sel="$(lower "${calldata:0:10}")"
@@ -298,7 +397,75 @@ handle_execute() {
   emit_send_result "$tx"
 }
 
-pos=(); data=""; field=""; keystore=""; privkey=""
+# `pause_on_value`: the first value transfer (run's key funding, after every key
+# is minted) marks "$FAKE_STATE.paused" and hangs until "$FAKE_STATE.release"
+# appears, so the harness can signal a `run` that is blocked inside cast.
+# Bounded, so a harness that never releases it fails instead of hanging CI.
+pause_here() {
+  touch "$FAKE_STATE.paused"
+  local i
+  for (( i = 0; i < 600; i++ )); do
+    [[ ! -e "$FAKE_STATE.release" ]] || { echo "fake cast: released while paused" >&2; exit 1; }
+    sleep 0.1
+  done
+  echo "fake cast: paused for 60s and nobody signalled" >&2
+  exit 1
+}
+append_state() {
+  local cur; cur="$(state "$1" || true)"
+  [[ " $cur " == *" $2 "* ]] || set_state "$1" "${cur:+$cur }$2"
+}
+# `accept_sends`: the writes `run` makes before the handover, applied the way
+# the contracts would, so a whole `run` can reach its record and its verify.
+# Without it every one of these sends is refused, as before.
+handle_run_send() {
+  local target sig; target="$(lower "$1")"; sig="$2"; shift 2
+  [[ "$(state accept_sends || echo false)" == true ]] || revert_send "unhandled send $sig"
+  local agent committee
+  agent="$(lower "$("$REAL_CAST" keccak AGENT_ROLE)")"
+  committee="$(lower "$("$REAL_CAST" keccak COMMITTEE_AGENT_ROLE)")"
+  case "$sig" in
+    authorizeAgent\(*)
+      set_state "role:$target:$agent:$(lower "$1")" true
+      append_state "logs:$target:$agent" "$(lower "$1")" ;;
+    'committeeRegister(address,string)')
+      # Sent to the gateway, which forwards it to the IC policy (`ic_policy`).
+      local ic; ic="$(lower "$(state ic_policy)")"
+      set_state "role:$ic:$committee:$(lower "$1")" true
+      append_state "logs:$ic:$committee" "$(lower "$1")" ;;
+    'setVotingPower(address,uint256)')
+      set_state "power:$(lower "$1")" "$2"
+      append_state "logs:$target:none" "$(lower "$1")" ;;
+    'setQuorumThreshold(uint256)') set_state quorum "$1" ;;
+    'grantRole(bytes32,address)') set_state "role:$target:$1:$(lower "$2")" true ;;
+    'revokeRole(bytes32,address)') set_state "role:$target:$1:$(lower "$2")" false ;;
+    'createProxyWithNonce(address,bytes,uint256)')
+      # A SafeProxy at the address the eth_call predicted, set up exactly as
+      # the initializer says: its owners, threshold and fallback handler.
+      local safe setup out owners
+      safe="$(lower "$(state create_safe_at)")"
+      setup="$2"
+      mapfile -t out < <("$REAL_CAST" abi-decode --input 'setup(address[],uint256,address,bytes,address,address,uint256,address)' "0x${setup:10}")
+      owners="$(tr -d '[],' <<<"${out[0]}")"
+      set_state "owners:$safe" "$(lower "$owners" | xargs)"
+      set_state "threshold:$safe" "${out[1]%% *}"
+      set_state "handler:$safe" "${out[4]}"
+      set_state "singleton:$safe" "$1"
+      set_state "codehash:$safe" "$(state safe_proxy_hash)"
+      append_state "logs:$target:none" "$safe" ;;
+    *) revert_send "unhandled send $sig" ;;
+  esac
+  emit_send_result "$(next_tx)"
+}
+
+# `unreadable:<address>`: every read of that account fails, as an RPC that
+# times out or a node that lost the account would.
+unreadable() {
+  [[ "$(state "unreadable:$(lower "$1")" || echo false)" != true ]] \
+    || { echo "fake cast: request for $1 timed out" >&2; exit 1; }
+}
+
+pos=(); data=""; field=""; keystore=""; privkey=""; value=""
 while (( $# )); do
   case "$1" in
     --rpc-url|--from|--from-block|--address) [[ "$1" == "--address" ]] && addr="$2"; [[ "$1" == "--from" ]] && from="$2"; shift 2 ;;
@@ -308,19 +475,68 @@ while (( $# )); do
     --keystore) keystore="$2"; shift 2 ;;
     --password-file) shift 2 ;;
     --private-key) privkey="$2"; shift 2 ;;
+    --value) value="$2"; shift 2 ;;
     *) pos+=("$1"); shift ;;
   esac
 done
 [[ -n "$keystore" ]] && from="$(state "keystore:$(basename "$keystore")" || true)"
 [[ -n "$privkey" ]] && from="$(state "privkey:$(lower "$privkey")" || true)"
 
+# `rpc_down`: the node does not answer. Everything that needs it fails the way
+# cast does against a closed port; pure encoding and local keystores still work.
+if [[ "$(state rpc_down || echo false)" == true ]]; then
+  case "${pos[0]}" in
+    keccak|calldata|sig|abi-encode|abi-decode|to-dec|wallet) ;;
+    *) echo "fake cast: error sending request: tcp connect error: Connection refused (os error 111)" >&2; exit 1 ;;
+  esac
+fi
+
 case "${pos[0]}" in
   keccak|calldata|sig|abi-encode|abi-decode|to-dec) exec "$REAL_CAST" "${pos[@]}" ;;
+  wallet)
+    # `wallet new` is how `run` mints a key. No case here may reach it
+    # unless it means to provision, so it leaves a mark and refuses.
+    if [[ "${pos[1]:-}" == "new" ]]; then
+      set_state wallet_new_called true
+      [[ "$(state wallet_new_ok || echo false)" == true ]] || { echo "fake cast: wallet new refused" >&2; exit 1; }
+      # A keystore password on the command line is readable by every user on
+      # the host (ps); `run` must hand it over in CAST_PASSWORD instead.
+      if [[ " ${pos[*]} " == *" --unsafe-password "* || -z "${CAST_PASSWORD:-}" ]]; then
+        set_state wallet_new_argv_password true
+        echo "fake cast: keystore password passed on argv (or not at all)" >&2; exit 1
+      fi
+      n="$(state walletseq || echo 0)"; n=$((n + 1)); set_state walletseq "$n"
+      printf '{"fake":"keystore"}' >"${pos[2]}/${pos[3]}"
+      set_state "keystore:${pos[3]}" "$(printf '0x%040x' $((0x5000 + n)))"
+      echo "Created new encrypted keystore file: ${pos[2]}/${pos[3]}" >&2
+      exit 0
+    fi
+    if [[ "${pos[1]:-}" == "address" ]]; then
+      [[ -n "${from:-}" ]] || { echo "fake cast: wallet address with no known key" >&2; exit 1; }
+      echo "$from"; exit 0
+    fi
+    [[ "${pos[1]:-}" == "sign" ]] || { echo "fake cast: unhandled wallet ${pos[1]:-}" >&2; exit 1; }
+    [[ " ${pos[*]} " == *" --no-hash "* ]] || { echo "fake cast: SafeTx digests must be signed --no-hash" >&2; exit 1; }
+    [[ -n "${from:-}" ]] || { echo "fake cast: wallet sign with no known keystore" >&2; exit 1; }
+    digest="${pos[${#pos[@]}-1]}"
+    # `sign_v`: the v byte the fake signer emits (27 = 0x1b unless told otherwise).
+    printf '0x000000000000000000000000%s%s%s\n' "$(lower "${from#0x}")" "$(lower "${digest#0x}")" "$(state sign_v || echo 1b)" ;;
   chain-id) state chain ;;
   block-number) state blocknum || echo 0 ;;
-  codehash) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
-  code) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
+  codehash) unreadable "${pos[1]}"; state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
+  code) unreadable "${pos[1]}"; state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
   balance) state "balance:$(lower "${pos[1]}")" || echo 0 ;;
+  storage)
+    unreadable "${pos[1]}"
+    # A Safe proxy's slot 0 (masterCopy), its guard slot and its fallback
+    # handler slot; anything else reads zero, as unwritten storage does.
+    case "$(lower "${pos[2]:-0}")" in
+      0|0x0) slotkey=singleton ;;
+      0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8) slotkey=guard ;;
+      0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5) slotkey=handler ;;
+      *) slotkey=none ;;
+    esac
+    printf '0x000000000000000000000000%s\n' "$(lower "$(state "$slotkey:$(lower "${pos[1]}")" || echo 0x0000000000000000000000000000000000000000)" | sed 's/^0x//')" ;;
   block)
     [[ "$field" == "timestamp" ]] || { echo "fake cast: unhandled block field '$field'" >&2; exit 1; }
     current_clock ;;
@@ -362,6 +578,7 @@ case "${pos[0]}" in
     jq -n --argjson logs "$(state "receiptlogs:$tx" || echo '[]')" '{logs:$logs}' ;;
   call)
     c="$(lower "${pos[1]}")"; sig="${pos[2]:-}"
+    unreadable "$c"
     if [[ -z "$sig" && -n "$data" ]]; then
       handle_raw_data_call "${from:-}"
     else
@@ -371,7 +588,23 @@ case "${pos[0]}" in
         'totalVotingPower()(uint256)') state total ;;
         'votingPower(address)(uint256)') state "power:$(lower "${pos[3]}")" || echo 0 ;;
         'owner()(address)') state "owner:$c" ;;
+        'nonce()(uint256)')
+          [[ "$(state nonce_unreadable || echo false)" != true ]] || { echo "fake cast: nonce() timed out" >&2; exit 1; }
+          state "safenonce:$c" || echo 0 ;;
+        'getThreshold()(uint256)') state "threshold:$c" || echo 2 ;;
+        'getModulesPaginated(address,uint256)(address[],address)')
+          printf '[%s]\n0x0000000000000000000000000000000000000001\n' "$(state "modules:$c" || true)" ;;
+        'getOwners()(address[])')
+          owners_list="$(state "owners:$c" || true)"
+          printf '[%s]\n' "$(tr ' ' '\n' <<<"$owners_list" | sed '/^$/d' | paste -sd, - | sed 's/,/, /g')" ;;
+        'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)(bool)')
+          safe_exec_checks "$c" "${pos[@]:3:10}"
+          echo true ;;
+        'getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)')
+          safe_digest "${pos[@]:3:10}" ;;
         'getMinDelay()(uint256)') state delay ;;
+        'createProxyWithNonce(address,bytes,uint256)(address)') state create_safe_at ;;
+        'receiptCount()(uint256)') state "receiptcount:$c" || echo 0 ;;
         'setWeights(address[],uint256[])') [[ "$(state "setweights:$(lower "${from:-}")" || echo revert)" == ok ]] ;;
         'isReleased(bytes32)(bool)') state "released:$(lower "${pos[3]}")" || echo false ;;
         'currentProposalId()(uint256)') state proposalid || echo 0 ;;
@@ -396,26 +629,97 @@ case "${pos[0]}" in
       esac
     fi ;;
   send)
-    target="${pos[1]}"; sig="${pos[2]}"
+    target="${pos[1]}"; sig="${pos[2]:-}"
     case "$sig" in
-      'exec(address,uint256,bytes)') handle_safe_exec "${pos[3]}" "${pos[5]}" ;;
+      'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)')
+        handle_exec_transaction "$target" "${pos[@]:3:10}" ;;
       'vote(uint256)') handle_vote "$target" "${pos[3]}" "${from:-}" ;;
       'execute(uint256)') handle_execute "$target" "${pos[3]}" "${from:-}" ;;
-      *) echo "fake cast: unhandled send $sig" >&2; exit 1 ;;
+      '')
+        # A bare value transfer (run funding a key it minted).
+        [[ "$(state pause_on_value || echo false)" != true ]] || pause_here
+        [[ "$(state accept_sends || echo false)" == true ]] || revert_send "value transfer to $target refused"
+        set_state "balance:$(lower "$target")" 2000000000000000000
+        emit_send_result "$(next_tx)" ;;
+      *) handle_run_send "$target" "$sig" "${pos[@]:3}" ;;
     esac ;;
   *) echo "fake cast: unhandled ${pos[0]}" >&2; exit 1 ;;
 esac
 FAKE
 chmod +x "$WORK/cast"
 
+# ─── the fake forge ──────────────────────────────────────────────────────────
+# Plays `forge script DeployTimelock.s.sol --broadcast` for a `run` that gets
+# that far: the handover the script performs on the fake chain (the timelock
+# takes ADMIN_ROLE on every contract it covers, the Safe becomes its proposer
+# and executor, the deployer loses its roles) and the manifest it writes to
+# DEPLOYMENT_OUT. The timelock's address and code hash come from the state
+# table (forge_timelock, forge_codehash); everything else comes from the same
+# environment the real script reads.
+cat >"$WORK/forge" <<'FAKEFORGE'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-} ${2:-}" == "script contracts/script/DeployTimelock.s.sol:DeployTimelock" ]] \
+  || { echo "fake forge: unexpected invocation: $*" >&2; exit 1; }
+state() { awk -F'\t' -v k="$1" '$1 == k { v = $2; f = 1 } END { if (f) print v; else exit 1 }' "$FAKE_STATE"; }
+set_state() {
+  grep -v -F "$1"$'\t' "$FAKE_STATE" >"$FAKE_STATE.new" 2>/dev/null || true
+  printf '%s\t%s\n' "$1" "$2" >>"$FAKE_STATE.new"
+  mv "$FAKE_STATE.new" "$FAKE_STATE"
+}
+lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
+key=""
+while (( $# )); do
+  case "$1" in --private-key) key="$2"; shift 2 ;; *) shift ;; esac
+done
+deployer="$(lower "$(state "privkey:$(lower "$key")")")"
+tl="$(lower "$(state forge_timelock)")"; hash="$(state forge_codehash)"
+admin="$(lower "$("$REAL_CAST" keccak ADMIN_ROLE)")"
+proposer="$(lower "$("$REAL_CAST" keccak PROPOSER_ROLE)")"
+executor="$(lower "$("$REAL_CAST" keccak EXECUTOR_ROLE)")"
+root=0x0000000000000000000000000000000000000000000000000000000000000000
+safe="$(lower "$SAFE_ADDRESS")"
+set_state "codehash:$tl" "$hash"
+set_state delay "$TIMELOCK_MIN_DELAY"
+set_state "role:$tl:$proposer:$safe" true
+set_state "role:$tl:$executor:$safe" true
+for c in "$VAULT_ADDRESS" "$GATEWAY_ADDRESS" "$REGISTRY_ADDRESS" "$ROUTER_ADDRESS" "$GOVERNANCE_ADDRESS" \
+         "$IC_POLICY_ADDRESS" "$CONSENSUS_RECEIPT_ADDRESS"; do
+  set_state "role:$(lower "$c"):$admin:$tl" true
+  set_state "role:$(lower "$c"):$admin:$deployer" false
+done
+set_state "role:$(lower "$GATEWAY_ADDRESS"):$root:$deployer" false
+codehash_of() { state "codehash:$(lower "$1")"; }
+jq -n --argjson chain "$(state chain)" --argjson delay "$TIMELOCK_MIN_DELAY" --arg t "$tl" --arg s "$safe" \
+  --arg e "$EMERGENCY_ADDRESS" --arg v "$VAULT_ADDRESS" --arg g "$GATEWAY_ADDRESS" --arg reg "$REGISTRY_ADDRESS" \
+  --arg r "$ROUTER_ADDRESS" --arg ic "$IC_POLICY_ADDRESS" --arg rc "$CONSENSUS_RECEIPT_ADDRESS" --arg gov "$GOVERNANCE_ADDRESS" \
+  --arg th "$hash" --arg sh "$(codehash_of "$safe")" --arg vh "$(codehash_of "$VAULT_ADDRESS")" \
+  --arg gh "$(codehash_of "$GATEWAY_ADDRESS")" --arg regh "$(codehash_of "$REGISTRY_ADDRESS")" \
+  --arg rh "$(codehash_of "$ROUTER_ADDRESS")" --arg ich "$(codehash_of "$IC_POLICY_ADDRESS")" \
+  --arg rch "$(codehash_of "$CONSENSUS_RECEIPT_ADDRESS")" --arg govh "$(codehash_of "$GOVERNANCE_ADDRESS")" \
+  '{chain_id: $chain, min_delay: $delay, timelock: $t, safe: $s,
+    addresses: {timelock: $t, safe: $s, emergency: $e, vault: $v, gateway: $g, registry: $reg, router: $r,
+                ic_policy: $ic, consensus_receipt: $rc, governance: $gov},
+    code_hashes: {timelock: $th, safe: $sh, vault: $vh, gateway: $gh, registry: $regh, router: $rh,
+                  ic_policy: $ich, consensus_receipt: $rch, governance: $govh}}' >"$DEPLOYMENT_OUT"
+echo "fake forge: handover done, manifest at $DEPLOYMENT_OUT"
+FAKEFORGE
+chmod +x "$WORK/forge"
+
 baseline() {
   local r
   {
     printf 'chain\t918453\nquorum\t2\ntotal\t2\ndelay\t120\n'
-    printf 'owner:%s\t%s\n' "$SAFE" "$APPROVER"
-    for r in "$GATEWAY" "$ROUTER" "$GOVERNANCE" "$RECEIPT" "$IC" "$TIMELOCK" "$SAFE" "$REGISTRY" "$VAULT"; do
+    printf 'owners:%s\t%s %s %s\n' "$(lc "$SAFE")" "$(lc "$APPROVER")" "$(lc "$APPROVER_B")" "$(lc "$APPROVER_C")"
+    printf 'threshold:%s\t2\n' "$(lc "$SAFE")"
+    printf 'singleton:%s\t%s\n' "$(lc "$SAFE")" "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"
+    printf 'handler:%s\t%s\n' "$(lc "$SAFE")" "$SAFE_HANDLER"
+    printf 'keystore:%s\t%s\n' approver "$APPROVER" approver-b "$APPROVER_B" approver-c "$APPROVER_C" \
+      submitter "$SUBMITTER" voter-a "$VOTER_A"
+    for r in "$GATEWAY" "$ROUTER" "$GOVERNANCE" "$RECEIPT" "$IC" "$TIMELOCK" "$REGISTRY" "$VAULT"; do
       printf 'codehash:%s\t%s\n' "$r" "$HASH"
     done
+    printf 'codehash:%s\t%s\n' "$SAFE" "$SAFE_PROXY_HASH"
     printf 'balance:%s\t2000000000000000000\nbalance:%s\t2000000000000000000\n' "$SUBMITTER" "$APPROVER"
     printf 'role:%s:%s:%s\ttrue\n' "$GATEWAY" "$AGENT" "$SUBMITTER" "$IC" "$COMMITTEE" "$SUBMITTER" \
       "$ROUTER" "$ADMIN" "$GOVERNANCE" "$TIMELOCK" "$PROPOSER" "$SAFE" "$TIMELOCK" "$EXECUTOR" "$SAFE"
@@ -429,16 +733,23 @@ baseline() {
   jq -n --arg g "$GATEWAY" --arg r "$ROUTER" --arg gov "$GOVERNANCE" --arg rc "$RECEIPT" --arg ic "$IC" \
     --arg t "$TIMELOCK" --arg s "$SAFE" --arg reg "$REGISTRY" --arg v "$VAULT" --arg d "$DEPLOYER" \
     --arg sub "$SUBMITTER" --arg ap "$APPROVER" --arg va "$VOTER_A" --arg vb "$VOTER_B" --arg e "$EMERGENCY" --arg h "$HASH" \
+    --arg apb "$APPROVER_B" --arg apc "$APPROVER_C" --arg keydir "$WORK/vkeys" --arg sh "$SAFE_PROXY_HASH" \
     '{chain_id: 918453, min_delay: 120, deployer: $d,
       addresses: {gateway: $g, router: $r, governance: $gov, consensus_receipt: $rc, ic_policy: $ic,
                   timelock: $t, safe: $s, registry: $reg, vault: $v, emergency: $e},
       code_hashes: {gateway: $h, router: $h, governance: $h, consensus_receipt: $h, ic_policy: $h,
-                    timelock: $h, safe: $h, registry: $h, vault: $h},
+                    timelock: $h, safe: $sh, registry: $h, vault: $h},
       vault_addresses: {rmUSDC: $v, rmPROTO: $v, rmAGENT: $v, rmRWA: $v},
-      ephemeral: {submitter: $sub, approver: $ap, voters: [$va, $vb], emergency: $e}}' >"$WORK/record.json"
+      ephemeral: {submitter: $sub, approver: $ap, voters: [$va, $vb], emergency: $e, keystore_dir: $keydir,
+                 safe_signers: [{role: "approver", address: $ap}, {role: "approver-b", address: $apb},
+                                {role: "approver-c", address: $apc}]}}' >"$WORK/record.json"
+  rm -rf "$WORK/vkeys"; mkdir -p "$WORK/vkeys"
+  local role
+  for role in approver approver-b approver-c submitter voter-a; do : >"$WORK/vkeys/$role"; : >"$WORK/vkeys/$role.pw"; done
 }
 
 lc() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
+state_of() { awk -F'\t' -v k="$1" '$1 == k { v = $2 } END { print v }' "$WORK/state"; }
 set_state() { grep -v -F "$1"$'\t' "$WORK/state" >"$WORK/state.new" || true; printf '%s\t%s\n' "$1" "$2" >>"$WORK/state.new"; mv "$WORK/state.new" "$WORK/state"; }
 
 run_verify() {
@@ -467,6 +778,18 @@ expect_fail() {
   fi
 }
 
+# expect_summary <name> <rc>: verify's own tail line was printed and it exited
+# exactly <rc>, so the run ended in verify's summary rather than in an abort.
+expect_summary() {
+  local name="$1" want="$2" rc=0
+  run_verify || rc=$?
+  if [[ "$rc" == "$want" ]] && grep -qE '^verify: ([0-9]+ assertion\(s\) failed|every assertion passed)' "$WORK/out"; then
+    PASSED=$((PASSED + 1)); echo "ok   $name reaches verify's summary line (exit $rc)"
+  else
+    FAILED=$((FAILED + 1)); echo "FAIL $name: exit $rc, summary line $(grep -c '^verify: ' "$WORK/out") time(s)"; tail -3 "$WORK/out"
+  fi
+}
+
 expect_ok
 
 baseline; set_state "role:$(lc "$ROUTER"):$ADMIN:$(lc "$GOVERNANCE")" false
@@ -481,8 +804,64 @@ expect_fail "placeholder quorum of 1" "quorumThreshold >= 2"
 baseline; set_state "logs:$(lc "$IC"):$COMMITTEE" "$SUBMITTER $VOTER_A"; set_state "role:$(lc "$IC"):$COMMITTEE:$(lc "$VOTER_A")" true
 expect_fail "a voter who is also a committee agent" "committee agents and non-zero voters are disjoint"
 
-baseline; set_state "owner:$(lc "$SAFE")" "$DEPLOYER"
-expect_fail "a safe the approver does not drive" "approver is the only key"
+# governance-isomorphism.md §4.4: the Safe is graded from the Safe.
+baseline; set_state "threshold:$(lc "$SAFE")" 1
+expect_fail "a 1-of-3 Safe" "safe threshold is 2"
+baseline; set_state "threshold:$(lc "$SAFE")" 1
+expect_fail "a 1-of-3 Safe that one key can drive" "one owner signature cannot drive the safe"
+baseline; set_state "owners:$(lc "$SAFE")" "$(lc "$APPROVER") $(lc "$APPROVER_B") $(lc "$DEPLOYER")"
+expect_fail "a Safe whose owners are not the record's signers" "safe owners are exactly the record's signers"
+baseline; set_state "singleton:$(lc "$SAFE")" "0x41675C099F32341bf84BFc5382aF534df5C7461a"
+expect_fail "a Safe on the L1 singleton" "safe delegates to the SafeL2 singleton"
+baseline; set_state safe_accepts_anything true
+expect_fail "a Safe that executes on one signature (quorum configured, not enforced)" "one owner signature cannot drive the safe"
+# The positive twin is what makes the reverts evidence of quorum: a Safe that
+# refuses even threshold signatures (its call reverts GS013) must fail it,
+# while the three negative controls still pass on their own revert codes.
+baseline; set_state safe_inner_revert true
+expect_fail "a Safe that cannot execute even with threshold signatures" "threshold owner signatures can drive the safe (eth_call reverted"
+# A control passes on its exact GS code only. A Safe that reverts everything
+# with no code at all proves nothing about quorum.
+baseline; set_state safe_reverts_all true
+expect_fail "a Safe that reverts every call without a GS code (one signature)" "one owner signature cannot drive the safe (reverted, but not GS020"
+expect_fail "a Safe that reverts every call without a GS code (repeated signature)" "one owner's signature twice cannot drive the safe (reverted, but not GS026"
+expect_fail "a Safe that reverts every call without a GS code (non-owners)" "two non-owner signatures cannot drive the safe (reverted, but not GS026"
+# A GS026 where GS020 is owed is not the quorum rule either.
+baseline; set_state "threshold:$(lc "$SAFE")" 1; set_state "owners:$(lc "$SAFE")" "$(lc "$APPROVER_B") $(lc "$APPROVER")"
+expect_fail "a one-signature control answered by the owner check, not the threshold" "one owner signature cannot drive the safe"
+baseline; rm -f "$WORK/vkeys/approver-b"
+expect_fail "signer keystores gone: quorum enforcement unproven, not assumed" "one owner signature cannot drive the safe"
+baseline; set_state "owners:$(lc "$SAFE")" ""
+expect_fail "a Safe with no readable owner set" "safe owners are exactly the record's signers"
+baseline; jq --arg d "$DEPLOYER" '.ephemeral.safe_signers[2].address = $d' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
+expect_fail "the deployer reused as a Safe signer" "are distinct"
+
+# R12 beyond the configuration: the code at the Safe address, its modules, its
+# guard and its fallback handler are all read from chain, and a Safe that
+# accepts a repeated or a non-owner signature is caught by its GS026 controls.
+baseline; set_state "codehash:$(lc "$SAFE")" "$HASH"
+jq --arg h "$HASH" '.code_hashes.safe = $h' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
+expect_fail "a fake Safe (not SafeProxy code) the record agrees with" "safe runtime code is the canonical SafeProxy v1.4.1"
+baseline; set_state "modules:$(lc "$SAFE")" "$DEPLOYER"
+expect_fail "a Safe with a module enabled" "safe has no modules enabled"
+baseline; set_state "guard:$(lc "$SAFE")" "$DEPLOYER"
+expect_fail "a Safe with a guard set" "safe has no guard set"
+baseline; set_state "handler:$(lc "$SAFE")" "$DEPLOYER"
+expect_fail "a Safe with a non-canonical fallback handler" "fallback handler is the canonical CompatibilityFallbackHandler"
+baseline; set_state safe_accepts_duplicates true
+expect_fail "a Safe that counts one owner's signature twice" "one owner's signature twice cannot drive the safe"
+baseline; set_state safe_accepts_non_owners true
+expect_fail "a Safe that counts non-owner signatures" "two non-owner signatures cannot drive the safe"
+baseline; rm -f "$WORK/vkeys/voter-a.pw"
+expect_fail "non-owner keystores gone: the non-owner control is unproven, not assumed" "two non-owner signatures cannot drive the safe"
+# Item 2 of the #1447 review: an unreadable Safe is a list of FAIL lines and the
+# summary, never a silent abort half way through verify.
+baseline; set_state "unreadable:$(lc "$SAFE")" true
+expect_fail "an unreadable Safe" "safe threshold is 2"
+expect_summary "an unreadable Safe" 1
+baseline; set_state nonce_unreadable true
+expect_fail "a Safe whose nonce() cannot be read" "one owner signature cannot drive the safe (unproven: could not read nonce()"
+expect_summary "a Safe whose nonce() cannot be read" 1
 
 baseline; set_state "role:$(lc "$RECEIPT"):$ADMIN:$(lc "$DEPLOYER")" true
 expect_fail "deployer keeping receipt ADMIN_ROLE" "deployer holds no ADMIN_ROLE on consensus_receipt"
@@ -507,6 +886,229 @@ else FAILED=$((FAILED + 1)); echo "FAIL a revoked role was reported as held"; gr
 baseline; jq --arg rwa "$(a 16)" '.vault_addresses.rmRWA = $rwa' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
 expect_fail "a demo vault the timelock does not administer" "timelock holds ADMIN_ROLE on vault $(a 16)"
 
+# ─── ensure ──────────────────────────────────────────────────────────────────
+# ensure verifies a live ceremony and provisions only a FRESH chain. A chain
+# whose recorded timelock/Safe still has code but whose ceremony cannot be
+# driven (a keystore or password gone) must be refused with exit 65 and the
+# reboot instruction, before a single key is minted.
+run_ensure() {
+  set +e
+  FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" \
+    "$CEREMONY" ensure --record "$WORK/record.json" --summary "$WORK/no-summary.log" \
+    --out-dir "$WORK/ensure-out" --rpc-url http://fake >"$WORK/out" 2>&1
+  local rc=$?
+  set -e
+  return $rc
+}
+ensure_refused() {
+  local name="$1" rc=0
+  rm -rf "$WORK/ensure-out"; mkdir -p "$WORK/ensure-out"
+  run_ensure || rc=$?
+  if [[ "$rc" == 65 ]] && grep -q "reboot the devnet (chain down/up)" "$WORK/out" \
+     && grep -qF "stale record: $WORK/record.json" "$WORK/out" \
+     && ! grep -q '^wallet_new_called' "$WORK/state" && [[ ! -e "$WORK/ensure-out/keys" ]]; then
+    PASSED=$((PASSED + 1)); echo "ok   ensure on $name is refused (exit 65, names the stale record, reboot the devnet, no key minted)"
+  else
+    FAILED=$((FAILED + 1)); echo "FAIL ensure on $name: exit $rc"; tail -3 "$WORK/out"
+  fi
+}
+
+baseline
+if run_ensure && grep -q "ceremony is live on this chain; provisioning nothing" "$WORK/out" \
+   && grep -q "^verify: every assertion passed" "$WORK/out"; then
+  PASSED=$((PASSED + 1)); echo "ok   ensure on a live ceremony provisions nothing and verifies"
+else
+  FAILED=$((FAILED + 1)); echo "FAIL ensure on a live ceremony"; tail -3 "$WORK/out"
+fi
+baseline; rm -f "$WORK/vkeys/submitter"
+ensure_refused "a used chain (recorded timelock and Safe have code, submitter key gone)"
+baseline; rm -f "$WORK/vkeys/approver-c"
+ensure_refused "a used chain whose approver-c keystore is gone"
+baseline; rm -f "$WORK/vkeys/approver-c.pw"
+ensure_refused "a used chain whose approver-c password is gone"
+baseline; rm -f "$WORK/vkeys/approver-c"; set_state "codehash:$(lc "$TIMELOCK")" 0x00
+ensure_refused "a used chain where only the recorded Safe still has code"
+# voter-a is not a Safe owner, but verify's GS026 non-owner control signs with
+# its keystore. A ceremony missing it can never verify, so it is not live.
+baseline; rm -f "$WORK/vkeys/voter-a.pw"
+ensure_refused "a used chain whose voter-a password (a non-owner control key) is gone"
+# Code at the recorded timelock ADDRESS is evidence only when it is the recorded
+# ceremony's timelock. The deployer CREATEs the timelock, so a rebooted chain
+# whose deployer nonce reaches the same count puts another contract there.
+# Refusing that chain would refuse every fresh chain after it forever.
+baseline; rm -f "$WORK/vkeys/approver-c"; set_state "codehash:$(lc "$SAFE")" 0x00
+set_state "role:$(lc "$TIMELOCK"):$PROPOSER:$(lc "$SAFE")" false
+ensure_refused "a used chain whose recorded timelock still carries the record's code hash"
+baseline; rm -f "$WORK/vkeys/approver-c"; set_state "codehash:$(lc "$SAFE")" 0x00
+set_state "codehash:$(lc "$TIMELOCK")" 0xbeef
+jq 'del(.code_hashes.timelock)' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
+ensure_refused "a used chain whose recorded timelock (no recorded hash) still makes the recorded Safe its proposer"
+baseline; rm -f "$WORK/vkeys/approver-c"; set_state "codehash:$(lc "$SAFE")" 0x00
+set_state "codehash:$(lc "$TIMELOCK")" 0xbeef; set_state "role:$(lc "$TIMELOCK"):$PROPOSER:$(lc "$SAFE")" false
+rc=0; rm -rf "$WORK/ensure-out"; mkdir -p "$WORK/ensure-out"; run_ensure || rc=$?
+if grep -q "summary not found" "$WORK/out" && ! grep -q "reboot the devnet" "$WORK/out" \
+   && grep -q "holds other code (not the recorded ceremony's timelock)" "$WORK/out"; then
+  PASSED=$((PASSED + 1)); echo "ok   ensure on a fresh chain with other code at the recorded timelock address goes on to provision (exit $rc at the missing summary)"
+else
+  FAILED=$((FAILED + 1)); echo "FAIL ensure on a fresh chain with other code at the recorded timelock address: exit $rc"; tail -3 "$WORK/out"
+fi
+# An RPC that does not answer is exit 66 naming the URL, never the reboot
+# instruction: an unreachable node says nothing about the chain behind it.
+baseline; set_state rpc_down true
+rc=0; rm -rf "$WORK/ensure-out"; mkdir -p "$WORK/ensure-out"; run_ensure || rc=$?
+if [[ "$rc" == 66 ]] && grep -qF "rpc unreachable: http://fake" "$WORK/out" && ! grep -q "reboot the devnet" "$WORK/out" \
+   && ! grep -q '^wallet_new_called' "$WORK/state"; then
+  PASSED=$((PASSED + 1)); echo "ok   ensure on an unreachable RPC exits 66 naming the URL, not the reboot instruction"
+else
+  FAILED=$((FAILED + 1)); echo "FAIL ensure on an unreachable RPC: exit $rc"; tail -3 "$WORK/out"
+fi
+# The positive twin: the same missing keystore on a REBOOTED chain (neither the
+# timelock nor the Safe has code) is not refused as used; ensure goes on to
+# provision, which in this harness stops at the missing summary.
+baseline; rm -f "$WORK/vkeys/approver-c"
+set_state "codehash:$(lc "$TIMELOCK")" 0x00; set_state "codehash:$(lc "$SAFE")" 0x00
+rc=0; rm -rf "$WORK/ensure-out"; mkdir -p "$WORK/ensure-out"; run_ensure || rc=$?
+if grep -q "summary not found" "$WORK/out" && ! grep -q "reboot the devnet" "$WORK/out"; then
+  PASSED=$((PASSED + 1)); echo "ok   ensure on a rebooted chain goes on to provision (exit $rc at the missing summary)"
+else
+  FAILED=$((FAILED + 1)); echo "FAIL ensure on a rebooted chain: exit $rc"; tail -3 "$WORK/out"
+fi
+
+# ─── run: the key-minting preflight and the unrecorded-key trap ──────────────
+# `run` mints seven funded keys. A chain that cannot hold the Safe, or that was
+# already handed over, must be refused before the first one; and a run that
+# dies after minting but before its record names them must shred them.
+DEPLOYER_KEY="$(sed -n '/pub const DEPLOYER_PRIVATE_KEY_HEX/{n;p}' "$HERE/../../../testing/smoke-test/src/lib.rs" | tr -d ' ";')"
+run_baseline() {
+  baseline
+  set_state "privkey:$(lc "$DEPLOYER_KEY")" "$DEPLOYER"
+  set_state "role:$(lc "$GATEWAY"):$ADMIN:$(lc "$DEPLOYER")" true
+  local s
+  for s in 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99; do
+    set_state "codehash:$(lc "$s")" "$HASH"
+  done
+  {
+    printf 'gateway_addr=%s\nvault_addr=%s\nregistry_addr=%s\nrouter_addr=%s\n' "$GATEWAY" "$VAULT" "$REGISTRY" "$ROUTER"
+    printf 'governance_addr=%s\nic_policy_addr=%s\nconsensus_receipt_addr=%s\nadmin_addr=%s\n' "$GOVERNANCE" "$IC" "$RECEIPT" "$DEPLOYER"
+    printf 'vault_addresses_json={"rmUSDC":"%s","rmPROTO":"%s","rmAGENT":"%s","rmRWA":"%s"}\n' "$VAULT" "$VAULT" "$VAULT" "$VAULT"
+    printf -- '--- end endpoint summary ---\n'
+  } >"$WORK/summary.log"
+  rm -rf "$WORK/run-out"; mkdir -p "$WORK/run-out"
+}
+run_run() {
+  set +e
+  FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" FORGE="$WORK/forge" \
+    "$CEREMONY" run --summary "$WORK/summary.log" --out-dir "$WORK/run-out" --rpc-url http://fake >"$WORK/out" 2>&1
+  local rc=$?
+  set -e
+  return $rc
+}
+key_files_left() { find "$WORK/run-out" -path '*/keys/*' -type f 2>/dev/null | wc -l | tr -d ' '; }
+run_refused_before_keys() {
+  local name="$1" needle="$2" rc=0
+  run_run || rc=$?
+  if [[ "$rc" == 65 ]] && grep -qF -- "$needle" "$WORK/out" && [[ "$(key_files_left)" == 0 ]] \
+     && ! grep -q '^wallet_new_called' "$WORK/state"; then
+    PASSED=$((PASSED + 1)); echo "ok   run on $name is refused before any key is minted"
+  else
+    FAILED=$((FAILED + 1)); echo "FAIL run on $name: exit $rc, $(key_files_left) key file(s) left"; tail -3 "$WORK/out"
+  fi
+}
+
+run_baseline; set_state "codehash:0x29fcb43b46531bca003ddc8fcb67ffe91900c762" 0x00
+run_refused_before_keys "a chain without the SafeL2 singleton" "lacks the Safe v1.4.1 set"
+run_baseline; set_state "role:$(lc "$GATEWAY"):$ADMIN:$(lc "$DEPLOYER")" false
+run_refused_before_keys "a chain already handed over to a timelock" "reboot the devnet (chain down/up)"
+run_baseline; set_state "logs:0x4e1dcf7ad4e460cfd30791ccc4f9c8a4f820ec67:none" "$SAFE"
+run_refused_before_keys "a chain where the factory already created a Safe" "reboot the devnet (chain down/up)"
+# Every key is minted, then funding them fails (the fake chain refuses a bare
+# value transfer): the run dies before its record exists, and must leave no
+# keystore and no password behind.
+run_baseline; set_state wallet_new_ok true
+rc=0; run_run || rc=$?
+if [[ "$rc" != 0 && "$(state_of walletseq)" == 7 && "$(key_files_left)" == 0 ]] \
+   && grep -q "shredded the unrecorded keys" "$WORK/out" && ! grep -q '^wallet_new_argv_password' "$WORK/state"; then
+  PASSED=$((PASSED + 1)); echo "ok   a run that dies after minting 7 keys shreds them all (exit $rc; passwords never on argv)"
+else
+  FAILED=$((FAILED + 1)); echo "FAIL failed run: exit $rc, $(state_of walletseq) keys minted, $(key_files_left) key file(s) left, argv password: $(state_of wallet_new_argv_password)"
+  tail -3 "$WORK/out"
+fi
+
+# The other side of the trap: a run that DOES write its record keeps every key
+# it names. The fake chain accepts run's writes and the fake forge performs the
+# handover, so `run` goes all the way through its own verify. Every keystore
+# and password must survive under the recorded keystore_dir, and the record
+# must name each key's address. Deleting the trap-lift lines in `run` shreds
+# them on the way out and fails this case.
+RUN_ROLES=(submitter approver approver-b approver-c voter-a voter-b emergency)
+NEW_SAFE=$(a 48); NEW_TIMELOCK=$(a 49)
+run_baseline; set_state wallet_new_ok true; set_state accept_sends true
+set_state create_safe_at "$NEW_SAFE"; set_state safe_proxy_hash "$SAFE_PROXY_HASH"; set_state ic_policy "$IC"
+set_state forge_timelock "$NEW_TIMELOCK"; set_state forge_codehash "$HASH"
+rc=0; run_run || rc=$?
+RUN_RECORD="$WORK/run-out/fusion-stage-record.json"
+RUN_KEYDIR="$(jq -r '.ephemeral.keystore_dir // empty' "$RUN_RECORD" 2>/dev/null || true)"
+missing=""; unnamed=""
+for role in "${RUN_ROLES[@]}"; do
+  [[ -n "$RUN_KEYDIR" && -s "$RUN_KEYDIR/$role" && -s "$RUN_KEYDIR/$role.pw" ]] || missing+="$role "
+  role_addr="$(state_of "keystore:$role")"
+  [[ -n "$role_addr" ]] && jq -e --arg a "$(lc "$role_addr")" \
+      '[.. | strings | ascii_downcase] | index($a) != null' "$RUN_RECORD" >/dev/null 2>&1 || unnamed+="$role "
+done
+if [[ "$rc" == 0 && "$RUN_KEYDIR" == "$WORK/run-out/keys/"* && -z "$missing" && -z "$unnamed" \
+      && "$(key_files_left)" == $(( 2 * ${#RUN_ROLES[@]} )) ]] \
+   && grep -q "^verify: every assertion passed" "$WORK/out" && ! grep -q "shredded" "$WORK/out"; then
+  PASSED=$((PASSED + 1)); echo "ok   a run that writes its record keeps all ${#RUN_ROLES[@]} keystores and passwords, and the record names each"
+else
+  FAILED=$((FAILED + 1))
+  echo "FAIL successful run: exit $rc, keydir '${RUN_KEYDIR}', missing: ${missing:-none}, unnamed: ${unnamed:-none}, $(key_files_left) key file(s)"
+  grep -E "^FAIL|shredded" "$WORK/out" | head -5; tail -3 "$WORK/out"
+fi
+
+# SIGTERM to a `run` that is blocked inside cast, after every key is minted and
+# before any record names them. The TERM trap must turn the signal into a
+# normal exit 143, and the EXIT trap must then shred every key.
+#
+# How the run ENDS is asserted, not only its status. Bash runs an EXIT trap
+# even when a signal kills it, so the keys are shredded either way; what the
+# TERM trap adds is that the run exits 143 on its own terms (the EXIT trap
+# sees 143) instead of dying by the signal (the EXIT trap sees whatever $? was
+# last, and bash re-raises SIGTERM). A shell `wait` reports 143 for both, so a
+# perl waiter reports which one happened. Deleting the INT/TERM traps turns
+# "exited 143" into "signaled 15": this case fails.
+RUN_WAITER='my ($pidfile, $statusfile, @cmd) = @ARGV;
+my $pid = fork; defined $pid or die "fork: $!";
+if (!$pid) { exec { $cmd[0] } @cmd or die "exec: $!" }
+open(my $p, ">", $pidfile) or die; print $p $pid; close $p;
+waitpid($pid, 0); my $s = $?;
+open(my $o, ">", $statusfile) or die;
+print $o (($s & 127) ? "signaled " . ($s & 127) : "exited " . ($s >> 8)); close $o;
+exit(($s & 127) ? 128 + ($s & 127) : $s >> 8);'
+run_baseline; set_state wallet_new_ok true; set_state pause_on_value true
+rm -f "$WORK/state.paused" "$WORK/state.release" "$WORK/run.pid" "$WORK/run.status"
+FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" FORGE="$WORK/forge" \
+  perl -e "$RUN_WAITER" "$WORK/run.pid" "$WORK/run.status" \
+  "$CEREMONY" run --summary "$WORK/summary.log" --out-dir "$WORK/run-out" --rpc-url http://fake >"$WORK/out" 2>&1 &
+WAITER_PID=$!
+for _ in $(seq 1 300); do [[ -e "$WORK/state.paused" && -s "$WORK/run.pid" ]] && break; sleep 0.1; done
+paused=0; [[ -e "$WORK/state.paused" && -s "$WORK/run.pid" ]] && paused=1
+keys_before="$(key_files_left)"
+if (( paused )); then kill -TERM "$(cat "$WORK/run.pid")" 2>/dev/null || true; fi
+sleep 0.5
+touch "$WORK/state.release"
+rc=0; wait "$WAITER_PID" || rc=$?
+sleep 0.3   # let a released fake cast finish before the next case touches its state
+ended="$(cat "$WORK/run.status" 2>/dev/null || echo "no status")"
+rm -f "$WORK/state.paused" "$WORK/state.release"
+if [[ "$paused" == 1 && "$keys_before" == $(( 2 * ${#RUN_ROLES[@]} )) && "$rc" == 143 && "$ended" == "exited 143" \
+      && "$(key_files_left)" == 0 ]] && grep -q "shredded the unrecorded keys" "$WORK/out"; then
+  PASSED=$((PASSED + 1)); echo "ok   SIGTERM to a run paused inside cast exits 143 and shreds all ${keys_before} key files"
+else
+  FAILED=$((FAILED + 1))
+  echo "FAIL SIGTERM to a paused run: paused=$paused, $keys_before key file(s) before, exit $rc ($ended), $(key_files_left) key file(s) left"
+  tail -3 "$WORK/out"
+fi
+
 echo "fusion-ceremony selftest: $PASSED passed, $FAILED failed"
 
 # ─── propose / propose-negative / vote / execute / jump_to ──────────────────
@@ -522,7 +1124,7 @@ gov_ok() {
   local name="$1" rc=0
   run_action || rc=$?
   if [[ "$rc" == 0 ]]; then GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   $name"
-  else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: exited $rc — $(tail -5 "$WORK/out" "$WORK/err")"; fi
+  else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: exited $rc — $(cat "$WORK/out" "$WORK/err" | tail -5)"; fi
 }
 gov_fail_needle() {
   local name="$1" needle="$2" rc=0
@@ -549,25 +1151,33 @@ gov_baseline() {
     for r in "$GOVERNANCE" "$TIMELOCK" "$SAFE" "$ROUTER"; do printf 'codehash:%s\t%s\n' "$r" "$HASH"; done
     printf 'power:%s\t1\npower:%s\t1\n' "$VOTER_A" "$VOTER_B"
     printf 'keystore:approver\t%s\n' "$APPROVER"
+    printf 'keystore:approver-b\t%s\n' "$APPROVER_B"
+    printf 'keystore:approver-c\t%s\n' "$APPROVER_C"
     printf 'keystore:voter-a\t%s\n' "$VOTER_A"
     printf 'keystore:voter-b\t%s\n' "$VOTER_B"
+    printf 'owners:%s\t%s %s %s\n' "$(lc "$SAFE")" "$(lc "$APPROVER")" "$(lc "$APPROVER_B")" "$(lc "$APPROVER_C")"
+    printf 'threshold:%s\t2\n' "$(lc "$SAFE")"
   } >"$WORK/state"
   rm -rf "$WORK/out-dir"
   mkdir -p "$WORK/out-dir"
   mkdir -p "$WORK/keys"
   : >"$WORK/keys/approver"; : >"$WORK/keys/approver.pw"
+  : >"$WORK/keys/approver-b"; : >"$WORK/keys/approver-b.pw"
+  : >"$WORK/keys/approver-c"; : >"$WORK/keys/approver-c.pw"
   : >"$WORK/keys/voter-a"; : >"$WORK/keys/voter-a.pw"
   : >"$WORK/keys/voter-b"; : >"$WORK/keys/voter-b.pw"
   jq -n --arg gov "$GOVERNANCE" --arg t "$TIMELOCK" --arg s "$SAFE" --arg r "$ROUTER" --arg d "$DEPLOYER" \
     --arg sub "$SUBMITTER" --arg ap "$APPROVER" --arg va "$VOTER_A" --arg vb "$VOTER_B" --arg e "$EMERGENCY" \
-    --arg keydir "$WORK/keys" --arg run "selftest" \
+    --arg keydir "$WORK/keys" --arg run "selftest" --arg apb "$APPROVER_B" --arg apc "$APPROVER_C" \
     --arg vagent "$VAULT_AGENT" --arg vusdc "$VAULT_USDC" --arg vproto "$VAULT_PROTO" --arg vrwa "$VAULT_RWA" \
     '{chain_id: 918453, min_delay: 120, deployer: $d, run_id: $run,
       addresses: {gateway: $t, router: $r, governance: $gov, consensus_receipt: $t, ic_policy: $t,
                   timelock: $t, safe: $s, registry: $t, vault: $vusdc, emergency: $e},
       code_hashes: {},
       vault_addresses: {rmUSDC: $vusdc, rmPROTO: $vproto, rmAGENT: $vagent, rmRWA: $vrwa},
-      ephemeral: {submitter: $sub, approver: $ap, voters: [$va, $vb], emergency: $e, keystore_dir: $keydir}}' \
+      ephemeral: {submitter: $sub, approver: $ap, voters: [$va, $vb], emergency: $e, keystore_dir: $keydir,
+                 safe_signers: [{role: "approver", address: $ap}, {role: "approver-b", address: $apb},
+                                {role: "approver-c", address: $apc}]}}' \
     >"$WORK/record.json"
 }
 
@@ -602,6 +1212,9 @@ run_action() {
   return $rc
 }
 # gov_fail_needle greps stdout+stderr combined, since `die` writes to stderr.
+# A bare `run_action` that only SEEDS a later case carries `|| true`: a seed
+# that fails must leave the case after it to fail and be counted, not abort the
+# whole run under set -e and hide every case after it.
 run_action_combined() { run_action; local rc=$?; mv "$WORK/out.combined" "$WORK/out"; return $rc; }
 
 echo "--- propose / propose-negative ---"
@@ -656,7 +1269,7 @@ jq '.drafts[0].vaults[0].weight_bps = 834 | .drafts[0].vaults[1].weight_bps = 81
 other_calldata="$("$REAL_CAST" calldata 'propose(address[],uint256[])' \
   "[$VAULT_AGENT,$VAULT_USDC,$VAULT_PROTO,$VAULT_RWA]" "[834,8166,667,333]")"
 jq --arg cd "$other_calldata" '.drafts[0].propose_calldata = $cd' "$WORK/draft.json" >"$WORK/d2" && mv "$WORK/d2" "$WORK/draft.json"
-run_action >/dev/null 2>&1   # a live Active proposal from ANOTHER draft
+run_action >/dev/null 2>&1 || true   # a live Active proposal from ANOTHER draft
 write_draft "$RECEIPT_A"
 gov_fail_needle "propose refuses to call another draft's live proposal its own" "stored proposal bps do not equal the draft's"
 
@@ -711,7 +1324,7 @@ else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL release rerun: exited nonzero �
 
 echo "--- vote ---"
 gov_baseline; write_draft "$RECEIPT_A"
-ACTION=propose; run_action >/dev/null 2>&1   # seed a fresh Active proposal first
+ACTION=propose; run_action >/dev/null 2>&1 || true   # seed a fresh Active proposal first
 ACTION=vote
 gov_ok "vote drives both voters to quorum"
 [[ "$(json_field .quorum_reached)" == "true" && "$(json_field .votes_for)" == "2" ]] \
@@ -829,7 +1442,7 @@ echo "--- vote: the quorum rule itself has to be on chain ---"
 # The fake chain's execute() keeps its VotingStillOpen and its delay checks and
 # drops only the tally check, which is exactly the contract a VotingStillOpen
 # assertion would have passed.
-ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
+ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1 || true
 set_state no_quorum_rule true
 ACTION=vote
 gov_fail_needle "vote refuses a governance with no quorum rule" "not with QuorumNotReached"
@@ -839,11 +1452,13 @@ echo "--- execute: the weights-unchanged witness across the whole cycle ---"
 # propose took only reaches execute on disk. These two cases are what makes that
 # file worth reading: one where a witness disagrees, and one where there is none.
 seed_witnessed_cycle() {
-  ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
-  ACTION=vote; run_action >/dev/null 2>&1
+  ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1 || true
+  ACTION=vote; run_action >/dev/null 2>&1 || true
   ACTION=execute
 }
-witness_file_path() { ls "$WORK/out-dir/weight-witness/"*.jsonl 2>/dev/null | head -1; }
+# Never fails: a cycle that left no witness file (because the action under test
+# broke) must fail the case that reads it, not abort the run under set -e.
+witness_file_path() { ls "$WORK/out-dir/weight-witness/"*.jsonl 2>/dev/null | head -1 || true; }
 
 # A witness that disagrees is a router whose weights MOVED before execute —
 # exactly the breach G08 exists to detect. It must stop the ceremony, never come
@@ -910,7 +1525,7 @@ rm -f "$WORK/out-dir/weight-witness"
 # A witness that cannot be READ: the router stops answering getWeights() at the
 # instant vote-b's vote is already mined. Both votes are irreversible, so the
 # action has to come back with them rather than exit on the reading.
-ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
+ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1 || true
 ACTION=vote; set_state getweights_fails true
 gov_ok "vote still reports both votes when the router will not answer the witness read"
 set_state getweights_fails false
@@ -926,8 +1541,7 @@ set_state getweights_fails false
 # transition and must still refuse to call the clause proved.
 seed_witnessed_cycle
 WF="$(witness_file_path)"
-{ head -1 "$WF" | cut -c1-30 | tr -d '\n'; tail -n +2 "$WF"; } >"$WF.truncated"
-mv "$WF.truncated" "$WF"
+{ head -1 "$WF" | cut -c1-30 | tr -d '\n'; tail -n +2 "$WF"; } >"$WF.truncated" && mv "$WF.truncated" "$WF" || true
 gov_ok "execute still runs the transition over a truncated witness line"
 [[ "$(json_field .action)" == "executed" \
    && "$(json_field .weights_unchanged_until_execute.asserted)" == "false" \
@@ -949,6 +1563,75 @@ gov_ok "execute still runs the transition over a propose-less witness file"
   && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   vote witnesses alone cannot carry the weights-unchanged claim"; } \
   || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL propose-less execute claimed $(json_field_c .weights_unchanged_until_execute)"; }
 
+# ─── the Safe signing path (issue #1447) ─────────────────────────────────────
+# release is the other Safe -> timelock caller. The fake Safe forwards nothing
+# unless execTransaction carries `threshold` owner signatures over its own
+# digest, ascending — so each case below is graded by what the Safe accepted.
+run_release() {
+  set +e
+  FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" \
+    "$CEREMONY" release --record "$WORK/record.json" --receipt-id "$RECEIPT_A" --rpc-url http://fake \
+    >"$WORK/out" 2>"$WORK/err"
+  local rc=$?
+  set -e
+  cat "$WORK/out" "$WORK/err" >"$WORK/out.combined" 2>/dev/null || true
+  return $rc
+}
+release_ok() {
+  local name="$1"
+  if run_release && [[ "$(jq -r .action "$WORK/out")" == "released_via_timelock" ]] \
+     && [[ "$(awk -F'\t' -v k="released:$(lc "$RECEIPT_A")" '$1 == k { print $2 }' "$WORK/state")" == "true" ]]; then
+    GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   $name"
+  else
+    GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: $(tail -3 "$WORK/out.combined")"
+  fi
+}
+release_refused() {
+  # release_refused <name> <needle> [exit code the refusal must carry]
+  local name="$1" needle="$2" want_rc="${3:-}" rc=0
+  run_release || rc=$?
+  if [[ "$rc" == 0 ]]; then
+    GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: release exited 0"
+  elif [[ -n "$want_rc" && "$rc" != "$want_rc" ]]; then
+    GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: refused with exit $rc, not $want_rc — $(tail -2 "$WORK/out.combined")"
+  elif grep -qF -- "$needle" "$WORK/out.combined"; then
+    GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   $name is refused${want_rc:+ (exit $want_rc)}"
+  else
+    GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: refused without naming '$needle' — $(tail -3 "$WORK/out.combined")"
+  fi
+}
+
+gov_baseline
+release_ok "release schedules and executes through a 2-of-3 Safe (signers packed by address, not record order)"
+[[ "$(awk -F'\t' -v k="safenonce:$(lc "$SAFE")" '$1 == k { print $2 }' "$WORK/state")" == "2" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   release spent exactly two Safe nonces (schedule, execute)"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL release left Safe nonce at $(awk -F'\t' -v k="safenonce:$(lc "$SAFE")" '$1 == k { print $2 }' "$WORK/state")"; }
+
+gov_baseline; set_state "threshold:$(lc "$SAFE")" 1
+release_refused "a Safe reporting threshold 1" "cannot enforce quorum"
+
+gov_baseline
+jq '.ephemeral.safe_signers |= .[:1]' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
+release_refused "a record naming a single Safe signer" "2 are needed"
+
+# approver-c is the lowest owner, so it is always one of the two signers.
+gov_baseline; rm -f "$WORK/keys/approver-c"
+release_refused "a discarded Safe signer keystore" "safe signer keystore is gone" 65
+gov_baseline; rm -f "$WORK/keys/approver-b.pw"
+release_refused "a Safe signer whose password file is gone" "safe signer keystore is gone" 65
+# A Safe that reverts after the signatures pass (GS013): release must stop
+# there, not report a release the chain never made.
+gov_baseline; set_state safe_inner_revert true
+release_refused "a Safe transaction whose call reverts" "GS013"
+# v 0/1 is a contract or approved-hash signature to Safe, not an ECDSA one.
+gov_baseline; set_state sign_v 01
+release_refused "a signer that returns v=0x01" "not 0x1b/0x1c" 66
+
+# The Safe itself, not the ceremony, is the last line: an owner set that does
+# not include a signer the record names makes the Safe refuse (GS026).
+gov_baseline; set_state "owners:$(lc "$SAFE")" "$(lc "$APPROVER") $(lc "$APPROVER_B") $(lc "$DEPLOYER")"
+release_refused "a record signer the Safe does not list as an owner" "GS026"
+
 echo "governance actions selftest: $GOV_PASSED passed, $GOV_FAILED failed"
 
 # ─── test-the-test: prove two of the new assertions actually gate something ──
@@ -960,7 +1643,7 @@ STUB_PASSED=0; STUB_FAILED=0
 CEREMONY_BACKUP="$WORK/fusion-ceremony.sh.orig"
 cp "$CEREMONY" "$CEREMONY_BACKUP"
 restore_ceremony() { cp "$CEREMONY_BACKUP" "$CEREMONY"; }
-trap 'restore_ceremony; rm -rf "$WORK"' EXIT
+RESTORE_ON_EXIT=1
 
 patch_literal() {
   # patch_literal <needle> <replacement>: exact, non-regex text substitution,
@@ -997,8 +1680,8 @@ echo "--- test-the-test: execute too-early negative ---"
 # scenario is now silently accepted. A check on the reported error string would
 # be a tautology — the stub is the only thing that produces that string.
 seed_too_early_chain() {
-  ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
-  ACTION=vote; run_action >/dev/null 2>&1
+  ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1 || true
+  ACTION=vote; run_action >/dev/null 2>&1 || true
   set_state never_reverts_execute true
   ACTION=execute
 }
@@ -1082,10 +1765,20 @@ else
 fi
 restore_ceremony
 
-trap 'rm -rf "$WORK"' EXIT
+RESTORE_ON_EXIT=0
 
 echo "test-the-test: $STUB_PASSED passed, $STUB_FAILED failed"
 
 TOTAL_FAILED=$((FAILED + GOV_FAILED + STUB_FAILED))
-echo "fusion-ceremony selftest TOTAL: $((PASSED + GOV_PASSED + STUB_PASSED)) passed, $TOTAL_FAILED failed"
+TOTAL_PASSED=$((PASSED + GOV_PASSED + STUB_PASSED))
+# Executed-assertion floor. Every `ok` line above is an assertion that RAN; a
+# run that silently skips a section prints fewer and must not pass. Raise the
+# floor whenever cases are added (CI checks the same line: suite-01-02).
+ASSERTION_FLOOR=128
+echo "fusion-ceremony selftest TOTAL: $TOTAL_PASSED passed, $TOTAL_FAILED failed (floor $ASSERTION_FLOOR)"
+SELFTEST_COMPLETE=1
+if (( TOTAL_PASSED < ASSERTION_FLOOR )); then
+  echo "fusion-ceremony selftest: only $TOTAL_PASSED assertions executed, below the floor of $ASSERTION_FLOOR" >&2
+  exit 1
+fi
 (( TOTAL_FAILED == 0 ))
