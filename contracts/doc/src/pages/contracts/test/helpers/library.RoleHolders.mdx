@@ -1,0 +1,125 @@
+---
+title: "RoleHolders"
+description: "Lists who holds a role on a plain OpenZeppelin `AccessControl` contract, from the `RoleGranted` / `RoleRevoked` logs a test recorded."
+---
+
+# RoleHolders
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6a5a4efb7af758963b9507b608985ed6f60e373a/contracts/test/helpers/RoleHolders.sol)
+
+**Title:** RoleHolders
+
+Lists who holds a role on a plain OpenZeppelin `AccessControl`
+contract, from the `RoleGranted` / `RoleRevoked` logs a test recorded.
+
+<i>
+
+The governed contracts are not `AccessControlEnumerable`, so a test
+cannot ask them for their members. A `hasRole` check can only clear the
+addresses the test thought to name, and an address nobody named (the
+deploy script's own contract, say) passes unseen. OpenZeppelin emits
+`RoleGranted` only when an account gains a role and `RoleRevoked` only
+when it loses one, so replaying every such log from before the
+contract's construction yields its exact current member set. Call
+`vm.recordLogs()` before the contracts are built. TEST HELPER ONLY.
+
+</i>
+
+## Constants
+
+### ROLE_GRANTED
+
+```solidity
+bytes32 internal constant ROLE_GRANTED = keccak256("RoleGranted(bytes32,address,address)");
+```
+
+### ROLE_REVOKED
+
+```solidity
+bytes32 internal constant ROLE_REVOKED = keccak256("RoleRevoked(bytes32,address,address)");
+```
+
+## Functions
+
+<a id="holders-vm-log-address-bytes32"></a>
+
+### holders
+
+The accounts that hold `role` on `target` after replaying `logs`.
+
+```solidity
+function holders(Vm.Log[] memory logs, address target, bytes32 role)
+        internal
+        pure
+        returns (address[] memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `Vm.Log[]` |  |
+| target | `address` |  |
+| role | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `address[]` |  |
+
+<a id="wasrevoked-vm-log-address-bytes32-address"></a>
+
+### wasRevoked
+
+True when `logs` show `account` losing `role` on `target`, which
+proves it held the role before: OpenZeppelin emits RoleRevoked
+only for an account that had the role.
+
+```solidity
+function wasRevoked(Vm.Log[] memory logs, address target, bytes32 role, address account)
+        internal
+        pure
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `Vm.Log[]` |  |
+| target | `address` |  |
+| role | `bytes32` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_indexof-address-uint256-address"></a>
+
+### _indexOf
+
+```solidity
+function _indexOf(address[] memory members, uint256 n, address account)
+        private
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| members | `address[]` |  |
+| n | `uint256` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

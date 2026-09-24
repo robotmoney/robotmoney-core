@@ -5,7 +5,7 @@ description: "Fork-based integration tests proving that a 2-of-3 Safe proxy depl
 
 # SafeIntegrationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9754a452dda1133d32f6202ee22479b307098a20/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6a5a4efb7af758963b9507b608985ed6f60e373a/contracts/test/SafeIntegration.t.sol)
 
 **Inherits:** Test
 
@@ -229,6 +229,36 @@ Snapshot id used for per-test isolation.
 uint256 internal _snap;
 ```
 
+### script
+
+The deploy script and its deployer (the script's own address; see setUp).
+
+```solidity
+DeployTimelock internal script;
+```
+
+### deployer
+
+```solidity
+address internal deployer;
+```
+
+### adminHolders
+
+Who holds what after the handover, replayed from every RoleGranted /
+RoleRevoked log since before the contracts were built. The contracts are
+not AccessControlEnumerable, so this is the only complete member list.
+
+```solidity
+mapping(address => address[]) internal adminHolders;
+```
+
+### gatewayRootHolders
+
+```solidity
+address[] internal gatewayRootHolders;
+```
+
 ## Functions
 
 <a id="_tryselectfork"></a>
@@ -264,6 +294,44 @@ whose PROPOSER is the deployed 2-of-3 Safe proxy.
 
 ```solidity
 function setUp() public;
+```
+
+<a id="_governed"></a>
+
+### _governed
+
+```solidity
+function _governed() internal view returns (address[5] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[5]` |  |
+
+<a id="test_handover_timelockistheonlyadminoneverygovernedcontract"></a>
+
+### test_handover_timelockIsTheOnlyAdminOnEveryGovernedContract
+
+After the handover the timelock is the ONLY ADMIN_ROLE holder on
+every governed contract, the router excepted: RouterGovernance
+also holds router ADMIN_ROLE by design (R7). The lists are complete
+member sets replayed from the role logs, so an admin nobody thought
+to name (the deploy script's contract, the test) cannot hide.
+
+```solidity
+function test_handover_timelockIsTheOnlyAdminOnEveryGovernedContract() public withSnap;
+```
+
+<a id="test_handover_timelockistheonlygatewayrootholder"></a>
+
+### test_handover_timelockIsTheOnlyGatewayRootHolder
+
+No address other than the timelock holds the gateway root.
+
+```solidity
+function test_handover_timelockIsTheOnlyGatewayRootHolder() public withSnap;
 ```
 
 <a id="withsnap"></a>
