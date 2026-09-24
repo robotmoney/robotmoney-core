@@ -14,28 +14,50 @@
 # can be told to refuse them so the die-if-not-anvil path is exercised too.
 #
 # The Safe is played as a real 2-of-3 would behave (issue #1447): `wallet sign`
-# returns a signature that names its signer and the digest it signed, and
-# `execTransaction` refuses too few signatures (GS020), a signature over the
-# wrong digest or from a non-owner, or signers not strictly ascending (GS026),
-# before it forwards anything to the timelock. The ceremony therefore only
-# passes if it collects `threshold` distinct owner signatures over the digest
-# the Safe itself reports, packed in the order the Safe demands.
+# returns a signature that names its signer and the digest it signed, the
+# SafeTx digest covers every field (to, value, data, operation, gas terms,
+# nonce), and `execTransaction` refuses a DELEGATECALL, too few signatures
+# (GS020), a signature over the wrong digest or from a non-owner, or signers
+# not strictly ascending (GS026), before it forwards anything to the timelock.
+# The record lists the owners in DESCENDING address order, so the ceremony
+# only passes if it collects `threshold` distinct owner signatures over the
+# digest the Safe itself reports, sorted into the order the Safe demands.
+#
+# The run ends with an executed-assertion floor, and any exit before the final
+# tally (an abort, a truncated file) is a failure, so a run that silently did
+# less cannot pass.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CEREMONY="$HERE/../fusion-ceremony.sh"
 REAL_CAST="$(command -v cast)" || { echo "selftest needs foundry's cast for keccak" >&2; exit 2; }
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# A run that ends before its final tally — an abort under set -e, an early
+# exit, a truncated file — must never exit 0, whatever its last command was.
+SELFTEST_COMPLETE=0
+RESTORE_ON_EXIT=0
+on_exit() {
+  local rc=$?
+  if [[ "$RESTORE_ON_EXIT" == 1 ]]; then restore_ceremony; fi
+  rm -rf "$WORK"
+  if [[ "$SELFTEST_COMPLETE" != 1 ]]; then
+    echo "fusion-ceremony selftest: ended before its final tally (aborted or truncated run)" >&2
+    exit 1
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
 
 a() { printf '0x%040x' "$1"; }
 GATEWAY=$(a 1); ROUTER=$(a 2); GOVERNANCE=$(a 3); RECEIPT=$(a 4); IC=$(a 5); TIMELOCK=$(a 6)
-SAFE=$(a 7); REGISTRY=$(a 8); VAULT=$(a 9); DEPLOYER=$(a 10); SUBMITTER=$(a 11); APPROVER=$(a 12)
+SAFE=$(a 7); REGISTRY=$(a 8); VAULT=$(a 9); DEPLOYER=$(a 10); SUBMITTER=$(a 11)
 VOTER_A=$(a 13); VOTER_B=$(a 14); EMERGENCY=$(a 15)
-# The Safe's other two owners. Record order is approver, approver-b, approver-c,
-# but by address approver-c (0x..11) sorts before approver-b (0x..1001), so the
-# ceremony only passes if it signs in address order, not record order.
-APPROVER_B=$(a 4097); APPROVER_C=$(a 17)
+# The Safe's three owners. Record order is approver, approver-b, approver-c,
+# and by address it is exactly the reverse: approver-c (0x..11) < approver-b
+# (0x..1001) < approver (0x..2000). Any two signers taken in record order are
+# therefore DESCENDING, so a ceremony that does not sort by address (GS026)
+# fails every Safe transaction here rather than passing by luck.
+APPROVER=$(a 8192); APPROVER_B=$(a 4097); APPROVER_C=$(a 17)
 VAULT_AGENT=$(a 20); VAULT_USDC=$(a 21); VAULT_PROTO=$(a 22); VAULT_RWA=$(a 23)
 ADMIN=$("$REAL_CAST" keccak ADMIN_ROLE); AGENT=$("$REAL_CAST" keccak AGENT_ROLE)
 COMMITTEE=$("$REAL_CAST" keccak COMMITTEE_AGENT_ROLE)
@@ -221,10 +243,11 @@ do_propose() {
   emit_send_result "$tx"
 }
 safe_digest() {
-  # The fake's SafeTx digest: pure keccak over (to, data, nonce), so the digest
-  # getTransactionHash reports and the one execTransaction checks agree.
-  local to="$1" data="$2" nonce="$3"
-  "$REAL_CAST" keccak "$("$REAL_CAST" abi-encode 'f(address,uint256,bytes,uint256)' "$to" 0 "$data" "$nonce")"
+  # safe_digest <to> <value> <data> <operation> <safeTxGas> <baseGas> <gasPrice>
+  #             <gasToken> <refundReceiver> <nonce>: keccak over EVERY SafeTx
+  # field, as Safe's EIP-712 hash is, so signatures over one SafeTx never
+  # authorize another that differs only in its operation, value or gas terms.
+  "$REAL_CAST" keccak "$("$REAL_CAST" abi-encode 'f(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)' "$@")"
 }
 safe_revert() {
   # The Safe's own revert string, the way `cast send` / `cast call` report it.
@@ -232,13 +255,13 @@ safe_revert() {
   exit 1
 }
 check_safe_signatures() {
-  # check_safe_signatures <safe> <to> <data> <sigs>: Safe.checkSignatures,
+  # check_safe_signatures <safe> <9 SafeTx fields> <sigs>: Safe.checkSignatures,
   # ECDSA branch only, with the fake signature layout r=signer, s=digest.
-  local safe; safe="$(lower "$1")"
-  local to="$2" data="$3" sigs="${4#0x}" threshold nonce digest owners i chunk signer signed last=""
+  local safe; safe="$(lower "$1")"; shift
+  local fields=("${@:1:9}") sigs="${10#0x}" threshold nonce digest owners i chunk signer signed last=""
   threshold="$(state "threshold:$safe" || echo 2)"
   nonce="$(state "safenonce:$safe" || echo 0)"
-  digest="$(lower "$(safe_digest "$to" "$data" "$nonce")")"
+  digest="$(lower "$(safe_digest "${fields[@]}" "$nonce")")"
   owners=" $(state "owners:$safe" || true) "
   (( ${#sigs} >= threshold * 130 )) || safe_revert GS020
   for (( i = 0; i < threshold; i++ )); do
@@ -255,12 +278,31 @@ check_safe_signatures() {
     last="$(lower "$signer")"
   done
 }
+safe_exec_checks() {
+  # safe_exec_checks <safe> <9 SafeTx fields> <sigs>: everything execTransaction
+  # does before its call lands. Knobs:
+  #   safe_reverts_all     a Safe that reverts every execTransaction with no GS
+  #                        code at all (so a control that only looks for "a
+  #                        revert" is caught);
+  #   safe_accepts_anything  a Safe that checks no signature;
+  #   safe_inner_revert    signatures pass, then the inner call reverts (GS013),
+  #                        so the positive twin has something to catch.
+  # A DELEGATECALL (operation 1) is always refused: the ceremony never means one.
+  local safe="$1"; shift
+  local fields=("${@:1:9}") sigs="${10}"
+  [[ "$(state safe_reverts_all || echo false)" != true ]] \
+    || { echo "Error: server returned an error response: error code 3: execution reverted" >&2; exit 1; }
+  [[ "${fields[3]}" == 0 ]] || safe_revert "fake Safe: operation ${fields[3]} (DELEGATECALL) refused"
+  [[ "$(state safe_accepts_anything || echo false)" == "true" ]] || check_safe_signatures "$safe" "${fields[@]}" "$sigs"
+  [[ "$(state safe_inner_revert || echo false)" != true ]] || safe_revert GS013
+}
 handle_exec_transaction() {
-  local safe="$1" to="$2" data="$3" sigs="$4" n
-  [[ "$(state safe_accepts_anything || echo false)" == "true" ]] || check_safe_signatures "$safe" "$to" "$data" "$sigs"
+  # handle_exec_transaction <safe> <9 SafeTx fields> <sigs>
+  local safe="$1" n; shift
+  safe_exec_checks "$safe" "$@"
   n="$(state "safenonce:$(lower "$safe")" || echo 0)"
   set_state "safenonce:$(lower "$safe")" "$((n + 1))"
-  handle_safe_exec "$to" "$data"
+  handle_safe_exec "$1" "$3"
 }
 handle_safe_exec() {
   local timelock="$1" calldata="$2" sel schedule_sel execute_sel body
@@ -406,7 +448,8 @@ case "${pos[0]}" in
     [[ " ${pos[*]} " == *" --no-hash "* ]] || { echo "fake cast: SafeTx digests must be signed --no-hash" >&2; exit 1; }
     [[ -n "${from:-}" ]] || { echo "fake cast: wallet sign with no known keystore" >&2; exit 1; }
     digest="${pos[${#pos[@]}-1]}"
-    printf '0x000000000000000000000000%s%s1b\n' "$(lower "${from#0x}")" "$(lower "${digest#0x}")" ;;
+    # `sign_v`: the v byte the fake signer emits (27 = 0x1b unless told otherwise).
+    printf '0x000000000000000000000000%s%s%s\n' "$(lower "${from#0x}")" "$(lower "${digest#0x}")" "$(state sign_v || echo 1b)" ;;
   chain-id) state chain ;;
   block-number) state blocknum || echo 0 ;;
   codehash) unreadable "${pos[1]}"; state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
@@ -484,10 +527,10 @@ case "${pos[0]}" in
           owners_list="$(state "owners:$c" || true)"
           printf '[%s]\n' "$(tr ' ' '\n' <<<"$owners_list" | sed '/^$/d' | paste -sd, - | sed 's/,/, /g')" ;;
         'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)(bool)')
-          [[ "$(state safe_accepts_anything || echo false)" == "true" ]] || check_safe_signatures "$c" "${pos[3]}" "${pos[5]}" "${pos[12]}"
+          safe_exec_checks "$c" "${pos[@]:3:10}"
           echo true ;;
         'getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)')
-          safe_digest "${pos[3]}" "${pos[5]}" "${pos[12]}" ;;
+          safe_digest "${pos[@]:3:10}" ;;
         'getMinDelay()(uint256)') state delay ;;
         'receiptCount()(uint256)') state "receiptcount:$c" || echo 0 ;;
         'setWeights(address[],uint256[])') [[ "$(state "setweights:$(lower "${from:-}")" || echo revert)" == ok ]] ;;
@@ -517,7 +560,7 @@ case "${pos[0]}" in
     target="${pos[1]}"; sig="${pos[2]}"
     case "$sig" in
       'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)')
-        handle_exec_transaction "$target" "${pos[3]}" "${pos[5]}" "${pos[12]}" ;;
+        handle_exec_transaction "$target" "${pos[@]:3:10}" ;;
       'vote(uint256)') handle_vote "$target" "${pos[3]}" "${from:-}" ;;
       'execute(uint256)') handle_execute "$target" "${pos[3]}" "${from:-}" ;;
       *) echo "fake cast: unhandled send $sig" >&2; exit 1 ;;
@@ -636,6 +679,20 @@ baseline; set_state "singleton:$(lc "$SAFE")" "0x41675C099F32341bf84BFc5382aF534
 expect_fail "a Safe on the L1 singleton" "safe delegates to the SafeL2 singleton"
 baseline; set_state safe_accepts_anything true
 expect_fail "a Safe that executes on one signature (quorum configured, not enforced)" "one owner signature cannot drive the safe"
+# The positive twin is what makes the reverts evidence of quorum: a Safe that
+# refuses even threshold signatures (its call reverts GS013) must fail it,
+# while the three negative controls still pass on their own revert codes.
+baseline; set_state safe_inner_revert true
+expect_fail "a Safe that cannot execute even with threshold signatures" "threshold owner signatures can drive the safe (eth_call reverted"
+# A control passes on its exact GS code only. A Safe that reverts everything
+# with no code at all proves nothing about quorum.
+baseline; set_state safe_reverts_all true
+expect_fail "a Safe that reverts every call without a GS code (one signature)" "one owner signature cannot drive the safe (reverted, but not GS020"
+expect_fail "a Safe that reverts every call without a GS code (repeated signature)" "one owner's signature twice cannot drive the safe (reverted, but not GS026"
+expect_fail "a Safe that reverts every call without a GS code (non-owners)" "two non-owner signatures cannot drive the safe (reverted, but not GS026"
+# A GS026 where GS020 is owed is not the quorum rule either.
+baseline; set_state "threshold:$(lc "$SAFE")" 1; set_state "owners:$(lc "$SAFE")" "$(lc "$APPROVER_B") $(lc "$APPROVER")"
+expect_fail "a one-signature control answered by the owner check, not the threshold" "one owner signature cannot drive the safe"
 baseline; rm -f "$WORK/vkeys/approver-b"
 expect_fail "signer keystores gone: quorum enforcement unproven, not assumed" "one owner signature cannot drive the safe"
 baseline; set_state "owners:$(lc "$SAFE")" ""
@@ -821,7 +878,7 @@ gov_ok() {
   local name="$1" rc=0
   run_action || rc=$?
   if [[ "$rc" == 0 ]]; then GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   $name"
-  else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: exited $rc — $(tail -5 "$WORK/out" "$WORK/err")"; fi
+  else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: exited $rc — $(cat "$WORK/out" "$WORK/err" | tail -5)"; fi
 }
 gov_fail_needle() {
   local name="$1" needle="$2" rc=0
@@ -909,6 +966,9 @@ run_action() {
   return $rc
 }
 # gov_fail_needle greps stdout+stderr combined, since `die` writes to stderr.
+# A bare `run_action` that only SEEDS a later case carries `|| true`: a seed
+# that fails must leave the case after it to fail and be counted, not abort the
+# whole run under set -e and hide every case after it.
 run_action_combined() { run_action; local rc=$?; mv "$WORK/out.combined" "$WORK/out"; return $rc; }
 
 echo "--- propose / propose-negative ---"
@@ -963,7 +1023,7 @@ jq '.drafts[0].vaults[0].weight_bps = 834 | .drafts[0].vaults[1].weight_bps = 81
 other_calldata="$("$REAL_CAST" calldata 'propose(address[],uint256[])' \
   "[$VAULT_AGENT,$VAULT_USDC,$VAULT_PROTO,$VAULT_RWA]" "[834,8166,667,333]")"
 jq --arg cd "$other_calldata" '.drafts[0].propose_calldata = $cd' "$WORK/draft.json" >"$WORK/d2" && mv "$WORK/d2" "$WORK/draft.json"
-run_action >/dev/null 2>&1   # a live Active proposal from ANOTHER draft
+run_action >/dev/null 2>&1 || true   # a live Active proposal from ANOTHER draft
 write_draft "$RECEIPT_A"
 gov_fail_needle "propose refuses to call another draft's live proposal its own" "stored proposal bps do not equal the draft's"
 
@@ -1018,7 +1078,7 @@ else GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL release rerun: exited nonzero �
 
 echo "--- vote ---"
 gov_baseline; write_draft "$RECEIPT_A"
-ACTION=propose; run_action >/dev/null 2>&1   # seed a fresh Active proposal first
+ACTION=propose; run_action >/dev/null 2>&1 || true   # seed a fresh Active proposal first
 ACTION=vote
 gov_ok "vote drives both voters to quorum"
 [[ "$(json_field .quorum_reached)" == "true" && "$(json_field .votes_for)" == "2" ]] \
@@ -1136,7 +1196,7 @@ echo "--- vote: the quorum rule itself has to be on chain ---"
 # The fake chain's execute() keeps its VotingStillOpen and its delay checks and
 # drops only the tally check, which is exactly the contract a VotingStillOpen
 # assertion would have passed.
-ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
+ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1 || true
 set_state no_quorum_rule true
 ACTION=vote
 gov_fail_needle "vote refuses a governance with no quorum rule" "not with QuorumNotReached"
@@ -1146,8 +1206,8 @@ echo "--- execute: the weights-unchanged witness across the whole cycle ---"
 # propose took only reaches execute on disk. These two cases are what makes that
 # file worth reading: one where a witness disagrees, and one where there is none.
 seed_witnessed_cycle() {
-  ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
-  ACTION=vote; run_action >/dev/null 2>&1
+  ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1 || true
+  ACTION=vote; run_action >/dev/null 2>&1 || true
   ACTION=execute
 }
 witness_file_path() { ls "$WORK/out-dir/weight-witness/"*.jsonl 2>/dev/null | head -1; }
@@ -1217,7 +1277,7 @@ rm -f "$WORK/out-dir/weight-witness"
 # A witness that cannot be READ: the router stops answering getWeights() at the
 # instant vote-b's vote is already mined. Both votes are irreversible, so the
 # action has to come back with them rather than exit on the reading.
-ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
+ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1 || true
 ACTION=vote; set_state getweights_fails true
 gov_ok "vote still reports both votes when the router will not answer the witness read"
 set_state getweights_fails false
@@ -1280,11 +1340,15 @@ release_ok() {
   fi
 }
 release_refused() {
-  local name="$1" needle="$2"
-  if run_release; then
+  # release_refused <name> <needle> [exit code the refusal must carry]
+  local name="$1" needle="$2" want_rc="${3:-}" rc=0
+  run_release || rc=$?
+  if [[ "$rc" == 0 ]]; then
     GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: release exited 0"
+  elif [[ -n "$want_rc" && "$rc" != "$want_rc" ]]; then
+    GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: refused with exit $rc, not $want_rc — $(tail -2 "$WORK/out.combined")"
   elif grep -qF -- "$needle" "$WORK/out.combined"; then
-    GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   $name is refused"
+    GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   $name is refused${want_rc:+ (exit $want_rc)}"
   else
     GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: refused without naming '$needle' — $(tail -3 "$WORK/out.combined")"
   fi
@@ -1303,8 +1367,18 @@ gov_baseline
 jq '.ephemeral.safe_signers |= .[:1]' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
 release_refused "a record naming a single Safe signer" "2 are needed"
 
+# approver-c is the lowest owner, so it is always one of the two signers.
 gov_baseline; rm -f "$WORK/keys/approver-c"
-release_refused "a discarded Safe signer keystore" "safe signer keystore is gone"
+release_refused "a discarded Safe signer keystore" "safe signer keystore is gone" 65
+gov_baseline; rm -f "$WORK/keys/approver-b.pw"
+release_refused "a Safe signer whose password file is gone" "safe signer keystore is gone" 65
+# A Safe that reverts after the signatures pass (GS013): release must stop
+# there, not report a release the chain never made.
+gov_baseline; set_state safe_inner_revert true
+release_refused "a Safe transaction whose call reverts" "GS013"
+# v 0/1 is a contract or approved-hash signature to Safe, not an ECDSA one.
+gov_baseline; set_state sign_v 01
+release_refused "a signer that returns v=0x01" "not 0x1b/0x1c" 66
 
 # The Safe itself, not the ceremony, is the last line: an owner set that does
 # not include a signer the record names makes the Safe refuse (GS026).
@@ -1322,7 +1396,7 @@ STUB_PASSED=0; STUB_FAILED=0
 CEREMONY_BACKUP="$WORK/fusion-ceremony.sh.orig"
 cp "$CEREMONY" "$CEREMONY_BACKUP"
 restore_ceremony() { cp "$CEREMONY_BACKUP" "$CEREMONY"; }
-trap 'restore_ceremony; rm -rf "$WORK"' EXIT
+RESTORE_ON_EXIT=1
 
 patch_literal() {
   # patch_literal <needle> <replacement>: exact, non-regex text substitution,
@@ -1359,8 +1433,8 @@ echo "--- test-the-test: execute too-early negative ---"
 # scenario is now silently accepted. A check on the reported error string would
 # be a tautology — the stub is the only thing that produces that string.
 seed_too_early_chain() {
-  ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1
-  ACTION=vote; run_action >/dev/null 2>&1
+  ACTION=propose; gov_baseline; write_draft "$RECEIPT_A"; run_action >/dev/null 2>&1 || true
+  ACTION=vote; run_action >/dev/null 2>&1 || true
   set_state never_reverts_execute true
   ACTION=execute
 }
@@ -1444,10 +1518,20 @@ else
 fi
 restore_ceremony
 
-trap 'rm -rf "$WORK"' EXIT
+RESTORE_ON_EXIT=0
 
 echo "test-the-test: $STUB_PASSED passed, $STUB_FAILED failed"
 
 TOTAL_FAILED=$((FAILED + GOV_FAILED + STUB_FAILED))
-echo "fusion-ceremony selftest TOTAL: $((PASSED + GOV_PASSED + STUB_PASSED)) passed, $TOTAL_FAILED failed"
+TOTAL_PASSED=$((PASSED + GOV_PASSED + STUB_PASSED))
+# Executed-assertion floor. Every `ok` line above is an assertion that RAN; a
+# run that silently skips a section prints fewer and must not pass. Raise the
+# floor whenever cases are added (CI checks the same line: suite-01-02).
+ASSERTION_FLOOR=121
+echo "fusion-ceremony selftest TOTAL: $TOTAL_PASSED passed, $TOTAL_FAILED failed (floor $ASSERTION_FLOOR)"
+SELFTEST_COMPLETE=1
+if (( TOTAL_PASSED < ASSERTION_FLOOR )); then
+  echo "fusion-ceremony selftest: only $TOTAL_PASSED assertions executed, below the floor of $ASSERTION_FLOOR" >&2
+  exit 1
+fi
 (( TOTAL_FAILED == 0 ))
