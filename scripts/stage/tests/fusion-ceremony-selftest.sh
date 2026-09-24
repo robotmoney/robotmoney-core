@@ -1210,7 +1210,9 @@ seed_witnessed_cycle() {
   ACTION=vote; run_action >/dev/null 2>&1 || true
   ACTION=execute
 }
-witness_file_path() { ls "$WORK/out-dir/weight-witness/"*.jsonl 2>/dev/null | head -1; }
+# Never fails: a cycle that left no witness file (because the action under test
+# broke) must fail the case that reads it, not abort the run under set -e.
+witness_file_path() { ls "$WORK/out-dir/weight-witness/"*.jsonl 2>/dev/null | head -1 || true; }
 
 # A witness that disagrees is a router whose weights MOVED before execute —
 # exactly the breach G08 exists to detect. It must stop the ceremony, never come
@@ -1293,8 +1295,7 @@ set_state getweights_fails false
 # transition and must still refuse to call the clause proved.
 seed_witnessed_cycle
 WF="$(witness_file_path)"
-{ head -1 "$WF" | cut -c1-30 | tr -d '\n'; tail -n +2 "$WF"; } >"$WF.truncated"
-mv "$WF.truncated" "$WF"
+{ head -1 "$WF" | cut -c1-30 | tr -d '\n'; tail -n +2 "$WF"; } >"$WF.truncated" && mv "$WF.truncated" "$WF" || true
 gov_ok "execute still runs the transition over a truncated witness line"
 [[ "$(json_field .action)" == "executed" \
    && "$(json_field .weights_unchanged_until_execute.asserted)" == "false" \
