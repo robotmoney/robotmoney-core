@@ -79,6 +79,10 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     address internal constant SAFE_PROXY_FACTORY = 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67;
     address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
     address internal constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+    address internal constant SAFE_MULTISEND = 0x38869bf66a61cF6bDB996A6aE40D5853Fd43B526;
+    /// @dev FallbackManager's handler slot: keccak256("fallback_manager.handler.address").
+    bytes32 internal constant FALLBACK_HANDLER_STORAGE_SLOT =
+        0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
 
     /// @dev A real 2-of-3 Safe, the topology stage's ceremony creates: the
     ///      post-handover path is only proved if an actual quorum-enforcing
@@ -283,6 +287,15 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         );
         assertEq(safe.getThreshold(), 2, "safe threshold must be 2");
         assertEq(safe.getOwners().length, 3, "safe must have 3 owners");
+        // The fallback handler setup() stored is the canonical one, and it and
+        // MultiSend are real code on this fork (governance-isomorphism.md R2).
+        assertEq(
+            address(uint160(uint256(vm.load(address(safe), FALLBACK_HANDLER_STORAGE_SLOT)))),
+            SAFE_FALLBACK_HANDLER,
+            "safe fallback handler must be the canonical CompatibilityFallbackHandler"
+        );
+        assertGt(SAFE_FALLBACK_HANDLER.code.length, 0, "fallback handler has no code on this fork");
+        assertGt(SAFE_MULTISEND.code.length, 0, "MultiSend has no code on this fork");
     }
 
     /// @notice One owner's signature cannot schedule anything (GS020), so no

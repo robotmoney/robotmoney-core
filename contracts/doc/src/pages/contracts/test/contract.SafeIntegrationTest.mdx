@@ -5,7 +5,7 @@ description: "Fork-based integration tests proving that a 2-of-3 Safe proxy depl
 
 # SafeIntegrationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/aca248f254c7c0f24a3b8cd0b3ae494e8fd405cc/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9754a452dda1133d32f6202ee22479b307098a20/contracts/test/SafeIntegration.t.sol)
 
 **Inherits:** Test
 
@@ -88,6 +88,31 @@ Safe Compatibility Fallback Handler on Base mainnet.
 
 ```solidity
 address internal constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+```
+
+### SAFE_MULTISEND
+
+<i>
+
+Safe MultiSend v1.4.1 on Base mainnet (governance-isomorphism.md §2.2).
+
+</i>
+
+```solidity
+address internal constant SAFE_MULTISEND = 0x38869bf66a61cF6bDB996A6aE40D5853Fd43B526;
+```
+
+### FALLBACK_HANDLER_STORAGE_SLOT
+
+<i>
+
+FallbackManager's handler slot: keccak256("fallback_manager.handler.address").
+
+</i>
+
+```solidity
+bytes32 internal constant FALLBACK_HANDLER_STORAGE_SLOT =
+        0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
 ```
 
 ### ADMIN_ROLE

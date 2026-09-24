@@ -130,6 +130,13 @@ contract SafeIntegrationTest is Test {
     /// @dev Safe Compatibility Fallback Handler on Base mainnet.
     address internal constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
 
+    /// @dev Safe MultiSend v1.4.1 on Base mainnet (governance-isomorphism.md §2.2).
+    address internal constant SAFE_MULTISEND = 0x38869bf66a61cF6bDB996A6aE40D5853Fd43B526;
+
+    /// @dev FallbackManager's handler slot: keccak256("fallback_manager.handler.address").
+    bytes32 internal constant FALLBACK_HANDLER_STORAGE_SLOT =
+        0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
+
     // ─── Role constant ────────────────────────────────────────────────────────
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -267,6 +274,16 @@ contract SafeIntegrationTest is Test {
             SAFE_SINGLETON_L2,
             "safe proxy must delegate to the SafeL2 singleton"
         );
+        // setup() stored the canonical fallback handler, and the handler and
+        // MultiSend the Safe set promises are real code on this fork, not empty
+        // accounts a call would silently succeed against (R2).
+        assertEq(
+            address(uint160(uint256(vm.load(safeProxy, FALLBACK_HANDLER_STORAGE_SLOT)))),
+            SAFE_FALLBACK_HANDLER,
+            "safe fallback handler must be the canonical CompatibilityFallbackHandler"
+        );
+        assertGt(SAFE_FALLBACK_HANDLER.code.length, 0, "fallback handler has no code on this fork");
+        assertGt(SAFE_MULTISEND.code.length, 0, "MultiSend has no code on this fork");
 
         // Deploy TimelockController and wire ADMIN_ROLE on all five contracts.
         DeployTimelock script = new DeployTimelock();
@@ -963,14 +980,31 @@ contract SafeIntegrationTest is Test {
             _buildTwoOwnerSigs(scheduleTxHash)
         );
 
-        // Cancel via Safe (CANCELLER_ROLE is held by the TimelockController admin —
-        // in OZ v5 the deployer is granted CANCELLER_ROLE too; the Safe can also
-        // be granted it. Here we use vm.prank on the timelock itself since it holds
-        // DEFAULT_ADMIN_ROLE and can self-cancel, OR we prank the Safe address since
-        // it holds PROPOSER_ROLE which in OZ v5 TimelockController also acts as
-        // CANCELLER_ROLE by default).
-        vm.prank(address(safe));
-        d.timelock.cancel(opId);
+        // Cancel through the Safe itself, with two owner signatures: OZ v5's
+        // TimelockController grants every proposer CANCELLER_ROLE, so the Safe
+        // holds it, and only a quorum of owners can make the Safe use it. A
+        // vm.prank here would prove the role, not the quorum.
+        assertTrue(
+            d.timelock.hasRole(d.timelock.CANCELLER_ROLE(), address(safe)),
+            "safe must hold CANCELLER_ROLE"
+        );
+        bytes memory cancelCall = abi.encodeCall(d.timelock.cancel, (opId));
+        bytes32 cancelTxHash = safe.getTransactionHash(
+            address(d.timelock),
+            0,
+            cancelCall,
+            0,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            safe.nonce()
+        );
+        assertTrue(
+            _safeExec(address(d.timelock), cancelCall, _buildTwoOwnerSigs(cancelTxHash)),
+            "safe.execTransaction(cancel) failed"
+        );
 
         // Verify operation is cancelled (state = Unset).
         assertEq(

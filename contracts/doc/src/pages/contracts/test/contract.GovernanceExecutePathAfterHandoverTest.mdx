@@ -5,7 +5,7 @@ description: "R7's two halves, proved on one topology built the way the deploy s
 
 # GovernanceExecutePathAfterHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e4692028a173bf3bd2b13e72352884a265fdf994/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9754a452dda1133d32f6202ee22479b307098a20/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
 
 **Inherits:** Test
 
@@ -62,6 +62,25 @@ address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE9
 
 ```solidity
 address internal constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+```
+
+### SAFE_MULTISEND
+
+```solidity
+address internal constant SAFE_MULTISEND = 0x38869bf66a61cF6bDB996A6aE40D5853Fd43B526;
+```
+
+### FALLBACK_HANDLER_STORAGE_SLOT
+
+<i>
+
+FallbackManager's handler slot: keccak256("fallback_manager.handler.address").
+
+</i>
+
+```solidity
+bytes32 internal constant FALLBACK_HANDLER_STORAGE_SLOT =
+        0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
 ```
 
 ### VOTING_PERIOD
