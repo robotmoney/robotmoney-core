@@ -228,13 +228,6 @@ jobs:
         # is never exercised is the same silence that let the pin reach 48 days.
         run: scripts/devnet/check-fork-pin-age-selftest.sh
 
-      - name: Fork Safe-set gate behaviour self-test (issue #1447)
-        # Offline, no network/Docker: drives scripts/devnet/check-fork-safe-set.sh
-        # against synthetic state files so a fixture missing any canonical Safe
-        # contract is proven to fail (governance-isomorphism.md R3) before
-        # check-fork-manifest.sh judges the real fixture with it.
-        run: scripts/devnet/check-fork-safe-set-selftest.sh
-
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
@@ -242,6 +235,16 @@ jobs:
           # (verified locally against testing/fixtures/fork-state/CURRENT.anvil-state),
           # so this site no longer needs the floating `nightly` channel.
           version: stable
+
+      - name: Fork Safe-set gate behaviour self-test (issue #1447)
+        # Offline, no network/Docker: drives scripts/devnet/check-fork-safe-set.sh
+        # against state files built from the committed fixture's five Safe
+        # accounts, so a fixture missing a canonical Safe contract, carrying
+        # other code than the canonical one, or with an unlocked singleton is
+        # proven to fail (governance-isomorphism.md R3) before
+        # check-fork-manifest.sh judges the real fixture with it. After Install
+        # Foundry: the gate hashes code with `cast keccak`.
+        run: scripts/devnet/check-fork-safe-set-selftest.sh
 
       - name: Cache Foundry build artifacts
         uses: actions/cache@v4

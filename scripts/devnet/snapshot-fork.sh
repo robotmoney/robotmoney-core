@@ -56,6 +56,22 @@ for tool in cast forge cargo jq curl docker; do
   fi
 done
 
+# anvil_set <method> <params-json>: one anvil_set* state write against the
+# snapshot node, refused loudly when the node answers with a JSON-RPC error or
+# not at all. A write that silently failed would leave the dump without the
+# code or slot the fixture exists to carry, and nothing would notice until an
+# offline suite failed against it (issue #1447 review).
+anvil_set() {
+  local method="$1" params="$2" resp
+  resp="$(curl -sS -X POST -H 'content-type: application/json' \
+    --data "$(jq -nc --arg m "$method" --argjson p "$params" '{jsonrpc:"2.0",id:1,method:$m,params:$p}')" \
+    "$ANVIL_RPC")" || { echo "ERROR: $method: no response from $ANVIL_RPC" >&2; exit 1; }
+  if ! jq -e 'has("result") and (has("error") | not)' <<<"$resp" >/dev/null 2>&1; then
+    echo "ERROR: $method failed on $ANVIL_RPC: $(printf '%s' "$resp" | cut -c1-300)" >&2
+    exit 1
+  fi
+}
+
 # 1. Look up the current upstream block number.
 echo "[snapshot] querying upstream block number from $RMPC_FORK_RPC_URL"
 UPSTREAM_BLOCK_HEX=$(curl -sS -X POST -H 'content-type: application/json' \
@@ -193,10 +209,7 @@ SEED_USDC_UNITS=2000000000   # 2,000 USDC (6 decimals) — covers seed + warm
 DEPLOYER_BAL_SLOT=$(cast index address "$ADMIN_ADDRESS" 9)
 SEED_BAL_HEX=$(cast to-uint256 "$SEED_USDC_UNITS")
 echo "[snapshot] funding deployer with $SEED_USDC_UNITS USDC via storage slot write"
-curl -sS -X POST -H 'content-type: application/json' \
-  --data "$(jq -n --arg a "$USDC_ADDRESS" --arg s "$DEPLOYER_BAL_SLOT" --arg v "$SEED_BAL_HEX" \
-    '{jsonrpc:"2.0",id:1,method:"anvil_setStorageAt",params:[$a,$s,$v]}')" \
-  "$ANVIL_RPC" >/dev/null
+anvil_set anvil_setStorageAt "$(jq -nc --arg a "$USDC_ADDRESS" --arg s "$DEPLOYER_BAL_SLOT" --arg v "$SEED_BAL_HEX" '[$a,$s,$v]')"
 
 forge script contracts/script/Deploy.s.sol:Deploy \
   --rpc-url "$ANVIL_RPC" \
@@ -320,10 +333,7 @@ WARM_DEPOSIT_UNITS=50000000 # 50 USDC (6 decimals)
 # FiatTokenV2_1 balances mapping lives at slot 9 (see genesis_alloc.rs).
 DEPLOYER_BAL_SLOT=$(cast index address "$ADMIN_ADDRESS" 9)
 WARM_BAL_HEX=$(cast to-uint256 "$WARM_DEPOSIT_UNITS")
-curl -sS -X POST -H 'content-type: application/json' \
-  --data "$(jq -n --arg a "$USDC_ADDRESS" --arg s "$DEPLOYER_BAL_SLOT" --arg v "$WARM_BAL_HEX" \
-    '{jsonrpc:"2.0",id:1,method:"anvil_setStorageAt",params:[$a,$s,$v]}')" \
-  "$ANVIL_RPC" >/dev/null
+anvil_set anvil_setStorageAt "$(jq -nc --arg a "$USDC_ADDRESS" --arg s "$DEPLOYER_BAL_SLOT" --arg v "$WARM_BAL_HEX" '[$a,$s,$v]')"
 
 # Approve + deposit + partial redeem. Each call must mine so the slots
 # settle into anvil state before the dump.
@@ -426,10 +436,7 @@ for addr in "${WARM_ADDRESSES[@]}"; do
     echo "[snapshot]   $addr: no code on upstream; skipping"
     continue
   fi
-  curl -sS -X POST -H 'content-type: application/json' \
-    --data "$(jq -n --arg a "$addr" --arg c "$CODE" \
-      '{jsonrpc:"2.0",id:1,method:"anvil_setCode",params:[$a,$c]}')" \
-    "$ANVIL_RPC" >/dev/null
+  anvil_set anvil_setCode "$(jq -nc --arg a "$addr" --arg c "$CODE" '[$a,$c]')"
   echo "[snapshot]   $addr: cached $(printf '%s' "$CODE" | wc -c) hex chars of bytecode"
 done
 
@@ -442,9 +449,15 @@ done
 #     on the SafeL2 singleton, with CompatibilityFallbackHandler as the
 #     fallback; CI's SafeIntegration.t.sol does the same. None of them may be
 #     missing, and R8 forbids a stand-in, so a missing one aborts the snapshot.
-#     Code only: these are CREATE2-deployed and immutable, and a proxy's state
-#     lives in the proxy, never in the singleton or the factory.
-#     scripts/devnet/check-fork-safe-set.sh asserts the result (R3).
+#     These are CREATE2-deployed and their code is immutable. A proxy's state
+#     lives in the proxy, but the two SINGLETONS are not stateless: each one's
+#     constructor sets threshold = 1 (storage slot 4) so setup() on the
+#     singleton itself reverts GS200 and nobody can take it over. Base carries
+#     that slot; a fixture that copies only their code leaves both singletons
+#     unlocked. So the singletons' slot 4 is read at the pin block, required to
+#     be 1, and written back below.
+#     scripts/devnet/check-fork-safe-set.sh asserts the result (R3): code hash
+#     of all five, and slot 4 = 1 on both singletons.
 SAFE_SET=(
   "0x41675C099F32341bf84BFc5382aF534df5C7461a"  # Safe singleton (L1) v1.4.1
   "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"  # SafeL2 singleton v1.4.1
@@ -459,11 +472,18 @@ for addr in "${SAFE_SET[@]}"; do
     echo "ERROR: canonical Safe contract $addr has no code upstream at block $PIN_BLOCK" >&2
     exit 1
   fi
-  curl -sS -X POST -H 'content-type: application/json' \
-    --data "$(jq -n --arg a "$addr" --arg c "$CODE" \
-      '{jsonrpc:"2.0",id:1,method:"anvil_setCode",params:[$a,$c]}')" \
-    "$ANVIL_RPC" >/dev/null
+  anvil_set anvil_setCode "$(jq -nc --arg a "$addr" --arg c "$CODE" '[$a,$c]')"
   echo "[snapshot]   $addr: cached $(printf '%s' "$CODE" | wc -c) hex chars of Safe bytecode"
+done
+SAFE_LOCKED_THRESHOLD="0x0000000000000000000000000000000000000000000000000000000000000001"
+for addr in "0x41675C099F32341bf84BFc5382aF534df5C7461a" "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"; do
+  SLOT4=$(cast storage "$addr" 4 --rpc-url "$RMPC_FORK_RPC_URL" --block "$PIN_BLOCK")
+  if [ "$SLOT4" != "$SAFE_LOCKED_THRESHOLD" ]; then
+    echo "ERROR: Safe singleton $addr has threshold slot 4 = '$SLOT4' upstream at block $PIN_BLOCK, not 1: it is not the locked canonical singleton" >&2
+    exit 1
+  fi
+  anvil_set anvil_setStorageAt "$(jq -nc --arg a "$addr" --arg v "$SLOT4" '[$a,"0x4",$v]')"
+  echo "[snapshot]   $addr: singleton lock (threshold slot 4 = 1) written"
 done
 
 # 3c. Warm slot0 storage for each Uniswap V3 price-strip pool.
@@ -492,10 +512,7 @@ for pool in "${PRICE_STRIP_POOLS[@]}"; do
     echo "[snapshot]   $pool: slot0 is zero or empty; skipping storage write"
     continue
   fi
-  curl -sS -X POST -H 'content-type: application/json' \
-    --data "$(jq -n --arg a "$pool" --arg v "$SLOT0" \
-      '{jsonrpc:"2.0",id:1,method:"anvil_setStorageAt",params:[$a,"0x0",$v]}')" \
-    "$ANVIL_RPC" >/dev/null
+  anvil_set anvil_setStorageAt "$(jq -nc --arg a "$pool" --arg v "$SLOT0" '[$a,"0x0",$v]')"
   echo "[snapshot]   $pool: slot0=$SLOT0"
 done
 
@@ -505,14 +522,8 @@ done
 HARNESS_HOLDER="0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5"
 HARNESS_BAL_SLOT=$(cast index address "$HARNESS_HOLDER" 9)
 HARNESS_USDC_HEX=$(cast to-uint256 1000000000000)
-curl -sS -X POST -H 'content-type: application/json' \
-  --data "$(jq -n --arg a "$USDC_ADDRESS" --arg s "$HARNESS_BAL_SLOT" --arg v "$HARNESS_USDC_HEX" \
-    '{jsonrpc:"2.0",id:1,method:"anvil_setStorageAt",params:[$a,$s,$v]}')" \
-  "$ANVIL_RPC" >/dev/null
-curl -sS -X POST -H 'content-type: application/json' \
-  --data "$(jq -n --arg a "$HARNESS_HOLDER" \
-    '{jsonrpc:"2.0",id:1,method:"anvil_setBalance",params:[$a,"0x3635c9adc5dea00000"]}')" \
-  "$ANVIL_RPC" >/dev/null
+anvil_set anvil_setStorageAt "$(jq -nc --arg a "$USDC_ADDRESS" --arg s "$HARNESS_BAL_SLOT" --arg v "$HARNESS_USDC_HEX" '[$a,$s,$v]')"
+anvil_set anvil_setBalance "$(jq -nc --arg a "$HARNESS_HOLDER" '[$a,"0x3635c9adc5dea00000"]')"
 
 echo "[snapshot] warming flagship Rust scenarios against live fork"
 RMPC_TESTNET_RPC_URL="$ANVIL_RPC" RMPC_FIXTURE_VAULT="$VAULT_ADDR" \
@@ -601,6 +612,12 @@ jq -n \
 
 # 6a. Same digest binding for the CURRENT.json pointer (issue #1152).
 "$REPO_ROOT/scripts/devnet/fork-state-digest.sh" write "$CURRENT_STATE_FILE" "$CURRENT_FILE"
+
+# 6b. The Safe set the stage ceremony depends on, judged on the file just
+#     written (governance-isomorphism.md R3): all five contracts with their
+#     pinned code hashes, and both singletons locked. A capture that lost any
+#     of it fails here, not in the ceremony.
+"$REPO_ROOT/scripts/devnet/check-fork-safe-set.sh" "$CURRENT_STATE_FILE"
 
 # 7. Persist a copy of the deployment artifact at the canonical path so
 #    the indexer (and CI smoke jobs) can read it without re-running the
