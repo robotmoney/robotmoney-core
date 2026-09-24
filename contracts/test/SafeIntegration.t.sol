@@ -71,6 +71,9 @@ interface ISafe {
 
     /// @notice Returns the on-chain nonce (number of executed transactions).
     function nonce() external view returns (uint256);
+
+    /// @notice Whether `owner` is in the Safe's owner set.
+    function isOwner(address owner) external view returns (bool);
 }
 
 /// @title ISafeProxyFactory — minimal interface for Safe{Wallet} ProxyFactory.
@@ -99,9 +102,12 @@ interface ISafeProxyFactory {
 ///          forge test --match-contract SafeIntegration -vvv
 ///
 /// @dev Safe deployment approach:
-///      We call `SafeProxyFactory.createProxyWithNonce` against the live Base-mainnet
-///      factory (0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67) which points to the
-///      canonical Safe singleton (0x29fcB43b46531BcA003ddC8FCB67FFE91900C762 — L2 variant).
+///      We call `SafeProxyFactory.createProxyWithNonce` against the canonical Base-mainnet
+///      factory (0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67) with the canonical
+///      `SafeL2` singleton (0x29fcB43b46531BcA003ddC8FCB67FFE91900C762). Base is an L2,
+///      so `SafeL2` is the singleton production uses (governance-isomorphism.md §2.2, R4).
+///      The golden fixture carries it because snapshot-fork.sh warms the whole Safe set
+///      and check-fork-safe-set.sh refuses a fixture without it (R2, R3).
 ///      This proves the quorum is enforced by actual Safe contract code, not vm.prank.
 ///
 /// @dev EIP-712 signing:
@@ -117,7 +123,9 @@ contract SafeIntegrationTest is Test {
 
     /// @dev Safe L2 singleton (implementation) on Base mainnet.
     ///      This is the SafeL2.sol variant that emits extra events for L2 indexers.
-    address internal constant SAFE_SINGLETON_L2 = 0x41675C099F32341bf84BFc5382aF534df5C7461a;
+    ///      Until issue #1447 this constant held 0x41675C09…, the L1 `Safe` singleton,
+    ///      despite its name (governance-isomorphism.md §3.4).
+    address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
 
     /// @dev Safe Compatibility Fallback Handler on Base mainnet.
     address internal constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
@@ -245,9 +253,20 @@ contract SafeIntegrationTest is Test {
             .createProxyWithNonce(SAFE_SINGLETON_L2, safeSetup, uint256(keccak256("safe-salt-422")));
         safe = ISafe(safeProxy);
 
-        // Verify Safe deployed correctly.
+        // Verify the Safe from the Safe itself, never from what this test asked
+        // for (governance-isomorphism.md R12).
         assertEq(safe.getThreshold(), 2, "safe threshold must be 2");
         assertEq(safe.getOwners().length, 3, "safe must have 3 owners");
+        for (uint256 i = 0; i < owners.length; i++) {
+            assertTrue(safe.isOwner(owners[i]), "every intended signer must be a safe owner");
+        }
+        // SafeProxy keeps its singleton in storage slot 0 (`masterCopy`): the proxy
+        // must delegate to SafeL2, not the L1 singleton (R4).
+        assertEq(
+            address(uint160(uint256(vm.load(safeProxy, bytes32(0))))),
+            SAFE_SINGLETON_L2,
+            "safe proxy must delegate to the SafeL2 singleton"
+        );
 
         // Deploy TimelockController and wire ADMIN_ROLE on all five contracts.
         DeployTimelock script = new DeployTimelock();
@@ -498,7 +517,11 @@ contract SafeIntegrationTest is Test {
     // Sad-path: quorum not met (1-of-3 signature)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @notice AC2: One signature from a 2-of-3 Safe reverts inside execTransaction.
+    /// @notice AC2 / governance-isomorphism.md R13: threshold - 1 valid owner signatures
+    ///         revert with Safe's own GS020, and the very same SafeTx then succeeds with
+    ///         threshold signatures. The positive twin is what makes the revert evidence
+    ///         of quorum enforcement rather than of some unrelated failure that a bare
+    ///         `expectRevert()` would also have accepted.
     function test_sadPath_quorumNotMet_oneSignerReverts() public withSnap {
         bytes memory callData = abi.encodeCall(
             VaultRegistry.registerVault,
@@ -528,11 +551,65 @@ contract SafeIntegrationTest is Test {
         );
         bytes memory sigs = _buildOneOwnerSig(txHash);
 
-        // Safe.execTransaction reverts (or returns false) when quorum not met.
-        // The Safe contract reverts with GS020 (not enough valid signatures).
-        vm.expectRevert();
+        // GS020: signatures data too short for the threshold.
+        vm.expectRevert(bytes("GS020"));
         safe.execTransaction(
             address(d.timelock), 0, scheduleCall, 0, 0, 0, 0, address(0), payable(address(0)), sigs
+        );
+
+        // The revert consumed no nonce, so the identical SafeTx is still the pending
+        // one: with a second owner's signature it must now go through.
+        assertTrue(
+            safe.execTransaction(
+                address(d.timelock),
+                0,
+                scheduleCall,
+                0,
+                0,
+                0,
+                0,
+                address(0),
+                payable(address(0)),
+                _buildTwoOwnerSigs(txHash)
+            ),
+            "the same SafeTx must execute once quorum is met"
+        );
+    }
+
+    /// @notice R13 / §1.1 "two DISTINCT owner signatures": one owner signing twice has
+    ///         the right byte length but only one owner's authority. Safe requires
+    ///         strictly ascending signers, so the repeat reverts GS026.
+    function test_sadPath_sameOwnerTwice_reverts() public withSnap {
+        bytes memory scheduleCall = abi.encodeCall(
+            d.timelock.schedule,
+            (address(registry), 0, hex"", bytes32(0), keccak256("salt-dup"), MIN_DELAY)
+        );
+        bytes32 txHash = safe.getTransactionHash(
+            address(d.timelock),
+            0,
+            scheduleCall,
+            0,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            safe.nonce()
+        );
+        bytes memory one = _buildOneOwnerSig(txHash);
+
+        vm.expectRevert(bytes("GS026"));
+        safe.execTransaction(
+            address(d.timelock),
+            0,
+            scheduleCall,
+            0,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            bytes.concat(one, one)
         );
     }
 
@@ -570,7 +647,8 @@ contract SafeIntegrationTest is Test {
         );
         bytes memory sigs = _buildWrongSignerSigs(txHash);
 
-        vm.expectRevert();
+        // GS026: a recovered signer that is not an owner.
+        vm.expectRevert(bytes("GS026"));
         safe.execTransaction(
             address(d.timelock), 0, scheduleCall, 0, 0, 0, 0, address(0), payable(address(0)), sigs
         );
