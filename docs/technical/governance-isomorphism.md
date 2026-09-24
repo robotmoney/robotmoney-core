@@ -1,10 +1,16 @@
 # Governance isomorphism: CI, Stage and Production
 
-**Status: implemented in source; not yet on the stage host.** Tracked by issue
-#1447. Migration steps 1–4 (§5) have landed in this repository and the devops
-acceptance driver; §3.0 says what changed. The stage host keeps running the
-single-key stand-in until it is redeployed from a tag that carries them, so the
-§3.1–§3.4 measurements still describe the live stage chain until then.
+**Status: governance is NOT isomorphic yet.** Tracked by issue #1447, whose
+"Definition of done" is the only authority for saying otherwise. Migration steps
+1–4 (§5) make the **stage ceremony** and the two forge fork tests
+(`SafeIntegration`, `GovernanceExecutePathAfterHandover`) use a real 2-of-3
+`SafeL2`; §3.0 says what changed. Still open, per #1447: the `DeployTimelock`
+Safe gate accepts a constant-threshold stub; stub Safes and `vm.prank(safe)`
+flows remain in the unit suites; several timelocks use EOA proposers; the
+smoke, dapp and fork e2e devnets govern from the deployer EOA; and production
+has no Safe → Timelock deploy or operating path. The stage host keeps running
+the single-key stand-in until it is redeployed from a ref that carries these
+steps, so the §3.1–§3.4 measurements still describe the live stage chain.
 
 This document specifies the governance topology every environment must present,
 and the verification that proves it. It exists because one environment currently
