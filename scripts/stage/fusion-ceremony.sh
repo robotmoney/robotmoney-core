@@ -35,7 +35,10 @@
 #          chain and re-provisions only when the ceremony is actually absent
 #          (a devnet reboot wipes the Safe, the timelock and the key funding
 #          while leaving a plausible-looking record behind). Callers use this
-#          so environment setup is never a manual prerequisite.
+#          so environment setup is never a manual prerequisite. A chain that
+#          still carries a ceremony it cannot drive (a recorded timelock or
+#          Safe with code, but a keystore or password gone) is never
+#          provisioned again: ensure exits 65 and says to reboot the devnet.
 # verify   asserts the acceptance topology on chain; exit 1 on any failure.
 #          The Safe is read from the Safe, never from the record (R12):
 #          runtime code equal to the canonical SafeProxy v1.4.1's, threshold 2,
@@ -745,6 +748,40 @@ mine_one_at() {
     || die "evm_mine rejected by $RPC_URL: this chain is not Anvil-backed"
 }
 
+# ─── a chain that already carries a ceremony ─────────────────────────────────
+# `run` provisions a FRESH devnet only. Evidence that this chain already carries
+# a ceremony: a recorded timelock or Safe that still has code, or any Safe the
+# canonical SafeProxyFactory ever created here (ProxyCreation logs). `run`
+# additionally checks that the deployer still holds gateway ADMIN_ROLE, which
+# the handover removes. A history that cannot be read is not proof of a fresh
+# chain, so it refuses too.
+PROXY_CREATION_SIG='ProxyCreation(address,address)'
+used_chain_evidence() {
+  local record="$1" name a n evidence=""
+  if [[ -n "$record" && -f "$record" ]] && jq -e . "$record" >/dev/null 2>&1; then
+    for name in timelock safe; do
+      a="$(jq -r ".addresses.$name // empty" "$record")"
+      if is_address "$a" && has_code "$a"; then evidence+="recorded $name $a still has code; "; fi
+    done
+  fi
+  n="$("$CAST" logs --rpc-url "$RPC_URL" --from-block 0 --address "$SAFE_PROXY_FACTORY" --json "$PROXY_CREATION_SIG" 2>/dev/null \
+    | jq 'length' 2>/dev/null)" || n=""
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    evidence+="the SafeProxyFactory's ProxyCreation history is unreadable, so this chain cannot be shown fresh; "
+  elif (( n > 0 )); then
+    evidence+="the canonical SafeProxyFactory already created $n Safe(s) here; "
+  fi
+  printf '%s' "$evidence"
+}
+
+# refuse_used_chain <record>: exit 65 when this chain already carries a ceremony.
+refuse_used_chain() {
+  local evidence
+  evidence="$(used_chain_evidence "$1")"
+  [[ -z "$evidence" ]] && return 0
+  die "this chain already carries a governance ceremony that is not live (${evidence%; }). Refusing to provision a second one on it: reboot the devnet (chain down/up), then run \`fusion-ceremony.sh ensure\` again" 65
+}
+
 run_ceremony() {
   command -v jq >/dev/null || die "jq is required" 65
   [[ -f "$SUMMARY" ]] || die "summary not found: $SUMMARY" 65
@@ -765,6 +802,9 @@ run_ceremony() {
   if [[ "$(call "$receipt" 'receiptCount()(uint256)')" != "0" ]]; then
     die "receipt contract already holds receipts: boot the smoke with --no-receipt-fixtures" 65
   fi
+  refuse_used_chain "${RECORD:-$OUT_DIR/fusion-stage-record.json}"
+  [[ "$(has_role "$gateway" "$ADMIN_ROLE" "$admin")" == 1 ]] \
+    || die "the deployer $admin no longer holds gateway ADMIN_ROLE: this chain was already handed over to a timelock. Refusing to provision a second ceremony on it: reboot the devnet (chain down/up)" 65
 
   local deployer_key
   deployer_key="$(repo_deployer_key "$admin")"
@@ -2129,6 +2169,13 @@ execute_governance() {
 # authorization error instead of as a missing environment. These are the
 # preconditions `run` establishes and a reboot destroys; anything subtler is
 # drift for `verify` to grade, not a reason to redeploy.
+#
+# "Not live" is only a reason to provision on a chain that carries no ceremony
+# at all. A record whose timelock or Safe still has code here, with a keystore
+# gone or a record gone stale, is a USED chain: the deployer's roles are
+# already handed over, so a second `run` would mint and fund keys and create a
+# second Safe before failing in the handover. ensure refuses that (exit 65)
+# and names the only way back: a devnet reboot.
 ceremony_is_live() {
   local timelock safe keydir who
   [[ -f "$RECORD" ]] || { info "no record at $RECORD"; return 1; }
@@ -2143,11 +2190,15 @@ ceremony_is_live() {
   # signers; it can never drive a real Safe, so it is re-provisioned.
   [[ "$(jq '.ephemeral.safe_signers // [] | length' "$RECORD")" -ge "$SAFE_THRESHOLD" ]] \
     || { info "record names no Safe signer set (it predates the real Safe)"; return 1; }
-  for who in $(jq -r '.ephemeral.safe_signers[].role' "$RECORD"); do
-    [[ -f "$keydir/$who" ]] || { info "safe signer $who keystore is gone: $keydir"; return 1; }
+  # All three owners, keystore AND password: a 2-of-3 whose third key is gone
+  # has lost its margin, and a keystore without its .pw signs nothing.
+  for who in "${SAFE_OWNER_ROLES[@]}"; do
+    jq -e --arg r "$who" '[.ephemeral.safe_signers[].role] | index($r) != null' "$RECORD" >/dev/null \
+      || { info "record names no Safe signer $who"; return 1; }
+    [[ -f "$keydir/$who" && -f "$keydir/$who.pw" ]] || { info "safe signer $who keystore or password is gone: $keydir"; return 1; }
   done
   for who in submitter approver; do
-    [[ -f "$keydir/$who" ]] || { info "$who keystore is gone: $keydir"; return 1; }
+    [[ -f "$keydir/$who" && -f "$keydir/$who.pw" ]] || { info "$who keystore or password is gone: $keydir"; return 1; }
     [[ "$("$CAST" balance "$(rec ".ephemeral.$who")" --rpc-url "$RPC_URL" 2>/dev/null)" != "0" ]] \
       || { info "$who holds no gas on this chain"; return 1; }
   done
@@ -2161,6 +2212,7 @@ ensure_ceremony() {
     verify_record
     return
   fi
+  refuse_used_chain "$RECORD"
   info "provisioning a fresh ceremony against the live chain"
   run_ceremony
 }

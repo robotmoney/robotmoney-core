@@ -381,6 +381,9 @@ done
 case "${pos[0]}" in
   keccak|calldata|sig|abi-encode|abi-decode|to-dec) exec "$REAL_CAST" "${pos[@]}" ;;
   wallet)
+    # `wallet new` is how `run` mints a key. No case here may reach it
+    # unless it means to provision, so it leaves a mark and refuses.
+    if [[ "${pos[1]:-}" == "new" ]]; then set_state wallet_new_called true; echo "fake cast: wallet new refused" >&2; exit 1; fi
     [[ "${pos[1]:-}" == "sign" ]] || { echo "fake cast: unhandled wallet ${pos[1]:-}" >&2; exit 1; }
     [[ " ${pos[*]} " == *" --no-hash "* ]] || { echo "fake cast: SafeTx digests must be signed --no-hash" >&2; exit 1; }
     [[ -n "${from:-}" ]] || { echo "fake cast: wallet sign with no known keystore" >&2; exit 1; }
@@ -669,6 +672,59 @@ else FAILED=$((FAILED + 1)); echo "FAIL a revoked role was reported as held"; gr
 
 baseline; jq --arg rwa "$(a 16)" '.vault_addresses.rmRWA = $rwa' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
 expect_fail "a demo vault the timelock does not administer" "timelock holds ADMIN_ROLE on vault $(a 16)"
+
+# ─── ensure ──────────────────────────────────────────────────────────────────
+# ensure verifies a live ceremony and provisions only a FRESH chain. A chain
+# whose recorded timelock/Safe still has code but whose ceremony cannot be
+# driven (a keystore or password gone) must be refused with exit 65 and the
+# reboot instruction, before a single key is minted.
+run_ensure() {
+  set +e
+  FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" \
+    "$CEREMONY" ensure --record "$WORK/record.json" --summary "$WORK/no-summary.log" \
+    --out-dir "$WORK/ensure-out" --rpc-url http://fake >"$WORK/out" 2>&1
+  local rc=$?
+  set -e
+  return $rc
+}
+ensure_refused() {
+  local name="$1" rc=0
+  rm -rf "$WORK/ensure-out"; mkdir -p "$WORK/ensure-out"
+  run_ensure || rc=$?
+  if [[ "$rc" == 65 ]] && grep -q "reboot the devnet (chain down/up)" "$WORK/out" \
+     && ! grep -q '^wallet_new_called' "$WORK/state" && [[ ! -e "$WORK/ensure-out/keys" ]]; then
+    PASSED=$((PASSED + 1)); echo "ok   ensure on $name is refused (exit 65, reboot the devnet, no key minted)"
+  else
+    FAILED=$((FAILED + 1)); echo "FAIL ensure on $name: exit $rc"; tail -3 "$WORK/out"
+  fi
+}
+
+baseline
+if run_ensure && grep -q "ceremony is live on this chain; provisioning nothing" "$WORK/out" \
+   && grep -q "^verify: every assertion passed" "$WORK/out"; then
+  PASSED=$((PASSED + 1)); echo "ok   ensure on a live ceremony provisions nothing and verifies"
+else
+  FAILED=$((FAILED + 1)); echo "FAIL ensure on a live ceremony"; tail -3 "$WORK/out"
+fi
+baseline; rm -f "$WORK/vkeys/submitter"
+ensure_refused "a used chain (recorded timelock and Safe have code, submitter key gone)"
+baseline; rm -f "$WORK/vkeys/approver-c"
+ensure_refused "a used chain whose approver-c keystore is gone"
+baseline; rm -f "$WORK/vkeys/approver-c.pw"
+ensure_refused "a used chain whose approver-c password is gone"
+baseline; rm -f "$WORK/vkeys/approver-c"; set_state "codehash:$(lc "$TIMELOCK")" 0x00
+ensure_refused "a used chain where only the recorded Safe still has code"
+# The positive twin: the same missing keystore on a REBOOTED chain (neither the
+# timelock nor the Safe has code) is not refused as used; ensure goes on to
+# provision, which in this harness stops at the missing summary.
+baseline; rm -f "$WORK/vkeys/approver-c"
+set_state "codehash:$(lc "$TIMELOCK")" 0x00; set_state "codehash:$(lc "$SAFE")" 0x00
+rc=0; rm -rf "$WORK/ensure-out"; mkdir -p "$WORK/ensure-out"; run_ensure || rc=$?
+if grep -q "summary not found" "$WORK/out" && ! grep -q "reboot the devnet" "$WORK/out"; then
+  PASSED=$((PASSED + 1)); echo "ok   ensure on a rebooted chain goes on to provision (exit $rc at the missing summary)"
+else
+  FAILED=$((FAILED + 1)); echo "FAIL ensure on a rebooted chain: exit $rc"; tail -3 "$WORK/out"
+fi
 
 echo "fusion-ceremony selftest: $PASSED passed, $FAILED failed"
 
