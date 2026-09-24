@@ -21,21 +21,26 @@
 #   fusion-ceremony.sh discard --record FILE
 #   fusion-ceremony.sh handover-vaults --record FILE [--rpc-url URL]
 #
-# run      provisions fresh submitter / approver / two voters / emergency keys
-#          (host-local keystores, 0600, never printed), registers the submitter
-#          as the one committee agent, gives the two voters power, deploys a
-#          RehearsalSafe owned by the approver and the TimelockController
+# run      provisions fresh submitter / approver / approver-b / approver-c /
+#          two voters / emergency keys (host-local keystores, 0600, never
+#          printed), registers the submitter as the one committee agent, gives
+#          the two voters power, creates a real 2-of-3 Safe (a SafeProxy on the
+#          canonical SafeL2 singleton via the canonical SafeProxyFactory; owners
+#          approver, approver-b, approver-c) and the TimelockController
 #          handover, then runs `verify` and writes a GENERATED record to
 #          $OUT_DIR/fusion-stage-record-<run>.json (+ fusion-stage-record.json).
+#          There is no fallback: a chain without the canonical Safe set cannot
+#          run the ceremony (docs/technical/governance-isomorphism.md R8).
 # ensure   the idempotent form of `run`: verifies the record against the live
 #          chain and re-provisions only when the ceremony is actually absent
 #          (a devnet reboot wipes the Safe, the timelock and the key funding
 #          while leaving a plausible-looking record behind). Callers use this
 #          so environment setup is never a manual prerequisite.
 # verify   asserts the acceptance topology on chain; exit 1 on any failure.
-# release  releases a receipt the way a timelocked stage must: the approver
-#          drives Safe -> TimelockController.schedule, waits the delay, then
-#          execute. Idempotent on an already-released receipt.
+# release  releases a receipt the way a timelocked stage must: the Safe
+#          schedules on the TimelockController through execTransaction signed
+#          by two distinct owners, waits the delay, then executes the same way.
+#          Idempotent on an already-released receipt.
 # propose  puts a governance draft's propose(address[],uint256[]) calldata through
 #          the same Safe -> TimelockController path, then PROVES the authority it
 #          used: currentProposalId must advance by exactly one, the stored
@@ -138,6 +143,23 @@ PROPOSER_ROLE="$("$CAST" keccak "PROPOSER_ROLE" 2>/dev/null || true)"
 EMERGENCY_ROLE="$("$CAST" keccak "EMERGENCY_ROLE" 2>/dev/null || true)"
 ROLE_GRANTED_TOPIC="$("$CAST" keccak "RoleGranted(bytes32,address,address)" 2>/dev/null || true)"
 EXECUTOR_ROLE="$("$CAST" keccak "EXECUTOR_ROLE" 2>/dev/null || true)"
+
+# Canonical Safe v1.4.1 (docs/technical/governance-isomorphism.md §2.2). Safe is
+# third-party infrastructure the fork fixture carries; this script never deploys
+# a Safe implementation, only creates an account (a SafeProxy) on it (R1, R5).
+# SafeL2, not the L1 singleton: the stage chain is a Base fork, and Base is an
+# L2 (R4).
+SAFE_L2_SINGLETON="0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"
+SAFE_PROXY_FACTORY="0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"
+SAFE_FALLBACK_HANDLER="0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99"
+ZERO_ADDRESS="0x0000000000000000000000000000000000000000"
+# The Safe's owners are three dedicated approver keys, not keys that already
+# hold another role: the submitter is the agent whose receipts the Safe
+# releases, the voters are RouterGovernance's approving body, and the
+# emergency key is the independent hot key. Owning the Safe with any of them
+# would fuse two governing bodies into one signer set.
+SAFE_OWNER_ROLES=(approver approver-b approver-c)
+SAFE_THRESHOLD=2
 
 is_address() { [[ "$1" =~ ^0x[0-9a-fA-F]{40}$ ]]; }
 lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
@@ -318,6 +340,91 @@ send() {
   jq -r '.transactionHash' <<<"$out"
 }
 
+# ─── the Safe signing path (governance-isomorphism.md R9-R11) ────────────────
+# Every privileged operation goes through Safe.execTransaction with `threshold`
+# distinct owner signatures over the EIP-712 SafeTx digest the Safe itself
+# computes (getTransactionHash), packed ascending by owner address — the port of
+# contracts/test/SafeIntegration.t.sol's _buildTwoOwnerSigs. Signatures come
+# from the keystores (`cast wallet sign --no-hash`), never from a key on a
+# command line. --no-hash signs the digest as-is, which Safe verifies as a plain
+# ECDSA signature (v 27/28).
+
+# safe_tx_hash <safe> <to> <data>: the SafeTx digest for a value-0 CALL with no
+# gas refund, at the Safe's current nonce.
+safe_tx_hash() {
+  local safe="$1" to="$2" data="$3" nonce digest
+  nonce="$(call "$safe" 'nonce()(uint256)')"
+  [[ "$nonce" =~ ^[0-9]+$ ]] || die "could not read nonce() from safe $safe"
+  digest="$(call "$safe" 'getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)'     "$to" 0 "$data" 0 0 0 0 "$ZERO_ADDRESS" "$ZERO_ADDRESS" "$nonce")"
+  [[ "$digest" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "could not read getTransactionHash() from safe $safe"
+  printf '%s' "$digest"
+}
+
+# safe_signatures <digest> <count>: `count` signatures over `digest` from the
+# record's Safe signers, lowest owner address first (Safe rejects anything not
+# strictly ascending, GS026), packed as one 0x-prefixed byte string.
+safe_signatures() {
+  local digest="$1" count="$2" keydir addr role sig packed="" n=0
+  keydir="$(rec .ephemeral.keystore_dir)"
+  while IFS=$'\t' read -r addr role; do
+    (( n < count )) || break
+    [[ -f "$keydir/$role" && -f "$keydir/$role.pw" ]] \
+      || die "safe signer keystore is gone (discarded?): $keydir/$role" 65
+    sig="$("$CAST" wallet sign --no-hash --keystore "$keydir/$role" --password-file "$keydir/$role.pw" "$digest")" \
+      || die "could not sign the SafeTx digest as $role"
+    [[ "$sig" =~ ^0x[0-9a-fA-F]{130}$ ]] || die "signature from $role is not 65 bytes: $sig"
+    packed+="${sig#0x}"
+    n=$((n + 1))
+  done < <(jq -r '.ephemeral.safe_signers[] | [(.address | ascii_downcase), .role] | @tsv' "$RECORD" | LC_ALL=C sort)
+  (( n == count )) || die "the record names $n Safe signers; $count are needed"
+  printf '0x%s' "$packed"
+}
+
+# safe_exec <safe> <to> <data>: one Safe transaction, signed by exactly the
+# threshold the Safe reports, sent by the approver (any account may relay a
+# fully-signed SafeTx; the signatures are the authority, not the sender).
+# Prints the transaction hash. A Safe whose threshold is below 2 is refused
+# rather than driven (R6).
+safe_exec() {
+  local safe="$1" to="$2" data="$3" threshold digest sigs keydir
+  threshold="$(call "$safe" 'getThreshold()(uint256)')"
+  [[ "$threshold" =~ ^[0-9]+$ ]] && (( threshold >= 2 )) \
+    || die "safe $safe reports threshold '$threshold'; refusing to drive a Safe that cannot enforce quorum (R6)"
+  digest="$(safe_tx_hash "$safe" "$to" "$data")"
+  sigs="$(safe_signatures "$digest" "$threshold")"
+  keydir="$(rec .ephemeral.keystore_dir)"
+  send --keystore "$keydir/approver" --password-file "$keydir/approver.pw" "$safe" \
+    'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)' \
+    "$to" 0 "$data" 0 0 0 0 "$ZERO_ADDRESS" "$ZERO_ADDRESS" "$sigs"
+}
+
+# create_safe <salt-nonce> <owner>...: a SafeProxy on SafeL2 via the canonical
+# factory, threshold $SAFE_THRESHOLD, the canonical fallback handler (R5).
+# Prints the new Safe's address. No fallback of any kind when the Safe set is
+# absent (R8): the fixture is what has to change, and check-fork-safe-set.sh
+# says so at fixture-build time.
+create_safe() {
+  local salt="$1" owners setup predicted name
+  shift
+  for name in "SafeL2 singleton:$SAFE_L2_SINGLETON" "SafeProxyFactory:$SAFE_PROXY_FACTORY" \
+              "CompatibilityFallbackHandler:$SAFE_FALLBACK_HANDLER"; do
+    has_code "${name#*:}" \
+      || die "canonical ${name%%:*} ${name#*:} has no code on $RPC_URL: this chain lacks the Safe v1.4.1 set (governance-isomorphism.md R2) and the ceremony has no stand-in (R8)" 65
+  done
+  owners="[$(IFS=,; echo "$*")]"
+  setup="$("$CAST" calldata 'setup(address[],uint256,address,bytes,address,address,uint256,address)' \
+    "$owners" "$SAFE_THRESHOLD" "$ZERO_ADDRESS" 0x "$SAFE_FALLBACK_HANDLER" "$ZERO_ADDRESS" 0 "$ZERO_ADDRESS")"
+  # The factory's CREATE2 address depends only on (singleton, initializer,
+  # salt), so an eth_call names the proxy before the transaction creates it.
+  predicted="$("$CAST" call --rpc-url "$RPC_URL" "$SAFE_PROXY_FACTORY" \
+    'createProxyWithNonce(address,bytes,uint256)(address)' "$SAFE_L2_SINGLETON" "$setup" "$salt" 2>/dev/null | awk '{print $1; exit}')"
+  is_address "$predicted" || die "SafeProxyFactory.createProxyWithNonce would not create a proxy (eth_call answered '$predicted')"
+  send "${CREATE_SAFE_SENDER[@]}" "$SAFE_PROXY_FACTORY" 'createProxyWithNonce(address,bytes,uint256)' \
+    "$SAFE_L2_SINGLETON" "$setup" "$salt" >/dev/null
+  has_code "$predicted" || die "createProxyWithNonce mined but $predicted has no code"
+  printf '%s' "$predicted"
+}
+
 # ─── chain time ──────────────────────────────────────────────────────────────
 # Read the latest block's timestamp as decimal seconds (cast may print hex).
 chain_time() {
@@ -437,7 +544,7 @@ run_ceremony() {
 
   declare -A addr
   local role pw
-  for role in submitter approver voter-a voter-b emergency; do
+  for role in submitter "${SAFE_OWNER_ROLES[@]}" voter-a voter-b emergency; do
     pw="$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n')"
     printf '%s' "$pw" >"$keydir/$role.pw"
     "$CAST" wallet new "$keydir" "$role" --unsafe-password "$pw" >/dev/null
@@ -448,7 +555,7 @@ run_ceremony() {
   local as_deployer=(--private-key "$deployer_key")
   local as_approver=(--keystore "$keydir/approver" --password-file "$keydir/approver.pw")
 
-  for role in submitter approver voter-a voter-b emergency; do
+  for role in submitter "${SAFE_OWNER_ROLES[@]}" voter-a voter-b emergency; do
     send "${as_deployer[@]}" --value 2ether "${addr[$role]}" >/dev/null
   done
 
@@ -473,15 +580,16 @@ run_ceremony() {
   fi
   info "two voters with power 1 each; quorum $(call "$governance" 'quorumThreshold()(uint256)')"
 
-  local work safe
+  local work safe owner_addrs=() signers_json
   work="$(mktemp -d /tmp/fusion-ceremony.XXXXXX)"
   trap 'rm -rf "$work"' RETURN
-  (cd "$REPO_ROOT" && "$FORGE" script contracts/script/DeployRehearsalSafe.s.sol:DeployRehearsalSafe \
-      --rpc-url "$RPC_URL" "${as_approver[@]}" --sender "${addr[approver]}" --broadcast --slow) >"$work/safe.log" 2>&1 \
-    || { tail -20 "$work/safe.log" >&2; die "DeployRehearsalSafe failed"; }
-  safe="$(awk '/RehearsalSafe deployed:/ { print $3 }' "$work/safe.log" | tail -1)"
-  is_address "$safe" || die "could not read the RehearsalSafe address"
-  info "rehearsal safe $safe owned by the approver"
+  for role in "${SAFE_OWNER_ROLES[@]}"; do owner_addrs+=("${addr[$role]}"); done
+  CREATE_SAFE_SENDER=("${as_approver[@]}")
+  safe="$(create_safe "$("$CAST" keccak "fusion-stage-safe-$run_id")" "${owner_addrs[@]}")"
+  info "safe $safe: ${SAFE_THRESHOLD}-of-${#owner_addrs[@]} on SafeL2, owners ${SAFE_OWNER_ROLES[*]}"
+  signers_json="$(for role in "${SAFE_OWNER_ROLES[@]}"; do
+      jq -n --arg r "$role" --arg a "${addr[$role]}" '{role: $r, address: $a}'
+    done | jq -s .)"
 
   (cd "$REPO_ROOT" && \
     VAULT_ADDRESS="$vault" GATEWAY_ADDRESS="$gateway" REGISTRY_ADDRESS="$registry" ROUTER_ADDRESS="$router" \
@@ -501,13 +609,13 @@ run_ceremony() {
      --argjson delay "$MIN_DELAY" --argjson vaults "$vault_json" --arg deployer "$admin" \
      --arg submitter "${addr[submitter]}" --arg approver "${addr[approver]}" \
      --arg voter_a "${addr[voter-a]}" --arg voter_b "${addr[voter-b]}" --arg emergency "${addr[emergency]}" \
-     --arg keydir "$keydir" \
+     --arg keydir "$keydir" --argjson safe_signers "$signers_json" \
      '. + {
         generated_by: "scripts/stage/fusion-ceremony.sh", run_id: $run, core_tag: $tag, core_sha: $sha,
         generated_at: (now | todate), chain_id: $chain, min_delay: $delay, deployer: $deployer,
         vault_addresses: $vaults,
         ephemeral: {submitter: $submitter, approver: $approver, voters: [$voter_a, $voter_b],
-                    emergency: $emergency, keystore_dir: $keydir}
+                    emergency: $emergency, keystore_dir: $keydir, safe_signers: $safe_signers}
       }' "$work/timelock.json" >"$out"
   umask 022
   chmod 644 "$out"
@@ -559,7 +667,6 @@ release_receipt() {
     echo '{"action":"already_released"}'
     return 0
   fi
-  local as_approver=(--keystore "$keydir/approver" --password-file "$keydir/approver.pw")
   data="$("$CAST" calldata 'releaseReceipt(bytes32)' "$RECEIPT_ID")"
   zero="0x0000000000000000000000000000000000000000000000000000000000000000"
   salt="$RECEIPT_ID"
@@ -570,7 +677,7 @@ release_receipt() {
   fi
   local schedule_tx="" execute_tx
   if [[ "$(call "$timelock" 'isOperation(bytes32)(bool)' "$op")" != "true" ]]; then
-    schedule_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
+    schedule_tx="$(safe_exec "$safe" "$timelock" \
       "$("$CAST" calldata 'schedule(address,uint256,bytes,bytes32,bytes32,uint256)' "$receipt" 0 "$data" "$zero" "$salt" "$delay")")"
     info "scheduled release $op; jumping chain time past the ${delay}s delay"
   fi
@@ -582,7 +689,7 @@ release_receipt() {
     jump_to "$(( ready + 1 ))"
   fi
   [[ "$(call "$timelock" 'isOperationReady(bytes32)(bool)' "$op")" == "true" ]] || die "timelock operation never became ready: $op"
-  execute_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
+  execute_tx="$(safe_exec "$safe" "$timelock" \
     "$("$CAST" calldata 'execute(address,uint256,bytes,bytes32,bytes32)' "$receipt" 0 "$data" "$zero" "$salt")")"
   [[ "$(call "$receipt" 'isReleased(bytes32)(bool)' "$RECEIPT_ID")" == "true" ]] || die "execute mined but the receipt is not released"
   jq -n --arg op "$op" --arg s "$schedule_tx" --arg e "$execute_tx" '{action:"released_via_timelock", operation:$op, schedule_tx:$s, execute_tx:$e}'
@@ -1004,7 +1111,6 @@ propose_governance() {
     fi
   fi
 
-  local as_approver=(--keystore "$keydir/approver" --password-file "$keydir/approver.pw")
   zero="0x0000000000000000000000000000000000000000000000000000000000000000"
   salt="$(propose_salt "$receipt_id" "$pid_before")"
   [[ "$salt" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "derived propose salt is not a bytes32: $salt"
@@ -1022,7 +1128,7 @@ propose_governance() {
 
   local schedule_tx="" execute_tx=""
   if [[ "$(call "$timelock" 'isOperation(bytes32)(bool)' "$op")" != "true" ]]; then
-    schedule_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
+    schedule_tx="$(safe_exec "$safe" "$timelock" \
       "$("$CAST" calldata 'schedule(address,uint256,bytes,bytes32,bytes32,uint256)' "$governance" 0 "$data" "$zero" "$salt" "$delay")")"
     info "scheduled propose $op (salt $salt); jumping chain time past the ${delay}s delay"
   fi
@@ -1034,7 +1140,7 @@ propose_governance() {
     jump_to "$(( ready + 1 ))"
   fi
   [[ "$(call "$timelock" 'isOperationReady(bytes32)(bool)' "$op")" == "true" ]] || die "timelock operation never became ready: $op"
-  execute_tx="$(send "${as_approver[@]}" "$safe" 'exec(address,uint256,bytes)' "$timelock" 0 \
+  execute_tx="$(safe_exec "$safe" "$timelock" \
     "$("$CAST" calldata 'execute(address,uint256,bytes,bytes32,bytes32)' "$governance" 0 "$data" "$zero" "$salt")")"
 
   # ── the authority path, proved rather than assumed ────────────────────────
@@ -1799,6 +1905,13 @@ ceremony_is_live() {
   has_code "$timelock" || { info "timelock $timelock has no code on this chain"; return 1; }
   has_code "$safe" || { info "safe $safe has no code on this chain"; return 1; }
   keydir="$(rec .ephemeral.keystore_dir)"
+  # A record from before issue #1447 names a single-key stand-in and no Safe
+  # signers; it can never drive a real Safe, so it is re-provisioned.
+  [[ "$(jq '.ephemeral.safe_signers // [] | length' "$RECORD")" -ge "$SAFE_THRESHOLD" ]] \
+    || { info "record names no Safe signer set (it predates the real Safe)"; return 1; }
+  for who in $(jq -r '.ephemeral.safe_signers[].role' "$RECORD"); do
+    [[ -f "$keydir/$who" ]] || { info "safe signer $who keystore is gone: $keydir"; return 1; }
+  done
   for who in submitter approver; do
     [[ -f "$keydir/$who" ]] || { info "$who keystore is gone: $keydir"; return 1; }
     [[ "$("$CAST" balance "$(rec ".ephemeral.$who")" --rpc-url "$RPC_URL" 2>/dev/null)" != "0" ]] \

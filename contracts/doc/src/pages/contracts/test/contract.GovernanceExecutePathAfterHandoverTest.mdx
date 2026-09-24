@@ -5,7 +5,7 @@ description: "R7's two halves, proved on one topology built the way the deploy s
 
 # GovernanceExecutePathAfterHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e4692028a173bf3bd2b13e72352884a265fdf994/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
 
 **Inherits:** Test
 
@@ -26,12 +26,42 @@ inversion §4.3 describes as the gap.
 so after a complete ceremony the honest end state is: governance
 can act, the deployer cannot, and the timelock administers both.
 
+<i>
+
+Fork test. The Safe that drives the timelock is the one stage now
+runs (issue #1447): a SafeProxy created through the canonical
+SafeProxyFactory on the canonical SafeL2 singleton, 2-of-3, driven
+by `execTransaction` with two owner signatures. Those contracts
+exist only on a Base fork, so CI runs this file through
+scripts/devnet/run-golden-forge-forks.sh against the golden
+fixture, like SafeIntegration.t.sol.
+
+</i>
+
 ## Constants
 
 ### ADMIN_ROLE
 
 ```solidity
 bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### SAFE_PROXY_FACTORY
+
+```solidity
+address internal constant SAFE_PROXY_FACTORY = 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67;
+```
+
+### SAFE_SINGLETON_L2
+
+```solidity
+address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+```
+
+### SAFE_FALLBACK_HANDLER
+
+```solidity
+address internal constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
 ```
 
 ### VOTING_PERIOD
@@ -150,14 +180,20 @@ MockGovVault internal vaultB;
 
 <i>
 
-The REAL rehearsal Safe stand-in, not a local mock: the
-post-handover path is only proved if the artifact a rehearsal
-actually deploys can drive the timelock.
+A real 2-of-3 Safe, the topology stage's ceremony creates: the
+post-handover path is only proved if an actual quorum-enforcing
+Safe can drive the timelock.
 
 </i>
 
 ```solidity
-RehearsalSafe internal safe;
+ISafe internal safe;
+```
+
+### ownerPks
+
+```solidity
+uint256[3] internal ownerPks;
 ```
 
 ### emergency
@@ -269,27 +305,26 @@ satisfiable by one voter.
 function test_quorumIsTwoOfTotalVotingPowerTwo() public view;
 ```
 
-<a id="test_rehearsalsafecandrivethetimelock"></a>
+<a id="test_safeisthetimelockdriverandistwoofthree"></a>
 
-### test_rehearsalSafeCanDriveTheTimelock
+### test_safeIsTheTimelockDriverAndIsTwoOfThree
 
-Without a call forwarder the handover bricks the environment:
-the stand-in is the timelock's only proposer and executor, and
-a contract that can only answer `getThreshold()` can do neither.
+The Safe is the timelock's proposer and executor, and it is a
+real 2-of-3: threshold and owner set read back from the Safe.
 
 ```solidity
-function test_rehearsalSafeCanDriveTheTimelock() public view;
+function test_safeIsTheTimelockDriverAndIsTwoOfThree() public view;
 ```
 
-<a id="test_rehearsalsafeforwarderrefusesanonowner"></a>
+<a id="test_oneownercannotdrivethetimelock"></a>
 
-### test_rehearsalSafeForwarderRefusesANonOwner
+### test_oneOwnerCannotDriveTheTimelock
 
-The forwarder is owner-gated — it stands in for a signer set,
-not for an open door.
+One owner's signature cannot schedule anything (GS020), so no
+single key drives governance (governance-isomorphism.md R10).
 
 ```solidity
-function test_rehearsalSafeForwarderRefusesANonOwner() public;
+function test_oneOwnerCannotDriveTheTimelock() public;
 ```
 
 <a id="_sixtyforty"></a>
@@ -337,4 +372,114 @@ function _proposeViaTimelock(address[] memory vaults, uint256[] memory bps)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | proposalId | `uint256` |  |
+
+<a id="_createsafe"></a>
+
+### _createSafe
+
+<i>
+
+A 2-of-3 SafeProxy on SafeL2 through the canonical factory — the
+same call stage's ceremony makes (fusion-ceremony.sh create_safe).
+
+</i>
+
+```solidity
+function _createSafe() internal returns (ISafe created);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| created | `ISafe` |  |
+
+<a id="_sortedownerpks"></a>
+
+### _sortedOwnerPks
+
+<i>
+
+Owner keys ordered by owner address, ascending (Safe requirement).
+
+</i>
+
+```solidity
+function _sortedOwnerPks() internal view returns (uint256[3] memory pks);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pks | `uint256[3]` |  |
+
+<a id="_safetxhash-address-bytes"></a>
+
+### _safeTxHash
+
+```solidity
+function _safeTxHash(address to, bytes memory data) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_sign-uint256-bytes32"></a>
+
+### _sign
+
+<i>
+
+One 65-byte (r, s, v) owner signature over a SafeTx digest.
+
+</i>
+
+```solidity
+function _sign(uint256 pk, bytes32 txHash) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pk | `uint256` |  |
+| txHash | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_safeexec-address-bytes"></a>
+
+### _safeExec
+
+<i>
+
+execTransaction with the two lowest-address owners' signatures.
+
+</i>
+
+```solidity
+function _safeExec(address to, bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
 

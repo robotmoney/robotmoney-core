@@ -12,6 +12,14 @@
 # the exact custom error the live state owes. `rpc` answers
 # anvil_setNextBlockTimestamp / evm_mine so `jump_to` can fast-forward it, and
 # can be told to refuse them so the die-if-not-anvil path is exercised too.
+#
+# The Safe is played as a real 2-of-3 would behave (issue #1447): `wallet sign`
+# returns a signature that names its signer and the digest it signed, and
+# `execTransaction` refuses too few signatures (GS020), a signature over the
+# wrong digest or from a non-owner, or signers not strictly ascending (GS026),
+# before it forwards anything to the timelock. The ceremony therefore only
+# passes if it collects `threshold` distinct owner signatures over the digest
+# the Safe itself reports, packed in the order the Safe demands.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -24,6 +32,10 @@ a() { printf '0x%040x' "$1"; }
 GATEWAY=$(a 1); ROUTER=$(a 2); GOVERNANCE=$(a 3); RECEIPT=$(a 4); IC=$(a 5); TIMELOCK=$(a 6)
 SAFE=$(a 7); REGISTRY=$(a 8); VAULT=$(a 9); DEPLOYER=$(a 10); SUBMITTER=$(a 11); APPROVER=$(a 12)
 VOTER_A=$(a 13); VOTER_B=$(a 14); EMERGENCY=$(a 15)
+# The Safe's other two owners. Record order is approver, approver-b, approver-c,
+# but by address approver-c (0x..11) sorts before approver-b (0x..1001), so the
+# ceremony only passes if it signs in address order, not record order.
+APPROVER_B=$(a 4097); APPROVER_C=$(a 17)
 VAULT_AGENT=$(a 20); VAULT_USDC=$(a 21); VAULT_PROTO=$(a 22); VAULT_RWA=$(a 23)
 ADMIN=$("$REAL_CAST" keccak ADMIN_ROLE); AGENT=$("$REAL_CAST" keccak AGENT_ROLE)
 COMMITTEE=$("$REAL_CAST" keccak COMMITTEE_AGENT_ROLE)
@@ -205,6 +217,43 @@ do_propose() {
   set_state "receiptlogs:$(lower "$tx")" "$(jq -c -n --argjson l "$log" '[$l]')"
   emit_send_result "$tx"
 }
+safe_digest() {
+  # The fake's SafeTx digest: pure keccak over (to, data, nonce), so the digest
+  # getTransactionHash reports and the one execTransaction checks agree.
+  local to="$1" data="$2" nonce="$3"
+  "$REAL_CAST" keccak "$("$REAL_CAST" abi-encode 'f(address,uint256,bytes,uint256)' "$to" 0 "$data" "$nonce")"
+}
+safe_revert() {
+  # The Safe's own revert string, the way `cast send` / `cast call` report it.
+  echo "Error: server returned an error response: error code 3: execution reverted: $1" >&2
+  exit 1
+}
+check_safe_signatures() {
+  # check_safe_signatures <safe> <to> <data> <sigs>: Safe.checkSignatures,
+  # ECDSA branch only, with the fake signature layout r=signer, s=digest.
+  local safe; safe="$(lower "$1")"
+  local to="$2" data="$3" sigs="${4#0x}" threshold nonce digest owners i chunk signer signed last=""
+  threshold="$(state "threshold:$safe" || echo 2)"
+  nonce="$(state "safenonce:$safe" || echo 0)"
+  digest="$(lower "$(safe_digest "$to" "$data" "$nonce")")"
+  owners=" $(state "owners:$safe" || true) "
+  (( ${#sigs} >= threshold * 130 )) || safe_revert GS020
+  for (( i = 0; i < threshold; i++ )); do
+    chunk="${sigs:$((i * 130)):130}"
+    signer="0x${chunk:24:40}"; signed="0x${chunk:64:64}"
+    [[ "$(lower "$signed")" == "$digest" ]] || safe_revert GS026
+    [[ "$owners" == *" $(lower "$signer") "* ]] || safe_revert GS026
+    [[ -z "$last" || "$(lower "$signer")" > "$last" ]] || safe_revert GS026
+    last="$(lower "$signer")"
+  done
+}
+handle_exec_transaction() {
+  local safe="$1" to="$2" data="$3" sigs="$4" n
+  [[ "$(state safe_accepts_anything || echo false)" == "true" ]] || check_safe_signatures "$safe" "$to" "$data" "$sigs"
+  n="$(state "safenonce:$(lower "$safe")" || echo 0)"
+  set_state "safenonce:$(lower "$safe")" "$((n + 1))"
+  handle_safe_exec "$to" "$data"
+}
 handle_safe_exec() {
   local timelock="$1" calldata="$2" sel schedule_sel execute_sel body
   sel="$(lower "${calldata:0:10}")"
@@ -316,6 +365,12 @@ done
 
 case "${pos[0]}" in
   keccak|calldata|sig|abi-encode|abi-decode|to-dec) exec "$REAL_CAST" "${pos[@]}" ;;
+  wallet)
+    [[ "${pos[1]:-}" == "sign" ]] || { echo "fake cast: unhandled wallet ${pos[1]:-}" >&2; exit 1; }
+    [[ " ${pos[*]} " == *" --no-hash "* ]] || { echo "fake cast: SafeTx digests must be signed --no-hash" >&2; exit 1; }
+    [[ -n "${from:-}" ]] || { echo "fake cast: wallet sign with no known keystore" >&2; exit 1; }
+    digest="${pos[${#pos[@]}-1]}"
+    printf '0x000000000000000000000000%s%s1b\n' "$(lower "${from#0x}")" "$(lower "${digest#0x}")" ;;
   chain-id) state chain ;;
   block-number) state blocknum || echo 0 ;;
   codehash) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
@@ -371,6 +426,10 @@ case "${pos[0]}" in
         'totalVotingPower()(uint256)') state total ;;
         'votingPower(address)(uint256)') state "power:$(lower "${pos[3]}")" || echo 0 ;;
         'owner()(address)') state "owner:$c" ;;
+        'nonce()(uint256)') state "safenonce:$c" || echo 0 ;;
+        'getThreshold()(uint256)') state "threshold:$c" || echo 2 ;;
+        'getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)')
+          safe_digest "${pos[3]}" "${pos[5]}" "${pos[12]}" ;;
         'getMinDelay()(uint256)') state delay ;;
         'setWeights(address[],uint256[])') [[ "$(state "setweights:$(lower "${from:-}")" || echo revert)" == ok ]] ;;
         'isReleased(bytes32)(bool)') state "released:$(lower "${pos[3]}")" || echo false ;;
@@ -398,7 +457,8 @@ case "${pos[0]}" in
   send)
     target="${pos[1]}"; sig="${pos[2]}"
     case "$sig" in
-      'exec(address,uint256,bytes)') handle_safe_exec "${pos[3]}" "${pos[5]}" ;;
+      'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)')
+        handle_exec_transaction "$target" "${pos[3]}" "${pos[5]}" "${pos[12]}" ;;
       'vote(uint256)') handle_vote "$target" "${pos[3]}" "${from:-}" ;;
       'execute(uint256)') handle_execute "$target" "${pos[3]}" "${from:-}" ;;
       *) echo "fake cast: unhandled send $sig" >&2; exit 1 ;;
@@ -549,25 +609,33 @@ gov_baseline() {
     for r in "$GOVERNANCE" "$TIMELOCK" "$SAFE" "$ROUTER"; do printf 'codehash:%s\t%s\n' "$r" "$HASH"; done
     printf 'power:%s\t1\npower:%s\t1\n' "$VOTER_A" "$VOTER_B"
     printf 'keystore:approver\t%s\n' "$APPROVER"
+    printf 'keystore:approver-b\t%s\n' "$APPROVER_B"
+    printf 'keystore:approver-c\t%s\n' "$APPROVER_C"
     printf 'keystore:voter-a\t%s\n' "$VOTER_A"
     printf 'keystore:voter-b\t%s\n' "$VOTER_B"
+    printf 'owners:%s\t%s %s %s\n' "$(lc "$SAFE")" "$(lc "$APPROVER")" "$(lc "$APPROVER_B")" "$(lc "$APPROVER_C")"
+    printf 'threshold:%s\t2\n' "$(lc "$SAFE")"
   } >"$WORK/state"
   rm -rf "$WORK/out-dir"
   mkdir -p "$WORK/out-dir"
   mkdir -p "$WORK/keys"
   : >"$WORK/keys/approver"; : >"$WORK/keys/approver.pw"
+  : >"$WORK/keys/approver-b"; : >"$WORK/keys/approver-b.pw"
+  : >"$WORK/keys/approver-c"; : >"$WORK/keys/approver-c.pw"
   : >"$WORK/keys/voter-a"; : >"$WORK/keys/voter-a.pw"
   : >"$WORK/keys/voter-b"; : >"$WORK/keys/voter-b.pw"
   jq -n --arg gov "$GOVERNANCE" --arg t "$TIMELOCK" --arg s "$SAFE" --arg r "$ROUTER" --arg d "$DEPLOYER" \
     --arg sub "$SUBMITTER" --arg ap "$APPROVER" --arg va "$VOTER_A" --arg vb "$VOTER_B" --arg e "$EMERGENCY" \
-    --arg keydir "$WORK/keys" --arg run "selftest" \
+    --arg keydir "$WORK/keys" --arg run "selftest" --arg apb "$APPROVER_B" --arg apc "$APPROVER_C" \
     --arg vagent "$VAULT_AGENT" --arg vusdc "$VAULT_USDC" --arg vproto "$VAULT_PROTO" --arg vrwa "$VAULT_RWA" \
     '{chain_id: 918453, min_delay: 120, deployer: $d, run_id: $run,
       addresses: {gateway: $t, router: $r, governance: $gov, consensus_receipt: $t, ic_policy: $t,
                   timelock: $t, safe: $s, registry: $t, vault: $vusdc, emergency: $e},
       code_hashes: {},
       vault_addresses: {rmUSDC: $vusdc, rmPROTO: $vproto, rmAGENT: $vagent, rmRWA: $vrwa},
-      ephemeral: {submitter: $sub, approver: $ap, voters: [$va, $vb], emergency: $e, keystore_dir: $keydir}}' \
+      ephemeral: {submitter: $sub, approver: $ap, voters: [$va, $vb], emergency: $e, keystore_dir: $keydir,
+                 safe_signers: [{role: "approver", address: $ap}, {role: "approver-b", address: $apb},
+                                {role: "approver-c", address: $apc}]}}' \
     >"$WORK/record.json"
 }
 
@@ -948,6 +1016,61 @@ gov_ok "execute still runs the transition over a propose-less witness file"
    && "$(json_field .weights_unchanged_until_execute.reason)" == *"no propose weight witness"* ]] \
   && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   vote witnesses alone cannot carry the weights-unchanged claim"; } \
   || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL propose-less execute claimed $(json_field_c .weights_unchanged_until_execute)"; }
+
+# ─── the Safe signing path (issue #1447) ─────────────────────────────────────
+# release is the other Safe -> timelock caller. The fake Safe forwards nothing
+# unless execTransaction carries `threshold` owner signatures over its own
+# digest, ascending — so each case below is graded by what the Safe accepted.
+run_release() {
+  set +e
+  FAKE_STATE="$WORK/state" REAL_CAST="$REAL_CAST" CAST="$WORK/cast" \
+    "$CEREMONY" release --record "$WORK/record.json" --receipt-id "$RECEIPT_A" --rpc-url http://fake \
+    >"$WORK/out" 2>"$WORK/err"
+  local rc=$?
+  set -e
+  cat "$WORK/out" "$WORK/err" >"$WORK/out.combined" 2>/dev/null || true
+  return $rc
+}
+release_ok() {
+  local name="$1"
+  if run_release && [[ "$(jq -r .action "$WORK/out")" == "released_via_timelock" ]] \
+     && [[ "$(awk -F'\t' -v k="released:$(lc "$RECEIPT_A")" '$1 == k { print $2 }' "$WORK/state")" == "true" ]]; then
+    GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   $name"
+  else
+    GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: $(tail -3 "$WORK/out.combined")"
+  fi
+}
+release_refused() {
+  local name="$1" needle="$2"
+  if run_release; then
+    GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: release exited 0"
+  elif grep -qF -- "$needle" "$WORK/out.combined"; then
+    GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   $name is refused"
+  else
+    GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL $name: refused without naming '$needle' — $(tail -3 "$WORK/out.combined")"
+  fi
+}
+
+gov_baseline
+release_ok "release schedules and executes through a 2-of-3 Safe (signers packed by address, not record order)"
+[[ "$(awk -F'\t' -v k="safenonce:$(lc "$SAFE")" '$1 == k { print $2 }' "$WORK/state")" == "2" ]] \
+  && { GOV_PASSED=$((GOV_PASSED + 1)); echo "ok   release spent exactly two Safe nonces (schedule, execute)"; } \
+  || { GOV_FAILED=$((GOV_FAILED + 1)); echo "FAIL release left Safe nonce at $(awk -F'\t' -v k="safenonce:$(lc "$SAFE")" '$1 == k { print $2 }' "$WORK/state")"; }
+
+gov_baseline; set_state "threshold:$(lc "$SAFE")" 1
+release_refused "a Safe reporting threshold 1" "cannot enforce quorum"
+
+gov_baseline
+jq '.ephemeral.safe_signers |= .[:1]' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
+release_refused "a record naming a single Safe signer" "2 are needed"
+
+gov_baseline; rm -f "$WORK/keys/approver-c"
+release_refused "a discarded Safe signer keystore" "safe signer keystore is gone"
+
+# The Safe itself, not the ceremony, is the last line: an owner set that does
+# not include a signer the record names makes the Safe refuse (GS026).
+gov_baseline; set_state "owners:$(lc "$SAFE")" "$(lc "$APPROVER") $(lc "$APPROVER_B") $(lc "$DEPLOYER")"
+release_refused "a record signer the Safe does not list as an owner" "GS026"
 
 echo "governance actions selftest: $GOV_PASSED passed, $GOV_FAILED failed"
 

@@ -105,7 +105,7 @@ jobs:
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover}.t.sol"
           --no-match-contract "UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
 
       # Fusion's named evidence files need an execution boundary in the CI log.
@@ -113,7 +113,7 @@ jobs:
       # evidence reader to know that an individual file actually ran.
       - name: Fusion contract evidence targets
         run: |
-          for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant GovernanceExecutePathAfterHandover QuorumFloorInvariant; do
+          for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant QuorumFloorInvariant; do
             echo "::group::contracts/test/${f}.t.sol:"
             forge test -vvv --match-path "contracts/test/${f}.t.sol"
             echo "::endgroup::"
@@ -264,6 +264,16 @@ jobs:
 
       - name: forge test (Safe multisig integration — issue 422)
         run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/SafeIntegration.t.sol"
+
+      - name: forge test (governance execute path through a real 2-of-3 Safe — issue 1447)
+        # A Fusion named evidence file (AC-GOV-03). It drives the timelock through
+        # a canonical SafeL2 proxy, which exists only on the Base fork, so it moved
+        # here from the unit job's evidence loop; the group markers keep the
+        # per-file boundary the external evidence reader looks for.
+        run: |
+          echo "::group::contracts/test/GovernanceExecutePathAfterHandover.t.sol:"
+          scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/GovernanceExecutePathAfterHandover.t.sol"
+          echo "::endgroup::"
 
       - name: Assert missing fixture is red
         run: |
@@ -497,8 +507,8 @@ jobs:
         #   - `UniV3/UniV4/Aerodrome AssetPositionAdapterForkTest`: LOUD-SKIP fork
         #     tests (issues #1118 / #1124 / #1125) whose setUp reverts without a fork
         #     RPC, which this job does not set. They run in `fork-regressions`.
-        #   - `DeploySeedDeposit` / `SafeIntegration` / `VaultForkRegressions`: fork
-        #     tests, same reason.
+        #   - `DeploySeedDeposit` / `SafeIntegration` / `VaultForkRegressions` /
+        #     `GovernanceExecutePathAfterHandover`: fork tests, same reason.
         #
         # The wrapper measures the run's peak RSS and fails the job above 50% of
         # runner RAM, so the next contract-adding PR meets an explanatory red gate
@@ -508,7 +518,7 @@ jobs:
           forge coverage --report lcov
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info
