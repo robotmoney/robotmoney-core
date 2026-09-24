@@ -41,6 +41,9 @@ ADMIN=$("$REAL_CAST" keccak ADMIN_ROLE); AGENT=$("$REAL_CAST" keccak AGENT_ROLE)
 COMMITTEE=$("$REAL_CAST" keccak COMMITTEE_AGENT_ROLE)
 PROPOSER=$("$REAL_CAST" keccak PROPOSER_ROLE); EXECUTOR=$("$REAL_CAST" keccak EXECUTOR_ROLE)
 HASH=0x$(printf 'ab%.0s' {1..32})
+# The canonical SafeProxy v1.4.1 runtime code hash verify pins (R12).
+SAFE_PROXY_HASH=0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c
+SAFE_HANDLER=0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99
 
 # ─── the fake chain ──────────────────────────────────────────────────────────
 # `verify` only ever reads, so the original fake cast was a pure table lookup.
@@ -242,8 +245,13 @@ check_safe_signatures() {
     chunk="${sigs:$((i * 130)):130}"
     signer="0x${chunk:24:40}"; signed="0x${chunk:64:64}"
     [[ "$(lower "$signed")" == "$digest" ]] || safe_revert GS026
-    [[ "$owners" == *" $(lower "$signer") "* ]] || safe_revert GS026
-    [[ -z "$last" || "$(lower "$signer")" > "$last" ]] || safe_revert GS026
+    # `safe_accepts_non_owners` / `safe_accepts_duplicates`: a Safe whose
+    # owner or ordering check is broken, for verify's GS026 controls to catch.
+    [[ "$owners" == *" $(lower "$signer") "* || "$(state safe_accepts_non_owners || echo false)" == true ]] \
+      || safe_revert GS026
+    if ! [[ "$(lower "$signer")" == "$last" && "$(state safe_accepts_duplicates || echo false)" == true ]]; then
+      [[ -z "$last" || "$(lower "$signer")" > "$last" ]] || safe_revert GS026
+    fi
     last="$(lower "$signer")"
   done
 }
@@ -347,6 +355,13 @@ handle_execute() {
   emit_send_result "$tx"
 }
 
+# `unreadable:<address>`: every read of that account fails, as an RPC that
+# times out or a node that lost the account would.
+unreadable() {
+  [[ "$(state "unreadable:$(lower "$1")" || echo false)" != true ]] \
+    || { echo "fake cast: request for $1 timed out" >&2; exit 1; }
+}
+
 pos=(); data=""; field=""; keystore=""; privkey=""
 while (( $# )); do
   case "$1" in
@@ -373,12 +388,20 @@ case "${pos[0]}" in
     printf '0x000000000000000000000000%s%s1b\n' "$(lower "${from#0x}")" "$(lower "${digest#0x}")" ;;
   chain-id) state chain ;;
   block-number) state blocknum || echo 0 ;;
-  codehash) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
-  code) state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
+  codehash) unreadable "${pos[1]}"; state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
+  code) unreadable "${pos[1]}"; state "codehash:$(lower "${pos[1]}")" || echo 0x00 ;;
   balance) state "balance:$(lower "${pos[1]}")" || echo 0 ;;
   storage)
-    # Only slot 0 of a Safe proxy is ever read: its masterCopy (singleton).
-    printf '0x000000000000000000000000%s\n' "$(lower "$(state "singleton:$(lower "${pos[1]}")" || echo 0x0000000000000000000000000000000000000000)" | sed 's/^0x//')" ;;
+    unreadable "${pos[1]}"
+    # A Safe proxy's slot 0 (masterCopy), its guard slot and its fallback
+    # handler slot; anything else reads zero, as unwritten storage does.
+    case "$(lower "${pos[2]:-0}")" in
+      0|0x0) slotkey=singleton ;;
+      0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8) slotkey=guard ;;
+      0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5) slotkey=handler ;;
+      *) slotkey=none ;;
+    esac
+    printf '0x000000000000000000000000%s\n' "$(lower "$(state "$slotkey:$(lower "${pos[1]}")" || echo 0x0000000000000000000000000000000000000000)" | sed 's/^0x//')" ;;
   block)
     [[ "$field" == "timestamp" ]] || { echo "fake cast: unhandled block field '$field'" >&2; exit 1; }
     current_clock ;;
@@ -420,6 +443,7 @@ case "${pos[0]}" in
     jq -n --argjson logs "$(state "receiptlogs:$tx" || echo '[]')" '{logs:$logs}' ;;
   call)
     c="$(lower "${pos[1]}")"; sig="${pos[2]:-}"
+    unreadable "$c"
     if [[ -z "$sig" && -n "$data" ]]; then
       handle_raw_data_call "${from:-}"
     else
@@ -429,8 +453,12 @@ case "${pos[0]}" in
         'totalVotingPower()(uint256)') state total ;;
         'votingPower(address)(uint256)') state "power:$(lower "${pos[3]}")" || echo 0 ;;
         'owner()(address)') state "owner:$c" ;;
-        'nonce()(uint256)') state "safenonce:$c" || echo 0 ;;
+        'nonce()(uint256)')
+          [[ "$(state nonce_unreadable || echo false)" != true ]] || { echo "fake cast: nonce() timed out" >&2; exit 1; }
+          state "safenonce:$c" || echo 0 ;;
         'getThreshold()(uint256)') state "threshold:$c" || echo 2 ;;
+        'getModulesPaginated(address,uint256)(address[],address)')
+          printf '[%s]\n0x0000000000000000000000000000000000000001\n' "$(state "modules:$c" || true)" ;;
         'getOwners()(address[])')
           owners_list="$(state "owners:$c" || true)"
           printf '[%s]\n' "$(tr ' ' '\n' <<<"$owners_list" | sed '/^$/d' | paste -sd, - | sed 's/,/, /g')" ;;
@@ -484,10 +512,13 @@ baseline() {
     printf 'owners:%s\t%s %s %s\n' "$(lc "$SAFE")" "$(lc "$APPROVER")" "$(lc "$APPROVER_B")" "$(lc "$APPROVER_C")"
     printf 'threshold:%s\t2\n' "$(lc "$SAFE")"
     printf 'singleton:%s\t%s\n' "$(lc "$SAFE")" "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"
-    printf 'keystore:%s\t%s\n' approver "$APPROVER" approver-b "$APPROVER_B" approver-c "$APPROVER_C"
-    for r in "$GATEWAY" "$ROUTER" "$GOVERNANCE" "$RECEIPT" "$IC" "$TIMELOCK" "$SAFE" "$REGISTRY" "$VAULT"; do
+    printf 'handler:%s\t%s\n' "$(lc "$SAFE")" "$SAFE_HANDLER"
+    printf 'keystore:%s\t%s\n' approver "$APPROVER" approver-b "$APPROVER_B" approver-c "$APPROVER_C" \
+      submitter "$SUBMITTER" voter-a "$VOTER_A"
+    for r in "$GATEWAY" "$ROUTER" "$GOVERNANCE" "$RECEIPT" "$IC" "$TIMELOCK" "$REGISTRY" "$VAULT"; do
       printf 'codehash:%s\t%s\n' "$r" "$HASH"
     done
+    printf 'codehash:%s\t%s\n' "$SAFE" "$SAFE_PROXY_HASH"
     printf 'balance:%s\t2000000000000000000\nbalance:%s\t2000000000000000000\n' "$SUBMITTER" "$APPROVER"
     printf 'role:%s:%s:%s\ttrue\n' "$GATEWAY" "$AGENT" "$SUBMITTER" "$IC" "$COMMITTEE" "$SUBMITTER" \
       "$ROUTER" "$ADMIN" "$GOVERNANCE" "$TIMELOCK" "$PROPOSER" "$SAFE" "$TIMELOCK" "$EXECUTOR" "$SAFE"
@@ -501,19 +532,19 @@ baseline() {
   jq -n --arg g "$GATEWAY" --arg r "$ROUTER" --arg gov "$GOVERNANCE" --arg rc "$RECEIPT" --arg ic "$IC" \
     --arg t "$TIMELOCK" --arg s "$SAFE" --arg reg "$REGISTRY" --arg v "$VAULT" --arg d "$DEPLOYER" \
     --arg sub "$SUBMITTER" --arg ap "$APPROVER" --arg va "$VOTER_A" --arg vb "$VOTER_B" --arg e "$EMERGENCY" --arg h "$HASH" \
-    --arg apb "$APPROVER_B" --arg apc "$APPROVER_C" --arg keydir "$WORK/vkeys" \
+    --arg apb "$APPROVER_B" --arg apc "$APPROVER_C" --arg keydir "$WORK/vkeys" --arg sh "$SAFE_PROXY_HASH" \
     '{chain_id: 918453, min_delay: 120, deployer: $d,
       addresses: {gateway: $g, router: $r, governance: $gov, consensus_receipt: $rc, ic_policy: $ic,
                   timelock: $t, safe: $s, registry: $reg, vault: $v, emergency: $e},
       code_hashes: {gateway: $h, router: $h, governance: $h, consensus_receipt: $h, ic_policy: $h,
-                    timelock: $h, safe: $h, registry: $h, vault: $h},
+                    timelock: $h, safe: $sh, registry: $h, vault: $h},
       vault_addresses: {rmUSDC: $v, rmPROTO: $v, rmAGENT: $v, rmRWA: $v},
       ephemeral: {submitter: $sub, approver: $ap, voters: [$va, $vb], emergency: $e, keystore_dir: $keydir,
                  safe_signers: [{role: "approver", address: $ap}, {role: "approver-b", address: $apb},
                                 {role: "approver-c", address: $apc}]}}' >"$WORK/record.json"
   rm -rf "$WORK/vkeys"; mkdir -p "$WORK/vkeys"
   local role
-  for role in approver approver-b approver-c; do : >"$WORK/vkeys/$role"; : >"$WORK/vkeys/$role.pw"; done
+  for role in approver approver-b approver-c submitter voter-a; do : >"$WORK/vkeys/$role"; : >"$WORK/vkeys/$role.pw"; done
 }
 
 lc() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
@@ -542,6 +573,18 @@ expect_fail() {
     PASSED=$((PASSED + 1)); echo "ok   $name is refused"
   else
     FAILED=$((FAILED + 1)); echo "FAIL $name: exited non-zero without naming '$needle'"; grep FAIL "$WORK/out" | head -3
+  fi
+}
+
+# expect_summary <name> <rc>: verify's own tail line was printed and it exited
+# exactly <rc>, so the run ended in verify's summary rather than in an abort.
+expect_summary() {
+  local name="$1" want="$2" rc=0
+  run_verify || rc=$?
+  if [[ "$rc" == "$want" ]] && grep -qE '^verify: ([0-9]+ assertion\(s\) failed|every assertion passed)' "$WORK/out"; then
+    PASSED=$((PASSED + 1)); echo "ok   $name reaches verify's summary line (exit $rc)"
+  else
+    FAILED=$((FAILED + 1)); echo "FAIL $name: exit $rc, summary line $(grep -c '^verify: ' "$WORK/out") time(s)"; tail -3 "$WORK/out"
   fi
 }
 
@@ -576,6 +619,33 @@ baseline; set_state "owners:$(lc "$SAFE")" ""
 expect_fail "a Safe with no readable owner set" "safe owners are exactly the record's signers"
 baseline; jq --arg d "$DEPLOYER" '.ephemeral.safe_signers[2].address = $d' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
 expect_fail "the deployer reused as a Safe signer" "are distinct"
+
+# R12 beyond the configuration: the code at the Safe address, its modules, its
+# guard and its fallback handler are all read from chain, and a Safe that
+# accepts a repeated or a non-owner signature is caught by its GS026 controls.
+baseline; set_state "codehash:$(lc "$SAFE")" "$HASH"
+jq --arg h "$HASH" '.code_hashes.safe = $h' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
+expect_fail "a fake Safe (not SafeProxy code) the record agrees with" "safe runtime code is the canonical SafeProxy v1.4.1"
+baseline; set_state "modules:$(lc "$SAFE")" "$DEPLOYER"
+expect_fail "a Safe with a module enabled" "safe has no modules enabled"
+baseline; set_state "guard:$(lc "$SAFE")" "$DEPLOYER"
+expect_fail "a Safe with a guard set" "safe has no guard set"
+baseline; set_state "handler:$(lc "$SAFE")" "$DEPLOYER"
+expect_fail "a Safe with a non-canonical fallback handler" "fallback handler is the canonical CompatibilityFallbackHandler"
+baseline; set_state safe_accepts_duplicates true
+expect_fail "a Safe that counts one owner's signature twice" "one owner's signature twice cannot drive the safe"
+baseline; set_state safe_accepts_non_owners true
+expect_fail "a Safe that counts non-owner signatures" "two non-owner signatures cannot drive the safe"
+baseline; rm -f "$WORK/vkeys/voter-a.pw"
+expect_fail "non-owner keystores gone: the non-owner control is unproven, not assumed" "two non-owner signatures cannot drive the safe"
+# Item 2 of the #1447 review: an unreadable Safe is a list of FAIL lines and the
+# summary, never a silent abort half way through verify.
+baseline; set_state "unreadable:$(lc "$SAFE")" true
+expect_fail "an unreadable Safe" "safe threshold is 2"
+expect_summary "an unreadable Safe" 1
+baseline; set_state nonce_unreadable true
+expect_fail "a Safe whose nonce() cannot be read" "one owner signature cannot drive the safe (unproven: could not read nonce()"
+expect_summary "a Safe whose nonce() cannot be read" 1
 
 baseline; set_state "role:$(lc "$RECEIPT"):$ADMIN:$(lc "$DEPLOYER")" true
 expect_fail "deployer keeping receipt ADMIN_ROLE" "deployer holds no ADMIN_ROLE on consensus_receipt"
