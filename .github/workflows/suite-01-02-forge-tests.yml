@@ -430,7 +430,11 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          # Pinned, not the floating `stable` channel: the self-test reads cast's
+          # output formats (abi-decode, wallet, keccak) through a fake chain, so
+          # a cast release that changes one must be adopted on purpose. v1.8.3 is
+          # the release this suite was last run green on.
+          version: v1.8.3
 
       - name: Fusion ceremony self-test (issue #1447)
         run: |

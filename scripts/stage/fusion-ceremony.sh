@@ -172,7 +172,7 @@ ZERO_ADDRESS="0x0000000000000000000000000000000000000000"
 #   anvil --load-state testing/fixtures/fork-state/CURRENT.anvil-state --chain-id 918453
 # creating a proxy with SafeProxyFactory.createProxyWithNonce(SafeL2,
 # setup([3 owners], 2, 0, 0x, CompatibilityFallbackHandler, 0, 0, 0), 7) and
-# reading `cast codehash <proxy>` (345 bytes of runtime code). The PR review
+# reading `cast codehash <proxy>` (171 bytes of runtime code). The PR review
 # measured the same value independently. Anything else at the Safe address is
 # not a Safe, however it answers getThreshold()/getOwners() (R12).
 SAFE_PROXY_RUNTIME_CODEHASH="0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c"
@@ -873,6 +873,9 @@ run_ceremony() {
   local role pw
   for role in submitter "${SAFE_OWNER_ROLES[@]}" voter-a voter-b emergency; do
     pw="$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n')"
+    # Never hand cast an empty CAST_PASSWORD: a funded key must not sit in a
+    # keystore under an empty password, or wait on a prompt nobody answers.
+    [[ -n "$pw" ]] || die "could not generate a keystore password for $role (/dev/urandom unreadable?)"
     printf '%s' "$pw" >"$keydir/$role.pw"
     # The password reaches cast through its environment (CAST_PASSWORD, the
     # env form of --unsafe-password), never through argv, which every user on
