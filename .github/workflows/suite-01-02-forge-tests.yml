@@ -431,7 +431,7 @@ jobs:
       # ASSERTION_FLOOR so a run that silently did less (a section skipped, a
       # truncated file, a lost exit status) is red either way. Raise both
       # together when cases are added.
-      CEREMONY_SELFTEST_FLOOR: "135"
+      CEREMONY_SELFTEST_FLOOR: "136"
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # scripts/stage/tests/fusion-ceremony-selftest.sh (issue #1447): the stage
     # governance ceremony's verify/ensure/run/release/propose/vote/execute

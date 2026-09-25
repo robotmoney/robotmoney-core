@@ -625,6 +625,9 @@ case "${pos[0]}" in
         'votingPower(address)(uint256)') state "power:$(lower "${pos[3]}")" || echo 0 ;;
         'owner()(address)') state "owner:$c" ;;
         'agentOwner(address)(address)')
+          # `agentowner_unreadable`: the one agent whose owner read fails.
+          [[ "$(state agentowner_unreadable || true)" != "$(lower "${pos[3]}")" ]] \
+            || { echo "fake cast: agentOwner(${pos[3]}) read failed" >&2; exit 1; }
           state "agentowner:$c:$(lower "${pos[3]}")" || echo 0x0000000000000000000000000000000000000000 ;;
         'nonce()(uint256)')
           [[ "$(state nonce_unreadable || echo false)" != true ]] || { echo "fake cast: nonce() timed out" >&2; exit 1; }
@@ -978,6 +981,11 @@ baseline; set_state "agentowner:$(lc "$GATEWAY"):$(lc "$GIVEN_AGENT")" "$(lc "$D
 expect_fail "the deployer still owning an agent another owner handed to it" "no agent authorized by the deployer is still deployer-owned"
 baseline; set_state agentlogs_fail true
 expect_fail "unreadable gateway agent logs: agent ownership unproven, not assumed" "no agent authorized by the deployer is still deployer-owned (unproven"
+# One logged agent whose agentOwner read fails is a FAIL naming it, never a
+# silent skip. The submitter's owner stays readable, so only this branch fires.
+baseline; set_state agentowner_unreadable "$(lc "$DEPLOY_AGENT")"
+expect_fail "an agent whose owner cannot be read: ownership unproven, not assumed" \
+  "no agent authorized by the deployer is still deployer-owned (.*$(lc "$DEPLOY_AGENT")(owner unreadable)"
 baseline; set_state "agentowner:$(lc "$GATEWAY"):$(lc "$SUBMITTER")" "$(lc "$APPROVER")"
 expect_fail "the submitter agent owned by an account other than the timelock" "timelock owns the submitter agent"
 
@@ -1894,7 +1902,7 @@ TOTAL_PASSED=$((PASSED + GOV_PASSED + STUB_PASSED))
 # Executed-assertion floor. Every `ok` line above is an assertion that RAN; a
 # run that silently skips a section prints fewer and must not pass. Raise the
 # floor whenever cases are added (CI checks the same line: suite-01-02).
-ASSERTION_FLOOR=135
+ASSERTION_FLOOR=136
 echo "fusion-ceremony selftest TOTAL: $TOTAL_PASSED passed, $TOTAL_FAILED failed (floor $ASSERTION_FLOOR)"
 SELFTEST_COMPLETE=1
 if (( TOTAL_PASSED < ASSERTION_FLOOR )); then
