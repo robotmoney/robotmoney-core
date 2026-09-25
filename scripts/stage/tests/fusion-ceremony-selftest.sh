@@ -59,7 +59,12 @@ VOTER_A=$(a 13); VOTER_B=$(a 14); EMERGENCY=$(a 15)
 # fails every Safe transaction here rather than passing by luck.
 APPROVER=$(a 8192); APPROVER_B=$(a 4097); APPROVER_C=$(a 17)
 VAULT_AGENT=$(a 20); VAULT_USDC=$(a 21); VAULT_PROTO=$(a 22); VAULT_RWA=$(a 23)
+# The smoke deploy's gateway agent (Deploy.s.sol), authorized by the deployer
+# like the submitter and handed to the timelock at handover (issue #1476).
+DEPLOY_AGENT=$(a 24)
 ADMIN=$("$REAL_CAST" keccak ADMIN_ROLE); AGENT=$("$REAL_CAST" keccak AGENT_ROLE)
+AUTH_TOPIC=$("$REAL_CAST" keccak 'AgentAuthorized(address,address,uint64,uint256,uint256,address)')
+XFER_TOPIC=$("$REAL_CAST" keccak 'AgentOwnershipTransferred(address,address,address)')
 COMMITTEE=$("$REAL_CAST" keccak COMMITTEE_AGENT_ROLE)
 PROPOSER=$("$REAL_CAST" keccak PROPOSER_ROLE); EXECUTOR=$("$REAL_CAST" keccak EXECUTOR_ROLE)
 HASH=0x$(printf 'ab%.0s' {1..32})
@@ -415,6 +420,15 @@ append_state() {
   local cur; cur="$(state "$1" || true)"
   [[ " $cur " == *" $2 "* ]] || set_state "$1" "${cur:+$cur }$2"
 }
+# append_agent_log <gateway> <topic0> <address...>: one gateway log whose
+# topics after topic 0 are the given addresses, left-padded to 32 bytes, kept
+# in the `agentlogs` JSON array that eth_getLogs filters (issue #1476).
+append_agent_log() {
+  local gateway="$1" topics x; topics="$(lower "$2")"; shift 2
+  for x in "$@"; do topics+=" $(pad_addr "$x")"; done
+  set_state agentlogs "$(jq -c --arg a "$(lower "$gateway")" --arg t "$topics" \
+    '. + [{address: $a, topics: ($t | split(" "))}]' <<<"$(state agentlogs || echo '[]')")"
+}
 # `accept_sends`: the writes `run` makes before the handover, applied the way
 # the contracts would, so a whole `run` can reach its record and its verify.
 # Without it every one of these sends is refused, as before.
@@ -427,7 +441,9 @@ handle_run_send() {
   case "$sig" in
     authorizeAgent\(*)
       set_state "role:$target:$agent:$(lower "$1")" true
-      append_state "logs:$target:$agent" "$(lower "$1")" ;;
+      append_state "logs:$target:$agent" "$(lower "$1")"
+      set_state "agentowner:$target:$(lower "$1")" "$(lower "${from:-}")"
+      append_agent_log "$target" "$("$REAL_CAST" keccak 'AgentAuthorized(address,address,uint64,uint256,uint256,address)')" "$1" "${from:-}" ;;
     'committeeRegister(address,string)')
       # Sent to the gateway, which forwards it to the IC policy (`ic_policy`).
       local ic; ic="$(lower "$(state ic_policy)")"
@@ -542,7 +558,23 @@ case "${pos[0]}" in
     current_clock ;;
   rpc)
     case "${pos[1]:-}" in
-      eth_getLogs) state rpclogs || echo '[]' ;;
+      eth_getLogs)
+        # RoleGranted queries answer from `rpclogs` as they always have. The
+        # gateway agent-event queries (issue #1476) are filtered from
+        # `agentlogs` by address and by every non-null topic, as a node would.
+        # `agentlogs_fail`: those reads fail, as an RPC that times out would.
+        filter="${pos[2]:-}"; [[ -n "$filter" ]] || filter='{}'
+        t0="$(jq -r '.topics[0] // ""' <<<"$filter" | tr '[:upper:]' '[:lower:]')"
+        if [[ "$t0" == "$(lower "$("$REAL_CAST" keccak 'RoleGranted(bytes32,address,address)')")" ]]; then
+          state rpclogs || echo '[]'
+        else
+          [[ "$(state agentlogs_fail || echo false)" != true ]] || { echo "fake cast: eth_getLogs timed out" >&2; exit 1; }
+          jq -c --argjson f "$filter" '[.[] | . as $l
+            | select((($f.address // $l.address) | ascii_downcase) == ($l.address | ascii_downcase))
+            | select(all(range(0; ($f.topics // []) | length);
+                ($f.topics[.] == null) or (($f.topics[.] | ascii_downcase) == (($l.topics[.] // "") | ascii_downcase))))]' \
+            <<<"$(state agentlogs || echo '[]')"
+        fi ;;
       anvil_setNextBlockTimestamp)
         [[ "$(state anvil_reject || echo false)" != "true" ]] || { echo "fake cast: rpc refused (chain is not anvil-backed)" >&2; exit 1; }
         set_state clock "${pos[2]}" ;;
@@ -588,6 +620,8 @@ case "${pos[0]}" in
         'totalVotingPower()(uint256)') state total ;;
         'votingPower(address)(uint256)') state "power:$(lower "${pos[3]}")" || echo 0 ;;
         'owner()(address)') state "owner:$c" ;;
+        'agentOwner(address)(address)')
+          state "agentowner:$c:$(lower "${pos[3]}")" || echo 0x0000000000000000000000000000000000000000 ;;
         'nonce()(uint256)')
           [[ "$(state nonce_unreadable || echo false)" != true ]] || { echo "fake cast: nonce() timed out" >&2; exit 1; }
           state "safenonce:$c" || echo 0 ;;
@@ -689,6 +723,26 @@ for c in "$VAULT_ADDRESS" "$GATEWAY_ADDRESS" "$REGISTRY_ADDRESS" "$ROUTER_ADDRES
   set_state "role:$(lower "$c"):$admin:$deployer" false
 done
 set_state "role:$(lower "$GATEWAY_ADDRESS"):$root:$deployer" false
+# AGENT_ADDRESSES (issue #1476): required, as in the real script (an unset or
+# empty value stops the run, `none` lists no agent). Each listed agent must be
+# deployer-owned, and moves to the timelock with an AgentOwnershipTransferred
+# log, as the real script's transferAgentOwnership calls do.
+[[ -n "${AGENT_ADDRESSES:-}" ]] \
+  || { echo "fake forge: AGENT_ADDRESSES must be set: the deployer-owned gateway agents, comma-separated, or none" >&2; exit 1; }
+set_state forge_agent_addresses "$AGENT_ADDRESSES"
+agent_list="$AGENT_ADDRESSES"
+[[ "$agent_list" != none ]] || agent_list=""
+gw="$(lower "$GATEWAY_ADDRESS")"
+xfer="$(lower "$("$REAL_CAST" keccak 'AgentOwnershipTransferred(address,address,address)')")"
+pad() { printf '0x000000000000000000000000%s' "$(lower "${1#0x}")"; }
+for ag in ${agent_list//,/ }; do
+  ag="$(lower "$ag")"
+  [[ "$(state "agentowner:$gw:$ag" || echo none)" == "$deployer" ]] \
+    || { echo "fake forge: AGENT_ADDRESSES entry is not owned by the deployer: $ag" >&2; exit 1; }
+  set_state "agentowner:$gw:$ag" "$tl"
+  set_state agentlogs "$(jq -c --arg a "$gw" --arg t0 "$xfer" --arg t1 "$(pad "$ag")" --arg t2 "$(pad "$deployer")" --arg t3 "$(pad "$tl")" \
+    '. + [{address: $a, topics: [$t0, $t1, $t2, $t3]}]' <<<"$(state agentlogs || echo '[]')")"
+done
 codehash_of() { state "codehash:$(lower "$1")"; }
 jq -n --argjson chain "$(state chain)" --argjson delay "$TIMELOCK_MIN_DELAY" --arg t "$tl" --arg s "$safe" \
   --arg e "$EMERGENCY_ADDRESS" --arg v "$VAULT_ADDRESS" --arg g "$GATEWAY_ADDRESS" --arg reg "$REGISTRY_ADDRESS" \
@@ -729,6 +783,11 @@ baseline() {
     printf 'logs:%s:%s\t%s\n' "$IC" "$COMMITTEE" "$SUBMITTER" "$GATEWAY" "$AGENT" "$SUBMITTER"
     printf 'logs:%s:none\t%s %s\n' "$GOVERNANCE" "$VOTER_A" "$VOTER_B"
     printf 'power:%s\t1\npower:%s\t1\n' "$VOTER_A" "$VOTER_B"
+    # Issue #1476: the deployer authorized the submitter and the deploy agent,
+    # and the handover gave both to the timelock.
+    printf 'agentowner:%s:%s\t%s\n' "$(lc "$GATEWAY")" "$(lc "$SUBMITTER")" "$(lc "$TIMELOCK")" \
+      "$(lc "$GATEWAY")" "$(lc "$DEPLOY_AGENT")" "$(lc "$TIMELOCK")"
+    printf 'agentlogs\t%s\n' "$(agent_logs_json "$SUBMITTER" "$DEPLOY_AGENT")"
   } >"$WORK/state"
   jq -n --arg g "$GATEWAY" --arg r "$ROUTER" --arg gov "$GOVERNANCE" --arg rc "$RECEIPT" --arg ic "$IC" \
     --arg t "$TIMELOCK" --arg s "$SAFE" --arg reg "$REGISTRY" --arg v "$VAULT" --arg d "$DEPLOYER" \
@@ -749,6 +808,17 @@ baseline() {
 }
 
 lc() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
+pad32() { printf '0x000000000000000000000000%s' "$(lc "${1#0x}")"; }
+# agent_logs_json <agent...>: the gateway logs of a handover that went right —
+# each agent authorized by the deployer, then transferred to the timelock.
+agent_logs_json() {
+  local ag
+  for ag in "$@"; do
+    jq -nc --arg g "$(lc "$GATEWAY")" --arg a "$AUTH_TOPIC" --arg x "$XFER_TOPIC" --arg ag "$(pad32 "$ag")" \
+      --arg d "$(pad32 "$DEPLOYER")" --arg t "$(pad32 "$TIMELOCK")" \
+      '{address: $g, topics: [$a, $ag, $d]}, {address: $g, topics: [$x, $ag, $d, $t]}'
+  done | jq -sc .
+}
 state_of() { awk -F'\t' -v k="$1" '$1 == k { v = $2 } END { print v }' "$WORK/state"; }
 set_state() { grep -v -F "$1"$'\t' "$WORK/state" >"$WORK/state.new" || true; printf '%s\t%s\n' "$1" "$2" >>"$WORK/state.new"; mv "$WORK/state.new" "$WORK/state"; }
 
@@ -885,6 +955,16 @@ else FAILED=$((FAILED + 1)); echo "FAIL a revoked role was reported as held"; gr
 
 baseline; jq --arg rwa "$(a 16)" '.vault_addresses.rmRWA = $rwa' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
 expect_fail "a demo vault the timelock does not administer" "timelock holds ADMIN_ROLE on vault $(a 16)"
+
+# Issue #1476: agent ownership is graded from the gateway's logs, not the record.
+baseline; set_state "agentowner:$(lc "$GATEWAY"):$(lc "$SUBMITTER")" "$(lc "$DEPLOYER")"
+expect_fail "the deployer still owning the submitter agent" "no agent authorized by the deployer is still deployer-owned"
+baseline; set_state "agentowner:$(lc "$GATEWAY"):$(lc "$DEPLOY_AGENT")" "$(lc "$DEPLOYER")"
+expect_fail "the deployer still owning the deploy agent the record never names" "no agent authorized by the deployer is still deployer-owned"
+baseline; set_state agentlogs_fail true
+expect_fail "unreadable gateway agent logs: agent ownership unproven, not assumed" "no agent authorized by the deployer is still deployer-owned (unproven"
+baseline; set_state "agentowner:$(lc "$GATEWAY"):$(lc "$SUBMITTER")" "$(lc "$APPROVER")"
+expect_fail "the submitter agent owned by an account other than the timelock" "timelock owns the submitter agent"
 
 # ─── ensure ──────────────────────────────────────────────────────────────────
 # ensure verifies a live ceremony and provisions only a FRESH chain. A chain
@@ -1063,6 +1143,18 @@ else
   FAILED=$((FAILED + 1))
   echo "FAIL successful run: exit $rc, keydir '${RUN_KEYDIR}', missing: ${missing:-none}, unnamed: ${unnamed:-none}, $(key_files_left) key file(s)"
   grep -E "^FAIL|shredded" "$WORK/out" | head -5; tail -3 "$WORK/out"
+fi
+
+# Issue #1476: that run handed the submitter it minted to DeployTimelock in
+# AGENT_ADDRESSES, and the fake forge moved it to the timelock only because it
+# was deployer-owned at that point.
+run_submitter="$(lc "$(state_of "keystore:submitter")")"
+if [[ -n "$run_submitter" && ",$(lc "$(state_of forge_agent_addresses)")," == *",$run_submitter,"* \
+      && "$(state_of "agentowner:$(lc "$GATEWAY"):$run_submitter")" == "$(lc "$NEW_TIMELOCK")" ]]; then
+  PASSED=$((PASSED + 1)); echo "ok   run passes the submitter in AGENT_ADDRESSES and the timelock ends up owning it"
+else
+  FAILED=$((FAILED + 1))
+  echo "FAIL run AGENT_ADDRESSES: '$(state_of forge_agent_addresses)', submitter '$run_submitter' owned by '$(state_of "agentowner:$(lc "$GATEWAY"):$run_submitter")'"
 fi
 
 # SIGTERM to a `run` that is blocked inside cast, after every key is minted and
@@ -1774,7 +1866,7 @@ TOTAL_PASSED=$((PASSED + GOV_PASSED + STUB_PASSED))
 # Executed-assertion floor. Every `ok` line above is an assertion that RAN; a
 # run that silently skips a section prints fewer and must not pass. Raise the
 # floor whenever cases are added (CI checks the same line: suite-01-02).
-ASSERTION_FLOOR=128
+ASSERTION_FLOOR=133
 echo "fusion-ceremony selftest TOTAL: $TOTAL_PASSED passed, $TOTAL_FAILED failed (floor $ASSERTION_FLOOR)"
 SELFTEST_COMPLETE=1
 if (( TOTAL_PASSED < ASSERTION_FLOOR )); then
