@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0bc10c273f691fbe4d3070da0bd42a62fa604443/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/68d3fbc00c0edeb93f9d37a428d8f43895524380/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** Script
 
@@ -29,7 +29,9 @@ setPolicy / revokeAgent on those agents go Safe -> Timelock ->
 gateway. The guarantee covers the listed agents only: the
 gateway cannot enumerate an owner's agents, so the list must
 name every agent the deployer owns (the stage ceremony derives
-it from the gateway's AgentAuthorized logs).
+it from the gateway's AgentAuthorized and
+AgentOwnershipTransferred logs, keeping agents the deployer
+still owns).
 - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
 hot key, not the deployer.
 - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and

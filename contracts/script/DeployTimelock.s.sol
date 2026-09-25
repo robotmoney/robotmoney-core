@@ -65,7 +65,9 @@ interface IRouterGovernanceQuorum {
 ///           gateway. The guarantee covers the listed agents only: the
 ///           gateway cannot enumerate an owner's agents, so the list must
 ///           name every agent the deployer owns (the stage ceremony derives
-///           it from the gateway's AgentAuthorized logs).
+///           it from the gateway's AgentAuthorized and
+///           AgentOwnershipTransferred logs, keeping agents the deployer
+///           still owns).
 ///         - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
 ///           hot key, not the deployer.
 ///         - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
