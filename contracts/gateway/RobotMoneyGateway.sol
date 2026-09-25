@@ -84,11 +84,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice `revealAuthorization` called in the same block as the commitment.
     ///         Must wait at least one block before revealing.
     error CommitmentTooRecent();
-    /// @notice `revealAuthorization` called with a policy whose `shareReceiver`
-    ///         is not `msg.sender`. In the permissionless commit/reveal path the
-    ///         caller must be the intended share receiver so that vault-share
-    ///         allowances from the receiver cannot be spent by an unauthorized
-    ///         third party (AZ-GW-1 — critical / access-control).
+    /// @notice A caller without `ADMIN_ROLE` named a `shareReceiver` other than
+    ///         itself when authorizing an agent (`revealAuthorization`). An
+    ///         `ADMIN_ROLE` caller (`authorizeAgent`) may name any receiver.
     error ShareReceiverNotAuthorized();
     /// @notice `depositTo` was called with a destination not in the agent's
     ///         `allowedDestinations` list (when the list is non-empty), or the
@@ -642,14 +640,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         if (agent == address(0)) revert ZeroAddress();
         if (agentOwner[agent] != address(0)) revert AgentAlreadyOwned();
 
-        // AZ-GW-1 (critical): in the permissionless commit/reveal path the caller
-        // must be the intended share receiver. Without this gate an attacker can
-        // name a victim as `shareReceiver`, obtain AGENT_ROLE, and drain the
-        // victim's vault-share allowance via `withdrawFromRouter` by routing USDC
-        // to an attacker-controlled `assetRecipient`. The `ADMIN_ROLE` path
-        // (`authorizeAgent`) is exempt because the caller is a trusted privileged
-        // account; permissionless callers have no implicit authority over a
-        // third-party's share allowances.
+        // A caller without ADMIN_ROLE must name itself as shareReceiver. An
+        // ADMIN_ROLE caller (authorizeAgent) may name any receiver.
         if (!hasRole(ADMIN_ROLE, msg.sender)) {
             if (p.shareReceiver != msg.sender) revert ShareReceiverNotAuthorized();
         }

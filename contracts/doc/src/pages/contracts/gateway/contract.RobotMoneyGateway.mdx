@@ -1605,11 +1605,9 @@ error CommitmentTooRecent();
 
 ### ShareReceiverNotAuthorized
 
-`revealAuthorization` called with a policy whose `shareReceiver`
-is not `msg.sender`. In the permissionless commit/reveal path the
-caller must be the intended share receiver so that vault-share
-allowances from the receiver cannot be spent by an unauthorized
-third party (AZ-GW-1 — critical / access-control).
+A caller without `ADMIN_ROLE` named a `shareReceiver` other than
+itself when authorizing an agent (`revealAuthorization`). An
+`ADMIN_ROLE` caller (`authorizeAgent`) may name any receiver.
 
 ```solidity
 error ShareReceiverNotAuthorized();
