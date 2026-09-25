@@ -1,0 +1,250 @@
+---
+title: "GatewayAgentPolicyFixture"
+---
+
+# GatewayAgentPolicyFixture
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b3635c182d68ead6b3805677fd0b2e4b740e26eb/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+
+**Inherits:** Test
+
+<i>
+
+Shared fixture: a gateway with two ADMIN_ROLE holders (`admin`, the
+constructor admin, and `adminOwner`, who owns agents in these tests)
+and a permissionless account (`user`) that authorizes through
+commit/reveal.
+
+</i>
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vault
+
+```solidity
+MockVault internal vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal ADMIN_ROLE;
+```
+
+### AGENT_ROLE
+
+```solidity
+bytes32 internal AGENT_ROLE;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### adminOwner
+
+An ADMIN_ROLE holder that owns agents.
+
+```solidity
+address internal adminOwner = makeAddr("adminOwner");
+```
+
+### adminB
+
+A second ADMIN_ROLE holder, the destination of ownership transfers.
+
+```solidity
+address internal adminB = makeAddr("adminB");
+```
+
+### user
+
+A permissionless owner: no role at all.
+
+```solidity
+address internal user = makeAddr("user");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### otherReceiver
+
+```solidity
+address internal otherReceiver = makeAddr("otherReceiver");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public virtual;
+```
+
+<a id="_policy-address"></a>
+
+### _policy
+
+```solidity
+function _policy(address receiver) internal view returns (IGateway.AgentPolicy memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="_commit-address-address-bytes32"></a>
+
+### _commit
+
+```solidity
+function _commit(address owner, address agent, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| agent | `address` |  |
+| salt | `bytes32` |  |
+
+<a id="_reveal-address-address-igateway-agentpolicy"></a>
+
+### _reveal
+
+<i>
+
+Commit/reveal authorization by `owner`, waiting the one block the
+commitment requires.
+
+</i>
+
+```solidity
+function _reveal(address owner, address agent, IGateway.AgentPolicy memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| agent | `address` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="_try-address-bytes"></a>
+
+### _try
+
+<i>
+
+Low-level call as `caller`: success flag and the revert selector.
+
+</i>
+
+```solidity
+function _try(address caller, bytes memory data) internal returns (bool ok, bytes4 sel);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| sel | `bytes4` |  |
+
+<a id="_storedpolicyhash-address"></a>
+
+### _storedPolicyHash
+
+<i>
+
+The non-array fields of the stored policy, as one hash.
+
+</i>
+
+```solidity
+function _storedPolicyHash(address agent) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_storedsharereceiver-address"></a>
+
+### _storedShareReceiver
+
+```solidity
+function _storedShareReceiver(address agent) internal view returns (address receiver);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+

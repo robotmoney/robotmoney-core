@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f48839de85d7f70aa47a13db9bf253fdacf20af1/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** Script
 
@@ -21,6 +21,17 @@ Gateway DEFAULT_ADMIN_ROLE (so it can rotate roles / authorizeAgent).
 - The deployer EOA holds NO privileged role of any kind:
 no ADMIN_ROLE on any contract, no Gateway DEFAULT_ADMIN_ROLE, and
 no vault EMERGENCY_ROLE.
+- Every gateway agent listed in AGENT_ADDRESSES is owned by the
+TimelockController, not the deployer (issue #1476). The transfer
+does not change AGENT_ROLE: an agent that held it still holds it,
+and an agent that did not hold it is handed over without it.
+setPolicy / revokeAgent on those agents go Safe -> Timelock ->
+gateway. The guarantee covers the listed agents only: the
+gateway cannot enumerate an owner's agents, so the list must
+name every agent the deployer owns (the stage ceremony derives
+it from the gateway's AgentAuthorized and
+AgentOwnershipTransferred logs, keeping agents the deployer
+still owns).
 - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
 hot key, not the deployer.
 - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
@@ -56,6 +67,21 @@ committeeRegister calls — is untouched.
 CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
 same rule). When set, ADMIN_ROLE +
 DEFAULT_ADMIN_ROLE move to the timelock.
+AGENT_ADDRESSES        — comma-separated gateway agents the deployer
+owns (issue #1476): the deploy agent from
+Deploy.s.sol, the stage ceremony's submitter.
+Each is handed to the timelock with
+transferAgentOwnership while the timelock
+already holds gateway ADMIN_ROLE and before
+the deployer's ADMIN_ROLE is revoked. Every
+entry must be owned by the deployer, or the
+handover reverts. An entry is handed over
+whether or not it holds AGENT_ROLE; the
+transfer leaves AGENT_ROLE unchanged.
+Required, with no default:
+an unset or empty value reverts before any
+broadcast, and the literal `none` declares
+a run whose deployer owns no gateway agent.
 RECEIPT_ADMIN_ADDRESS  — the address that currently holds ADMIN_ROLE /
 DEFAULT_ADMIN_ROLE on the receipt contract (the
 RECEIPT_ADMIN_ADDRESS DeployInvestmentCommittee-
@@ -131,6 +157,35 @@ function run() external returns (Deployed memory d);
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
+<a id="_runfrom-string"></a>
+
+### _runFrom
+
+<i>
+
+The body of `run()`. Every env var it reads is named `prefix`
+followed by a name from the lists above; `run()` passes an empty
+prefix. A test passes a prefix of its own, because env vars are
+process-wide and forge runs tests in parallel.
+
+</i>
+
+```solidity
+function _runFrom(string memory prefix) internal returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
 <a id="runinprocess-address-address-address-address-address-address-address-uint256"></a>
 
 ### runInProcess
@@ -138,7 +193,8 @@ function run() external returns (Deployed memory d);
 In-process variant for Forge tests. Caller sets up prank context.
 No JSON is written; no env vars are read. Does not exercise the
 optional IC policy / consensus receipt handover — use
-`runInProcessWithCommittee` for that.
+`runInProcessWithCommittee` for that. Hands over no gateway
+agent — use `runInProcessWithAgents` for that.
 
 ```solidity
 function runInProcess(
@@ -218,6 +274,79 @@ function runInProcessWithCommittee(
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
+<a id="runinprocesswithagents-address-address-address-address-address-address-address-uint256-address"></a>
+
+### runInProcessWithAgents
+
+In-process variant that also hands the listed deployer-owned
+gateway agents to the timelock (issue #1476), the in-process
+form of AGENT_ADDRESSES. Caller sets up prank context. No JSON
+is written; no env vars are read.
+
+```solidity
+function runInProcessWithAgents(
+        address vault_,
+        address gateway_,
+        address registry_,
+        address router_,
+        address governance_,
+        address safe_,
+        address emergency_,
+        uint256 minDelay_,
+        address[] calldata agents_
+    ) external returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault_ | `address` |  |
+| gateway_ | `address` |  |
+| registry_ | `address` |  |
+| router_ | `address` |  |
+| governance_ | `address` |  |
+| safe_ | `address` |  |
+| emergency_ | `address` |  |
+| minDelay_ | `uint256` |  |
+| agents_ | `address[]` | Gateway agents the deployer (the caller) owns. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_readagentlist-string"></a>
+
+### _readAgentList
+
+<i>
+
+The deployer-owned gateway agent list from env var `name` (issue
+#1476). The variable must be set: a comma-separated list of
+agents, or the literal `none` for a run whose deployer owns no
+gateway agent. An unset or empty variable reverts, so a broadcast
+run never treats a missing list as an empty one.
+
+</i>
+
+```solidity
+function _readAgentList(string memory name) internal view returns (address[] memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
+
 <a id="_validate-deployed"></a>
 
 ### _validate
@@ -252,6 +381,40 @@ function _deployAndWire(Deployed memory d) internal returns (TimelockController 
 | ---- | ---- | ----------- |
 | timelock | `TimelockController` |  |
 
+<a id="_transferagents-deployed-address"></a>
+
+### _transferAgents
+
+<i>
+
+Hand every listed agent from the deployer (msg.sender) to `timelock`.
+A listed agent the deployer does not own is an input error and
+reverts before any transfer of it is attempted. Ownership does not
+depend on AGENT_ROLE, so an agent without the role is handed over
+too. Returns, per listed agent, whether it held AGENT_ROLE before
+its transfer, for the caller's post-condition.
+
+</i>
+
+```solidity
+function _transferAgents(Deployed memory d, address timelock)
+        internal
+        returns (bool[] memory hadAgentRole);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| timelock | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hadAgentRole | `bool[]` |  |
+
 <a id="_logresult-deployed"></a>
 
 ### _logResult
@@ -266,7 +429,7 @@ function _logResult(Deployed memory d) internal pure;
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="_writejson-deployed"></a>
+<a id="_writejson-deployed-string"></a>
 
 ### _writeJson
 
@@ -280,11 +443,12 @@ artifact and without an archive node. The code hashes are read
 from the chain (`address.codehash`), not from build artifacts, so
 the manifest describes what was actually deployed rather than what
 the local `out/` directory happened to contain.
+`outVar` names the env var that holds the output path.
 
 </i>
 
 ```solidity
-function _writeJson(Deployed memory d) internal;
+function _writeJson(Deployed memory d, string memory outVar) internal;
 ```
 
 **Parameters**
@@ -292,6 +456,30 @@ function _writeJson(Deployed memory d) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+| outVar | `string` |  |
+
+<a id="_writejsonto-deployed-string"></a>
+
+### _writeJsonTo
+
+<i>
+
+Writes the manifest `_writeJson` describes to `outPath`. Kept apart
+from the `DEPLOYMENT_OUT` read so a caller can name the path
+without setting a process-wide variable.
+
+</i>
+
+```solidity
+function _writeJsonTo(Deployed memory d, string memory outPath) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| outPath | `string` |  |
 
 <a id="_serializeroles-deployed"></a>
 
@@ -339,6 +527,8 @@ struct Deployed {
         address icPolicy;
         address consensusReceipt;
         address receiptAdmin;
+        /// Deployer-owned gateway agents handed to the timelock (issue #1476).
+        address[] agents;
     }
 ```
 
@@ -358,4 +548,5 @@ struct Deployed {
 | icPolicy | `address` |  |
 | consensusReceipt | `address` |  |
 | receiptAdmin | `address` |  |
+| agents | `address[]` |  |
 

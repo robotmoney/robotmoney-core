@@ -27,7 +27,9 @@
 #          the two voters power, creates a real 2-of-3 Safe (a SafeProxy on the
 #          canonical SafeL2 singleton via the canonical SafeProxyFactory; owners
 #          approver, approver-b, approver-c) and the TimelockController
-#          handover, then runs `verify` and writes a GENERATED record to
+#          handover (which also hands every gateway agent the deployer owns,
+#          the submitter included, to the timelock: DeployTimelock
+#          AGENT_ADDRESSES, issue #1476), then runs `verify` and writes a GENERATED record to
 #          $OUT_DIR/fusion-stage-record-<run>.json (+ fusion-stage-record.json).
 #          There is no fallback: a chain without the canonical Safe set cannot
 #          run the ceremony (docs/technical/governance-isomorphism.md R8).
@@ -48,7 +50,11 @@
 #          one owner's signature twice and two non-owner signatures must each
 #          revert GS026, while the same SafeTx with threshold signatures would
 #          execute (all eth_call; no state change). A Safe read that fails is a
-#          FAIL line; verify always reaches its summary line.
+#          FAIL line; verify always reaches its summary line. Gateway agents
+#          are graded from the gateway's logs (issue #1476): no agent that an
+#          AgentAuthorized or AgentOwnershipTransferred log gives to the
+#          deployer may still be deployer-owned, and the timelock must own the
+#          submitter.
 # release  releases a receipt the way a timelocked stage must: the Safe
 #          schedules on the TimelockController through execTransaction signed
 #          by two distinct owners, waits the delay, then executes the same way.
@@ -155,6 +161,11 @@ PROPOSER_ROLE="$("$CAST" keccak "PROPOSER_ROLE" 2>/dev/null || true)"
 EMERGENCY_ROLE="$("$CAST" keccak "EMERGENCY_ROLE" 2>/dev/null || true)"
 ROLE_GRANTED_TOPIC="$("$CAST" keccak "RoleGranted(bytes32,address,address)" 2>/dev/null || true)"
 EXECUTOR_ROLE="$("$CAST" keccak "EXECUTOR_ROLE" 2>/dev/null || true)"
+# RobotMoneyGateway agent-ownership events (issue #1476). AgentAuthorized names
+# the agent in topic 1 and its owner in topic 2; AgentOwnershipTransferred names
+# the agent in topic 1, the previous owner in topic 2 and the new owner in topic 3.
+AGENT_AUTHORIZED_TOPIC="$("$CAST" keccak "AgentAuthorized(address,address,uint64,uint256,uint256,address)" 2>/dev/null || true)"
+AGENT_TRANSFERRED_TOPIC="$("$CAST" keccak "AgentOwnershipTransferred(address,address,address)" 2>/dev/null || true)"
 
 # Canonical Safe v1.4.1 (docs/technical/governance-isomorphism.md §2.2). Safe is
 # third-party infrastructure the fork fixture carries; this script never deploys
@@ -239,6 +250,37 @@ log_accounts() {
   local args=(logs --rpc-url "$RPC_URL" --from-block 0 --address "$address" --json "$sig")
   [[ -n "$topic1" ]] && args+=("$topic1")
   "$CAST" "${args[@]}" | jq -r '.[] | .topics[if (.topics|length) > 2 then 2 else 1 end] | "0x" + .[26:]' | sort -u
+}
+
+# agents_logged_for <gateway> <owner>: every agent the gateway's logs name with
+# <owner> as its owner, one lowercase address per line — AgentAuthorized with
+# <owner> in topic 2, and AgentOwnershipTransferred with <owner> as the new
+# owner in topic 3. Returns 66 when either log read fails, so a caller never
+# mistakes an unreadable history for an empty one.
+agents_logged_for() {
+  local gateway="$1" owner="$2" owner_topic authorized transferred
+  owner_topic="0x000000000000000000000000$(lower "${owner#0x}")"
+  authorized="$("$CAST" rpc --rpc-url "$RPC_URL" eth_getLogs \
+    "{\"address\":\"$gateway\",\"fromBlock\":\"0x0\",\"toBlock\":\"latest\",\"topics\":[\"$AGENT_AUTHORIZED_TOPIC\",null,\"$owner_topic\"]}" 2>/dev/null)" \
+    || return 66
+  transferred="$("$CAST" rpc --rpc-url "$RPC_URL" eth_getLogs \
+    "{\"address\":\"$gateway\",\"fromBlock\":\"0x0\",\"toBlock\":\"latest\",\"topics\":[\"$AGENT_TRANSFERRED_TOPIC\",null,null,\"$owner_topic\"]}" 2>/dev/null)" \
+    || return 66
+  jq -rs '[.[][] | .topics[1] | "0x" + .[26:] | ascii_downcase] | unique | .[]' \
+    <<<"$authorized"$'\n'"$transferred" || return 66
+}
+
+# deployer_owned_agents <gateway> <owner>: the agents the logs name for <owner>
+# that <owner> still owns now. Returns 66 when the logs or an owner read fail.
+deployer_owned_agents() {
+  local gateway="$1" owner="$2" logged agent current
+  logged="$(agents_logged_for "$gateway" "$owner")" || return 66
+  while read -r agent; do
+    [[ -n "$agent" ]] || continue
+    current="$(call "$gateway" 'agentOwner(address)(address)' "$agent")" || current=""
+    is_address "$current" || { echo "could not read agentOwner($agent)" >&2; return 66; }
+    [[ "$(lower "$current")" != "$(lower "$owner")" ]] || echo "$agent"
+  done <<<"$logged"
 }
 
 # verify_safe_quorum <safe> <timelock> <relayer>: the Safe checks of
@@ -494,6 +536,31 @@ verify_record() {
     done <<<"$granted"
     check "AC-CORE-05 deployer EOA holds no role on any contract" "$([[ -z "$held" ]] && echo 1 || echo 0)" "${held:-none}"
   fi
+
+  # Issue #1476: owning a gateway agent carries setPolicy / revokeAgent
+  # authority over it, so the handover moves every agent the deployer
+  # authorized (or was given) to the timelock. Enumerated from the gateway's
+  # logs, never from the record. A log or owner read that fails is a FAIL.
+  local logged_agents still_owned="" agent owner
+  local l_owned="AC-CORE-05 no agent authorized by the deployer is still deployer-owned"
+  if logged_agents="$(agents_logged_for "$gateway" "$deployer")"; then
+    while read -r agent; do
+      [[ -n "$agent" ]] || continue
+      owner="$(call "$gateway" 'agentOwner(address)(address)' "$agent")" || owner=""
+      if ! is_address "$owner"; then
+        still_owned+="$agent(owner unreadable) "
+      elif [[ "$(lower "$owner")" == "$(lower "$deployer")" ]]; then
+        still_owned+="$agent "
+      fi
+    done <<<"$logged_agents"
+    check "$l_owned" "$([[ -z "$still_owned" ]] && echo 1 || echo 0)" \
+      "$(wc -w <<<"$logged_agents" | tr -d ' ') logged for the deployer; still deployer-owned: ${still_owned:-none}"
+  else
+    check "$l_owned" 0 "unproven: eth_getLogs for the gateway's agent events failed"
+  fi
+  owner="$(call "$gateway" 'agentOwner(address)(address)' "$submitter")" || owner=""
+  check "AC-CORE-05 timelock owns the submitter agent" \
+    "$([[ -n "$owner" && "$(lower "$owner")" == "$(lower "$timelock")" ]] && echo 1 || echo 0)" "owner=${owner:-unreadable}"
   check "AC-CORE-05 approver holds no receipt ADMIN_ROLE directly" "$(not_role "$receipt" "$ADMIN_ROLE" "$approver")"
   check "AC-CORE-05 safe is the timelock proposer" "$(has_role "$timelock" "$PROPOSER_ROLE" "$safe")"
   check "AC-CORE-05 safe is the timelock executor" "$(has_role "$timelock" "$EXECUTOR_ROLE" "$safe")"
@@ -924,7 +991,18 @@ run_ceremony() {
       jq -n --arg r "$role" --arg a "${addr[$role]}" '{role: $r, address: $a}'
     done | jq -s .)"
 
+  # Issue #1476: every gateway agent the deployer owns (the smoke deploy agent,
+  # the submitter) goes to DeployTimelock, which hands each to the timelock
+  # before it revokes the deployer's gateway ADMIN_ROLE.
+  local owned_agents
+  owned_agents="$(deployer_owned_agents "$gateway" "$admin")" \
+    || die "could not enumerate the deployer's gateway agents from the gateway logs"
+  grep -qxF "$(lower "${addr[submitter]}")" <<<"$owned_agents" \
+    || die "the submitter ${addr[submitter]} is not among the deployer-owned gateway agents the logs name"
+  info "gateway agents handed to the timelock: $(paste -sd' ' <<<"$owned_agents")"
+
   (cd "$REPO_ROOT" && \
+    AGENT_ADDRESSES="$(paste -sd, <<<"$owned_agents")" \
     VAULT_ADDRESS="$vault" GATEWAY_ADDRESS="$gateway" REGISTRY_ADDRESS="$registry" ROUTER_ADDRESS="$router" \
     GOVERNANCE_ADDRESS="$governance" SAFE_ADDRESS="$safe" EMERGENCY_ADDRESS="${addr[emergency]}" \
     TIMELOCK_MIN_DELAY="$MIN_DELAY" IC_POLICY_ADDRESS="$ic_policy" CONSENSUS_RECEIPT_ADDRESS="$receipt" \

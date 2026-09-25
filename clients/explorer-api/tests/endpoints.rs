@@ -1088,3 +1088,67 @@ async fn sign_authorize_endpoints_are_absent() {
         }
     }
 }
+
+/// Issue #1476: an agent handed to another owner (`AgentOwnershipTransferred`,
+/// indexed as a new row naming the new owner) is listed under its new owner
+/// only. The previous owner's older rows no longer make it look like the
+/// current owner.
+#[tokio::test]
+async fn account_policies_follow_the_latest_owner_after_transfer() {
+    let s = start_with_seed().await;
+    let agent = [0x7au8; 20];
+    let previous = [0x7bu8; 20];
+    let next = [0x7cu8; 20];
+    let receiver = [0x7du8; 20];
+    for (block, owner) in [(950_i64, previous), (951_i64, next)] {
+        sqlx::query(
+            "INSERT INTO agent_policies (chain_id, block_number, log_index, tx_hash, agent, owner, \
+             revoked, valid_until, max_per_payment, max_per_window, share_receiver) \
+             VALUES (8453, $1, 0, $2, $3, $4, FALSE, 2000000000, 5000000::NUMERIC, \
+             50000000::NUMERIC, $5)",
+        )
+        .bind(block)
+        .bind(&[block as u8; 32][..])
+        .bind(&agent[..])
+        .bind(&owner[..])
+        .bind(&receiver[..])
+        .execute(&s._pool)
+        .await
+        .unwrap();
+    }
+
+    let fetch = |owner: [u8; 20]| {
+        let url = format!(
+            "http://{}/v1/accounts/0x{}/policies",
+            s.addr,
+            hex::encode(owner)
+        );
+        async move {
+            http()
+                .get(url)
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+
+    let before = fetch(previous).await;
+    assert_eq!(
+        before["policies"].as_array().expect("policies array").len(),
+        0,
+        "the previous owner still lists a transferred agent: {before}"
+    );
+
+    let after = fetch(next).await;
+    let policies = after["policies"].as_array().expect("policies array");
+    assert_eq!(policies.len(), 1, "new owner must list the agent: {after}");
+    assert_eq!(policies[0]["agent"], format!("0x{}", hex::encode(agent)));
+    assert_eq!(policies[0]["owner"], format!("0x{}", hex::encode(next)));
+    assert_eq!(
+        policies[0]["share_receiver"],
+        format!("0x{}", hex::encode(receiver))
+    );
+}

@@ -887,6 +887,33 @@ The depositor owns the policy: valid-until, max per payment, max per
 window, share receiver, and allowed destinations. The Robot Money team
 does not manage individual depositor agent policies at runtime.
 
+Agent ownership and policy rules (issue #1476):
+
+- the account that first authorizes an agent is its recorded owner: any
+  account through `commitAuthorization` + `revealAuthorization`, an
+  `ADMIN_ROLE` holder also through `authorizeAgent`;
+- only the recorded owner can call `setPolicy`, `revokeAgent` or
+  `transferAgentOwnership` on that agent; `ADMIN_ROLE` grants no
+  authority over an agent it does not own;
+- every write of a policy (`authorizeAgent`, `revealAuthorization`,
+  `setPolicy`) runs one shared validator: the caller-independent shape
+  checks plus one caller-dependent rule, judged on the caller's role at
+  call time — a caller without `ADMIN_ROLE` must name itself as share
+  receiver. Any policy an owner can set through `setPolicy` is one it
+  could also have obtained through authorization;
+- `transferAgentOwnership` hands an agent only to an `ADMIN_ROLE` holder
+  and does not change its `AGENT_ROLE` or stored policy. The
+  caller-dependent rule does not bind an `ADMIN_ROLE` holder, so the
+  destination rule is the whole rule for a transfer. Governance can be
+  given an agent; it cannot take one;
+- at deployment handover `DeployTimelock` transfers every agent listed in
+  `AGENT_ADDRESSES` to the `TimelockController`, so after handover
+  `setPolicy` and `revokeAgent` on those agents go Safe -> Timelock ->
+  gateway. The list is a required input (a comma-separated list, or
+  `none`); the stage ceremony derives it from the gateway logs, and a
+  direct run must list every deployer-owned agent (invariants `ACL-8`,
+  `GW-7` in `docs/technical/smart-contract-invariants.md`).
+
 The current gateway implementation gates agent deposits into a vault. The
 product architecture uses the same safety boundary for agent deposits and
 agent withdrawals across single-vault and Portfolio Router paths:
@@ -1220,7 +1247,11 @@ custody an outer share position under the current product definition.
 Protocol authority is limited to contract upgrade where applicable,
 configuration of protocol-level controls, pause, and permanent shutdown.
 Depositor-owned agent policies are controlled by the depositor. Agent
-keys must not hold admin or pause authority.
+keys must not hold admin or pause authority. Every agent listed in
+`DeployTimelock`'s required `AGENT_ADDRESSES` input is owned by the
+`TimelockController` after handover, not by the deployer EOA; the stage
+ceremony lists every agent the gateway logs give the deployer (§5.2,
+invariant `ACL-8`).
 
 ## 7. Interface and Execution Contracts
 

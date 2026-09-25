@@ -5,7 +5,7 @@ description: "Fork-based integration tests proving that a 2-of-3 Safe proxy depl
 
 # SafeIntegrationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6a5a4efb7af758963b9507b608985ed6f60e373a/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b3635c182d68ead6b3805677fd0b2e4b740e26eb/contracts/test/SafeIntegration.t.sol)
 
 **Inherits:** Test
 
@@ -119,6 +119,12 @@ bytes32 internal constant FALLBACK_HANDLER_STORAGE_SLOT =
 
 ```solidity
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### AGENT_ROLE
+
+```solidity
+bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 ```
 
 ### MIN_DELAY
@@ -259,6 +265,24 @@ mapping(address => address[]) internal adminHolders;
 address[] internal gatewayRootHolders;
 ```
 
+### deployAgent
+
+A gateway agent the deployer authorizes before the handover, as
+Deploy.s.sol does for its deploy agent (issue #1476).
+
+```solidity
+address internal deployAgent;
+```
+
+### loggedAgents
+
+Every agent named by an AgentAuthorized or AgentOwnershipTransferred log
+the gateway emitted from before the contracts were built.
+
+```solidity
+address[] internal loggedAgents;
+```
+
 ## Functions
 
 <a id="_tryselectfork"></a>
@@ -333,6 +357,61 @@ No address other than the timelock holds the gateway root.
 ```solidity
 function test_handover_timelockIsTheOnlyGatewayRootHolder() public withSnap;
 ```
+
+<a id="test_handover_nodeployerownedagentremains"></a>
+
+### test_handover_noDeployerOwnedAgentRemains
+
+Issue #1476: after the handover no gateway agent is owned by
+the deployer. The agents are enumerated from the gateway's own
+AgentAuthorized / AgentOwnershipTransferred logs, not from the
+list the fixture passed in. The transferred agent keeps
+AGENT_ROLE, and the deployer's setPolicy / revokeAgent on it
+revert NotAgentOwner.
+
+```solidity
+function test_handover_noDeployerOwnedAgentRemains() public withSnap;
+```
+
+<a id="_rememberagent-address"></a>
+
+### _rememberAgent
+
+```solidity
+function _rememberAgent(address agent) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+<a id="_agentpolicy-address"></a>
+
+### _agentPolicy
+
+<i>
+
+A valid policy with `receiver` as shareReceiver, withdrawal disabled.
+
+</i>
+
+```solidity
+function _agentPolicy(address receiver) internal view returns (IGateway.AgentPolicy memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `IGateway.AgentPolicy` |  |
 
 <a id="withsnap"></a>
 
@@ -602,6 +681,18 @@ AC1e: Full Safe+timelock path on RobotMoneyGateway (ADMIN_ROLE grant).
 
 ```solidity
 function test_happyPath_gateway_adminRoleGrant() public withSnap;
+```
+
+<a id="test_happypath_gateway_setpolicyontransferredagent"></a>
+
+### test_happyPath_gateway_setPolicyOnTransferredAgent
+
+AC1f (issue #1476): setPolicy on the agent the handover gave the
+timelock, driven by two owner signatures through
+Safe.execTransaction -> TimelockController schedule / execute.
+
+```solidity
+function test_happyPath_gateway_setPolicyOnTransferredAgent() public withSnap;
 ```
 
 <a id="test_sadpath_quorumnotmet_onesignerreverts"></a>

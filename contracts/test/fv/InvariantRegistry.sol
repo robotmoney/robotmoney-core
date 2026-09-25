@@ -48,7 +48,7 @@ library InvariantRegistry {
     /// @dev The full catalogue. Order mirrors the spec's section order. NEVER
     ///      reorder-and-renumber; append-only like the spec's IDs.
     function entries() internal pure returns (Entry[] memory e) {
-        e = new Entry[](57);
+        e = new Entry[](59);
         uint256 i;
 
         // ── 1. Custody & solvency (INV-1/2/3, CUST) ──────────────────────────
@@ -84,6 +84,9 @@ library InvariantRegistry {
         e[i++] = Entry("ACL-5", Status.HOLDS, "static-guard", 0); // F-08 fixed (#966)
         e[i++] = Entry("ACL-6", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("ACL-7", Status.HOLDS, "deploy-assertion", 0); // NC-10 fixed (#970)
+        // #1476: no gateway agent deployer-owned after handover. Deep proofs:
+        // DeployTimelock.t.sol::DeployTimelockAgentHandoverTest, SafeIntegration.t.sol.
+        e[i++] = Entry("ACL-8", Status.HOLDS, "deploy-assertion", 0);
 
         // ── 5. Lifecycle & state machine (LIFE) ──────────────────────────────
         e[i++] = Entry("LIFE-1", Status.HOLDS, "stateful-invariant", 0); // F-04 fixed (#968)
@@ -108,6 +111,9 @@ library InvariantRegistry {
         e[i++] = Entry("GW-4", Status.HOLDS, "stateful-invariant", 0); // 🟡 partial
         e[i++] = Entry("GW-5", Status.HOLDS, "static-guard", 0); // F-11 fixed (#969)
         e[i++] = Entry("GW-6", Status.HOLDS, "symbolic", 0);
+        // #1476: one shared policy validator for every agents[...] writer. Deep
+        // proof: GatewayAgentPolicyAuthorization.t.sol (differential fuzz).
+        e[i++] = Entry("GW-7", Status.HOLDS, "fuzz", 0);
 
         // ── 8. Governance / timelock (GOV) ───────────────────────────────────
         e[i++] = Entry("GOV-1", Status.HOLDS, "deploy-assertion", 0);

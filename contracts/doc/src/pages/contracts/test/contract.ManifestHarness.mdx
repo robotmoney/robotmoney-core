@@ -4,7 +4,7 @@ title: "ManifestHarness"
 
 # ManifestHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f48839de85d7f70aa47a13db9bf253fdacf20af1/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelock](/contracts/script/contract.DeployTimelock)
 
@@ -15,17 +15,21 @@ inside `run()`, which needs a broadcast context and a live chain — so
 without this seam the manifest is the one part of the deploy script
 that ships untested, and a serialization mistake in it surfaces as a
 malformed artifact during a real ceremony.
+Tests write through `exposedWriteJsonTo` with an explicit path: env
+vars are process-wide and forge runs test contracts in parallel, so
+two test contracts that each set `DEPLOYMENT_OUT` can write to each
+other's file.
 
 </i>
 
 ## Functions
 
-<a id="exposedwritejson-deployed"></a>
+<a id="exposedwritejsonto-deployed-string"></a>
 
-### exposedWriteJson
+### exposedWriteJsonTo
 
 ```solidity
-function exposedWriteJson(Deployed memory d) external;
+function exposedWriteJsonTo(Deployed memory d, string memory outPath) external;
 ```
 
 **Parameters**
@@ -33,4 +37,51 @@ function exposedWriteJson(Deployed memory d) external;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+| outPath | `string` |  |
+
+<a id="exposedreadagentlist-string"></a>
+
+### exposedReadAgentList
+
+```solidity
+function exposedReadAgentList(string memory name) external view returns (address[] memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
+
+<a id="exposedrunfrom-string"></a>
+
+### exposedRunFrom
+
+<i>
+
+The body of `run()`, reading every env var under `prefix`.
+
+</i>
+
+```solidity
+function exposedRunFrom(string memory prefix) external returns (Deployed memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Deployed` |  |
 

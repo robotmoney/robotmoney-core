@@ -1272,7 +1272,7 @@ pub async fn handle_log(
         return Ok(r);
     }
 
-    // AgentDepositRouted — multi-leg router deposit (IGateway.sol:119).
+    // AgentDepositRouted — multi-leg router deposit (IGateway.sol:156).
     // Stores a parent row in agent_deposits (vault = NULL; per-leg data is
     // written by the corresponding RouterDeposit events from PortfolioRouter).
     if topic0 == topics.agent_deposit_routed {
@@ -1318,7 +1318,7 @@ pub async fn handle_log(
         return Ok(r);
     }
 
-    // AgentWithdrawal — gateway-level withdrawal (IGateway.sol:139).
+    // AgentWithdrawal — gateway-level withdrawal (IGateway.sol:176).
     // Stores a withdrawal history row for the agent address.
     // The ERC-4626 Withdraw event (emitted by the vault in the same tx)
     // is stored separately — both coexist because they have distinct log_index values.
@@ -1361,6 +1361,40 @@ pub async fn handle_log(
             )
             .await?;
         // Store policy change in account history for the agent.
+        r += db
+            .insert_history_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.agent.into_array(),
+                "policy_change",
+                None,
+                Some(decoded.agent.into_array()),
+                None,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // AgentOwnershipTransferred (IGateway.sol:116, issue #1476): the owner
+    // changes, the policy does not. A new agent_policies row names the new
+    // owner and carries the policy fields forward, so the latest row per agent
+    // stays the current state.
+    if topic0 == topics.agent_ownership_transferred {
+        let decoded =
+            IGatewayEvents::AgentOwnershipTransferred::decode_log(&into_alloy_log(log), true)
+                .map_err(|e| IndexerError::Decode(format!("AgentOwnershipTransferred: {e}")))?;
+        let mut r = db
+            .insert_agent_owner_transfer(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.agent.into_array(),
+                decoded.newOwner.into_array(),
+            )
+            .await?;
         r += db
             .insert_history_event(
                 cfg.chain_id,

@@ -1,0 +1,384 @@
+---
+title: "DeployTimelockAgentHandoverTest"
+description: "A full Deploy -> DeployTimelock run hands every deployer-owned gateway agent to the TimelockController: the deploy agent Deploy.s.sol authorizes and a stage-style submitter agent the deployer authorizes afterwards. After the handover the timelock owns both, both keep AGENT_ROLE, and the deployer can no longer call setPolicy or revokeAgent on them."
+---
+
+# DeployTimelockAgentHandoverTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0bc10c273f691fbe4d3070da0bd42a62fa604443/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** Test
+
+A full Deploy -> DeployTimelock run hands every deployer-owned gateway
+agent to the TimelockController: the deploy agent Deploy.s.sol
+authorizes and a stage-style submitter agent the deployer authorizes
+afterwards. After the handover the timelock owns both, both keep
+AGENT_ROLE, and the deployer can no longer call setPolicy or
+revokeAgent on them.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### AGENT_ROLE
+
+```solidity
+bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
+```
+
+### MIN_DELAY
+
+```solidity
+uint256 public constant MIN_DELAY = 2 days;
+```
+
+## State Variables
+
+### script
+
+```solidity
+DeployTimelock internal script;
+```
+
+### deployer
+
+```solidity
+address internal deployer;
+```
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("handover-emergency");
+```
+
+### deployAgent
+
+```solidity
+address internal deployAgent = makeAddr("deploy-agent");
+```
+
+### submitter
+
+```solidity
+address internal submitter = makeAddr("stage-submitter");
+```
+
+### dep
+
+```solidity
+Deploy.Deployed internal dep;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### governance
+
+```solidity
+RouterGovernance internal governance;
+```
+
+### d
+
+```solidity
+DeployTimelock.Deployed internal d;
+```
+
+### listed
+
+```solidity
+address[] internal listed;
+```
+
+### loggedAgents
+
+Every agent named by an AgentAuthorized or AgentOwnershipTransferred log
+the gateway emitted during the run, deduplicated.
+
+```solidity
+address[] internal loggedAgents;
+```
+
+### transferLogs
+
+```solidity
+uint256 internal transferLogs;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_remember-address"></a>
+
+### _remember
+
+```solidity
+function _remember(address agent) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+<a id="_policy-address"></a>
+
+### _policy
+
+```solidity
+function _policy(address receiver) internal view returns (IGateway.AgentPolicy memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="test_handover_listedagentsownedbytimelock_keepagentrole"></a>
+
+### test_handover_listedAgentsOwnedByTimelock_keepAgentRole
+
+```solidity
+function test_handover_listedAgentsOwnedByTimelock_keepAgentRole() public view;
+```
+
+<a id="test_handover_deployersetpolicy_revertsnotagentowner"></a>
+
+### test_handover_deployerSetPolicy_revertsNotAgentOwner
+
+```solidity
+function test_handover_deployerSetPolicy_revertsNotAgentOwner() public;
+```
+
+<a id="test_handover_deployerrevokeagent_revertsnotagentowner"></a>
+
+### test_handover_deployerRevokeAgent_revertsNotAgentOwner
+
+```solidity
+function test_handover_deployerRevokeAgent_revertsNotAgentOwner() public;
+```
+
+<a id="test_handover_recordedlogs_noagentleftdeployerowned"></a>
+
+### test_handover_recordedLogs_noAgentLeftDeployerOwned
+
+Enumerated from the run's own logs rather than from the list the
+test passed in: every agent the gateway ever named in an
+AgentAuthorized or AgentOwnershipTransferred log has an owner
+other than the deployer.
+
+```solidity
+function test_handover_recordedLogs_noAgentLeftDeployerOwned() public view;
+```
+
+<a id="test_handover_timelockroutedsetpolicy_ontransferredagent_succeeds"></a>
+
+### test_handover_timelockRoutedSetPolicy_onTransferredAgent_succeeds
+
+After the handover the owner's authority runs through the
+timelock: a scheduled setPolicy on a transferred agent executes.
+
+```solidity
+function test_handover_timelockRoutedSetPolicy_onTransferredAgent_succeeds() public;
+```
+
+<a id="test_handover_revertswhenlistedagentnotdeployerowned"></a>
+
+### test_handover_revertsWhenListedAgentNotDeployerOwned
+
+A listed agent the deployer does not own stops the handover with
+a named require, before the deployer loses any gateway role.
+
+```solidity
+function test_handover_revertsWhenListedAgentNotDeployerOwned() public;
+```
+
+<a id="test_manifestrecordstimelockownedagents"></a>
+
+### test_manifestRecordsTimelockOwnedAgents
+
+The manifest names the agents handed to the timelock and records
+that the deployer owns none of them.
+
+```solidity
+function test_manifestRecordsTimelockOwnedAgents() public;
+```
+
+<a id="test_manifestrecordsdeployerownedlistedagent_whenoneisstillowned"></a>
+
+### test_manifestRecordsDeployerOwnedListedAgent_whenOneIsStillOwned
+
+`roles.deployer_owns_a_listed_gateway_agent` is read from the
+gateway when the manifest is written. run() writes the manifest
+only after `_deployAndWire` requires every listed agent to have
+left the deployer, so a manifest run() writes records false. This
+drives the writer with a listed agent the deployer still owns, and
+the row must read true.
+
+```solidity
+function test_manifestRecordsDeployerOwnedListedAgent_whenOneIsStillOwned() public;
+```
+
+<a id="_freshstack-deploytimelock-address-address"></a>
+
+### _freshStack
+
+<i>
+
+A fresh Deploy.s.sol stack owned by `script_`, plus a second agent
+the deployer authorizes, so a case can change the agents' roles
+before its own handover.
+
+</i>
+
+```solidity
+function _freshStack(DeployTimelock script_, address agent_, address second_)
+        internal
+        returns (Deploy.Deployed memory dep_, address[] memory agents_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| script_ | `DeployTimelock` |  |
+| agent_ | `address` |  |
+| second_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| dep_ | `Deploy.Deployed` |  |
+| agents_ | `address[]` |  |
+
+<a id="_handover-deploytimelock-deploy-deployed-address"></a>
+
+### _handover
+
+<i>
+
+Runs the handover of `agents_` on `dep_`, with core contracts
+owned by `script_`'s address.
+
+</i>
+
+```solidity
+function _handover(
+        DeployTimelock script_,
+        Deploy.Deployed memory dep_,
+        address[] memory agents_
+    ) internal returns (DeployTimelock.Deployed memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| script_ | `DeployTimelock` |  |
+| dep_ | `Deploy.Deployed` |  |
+| agents_ | `address[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `DeployTimelock.Deployed` |  |
+
+<a id="_asserthandedoverroleunchanged-deploytimelock-deploy-deployed-deploytimelock-deployed-address-address"></a>
+
+### _assertHandedOverRoleUnchanged
+
+<i>
+
+Asserts the handover moved both agents to the timelock, left
+`withRole` holding AGENT_ROLE and `withoutRole` without it, and
+left the deployer no setPolicy or revokeAgent over either.
+
+</i>
+
+```solidity
+function _assertHandedOverRoleUnchanged(
+        DeployTimelock script_,
+        Deploy.Deployed memory dep_,
+        DeployTimelock.Deployed memory out,
+        address withRole,
+        address withoutRole
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| script_ | `DeployTimelock` |  |
+| dep_ | `Deploy.Deployed` |  |
+| out | `DeployTimelock.Deployed` |  |
+| withRole | `address` |  |
+| withoutRole | `address` |  |
+
+<a id="test_handover_listedagentthatrenouncedagentrole_ishandedover"></a>
+
+### test_handover_listedAgentThatRenouncedAgentRole_isHandedOver
+
+A listed deployer-owned agent that renounced AGENT_ROLE before
+the handover is still handed to the timelock. The transfer does
+not change AGENT_ROLE, so the agent stays without it.
+
+```solidity
+function test_handover_listedAgentThatRenouncedAgentRole_isHandedOver() public;
+```
+
+<a id="test_handover_listedagentwithagentrolerevoked_ishandedover"></a>
+
+### test_handover_listedAgentWithAgentRoleRevoked_isHandedOver
+
+The same holds for a listed deployer-owned agent whose
+AGENT_ROLE the deployer revoked, as ADMIN_ROLE, before the
+handover.
+
+```solidity
+function test_handover_listedAgentWithAgentRoleRevoked_isHandedOver() public;
+```
+

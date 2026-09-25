@@ -1,0 +1,282 @@
+---
+title: "GatewayAgentPolicyAuthorizationTest"
+description: "Every writer of `agents[...]` / `agentOwner[...]` applies the same caller-dependent rule, judged on the caller's role at call time: a caller without ADMIN_ROLE must name itself as `shareReceiver`."
+---
+
+# GatewayAgentPolicyAuthorizationTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+
+**Inherits:** [GatewayAgentPolicyFixture](/contracts/test/abstract.GatewayAgentPolicyFixture)
+
+**Title:** GatewayAgentPolicyAuthorizationTest
+
+Every writer of `agents[...]` / `agentOwner[...]` applies the same
+caller-dependent rule, judged on the caller's role at call time: a
+caller without ADMIN_ROLE must name itself as `shareReceiver`.
+
+## State Variables
+
+### agentU
+
+```solidity
+address internal agentU = makeAddr("agentU");
+```
+
+### agentA
+
+```solidity
+address internal agentA = makeAddr("agentA");
+```
+
+## Functions
+
+<a id="test_setpolicy_nonadminowner_foreignsharereceiver_reverts_policyunchanged"></a>
+
+### test_setPolicy_nonAdminOwner_foreignShareReceiver_reverts_policyUnchanged
+
+```solidity
+function test_setPolicy_nonAdminOwner_foreignShareReceiver_reverts_policyUnchanged() public;
+```
+
+<a id="test_setpolicy_nonadminowner_zerosharereceiver_reverts_likeauthorization"></a>
+
+### test_setPolicy_nonAdminOwner_zeroShareReceiver_reverts_likeAuthorization
+
+```solidity
+function test_setPolicy_nonAdminOwner_zeroShareReceiver_reverts_likeAuthorization() public;
+```
+
+<a id="test_setpolicy_nonadminowner_selfsharereceiver_updates_andemits"></a>
+
+### test_setPolicy_nonAdminOwner_selfShareReceiver_updates_andEmits
+
+```solidity
+function test_setPolicy_nonAdminOwner_selfShareReceiver_updates_andEmits() public;
+```
+
+<a id="test_setpolicy_adminowner_acceptsforeignsharereceiver"></a>
+
+### test_setPolicy_adminOwner_acceptsForeignShareReceiver
+
+```solidity
+function test_setPolicy_adminOwner_acceptsForeignShareReceiver() public;
+```
+
+<a id="test_setpolicy_adminowner_matchesauthorizeagent"></a>
+
+### test_setPolicy_adminOwner_matchesAuthorizeAgent
+
+For an ADMIN_ROLE owner, setPolicy accepts exactly what
+authorizeAgent accepts: each policy is sent to both, and the
+outcome and the revert selector must agree.
+
+```solidity
+function test_setPolicy_adminOwner_matchesAuthorizeAgent() public;
+```
+
+<a id="testfuzz_setpolicy_matchesfreshauthorization-bool-uint256"></a>
+
+### testFuzz_setPolicy_matchesFreshAuthorization
+
+For fuzzed (caller role, policy) pairs, setPolicy on an agent
+the caller owns and a fresh authorization by the same caller
+(revealAuthorization for every caller, authorizeAgent as well
+for an ADMIN_ROLE caller) either all succeed or all revert
+with the same selector.
+
+```solidity
+function testFuzz_setPolicy_matchesFreshAuthorization(bool callerIsAdmin, uint256 seed) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| callerIsAdmin | `bool` |  |
+| seed | `uint256` |  |
+
+<a id="_fuzzpolicy-address-uint256"></a>
+
+### _fuzzPolicy
+
+<i>
+
+A policy whose every validated field is drawn from a small domain
+around its boundary, one byte of `seed` per field: receivers from
+`caller, another account, zero`, validUntil from `now`,
+caps from 0..3.
+
+</i>
+
+```solidity
+function _fuzzPolicy(address caller, uint256 seed)
+        internal
+        view
+        returns (IGateway.AgentPolicy memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| seed | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="test_setpolicy_ownerlostadminrole_judgedasnonadmin"></a>
+
+### test_setPolicy_ownerLostAdminRole_judgedAsNonAdmin
+
+An owner that authorized an agent while holding ADMIN_ROLE and
+later lost it is judged as a caller without ADMIN_ROLE.
+
+```solidity
+function test_setPolicy_ownerLostAdminRole_judgedAsNonAdmin() public;
+```
+
+<a id="test_authorizeagent_admincaller_succeeds"></a>
+
+### test_authorizeAgent_adminCaller_succeeds
+
+```solidity
+function test_authorizeAgent_adminCaller_succeeds() public;
+```
+
+<a id="test_authorizeagent_permissionlesscaller_reverts"></a>
+
+### test_authorizeAgent_permissionlessCaller_reverts
+
+```solidity
+function test_authorizeAgent_permissionlessCaller_reverts() public;
+```
+
+<a id="test_revealauthorization_admincaller_acceptsforeignsharereceiver"></a>
+
+### test_revealAuthorization_adminCaller_acceptsForeignShareReceiver
+
+```solidity
+function test_revealAuthorization_adminCaller_acceptsForeignShareReceiver() public;
+```
+
+<a id="test_revealauthorization_permissionlessowner_selfsharereceiver_succeeds"></a>
+
+### test_revealAuthorization_permissionlessOwner_selfShareReceiver_succeeds
+
+```solidity
+function test_revealAuthorization_permissionlessOwner_selfShareReceiver_succeeds() public;
+```
+
+<a id="test_revealauthorization_permissionlessowner_foreignsharereceiver_reverts"></a>
+
+### test_revealAuthorization_permissionlessOwner_foreignShareReceiver_reverts
+
+```solidity
+function test_revealAuthorization_permissionlessOwner_foreignShareReceiver_reverts() public;
+```
+
+<a id="test_revokeagent_adminowner_succeeds"></a>
+
+### test_revokeAgent_adminOwner_succeeds
+
+```solidity
+function test_revokeAgent_adminOwner_succeeds() public;
+```
+
+<a id="test_revokeagent_permissionlessowner_succeeds"></a>
+
+### test_revokeAgent_permissionlessOwner_succeeds
+
+```solidity
+function test_revokeAgent_permissionlessOwner_succeeds() public;
+```
+
+<a id="test_transferagentownership_adminowner_succeeds"></a>
+
+### test_transferAgentOwnership_adminOwner_succeeds
+
+```solidity
+function test_transferAgentOwnership_adminOwner_succeeds() public;
+```
+
+<a id="test_transferagentownership_permissionlessowner_toadmin_succeeds"></a>
+
+### test_transferAgentOwnership_permissionlessOwner_toAdmin_succeeds
+
+```solidity
+function test_transferAgentOwnership_permissionlessOwner_toAdmin_succeeds() public;
+```
+
+<a id="test_nonowner_setpolicy_revokeagent_transfer_revertnotagentowner"></a>
+
+### test_nonOwner_setPolicy_revokeAgent_transfer_revertNotAgentOwner
+
+setPolicy, revokeAgent and transferAgentOwnership from anyone
+other than the recorded owner revert NotAgentOwner, for a
+permissionless caller and for an ADMIN_ROLE caller alike.
+
+```solidity
+function test_nonOwner_setPolicy_revokeAgent_transfer_revertNotAgentOwner() public;
+```
+
+<a id="test_transferagentownership_keepsroleandpolicy_emits_movesauthority"></a>
+
+### test_transferAgentOwnership_keepsRoleAndPolicy_emits_movesAuthority
+
+```solidity
+function test_transferAgentOwnership_keepsRoleAndPolicy_emits_movesAuthority() public;
+```
+
+<a id="test_transferagentownership_nonadmindestination_reverts"></a>
+
+### test_transferAgentOwnership_nonAdminDestination_reverts
+
+```solidity
+function test_transferAgentOwnership_nonAdminDestination_reverts() public;
+```
+
+<a id="test_transferagentownership_foreignstoredreceiver_movesunchecked"></a>
+
+### test_transferAgentOwnership_foreignStoredReceiver_movesUnchecked
+
+The destination rule is the whole rule for a transfer: the
+caller-dependent shareReceiver rule does not bind an ADMIN_ROLE
+destination, so a stored policy naming a third-party receiver
+moves unchanged, and the new owner can set that same policy.
+
+```solidity
+function test_transferAgentOwnership_foreignStoredReceiver_movesUnchecked() public;
+```
+
+<a id="test_transferagentownership_zeroaddress_reverts"></a>
+
+### test_transferAgentOwnership_zeroAddress_reverts
+
+```solidity
+function test_transferAgentOwnership_zeroAddress_reverts() public;
+```
+
+<a id="test_transferagentownership_unownedagent_revertsnotagentowner"></a>
+
+### test_transferAgentOwnership_unownedAgent_revertsNotAgentOwner
+
+```solidity
+function test_transferAgentOwnership_unownedAgent_revertsNotAgentOwner() public;
+```
+
+<a id="test_transferagentownership_destinationlostadminrole_reverts"></a>
+
+### test_transferAgentOwnership_destinationLostAdminRole_reverts
+
+The destination is judged at call time: an account that lost
+ADMIN_ROLE can no longer receive an agent.
+
+```solidity
+function test_transferAgentOwnership_destinationLostAdminRole_reverts() public;
+```
+

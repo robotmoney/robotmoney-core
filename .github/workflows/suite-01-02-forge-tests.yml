@@ -113,11 +113,27 @@ jobs:
       # evidence reader to know that an individual file actually ran.
       - name: Fusion contract evidence targets
         run: |
-          for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant QuorumFloorInvariant; do
+          for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant QuorumFloorInvariant GatewayAgentPolicyAuthorization; do
             echo "::group::contracts/test/${f}.t.sol:"
             forge test -vvv --match-path "contracts/test/${f}.t.sol"
             echo "::endgroup::"
           done
+
+      - name: Gateway storage-layout gate (issue 1476)
+        # RobotMoneyGateway state may only be appended. The gate diffs the
+        # AST-id-free (label, slot, offset, type) of every state variable and
+        # storage-struct member from `forge inspect` against the committed
+        # snapshot (taken from dev before issue 1476). The self-test runs first
+        # and proves the gate fails on a mutated snapshot.
+        run: |
+          scripts/ci/check-gateway-storage-layout.sh --selftest
+          scripts/ci/check-gateway-storage-layout.sh
+
+      - name: Gateway agent-policy gas report (issue 1476)
+        # Measurement, not a budget: prints the RobotMoneyGateway rows for
+        # authorizeAgent, revealAuthorization, setPolicy and
+        # transferAgentOwnership so a change in their cost shows in the log.
+        run: forge test --match-contract "GatewayAgentPolicyAuthorizationTest" --gas-report
 
       - name: forge test (four-vault real-TVL pyramid — issue #592)
         # Explicit, named guard for the four-vault real-TVL end state so it
@@ -415,7 +431,7 @@ jobs:
       # ASSERTION_FLOOR so a run that silently did less (a section skipped, a
       # truncated file, a lost exit status) is red either way. Raise both
       # together when cases are added.
-      CEREMONY_SELFTEST_FLOOR: "128"
+      CEREMONY_SELFTEST_FLOOR: "136"
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # scripts/stage/tests/fusion-ceremony-selftest.sh (issue #1447): the stage
     # governance ceremony's verify/ensure/run/release/propose/vote/execute
@@ -551,10 +567,10 @@ jobs:
         #   - `^testFail_`: the vendored a16z erc4626-tests ships two deprecated
         #     `testFail_*` functions that modern forge rejects by name. See the unit
         #     job.
-        #   - `VaultCodeSizeGuard`: asserts deployed bytecode is under the EIP-170
-        #     24576-byte limit (issue #865), but coverage instruments bytecode and
-        #     inflates every contract past it, so the assertion is meaningless here.
-        #     It runs in the unit job.
+        #   - `VaultCodeSizeGuard` / `GatewayAgentPolicyCodeSizeGuard`: assert
+        #     deployed bytecode is under the EIP-170 24576-byte limit (issues #865,
+        #     1476), but coverage instruments bytecode and inflates every contract
+        #     past it, so the assertion is meaningless here. They run in the unit job.
         #   - `UniV3/UniV4/Aerodrome AssetPositionAdapterForkTest`: LOUD-SKIP fork
         #     tests (issues #1118 / #1124 / #1125) whose setUp reverts without a fork
         #     RPC, which this job does not set. They run in `fork-regressions`.
@@ -568,7 +584,7 @@ jobs:
           python3 .github/scripts/run_coverage_memory_guard.py
           forge coverage --report lcov
           --no-match-test "^testFail_"
-          --no-match-contract "VaultCodeSizeGuard|UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
+          --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard|UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
           --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover}.t.sol"
 
       - name: Enforce branch-coverage gate
