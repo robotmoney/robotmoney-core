@@ -902,10 +902,10 @@ Agent ownership and policy rules (issue #1476):
   receiver. Any policy an owner can set through `setPolicy` is one it
   could also have obtained through authorization;
 - `transferAgentOwnership` hands an agent only to an `ADMIN_ROLE` holder
-  and keeps its `AGENT_ROLE` and stored policy. The caller-dependent rule
-  does not bind an `ADMIN_ROLE` holder, so the destination rule is the
-  whole rule for a transfer. Governance can be given an agent; it cannot
-  take one;
+  and does not change its `AGENT_ROLE` or stored policy. The
+  caller-dependent rule does not bind an `ADMIN_ROLE` holder, so the
+  destination rule is the whole rule for a transfer. Governance can be
+  given an agent; it cannot take one;
 - at deployment handover `DeployTimelock` transfers every agent listed in
   `AGENT_ADDRESSES` to the `TimelockController`, so after handover
   `setPolicy` and `revokeAgent` on those agents go Safe -> Timelock ->

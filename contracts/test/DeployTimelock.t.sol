@@ -1409,6 +1409,124 @@ contract DeployTimelockAgentHandoverTest is Test {
             "manifest listed-agent count"
         );
     }
+
+    /// @dev A fresh Deploy.s.sol stack owned by `script_`, plus a second agent
+    ///      the deployer authorizes, so a case can change the agents' roles
+    ///      before its own handover.
+    function _freshStack(DeployTimelock script_, address agent_, address second_)
+        internal
+        returns (Deploy.Deployed memory dep_, address[] memory agents_)
+    {
+        address deployer_ = address(script_);
+        TestERC20 usdc_ = new TestERC20();
+        dep_ = new Deploy()
+            .runInProcessWith(
+                deployer_,
+                makeAddr("fresh-pauser"),
+                agent_,
+                makeAddr("fresh-receiver"),
+                address(usdc_)
+            );
+        vm.prank(deployer_);
+        dep_.gateway.authorizeAgent(second_, _policy(second_));
+        agents_ = new address[](2);
+        agents_[0] = agent_;
+        agents_[1] = second_;
+    }
+
+    /// @dev Runs the handover of `agents_` on `dep_`, with core contracts
+    ///      owned by `script_`'s address.
+    function _handover(
+        DeployTimelock script_,
+        Deploy.Deployed memory dep_,
+        address[] memory agents_
+    ) internal returns (DeployTimelock.Deployed memory out) {
+        address deployer_ = address(script_);
+        VaultRegistry registry_ = new VaultRegistry(deployer_);
+        PortfolioRouter router_ =
+            new PortfolioRouter(address(dep_.usdc), address(registry_), deployer_);
+        RouterGovernance governance_ =
+            new RouterGovernance(address(router_), deployer_, 7 days, 1 days, 2);
+        vm.prank(deployer_);
+        router_.grantRole(ADMIN_ROLE, address(governance_));
+        vm.prank(deployer_);
+        out = script_.runInProcessWithAgents(
+            address(dep_.vault),
+            address(dep_.gateway),
+            address(registry_),
+            address(router_),
+            address(governance_),
+            safe,
+            emergency,
+            MIN_DELAY,
+            agents_
+        );
+    }
+
+    /// @dev Asserts the handover moved both agents to the timelock, left
+    ///      `withRole` holding AGENT_ROLE and `withoutRole` without it, and
+    ///      left the deployer no setPolicy or revokeAgent over either.
+    function _assertHandedOverRoleUnchanged(
+        DeployTimelock script_,
+        Deploy.Deployed memory dep_,
+        DeployTimelock.Deployed memory out,
+        address withRole,
+        address withoutRole
+    ) internal {
+        address deployer_ = address(script_);
+        RobotMoneyGateway gw = dep_.gateway;
+        assertEq(gw.agentOwner(withRole), address(out.timelock), "agent with role not handed over");
+        assertEq(
+            gw.agentOwner(withoutRole), address(out.timelock), "agent without role not handed over"
+        );
+        assertTrue(gw.hasRole(AGENT_ROLE, withRole), "handover removed AGENT_ROLE");
+        assertFalse(gw.hasRole(AGENT_ROLE, withoutRole), "handover granted AGENT_ROLE");
+        assertFalse(gw.hasRole(ADMIN_ROLE, deployer_), "deployer kept gateway ADMIN_ROLE");
+        vm.prank(deployer_);
+        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
+        gw.setPolicy(withoutRole, _policy(deployer_));
+        vm.prank(deployer_);
+        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
+        gw.revokeAgent(withoutRole);
+    }
+
+    /// @notice A listed deployer-owned agent that renounced AGENT_ROLE before
+    ///         the handover is still handed to the timelock. The transfer does
+    ///         not change AGENT_ROLE, so the agent stays without it.
+    function test_handover_listedAgentThatRenouncedAgentRole_isHandedOver() public {
+        DeployTimelock script2 = new DeployTimelock();
+        address agent2 = makeAddr("renounce-deploy-agent");
+        address renounced = makeAddr("renounced-submitter");
+        (Deploy.Deployed memory dep2, address[] memory agents2) =
+            _freshStack(script2, agent2, renounced);
+
+        vm.prank(renounced);
+        dep2.gateway.renounceRole(AGENT_ROLE, renounced);
+        assertEq(dep2.gateway.agentOwner(renounced), address(script2), "fixture: owner");
+        assertFalse(dep2.gateway.hasRole(AGENT_ROLE, renounced), "fixture: role");
+
+        DeployTimelock.Deployed memory out = _handover(script2, dep2, agents2);
+        _assertHandedOverRoleUnchanged(script2, dep2, out, agent2, renounced);
+    }
+
+    /// @notice The same holds for a listed deployer-owned agent whose
+    ///         AGENT_ROLE the deployer revoked, as ADMIN_ROLE, before the
+    ///         handover.
+    function test_handover_listedAgentWithAgentRoleRevoked_isHandedOver() public {
+        DeployTimelock script2 = new DeployTimelock();
+        address agent2 = makeAddr("revoke-deploy-agent");
+        address revoked = makeAddr("revoked-submitter");
+        (Deploy.Deployed memory dep2, address[] memory agents2) =
+            _freshStack(script2, agent2, revoked);
+
+        vm.prank(address(script2));
+        dep2.gateway.revokeRole(AGENT_ROLE, revoked);
+        assertEq(dep2.gateway.agentOwner(revoked), address(script2), "fixture: owner");
+        assertFalse(dep2.gateway.hasRole(AGENT_ROLE, revoked), "fixture: role");
+
+        DeployTimelock.Deployed memory out = _handover(script2, dep2, agents2);
+        _assertHandedOverRoleUnchanged(script2, dep2, out, agent2, revoked);
+    }
 }
 
 /// @notice The broadcast entrypoint reads AGENT_ADDRESSES with no default

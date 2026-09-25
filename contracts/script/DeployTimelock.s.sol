@@ -58,12 +58,14 @@ interface IRouterGovernanceQuorum {
 ///           no ADMIN_ROLE on any contract, no Gateway DEFAULT_ADMIN_ROLE, and
 ///           no vault EMERGENCY_ROLE.
 ///         - Every gateway agent listed in AGENT_ADDRESSES is owned by the
-///           TimelockController, not the deployer, and still holds AGENT_ROLE
-///           (issue #1476). setPolicy / revokeAgent on those agents go
-///           Safe -> Timelock -> gateway. The guarantee covers the listed
-///           agents only: the gateway cannot enumerate an owner's agents, so
-///           the list must name every agent the deployer owns (the stage
-///           ceremony derives it from the gateway's AgentAuthorized logs).
+///           TimelockController, not the deployer (issue #1476). The transfer
+///           does not change AGENT_ROLE: an agent that held it still holds it,
+///           and an agent that did not hold it is handed over without it.
+///           setPolicy / revokeAgent on those agents go Safe -> Timelock ->
+///           gateway. The guarantee covers the listed agents only: the
+///           gateway cannot enumerate an owner's agents, so the list must
+///           name every agent the deployer owns (the stage ceremony derives
+///           it from the gateway's AgentAuthorized logs).
 ///         - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
 ///           hot key, not the deployer.
 ///         - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
@@ -107,7 +109,10 @@ interface IRouterGovernanceQuorum {
 ///                                    already holds gateway ADMIN_ROLE and before
 ///                                    the deployer's ADMIN_ROLE is revoked. Every
 ///                                    entry must be owned by the deployer, or the
-///                                    handover reverts. Required, with no default:
+///                                    handover reverts. An entry is handed over
+///                                    whether or not it holds AGENT_ROLE; the
+///                                    transfer leaves AGENT_ROLE unchanged.
+///                                    Required, with no default:
 ///                                    an unset or empty value reverts before any
 ///                                    broadcast, and the literal `none` declares
 ///                                    a run whose deployer owns no gateway agent.
@@ -431,8 +436,9 @@ contract DeployTimelock is Script {
         // so deployer-owned agents move to the timelock as part of the handover.
         // transferAgentOwnership only accepts an ADMIN_ROLE destination, so this
         // runs after the timelock's grant above and before the deployer's revoke
-        // below. The agents keep AGENT_ROLE and their stored policy.
-        _transferAgents(d, address(timelock));
+        // below. The transfer does not change an agent's AGENT_ROLE or its
+        // stored policy.
+        bool[] memory hadAgentRole = _transferAgents(d, address(timelock));
         IAccessControl(d.gateway).revokeRole(ADMIN_ROLE, msg.sender);
         require(
             !IAccessControl(d.gateway).hasRole(ADMIN_ROLE, msg.sender),
@@ -444,15 +450,16 @@ contract DeployTimelock is Script {
             "Deployer still has DEFAULT_ADMIN_ROLE on gateway"
         );
         // Post-condition, read after the deployer lost every gateway role: no
-        // listed agent is deployer-owned, and each still holds AGENT_ROLE.
+        // listed agent is deployer-owned, and each holds AGENT_ROLE exactly
+        // when it held it before the transfer.
         for (uint256 i = 0; i < d.agents.length; i++) {
             require(
                 IGatewayAgentOwnership(d.gateway).agentOwner(d.agents[i]) != msg.sender,
                 "Deployer still owns a listed gateway agent"
             );
             require(
-                IAccessControl(d.gateway).hasRole(AGENT_ROLE, d.agents[i]),
-                "Listed gateway agent lost AGENT_ROLE"
+                IAccessControl(d.gateway).hasRole(AGENT_ROLE, d.agents[i]) == hadAgentRole[i],
+                "Handover changed a listed gateway agent's AGENT_ROLE"
             );
         }
 
@@ -597,8 +604,15 @@ contract DeployTimelock is Script {
 
     /// @dev Hand every listed agent from the deployer (msg.sender) to `timelock`.
     ///      A listed agent the deployer does not own is an input error and
-    ///      reverts before any transfer of it is attempted.
-    function _transferAgents(Deployed memory d, address timelock) internal {
+    ///      reverts before any transfer of it is attempted. Ownership does not
+    ///      depend on AGENT_ROLE, so an agent without the role is handed over
+    ///      too. Returns, per listed agent, whether it held AGENT_ROLE before
+    ///      its transfer, for the caller's post-condition.
+    function _transferAgents(Deployed memory d, address timelock)
+        internal
+        returns (bool[] memory hadAgentRole)
+    {
+        hadAgentRole = new bool[](d.agents.length);
         for (uint256 i = 0; i < d.agents.length; i++) {
             address agent = d.agents[i];
             require(agent != address(0), "AGENT_ADDRESSES entry is address(0)");
@@ -606,6 +620,7 @@ contract DeployTimelock is Script {
                 IGatewayAgentOwnership(d.gateway).agentOwner(agent) == msg.sender,
                 "AGENT_ADDRESSES entry is not owned by the deployer"
             );
+            hadAgentRole[i] = IAccessControl(d.gateway).hasRole(AGENT_ROLE, agent);
             IGatewayAgentOwnership(d.gateway).transferAgentOwnership(agent, timelock);
             require(
                 IGatewayAgentOwnership(d.gateway).agentOwner(agent) == timelock,
