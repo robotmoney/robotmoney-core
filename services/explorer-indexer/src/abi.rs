@@ -205,7 +205,7 @@ sol! {
     #[sol(abi)]
     #[allow(missing_docs)]
     interface IGatewayEvents {
-        /// IGateway.sol:97
+        /// IGateway.sol:102
         event AgentAuthorized(
             address indexed agent,
             address indexed owner,
@@ -214,7 +214,14 @@ sol! {
             uint256 maxPerWindow,
             address shareReceiver
         );
-        /// IGateway.sol:108
+        /// IGateway.sol:116 — issue #1476. Only the recorded owner changes;
+        /// the agent keeps `AGENT_ROLE` and its stored policy.
+        event AgentOwnershipTransferred(
+            address indexed agent,
+            address indexed previousOwner,
+            address indexed newOwner
+        );
+        /// IGateway.sol:122
         event AgentRevoked(address indexed agent, address indexed owner);
         event Paused(address indexed by);
         event Unpaused(address indexed by);
@@ -227,7 +234,7 @@ sol! {
             uint256 sharesMinted,
             uint64 windowId
         );
-        /// IGateway.sol:162 — emitted on every successful agent withdrawal.
+        /// IGateway.sol:176 — emitted on every successful agent withdrawal.
         event AgentWithdrawal(
             bytes32 indexed paymentId,
             bytes32 indexed orderId,
@@ -238,7 +245,7 @@ sol! {
             address assetRecipient,
             uint64  windowId
         );
-        /// IGateway.sol:142 — emitted for router-path deposits (multi-leg).
+        /// IGateway.sol:156 — emitted for router-path deposits (multi-leg).
         event AgentDepositRouted(
             bytes32 indexed paymentId,
             bytes32 indexed orderId,
@@ -435,11 +442,13 @@ sol! {
 /// at startup from the canonical event signature strings.
 pub struct Topics {
     pub agent_authorized: B256,
+    /// Owner-initiated agent ownership transfer — IGateway.sol:116, issue #1476.
+    pub agent_ownership_transferred: B256,
     pub agent_revoked: B256,
     pub agent_deposit: B256,
-    /// Agent-initiated withdrawal emitted by IGateway.sol:162.
+    /// Agent-initiated withdrawal emitted by IGateway.sol:176.
     pub agent_withdrawal: B256,
-    /// Multi-leg router deposit emitted by IGateway.sol:142.
+    /// Multi-leg router deposit emitted by IGateway.sol:156.
     pub agent_deposit_routed: B256,
     pub paused: B256,
     pub unpaused: B256,
@@ -490,6 +499,9 @@ impl Topics {
         Self {
             agent_authorized: keccak256(
                 b"AgentAuthorized(address,address,uint64,uint256,uint256,address)",
+            ),
+            agent_ownership_transferred: keccak256(
+                b"AgentOwnershipTransferred(address,address,address)",
             ),
             agent_revoked: keccak256(b"AgentRevoked(address,address)"),
             agent_deposit: keccak256(
@@ -545,6 +557,7 @@ impl Topics {
     pub fn all_topic0(&self) -> Vec<B256> {
         vec![
             self.agent_authorized,
+            self.agent_ownership_transferred,
             self.agent_revoked,
             self.agent_deposit,
             self.agent_withdrawal,
@@ -838,6 +851,12 @@ mod tests {
             (
                 "RobotMoneyGateway.sol",
                 "RobotMoneyGateway",
+                "AgentOwnershipTransferred",
+                t.agent_ownership_transferred,
+            ),
+            (
+                "RobotMoneyGateway.sol",
+                "RobotMoneyGateway",
                 "AgentRevoked",
                 t.agent_revoked,
             ),
@@ -1119,6 +1138,10 @@ mod tests {
             IGatewayEvents::AgentAuthorized::SIGNATURE_HASH
         );
         assert_eq!(
+            t.agent_ownership_transferred,
+            IGatewayEvents::AgentOwnershipTransferred::SIGNATURE_HASH
+        );
+        assert_eq!(
             t.agent_revoked,
             IGatewayEvents::AgentRevoked::SIGNATURE_HASH
         );
@@ -1248,7 +1271,7 @@ mod tests {
     /// an internal inconsistency to a specific copy, that one establishes truth.
     ///
     /// Source references:
-    ///   IGateway.sol:97,108,123,142  VaultRegistry.sol:146,152
+    ///   IGateway.sol:102,116,122,137,156,176  VaultRegistry.sol:146,152
     ///   RouterGovernance.sol:163,176,183,189  PortfolioRouter.sol:122
     #[test]
     fn abi_drift_gate() {
@@ -1256,31 +1279,37 @@ mod tests {
 
         // One entry per indexed event: (event_name, canonical_signature, sol_macro_hash).
         let checks: &[(&str, &[u8], B256)] = &[
-            // IGateway.sol:97
+            // IGateway.sol:102
             (
                 "AgentAuthorized",
                 b"AgentAuthorized(address,address,uint64,uint256,uint256,address)",
                 IGatewayEvents::AgentAuthorized::SIGNATURE_HASH,
             ),
-            // IGateway.sol:108
+            // IGateway.sol:116
+            (
+                "AgentOwnershipTransferred",
+                b"AgentOwnershipTransferred(address,address,address)",
+                IGatewayEvents::AgentOwnershipTransferred::SIGNATURE_HASH,
+            ),
+            // IGateway.sol:122
             (
                 "AgentRevoked",
                 b"AgentRevoked(address,address)",
                 IGatewayEvents::AgentRevoked::SIGNATURE_HASH,
             ),
-            // IGateway.sol:123
+            // IGateway.sol:137
             (
                 "AgentDeposit",
                 b"AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)",
                 IGatewayEvents::AgentDeposit::SIGNATURE_HASH,
             ),
-            // IGateway.sol:162
+            // IGateway.sol:176
             (
                 "AgentWithdrawal",
                 b"AgentWithdrawal(bytes32,bytes32,address,address,uint256,uint256,address,uint64)",
                 IGatewayEvents::AgentWithdrawal::SIGNATURE_HASH,
             ),
-            // IGateway.sol:142
+            // IGateway.sol:156
             (
                 "AgentDepositRouted",
                 b"AgentDepositRouted(bytes32,bytes32,address,address,address,uint256,uint256[],uint64)",

@@ -90,7 +90,7 @@ A second binding constraint from user memory applies: **no fast-feedback optimiz
   | `blocks` | `(chain_id, block_number)` | `hash` is a non-PK column used for reorg detection (§3.3). |
   | `transactions` | `(chain_id, tx_hash)` | `block_number` is a non-PK column; `tx_hash` is globally unique per chain. |
   | `agent_deposits` | `(chain_id, block_number, log_index)` | Event-sourced from `IGateway.AgentDeposit`. `tx_hash` and `payment_id` are non-PK columns. |
-  | `agent_policies` | `(chain_id, block_number, log_index)` | Event-sourced from `IGateway.AgentAuthorized`/`AgentRevoked`. Latest-state view derived via `DISTINCT ON (chain_id, agent) … ORDER BY block_number DESC`. |
+  | `agent_policies` | `(chain_id, block_number, log_index)` | Event-sourced from `IGateway.AgentAuthorized`/`AgentOwnershipTransferred`/`AgentRevoked`. Latest-state view derived via `DISTINCT ON (chain_id, agent) … ORDER BY block_number DESC`. |
   | `vault_snapshots` | `(chain_id, contract, block_number)` | State-read row, not event-sourced. One snapshot per indexer-decided cadence (§3.5). |
   | `wallet_positions` | `(chain_id, contract, owner, block_number)` | State-read row. Same cadence as `vault_snapshots`. |
   | `indexer_runs` | `(run_id)` (serial) | Append-only audit log; `started_at`, `last_indexed_block`, `reorg_count`, `error` columns. |
@@ -113,6 +113,7 @@ A second binding constraint from user memory applies: **no fast-feedback optimiz
   Both triggers write to the same table with the same `(chain_id, contract, block_number)` key, so heartbeat snapshots are no-ops if an event-driven snapshot already covered that block.
 - **Watched event set (initial).** From the contracts in this repo:
   - `IGateway.AgentAuthorized` → `agent_policies` upsert.
+  - `IGateway.AgentOwnershipTransferred` → `agent_policies` row naming the new owner, with the policy fields carried from the agent's latest earlier row (issue #1476).
   - `IGateway.AgentRevoked` → `agent_policies` upsert (with a tombstone column).
   - `IGateway.AgentDeposit` → `agent_deposits` insert.
   - `IGateway.Paused` / `IGateway.Unpaused` → `agent_policies` global state row (or a `gateway_state` later table — defer).

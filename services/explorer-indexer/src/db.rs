@@ -955,6 +955,52 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Record an `AgentOwnershipTransferred` log (issue #1476) as a new
+    /// event-sourced `agent_policies` row owned by `new_owner`.
+    ///
+    /// The transfer changes only the recorded owner, and the event carries no
+    /// policy fields, so the row copies them from the agent's latest earlier
+    /// row on the same chain. With no earlier row indexed they stay NULL.
+    /// Idempotent on `(chain_id, block_number, log_index)` like every other
+    /// writer of this table.
+    pub async fn insert_agent_owner_transfer(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        agent: [u8; 20],
+        new_owner: [u8; 20],
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO agent_policies \
+             (chain_id, block_number, log_index, tx_hash, agent, owner, revoked, valid_until, \
+              max_per_payment, max_per_window, window_usage_to_date, share_receiver) \
+             SELECT $1, $2, $3, $4, $5, $6, FALSE, prev.valid_until, prev.max_per_payment, \
+                    prev.max_per_window, prev.window_usage_to_date, prev.share_receiver \
+             FROM (SELECT 1) AS one \
+             LEFT JOIN LATERAL ( \
+                 SELECT valid_until, max_per_payment, max_per_window, window_usage_to_date, \
+                        share_receiver \
+                 FROM agent_policies \
+                 WHERE chain_id = $1 AND agent = $5 \
+                   AND (block_number, log_index) < ($2, $3) \
+                 ORDER BY block_number DESC, log_index DESC \
+                 LIMIT 1 \
+             ) AS prev ON TRUE \
+             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&agent[..])
+        .bind(&new_owner[..])
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_vault_snapshot(
         &self,

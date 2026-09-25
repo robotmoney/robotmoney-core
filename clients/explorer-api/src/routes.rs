@@ -1287,9 +1287,10 @@ async fn get_account_history(
 
 /// GET /v1/accounts/:address/policies — all gateway agent-policy states owned by a depositor.
 ///
-/// Returns the latest-state row per agent for all policies where `owner` matches
-/// the queried address.  Uses `DISTINCT ON (agent)` ordered by block_number DESC
-/// to surface only the most recent authorization or revocation for each agent.
+/// Returns the latest-state row per agent, for every agent whose latest row
+/// names the queried address as `owner`.  Uses `DISTINCT ON (agent)` ordered by
+/// block_number DESC to surface only the most recent authorization, ownership
+/// transfer or revocation for each agent.
 /// Returns an empty array (not 404) when the owner has no policies.
 /// Chain-scoped to state.chain_id.
 async fn get_account_policies(
@@ -1298,10 +1299,13 @@ async fn get_account_policies(
 ) -> ApiResult<Json<AccountPoliciesResponse>> {
     let address_bytes = decode_address_param(&address)?;
 
-    // Latest policy state per agent for this owner. DISTINCT ON picks the
-    // highest-block row per (chain_id, agent) pair, matching the tombstone
-    // pattern from migration 0001: `revoked = true` rows supersede older
-    // authorization rows.
+    // Latest policy state per agent, kept when its latest row names this
+    // owner. DISTINCT ON picks the highest-block row per (chain_id, agent)
+    // pair over every row of the agent, matching the tombstone pattern from
+    // migration 0001: `revoked = true` rows supersede older authorization
+    // rows. The owner filter runs on that latest row, so an agent handed to
+    // another owner with `AgentOwnershipTransferred` (issue #1476) is listed
+    // under its new owner only.
     let rows: Vec<PolicyRow> = sqlx::query_as(
         "SELECT agent, owner, revoked, valid_until, \
                 max_per_payment, max_per_window, window_usage_to_date, \
@@ -1312,9 +1316,13 @@ async fn get_account_policies(
                     max_per_payment, max_per_window, window_usage_to_date, \
                     share_receiver, tx_hash, block_number \
              FROM agent_policies \
-             WHERE chain_id = $1 AND owner = $2 \
+             WHERE chain_id = $1 \
+               AND agent IN ( \
+                   SELECT agent FROM agent_policies WHERE chain_id = $1 AND owner = $2 \
+               ) \
              ORDER BY chain_id, agent, block_number DESC, log_index DESC \
          ) AS latest \
+         WHERE owner = $2 \
          ORDER BY agent ASC",
     )
     .bind(state.chain_id)

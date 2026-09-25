@@ -544,3 +544,121 @@ async fn account_history_insert_is_idempotent() {
         "exactly one row must be in account_history_events"
     );
 }
+
+/// (owner, revoked, valid_until, max_per_window as text, share_receiver).
+type LatestPolicyRow = (Vec<u8>, bool, Option<i64>, Option<String>, Option<Vec<u8>>);
+
+/// Issue #1476: `AgentOwnershipTransferred` moves the indexed owner. The
+/// latest `agent_policies` row for the agent names the new owner and carries
+/// the policy fields of the `AgentAuthorized` row before it, because a
+/// transfer changes the owner and nothing else.
+#[tokio::test]
+async fn agent_ownership_transferred_moves_owner_and_carries_policy() {
+    let fx = pg_fixture().await;
+
+    let gateway = Address::from([0x11u8; 20]);
+    let vault = Address::from([0x22u8; 20]);
+    let agent = Address::from([0x33u8; 20]);
+    let deployer = Address::from([0x44u8; 20]);
+    let timelock = Address::from([0x66u8; 20]);
+    let share_receiver = Address::from([0x55u8; 20]);
+
+    let auth_log = encode_log(
+        IGatewayEvents::AgentAuthorized {
+            agent,
+            owner: deployer,
+            validUntil: 2_000_000_000u64,
+            maxPerPayment: U256::from(5_000_000u64),
+            maxPerWindow: U256::from(50_000_000u64),
+            shareReceiver: share_receiver,
+        },
+        gateway,
+        10u64,
+        [0x77u8; 32],
+        0,
+    );
+    let transfer_log = encode_log(
+        IGatewayEvents::AgentOwnershipTransferred {
+            agent,
+            previousOwner: deployer,
+            newOwner: timelock,
+        },
+        gateway,
+        10u64,
+        [0x78u8; 32],
+        1,
+    );
+
+    let stub = common::StubRpcServer::start().await;
+    stub.set("eth_blockNumber", serde_json::Value::String("0x0f".into())); // 15
+    stub.set(
+        "eth_getLogs",
+        serde_json::Value::Array(vec![auth_log, transfer_log]),
+    );
+    stub.set(
+        "eth_call",
+        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+    );
+    stub.set("eth_getBlockByNumber", stub_block(10));
+
+    let rpc = JsonRpc::new(&stub.url);
+    let cfg = history_cfg(gateway, vault, None);
+    let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(
+        outcome.error.is_none(),
+        "indexer run must succeed: {:?}",
+        outcome.error
+    );
+    stub.shutdown();
+
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::BIGINT FROM agent_policies WHERE chain_id = $1 AND agent = $2",
+    )
+    .bind(8453_i64)
+    .bind(agent.as_slice())
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(rows, 2, "one row per owner-bearing event, got {rows}");
+
+    let (owner, revoked, valid_until, max_per_window, receiver): LatestPolicyRow = sqlx::query_as(
+        "SELECT owner, revoked, valid_until, max_per_window::TEXT, share_receiver \
+         FROM agent_policies WHERE chain_id = $1 AND agent = $2 \
+         ORDER BY block_number DESC, log_index DESC LIMIT 1",
+    )
+    .bind(8453_i64)
+    .bind(agent.as_slice())
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        owner,
+        timelock.as_slice(),
+        "latest row must name the new owner"
+    );
+    assert!(!revoked, "a transfer does not revoke the agent");
+    assert_eq!(valid_until, Some(2_000_000_000), "validUntil not carried");
+    assert_eq!(
+        max_per_window.as_deref(),
+        Some("50000000"),
+        "maxPerWindow not carried"
+    );
+    assert_eq!(
+        receiver.as_deref(),
+        Some(share_receiver.as_slice()),
+        "shareReceiver not carried"
+    );
+
+    let history: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::BIGINT FROM account_history_events \
+         WHERE chain_id = $1 AND kind = 'policy_change'",
+    )
+    .bind(8453_i64)
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        history, 2,
+        "authorization and transfer each add a policy_change row"
+    );
+}
