@@ -1,0 +1,40 @@
+---
+title: "RunEntrypointRelay"
+---
+
+# RunEntrypointRelay
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f48839de85d7f70aa47a13db9bf253fdacf20af1/contracts/test/DeployTimelock.t.sol)
+
+<i>
+
+Calls run()'s body from the address it is deployed or etched at, so
+that address is both the script's msg.sender and its broadcaster.
+
+</i>
+
+## Functions
+
+<a id="runfrom-manifestharness-string"></a>
+
+### runFrom
+
+```solidity
+function runFrom(ManifestHarness harness, string memory prefix)
+        external
+        returns (DeployTimelock.Deployed memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| harness | `ManifestHarness` |  |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `DeployTimelock.Deployed` |  |
+

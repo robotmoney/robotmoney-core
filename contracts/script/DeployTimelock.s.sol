@@ -159,19 +159,30 @@ contract DeployTimelock is Script {
     ///         transfers ADMIN_ROLE on all five contracts (plus the optional
     ///         IC policy / consensus receipt handover — issue #1319).
     function run() external returns (Deployed memory d) {
+        return _runFrom("");
+    }
+
+    // ─── Internal ──────────────────────────────────────────────────────────────
+
+    /// @dev The body of `run()`. Every env var it reads is named `prefix`
+    ///      followed by a name from the lists above; `run()` passes an empty
+    ///      prefix. A test passes a prefix of its own, because env vars are
+    ///      process-wide and forge runs tests in parallel.
+    function _runFrom(string memory prefix) internal returns (Deployed memory d) {
         // Read first, so a run that leaves the list out stops on that input.
-        d.agents = _readAgentList("AGENT_ADDRESSES");
-        d.vault = vm.envAddress("VAULT_ADDRESS");
-        d.gateway = vm.envAddress("GATEWAY_ADDRESS");
-        d.registry = vm.envAddress("REGISTRY_ADDRESS");
-        d.router = vm.envAddress("ROUTER_ADDRESS");
-        d.governance = vm.envAddress("GOVERNANCE_ADDRESS");
-        d.safe = vm.envAddress("SAFE_ADDRESS");
-        d.emergency = vm.envAddress("EMERGENCY_ADDRESS");
-        d.minDelay = vm.envUint("TIMELOCK_MIN_DELAY");
-        d.icPolicy = vm.envOr("IC_POLICY_ADDRESS", address(0));
-        d.consensusReceipt = vm.envOr("CONSENSUS_RECEIPT_ADDRESS", address(0));
-        d.receiptAdmin = vm.envOr("RECEIPT_ADMIN_ADDRESS", address(0));
+        d.agents = _readAgentList(string.concat(prefix, "AGENT_ADDRESSES"));
+        d.vault = vm.envAddress(string.concat(prefix, "VAULT_ADDRESS"));
+        d.gateway = vm.envAddress(string.concat(prefix, "GATEWAY_ADDRESS"));
+        d.registry = vm.envAddress(string.concat(prefix, "REGISTRY_ADDRESS"));
+        d.router = vm.envAddress(string.concat(prefix, "ROUTER_ADDRESS"));
+        d.governance = vm.envAddress(string.concat(prefix, "GOVERNANCE_ADDRESS"));
+        d.safe = vm.envAddress(string.concat(prefix, "SAFE_ADDRESS"));
+        d.emergency = vm.envAddress(string.concat(prefix, "EMERGENCY_ADDRESS"));
+        d.minDelay = vm.envUint(string.concat(prefix, "TIMELOCK_MIN_DELAY"));
+        d.icPolicy = vm.envOr(string.concat(prefix, "IC_POLICY_ADDRESS"), address(0));
+        d.consensusReceipt =
+            vm.envOr(string.concat(prefix, "CONSENSUS_RECEIPT_ADDRESS"), address(0));
+        d.receiptAdmin = vm.envOr(string.concat(prefix, "RECEIPT_ADMIN_ADDRESS"), address(0));
 
         _validate(d);
 
@@ -179,7 +190,7 @@ contract DeployTimelock is Script {
         d.timelock = _deployAndWire(d);
         vm.stopBroadcast();
 
-        _writeJson(d);
+        _writeJson(d, string.concat(prefix, "DEPLOYMENT_OUT"));
         _logResult(d);
     }
 
@@ -277,8 +288,6 @@ contract DeployTimelock is Script {
         _validate(d);
         d.timelock = _deployAndWire(d);
     }
-
-    // ─── Internal ──────────────────────────────────────────────────────────────
 
     /// @dev The deployer-owned gateway agent list from env var `name` (issue
     ///      #1476). The variable must be set: a comma-separated list of
@@ -661,9 +670,10 @@ contract DeployTimelock is Script {
     ///      from the chain (`address.codehash`), not from build artifacts, so
     ///      the manifest describes what was actually deployed rather than what
     ///      the local `out/` directory happened to contain.
-    function _writeJson(Deployed memory d) internal {
+    ///      `outVar` names the env var that holds the output path.
+    function _writeJson(Deployed memory d, string memory outVar) internal {
         string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
+        try vm.envString(outVar) returns (string memory s) {
             outPath = s;
         } catch {
             outPath = "artifacts/timelock.json";

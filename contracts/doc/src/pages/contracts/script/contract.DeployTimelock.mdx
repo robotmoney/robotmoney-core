@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/68d3fbc00c0edeb93f9d37a428d8f43895524380/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f48839de85d7f70aa47a13db9bf253fdacf20af1/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** Script
 
@@ -150,6 +150,35 @@ IC policy / consensus receipt handover — issue #1319).
 ```solidity
 function run() external returns (Deployed memory d);
 ```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_runfrom-string"></a>
+
+### _runFrom
+
+<i>
+
+The body of `run()`. Every env var it reads is named `prefix`
+followed by a name from the lists above; `run()` passes an empty
+prefix. A test passes a prefix of its own, because env vars are
+process-wide and forge runs tests in parallel.
+
+</i>
+
+```solidity
+function _runFrom(string memory prefix) internal returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
 
 **Returns**
 
@@ -400,7 +429,7 @@ function _logResult(Deployed memory d) internal pure;
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="_writejson-deployed"></a>
+<a id="_writejson-deployed-string"></a>
 
 ### _writeJson
 
@@ -414,11 +443,12 @@ artifact and without an archive node. The code hashes are read
 from the chain (`address.codehash`), not from build artifacts, so
 the manifest describes what was actually deployed rather than what
 the local `out/` directory happened to contain.
+`outVar` names the env var that holds the output path.
 
 </i>
 
 ```solidity
-function _writeJson(Deployed memory d) internal;
+function _writeJson(Deployed memory d, string memory outVar) internal;
 ```
 
 **Parameters**
@@ -426,6 +456,7 @@ function _writeJson(Deployed memory d) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+| outVar | `string` |  |
 
 <a id="_writejsonto-deployed-string"></a>
 

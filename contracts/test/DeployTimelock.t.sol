@@ -995,6 +995,11 @@ contract ManifestHarness is DeployTimelock {
     function exposedReadAgentList(string memory name) external view returns (address[] memory) {
         return _readAgentList(name);
     }
+
+    /// @dev The body of `run()`, reading every env var under `prefix`.
+    function exposedRunFrom(string memory prefix) external returns (Deployed memory) {
+        return _runFrom(prefix);
+    }
 }
 
 /// @notice The manifest must answer, from one file: which chain, which
@@ -1583,5 +1588,124 @@ contract DeployTimelockAgentListInputTest is Test {
             )
         );
         script.run();
+    }
+}
+
+/// @notice `run()` hands the AGENT_ADDRESSES list it reads to the handover
+///         (issue #1476). This drives run()'s own body, `_runFrom`, through
+///         the broadcast path against a Deploy.s.sol stack. Every env var it
+///         reads carries a prefix only this test sets, because env vars are
+///         process-wide and forge runs tests in parallel.
+contract DeployTimelockRunEntrypointTest is Test {
+    using stdJson for string;
+
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
+    string internal constant PREFIX = "RM_1476_RUN_ENTRYPOINT_";
+    string internal constant OUT_PATH = "/tmp/1476-run-entrypoint-manifest.json";
+
+    ManifestHarness internal harness;
+    address internal deployer;
+    address internal deployAgent = makeAddr("run-deploy-agent");
+    address internal submitter = makeAddr("run-stage-submitter");
+    Deploy.Deployed internal dep;
+    RobotMoneyGateway internal gateway;
+
+    function _set(string memory name, string memory value) internal {
+        vm.setEnv(string.concat(PREFIX, name), value);
+    }
+
+    function setUp() public {
+        harness = new ManifestHarness();
+        // In a real `forge script`, run() is called by the broadcaster, and
+        // the broadcast sends every call from that same account. The default
+        // broadcaster is tx.origin, so it is the deployer here. Broadcasting
+        // is not allowed under a prank, so a relay placed at tx.origin makes
+        // the call into run()'s body instead.
+        deployer = tx.origin;
+        vm.etch(deployer, address(new RunEntrypointRelay()).code);
+        TestERC20 usdc = new TestERC20();
+        dep = new Deploy()
+            .runInProcessWith(
+                deployer,
+                makeAddr("run-pauser"),
+                deployAgent,
+                makeAddr("run-receiver"),
+                address(usdc)
+            );
+        gateway = dep.gateway;
+        address[] memory empty = new address[](0);
+        vm.prank(deployer);
+        gateway.authorizeAgent(
+            submitter,
+            IGateway.AgentPolicy({
+                active: true,
+                validUntil: uint64(block.timestamp + 30 days),
+                maxPerPayment: 1e6,
+                maxPerWindow: 1e6,
+                shareReceiver: submitter,
+                allowedDestinations: empty,
+                assetRecipient: address(0),
+                maxWithdrawPerPayment: 0,
+                maxWithdrawPerWindow: 0,
+                allowedSourceVaults: empty
+            })
+        );
+
+        VaultRegistry registry = new VaultRegistry(deployer);
+        PortfolioRouter router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        RouterGovernance governance =
+            new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        vm.prank(deployer);
+        router.grantRole(ADMIN_ROLE, address(governance));
+
+        _set(
+            "AGENT_ADDRESSES", string.concat(vm.toString(deployAgent), ",", vm.toString(submitter))
+        );
+        _set("VAULT_ADDRESS", vm.toString(address(dep.vault)));
+        _set("GATEWAY_ADDRESS", vm.toString(address(gateway)));
+        _set("REGISTRY_ADDRESS", vm.toString(address(registry)));
+        _set("ROUTER_ADDRESS", vm.toString(address(router)));
+        _set("GOVERNANCE_ADDRESS", vm.toString(address(governance)));
+        _set("SAFE_ADDRESS", vm.toString(address(new MockHighThresholdSafe())));
+        _set("EMERGENCY_ADDRESS", vm.toString(makeAddr("run-emergency")));
+        _set("TIMELOCK_MIN_DELAY", "172800");
+        _set("DEPLOYMENT_OUT", OUT_PATH);
+        if (vm.exists(OUT_PATH)) vm.removeFile(OUT_PATH);
+    }
+
+    function test_run_handsAgentAddressesToTimelock() public {
+        DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, PREFIX);
+
+        address timelock = address(d.timelock);
+        assertEq(gateway.agentOwner(deployAgent), timelock, "deploy agent not owned by timelock");
+        assertEq(gateway.agentOwner(submitter), timelock, "submitter not owned by timelock");
+        assertTrue(gateway.hasRole(AGENT_ROLE, deployAgent), "deploy agent lost AGENT_ROLE");
+        assertTrue(gateway.hasRole(AGENT_ROLE, submitter), "submitter lost AGENT_ROLE");
+        assertFalse(gateway.hasRole(ADMIN_ROLE, deployer), "deployer kept gateway ADMIN_ROLE");
+
+        string memory manifest = vm.readFile(OUT_PATH);
+        assertEq(
+            manifest.readUint(".roles.gateway_agents_listed_count"), 2, "manifest listed count"
+        );
+        assertFalse(
+            manifest.readBool(".roles.deployer_owns_a_listed_gateway_agent"),
+            "manifest says the deployer owns a listed agent"
+        );
+        address[] memory recorded = manifest.readAddressArray(".timelock_owned_agents");
+        assertEq(recorded.length, 2, "manifest agent count");
+        assertEq(recorded[0], deployAgent, "manifest agent 0");
+        assertEq(recorded[1], submitter, "manifest agent 1");
+    }
+}
+
+/// @dev Calls run()'s body from the address it is deployed or etched at, so
+///      that address is both the script's msg.sender and its broadcaster.
+contract RunEntrypointRelay {
+    function runFrom(ManifestHarness harness, string memory prefix)
+        external
+        returns (DeployTimelock.Deployed memory)
+    {
+        return harness.exposedRunFrom(prefix);
     }
 }

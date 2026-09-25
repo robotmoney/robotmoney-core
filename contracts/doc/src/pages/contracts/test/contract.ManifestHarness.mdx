@@ -4,7 +4,7 @@ title: "ManifestHarness"
 
 # ManifestHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/db74d747cb63d7157485338d758ffc470a9ae2cf/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f48839de85d7f70aa47a13db9bf253fdacf20af1/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelock](/contracts/script/contract.DeployTimelock)
 
@@ -58,4 +58,30 @@ function exposedReadAgentList(string memory name) external view returns (address
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address[]` |  |
+
+<a id="exposedrunfrom-string"></a>
+
+### exposedRunFrom
+
+<i>
+
+The body of `run()`, reading every env var under `prefix`.
+
+</i>
+
+```solidity
+function exposedRunFrom(string memory prefix) external returns (Deployed memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Deployed` |  |
 
