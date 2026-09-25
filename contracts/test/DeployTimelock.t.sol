@@ -1345,8 +1345,8 @@ contract DeployTimelockAgentHandoverTest is Test {
         assertEq(gateway2.agentOwner(otherAgent), other, "owner changed by a reverted handover");
     }
 
-    /// @notice The manifest names the agents handed to the timelock and records,
-    ///         from a live read, that the deployer owns none of them.
+    /// @notice The manifest names the agents handed to the timelock and records
+    ///         that the deployer owns none of them.
     function test_manifestRecordsTimelockOwnedAgents() public {
         ManifestHarness harness = new ManifestHarness();
         string memory outPath = "/tmp/1476-manifest-test.json";
@@ -1361,6 +1361,47 @@ contract DeployTimelockAgentHandoverTest is Test {
         assertFalse(
             stdJson.readBool(manifest, ".roles.deployer_owns_a_listed_gateway_agent"),
             "manifest says the deployer still owns a listed agent"
+        );
+        assertEq(
+            stdJson.readUint(manifest, ".roles.gateway_agents_listed_count"),
+            2,
+            "manifest listed-agent count"
+        );
+    }
+
+    /// @notice `roles.deployer_owns_a_listed_gateway_agent` is read from the
+    ///         gateway when the manifest is written. run() writes the manifest
+    ///         only after `_deployAndWire` requires every listed agent to have
+    ///         left the deployer, so a manifest run() writes records false. This
+    ///         drives the writer with a listed agent the deployer still owns, and
+    ///         the row must read true.
+    function test_manifestRecordsDeployerOwnedListedAgent_whenOneIsStillOwned() public {
+        // After the handover the deployer holds no gateway ADMIN_ROLE, so it
+        // takes the permissionless path and names itself as shareReceiver.
+        address kept = makeAddr("still-deployer-owned");
+        bytes32 salt = keccak256("kept");
+        vm.prank(deployer);
+        gateway.commitAuthorization(keccak256(abi.encode(kept, deployer, salt)));
+        vm.roll(block.number + 1);
+        vm.prank(deployer);
+        gateway.revealAuthorization(kept, salt, _policy(deployer));
+        assertEq(gateway.agentOwner(kept), deployer, "fixture: deployer owns the agent");
+
+        DeployTimelock.Deployed memory withKept = d;
+        address[] memory agents = new address[](2);
+        agents[0] = deployAgent;
+        agents[1] = kept;
+        withKept.agents = agents;
+
+        ManifestHarness harness = new ManifestHarness();
+        string memory outPath = "/tmp/1476-manifest-owned-test.json";
+        if (vm.exists(outPath)) vm.removeFile(outPath);
+        vm.prank(deployer);
+        harness.exposedWriteJsonTo(withKept, outPath);
+        string memory manifest = vm.readFile(outPath);
+        assertTrue(
+            stdJson.readBool(manifest, ".roles.deployer_owns_a_listed_gateway_agent"),
+            "manifest misses a listed agent the deployer still owns"
         );
         assertEq(
             stdJson.readUint(manifest, ".roles.gateway_agents_listed_count"),

@@ -771,8 +771,10 @@ contract DeployTimelock is Script {
             "deployer_has_vault_emergency_role",
             IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, msg.sender)
         );
-        // Issue #1476: read live, so the manifest cannot claim a transfer that
-        // did not land.
+        // Issue #1476: read from the gateway like the rows above. run() writes
+        // the manifest only after _deployAndWire requires every listed agent to
+        // have left the deployer, so a manifest run() writes records false; it
+        // is a record for the reader, not a check.
         bool deployerOwnsListedAgent;
         for (uint256 i = 0; i < d.agents.length; i++) {
             if (IGatewayAgentOwnership(d.gateway).agentOwner(d.agents[i]) == msg.sender) {
