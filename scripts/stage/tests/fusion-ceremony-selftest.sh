@@ -62,6 +62,10 @@ VAULT_AGENT=$(a 20); VAULT_USDC=$(a 21); VAULT_PROTO=$(a 22); VAULT_RWA=$(a 23)
 # The smoke deploy's gateway agent (Deploy.s.sol), authorized by the deployer
 # like the submitter and handed to the timelock at handover (issue #1476).
 DEPLOY_AGENT=$(a 24)
+# An agent another owner handed to the deployer. Only an
+# AgentOwnershipTransferred log with the deployer in topic 3 names it for the
+# deployer; no AgentAuthorized log does (issue #1476).
+GIVEN_AGENT=$(a 25); GIVEN_FROM=$(a 26)
 ADMIN=$("$REAL_CAST" keccak ADMIN_ROLE); AGENT=$("$REAL_CAST" keccak AGENT_ROLE)
 AUTH_TOPIC=$("$REAL_CAST" keccak 'AgentAuthorized(address,address,uint64,uint256,uint256,address)')
 XFER_TOPIC=$("$REAL_CAST" keccak 'AgentOwnershipTransferred(address,address,address)')
@@ -784,10 +788,14 @@ baseline() {
     printf 'logs:%s:none\t%s %s\n' "$GOVERNANCE" "$VOTER_A" "$VOTER_B"
     printf 'power:%s\t1\npower:%s\t1\n' "$VOTER_A" "$VOTER_B"
     # Issue #1476: the deployer authorized the submitter and the deploy agent,
-    # and the handover gave both to the timelock.
+    # another owner handed GIVEN_AGENT to the deployer, and the handover gave
+    # all three to the timelock.
     printf 'agentowner:%s:%s\t%s\n' "$(lc "$GATEWAY")" "$(lc "$SUBMITTER")" "$(lc "$TIMELOCK")" \
-      "$(lc "$GATEWAY")" "$(lc "$DEPLOY_AGENT")" "$(lc "$TIMELOCK")"
-    printf 'agentlogs\t%s\n' "$(agent_logs_json "$SUBMITTER" "$DEPLOY_AGENT")"
+      "$(lc "$GATEWAY")" "$(lc "$DEPLOY_AGENT")" "$(lc "$TIMELOCK")" \
+      "$(lc "$GATEWAY")" "$(lc "$GIVEN_AGENT")" "$(lc "$TIMELOCK")"
+    printf 'agentlogs\t%s\n' "$({ agent_logs_json "$SUBMITTER" "$DEPLOY_AGENT" | jq -c '.[]'
+      xfer_log_json "$GIVEN_AGENT" "$GIVEN_FROM" "$DEPLOYER"
+      xfer_log_json "$GIVEN_AGENT" "$DEPLOYER" "$TIMELOCK"; } | jq -sc .)"
   } >"$WORK/state"
   jq -n --arg g "$GATEWAY" --arg r "$ROUTER" --arg gov "$GOVERNANCE" --arg rc "$RECEIPT" --arg ic "$IC" \
     --arg t "$TIMELOCK" --arg s "$SAFE" --arg reg "$REGISTRY" --arg v "$VAULT" --arg d "$DEPLOYER" \
@@ -818,6 +826,11 @@ agent_logs_json() {
       --arg d "$(pad32 "$DEPLOYER")" --arg t "$(pad32 "$TIMELOCK")" \
       '{address: $g, topics: [$a, $ag, $d]}, {address: $g, topics: [$x, $ag, $d, $t]}'
   done | jq -sc .
+}
+# xfer_log_json <agent> <from> <to>: one AgentOwnershipTransferred log.
+xfer_log_json() {
+  jq -nc --arg g "$(lc "$GATEWAY")" --arg x "$XFER_TOPIC" --arg ag "$(pad32 "$1")" \
+    --arg f "$(pad32 "$2")" --arg t "$(pad32 "$3")" '{address: $g, topics: [$x, $ag, $f, $t]}'
 }
 state_of() { awk -F'\t' -v k="$1" '$1 == k { v = $2 } END { print v }' "$WORK/state"; }
 set_state() { grep -v -F "$1"$'\t' "$WORK/state" >"$WORK/state.new" || true; printf '%s\t%s\n' "$1" "$2" >>"$WORK/state.new"; mv "$WORK/state.new" "$WORK/state"; }
@@ -961,6 +974,8 @@ baseline; set_state "agentowner:$(lc "$GATEWAY"):$(lc "$SUBMITTER")" "$(lc "$DEP
 expect_fail "the deployer still owning the submitter agent" "no agent authorized by the deployer is still deployer-owned"
 baseline; set_state "agentowner:$(lc "$GATEWAY"):$(lc "$DEPLOY_AGENT")" "$(lc "$DEPLOYER")"
 expect_fail "the deployer still owning the deploy agent the record never names" "no agent authorized by the deployer is still deployer-owned"
+baseline; set_state "agentowner:$(lc "$GATEWAY"):$(lc "$GIVEN_AGENT")" "$(lc "$DEPLOYER")"
+expect_fail "the deployer still owning an agent another owner handed to it" "no agent authorized by the deployer is still deployer-owned"
 baseline; set_state agentlogs_fail true
 expect_fail "unreadable gateway agent logs: agent ownership unproven, not assumed" "no agent authorized by the deployer is still deployer-owned (unproven"
 baseline; set_state "agentowner:$(lc "$GATEWAY"):$(lc "$SUBMITTER")" "$(lc "$APPROVER")"
@@ -1125,6 +1140,11 @@ NEW_SAFE=$(a 48); NEW_TIMELOCK=$(a 49)
 run_baseline; set_state wallet_new_ok true; set_state accept_sends true
 set_state create_safe_at "$NEW_SAFE"; set_state safe_proxy_hash "$SAFE_PROXY_HASH"; set_state ic_policy "$IC"
 set_state forge_timelock "$NEW_TIMELOCK"; set_state forge_codehash "$HASH"
+# Issue #1476: an agent another owner handed to the deployer, named for the
+# deployer only by an AgentOwnershipTransferred log. run must list it too.
+RUN_GIVEN=$(a 27)
+set_state "agentowner:$(lc "$GATEWAY"):$(lc "$RUN_GIVEN")" "$(lc "$DEPLOYER")"
+set_state agentlogs "$(jq -c --argjson l "$(xfer_log_json "$RUN_GIVEN" "$GIVEN_FROM" "$DEPLOYER")" '. + [$l]' <<<"$(state_of agentlogs)")"
 rc=0; run_run || rc=$?
 RUN_RECORD="$WORK/run-out/fusion-stage-record.json"
 RUN_KEYDIR="$(jq -r '.ephemeral.keystore_dir // empty' "$RUN_RECORD" 2>/dev/null || true)"
@@ -1155,6 +1175,14 @@ if [[ -n "$run_submitter" && ",$(lc "$(state_of forge_agent_addresses)")," == *"
 else
   FAILED=$((FAILED + 1))
   echo "FAIL run AGENT_ADDRESSES: '$(state_of forge_agent_addresses)', submitter '$run_submitter' owned by '$(state_of "agentowner:$(lc "$GATEWAY"):$run_submitter")'"
+fi
+# The same run listed the agent only a transfer log gives the deployer.
+if [[ ",$(lc "$(state_of forge_agent_addresses)")," == *",$(lc "$RUN_GIVEN"),"* \
+      && "$(state_of "agentowner:$(lc "$GATEWAY"):$(lc "$RUN_GIVEN")")" == "$(lc "$NEW_TIMELOCK")" ]]; then
+  PASSED=$((PASSED + 1)); echo "ok   run passes an agent handed to the deployer in AGENT_ADDRESSES and the timelock ends up owning it"
+else
+  FAILED=$((FAILED + 1))
+  echo "FAIL run AGENT_ADDRESSES: '$(state_of forge_agent_addresses)', handed-over agent $RUN_GIVEN owned by '$(state_of "agentowner:$(lc "$GATEWAY"):$(lc "$RUN_GIVEN")")'"
 fi
 
 # SIGTERM to a `run` that is blocked inside cast, after every key is minted and
@@ -1866,7 +1894,7 @@ TOTAL_PASSED=$((PASSED + GOV_PASSED + STUB_PASSED))
 # Executed-assertion floor. Every `ok` line above is an assertion that RAN; a
 # run that silently skips a section prints fewer and must not pass. Raise the
 # floor whenever cases are added (CI checks the same line: suite-01-02).
-ASSERTION_FLOOR=133
+ASSERTION_FLOOR=135
 echo "fusion-ceremony selftest TOTAL: $TOTAL_PASSED passed, $TOTAL_FAILED failed (floor $ASSERTION_FLOOR)"
 SELFTEST_COMPLETE=1
 if (( TOTAL_PASSED < ASSERTION_FLOOR )); then
