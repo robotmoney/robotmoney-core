@@ -1017,6 +1017,24 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "transferAgentOwnership",
+    inputs: [
+      {
+        name: "agent",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "newOwner",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "unpause",
     inputs: [],
     outputs: [],
@@ -1329,6 +1347,31 @@ export const gatewayAbiGenerated = [
         type: "uint64",
         indexed: false,
         internalType: "uint64",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "AgentOwnershipTransferred",
+    inputs: [
+      {
+        name: "agent",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "previousOwner",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "newOwner",
+        type: "address",
+        indexed: true,
+        internalType: "address",
       },
     ],
     anonymous: false,
@@ -1813,6 +1856,11 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "LastAdminFloor",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "NewAgentOwnerNotAdmin",
     inputs: [],
   },
   {

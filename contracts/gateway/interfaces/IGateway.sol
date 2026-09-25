@@ -9,19 +9,23 @@ import {IConsensusRecommendationReceipt} from "./IConsensusRecommendationReceipt
 /// @title IGateway
 /// @notice Minimal interface stub for the RobotMoney deposit gateway.
 /// @dev Per the MVP plan (`Plan tracking issue #109` §2.2), the gateway
-///      exposes a single state-mutating entrypoint for agents (`deposit`),
-///      a permissionless depositor-owned authorize/revoke/policy surface
-///      (`authorizeAgent`, `revokeAgent`, `setPolicy`), and a protocol-wide
-///      pause asymmetry (PAUSER pauses, ADMIN unpauses) retained as a
-///      kill-switch by the contract upgrader.
+///      exposes state-mutating entrypoints for agents (`deposit` and
+///      friends), an owner-gated agent lifecycle surface
+///      (`commitAuthorization`/`revealAuthorization`, `authorizeAgent`,
+///      `setPolicy`, `transferAgentOwnership`, `revokeAgent`), and a
+///      protocol-wide pause asymmetry (PAUSER pauses, ADMIN unpauses).
 ///
-/// Authority model (see issue #269). Each depositor is the sole authority
-/// over her own agent. `authorizeAgent` is callable by any EOA;
-/// `msg.sender` is recorded as the agent's owner. Only that recorded
-/// owner can update policy or revoke. The Robot Money team has no
-/// runtime authority over any agent's lifecycle — `ADMIN_ROLE` is
-/// reserved for protocol-wide kill switches (e.g. `unpause`) retained
-/// by the contract upgrader for incident response.
+/// Authority model (issues #269, #1476). First-time authorization records
+/// `msg.sender` as the agent's owner: any account through
+/// `commitAuthorization` + `revealAuthorization`, an `ADMIN_ROLE` holder
+/// also through `authorizeAgent`. Only the recorded owner can update the
+/// policy, hand the agent to an `ADMIN_ROLE` holder, or revoke it.
+/// `ADMIN_ROLE` grants no authority over an agent it does not own.
+///
+/// Policy rule (issue #1476). Every call that writes a policy applies the
+/// same validator: the caller-independent shape checks plus one
+/// caller-dependent rule, judged on the caller's role at call time — a
+/// caller without `ADMIN_ROLE` must name itself as `shareReceiver`.
 interface IGateway {
     // -------------------------------------------------------------------
     // Types
@@ -88,8 +92,9 @@ interface IGateway {
 
     /// @notice Emitted when an agent's policy is created or updated.
     /// @param agent          Agent address whose policy was set.
-    /// @param owner          Depositor EOA that authorized the agent
-    ///                       (`msg.sender` at first `authorizeAgent` call).
+    /// @param owner          The agent's recorded owner, which is `msg.sender`
+    ///                       of the `authorizeAgent`, `revealAuthorization` or
+    ///                       `setPolicy` call that emitted it.
     /// @param validUntil     Policy expiry timestamp (Unix seconds).
     /// @param maxPerPayment  Maximum USDC per single deposit call.
     /// @param maxPerWindow   Maximum USDC per rolling window.
@@ -101,6 +106,15 @@ interface IGateway {
         uint256 maxPerPayment,
         uint256 maxPerWindow,
         address shareReceiver
+    );
+    /// @notice Emitted when an agent's recorded owner hands it to another
+    ///         owner through `transferAgentOwnership`. The agent keeps its
+    ///         `AGENT_ROLE` and its stored policy.
+    /// @param agent         Agent address whose owner changed.
+    /// @param previousOwner Owner before the call (`msg.sender`).
+    /// @param newOwner      Owner after the call; holds `ADMIN_ROLE`.
+    event AgentOwnershipTransferred(
+        address indexed agent, address indexed previousOwner, address indexed newOwner
     );
     /// @notice Emitted when an agent's policy and role are revoked.
     /// @param agent Agent address whose policy was removed.
@@ -337,6 +351,9 @@ interface IGateway {
     ///         `msg.sender` is not the original committer, or if the hash
     ///         does not match.
     /// @dev    Must be called at least one block after `commitAuthorization`.
+    ///         The policy is checked by the same validator as `setPolicy`:
+    ///         a caller without `ADMIN_ROLE` must name itself as
+    ///         `shareReceiver` (`ShareReceiverNotAuthorized`).
     /// @param agent  The agent address to authorize (must not already be owned).
     /// @param salt   The caller-chosen salt used when building `commitHash`.
     /// @param p      Initial policy parameters.
@@ -349,16 +366,38 @@ interface IGateway {
     ///         `commitAuthorization` + `revealAuthorization` instead.
     ///         `msg.sender` is recorded as the agent's owner. Reverts if
     ///         `agent` already has a recorded owner; that owner must call
-    ///         `setPolicy` to update or `revokeAgent` to release.
+    ///         `setPolicy` to update or `revokeAgent` to release. The caller
+    ///         holds `ADMIN_ROLE`, so the validator accepts any `shareReceiver`.
     /// @param agent The agent address to authorize (must not already be owned).
     /// @param p     Initial policy parameters.
     function authorizeAgent(address agent, AgentPolicy calldata p) external;
 
     /// @notice Update the policy for an agent the caller already owns.
-    ///         Reverts if `msg.sender` is not the recorded owner of `agent`.
+    ///         Reverts `NotAgentOwner` if `msg.sender` is not the recorded
+    ///         owner of `agent`. The new policy passes the same validator as
+    ///         first-time authorization, with the rule judged on the caller's
+    ///         role at call time: a caller without `ADMIN_ROLE` must name
+    ///         itself as `shareReceiver` (`ShareReceiverNotAuthorized`),
+    ///         whatever role it held when the agent was authorized. Any
+    ///         policy an owner can set here is one it could also have
+    ///         obtained through authorization. Emits `AgentAuthorized`.
     /// @param agent The agent address whose policy to update.
     /// @param p     New policy parameters.
     function setPolicy(address agent, AgentPolicy calldata p) external;
+
+    /// @notice Hand an agent the caller owns to `newOwner`. Only the recorded
+    ///         owner can call it (`NotAgentOwner`), and `newOwner` must hold
+    ///         `ADMIN_ROLE` (`NewAgentOwnerNotAdmin`), so an agent can be given
+    ///         to governance but never taken by it. That destination rule is
+    ///         the whole rule for a transfer: the caller-dependent
+    ///         `shareReceiver` rule does not bind an `ADMIN_ROLE` holder, so
+    ///         the stored policy is not checked again. The agent keeps
+    ///         `AGENT_ROLE` and its stored policy. Reverts `ZeroAddress`
+    ///         when `agent` or `newOwner` is `address(0)`.
+    ///         Emits `AgentOwnershipTransferred`.
+    /// @param agent    The agent address whose ownership moves.
+    /// @param newOwner The new recorded owner; must hold `ADMIN_ROLE`.
+    function transferAgentOwnership(address agent, address newOwner) external;
 
     /// @notice Revoke an agent. Reverts if `msg.sender` is not the recorded
     ///         owner. Clears policy, role, and owner record.
@@ -370,8 +409,8 @@ interface IGateway {
 
     /// @notice Resume operations. Restricted to `ADMIN_ROLE` (asymmetric).
     ///         `ADMIN_ROLE` is retained as a protocol-wide kill-switch
-    ///         counterweight to `pause`; it has no authority over any
-    ///         agent's lifecycle.
+    ///         counterweight to `pause`; it has no authority over the
+    ///         lifecycle of an agent it does not own.
     function unpause() external;
 
     /// @notice Set or update the Investment Committee policy contract address.
@@ -441,10 +480,11 @@ interface IGateway {
     /// @notice Consensus recommendation receipt contract, or `address(0)` if not configured.
     function consensusReceipt() external view returns (IConsensusRecommendationReceipt);
 
-    /// @notice Recorded owner (depositor EOA) for `agent`, or `address(0)`
-    ///         if no policy is recorded.
+    /// @notice Recorded owner for `agent`, or `address(0)` if no policy is
+    ///         recorded.
     /// @param agent The agent address whose recorded owner to look up.
-    /// @return The depositor EOA that authorized `agent`, or zero if none.
+    /// @return The account that authorized `agent` or received it through
+    ///         `transferAgentOwnership`, or zero if none.
     function agentOwner(address agent) external view returns (address);
 
     /// @notice Cumulative vault shares the agent has redeemed in the current

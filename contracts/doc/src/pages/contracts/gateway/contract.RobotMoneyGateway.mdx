@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
 
@@ -709,6 +709,9 @@ does not match.
 <i>
 
 Must be called at least one block after `commitAuthorization`.
+The policy is checked by the same validator as `setPolicy`:
+a caller without `ADMIN_ROLE` must name itself as
+`shareReceiver` (`ShareReceiverNotAuthorized`).
 
 </i>
 
@@ -735,7 +738,8 @@ authority after the deploy handover revokes the deployer's
 `commitAuthorization` + `revealAuthorization` instead.
 `msg.sender` is recorded as the agent's owner. Reverts if
 `agent` already has a recorded owner; that owner must call
-`setPolicy` to update or `revokeAgent` to release.
+`setPolicy` to update or `revokeAgent` to release. The caller
+holds `ADMIN_ROLE`, so the validator accepts any `shareReceiver`.
 
 ```solidity
 function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole(ADMIN_ROLE);
@@ -755,8 +759,7 @@ function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole
 <i>
 
 Shared authorization logic for both `authorizeAgent` (direct) and
-`revealAuthorization` (commit/reveal path). Extracted to avoid code
-duplication and to keep each entrypoint concise.
+`revealAuthorization` (commit/reveal path).
 
 </i>
 
@@ -776,7 +779,14 @@ function _authorizeAgentInternal(address agent, AgentPolicy calldata p) internal
 ### setPolicy
 
 Update the policy for an agent the caller already owns.
-Reverts if `msg.sender` is not the recorded owner of `agent`.
+Reverts `NotAgentOwner` if `msg.sender` is not the recorded
+owner of `agent`. The new policy passes the same validator as
+first-time authorization, with the rule judged on the caller's
+role at call time: a caller without `ADMIN_ROLE` must name
+itself as `shareReceiver` (`ShareReceiverNotAuthorized`),
+whatever role it held when the agent was authorized. Any
+policy an owner can set here is one it could also have
+obtained through authorization. Emits `AgentAuthorized`.
 
 ```solidity
 function setPolicy(address agent, AgentPolicy calldata p) external;
@@ -788,6 +798,32 @@ function setPolicy(address agent, AgentPolicy calldata p) external;
 | ---- | ---- | ----------- |
 | agent | `address` | The agent address whose policy to update. |
 | p | `AgentPolicy` | New policy parameters. |
+
+<a id="transferagentownership-address-address"></a>
+
+### transferAgentOwnership
+
+Hand an agent the caller owns to `newOwner`. Only the recorded
+owner can call it (`NotAgentOwner`), and `newOwner` must hold
+`ADMIN_ROLE` (`NewAgentOwnerNotAdmin`), so an agent can be given
+to governance but never taken by it. That destination rule is
+the whole rule for a transfer: the caller-dependent
+`shareReceiver` rule does not bind an `ADMIN_ROLE` holder, so
+the stored policy is not checked again. The agent keeps
+`AGENT_ROLE` and its stored policy. Reverts `ZeroAddress`
+when `agent` or `newOwner` is `address(0)`.
+Emits `AgentOwnershipTransferred`.
+
+```solidity
+function transferAgentOwnership(address agent, address newOwner) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` | The agent address whose ownership moves. |
+| newOwner | `address` | The new recorded owner; must hold `ADMIN_ROLE`. |
 
 <a id="revokeagent-address"></a>
 
@@ -806,27 +842,32 @@ function revokeAgent(address agent) external;
 | ---- | ---- | ----------- |
 | agent | `address` | The agent address whose policy and role are revoked. |
 
-<a id="_validatepolicy-agentpolicy"></a>
+<a id="_validatepolicy-address-agentpolicy"></a>
 
 ### _validatePolicy
 
 <i>
 
-Internal policy-shape validator shared by `authorizeAgent` and
-`setPolicy`. Custom errors match the previous public surface
-so downstream clients (rmpc, dapp) keep the same revert
-vocabulary across the depositor-owned redesign.
+The one policy validator every writer of `agents[...]` calls, so
+the rules for first-time authorization and for later updates
+cannot drift apart. It applies the caller-dependent rule, judged
+on `caller`'s role at call time (a caller without `ADMIN_ROLE`
+must name itself as `shareReceiver`; an `ADMIN_ROLE` caller may
+name any receiver), and then the caller-independent shape rules.
+Custom errors match the previous public surface so downstream
+clients (rmpc, dapp) keep the same revert vocabulary.
 
 </i>
 
 ```solidity
-function _validatePolicy(AgentPolicy calldata p) internal view;
+function _validatePolicy(address caller, AgentPolicy calldata p) internal view;
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
+| caller | `address` |  |
 | p | `AgentPolicy` |  |
 
 <a id="pause"></a>
@@ -845,8 +886,8 @@ function pause() external onlyRole(PAUSER_ROLE);
 
 Resume operations. Restricted to `ADMIN_ROLE` (asymmetric).
 `ADMIN_ROLE` is retained as a protocol-wide kill-switch
-counterweight to `pause`; it has no authority over any
-agent's lifecycle.
+counterweight to `pause`; it has no authority over the
+lifecycle of an agent it does not own.
 
 ```solidity
 function unpause() external onlyRole(ADMIN_ROLE);
@@ -1541,10 +1582,20 @@ error InvalidValidUntil();
 ### NotAgentOwner
 
 Caller is not the recorded owner of the target agent. Raised by
-`setPolicy` and `revokeAgent` when `msg.sender != agentOwner[agent]`.
+`setPolicy`, `revokeAgent` and `transferAgentOwnership` when
+`msg.sender != agentOwner[agent]`.
 
 ```solidity
 error NotAgentOwner();
+```
+
+### NewAgentOwnerNotAdmin
+
+`transferAgentOwnership` named a destination that does not hold
+`ADMIN_ROLE`. An agent can only be handed to an `ADMIN_ROLE` holder.
+
+```solidity
+error NewAgentOwnerNotAdmin();
 ```
 
 ### AgentAlreadyOwned
@@ -1606,8 +1657,10 @@ error CommitmentTooRecent();
 ### ShareReceiverNotAuthorized
 
 A caller without `ADMIN_ROLE` named a `shareReceiver` other than
-itself when authorizing an agent (`revealAuthorization`). An
-`ADMIN_ROLE` caller (`authorizeAgent`) may name any receiver.
+itself. Raised by `revealAuthorization` and `setPolicy`: every
+policy writer applies the same caller-dependent rule, judged on
+the caller's role at call time (`authorizeAgent` callers hold
+`ADMIN_ROLE`, so it never raises it).
 
 ```solidity
 error ShareReceiverNotAuthorized();

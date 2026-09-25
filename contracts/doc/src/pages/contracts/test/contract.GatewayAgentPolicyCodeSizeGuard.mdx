@@ -1,0 +1,36 @@
+---
+title: "GatewayAgentPolicyCodeSizeGuard"
+description: "The gateway's deployed runtime stays under the EIP-170 limit with the shared validator and transferAgentOwnership in it. Kept in its own contract so the coverage job, which instruments bytecode past the limit, can exclude it by name as it does VaultCodeSizeGuard."
+---
+
+# GatewayAgentPolicyCodeSizeGuard
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b3635c182d68ead6b3805677fd0b2e4b740e26eb/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+
+**Inherits:** [GatewayAgentPolicyFixture](/contracts/test/abstract.GatewayAgentPolicyFixture)
+
+**Title:** GatewayAgentPolicyCodeSizeGuard
+
+The gateway's deployed runtime stays under the EIP-170 limit with
+the shared validator and transferAgentOwnership in it. Kept in its
+own contract so the coverage job, which instruments bytecode past
+the limit, can exclude it by name as it does VaultCodeSizeGuard.
+
+## Constants
+
+### EIP170_LIMIT
+
+```solidity
+uint256 internal constant EIP170_LIMIT = 24_576;
+```
+
+## Functions
+
+<a id="test_gatewayruntime_undereip170"></a>
+
+### test_gatewayRuntime_underEip170
+
+```solidity
+function test_gatewayRuntime_underEip170() public;
+```
+

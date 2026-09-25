@@ -62,8 +62,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice `authorizeAgent` policy is inactive or `validUntil` is already in the past.
     error InvalidValidUntil();
     /// @notice Caller is not the recorded owner of the target agent. Raised by
-    ///         `setPolicy` and `revokeAgent` when `msg.sender != agentOwner[agent]`.
+    ///         `setPolicy`, `revokeAgent` and `transferAgentOwnership` when
+    ///         `msg.sender != agentOwner[agent]`.
     error NotAgentOwner();
+    /// @notice `transferAgentOwnership` named a destination that does not hold
+    ///         `ADMIN_ROLE`. An agent can only be handed to an `ADMIN_ROLE` holder.
+    error NewAgentOwnerNotAdmin();
     /// @notice `authorizeAgent` called on an agent that already has a recorded
     ///         owner. The existing owner must call `setPolicy` to update or
     ///         `revokeAgent` to release the address before a new authorization.
@@ -85,8 +89,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         Must wait at least one block before revealing.
     error CommitmentTooRecent();
     /// @notice A caller without `ADMIN_ROLE` named a `shareReceiver` other than
-    ///         itself when authorizing an agent (`revealAuthorization`). An
-    ///         `ADMIN_ROLE` caller (`authorizeAgent`) may name any receiver.
+    ///         itself. Raised by `revealAuthorization` and `setPolicy`: every
+    ///         policy writer applies the same caller-dependent rule, judged on
+    ///         the caller's role at call time (`authorizeAgent` callers hold
+    ///         `ADMIN_ROLE`, so it never raises it).
     error ShareReceiverNotAuthorized();
     /// @notice `depositTo` was called with a destination not in the agent's
     ///         `allowedDestinations` list (when the list is non-empty), or the
@@ -573,13 +579,21 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     // -------------------------------------------------------------------
-    // Agent lifecycle — permissionless, depositor-owned
+    // Agent lifecycle — owner-gated
     //
-    // Each depositor is the sole authority over her own agent. The
-    // authorize/setPolicy/revoke trio is gated on `msg.sender ==
-    // agentOwner[agent]` (or, for first-time authorize, on the agent
-    // having no recorded owner yet). `ADMIN_ROLE` plays no part in
-    // these calls — see issue #269 and docs/architecture.md §6.
+    // First-time authorization records `msg.sender` as the agent's owner
+    // (`revealAuthorization` for anyone, `authorizeAgent` for ADMIN_ROLE).
+    // After that only the recorded owner can call setPolicy, revokeAgent
+    // or transferAgentOwnership (issue #269, docs/architecture.md §6).
+    //
+    // Writers of `agents[...]` / `agentOwner[...]` (issue #1476):
+    //   _authorizeAgentInternal  writes both; runs _validatePolicy(caller, p)
+    //   setPolicy                writes agents; runs _validatePolicy(caller, p)
+    //   transferAgentOwnership   writes agentOwner only; the destination
+    //                            must hold ADMIN_ROLE, which the caller-
+    //                            dependent shareReceiver rule does not bind,
+    //                            so the stored policy is not checked again
+    //   revokeAgent              deletes both; writes no policy, so no check
     // -------------------------------------------------------------------
 
     /// @inheritdoc IGateway
@@ -634,19 +648,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     /// @dev Shared authorization logic for both `authorizeAgent` (direct) and
-    ///      `revealAuthorization` (commit/reveal path). Extracted to avoid code
-    ///      duplication and to keep each entrypoint concise.
+    ///      `revealAuthorization` (commit/reveal path).
     function _authorizeAgentInternal(address agent, AgentPolicy calldata p) internal {
         if (agent == address(0)) revert ZeroAddress();
         if (agentOwner[agent] != address(0)) revert AgentAlreadyOwned();
-
-        // A caller without ADMIN_ROLE must name itself as shareReceiver. An
-        // ADMIN_ROLE caller (authorizeAgent) may name any receiver.
-        if (!hasRole(ADMIN_ROLE, msg.sender)) {
-            if (p.shareReceiver != msg.sender) revert ShareReceiverNotAuthorized();
-        }
-
-        _validatePolicy(p);
+        _validatePolicy(msg.sender, p);
 
         agentOwner[agent] = msg.sender;
         agents[agent] = p;
@@ -665,13 +671,27 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     function setPolicy(address agent, AgentPolicy calldata p) external {
         if (agent == address(0)) revert ZeroAddress();
         if (agentOwner[agent] != msg.sender) revert NotAgentOwner();
-        _validatePolicy(p);
+        _validatePolicy(msg.sender, p);
 
         agents[agent] = p;
 
         emit AgentAuthorized(
             agent, msg.sender, p.validUntil, p.maxPerPayment, p.maxPerWindow, p.shareReceiver
         );
+    }
+
+    /// @inheritdoc IGateway
+    function transferAgentOwnership(address agent, address newOwner) external {
+        if (agent == address(0) || newOwner == address(0)) revert ZeroAddress();
+        address owner = agentOwner[agent];
+        if (owner != msg.sender) revert NotAgentOwner();
+        // The destination must hold ADMIN_ROLE. The caller-dependent
+        // shareReceiver rule does not bind an ADMIN_ROLE holder, so the
+        // stored policy is not checked again.
+        if (!hasRole(ADMIN_ROLE, newOwner)) revert NewAgentOwnerNotAdmin();
+
+        agentOwner[agent] = newOwner;
+        emit AgentOwnershipTransferred(agent, owner, newOwner);
     }
 
     /// @inheritdoc IGateway
@@ -688,11 +708,18 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         emit AgentRevoked(agent, owner);
     }
 
-    /// @dev Internal policy-shape validator shared by `authorizeAgent` and
-    ///      `setPolicy`. Custom errors match the previous public surface
-    ///      so downstream clients (rmpc, dapp) keep the same revert
-    ///      vocabulary across the depositor-owned redesign.
-    function _validatePolicy(AgentPolicy calldata p) internal view {
+    /// @dev The one policy validator every writer of `agents[...]` calls, so
+    ///      the rules for first-time authorization and for later updates
+    ///      cannot drift apart. It applies the caller-dependent rule, judged
+    ///      on `caller`'s role at call time (a caller without `ADMIN_ROLE`
+    ///      must name itself as `shareReceiver`; an `ADMIN_ROLE` caller may
+    ///      name any receiver), and then the caller-independent shape rules.
+    ///      Custom errors match the previous public surface so downstream
+    ///      clients (rmpc, dapp) keep the same revert vocabulary.
+    function _validatePolicy(address caller, AgentPolicy calldata p) internal view {
+        if (!hasRole(ADMIN_ROLE, caller) && p.shareReceiver != caller) {
+            revert ShareReceiverNotAuthorized();
+        }
         if (p.shareReceiver == address(0)) revert InvalidShareReceiver();
         if (!p.active) revert InvalidValidUntil();
         if (p.validUntil < block.timestamp) revert InvalidValidUntil();
