@@ -1,0 +1,52 @@
+---
+title: "IGatewayAgentOwnership"
+---
+
+# IGatewayAgentOwnership
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b3635c182d68ead6b3805677fd0b2e4b740e26eb/contracts/script/DeployTimelock.s.sol)
+
+<i>
+
+Minimal gateway agent surface used to hand deployer-owned agents to
+the timelock (issue #1476).
+
+</i>
+
+## Functions
+
+<a id="agentowner-address"></a>
+
+### agentOwner
+
+```solidity
+function agentOwner(address agent) external view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="transferagentownership-address-address"></a>
+
+### transferAgentOwnership
+
+```solidity
+function transferAgentOwnership(address agent, address newOwner) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+| newOwner | `address` |  |
+

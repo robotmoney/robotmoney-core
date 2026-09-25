@@ -5,7 +5,7 @@ description: "The manifest must answer, from one file: which chain, which addres
 
 # DeployTimelockManifestTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** Test
 
@@ -94,5 +94,17 @@ function test_manifestRecordsTheR7RoleConditions() public view;
 
 ```solidity
 function test_manifestRecordsTheQuorumFloorItWasDeployedUnder() public view;
+```
+
+<a id="test_manifestrecordszerolistedagents_whennonelisted"></a>
+
+### test_manifestRecordsZeroListedAgents_whenNoneListed
+
+A run with no listed agent records a listed count of zero, so
+`deployer_owns_a_listed_gateway_agent = false` is not read as a
+check over every agent (issue #1476).
+
+```solidity
+function test_manifestRecordsZeroListedAgents_whenNoneListed() public view;
 ```
 

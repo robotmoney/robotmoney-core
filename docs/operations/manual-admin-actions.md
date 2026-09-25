@@ -109,7 +109,33 @@ contract-enforced rather than operational convention.
    broadcasting with the production deployer key.
 2. Deploy and migrate using `contracts/script/DeployTimelock.s.sol`, which deploys
    the `TimelockController` and performs the per-contract `ADMIN_ROLE` transfer
-   with role-acceptance verification.
+   with role-acceptance verification. Set `AGENT_ADDRESSES` to every gateway
+   agent the deployer still owns, comma-separated, or to `none` when it owns
+   none; the script reverts before broadcasting when the variable is unset or
+   empty. It hands each listed agent to the timelock with
+   `transferAgentOwnership` (issue #1476). The gateway cannot enumerate an
+   owner's agents, so derive the list from its logs: every `AgentAuthorized`
+   log whose second topic is the deployer, plus every
+   `AgentOwnershipTransferred` log whose third topic is the deployer, keeping
+   only the agents whose `agentOwner(agent)` is still the deployer (the
+   `deployer_owned_agents` helper in `scripts/stage/fusion-ceremony.sh` does
+   exactly this). Deploy.s.sol's deploy agent is among them unless it was
+   already revoked or handed over.
+
+   ```bash
+   cast logs --rpc-url "$BASE_RPC" --address "$GATEWAY_ADDRESS" --from-block "$GATEWAY_DEPLOY_BLOCK" \
+     'AgentAuthorized(address indexed agent, address indexed owner, uint64 validUntil, uint256 maxPerPayment, uint256 maxPerWindow, address shareReceiver)' \
+     '' "$DEPLOYER"
+   cast logs --rpc-url "$BASE_RPC" --address "$GATEWAY_ADDRESS" --from-block "$GATEWAY_DEPLOY_BLOCK" \
+     'AgentOwnershipTransferred(address indexed agent, address indexed previousOwner, address indexed newOwner)' \
+     '' '' "$DEPLOYER"
+   # for each agent (topic 1) in either list; keep it when this prints $DEPLOYER:
+   cast call "$GATEWAY_ADDRESS" 'agentOwner(address)(address)' "$AGENT" --rpc-url "$BASE_RPC"
+   ```
+
+   After the run, `roles.deployer_owns_a_listed_gateway_agent` in the manifest
+   must be `false` and `roles.gateway_agents_listed_count` must equal the
+   number of agents found above.
 3. Record the resulting `portfolio_router`, `router_governance`, and
    `timelock_controller` addresses in `deployments/full-stack.json`.
 

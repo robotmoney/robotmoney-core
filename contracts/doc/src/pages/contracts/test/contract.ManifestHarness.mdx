@@ -4,7 +4,7 @@ title: "ManifestHarness"
 
 # ManifestHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelock](/contracts/script/contract.DeployTimelock)
 
@@ -33,4 +33,24 @@ function exposedWriteJson(Deployed memory d) external;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+
+<a id="exposedreadagentlist-string"></a>
+
+### exposedReadAgentList
+
+```solidity
+function exposedReadAgentList(string memory name) external view returns (address[] memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
 

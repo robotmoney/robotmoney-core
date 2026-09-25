@@ -11,6 +11,7 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
@@ -142,6 +143,7 @@ contract SafeIntegrationTest is Test {
     // ─── Role constant ────────────────────────────────────────────────────────
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 
     // ─── Timelock delay ────────────────────────────────────────────────────────
 
@@ -185,6 +187,13 @@ contract SafeIntegrationTest is Test {
     /// not AccessControlEnumerable, so this is the only complete member list.
     mapping(address => address[]) internal adminHolders;
     address[] internal gatewayRootHolders;
+
+    /// A gateway agent the deployer authorizes before the handover, as
+    /// Deploy.s.sol does for its deploy agent (issue #1476).
+    address internal deployAgent;
+    /// Every agent named by an AgentAuthorized or AgentOwnershipTransferred log
+    /// the gateway emitted from before the contracts were built.
+    address[] internal loggedAgents;
 
     // ─── Set-up ────────────────────────────────────────────────────────────────
 
@@ -305,10 +314,19 @@ contract SafeIntegrationTest is Test {
         assertGt(SAFE_FALLBACK_HANDLER.code.length, 0, "fallback handler has no code on this fork");
         assertGt(SAFE_MULTISEND.code.length, 0, "MultiSend has no code on this fork");
 
-        // Deploy TimelockController and wire ADMIN_ROLE on all five contracts,
-        // called from the deployer so its roles are the ones revoked.
+        // A deployer-owned gateway agent, authorized before the handover the
+        // way Deploy.s.sol authorizes its deploy agent (issue #1476).
+        deployAgent = makeAddr("deploy-agent");
         vm.prank(deployer);
-        d = script.runInProcess(
+        gateway.authorizeAgent(deployAgent, _agentPolicy(makeAddr("deploy-share-receiver")));
+
+        // Deploy TimelockController and wire ADMIN_ROLE on all five contracts,
+        // called from the deployer so its roles are the ones revoked. The
+        // deployer's agent is handed to the timelock in the same handover.
+        address[] memory agents = new address[](1);
+        agents[0] = deployAgent;
+        vm.prank(deployer);
+        d = script.runInProcessWithAgents(
             address(vault),
             address(gateway),
             address(registry),
@@ -316,7 +334,8 @@ contract SafeIntegrationTest is Test {
             address(governance),
             address(safe),
             makeAddr("emergency"), // independent emergency hot key (ACL-1 / F-01)
-            MIN_DELAY
+            MIN_DELAY,
+            agents
         );
 
         // Verify wiring.
@@ -347,6 +366,16 @@ contract SafeIntegrationTest is Test {
             adminHolders[governed[i]] = RoleHolders.holders(logs, governed[i], ADMIN_ROLE);
         }
         gatewayRootHolders = RoleHolders.holders(logs, address(gateway), bytes32(0));
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter != address(gateway) || logs[i].topics.length < 2) continue;
+            bytes32 t0 = logs[i].topics[0];
+            if (
+                t0 == IGateway.AgentAuthorized.selector
+                    || t0 == IGateway.AgentOwnershipTransferred.selector
+            ) {
+                _rememberAgent(address(uint160(uint256(logs[i].topics[1]))));
+            }
+        }
 
         // Take a snapshot for per-test revert.
         _snap = vm.snapshot();
@@ -406,7 +435,56 @@ contract SafeIntegrationTest is Test {
         assertFalse(gateway.hasRole(bytes32(0), address(this)), "the test holds the gateway root");
     }
 
+    /// @notice Issue #1476: after the handover no gateway agent is owned by
+    ///         the deployer. The agents are enumerated from the gateway's own
+    ///         AgentAuthorized / AgentOwnershipTransferred logs, not from the
+    ///         list the fixture passed in. The transferred agent keeps
+    ///         AGENT_ROLE, and the deployer's setPolicy / revokeAgent on it
+    ///         revert NotAgentOwner.
+    function test_handover_noDeployerOwnedAgentRemains() public withSnap {
+        assertGe(loggedAgents.length, 1, "the logs name no gateway agent");
+        for (uint256 i = 0; i < loggedAgents.length; i++) {
+            assertTrue(
+                gateway.agentOwner(loggedAgents[i]) != deployer,
+                "a gateway agent is still owned by the deployer"
+            );
+        }
+        assertEq(gateway.agentOwner(deployAgent), address(d.timelock), "timelock is not the owner");
+        assertTrue(gateway.hasRole(AGENT_ROLE, deployAgent), "transferred agent lost AGENT_ROLE");
+
+        vm.prank(deployer);
+        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
+        gateway.setPolicy(deployAgent, _agentPolicy(deployer));
+        vm.prank(deployer);
+        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
+        gateway.revokeAgent(deployAgent);
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────────────
+
+    function _rememberAgent(address agent) internal {
+        for (uint256 i = 0; i < loggedAgents.length; i++) {
+            if (loggedAgents[i] == agent) return;
+        }
+        loggedAgents.push(agent);
+    }
+
+    /// @dev A valid policy with `receiver` as shareReceiver, withdrawal disabled.
+    function _agentPolicy(address receiver) internal view returns (IGateway.AgentPolicy memory p) {
+        address[] memory empty = new address[](0);
+        p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 30 days),
+            maxPerPayment: 1e6,
+            maxPerWindow: 10e6,
+            shareReceiver: receiver,
+            allowedDestinations: empty,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: empty
+        });
+    }
 
     /// @dev Revert to post-setUp snapshot before each test.
     modifier withSnap() {
@@ -604,6 +682,21 @@ contract SafeIntegrationTest is Test {
             IAccessControl(address(gateway)).hasRole(ADMIN_ROLE, newAdmin),
             "newAdmin should hold ADMIN_ROLE on gateway"
         );
+    }
+
+    /// @notice AC1f (issue #1476): setPolicy on the agent the handover gave the
+    ///         timelock, driven by two owner signatures through
+    ///         Safe.execTransaction -> TimelockController schedule / execute.
+    function test_happyPath_gateway_setPolicyOnTransferredAgent() public withSnap {
+        address newReceiver = makeAddr("governance-receiver");
+        bytes memory callData =
+            abi.encodeCall(IGateway.setPolicy, (deployAgent, _agentPolicy(newReceiver)));
+        _scheduleAndExecute(address(gateway), callData);
+
+        (,,,, address receiver,,,) = gateway.agents(deployAgent);
+        assertEq(receiver, newReceiver, "Safe -> Timelock setPolicy did not land");
+        assertEq(gateway.agentOwner(deployAgent), address(d.timelock), "owner changed");
+        assertTrue(gateway.hasRole(AGENT_ROLE, deployAgent), "agent lost AGENT_ROLE");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** Script
 
@@ -21,6 +21,13 @@ Gateway DEFAULT_ADMIN_ROLE (so it can rotate roles / authorizeAgent).
 - The deployer EOA holds NO privileged role of any kind:
 no ADMIN_ROLE on any contract, no Gateway DEFAULT_ADMIN_ROLE, and
 no vault EMERGENCY_ROLE.
+- Every gateway agent listed in AGENT_ADDRESSES is owned by the
+TimelockController, not the deployer, and still holds AGENT_ROLE
+(issue #1476). setPolicy / revokeAgent on those agents go
+Safe -> Timelock -> gateway. The guarantee covers the listed
+agents only: the gateway cannot enumerate an owner's agents, so
+the list must name every agent the deployer owns (the stage
+ceremony derives it from the gateway's AgentAuthorized logs).
 - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
 hot key, not the deployer.
 - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
@@ -56,6 +63,18 @@ committeeRegister calls — is untouched.
 CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
 same rule). When set, ADMIN_ROLE +
 DEFAULT_ADMIN_ROLE move to the timelock.
+AGENT_ADDRESSES        — comma-separated gateway agents the deployer
+owns (issue #1476): the deploy agent from
+Deploy.s.sol, the stage ceremony's submitter.
+Each is handed to the timelock with
+transferAgentOwnership while the timelock
+already holds gateway ADMIN_ROLE and before
+the deployer's ADMIN_ROLE is revoked. Every
+entry must be owned by the deployer, or the
+handover reverts. Required, with no default:
+an unset or empty value reverts before any
+broadcast, and the literal `none` declares
+a run whose deployer owns no gateway agent.
 RECEIPT_ADMIN_ADDRESS  — the address that currently holds ADMIN_ROLE /
 DEFAULT_ADMIN_ROLE on the receipt contract (the
 RECEIPT_ADMIN_ADDRESS DeployInvestmentCommittee-
@@ -138,7 +157,8 @@ function run() external returns (Deployed memory d);
 In-process variant for Forge tests. Caller sets up prank context.
 No JSON is written; no env vars are read. Does not exercise the
 optional IC policy / consensus receipt handover — use
-`runInProcessWithCommittee` for that.
+`runInProcessWithCommittee` for that. Hands over no gateway
+agent — use `runInProcessWithAgents` for that.
 
 ```solidity
 function runInProcess(
@@ -218,6 +238,79 @@ function runInProcessWithCommittee(
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
+<a id="runinprocesswithagents-address-address-address-address-address-address-address-uint256-address"></a>
+
+### runInProcessWithAgents
+
+In-process variant that also hands the listed deployer-owned
+gateway agents to the timelock (issue #1476), the in-process
+form of AGENT_ADDRESSES. Caller sets up prank context. No JSON
+is written; no env vars are read.
+
+```solidity
+function runInProcessWithAgents(
+        address vault_,
+        address gateway_,
+        address registry_,
+        address router_,
+        address governance_,
+        address safe_,
+        address emergency_,
+        uint256 minDelay_,
+        address[] calldata agents_
+    ) external returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault_ | `address` |  |
+| gateway_ | `address` |  |
+| registry_ | `address` |  |
+| router_ | `address` |  |
+| governance_ | `address` |  |
+| safe_ | `address` |  |
+| emergency_ | `address` |  |
+| minDelay_ | `uint256` |  |
+| agents_ | `address[]` | Gateway agents the deployer (the caller) owns. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_readagentlist-string"></a>
+
+### _readAgentList
+
+<i>
+
+The deployer-owned gateway agent list from env var `name` (issue
+#1476). The variable must be set: a comma-separated list of
+agents, or the literal `none` for a run whose deployer owns no
+gateway agent. An unset or empty variable reverts, so a broadcast
+run never treats a missing list as an empty one.
+
+</i>
+
+```solidity
+function _readAgentList(string memory name) internal view returns (address[] memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
+
 <a id="_validate-deployed"></a>
 
 ### _validate
@@ -251,6 +344,29 @@ function _deployAndWire(Deployed memory d) internal returns (TimelockController 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | timelock | `TimelockController` |  |
+
+<a id="_transferagents-deployed-address"></a>
+
+### _transferAgents
+
+<i>
+
+Hand every listed agent from the deployer (msg.sender) to `timelock`.
+A listed agent the deployer does not own is an input error and
+reverts before any transfer of it is attempted.
+
+</i>
+
+```solidity
+function _transferAgents(Deployed memory d, address timelock) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| timelock | `address` |  |
 
 <a id="_logresult-deployed"></a>
 
@@ -339,6 +455,8 @@ struct Deployed {
         address icPolicy;
         address consensusReceipt;
         address receiptAdmin;
+        /// Deployer-owned gateway agents handed to the timelock (issue #1476).
+        address[] agents;
     }
 ```
 
@@ -358,4 +476,5 @@ struct Deployed {
 | icPolicy | `address` |  |
 | consensusReceipt | `address` |  |
 | receiptAdmin | `address` |  |
+| agents | `address[]` |  |
 

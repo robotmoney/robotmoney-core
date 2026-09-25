@@ -1,0 +1,78 @@
+---
+title: "DeployTimelockAgentListInputTest"
+description: "The broadcast entrypoint reads AGENT_ADDRESSES with no default (issue #1476): the list must be set, either to the deployer-owned gateway agents or to the literal `none`. Each reader case uses its own variable name, because env vars are process-wide and forge runs tests in parallel."
+---
+
+# DeployTimelockAgentListInputTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** Test
+
+The broadcast entrypoint reads AGENT_ADDRESSES with no default
+(issue #1476): the list must be set, either to the deployer-owned
+gateway agents or to the literal `none`. Each reader case uses its
+own variable name, because env vars are process-wide and forge runs
+tests in parallel.
+
+## State Variables
+
+### harness
+
+```solidity
+ManifestHarness internal harness;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_agentlist_unset_reverts"></a>
+
+### test_agentList_unset_reverts
+
+```solidity
+function test_agentList_unset_reverts() public;
+```
+
+<a id="test_agentlist_empty_reverts"></a>
+
+### test_agentList_empty_reverts
+
+```solidity
+function test_agentList_empty_reverts() public;
+```
+
+<a id="test_agentlist_none_isempty"></a>
+
+### test_agentList_none_isEmpty
+
+```solidity
+function test_agentList_none_isEmpty() public;
+```
+
+<a id="test_agentlist_parsescommaseparatedaddresses"></a>
+
+### test_agentList_parsesCommaSeparatedAddresses
+
+```solidity
+function test_agentList_parsesCommaSeparatedAddresses() public;
+```
+
+<a id="test_run_withoutagentaddresses_reverts"></a>
+
+### test_run_withoutAgentAddresses_reverts
+
+run() itself stops on a missing AGENT_ADDRESSES before it reads
+any other input or broadcasts anything. No test sets that name.
+
+```solidity
+function test_run_withoutAgentAddresses_reverts() public;
+```
+
