@@ -296,6 +296,19 @@ Normative. "Must" is binding; a violation is a release blocker.
   makes `propose` meaningful.
 - **R14.** Any assertion that a single key drives the Safe must be deleted.
   Specifically `fusion-ceremony.sh:292`.
+- **R15.** (issue #1476) Gateway agent ownership is governance authority too:
+  the recorded owner alone can call `setPolicy` and `revokeAgent`. The handover
+  must leave no gateway agent owned by the deployer. `DeployTimelock` hands
+  every agent in `AGENT_ADDRESSES` to the TimelockController with
+  `transferAgentOwnership` and requires none is still deployer-owned. The
+  list is a required input with no default (a comma-separated list, or
+  `none`), because the gateway cannot enumerate an owner's agents; the stage
+  ceremony passes every deployer-owned agent the gateway logs name, and
+  `verify` fails `AC-CORE-05 no agent authorized by the deployer is still
+  deployer-owned` when an agent an `AgentAuthorized` or
+  `AgentOwnershipTransferred` log gives the deployer is still deployer-owned.
+  This closes one gap in the handover; it does not by itself make stage and
+  production governance isomorphic (issue #1447 tracks that).
 
 ---
 
