@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/db74d747cb63d7157485338d758ffc470a9ae2cf/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** Script
 
@@ -408,6 +408,29 @@ function _writeJson(Deployed memory d) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+
+<a id="_writejsonto-deployed-string"></a>
+
+### _writeJsonTo
+
+<i>
+
+Writes the manifest `_writeJson` describes to `outPath`. Kept apart
+from the `DEPLOYMENT_OUT` read so a caller can name the path
+without setting a process-wide variable.
+
+</i>
+
+```solidity
+function _writeJsonTo(Deployed memory d, string memory outPath) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| outPath | `string` |  |
 
 <a id="_serializeroles-deployed"></a>
 

@@ -5,7 +5,7 @@ description: "The manifest must answer, from one file: which chain, which addres
 
 # DeployTimelockManifestTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/db74d747cb63d7157485338d758ffc470a9ae2cf/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** Test
 
@@ -86,6 +86,19 @@ The two R7 conditions, recorded as booleans an auditor can grep.
 
 ```solidity
 function test_manifestRecordsTheR7RoleConditions() public view;
+```
+
+<a id="test_manifesttests_passanexplicitpath_neversetdeploymentout"></a>
+
+### test_manifestTests_passAnExplicitPath_neverSetDeploymentOut
+
+Every manifest test in this file passes its output path to
+`exposedWriteJsonTo`. None sets `DEPLOYMENT_OUT`: env vars are
+process-wide and forge runs test contracts in parallel, so a
+shared variable lets one test write to another test's path.
+
+```solidity
+function test_manifestTests_passAnExplicitPath_neverSetDeploymentOut() public view;
 ```
 
 <a id="test_manifestrecordsthequorumflooritwasdeployedunder"></a>

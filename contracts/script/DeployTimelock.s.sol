@@ -651,7 +651,13 @@ contract DeployTimelock is Script {
         } catch {
             outPath = "artifacts/timelock.json";
         }
+        _writeJsonTo(d, outPath);
+    }
 
+    /// @dev Writes the manifest `_writeJson` describes to `outPath`. Kept apart
+    ///      from the `DEPLOYMENT_OUT` read so a caller can name the path
+    ///      without setting a process-wide variable.
+    function _writeJsonTo(Deployed memory d, string memory outPath) internal {
         string memory addrs = "manifest_addresses";
         vm.serializeAddress(addrs, "timelock", address(d.timelock));
         vm.serializeAddress(addrs, "safe", d.safe);

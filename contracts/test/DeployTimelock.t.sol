@@ -983,9 +983,13 @@ contract NaiveAgentGateway is AccessControl {
 ///      without this seam the manifest is the one part of the deploy script
 ///      that ships untested, and a serialization mistake in it surfaces as a
 ///      malformed artifact during a real ceremony.
+///      Tests write through `exposedWriteJsonTo` with an explicit path: env
+///      vars are process-wide and forge runs test contracts in parallel, so
+///      two test contracts that each set `DEPLOYMENT_OUT` can write to each
+///      other's file.
 contract ManifestHarness is DeployTimelock {
-    function exposedWriteJson(Deployed memory d) external {
-        _writeJson(d);
+    function exposedWriteJsonTo(Deployed memory d, string memory outPath) external {
+        _writeJsonTo(d, outPath);
     }
 
     function exposedReadAgentList(string memory name) external view returns (address[] memory) {
@@ -1042,12 +1046,13 @@ contract DeployTimelockManifestTest is Test {
 
         harness = new ManifestHarness();
         outPath = "/tmp/r7-manifest-test.json";
-        vm.setEnv("DEPLOYMENT_OUT", outPath);
+        // A file left by an earlier run must not stand in for this one.
+        if (vm.exists(outPath)) vm.removeFile(outPath);
 
-        // `_writeJson` reads `msg.sender` for the deployer role rows, so the
+        // `_writeJsonTo` reads `msg.sender` for the deployer role rows, so the
         // harness call must carry the same deployer identity.
         vm.prank(deployer);
-        harness.exposedWriteJson(d);
+        harness.exposedWriteJsonTo(d, outPath);
         manifest = vm.readFile(outPath);
     }
 
@@ -1091,6 +1096,16 @@ contract DeployTimelockManifestTest is Test {
         assertTrue(manifest.readBool(".roles.timelock_has_router_admin_role"));
         assertTrue(manifest.readBool(".roles.safe_is_timelock_proposer"));
         assertTrue(manifest.readBool(".roles.safe_is_timelock_executor"));
+    }
+
+    /// @notice Every manifest test in this file passes its output path to
+    ///         `exposedWriteJsonTo`. None sets `DEPLOYMENT_OUT`: env vars are
+    ///         process-wide and forge runs test contracts in parallel, so a
+    ///         shared variable lets one test write to another test's path.
+    function test_manifestTests_passAnExplicitPath_neverSetDeploymentOut() public view {
+        string memory src = vm.readFile("contracts/test/DeployTimelock.t.sol");
+        string memory setter = string.concat("vm.setEnv(", '"', "DEPLOYMENT_", "OUT", '"');
+        assertFalse(vm.contains(src, setter), "a test sets the shared DEPLOYMENT_OUT variable");
     }
 
     function test_manifestRecordsTheQuorumFloorItWasDeployedUnder() public view {
@@ -1335,9 +1350,9 @@ contract DeployTimelockAgentHandoverTest is Test {
     function test_manifestRecordsTimelockOwnedAgents() public {
         ManifestHarness harness = new ManifestHarness();
         string memory outPath = "/tmp/1476-manifest-test.json";
-        vm.setEnv("DEPLOYMENT_OUT", outPath);
+        if (vm.exists(outPath)) vm.removeFile(outPath);
         vm.prank(deployer);
-        harness.exposedWriteJson(d);
+        harness.exposedWriteJsonTo(d, outPath);
         string memory manifest = vm.readFile(outPath);
         address[] memory recorded = stdJson.readAddressArray(manifest, ".timelock_owned_agents");
         assertEq(recorded.length, 2, "manifest agent count");

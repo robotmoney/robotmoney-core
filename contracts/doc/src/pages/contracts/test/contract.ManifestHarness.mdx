@@ -4,7 +4,7 @@ title: "ManifestHarness"
 
 # ManifestHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/db74d747cb63d7157485338d758ffc470a9ae2cf/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelock](/contracts/script/contract.DeployTimelock)
 
@@ -15,17 +15,21 @@ inside `run()`, which needs a broadcast context and a live chain — so
 without this seam the manifest is the one part of the deploy script
 that ships untested, and a serialization mistake in it surfaces as a
 malformed artifact during a real ceremony.
+Tests write through `exposedWriteJsonTo` with an explicit path: env
+vars are process-wide and forge runs test contracts in parallel, so
+two test contracts that each set `DEPLOYMENT_OUT` can write to each
+other's file.
 
 </i>
 
 ## Functions
 
-<a id="exposedwritejson-deployed"></a>
+<a id="exposedwritejsonto-deployed-string"></a>
 
-### exposedWriteJson
+### exposedWriteJsonTo
 
 ```solidity
-function exposedWriteJson(Deployed memory d) external;
+function exposedWriteJsonTo(Deployed memory d, string memory outPath) external;
 ```
 
 **Parameters**
@@ -33,6 +37,7 @@ function exposedWriteJson(Deployed memory d) external;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+| outPath | `string` |  |
 
 <a id="exposedreadagentlist-string"></a>
 
