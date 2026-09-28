@@ -15,7 +15,7 @@ fail() { echo "FAIL: $1"; ((FAIL++)) || true; }
 test_empty_value_warns_by_name() {
   local out status
   out="$("$SCRIPT" "" 2>&1)" && status=0 || status=$?
-  [[ "$status" -eq 0 ]] && grep -q '::warning::RMPC_FORK_RPC_URL Actions variable is not set' <<<"$out"
+  [[ "$status" -eq 0 ]] && grep -q '::warning::RMPC_FORK_RPC_URL Actions secret is not set' <<<"$out"
 }
 
 test_missing_arg_also_warns() {

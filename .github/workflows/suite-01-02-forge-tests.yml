@@ -354,11 +354,14 @@ jobs:
 
       - name: Check fork RPC configuration (issue #1239)
         # Makes the public-RPC fallback below loud: if the repo/org Actions
-        # variable is unset, name it explicitly via a `::warning::` annotation
+        # secret is unset, name it explicitly via a `::warning::` annotation
         # in the run summary instead of only showing up later as an
-        # unexplained Cloudflare 429 on the public fallback endpoint.
+        # unexplained Cloudflare 429 on the public fallback endpoint. This
+        # must be a secret, not a variable: this repo is public, and GitHub
+        # does not mask `vars.*` values, so an Actions variable would leak
+        # the keyed URL into this step's `env:` block in the public log.
         env:
-          RMPC_FORK_RPC_URL_RAW: ${{ vars.RMPC_FORK_RPC_URL }}
+          RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
         run: scripts/devnet/check-fork-rpc-configured.sh "$RMPC_FORK_RPC_URL_RAW"
 
       - name: forge test (Uniswap V3 AssetPositionAdapter fork — issue #1118)
@@ -372,13 +375,15 @@ jobs:
           # vault/adapter deployment fixtures, which never touched the Uniswap V3
           # factory/pool — `getPool` has no code to call there. It genuinely needs
           # a live RPC, same as the `live-base-fork-drift` job in
-          # suite-21-nightly.yml, so it uses the same `vars.RMPC_FORK_RPC_URL`
-          # (repo/org variable, not secret) — no repo secret named
-          # RMPC_FORK_RPC_URL exists (`gh api repos/.../actions/secrets` returns
-          # zero), so leaving this pinned to `secrets.*` made the job loud-fail
-          # on every run, not just when genuinely misconfigured.
+          # suite-21-nightly.yml, so it uses the same `secrets.RMPC_FORK_RPC_URL`
+          # (repo/org secret, not variable). This repo is public and GitHub
+          # does not mask `vars.*` values in logs, including step `env:`
+          # headers, so a keyed URL stored as a variable leaks into every
+          # public run's log. It must be a secret so GitHub masks it wherever
+          # it appears. Until an admin provisions the secret it reads empty,
+          # same as an unset variable, and the fallback below still applies.
           #
-          # RPC ATTRIBUTION (issue #1239): the raw variable goes to
+          # RPC ATTRIBUTION (issue #1239): the raw secret goes to
           # run-live-rpc-forge-fork.sh, which falls back to the public endpoints
           # in scripts/devnet/fork-rpc-lib.sh when it is unset. It retries only
           # when every failing test failed on the RPC provider, rotating public
@@ -392,7 +397,7 @@ jobs:
           # REVERTS when neither RMPC_FORK_RPC_URL nor FORK_RPC_URL resolves to a
           # non-empty string — it never silent-skips. The runner always sets
           # both, and it fails a green run that executed zero tests.
-          RMPC_FORK_RPC_URL_RAW: ${{ vars.RMPC_FORK_RPC_URL }}
+          RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
         run: |
           scripts/devnet/run-live-rpc-forge-fork.sh "Uniswap V3 AssetPositionAdapter fork" --match-contract "UniV3AssetPositionAdapterForkTest" -vvv
 
@@ -407,14 +412,14 @@ jobs:
           # `IUniswapV4Pool`/`IUniswapV4SwapRouter` seam (documented architecture
           # gap, docs/code-review/20260623-code-review-testmachine-azimuth.md,
           # info-severity, out of #1124's scope to redesign). Same
-          # `vars.RMPC_FORK_RPC_URL` (repo/org variable, not secret) and the
+          # `secrets.RMPC_FORK_RPC_URL` (repo/org secret, not variable) and the
           # same run-live-rpc-forge-fork.sh fallback and RPC attribution as the
           # V3 fork test above.
           #
           # LOUD-SKIP (test-coverage-policy invariant 1): this contract's setUp
           # REVERTS when neither RMPC_FORK_RPC_URL nor FORK_RPC_URL resolves to a
           # non-empty string — it never silent-skips.
-          RMPC_FORK_RPC_URL_RAW: ${{ vars.RMPC_FORK_RPC_URL }}
+          RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
         run: |
           scripts/devnet/run-live-rpc-forge-fork.sh "Uniswap V4 AssetPositionAdapter fork" --match-contract "UniV4AssetPositionAdapterForkTest" -vvv
 
@@ -433,7 +438,7 @@ jobs:
           # LOUD-SKIP (test-coverage-policy invariant 1): this contract's setUp
           # REVERTS when neither RMPC_FORK_RPC_URL nor FORK_RPC_URL resolves to a
           # non-empty string — it never silent-skips.
-          RMPC_FORK_RPC_URL_RAW: ${{ vars.RMPC_FORK_RPC_URL }}
+          RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
         run: |
           scripts/devnet/run-live-rpc-forge-fork.sh "Aerodrome AssetPositionAdapter fork" --match-contract "AerodromeAssetPositionAdapterForkTest" -vvv
 

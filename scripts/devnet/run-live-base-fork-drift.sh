@@ -5,7 +5,7 @@
 # 20 = provider/RPC unavailable after retries; 30 = harness/no-test failure.
 #
 # Endpoint (issue #1239): FORK_RPC_URL / RMPC_FORK_RPC_URL when set (the
-# workflow passes the raw vars.RMPC_FORK_RPC_URL), else the first public
+# workflow passes the raw secrets.RMPC_FORK_RPC_URL), else the first public
 # endpoint in fork-rpc-lib.sh. Every log this script prints is redacted, since
 # forge and curl print the request URL on a transport error and a keyed URL
 # carries its API key.

@@ -67,7 +67,7 @@ test_compile_failure_is_harness_failure_not_drift() {
   [[ "$status" -eq 30 ]] && grep -qx 'classification=harness' "$output_file"
 }
 
-# Issue #1239: with the Actions variable unset the workflow passes an empty
+# Issue #1239: with the Actions secret unset the workflow passes an empty
 # FORK_RPC_URL; the script must hand the shared public default to forge rather
 # than stop, and must never print a configured endpoint.
 test_unset_url_falls_back_to_shared_default() {

@@ -5,7 +5,7 @@
 # Canonical: docs/development/ci-suites.md §1–2 ("Live-RPC fork steps").
 #
 # Usage:
-#   RMPC_FORK_RPC_URL_RAW=<raw vars.RMPC_FORK_RPC_URL, may be empty> \
+#   RMPC_FORK_RPC_URL_RAW=<raw secrets.RMPC_FORK_RPC_URL, may be empty> \
 #     scripts/devnet/run-live-rpc-forge-fork.sh <label> <forge test args...>
 #
 # WHY THIS EXISTS
@@ -34,7 +34,7 @@
 #   failure, and a keyed provider URL carries its API key.
 #
 # Env:
-#   RMPC_FORK_RPC_URL_RAW       raw Actions variable value (empty = unset)
+#   RMPC_FORK_RPC_URL_RAW       raw Actions secret value (empty = unset)
 #   FORK_RPC_ATTEMPTS           attempts in total (default 3)
 #   FORK_RPC_RETRY_DELAY_SECONDS  base backoff; attempt n waits n*base (default 10)
 #   FORK_RPC_PUBLIC_ENDPOINTS   override the public fallback list (tests)
@@ -170,7 +170,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
       exit 30
     fi
     if [ "$provider_failures" -gt 0 ]; then
-      echo "::warning title=Fork RPC flake recovered (issue #1239)::${LABEL}: passed on attempt ${attempt}/${ATTEMPTS} after ${provider_failures} RPC provider failure(s). Provision a keyed Base archive RPC as the RMPC_FORK_RPC_URL Actions variable to remove this."
+      echo "::warning title=Fork RPC flake recovered (issue #1239)::${LABEL}: passed on attempt ${attempt}/${ATTEMPTS} after ${provider_failures} RPC provider failure(s). Provision a keyed Base archive RPC as the RMPC_FORK_RPC_URL Actions secret to remove this."
     fi
     echo "[live-rpc-fork] ${LABEL}: ${passed} test(s) passed"
     record passed
@@ -200,6 +200,6 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   esac
 done
 
-echo "::error title=Fork RPC provider failure, not a test regression (issue #1239)::${LABEL}: every one of ${ATTEMPTS} attempts failed on the RPC provider (rate limit, pruned state or transport error), never on a test assertion. Re-run, or provision a keyed Base archive RPC as the RMPC_FORK_RPC_URL Actions variable."
+echo "::error title=Fork RPC provider failure, not a test regression (issue #1239)::${LABEL}: every one of ${ATTEMPTS} attempts failed on the RPC provider (rate limit, pruned state or transport error), never on a test assertion. Re-run, or provision a keyed Base archive RPC as the RMPC_FORK_RPC_URL Actions secret."
 record provider
 exit 20

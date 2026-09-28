@@ -225,7 +225,7 @@ on exit code 0 alone to confirm task success.
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes (for live runs) | Anthropic API key. OpenCode uses this to call Claude. Without it, model calls fail. |
 | `OPENCODE_SERVER_PASSWORD` | No | Basic-auth password when attaching to a remote OpenCode server (`opencode attach`). Not needed for `opencode run`. |
-| `RMPC_FORK_RPC_URL` | Local-only, optional | Overrides the RPC endpoint for optional local live-fork reads by the Robot Money skill; defaults to a public Base RPC and is never a CI secret. Not consumed by OpenCode itself. See [`docs/development/environments.md`](../development/environments.md) §2. |
+| `RMPC_FORK_RPC_URL` | Local-only, optional | Overrides the RPC endpoint for optional local live-fork reads by the Robot Money skill; defaults to a public Base RPC. Not consumed by OpenCode itself. It is a CI Actions **secret** for the `fork-regressions` and nightly live-drift jobs (issue #1239) — this repo is public, so GitHub does not mask an Actions variable in the log, and a keyed URL must stay masked. See [`docs/development/environments.md`](../development/environments.md) §2. |
 | `RMPC_BIN` | Conditional | Override path to the `rmpc` binary. Defaults to `rmpc` on `$PATH`. Not consumed by OpenCode itself. |
 
 **CI secret wiring (GitHub Actions example):**

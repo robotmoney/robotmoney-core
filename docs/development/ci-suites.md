@@ -122,11 +122,15 @@ Three `fork-regressions` steps — the Uniswap V3, Uniswap V4 and Aerodrome
 because it never touched those pools. They fork live Base, so they run through
 `scripts/devnet/run-live-rpc-forge-fork.sh` instead of a bare `forge test`:
 
-- **Endpoint.** The `RMPC_FORK_RPC_URL` Actions variable when it is set. When it
-  is unset (the case today), the public endpoints listed in
+- **Endpoint.** The `RMPC_FORK_RPC_URL` Actions secret when it is set. It must
+  be a secret, not a variable: this repo is public and GitHub does not mask
+  `vars.*` values anywhere they appear, including a step's `env:` block in
+  the log, so a keyed URL stored as a variable would leak into every public
+  run. When it is unset (the case today), the public endpoints listed in
   `scripts/devnet/fork-rpc-lib.sh`, one per attempt in rotation. That file is
   the only copy of the fallback list; `check-adr0011-ci.sh` fails if a
-  workflow reintroduces a `vars.RMPC_FORK_RPC_URL || '<url>'` expression.
+  workflow reintroduces a `secrets.RMPC_FORK_RPC_URL || '<url>'` expression,
+  or reads the value from `vars.*` instead of `secrets.*`.
 - **Attribution.** A red step carries an `::error` whose title says which kind
   of failure it is. *Provider failure* means every failing test failed on an
   RPC transport or provider error (429, "Archive requests require a personal
@@ -143,7 +147,8 @@ because it never touched those pools. They fork live Base, so they run through
 `bash .github/scripts/tests/test_run_live_rpc_forge_fork.sh` (offline, stubbed
 forge) proves each of those behaviours in the same job before the live steps
 run. The fix that removes the pressure entirely is still external: a repo admin
-must set `RMPC_FORK_RPC_URL` to a keyed Base archive RPC.
+must set `RMPC_FORK_RPC_URL` to a keyed Base archive RPC as a repository or
+organization Actions **secret**.
 
 ---
 
