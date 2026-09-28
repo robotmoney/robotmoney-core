@@ -522,11 +522,11 @@ isolation, independent of any client (rmpc, dapp, explorer).
 5. Cargo cache
 6. `cargo fmt --check -p smoke-test`
 7. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
-8. `cargo clippy -p smoke-test --all-targets -- -D warnings` — type-checks the crate's 9 `tests/` integration binaries in the hermetic `smoke-test-guards` job (issue #1295); `cargo build` alone never compiles them
+8. `cargo clippy -p smoke-test --all-targets -- -D warnings` — type-checks the crate's 9 `tests/` integration binaries in the hermetic `smoke-test-guards` job (issue #1295); `cargo build` alone never compiles them. The same job also runs `bash .github/scripts/tests/test_cargo_test_require_executed.sh`, the self-test proving the executed-test guard's `REQUIRE_EXECUTED_MARKERS` gate goes red on a skipped or truncated devnet test (issue #1371)
 9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
 10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly and writes `smoke-test-fixture_meta.log`
 11. `cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture` (four-vault real-TVL, issue #592) — boots the devnet fixture, seeds the simulated depositors, and asserts the four-vault real-TVL end state: `VaultRegistry.listVaults()` returns **exactly four Active** vaults (PRD §11.1–§11.4); `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1); and **all four** vaults report non-zero on-chain `totalAssets` after seeding. Writes `smoke-test-demo_seeding.log`. **This gate runs exactly once per suite run — on the `demo_seeding` matrix binary only** (see de-dup note below).
-12. `bash .github/scripts/cargo_test_require_executed.sh -p smoke-test --release --test full_stack_demo_tvl -- --test-threads=1 --nocapture` — the **full-stack** (as opposed to fixture-only) half of the four-vault gate. Boots the whole compose stack (chain + dapp + explorer-api + indexer) via `DappStack::boot` **once**, then makes both explorer-API end-state assertions against that one stack: `GET /v1/vaults` returns exactly four entries, each Active with non-zero `total_assets` (issue #592), and `GET /v1/router/weights` returns non-empty `current_weights` summing to exactly 10000 bps (issue #615). Each assertion keeps its own independent 90 s indexer-settle budget. Writes `smoke-test-full_stack_demo_tvl.log`. Unlike step 11's `demo_seeding`, which reads the **chain** (`VaultRegistry.listVaults()`, `PortfolioRouter.getWeights()`), this row reads what the **indexer wrote and the explorer-api serves** — the two are not substitutes, and neither can be dropped for the other.
+12. `bash .github/scripts/cargo_test_require_executed.sh -p smoke-test --release --test full_stack_demo_tvl -- --test-threads=1 --nocapture` — the **full-stack** (as opposed to fixture-only) half of the four-vault gate. Boots the whole compose stack (chain + dapp + explorer-api + indexer) via `DappStack::boot` **once**, then makes both explorer-API end-state assertions against that one stack: `GET /v1/vaults` returns exactly four entries, each Active with non-zero `total_assets` (issue #592), and `GET /v1/router/weights` returns non-empty `current_weights` summing to exactly 10000 bps (issue #615). Each assertion keeps its own independent 90 s indexer-settle budget. This row also sets `REQUIRE_EXECUTED_MARKERS` (via `matrix.include`) to the two `[full_stack_demo_tvl] assertion N/2 PASSED` lines, so it is red unless both devnet assertions reached their success path — see "Proof the devnet assertions ran" below. Writes `smoke-test-full_stack_demo_tvl.log`. Unlike step 11's `demo_seeding`, which reads the **chain** (`VaultRegistry.listVaults()`, `PortfolioRouter.getWeights()`), this row reads what the **indexer wrote and the explorer-api serves** — the two are not substitutes, and neither can be dropped for the other.
 13. Four more devnet matrix rows, folded in by issue #1311 (each boots its own `Fixture`, runs a handful of RPC/`cast` round-trips, and tears down — no dapp-stack build, no reseed):
     - `cargo test -p smoke-test --release --test faucet_eth -- --test-threads=1 --nocapture` — native Base ETH faucet drip round-trip (issue #466): harness EOA holds non-zero ETH at boot, `fund_eth_from_harness` grows the recipient's balance by the exact drip amount
     - `cargo test -p smoke-test --release --test faucet_rm -- --test-threads=1 --nocapture` — RM token faucet drip round-trip (issue #365): RmToken deployed non-zero, harness holds initial supply, `fund_rm_token` grows the recipient's balance by the exact amount and emits a matching `Transfer` log
@@ -562,7 +562,21 @@ isolation, independent of any client (rmpc, dapp, explorer).
 > 103087891903) of which the two boots were **23m22s + 21m33s**; suite-19
 > `demo-tvl-full-stack` **45m51s** (run 34540952832, job 103087822627). Total
 > **1h32m47s** of runner time. After the change the same coverage is one row of
-> ~24 min, and suite-19 no longer boots a devnet at all.
+> **24m39s** (PR #1401 run 34552007957, job 103116694133, logging
+> `7 passed`: the one devnet test plus six hermetic predicate tests), and
+> suite-19 no longer boots a devnet at all.
+>
+> **Proof the devnet assertions ran (issues #1371, #1437).** The six hermetic
+> `invariant_predicates` tests share the `full_stack_demo_tvl` binary, so
+> `cargo_test_require_executed.sh`'s `N > 0` check alone would stay green at
+> `6 passed` if the devnet test skipped (no docker/forge/cast) or were deleted.
+> The row therefore passes `REQUIRE_EXECUTED_MARKERS` with the two strings
+> `[full_stack_demo_tvl] assertion 1/2 PASSED` and `… 2/2 PASSED`; each is printed
+> only on the success path of one devnet assertion, and the guard fails the row
+> if either is absent from the cargo output. Rows that set no markers keep the
+> guard's original behaviour. The gate is self-tested in `smoke-test-guards`
+> (`.github/scripts/tests/test_cargo_test_require_executed.sh`), which replays a
+> skipped-devnet transcript and a one-marker transcript and requires both red.
 >
 > **No assertion was dropped.** Both poll loops, both 90 s indexer-settle
 > budgets, and both panic messages moved verbatim into
@@ -1090,7 +1104,7 @@ CI chain-container readiness (issue #988) rather than the 60-120s the boot
 log message claims. Because the devnet matrix runs in parallel (one runner
 per binary), adding four more rows does not change suite 14's total
 wall-clock — it stayed bounded by `full_stack_demo_tvl`'s ~46 min (issue #1371
-has since halved that row to a single devnet bring-up, ~24 min, making
+has since halved that row to a single devnet bring-up, 24m39s, making
 `cli_meta` at ~25 min the new bound) — but it
 does add roughly four more `fixture_meta`-sized runners (~17-18 min each) to
 every PR against `dev`, since suite 14 is a HEAVY-tier gate with no path
