@@ -303,6 +303,9 @@ async fn get_vault_partial_when_total_assets_reverts() {
     assert!(errs.iter().any(|e| e["field"] == "total_assets"));
     // A failed totalAssets read is null, not the valid zero TVL value.
     assert!(v["data"]["total_assets"].is_null());
+    // The sibling totalSupply read succeeded and keeps its value (#1427/#1390:
+    // failure on one accounting sub-read must not null out the other).
+    assert_eq!(v["data"]["total_supply"], "1");
     // share_price uncomputable when total_assets read failed
     assert!(v["data"]["share_price"].is_null());
 }
@@ -432,6 +435,10 @@ async fn get_vault_partial_when_total_supply_reverts() {
         !errs.iter().any(|e| e["field"] == "total_assets"),
         "total_assets read succeeded and must not appear in errors[], got {errs:?}"
     );
+
+    // A failed totalSupply read is null, not the in-domain zero-supply value
+    // (issue #1390's fix applied to the sibling field).
+    assert!(v["data"]["total_supply"].is_null());
 
     // Sibling reads that succeeded still carry their values.
     let d = &v["data"];
