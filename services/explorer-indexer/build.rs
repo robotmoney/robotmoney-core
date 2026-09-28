@@ -15,24 +15,33 @@
 //! `#[cfg(any(sqlx_macros_unstable, procmacro2_semver_exempt))]`
 //! (`sqlx-macros-core/src/migrate.rs`), and this workspace builds on stable.
 //!
-//! The consequence is a silent, invisible defect: change only a `.sql` file and
-//! cargo considers `explorer-indexer` fresh, so the binary and the test
-//! binaries keep an OLDER embedded migration set than the repository holds. CI
-//! is exposed to exactly this because `Swatinem/rust-cache` restores `target/`
-//! across runs — a PR that only adds a migration could go green with the new
-//! migration never compiled in, and `indexer --migrate-only` built from that
-//! cache would not apply it.
+//! The macro does expand each migration it finds to
+//! `include_str!("<absolute path>")`, and rustc records every `include_str!`
+//! in its dep-info — so an EDIT to, or a DELETION of, a migration that existed
+//! at the last build already makes cargo recompile. What nothing records is
+//! the DIRECTORY LISTING: a newly ADDED `.sql` file appears in no dep-info, so
+//! cargo considers `explorer-indexer` fresh, and the binary and the test
+//! binaries keep an embedded migration set that lacks the new migration. CI is
+//! exposed to exactly this because `Swatinem/rust-cache` restores `target/`
+//! across runs — a PR that only adds a migration (the common shape of schema
+//! work) could go green with the new migration never compiled in, and
+//! `indexer --migrate-only` built from that cache would not apply it.
 //!
 //! This script supplies the dependency sqlx cannot. `rerun-if-changed` on a
-//! DIRECTORY is walked recursively by cargo (it takes the newest mtime beneath
-//! it), so this covers file additions and deletions as well as edits to an
-//! existing migration. When the directory is dirty the build script re-runs,
-//! which marks the crate dirty, which re-expands `sqlx::migrate!`.
+//! DIRECTORY is walked recursively by cargo (it takes the newest mtime of the
+//! directory and everything beneath it), so an addition — and, redundantly
+//! with rustc's dep-info, an edit or a deletion — re-runs this script, which
+//! marks the crate dirty, which re-expands `sqlx::migrate!`.
 //!
-//! `tests/migration_set_parity.rs` is the guard on this mechanism: it compares
-//! the compile-time embedded set against the run-time contents of
-//! `migrations/`, so removing or breaking this script turns CI red instead of
-//! shipping a stale binary.
+//! Two guards hold this in place:
+//! - `tests/migration_set_parity.rs` compares the compile-time embedded set
+//!   against the run-time contents of `migrations/` (versions, descriptions
+//!   and SQL text), so a stale binary fails red wherever it is tested;
+//! - `.github/scripts/tests/test_indexer_migration_rebuild_trigger.sh` warms
+//!   `target/`, adds / edits / deletes a migration with no `.rs` change, and
+//!   asserts this script re-ran and the parity target passed after each —
+//!   the only check that can see this script go missing, since on a cold
+//!   build the parity target passes with or without it.
 
 use std::path::Path;
 
