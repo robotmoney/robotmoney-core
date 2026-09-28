@@ -818,15 +818,23 @@ async fn boot_refuses_a_migration_edited_in_place_naming_the_checksum() {
     assert_refused(&out, &report);
 
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // The success-path log line also contains the words "checksum" and the
+    // embedded version number, so a bare substring check on either would pass
+    // against a binary that logged success and then indexed anyway — this
+    // only holds because `assert_refused` above already rejected that binary.
+    // Anchor on the refusal's own sentence, which the success line does not
+    // contain, so this assertion is meaningful on its own.
     assert!(
-        stderr.contains("checksum"),
+        stderr.contains("the applied checksum does not match the one embedded"),
         "the refusal must say the CHECKSUM diverged, not merely that something is \
          wrong — the remedy for an edited migration differs from the remedy for a \
          stale one.\n{report}"
     );
     assert!(
-        stderr.contains(&embedded.to_string()),
-        "the refusal must name the diverging version ({embedded}).\n{report}"
+        stderr.contains(&format!("migration {embedded} (")),
+        "the refusal must name the diverging version ({embedded}) in the \
+         refusal-specific \"migration {embedded} (...)\" shape, not merely \
+         mention the number somewhere.\n{report}"
     );
     assert_eq!(
         indexer_run_count(&db).await,
@@ -945,9 +953,13 @@ async fn boot_refuses_an_applied_version_this_binary_does_not_embed() {
         "the refusal must say the binary does not embed the applied migration, \
          rather than reporting a match.\n{report}"
     );
+    // "migration 0" alone could match incidentally (e.g. inside a longer
+    // number or an unrelated sentence); anchor on the refusal's own sentence
+    // shape so this only passes for the UnknownAppliedVersion message.
     assert!(
-        stderr.contains("migration 0"),
-        "the refusal must name the offending applied version.\n{report}"
+        stderr.contains("migration 0 is applied to the database but this binary does not embed it"),
+        "the refusal must name the offending applied version (0) in the \
+         refusal-specific sentence, not merely contain the digit somewhere.\n{report}"
     );
     assert_eq!(
         indexer_run_count(&db).await,

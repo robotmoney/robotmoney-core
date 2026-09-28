@@ -11,12 +11,15 @@
 //! fails a deployment's explicit migrate step instead of crash-looping a
 //! long-running container against a half-migrated database.
 //!
-//! Because the boot path never migrates, it instead *checks* (issue #1392):
-//! the highest migration version embedded in this binary must equal the highest
-//! version applied in `_sqlx_migrations`, or the process refuses to start and
-//! names both versions. That is the loud failure auto-migration used to provide;
-//! without it an indexer on a stale schema loops silently and no healthcheck
-//! notices.
+//! Because the boot path never migrates, it instead *checks* (issue #1392,
+//! tightened to a full-set comparison by issue #1429): the applied migration
+//! set in `_sqlx_migrations` must equal the embedded set, version **and**
+//! checksum, or the process refuses to start and names the first divergence —
+//! a version embedded but not applied, an applied version this binary does
+//! not embed, or a version applied on both sides whose content has since
+//! changed (an already-applied migration edited in place). That is the loud
+//! failure auto-migration used to provide; without it an indexer on a stale
+//! or divergent schema loops silently and no healthcheck notices.
 
 use alloy_primitives::Address;
 use clap::Parser;
