@@ -22,10 +22,16 @@
 # When a binary mixes a devnet test with hermetic ones (full_stack_demo_tvl),
 # the hermetic tests alone keep N > 0 even if the devnet test silently skipped
 # or was deleted. Set REQUIRE_EXECUTED_MARKERS to a newline-separated list of
-# fixed strings; each must appear verbatim in the cargo output or the run is
-# RED. Tests print such a marker only on the success path of a real assertion,
-# so a skip, an early return, or a dropped assertion all fail here. Blank lines
-# are ignored; an unset/empty variable leaves the guard's behaviour unchanged.
+# fixed strings; each must appear at the START OF A LINE in the cargo output
+# or the run is RED. Tests print such a marker only on the success path of a
+# real assertion, so a skip, an early return, or a dropped assertion all fail
+# here. The match is anchored to line start (not "anywhere in the output")
+# because a compiler warning can echo marker text mid-line — e.g. an
+# "unreachable statement" diagnostic that happens to quote the marker string —
+# and an unanchored substring match would let that false positive satisfy the
+# guard even though the test itself never reached its success path (issue
+# #1401 review finding). Blank lines are ignored; an unset/empty variable
+# leaves the guard's behaviour unchanged.
 # Self-test: .github/scripts/tests/test_cargo_test_require_executed.sh.
 
 set -euo pipefail
@@ -83,7 +89,13 @@ if [ -n "${REQUIRE_EXECUTED_MARKERS:-}" ]; then
     # Trim surrounding whitespace so YAML block-scalar indentation is harmless.
     marker="$(printf '%s' "$marker" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
     [ -z "$marker" ] && continue
-    if grep -qF -- "$marker" "$LOG"; then
+    # Anchored to the start of a line (not a bare substring search): a fixed
+    # string can appear verbatim mid-line in unrelated output, most notably a
+    # rustc warning that happens to quote the marker text, without the test
+    # itself ever running. Markers are only ever emitted as the first
+    # characters of their own eprintln/println line, so this cannot miss a
+    # real pass while it rejects a compiler-diagnostic false positive.
+    if awk -v m="$marker" 'index($0, m) == 1 { found = 1; exit } END { exit !found }' "$LOG"; then
       echo "executed-test-guard: required marker present: ${marker}"
     else
       echo "ERROR: required marker absent from cargo test output: ${marker}" >&2

@@ -13,6 +13,9 @@
 #      so its success-path marker is absent              -> red  (issue #1437)
 #   5. only one of two required markers present          -> red
 #   6. cargo itself fails                                -> red
+#   7. marker text echoed mid-line by a compiler warning,
+#      the test itself never printed it (line-start
+#      anchor false-positive guard)                      -> red  (issue #1401)
 #
 # Runs in suite-14's hermetic `smoke-test-guards` job.
 
@@ -63,6 +66,19 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ZERO_RUN="running 0 tests
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s"
 
+# The devnet test never reached its success-path eprintln (early return before
+# it, same shape as SKIPPED_DEVNET) but rustc emits an unrelated warning that
+# happens to quote the marker text mid-line. N stays > 0 from the hermetic
+# tests. Before anchoring the marker match to line start, grep -F found this
+# substring anywhere in the log and reported the marker "present" even though
+# the assertion it names never ran (issue #1401).
+WARNING_ECHOES_MARKER="running 7 tests
+warning: unreachable statement: this branch is dead now that the \`${M1}\` \
+eprintln was hoisted above an early return, so the assertion below it never \
+executes
+test invariant_predicates::empty_router_weights_fail_the_invariant ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s"
+
 FAILS=0
 
 # expect <green|red> <label> <stub-output> <stub-status> <markers>
@@ -90,6 +106,7 @@ expect red   "devnet test skipped, hermetic tests pad N"  "$SKIPPED_DEVNET" 0 "$
 expect green "same skipped run WITHOUT markers (the #1437 hole)" "$SKIPPED_DEVNET" 0 ""
 expect red   "one of two required markers present"        "$ONE_MARKER"     0 "$MARKERS"
 expect red   "cargo test itself failed"                   "$FULL_RUN"       101 "$MARKERS"
+expect red   "compiler warning echoes marker mid-line, test never ran" "$WARNING_ECHOES_MARKER" 0 "$M1"
 
 if [ "$FAILS" -gt 0 ]; then
   echo "test_cargo_test_require_executed: ${FAILS} case(s) failed" >&2
