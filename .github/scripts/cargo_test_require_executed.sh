@@ -16,6 +16,17 @@
 #   cargo_test_require_executed.sh -p explorer-api --test committee_api --test regime_api -- --nocapture
 #
 # Reference: skills/_shared/test-coverage-policy.md (invariant 2: Exit 0 != tested).
+#
+# OPTIONAL: REQUIRED MARKERS (issue #1371 / #1437)
+# "N > 0 tests passed" proves *something* ran, not that a *specific* test did.
+# When a binary mixes a devnet test with hermetic ones (full_stack_demo_tvl),
+# the hermetic tests alone keep N > 0 even if the devnet test silently skipped
+# or was deleted. Set REQUIRE_EXECUTED_MARKERS to a newline-separated list of
+# fixed strings; each must appear verbatim in the cargo output or the run is
+# RED. Tests print such a marker only on the success path of a real assertion,
+# so a skip, an early return, or a dropped assertion all fail here. Blank lines
+# are ignored; an unset/empty variable leaves the guard's behaviour unchanged.
+# Self-test: .github/scripts/tests/test_cargo_test_require_executed.sh.
 
 set -euo pipefail
 
@@ -63,5 +74,28 @@ if [ "${PASSED_TOTAL}" -le 0 ]; then
   echo "       likely the required resource (Postgres testcontainer / devnet) was" >&2
   echo "       absent or the --test filter matched nothing. Failing loudly." >&2
   echo "       Reference: skills/_shared/test-coverage-policy.md (invariant 2)." >&2
+  exit 1
+fi
+
+MISSING=0
+if [ -n "${REQUIRE_EXECUTED_MARKERS:-}" ]; then
+  while IFS= read -r marker; do
+    # Trim surrounding whitespace so YAML block-scalar indentation is harmless.
+    marker="$(printf '%s' "$marker" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    [ -z "$marker" ] && continue
+    if grep -qF -- "$marker" "$LOG"; then
+      echo "executed-test-guard: required marker present: ${marker}"
+    else
+      echo "ERROR: required marker absent from cargo test output: ${marker}" >&2
+      MISSING=$((MISSING + 1))
+    fi
+  done <<< "${REQUIRE_EXECUTED_MARKERS}"
+fi
+
+if [ "${MISSING}" -gt 0 ]; then
+  echo "ERROR: ${MISSING} required marker(s) missing. The test(s) that print them" >&2
+  echo "       did not reach their success path — skipped, returned early, or the" >&2
+  echo "       assertion was removed. A non-zero pass count from other tests in" >&2
+  echo "       the same binary does not stand in for them. Failing loudly." >&2
   exit 1
 fi

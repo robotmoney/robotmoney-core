@@ -307,25 +307,28 @@ fn explorer_api_reports_four_vault_tvl_and_router_weights_after_boot() {
 // `2 passed`, so an assertion that stopped being made changed the count.
 // It reports `1 passed` for the devnet test now, and would keep doing so if
 // `assert_router_weights_sum_to_full_allocation` were quietly dropped from the
-// end of the test body.
+// end of the test body. The required-marker gate described below closes that
+// in CI (assertion 2/2's marker would vanish).
 //
-// These tests close that gap from the other side: they pin the two pure
+// These tests pin the other side: they pin the two pure
 // predicates that decide pass-vs-fail, against the exact failure shapes the
 // devnet assertions exist to catch (three vaults, a paused vault, a zero-TVL
 // vault, weights that do not sum to a full allocation). Loosening either
 // invariant turns them red — in milliseconds, with no Docker, in the same
 // `smoke-test-devnet-full_stack_demo_tvl` job.
 //
-// KNOWN GAP — these tests WEAKEN `cargo_test_require_executed.sh` for this
-// binary, they do not strengthen it (issue #1437). That guard fails only when
-// `PASSED_TOTAL <= 0`; its `RESULT_LINES` count is echoed, never gated on, and
-// is one per test *binary* regardless of how many tests ran (the job log reads
-// `1 test binary result line(s), 7 test(s) passed`). Before these tests landed
-// this binary held only the devnet test, so dropping it made the job report
-// `0 passed` and the guard went red. Now six hermetic tests pad the count, so
-// dropping the devnet test would still report `6 passed` and stay green with
-// zero full-stack coverage. Do not read a green executed-test-guard on this
-// job as evidence that the devnet assertion ran.
+// HOW THE CI JOB PROVES THE DEVNET TEST RAN (issues #1371, #1437)
+// `cargo_test_require_executed.sh` on its own fails only when zero tests pass.
+// These six hermetic tests would keep that count at `6 passed` even if the
+// devnet test skipped (no docker/forge/cast) or were deleted, so the count alone
+// is not evidence of full-stack coverage for this binary. The suite-14
+// `full_stack_demo_tvl` matrix row therefore also sets
+// `REQUIRE_EXECUTED_MARKERS` to the two `[full_stack_demo_tvl] assertion N/2
+// PASSED` lines printed on the success paths above: if either is missing from
+// the cargo output the row is red regardless of the pass count. Keep those
+// eprintln! strings and the workflow's `required_markers` in sync; renaming one
+// without the other turns the row red, which is the intended failure.
+// Self-test: .github/scripts/tests/test_cargo_test_require_executed.sh.
 //
 // Verified mutation-sensitive before landing (issue #1371): loosening
 // `four_vault_tvl_invariant_holds` to `!resp.vaults.is_empty() && active_nonzero

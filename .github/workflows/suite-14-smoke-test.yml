@@ -142,6 +142,14 @@ jobs:
         working-directory: testing/smoke-test
         run: "cargo test -p smoke-test --lib tests:: -- --nocapture"
 
+      # Self-test for the executed-test guard's REQUIRE_EXECUTED_MARKERS gate
+      # (issue #1371): replays canned libtest transcripts through a stub cargo
+      # and proves the guard goes RED when hermetic tests keep the pass count
+      # non-zero but the devnet test skipped or lost an assertion. Runs here,
+      # in seconds, so a broken gate is caught before the devnet matrix trusts it.
+      - name: executed-test guard self-test (required markers, hermetic)
+        run: bash .github/scripts/tests/test_cargo_test_require_executed.sh
+
   # PARALLEL DEVNET MATRIX (issue #600): each devnet-booting binary used to run as a
   # SERIAL step in one job, each booting Geth+Lighthouse on port 8545 (suite ~38m).
   # Splitting them into a matrix gives one runner per binary, each booting + tearing
@@ -150,7 +158,8 @@ jobs:
   #   - cli_meta:            boots `smoke-test --full-stack`, asserts summary + Ctrl-C teardown
   #   - fixture_meta:        boots devnet, deploys contracts, asserts RPC + block production
   #   - demo_seeding:        boots the four-vault catalog and asserts all four vaults seed
-  #   - full_stack_demo_tvl: boots full compose stack, asserts all four PRD §11 vaults report non-zero TVL
+  #   - full_stack_demo_tvl: boots full compose stack ONCE, asserts all four PRD §11 vaults report
+  #                          non-zero TVL and router weights sum to 10000 bps (issue #1371)
   #   - faucet_eth:          native Base ETH faucet drip round-trip (issue #466)
   #   - faucet_rm:           RM token faucet drip round-trip (issue #365)
   #   - fund_usdc:           real-signed-transfer assertions incl. the Geth-not-Anvil check (issue #255 step 7)
@@ -160,8 +169,9 @@ jobs:
   # only adds a Fixture boot (already paid by every other row) plus a handful of
   # RPC round-trips on top, so each row's wall-clock is expected to land near
   # fixture_meta's measured CI cost (~18 min) rather than full_stack_demo_tvl's
-  # ~46 min. Because the matrix runs in parallel, the suite's total wall-clock
-  # stays bounded by the slowest row (full_stack_demo_tvl); these four rows add
+  # (~46 min with two bring-ups; 24m39s with one after issue #1371, job
+  # 103116694133). Because the matrix runs in parallel, the suite's total
+  # wall-clock stays bounded by the slowest row; these four rows add
   # runner-minutes, not suite latency. See docs/development/ci-suites.md §14
   # ("Resolution of the five smoke-test devnet targets") for the measured
   # figures and the cost tradeoff this was weighed against. `vault_deposit_redeem`
@@ -217,6 +227,20 @@ jobs:
             fund_usdc,
             governance,
           ]
+        # Rows whose binary mixes a devnet test with hermetic tests must prove
+        # the devnet assertions themselves ran, not just that N > 0 tests
+        # passed (issue #1371, the gap filed as #1437). full_stack_demo_tvl
+        # holds one devnet test plus six hermetic `invariant_predicates` tests,
+        # so a skipped or deleted devnet test would still report `6 passed`.
+        # Each marker is printed only on the success path of one devnet
+        # assertion; cargo_test_require_executed.sh fails the row if either is
+        # absent. Rows without `required_markers` get an empty string, which
+        # leaves the guard's behaviour unchanged.
+        include:
+          - binary: full_stack_demo_tvl
+            required_markers: |
+              [full_stack_demo_tvl] assertion 1/2 PASSED
+              [full_stack_demo_tvl] assertion 2/2 PASSED
     steps:
       - uses: actions/checkout@v4
         with:
@@ -278,11 +302,13 @@ jobs:
       # Routed through cargo_test_require_executed.sh (issue #1311 AC) so a run
       # that collects zero tests (e.g. a --test filter that silently matched
       # nothing) fails loudly instead of reporting a false green — the same
-      # guard suites 4/6/7/8/20 already use.
+      # guard suites 4/6/7/8/20 already use. REQUIRE_EXECUTED_MARKERS (set per
+      # row via `matrix.include` above) additionally pins named assertions.
       - name: cargo test (${{ matrix.binary }} — boots + tears down its own devnet)
         working-directory: testing/smoke-test
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-${{ matrix.binary }}.log
+          REQUIRE_EXECUTED_MARKERS: ${{ matrix.required_markers }}
         run: >-
           bash ../../.github/scripts/cargo_test_require_executed.sh
           -p smoke-test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
