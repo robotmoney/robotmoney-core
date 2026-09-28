@@ -127,7 +127,7 @@ live-RPC path and manual fixture refresh use:
 
 | Var | Required | Meaning |
 |-----|----------|---------|
-| `RMPC_FORK_RPC_URL` | No | Base mainnet endpoint. Used only for (a) **optional local** live-fork runs and (b) **fixture regeneration** (archive depth for a pinned historical block). It is **not** a CI secret and gates no merge (ADR-0011); merge-gating CI forks the checked-in fixture offline. The nightly live-drift alarm uses a free public default (`https://base-rpc.publicnode.com`), not a secret. |
+| `RMPC_FORK_RPC_URL` | No | Base mainnet endpoint. Used only for (a) **optional local** live-fork runs and (b) **fixture regeneration** (archive depth for a pinned historical block). It is **not** a CI secret and gates no merge (ADR-0011); merge-gating CI forks the checked-in fixture offline. When it is unset, the nightly live-drift alarm and the three live-RPC `fork-regressions` steps fall back to the free public endpoints in `scripts/devnet/fork-rpc-lib.sh` (issue #1239). Set it to a keyed Base archive RPC as a repository or organization Actions **variable**; scripts never print its value. |
 | `RMPC_FORK_BLOCK` | No | Decimal block number pin. CI sets this in the workflow file. Unset → `eth_blockNumber - 50` against the upstream RPC. |
 
 ### Startup command

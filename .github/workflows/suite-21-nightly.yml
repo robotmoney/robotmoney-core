@@ -130,7 +130,11 @@ jobs:
         id: drift
         continue-on-error: true
         env:
-          FORK_RPC_URL: ${{ vars.RMPC_FORK_RPC_URL || 'https://base-rpc.publicnode.com' }}
+          # Raw variable, no YAML fallback (issue #1239): when it is unset the
+          # script falls back to the public endpoints in
+          # scripts/devnet/fork-rpc-lib.sh, the single list every live-RPC
+          # caller shares.
+          FORK_RPC_URL: ${{ vars.RMPC_FORK_RPC_URL }}
         run: scripts/devnet/run-live-base-fork-drift.sh
       - name: Report unavailable live fork provider
         if: steps.drift.outputs.classification == 'provider'

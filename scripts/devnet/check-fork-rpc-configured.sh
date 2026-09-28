@@ -5,9 +5,9 @@
 # Issue #1239: `gh api repos/.../actions/variables` returns zero variables in
 # this repo, so `vars.RMPC_FORK_RPC_URL` is empty and the live-RPC fork steps
 # in suite-01-02-forge-tests.yml (fork-regressions job) and
-# suite-21-nightly.yml (live-base-fork-drift job) silently fall back to the
-# unkeyed public https://base-rpc.publicnode.com, which rate-limits
-# aggressively and has no archive guarantee. That surfaced as an unexplained
+# suite-21-nightly.yml (live-base-fork-drift job) fall back to unkeyed public
+# Base endpoints (the list lives in scripts/devnet/fork-rpc-lib.sh), which
+# rate-limit aggressively. That surfaced as an unexplained
 # Cloudflare 429 / "Archive requests require a personal token" deep in a job
 # log, and was investigated as test flakiness before being traced back here.
 #
@@ -22,10 +22,15 @@
 # string, so printing it would leak credentials into a public CI log.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/devnet/fork-rpc-lib.sh
+. "$SCRIPT_DIR/fork-rpc-lib.sh"
+
 value="${1:-}"
 
 if [ -z "$value" ]; then
-  echo "::warning::RMPC_FORK_RPC_URL Actions variable is not set. This job is falling back to the unkeyed public endpoint https://base-rpc.publicnode.com, which has no archive guarantee and aggressive rate limits (issue #1239). Provision a keyed Base archive RPC (Alchemy, QuickNode, Ankr, or equivalent) and set it as the RMPC_FORK_RPC_URL repository or organization Actions variable to fix this permanently."
+  fallbacks="$(fork_rpc_public_endpoints | while IFS= read -r ep; do fork_rpc_origin "$ep"; done | paste -sd, -)"
+  echo "::warning::RMPC_FORK_RPC_URL Actions variable is not set. This job is falling back to unkeyed public Base endpoints (${fallbacks}), which rate-limit aggressively (issue #1239). Provision a keyed Base archive RPC (Alchemy, QuickNode, Ankr, or equivalent) and set it as the RMPC_FORK_RPC_URL repository or organization Actions variable to fix this permanently."
   exit 0
 fi
 

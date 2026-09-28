@@ -108,15 +108,16 @@ then realign `testing/ethereum-testnet/config/fork-block.json`
 `smoke-test-genesis-ingester`, and recapture
 `testing/ethereum-testnet/config/expected-prices.json`.
 
-`RMPC_FORK_RPC_URL` is not optional in practice. The script's default,
-`https://base-rpc.publicnode.com`, is a pruned node: it serves state for only
-about 128 blocks (~4 minutes on Base) and answers anything older with
-"Archive requests require a personal token". A capture session runs far longer
-than that against a fixed pinned block, so the default endpoint cannot finish
-one. Several public Base endpoints do serve archive state — `mainnet.base.org`
-and `base-mainnet.public.blastapi.io` were both verified to fork a 48-day-old
-block under Anvil — so a refresh does not strictly require a keyed provider,
-though issue #1239 remains the right fix for CI.
+The script's default endpoint is the first public entry in
+`scripts/devnet/fork-rpc-lib.sh`, `mainnet.base.org`, which serves archive state
+by block number. The previous default, `https://base-rpc.publicnode.com`, refuses
+every numeric-block state read below the tip with "Archive requests require a
+personal token", so a capture (which reads with `cast storage --block N`) could
+never finish against it. `mainnet.base.org` and `base-mainnet.public.blastapi.io`
+were both verified to fork a 48-day-old block under Anvil. Public endpoints are
+rate-limited, so a keyed Base archive endpoint in `RMPC_FORK_RPC_URL` is still the
+reliable choice (issue #1239). The script logs and records only the endpoint's
+origin, so a keyed URL never reaches a log or the committed manifest.
 
 ## Troubleshooting
 

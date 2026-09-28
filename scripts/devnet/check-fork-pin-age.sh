@@ -34,12 +34,13 @@
 # `smoke-test-genesis-ingester` and
 # testing/ethereum-testnet/config/expected-prices.json.
 #
-# NOTE ON THE RPC: snapshot-fork.sh defaults to
-# https://base-rpc.publicnode.com, which serves state for only ~128 blocks
-# (~4 minutes on Base) and rejects anything older with "Archive requests
-# require a personal token". A capture session runs far longer than that, so
-# the default endpoint cannot complete a refresh. Set RMPC_FORK_RPC_URL to a
-# Base archive endpoint (issue #1239).
+# NOTE ON THE RPC: snapshot-fork.sh used to default to
+# https://base-rpc.publicnode.com, which rejects every numeric-block state read
+# below the tip with "Archive requests require a personal token", so a capture
+# could not complete. It now defaults to the first public endpoint in
+# scripts/devnet/fork-rpc-lib.sh, which serves archive state; a keyed Base
+# archive endpoint in RMPC_FORK_RPC_URL is still the reliable choice (issue
+# #1239).
 #
 # Usage:
 #   scripts/devnet/check-fork-pin-age.sh                     # report + warn
@@ -156,7 +157,7 @@ AGE_DAYS=$((AGE_SECONDS / 86400))
 
 echo "[check-fork-pin-age] fork_block=$FORK_BLOCK captured_at=$CAPTURED_AT age_days=$AGE_DAYS warn_days=$WARN_DAYS max_age_days=${MAX_AGE_DAYS:-none}"
 
-REFRESH_HINT="Refresh with RMPC_FORK_RPC_URL=<Base archive RPC> scripts/devnet/snapshot-fork.sh, then realign testing/ethereum-testnet/config/fork-block.json, genesis-alloc.json and expected-prices.json. The default public endpoint (base-rpc.publicnode.com) prunes state after ~128 blocks and cannot complete a capture (issue #1239)."
+REFRESH_HINT="Refresh with RMPC_FORK_RPC_URL=<Base archive RPC> scripts/devnet/snapshot-fork.sh, then realign testing/ethereum-testnet/config/fork-block.json, genesis-alloc.json and expected-prices.json. Prefer a keyed Base archive endpoint; the public default in scripts/devnet/fork-rpc-lib.sh is rate-limited (issue #1239)."
 
 if [ -n "$MAX_AGE_DAYS" ] && [ "$AGE_DAYS" -gt "$MAX_AGE_DAYS" ]; then
   echo "::error::The devnet's Base fork pin (block $FORK_BLOCK, captured $CAPTURED_AT) is $AGE_DAYS days old, over the $MAX_AGE_DAYS-day limit. The devnet clock is wall-clock now while the forked Aave/Compound/Morpho state is frozen at the pin, so the simulated accrual interval grows every day this is not refreshed (issue #1386). $REFRESH_HINT"

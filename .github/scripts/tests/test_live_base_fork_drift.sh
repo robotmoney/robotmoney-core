@@ -67,7 +67,28 @@ test_compile_failure_is_harness_failure_not_drift() {
   [[ "$status" -eq 30 ]] && grep -qx 'classification=harness' "$output_file"
 }
 
+# Issue #1239: with the Actions variable unset the workflow passes an empty
+# FORK_RPC_URL; the script must hand the shared public default to forge rather
+# than stop, and must never print a configured endpoint.
+test_unset_url_falls_back_to_shared_default() {
+  local seen="$TMPDIR_TEST/seen-url" forge status
+  forge="$(make_bin forge-seen "echo \"\$FORK_RPC_URL\" >> \"$seen\"" 'printf "%s\\n" "{\"status\":\"Success\"}"')"
+  FORK_RPC_URL="" RMPC_FORK_RPC_URL="" CURL_BIN="$curl_ok" FORGE_BIN="$forge" \
+    FORK_DRIFT_RETRY_DELAY_SECONDS=0 GITHUB_OUTPUT="$TMPDIR_TEST/output-default" "$SCRIPT" >/dev/null 2>&1 && status=0 || status=$?
+  [[ "$status" -eq 0 ]] && [[ "$(sort -u "$seen")" == "https://mainnet.base.org" ]]
+}
+
+test_configured_url_never_printed() {
+  local secret="https://base-mainnet.g.alchemy.invalid/v2/super-secret-token" forge out status
+  forge="$(make_bin forge-leak 'echo "HTTP request to $FORK_RPC_URL failed: 429 Too Many Requests" >&2' 'exit 1')"
+  out="$(FORK_RPC_URL="$secret" CURL_BIN="$curl_ok" FORGE_BIN="$forge" FORK_DRIFT_RETRIES=1 \
+    FORK_DRIFT_RETRY_DELAY_SECONDS=0 GITHUB_OUTPUT="$TMPDIR_TEST/output-leak" "$SCRIPT" 2>&1)" && status=0 || status=$?
+  [[ "$status" -eq 20 ]] && ! grep -q 'super-secret-token' <<<"$out" && grep -q '<redacted:' <<<"$out"
+}
+
 run_test 'success_requires_executed_tests' test_success_requires_executed_tests
+run_test 'unset_url_falls_back_to_shared_default' test_unset_url_falls_back_to_shared_default
+run_test 'configured_url_never_printed' test_configured_url_never_printed
 run_test 'assertion_failure_is_drift' test_assertion_failure_is_drift
 run_test 'provider_failure_retries_then_stays_provider' test_provider_failure_retries_then_stays_provider
 run_test 'zero_tests_is_harness_failure_not_drift' test_zero_tests_is_harness_failure_not_drift

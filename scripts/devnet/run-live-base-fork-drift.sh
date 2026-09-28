@@ -3,9 +3,26 @@
 #
 # Exit codes: 0 = all selected tests executed and passed; 10 = Base drift;
 # 20 = provider/RPC unavailable after retries; 30 = harness/no-test failure.
+#
+# Endpoint (issue #1239): FORK_RPC_URL / RMPC_FORK_RPC_URL when set (the
+# workflow passes the raw vars.RMPC_FORK_RPC_URL), else the first public
+# endpoint in fork-rpc-lib.sh. Every log this script prints is redacted, since
+# forge and curl print the request URL on a transport error and a keyed URL
+# carries its API key.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/devnet/fork-rpc-lib.sh
+. "$SCRIPT_DIR/fork-rpc-lib.sh"
+
 RPC_URL="${FORK_RPC_URL:-${RMPC_FORK_RPC_URL:-}}"
+if [[ -z "$RPC_URL" ]]; then
+  RPC_URL="$(fork_rpc_default_endpoint)"
+  echo "[live-fork-drift] RMPC_FORK_RPC_URL is unset; using public fallback $(fork_rpc_origin "$RPC_URL")"
+fi
+# The fork suites read FORK_RPC_URL themselves (vm.envString), so the resolved
+# endpoint, fallback included, must reach them through the environment.
+export FORK_RPC_URL="$RPC_URL"
 RETRIES="${FORK_DRIFT_RETRIES:-3}"
 RETRY_DELAY_SECONDS="${FORK_DRIFT_RETRY_DELAY_SECONDS:-5}"
 CURL_BIN="${CURL_BIN:-curl}"
@@ -59,7 +76,7 @@ preflight_rpc() {
       return 0
     fi
     echo "[live-fork-drift] RPC preflight attempt ${attempt}/${RETRIES} failed" >&2
-    cat "$log" >&2
+    fork_rpc_redact "$RPC_URL" <"$log" >&2
     rm -f "$log"
     [[ "$attempt" -lt "$RETRIES" ]] && retry_pause
   done
@@ -84,25 +101,25 @@ run_suite() {
         return 0
       fi
       echo "ERROR: ${description}: forge succeeded but executed zero tests" >&2
-      cat "$log" >&2
+      fork_rpc_redact "$RPC_URL" <"$log" >&2
       rm -f "$log"
       return 30
     fi
     if is_provider_failure "$log"; then
       echo "[live-fork-drift] ${description}: provider failure on attempt ${attempt}/${RETRIES}" >&2
-      cat "$log" >&2
+      fork_rpc_redact "$RPC_URL" <"$log" >&2
       rm -f "$log"
       [[ "$attempt" -lt "$RETRIES" ]] && retry_pause && continue
       return 20
     fi
     if is_harness_failure "$log"; then
       echo "[live-fork-drift] ${description}: local harness failure" >&2
-      cat "$log" >&2
+      fork_rpc_redact "$RPC_URL" <"$log" >&2
       rm -f "$log"
       return 30
     fi
     echo "[live-fork-drift] ${description}: test failure (Base drift candidate)" >&2
-    cat "$log" >&2
+    fork_rpc_redact "$RPC_URL" <"$log" >&2
     rm -f "$log"
     return 10
   done

@@ -115,6 +115,36 @@ compare (it names the mismatch rather than reporting stale docs).
 > it, not rediscover the cliff as an unfixable "flake". Raising the ceiling is a
 > deliberate act (`COVERAGE_MEM_CEILING_PCT`), not a default.
 
+#### Live-RPC fork steps (issue #1239)
+
+Three `fork-regressions` steps — the Uniswap V3, Uniswap V4 and Aerodrome
+`AssetPositionAdapter` fork tests — cannot use the offline golden fixture,
+because it never touched those pools. They fork live Base, so they run through
+`scripts/devnet/run-live-rpc-forge-fork.sh` instead of a bare `forge test`:
+
+- **Endpoint.** The `RMPC_FORK_RPC_URL` Actions variable when it is set. When it
+  is unset (the case today), the public endpoints listed in
+  `scripts/devnet/fork-rpc-lib.sh`, one per attempt in rotation. That file is
+  the only copy of the fallback list; `check-adr0011-ci.sh` fails if a
+  workflow reintroduces a `vars.RMPC_FORK_RPC_URL || '<url>'` expression.
+- **Attribution.** A red step carries an `::error` whose title says which kind
+  of failure it is. *Provider failure* means every failing test failed on an
+  RPC transport or provider error (429, "Archive requests require a personal
+  token", "could not instantiate forked environment", connection errors). Only
+  that kind is retried (three attempts by default). *Test failure* means at
+  least one test failed for any other reason. It is never retried, so a real
+  regression cannot be retried into a green. A recovered flake passes with a
+  `::warning` that names it.
+- **No zero-test green.** A run that executed no tests is red.
+- **Redaction.** forge prints the request URL on a transport error, and a keyed
+  provider URL carries its API key, so the runner redacts the endpoint from
+  forge's output and masks a configured value for the rest of the job.
+
+`bash .github/scripts/tests/test_run_live_rpc_forge_fork.sh` (offline, stubbed
+forge) proves each of those behaviours in the same job before the live steps
+run. The fix that removes the pressure entirely is still external: a repo admin
+must set `RMPC_FORK_RPC_URL` to a keyed Base archive RPC.
+
 ---
 
 ### 3. Solidity quality gate
@@ -200,7 +230,7 @@ legacy Solidity fork tests, which called `vm.createSelectFork` against a
 never-provisioned `RMPC_FORK_RPC_URL`/`FORK_RPC_URL` secret and therefore
 silently skip-cleaned to a false green.) A **non-blocking nightly drift alarm**
 forks live **Base mainnet at latest** via a **free public RPC** (public default,
-no secret — e.g. `https://base-rpc.publicnode.com`) and re-runs the suite; on
+no secret — the list in `scripts/devnet/fork-rpc-lib.sh`) and re-runs the suite; on
 failure it opens/updates a tracking issue instead of blocking a merge. That
 nightly is what catches real upstream drift (pool migrations, ABI changes,
 oracle heartbeat changes) a pinned snapshot cannot see. It is dispatched by the
