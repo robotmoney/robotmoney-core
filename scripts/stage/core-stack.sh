@@ -237,6 +237,19 @@ chain_facts_line() {
 # The stamp: which commit the running chain was booted from, and by which
 # harness process. Without it, rmpc's build-info would vouch for a chain that a
 # later rebuild (a failed `chain up`, `dapp up`) never booted.
+#
+# boot-mismatch vs. candidate-mismatch (devops#42): these name two different
+# facts on purpose and are not merged into one class. boot-mismatch is a
+# CHAIN fact: the stamp `chain up` wrote says which commit is actually
+# running, and it disagrees with what `--ref` (or HEAD) asks about now — the
+# operator's fix is `chain down` + `chain up --ref <the one they want>`.
+# candidate-mismatch (chain_facts_line, below) is a BUILD-ARTIFACT fact: the
+# stamp and the candidate already agree, but target/debug/rmpc on disk was
+# rebuilt for something else since (a failed `chain up`, a bare `dapp up`,
+# a stray `cargo build`) without booting a new chain — the fix there is just
+# rebuilding rmpc for the candidate, not touching the chain at all. Collapsing
+# both into one class would cost the operator exactly the information that
+# tells them which of those two unrelated actions to take.
 stamp_line() {
   local want="$1" commit pid start now
   [[ -f "$STAMP" ]] || { echo "not-booted: no completed \`chain up\` stamp at $STAMP"; return 1; }
@@ -347,6 +360,11 @@ chain_down() {
 # runs only when provisioning is about to happen, not as a standing check.
 governance_preflight() {
   need jq
+  # Every check below shells out to cast. Without this, a missing cast makes
+  # `"$CAST" chain-id` fail exactly like a dead RPC does (both print nothing
+  # on stdout), so the first check below would misreport a tool-missing host
+  # as rpc-unreachable: exit 1, not exit 3. Checked explicitly, first.
+  need "$CAST"
   grep -q -- '--- end endpoint summary ---' "$SUMMARY" 2>/dev/null \
     || unsatisfied summary-incomplete "$SUMMARY is absent or carries no end-of-summary marker"
   # summary_address (fusion-ceremony.sh): last key=value line wins.
@@ -406,16 +424,26 @@ governance_preflight() {
 governance_ensure() { exec bash "$CEREMONY" ensure --out-dir "$OUT_DIR" --summary "$SUMMARY" --rpc-url "$RPC_URL"; }
 
 governance_verify() {
-  local rc=0 keydir
+  local rc=0 keydir out
   [[ -f "$RECORD" ]] || unsatisfied record-missing "$RECORD does not exist — run \`core-stack.sh governance ensure\`"
-  bash "$CEREMONY" verify --record "$RECORD" --rpc-url "$RPC_URL" || rc=$?
-  (( rc == 1 )) || exit "$rc"
-  # verify's own PASS/FAIL lines are above; this names the one thing to do.
+  # Captured, not inherited: on success the ceremony's own PASS lines are the
+  # caller's evidence and are printed verbatim. On its "no" (rc 1) they move to
+  # stderr instead, so stdout still carries exactly the one classed line the
+  # one-stdout-line rule promises every failing read-only verb (the survived
+  # mutant this closes: two_stdout_lines, PASS/FAIL lines above a classed
+  # line).
+  out="$(bash "$CEREMONY" verify --record "$RECORD" --rpc-url "$RPC_URL" 2>&1)" || rc=$?
+  if (( rc != 1 )); then
+    echo "$out"
+    exit "$rc"
+  fi
+  echo "$out" >&2
+  # verify's own PASS/FAIL lines are on stderr above; this names the one thing to do.
   keydir="$(jq -r '.ephemeral.keystore_dir // empty' "$RECORD" 2>/dev/null || true)"
   if [[ -z "$keydir" || ! -d "$keydir" ]]; then
     unsatisfied keys-discarded "the ceremony keystores (${keydir:-none named}) are gone, so nobody can drive the Safe; rebuild the stack (chain down, chain up, governance ensure)"
   fi
-  unsatisfied governance-unverified "fusion-ceremony.sh verify failed against $RECORD (FAIL lines above)"
+  unsatisfied governance-unverified "fusion-ceremony.sh verify failed against $RECORD (see FAIL lines on stderr above)"
 }
 
 # ─── dapp ─────────────────────────────────────────────────────────────────────
