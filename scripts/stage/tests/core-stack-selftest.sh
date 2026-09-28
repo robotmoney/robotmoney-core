@@ -42,7 +42,7 @@ trap 'reap; rm -rf "$WORK"' EXIT
 # The expected executed-assertion floor: a truncated file that stops early must
 # not print a green summary. Raise it with every assertion added. CI holds its
 # own copy (suite-01-02-forge-tests.yml core-stack-selftest).
-MIN_EXPECTED_ASSERTIONS=184
+MIN_EXPECTED_ASSERTIONS=296
 
 REPO="$WORK/repo"; FAKE="$WORK/fake"; BIN="$WORK/bin"; OUT="$WORK/out"
 mkdir -p "$REPO/scripts/stage" "$REPO/target/debug" "$REPO/testing/smoke-test/src" "$FAKE" "$BIN" "$OUT" "$WORK/home"
@@ -276,16 +276,62 @@ run_bare() {  # no --out-dir, for the usage paths
   set -e
 }
 
+# ─── exit-3 (missing tool): a PATH with the tool genuinely absent ────────────
+# Real system utilities core-stack.sh and this rig need, resolved once from
+# the real $PATH — jq, git, flock and friends are ordinary base-image tools
+# that would otherwise still answer from some system directory even with $BIN
+# stripped out, so "absent" has to mean a PATH that carries none of them, not
+# just a PATH without our fakes.
+SYS_TOOLS=(bash cat mkdir rm mv cp chmod git jq flock tail grep sed awk date \
+           sleep kill tr wc seq dirname basename mktemp env stdbuf nohup \
+           true false sh readlink pwd printf)
+# without_tool NAME: a directory of symlinks covering every real tool this
+# script and the harness need (curl/docker/cast from $BIN, everything else
+# from the real PATH), minus NAME — so `command -v NAME` genuinely fails
+# rather than being shadowed by a fake or found later in some inherited PATH.
+without_tool() {
+  local omit="$1"
+  local dir="$WORK/minpath-$omit" t p
+  rm -rf "$dir"; mkdir -p "$dir"
+  for t in "${SYS_TOOLS[@]}" curl docker cast; do
+    [[ "$t" == "$omit" ]] && continue
+    case "$t" in
+      curl) p="$BIN/curl" ;;
+      docker) p="$BIN/docker" ;;
+      cast) p="$BIN/cast" ;;
+      *) p="$(command -v "$t" 2>/dev/null)" || continue ;;
+    esac
+    ln -sf "$p" "$dir/$t"
+  done
+  echo "$dir"
+}
+run_without() {  # run_without TOOL NOUN VERB [ARGS...]
+  local omit="$1" mp; shift
+  mp="$(without_tool "$omit")"
+  set +e
+  env HOME="$WORK/home" PATH="$mp" FAKE="$FAKE" SPAWNED="$SPAWNED" \
+    CORE_STACK_POLL_SECS=1 \
+    "$REPO/scripts/stage/core-stack.sh" "$@" --out-dir "$OUT" >"$WORK/stdout" 2>"$WORK/stderr" </dev/null
+  RC=$?
+  set -e
+}
+
 PASSED=0; FAILED=0
 pass() { PASSED=$((PASSED + 1)); echo "ok   $1"; }
 flunk() { FAILED=$((FAILED + 1)); echo "FAIL $1"; sed 's/^/     | /' "$WORK/stdout" "$WORK/stderr" | tail -6; }
 check() { local name="$1"; shift; if "$@"; then pass "$name"; else flunk "$name"; fi; }
 expect_rc() { local want="$1" name="$2"; if [[ "$RC" == "$want" ]]; then pass "$name"; else flunk "$name: exit $RC, want $want"; fi; }
-# A read-only verb's "no" is exit 1 (or the given code) AND the named class on stdout.
+# A read-only verb's "no" is exit 1 (or the given code) AND the named class on
+# stdout. The one-stdout-line rule (devops#42, survived mutant
+# two_stdout_lines) is checked here too, once, for every call site, rather
+# than as a one-off assertion bolted onto a handful of cases: a failing
+# read-only verb's stdout is EXACTLY the classed line, so a caller can read it
+# without stripping anything a wrapped script printed ahead of it.
 expect_class() {
   local class="$1" name="$2" want="${3:-1}"
   if [[ "$RC" == "$want" ]] && grep -q "^$class: " "$WORK/stdout"; then pass "$name is refused as $class"
   else flunk "$name: exit $RC (want $want), stdout lacks '$class:'"; fi
+  check "$name prints exactly one stdout line" test "$(wc -l < "$WORK/stdout")" -eq 1
 }
 calls() { cat "$FAKE/calls" 2>/dev/null || true; }
 no_smoke() { ! grep -q '^deploy smoke' "$FAKE/calls" 2>/dev/null; }
@@ -300,6 +346,34 @@ for flag in --ref --record --out-dir --timeout; do
   baseline; run_bare chain status "$flag"; expect_rc 64 "$flag with no value is a usage error"
   check "$flag with no value names the flag instead of crashing" stderr_has "$flag needs a value"
 done
+# devops#42, survived mutants unknown_flag_ignored / timeout_abc_ok.
+baseline; run_bare --bogus; expect_rc 64 "an unrecognized top-level argument is a usage error"
+baseline; run_bare chain status --bogus; expect_rc 64 "an unknown flag on a known noun/verb is a usage error"
+check "and names the flag instead of silently continuing" stderr_has "unknown argument: --bogus"
+baseline; run_bare chain up --timeout abc; expect_rc 64 "a non-numeric --timeout is a usage error"
+baseline; run_bare bogus-noun; expect_rc 64 "an unknown noun is a usage error"
+
+echo "--- exit 3: required tool missing ---"
+# devops#42, survived mutants status_no_need_docker / up_no_need_docker /
+# dapp_status_no_need_curl / need_exits_1. `need` is exit 3, never masqueraded
+# as a read-only verb's exit-1 "no" — no stdout classed line is expected here.
+baseline; run_without docker chain status; expect_rc 3 "chain status with docker absent"
+check "and names docker on stderr" stderr_has "required tool 'docker' not on PATH"
+baseline; run_without docker chain up --timeout 5; expect_rc 3 "chain up with docker absent"
+check "and names docker on stderr" stderr_has "required tool 'docker' not on PATH"
+check "before booting anything" no_smoke
+baseline; run_without curl dapp status; expect_rc 3 "dapp status with curl absent"
+check "and names curl on stderr" stderr_has "required tool 'curl' not on PATH"
+baseline; run_without jq record show; expect_rc 3 "record show with jq absent"
+check "and names jq on stderr" stderr_has "required tool 'jq' not on PATH"
+# The bug this closes (devops#42 item 5): governance preflight shells out to
+# cast for every check it runs. Without an explicit `need "$CAST"` first, a
+# missing cast made the first check (`cast chain-id`) fail exactly like a dead
+# RPC — rpc-unreachable, exit 1 — misreporting a tool-missing host as a dead
+# chain instead of exit 3.
+baseline; run_without cast governance preflight; expect_rc 3 "governance preflight with cast absent"
+check "and names cast on stderr, not rpc-unreachable on stdout" stderr_has "required tool 'cast' not on PATH"
+check "and never misreports it as rpc-unreachable" bash -c "! grep -q '^rpc-unreachable:' '$WORK/stdout'"
 
 echo "--- chain status ---"
 baseline; run chain status; expect_rc 0 "the healthy candidate passes"
@@ -530,6 +604,21 @@ baseline; edit_record '.code_hashes.gateway = "0x1234"'; run record show; expect
 baseline; edit_record '.core_sha = "abc"'; run record show; expect_class record-field-malformed "a core_sha that is not a commit" 65
 baseline; edit_record '.min_delay = 0'; run record show; expect_class record-field-malformed "a zero min_delay" 65
 baseline; edit_record ".addresses.safe = \"$(a 0)\""; run record show --path; check "--path is refused with the record" test "$RC" == 65
+
+echo "--- record schema drift guard ---"
+# devops#42 item 1: schemas/fusion-stage-record.schema.json's `required` array
+# and record_show's own RECORD_REQUIRED_FIELDS (exposed via the undocumented
+# `record show --list-required-fields`) must be the same list, read from each
+# side, so the schema file and the verb's validation cannot silently drift
+# apart. This does not check either one is "right" — the per-field cases above
+# already do that — only that the two stay equal.
+SCHEMA="$HERE/../../../schemas/fusion-stage-record.schema.json"
+check "the schema file is valid JSON" bash -c "jq -e . '$SCHEMA' >/dev/null"
+baseline; run record show --list-required-fields
+expect_rc 0 "record show --list-required-fields succeeds without a record on disk"
+check "and its field list is a JSON array" bash -c "jq -e 'type == \"array\" and length > 0' '$WORK/stdout' >/dev/null"
+check "schemas/fusion-stage-record.schema.json's required array equals record show's own field list" \
+  bash -c "diff <(jq -cS . '$WORK/stdout') <(jq -cS '.required' '$SCHEMA') >/dev/null"
 
 echo "core-stack selftest: $PASSED passed, $FAILED failed"
 echo "CORE_STACK_SELFTESTS_EXECUTED=$PASSED"
