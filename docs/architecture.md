@@ -1209,6 +1209,63 @@ it can pause but cannot unpause, matching the guardian/quorum separation in
 security-model.md §9. Unpause still requires `ADMIN_ROLE` through the
 timelock.
 
+**Startup exit on an invalid pauser key.** In a pause-capable mode
+(`pause` or `pause_and_alert`) the pauser key must be a valid secp256k1
+scalar. The daemon validates it at startup, before it connects to the
+database or polls once, and **exits non-zero** (`startup: config error:
+invalid pauser key: ...`) on an invalid key. It never degrades to an
+alert-only process: a pause-mode watchdog that cannot sign is not a watchdog,
+and discovering that mid-incident is worse than at boot. The committed
+`services/watchdog/config.toml` carries an all-zero placeholder key in
+`pause_and_alert` mode, so starting from it unmodified exits immediately.
+Because the exit costs alerting too, it must be caught by the liveness
+mechanism below; it is (issue #1378).
+
+#### Watchdog liveness and deployment
+
+In a calm market the watchdog's healthy output is *no output at all*, which is
+byte-identical to its output when dead. The liveness signal that tells them
+apart is the heartbeat `watchdog_cursor.updated_at`: the daemon refreshes it
+after every successful poll, both when it advances the cursor past an evaluated
+block and when a poll finds no newly indexed block (`touch_cursor`, which never
+moves the cursor). A stopped, hung, crash-looping, or startup-failed watchdog
+stops refreshing it.
+
+`watchdog-liveness` is the read-only checker, built by the same
+`cargo build -p watchdog` as the daemon (`src/bin/watchdog-liveness.rs`). It
+reads `WATCHDOG_DATABASE_URL` from the environment, requires
+`--chain-id`/`WATCHDOG_CHAIN_ID`, and measures age on the database clock:
+
+| Exit | Meaning |
+|------|---------|
+| `0` | heartbeat no older than `--max-age-secs` (default 180) |
+| `1` | heartbeat stale, or no cursor row (never polled, or wrong chain id) |
+| `2` | unknown: database unreachable or bad arguments — page it, never treat it as healthy |
+
+**Where the check lives.** The repo-owned stage supervisor
+(`scripts/stage/fusion-watchdog-supervisor.sh`, run by
+`fusion-watchdog.service` with `Restart=always`) restarts the watchdog and,
+every poll interval **whether or not the child is currently running**, pages
+`WATCHDOG_ALERT_WEBHOOK` with
+`watchdog_exited` (the child exited, with its status),
+`watchdog_cursor_stale` (checker exit 1), or `watchdog_liveness_unknown`
+(any other non-zero exit, including a missing checker binary). Each kind pages
+at most once per `WATCHDOG_CURSOR_STALE_SECS` (default 180 s), so a crash loop
+is one page per window rather than one per restart. Detection is bounded: an
+exit pages within one poll interval (12 s); a hung daemon pages within
+`STALE_SECS` + one poll. A process on the monitored host cannot report the
+host itself going dark, so a production deployment must also run
+`watchdog-liveness` from an off-host monitor; that probe is operated by the
+DevOps runtime repository, not this one. The operator procedure is
+`docs/operations/watchdog-liveness.md`.
+
+Verified by `services/watchdog/tests/liveness.rs` (real daemon and checker
+binaries against Postgres: healthy through a quiet market, stale within a
+bounded time after SIGKILL, invalid key exits and reads `missing`) and
+`scripts/stage/test-fusion-watchdog-supervisor.sh` (supervisor pages a crash
+loop, a hung daemon, and a missing checker; stays silent in a quiet market),
+both run by suite 20.
+
 The configured maximum response-time SLA is
 `sla.max_response_secs = 300` (five minutes) from breach detection to
 pause/alert dispatch; startup rejects a zero value. The service is exercised

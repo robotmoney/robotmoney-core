@@ -1,0 +1,15 @@
+# OnFailure target for fusion-watchdog.service (issue #1378).
+#
+# Fires when systemd stops restarting the watchdog supervisor. At that point
+# nothing on this host is watching the gateway, and nothing else on this host
+# will say so: page the same receiver the supervisor uses.
+[Unit]
+Description=Page that the Fusion watchdog supervisor failed
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/fusion-watchdog.env
+ExecStart=/bin/sh -c 'test -n "$WATCHDOG_ALERT_WEBHOOK" && curl -fsS -m 15 \
+  -H "content-type: application/json" \
+  --data "{\"kind\":\"watchdog_supervisor_failed\",\"chain_id\":${WATCHDOG_CHAIN_ID:-0},\"source\":\"fusion-watchdog-failed\",\"detail\":\"fusion-watchdog.service failed; systemd stopped restarting it\"}" \
+  "$WATCHDOG_ALERT_WEBHOOK" >/dev/null || true'
