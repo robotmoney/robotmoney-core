@@ -365,17 +365,16 @@ async fn boot_accepts_a_matching_schema_and_starts_indexing() {
 // grep while still running inside a transaction, and a future sqlx spelling of
 // the opt-out would defeat a grep entirely.
 //
-// FORMER LIMIT (issue #1416, filed from this work, fixed in the same PR that
-// added this note's correction): on stable Rust `sqlx::migrate!` registers no
-// rerun-if-changed dependency on `migrations/`, so a change touching ONLY a
-// `.sql` file could fail to recompile the crate against a warm target dir, and
-// the guard would then read a stale embedded set. `services/explorer-indexer/
-// build.rs` now emits `cargo:rerun-if-changed=migrations`, which covers
-// additions, in-place edits and deletions, and
-// `tests/migration_set_parity.rs` guards that mechanism. Note the parity guard
-// compares `version -> description` rather than file contents, so it alone
-// would not catch an in-place edit — see the `stale-cache-embedded-artefact`
-// entry in docs/development/false-green-shapes.md and issue #1429.
+// FORMER LIMIT (issue #1416, filed from this work): on stable Rust
+// `sqlx::migrate!` registers no rerun-if-changed dependency on `migrations/`.
+// It expands each migration it found to `include_str!`, so rustc already
+// tracked edits and deletions, but a newly ADDED `.sql` file could fail to
+// recompile the crate against a warm target dir, and this guard would then
+// read an embedded set without it. `services/explorer-indexer/build.rs` now
+// emits `cargo:rerun-if-changed=migrations`; `tests/migration_set_parity.rs`
+// compares the embedded set (versions and SQL text) with the directory, and
+// `.github/scripts/tests/test_indexer_migration_rebuild_trigger.sh` proves
+// the trigger fires against a warm target dir.
 
 /// Every migration this binary embeds runs inside a transaction, so a migration
 /// that fails part-way rolls back whole.

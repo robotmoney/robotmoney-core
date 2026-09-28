@@ -590,37 +590,53 @@ that reads the filesystem itself is not, unless it calls
 `sqlx::migrate!("./migrations")`. sqlx calls `proc_macro::tracked_path::path()`
 only under `#[cfg(any(sqlx_macros_unstable, procmacro2_semver_exempt))]`
 (`sqlx-macros-core/src/migrate.rs`) and this workspace builds on stable, and
-the crate had no `build.rs`, so nothing supplied the dependency (issue #1416,
-found while implementing issue #1392 / PR #1405). Measured on the pre-fix tree
-with a warm `target/`: adding `migrations/0016_*.sql` and re-running
-`cargo test -p explorer-indexer` printed `Finished` in 0.16s with no
-`Compiling explorer-indexer` line, and the embedded `MIGRATOR` still held 15
-migrations against 16 on disk. A PR that only added a migration could
-therefore have gone green in `explorer-indexer-fast` with that migration never
-compiled in, and `indexer --migrate-only` built from that cache would not have
-applied it.
+the crate had no `build.rs`, so nothing tracked the directory listing (issue
+#1416, found while implementing issue #1392 / PR #1405). The macro does expand
+each migration it found to `include_str!("<absolute path>")`, so rustc's
+dep-info already covered an edit to, or a deletion of, an existing migration;
+the untracked case is an **added** file, which appears in no dep-info.
+Measured on the pre-fix tree with a warm `target/`: adding
+`migrations/0016_*.sql` and re-running `cargo test -p explorer-indexer`
+printed `Finished` in 0.16s with no `Compiling explorer-indexer` line, and the
+embedded `MIGRATOR` still held 15 migrations against 16 on disk. A PR that only
+added a migration — the common shape of schema work — could therefore have
+gone green in `explorer-indexer-fast` with that migration never compiled in,
+and `indexer --migrate-only` built from that cache would not have applied it.
 
 ### Detecting check
 `services/explorer-indexer/build.rs` emits
 `cargo:rerun-if-changed=migrations`; cargo walks a directory dependency
-recursively, so additions, edits and deletions all mark the crate dirty.
-`services/explorer-indexer/tests/migration_set_parity.rs` is the guard on that
-mechanism: it compares the compile-time embedded set against the run-time
-contents of `migrations/`, so a regression in the rebuild trigger fails RED
-rather than shipping a stale binary — but only for an **added, deleted or
-renamed** migration. It compares `version -> description`, not file contents,
-so an **in-place edit** of an existing migration (same filename, different SQL)
-is invisible to it, which is the shape a PR takes when an author fixes a
-migration they added earlier in the same PR. That gap is narrow today because
-the rebuild trigger does cover in-place edits and sqlx independently rejects a
-mutated already-applied migration via `_sqlx_migrations` checksum validation at
-boot; it would matter if the trigger itself regressed. Comparing the embedded
-`Migration::sql`/`checksum` against the file bytes would close it — issue
-#1429 tracks the same version-vs-checksum blind spot in the boot guard, and
-both want the same comparison. It needs no Postgres, Docker or network,
-and runs in `.github/workflows/suite-04-rust-quality.yml`'s `lint` job — a
-LIGHT suite with no draft gate — because a stale `target/` bites hardest
-during draft iteration. Nothing detects a _new_ instance of this shape in
-another crate: `services/explorer-indexer` is currently the only workspace
-member with a `migrations/` directory, and a future
-compile-time-directory-reading macro elsewhere would need its own guard.
+recursively, so an addition (and, redundantly with rustc's dep-info, an edit
+or a deletion) marks the crate dirty. Two checks hold it in place, both in
+`.github/workflows/suite-04-rust-quality.yml`'s `lint` job — a LIGHT suite with
+no draft gate, because a stale `target/` bites hardest during draft
+iteration — and both need no Postgres, Docker or network:
+
+- `services/explorer-indexer/tests/migration_set_parity.rs` compares the
+  compile-time embedded set against the run-time contents of `migrations/`:
+  versions and descriptions (an added, deleted or renamed migration), then
+  each migration's SQL text (an in-place edit). A stale binary fails it RED.
+- `.github/scripts/tests/test_indexer_migration_rebuild_trigger.sh` is the
+  half that can see the trigger itself go missing, which the parity target
+  cannot: on a cold build both sides always agree. It warms `target/`, then
+  adds, edits, reverts and deletes a migration with no `.rs` change and
+  asserts after each that explorer-indexer's own build script re-ran, the
+  crate recompiled and the parity target passed; controls check that an
+  unchanged tree does not re-run the build script and that a missing
+  `migrations/` fails the build loudly. Verified red-before in a scratch clone
+  on PR #1423: with `build.rs` deleted, the ADD step failed with
+  `embedded migration COUNT 16 != on-disk count 17` and no
+  `Compiling explorer-indexer` line; with the directive pointed at a missing
+  path, the unchanged-tree control failed.
+
+It checks the build script's own `output` stamp rather than only the
+`Compiling explorer-indexer` line because a dirty dependency also prints that
+line. In a linked `git worktree`, `clients/rust-payment-client/build.rs`
+watches `../../.git/HEAD`, which is not a file there, so that crate and every
+dependent recompiles on every build — a `Compiling` check alone would pass
+with or without the fix.
+
+Nothing detects a _new_ instance of this shape in another crate:
+`services/explorer-indexer` is currently the only workspace member with a
+`migrations/` directory, and a future compile-time-directory-reading macro
+elsewhere would need its own guard.
