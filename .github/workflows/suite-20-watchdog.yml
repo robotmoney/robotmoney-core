@@ -131,6 +131,13 @@ jobs:
       - name: Stage watchdog supervisor liveness paging (issue #1378)
         run: bash scripts/stage/test-fusion-watchdog-supervisor.sh
 
+      # Issue #1378 review: the OnFailure= pager (fusion-watchdog-failed.service)
+      # used to embed a JSON payload directly in ExecStart=, which systemd
+      # mangles before exec -- the pager silently failed to page. Runs the
+      # extracted alert script against a real local HTTP receiver.
+      - name: Stage watchdog OnFailure alert delivery (issue #1378)
+        run: bash scripts/stage/tests/test-fusion-watchdog-supervisor-failed-alert.sh
+
   pg:
     name: watchdog-integration
     runs-on: ubuntu-latest

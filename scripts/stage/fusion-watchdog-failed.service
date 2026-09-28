@@ -3,13 +3,15 @@
 # Fires when systemd stops restarting the watchdog supervisor. At that point
 # nothing on this host is watching the gateway, and nothing else on this host
 # will say so: page the same receiver the supervisor uses.
+#
+# The paging logic lives in a standalone script, not an inline command here:
+# systemd un-escapes `\"` in ExecStart= before exec'ing it, so a JSON payload
+# quoted directly in this line reaches the shell malformed and whitespace-
+# split. See fusion-watchdog-supervisor-failed-alert.sh for the history.
 [Unit]
 Description=Page that the Fusion watchdog supervisor failed
 
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/fusion-watchdog.env
-ExecStart=/bin/sh -c 'test -n "$WATCHDOG_ALERT_WEBHOOK" && curl -fsS -m 15 \
-  -H "content-type: application/json" \
-  --data "{\"kind\":\"watchdog_supervisor_failed\",\"chain_id\":${WATCHDOG_CHAIN_ID:-0},\"source\":\"fusion-watchdog-failed\",\"detail\":\"fusion-watchdog.service failed; systemd stopped restarting it\"}" \
-  "$WATCHDOG_ALERT_WEBHOOK" >/dev/null || true'
+ExecStart=/opt/fusion-stage/fusion-watchdog-supervisor-failed-alert.sh

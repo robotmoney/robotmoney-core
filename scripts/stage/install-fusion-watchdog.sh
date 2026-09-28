@@ -20,8 +20,12 @@ env_value() { sed -n "s/^$1=//p" "$ENV_FILE" | tail -n1 | sed -e 's/^"\(.*\)"$/\
 liveness_bin="$(env_value WATCHDOG_LIVENESS_BIN)"
 [[ -n "$liveness_bin" ]] || liveness_bin="$(dirname "$(env_value WATCHDOG_BIN)")/watchdog-liveness"
 [[ -x "$liveness_bin" ]] || { echo "install-fusion-watchdog: watchdog-liveness not executable at $liveness_bin" >&2; exit 65; }
+# fusion-watchdog-supervisor-failed-alert.sh (the OnFailure= pager) builds its
+# JSON payload with jq; refuse to install a pager that cannot run.
+command -v jq >/dev/null || { echo "install-fusion-watchdog: jq not found on PATH" >&2; exit 65; }
 install -d -m 0755 /opt/fusion-stage
 install -m 0755 "$REPO_ROOT/scripts/stage/fusion-watchdog-supervisor.sh" /opt/fusion-stage/fusion-watchdog-supervisor.sh
+install -m 0755 "$REPO_ROOT/scripts/stage/fusion-watchdog-supervisor-failed-alert.sh" /opt/fusion-stage/fusion-watchdog-supervisor-failed-alert.sh
 install -m 0644 "$REPO_ROOT/scripts/stage/fusion-watchdog.service" "$UNIT_DST"
 install -m 0644 "$REPO_ROOT/scripts/stage/fusion-watchdog-failed.service" /etc/systemd/system/fusion-watchdog-failed.service
 systemctl daemon-reload

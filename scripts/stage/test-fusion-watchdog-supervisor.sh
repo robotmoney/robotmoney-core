@@ -24,8 +24,14 @@ unit_section() { awk -v s="[$2]" '/^\[/{in_s=($0==s)} in_s' "$1"; }
 unit_section "$ROOT/scripts/stage/fusion-watchdog.service" Unit | grep -q '^OnFailure=fusion-watchdog-failed.service$'
 unit_section "$ROOT/scripts/stage/fusion-watchdog.service" Unit | grep -q '^StartLimitIntervalSec='
 unit_section "$ROOT/scripts/stage/fusion-watchdog.service" Unit | grep -q '^StartLimitBurst='
-grep -q 'watchdog_supervisor_failed' "$ROOT/scripts/stage/fusion-watchdog-failed.service"
+grep -q '^ExecStart=/opt/fusion-stage/fusion-watchdog-supervisor-failed-alert.sh$' "$ROOT/scripts/stage/fusion-watchdog-failed.service"
+grep -q 'watchdog_supervisor_failed' "$ROOT/scripts/stage/fusion-watchdog-supervisor-failed-alert.sh"
 grep -q 'fusion-watchdog-failed.service' "$ROOT/scripts/stage/install-fusion-watchdog.sh"
+grep -q 'fusion-watchdog-supervisor-failed-alert.sh' "$ROOT/scripts/stage/install-fusion-watchdog.sh"
+bash -n "$ROOT/scripts/stage/fusion-watchdog-supervisor-failed-alert.sh"
+# The OnFailure unit must never again embed a JSON payload in ExecStart=: that
+# is the exact defect this file's ExecStart= check above guards against.
+! grep -q '"kind"' "$ROOT/scripts/stage/fusion-watchdog-failed.service"
 echo "fusion watchdog supervisor static checks: PASS"
 
 # ---- behavioural -----------------------------------------------------------
@@ -39,19 +45,34 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$WORK/bin"
-# curl stub: record the JSON body of every page.
+# curl stub: record the JSON body of every page, plus a PAGE entry in the
+# shared timeline (used by the ordering-mutant case below).
 cat >"$WORK/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 while [[ $# -gt 0 ]]; do
-  if [[ "$1" == --data ]]; then printf '%s\n' "$2" >>"$STUB_STATE/pages"; shift; fi
+  if [[ "$1" == --data ]]; then
+    printf '%s\n' "$2" >>"$STUB_STATE/pages"
+    echo "PAGE $(date +%s%N)" >>"$STUB_STATE/timeline"
+    shift
+  fi
   shift
 done
 EOF
-# watchdog stub: `crash` exits at once (invalid-key shape); `run` stays up.
+# watchdog stub: `crash` exits at once every time (invalid-key shape); `run`
+# stays up; `crash-once` exits on its first start only, then stays up (used to
+# put a liveness check and a restart in the same poll iteration). Every start
+# also gets a START entry in the shared timeline.
 cat >"$WORK/bin/watchdog" <<'EOF'
 #!/usr/bin/env bash
 echo "$$ $*" >>"$STUB_STATE/starts"
-[[ "$(cat "$STUB_STATE/mode")" == crash ]] && exit 1
+echo "START $(date +%s%N)" >>"$STUB_STATE/timeline"
+mode="$(cat "$STUB_STATE/mode")"
+if [[ "$mode" == crash ]]; then exit 1; fi
+if [[ "$mode" == crash-once ]]; then
+  n=$(( $(cat "$STUB_STATE/start_count" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" >"$STUB_STATE/start_count"
+  [[ "$n" -eq 1 ]] && exit 1
+fi
 exec sleep 1000
 EOF
 # watchdog-liveness stub: exit code comes from a state file.
@@ -122,6 +143,25 @@ echo "case: liveness checker missing (never read as healthy)"
 run_case nobin run 0 6 WATCHDOG_LIVENESS_BIN="$WORK/bin/does-not-exist"
 st="$WORK/nobin"
 check "unknown liveness is paged" test "$(count "$st/pages" '"kind":"watchdog_liveness_unknown"')" -ge 1
+
+echo "case: liveness is judged before restarting a child that already died (ordering mutant)"
+# supervisor_started=t0; child dies at t0 (crash-once). Iteration at t0+1
+# detects the exit and pages watchdog_exited, but is too early for a liveness
+# check (STALE_SECS=2) and too early to restart (RESTART_SECS=1 -> restart_at
+# = t0+2). Iteration at t0+2 has nothing new to detect (child already ""), so
+# it runs ONLY check_liveness (stale -> pages) and then the restart (starts
+# the child again, which this time stays up). That iteration is the one that
+# proves ordering: the correct supervisor's timeline reads PAGE then START for
+# those two events; a mutant that restarts before judging liveness reads
+# START then PAGE.
+run_case order crash-once 1 4 WATCHDOG_CURSOR_STALE_SECS=2
+st="$WORK/order"
+check "timeline recorded the initial start, the exit page, the stale page, and the restart" \
+  test "$(count "$st/timeline")" -ge 4
+line3="$(sed -n '3p' "$st/timeline" | awk '{print $1}')"
+line4="$(sed -n '4p' "$st/timeline" | awk '{print $1}')"
+check "liveness is checked (PAGE) before the dead child is restarted (START)" \
+  bash -c "[[ '$line3' == PAGE && '$line4' == START ]]"
 
 echo "case: SIGTERM stops the child"
 run_case term run 0 2
