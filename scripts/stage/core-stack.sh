@@ -96,6 +96,9 @@ REF=""
 RECORD=""
 TIMEOUT_SECS=1800               # the harness's own worst case; callers add headroom
 PATH_ONLY=0
+# Internal, undocumented in the usage banner: `record show --list-required-fields`
+# is the schema-drift guard's only consumer (see RECORD_REQUIRED_FIELDS below).
+LIST_REQUIRED_FIELDS=0
 # Seconds between readiness polls while `chain up` waits. Overridable so the
 # offline self-test does not spend minutes sleeping.
 POLL_SECS="${CORE_STACK_POLL_SECS:-3}"
@@ -136,6 +139,7 @@ while (( $# )); do
     --out-dir) value_of "$@"; OUT_DIR="$2"; shift 2 ;;
     --timeout) value_of "$@"; TIMEOUT_SECS="$2"; shift 2 ;;
     --path) PATH_ONLY=1; shift ;;
+    --list-required-fields) LIST_REQUIRED_FIELDS=1; shift ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
@@ -510,10 +514,38 @@ record_addr() {
     || record_bad record-field-malformed "${2:-$1} is not a non-zero address ('$RV')"
 }
 
+# The record contract's exhaustive required-field set (devops
+# docs/plans/core-runbook-verbs.md, "The record"), used two ways: record_show
+# checks every one of these for presence below, before any shape check runs,
+# and `record show --list-required-fields` prints this same array as JSON so
+# schemas/fusion-stage-record.schema.json's `required` array can be diffed
+# against it. That is the whole drift guard (devops#42): the schema and this
+# array are read from the one place each, and the selftest fails the moment
+# they stop matching, rather than the two silently drifting apart.
+RECORD_REQUIRED_FIELDS=(
+  .chain_id .run_id .core_tag .core_sha .generated_at .min_delay .deployer
+  .addresses.gateway .addresses.vault .addresses.registry .addresses.router .addresses.governance
+  .addresses.consensus_receipt .addresses.ic_policy .addresses.timelock .addresses.safe .addresses.emergency
+  .code_hashes.gateway
+  .vault_addresses.rmUSDC .vault_addresses.rmPROTO .vault_addresses.rmAGENT .vault_addresses.rmRWA
+  .ephemeral.submitter .ephemeral.approver .ephemeral.voters .ephemeral.emergency
+  .ephemeral.keystore_dir .ephemeral.safe_signers
+)
+
+record_list_required_fields() {
+  printf '%s\n' "${RECORD_REQUIRED_FIELDS[@]}" | jq -R . | jq -s .
+}
+
 record_show() {
   need jq
+  (( LIST_REQUIRED_FIELDS )) && { record_list_required_fields; return 0; }
   [[ -f "$RECORD" ]] || record_bad record-missing "$RECORD does not exist"
   jq -e 'type == "object"' "$RECORD" >/dev/null 2>&1 || record_bad record-unparseable "$RECORD is not a JSON object"
+  # Every required field, present, before any shape check runs — see
+  # RECORD_REQUIRED_FIELDS above. record_get already dies with
+  # record-field-missing on the first absent one.
+  local rfield
+  for rfield in "${RECORD_REQUIRED_FIELDS[@]}"; do record_get "$rfield"; done
   local field role approver=""
   record_get .chain_id
   [[ "$RV" == "$CHAIN_ID" ]] || record_bad record-wrong-chain "chain_id is '$RV', not $CHAIN_ID"
