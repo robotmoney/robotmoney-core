@@ -897,6 +897,47 @@ invariant it restores.
 
 ---
 
+### 28. Core stack selftest (core-stack-selftest)
+**File:** `.github/workflows/suite-28-core-stack-selftest.yml`
+**CI class / tier:** `system-correctness`
+**Environment:** `none` (offline; stubs and fakes only, no docker daemon, no chain)
+**Trigger:** `pull_request` (no path filter); `push` to `releases-*`; tags
+`v*.*.*`; `workflow_dispatch`. Foundry pinned to `v1.8.3`, the same release
+fusion-ceremony-selftest (suite 1–2) uses.
+
+Runs `scripts/stage/tests/core-stack-selftest.sh` — the offline self-test for
+`scripts/stage/core-stack.sh`, the one-verb-per-job surface over
+`deploy-core-stack.sh` and `fusion-ceremony.sh` that devops's core runbooks
+drive (devops#42). Every verb (`chain up/down/status`, `governance
+preflight/ensure/verify`, `dapp up/status`, `rmpc check`, `record show`) runs
+against stub wrapped scripts and fake `curl`/`docker`/`cast`, with real
+(sleeping) harness processes so process groups, `/proc` start times, signals
+and the out-dir lock are exercised for real.
+
+**Why its own file, not a job in suite-01-02:** core-stack.sh has nothing to
+do with the forge unit/invariant/coverage gate; it rode along as a fourth job
+there only because that was the suite that happened to be open when it
+landed, which meant it inherited suite-01-02's trigger set (no `releases-*`,
+no `v*.*.*` tags) rather than the refs the stage tooling actually ships on.
+
+**Jobs:**
+- `core-stack-selftest` — `bash scripts/stage/tests/core-stack-selftest.sh`
+  under `set -euo pipefail`; re-checks the printed
+  `CORE_STACK_SELFTESTS_EXECUTED` count against `CORE_STACK_SELFTEST_FLOOR`
+  (currently 296) independently of the script's own
+  `MIN_EXPECTED_ASSERTIONS`, so a run that silently did less is red either
+  way. Covers: usage errors (64) for an unknown noun/verb/flag and a
+  non-numeric `--timeout`; a required tool missing from `PATH` (3) for `chain
+  status`/`chain up` (docker), `governance preflight` (cast), `dapp status`
+  (curl) and `record show` (jq); every documented read-verb failure class,
+  each asserted to print exactly one `^<class>: ` stdout line; `chain
+  up`/`chain down` idempotency and refusal; the exact wrapped-script argv for
+  `governance ensure`/`verify`; and the `schemas/fusion-stage-record.schema.json`
+  drift guard — its `required` array must equal `record show
+  --list-required-fields`, the same field list `record show` enforces.
+
+---
+
 ## Integration-test target coverage
 
 Every Rust suite here names its cargo test binaries **by hand** — `cargo test
@@ -1300,3 +1341,4 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 25 | `suite-25-fusion-harness-selftests.yml` | `fusion-harness-selftests` | `none` |
 | 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | devnet `918453` |
 | 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |
+| 28 | `suite-28-core-stack-selftest.yml` | `core-stack-selftest` | `none` |
