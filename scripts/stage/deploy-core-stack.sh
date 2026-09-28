@@ -32,7 +32,10 @@
 #   build      env + build every dapp-stack image from the repo checkout.
 #   up         ensure the chain is up, then bring the dapp stack up with the
 #              PINNED images (docker compose up --no-build). No rebuild.
-#   down       tear the dapp stack down (data volumes preserved).
+#   down       stop the smoke harness the pid file names (its process group:
+#              SIGINT, then SIGTERM) and tear the dapp stack down (data volumes
+#              preserved). Runs before record validation: a missing or corrupt
+#              record never blocks teardown.
 #   smoke      run the repository's full devnet smoke harness on the canonical
 #              stage ports, WITHOUT fixture consensus receipts (acceptance
 #              stacks index real frontend receipts only); stays attached until
@@ -160,6 +163,90 @@ fi
 if [[ "$ACTION" == "ceremony" ]]; then
   exec "$REPO_ROOT/scripts/stage/fusion-ceremony.sh" run --out-dir "$OUT_DIR" \
     --summary "$OUT_DIR/core-smoke.log"
+fi
+
+# ─── down: before record validation ──────────────────────────────────────────
+# Teardown never depends on the record: a corrupt or half-written record is
+# exactly when an operator most needs the stack stopped, and stopping it needs
+# nothing the record carries.
+#
+# The harness pid file is "PID START" (core-stack.sh chain up), START being
+# /proc/PID/stat field 22. A pid whose start time differs was recycled by the
+# kernel and is left alone. A bare "PID" (an older launcher) is signalled only
+# while that process's command line is still the smoke harness.
+SMOKE_INT_GRACE_SECS="${SMOKE_INT_GRACE_SECS:-60}"
+SMOKE_TERM_GRACE_SECS="${SMOKE_TERM_GRACE_SECS:-30}"
+[[ "$SMOKE_INT_GRACE_SECS" =~ ^[0-9]+$ && "$SMOKE_TERM_GRACE_SECS" =~ ^[0-9]+$ ]] \
+  || fail "SMOKE_INT_GRACE_SECS / SMOKE_TERM_GRACE_SECS must be whole seconds" 64
+
+# signal_and_wait <SIG> <secs> <target>: true once nothing in <target> is left.
+signal_and_wait() {
+  kill -"$1" -- "$3" 2>/dev/null || true
+  for _attempt in $(seq 1 "$2"); do
+    kill -0 -- "$3" 2>/dev/null || return 0
+    sleep 1
+  done
+  ! kill -0 -- "$3" 2>/dev/null
+}
+
+stop_smoke_harness() {
+  local pid_file="$OUT_DIR/core-smoke.pid" pid="" start="" rest="" stat live_start pgrp target
+  [[ -f "$pid_file" ]] || return 0
+  read -r pid start rest <"$pid_file" || true
+  stat=""
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then stat="$(cat "/proc/$pid/stat" 2>/dev/null || true)"; fi
+  stat="${stat##*) }"
+  if [[ -z "$stat" || "${stat%% *}" == Z ]]; then
+    info "pid file names no running process; clearing it"
+    rm -f "$pid_file"; return 0
+  fi
+  live_start="$(awk '{ print $20 }' <<<"$stat")"
+  pgrp="$(awk '{ print $3 }' <<<"$stat")"
+  if [[ -n "$start" && "$start" != "$live_start" ]]; then
+    info "pid $pid now belongs to another process (started at $live_start, the harness at $start); not signalling it"
+    rm -f "$pid_file"; return 0
+  fi
+  if [[ -z "$start" ]] && ! tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -Eq 'deploy-core-stack\.sh smoke|smoke-test'; then
+    info "pid $pid is not the smoke harness (a bare pid file, and its command line is something else); not signalling it"
+    rm -f "$pid_file"; return 0
+  fi
+  # A harness that leads its own process group (core-stack.sh launches it under
+  # set -m) is signalled as a group, so cargo, smoke-test and whatever they
+  # spawned stop with it. One that shares its launcher's group is signalled
+  # alone: that group is the launcher's, not ours to stop.
+  target="$pid"
+  [[ "$pgrp" == "$pid" ]] && target="-$pid"
+  info "stopping the smoke harness (pid $pid${start:+, started $start}; signalling $target)"
+  signal_and_wait INT "$SMOKE_INT_GRACE_SECS" "$target" \
+    || { info "the harness ignored SIGINT for ${SMOKE_INT_GRACE_SECS}s; sending SIGTERM"
+         signal_and_wait TERM "$SMOKE_TERM_GRACE_SECS" "$target"; } \
+    || fail "core smoke harness (pid $pid) survived SIGINT and SIGTERM" 66
+  rm -f "$pid_file"
+}
+
+if [[ "$ACTION" == "down" ]]; then
+  stop_smoke_harness
+  # dapp.env is regenerated from the record by every other action; `down` has
+  # only whatever the last one left. The compose file's `:?` guards interpolate
+  # even for `down`, so without an env file they get placeholders `down` never
+  # uses.
+  down_env=(env INDEXER_GATEWAY=teardown INDEXER_VAULT=teardown VITE_GATEWAY_ADDRESS=teardown
+            VITE_VAULT_ADDRESS=teardown VITE_GATEWAY_EXPECTED_CODE_HASH=teardown)
+  down_env_file=()
+  if [[ -f "$OUT_DIR/dapp.env" ]]; then down_env=(env); down_env_file=(--env-file "$OUT_DIR/dapp.env"); fi
+  "${down_env[@]}" COMPOSE_PROFILES=receipt-fixtures docker compose --project-name "$DAPP_PROJECT" \
+    ${down_env_file[@]+"${down_env_file[@]}"} -f "$DAPP_COMPOSE" down \
+    || fail "dapp stack down failed" 66
+  if [[ "$CHAIN_BACKEND" == "anvil" ]]; then
+    # The chain is the smoke harness process stopped above; it removes the
+    # docker network it created on its way out. There is no chain stack here.
+    info "chain backend anvil: the smoke harness owns the chain; no chain compose stack to stop"
+  else
+    GETH_RPC_PORT="$RPC_PORT" docker compose --project-name "$CHAIN_PROJECT" -f "$CHAIN_COMPOSE" down \
+      || fail "chain stack down failed" 66
+  fi
+  info "down done"
+  exit 0
 fi
 
 # ─── Record validation (fail before any docker action) ───────────────────────
@@ -373,30 +460,6 @@ case "$ACTION" in
     chain_up
     compose "$DAPP_PROJECT" "$DAPP_COMPOSE" -f "$OUT_DIR/dapp.images.override.yaml" up --no-build -d \
       || fail "dapp stack up failed" 66
-    ;;
-  down)
-    if [[ -f "$OUT_DIR/core-smoke.pid" ]]; then
-      smoke_pid="$(cat "$OUT_DIR/core-smoke.pid")"
-      if [[ "$smoke_pid" =~ ^[0-9]+$ ]] && kill -0 "$smoke_pid" 2>/dev/null; then
-        kill -INT "$smoke_pid"
-        for _attempt in $(seq 1 60); do
-          kill -0 "$smoke_pid" 2>/dev/null || break
-          sleep 1
-        done
-        kill -0 "$smoke_pid" 2>/dev/null && fail "core smoke harness did not stop" 66
-      fi
-      rm -f "$OUT_DIR/core-smoke.pid"
-    fi
-    COMPOSE_PROFILES=receipt-fixtures compose "$DAPP_PROJECT" "$DAPP_COMPOSE" down \
-      || fail "dapp stack down failed" 66
-    if [[ "$CHAIN_BACKEND" == "anvil" ]]; then
-      # The chain is the smoke harness process signalled above; it removes the
-      # docker network it created on its way out. There is no chain stack here.
-      info "chain backend anvil: the smoke harness owns the chain; no chain compose stack to stop"
-    else
-      GETH_RPC_PORT="$RPC_PORT" docker compose --project-name "$CHAIN_PROJECT" -f "$CHAIN_COMPOSE" down \
-        || fail "chain stack down failed" 66
-    fi
     ;;
 esac
 
