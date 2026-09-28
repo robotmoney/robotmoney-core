@@ -88,6 +88,31 @@ Compiler run failed:
 Error (7576): Undeclared identifier.
 EOF
 
+# Real shape from PR #1411's own CI run (job 109076796558): a sharedbackend
+# RPC failure deep in a call trace bubbles up as a bare "EvmError: Revert"
+# with no reason text forge can attach to the [FAIL: ...] bracket. The
+# transport diagnostic that actually explains it prints separately, above
+# the trace/Suite-result block.
+cat >"$T/bare_revert_provider.txt" <<'EOF'
+Ran 4 tests for contracts/test/AerodromeAssetPositionAdapter.t.sol:AerodromeAssetPositionAdapterForkTest
+ERROR sharedbackend: Failed to send/recv `basic` err=failed to get account for 0x0AD08370c76Ff426F534bb2AFFD9b5555338ee68: Max retries exceeded HTTP error 429 with body: {"jsonrpc":"2.0","error":{"code":-32016,"message":"over rate limit"},"id":109}
+[FAIL: EvmError: Revert] test_fork_deploySwapsUsdcToWethAndPricesViaTwap() (block: 51915757) (gas: 7370)
+[FAIL: EvmError: Revert] test_fork_navDeviationGuardRevertsOnManipulatedSpot() (block: 51915757) (gas: 546203)
+[FAIL: EvmError: Revert] test_fork_roundTripWithdrawAllReturnsUsdc() (block: 51915757) (gas: 7454)
+[FAIL: EvmError: Revert] test_fork_withdrawRevertsBelowSlippageFloor() (block: 51915757) (gas: 7520)
+Suite result: FAILED. 0 passed; 4 failed; 0 skipped; finished in 8.35s (29.17s CPU time)
+EOF
+
+# Same bare "EvmError: Revert" bracket shape, but with no transport
+# diagnostic anywhere in the log: a genuine no-message revert() bug. Must
+# stay a test failure, never retried -- proves the bare-revert heuristic
+# does not just wave every unexplained revert through as "provider".
+cat >"$T/bare_revert_real_bug.txt" <<'EOF'
+Ran 1 test for contracts/test/AerodromeAssetPositionAdapter.t.sol:AerodromeAssetPositionAdapterForkTest
+[FAIL: EvmError: Revert] test_fork_withdrawRevertsBelowSlippageFloor() (block: 51915757) (gas: 7520)
+Suite result: FAILED. 0 passed; 1 failed; 0 skipped; finished in 8.35s (29.17s CPU time)
+EOF
+
 # Stub forge: appends the FORK_RPC_URL it was given to $T/calls, then replays
 # the file named by the next line of $STUB_SCRIPT (the last line repeats).
 cat >"$T/forge" <<EOF
@@ -171,6 +196,18 @@ test_compile_failure_is_harness() {
   [ "$(status)" = 30 ] && classification harness && [ "$(calls)" = 1 ]
 }
 
+test_bare_revert_with_transport_diagnostic_is_provider() {
+  RMPC_FORK_RPC_URL_RAW="" FORK_RPC_ATTEMPTS=2 run "bare_revert_provider 1" "ok 0"
+  [ "$(status)" = 0 ] && classification passed && [ "$(calls)" = 2 ] \
+    && grep -q '::warning title=Fork RPC flake recovered' "$T/out"
+}
+
+test_bare_revert_without_transport_diagnostic_is_test_not_retried() {
+  RMPC_FORK_RPC_URL_RAW="" run "bare_revert_real_bug 1" "ok 0"
+  [ "$(status)" = 10 ] && classification test && [ "$(calls)" = 1 ] \
+    && grep -q '::error title=Fork test failure, not an RPC failure' "$T/out"
+}
+
 test_configured_endpoint_only_and_never_printed() {
   local secret="https://base-mainnet.g.alchemy.invalid/v2/super-secret-token"
   RMPC_FORK_RPC_URL_RAW="$secret" ECHO_URL=1 FORK_RPC_ATTEMPTS=2 run "provider 1"
@@ -224,6 +261,8 @@ run_test "provider failure retries across public endpoints, then red" test_provi
 run_test "archive-token and FatalExternalError are provider failures" test_archive_and_fatal_external_are_provider
 run_test "recovered provider flake passes with a named warning" test_recovered_flake_passes_with_warning
 run_test "compile failure is a harness failure, not retried" test_compile_failure_is_harness
+run_test "bare EvmError revert with a transport diagnostic is retried as provider" test_bare_revert_with_transport_diagnostic_is_provider
+run_test "bare EvmError revert with no transport diagnostic stays a test failure" test_bare_revert_without_transport_diagnostic_is_test_not_retried
 run_test "configured endpoint is used alone and never printed" test_configured_endpoint_only_and_never_printed
 run_test "unset variable falls back to the archive-capable public default" test_unset_variable_uses_first_public_default
 run_test "origin drops credentials, path and query" test_origin_drops_credentials_path_and_query

@@ -118,11 +118,34 @@ PROVIDER = re.compile(
     re.IGNORECASE,
 )
 
+# A bubbled revert with no reason text of its own -- forge prints only
+# "EvmError: Revert" / "EvmError: FatalExternalError" in the [FAIL: ...]
+# bracket, with nothing to attach as a reason -- is ambiguous from the
+# bracket alone: a genuine no-message revert() and an RPC call that failed
+# deep in a call trace (e.g. sharedbackend timing out mid-trace, seen on
+# PR #1411's own CI run: "Failed to send/recv `basic` ... Max retries
+# exceeded HTTP error 429") render identically there. Attribute it to the
+# provider only when the full log also carries an explicit transport
+# diagnostic outside the bracket; a real contract bug never prints one.
+BARE_REVERT = re.compile(r"^(?:EvmError: )?(?:Revert|FatalExternalError)$")
+TRANSPORT_DIAGNOSTIC = re.compile(
+    r"sharedbackend.*?(?:Max retries exceeded|failed to send/recv)"
+    r"|Max retries exceeded HTTP error \d",
+    re.IGNORECASE,
+)
+
 # One reason per failing test, including multi-line reasons (forge wraps the
 # provider's HTTP diagnostics inside the brackets).
 reasons = re.findall(r"\[FAIL(?:: (.*?))?\] [A-Za-z_][A-Za-z0-9_]*\(", text, re.S)
 if reasons:
-    if all(r and PROVIDER.search(r) for r in reasons):
+    def is_provider_reason(r):
+        if not r:
+            return False
+        if PROVIDER.search(r):
+            return True
+        return bool(BARE_REVERT.match(r.strip())) and bool(TRANSPORT_DIAGNOSTIC.search(text))
+
+    if all(is_provider_reason(r) for r in reasons):
         print("provider")
     else:
         print("test")
