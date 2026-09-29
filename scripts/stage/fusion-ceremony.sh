@@ -431,6 +431,17 @@ safe_control_reverts() {
 
 verify_record() {
   [[ -f "$RECORD" ]] || die "record not found: $RECORD" 65
+
+  # Keystores must be present to sign Safe calls and prove governance control.
+  # If keys are gone (discarded after a prior QA run), verification cannot
+  # proceed and the chain must be rebuilt via chain down/chain up.
+  local keydir who
+  keydir="$(rec .ephemeral.keystore_dir)" || die "record has no ephemeral.keystore_dir" 65
+  for who in "${SAFE_OWNER_ROLES[@]}" "${SAFE_NON_OWNER_ROLES[@]}" submitter approver; do
+    [[ -f "$keydir/$who" && -f "$keydir/$who.pw" ]] \
+      || { check "ceremony keys present: $who keystores" 0 "$who keystore missing: $keydir/$who"; return 1; }
+  done
+
   local gateway router governance receipt ic_policy timelock safe deployer submitter approver voter_a voter_b emergency
   gateway="$(rec .addresses.gateway)"; router="$(rec .addresses.router)"
   governance="$(rec .addresses.governance)"; receipt="$(rec .addresses.consensus_receipt)"
