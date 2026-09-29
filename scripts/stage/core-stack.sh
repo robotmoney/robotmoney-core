@@ -425,7 +425,10 @@ governance_preflight() {
   echo "ok: the booted chain meets every ceremony precondition"
 }
 
-governance_ensure() { exec bash "$CEREMONY" ensure --out-dir "$OUT_DIR" --summary "$SUMMARY" --rpc-url "$RPC_URL"; }
+governance_ensure() {
+  info "calling ceremony ensure with RPC_URL=$RPC_URL"
+  exec bash "$CEREMONY" ensure --out-dir "$OUT_DIR" --summary "$SUMMARY" --rpc-url "$RPC_URL"
+}
 
 governance_verify() {
   local rc=0 keydir out

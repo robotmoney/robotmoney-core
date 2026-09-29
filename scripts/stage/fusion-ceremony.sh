@@ -153,6 +153,9 @@ while (( $# )); do
   esac
 done
 
+# Debug: show what RPC URL we're using
+info "ceremony received RPC_URL=$RPC_URL (default was http://127.0.0.1:18545)"
+
 ADMIN_ROLE="$("$CAST" keccak "ADMIN_ROLE" 2>/dev/null || true)"
 DEFAULT_ADMIN_ROLE="0x0000000000000000000000000000000000000000000000000000000000000000"
 AGENT_ROLE="$("$CAST" keccak "AGENT_ROLE" 2>/dev/null || true)"
