@@ -124,6 +124,20 @@ jobs:
       - name: cargo test -p watchdog --lib (unit tests, no Docker)
         run: cargo test -p watchdog --lib -- --nocapture
 
+      # Issue #1378: the stage supervisor must page a crash-looping, hung, or
+      # startup-failed watchdog instead of restarting it silently. Runs the real
+      # supervisor against stub watchdog/watchdog-liveness/curl executables with
+      # one-second intervals (~35s). No Docker, no network, no root.
+      - name: Stage watchdog supervisor liveness paging (issue #1378)
+        run: bash scripts/stage/test-fusion-watchdog-supervisor.sh
+
+      # Issue #1378 review: the OnFailure= pager (fusion-watchdog-failed.service)
+      # used to embed a JSON payload directly in ExecStart=, which systemd
+      # mangles before exec -- the pager silently failed to page. Runs the
+      # extracted alert script against a real local HTTP receiver.
+      - name: Stage watchdog OnFailure alert delivery (issue #1378)
+        run: bash scripts/stage/tests/test-fusion-watchdog-supervisor-failed-alert.sh
+
   pg:
     name: watchdog-integration
     runs-on: ubuntu-latest
@@ -132,7 +146,8 @@ jobs:
     # system-correctness is deferred until the PR is ready for review.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     # 30 (was 20): issue #1282 added cursor_and_volume (7 tests, ~25s locally),
-    # each test booting its own Postgres testcontainer.
+    # each test booting its own Postgres testcontainer. Issue #1378's liveness
+    # target (6 tests, ~90s locally) fits inside the same budget.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -184,3 +199,15 @@ jobs:
           bash .github/scripts/cargo_test_require_executed.sh \
             -p watchdog \
             --test cursor_and_volume -- --test-threads=1 --nocapture
+
+      # Issue #1378: a dead watchdog must be distinguishable from a quiet
+      # market. Drives the real `watchdog` and `watchdog-liveness` binaries
+      # against a Postgres testcontainer: healthy through a quiet market longer
+      # than the staleness limit, stale within a bounded time after SIGKILL,
+      # and an invalid pauser key exits at startup and reads `missing`.
+      # Serial: each test times a daemon; ~90s locally.
+      - name: Watchdog liveness heartbeat integration test (issue #1378)
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p watchdog \
+            --test liveness -- --test-threads=1 --nocapture

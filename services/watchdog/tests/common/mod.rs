@@ -33,6 +33,9 @@ use tokio::net::TcpListener;
 /// Fixture wrapping a live Postgres container.
 pub struct PgFixture {
     pub pool: PgPool,
+    /// Connection URL for the same database, for tests that spawn the
+    /// `watchdog` / `watchdog-liveness` binaries as separate processes.
+    pub url: String,
     _container: ContainerAsync<Postgres>,
 }
 
@@ -91,6 +94,7 @@ pub async fn pg_fixture() -> PgFixture {
 
     PgFixture {
         pool,
+        url,
         _container: container,
     }
 }

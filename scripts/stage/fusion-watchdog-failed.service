@@ -1,0 +1,17 @@
+# OnFailure target for fusion-watchdog.service (issue #1378).
+#
+# Fires when systemd stops restarting the watchdog supervisor. At that point
+# nothing on this host is watching the gateway, and nothing else on this host
+# will say so: page the same receiver the supervisor uses.
+#
+# The paging logic lives in a standalone script, not an inline command here:
+# systemd un-escapes `\"` in ExecStart= before exec'ing it, so a JSON payload
+# quoted directly in this line reaches the shell malformed and whitespace-
+# split. See fusion-watchdog-supervisor-failed-alert.sh for the history.
+[Unit]
+Description=Page that the Fusion watchdog supervisor failed
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/fusion-watchdog.env
+ExecStart=/opt/fusion-stage/fusion-watchdog-supervisor-failed-alert.sh

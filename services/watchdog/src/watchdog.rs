@@ -383,6 +383,20 @@ pub async fn store_cursor(
     Ok(())
 }
 
+/// Refresh the cursor heartbeat without changing its progress position.
+///
+/// A no-new-block poll is still evidence that the watchdog is running and able
+/// to read its database. Keeping this timestamp fresh makes quiet operation
+/// distinguishable from a stopped process for the external liveness monitor.
+pub async fn touch_cursor(pool: &PgPool, chain_id: i64) -> Result<(), WatchdogError> {
+    sqlx::query("UPDATE watchdog_cursor SET updated_at = now() WHERE chain_id = $1")
+        .bind(chain_id)
+        .execute(pool)
+        .await
+        .map_err(WatchdogError::Db)?;
+    Ok(())
+}
+
 /// Evaluate **every** block newly indexed since the watchdog's cursor, advancing
 /// the cursor past each block it successfully evaluates (scan finding WD-6).
 ///
@@ -409,6 +423,7 @@ pub async fn run_cycles_since_cursor(
 
     if from_block > latest_indexed_block {
         // Nothing new since last cycle.
+        touch_cursor(pool, chain_id).await?;
         return Ok(CycleResult::NoData);
     }
 

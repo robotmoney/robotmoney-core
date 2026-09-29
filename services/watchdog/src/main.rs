@@ -25,8 +25,10 @@
 //! # Startup validation
 //!
 //! The daemon validates the configuration on startup and exits non-zero if any
-//! threshold is absent or zero (security model §9 requirement).  Operators should
-//! treat a non-zero exit as a misconfiguration alert.
+//! threshold is absent or zero, or if a pause-mode pauser key is invalid
+//! (security model §9 requirement). Operators should treat a non-zero exit as a
+//! misconfiguration alert; `watchdog-liveness` reports the resulting missing
+//! cursor heartbeat to the external monitor.
 //!
 //! # SLA
 //!
