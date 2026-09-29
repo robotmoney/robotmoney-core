@@ -155,6 +155,8 @@ done
 
 # Debug: show what RPC URL we're using
 info "ceremony: RPC_URL=$RPC_URL (default was http://127.0.0.1:18545)"
+info "ceremony: attempting connectivity test with cast..."
+"$CAST" chain-id --rpc-url "$RPC_URL" >/dev/null 2>&1 && info "ceremony: RPC is reachable" || info "ceremony: RPC is NOT reachable at $RPC_URL"
 info "ceremony: SUMMARY file is $SUMMARY"
 if [[ -f "$SUMMARY" ]]; then
   info "ceremony: SUMMARY file contains: $(head -5 "$SUMMARY")"
