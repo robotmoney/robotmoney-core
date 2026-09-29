@@ -1057,7 +1057,8 @@ run_ceremony() {
   cp "$out" "$OUT_DIR/fusion-stage-record.json"
   info "wrote $out"
   UNRECORDED_KEYDIR=""
-  trap - EXIT INT TERM
+  rm -rf "$work"
+  trap - RETURN EXIT INT TERM
 
   RECORD="$out"
   handover_vaults
