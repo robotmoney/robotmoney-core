@@ -11,12 +11,15 @@
 //! fails a deployment's explicit migrate step instead of crash-looping a
 //! long-running container against a half-migrated database.
 //!
-//! Because the boot path never migrates, it instead *checks* (issue #1392):
-//! the highest migration version embedded in this binary must equal the highest
-//! version applied in `_sqlx_migrations`, or the process refuses to start and
-//! names both versions. That is the loud failure auto-migration used to provide;
-//! without it an indexer on a stale schema loops silently and no healthcheck
-//! notices.
+//! Because the boot path never migrates, it instead *checks* (issue #1392,
+//! tightened to a full-set comparison by issue #1429): the applied migration
+//! set in `_sqlx_migrations` must equal the embedded set, version **and**
+//! checksum, or the process refuses to start and names the first divergence —
+//! a version embedded but not applied, an applied version this binary does
+//! not embed, or a version applied on both sides whose content has since
+//! changed (an already-applied migration edited in place). That is the loud
+//! failure auto-migration used to provide; without it an indexer on a stale
+//! or divergent schema loops silently and no healthcheck notices.
 
 use alloy_primitives::Address;
 use clap::Parser;
@@ -172,15 +175,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => {
             // Emit the operator-facing message and exit non-zero. Returning the
             // error from `main` would print its *Debug* form instead —
-            // `SchemaVersionMismatch { embedded: 15, applied: "14" }` — which
-            // names the versions but not what to do about them.
+            // `SchemaDivergent(ChecksumMismatch { version: 15, .. })` — which
+            // names the divergence but not what to do about it.
             error!("{e}");
             std::process::exit(1);
         }
     };
+    // Issue #1429: this line used to claim a match the guard had not checked —
+    // it compared maxima only, so an edited-in-place migration or a row deleted
+    // below the maximum was announced here as a match and then failed every
+    // tick. It now reports what `compare_schema` actually established.
     info!(
         schema_version,
-        "schema version matches embedded migrations; starting indexer"
+        "applied migration set matches the embedded one (version and checksum); \
+         starting indexer"
     );
 
     // clap enforces these three via `required_unless_present = "migrate_only"`,

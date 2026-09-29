@@ -229,7 +229,7 @@ Everything in §1 plus:
 |---------|------|
 | `postgres` | Explorer persistence |
 | `explorer-migrate` | One-shot `indexer --migrate-only`: applies the explorer schema, then exits. `explorer-indexer` and `explorer-api` both wait on it with `service_completed_successfully`, so a failing migration stops the stack instead of leaving either service running against a half-migrated database (issue #1359) |
-| `explorer-indexer` | Chain event indexer. Does **not** migrate on boot — instead it **refuses to start** unless the highest migration version embedded in the binary equals the highest version applied in `_sqlx_migrations`, and the refusal names both versions (issue #1392). A container that exits with `schema version mismatch` needs its migrate step run (or a binary matching the database), not a restart |
+| `explorer-indexer` | Chain event indexer. Does **not** migrate on boot — instead it **refuses to start** unless every `(version, checksum)` row applied in `_sqlx_migrations` matches the migration set embedded in the binary (issues #1392, #1429). The refusal names the first diverging migration and its shape: `is embedded in this binary but is not applied` needs the migrate step run; `its content has changed since` means an applied migration was edited in place; `this binary does not embed it` means a rollback to an older image, which `--migrate-only` cannot fix. None of these is fixed by a restart |
 | `explorer-api` | REST API serving indexed data |
 | `dapp` | Built Vite bundle served by nginx |
 
