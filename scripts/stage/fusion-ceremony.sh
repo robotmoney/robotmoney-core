@@ -1006,7 +1006,7 @@ run_ceremony() {
 
   local work safe owner_addrs=() signers_json
   work="$(mktemp -d /tmp/fusion-ceremony.XXXXXX)"
-  trap "rm -rf '$work'" RETURN
+  trap "rm -rf $work" RETURN
   for role in "${SAFE_OWNER_ROLES[@]}"; do owner_addrs+=("${addr[$role]}"); done
   CREATE_SAFE_SENDER=("${as_approver[@]}")
   safe="$(create_safe "$("$CAST" keccak "fusion-stage-safe-$run_id")" "${owner_addrs[@]}")"
