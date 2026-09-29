@@ -153,6 +153,19 @@ while (( $# )); do
   esac
 done
 
+# Debug: show what RPC URL we're using
+info "ceremony: RPC_URL=$RPC_URL (default was http://127.0.0.1:18545)"
+info "ceremony: attempting connectivity test with cast..."
+"$CAST" chain-id --rpc-url "$RPC_URL" >/dev/null 2>&1 && info "ceremony: RPC is reachable" || info "ceremony: RPC is NOT reachable at $RPC_URL"
+info "ceremony: SUMMARY file is $SUMMARY"
+if [[ -f "$SUMMARY" ]]; then
+  info "ceremony: SUMMARY file contains: $(head -5 "$SUMMARY")"
+  if grep -q "rpc_url=" "$SUMMARY" 2>/dev/null; then
+    rpc_from_summary="$(grep "rpc_url=" "$SUMMARY" | head -1)"
+    info "ceremony: found in SUMMARY: $rpc_from_summary"
+  fi
+fi
+
 ADMIN_ROLE="$("$CAST" keccak "ADMIN_ROLE" 2>/dev/null || true)"
 DEFAULT_ADMIN_ROLE="0x0000000000000000000000000000000000000000000000000000000000000000"
 AGENT_ROLE="$("$CAST" keccak "AGENT_ROLE" 2>/dev/null || true)"
@@ -993,7 +1006,7 @@ run_ceremony() {
 
   local work safe owner_addrs=() signers_json
   work="$(mktemp -d /tmp/fusion-ceremony.XXXXXX)"
-  trap 'rm -rf "$work"' RETURN
+  trap "rm -rf $work" RETURN
   for role in "${SAFE_OWNER_ROLES[@]}"; do owner_addrs+=("${addr[$role]}"); done
   CREATE_SAFE_SENDER=("${as_approver[@]}")
   safe="$(create_safe "$("$CAST" keccak "fusion-stage-safe-$run_id")" "${owner_addrs[@]}")"
