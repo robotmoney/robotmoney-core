@@ -6,7 +6,10 @@
 #
 # What this script does (developer-run; NOT executed in CI per run):
 #
-#   1. Reads RMPC_FORK_RPC_URL from env (default: https://base-rpc.publicnode.com).
+#   1. Reads RMPC_FORK_RPC_URL from env (default: the first public endpoint in
+#      scripts/devnet/fork-rpc-lib.sh, which serves archive state by block
+#      number; issue #1239). Only the endpoint's origin is logged or recorded
+#      in the manifest, so a keyed URL never lands in a log or a commit.
 #   2. Queries the upstream for the current Base block number.
 #   3. Boots a local Anvil forking that block and chain-id 8453.
 #   4. Runs contracts/script/Deploy.s.sol so the gateway/vault/USDC
@@ -31,7 +34,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-RMPC_FORK_RPC_URL="${RMPC_FORK_RPC_URL:-https://base-rpc.publicnode.com}"
+# shellcheck source=scripts/devnet/fork-rpc-lib.sh
+. "$REPO_ROOT/scripts/devnet/fork-rpc-lib.sh"
+RMPC_FORK_RPC_URL="${RMPC_FORK_RPC_URL:-$(fork_rpc_default_endpoint)}"
+UPSTREAM_ORIGIN="$(fork_rpc_origin "$RMPC_FORK_RPC_URL")"
 FORK_CHAIN_ID="${FORK_CHAIN_ID:-8453}"
 ANVIL_PORT="${ANVIL_PORT:-18545}"
 ANVIL_HOST="127.0.0.1"
@@ -73,7 +79,7 @@ anvil_set() {
 }
 
 # 1. Look up the current upstream block number.
-echo "[snapshot] querying upstream block number from $RMPC_FORK_RPC_URL"
+echo "[snapshot] querying upstream block number from $UPSTREAM_ORIGIN"
 UPSTREAM_BLOCK_HEX=$(curl -sS -X POST -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
   "$RMPC_FORK_RPC_URL" | jq -r '.result')
@@ -571,7 +577,7 @@ jq -n \
   --arg chain_id "$FORK_CHAIN_ID" \
   --arg fork_block "$PIN_BLOCK" \
   --arg captured_at "$CAPTURED_AT" \
-  --arg upstream_rpc "$RMPC_FORK_RPC_URL" \
+  --arg upstream_rpc "$UPSTREAM_ORIGIN" \
   --arg state_file "base-${PIN_BLOCK}.anvil-state" \
   --argjson deployment "$DEPLOYMENT_JSON" \
   '{
