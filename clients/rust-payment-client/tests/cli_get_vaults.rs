@@ -667,6 +667,142 @@ async fn get_vault_address_total_assets_revert_is_null() {
     assert!(v["data"]["share_price"].is_null(), "{v}");
 }
 
+/// Sibling of [`get_vault_address_total_assets_revert_is_null`] for the
+/// *other* accounting sub-read in registry mode (issue #1427).
+///
+/// `read_vault_from_registry` records `total_assets` and `total_supply`
+/// failures in two independent `record_err` arms, same shape as `read_vault`.
+/// Without this test a regression that dropped or misattributed the
+/// registry-mode `total_supply` error record would ship silently. This also
+/// covers #1390's null-not-zero fix applied to `total_supply`: a failed
+/// totalSupply read must serialise as `null`, never as the in-domain
+/// zero-supply value.
+#[tokio::test]
+async fn get_vault_address_total_supply_revert_is_null() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let block_no = 0x42u64;
+
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{chain_id:x}")))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{block_no:x}")))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            VaultRegistry::getVaultCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_vault_record(
+            "Robot Money Vault",
+            USDC,
+            1_715_000_000,
+            0, // Active
+        )))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            MockVault::assetCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address(USDC)))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    let mut w = [0u8; 32];
+    w[31] = 6u8;
+    let dec_hex = format!("0x{}", ahex::encode(w));
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            MockVault::decimalsCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&dec_hex))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // totalAssets stays readable and non-zero, so `null` share_price can only
+    // come from the failed totalSupply read.
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            MockVault::totalAssetsCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(U256::from(2_000_000u64))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // vault.totalSupply() reverts.
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            MockVault::totalSupplyCall,
+        >()))
+        .with_status(200)
+        .with_body(r#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}"#)
+        .expect_at_least(0)
+        .create_async()
+        .await;
+
+    let fix = RegistryFixture::build(&server.url(), chain_id);
+    let out = rmpc()
+        .args([
+            "get-vault",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "--address",
+            &format!("{VAULT:#x}"),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["partial"], true, "{v}");
+    let errs = v["errors"].as_array().unwrap();
+    assert!(
+        errs.iter().any(|e| e["field"] == "total_supply"),
+        "expected a total_supply error entry: {v}"
+    );
+    // Not misattributed to the sibling field.
+    assert!(
+        !errs.iter().any(|e| e["field"] == "total_assets"),
+        "total_assets read succeeded and must not appear in errors[], got {errs:?}"
+    );
+    assert!(
+        v["data"]["total_supply"].is_null(),
+        "failed totalSupply must be null in registry mode too: {v}"
+    );
+    // Sibling fields still populated.
+    assert_eq!(v["data"]["name"], "Robot Money Vault");
+    assert_eq!(v["data"]["status"], "active");
+    assert_eq!(v["data"]["total_assets"].as_str().unwrap(), "2000000");
+    assert_eq!(
+        v["data"]["asset"].as_str().unwrap().to_lowercase(),
+        format!("{USDC:#x}")
+    );
+    assert_eq!(v["data"]["decimals"], 6);
+    assert!(v["data"]["share_price"].is_null(), "{v}");
+}
+
 /// Unregistered address: getVault reverts → command exits non-zero.
 #[tokio::test]
 async fn get_vault_address_unregistered_exits_nonzero() {
