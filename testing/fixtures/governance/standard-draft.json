@@ -1,0 +1,4 @@
+{"ok":true,"drafts":[{"receipt_id":"0xb5f690872e23268f6e50cbf0f2800fd27721400059e8752bc62888d5864966f6","session_id":"a31ecf60-bb8f-44c0-8b69-23d3e9c2562f","subject_id":"robotmoney-vault","status":"ready_for_review","vaults":[{"symbol":"rmAGENT","vault":"0xc52d2e547ab11ca62988e56fe821704644391f3a","weight_bps":2500},{"symbol":"rmUSDC","vault":"0xb4b46bdaa835f8e4b4d8e208b6559cd267851051","weight_bps":2500},{"symbol":"rmPROTO","vault":"0x2ab8518e671362be35c37c81e2a773d1afd0f9da","weight_bps":2500},{"symbol":"rmRWA","vault":"0xa6b3f5777a524792ed714c697aa50e52fc33d96f","weight_bps":2500}],"excluded_vaults":[],"fallback_applied":false,"propose_calldata":"EOF
+echo -n "$CALLDATA" >> /drive2/home/lucas/robotmoney/robotmoney-core/testing/fixtures/governance/standard-draft.json
+cat >> /drive2/home/lucas/robotmoney/robotmoney-core/testing/fixtures/governance/standard-draft.json << 'EOF'
+"}]}
