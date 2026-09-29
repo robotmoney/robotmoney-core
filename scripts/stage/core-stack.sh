@@ -426,8 +426,12 @@ governance_preflight() {
 }
 
 governance_ensure() {
-  info "calling ceremony ensure with RPC_URL=$RPC_URL"
-  exec bash "$CEREMONY" ensure --out-dir "$OUT_DIR" --summary "$SUMMARY" --rpc-url "$RPC_URL"
+  info "governance_ensure: RPC_URL=$RPC_URL OUT_DIR=$OUT_DIR SUMMARY=$SUMMARY"
+  info "governance_ensure: calling: bash $CEREMONY ensure --out-dir $OUT_DIR --summary $SUMMARY --rpc-url $RPC_URL"
+  bash "$CEREMONY" ensure --out-dir "$OUT_DIR" --summary "$SUMMARY" --rpc-url "$RPC_URL"
+  rc=$?
+  info "governance_ensure: ceremony returned $rc"
+  return $rc
 }
 
 governance_verify() {

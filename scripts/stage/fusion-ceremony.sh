@@ -154,7 +154,15 @@ while (( $# )); do
 done
 
 # Debug: show what RPC URL we're using
-info "ceremony received RPC_URL=$RPC_URL (default was http://127.0.0.1:18545)"
+info "ceremony: RPC_URL=$RPC_URL (default was http://127.0.0.1:18545)"
+info "ceremony: SUMMARY file is $SUMMARY"
+if [[ -f "$SUMMARY" ]]; then
+  info "ceremony: SUMMARY file contains: $(head -5 "$SUMMARY")"
+  if grep -q "rpc_url=" "$SUMMARY" 2>/dev/null; then
+    rpc_from_summary="$(grep "rpc_url=" "$SUMMARY" | head -1)"
+    info "ceremony: found in SUMMARY: $rpc_from_summary"
+  fi
+fi
 
 ADMIN_ROLE="$("$CAST" keccak "ADMIN_ROLE" 2>/dev/null || true)"
 DEFAULT_ADMIN_ROLE="0x0000000000000000000000000000000000000000000000000000000000000000"
