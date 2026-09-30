@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f48839de85d7f70aa47a13db9bf253fdacf20af1/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83eab89b8819bc1dd25ef3cee4ffbdd7220d6f63/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** Script
 
@@ -51,10 +51,15 @@ SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + EXECUTOR)
 EMERGENCY_ADDRESS      — independent hot key that receives the vault
 EMERGENCY_ROLE (must differ from the deployer
 EOA; ACL-1 / F-01)
-TIMELOCK_MIN_DELAY     — minimum delay in seconds (e.g. 172800 = 2 days)
+TIMELOCK_MIN_DELAY     — minimum delay in seconds. Must be >= 172800
+(48 hours, security-model.md §4) unless
+ALLOW_SHORT_TIMELOCK_DELAY=true (devnets only).
 
 Optional env vars:
-DEPLOYMENT_OUT         — output JSON path; default artifacts/timelock.json
+EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches
+(set 8453 for Base mainnet)
+ALLOW_SHORT_TIMELOCK_DELAY — `true` lifts the 48-hour floor. Devnets only.
+DEPLOYMENT_OUT         — output JSON path; default deployments/timelock-&lt;chain_id>.json
 IC_POLICY_ADDRESS      — InvestmentCommitteePolicy (issue #1319, one-
 ceremony rule #1247 AC10 / INV-3). When set,
 the same grant→verify→revoke handover runs on
@@ -137,7 +142,42 @@ OZ `AccessControl.DEFAULT_ADMIN_ROLE` is `bytes32(0)`.
 bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 ```
 
+### MIN_PRODUCTION_DELAY
+
+<i>
+
+security-model.md §4: production timelock delay floor, 48 hours.
+
+</i>
+
+```solidity
+uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
+```
+
 ## Functions
+
+<a id="_requireexpectedchain-string"></a>
+
+### _requireExpectedChain
+
+<i>
+
+When `&lt;prefix>EXPECTED_CHAIN_ID` is set, refuse to run against any
+other chain. `forge script --chain` does not refuse a wrong-chain
+RPC (tested), and the runbook policy says every broadcasting script
+checks the chain itself.
+
+</i>
+
+```solidity
+function _requireExpectedChain(string memory prefix) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
 
 <a id="run"></a>
 

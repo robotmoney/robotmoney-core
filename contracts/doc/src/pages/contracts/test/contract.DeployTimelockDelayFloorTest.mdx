@@ -1,0 +1,52 @@
+---
+title: "DeployTimelockDelayFloorTest"
+---
+
+# DeployTimelockDelayFloorTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83eab89b8819bc1dd25ef3cee4ffbdd7220d6f63/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
+
+<i>
+
+devops review 2026-09-30: inputs the ceremony used to accept silently.
+One contract per test: each mutates env vars the base setUp also sets,
+and forge runs tests in parallel over a process-wide environment.
+
+</i>
+
+## Functions
+
+<a id="_prefix"></a>
+
+### _prefix
+
+<i>
+
+Overridden by subclasses so tests that mutate shared env vars
+(vm.setEnv is process-wide) each get their own namespace.
+
+</i>
+
+```solidity
+function _prefix() internal pure override returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="test_run_revertsbelowdelayfloor"></a>
+
+### test_run_revertsBelowDelayFloor
+
+R-04: a delay under 48 hours is refused on the broadcast path
+unless the devnet override is set explicitly.
+
+```solidity
+function test_run_revertsBelowDelayFloor() public;
+```
+

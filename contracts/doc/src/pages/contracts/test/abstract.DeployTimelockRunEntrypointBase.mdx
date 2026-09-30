@@ -1,0 +1,121 @@
+---
+title: "DeployTimelockRunEntrypointBase"
+description: "`run()` hands the AGENT_ADDRESSES list it reads to the handover (issue #1476). This drives run()'s own body, `_runFrom`, through the broadcast path against a Deploy.s.sol stack. Every env var it reads carries a prefix only this test sets, because env vars are process-wide and forge runs tests in parallel."
+---
+
+# DeployTimelockRunEntrypointBase
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83eab89b8819bc1dd25ef3cee4ffbdd7220d6f63/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** Test
+
+`run()` hands the AGENT_ADDRESSES list it reads to the handover
+(issue #1476). This drives run()'s own body, `_runFrom`, through
+the broadcast path against a Deploy.s.sol stack. Every env var it
+reads carries a prefix only this test sets, because env vars are
+process-wide and forge runs tests in parallel.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### AGENT_ROLE
+
+```solidity
+bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
+```
+
+### OUT_PATH
+
+```solidity
+string internal constant OUT_PATH = "/tmp/1476-run-entrypoint-manifest.json";
+```
+
+## State Variables
+
+### harness
+
+```solidity
+ManifestHarness internal harness;
+```
+
+### deployer
+
+```solidity
+address internal deployer;
+```
+
+### deployAgent
+
+```solidity
+address internal deployAgent = makeAddr("run-deploy-agent");
+```
+
+### submitter
+
+```solidity
+address internal submitter = makeAddr("run-stage-submitter");
+```
+
+### dep
+
+```solidity
+Deploy.Deployed internal dep;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+## Functions
+
+<a id="_prefix"></a>
+
+### _prefix
+
+<i>
+
+Overridden by subclasses so tests that mutate shared env vars
+(vm.setEnv is process-wide) each get their own namespace.
+
+</i>
+
+```solidity
+function _prefix() internal pure virtual returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_set-string-string"></a>
+
+### _set
+
+```solidity
+function _set(string memory name, string memory value) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+| value | `string` |  |
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
