@@ -55,6 +55,12 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 ///        AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256, default = 100_000 * 1e6
 ///        DEPLOYMENT_OUT         — output JSON path,
 ///                                 default = "deployments/<chain_id>.json"
+///        EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches (8453 on Base)
+///        FEE_RECIPIENT_ADDRESS  — vault fee recipient, default ADMIN_ADDRESS (devnet only:
+///                                 a mainnet ceremony must name the treasury, never the deployer)
+///        VAULT_TVL_CAP          — default 10M USDC (devnet)
+///        VAULT_PER_DEPOSIT_CAP  — default 1M USDC (devnet)
+///        VAULT_EXIT_FEE_BPS     — default 0
 contract Deploy is Script {
     using stdJson for string;
 
@@ -113,15 +119,19 @@ contract Deploy is Script {
     uint256 public constant DEFAULT_MAX_WITHDRAW_PER_WINDOW = 100_000 * 1e6;
     /// @notice Default policy lifetime (30 days).
     uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
+    /// @notice Devnet vault TVL cap if `VAULT_TVL_CAP` is unset (10M USDC).
+    uint256 public constant DEFAULT_TVL_CAP = 10_000_000 * 1e6;
+    /// @notice Devnet per-deposit cap if `VAULT_PER_DEPOSIT_CAP` is unset (1M USDC).
+    uint256 public constant DEFAULT_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
 
     /// @notice Minimum seed deposit required before the vault is opened to the public.
     ///         Protects against ERC-4626 share-price inflation attacks on a zero-supply vault
     ///         even with `_decimalsOffset() == 18`.
     ///         See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
-    ///         TEMPORARY: lowered from 1,000 USDC to 1 USDC; see
-    ///         docs/future/review-usdc-seed.md for why and what reverting it
-    ///         requires — must be reverted before mainnet.
-    uint256 public constant SEED_DEPOSIT_AMOUNT = 1 * 1e6; // 1 USDC (6 decimals)
+    ///         Restored to 1,000 USDC (was 1 USDC for the retired Base Sepolia
+    ///         rehearsal; see docs/future/review-usdc-seed.md). The devnet seeds
+    ///         the deployer with enough USDC for this from genesis.
+    uint256 public constant SEED_DEPOSIT_AMOUNT = 1_000 * 1e6; // 1,000 USDC (6 decimals)
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys all contracts, and writes a JSON file.
     /// @return d Struct containing all deployed contract addresses and key parameters.
@@ -206,6 +216,9 @@ contract Deploy is Script {
         p.maxWithdrawPerPayment = DEFAULT_MAX_WITHDRAW_PER_PAYMENT;
         p.maxWithdrawPerWindow = DEFAULT_MAX_WITHDRAW_PER_WINDOW;
         p.usdcAddress = usdc_;
+        p.feeRecipient = admin_;
+        p.tvlCap = DEFAULT_TVL_CAP;
+        p.perDepositCap = DEFAULT_PER_DEPOSIT_CAP;
         d = _doDeploy(p);
         // In-process (no broadcast): addAdapter and authorizeAgent require
         // ADMIN_ROLE and DEFAULT_ADMIN_ROLE respectively, both held by d.admin.
@@ -245,6 +258,9 @@ contract Deploy is Script {
         p.maxWithdrawPerPayment = DEFAULT_MAX_WITHDRAW_PER_PAYMENT;
         p.maxWithdrawPerWindow = DEFAULT_MAX_WITHDRAW_PER_WINDOW;
         p.usdcAddress = usdc_;
+        p.feeRecipient = admin_;
+        p.tvlCap = DEFAULT_TVL_CAP;
+        p.perDepositCap = DEFAULT_PER_DEPOSIT_CAP;
         d = _doDeploy(p);
         vm.startPrank(d.admin);
         _authorizeDeployAgent(d, p);
@@ -268,9 +284,22 @@ contract Deploy is Script {
         ///      this to the canonical Base USDC ([`CANONICAL_BASE_USDC`]);
         ///      forge unit tests deploy a `TestERC20` helper.
         address usdcAddress;
+        /// @dev Vault economics. Defaults are the devnet values; a mainnet
+        ///      ceremony sets all four on its frozen sheet (devops review
+        ///      2026-09-30, R-01: the fee recipient used to be the deployer EOA,
+        ///      which the mainnet runbook retires right after the handover).
+        address feeRecipient;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
     }
 
     function _readEnvParams() internal view returns (Params memory p) {
+        uint256 expectedChain = _envOrDefault("EXPECTED_CHAIN_ID", 0);
+        require(
+            expectedChain == 0 || block.chainid == expectedChain,
+            "EXPECTED_CHAIN_ID does not match the RPC's chain id"
+        );
         p.admin = vm.envAddress("ADMIN_ADDRESS");
         p.pauser = vm.envAddress("PAUSER_ADDRESS");
         p.agent = vm.envAddress("AGENT_ADDRESS");
@@ -285,6 +314,10 @@ contract Deploy is Script {
         p.maxWithdrawPerWindow =
             _envOrDefault("AGENT_MAX_WITHDRAW_PER_WINDOW", DEFAULT_MAX_WITHDRAW_PER_WINDOW);
         p.usdcAddress = vm.envAddress("USDC_ADDRESS");
+        p.feeRecipient = vm.envOr("FEE_RECIPIENT_ADDRESS", p.admin);
+        p.tvlCap = _envOrDefault("VAULT_TVL_CAP", DEFAULT_TVL_CAP);
+        p.perDepositCap = _envOrDefault("VAULT_PER_DEPOSIT_CAP", DEFAULT_PER_DEPOSIT_CAP);
+        p.exitFeeBps = _envOrDefault("VAULT_EXIT_FEE_BPS", 0);
     }
 
     function _approveAndRegisterAdapters(Deployed memory d) internal {
@@ -377,14 +410,14 @@ contract Deploy is Script {
         require(p.usdcAddress != address(0), "USDC_ADDRESS=0");
         require(p.usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
         d.usdc = p.usdcAddress;
-        uint256 tvlCap = 10_000_000 * 1e6; // 10M USDC
-        uint256 perDepositCap = 1_000_000 * 1e6; // 1M USDC
+        require(p.feeRecipient != address(0), "FEE_RECIPIENT_ADDRESS=0");
+        require(p.tvlCap > 0 && p.perDepositCap > 0, "VAULT_TVL_CAP / VAULT_PER_DEPOSIT_CAP = 0");
         d.vault = new RobotMoneyVault(
             IERC20(d.usdc),
-            tvlCap,
-            perDepositCap,
-            0, // exitFeeBps = 0
-            d.admin, // feeRecipient (fees are 0, any non-zero addr)
+            p.tvlCap, // VAULT_TVL_CAP, default DEFAULT_TVL_CAP (devnet)
+            p.perDepositCap, // VAULT_PER_DEPOSIT_CAP, default DEFAULT_PER_DEPOSIT_CAP (devnet)
+            p.exitFeeBps, // VAULT_EXIT_FEE_BPS, default 0
+            p.feeRecipient, // FEE_RECIPIENT_ADDRESS, default admin (devnet only; never the deployer on mainnet)
             d.admin, // vaultAdmin — receives ADMIN_ROLE
             d.admin // emergencyResponder — receives EMERGENCY_ROLE (separate in prod)
         );

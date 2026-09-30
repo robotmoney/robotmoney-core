@@ -1029,7 +1029,7 @@ run_ceremony() {
     AGENT_ADDRESSES="$(paste -sd, <<<"$owned_agents")" \
     VAULT_ADDRESS="$vault" GATEWAY_ADDRESS="$gateway" REGISTRY_ADDRESS="$registry" ROUTER_ADDRESS="$router" \
     GOVERNANCE_ADDRESS="$governance" SAFE_ADDRESS="$safe" EMERGENCY_ADDRESS="${addr[emergency]}" \
-    TIMELOCK_MIN_DELAY="$MIN_DELAY" IC_POLICY_ADDRESS="$ic_policy" CONSENSUS_RECEIPT_ADDRESS="$receipt" \
+    TIMELOCK_MIN_DELAY="$MIN_DELAY" ALLOW_SHORT_TIMELOCK_DELAY=true IC_POLICY_ADDRESS="$ic_policy" CONSENSUS_RECEIPT_ADDRESS="$receipt" \
     RECEIPT_ADMIN_ADDRESS="$admin" DEPLOYMENT_OUT="$work/timelock.json" \
     "$FORGE" script contracts/script/DeployTimelock.s.sol:DeployTimelock \
       --rpc-url "$RPC_URL" "${as_deployer[@]}" --broadcast --slow) >"$work/timelock.log" 2>&1 \

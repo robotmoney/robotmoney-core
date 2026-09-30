@@ -1,5 +1,7 @@
 # Revert SEED_DEPOSIT_AMOUNT to 1,000 USDC before mainnet
 
+> **Done.** `SEED_DEPOSIT_AMOUNT` is `1_000 * 1e6` again and `Deploy.t.sol` asserts it. Kept for the history below.
+
 ## What changed
 
 > **The reason for this change no longer exists.** The Base Sepolia rehearsal
