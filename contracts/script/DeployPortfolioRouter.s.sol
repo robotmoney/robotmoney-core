@@ -50,10 +50,20 @@ contract DeployPortfolioRouter is Script {
     ///         setWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
     /// @return d Struct containing the deployed router and key parameters.
     function run() external returns (Deployed memory d) {
+        // Optional: refuse any other chain. `forge script --chain` does not (devops
+        // review 2026-09-30, B6).
+        require(
+            vm.envOr("EXPECTED_CHAIN_ID", uint256(0)) == 0
+                || block.chainid == vm.envOr("EXPECTED_CHAIN_ID", uint256(0)),
+            "EXPECTED_CHAIN_ID does not match the RPC's chain id"
+        );
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address registry = vm.envAddress("REGISTRY_ADDRESS");
         address vault = vm.envAddress("VAULT_ADDRESS");
         address usdc = vm.envAddress("USDC_ADDRESS");
+        require(registry.code.length > 0, "REGISTRY_ADDRESS has no code on this chain");
+        require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
+        require(usdc.code.length > 0, "USDC_ADDRESS has no code on this chain");
 
         vm.startBroadcast();
         d = _deploy(admin, registry, vault, usdc);

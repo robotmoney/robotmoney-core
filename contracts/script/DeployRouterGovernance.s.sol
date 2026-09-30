@@ -78,6 +78,13 @@ contract DeployRouterGovernance is Script {
     ///         RouterGovernance, and writes a deployment JSON.
     /// @return d Struct containing the deployed governance and key parameters.
     function run() external returns (Deployed memory d) {
+        // Optional: refuse any other chain. `forge script --chain` does not (devops
+        // review 2026-09-30, B6).
+        require(
+            vm.envOr("EXPECTED_CHAIN_ID", uint256(0)) == 0
+                || block.chainid == vm.envOr("EXPECTED_CHAIN_ID", uint256(0)),
+            "EXPECTED_CHAIN_ID does not match the RPC's chain id"
+        );
         // The quorum floor is checked FIRST, before any other env read. Two
         // reasons, both deliberate: a refusal costs nothing, and a test of the
         // refusal then needs to set only QUORUM_THRESHOLD — which nothing else

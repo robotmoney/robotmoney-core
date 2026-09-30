@@ -62,9 +62,17 @@ contract DeployInvestmentCommitteePolicy is Script {
     ///         and writes a deployment JSON.
     /// @return d Struct containing the deployed contract and key parameters.
     function run() external returns (Deployed memory d) {
+        // Optional: refuse any other chain. `forge script --chain` does not (devops
+        // review 2026-09-30, B6).
+        require(
+            vm.envOr("EXPECTED_CHAIN_ID", uint256(0)) == 0
+                || block.chainid == vm.envOr("EXPECTED_CHAIN_ID", uint256(0)),
+            "EXPECTED_CHAIN_ID does not match the RPC's chain id"
+        );
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address gateway = vm.envAddress("GATEWAY_ADDRESS");
         address receiptAdmin = vm.envOr("RECEIPT_ADMIN_ADDRESS", admin);
+        require(gateway.code.length > 0, "GATEWAY_ADDRESS has no code on this chain");
 
         vm.startBroadcast();
         d = _deploy(admin, receiptAdmin, gateway);
