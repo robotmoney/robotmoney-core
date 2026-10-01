@@ -61,6 +61,8 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 ///        VAULT_TVL_CAP          — default 10M USDC (devnet)
 ///        VAULT_PER_DEPOSIT_CAP  — default 1M USDC (devnet)
 ///        VAULT_EXIT_FEE_BPS     — default 0
+///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1,000 USDC. A lower value
+///                                 reverts unless ALLOW_SMALL_SEED=true (throwaway tests only)
 contract Deploy is Script {
     using stdJson for string;
 
@@ -147,25 +149,23 @@ contract Deploy is Script {
         // holds as d.admin.
         _authorizeDeployAgent(d, p);
         _approveAndRegisterAdapters(d);
+        uint256 seed = _seedAmount();
         // Seed deposit: the deployer (broadcaster) approves and deposits ≥ 1,000 USDC
         // before the vault is opened to the public.  This is required by
         // docs/technical/security-model.md §3 to prevent the share-price
         // inflation attack on a zero-supply vault.  In broadcast mode the
         // broadcaster IS d.admin so no vm.prank is needed.
-        IERC20(d.usdc).approve(address(d.vault), SEED_DEPOSIT_AMOUNT);
-        uint256 seedShares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, d.admin);
+        IERC20(d.usdc).approve(address(d.vault), seed);
+        uint256 seedShares = d.vault.deposit(seed, d.admin);
         // Allow up to 1 bps (0.01%) rounding loss when real yield-protocol adapters
         // (Aave V3, Compound V3, Morpho) convert USDC to yield-bearing tokens and
         // back. Real adapters may lose a few token dust units due to integer
         // division in exchange-rate math. The security property here is that
         // assets actually landed in the vault (totalAssets > 0), not that the
         // exact amount round-tripped.
-        require(
-            d.vault.totalAssets() >= SEED_DEPOSIT_AMOUNT * 9_999 / 10_000,
-            "seed deposit: totalAssets too low"
-        );
+        require(d.vault.totalAssets() >= seed * 9_999 / 10_000, "seed deposit: totalAssets too low");
         require(d.vault.totalSupply() > 0, "seed deposit: totalSupply must be > 0");
-        console2.log("  seed deposit (USDC):", SEED_DEPOSIT_AMOUNT);
+        console2.log("  seed deposit (USDC):", seed);
         console2.log("  seed shares minted :", seedShares);
         vm.stopBroadcast();
 
@@ -292,6 +292,22 @@ contract Deploy is Script {
         uint256 tvlCap;
         uint256 perDepositCap;
         uint256 exitFeeBps;
+    }
+
+    /// @dev The seed this broadcast run deposits. Defaults to SEED_DEPOSIT_AMOUNT
+    ///      (1,000 USDC). `SEED_DEPOSIT_USDC` (6-decimal units) may lower it only
+    ///      together with `ALLOW_SMALL_SEED=true`, so a throwaway mainnet rehearsal
+    ///      can run with about 1 USDC while a real ceremony cannot do so by accident
+    ///      (an unset or mistyped value never weakens the inflation-attack anchor).
+    function _seedAmount() internal view returns (uint256 seed) {
+        seed = _envOrDefault("SEED_DEPOSIT_USDC", SEED_DEPOSIT_AMOUNT);
+        if (seed < SEED_DEPOSIT_AMOUNT) {
+            require(
+                vm.envOr("ALLOW_SMALL_SEED", false),
+                "SEED_DEPOSIT_USDC is below the 1,000 USDC seed: set ALLOW_SMALL_SEED=true only for a throwaway test"
+            );
+        }
+        require(seed > 0, "SEED_DEPOSIT_USDC=0");
     }
 
     function _readEnvParams() internal view returns (Params memory p) {
