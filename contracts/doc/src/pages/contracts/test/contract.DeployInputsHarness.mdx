@@ -1,0 +1,80 @@
+---
+title: "DeployInputsHarness"
+---
+
+# DeployInputsHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/test/DeployMainnetInputs.t.sol)
+
+**Inherits:** [Deploy](/contracts/script/contract.Deploy)
+
+<i>
+
+Exposes the script's internal env readers and deploy step. Every test below uses a
+prefix of its own, because env vars are process-wide and forge runs test contracts
+in parallel (see the note in Deploy.t.sol on the ADMIN_ADDRESS race).
+
+</i>
+
+## Functions
+
+<a id="readparams-string"></a>
+
+### readParams
+
+```solidity
+function readParams(string memory prefix) external view returns (Params memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Params` |  |
+
+<a id="seed-string"></a>
+
+### seed
+
+```solidity
+function seed(string memory prefix) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="deploywith-params"></a>
+
+### deployWith
+
+```solidity
+function deployWith(Params memory p) external returns (Deployed memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Deployed` |  |
+

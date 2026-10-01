@@ -172,6 +172,13 @@ export const sidebar = [
           ],
         },
         {
+          text: "Abstract Contracts",
+          collapsed: true,
+          items: [
+            { text: "ExpectedChainGuard", link: "/contracts/script/abstract.ExpectedChainGuard" },
+          ],
+        },
+        {
           text: "Interfaces",
           collapsed: true,
           items: [
@@ -245,6 +252,8 @@ export const sidebar = [
             { text: "DeployConsensusRecommendationReceiptTest", link: "/contracts/test/contract.DeployConsensusRecommendationReceiptTest" },
             { text: "DeployDemoExtraVaultsHarness", link: "/contracts/test/contract.DeployDemoExtraVaultsHarness" },
             { text: "DeployDemoExtraVaultsTest", link: "/contracts/test/contract.DeployDemoExtraVaultsTest" },
+            { text: "DeployInputsHarness", link: "/contracts/test/contract.DeployInputsHarness" },
+            { text: "DeployMainnetInputsTest", link: "/contracts/test/contract.DeployMainnetInputsTest" },
             { text: "DeployPortfolioRouterTest", link: "/contracts/test/contract.DeployPortfolioRouterTest" },
             { text: "DeployProtocolAssetVaultTest", link: "/contracts/test/contract.DeployProtocolAssetVaultTest" },
             { text: "DeployRouterGovernanceDefaultsTest", link: "/contracts/test/contract.DeployRouterGovernanceDefaultsTest" },

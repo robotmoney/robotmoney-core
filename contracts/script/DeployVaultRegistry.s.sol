@@ -7,6 +7,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployVaultRegistry
 /// @notice Foundry deploy script for the VaultRegistry contract.
@@ -28,7 +29,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 ///                              (default: "Robot Money USDC")
 ///           DEPLOYMENT_OUT   — path for the output JSON
 ///                              (default: "deployments/registry-<chain_id>.json")
-contract DeployVaultRegistry is Script {
+contract DeployVaultRegistry is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
@@ -51,13 +52,7 @@ contract DeployVaultRegistry is Script {
     ///         registerVault holds ADMIN_ROLE. No vm.prank is needed or allowed.
     /// @return d Struct containing the deployed registry and key parameters.
     function run() external returns (Deployed memory d) {
-        // Optional: refuse any other chain. `forge script --chain` does not (devops
-        // review 2026-09-30, B6).
-        require(
-            vm.envOr("EXPECTED_CHAIN_ID", uint256(0)) == 0
-                || block.chainid == vm.envOr("EXPECTED_CHAIN_ID", uint256(0)),
-            "EXPECTED_CHAIN_ID does not match the RPC's chain id"
-        );
+        _requireExpectedChain("");
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address vault = vm.envAddress("VAULT_ADDRESS");
         address asset = vm.envAddress("USDC_ADDRESS");

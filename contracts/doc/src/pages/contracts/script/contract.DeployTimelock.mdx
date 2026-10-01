@@ -5,9 +5,9 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83eab89b8819bc1dd25ef3cee4ffbdd7220d6f63/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/DeployTimelock.s.sol)
 
-**Inherits:** Script
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
 Deploy an OZ TimelockController and complete the privileged-role
 handover on all five Robot Money contracts (RobotMoneyVault,
@@ -155,29 +155,6 @@ uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
 ```
 
 ## Functions
-
-<a id="_requireexpectedchain-string"></a>
-
-### _requireExpectedChain
-
-<i>
-
-When `&lt;prefix>EXPECTED_CHAIN_ID` is set, refuse to run against any
-other chain. `forge script --chain` does not refuse a wrong-chain
-RPC (tested), and the runbook policy says every broadcasting script
-checks the chain itself.
-
-</i>
-
-```solidity
-function _requireExpectedChain(string memory prefix) internal view;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| prefix | `string` |  |
 
 <a id="run"></a>
 

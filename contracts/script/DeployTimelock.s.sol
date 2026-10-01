@@ -14,6 +14,7 @@ import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @dev Minimal Safe interface — only `getThreshold()` is required for the
 ///      deploy-time guard that rejects EOA or low-threshold Safe addresses.
@@ -135,7 +136,7 @@ interface IRouterGovernanceQuorum {
 /// @dev After deploying, the broadcaster (current ADMIN_ROLE holder) is no
 ///      longer the admin on any contract. Verify with:
 ///        cast call <vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") <timelock>
-contract DeployTimelock is Script {
+contract DeployTimelock is ExpectedChainGuard {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
@@ -144,18 +145,6 @@ contract DeployTimelock is Script {
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
     /// @dev security-model.md §4: production timelock delay floor, 48 hours.
     uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
-
-    /// @dev When `<prefix>EXPECTED_CHAIN_ID` is set, refuse to run against any
-    ///      other chain. `forge script --chain` does not refuse a wrong-chain
-    ///      RPC (tested), and the runbook policy says every broadcasting script
-    ///      checks the chain itself.
-    function _requireExpectedChain(string memory prefix) internal view {
-        uint256 expected = vm.envOr(string.concat(prefix, "EXPECTED_CHAIN_ID"), uint256(0));
-        require(
-            expected == 0 || block.chainid == expected,
-            "EXPECTED_CHAIN_ID does not match the RPC's chain id"
-        );
-    }
 
     struct Deployed {
         TimelockController timelock;

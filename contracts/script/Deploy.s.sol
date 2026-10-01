@@ -18,6 +18,7 @@ import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title Deploy
 /// @notice Foundry deploy script for the Robot Money gateway stack.
@@ -63,7 +64,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 ///        VAULT_EXIT_FEE_BPS     — default 0
 ///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC. A mainnet ceremony
 ///                                 sets it explicitly (devops runbook frozen sheet)
-contract Deploy is Script {
+contract Deploy is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
@@ -150,7 +151,7 @@ contract Deploy is Script {
         // holds as d.admin.
         _authorizeDeployAgent(d, p);
         _approveAndRegisterAdapters(d);
-        uint256 seed = _seedAmount();
+        uint256 seed = _seedAmount("");
         // Seed deposit: the deployer (broadcaster) approves and deposits the seed
         // before the vault is opened to the public.  This is required by
         // docs/technical/security-model.md §3 to prevent the share-price
@@ -295,37 +296,48 @@ contract Deploy is Script {
         uint256 exitFeeBps;
     }
 
-    /// @dev The seed this broadcast run deposits: `SEED_DEPOSIT_USDC` (6-decimal units),
-    ///      default SEED_DEPOSIT_AMOUNT. Must be non-zero.
-    function _seedAmount() internal view returns (uint256 seed) {
-        seed = _envOrDefault("SEED_DEPOSIT_USDC", SEED_DEPOSIT_AMOUNT);
+    /// @dev The seed this broadcast run deposits: `<prefix>SEED_DEPOSIT_USDC` (6-decimal
+    ///      units), default SEED_DEPOSIT_AMOUNT. Must be non-zero.
+    function _seedAmount(string memory prefix) internal view returns (uint256 seed) {
+        seed = _envOrDefault(string.concat(prefix, "SEED_DEPOSIT_USDC"), SEED_DEPOSIT_AMOUNT);
         require(seed > 0, "SEED_DEPOSIT_USDC=0");
     }
 
     function _readEnvParams() internal view returns (Params memory p) {
-        uint256 expectedChain = _envOrDefault("EXPECTED_CHAIN_ID", 0);
-        require(
-            expectedChain == 0 || block.chainid == expectedChain,
-            "EXPECTED_CHAIN_ID does not match the RPC's chain id"
-        );
-        p.admin = vm.envAddress("ADMIN_ADDRESS");
-        p.pauser = vm.envAddress("PAUSER_ADDRESS");
-        p.agent = vm.envAddress("AGENT_ADDRESS");
-        p.shareReceiver = vm.envAddress("SHARE_RECEIVER_ADDRESS");
+        return _readEnvParamsFrom("");
+    }
+
+    /// @dev `prefix` is "" in production. Tests pass their own prefix because env
+    ///      vars are process-wide and forge runs tests in parallel.
+    function _readEnvParamsFrom(string memory prefix) internal view returns (Params memory p) {
+        _requireExpectedChain(prefix);
+        p.admin = vm.envAddress(string.concat(prefix, "ADMIN_ADDRESS"));
+        p.pauser = vm.envAddress(string.concat(prefix, "PAUSER_ADDRESS"));
+        p.agent = vm.envAddress(string.concat(prefix, "AGENT_ADDRESS"));
+        p.shareReceiver = vm.envAddress(string.concat(prefix, "SHARE_RECEIVER_ADDRESS"));
         p.validUntil = uint64(
-            _envOrDefault("AGENT_VALID_UNTIL", block.timestamp + DEFAULT_VALID_UNTIL_OFFSET)
+            _envOrDefault(
+                string.concat(prefix, "AGENT_VALID_UNTIL"),
+                block.timestamp + DEFAULT_VALID_UNTIL_OFFSET
+            )
         );
-        p.maxPerPayment = _envOrDefault("AGENT_MAX_PER_PAYMENT", DEFAULT_MAX_PER_PAYMENT);
-        p.maxPerWindow = _envOrDefault("AGENT_MAX_PER_WINDOW", DEFAULT_MAX_PER_WINDOW);
-        p.maxWithdrawPerPayment =
-            _envOrDefault("AGENT_MAX_WITHDRAW_PER_PAYMENT", DEFAULT_MAX_WITHDRAW_PER_PAYMENT);
-        p.maxWithdrawPerWindow =
-            _envOrDefault("AGENT_MAX_WITHDRAW_PER_WINDOW", DEFAULT_MAX_WITHDRAW_PER_WINDOW);
-        p.usdcAddress = vm.envAddress("USDC_ADDRESS");
-        p.feeRecipient = vm.envOr("FEE_RECIPIENT_ADDRESS", p.admin);
-        p.tvlCap = _envOrDefault("VAULT_TVL_CAP", DEFAULT_TVL_CAP);
-        p.perDepositCap = _envOrDefault("VAULT_PER_DEPOSIT_CAP", DEFAULT_PER_DEPOSIT_CAP);
-        p.exitFeeBps = _envOrDefault("VAULT_EXIT_FEE_BPS", 0);
+        p.maxPerPayment =
+            _envOrDefault(string.concat(prefix, "AGENT_MAX_PER_PAYMENT"), DEFAULT_MAX_PER_PAYMENT);
+        p.maxPerWindow =
+            _envOrDefault(string.concat(prefix, "AGENT_MAX_PER_WINDOW"), DEFAULT_MAX_PER_WINDOW);
+        p.maxWithdrawPerPayment = _envOrDefault(
+            string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_PAYMENT"),
+            DEFAULT_MAX_WITHDRAW_PER_PAYMENT
+        );
+        p.maxWithdrawPerWindow = _envOrDefault(
+            string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_WINDOW"), DEFAULT_MAX_WITHDRAW_PER_WINDOW
+        );
+        p.usdcAddress = vm.envAddress(string.concat(prefix, "USDC_ADDRESS"));
+        p.feeRecipient = vm.envOr(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"), p.admin);
+        p.tvlCap = _envOrDefault(string.concat(prefix, "VAULT_TVL_CAP"), DEFAULT_TVL_CAP);
+        p.perDepositCap =
+            _envOrDefault(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"), DEFAULT_PER_DEPOSIT_CAP);
+        p.exitFeeBps = _envOrDefault(string.concat(prefix, "VAULT_EXIT_FEE_BPS"), 0);
     }
 
     function _approveAndRegisterAdapters(Deployed memory d) internal {

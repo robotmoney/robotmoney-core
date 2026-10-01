@@ -8,6 +8,7 @@ import {console2} from "forge-std/console2.sol";
 
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployPortfolioRouter
 /// @notice Foundry deploy script for the PortfolioRouter contract.
@@ -27,7 +28,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 ///         Optional env vars:
 ///           DEPLOYMENT_OUT     — path for the output JSON
 ///                                (default: "deployments/router-<chain_id>.json")
-contract DeployPortfolioRouter is Script {
+contract DeployPortfolioRouter is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice BPS weight assigned to RobotMoneyVault as the sole active vault.
@@ -50,13 +51,7 @@ contract DeployPortfolioRouter is Script {
     ///         setWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
     /// @return d Struct containing the deployed router and key parameters.
     function run() external returns (Deployed memory d) {
-        // Optional: refuse any other chain. `forge script --chain` does not (devops
-        // review 2026-09-30, B6).
-        require(
-            vm.envOr("EXPECTED_CHAIN_ID", uint256(0)) == 0
-                || block.chainid == vm.envOr("EXPECTED_CHAIN_ID", uint256(0)),
-            "EXPECTED_CHAIN_ID does not match the RPC's chain id"
-        );
+        _requireExpectedChain("");
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address registry = vm.envAddress("REGISTRY_ADDRESS");
         address vault = vm.envAddress("VAULT_ADDRESS");

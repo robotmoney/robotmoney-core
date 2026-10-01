@@ -12,6 +12,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployRouterGovernance
 /// @notice Foundry deploy script for the RouterGovernance contract.
@@ -49,7 +50,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 ///                                and the grant will be scheduled through it.
 ///                                The script then refuses to pretend the wiring
 ///                                is complete and says so loudly.
-contract DeployRouterGovernance is Script {
+contract DeployRouterGovernance is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Default voting period: 1 hour in seconds.
@@ -78,13 +79,7 @@ contract DeployRouterGovernance is Script {
     ///         RouterGovernance, and writes a deployment JSON.
     /// @return d Struct containing the deployed governance and key parameters.
     function run() external returns (Deployed memory d) {
-        // Optional: refuse any other chain. `forge script --chain` does not (devops
-        // review 2026-09-30, B6).
-        require(
-            vm.envOr("EXPECTED_CHAIN_ID", uint256(0)) == 0
-                || block.chainid == vm.envOr("EXPECTED_CHAIN_ID", uint256(0)),
-            "EXPECTED_CHAIN_ID does not match the RPC's chain id"
-        );
+        _requireExpectedChain("");
         // The quorum floor is checked FIRST, before any other env read. Two
         // reasons, both deliberate: a refusal costs nothing, and a test of the
         // refusal then needs to set only QUORUM_THRESHOLD — which nothing else
@@ -98,6 +93,7 @@ contract DeployRouterGovernance is Script {
 
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address router = vm.envAddress("ROUTER_ADDRESS");
+        require(router.code.length > 0, "ROUTER_ADDRESS has no code on this chain");
 
         uint64 votingPeriod = uint64(vm.envOr("VOTING_PERIOD", uint256(DEFAULT_VOTING_PERIOD)));
         uint64 executionDelay =

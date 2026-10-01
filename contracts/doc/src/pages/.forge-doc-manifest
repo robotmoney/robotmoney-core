@@ -54,6 +54,7 @@ contracts/lib/library.ForeignTokenQuarantine.mdx
 contracts/lib/library.TickMath.mdx
 contracts/lib/library.TwapTickMath.mdx
 contracts/library.FeatureFlags.mdx
+contracts/script/abstract.ExpectedChainGuard.mdx
 contracts/script/contract.ActivateBasketVaultEligibility.mdx
 contracts/script/contract.AgentBasketStubDeployer.mdx
 contracts/script/contract.DemoAerodromeRouter.mdx
@@ -140,6 +141,8 @@ contracts/test/contract.DelegatecallProxyAdapter.mdx
 contracts/test/contract.DeployConsensusRecommendationReceiptTest.mdx
 contracts/test/contract.DeployDemoExtraVaultsHarness.mdx
 contracts/test/contract.DeployDemoExtraVaultsTest.mdx
+contracts/test/contract.DeployInputsHarness.mdx
+contracts/test/contract.DeployMainnetInputsTest.mdx
 contracts/test/contract.DeployPortfolioRouterTest.mdx
 contracts/test/contract.DeployProtocolAssetVaultTest.mdx
 contracts/test/contract.DeployRouterGovernanceDefaultsTest.mdx

@@ -1,0 +1,52 @@
+---
+title: "ExpectedChainGuard"
+description: "Shared chain-identity check for the broadcasting deploy scripts."
+---
+
+# ExpectedChainGuard
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/ExpectedChainGuard.sol)
+
+**Inherits:** Script
+
+**Title:** ExpectedChainGuard
+
+Shared chain-identity check for the broadcasting deploy scripts.
+
+<i>
+
+The release policy says every broadcasting script verifies the chain id
+itself, but `forge script --chain &lt;id>` does not refuse an RPC that
+serves a different chain (tested against a chain-31337 node: it ran and
+only stopped because USDC had no code there). A ceremony therefore sets
+`EXPECTED_CHAIN_ID` (8453 on Base mainnet) and every script refuses to
+run anywhere else. Unset or 0 means "no check", which keeps devnets and
+forge tests working without configuration. Found by the devops mainnet
+runbook review (2026-09-30, B6).
+
+</i>
+
+## Functions
+
+<a id="_requireexpectedchain-string"></a>
+
+### _requireExpectedChain
+
+<i>
+
+Reverts unless `&lt;prefix>EXPECTED_CHAIN_ID` is unset/0 or equals
+`block.chainid`. `prefix` is "" in production; tests pass their own
+prefix because env vars are process-wide and forge runs tests in parallel.
+
+</i>
+
+```solidity
+function _requireExpectedChain(string memory prefix) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+

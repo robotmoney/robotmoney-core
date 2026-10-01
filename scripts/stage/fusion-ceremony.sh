@@ -1025,6 +1025,8 @@ run_ceremony() {
     || die "the submitter ${addr[submitter]} is not among the deployer-owned gateway agents the logs name"
   info "gateway agents handed to the timelock: $(paste -sd' ' <<<"$owned_agents")"
 
+  # DeployTimelock refuses a delay under 48h unless told otherwise. This ceremony only runs on the
+  # 918453 devnet (the chain-id check above dies on anything else), where the short delay is deliberate.
   (cd "$REPO_ROOT" && \
     AGENT_ADDRESSES="$(paste -sd, <<<"$owned_agents")" \
     VAULT_ADDRESS="$vault" GATEWAY_ADDRESS="$gateway" REGISTRY_ADDRESS="$registry" ROUTER_ADDRESS="$router" \

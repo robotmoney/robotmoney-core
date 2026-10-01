@@ -5,9 +5,9 @@ description: "Foundry deploy script for the Robot Money gateway stack. Deploys R
 
 # Deploy
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/459241c745781d17f5089e0f4c2b94d7d9e255a1/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/Deploy.s.sol)
 
-**Inherits:** Script
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
 **Title:** Deploy
 
@@ -289,20 +289,26 @@ function runInProcessWithSeed(
 | ---- | ---- | ----------- |
 | d | `Deployed` | Struct containing all deployed contract addresses and key parameters. |
 
-<a id="_seedamount"></a>
+<a id="_seedamount-string"></a>
 
 ### _seedAmount
 
 <i>
 
-The seed this broadcast run deposits: `SEED_DEPOSIT_USDC` (6-decimal units),
-default SEED_DEPOSIT_AMOUNT. Must be non-zero.
+The seed this broadcast run deposits: `&lt;prefix>SEED_DEPOSIT_USDC` (6-decimal
+units), default SEED_DEPOSIT_AMOUNT. Must be non-zero.
 
 </i>
 
 ```solidity
-function _seedAmount() internal view returns (uint256 seed);
+function _seedAmount(string memory prefix) internal view returns (uint256 seed);
 ```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
 
 **Returns**
 
@@ -317,6 +323,33 @@ function _seedAmount() internal view returns (uint256 seed);
 ```solidity
 function _readEnvParams() internal view returns (Params memory p);
 ```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+
+<a id="_readenvparamsfrom-string"></a>
+
+### _readEnvParamsFrom
+
+<i>
+
+`prefix` is "" in production. Tests pass their own prefix because env
+vars are process-wide and forge runs tests in parallel.
+
+</i>
+
+```solidity
+function _readEnvParamsFrom(string memory prefix) internal view returns (Params memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
 
 **Returns**
 

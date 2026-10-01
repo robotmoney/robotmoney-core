@@ -12,6 +12,7 @@ import {console2} from "forge-std/console2.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployInvestmentCommitteePolicy
 /// @notice Foundry deploy script for the InvestmentCommitteePolicy contract.
@@ -45,7 +46,7 @@ import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 ///                              Defaults to ADMIN_ADDRESS for devnet ceremonies.
 ///           DEPLOYMENT_OUT   — path for the output JSON
 ///                              (default: "deployments/ic-policy-<chain_id>.json")
-contract DeployInvestmentCommitteePolicy is Script {
+contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
@@ -62,13 +63,7 @@ contract DeployInvestmentCommitteePolicy is Script {
     ///         and writes a deployment JSON.
     /// @return d Struct containing the deployed contract and key parameters.
     function run() external returns (Deployed memory d) {
-        // Optional: refuse any other chain. `forge script --chain` does not (devops
-        // review 2026-09-30, B6).
-        require(
-            vm.envOr("EXPECTED_CHAIN_ID", uint256(0)) == 0
-                || block.chainid == vm.envOr("EXPECTED_CHAIN_ID", uint256(0)),
-            "EXPECTED_CHAIN_ID does not match the RPC's chain id"
-        );
+        _requireExpectedChain("");
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address gateway = vm.envAddress("GATEWAY_ADDRESS");
         address receiptAdmin = vm.envOr("RECEIPT_ADMIN_ADDRESS", admin);

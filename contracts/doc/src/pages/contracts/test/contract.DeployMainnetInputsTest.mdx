@@ -1,0 +1,123 @@
+---
+title: "DeployMainnetInputsTest"
+description: "The vault economics, the seed and the chain check are explicit script inputs."
+---
+
+# DeployMainnetInputsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/test/DeployMainnetInputs.t.sol)
+
+**Inherits:** Test
+
+The vault economics, the seed and the chain check are explicit script inputs.
+
+## State Variables
+
+### h
+
+```solidity
+DeployInputsHarness internal h;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("inputs-admin");
+```
+
+### treasury
+
+```solidity
+address internal treasury = makeAddr("inputs-treasury");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_base-string"></a>
+
+### _base
+
+```solidity
+function _base(string memory prefix) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+<a id="test_defaults_aredevnetvalues"></a>
+
+### test_defaults_areDevnetValues
+
+```solidity
+function test_defaults_areDevnetValues() public;
+```
+
+<a id="test_overrides_areread"></a>
+
+### test_overrides_areRead
+
+```solidity
+function test_overrides_areRead() public;
+```
+
+<a id="test_inputs_reachthevault"></a>
+
+### test_inputs_reachTheVault
+
+The inputs reach the vault constructor: the fee recipient is no longer the deployer.
+
+```solidity
+function test_inputs_reachTheVault() public;
+```
+
+<a id="test_zeroseed_reverts"></a>
+
+### test_zeroSeed_reverts
+
+```solidity
+function test_zeroSeed_reverts() public;
+```
+
+<a id="test_zerofeerecipient_reverts"></a>
+
+### test_zeroFeeRecipient_reverts
+
+```solidity
+function test_zeroFeeRecipient_reverts() public;
+```
+
+<a id="test_zerocaps_revert"></a>
+
+### test_zeroCaps_revert
+
+```solidity
+function test_zeroCaps_revert() public;
+```
+
+<a id="test_wrongexpectedchain_reverts"></a>
+
+### test_wrongExpectedChain_reverts
+
+```solidity
+function test_wrongExpectedChain_reverts() public;
+```
+
+<a id="test_matchingexpectedchain_passes"></a>
+
+### test_matchingExpectedChain_passes
+
+```solidity
+function test_matchingExpectedChain_passes() public;
+```
+
