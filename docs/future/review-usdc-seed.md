@@ -1,6 +1,6 @@
 # Revert SEED_DEPOSIT_AMOUNT to 1,000 USDC before mainnet
 
-> **Done.** `SEED_DEPOSIT_AMOUNT` is `1_000 * 1e6` again and `Deploy.t.sol` asserts it. Kept for the history below.
+> **Superseded 2026-10-01 (owner decision).** `SEED_DEPOSIT_AMOUNT` stays `1 * 1e6` as the default. A mainnet ceremony sets `SEED_DEPOSIT_USDC` explicitly on its frozen sheet; the devops mainnet runbook and verifier enforce the production value. Kept for the history below.
 
 ## What changed
 

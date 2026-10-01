@@ -61,8 +61,8 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 ///        VAULT_TVL_CAP          — default 10M USDC (devnet)
 ///        VAULT_PER_DEPOSIT_CAP  — default 1M USDC (devnet)
 ///        VAULT_EXIT_FEE_BPS     — default 0
-///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1,000 USDC. A lower value
-///                                 reverts unless ALLOW_SMALL_SEED=true (throwaway tests only)
+///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC. A mainnet ceremony
+///                                 sets it explicitly (devops runbook frozen sheet)
 contract Deploy is Script {
     using stdJson for string;
 
@@ -126,14 +126,15 @@ contract Deploy is Script {
     /// @notice Devnet per-deposit cap if `VAULT_PER_DEPOSIT_CAP` is unset (1M USDC).
     uint256 public constant DEFAULT_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
 
-    /// @notice Minimum seed deposit required before the vault is opened to the public.
+    /// @notice Default seed deposit for a broadcast run: 1 USDC (6 decimals).
     ///         Protects against ERC-4626 share-price inflation attacks on a zero-supply vault
-    ///         even with `_decimalsOffset() == 18`.
-    ///         See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
-    ///         Restored to 1,000 USDC (was 1 USDC for the retired Base Sepolia
-    ///         rehearsal; see docs/future/review-usdc-seed.md). The devnet seeds
-    ///         the deployer with enough USDC for this from genesis.
-    uint256 public constant SEED_DEPOSIT_AMOUNT = 1_000 * 1e6; // 1,000 USDC (6 decimals)
+    ///         even with `_decimalsOffset() == 18`; the seed anchors the share price to real
+    ///         capital before any public depositor arrives. See
+    ///         docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
+    ///         A mainnet ceremony does not rely on this default: it sets `SEED_DEPOSIT_USDC`
+    ///         explicitly on its frozen sheet (devops mainnet runbook P4), so the production
+    ///         seed is a deliberate, reviewed value.
+    uint256 public constant SEED_DEPOSIT_AMOUNT = 1 * 1e6; // 1 USDC (6 decimals)
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys all contracts, and writes a JSON file.
     /// @return d Struct containing all deployed contract addresses and key parameters.
@@ -150,7 +151,7 @@ contract Deploy is Script {
         _authorizeDeployAgent(d, p);
         _approveAndRegisterAdapters(d);
         uint256 seed = _seedAmount();
-        // Seed deposit: the deployer (broadcaster) approves and deposits ≥ 1,000 USDC
+        // Seed deposit: the deployer (broadcaster) approves and deposits the seed
         // before the vault is opened to the public.  This is required by
         // docs/technical/security-model.md §3 to prevent the share-price
         // inflation attack on a zero-supply vault.  In broadcast mode the
@@ -294,19 +295,10 @@ contract Deploy is Script {
         uint256 exitFeeBps;
     }
 
-    /// @dev The seed this broadcast run deposits. Defaults to SEED_DEPOSIT_AMOUNT
-    ///      (1,000 USDC). `SEED_DEPOSIT_USDC` (6-decimal units) may lower it only
-    ///      together with `ALLOW_SMALL_SEED=true`, so a throwaway mainnet rehearsal
-    ///      can run with about 1 USDC while a real ceremony cannot do so by accident
-    ///      (an unset or mistyped value never weakens the inflation-attack anchor).
+    /// @dev The seed this broadcast run deposits: `SEED_DEPOSIT_USDC` (6-decimal units),
+    ///      default SEED_DEPOSIT_AMOUNT. Must be non-zero.
     function _seedAmount() internal view returns (uint256 seed) {
         seed = _envOrDefault("SEED_DEPOSIT_USDC", SEED_DEPOSIT_AMOUNT);
-        if (seed < SEED_DEPOSIT_AMOUNT) {
-            require(
-                vm.envOr("ALLOW_SMALL_SEED", false),
-                "SEED_DEPOSIT_USDC is below the 1,000 USDC seed: set ALLOW_SMALL_SEED=true only for a throwaway test"
-            );
-        }
         require(seed > 0, "SEED_DEPOSIT_USDC=0");
     }
 

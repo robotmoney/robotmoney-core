@@ -5,7 +5,7 @@ description: "Note: adapter constructors only check for address(0) — they do N
 
 # DeployTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83eab89b8819bc1dd25ef3cee4ffbdd7220d6f63/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/459241c745781d17f5089e0f4c2b94d7d9e255a1/contracts/test/Deploy.t.sol)
 
 **Inherits:** Test
 
@@ -189,18 +189,16 @@ function test_deploy_revertsWhenAdminEqualsAgent() public;
 function test_deploy_revertsWhenPauserEqualsAgent() public;
 ```
 
-<a id="test_deploy_seeddepositamount_isonethousandusdc"></a>
+<a id="test_deploy_seeddepositamount_isoneusdc"></a>
 
-### test_deploy_seedDepositAmount_isOneThousandUsdc
+### test_deploy_seedDepositAmount_isOneUsdc
 
-SEED_DEPOSIT_AMOUNT constant equals 1,000 USDC (1_000_000_000 wei).
-This is a pure unit check — no protocol interaction required.
-The fork-level post-conditions are in DeploySeedDeposit.t.sol.
-security-model.md §3: the seed anchors the share price with real
-capital before any public depositor arrives.
+SEED_DEPOSIT_AMOUNT constant equals 1 USDC (1_000_000 units). A mainnet
+ceremony sets SEED_DEPOSIT_USDC explicitly, so this default is the
+rehearsal and devnet seed.
 
 ```solidity
-function test_deploy_seedDepositAmount_isOneThousandUsdc() public view;
+function test_deploy_seedDepositAmount_isOneUsdc() public view;
 ```
 
 <a id="test_deploy_envdriven_runinprocesssucceeds"></a>

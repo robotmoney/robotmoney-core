@@ -5,7 +5,7 @@ description: "Foundry deploy script for the Robot Money gateway stack. Deploys R
 
 # Deploy
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/709a5408c13febe5656c4fb9cbf7b3a67211ee3d/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/459241c745781d17f5089e0f4c2b94d7d9e255a1/contracts/script/Deploy.s.sol)
 
 **Inherits:** Script
 
@@ -57,8 +57,8 @@ a mainnet ceremony must name the treasury, never the deployer)
 VAULT_TVL_CAP          — default 10M USDC (devnet)
 VAULT_PER_DEPOSIT_CAP  — default 1M USDC (devnet)
 VAULT_EXIT_FEE_BPS     — default 0
-SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1,000 USDC. A lower value
-reverts unless ALLOW_SMALL_SEED=true (throwaway tests only)
+SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC. A mainnet ceremony
+sets it explicitly (devops runbook frozen sheet)
 
 ## Constants
 
@@ -170,16 +170,17 @@ uint256 public constant DEFAULT_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
 
 ### SEED_DEPOSIT_AMOUNT
 
-Minimum seed deposit required before the vault is opened to the public.
+Default seed deposit for a broadcast run: 1 USDC (6 decimals).
 Protects against ERC-4626 share-price inflation attacks on a zero-supply vault
-even with `_decimalsOffset() == 18`.
-See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
-Restored to 1,000 USDC (was 1 USDC for the retired Base Sepolia
-rehearsal; see docs/future/review-usdc-seed.md). The devnet seeds
-the deployer with enough USDC for this from genesis.
+even with `_decimalsOffset() == 18`; the seed anchors the share price to real
+capital before any public depositor arrives. See
+docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
+A mainnet ceremony does not rely on this default: it sets `SEED_DEPOSIT_USDC`
+explicitly on its frozen sheet (devops mainnet runbook P4), so the production
+seed is a deliberate, reviewed value.
 
 ```solidity
-uint256 public constant SEED_DEPOSIT_AMOUNT = 1_000 * 1e6;
+uint256 public constant SEED_DEPOSIT_AMOUNT = 1 * 1e6;
 ```
 
 ## Functions
@@ -294,11 +295,8 @@ function runInProcessWithSeed(
 
 <i>
 
-The seed this broadcast run deposits. Defaults to SEED_DEPOSIT_AMOUNT
-(1,000 USDC). `SEED_DEPOSIT_USDC` (6-decimal units) may lower it only
-together with `ALLOW_SMALL_SEED=true`, so a throwaway mainnet rehearsal
-can run with about 1 USDC while a real ceremony cannot do so by accident
-(an unset or mistyped value never weakens the inflation-attack anchor).
+The seed this broadcast run deposits: `SEED_DEPOSIT_USDC` (6-decimal units),
+default SEED_DEPOSIT_AMOUNT. Must be non-zero.
 
 </i>
 
