@@ -8,6 +8,10 @@
 # §13 row "Deploy-key compromise pushes a malicious contract" states:
 #   "BaseScan verification must complete within one hour of deploy."
 #
+# NOTE (2026-10-01): Etherscan API v2 answers "Free API access is not supported for this chain" for Base,
+# so this script needs a PAID Etherscan plan. The devops mainnet runbook verifies on Blockscout and Sourcify
+# instead (devops scripts/mainnet-verify-sources.sh, no API key) and does not use this script.
+#
 # This script polls the Etherscan API v2 (which serves BaseScan; the per-chain
 # api.basescan.org v1 host now answers only "deprecated V1 endpoint") getsourcecode
 # endpoint for each contract address in the deployment set, retrying on a
