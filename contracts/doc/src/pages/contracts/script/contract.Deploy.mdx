@@ -5,9 +5,9 @@ description: "Foundry deploy script for the Robot Money gateway stack. Deploys R
 
 # Deploy
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a3c985265e139ead86ed9591607790a34a06d791/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/Deploy.s.sol)
 
-**Inherits:** Script
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
 **Title:** Deploy
 
@@ -51,6 +51,14 @@ AGENT_MAX_WITHDRAW_PER_PAYMENT  — uint256, default = 10_000 * 1e6 (shares, 6dp
 AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256, default = 100_000 * 1e6
 DEPLOYMENT_OUT         — output JSON path,
 default = "deployments/&lt;chain_id>.json"
+EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches (8453 on Base)
+FEE_RECIPIENT_ADDRESS  — vault fee recipient, default ADMIN_ADDRESS (devnet only:
+a mainnet ceremony must name the treasury, never the deployer)
+VAULT_TVL_CAP          — default 10M USDC (devnet)
+VAULT_PER_DEPOSIT_CAP  — default 1M USDC (devnet)
+VAULT_EXIT_FEE_BPS     — default 0
+SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC. A mainnet ceremony
+sets it explicitly (devops runbook frozen sheet)
 
 ## Constants
 
@@ -144,15 +152,32 @@ Default policy lifetime (30 days).
 uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
 ```
 
+### DEFAULT_TVL_CAP
+
+Devnet vault TVL cap if `VAULT_TVL_CAP` is unset (10M USDC).
+
+```solidity
+uint256 public constant DEFAULT_TVL_CAP = 10_000_000 * 1e6;
+```
+
+### DEFAULT_PER_DEPOSIT_CAP
+
+Devnet per-deposit cap if `VAULT_PER_DEPOSIT_CAP` is unset (1M USDC).
+
+```solidity
+uint256 public constant DEFAULT_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
+```
+
 ### SEED_DEPOSIT_AMOUNT
 
-Minimum seed deposit required before the vault is opened to the public.
+Default seed deposit for a broadcast run: 1 USDC (6 decimals).
 Protects against ERC-4626 share-price inflation attacks on a zero-supply vault
-even with `_decimalsOffset() == 18`.
-See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
-TEMPORARY: lowered from 1,000 USDC to 1 USDC; see
-docs/future/review-usdc-seed.md for why and what reverting it
-requires — must be reverted before mainnet.
+even with `_decimalsOffset() == 18`; the seed anchors the share price to real
+capital before any public depositor arrives. See
+docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
+A mainnet ceremony does not rely on this default: it sets `SEED_DEPOSIT_USDC`
+explicitly on its frozen sheet (devops mainnet runbook P4), so the production
+seed is a deliberate, reviewed value.
 
 ```solidity
 uint256 public constant SEED_DEPOSIT_AMOUNT = 1 * 1e6;
@@ -264,6 +289,33 @@ function runInProcessWithSeed(
 | ---- | ---- | ----------- |
 | d | `Deployed` | Struct containing all deployed contract addresses and key parameters. |
 
+<a id="_seedamount-string"></a>
+
+### _seedAmount
+
+<i>
+
+The seed this broadcast run deposits: `&lt;prefix>SEED_DEPOSIT_USDC` (6-decimal
+units), default SEED_DEPOSIT_AMOUNT. Must be non-zero.
+
+</i>
+
+```solidity
+function _seedAmount(string memory prefix) internal view returns (uint256 seed);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seed | `uint256` |  |
+
 <a id="_readenvparams"></a>
 
 ### _readEnvParams
@@ -271,6 +323,33 @@ function runInProcessWithSeed(
 ```solidity
 function _readEnvParams() internal view returns (Params memory p);
 ```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+
+<a id="_readenvparamsfrom-string"></a>
+
+### _readEnvParamsFrom
+
+<i>
+
+`prefix` is "" in production. Tests pass their own prefix because env
+vars are process-wide and forge runs tests in parallel.
+
+</i>
+
+```solidity
+function _readEnvParamsFrom(string memory prefix) internal view returns (Params memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
 
 **Returns**
 
@@ -519,6 +598,14 @@ struct Params {
         ///      this to the canonical Base USDC ([`CANONICAL_BASE_USDC`]);
         ///      forge unit tests deploy a `TestERC20` helper.
         address usdcAddress;
+        /// @dev Vault economics. Defaults are the devnet values; a mainnet
+        ///      ceremony sets all four on its frozen sheet (devops review
+        ///      2026-09-30, R-01: the fee recipient used to be the deployer EOA,
+        ///      which the mainnet runbook retires right after the handover).
+        address feeRecipient;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
     }
 ```
 
@@ -536,4 +623,8 @@ struct Params {
 | maxWithdrawPerPayment | `uint256` |  |
 | maxWithdrawPerWindow | `uint256` |  |
 | usdcAddress | `address` |  |
+| feeRecipient | `address` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
 

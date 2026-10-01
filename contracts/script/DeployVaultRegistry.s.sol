@@ -7,6 +7,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployVaultRegistry
 /// @notice Foundry deploy script for the VaultRegistry contract.
@@ -28,7 +29,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 ///                              (default: "Robot Money USDC")
 ///           DEPLOYMENT_OUT   — path for the output JSON
 ///                              (default: "deployments/registry-<chain_id>.json")
-contract DeployVaultRegistry is Script {
+contract DeployVaultRegistry is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
@@ -51,10 +52,15 @@ contract DeployVaultRegistry is Script {
     ///         registerVault holds ADMIN_ROLE. No vm.prank is needed or allowed.
     /// @return d Struct containing the deployed registry and key parameters.
     function run() external returns (Deployed memory d) {
+        _requireExpectedChain("");
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address vault = vm.envAddress("VAULT_ADDRESS");
         address asset = vm.envAddress("USDC_ADDRESS");
         string memory vaultName = _envStringOrDefault("VAULT_NAME", DEFAULT_VAULT_NAME);
+        // The registry stores these two addresses without reading them; a wrong-chain
+        // or mistyped address would register a vault with no code behind it.
+        require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
+        require(asset.code.length > 0, "USDC_ADDRESS has no code on this chain");
 
         vm.startBroadcast();
         d.registry = new VaultRegistry(admin);

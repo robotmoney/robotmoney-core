@@ -18,6 +18,7 @@ import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title Deploy
 /// @notice Foundry deploy script for the Robot Money gateway stack.
@@ -55,7 +56,15 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 ///        AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256, default = 100_000 * 1e6
 ///        DEPLOYMENT_OUT         — output JSON path,
 ///                                 default = "deployments/<chain_id>.json"
-contract Deploy is Script {
+///        EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches (8453 on Base)
+///        FEE_RECIPIENT_ADDRESS  — vault fee recipient, default ADMIN_ADDRESS (devnet only:
+///                                 a mainnet ceremony must name the treasury, never the deployer)
+///        VAULT_TVL_CAP          — default 10M USDC (devnet)
+///        VAULT_PER_DEPOSIT_CAP  — default 1M USDC (devnet)
+///        VAULT_EXIT_FEE_BPS     — default 0
+///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC. A mainnet ceremony
+///                                 sets it explicitly (devops runbook frozen sheet)
+contract Deploy is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
@@ -113,14 +122,19 @@ contract Deploy is Script {
     uint256 public constant DEFAULT_MAX_WITHDRAW_PER_WINDOW = 100_000 * 1e6;
     /// @notice Default policy lifetime (30 days).
     uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
+    /// @notice Devnet vault TVL cap if `VAULT_TVL_CAP` is unset (10M USDC).
+    uint256 public constant DEFAULT_TVL_CAP = 10_000_000 * 1e6;
+    /// @notice Devnet per-deposit cap if `VAULT_PER_DEPOSIT_CAP` is unset (1M USDC).
+    uint256 public constant DEFAULT_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
 
-    /// @notice Minimum seed deposit required before the vault is opened to the public.
+    /// @notice Default seed deposit for a broadcast run: 1 USDC (6 decimals).
     ///         Protects against ERC-4626 share-price inflation attacks on a zero-supply vault
-    ///         even with `_decimalsOffset() == 18`.
-    ///         See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
-    ///         TEMPORARY: lowered from 1,000 USDC to 1 USDC; see
-    ///         docs/future/review-usdc-seed.md for why and what reverting it
-    ///         requires — must be reverted before mainnet.
+    ///         even with `_decimalsOffset() == 18`; the seed anchors the share price to real
+    ///         capital before any public depositor arrives. See
+    ///         docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
+    ///         A mainnet ceremony does not rely on this default: it sets `SEED_DEPOSIT_USDC`
+    ///         explicitly on its frozen sheet (devops mainnet runbook P4), so the production
+    ///         seed is a deliberate, reviewed value.
     uint256 public constant SEED_DEPOSIT_AMOUNT = 1 * 1e6; // 1 USDC (6 decimals)
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys all contracts, and writes a JSON file.
@@ -137,25 +151,23 @@ contract Deploy is Script {
         // holds as d.admin.
         _authorizeDeployAgent(d, p);
         _approveAndRegisterAdapters(d);
-        // Seed deposit: the deployer (broadcaster) approves and deposits ≥ 1,000 USDC
+        uint256 seed = _seedAmount("");
+        // Seed deposit: the deployer (broadcaster) approves and deposits the seed
         // before the vault is opened to the public.  This is required by
         // docs/technical/security-model.md §3 to prevent the share-price
         // inflation attack on a zero-supply vault.  In broadcast mode the
         // broadcaster IS d.admin so no vm.prank is needed.
-        IERC20(d.usdc).approve(address(d.vault), SEED_DEPOSIT_AMOUNT);
-        uint256 seedShares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, d.admin);
+        IERC20(d.usdc).approve(address(d.vault), seed);
+        uint256 seedShares = d.vault.deposit(seed, d.admin);
         // Allow up to 1 bps (0.01%) rounding loss when real yield-protocol adapters
         // (Aave V3, Compound V3, Morpho) convert USDC to yield-bearing tokens and
         // back. Real adapters may lose a few token dust units due to integer
         // division in exchange-rate math. The security property here is that
         // assets actually landed in the vault (totalAssets > 0), not that the
         // exact amount round-tripped.
-        require(
-            d.vault.totalAssets() >= SEED_DEPOSIT_AMOUNT * 9_999 / 10_000,
-            "seed deposit: totalAssets too low"
-        );
+        require(d.vault.totalAssets() >= seed * 9_999 / 10_000, "seed deposit: totalAssets too low");
         require(d.vault.totalSupply() > 0, "seed deposit: totalSupply must be > 0");
-        console2.log("  seed deposit (USDC):", SEED_DEPOSIT_AMOUNT);
+        console2.log("  seed deposit (USDC):", seed);
         console2.log("  seed shares minted :", seedShares);
         vm.stopBroadcast();
 
@@ -206,6 +218,9 @@ contract Deploy is Script {
         p.maxWithdrawPerPayment = DEFAULT_MAX_WITHDRAW_PER_PAYMENT;
         p.maxWithdrawPerWindow = DEFAULT_MAX_WITHDRAW_PER_WINDOW;
         p.usdcAddress = usdc_;
+        p.feeRecipient = admin_;
+        p.tvlCap = DEFAULT_TVL_CAP;
+        p.perDepositCap = DEFAULT_PER_DEPOSIT_CAP;
         d = _doDeploy(p);
         // In-process (no broadcast): addAdapter and authorizeAgent require
         // ADMIN_ROLE and DEFAULT_ADMIN_ROLE respectively, both held by d.admin.
@@ -245,6 +260,9 @@ contract Deploy is Script {
         p.maxWithdrawPerPayment = DEFAULT_MAX_WITHDRAW_PER_PAYMENT;
         p.maxWithdrawPerWindow = DEFAULT_MAX_WITHDRAW_PER_WINDOW;
         p.usdcAddress = usdc_;
+        p.feeRecipient = admin_;
+        p.tvlCap = DEFAULT_TVL_CAP;
+        p.perDepositCap = DEFAULT_PER_DEPOSIT_CAP;
         d = _doDeploy(p);
         vm.startPrank(d.admin);
         _authorizeDeployAgent(d, p);
@@ -268,23 +286,58 @@ contract Deploy is Script {
         ///      this to the canonical Base USDC ([`CANONICAL_BASE_USDC`]);
         ///      forge unit tests deploy a `TestERC20` helper.
         address usdcAddress;
+        /// @dev Vault economics. Defaults are the devnet values; a mainnet
+        ///      ceremony sets all four on its frozen sheet (devops review
+        ///      2026-09-30, R-01: the fee recipient used to be the deployer EOA,
+        ///      which the mainnet runbook retires right after the handover).
+        address feeRecipient;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
+    }
+
+    /// @dev The seed this broadcast run deposits: `<prefix>SEED_DEPOSIT_USDC` (6-decimal
+    ///      units), default SEED_DEPOSIT_AMOUNT. Must be non-zero.
+    function _seedAmount(string memory prefix) internal view returns (uint256 seed) {
+        seed = _envOrDefault(string.concat(prefix, "SEED_DEPOSIT_USDC"), SEED_DEPOSIT_AMOUNT);
+        require(seed > 0, "SEED_DEPOSIT_USDC=0");
     }
 
     function _readEnvParams() internal view returns (Params memory p) {
-        p.admin = vm.envAddress("ADMIN_ADDRESS");
-        p.pauser = vm.envAddress("PAUSER_ADDRESS");
-        p.agent = vm.envAddress("AGENT_ADDRESS");
-        p.shareReceiver = vm.envAddress("SHARE_RECEIVER_ADDRESS");
+        return _readEnvParamsFrom("");
+    }
+
+    /// @dev `prefix` is "" in production. Tests pass their own prefix because env
+    ///      vars are process-wide and forge runs tests in parallel.
+    function _readEnvParamsFrom(string memory prefix) internal view returns (Params memory p) {
+        _requireExpectedChain(prefix);
+        p.admin = vm.envAddress(string.concat(prefix, "ADMIN_ADDRESS"));
+        p.pauser = vm.envAddress(string.concat(prefix, "PAUSER_ADDRESS"));
+        p.agent = vm.envAddress(string.concat(prefix, "AGENT_ADDRESS"));
+        p.shareReceiver = vm.envAddress(string.concat(prefix, "SHARE_RECEIVER_ADDRESS"));
         p.validUntil = uint64(
-            _envOrDefault("AGENT_VALID_UNTIL", block.timestamp + DEFAULT_VALID_UNTIL_OFFSET)
+            _envOrDefault(
+                string.concat(prefix, "AGENT_VALID_UNTIL"),
+                block.timestamp + DEFAULT_VALID_UNTIL_OFFSET
+            )
         );
-        p.maxPerPayment = _envOrDefault("AGENT_MAX_PER_PAYMENT", DEFAULT_MAX_PER_PAYMENT);
-        p.maxPerWindow = _envOrDefault("AGENT_MAX_PER_WINDOW", DEFAULT_MAX_PER_WINDOW);
-        p.maxWithdrawPerPayment =
-            _envOrDefault("AGENT_MAX_WITHDRAW_PER_PAYMENT", DEFAULT_MAX_WITHDRAW_PER_PAYMENT);
-        p.maxWithdrawPerWindow =
-            _envOrDefault("AGENT_MAX_WITHDRAW_PER_WINDOW", DEFAULT_MAX_WITHDRAW_PER_WINDOW);
-        p.usdcAddress = vm.envAddress("USDC_ADDRESS");
+        p.maxPerPayment =
+            _envOrDefault(string.concat(prefix, "AGENT_MAX_PER_PAYMENT"), DEFAULT_MAX_PER_PAYMENT);
+        p.maxPerWindow =
+            _envOrDefault(string.concat(prefix, "AGENT_MAX_PER_WINDOW"), DEFAULT_MAX_PER_WINDOW);
+        p.maxWithdrawPerPayment = _envOrDefault(
+            string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_PAYMENT"),
+            DEFAULT_MAX_WITHDRAW_PER_PAYMENT
+        );
+        p.maxWithdrawPerWindow = _envOrDefault(
+            string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_WINDOW"), DEFAULT_MAX_WITHDRAW_PER_WINDOW
+        );
+        p.usdcAddress = vm.envAddress(string.concat(prefix, "USDC_ADDRESS"));
+        p.feeRecipient = vm.envOr(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"), p.admin);
+        p.tvlCap = _envOrDefault(string.concat(prefix, "VAULT_TVL_CAP"), DEFAULT_TVL_CAP);
+        p.perDepositCap =
+            _envOrDefault(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"), DEFAULT_PER_DEPOSIT_CAP);
+        p.exitFeeBps = _envOrDefault(string.concat(prefix, "VAULT_EXIT_FEE_BPS"), 0);
     }
 
     function _approveAndRegisterAdapters(Deployed memory d) internal {
@@ -377,14 +430,14 @@ contract Deploy is Script {
         require(p.usdcAddress != address(0), "USDC_ADDRESS=0");
         require(p.usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
         d.usdc = p.usdcAddress;
-        uint256 tvlCap = 10_000_000 * 1e6; // 10M USDC
-        uint256 perDepositCap = 1_000_000 * 1e6; // 1M USDC
+        require(p.feeRecipient != address(0), "FEE_RECIPIENT_ADDRESS=0");
+        require(p.tvlCap > 0 && p.perDepositCap > 0, "VAULT_TVL_CAP / VAULT_PER_DEPOSIT_CAP = 0");
         d.vault = new RobotMoneyVault(
             IERC20(d.usdc),
-            tvlCap,
-            perDepositCap,
-            0, // exitFeeBps = 0
-            d.admin, // feeRecipient (fees are 0, any non-zero addr)
+            p.tvlCap, // VAULT_TVL_CAP, default DEFAULT_TVL_CAP (devnet)
+            p.perDepositCap, // VAULT_PER_DEPOSIT_CAP, default DEFAULT_PER_DEPOSIT_CAP (devnet)
+            p.exitFeeBps, // VAULT_EXIT_FEE_BPS, default 0
+            p.feeRecipient, // FEE_RECIPIENT_ADDRESS, default admin (devnet only; never the deployer on mainnet)
             d.admin, // vaultAdmin — receives ADMIN_ROLE
             d.admin // emergencyResponder — receives EMERGENCY_ROLE (separate in prod)
         );

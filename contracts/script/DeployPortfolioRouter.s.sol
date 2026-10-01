@@ -8,6 +8,7 @@ import {console2} from "forge-std/console2.sol";
 
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployPortfolioRouter
 /// @notice Foundry deploy script for the PortfolioRouter contract.
@@ -27,7 +28,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 ///         Optional env vars:
 ///           DEPLOYMENT_OUT     — path for the output JSON
 ///                                (default: "deployments/router-<chain_id>.json")
-contract DeployPortfolioRouter is Script {
+contract DeployPortfolioRouter is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice BPS weight assigned to RobotMoneyVault as the sole active vault.
@@ -50,10 +51,14 @@ contract DeployPortfolioRouter is Script {
     ///         setWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
     /// @return d Struct containing the deployed router and key parameters.
     function run() external returns (Deployed memory d) {
+        _requireExpectedChain("");
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address registry = vm.envAddress("REGISTRY_ADDRESS");
         address vault = vm.envAddress("VAULT_ADDRESS");
         address usdc = vm.envAddress("USDC_ADDRESS");
+        require(registry.code.length > 0, "REGISTRY_ADDRESS has no code on this chain");
+        require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
+        require(usdc.code.length > 0, "USDC_ADDRESS has no code on this chain");
 
         vm.startBroadcast();
         d = _deploy(admin, registry, vault, usdc);

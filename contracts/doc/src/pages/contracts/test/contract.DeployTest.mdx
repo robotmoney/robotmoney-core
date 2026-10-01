@@ -5,7 +5,7 @@ description: "Note: adapter constructors only check for address(0) — they do N
 
 # DeployTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/459241c745781d17f5089e0f4c2b94d7d9e255a1/contracts/test/Deploy.t.sol)
 
 **Inherits:** Test
 
@@ -193,10 +193,9 @@ function test_deploy_revertsWhenPauserEqualsAgent() public;
 
 ### test_deploy_seedDepositAmount_isOneUsdc
 
-SEED_DEPOSIT_AMOUNT constant equals 1 USDC (1_000_000 wei).
-This is a pure unit check — no protocol interaction required.
-The fork-level post-conditions are in DeploySeedDeposit.t.sol.
-TEMPORARY: was 1,000 USDC; see docs/future/review-usdc-seed.md.
+SEED_DEPOSIT_AMOUNT constant equals 1 USDC (1_000_000 units). A mainnet
+ceremony sets SEED_DEPOSIT_USDC explicitly, so this default is the
+rehearsal and devnet seed.
 
 ```solidity
 function test_deploy_seedDepositAmount_isOneUsdc() public view;

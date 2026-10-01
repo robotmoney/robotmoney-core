@@ -1596,12 +1596,17 @@ contract DeployTimelockAgentListInputTest is Test {
 ///         the broadcast path against a Deploy.s.sol stack. Every env var it
 ///         reads carries a prefix only this test sets, because env vars are
 ///         process-wide and forge runs tests in parallel.
-contract DeployTimelockRunEntrypointTest is Test {
+abstract contract DeployTimelockRunEntrypointBase is Test {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
-    string internal constant PREFIX = "RM_1476_RUN_ENTRYPOINT_";
+
+    /// @dev Overridden by subclasses so tests that mutate shared env vars
+    ///      (vm.setEnv is process-wide) each get their own namespace.
+    function _prefix() internal pure virtual returns (string memory) {
+        return "RM_1476_RUN_ENTRYPOINT_";
+    }
     string internal constant OUT_PATH = "/tmp/1476-run-entrypoint-manifest.json";
 
     ManifestHarness internal harness;
@@ -1612,7 +1617,7 @@ contract DeployTimelockRunEntrypointTest is Test {
     RobotMoneyGateway internal gateway;
 
     function _set(string memory name, string memory value) internal {
-        vm.setEnv(string.concat(PREFIX, name), value);
+        vm.setEnv(string.concat(_prefix(), name), value);
     }
 
     function setUp() public {
@@ -1673,9 +1678,14 @@ contract DeployTimelockRunEntrypointTest is Test {
         _set("DEPLOYMENT_OUT", OUT_PATH);
         if (vm.exists(OUT_PATH)) vm.removeFile(OUT_PATH);
     }
+}
+
+/// @notice The broadcast-path happy case (issue #1476), on the shared fixture.
+contract DeployTimelockRunEntrypointTest is DeployTimelockRunEntrypointBase {
+    using stdJson for string;
 
     function test_run_handsAgentAddressesToTimelock() public {
-        DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, PREFIX);
+        DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
 
         address timelock = address(d.timelock);
         assertEq(gateway.agentOwner(deployAgent), timelock, "deploy agent not owned by timelock");
@@ -1707,5 +1717,84 @@ contract RunEntrypointRelay {
         returns (DeployTimelock.Deployed memory)
     {
         return harness.exposedRunFrom(prefix);
+    }
+}
+
+/// @dev devops review 2026-09-30: inputs the ceremony used to accept silently.
+///      One contract per test: each mutates env vars the base setUp also sets,
+///      and forge runs tests in parallel over a process-wide environment.
+contract DeployTimelockDelayFloorTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_REVIEW_R04_FLOOR_";
+    }
+
+    /// @notice R-04: a delay under 48 hours is refused on the broadcast path
+    ///         unless the devnet override is set explicitly.
+    function test_run_revertsBelowDelayFloor() public {
+        _set("TIMELOCK_MIN_DELAY", "60");
+        vm.expectRevert(
+            bytes(
+                "TIMELOCK_MIN_DELAY below 172800 (48h): set ALLOW_SHORT_TIMELOCK_DELAY=true only on a devnet"
+            )
+        );
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+}
+
+contract DeployTimelockDelayOverrideTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_REVIEW_R04_OVERRIDE_";
+    }
+
+    function test_run_shortDelayAllowedWithExplicitOverride() public {
+        _set("TIMELOCK_MIN_DELAY", "60");
+        _set("ALLOW_SHORT_TIMELOCK_DELAY", "true");
+        DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        assertEq(d.timelock.getMinDelay(), 60, "override not honoured");
+    }
+}
+
+contract DeployTimelockExpectedChainTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_REVIEW_B6_CHAIN_";
+    }
+
+    /// @notice R-01/B6: EXPECTED_CHAIN_ID must match the chain the RPC serves.
+    function test_run_revertsOnExpectedChainMismatch() public {
+        _set("EXPECTED_CHAIN_ID", vm.toString(block.chainid + 1));
+        vm.expectRevert(bytes("EXPECTED_CHAIN_ID does not match the RPC's chain id"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+}
+
+contract DeployTimelockReceiptAdminTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_REVIEW_R02_RECEIPT_";
+    }
+
+    /// @notice R-02: a RECEIPT_ADMIN_ADDRESS that names the wrong account must not
+    ///         leave the deployer holding the receipt contract's admin roles.
+    function test_run_revertsWhenReceiptAdminAddressIsWrong() public {
+        ReceiptRoleStub receipt = new ReceiptRoleStub(deployer);
+        _set("CONSENSUS_RECEIPT_ADDRESS", vm.toString(address(receipt)));
+        _set("RECEIPT_ADMIN_ADDRESS", vm.toString(makeAddr("not-the-receipt-admin")));
+        vm.expectRevert(
+            bytes(
+                "Deployer still has ADMIN_ROLE on consensus receipt: RECEIPT_ADMIN_ADDRESS names the wrong account"
+            )
+        );
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        assertTrue(receipt.hasRole(ADMIN_ROLE, deployer), "stub precondition");
+    }
+}
+
+/// @dev Stands in for ConsensusRecommendationReceipt's role surface: the
+///      handover only needs `hasRole` / `grantRole` / `revokeRole`.
+contract ReceiptRoleStub is AccessControl {
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
+    constructor(address admin) {
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(ADMIN_ROLE, admin);
     }
 }

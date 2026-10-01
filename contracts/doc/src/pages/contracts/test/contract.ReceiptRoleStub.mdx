@@ -1,0 +1,41 @@
+---
+title: "ReceiptRoleStub"
+---
+
+# ReceiptRoleStub
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83eab89b8819bc1dd25ef3cee4ffbdd7220d6f63/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** AccessControl
+
+<i>
+
+Stands in for ConsensusRecommendationReceipt's role surface: the
+handover only needs `hasRole` / `grantRole` / `revokeRole`.
+
+</i>
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address admin);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin | `address` |  |
+

@@ -14,6 +14,7 @@ import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @dev Minimal Safe interface — only `getThreshold()` is required for the
 ///      deploy-time guard that rejects EOA or low-threshold Safe addresses.
@@ -87,10 +88,15 @@ interface IRouterGovernanceQuorum {
 ///           EMERGENCY_ADDRESS      — independent hot key that receives the vault
 ///                                    EMERGENCY_ROLE (must differ from the deployer
 ///                                    EOA; ACL-1 / F-01)
-///           TIMELOCK_MIN_DELAY     — minimum delay in seconds (e.g. 172800 = 2 days)
+///           TIMELOCK_MIN_DELAY     — minimum delay in seconds. Must be >= 172800
+///                                    (48 hours, security-model.md §4) unless
+///                                    ALLOW_SHORT_TIMELOCK_DELAY=true (devnets only).
 ///
 ///         Optional env vars:
-///           DEPLOYMENT_OUT         — output JSON path; default artifacts/timelock.json
+///           EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches
+///                                    (set 8453 for Base mainnet)
+///           ALLOW_SHORT_TIMELOCK_DELAY — `true` lifts the 48-hour floor. Devnets only.
+///           DEPLOYMENT_OUT         — output JSON path; default deployments/timelock-<chain_id>.json
 ///           IC_POLICY_ADDRESS      — InvestmentCommitteePolicy (issue #1319, one-
 ///                                    ceremony rule #1247 AC10 / INV-3). When set,
 ///                                    the same grant→verify→revoke handover runs on
@@ -130,13 +136,15 @@ interface IRouterGovernanceQuorum {
 /// @dev After deploying, the broadcaster (current ADMIN_ROLE holder) is no
 ///      longer the admin on any contract. Verify with:
 ///        cast call <vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") <timelock>
-contract DeployTimelock is Script {
+contract DeployTimelock is ExpectedChainGuard {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
     /// @dev OZ `AccessControl.DEFAULT_ADMIN_ROLE` is `bytes32(0)`.
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
+    /// @dev security-model.md §4: production timelock delay floor, 48 hours.
+    uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
 
     struct Deployed {
         TimelockController timelock;
@@ -183,6 +191,18 @@ contract DeployTimelock is Script {
         d.consensusReceipt =
             vm.envOr(string.concat(prefix, "CONSENSUS_RECEIPT_ADDRESS"), address(0));
         d.receiptAdmin = vm.envOr(string.concat(prefix, "RECEIPT_ADMIN_ADDRESS"), address(0));
+
+        _requireExpectedChain(prefix);
+        // security-model.md §4: the production delay for high-risk operations is
+        // >= 48 hours. The contract accepts any non-zero delay, and nothing else
+        // in the ceremony checks it (devops review 2026-09-30, R-04: a 60-second
+        // delay landed on a mainnet fork with no error). Devnets opt out
+        // explicitly; a broadcast run never gets a short delay by accident.
+        require(
+            d.minDelay >= MIN_PRODUCTION_DELAY
+                || vm.envOr(string.concat(prefix, "ALLOW_SHORT_TIMELOCK_DELAY"), false),
+            "TIMELOCK_MIN_DELAY below 172800 (48h): set ALLOW_SHORT_TIMELOCK_DELAY=true only on a devnet"
+        );
 
         _validate(d);
 
@@ -610,6 +630,20 @@ contract DeployTimelock is Script {
                     .hasRole(DEFAULT_ADMIN_ROLE, currentReceiptAdmin),
                 "Configured receipt admin still has DEFAULT_ADMIN_ROLE on consensus receipt"
             );
+            // A wrong RECEIPT_ADMIN_ADDRESS must not leave the deployer EOA as the
+            // receipt's admin: the revoke above targets the configured address,
+            // which may not be the one that actually holds the role. Assert the
+            // deployer's state regardless of what was configured (devops review
+            // 2026-09-30, finding R-02; on a fork the handover passed while the
+            // deployer kept both roles).
+            require(
+                !IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, msg.sender),
+                "Deployer still has ADMIN_ROLE on consensus receipt: RECEIPT_ADMIN_ADDRESS names the wrong account"
+            );
+            require(
+                !IAccessControl(d.consensusReceipt).hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
+                "Deployer still has DEFAULT_ADMIN_ROLE on consensus receipt: RECEIPT_ADMIN_ADDRESS names the wrong account"
+            );
         }
     }
 
@@ -676,7 +710,10 @@ contract DeployTimelock is Script {
         try vm.envString(outVar) returns (string memory s) {
             outPath = s;
         } catch {
-            outPath = "artifacts/timelock.json";
+            // Under deployments/ like every other deploy script: foundry.toml
+            // grants no write permission to artifacts/, so the old default
+            // failed every run that did not set DEPLOYMENT_OUT.
+            outPath = string.concat("deployments/timelock-", vm.toString(block.chainid), ".json");
         }
         _writeJsonTo(d, outPath);
     }

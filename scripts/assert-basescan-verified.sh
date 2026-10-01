@@ -8,14 +8,20 @@
 # §13 row "Deploy-key compromise pushes a malicious contract" states:
 #   "BaseScan verification must complete within one hour of deploy."
 #
-# This script polls the BaseScan v2 API's checkverifystatus / getsourcecode
+# NOTE (2026-10-01): Etherscan API v2 answers "Free API access is not supported for this chain" for Base,
+# so this script needs a PAID Etherscan plan. The devops mainnet runbook verifies on Blockscout and Sourcify
+# instead (devops scripts/mainnet-verify-sources.sh, no API key) and does not use this script.
+#
+# This script polls the Etherscan API v2 (which serves BaseScan; the per-chain
+# api.basescan.org v1 host now answers only "deprecated V1 endpoint") getsourcecode
 # endpoint for each contract address in the deployment set, retrying on a
 # configurable interval until all contracts report isVerified/SourceCode status,
 # or until the timeout is reached.  On timeout it logs the unverified addresses
 # and exits non-zero, blocking the deploy job.
 #
 # USAGE
-#   BASESCAN_API_KEY=<key> \
+#   ETHERSCAN_API_KEY=<key> \  # one Etherscan account key works for every chain on v2;
+#                              # BASESCAN_API_KEY is still accepted as an alias
 #   NETWORK=base              \  # "base" (mainnet)
 #   TIMEOUT_SECONDS=3600      \  # default 3600 s (1 h)
 #   POLL_INTERVAL_SECONDS=30  \  # default 30 s
@@ -29,8 +35,8 @@
 #   These two variables are mutually exclusive per-address; UNVERIFIED takes
 #   precedence.
 #
-# NETWORK → BaseScan API base URL
-#   base          → https://api.basescan.org/api
+# NETWORK → Etherscan v2 chain id
+#   base          → chainid=8453 at https://api.etherscan.io/v2/api
 #
 # EXIT CODES
 #   0  — all supplied addresses are verified on BaseScan
@@ -45,7 +51,7 @@ set -euo pipefail
 NETWORK="${NETWORK:-base}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-3600}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-30}"
-BASESCAN_API_KEY="${BASESCAN_API_KEY:-}"
+BASESCAN_API_KEY="${ETHERSCAN_API_KEY:-${BASESCAN_API_KEY:-}}"
 MOCK_BASESCAN_VERIFIED="${MOCK_BASESCAN_VERIFIED:-}"
 MOCK_BASESCAN_UNVERIFIED="${MOCK_BASESCAN_UNVERIFIED:-}"
 
@@ -84,9 +90,10 @@ declare -a ADDRESSES=("$@")
 # ---------------------------------------------------------------------------
 # Resolve API base URL
 # ---------------------------------------------------------------------------
+API_BASE="https://api.etherscan.io/v2/api"
 case "${NETWORK}" in
   base)
-    API_BASE="https://api.basescan.org/api"
+    CHAIN_ID=8453
     ;;
   *)
     fail "Unknown NETWORK '${NETWORK}'. Use 'base'."
@@ -147,7 +154,7 @@ is_verified_live() {
   local addr="$1"
   local response
   response=$(curl --silent --max-time 30 \
-    "${API_BASE}?module=contract&action=getsourcecode&address=${addr}&apikey=${BASESCAN_API_KEY}" \
+    "${API_BASE}?chainid=${CHAIN_ID}&module=contract&action=getsourcecode&address=${addr}&apikey=${BASESCAN_API_KEY}" \
     2>/dev/null) || {
     log "WARNING: curl failed for ${addr} — treating as unverified"
     return 1
