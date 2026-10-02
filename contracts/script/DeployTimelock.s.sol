@@ -141,6 +141,9 @@ interface IRouterGovernanceQuorum {
 ///      longer the admin on any contract. Verify with:
 ///        cast call <vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") <timelock>
 contract DeployTimelock is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "timelock.json";
+
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");

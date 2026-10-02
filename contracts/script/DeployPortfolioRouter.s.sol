@@ -31,6 +31,9 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
 ///         (mandatory and equal to 8453 on Base mainnet).
 contract DeployPortfolioRouter is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "router.json";
+
     using stdJson for string;
 
     /// @notice BPS weight assigned to RobotMoneyVault as the sole active vault.

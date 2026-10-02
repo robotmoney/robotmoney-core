@@ -6,7 +6,7 @@ import { STAGES, assertGatewayRouter, assertStageOrder, mergeManifests } from ".
 describe("stage table", () => {
   test("runs libs, vault, registry, router, gateway, governance, ic, three basket vaults, timelock in that order", () => {
     expect(STAGES.map((s) => s.name)).toEqual([
-      "libs", "vault", "registry", "router", "gateway", "governance", "ic", "protocol", "agent", "rwa", "timelock",
+      "libs", "vault", "registry", "router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa", "timelock",
     ]);
   });
   test("the timelock is last and hands over all four vaults", () => {

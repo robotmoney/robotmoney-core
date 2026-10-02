@@ -30,6 +30,9 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
 ///         (mandatory and equal to 8453 on Base mainnet).
 contract DeployVaultRegistry is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "registry.json";
+
     using stdJson for string;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).

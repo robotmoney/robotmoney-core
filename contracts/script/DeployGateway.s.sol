@@ -35,6 +35,9 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///        DEPLOYMENT_OUT        — output JSON path
 ///      USDC is the canonical Base USDC constant on every chain.
 contract DeployGateway is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "gateway.json";
+
     /// @notice In-process test seam defaults. Env runs require every agent cap.
     uint256 public constant DEFAULT_MAX_PER_PAYMENT = 10_000 * 1e6;
     uint256 public constant DEFAULT_MAX_PER_WINDOW = 100_000 * 1e6;

@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 // Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S3 (issue 1485), core 1493.
 //
-// The core deploy as data: one stage table, one runner. The order is libs, vault, registry,
-// router, gateway, governance, ic, the three basket vaults (rmPROTO, rmAGENT, rmRWA), then the
+// The core deploy as data: scripts/deploy/stage-table.json (the one table, read by devops too), one runner. The order is libs, vault, registry,
+// router, gateway, governance, ic-policy, proto, agent, rwa (rmPROTO, rmAGENT, rmRWA), then the
 // timelock. The router runs BEFORE the gateway because the gateway stores the router as an
 // immutable (core 1493). Agent authorization is part of the gateway stage, so it follows the
 // gateway. The timelock stage is last: it hands every vault, the gateway, registry, router,
@@ -37,11 +37,46 @@ export type StageName =
   | "router"
   | "gateway"
   | "governance"
-  | "ic"
-  | "protocol"
+  | "ic-policy"
+  | "proto"
   | "agent"
   | "rwa"
   | "timelock";
+
+/** One row of scripts/deploy/stage-table.json (version 1), the interface devops reads. */
+export interface TableStage {
+  name: StageName;
+  kind: "forge";
+  script: string;
+  requiredEnv: string[];
+  optionalEnv: string[];
+  manifest: string;
+  libraries: string[];
+  vault: "USDC" | "PROTO" | "AGENT" | "RWA" | null;
+}
+export interface TableLibrary {
+  name: string;
+  artifact: string;
+  manifestKey: string;
+  /** Source path used for `forge script --libraries path:artifact:address`. */
+  path?: string;
+}
+export interface StageTable {
+  version: 1;
+  stages: TableStage[];
+  vaults: { key: string; stage: string; artifact: string; manifest: string }[];
+  libraries: TableLibrary[];
+  artifacts: Record<string, string>;
+}
+
+export const TABLE_PATH = join(import.meta.dir, "stage-table.json");
+
+/** Reads the stage table: the one source of truth for stage names, scripts, env and manifests. */
+export function loadStageTable(path: string = TABLE_PATH): StageTable {
+  const t = JSON.parse(readFileSync(path, "utf8")) as StageTable;
+  if (t.version !== 1) throw new Error(`stage-table.json version ${t.version} is not supported`);
+  return t;
+}
 
 export interface Stage {
   name: StageName;
@@ -55,14 +90,17 @@ export interface Stage {
   ns?: string;
   /** Extra env computed from the merged manifest (the timelock's VAULT_ADDRESSES). */
   computed?: (m: Record<string, unknown>) => Record<string, string>;
-  /** Operator inputs the stage reads from the process environment. Checked before it runs. */
+  /** Operator inputs the stage reads from the environment. Checked before it runs. */
   requiredEnv?: string[];
+  /** Manifest file name from the table (the basename of the manifest template). */
+  manifestFile: string;
+  /** Libraries to link, from the table. */
+  libraries: TableLibrary[];
 }
 
 /** The merged-manifest key a stage's raw key lands under. */
 export const keyOf = (s: Stage, k: string): string => (s.ns ? `${s.ns}_${k}` : k);
 
-const BASKET_ENV = ["ADMIN_ADDRESS", "SWAP_ROUTER", "TVL_CAP", "PER_DEPOSIT_CAP", "FEE_RECIPIENT"];
 const BASKET_NEEDS = { registry: "REGISTRY_ADDRESS" };
 const BASKET_WRITES = ["vault", "registry", "adapter", "registered", "paused", "assets"];
 
@@ -76,73 +114,25 @@ export function vaultAddresses(m: Record<string, unknown>): string[] {
   });
 }
 
-/** The stage table. Order is the deploy order. */
-export const STAGES: Stage[] = [
-  { name: "libs", target: "contracts/script/DeployLibs.s.sol:DeployLibs", needs: {}, writes: ["tick_math"] },
-  {
-    name: "vault",
-    target: "contracts/script/DeployVault.s.sol:DeployVault",
-    needs: {},
-    writes: ["usdc", "vault", "aave_adapter", "compound_adapter", "moonwell_flagship_adapter"],
-  },
-  {
-    name: "registry",
-    target: "contracts/script/DeployVaultRegistry.s.sol:DeployVaultRegistry",
-    needs: { vault: "VAULT_ADDRESS" },
-    writes: ["registry"],
-  },
-  {
-    name: "router",
-    target: "contracts/script/DeployPortfolioRouter.s.sol:DeployPortfolioRouter",
-    needs: { registry: "REGISTRY_ADDRESS", vault: "VAULT_ADDRESS" },
-    writes: ["router"],
-  },
-  {
-    name: "gateway",
-    target: "contracts/script/DeployGateway.s.sol:DeployGateway",
+/**
+ * Runner wiring the table does not carry: which earlier manifest keys feed which env var, which
+ * keys the stage writes, and the merged-manifest namespace. Keyed by table stage name.
+ */
+const WIRING: Record<StageName, Pick<Stage, "needs" | "writes" | "ns" | "computed">> = {
+  libs: { needs: {}, writes: ["tick_math"] },
+  vault: { needs: {}, writes: ["usdc", "vault", "aave_adapter", "compound_adapter", "moonwell_flagship_adapter"] },
+  registry: { needs: { vault: "VAULT_ADDRESS" }, writes: ["registry"] },
+  router: { needs: { registry: "REGISTRY_ADDRESS", vault: "VAULT_ADDRESS" }, writes: ["router"] },
+  gateway: {
     needs: { vault: "VAULT_ADDRESS", router: "ROUTER_ADDRESS" },
     writes: ["gateway", "gateway_router", "gateway_runtime_hash", "agent"],
   },
-  {
-    name: "governance",
-    target: "contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance",
-    needs: { router: "ROUTER_ADDRESS" },
-    writes: ["governance"],
-  },
-  {
-    name: "ic",
-    target: "contracts/script/DeployInvestmentCommitteePolicy.s.sol:DeployInvestmentCommitteePolicy",
-    needs: { gateway: "GATEWAY_ADDRESS" },
-    writes: ["policy", "consensus_receipt"],
-    requiredEnv: ["RECEIPT_ADMIN_ADDRESS"],
-  },
-  {
-    name: "protocol",
-    target: "contracts/script/DeployProtocolAssetVault.s.sol:DeployProtocolAssetVault",
-    needs: BASKET_NEEDS,
-    writes: BASKET_WRITES,
-    ns: "protocol",
-    requiredEnv: BASKET_ENV,
-  },
-  {
-    name: "agent",
-    target: "contracts/script/DeployAgentTokenVault.s.sol:DeployAgentTokenVault",
-    needs: BASKET_NEEDS,
-    writes: BASKET_WRITES,
-    ns: "agent",
-    requiredEnv: BASKET_ENV,
-  },
-  {
-    name: "rwa",
-    target: "contracts/script/DeployRwaBasketVault.s.sol:DeployRwaBasketVault",
-    needs: BASKET_NEEDS,
-    writes: BASKET_WRITES,
-    ns: "rwa",
-    requiredEnv: BASKET_ENV,
-  },
-  {
-    name: "timelock",
-    target: "contracts/script/DeployTimelock.s.sol:DeployTimelock",
+  governance: { needs: { router: "ROUTER_ADDRESS" }, writes: ["governance"] },
+  "ic-policy": { needs: { gateway: "GATEWAY_ADDRESS" }, writes: ["policy", "consensus_receipt"] },
+  proto: { needs: BASKET_NEEDS, writes: BASKET_WRITES, ns: "protocol" },
+  agent: { needs: BASKET_NEEDS, writes: BASKET_WRITES, ns: "agent" },
+  rwa: { needs: BASKET_NEEDS, writes: BASKET_WRITES, ns: "rwa" },
+  timelock: {
     needs: {
       gateway: "GATEWAY_ADDRESS",
       registry: "REGISTRY_ADDRESS",
@@ -155,17 +145,31 @@ export const STAGES: Stage[] = [
     computed: (m) => ({ VAULT_ADDRESSES: vaultAddresses(m).join(",") }),
     writes: ["timelock", "safe", "emergency", "vaults"],
     ns: "timelock",
-    requiredEnv: [
-      "ADMIN_ADDRESS",
-      "SAFE_ADDRESS",
-      "SAFE_OWNERS",
-      "SAFE_THRESHOLD",
-      "EMERGENCY_ADDRESS",
-      "TIMELOCK_MIN_DELAY",
-      "RECEIPT_ADMIN_ADDRESS",
-    ],
   },
-];
+};
+
+/** Builds the runner stages from the table. Order is the table order. */
+export function stagesFromTable(t: StageTable = loadStageTable()): Stage[] {
+  return t.stages.map((row) => {
+    const w = WIRING[row.name];
+    if (!w) throw new Error(`stage-table.json stage "${row.name}" has no runner wiring in core-stages.ts`);
+    return {
+      name: row.name,
+      target: row.script,
+      ...w,
+      requiredEnv: row.requiredEnv,
+      manifestFile: row.manifest.split("/").pop()!,
+      libraries: row.libraries.map((n) => {
+        const lib = t.libraries.find((l) => l.name === n);
+        if (!lib) throw new Error(`stage ${row.name} links unknown library "${n}"`);
+        return lib;
+      }),
+    };
+  });
+}
+
+/** The stage table. Order is the deploy order. */
+export const STAGES: Stage[] = stagesFromTable();
 
 /** Throws when the stage table breaks the rule: every stage's inputs come from an earlier stage. */
 export function assertStageOrder(stages: Stage[] = STAGES): void {
@@ -249,14 +253,23 @@ async function main() {
 
   for (const stage of STAGES) {
     if (a.only.length && !a.only.includes(stage.name)) continue;
-    const env: Record<string, string> = { DEPLOYMENT_OUT: join(work, `${stage.name}.json`) };
+    const env: Record<string, string> = { DEPLOYMENT_OUT: join(work, stage.manifestFile) };
     const m = merged();
     for (const [key, envName] of Object.entries(stage.needs)) env[envName] = String(m[key]);
-    for (const name of stage.requiredEnv ?? []) {
-      if (!process.env[name]) throw new Error(`stage ${stage.name} needs ${name} in the environment`);
-    }
     if (stage.computed && !a.dryRun) Object.assign(env, stage.computed(m));
-    const cmd = ["forge", "script", stage.target, "--rpc-url", a.rpc, "--slow", ...(a.dryRun ? [] : ["--broadcast"]), ...a.forgeArgs];
+    // A required name is satisfied by the operator environment or by an earlier stage's manifest.
+    const derived = new Set([...Object.values(stage.needs), ...(stage.computed ? ["VAULT_ADDRESSES"] : [])]);
+    for (const name of stage.requiredEnv ?? []) {
+      if (!process.env[name] && !env[name] && !(a.dryRun && derived.has(name))) {
+        throw new Error(`stage ${stage.name} needs ${name} in the environment`);
+      }
+    }
+    const link = stage.libraries.flatMap((l) => {
+      const addr = m[l.manifestKey];
+      if (!addr) throw new Error(`stage ${stage.name} links ${l.name} but no earlier stage wrote "${l.manifestKey}"`);
+      return ["--libraries", `${l.path ?? l.artifact}:${l.artifact}:${String(addr)}`];
+    });
+    const cmd = ["forge", "script", stage.target, "--rpc-url", a.rpc, "--slow", ...link, ...(a.dryRun ? [] : ["--broadcast"]), ...a.forgeArgs];
     const before = a.dryRun ? 0 : await nonce(deployer, a.rpc);
     console.log(`==> stage ${stage.name}`);
     await run(cmd, env);

@@ -1,0 +1,262 @@
+{
+  "version": 1,
+  "stages": [
+    {
+      "name": "libs",
+      "kind": "forge",
+      "script": "contracts/script/DeployLibs.s.sol:DeployLibs",
+      "requiredEnv": [],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/libs.json",
+      "libraries": [],
+      "vault": null
+    },
+    {
+      "name": "vault",
+      "kind": "forge",
+      "script": "contracts/script/DeployVault.s.sol:DeployVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "FEE_RECIPIENT_ADDRESS",
+        "VAULT_TVL_CAP",
+        "VAULT_PER_DEPOSIT_CAP"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID",
+        "SEED_DEPOSIT_USDC",
+        "VAULT_EXIT_FEE_BPS"
+      ],
+      "manifest": "deployments/<chain>/vault.json",
+      "libraries": [],
+      "vault": "USDC"
+    },
+    {
+      "name": "registry",
+      "kind": "forge",
+      "script": "contracts/script/DeployVaultRegistry.s.sol:DeployVaultRegistry",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "VAULT_ADDRESS"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID",
+        "VAULT_NAME"
+      ],
+      "manifest": "deployments/<chain>/registry.json",
+      "libraries": [],
+      "vault": null
+    },
+    {
+      "name": "router",
+      "kind": "forge",
+      "script": "contracts/script/DeployPortfolioRouter.s.sol:DeployPortfolioRouter",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "REGISTRY_ADDRESS",
+        "VAULT_ADDRESS"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/router.json",
+      "libraries": [],
+      "vault": null
+    },
+    {
+      "name": "gateway",
+      "kind": "forge",
+      "script": "contracts/script/DeployGateway.s.sol:DeployGateway",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "PAUSER_ADDRESS",
+        "AGENT_ADDRESS",
+        "SHARE_RECEIVER_ADDRESS",
+        "VAULT_ADDRESS",
+        "ROUTER_ADDRESS",
+        "AGENT_VALID_UNTIL",
+        "AGENT_MAX_PER_PAYMENT",
+        "AGENT_MAX_PER_WINDOW",
+        "AGENT_MAX_WITHDRAW_PER_PAYMENT",
+        "AGENT_MAX_WITHDRAW_PER_WINDOW"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/gateway.json",
+      "libraries": [],
+      "vault": null
+    },
+    {
+      "name": "governance",
+      "kind": "forge",
+      "script": "contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "ROUTER_ADDRESS"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID",
+        "QUORUM_THRESHOLD",
+        "VOTING_PERIOD",
+        "EXECUTION_DELAY"
+      ],
+      "manifest": "deployments/<chain>/governance.json",
+      "libraries": [],
+      "vault": null
+    },
+    {
+      "name": "ic-policy",
+      "kind": "forge",
+      "script": "contracts/script/DeployInvestmentCommitteePolicy.s.sol:DeployInvestmentCommitteePolicy",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "GATEWAY_ADDRESS",
+        "RECEIPT_ADMIN_ADDRESS"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/ic-policy.json",
+      "libraries": [],
+      "vault": null
+    },
+    {
+      "name": "proto",
+      "kind": "forge",
+      "script": "contracts/script/DeployProtocolAssetVault.s.sol:DeployProtocolAssetVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "SWAP_ROUTER",
+        "REGISTRY_ADDRESS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID",
+        "EXIT_FEE_BPS"
+      ],
+      "manifest": "deployments/<chain>/protocol-asset-vault.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": "PROTO"
+    },
+    {
+      "name": "agent",
+      "kind": "forge",
+      "script": "contracts/script/DeployAgentTokenVault.s.sol:DeployAgentTokenVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "SWAP_ROUTER",
+        "REGISTRY_ADDRESS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID",
+        "EXIT_FEE_BPS"
+      ],
+      "manifest": "deployments/<chain>/agent-token-vault.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": "AGENT"
+    },
+    {
+      "name": "rwa",
+      "kind": "forge",
+      "script": "contracts/script/DeployRwaBasketVault.s.sol:DeployRwaBasketVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "SWAP_ROUTER",
+        "REGISTRY_ADDRESS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID",
+        "EXIT_FEE_BPS"
+      ],
+      "manifest": "deployments/<chain>/rwa-basket-vault.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": "RWA"
+    },
+    {
+      "name": "timelock",
+      "kind": "forge",
+      "script": "contracts/script/DeployTimelock.s.sol:DeployTimelock",
+      "requiredEnv": [
+        "AGENT_ADDRESSES",
+        "VAULT_ADDRESSES",
+        "GATEWAY_ADDRESS",
+        "REGISTRY_ADDRESS",
+        "ROUTER_ADDRESS",
+        "GOVERNANCE_ADDRESS",
+        "SAFE_ADDRESS",
+        "SAFE_OWNERS",
+        "SAFE_THRESHOLD",
+        "EMERGENCY_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "IC_POLICY_ADDRESS",
+        "CONSENSUS_RECEIPT_ADDRESS",
+        "RECEIPT_ADMIN_ADDRESS"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/timelock.json",
+      "libraries": [],
+      "vault": null
+    }
+  ],
+  "vaults": [
+    {
+      "key": "USDC",
+      "stage": "vault",
+      "artifact": "RobotMoneyVault",
+      "manifest": "deployments/<chain>/vault.json"
+    },
+    {
+      "key": "PROTO",
+      "stage": "proto",
+      "artifact": "ProtocolAssetVault",
+      "manifest": "deployments/<chain>/protocol-asset-vault.json"
+    },
+    {
+      "key": "AGENT",
+      "stage": "agent",
+      "artifact": "AgentTokenVault",
+      "manifest": "deployments/<chain>/agent-token-vault.json"
+    },
+    {
+      "key": "RWA",
+      "stage": "rwa",
+      "artifact": "RwaBasketVault",
+      "manifest": "deployments/<chain>/rwa-basket-vault.json"
+    }
+  ],
+  "libraries": [
+    {
+      "name": "tick_math",
+      "artifact": "TickMath",
+      "manifestKey": "tick_math",
+      "path": "contracts/lib/TickMath.sol"
+    }
+  ],
+  "artifacts": {
+    "gateway": "RobotMoneyGateway",
+    "router": "PortfolioRouter",
+    "registry": "VaultRegistry",
+    "governance": "RouterGovernance",
+    "timelock": "TimelockController",
+    "icPolicy": "InvestmentCommitteePolicy",
+    "receipt": "ConsensusRecommendationReceipt"
+  }
+}

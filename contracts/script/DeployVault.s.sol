@@ -36,6 +36,9 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///        VAULT_EXIT_FEE_BPS     — default 0
 ///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC
 contract DeployVault is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "vault.json";
+
     /// @notice Canonical Base mainnet USDC (FiatTokenProxy).
     address public constant CANONICAL_BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
 

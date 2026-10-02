@@ -48,6 +48,9 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///
 ///         The router ADMIN_ROLE grant always runs: no flag skips it.
 contract DeployRouterGovernance is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "governance.json";
+
     using stdJson for string;
 
     /// @notice Default voting period: 1 hour in seconds.

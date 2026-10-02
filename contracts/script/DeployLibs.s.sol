@@ -21,6 +21,9 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         Required env vars: EXPECTED_CHAIN_ID (mandatory and equal to 8453 on Base mainnet),
 ///         DEPLOYMENT_OUT (output JSON path).
 contract DeployLibs is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "libs.json";
+
     /// @notice sqrt(1.0001^0) * 2^96: the canonical answer for tick 0.
     uint160 public constant SQRT_RATIO_AT_TICK_ZERO = 79228162514264337593543950336;
 

@@ -46,6 +46,9 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///           DEPLOYMENT_OUT   — path for the output JSON
 ///           EXPECTED_CHAIN_ID — mandatory and equal to 8453 on Base mainnet
 contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "ic-policy.json";
+
     using stdJson for string;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
