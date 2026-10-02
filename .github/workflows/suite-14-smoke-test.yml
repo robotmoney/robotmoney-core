@@ -348,9 +348,29 @@ jobs:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-${{ matrix.binary }}.log
           PUBLISH_CONTRACTS_DIR: ${{ github.workspace }}/devops/publish-contracts
           STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
+          SMOKE_TEST_VERIFY_OUT: ${{ runner.temp }}/stage-verify-labels.txt
         run: >-
           bash ../../.github/scripts/cargo_test_require_executed.sh
           -p smoke-test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
+
+      # Core 1488: the REAL stage outputs go through label-diff and sheet-diff.
+      # The verifier label set from the Twin chain run must equal the mainnet
+      # set, and the stage sheet must differ from the production sheet only in
+      # parameter lines. Both reference files are the devops repo's, checked out
+      # above: a missing file fails this step (it is not skipped).
+      - name: Stage vs mainnet parity (label-diff, sheet-diff on real output)
+        if: ${{ matrix.binary == 'twin_publish' }}
+        env:
+          MAINNET_LABELS: ${{ github.workspace }}/devops/deployments/base-8453/verifier-labels.txt
+          PRODUCTION_SHEET: ${{ github.workspace }}/devops/deployments/base-8453/production-sheet.env
+          STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
+        run: |
+          set -euo pipefail
+          for f in "$MAINNET_LABELS" "$PRODUCTION_SHEET" "$STAGE_SHEET" "$RUNNER_TEMP/stage-verify-labels.txt"; do
+            [ -s "$f" ] || { echo "::error::parity input missing or empty: $f"; exit 1; }
+          done
+          bun scripts/stage/label-diff.ts "$RUNNER_TEMP/stage-verify-labels.txt" "$MAINNET_LABELS"
+          bun scripts/stage/sheet-diff.ts "$STAGE_SHEET" "$PRODUCTION_SHEET"
 
       - name: Upload smoke-test logs
         if: always()

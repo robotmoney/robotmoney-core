@@ -27,6 +27,10 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     }
     let verified = fx.published().verify().expect("the verifier must pass on the Twin chain");
     assert!(!verified.trim().is_empty(), "the verifier printed nothing");
+    // Saved for scripts/stage/label-diff.ts: the stage label set must equal mainnet's.
+    if let Ok(path) = std::env::var("SMOKE_TEST_VERIFY_OUT") {
+        std::fs::write(&path, &verified).expect("write the verifier output");
+    }
     let rows = fx
         .published()
         .govern_matrix()
