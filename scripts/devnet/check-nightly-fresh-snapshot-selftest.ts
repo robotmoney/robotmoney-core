@@ -12,7 +12,8 @@
  *   - check-nightly-fresh-snapshot.ts accepts a manifest without block number, hash or timestamp,
  *     or one whose block timestamp is more than one hour old;
  *   - it accepts a stubbed failing, cancelled, skipped or missing suite result;
- *   - the final step of the results job is not `git diff --exit-code` over the fixture paths;
+ *   - the called suite list is not exactly the final list, or the results job still ends in a git diff
+ *     step that cannot see suite runners (removed: it ran on a fresh checkout);
  *   - snapshot-fork retries do not survive a stub HTTP 429 (snapshot-fork-selftest.ts).
  */
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
@@ -62,6 +63,13 @@ const missingSuites = (file: string): string[] =>
   );
 const jobKey = (s: string) =>
   yq(`.jobs | to_entries[] | select(.value.uses == "./.github/workflows/${SUITE_FILE[s]}") | .key`, WF).out.trim();
+
+// 0. the final suite list is exactly SUITES: no more, no fewer
+const called = yq('.jobs[] | select(.uses != null) | .uses', WF).out.split("\n").filter(Boolean).sort();
+const want = Object.values(SUITE_FILE).map((f) => `./.github/workflows/${f}`).sort();
+if (JSON.stringify(called) !== JSON.stringify(want))
+  bad(`the called suite list is not the final list.\n  want: ${want.join(" ")}\n  got:  ${called.join(" ")}`);
+ok(`the called suite list is exactly: suites ${SUITES.join(", ")}`);
 
 // 1. every suite is in the workflow
 const m0 = missingSuites(WF);
@@ -203,10 +211,11 @@ if (!yqOk('.jobs.results.steps[] | select(.run | test("check-nightly-fresh-snaps
 ok("the results job runs the gate with --suite-results");
 
 // 5. nothing is committed
-const last = yq(".jobs.results.steps[-1].run", WF).out;
-if (!(last.includes("git diff --exit-code") && last.includes("testing/fixtures/fork-state") && last.includes("testing/ethereum-testnet/config")))
-  bad(`the final step of the results job is not git diff --exit-code over the fixture paths: ${last}`);
-ok("the final step of the results job is git diff --exit-code over testing/fixtures/fork-state and testing/ethereum-testnet/config");
+if (yq(".jobs.results.steps[].run // \"\"", WF).out.includes("git diff"))
+  bad("the results job has a git diff step again: it runs on a fresh checkout and cannot see what the suite runners did");
+ok("the results job has no git diff step (it could not see suite runners; reason in the workflow header)");
+if (!yqOk('.permissions.contents == "read" and (.permissions | length) == 1', WF)) bad("the workflow permissions are not contents: read only");
+ok("workflow permissions are contents: read only");
 if (/git (add|commit|push)/.test(live)) bad("the workflow commits or pushes");
 ok("the workflow never runs git add, commit or push");
 

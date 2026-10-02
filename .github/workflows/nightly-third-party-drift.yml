@@ -93,6 +93,7 @@ jobs:
 
       - name: Every manifest address is in the deploy config
         run: |
+          bun scripts/release/check-dependency-manifest-addresses.ts --manifest deployments/dependency-manifests/example.json
           shopt -s nullglob
           for m in deployments/dependency-manifests/*/*.json; do
             bun scripts/release/check-dependency-manifest-addresses.ts --manifest "$m"
