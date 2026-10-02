@@ -55,7 +55,8 @@
       "venue": "UniswapV3",
       "pool": "0x170De01C2b662b7d54BFFd400bc35283B8671e38",
       "poolFee": 500,
-      "pool_status": "confirmed"
+      "pool_status": "no_liquidity",
+      "pool_status_note": "Checked on Base at 2026-10-02: liquidity() is 0 on this pool. rmPROTO ships wETH and cbBTC (one-deployment-scheme plan), so wSOL is not a usable basket asset. The snapshot contents check does not require liquidity here."
     },
     "$comment_agent_tokens": "Retired: AgentTokenVault routing is defined only in config/agent-token-shortlist.json. Do not add rmAGENT entries here.",
     "$comment_rwa": "RWA vault (rmRWA) asset: deSPXA (Centrifuge V3, Base). Entry/exit via Uniswap V3 secondary market (ERC-7540 primary NAV redeem is KYC-gated and not used — see ADR-0006). ADR-0006 originally assumed Aerodrome but on-chain liquidity has migrated to Uniswap V3 (~$3.6M TVL). Token address is the deSPXA ERC-20 on Base (Centrifuge ShareToken). Chronicle NAV oracle address is TBD — separate deployment config item in Phase D.",

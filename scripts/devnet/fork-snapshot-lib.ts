@@ -85,6 +85,8 @@ export interface PoolEntry {
   pool: string;
   tokens: string[]; // tokens named in config (may be partial; the pool is the authority)
   source: string;
+  /** False only when config/dex-pools.json marks the basket row pool_status "no_liquidity": a fact about the upstream pool. */
+  liquidityRequired: boolean;
 }
 
 /**
@@ -100,6 +102,7 @@ export function loadConfiguredPools(repo: string = REPO): PoolEntry[] {
     const prev = byAddr.get(k);
     if (prev) {
       prev.id += `+${e.id}`;
+      prev.liquidityRequired = prev.liquidityRequired && e.liquidityRequired;
       return;
     }
     byAddr.set(k, e);
@@ -107,11 +110,11 @@ export function loadConfiguredPools(repo: string = REPO): PoolEntry[] {
   for (const [id, row] of Object.entries<any>(cfg.basket_assets ?? {})) {
     if (id.startsWith("$") || typeof row !== "object") continue;
     if (row.venue !== "UniswapV3" || !row.pool) continue;
-    add({ id, pool: row.pool, tokens: [row.token].filter(Boolean), source: "basket_assets" });
+    add({ id, pool: row.pool, tokens: [row.token].filter(Boolean), source: "basket_assets", liquidityRequired: row.pool_status !== "no_liquidity" });
   }
   for (const [id, row] of Object.entries<any>(cfg.mainnet?.pools ?? {})) {
     if (row.aerodromePool || !row.pool || !row.token0) continue;
-    add({ id, pool: row.pool, tokens: [row.token0, row.token1].filter(Boolean), source: "mainnet.pools" });
+    add({ id, pool: row.pool, tokens: [row.token0, row.token1].filter(Boolean), source: "mainnet.pools", liquidityRequired: true });
   }
   return [...byAddr.values()];
 }
@@ -120,11 +123,14 @@ export function loadConfiguredPools(repo: string = REPO): PoolEntry[] {
 export function robotMoneyAddresses(repo: string = REPO): Array<[string, string]> {
   const out = [...ROBOT_MONEY_ADDRESSES];
   const seen = new Set(out.map(([a]) => a.toLowerCase()));
+  // Keys of deployments/full-stack.json that are NOT Robot Money contracts: the anvil dev accounts
+  // (EOAs the old stub deploy used as roles) and Base USDC. Everything else in the file is ours.
+  const NOT_ROBOT_MONEY_CODE = new Set(["admin", "agent", "pauser", "share_receiver", "usdc"]);
   for (const f of ["deployments/full-stack.json"]) {
     try {
       const j = JSON.parse(readFileSync(join(repo, f), "utf8"));
       for (const [k, v] of Object.entries<any>(j)) {
-        if (typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v) && !seen.has(v.toLowerCase())) {
+        if (typeof v === "string" && !NOT_ROBOT_MONEY_CODE.has(k) && /^0x[0-9a-fA-F]{40}$/.test(v) && !seen.has(v.toLowerCase())) {
           seen.add(v.toLowerCase());
           out.push([v, `${f}:${k}`]);
         }

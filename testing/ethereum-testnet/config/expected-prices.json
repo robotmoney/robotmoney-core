@@ -1,6 +1,6 @@
 {
   "$comment": "Canonical: docs/prd.md#112-protocol-asset-vault (issue #482). Expected Uniswap V3 mid prices for the landing-page price strip, pinned to the Base fork point recorded in testing/ethereum-testnet/config/fork-block.json. `fork_block` MUST equal that manifest's `block_number` — the CI guard `fork_block_aligns_with_expected_prices` in testing/smoke-test/src/fork_manifest.rs fails the build if the fork block changes without this fixture being refreshed in the same commit. The fork integration test (testing/fork-e2e-rust/tests/landing_price_strip_fork.rs) reads each pool's slot0 from the running forked-Base devnet, converts via the shared sqrtPriceX96 math, and asserts the result matches `expected_price` within `tolerance_pct`. The Playwright fork test asserts the rendered cells match these same values.",
-  "fork_block": 48896605,
+  "fork_block": 52086135,
   "chain": "base",
   "tolerance_pct": 0.5,
   "$tolerance_note": "0.5% (issue #890). Values are captured from the checked-in golden fixture at fork_block. The tolerance absorbs display rounding while still catching wrong decimals, inverted pairs, and material fixture drift.",
@@ -17,7 +17,7 @@
       "quote_decimals": 6,
       "base_is_token0": true,
       "captured": true,
-      "expected_price": 1905.13
+      "expected_price": 2685.2622
     },
     {
       "id": "weth-usdc",
@@ -27,7 +27,7 @@
       "quote_decimals": 6,
       "base_is_token0": true,
       "captured": true,
-      "expected_price": 1905.13
+      "expected_price": 2685.2622
     },
     {
       "id": "cbbtc-usdc",
@@ -37,7 +37,7 @@
       "quote_decimals": 6,
       "base_is_token0": false,
       "captured": true,
-      "expected_price": 65302.25
+      "expected_price": 84911.074
     },
     {
       "id": "wsol-usdc",
@@ -47,7 +47,7 @@
       "quote_decimals": 6,
       "base_is_token0": true,
       "captured": true,
-      "expected_price": 219.96
+      "expected_price": 219.9577
     }
   ]
 }

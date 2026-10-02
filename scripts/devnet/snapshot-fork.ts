@@ -35,7 +35,8 @@
  *      FIXTURE_DIR (default testing/fixtures/fork-state; any other dir skips the
  *      config updates), ANVIL_EXTRA_ARGS, SNAPSHOT_SWAP_USDC (100000000),
  *      SNAPSHOT_TICK_WORDS (6), SNAPSHOT_MAX_OBSERVATIONS (4096),
- *      SNAPSHOT_UPDATE_CONFIG (1|0 overrides the auto choice).
+ *      SNAPSHOT_UPDATE_CONFIG (1|0 overrides the auto choice),
+ *      SNAPSHOT_RESUME_CONFIG (1: skip the capture, move the config files to CURRENT.json's block).
  * Needs on PATH: docker, cast, jq (digest helper), bun; cargo for the ingester.
  * No secret is read, written or logged: transactions are sent from anvil's
  * unlocked dev account 0.
@@ -250,7 +251,33 @@ async function cleanup(): Promise<void> {
   }
 }
 
+/**
+ * SNAPSHOT_RESUME_CONFIG=1: the capture already produced CURRENT.anvil-state (a later step failed, or the
+ * config step needs a rerun). Skip the capture and move fork-block.json, genesis-alloc.json and
+ * expected-prices.json to the block CURRENT.json names. The contents check runs first.
+ */
+async function resumeConfig(): Promise<void> {
+  const cur = JSON.parse(readFileSync(join(FIXTURE_DIR, "CURRENT.json"), "utf8"));
+  const block = Number(cur.fork_block);
+  const currentState = join(FIXTURE_DIR, "CURRENT.anvil-state");
+  await sh(["bun", join(REPO, "scripts/devnet/check-fork-snapshot-contents.ts"), "--state", currentState], {}, true);
+  const upstream = process.env.RMPC_FORK_RPC_URL || (await publicEndpoints())[0];
+  const blk = await rpc(upstream, "eth_getBlockByNumber", ["0x" + block.toString(16), false]);
+  if (!blk?.hash) throw new Error(`upstream did not return block ${block}`);
+  const state = JSON.parse(readFileSync(currentState, "utf8"));
+  const accounts: Record<string, any> = state.accounts ?? state;
+  const slot0ByPool = new Map<string, bigint>();
+  for (const p of loadConfiguredPools()) {
+    const raw = accounts[p.pool.toLowerCase()]?.storage?.["0x" + "0".repeat(64)];
+    if (!raw) throw new Error(`pool ${p.id} ${p.pool} has no slot0 in the snapshot`);
+    slot0ByPool.set(p.pool.toLowerCase(), decodeSlot0(word(raw, 0)).sqrtPriceX96);
+  }
+  await updateConfig(state, block, blk.hash, currentState, slot0ByPool);
+  log("resume done.");
+}
+
 async function main(): Promise<void> {
+  if (process.env.SNAPSHOT_RESUME_CONFIG === "1") return resumeConfig();
   for (const t of ["cast", "jq", "docker"]) await sh(["which", t]).catch(() => { throw new Error(`required tool '${t}' not on PATH`); });
   mkdirSync(FIXTURE_DIR, { recursive: true });
 

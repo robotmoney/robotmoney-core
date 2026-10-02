@@ -111,19 +111,24 @@ async function main() {
           fail(`${tag}: no code`);
           continue;
         }
+        // slot0() returns seven words: sqrtPriceX96, tick, observationIndex, observationCardinality,
+        // observationCardinalityNext, feeProtocol, unlocked. Decode them as the ABI return, not as a packed slot.
         const s0 = await call(p.pool, await calldata("slot0()"));
-        const d = decodeSlot0(word(s0, 0));
-        d.sqrtPriceX96 > 0n ? ok(`${tag}: slot0 sqrtPriceX96=${d.sqrtPriceX96} tick=${d.tick}`) : fail(`${tag}: slot0 sqrtPriceX96 is zero`);
-        d.observationCardinality >= 1 ? ok(`${tag}: observationCardinality=${d.observationCardinality}`) : fail(`${tag}: observationCardinality is zero`);
+        const sqrtPrice = BigInt(word(s0, 0));
+        const obsIndex = Number(BigInt(word(s0, 2)));
+        const obsCardinality = Number(BigInt(word(s0, 3)));
+        sqrtPrice > 0n ? ok(`${tag}: slot0 sqrtPriceX96=${sqrtPrice}`) : fail(`${tag}: slot0 sqrtPriceX96 is zero`);
+        obsCardinality >= 1 ? ok(`${tag}: observationCardinality=${obsCardinality}`) : fail(`${tag}: observationCardinality is zero`);
 
         const liq = BigInt(await call(p.pool, await calldata("liquidity()")));
-        liq > 0n ? ok(`${tag}: liquidity=${liq}`) : fail(`${tag}: liquidity is zero`);
+        if (p.liquidityRequired) liq > 0n ? ok(`${tag}: liquidity=${liq}`) : fail(`${tag}: liquidity is zero`);
+        else ok(`${tag}: liquidity=${liq} (config/dex-pools.json marks this basket pool no_liquidity; not required)`);
 
         // The observation written most recently must be initialised.
-        const ob = await call(p.pool, await calldata("observations(uint256)", String(d.observationIndex)));
+        const ob = await call(p.pool, await calldata("observations(uint256)", String(obsIndex)));
         BigInt(word(ob, 3)) === 1n && BigInt(word(ob, 0)) > 0n
-          ? ok(`${tag}: observations[${d.observationIndex}] initialised`)
-          : fail(`${tag}: observations[${d.observationIndex}] not initialised`);
+          ? ok(`${tag}: observations[${obsIndex}] initialised`)
+          : fail(`${tag}: observations[${obsIndex}] not initialised`);
 
         // observe() answers for now and for a short look-back.
         const obs = await call(p.pool, await calldata("observe(uint32[])", "[0]"));
