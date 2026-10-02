@@ -374,8 +374,7 @@ jobs:
           # that snapshot only carries the state touched while generating the
           # vault/adapter deployment fixtures, which never touched the Uniswap V3
           # factory/pool — `getPool` has no code to call there. It genuinely needs
-          # a live RPC, same as the `live-base-fork-drift` job in
-          # suite-21-nightly.yml, so it uses the same `secrets.RMPC_FORK_RPC_URL`
+          # a live RPC, same as the fork-regressions job above, so it uses the same `secrets.RMPC_FORK_RPC_URL`
           # (repo/org secret, not variable). This repo is public and GitHub
           # does not mask `vars.*` values in logs, including step `env:`
           # headers, so a keyed URL stored as a variable leaks into every

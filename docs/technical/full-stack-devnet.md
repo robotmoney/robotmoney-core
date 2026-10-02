@@ -74,8 +74,8 @@ refreshed. The fixture was historically refreshed every one to four weeks; in
   printed on the pull-request path and annotated as a `::warning::` once the
   pin passes the 21-day cadence. It never fails there — a stale pin is a
   maintenance signal, not a reason to red the merge queue.
-- The nightly `live-base-fork-drift` job calls it with `--max-age-days 30`,
-  where a hard failure is affordable and creates real pressure to refresh.
+- The nightly `fork-pin-age-warning` job calls it without a limit (warning only);
+  it never fails the nightly.
 - `scripts/devnet/check-fork-pin-age-selftest.sh` drives every branch of the
   gate offline; `suite-01-02-forge-tests.yml` runs it before the real fixture
   is judged.

@@ -15,8 +15,8 @@
 //     slippage-floor revert, and the NAV-deviation guard. LOUD-SKIP: setUp reverts
 //     when no fork RPC is configured (never a silent skip) — wired into the CI
 //     fork job with FORK_RPC_URL set from the `vars.RMPC_FORK_RPC_URL` repo
-//     variable (public-RPC fallback), matching the `live-base-fork-drift` job in
-//     suite-21-nightly.yml. It cannot use the offline golden fixture the other
+//     variable (public-RPC fallback), like the fork-regressions job in
+//     suite-01-02-forge-tests.yml. It cannot use the offline golden fixture the other
 //     fork tests in this repo share: that snapshot never touched the Uniswap V3
 //     factory/pool, so it has no code there.
 pragma solidity ^0.8.24;

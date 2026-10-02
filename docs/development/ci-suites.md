@@ -32,7 +32,7 @@ compare (it names the mismatch rather than reporting stale docs).
 |--------|---------|
 | `devnet` | Geth + Lighthouse Docker Compose stack (`testing/ethereum-testnet/config/`). Lifecycle owned by the test code. |
 | `anvil` | In-process Anvil EVM. No Docker. |
-| `fork` | Anvil forked from the checked-in golden fixture (`testing/fixtures/fork-state/`) at a pinned block — deterministic, offline, no secret, no live RPC (ADR-0011). CI fails loudly if the fixture is missing or zero fork tests run; it never silent-skips. (Live Base-mainnet forking survives only as the non-blocking **nightly drift alarm** via a free public RPC — see suite 5.) |
+| `fork` | Anvil forked from the checked-in golden fixture (`testing/fixtures/fork-state/`) at a pinned block — deterministic, offline, no secret, no live RPC (ADR-0011). CI fails loudly if the fixture is missing or zero fork tests run; it never silent-skips. |
 | `none` | No chain. Static analysis, pure unit tests, doc checks. |
 
 ---
@@ -233,13 +233,7 @@ Coverage is **loud** per the repo test-coverage policy: a missing fixture or
 zero executed fork tests fails CI, never silent-skips. (This corrects the
 legacy Solidity fork tests, which called `vm.createSelectFork` against a
 never-provisioned `RMPC_FORK_RPC_URL`/`FORK_RPC_URL` secret and therefore
-silently skip-cleaned to a false green.) A **non-blocking nightly drift alarm**
-forks live **Base mainnet at latest** via a **free public RPC** (public default,
-no secret — the list in `scripts/devnet/fork-rpc-lib.sh`) and re-runs the suite; on
-failure it opens/updates a tracking issue instead of blocking a merge. That
-nightly is what catches real upstream drift (pool migrations, ABI changes,
-oracle heartbeat changes) a pinned snapshot cannot see. It is dispatched by the
-nightly orchestrator (suite 21).
+silently skip-cleaned to a false green.) Live-Base drift is covered by the nightly jobs described in suite 21; there is no live-RPC fork alarm any more.
 
 **Why Anvil here, and why this is not redundant with the Geth+Lighthouse devnet harness:**
 This suite forks **Base mainnet** state (real deployed contracts, real DEX
@@ -870,13 +864,10 @@ signal regardless of whether that day's commits touch each suite's path filters.
 **Jobs:**
 - `dispatch-all-suites` — single job; iterates over all suite workflow files and
   calls `gh workflow run <file> --ref dev`
-- `live-base-fork-drift` — non-blocking nightly alarm that classifies live
-  Base-mainnet fork drift vs. provider/harness failure (issue #1217); runs
-  `.github/scripts/tests/test_live_base_fork_drift.sh` (offline, stubbed
-  curl/forge, no live RPC) before `scripts/devnet/run-live-base-fork-drift.sh`
-  so a classification-logic regression is caught before spending the
-  live-RPC budget (issue #1235; the unit test previously existed but no
-  workflow invoked it).
+- `fork-pin-age-warning` — runs `scripts/devnet/check-fork-pin-age.sh` and
+  only warns; it never fails the run.
+- Self-test: `.github/scripts/check_nightly_dispatch_list.py` (run in suite 13)
+  fails when a suite workflow is missing from the dispatch list.
 
 **Steps — `dispatch-all-suites` job:**
 1. Dispatch each suite workflow via `gh workflow run` against the `dev` ref

@@ -65,6 +65,14 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Self-test nightly dispatch list (core 1495)
+        # Fails when a suite workflow is missing from suite-21-nightly.yml's
+        # SUITES list (release and deploy workflows are excluded explicitly).
+        run: python3 .github/scripts/check_nightly_dispatch_list.py --self-test
+
+      - name: Nightly dispatch list covers every suite
+        run: python3 .github/scripts/check_nightly_dispatch_list.py
+
       - name: Browser keygen ADR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
