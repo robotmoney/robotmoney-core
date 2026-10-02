@@ -30,6 +30,14 @@ contract ShortlistMockPool {
         feeTier = fee_;
     }
 
+    function setCardinality(uint16 c) external {
+        cardinality = c;
+    }
+
+    function setLiquidity(uint128 l) external {
+        poolLiquidity = l;
+    }
+
     function fee() external view returns (uint24) {
         return feeTier;
     }
@@ -198,5 +206,38 @@ contract ProtocolAssetVaultShortlistTest is Test {
         assertEq(fees.length, 0, "empty basket returns zero fees");
         assertEq(active.length, 0, "empty basket returns zero active flags");
         assertEq(balances.length, 0, "empty basket returns zero balances");
+    }
+
+    // --- 1486 / 1490: wSOL has no usable pool at launch and addAsset rejects an empty pool -----
+
+    function _wsolPoolAdd(uint16 card, uint128 liq) internal returns (bool ok, bytes memory ret) {
+        TestERC20 wsol = new TestERC20();
+        ShortlistMockPool pool = new ShortlistMockPool(address(wsol), address(usdc), POOL_FEE);
+        pool.setCardinality(card);
+        pool.setLiquidity(liq);
+        vm.prank(admin);
+        (ok, ret) = address(vault)
+            .call(
+                abi.encodeCall(
+                    BasketVault.addAsset,
+                    (address(wsol), address(pool), POOL_FEE, address(0), BasketVault.Venue.V3)
+                )
+            );
+    }
+
+    /// @notice A wSOL pool with no observation history is rejected, so wSOL cannot join the basket.
+    function test_wsol_emptyPoolCardinalityIsRejected() public {
+        (bool ok, bytes memory ret) = _wsolPoolAdd(0, 1e18);
+        assertFalse(ok, "wSOL pool with zero cardinality must not be added");
+        assertEq(bytes4(ret), BasketVault.InsufficientPoolCardinality.selector);
+        (address[] memory t,,,,) = vault.shortlist();
+        assertEq(t.length, tokens.length, "basket unchanged");
+    }
+
+    /// @notice A wSOL pool with zero liquidity is rejected.
+    function test_wsol_emptyPoolLiquidityIsRejected() public {
+        (bool ok, bytes memory ret) = _wsolPoolAdd(100, 0);
+        assertFalse(ok, "wSOL pool with zero liquidity must not be added");
+        assertEq(bytes4(ret), BasketVault.InsufficientPoolLiquidity.selector);
     }
 }

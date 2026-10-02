@@ -15,6 +15,7 @@ import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
 import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitteePolicy.s.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
+import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
 import {ActivateBasketVaultEligibility} from "../script/ActivateBasketVaultEligibility.s.sol";
 
 /// @notice On chain id 8453, every script's `run()` refuses to start when EXPECTED_CHAIN_ID is
@@ -91,6 +92,12 @@ contract DeployScriptChainGuardsTest is Test {
 
     function test_agentTokenVault_run_requiresExpectedChainOnBase() public {
         DeployAgentTokenVault s = new DeployAgentTokenVault();
+        vm.expectRevert(bytes(MSG));
+        s.run();
+    }
+
+    function test_rwaBasketVault_run_requiresExpectedChainOnBase() public {
+        DeployRwaBasketVault s = new DeployRwaBasketVault();
         vm.expectRevert(bytes(MSG));
         s.run();
     }
