@@ -2,10 +2,17 @@
 // Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S3 (issue 1485), core 1493.
 //
 // The core deploy as data: one stage table, one runner. The order is libs, vault, registry,
-// router, gateway. The router runs BEFORE the gateway because the gateway stores the router as an
+// router, gateway, governance, ic, the three basket vaults (rmPROTO, rmAGENT, rmRWA), then the
+// timelock. The router runs BEFORE the gateway because the gateway stores the router as an
 // immutable (core 1493). Agent authorization is part of the gateway stage, so it follows the
-// gateway. The IC policy and receipt follow in their own stage (DeployInvestmentCommitteePolicy),
-// owned by the driver stage table in the devops repo.
+// gateway. The timelock stage is last: it hands every vault, the gateway, registry, router,
+// governance, IC policy and receipt to the timelock and revokes the deployer (core 1487). The
+// basket vault eligibility step (ActivateBasketVaultEligibility) is a govern action through the
+// timelock after the checks pass, so it is not a stage here.
+//
+// The timelock stage reads operator inputs from the environment: SAFE_ADDRESS, SAFE_OWNERS,
+// SAFE_THRESHOLD, EMERGENCY_ADDRESS, TIMELOCK_MIN_DELAY, RECEIPT_ADMIN_ADDRESS. The Safe is the
+// real Safe the driver created with the Safe SDK. This runner never makes one.
 //
 // This runner is the engine behind the driver's "publish contracts" core stages and the Twin chain
 // proof. It does not take a key. The caller passes signer flags through (`--forge-arg`), for
@@ -23,7 +30,18 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type StageName = "libs" | "vault" | "registry" | "router" | "gateway";
+export type StageName =
+  | "libs"
+  | "vault"
+  | "registry"
+  | "router"
+  | "gateway"
+  | "governance"
+  | "ic"
+  | "protocol"
+  | "agent"
+  | "rwa"
+  | "timelock";
 
 export interface Stage {
   name: StageName;
@@ -33,6 +51,29 @@ export interface Stage {
   needs: Record<string, string>;
   /** manifest keys the stage must write */
   writes: string[];
+  /** Prefix for every key this stage's manifest adds to the merged manifest (basket vaults). */
+  ns?: string;
+  /** Extra env computed from the merged manifest (the timelock's VAULT_ADDRESSES). */
+  computed?: (m: Record<string, unknown>) => Record<string, string>;
+  /** Operator inputs the stage reads from the process environment. Checked before it runs. */
+  requiredEnv?: string[];
+}
+
+/** The merged-manifest key a stage's raw key lands under. */
+export const keyOf = (s: Stage, k: string): string => (s.ns ? `${s.ns}_${k}` : k);
+
+const BASKET_ENV = ["ADMIN_ADDRESS", "SWAP_ROUTER", "TVL_CAP", "PER_DEPOSIT_CAP", "FEE_RECIPIENT"];
+const BASKET_NEEDS = { registry: "REGISTRY_ADDRESS" };
+const BASKET_WRITES = ["vault", "registry", "adapter", "registered", "paused", "assets"];
+
+/** Every vault the timelock hands over, in registry order: rmUSDC, rmPROTO, rmAGENT, rmRWA. */
+export function vaultAddresses(m: Record<string, unknown>): string[] {
+  const keys = ["vault", "protocol_vault", "agent_vault", "rwa_vault"];
+  return keys.map((k) => {
+    const v = m[k];
+    if (!v) throw new Error(`merged manifest lacks "${k}": run the vault stages first`);
+    return String(v);
+  });
 }
 
 /** The stage table. Order is the deploy order. */
@@ -62,6 +103,68 @@ export const STAGES: Stage[] = [
     needs: { vault: "VAULT_ADDRESS", router: "ROUTER_ADDRESS" },
     writes: ["gateway", "gateway_router", "gateway_runtime_hash", "agent"],
   },
+  {
+    name: "governance",
+    target: "contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance",
+    needs: { router: "ROUTER_ADDRESS" },
+    writes: ["governance"],
+  },
+  {
+    name: "ic",
+    target: "contracts/script/DeployInvestmentCommitteePolicy.s.sol:DeployInvestmentCommitteePolicy",
+    needs: { gateway: "GATEWAY_ADDRESS" },
+    writes: ["policy", "consensus_receipt"],
+    requiredEnv: ["RECEIPT_ADMIN_ADDRESS"],
+  },
+  {
+    name: "protocol",
+    target: "contracts/script/DeployProtocolAssetVault.s.sol:DeployProtocolAssetVault",
+    needs: BASKET_NEEDS,
+    writes: BASKET_WRITES,
+    ns: "protocol",
+    requiredEnv: BASKET_ENV,
+  },
+  {
+    name: "agent",
+    target: "contracts/script/DeployAgentTokenVault.s.sol:DeployAgentTokenVault",
+    needs: BASKET_NEEDS,
+    writes: BASKET_WRITES,
+    ns: "agent",
+    requiredEnv: BASKET_ENV,
+  },
+  {
+    name: "rwa",
+    target: "contracts/script/DeployRwaBasketVault.s.sol:DeployRwaBasketVault",
+    needs: BASKET_NEEDS,
+    writes: BASKET_WRITES,
+    ns: "rwa",
+    requiredEnv: BASKET_ENV,
+  },
+  {
+    name: "timelock",
+    target: "contracts/script/DeployTimelock.s.sol:DeployTimelock",
+    needs: {
+      gateway: "GATEWAY_ADDRESS",
+      registry: "REGISTRY_ADDRESS",
+      router: "ROUTER_ADDRESS",
+      governance: "GOVERNANCE_ADDRESS",
+      policy: "IC_POLICY_ADDRESS",
+      consensus_receipt: "CONSENSUS_RECEIPT_ADDRESS",
+      agent: "AGENT_ADDRESSES",
+    },
+    computed: (m) => ({ VAULT_ADDRESSES: vaultAddresses(m).join(",") }),
+    writes: ["timelock", "safe", "emergency", "vaults"],
+    ns: "timelock",
+    requiredEnv: [
+      "ADMIN_ADDRESS",
+      "SAFE_ADDRESS",
+      "SAFE_OWNERS",
+      "SAFE_THRESHOLD",
+      "EMERGENCY_ADDRESS",
+      "TIMELOCK_MIN_DELAY",
+      "RECEIPT_ADMIN_ADDRESS",
+    ],
+  },
 ];
 
 /** Throws when the stage table breaks the rule: every stage's inputs come from an earlier stage. */
@@ -71,12 +174,15 @@ export function assertStageOrder(stages: Stage[] = STAGES): void {
     for (const key of Object.keys(s.needs)) {
       if (!produced.has(key)) throw new Error(`stage ${s.name} needs "${key}", which no earlier stage writes`);
     }
-    for (const k of s.writes) produced.add(k);
+    for (const k of s.writes) produced.add(keyOf(s, k));
   }
   const names = stages.map((s) => s.name);
   const router = names.indexOf("router");
   const gateway = names.indexOf("gateway");
   if (router < 0 || gateway < 0 || router > gateway) throw new Error("the router stage must come before the gateway stage");
+  if (names.includes("timelock") && names.indexOf("timelock") !== names.length - 1) {
+    throw new Error("the timelock stage must be last: it revokes the deployer");
+  }
 }
 
 /** Merge stage manifests. A key written twice must carry one value. */
@@ -146,6 +252,10 @@ async function main() {
     const env: Record<string, string> = { DEPLOYMENT_OUT: join(work, `${stage.name}.json`) };
     const m = merged();
     for (const [key, envName] of Object.entries(stage.needs)) env[envName] = String(m[key]);
+    for (const name of stage.requiredEnv ?? []) {
+      if (!process.env[name]) throw new Error(`stage ${stage.name} needs ${name} in the environment`);
+    }
+    if (stage.computed && !a.dryRun) Object.assign(env, stage.computed(m));
     const cmd = ["forge", "script", stage.target, "--rpc-url", a.rpc, "--slow", ...(a.dryRun ? [] : ["--broadcast"]), ...a.forgeArgs];
     const before = a.dryRun ? 0 : await nonce(deployer, a.rpc);
     console.log(`==> stage ${stage.name}`);
@@ -156,7 +266,9 @@ async function main() {
     if (!existsSync(env.DEPLOYMENT_OUT)) throw new Error(`stage ${stage.name} wrote no manifest`);
     const part = JSON.parse(readFileSync(env.DEPLOYMENT_OUT, "utf8"));
     for (const k of stage.writes) if (!(k in part)) throw new Error(`stage ${stage.name} manifest lacks "${k}"`);
-    manifests.push(part);
+    manifests.push(
+      stage.ns ? Object.fromEntries(Object.entries(part).map(([k, v]) => [keyOf(stage, k), v])) : part,
+    );
   }
 
   if (a.dryRun) {
