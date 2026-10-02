@@ -16,6 +16,8 @@ import {MockVault} from "../gateway/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {CoreStages} from "./helpers/CoreStages.sol";
+import {DeployGateway} from "../script/DeployGateway.s.sol";
 import {FeeOnTransferUSDC, ShareLeakVault, UnderPullVault} from "./RobotMoneyGateway.t.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
@@ -2659,5 +2661,97 @@ contract GatewayRouterTest is Test {
         assertTrue(evtIdx != type(uint256).max, "AgentWithdrawalRouted event not found");
         assertEq(logs[evtIdx].topics[2], orderId, "orderId topic");
         assertEq(address(uint160(uint256(logs[evtIdx].topics[3]))), expectedAgent, "agent topic");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Split-stage deploy: router deposit and withdraw through the deployed gateway (core S3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// @notice Runs the production stage scripts (libs, vault, registry, router, gateway) against
+///         real Base state, then routes a deposit and a withdraw through the gateway that the
+///         gateway stage built. Before core S3 the gateway held a zero router, so both calls
+///         reverted (`InvalidDestination`, `RouterNotConfigured`). Real USDC and the real
+///         Aave, Compound and Moonwell venues are needed, so this test runs on the Base
+///         golden fixture the other fork tests use. `FORK_RPC_URL` overrides the fixture RPC.
+contract GatewayRouterSplitStagesForkTest is Test {
+    address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+    uint256 internal constant ONE_USDC = 1e6;
+
+    address internal admin = makeAddr("split-admin");
+    address internal pauser = makeAddr("split-pauser");
+    address internal agent = makeAddr("split-agent");
+    address internal shareReceiver = makeAddr("split-share-receiver");
+
+    function _forkRpcUrl() internal view returns (string memory) {
+        try vm.envString("FORK_RPC_URL") returns (string memory s) {
+            if (bytes(s).length > 0) return s;
+        } catch {}
+        return "http://127.0.0.1:8545";
+    }
+
+    function test_fork_splitStages_routerDepositThenWithdraw_succeed() public {
+        vm.createSelectFork(_forkRpcUrl());
+
+        CoreStages stages = new CoreStages();
+        CoreStages.Stack memory s = stages.run(admin, pauser, agent, shareReceiver, BASE_USDC);
+
+        // The defect: a gateway with a zero router. It must be the deployed router now.
+        assertTrue(s.gateway.router() != address(0), "gateway.router is zero");
+        assertEq(s.gateway.router(), address(s.router), "gateway.router != router");
+        assertEq(address(s.registry.router()), address(s.router), "registry.router != router");
+
+        // Router deposit through the gateway.
+        uint256 amount = 100 * ONE_USDC;
+        deal(BASE_USDC, agent, amount);
+        vm.prank(agent);
+        IERC20(BASE_USDC).approve(address(s.gateway), amount);
+        uint256[] memory minShares = new uint256[](0);
+        vm.prank(agent);
+        s.gateway.depositTo(
+            keccak256("split-deposit"),
+            amount,
+            uint64(block.timestamp + 60),
+            keccak256("split-deposit-idem"),
+            address(s.router),
+            minShares
+        );
+        uint256 shares = s.vault.balanceOf(shareReceiver);
+        assertGt(shares, 0, "router deposit minted no rmUSDC shares");
+        assertEq(IERC20(BASE_USDC).balanceOf(address(s.gateway)), 0, "gateway holds USDC");
+
+        // Router withdraw through the gateway. The stage policy sends assets to shareReceiver.
+        vm.prank(shareReceiver);
+        s.vault.approve(address(s.gateway), shares);
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(s.vault);
+        uint256[] memory sharesPerLeg = new uint256[](1);
+        sharesPerLeg[0] = shares;
+        uint256 before = IERC20(BASE_USDC).balanceOf(shareReceiver);
+        vm.prank(agent);
+        s.gateway.withdrawFromRouter(
+            keccak256("split-withdraw"),
+            vaults,
+            sharesPerLeg,
+            new uint256[](1),
+            uint64(block.timestamp + 60),
+            keccak256("split-withdraw-idem")
+        );
+        uint256 received = IERC20(BASE_USDC).balanceOf(shareReceiver) - before;
+        // Up to 1 bps of venue rounding is allowed, as in the seed deposit check.
+        assertGe(received, amount * 9_999 / 10_000, "withdraw returned less than deposited");
+        assertEq(s.vault.balanceOf(shareReceiver), 0, "shares left after full withdraw");
+    }
+
+    /// @notice A gateway stage with no router never produces a gateway: the stage reverts.
+    function test_splitStages_gatewayStageRefusesUnsetRouter() public {
+        TestERC20 token = new TestERC20();
+        CoreStages stages = new CoreStages();
+        CoreStages.Stack memory s = stages.run(admin, pauser, agent, shareReceiver, address(token));
+        DeployGateway gw = stages.gatewayScript();
+        vm.expectRevert(bytes("ROUTER_ADDRESS=0"));
+        gw.runInProcessWith(
+            admin, pauser, agent, shareReceiver, address(token), address(s.vault), address(0)
+        );
     }
 }

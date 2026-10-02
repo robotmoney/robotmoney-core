@@ -2,7 +2,7 @@
 // Canonical: none — Foundry test for contracts/script/DeployPortfolioRouter.s.sol
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {DeployPortfolioRouter} from "../script/DeployPortfolioRouter.s.sol";
 import {DeployVaultRegistry} from "../script/DeployVaultRegistry.s.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
@@ -92,6 +92,23 @@ contract DeployPortfolioRouterTest is Test {
         vm.expectEmit(false, false, false, true);
         emit PortfolioRouter.WeightsSet(expectedVaults, expectedBps);
         script.runInProcessWith(admin, address(registry), vault, address(usdc));
+    }
+
+    /// @notice The router stage links the registry to the router (core S3): `registry.router()`
+    ///         equals the deployed router, and the link event fires exactly once.
+    function test_deploy_linksRegistryToRouterExactlyOnce() public {
+        vm.recordLogs();
+        DeployPortfolioRouter.Deployed memory d =
+            script.runInProcessWith(admin, address(registry), vault, address(usdc));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 linked;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter == address(registry) && logs[i].topics[0] == VaultRegistry.RouterSet.selector) {
+                linked++;
+            }
+        }
+        assertEq(linked, 1, "registry.setRouter must be called exactly once");
+        assertEq(address(registry.router()), address(d.router), "registry.router != router");
     }
 
     /// @notice Returned struct fields match input parameters.
