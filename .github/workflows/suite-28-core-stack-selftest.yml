@@ -47,7 +47,7 @@ jobs:
       # MIN_EXPECTED_ASSERTIONS so a run that silently did less (a section
       # skipped, a truncated file, a lost exit status) is red either way. Raise
       # both together when cases are added.
-      CORE_STACK_SELFTEST_FLOOR: "42"
+      CORE_STACK_SELFTEST_FLOOR: "60"
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # scripts/stage/tests/core-stack-selftest.sh: the stage verbs in
     # scripts/stage/core-stack.sh (publish / governance / record) against a fake
