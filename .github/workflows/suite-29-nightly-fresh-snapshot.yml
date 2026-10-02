@@ -25,6 +25,13 @@
 # fresh Twin chain, so it cannot run here with no secret. See
 # docs/development/nightly-fresh-snapshot.md.
 #
+# NO FINAL git diff STEP
+# Each suite runs in its own runner (a reusable workflow job) and applies the
+# overlay into that runner's checkout. The results job has a fresh checkout, so a
+# git diff there could never see what a suite did. The step was removed because it
+# proved nothing. Nothing is committed because no step runs git add, commit or push
+# and the job has contents: read only (asserted by the self-test).
+#
 # RESULT
 # The `results` job fails when the snapshot is not within one hour of now
 # (scripts/devnet/check-nightly-fresh-snapshot.ts) or when any suite did not
@@ -198,8 +205,3 @@ jobs:
             --manifest "$RUNNER_TEMP/manifest/snapshot-manifest.json" \
             --max-age-seconds 28800 \
             --suite-results "$RUNNER_TEMP/suite-results"
-
-      # Nothing is committed: the snapshot lives in runner temp and artifacts only.
-      # Final step, so a snapshot file written into the checkout fails the run.
-      - name: Assert no snapshot file is committed or changed
-        run: git diff --exit-code -- testing/fixtures/fork-state testing/ethereum-testnet/config

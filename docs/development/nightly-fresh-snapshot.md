@@ -13,7 +13,7 @@ Suite 26 (`suite-26-fusion-devnet-acceptance.yml`) is removed from the nightly l
 - It needs `secrets.FUSION_RMPC_CONFIG` and many repository variables. The nightly passes no secret.
 - It targets the shared fusion devnet. It never applies the fresh snapshot, so it did not run against the Twin chain built from the fresh genesis.
 
-Keeping it would leave the nightly red for ever or make it lie. Suite 26 keeps its own dispatch and its place in the suite 21 dispatch list. The self-test fails if suite 26 is added back to suite 29.
+Keeping it would leave the nightly red for ever or make it lie. Suite 26 keeps its own dispatch and its place in the suite 21 dispatch list. The self-test asserts the final suite list is exactly 5, 7, 8, 10, 11b and 14. It fails if suite 26 is added back or any listed suite is dropped.
 
 ## Secrets in called suites
 
@@ -22,9 +22,9 @@ Keeping it would leave the nightly red for ever or make it lie. Suite 26 keeps i
 
 The self-test scans every called suite job and fails on a secret that is not `GITHUB_TOKEN`, not gated by `fresh_snapshot != true` and not on the exception list.
 
-## Final git diff step
+## No final git diff step
 
-The final step of the `results` job runs `git diff --exit-code` over `testing/fixtures/fork-state` and `testing/ethereum-testnet/config`. It runs on a fresh checkout, so it shows only that the workflow itself commits nothing. It does not prove each suite left tracked files untouched. Each suite job applies the overlay with `.github/actions/apply-fresh-snapshot` into its own runner checkout.
+The `results` job used to end with `git diff --exit-code` over `testing/fixtures/fork-state` and `testing/ethereum-testnet/config`. The step is removed. Each suite runs in its own runner and applies the overlay with `.github/actions/apply-fresh-snapshot` into that runner's checkout. The `results` job has a fresh checkout, so the diff could never show what a suite changed. The step proved only that the results job itself edits nothing. Nothing is committed because no step runs `git add`, `git commit` or `git push` and the workflow has `contents: read`. The self-test asserts both facts. A real per-suite check would have to run inside each suite job after its tests. That is not built.
 
 ## Block lockstep (core 1498)
 

@@ -17,7 +17,11 @@
 //
 // Usage:
 //   bun scripts/deploy/assert-core-router.ts --rpc-url URL --manifest M.json --out PROOF.json
-//        [--amount 5000000] [--agent-arg A]... [--receiver-arg A]...
+//        [--amount 5000000] [--agent-arg A]... [--receiver-arg A]... [--read-only]
+//
+// --read-only runs checks 1 and 2 only (two `cast call`s, no signer). The Twin chain publish job uses it:
+// the share receiver there is a keyless address, so the signed round trip (checks 3 and 4) runs where
+// both signers exist. The mode is explicit and the output records `"mode": "read-only"`.
 import { readFileSync, writeFileSync } from "node:fs";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -59,12 +63,13 @@ export function routerChecks(m: Record<string, string>, gatewayRouter: string, r
 }
 
 function parseArgs(argv: string[]) {
-  const a = { rpc: "", manifest: "", out: "", amount: 5_000_000n, agentArgs: [] as string[], receiverArgs: [] as string[] };
+  const a = { rpc: "", manifest: "", out: "", readOnly: false, amount: 5_000_000n, agentArgs: [] as string[], receiverArgs: [] as string[] };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === "--rpc-url") a.rpc = argv[++i];
     else if (k === "--manifest") a.manifest = argv[++i];
     else if (k === "--out") a.out = argv[++i];
+    else if (k === "--read-only") a.readOnly = true;
     else if (k === "--amount") a.amount = BigInt(argv[++i]);
     else if (k === "--agent-arg") a.agentArgs.push(argv[++i]);
     else if (k === "--receiver-arg") a.receiverArgs.push(argv[++i]);
@@ -80,7 +85,10 @@ function parseArgs(argv: string[]) {
 async function main() {
   const a = parseArgs(process.argv.slice(2));
   const m = JSON.parse(readFileSync(a.manifest, "utf8")) as Record<string, any>;
-  for (const k of ["gateway", "router", "registry", "vault", "usdc", "agent", "share_receiver"]) {
+  const required = a.readOnly
+    ? ["gateway", "router", "registry"]
+    : ["gateway", "router", "registry", "vault", "usdc", "agent", "share_receiver"];
+  for (const k of required) {
     if (!m[k]) throw new Error(`manifest lacks "${k}"`);
   }
   const call = (to: string, sig: string, ...args: string[]) =>
@@ -96,6 +104,12 @@ async function main() {
   const gatewayRouter = (await call(m.gateway, "router()(address)")).split(/\s/)[0];
   const registryRouter = (await call(m.registry, "router()(address)")).split(/\s/)[0];
   checks.push(...routerChecks(m, gatewayRouter, registryRouter));
+  if (a.readOnly) {
+    const ok = checks.every((c) => c.ok);
+    writeFileSync(a.out, JSON.stringify({ ok, mode: "read-only", checks }, null, 2) + "\n");
+    for (const c of checks) console.log(`${c.ok ? "PASS" : "FAIL"} ${c.name}: ${c.detail}`);
+    process.exit(ok ? 0 : 1);
+  }
 
   // Router deposit through the gateway.
   const usdcOf = async (who: string) => BigInt((await call(m.usdc, "balanceOf(address)(uint256)", who)).split(/\s/)[0]);

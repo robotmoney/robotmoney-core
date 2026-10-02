@@ -83,6 +83,15 @@ try {
   writeFileSync(strayPath, JSON.stringify(stray));
   ok(run("check-dependency-manifest-addresses.ts", ["--manifest", strayPath, "--repo-root", root]).code === 1, "an address missing from the deploy config is refused");
 
+  // 4b. the committed example fixture (not a release record)
+  const ex = join(root, "deployments/dependency-manifests/example.json");
+  const exm = JSON.parse(readFileSync(ex, "utf8"));
+  ok(exm.example === true && /EXAMPLE/.test(exm.note ?? ""), "example fixture is clearly marked as an example");
+  ok(run("check-dependency-manifest-addresses.ts", ["--manifest", ex, "--repo-root", root]).code === 0, "example fixture addresses are all in the deploy config");
+  const d4 = run("dependency-manifest-diff.ts", ["--manifest", ex, "--state-file", state]);
+  ok(d4.code === 0 && /no change/.test(d4.out), "example fixture diffs clean against the checked-in snapshot");
+  ok(run("record-release-dependencies.ts", ["--chain-id", "8453", "--release", "x", "--manifests-dir", join(tmp, "nope")]).code === 2, "release hook refuses a missing --manifests-dir");
+
   // 5. workflow check
   const wf = join(root, ".github/workflows/nightly-third-party-drift.yml");
   ok(run("check-nightly-third-party-workflow.ts", [wf]).code === 0, "shipped workflow: dispatch only, no active schedule");

@@ -17,6 +17,8 @@ The RPC URL comes from the environment only. It is never an argument, a file or 
 
 The hook writes the manifest, checks its addresses against the config, and prints the path. Commit that file with the release deployment record. The devops publish-contracts runbook step that calls the hook is tracked in the devops repo (out of scope here). `scripts/release/preflight-guards.sh --dependency-manifest CHAIN_ID:RELEASE` records the same file for a manual preflight.
 
+The same recording is available as the dispatch workflow `.github/workflows/release-record.yml` (see `scripts/release/README.md`). The `example.json` file here is a marked example fixture, not a release.
+
 ## Reading
 
 `.github/workflows/nightly-third-party-drift.yml` (dispatch only, schedule disabled) reads the latest manifest for a chain, reads the same values live, and reports each difference. With no manifest committed yet it exits 2. That is expected until the first release deploy records one.

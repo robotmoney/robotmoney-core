@@ -22,7 +22,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
-  BNKR, INFRA_ADDRESSES, QUOTER_V2, REPO, SAFE_SET, SWAP_ROUTER02, V3_FACTORY, addrOf, calldata, decodeSlot0, loadConfiguredPools,
+  BNKR, EXCLUDED_BASKET_SYMBOLS, INFRA_ADDRESSES, excludedSymbolRows, QUOTER_V2, REPO, SAFE_SET, SWAP_ROUTER02, V3_FACTORY, addrOf, calldata, decodeSlot0, loadConfiguredPools,
   robotMoneyAddresses, rpc, sleep, word,
 } from "./fork-snapshot-lib.ts";
 
@@ -83,7 +83,13 @@ async function main() {
       ...SAFE_SET.map((a): [string, string] => [a, "Safe v1.4.1 set member"]),
     ];
     // BNKR is in INFRA_ADDRESSES only when config/agent-token-shortlist.json names it (rmAGENT ships empty).
-    if (!BNKR) console.log("skip: no BNKR address in config/agent-token-shortlist.json (rmAGENT ships empty); BNKR not asserted");
+    // BNKR note: there is no BNKR address in config, so the check cannot assert it. That is the
+    // documented state, not a skipped assertion. If an address is ever added, it is asserted above.
+    if (!BNKR) console.log(`note: BNKR ${EXCLUDED_BASKET_SYMBOLS.bnkr}`);
+    // wSOL is excluded from the basket list explicitly. No config row may name an excluded symbol.
+    console.log(`note: wSOL ${EXCLUDED_BASKET_SYMBOLS.wsol}`);
+    const leaked = excludedSymbolRows();
+    leaked.length === 0 ? ok("no excluded basket symbol (wSOL, BNKR) in config") : leaked.forEach((l) => fail(`excluded symbol in config: ${l}`));
     const seen = new Set<string>();
     for (const [a, label] of required) {
       if (seen.has(a.toLowerCase())) continue;

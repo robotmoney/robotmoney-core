@@ -67,6 +67,11 @@ on:
         type: string
         required: false
         default: "devops/deployments/base-8453"
+      publish_contracts_dir:
+        description: "The devops publish-contracts directory (holds src/cli.ts), relative to the workspace. Default: the devops checkout this workflow makes."
+        type: string
+        required: false
+        default: "devops/publish-contracts"
   # HEAVY tier: this devnet boot/teardown suite is a merge gate for `dev` — it
   # runs on every pull_request targeting dev (no path filter, so the gate always
   # reports for any branch merging to dev) and on push to dev for merged-commit
@@ -82,6 +87,11 @@ on:
         type: string
         required: false
         default: "devops/deployments/base-8453"
+      publish_contracts_dir:
+        description: "The devops publish-contracts directory (holds src/cli.ts), relative to the workspace. Default: the devops checkout this workflow makes."
+        type: string
+        required: false
+        default: "devops/publish-contracts"
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
 # not pile up duplicate suites. push:main/dev runs are exempt — they keep a
@@ -208,8 +218,7 @@ jobs:
   #   (demo_seeding, full_stack_demo_tvl, faucet_eth and faucet_rm were deleted in core 1488 with demo seeding
   #   and the dapp faucet funding: the one deployment scheme has no demo-only code.)
   #   - fund_usdc:           real-signed-transfer assertions incl. the Geth-not-Anvil check (issue #255 step 7)
-  #   - twin_publish:        the real Twin chain publish, verify and govern matrix: four manifests,
-  #                          the one verifier green, every govern row tx hash + receipt status 1
+  #   - twin_publish:        its own job below (not a matrix row): path-gated on pull_request
   #   - governance:          the deployer holds no voting power or admin; the timelock is admin (core 1488)
   #
   # faucet_eth/faucet_rm/fund_usdc/governance were folded in by issue #1311: each
@@ -268,7 +277,6 @@ jobs:
             fixture_meta,
             fund_usdc,
             governance,
-            twin_publish,
           ]
     steps:
       - uses: actions/checkout@v4
@@ -368,12 +376,136 @@ jobs:
           bash ../../.github/scripts/cargo_test_require_executed.sh
           -p smoke-test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
 
+      - name: Upload smoke-test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-logs-${{ matrix.binary }}
+          path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
+
+      - name: Safety-net teardown (always)
+        if: always()
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans || true
+
+  # Which paths changed. twin_publish runs on a pull_request only when a path that affects the deploy
+  # changed. push, workflow_dispatch and workflow_call (the nightly) always run it. The diff is read
+  # from git: no third-party action, no token.
+  changes:
+    name: smoke-test-changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: feature-correctness
+    outputs:
+      deploy: ${{ steps.diff.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$BASE_SHA"...HEAD | grep -Eq '^(contracts/script/|scripts/deploy/|scripts/stage/|config/|testing/smoke-test/|\.github/workflows/suite-14-smoke-test\.yml)'; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # THE TWIN CHAIN PUBLISH JOB (core 1488, 1486, 1485). Boots the Twin chain (918453) from the committed
+  # snapshot, runs publish contracts (the devops CLI, directory given by the input publish_contracts_dir)
+  # through the harness test twin_publish: all four vaults, the real Safe, the timelock handover, the
+  # one verifier and the govern matrix. While the chain is up the same test runs the assertion scripts
+  # scripts/deploy/assert-core-router.ts, assert-basket-vaults.ts and assert-timelock-roles.ts, then
+  # scripts/stage/twin-run-report.ts. This job needs Docker and runs only in CI.
+  twin_publish:
+    name: smoke-test-twin-publish
+    needs: changes
+    if: ${{ needs.changes.outputs.deploy == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
+        uses: ./.github/actions/apply-fresh-snapshot
+        with:
+          enabled: ${{ inputs.fresh_snapshot == true }}
+
+      - name: Check out devops (publish contracts)
+        uses: actions/checkout@v4
+        with:
+          repository: robotmoney/devops
+          ref: ${{ vars.DEVOPS_PUBLISH_REF || 'main' }}
+          token: ${{ secrets.DEVOPS_READ_TOKEN }}
+          path: devops
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install publish-contracts dependencies
+        env:
+          PUBLISH_DIR: ${{ github.workspace }}/${{ inputs.publish_contracts_dir || 'devops/publish-contracts' }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          test -f "$PUBLISH_DIR/src/cli.ts" || { echo "::error::$PUBLISH_DIR/src/cli.ts not found"; exit 1; }
+          cd "$PUBLISH_DIR" && bun install --frozen-lockfile
+
+      - name: Verify Docker is available
+        run: |
+          docker version
+          docker compose version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Pre-pull Docker images
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose -f docker-compose.yaml pull --ignore-pull-failures || true
+
+      - name: cargo build (includes CLI binary)
+        working-directory: testing/smoke-test
+        run: cargo build -p smoke-test
+
+      # Non-zero test count floor (core 1488): cargo_test_require_executed.sh fails a run that executes
+      # fewer than CARGO_TEST_MIN_EXECUTED tests, so a filter that matches nothing is a failure, not a green.
+      - name: Twin chain publish, verify, assertion scripts and govern matrix
+        working-directory: testing/smoke-test
+        env:
+          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-twin_publish.log
+          PUBLISH_CONTRACTS_DIR: ${{ github.workspace }}/${{ inputs.publish_contracts_dir || 'devops/publish-contracts' }}
+          STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
+          CARGO_TEST_MIN_EXECUTED: "1"
+          SMOKE_TEST_VERIFY_OUT: ${{ runner.temp }}/stage-verify-labels.txt
+          SMOKE_TEST_SHEET_OUT: ${{ runner.temp }}/stage-run-sheet.env
+          SMOKE_TEST_PROOF_DIR: ${{ runner.temp }}/twin-proofs
+        run: >-
+          bash ../../.github/scripts/cargo_test_require_executed.sh
+          -p smoke-test --release --test twin_publish -- --test-threads=1 --nocapture
+
       # Core 1488: the REAL stage outputs go through label-diff and sheet-diff. The Twin chain test
       # (twin_publish.rs) writes the verifier label file (SMOKE_TEST_VERIFY_OUT) and the run sheet
       # (SMOKE_TEST_SHEET_OUT). The mainnet side is the devops production fixtures directory, given as
       # the input production_fixtures_dir. A missing or empty file fails this step and names the path.
       - name: Stage vs mainnet parity (label-diff, sheet-diff on real output)
-        if: ${{ matrix.binary == 'twin_publish' }}
         env:
           FIXTURES_DIR: ${{ github.workspace }}/${{ inputs.production_fixtures_dir || 'devops/deployments/base-8453' }}
         run: >-
@@ -382,11 +514,22 @@ jobs:
           --stage-sheet "$RUNNER_TEMP/stage-run-sheet.env"
           --fixtures-dir "$FIXTURES_DIR"
 
+      - name: Upload manifests, proofs and the run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twin-publish-run
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/twin-proofs/
+            ${{ runner.temp }}/stage-verify-labels.txt
+            ${{ runner.temp }}/stage-run-sheet.env
+
       - name: Upload smoke-test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-test-logs-${{ matrix.binary }}
+          name: smoke-test-logs-twin_publish
           path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
 
       - name: Safety-net teardown (always)
