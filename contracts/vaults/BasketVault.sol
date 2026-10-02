@@ -1015,7 +1015,7 @@ abstract contract BasketVault is
         // audited SWAP_ROUTER and needs no vetting.
         //
         // NOTE: unlike RobotMoneyVault's delegatecall-free strategy adapters, the
-        // basket swap adapters (UniswapV4/Aerodrome) legitimately DELEGATECALL the
+        // basket swap adapters (UniswapV3/Aerodrome) legitimately DELEGATECALL the
         // shared, linked `TickMath` library on the TWAP path, so a blanket runtime
         // DELEGATECALL scan is inapplicable here; codehash pinning subsumes the
         // no-hot-swap-proxy guarantee. The no-proxy bytecode scan remains a

@@ -9,8 +9,8 @@ import {TickMath} from "./TickMath.sol";
 
 /// @title TwapTickMath
 /// @notice Shared time-weighted-average-price tick helpers for the BasketVault
-///         swap adapters. `AerodromeSwapAdapter` and `UniswapV4SwapAdapter`
-///         previously carried byte-identical copies of pool-pair validation,
+///         swap adapters. `AerodromeSwapAdapter` and `UniswapV3SwapAdapter`
+///         share one copy of of pool-pair validation,
 ///         mean-tick computation, and price-from-tick conversion, differing only
 ///         in the concrete pool interface type. Both pool types expose the
 ///         Uniswap V3 `observe()` ABI, so the logic is consolidated here over

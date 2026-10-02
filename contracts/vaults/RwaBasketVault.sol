@@ -3,6 +3,8 @@
 //            docs/plans/one-deployment-scheme.md (robotmoney/devops) — decision 9: rmRWA is a
 //            plain basket row with no oracle.
 // (See also: docs/architecture.md §4.1 — Vault Family; docs/audits.md)
+// Audit status: see the audit-scope ledger in docs/audits.md. A thin subclass of BasketVault,
+// not separately audited, under the same bucket-B/C economic-audit gate (exception pending owner).
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";

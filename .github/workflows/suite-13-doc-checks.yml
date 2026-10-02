@@ -73,6 +73,19 @@ jobs:
       - name: Nightly dispatch list covers every suite
         run: python3 .github/scripts/check_nightly_dispatch_list.py
 
+      - name: Audit ledger self-test (core 1492)
+        # Plants a deleted contract name in a ledger row and in a source comment and
+        # expects the check to fail, so a silent regression cannot let one ship.
+        run: |
+          shellcheck scripts/check-audit-ledger.sh scripts/check-audit-ledger.test.sh
+          bash scripts/check-audit-ledger.test.sh
+
+      - name: Audit ledger has no deleted contract names (core 1492)
+        # Every shipped .sol has a ledger row, no row names a deleted contract
+        # (RwaVault, ChronicleOracleAdapter, DeSpxaAssetPositionAdapter, V4 adapters)
+        # and no shipped source comment names one.
+        run: bash scripts/check-audit-ledger.sh
+
       - name: Browser keygen ADR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

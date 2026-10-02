@@ -49,5 +49,18 @@ rm -rf "${TMP}/t/contracts"
 if bash "${TMP}/t/scripts/check-audit-ledger.sh" >/dev/null 2>&1; then bad "zero shipped contracts must exit non-zero"; fi
 pass "zero shipped contracts fails"
 
-[ "${ran}" -ge 4 ] || bad "fewer than 4 checks ran"
+mk_tree
+sed -i 's/Basis-point math exercised through/Basis-point math shared with RwaVault, exercised through/' "${TMP}/t/docs/audits.md"
+grep -q 'shared with RwaVault' "${TMP}/t/docs/audits.md" || bad "test setup: planted text missing"
+if out="$(bash "${TMP}/t/scripts/check-audit-ledger.sh" 2>&1)"; then bad "a ledger row naming RwaVault must exit non-zero"; fi
+grep -q 'RwaVault' <<<"${out}" || bad "failure must name RwaVault"
+pass "ledger row naming a deleted contract fails"
+
+mk_tree
+printf '\n/// @dev Planted: mirrors the RwaVault floor.\n' >>"${TMP}/t/contracts/lib/BpsMath.sol"
+if out="$(bash "${TMP}/t/scripts/check-audit-ledger.sh" 2>&1)"; then bad "a source header naming RwaVault must exit non-zero"; fi
+grep -q 'contracts/lib/BpsMath.sol' <<<"${out}" || bad "failure must name contracts/lib/BpsMath.sol"
+pass "source comment naming a deleted contract fails"
+
+[ "${ran}" -ge 6 ] || bad "fewer than 6 checks ran"
 echo "check-audit-ledger.test: ${ran} checks passed"
