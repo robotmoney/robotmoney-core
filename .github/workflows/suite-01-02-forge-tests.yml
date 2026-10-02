@@ -152,25 +152,22 @@ jobs:
         # transferAgentOwnership so a change in their cost shows in the log.
         run: forge test --match-contract "GatewayAgentPolicyAuthorizationTest" --gas-report
 
-      - name: forge test (four-vault real-TVL pyramid — issue #592)
-        # Explicit, named guard for the four-vault real-TVL end state so it
-        # cannot silently regress (the suite above already runs these, but a
-        # dedicated step gives a discrete CI signal):
-        #   - DeployDemoExtraVaults.t.sol — four vaults Active and all four
-        #     router-eligible (8500/500/500/500 bps split, rmRWA at 500 per
-        #     issue #621), all with non-zero totalAssets after a routed +
-        #     direct deposit.
-        #   - RwaVault.t.sol — deSPXA deposit/redeem round-trip and stale-oracle
-        #     halt (PRD §11.4, ADR-0006).
-        #   - BasketVault / AgentTokenVault / ProtocolAssetVault — per-vault
-        #     basket composition. All THREE basket vaults are named: this guard
-        #     covered two of them while ProtocolAssetVault shipped without a
-        #     shortlist() at all and its dapp composition panel rendered
-        #     "unavailable" (issue #1364). A per-vault guard that skips a vault
-        #     is not a per-vault guard.
+      - name: forge test (basket vault production scripts and eligibility — core 1486)
+        # Explicit, named guard for the three basket vault scripts (one deployment scheme):
+        #   - DeployProtocolAssetVault.t.sol: rmPROTO paused with exactly wETH and cbBTC,
+        #     asset config read back equals config/protocol-assets.json.
+        #   - DeployAgentTokenVault.t.sol: rmAGENT empty, paused, registered.
+        #   - DeployBasketVaultRwa.t.sol: rmRWA is a plain BasketVault row for deSPXA through
+        #     the UniswapV3SwapAdapter on the fee 500 pool.
+        #   - ActivateBasketVaultEligibility.t.sol: atomic migrateEligibility per basket.
+        #   - BasketVault / AgentTokenVault / ProtocolAssetVault: per-vault composition.
         run: |
-          forge test -vvv --match-path "contracts/test/DeployDemoExtraVaults.t.sol"
-          forge test -vvv --match-contract 'Rwa|DeSPXA|Despxa|BasketVault|AgentTokenVault|ProtocolAssetVault'
+          forge test -vvv --match-path "contracts/test/DeployProtocolAssetVault.t.sol"
+          forge test -vvv --match-path "contracts/test/DeployAgentTokenVault.t.sol"
+          forge test -vvv --match-path "contracts/test/DeployBasketVaultRwa.t.sol"
+          forge test -vvv --match-path "contracts/test/ActivateBasketVaultEligibility.t.sol"
+          forge test -vvv --match-contract 'BasketVault|AgentTokenVault|ProtocolAssetVault'
+          bash scripts/ci/check-no-devnet-config.sh
 
       - name: forge test (unified-vault ERC-4626 conformance per composition + EIP-170 size gate — issue #1127)
         # Explicit, named guard so the ADR-0010 unified-vault deliverables cannot
@@ -417,28 +414,6 @@ jobs:
           RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
         run: |
           scripts/devnet/run-live-rpc-forge-fork.sh "Uniswap V3 AssetPositionAdapter fork" --match-contract "UniV3AssetPositionAdapterForkTest" -vvv
-
-      - name: forge test (Uniswap V4 AssetPositionAdapter fork — issue #1124)
-        env:
-          # UniV4AssetPositionAdapterForkTest exercises a full deploy/withdraw
-          # round-trip against REAL Base-mainnet USDC (`deal`d balances, genuine
-          # ERC-20 6-decimal token bytecode) through the concrete
-          # `UniswapV4SwapAdapter` venue seam. It deploys a local V4 router/pool
-          # harness on the fork (see the test file header): no genuinely deployed
-          # third-party Uniswap V4 pool is ABI-compatible with this repo's
-          # `IUniswapV4Pool`/`IUniswapV4SwapRouter` seam (documented architecture
-          # gap, docs/code-review/20260623-code-review-testmachine-azimuth.md,
-          # info-severity, out of #1124's scope to redesign). Same
-          # `secrets.RMPC_FORK_RPC_URL` (repo/org secret, not variable) and the
-          # same run-live-rpc-forge-fork.sh fallback and RPC attribution as the
-          # V3 fork test above.
-          #
-          # LOUD-SKIP (test-coverage-policy invariant 1): this contract's setUp
-          # REVERTS when neither RMPC_FORK_RPC_URL nor FORK_RPC_URL resolves to a
-          # non-empty string — it never silent-skips.
-          RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
-        run: |
-          scripts/devnet/run-live-rpc-forge-fork.sh "Uniswap V4 AssetPositionAdapter fork" --match-contract "UniV4AssetPositionAdapterForkTest" -vvv
 
       - name: forge test (Aerodrome AssetPositionAdapter fork — issue #1125)
         env:

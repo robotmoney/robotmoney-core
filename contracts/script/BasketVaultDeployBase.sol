@@ -4,7 +4,7 @@
 //
 // One production path for the three basket vaults (rmPROTO, rmAGENT, rmRWA). The scripts differ
 // only in the vault class, the config file and whether assets route through the
-// `UniswapV3SwapAdapter`. There is no chain-id branch, no DEVNET_* variable and no CONFIG_PATH.
+// `UniswapV3SwapAdapter`. There is no chain-id branch and no devnet-only input.
 pragma solidity ^0.8.24;
 
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";

@@ -51,7 +51,7 @@ CEREMONY_CONTRACTS=(
   # before, and sit near it today — the size gate must run against the exact
   # bytecode the testnet deploy would broadcast even if this ceremony does not
   # deploy them itself.
-  "RwaVault"
+  "RwaBasketVault"
   "AgentTokenVault"
 )
 
