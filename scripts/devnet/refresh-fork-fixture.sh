@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Convenience wrapper around scripts/devnet/snapshot-fork.sh.
+# Convenience wrapper around scripts/devnet/snapshot-fork.ts.
 #
-# Refresh is developer-owned whenever an integration changes or nightly drift fires.
+# Refresh is developer-owned whenever an integration changes or the fork-pin age warning in the nightly asks for it.
 # Bump it whenever:
 #   - upstream contracts the fork interacts with change at a known block, OR
 #   - more than ~6 months have elapsed since CURRENT.json's captured_at.
@@ -14,4 +14,4 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-exec bash "$REPO_ROOT/scripts/devnet/snapshot-fork.sh" "$@"
+exec bun "$REPO_ROOT/scripts/devnet/snapshot-fork.ts" "$@"

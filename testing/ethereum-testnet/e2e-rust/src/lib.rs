@@ -19,9 +19,8 @@ use once_cell::sync::Lazy;
 
 pub use rust_payment_client::signer::software::PASSPHRASE_ENV_VAR;
 pub use smoke_test::{
-    agent_address, prerequisites_available, HarnessError, AGENT_PRIVATE_KEY, DEPLOYER_ADDRESS_HEX,
-    DEPLOYER_PRIVATE_KEY_HEX, PAUSER_ADDRESS_HEX, PAUSER_PRIVATE_KEY_HEX,
-    SHARE_RECEIVER_ADDRESS_HEX,
+    agent_address, prerequisites_available, HarnessError, AGENT_PRIVATE_KEY, PAUSER_ADDRESS_HEX,
+    PAUSER_PRIVATE_KEY_HEX, SHARE_RECEIVER_ADDRESS_HEX,
 };
 
 const TEST_PASSPHRASE: &str = "rmpc-e2e-passphrase";
@@ -104,7 +103,7 @@ impl Fixture {
         Self::with_deploy_env(&[])
     }
 
-    /// Like [`Self::new`] but passes extra env vars to `forge script Deploy`.
+    /// Like [`Self::new`] but passes parameter overrides (allow-listed sheet keys) to publish contracts.
     pub fn with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
         // Build rmpc first so we fail fast before the 60-90s devnet boot.
         let rmpc_bin = ensure_rmpc_built()?;
@@ -191,6 +190,16 @@ impl Fixture {
 
     pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<String, HarnessError> {
         self.devnet.fund_usdc(recipient, amount)
+    }
+
+    /// Run one govern row through the real Safe and the timelock.
+    pub fn govern(&self, row: &str, args: &[&str]) -> Result<String, HarnessError> {
+        self.devnet.govern(row, args)
+    }
+
+    /// The timelock that holds admin after handover.
+    pub fn timelock(&self) -> Address {
+        self.devnet.timelock()
     }
 
     // ---- rmpc accessors ---------------------------------------------

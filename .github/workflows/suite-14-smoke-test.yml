@@ -51,6 +51,17 @@
 name: smoke-test-devnet-boot-teardown
 
 on:
+  # Nightly job (b), core issue 1496: reused by suite-NN-nightly-fresh-snapshot.yml
+  # with fresh_snapshot=true so this suite boots the Twin chain from a snapshot
+  # taken at the latest Base block instead of the checked-in pin. Steps are not
+  # copied: the nightly calls this very workflow.
+  workflow_call:
+    inputs:
+      fresh_snapshot:
+        description: "Apply the nightly fresh snapshot overlay before booting a chain."
+        type: boolean
+        required: false
+        default: false
   # HEAVY tier: this devnet boot/teardown suite is a merge gate for `dev` — it
   # runs on every pull_request targeting dev (no path filter, so the gate always
   # reports for any branch merging to dev) and on push to dev for merged-commit
@@ -66,7 +77,9 @@ on:
 # distinct concurrency lane per ref and never cancel, so merged-commit coverage
 # always completes. See docs/development/ci-suites.md (CI velocity tiers).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # suite tag keeps called copies (nightly fresh snapshot, issue 1496) in separate lanes:
+  # inside workflow_call github.workflow is the CALLER's name, shared by every suite.
+  group: ${{ github.workflow }}-suite14-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -88,6 +101,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
+        uses: ./.github/actions/apply-fresh-snapshot
+        with:
+          enabled: ${{ inputs.fresh_snapshot == true }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -125,6 +142,34 @@ jobs:
       - name: fork-block manifest + alloc-ingester guard
         run: bash scripts/devnet/check-fork-manifest.sh
 
+      # Core 1498: the committed fixtures are one pin. CURRENT.json,
+      # fork-block.json and genesis-alloc.json must agree on block number and hash.
+      - name: fixture lockstep gate (--require-pinned)
+        run: bash scripts/devnet/check-fork-manifest.sh --require-pinned
+
+      # Core 1498: the committed snapshot holds SwapRouter02, the V3 factory,
+      # BNKR and the pool state, and no Robot Money code at genesis.
+      - name: committed snapshot contents (code, pool calls, no Robot Money)
+        run: bun scripts/devnet/check-fork-snapshot-contents.ts
+
+      # Core 1488: the Twin chain publish run has a unit-test floor. cargo test
+      # -p smoke-test --lib must execute a non-zero number of tests, and at
+      # least SMOKE_TEST_LIB_TEST_FLOOR of them, so the deletions cannot
+      # silently empty the crate.
+      - name: smoke-test lib test count floor
+        working-directory: testing/smoke-test
+        env:
+          SMOKE_TEST_LIB_TEST_FLOOR: "60"
+        run: |
+          set -o pipefail
+          cargo test -p smoke-test --lib 2>&1 | tee "$RUNNER_TEMP/smoke-lib.log"
+          n="$(grep -E '^test result: ok\. [0-9]+ passed' "$RUNNER_TEMP/smoke-lib.log" | sed -E 's/^test result: ok\. ([0-9]+) passed.*/\1/' | awk '{s+=$1} END {print s+0}')"
+          echo "smoke-test lib tests executed: ${n:-0} (floor $SMOKE_TEST_LIB_TEST_FLOOR)"
+          if [ -z "$n" ] || [ "$n" -lt "$SMOKE_TEST_LIB_TEST_FLOOR" ]; then
+            echo "::error::cargo test -p smoke-test ran ${n:-0} tests, floor is $SMOKE_TEST_LIB_TEST_FLOOR"
+            exit 1
+          fi
+
       # Issue #558 CI gate: assert fork-block.json, expected-prices.json, and
       # ingested_addresses stay in sync after a fork-block bump.  Runs as a
       # hermetic lib-test (no Docker required).  Also exercises the simulated
@@ -149,12 +194,12 @@ jobs:
   # (suite ~38m -> ~18m). fail-fast: false keeps every binary's signal independent.
   #   - cli_meta:            boots `smoke-test --full-stack`, asserts summary + Ctrl-C teardown
   #   - fixture_meta:        boots devnet, deploys contracts, asserts RPC + block production
-  #   - demo_seeding:        boots the four-vault catalog and asserts all four vaults seed
-  #   - full_stack_demo_tvl: boots full compose stack, asserts all four PRD §11 vaults report non-zero TVL
-  #   - faucet_eth:          native Base ETH faucet drip round-trip (issue #466)
-  #   - faucet_rm:           RM token faucet drip round-trip (issue #365)
+  #   (demo_seeding, full_stack_demo_tvl, faucet_eth and faucet_rm were deleted in core 1488 with demo seeding
+  #   and the dapp faucet funding: the one deployment scheme has no demo-only code.)
   #   - fund_usdc:           real-signed-transfer assertions incl. the Geth-not-Anvil check (issue #255 step 7)
-  #   - governance:          RouterGovernance deploy + setVotingPower round-trip (issue #364)
+  #   - twin_publish:        the real Twin chain publish, verify and govern matrix: four manifests,
+  #                          the one verifier green, every govern row tx hash + receipt status 1
+  #   - governance:          the deployer holds no voting power or admin; the timelock is admin (core 1488)
   #
   # faucet_eth/faucet_rm/fund_usdc/governance were folded in by issue #1311: each
   # only adds a Fixture boot (already paid by every other row) plus a handful of
@@ -210,17 +255,35 @@ jobs:
           [
             cli_meta,
             fixture_meta,
-            demo_seeding,
-            full_stack_demo_tvl,
-            faucet_eth,
-            faucet_rm,
             fund_usdc,
             governance,
+            twin_publish,
           ]
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
+        uses: ./.github/actions/apply-fresh-snapshot
+        with:
+          enabled: ${{ inputs.fresh_snapshot == true }}
+
+      # The harness calls the one runbook, "publish contracts" (devops, Bun TypeScript).
+      # Same devops SHA as every other run; the Twin chain arguments are the only difference.
+      - name: Check out devops (publish contracts)
+        uses: actions/checkout@v4
+        with:
+          repository: robotmoney/devops
+          ref: ${{ vars.DEVOPS_PUBLISH_REF || 'main' }}
+          token: ${{ secrets.DEVOPS_READ_TOKEN }}
+          path: devops
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install publish-contracts dependencies
+        working-directory: devops/publish-contracts
+        run: bun install --frozen-lockfile
 
       - name: Verify Docker is available
         run: |
@@ -283,9 +346,31 @@ jobs:
         working-directory: testing/smoke-test
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-${{ matrix.binary }}.log
+          PUBLISH_CONTRACTS_DIR: ${{ github.workspace }}/devops/publish-contracts
+          STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
+          SMOKE_TEST_VERIFY_OUT: ${{ runner.temp }}/stage-verify-labels.txt
         run: >-
           bash ../../.github/scripts/cargo_test_require_executed.sh
           -p smoke-test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
+
+      # Core 1488: the REAL stage outputs go through label-diff and sheet-diff.
+      # The verifier label set from the Twin chain run must equal the mainnet
+      # set, and the stage sheet must differ from the production sheet only in
+      # parameter lines. Both reference files are the devops repo's, checked out
+      # above: a missing file fails this step (it is not skipped).
+      - name: Stage vs mainnet parity (label-diff, sheet-diff on real output)
+        if: ${{ matrix.binary == 'twin_publish' }}
+        env:
+          MAINNET_LABELS: ${{ github.workspace }}/devops/deployments/base-8453/verifier-labels.txt
+          PRODUCTION_SHEET: ${{ github.workspace }}/devops/deployments/base-8453/production-sheet.env
+          STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
+        run: |
+          set -euo pipefail
+          for f in "$MAINNET_LABELS" "$PRODUCTION_SHEET" "$STAGE_SHEET" "$RUNNER_TEMP/stage-verify-labels.txt"; do
+            [ -s "$f" ] || { echo "::error::parity input missing or empty: $f"; exit 1; }
+          done
+          bun scripts/stage/label-diff.ts "$RUNNER_TEMP/stage-verify-labels.txt" "$MAINNET_LABELS"
+          bun scripts/stage/sheet-diff.ts "$STAGE_SHEET" "$PRODUCTION_SHEET"
 
       - name: Upload smoke-test logs
         if: always()

@@ -354,7 +354,7 @@ contract VaultForkRegressions is Test {
         // rayMul on balanceOf), which rounds down by a few wei. That round-trip
         // loss grows with the *live* Aave liquidity index: the pinned golden
         // fixture saw <=1 wei, but live Base drifted to 2 wei and flapped this
-        // non-blocking nightly drift alarm (issue #1157). A small fixed dust
+        // test on live-fork runs (issue #1157). A small fixed dust
         // tolerance absorbs the benign Aave rounding while still catching a real
         // "idle not counted" regression — that would miss the whole 4 000e6 idle,
         // ~7 orders of magnitude larger than this tolerance.

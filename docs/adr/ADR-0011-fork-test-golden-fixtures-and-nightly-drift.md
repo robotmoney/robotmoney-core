@@ -19,7 +19,7 @@
   - `testing/fixtures/fork-state/` — the checked-in golden fixtures
     (`CURRENT.anvil-state`, `genesis-alloc.json`, pinned
     `base-<block>.anvil-state`)
-  - `scripts/devnet/snapshot-fork.sh` — the developer-run fixture generator
+  - `scripts/devnet/snapshot-fork.ts` — the developer-run fixture generator
   - `testing/fork-e2e-rust/` — the Rust fork-e2e crate that provides the
     `anvil --load-state` fixture-loading mechanism
   - `contracts/test/VaultForkRegressions.t.sol`,
@@ -123,7 +123,7 @@ via a **free public RPC** and re-runs the fork suite as a **drift alarm**.
   (`https://base-rpc.publicnode.com`), or LlamaRPC. A single nightly run will
   not be rate-limited by these.
 - The endpoint URL is read from a **var with a public default** — **no CI
-  secret**. (`scripts/devnet/snapshot-fork.sh` already defaults
+  secret**. (`scripts/devnet/snapshot-fork.ts` already defaults
   `RMPC_FORK_RPC_URL` to `https://base-rpc.publicnode.com`, so the same public
   default applies.)
 - On failure the nightly **opens or updates a tracking issue** rather than
@@ -141,7 +141,7 @@ There is **no monthly (or any scheduled) refresh cadence**. The fixture is
 refreshed by **whoever changes what it must cover**:
 
 - Adding an adapter, wiring a new pool, or changing an integration → the
-  **same PR** regenerates the fixture (`scripts/devnet/snapshot-fork.sh`, or
+  **same PR** regenerates the fixture (`scripts/devnet/snapshot-fork.ts`, or
   the `scripts/devnet/refresh-fork-fixture.sh` wrapper) and commits it.
 - A nightly drift alarm (Decision §2) firing → a developer refreshes the
   fixture in response, as a normal change.
@@ -207,7 +207,7 @@ silent reversal:
   motivation.)
 - **Realism is preserved**: the golden fixture **is** real Base mainnet state
   (real deployed bytecode, real pools, real USDC), captured by
-  `snapshot-fork.sh`. Testing against it is testing against reality — a pinned
+  `snapshot-fork.ts`. Testing against it is testing against reality — a pinned
   instant of it, not a synthetic chain.
 - **Drift is still caught** — by the nightly live-fork alarm (§2). The realism
   the live-RPC path provided (freshness against upstream) is retained on the
@@ -232,9 +232,9 @@ adding a new dependency or changing the decision above.
   committed `base-<block>.json`).
 - `scripts/devnet/fork-state-digest.sh write <state_file> <manifest_json>`
   computes the digest and writes/overwrites `state_sha256` in place;
-  `scripts/devnet/snapshot-fork.sh` calls it for both the dated
+  `scripts/devnet/snapshot-fork.ts` calls it for both the dated
   `base-<block>.json` fixture and the `CURRENT.json` pointer at capture time,
-  so `refresh-fork-fixture.sh` (which execs into `snapshot-fork.sh`) inherits
+  so `refresh-fork-fixture.sh` (which execs into `snapshot-fork.ts`) inherits
   it automatically.
 - `scripts/devnet/fork-state-digest.sh verify <state_file> <manifest_json>`
   recomputes the digest and compares it to the recorded one. Per this ADR's
@@ -249,7 +249,7 @@ adding a new dependency or changing the decision above.
   `check-fork-manifest.sh`; the workflow runs `fork-state-digest.sh verify`
   directly for those two groups before `cargo test`.
 - Regeneration workflow is unchanged from Decision §3 (developer-owned on
-  change): `snapshot-fork.sh` / `refresh-fork-fixture.sh` writes the new
+  change): `snapshot-fork.ts` / `refresh-fork-fixture.sh` writes the new
   digest alongside the new blob, so a legitimate refresh shows up in review
   as an intentional manifest+digest diff — the reviewable proxy for the
   unreviewable blob — while a silent blob edit with no matching digest change
@@ -269,5 +269,5 @@ adding a new dependency or changing the decision above.
 - The precise workflow YAML wiring (job filters, schedule cron, tracking-issue
   automation) — an implementation detail carried by the CI workflow files and
   catalogued in `docs/development/ci-suites.md` §5 / §21.
-- Fixture format and manifest validation — governed by `snapshot-fork.sh`,
+- Fixture format and manifest validation — governed by `snapshot-fork.ts`,
   `refresh-fork-fixture.sh`, and `check-fork-manifest.sh`.

@@ -98,6 +98,10 @@ jobs:
       - name: Config-check offline test
         run: bun test scripts/ci/config-check.test.ts
 
+      - name: Snapshot tooling self-test (core issue 1498)
+        # Offline: 429 retry and no Deploy.s.sol in the snapshot capture.
+        run: bun scripts/devnet/snapshot-fork-selftest.ts
+
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:

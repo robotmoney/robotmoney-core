@@ -57,8 +57,9 @@ echo "[check-fork-manifest] verifying the canonical Safe v1.4.1 set is in the fi
 # which is how the pin reached 48 days unnoticed. Reported (and annotated past
 # the refresh cadence) on every run, but deliberately NOT a hard failure here:
 # this script is on the pull-request path and a stale pin is a maintenance
-# signal, not a reason to red the merge queue. The hard gate lives in the
-# nightly live-base-fork-drift job, which passes --max-age-days.
+# signal, not a reason to red the merge queue. The nightly
+# fork-pin-age-warning job also only warns; --max-age-days remains available
+# for a manual hard gate.
 echo "[check-fork-manifest] reporting fork pin age"
 "$REPO_ROOT/scripts/devnet/check-fork-pin-age.sh"
 

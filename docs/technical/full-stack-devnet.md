@@ -54,7 +54,7 @@ It defines:
 (`testing/fixtures/fork-state/CURRENT.anvil-state`) via `anvil --load-state`,
 requiring no live RPC at test time. For the fixture's purpose, the
 `RMPC_FORK_RPC_URL` regeneration variable, and the developer-owned-on-change
-refresh command (`scripts/devnet/snapshot-fork.sh`), see
+refresh command (`scripts/devnet/snapshot-fork.ts`), see
 `docs/development/environments.md` §2 ("Fork e2e") and ADR-0011.
 
 ### Pin age (issue #1386)
@@ -74,14 +74,14 @@ refreshed. The fixture was historically refreshed every one to four weeks; in
   printed on the pull-request path and annotated as a `::warning::` once the
   pin passes the 21-day cadence. It never fails there — a stale pin is a
   maintenance signal, not a reason to red the merge queue.
-- The nightly `live-base-fork-drift` job calls it with `--max-age-days 30`,
-  where a hard failure is affordable and creates real pressure to refresh.
+- The nightly `fork-pin-age-warning` job calls it without a limit (warning only);
+  it never fails the nightly.
 - `scripts/devnet/check-fork-pin-age-selftest.sh` drives every branch of the
   gate offline; `suite-01-02-forge-tests.yml` runs it before the real fixture
   is judged.
 
 Measured, deliberately, from `CURRENT.json`'s `captured_at` rather than the
-block's own timestamp: `snapshot-fork.sh` advances the fork clock to wall-clock
+block's own timestamp: `snapshot-fork.ts` advances the fork clock to wall-clock
 now *before* warming the adapters, so the protocol `lastUpdateTimestamp` values
 baked into the fixture are the capture wall-clock, not the fork block's
 timestamp.
@@ -90,7 +90,7 @@ That last point also rules out "set `GENESIS_TIMESTAMP` to the forked block's
 timestamp" as a way to hold the delta at zero: the fixture's protocol
 timestamps are *later* than the fork block's, so booting the devnet at the fork
 block's timestamp makes `block.timestamp - lastUpdateTimestamp` underflow and
-reverts every adapter call — the same failure `snapshot-fork.sh` step "3-pre"
+reverts every adapter call — the same failure `snapshot-fork.ts` step "3-pre"
 already documents and works around. Anchoring genesis to `captured_at` instead
 avoids the underflow but puts the beacon genesis in the past by the pin's full
 age, which Lighthouse would have to traverse as empty slots before producing a
@@ -99,14 +99,22 @@ block. Refreshing the pin is the supported way to keep the delta small.
 ### Refreshing the pin
 
 ```bash
-RMPC_FORK_RPC_URL=<Base archive RPC> scripts/devnet/snapshot-fork.sh
+bun scripts/devnet/snapshot-fork.ts
 ```
 
-then realign `testing/ethereum-testnet/config/fork-block.json`
-(`block_number`, `block_hash`), regenerate
-`testing/fixtures/fork-state/genesis-alloc.json` with
-`smoke-test-genesis-ingester`, and recapture
-`testing/ethereum-testnet/config/expected-prices.json`.
+The script uses public Base endpoints only (with back-off on HTTP 429) and needs no
+key or archive node. It deploys nothing: the snapshot holds third-party Base state
+(Uniswap V3 factory, SwapRouter02, QuoterV2, every pool in `config/dex-pools.json`
+and its tokens, Aave, Compound, Morpho and the Safe v1.4.1 set) and no Robot Money
+contract. A public RPC cannot enumerate storage, so the capture runs quotes and
+USDC round-trip swaps on every pool, plus supply and withdraw on each yield
+protocol, so the slots they load are in the dump. Into the committed fixture dir
+it also realigns `fork-block.json`, regenerates `genesis-alloc.json` with
+`smoke-test-genesis-ingester` and recaptures `expected-prices.json`, all at the
+same block as `CURRENT.json`. A refreshed fixture is judged by
+`bun scripts/devnet/check-fork-snapshot-contents.ts` (code, live pool values, no
+Robot Money code at genesis) and `scripts/devnet/check-fork-manifest.sh --require-pinned`.
+`bun scripts/devnet/snapshot-fork-selftest.ts` is the offline selftest.
 
 The script's default endpoint is the first public entry in
 `scripts/devnet/fork-rpc-lib.sh`, `mainnet.base.org`, which serves archive state
@@ -127,4 +135,4 @@ origin, so a keyed URL never reaches a log or the committed manifest.
   `curl -L https://foundry.paradigm.xyz | bash && foundryup`.
 - **`anvil --load-state` parse error.** The fixture is stale or was
   written by a different Anvil version. Regenerate with
-  `bash scripts/devnet/snapshot-fork.sh`.
+  `bun scripts/devnet/snapshot-fork.ts`.

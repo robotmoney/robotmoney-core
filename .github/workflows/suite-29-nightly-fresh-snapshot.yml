@@ -1,0 +1,211 @@
+# Canonical: docs/development/ci-suites.md §29 (nightly fresh snapshot)
+# Issue: robotmoney-core 1496 (nightly job (b)); siblings 1495 (a) and 1497 (c).
+#
+# WHY THIS WORKFLOW EXISTS
+# Every chain suite normally boots the Twin chain (chain id 918453) from the
+# snapshot checked in under testing/fixtures/fork-state/. That pin ages. This
+# nightly takes a NEW snapshot of Base at the LATEST block, builds the Twin chain
+# genesis from it inside the runner, and reruns every chain suite against it. A
+# green run shows our contracts and clients still work against Base as it is
+# today, not as it was on the pin date.
+#
+# NO SECRET, NO ARCHIVE NODE, NOTHING COMMITTED
+# - The snapshot reads state at the latest block through the public endpoints in
+#   scripts/devnet/fork-rpc-lib.sh, with HTTP 429 back-off (fork_rpc_retry).
+#   RMPC_FORK_RPC_URL is ignored on purpose. No secrets.* is referenced here.
+# - The snapshot, genesis alloc and aligned manifests are an artifact only. The
+#   suites receive them through .github/actions/apply-fresh-snapshot, which copies
+#   them over the runner's checkout. Nothing is committed or pushed.
+#
+# NO COPIED STEPS
+# Each suite is the existing workflow, called with workflow_call and
+# fresh_snapshot=true: suites 5, 7, 8, 10, 11b, 14 and 26. A suite change lands
+# in one file and this nightly picks it up. Suite 26 targets the shared fusion
+# devnet and needs repository configuration; when it is not configured it FAILS
+# here (a skip is not a pass), see the fresh_snapshot gate in that workflow.
+#
+# RESULT
+# The `results` job fails when the snapshot is not within one hour of now
+# (scripts/devnet/check-nightly-fresh-snapshot.ts) or when any suite did not
+# succeed. It uploads snapshot-manifest (block number, hash, timestamp) and
+# suite-results (one JSON per suite).
+
+name: nightly-fresh-snapshot
+
+env:
+  CI_CLASS: ignore
+
+on:
+  schedule:
+    - cron: "30 5 * * *" # 05:30 UTC, after the 02:00 nightly and the 03:xx / 04:10 jobs
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-fresh-snapshot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    name: snapshot-at-latest-block
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: Capture Base at the latest block (public endpoints, 429 retry)
+        run: bun scripts/devnet/nightly-fresh-snapshot.ts snapshot --out "$RUNNER_TEMP/fresh"
+
+      # Fail before any suite spends runner time if the block is not fresh.
+      - name: Assert the snapshot block is within one hour
+        run: bun scripts/devnet/check-nightly-fresh-snapshot.ts --manifest "$RUNNER_TEMP/fresh/snapshot-manifest.json"
+
+      - name: Build the Twin chain genesis alloc and align the manifests
+        run: bun scripts/devnet/nightly-fresh-snapshot.ts realign --out "$RUNNER_TEMP/fresh"
+
+      - name: Show the manifest
+        run: |
+          jq . "$RUNNER_TEMP/fresh/snapshot-manifest.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the snapshot manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-manifest
+          path: ${{ runner.temp }}/fresh/snapshot-manifest.json
+          retention-days: 30
+
+      # Consumed by every suite job below. Not committed anywhere.
+      - name: Upload the fresh snapshot overlay
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-snapshot
+          path: |
+            ${{ runner.temp }}/fresh/overlay
+            ${{ runner.temp }}/fresh/snapshot-manifest.json
+          retention-days: 3
+
+  suite-05:
+    name: suite-05 fork integration
+    needs: snapshot
+    uses: ./.github/workflows/suite-05-fork-integration.yml
+    with:
+      fresh_snapshot: true
+
+  suite-07:
+    name: suite-07 rmpc integration
+    needs: snapshot
+    uses: ./.github/workflows/suite-07-rmpc-integration.yml
+    with:
+      fresh_snapshot: true
+
+  suite-08:
+    name: suite-08 explorer indexer
+    needs: snapshot
+    uses: ./.github/workflows/suite-08-explorer-indexer.yml
+    with:
+      fresh_snapshot: true
+
+  suite-10:
+    name: suite-10 dapp e2e
+    needs: snapshot
+    uses: ./.github/workflows/suite-10-dapp-e2e.yml
+    with:
+      fresh_snapshot: true
+
+  suite-11b:
+    name: suite-11b opencode headless
+    needs: snapshot
+    uses: ./.github/workflows/suite-11b-opencode-headless.yml
+    with:
+      fresh_snapshot: true
+
+  suite-14:
+    name: suite-14 smoke test
+    needs: snapshot
+    uses: ./.github/workflows/suite-14-smoke-test.yml
+    with:
+      fresh_snapshot: true
+
+  suite-26:
+    name: suite-26 fusion devnet acceptance
+    needs: snapshot
+    uses: ./.github/workflows/suite-26-fusion-devnet-acceptance.yml
+    with:
+      fresh_snapshot: true
+
+  results:
+    name: record-results
+    if: ${{ always() }}
+    needs: [snapshot, suite-05, suite-07, suite-08, suite-10, suite-11b, suite-14, suite-26]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Download the snapshot manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: snapshot-manifest
+          path: ${{ runner.temp }}/manifest
+        continue-on-error: true
+
+      - name: Write one result file per suite
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/suite-results"
+          echo "$NEEDS" | jq -r 'to_entries[] | select(.key | startswith("suite-")) | "\(.key)\t\(.value.result)"' |
+            while IFS=$'\t' read -r job result; do
+              suite="${job#suite-}"
+              jq -n --arg suite "$suite" --arg result "$result" --arg run "$GITHUB_RUN_ID" \
+                '{suite: $suite, result: $result, run_id: $run}' > "$RUNNER_TEMP/suite-results/suite-${suite}.json"
+              echo "suite $suite: $result" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          echo "snapshot job: $(echo "$NEEDS" | jq -r '.snapshot.result')" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the suite results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-results
+          path: ${{ runner.temp }}/suite-results
+          retention-days: 30
+
+      # Fails the run when the manifest is missing or stale, or any suite is not
+      # `success` (failure, cancelled and skipped all count as not passing).
+      # The freshness window is judged at capture time by the snapshot job; here
+      # it is re-read with --max-age-seconds wide enough to cover the suite run.
+      - name: Fail the run when any suite failed
+        run: |
+          bun scripts/devnet/check-nightly-fresh-snapshot.ts \
+            --manifest "$RUNNER_TEMP/manifest/snapshot-manifest.json" \
+            --max-age-seconds 28800 \
+            --suite-results "$RUNNER_TEMP/suite-results"
+
+      # Nothing is committed: the snapshot lives in runner temp and artifacts only.
+      # Final step, so a snapshot file written into the checkout fails the run.
+      - name: Assert no snapshot file is committed or changed
+        run: git diff --exit-code -- testing/fixtures/fork-state testing/ethereum-testnet/config

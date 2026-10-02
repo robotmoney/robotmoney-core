@@ -150,7 +150,14 @@ fn eoas_are_funded() {
     let fx = fixture();
     for (name, addr_hex) in [
         ("agent", format!("{:#x}", fx.agent())),
-        ("deployer", smoke_test::DEPLOYER_ADDRESS_HEX.to_string()),
+        (
+            "deployer",
+            fx.published()
+                .keys
+                .address("ADMIN_ADDRESS")
+                .expect("deployer address")
+                .to_string(),
+        ),
     ] {
         let hex = rpc_call::<String>(
             fx.rpc_url(),
@@ -216,101 +223,53 @@ fn approve_usdc_succeeds() {
     );
 }
 
-// -- Uniswap V3 stub pools (issue #531) ----------------------------------
+// -- One deployment scheme: four vaults, real Safe, timelock ------------
 
-/// All four devnet stub pool addresses are non-zero and distinct from the
-/// Base pool addresses (which have no bytecode on the fresh devnet).
+/// publish contracts wrote a manifest for each of the four vaults, and each has code.
 #[test]
-fn stub_pool_addresses_are_non_zero_and_distinct() {
-    if skip_if_no_prereqs("stub_pool_addresses_are_non_zero_and_distinct") {
+fn four_vault_manifests_exist_and_have_code() {
+    if skip_if_no_prereqs("four_vault_manifests_exist_and_have_code") {
         return;
     }
     let fx = fixture();
-    let base_eth_usd: Address = "0xd0b53D9277642d899DF5C87A3966A349A798F224"
-        .parse()
-        .unwrap();
-    let base_cbbtc: Address = "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef"
-        .parse()
-        .unwrap();
-    let base_wsol: Address = "0xc1bF8adf6E62cC9C56E2b246b03d3e74da45A0E1"
-        .parse()
-        .unwrap();
-
-    for (name, addr) in [
-        ("eth_usd", fx.stub_pool_eth_usd()),
-        ("weth_usdc", fx.stub_pool_weth_usdc()),
-        ("cbbtc_usdc", fx.stub_pool_cbbtc_usdc()),
-        ("wsol_usdc", fx.stub_pool_wsol_usdc()),
-    ] {
-        assert_ne!(addr, Address::ZERO, "stub pool {name} is zero address");
-        assert_ne!(
-            addr, base_eth_usd,
-            "stub pool {name} matches Base eth/usd pool"
-        );
-        assert_ne!(addr, base_cbbtc, "stub pool {name} matches Base cbbtc pool");
-        assert_ne!(addr, base_wsol, "stub pool {name} matches Base wsol pool");
-    }
-}
-
-/// All four stub pool contracts have bytecode deployed on the devnet.
-#[test]
-fn stub_pools_have_code() {
-    if skip_if_no_prereqs("stub_pools_have_code") {
-        return;
-    }
-    let fx = fixture();
-    for (name, addr) in [
-        ("eth_usd", fx.stub_pool_eth_usd()),
-        ("weth_usdc", fx.stub_pool_weth_usdc()),
-        ("cbbtc_usdc", fx.stub_pool_cbbtc_usdc()),
-        ("wsol_usdc", fx.stub_pool_wsol_usdc()),
-    ] {
+    for key in ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"] {
+        let addr = fx.vault_by_key(key);
+        assert_ne!(addr, Address::ZERO, "manifest for {key} is missing");
         let code = get_code(fx.rpc_url(), addr);
-        assert!(
-            code.len() > 2,
-            "stub pool {name} at {addr:#x} has no bytecode (got {code:?})"
-        );
+        assert!(code.len() > 2, "{key} at {addr:#x} has no bytecode");
     }
+    assert_ne!(fx.safe(), Address::ZERO, "Safe manifest is missing");
+    assert_ne!(fx.timelock(), Address::ZERO, "timelock manifest is missing");
 }
 
-/// Each stub pool returns a non-zero sqrtPriceX96 via slot0().
-///
-/// Selector: keccak256("slot0()")[0..4] = 0x3850c7bd
+/// After handover the deployer holds no admin on the governance contract: the
+/// timelock does. Nothing here is set by a deployer fixup.
 #[test]
-fn stub_pools_return_nonzero_sqrt_price() {
-    if skip_if_no_prereqs("stub_pools_return_nonzero_sqrt_price") {
+fn deployer_holds_no_admin_after_handover() {
+    if skip_if_no_prereqs("deployer_holds_no_admin_after_handover") {
         return;
     }
     let fx = fixture();
-    for (name, addr) in [
-        ("eth_usd", fx.stub_pool_eth_usd()),
-        ("weth_usdc", fx.stub_pool_weth_usdc()),
-        ("cbbtc_usdc", fx.stub_pool_cbbtc_usdc()),
-        ("wsol_usdc", fx.stub_pool_wsol_usdc()),
-    ] {
+    let deployer = fx
+        .published()
+        .keys
+        .address("ADMIN_ADDRESS")
+        .expect("deployer address")
+        .to_string();
+    let admin_role = "a49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775";
+    for (who, want) in [(deployer, false), (format!("{:#x}", fx.timelock()), true)] {
+        let who_hex = who.trim_start_matches("0x").to_lowercase();
+        let data = format!("0x91d14854{admin_role}{who_hex:0>64}");
         let result: String = rpc_call(
             fx.rpc_url(),
             "eth_call",
             serde_json::json!([
-                {"to": format!("{:#x}", addr), "data": "0x3850c7bd"},
+                {"to": format!("{:#x}", fx.governance()), "data": data},
                 "latest"
             ]),
         );
-        // slot0 returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
-        // ABI-encoded, the first 32 bytes hold the uint160 sqrtPriceX96.
-        let stripped = result.trim_start_matches("0x");
-        assert!(
-            stripped.len() >= 40,
-            "stub pool {name} slot0() returned too short: {result:?}"
-        );
-        // The first 32 bytes = sqrtPriceX96 (uint160 is right-aligned in a 32-byte slot).
-        let first_32 = &stripped[..64];
-        let sqrt_price =
-            u128::from_str_radix(&first_32[first_32.len().saturating_sub(40)..], 16).unwrap_or(0);
-        assert!(
-            sqrt_price > 0,
-            "stub pool {name} at {addr:#x} returned sqrtPriceX96=0"
-        );
+        let has = result.trim_start_matches("0x").ends_with('1');
+        assert_eq!(has, want, "hasRole(ADMIN_ROLE, {who}) on governance");
     }
 }
 

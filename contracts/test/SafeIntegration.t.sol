@@ -109,7 +109,7 @@ interface ISafeProxyFactory {
 ///      factory (0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67) with the canonical
 ///      `SafeL2` singleton (0x29fcB43b46531BcA003ddC8FCB67FFE91900C762). Base is an L2,
 ///      so `SafeL2` is the singleton production uses (governance-isomorphism.md §2.2, R4).
-///      The golden fixture carries it because snapshot-fork.sh warms the whole Safe set
+///      The golden fixture carries it because snapshot-fork.ts warms the whole Safe set
 ///      and check-fork-safe-set.sh refuses a fixture without it (R2, R3).
 ///      This proves the quorum is enforced by actual Safe contract code, not vm.prank.
 ///

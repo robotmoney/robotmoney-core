@@ -8,7 +8,7 @@
 # now-deleted test-only no-yield deploy hatch (issue #912).
 #
 # This mirrors testing/fork-e2e-rust/src/lib.rs::ForkFixture (the canonical
-# --load-state consumer) and scripts/devnet/snapshot-fork.sh:
+# --load-state consumer) and scripts/devnet/snapshot-fork.ts:
 #   1. anvil --load-state CURRENT.anvil-state --chain-id <devnet pin>
 #   2. Replay the canonical Base USDC proxy storage seed + implementation
 #      bytecode (usdc-storage-seed.json) so the forked FiatTokenProxy behaves
@@ -40,7 +40,7 @@
 # the canonical USDC address on stdout (so the caller can export USDC_ADDRESS).
 #
 # Each funded address receives 2,000 USDC (6 decimals) — comfortably covers
-# the Deploy.s.sol 1,000-USDC seed deposit plus a headless 1-USDC deposit.
+# the vault stage seed deposit plus a headless 1-USDC deposit.
 set -euo pipefail
 
 RPC_URL="${1:?usage: boot-fork-state-anvil.sh <rpc_url> <fund_addr>...}"

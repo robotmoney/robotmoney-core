@@ -18,7 +18,7 @@
 #     selftest re-creates that step's exact commands on a fixture archive and, on
 #     top of that, asserts the workflow still contains them — mirroring
 #     scripts/devnet/check-fork-state-digest-selftest.sh, which covers a helper
-#     snapshot-fork.sh relies on but CI never reaches.
+#     snapshot-fork.ts relies on but CI never reaches.
 #
 #  2. The corrupted-download path. A checksum that is published but never compared
 #     is decoration, so the load-bearing assertion here is the negative one: flip a

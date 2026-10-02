@@ -127,7 +127,7 @@ live-RPC path and manual fixture refresh use:
 
 | Var | Required | Meaning |
 |-----|----------|---------|
-| `RMPC_FORK_RPC_URL` | No | Base mainnet endpoint. Used locally, and in CI for (a) the nightly live-drift alarm and (b) the three live-RPC `fork-regressions` steps; it gates no merge (ADR-0011) — merge-gating CI forks the checked-in fixture offline. When it is unset, those CI steps fall back to the free public endpoints in `scripts/devnet/fork-rpc-lib.sh` (issue #1239). In CI it must be set as a repository or organization Actions **secret**, not a variable: this repo is public, and GitHub does not mask `vars.*` values anywhere they appear (including a step's `env:` block in the log), so a keyed URL stored as a variable would leak into every public run. Scripts never print its value, and a secret is masked wherever GitHub does print it. |
+| `RMPC_FORK_RPC_URL` | No | Base mainnet endpoint. Used locally, and in CI for the three live-RPC `fork-regressions` steps; it gates no merge (ADR-0011) — merge-gating CI forks the checked-in fixture offline. When it is unset, those CI steps fall back to the free public endpoints in `scripts/devnet/fork-rpc-lib.sh` (issue #1239). In CI it must be set as a repository or organization Actions **secret**, not a variable: this repo is public, and GitHub does not mask `vars.*` values anywhere they appear (including a step's `env:` block in the log), so a keyed URL stored as a variable would leak into every public run. Scripts never print its value, and a secret is masked wherever GitHub does print it. |
 | `RMPC_FORK_BLOCK` | No | Decimal block number pin. CI sets this in the workflow file. Unset → `eth_blockNumber - 50` against the upstream RPC. |
 
 ### Startup command
@@ -184,21 +184,21 @@ pkill -f 'anvil --fork-url'
 
 Refresh is **developer-owned on change**, not scheduled (ADR-0011): whoever
 adds an adapter, wires a new pool, or changes an integration regenerates the
-fixture in the **same PR**, and a developer refreshes in response to a nightly
-drift-alarm issue. There is no monthly cadence.
+fixture in the **same PR**, and a developer refreshes when the fork-pin age
+warning in the nightly asks for it. There is no monthly cadence.
 
 ```bash
 # Requires RMPC_FORK_RPC_URL (archive depth for the pinned block).
 # Run when an integration change requires a new fixture, or in response to a
-# nightly drift-alarm issue — not on a schedule (ADR-0011).
-bash scripts/devnet/snapshot-fork.sh
+# fork-pin age warning in the nightly — not on a schedule (ADR-0011).
+bash scripts/devnet/snapshot-fork.ts
 # Or via the convenience wrapper:
 bash scripts/devnet/refresh-fork-fixture.sh
 ```
 
 Validates the fixture manifest before use — including the sha256 integrity
 check (`state_sha256` in `CURRENT.json`, ADR-0011 addendum, issue #1152):
-`snapshot-fork.sh` writes the digest, so a legitimate refresh always updates
+`snapshot-fork.ts` writes the digest, so a legitimate refresh always updates
 it; a hand-edited blob with a stale or missing digest fails loudly here
 instead of loading silently:
 

@@ -1,0 +1,112 @@
+# Canonical: docs/development/ci-suites.md §28
+#
+# WHY A NEW FILE AND NOT A JOB FOLDED INTO suite-01-02
+# -----------------------------------------------------
+# core-stack.sh (scripts/stage/core-stack.sh) has nothing to do with the forge
+# unit/invariant/coverage gate suite-01-02 runs: it is the stage-deployment
+# verb surface (devops#42), not a Solidity test. It was folded into
+# suite-01-02-forge-tests.yml as a fourth job for convenience when it landed,
+# which meant its own trigger set was whatever suite-01-02 happened to have
+# (push: dev, pull_request, workflow_dispatch) rather than the refs the stage
+# tooling actually ships on — a release branch or a `v*.*.*` tag never ran it.
+# This file gives the selftest an independent trigger set and stops it riding
+# along with (and being invisible inside) the forge suite's run list.
+#
+# WHY ITS OWN ASSERTION FLOOR, SEPARATE FROM THE SCRIPT'S OWN
+# -------------------------------------------------------------
+# scripts/stage/tests/core-stack-selftest.sh already refuses to exit 0 below
+# its own MIN_EXPECTED_ASSERTIONS. This job re-checks the printed
+# CORE_STACK_SELFTESTS_EXECUTED count against a floor held here too, so a run
+# that silently did less (a section skipped, a truncated file, a lost exit
+# status, a future edit that lowers the script's own floor without anyone
+# noticing) is still red here. Raise both together when cases are added.
+name: core-stack-selftest
+
+on:
+  pull_request: {}
+  push:
+    branches: ["releases-*"]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  core-stack-selftest:
+    name: core-stack-selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI_CLASS: system-correctness
+      # Executed-assertion floor, held here independently of the script's own
+      # MIN_EXPECTED_ASSERTIONS so a run that silently did less (a section
+      # skipped, a truncated file, a lost exit status) is red either way. Raise
+      # both together when cases are added.
+      CORE_STACK_SELFTEST_FLOOR: "60"
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    # scripts/stage/tests/core-stack-selftest.sh: the stage verbs in
+    # scripts/stage/core-stack.sh (publish / governance / record) against a fake
+    # `bun` standing in for publish contracts, offline: the exact Twin chain
+    # argument list, exit-code passthrough, the govern row gate and the record
+    # contract. core-stack.sh deploys nothing itself (core 1488).
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: core-stack self-test
+        run: |
+          set -o pipefail
+          bash scripts/stage/tests/core-stack-selftest.sh 2>&1 | tee core-stack-selftest.log
+          tally="$(grep -E '^core-stack selftest: [0-9]+ passed, [0-9]+ failed$' core-stack-selftest.log | tail -1)"
+          if [ -z "$tally" ]; then
+            echo "::error::core-stack selftest printed no tally line: the run ended before its summary"
+            exit 1
+          fi
+          passed="$(sed -E 's/^core-stack selftest: ([0-9]+) passed.*/\1/' <<<"$tally")"
+          failed="$(sed -E 's/^.* ([0-9]+) failed$/\1/' <<<"$tally")"
+          echo "core-stack selftest: $passed assertions executed, $failed failed, floor $CORE_STACK_SELFTEST_FLOOR"
+          if [ "$failed" != 0 ] || [ "$passed" -lt "$CORE_STACK_SELFTEST_FLOOR" ]; then
+            echo "::error::core-stack selftest: $passed passed / $failed failed, floor $CORE_STACK_SELFTEST_FLOOR"
+            exit 1
+          fi
+
+  # The grep gate: exits 0 only when the second deployment path is gone. The
+  # stage ceremony shell, the deleted stage deploy script, the deploy workflow and the Rust
+  # harness deployment (forge script calls, demo seeding, faucet funding) must be
+  # absent, and core-stack.sh must hold no deploy or ceremony logic.
+  deleted-stage-gate:
+    name: deleted-stage-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Grep gate for the deleted stage paths
+        run: bun scripts/stage/check-deleted-stage-scripts.ts .
+
+  # Pure Bun TypeScript tests for the stage tooling: the govern row parser (tx
+  # hash and receipt status 1 on every row), the sheet-diff allow-list, the
+  # label-diff, and the gate itself. Fast, no chain.
+  stage-tooling-tests:
+    name: stage-tooling-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: bun test scripts/stage/tests
+        working-directory: scripts/stage
+        run: bun test tests

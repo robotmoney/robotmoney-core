@@ -55,7 +55,7 @@
 //!   PACKED blacklist bit (FiatToken V2_1-vs-V2_2 storage-layout mismatch), so
 //!   on a V2_2 snapshot the grant can target/leave a stale blacklist slot.
 //!   Lives in the USDC-seed path (`src/base_testnet.rs` /
-//!   `src/bin/demo-seed-depositors.rs`), NOT this manifest module. Seam for
+//!   the deleted demo seeder), NOT this manifest module. Seam for
 //!   #1026: detect the FiatToken minor version and compute the blacklist slot
 //!   from the packed layout rather than the hardcoded V2_1 slot.
 //!
@@ -578,7 +578,7 @@ mod tests {
             manifest.block_number, current_fork_block,
             "smoke-test fork-block.json block_number ({}) drifted from \
              Anvil fork-e2e CURRENT.json fork_block ({}); refresh both \
-             together via scripts/devnet/snapshot-fork.sh",
+             together via scripts/devnet/snapshot-fork.ts",
             manifest.block_number, current_fork_block
         );
     }
@@ -658,13 +658,13 @@ mod tests {
             let id = pair["id"].as_str().unwrap_or("<unknown>");
             assert!(
                 pair["captured"].as_bool() == Some(true),
-                "pair {id}: captured must be true (run scripts/devnet/snapshot-fork.sh \
+                "pair {id}: captured must be true (run scripts/devnet/snapshot-fork.ts \
                  against a Base archive RPC and update expected_price + captured per pair)"
             );
             assert!(
                 pair["expected_price"].as_f64().is_some(),
                 "pair {id}: expected_price must be a non-null number (run \
-                 scripts/devnet/snapshot-fork.sh against a Base archive RPC)"
+                 scripts/devnet/snapshot-fork.ts against a Base archive RPC)"
             );
         }
     }
