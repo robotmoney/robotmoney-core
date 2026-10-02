@@ -890,8 +890,8 @@ membership and asset config back from the chain. It takes no key.
 ### 28b. Core stack selftest, deleted-path gate and stage tooling tests
 **File:** `.github/workflows/suite-28-core-stack-selftest.yml`
 
-`scripts/stage/core-stack.sh` is a boot and health wrapper. It deploys and governs by calling publish contracts (devops, Bun TypeScript) with the Twin chain argument list. Jobs:
-- `core-stack-selftest` — `bash scripts/stage/tests/core-stack-selftest.sh` against a fake `bun` standing in for publish contracts: the exact argument list, exit-code passthrough, the four-manifest count, the govern row gate (tx hash and receipt status 1 on every row), the usage errors and the record contract with its schema drift guard. Executed-assertion floor held here and in the script.
+`scripts/stage/core-stack.ts` (Bun TypeScript; `core-stack.sh` is a shim that execs it) is the boot, health, record and parity tool. It deploys and governs by calling publish contracts (devops, Bun TypeScript) with the Twin chain argument list. Jobs:
+- `core-stack-selftest` — `bun test scripts/stage/tests/core-stack.test.ts` against a fake runner standing in for publish contracts: the exact argument list with the `keystore:PATH:PASSFILE` signer, a fresh keystore set per boot, exit-code passthrough, the four-manifest count, the govern row gate (tx hash and receipt status 1 on every row), the usage errors and the record contract with its schema drift guard. Executed-test floor held in the workflow.
 - `deleted-stage-gate` — `bun scripts/stage/check-deleted-stage-scripts.ts .` exits 0 only when the stage ceremony shell, the stage deploy script, the deploy workflow and the Rust harness deployment (forge script calls, demo seeding, faucet funding) are absent and `core-stack.sh` holds no deploy or ceremony logic.
 - `stage-tooling-tests` — `bun test scripts/stage/tests`: the govern row parser, the sheet-diff allow-list (stage versus production sheet differ only in parameter lines), the label-diff (verifier labels on stage equal the mainnet set) and the gate.
 

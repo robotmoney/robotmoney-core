@@ -13,8 +13,30 @@ function tree(files: Record<string, string>): string {
   return root;
 }
 
-test("a clean tree passes, core-stack.sh may exist as a boot and health wrapper", () => {
-  const root = tree({ "scripts/stage/core-stack.sh": "#!/usr/bin/env bash\n# deploys via publish contracts\nbun cli.ts publish\n" });
+const SHIM = '#!/usr/bin/env bash\n# shim\nset -euo pipefail\nexec bun "$(dirname "$0")/core-stack.ts" "$@"\n';
+
+test("a clean tree passes, core-stack.sh may exist as a one-screen shim that execs core-stack.ts", () => {
+  const root = tree({ "scripts/stage/core-stack.sh": SHIM, "scripts/stage/core-stack.ts": "// verbs\nexport const x = 1;\n" });
+  expect(check(root)).toEqual([]);
+});
+
+test("a long core-stack.sh fails: shell logic crept back", () => {
+  const root = tree({ "scripts/stage/core-stack.sh": SHIM + "echo hi\n".repeat(30) });
+  expect(check(root).join("\n")).toContain("shim");
+});
+
+test("a core-stack.sh that does not exec core-stack.ts fails", () => {
+  const root = tree({ "scripts/stage/core-stack.sh": "#!/usr/bin/env bash\necho hi\n" });
+  expect(check(root).join("\n")).toContain("must exec core-stack.ts");
+});
+
+test("core-stack.ts holding deploy logic fails", () => {
+  const root = tree({ "scripts/stage/core-stack.ts": 'run("cast send 0x1");\n// cast send in a comment is fine\n' });
+  expect(check(root).join("\n")).toContain("core-stack.ts");
+});
+
+test("the ban-list script may name the deleted paths", () => {
+  const root = tree({ "scripts/ci/check-no-test-only-code.ts": 'const x = "scripts/stage/deploy-core-stack.sh";\n' });
   expect(check(root)).toEqual([]);
 });
 

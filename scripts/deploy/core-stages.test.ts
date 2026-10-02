@@ -1,7 +1,7 @@
 // Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S3 (issue 1485).
 // Offline test of the core stage table. Run: bun test scripts/deploy/core-stages.test.ts
 import { describe, expect, test } from "bun:test";
-import { STAGES, assertGatewayRouter, assertStageOrder, mergeManifests } from "./core-stages";
+import { PROOFS, STAGES, assertGatewayRouter, assertStageOrder, mergeManifests, proofArgs, proofsAfter } from "./core-stages";
 
 describe("stage table", () => {
   test("runs libs, vault, registry, router, gateway, governance, ic, three basket vaults, timelock in that order", () => {
@@ -169,5 +169,39 @@ describe("basket vault proof rules", () => {
   test("a vault missing from the registry fails", async () => {
     const c = await basketChecks(reader({ listVaults: async () => [manifest.vault] }), manifest, configs);
     expect(c.filter((x) => !x.ok).length).toBe(3);
+  });
+});
+
+describe("proofs run inside the stage run", () => {
+  const ctx = { rpc: "http://r", manifest: "m.json", out: "o.json", agentArgs: [] as string[], receiverArgs: [] as string[], env: {} as Record<string, string> };
+  const names = STAGES.map((s) => s.name as string);
+  test("every proof follows a stage in the table", () => {
+    for (const p of PROOFS) expect(names).toContain(p.after);
+  });
+  test("the three assertion scripts are wired: router after gateway, baskets after rwa, roles after timelock", () => {
+    expect(proofsAfter("gateway").map((p) => p.script)).toEqual(["scripts/deploy/assert-core-router.ts"]);
+    expect(proofsAfter("rwa").map((p) => p.script)).toEqual(["scripts/deploy/assert-basket-vaults.ts"]);
+    expect(proofsAfter("timelock").map((p) => p.script)).toEqual(["scripts/deploy/assert-timelock-roles.ts"]);
+  });
+  test("the router proof refuses to run without signer flags and says which", () => {
+    const p = PROOFS.find((x) => x.name === "router")!;
+    expect(() => proofArgs(p, ctx)).toThrow(/--agent-arg/);
+    expect(() => proofArgs(p, { ...ctx, agentArgs: ["--unlocked"] })).toThrow(/--receiver-arg/);
+  });
+  test("the router proof passes the signer flags through", () => {
+    const p = PROOFS.find((x) => x.name === "router")!;
+    const args = proofArgs(p, { ...ctx, agentArgs: ["--unlocked", "--from"], receiverArgs: ["--unlocked"] });
+    expect(args.filter((x) => x === "--agent-arg").length).toBe(2);
+    expect(args.filter((x) => x === "--receiver-arg").length).toBe(1);
+  });
+  test("the timelock roles proof takes the deployer, Safe, emergency key and delay from the environment", () => {
+    const p = PROOFS.find((x) => x.name === "timelock-roles")!;
+    expect(() => proofArgs(p, ctx)).toThrow(/ADMIN_ADDRESS/);
+    const env = { ADMIN_ADDRESS: "0xa", SAFE_ADDRESS: "0xb", EMERGENCY_ADDRESS: "0xc", TIMELOCK_MIN_DELAY: "60" };
+    const args = proofArgs(p, { ...ctx, env });
+    expect(args).toEqual(expect.arrayContaining(["--deployer", "0xa", "--safe", "0xb", "--emergency", "0xc", "--min-delay", "60"]));
+  });
+  test("the basket proof needs only the common flags", () => {
+    expect(proofArgs(PROOFS.find((x) => x.name === "basket")!, ctx)).toEqual(["--rpc-url", "http://r", "--manifest", "m.json", "--out", "o.json"]);
   });
 });

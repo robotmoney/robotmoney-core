@@ -62,6 +62,11 @@ on:
         type: boolean
         required: false
         default: false
+      production_fixtures_dir:
+        description: "Directory with the devops production fixtures (verifier-labels.txt, production-sheet.env), relative to the workspace."
+        type: string
+        required: false
+        default: "devops/deployments/base-8453"
   # HEAVY tier: this devnet boot/teardown suite is a merge gate for `dev` — it
   # runs on every pull_request targeting dev (no path filter, so the gate always
   # reports for any branch merging to dev) and on push to dev for merged-commit
@@ -71,6 +76,12 @@ on:
   pull_request:
     branches: [dev]
   workflow_dispatch:
+    inputs:
+      production_fixtures_dir:
+        description: "Directory with the devops production fixtures (verifier-labels.txt, production-sheet.env), relative to the workspace."
+        type: string
+        required: false
+        default: "devops/deployments/base-8453"
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
 # not pile up duplicate suites. push:main/dev runs are exempt — they keep a
@@ -348,29 +359,28 @@ jobs:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-${{ matrix.binary }}.log
           PUBLISH_CONTRACTS_DIR: ${{ github.workspace }}/devops/publish-contracts
           STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
+          # Core 1488: a Twin chain matrix binary that executes zero tests is a silent skip. Every
+          # binary in this matrix holds at least one test, so the floor is one (non-zero count).
+          CARGO_TEST_MIN_EXECUTED: "1"
           SMOKE_TEST_VERIFY_OUT: ${{ runner.temp }}/stage-verify-labels.txt
+          SMOKE_TEST_SHEET_OUT: ${{ runner.temp }}/stage-run-sheet.env
         run: >-
           bash ../../.github/scripts/cargo_test_require_executed.sh
           -p smoke-test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
 
-      # Core 1488: the REAL stage outputs go through label-diff and sheet-diff.
-      # The verifier label set from the Twin chain run must equal the mainnet
-      # set, and the stage sheet must differ from the production sheet only in
-      # parameter lines. Both reference files are the devops repo's, checked out
-      # above: a missing file fails this step (it is not skipped).
+      # Core 1488: the REAL stage outputs go through label-diff and sheet-diff. The Twin chain test
+      # (twin_publish.rs) writes the verifier label file (SMOKE_TEST_VERIFY_OUT) and the run sheet
+      # (SMOKE_TEST_SHEET_OUT). The mainnet side is the devops production fixtures directory, given as
+      # the input production_fixtures_dir. A missing or empty file fails this step and names the path.
       - name: Stage vs mainnet parity (label-diff, sheet-diff on real output)
         if: ${{ matrix.binary == 'twin_publish' }}
         env:
-          MAINNET_LABELS: ${{ github.workspace }}/devops/deployments/base-8453/verifier-labels.txt
-          PRODUCTION_SHEET: ${{ github.workspace }}/devops/deployments/base-8453/production-sheet.env
-          STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
-        run: |
-          set -euo pipefail
-          for f in "$MAINNET_LABELS" "$PRODUCTION_SHEET" "$STAGE_SHEET" "$RUNNER_TEMP/stage-verify-labels.txt"; do
-            [ -s "$f" ] || { echo "::error::parity input missing or empty: $f"; exit 1; }
-          done
-          bun scripts/stage/label-diff.ts "$RUNNER_TEMP/stage-verify-labels.txt" "$MAINNET_LABELS"
-          bun scripts/stage/sheet-diff.ts "$STAGE_SHEET" "$PRODUCTION_SHEET"
+          FIXTURES_DIR: ${{ github.workspace }}/${{ inputs.production_fixtures_dir || 'devops/deployments/base-8453' }}
+        run: >-
+          bun scripts/stage/parity.ts
+          --stage-labels "$RUNNER_TEMP/stage-verify-labels.txt"
+          --stage-sheet "$RUNNER_TEMP/stage-run-sheet.env"
+          --fixtures-dir "$FIXTURES_DIR"
 
       - name: Upload smoke-test logs
         if: always()
