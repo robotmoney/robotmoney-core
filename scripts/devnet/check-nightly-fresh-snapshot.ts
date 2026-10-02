@@ -49,7 +49,7 @@ console.log(`OK: block ${m.block_number} (${m.block_hash}) is ${age}s old, withi
 
 const dir = opt("--suite-results");
 if (dir) {
-  const expected = ["5", "7", "8", "10", "11b", "14", "26"];
+  const expected = ["5", "7", "8", "10", "11b", "14"];
   const files = existsSync(dir) ? readdirSync(dir) : [];
   const bad: string[] = [];
   for (const s of expected) {

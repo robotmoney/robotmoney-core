@@ -379,12 +379,12 @@ jobs:
       - name: Nightly dispatch list self-test (core 1495)
         run: bash .github/scripts/tests/test_nightly_dispatch_list.sh
 
-      # Core 1496: suites 5, 7, 8, 10, 11b, 14 and 26 present, no secret or keyed
+      # Core 1496: suites 5, 7, 8, 10, 11b and 14 present, no secret or keyed
       # RPC, manifest fields and freshness, stubbed failing suite, final
       # git diff gate, HTTP 429 retry. Runs on every PR, so a change to suite-29
       # or scripts/devnet cannot skip it.
       - name: Nightly fresh snapshot self-test (core 1496)
-        run: bash scripts/devnet/check-nightly-fresh-snapshot-selftest.sh
+        run: bun scripts/devnet/check-nightly-fresh-snapshot-selftest.ts
 
       - name: Snapshot tooling self-test (HTTP 429 retry, no Deploy.s.sol; core 1498)
         run: bun scripts/devnet/snapshot-fork-selftest.ts

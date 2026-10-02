@@ -443,7 +443,7 @@ async function main(): Promise<void> {
     const currentJson = join(FIXTURE_DIR, "CURRENT.json");
     writeFileSync(
       currentJson,
-      JSON.stringify({ fixture: fixtureName, state_file: stateName, fork_block: pinBlock, chain_id: FORK_CHAIN_ID, captured_at: capturedAt }, null, 2) + "\n",
+      JSON.stringify({ fixture: fixtureName, state_file: stateName, fork_block: pinBlock, fork_block_hash: pinBlk.hash, chain_id: FORK_CHAIN_ID, captured_at: capturedAt }, null, 2) + "\n",
     );
     await sh(["bash", digest, "write", currentState, currentJson]);
 
@@ -496,6 +496,14 @@ async function updateConfig(state: any, block: number, hash: string, currentStat
       "--manifest", fbPath, "--snapshot", currentState, "--output", join(FIXTURE_DIR, "genesis-alloc.json"), "--require-pinned",
     ],
     {}, true,
+  );
+  // Block lockstep sidecar: genesis-alloc.json is an address map, so the block it was built at is recorded
+  // next to it. check-fork-lockstep.ts asserts CURRENT.json, fork-block.json and this file agree.
+  writeFileSync(
+    join(FIXTURE_DIR, "genesis-alloc.block.json"),
+    JSON.stringify(
+      { block_number: block, block_hash: hash, alloc_sha256: createHash("sha256").update(readFileSync(join(FIXTURE_DIR, "genesis-alloc.json"))).digest("hex") }, null, 2,
+    ) + "\n",
   );
 
   const epPath = join(cfgDir, "expected-prices.json");

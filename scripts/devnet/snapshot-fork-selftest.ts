@@ -12,6 +12,7 @@
  *
  * No network beyond a localhost stub, no Docker, no anvil.
  */
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DESPXA_POOL, REPO, SWAP_ROUTER02, V3_FACTORY, INFRA_ADDRESSES, loadConfiguredPools, rpc } from "./fork-snapshot-lib.ts";
@@ -74,6 +75,22 @@ check(pools.length >= 3, `configured pools: ${pools.length}`);
 
 const contents = readFileSync(join(REPO, "scripts/devnet/check-fork-snapshot-contents.ts"), "utf8");
 check(/robotMoneyAddresses/.test(contents) && /fail\(`Robot Money contract has code/.test(contents), "contents check fails on Robot Money code at genesis");
+
+// ── block lockstep (number and hash) ───────────────────────────────────────
+{
+  const { lockstepErrors } = await import("./check-fork-lockstep.ts");
+  const H = "0x" + "ab".repeat(32);
+  const alloc = Buffer.from("{}");
+  const sha = createHash("sha256").update(alloc).digest("hex");
+  const cur = { fork_block: 10, fork_block_hash: H };
+  const fb = { block_number: 10, block_hash: H };
+  const side = { block_number: 10, block_hash: H, alloc_sha256: sha };
+  check(lockstepErrors(cur, fb, side, alloc).length === 0, "lockstep: matching number and hash pass");
+  check(lockstepErrors(cur, { ...fb, block_hash: "0x" + "cd".repeat(32) }, side, alloc).length > 0, "lockstep: a differing hash fails");
+  check(lockstepErrors({ ...cur, fork_block: 11 }, fb, side, alloc).length > 0, "lockstep: a differing number fails");
+  check(lockstepErrors(cur, fb, side, Buffer.from("{\"x\":1}")).length > 0, "lockstep: edited alloc bytes fail");
+  check(lockstepErrors({ fork_block: 10 }, fb, side, alloc).length > 0, "lockstep: missing CURRENT.json hash fails");
+}
 
 if (failures > 0) {
   console.error(`${failures} selftest assertion(s) failed`);

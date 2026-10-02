@@ -26,14 +26,6 @@ import {
   robotMoneyAddresses, rpc, sleep, word,
 } from "./fork-snapshot-lib.ts";
 
-/** BNKR on Base, read from the one config file that lists it (no second hand-kept list). */
-function bnkrAddress(): string {
-  const cfg = JSON.parse(readFileSync(join(REPO, "config/agent-token-shortlist.json"), "utf8"));
-  const row = (cfg.mainnet?.shortlist ?? []).find((r: { symbol: string }) => r.symbol === "BNKR");
-  if (!row?.token || !/^0x[0-9a-fA-F]{40}$/.test(row.token)) throw new Error("config/agent-token-shortlist.json has no mainnet BNKR token address");
-  return row.token;
-}
-
 function arg(name: string, dflt?: string): string | undefined {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : dflt;
@@ -87,13 +79,11 @@ async function main() {
       [SWAP_ROUTER02, "Uniswap V3 SwapRouter02"],
       [QUOTER_V2, "Uniswap V3 QuoterV2"],
       [V3_FACTORY, "Uniswap V3 factory"],
-      [bnkrAddress(), "BNKR token (from config/agent-token-shortlist.json)"],
       ...INFRA_ADDRESSES,
       ...SAFE_SET.map((a): [string, string] => [a, "Safe v1.4.1 set member"]),
     ];
-    if (bnkrAddress().toLowerCase() !== BNKR.toLowerCase()) fail(`BNKR in fork-snapshot-lib.ts (${BNKR}) differs from config/agent-token-shortlist.json (${bnkrAddress()})`);
-    const bnkrCode: string = await rpc(url!, "eth_getCode", [BNKR, "latest"]);
-    bnkrCode && bnkrCode !== "0x" ? ok(`eth_getCode non-empty for BNKR ${BNKR}`) : fail(`eth_getCode is empty for BNKR ${BNKR}`);
+    // BNKR is in INFRA_ADDRESSES only when config/agent-token-shortlist.json names it (rmAGENT ships empty).
+    if (!BNKR) console.log("skip: no BNKR address in config/agent-token-shortlist.json (rmAGENT ships empty); BNKR not asserted");
     const seen = new Set<string>();
     for (const [a, label] of required) {
       if (seen.has(a.toLowerCase())) continue;
@@ -121,8 +111,7 @@ async function main() {
         obsCardinality >= 1 ? ok(`${tag}: observationCardinality=${obsCardinality}`) : fail(`${tag}: observationCardinality is zero`);
 
         const liq = BigInt(await call(p.pool, await calldata("liquidity()")));
-        if (p.liquidityRequired) liq > 0n ? ok(`${tag}: liquidity=${liq}`) : fail(`${tag}: liquidity is zero`);
-        else ok(`${tag}: liquidity=${liq} (config/dex-pools.json marks this basket pool no_liquidity; not required)`);
+        liq > 0n ? ok(`${tag}: liquidity=${liq}`) : fail(`${tag}: liquidity is zero`);
 
         // The observation written most recently must be initialised.
         const ob = await call(p.pool, await calldata("observations(uint256)", String(obsIndex)));

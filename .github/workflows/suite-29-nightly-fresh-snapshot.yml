@@ -19,10 +19,11 @@
 #
 # NO COPIED STEPS
 # Each suite is the existing workflow, called with workflow_call and
-# fresh_snapshot=true: suites 5, 7, 8, 10, 11b, 14 and 26. A suite change lands
-# in one file and this nightly picks it up. Suite 26 targets the shared fusion
-# devnet and needs repository configuration; when it is not configured it FAILS
-# here (a skip is not a pass), see the fresh_snapshot gate in that workflow.
+# fresh_snapshot=true: suites 5, 7, 8, 10, 11b and 14. A suite change lands
+# in one file and this nightly picks it up. Suite 26 is NOT in this list: it
+# needs secrets.FUSION_RMPC_CONFIG and targets the shared fusion devnet, not the
+# fresh Twin chain, so it cannot run here with no secret. See
+# docs/development/nightly-fresh-snapshot.md.
 #
 # RESULT
 # The `results` job fails when the snapshot is not within one hour of now
@@ -146,17 +147,10 @@ jobs:
     with:
       fresh_snapshot: true
 
-  suite-26:
-    name: suite-26 fusion devnet acceptance
-    needs: snapshot
-    uses: ./.github/workflows/suite-26-fusion-devnet-acceptance.yml
-    with:
-      fresh_snapshot: true
-
   results:
     name: record-results
     if: ${{ always() }}
-    needs: [snapshot, suite-05, suite-07, suite-08, suite-10, suite-11b, suite-14, suite-26]
+    needs: [snapshot, suite-05, suite-07, suite-08, suite-10, suite-11b, suite-14]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
