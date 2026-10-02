@@ -11,7 +11,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
-import {Deploy} from "../script/Deploy.s.sol";
+import {CoreStages} from "./helpers/CoreStages.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
@@ -1320,7 +1320,7 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
     address internal deployAgent = makeAddr("deploy-agent");
     address internal submitter = makeAddr("stage-submitter");
 
-    Deploy.Deployed internal dep;
+    CoreStages.Stack internal dep;
     RobotMoneyGateway internal gateway;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
@@ -1345,10 +1345,10 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
         _installSafeSet();
         safe = _newDefaultSafe();
 
-        // Deploy.s.sol: vault, adapters, gateway, and the deploy agent,
+        // Core stage scripts: vault, adapters, registry, router, gateway, and the deploy agent,
         // authorized by the admin (the deployer).
-        Deploy deployScript = new Deploy();
-        dep = deployScript.runInProcessWith(
+        CoreStages deployScript = new CoreStages();
+        dep = deployScript.run(
             deployer,
             makeAddr("handover-pauser"),
             deployAgent,
@@ -1592,12 +1592,12 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
     ///      before its own handover.
     function _freshStack(DeployTimelock script_, address agent_, address second_)
         internal
-        returns (Deploy.Deployed memory dep_, address[] memory agents_)
+        returns (CoreStages.Stack memory dep_, address[] memory agents_)
     {
         address deployer_ = address(script_);
         TestERC20 usdc_ = new TestERC20();
-        dep_ = new Deploy()
-            .runInProcessWith(
+        dep_ = new CoreStages()
+            .run(
                 deployer_,
                 makeAddr("fresh-pauser"),
                 agent_,
@@ -1615,7 +1615,7 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
     ///      owned by `script_`'s address.
     function _handover(
         DeployTimelock script_,
-        Deploy.Deployed memory dep_,
+        CoreStages.Stack memory dep_,
         address[] memory agents_
     ) internal returns (DeployTimelock.Deployed memory out) {
         address deployer_ = address(script_);
@@ -1644,7 +1644,7 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
     ///      left the deployer no setPolicy or revokeAgent over either.
     function _assertHandedOverRoleUnchanged(
         DeployTimelock script_,
-        Deploy.Deployed memory dep_,
+        CoreStages.Stack memory dep_,
         DeployTimelock.Deployed memory out,
         address withRole,
         address withoutRole
@@ -1673,7 +1673,7 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
         DeployTimelock script2 = new DeployTimelock();
         address agent2 = makeAddr("renounce-deploy-agent");
         address renounced = makeAddr("renounced-submitter");
-        (Deploy.Deployed memory dep2, address[] memory agents2) =
+        (CoreStages.Stack memory dep2, address[] memory agents2) =
             _freshStack(script2, agent2, renounced);
 
         vm.prank(renounced);
@@ -1692,7 +1692,7 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
         DeployTimelock script2 = new DeployTimelock();
         address agent2 = makeAddr("revoke-deploy-agent");
         address revoked = makeAddr("revoked-submitter");
-        (Deploy.Deployed memory dep2, address[] memory agents2) =
+        (CoreStages.Stack memory dep2, address[] memory agents2) =
             _freshStack(script2, agent2, revoked);
 
         vm.prank(address(script2));
@@ -1784,7 +1784,7 @@ abstract contract DeployTimelockRunEntrypointBase is SafeFixture {
     address internal deployer;
     address internal deployAgent = makeAddr("run-deploy-agent");
     address internal submitter = makeAddr("run-stage-submitter");
-    Deploy.Deployed internal dep;
+    CoreStages.Stack internal dep;
     RobotMoneyGateway internal gateway;
 
     function _set(string memory name, string memory value) internal {
@@ -1801,8 +1801,8 @@ abstract contract DeployTimelockRunEntrypointBase is SafeFixture {
         deployer = tx.origin;
         vm.etch(deployer, address(new RunEntrypointRelay()).code);
         TestERC20 usdc = new TestERC20();
-        dep = new Deploy()
-            .runInProcessWith(
+        dep = new CoreStages()
+            .run(
                 deployer,
                 makeAddr("run-pauser"),
                 deployAgent,

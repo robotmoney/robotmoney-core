@@ -5,13 +5,14 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {Deploy} from "../script/Deploy.s.sol";
+import {DeployVault} from "../script/DeployVault.s.sol";
+import {DeployGateway} from "../script/DeployGateway.s.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
 /// @dev Exposes the script's internal env readers and deploy step. Every test below uses a
 ///      prefix of its own, because env vars are process-wide and forge runs test contracts
 ///      in parallel (see the note in Deploy.t.sol on the ADMIN_ADDRESS race).
-contract DeployInputsHarness is Deploy {
+contract DeployInputsHarness is DeployVault {
     function readParams(string memory prefix) external view returns (Params memory) {
         return _readEnvParamsFrom(prefix);
     }
@@ -21,7 +22,7 @@ contract DeployInputsHarness is Deploy {
     }
 
     function deployWith(Params memory p) external returns (Deployed memory) {
-        return _doDeploy(p);
+        return _deploy(p);
     }
 
     function envOrDefault(string memory key, uint256 fallbackValue) external view returns (uint256) {
@@ -33,15 +34,24 @@ contract DeployInputsHarness is Deploy {
     }
 }
 
+/// @dev The gateway stage's strict env reader.
+contract GatewayInputsHarness is DeployGateway {
+    function readParams(string memory prefix) external view returns (Params memory) {
+        return _readEnvParamsFrom(prefix);
+    }
+}
+
 /// @notice The vault economics, the agent policy, the seed and the chain check are explicit
 ///         script inputs. Nothing falls back to a devnet default.
 contract DeployMainnetInputsTest is Test {
     DeployInputsHarness internal h;
+    GatewayInputsHarness internal g;
     address internal admin = makeAddr("inputs-admin");
     address internal treasury = makeAddr("inputs-treasury");
 
     function setUp() public {
         h = new DeployInputsHarness();
+        g = new GatewayInputsHarness();
     }
 
     function _set(string memory prefix, string memory key, string memory value) internal {
@@ -62,6 +72,8 @@ contract DeployMainnetInputsTest is Test {
         _set(prefix, "AGENT_MAX_WITHDRAW_PER_WINDOW", "100000000000");
         _set(prefix, "VAULT_TVL_CAP", "2000000000000");
         _set(prefix, "VAULT_PER_DEPOSIT_CAP", "100000000000");
+        _set(prefix, "VAULT_ADDRESS", vm.toString(makeAddr("inputs-vault")));
+        _set(prefix, "ROUTER_ADDRESS", vm.toString(makeAddr("inputs-router")));
     }
 
     // --- explicit inputs are read ----------------------------------------------------------
@@ -71,11 +83,13 @@ contract DeployMainnetInputsTest is Test {
         _base(p);
         _set(p, "VAULT_EXIT_FEE_BPS", "25");
         _set(p, "SEED_DEPOSIT_USDC", "1000000000");
-        Deploy.Params memory r = h.readParams(p);
+        DeployVault.Params memory r = h.readParams(p);
+        DeployGateway.Params memory gp = g.readParams(p);
         assertEq(r.feeRecipient, treasury);
         assertEq(r.tvlCap, 2_000_000_000_000);
         assertEq(r.perDepositCap, 100_000_000_000);
-        assertEq(r.maxPerPayment, 10_000_000_000);
+        assertEq(gp.maxPerPayment, 10_000_000_000);
+        assertEq(gp.router, makeAddr("inputs-router"), "router comes from ROUTER_ADDRESS");
         assertEq(r.exitFeeBps, 25);
         assertEq(r.usdcAddress, h.CANONICAL_BASE_USDC(), "USDC is the constant on every chain");
         assertEq(h.seed(p), 1_000_000_000, "seed override");
@@ -85,7 +99,7 @@ contract DeployMainnetInputsTest is Test {
     function test_optionalValues_defaultWhenUnset() public {
         string memory p = "RM_INPUTS_OPTIONAL_";
         _base(p);
-        Deploy.Params memory r = h.readParams(p);
+        DeployVault.Params memory r = h.readParams(p);
         assertEq(r.exitFeeBps, 0, "default exit fee");
         assertEq(h.seed(p), h.SEED_DEPOSIT_AMOUNT(), "default seed");
     }
@@ -97,10 +111,10 @@ contract DeployMainnetInputsTest is Test {
         _set(p, "VAULT_TVL_CAP", "7000000");
         _set(p, "VAULT_PER_DEPOSIT_CAP", "3000000");
         _set(p, "VAULT_EXIT_FEE_BPS", "10");
-        Deploy.Params memory r = h.readParams(p);
+        DeployVault.Params memory r = h.readParams(p);
         // The canonical USDC has no code on a bare test chain: bind a test token there.
         vm.etch(h.CANONICAL_BASE_USDC(), address(new TestERC20()).code);
-        Deploy.Deployed memory d = h.deployWith(r);
+        DeployVault.Deployed memory d = h.deployWith(r);
         assertEq(d.vault.feeRecipient(), treasury, "vault fee recipient");
         assertTrue(d.vault.feeRecipient() != admin, "fee recipient must not be the deployer");
         assertEq(d.vault.tvlCap(), 7_000_000);
@@ -116,11 +130,18 @@ contract DeployMainnetInputsTest is Test {
         string memory q = string.concat(p, "MISSING_");
         _copyAllExcept(p, q, key);
         vm.expectRevert(bytes(string.concat(q, key, " must be set")));
-        h.readParams(q);
+        if (_isVaultKey(key)) h.readParams(q);
+        else g.readParams(q);
+    }
+
+    function _isVaultKey(string memory key) internal pure returns (bool) {
+        bytes32 k = keccak256(bytes(key));
+        return k == keccak256("ADMIN_ADDRESS") || k == keccak256("FEE_RECIPIENT_ADDRESS")
+            || k == keccak256("VAULT_TVL_CAP") || k == keccak256("VAULT_PER_DEPOSIT_CAP");
     }
 
     function _copyAllExcept(string memory from, string memory to, string memory skip) internal {
-        string[12] memory keys = [
+        string[14] memory keys = [
             "ADMIN_ADDRESS",
             "PAUSER_ADDRESS",
             "AGENT_ADDRESS",
@@ -132,7 +153,9 @@ contract DeployMainnetInputsTest is Test {
             "AGENT_MAX_WITHDRAW_PER_PAYMENT",
             "AGENT_MAX_WITHDRAW_PER_WINDOW",
             "VAULT_TVL_CAP",
-            "VAULT_PER_DEPOSIT_CAP"
+            "VAULT_PER_DEPOSIT_CAP",
+            "VAULT_ADDRESS",
+            "ROUTER_ADDRESS"
         ];
         for (uint256 i = 0; i < keys.length; i++) {
             if (keccak256(bytes(keys[i])) == keccak256(bytes(skip))) continue;
@@ -169,6 +192,15 @@ contract DeployMainnetInputsTest is Test {
         _assertMissing("RM_INPUTS_M_AVU_", "AGENT_VALID_UNTIL");
     }
 
+    /// @notice The gateway stage has no default router: ROUTER_ADDRESS must be set (core 1493).
+    function test_missingRouterAddress_reverts() public {
+        _assertMissing("RM_INPUTS_M_ROUTER_", "ROUTER_ADDRESS");
+    }
+
+    function test_missingVaultAddress_reverts() public {
+        _assertMissing("RM_INPUTS_M_VAULT_", "VAULT_ADDRESS");
+    }
+
     // --- malformed values revert -------------------------------------------------------------
 
     function test_malformedCap_reverts() public {
@@ -198,7 +230,7 @@ contract DeployMainnetInputsTest is Test {
         vm.expectRevert(
             bytes("RM_INPUTS_BAD_AGENT_AGENT_MAX_PER_WINDOW is malformed: expected an unsigned integer")
         );
-        h.readParams(p);
+        g.readParams(p);
     }
 
     /// @notice `_envOrDefault` reverts on a malformed value instead of using the default.
@@ -235,7 +267,7 @@ contract DeployMainnetInputsTest is Test {
         string memory p = "RM_INPUTS_ZERO_FEE_";
         _base(p);
         _set(p, "FEE_RECIPIENT_ADDRESS", vm.toString(address(0)));
-        Deploy.Params memory r = h.readParams(p);
+        DeployVault.Params memory r = h.readParams(p);
         vm.etch(h.CANONICAL_BASE_USDC(), address(new TestERC20()).code);
         vm.expectRevert(bytes("FEE_RECIPIENT_ADDRESS=0"));
         h.deployWith(r);
@@ -245,7 +277,7 @@ contract DeployMainnetInputsTest is Test {
         string memory p = "RM_INPUTS_ZERO_CAP_";
         _base(p);
         _set(p, "VAULT_TVL_CAP", "0");
-        Deploy.Params memory r = h.readParams(p);
+        DeployVault.Params memory r = h.readParams(p);
         vm.etch(h.CANONICAL_BASE_USDC(), address(new TestERC20()).code);
         vm.expectRevert(bytes("VAULT_TVL_CAP / VAULT_PER_DEPOSIT_CAP = 0"));
         h.deployWith(r);

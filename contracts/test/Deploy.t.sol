@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: MIT
-// Canonical: none — Foundry test for contracts/script/Deploy.s.sol
+// Canonical: none — Foundry test for the core stage scripts (libs, vault, registry, router, gateway)
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {Deploy} from "../script/Deploy.s.sol";
+import {Test, Vm} from "forge-std/Test.sol";
+import {stdJson} from "forge-std/StdJson.sol";
+
+import {DeployLibs} from "../script/DeployLibs.s.sol";
+import {DeployVault} from "../script/DeployVault.s.sol";
+import {DeployGateway} from "../script/DeployGateway.s.sol";
+import {DeployPortfolioRouter} from "../script/DeployPortfolioRouter.s.sol";
+import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitteePolicy.s.sol";
+import {CoreStages} from "./helpers/CoreStages.sol";
 
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {RobotMoneyVault} from "../RobotMoneyVault.sol";
-import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
-import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
-import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
+import {VaultRegistry} from "../VaultRegistry.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
@@ -54,24 +58,24 @@ contract DeployDemoExtraVaultsHarness is DeployDemoExtraVaults {
     }
 }
 
-/// @dev Exercises the deploy script in-process and asserts the post-deploy
-///      invariants the operator and downstream tooling rely on (issue #10).
-///      The script deploys RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter
-///      + MorphoAdapter (issue #363) instead of MockVault.
-///      MockVault is retained only for its own unit
-///      tests.  The script always binds the gateway to an externally-supplied
-///      USDC token; this test deploys a `TestERC20` helper and passes its
-///      address in.  The smoke-test devnet does the same with the canonical
-///      Base USDC proxy seeded into genesis alloc (issue #255).
-///
-///      Note: adapter constructors only check for address(0) — they do NOT
-///      require the protocol contracts to have bytecode. The in-process test
-///      therefore succeeds even though AAVE_V3_POOL et al. are not deployed
-///      in the forge unit-test environment. Actual protocol interaction is
-///      tested by the fork regression suite (VaultForkRegressions.t.sol) and
-///      the fork-e2e-rust harness.
+/// @dev Exposes the vault stage's manifest writer so a test can read the keys back from a file
+///      without the process-wide DEPLOYMENT_OUT variable.
+contract DeployVaultManifestHarness is DeployVault {
+    function writeManifest(Deployed memory d, string memory path) external {
+        _writeDeploymentJsonTo(d, path);
+    }
+}
+
+/// @dev Runs the split stage scripts in process, in production order, and asserts the
+///      post-deploy invariants the operator and downstream tooling rely on (core S3).
+///      The stages are libs, vault, registry, router, gateway. The gateway takes the router as
+///      its immutable, so the router stage comes first (core 1493). Adapter constructors only
+///      check for address(0), so the in-process run succeeds although the venues have no
+///      code here. Venue interaction is covered by the fork regression suite.
 contract DeployTest is Test {
-    Deploy internal script;
+    using stdJson for string;
+
+    CoreStages internal stages;
     TestERC20 internal usdc;
 
     address internal admin = makeAddr("admin");
@@ -80,97 +84,189 @@ contract DeployTest is Test {
     address internal shareReceiver = makeAddr("shareReceiver");
 
     function setUp() public {
-        script = new Deploy();
+        stages = new CoreStages();
         usdc = new TestERC20();
     }
 
-    function _run() internal returns (Deploy.Deployed memory) {
-        return script.runInProcessWith(admin, pauser, agent, shareReceiver, address(usdc));
+    function _run() internal returns (CoreStages.Stack memory) {
+        return stages.run(admin, pauser, agent, shareReceiver, address(usdc));
+    }
+
+    // --- Stage order and router wiring (core 1493) ------------------------
+
+    function test_stages_runInProductionOrder() public {
+        _run();
+        assertEq(stages.stageCount(), 5, "five stages");
+        assertEq(stages.stages(0), "libs");
+        assertEq(stages.stages(1), "vault");
+        assertEq(stages.stages(2), "registry");
+        assertEq(stages.stages(3), "router");
+        assertEq(stages.stages(4), "gateway");
+    }
+
+    /// @notice The gateway is built with the deployed router: not zero, and equal to it.
+    function test_gateway_routerEqualsDeployedRouter_notZero() public {
+        CoreStages.Stack memory s = _run();
+        assertTrue(address(s.router) != address(0), "router deployed");
+        assertTrue(s.gateway.router() != address(0), "gateway.router is zero");
+        assertEq(s.gateway.router(), address(s.router), "gateway.router != deployed router");
+    }
+
+    /// @notice The router stage links the registry exactly once and the link equals the router.
+    function test_routerStage_callsRegistrySetRouterOnce() public {
+        vm.recordLogs();
+        CoreStages.Stack memory s = _run();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 routerSetEvents;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (
+                logs[i].emitter == address(s.registry)
+                    && logs[i].topics[0] == VaultRegistry.RouterSet.selector
+            ) routerSetEvents++;
+        }
+        assertEq(routerSetEvents, 1, "registry.setRouter must run exactly once");
+        assertEq(address(s.registry.router()), address(s.router), "registry.router != router");
+    }
+
+    /// @notice The gateway stage refuses a zero router and a router with no code.
+    function test_gatewayStage_revertsOnZeroOrEmptyRouter() public {
+        CoreStages.Stack memory s = _run();
+        DeployGateway gw = stages.gatewayScript();
+        vm.expectRevert(bytes("ROUTER_ADDRESS=0"));
+        gw.runInProcessWith(
+            admin, pauser, agent, shareReceiver, address(usdc), address(s.vault), address(0)
+        );
+        vm.expectRevert(bytes("ROUTER_ADDRESS has no code on this chain"));
+        gw.runInProcessWith(
+            admin,
+            pauser,
+            agent,
+            shareReceiver,
+            address(usdc),
+            address(s.vault),
+            makeAddr("not-a-router")
+        );
+    }
+
+    /// @notice Agent authorization runs in the gateway stage, after the gateway exists, and
+    ///         the IC policy stage that follows binds the final gateway address.
+    function test_agentAuthorizationAndIcPolicy_runAfterGateway_bindFinalGateway() public {
+        vm.recordLogs();
+        CoreStages.Stack memory s = _run();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        // The AgentAuthorized log comes from the gateway, so the gateway existed first.
+        bool authorized;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (
+                logs[i].emitter == address(s.gateway)
+                    && logs[i].topics[0] == IGateway.AgentAuthorized.selector
+            ) authorized = true;
+        }
+        assertTrue(authorized, "agent authorized through the final gateway");
+        assertTrue(s.gateway.hasRole(s.gateway.AGENT_ROLE(), agent), "agent role");
+
+        // In process the IC script is its own deployer and IC admin, so it needs the gateway's
+        // ADMIN_ROLE the way the broadcast deployer holds it. Capture the role before pranking.
+        DeployInvestmentCommitteePolicy ic = new DeployInvestmentCommitteePolicy();
+        bytes32 gatewayAdminRole = s.gateway.ADMIN_ROLE();
+        vm.prank(admin);
+        s.gateway.grantRole(gatewayAdminRole, address(ic));
+        DeployInvestmentCommitteePolicy.Deployed memory d =
+            ic.runInProcessWith(address(ic), address(s.gateway));
+        ic.wireGatewayInProcess(d);
+        assertEq(d.gateway, address(s.gateway), "IC stage binds the final gateway");
+        assertEq(d.policy.gateway(), address(s.gateway), "policy.gateway is the final gateway");
+        assertEq(address(s.gateway.icPolicy()), address(d.policy), "gateway.icPolicy is the policy");
+    }
+
+    // --- Manifest ----------------------------------------------------------
+
+    /// @notice The vault-stage manifest has the renamed keys and names the third venue for the
+    ///         address it wraps. The old `morpho_adapter` key is gone.
+    function test_manifest_hasRenamedKeysAndThirdVenueEntry() public {
+        CoreStages.Stack memory s = _run();
+        DeployVaultManifestHarness h = new DeployVaultManifestHarness();
+        string memory path = string.concat("/tmp/rm-core-s3-manifest-", vm.toString(address(h)), ".json");
+        h.writeManifest(s.vaultStage, path);
+        string memory json = vm.readFile(path);
+        vm.removeFile(path);
+
+        assertEq(json.readAddress(".moonwell_flagship_adapter"), address(s.vaultStage.moonwellAdapter));
+        assertEq(json.readAddress(".aave_adapter"), address(s.vaultStage.aaveAdapter));
+        assertEq(json.readAddress(".compound_adapter"), address(s.vaultStage.compoundAdapter));
+        assertEq(json.readAddress(".vault"), address(s.vault));
+        assertEq(json.readAddress(".moonwell_flagship_venue"), h.MOONWELL_FLAGSHIP_USDC());
+        assertEq(json.readString(".moonwell_flagship_venue_name"), "Moonwell Flagship USDC");
+        assertFalse(vm.keyExistsJson(json, ".morpho_adapter"), "old key morpho_adapter remains");
+        assertFalse(vm.keyExistsJson(json, ".gauntlet_adapter"), "no Gauntlet key for a Moonwell address");
     }
 
     // --- Happy path -----------------------------------------------------
 
     function test_deploy_wiresUsdcVaultAndAdminPauserRoles() public {
-        Deploy.Deployed memory d = _run();
+        CoreStages.Stack memory s = _run();
+        DeployVault.Deployed memory d = s.vaultStage;
 
-        // Gateway pins the right token + vault.
-        assertEq(d.gateway.usdc(), d.usdc, "usdc mismatch");
-        assertEq(d.gateway.vault(), address(d.vault), "vault mismatch");
-        // RobotMoneyVault exposes asset() (ERC-4626) not assetToken()
-        assertEq(d.vault.asset(), d.usdc, "vault.asset mismatch");
-        assertEq(d.usdc, address(usdc), "usdc passthrough");
+        assertEq(s.gateway.usdc(), s.usdc, "usdc mismatch");
+        assertEq(s.gateway.vault(), address(s.vault), "vault mismatch");
+        assertEq(s.vault.asset(), s.usdc, "vault.asset mismatch");
+        assertEq(s.usdc, address(usdc), "usdc passthrough");
 
-        // All three adapters are wired to the correct USDC and VAULT addresses.
-        assertEq(address(d.aaveAdapter.USDC()), d.usdc, "aaveAdapter.USDC mismatch");
-        assertEq(d.aaveAdapter.VAULT(), address(d.vault), "aaveAdapter.VAULT mismatch");
-        assertEq(address(d.compoundAdapter.USDC()), d.usdc, "compoundAdapter.USDC mismatch");
-        assertEq(d.compoundAdapter.VAULT(), address(d.vault), "compoundAdapter.VAULT mismatch");
-        assertEq(address(d.morphoAdapter.USDC()), d.usdc, "morphoAdapter.USDC mismatch");
-        assertEq(d.morphoAdapter.VAULT(), address(d.vault), "morphoAdapter.VAULT mismatch");
+        assertEq(address(d.aaveAdapter.USDC()), s.usdc, "aaveAdapter.USDC mismatch");
+        assertEq(d.aaveAdapter.VAULT(), address(s.vault), "aaveAdapter.VAULT mismatch");
+        assertEq(address(d.compoundAdapter.USDC()), s.usdc, "compoundAdapter.USDC mismatch");
+        assertEq(d.compoundAdapter.VAULT(), address(s.vault), "compoundAdapter.VAULT mismatch");
+        assertEq(address(d.moonwellAdapter.USDC()), s.usdc, "moonwellAdapter.USDC mismatch");
+        assertEq(d.moonwellAdapter.VAULT(), address(s.vault), "moonwellAdapter.VAULT mismatch");
 
-        // Vault has all three real adapters registered.
-        assertEq(d.vault.activeAdapterCount(), 3, "vault should have 3 active adapters");
+        assertEq(s.vault.activeAdapterCount(), 3, "vault should have 3 active adapters");
 
-        // Admin + Pauser hold their roles.
-        assertTrue(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), admin), "admin role");
-        assertTrue(d.gateway.hasRole(d.gateway.DEFAULT_ADMIN_ROLE(), admin), "default admin");
-        assertTrue(d.gateway.hasRole(d.gateway.PAUSER_ROLE(), pauser), "pauser role");
+        assertTrue(s.gateway.hasRole(s.gateway.ADMIN_ROLE(), admin), "admin role");
+        assertTrue(s.gateway.hasRole(s.gateway.DEFAULT_ADMIN_ROLE(), admin), "default admin");
+        assertTrue(s.gateway.hasRole(s.gateway.PAUSER_ROLE(), pauser), "pauser role");
 
-        // Agent holds AGENT and nothing else.
-        assertTrue(d.gateway.hasRole(d.gateway.AGENT_ROLE(), agent), "agent role");
-        assertFalse(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), agent), "agent !admin");
-        assertFalse(d.gateway.hasRole(d.gateway.PAUSER_ROLE(), agent), "agent !pauser");
+        assertTrue(s.gateway.hasRole(s.gateway.AGENT_ROLE(), agent), "agent role");
+        assertFalse(s.gateway.hasRole(s.gateway.ADMIN_ROLE(), agent), "agent !admin");
+        assertFalse(s.gateway.hasRole(s.gateway.PAUSER_ROLE(), agent), "agent !pauser");
 
-        // Runtime hash pinned correctly.
-        assertEq(d.gatewayRuntimeHash, keccak256(address(d.gateway).code));
+        assertEq(s.gatewayRuntimeHash, keccak256(address(s.gateway).code));
+
+        // The vault is registered and router-eligible, and the router weights it 100%.
+        assertTrue(s.registry.isRouterEligible(address(s.vault)), "vault router-eligible");
     }
 
-    /// @notice The production deploy path wires exactly three DISTINCT real
-    ///         adapter addresses — no single-address aliasing. This is the
-    ///         regression guard for the removed test-only no-yield deploy hatch
-    ///         (issue #912), which used to alias all three typed adapter fields
-    ///         to one no-yield adapter instance. `runInProcessWith` shares the
-    ///         same `_doDeploy` adapter-construction code path as the broadcast
-    ///         `run()` entrypoint, so this exercises the `run()`-equivalent
-    ///         wiring.
+    /// @notice Exactly three DISTINCT real adapters, and the third wraps the Moonwell
+    ///         Flagship address the constant names.
     function test_deploy_wiresThreeDistinctRealAdapterAddresses() public {
-        Deploy.Deployed memory d = _run();
+        CoreStages.Stack memory s = _run();
+        DeployVault.Deployed memory d = s.vaultStage;
+        DeployVault vs = stages.vaultScript();
 
         address aave = address(d.aaveAdapter);
         address compound = address(d.compoundAdapter);
-        address morpho = address(d.morphoAdapter);
+        address moonwell = address(d.moonwellAdapter);
 
-        // No zero addresses.
         assertTrue(aave != address(0), "aaveAdapter is zero");
         assertTrue(compound != address(0), "compoundAdapter is zero");
-        assertTrue(morpho != address(0), "morphoAdapter is zero");
-
-        // All three are pairwise distinct — no single-address aliasing.
+        assertTrue(moonwell != address(0), "moonwellAdapter is zero");
         assertTrue(aave != compound, "aave aliases compound");
-        assertTrue(aave != morpho, "aave aliases morpho");
-        assertTrue(compound != morpho, "compound aliases morpho");
+        assertTrue(aave != moonwell, "aave aliases moonwell");
+        assertTrue(compound != moonwell, "compound aliases moonwell");
 
-        // Each is a real, distinct adapter type wired to the vault: the three
-        // real adapters expose the Base-mainnet protocol immutables that a
-        // single aliased no-yield adapter could not.
-        assertEq(address(d.aaveAdapter.POOL()), script.AAVE_V3_POOL(), "aave POOL mismatch");
+        assertEq(address(d.aaveAdapter.POOL()), vs.AAVE_V3_POOL(), "aave POOL mismatch");
+        assertEq(address(d.compoundAdapter.COMET()), vs.COMPOUND_V3_COMET(), "compound COMET mismatch");
         assertEq(
-            address(d.compoundAdapter.COMET()),
-            script.COMPOUND_V3_COMET(),
-            "compound COMET mismatch"
+            address(d.moonwellAdapter.MORPHO_VAULT()),
+            vs.MOONWELL_FLAGSHIP_USDC(),
+            "third venue mismatch"
         );
-        assertEq(
-            address(d.morphoAdapter.MORPHO_VAULT()),
-            script.MORPHO_GAUNTLET_USDC_PRIME(),
-            "morpho vault mismatch"
-        );
-
-        // Exactly three active adapters registered (no fourth, no single-arm).
-        assertEq(d.vault.activeAdapterCount(), 3, "vault should have 3 active adapters");
+        assertEq(s.vault.activeAdapterCount(), 3, "vault should have 3 active adapters");
     }
 
     function test_deploy_authorizesAgentWithSanePolicy() public {
-        Deploy.Deployed memory d = _run();
+        CoreStages.Stack memory s = _run();
+        DeployGateway gw = stages.gatewayScript();
         (
             bool active,
             uint64 validUntil,
@@ -179,21 +275,17 @@ contract DeployTest is Test {
             address recv,,
             uint256 maxWithdrawPerPayment,
             uint256 maxWithdrawPerWindow
-        ) = d.gateway.agents(agent);
+        ) = s.gateway.agents(agent);
         assertTrue(active);
         assertGt(validUntil, block.timestamp);
-        assertEq(maxPerPayment, script.DEFAULT_MAX_PER_PAYMENT());
-        assertEq(maxPerWindow, script.DEFAULT_MAX_PER_WINDOW());
+        assertEq(maxPerPayment, gw.DEFAULT_MAX_PER_PAYMENT());
+        assertEq(maxPerWindow, gw.DEFAULT_MAX_PER_WINDOW());
         assertEq(recv, shareReceiver);
-        assertEq(maxWithdrawPerPayment, script.DEFAULT_MAX_WITHDRAW_PER_PAYMENT());
-        assertEq(maxWithdrawPerWindow, script.DEFAULT_MAX_WITHDRAW_PER_WINDOW());
+        assertEq(maxWithdrawPerPayment, gw.DEFAULT_MAX_WITHDRAW_PER_PAYMENT());
+        assertEq(maxWithdrawPerWindow, gw.DEFAULT_MAX_WITHDRAW_PER_WINDOW());
     }
 
     function test_deploy_doesNotMintToAgent() public {
-        // The script no longer mints test USDC to the agent — funding is
-        // the caller's responsibility (smoke-test harness or unit-test
-        // helpers). The agent's USDC balance must be untouched by the
-        // deploy.
         uint256 before = usdc.balanceOf(agent);
         _run();
         assertEq(usdc.balanceOf(agent), before, "deploy must not mint to agent");
@@ -202,25 +294,23 @@ contract DeployTest is Test {
     // --- USDC_ADDRESS preconditions -------------------------------------
 
     function test_deploy_revertsWhenUsdcAddressZero() public {
+        DeployVault vs = stages.vaultScript();
         vm.expectRevert(bytes("USDC_ADDRESS=0"));
-        script.runInProcessWith(admin, pauser, agent, shareReceiver, address(0));
+        vs.runInProcessWith(admin, address(0));
     }
 
     function test_deploy_revertsWhenUsdcAddressHasNoCode() public {
+        DeployVault vs = stages.vaultScript();
         address eoa = makeAddr("not-a-token");
         vm.expectRevert(bytes("USDC_ADDRESS has no code"));
-        script.runInProcessWith(admin, pauser, agent, shareReceiver, eoa);
+        vs.runInProcessWith(admin, eoa);
     }
 
     // --- Role-separation invariant (issue #10's headline test) ----------
 
-    function test_deploy_grantingAgentRoleToAdminReverts() public {
-        Deploy.Deployed memory d = _run();
-
-        // Build a policy and try to authorize ADMIN as an AGENT — this
-        // must revert because admin already holds ADMIN_ROLE.
+    function _openPolicy() internal view returns (IGateway.AgentPolicy memory) {
         address[] memory noDestinations = new address[](0);
-        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+        return IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 1 days),
             maxPerPayment: 1e6,
@@ -232,67 +322,64 @@ contract DeployTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: noDestinations
         });
+    }
 
+    function test_deploy_grantingAgentRoleToAdminReverts() public {
+        CoreStages.Stack memory s = _run();
         vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
-        d.gateway.authorizeAgent(admin, p);
+        s.gateway.authorizeAgent(admin, _openPolicy());
     }
 
     function test_deploy_grantingAgentRoleToPauserReverts() public {
-        Deploy.Deployed memory d = _run();
-
-        address[] memory noDestinations2 = new address[](0);
-        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
-            active: true,
-            validUntil: uint64(block.timestamp + 1 days),
-            maxPerPayment: 1e6,
-            maxPerWindow: 1e6,
-            shareReceiver: shareReceiver,
-            allowedDestinations: noDestinations2,
-            assetRecipient: address(0),
-            maxWithdrawPerPayment: 0,
-            maxWithdrawPerWindow: 0,
-            allowedSourceVaults: noDestinations2
-        });
-
+        CoreStages.Stack memory s = _run();
         vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
-        d.gateway.authorizeAgent(pauser, p);
+        s.gateway.authorizeAgent(pauser, _openPolicy());
     }
 
     // --- Pre-deploy distinctness check ----------------------------------
 
     function test_deploy_revertsWhenAdminEqualsPauser() public {
+        CoreStages.Stack memory s = _run();
+        DeployGateway gw = stages.gatewayScript();
         vm.expectRevert(bytes("ADMIN==PAUSER"));
-        script.runInProcessWith(admin, admin, agent, shareReceiver, address(usdc));
+        gw.runInProcessWith(
+            admin, admin, agent, shareReceiver, address(usdc), address(s.vault), address(s.router)
+        );
     }
 
     function test_deploy_revertsWhenAdminEqualsAgent() public {
+        CoreStages.Stack memory s = _run();
+        DeployGateway gw = stages.gatewayScript();
         vm.expectRevert(bytes("ADMIN==AGENT"));
-        script.runInProcessWith(admin, pauser, admin, shareReceiver, address(usdc));
+        gw.runInProcessWith(
+            admin, pauser, admin, shareReceiver, address(usdc), address(s.vault), address(s.router)
+        );
     }
 
     function test_deploy_revertsWhenPauserEqualsAgent() public {
+        CoreStages.Stack memory s = _run();
+        DeployGateway gw = stages.gatewayScript();
         vm.expectRevert(bytes("PAUSER==AGENT"));
-        script.runInProcessWith(admin, pauser, pauser, shareReceiver, address(usdc));
+        gw.runInProcessWith(
+            admin, pauser, pauser, shareReceiver, address(usdc), address(s.vault), address(s.router)
+        );
     }
 
     // --- Seed deposit constant (issue #656) --------------------------------
 
-    /// @notice SEED_DEPOSIT_AMOUNT constant equals 1 USDC (1_000_000 units). A mainnet
-    ///         ceremony sets SEED_DEPOSIT_USDC explicitly, so this default is the
-    ///         rehearsal and devnet seed.
     function test_deploy_seedDepositAmount_isOneUsdc() public view {
         assertEq(
-            script.SEED_DEPOSIT_AMOUNT(),
+            stages.vaultScript().SEED_DEPOSIT_AMOUNT(),
             1_000_000,
             "SEED_DEPOSIT_AMOUNT must be 1_000_000 (1 USDC in 6-decimal units)"
         );
     }
 
-    // --- Env-driven path also works (single test to keep coverage) ------
+    // --- Env-driven stages ------------------------------------------------
 
-    function test_deploy_envDriven_runInProcessSucceeds() public {
+    function test_deploy_envDriven_vaultAndGatewayStages() public {
         vm.setEnv("ADMIN_ADDRESS", vm.toString(admin));
         vm.setEnv("PAUSER_ADDRESS", vm.toString(pauser));
         vm.setEnv("AGENT_ADDRESS", vm.toString(agent));
@@ -306,15 +393,35 @@ contract DeployTest is Test {
         vm.setEnv("VAULT_TVL_CAP", "10000000000000");
         vm.setEnv("VAULT_PER_DEPOSIT_CAP", "1000000000000");
         // USDC is the canonical constant on every chain: install a token there.
-        vm.etch(script.CANONICAL_BASE_USDC(), address(usdc).code);
-        Deploy.Deployed memory d = script.runInProcess();
-        assertEq(d.admin, admin);
-        assertEq(d.pauser, pauser);
-        assertEq(d.agent, agent);
-        assertEq(d.usdc, script.CANONICAL_BASE_USDC());
+        DeployVault vs = stages.vaultScript();
+        vm.etch(vs.CANONICAL_BASE_USDC(), address(usdc).code);
+        DeployVault.Deployed memory v = vs.runInProcess();
+        assertEq(v.admin, admin);
+        assertEq(v.usdc, vs.CANONICAL_BASE_USDC());
+
+        // The router stage runs between the vault and the gateway.
+        VaultRegistry registry = stages.registryScript()
+            .runInProcessWith(admin, address(v.vault), v.usdc, "Robot Money USDC").registry;
+        DeployPortfolioRouter.Deployed memory rt = stages.routerScript()
+            .runInProcessWith(admin, address(registry), address(v.vault), v.usdc);
+        vm.setEnv("VAULT_ADDRESS", vm.toString(address(v.vault)));
+        vm.setEnv("ROUTER_ADDRESS", vm.toString(address(rt.router)));
+        DeployGateway.Deployed memory g = stages.gatewayScript().runInProcess();
+        assertEq(g.admin, admin);
+        assertEq(g.pauser, pauser);
+        assertEq(g.agent, agent);
+        assertEq(g.gateway.router(), address(rt.router));
     }
 
     // --- L3-D1: TickMath link integrity ------------------------------------
+
+    /// @notice The libs stage proves the linked TickMath answers a known value.
+    function test_libsStage_provesLinkedTickMath() public {
+        DeployLibs.Deployed memory d = stages.libsScript().runInProcess();
+        assertEq(d.tickMath, address(TickMath));
+        assertGt(d.tickMath.code.length, 0, "TickMath must have code");
+    }
+
 
     /// @dev The audited reference is the TickMath library linked into the test
     ///      artifact set, which is identical to the one linked into the deploy
@@ -364,16 +471,6 @@ contract DeployTest is Test {
         uint256 nav = vault.totalAssets();
         assertEq(nav, 0, "empty basket totalAssets is the USDC balance (0)");
         assertLe(nav, 10_000_000 * 1e6 * 1000, "totalAssets must be in range");
-    }
-
-    /// @notice The Deploy.s.sol deploy path asserts the linked TickMath is
-    ///         present: a successful in-process deploy implies the link-sanity
-    ///         check inside _doDeploy passed.
-    function test_tickMathLink_deployAssertsCanonicalLibrary() public {
-        // _run() invokes the full deploy, which calls _assertTickMathCanonical()
-        // internally; reaching this assert means the link-sanity check passed.
-        Deploy.Deployed memory d = _run();
-        assertTrue(address(d.vault) != address(0), "deploy completed past TickMath assertion");
     }
 
     /// @notice A deliberately wrong (and a zero) linked-library address fails the

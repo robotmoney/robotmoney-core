@@ -1,0 +1,267 @@
+// SPDX-License-Identifier: MIT
+// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops) — core S3, stage "vault"
+// (See also: docs/architecture.md §6 — Roles)
+pragma solidity ^0.8.24;
+
+import {console2} from "forge-std/console2.sol";
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
+import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
+import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
+import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+
+/// @title DeployVault
+/// @notice Stage 2 of the core deploy (libs, vault, registry, router, gateway).
+///         Deploys RobotMoneyVault (rmUSDC) with its three real strategy adapters (Aave V3,
+///         Compound V3, Moonwell Flagship USDC through the ERC-4626 `MorphoAdapter`), allows
+///         the adapters, registers them with 3334 / 3333 / 3333 bps caps, and makes the
+///         seed deposit that anchors the share price before the vault is opened.
+///
+///         The gateway, router and registry are NOT deployed here: the registry, router and
+///         gateway stages follow. The old single script deployed the gateway with a zero
+///         router (core 1493). The order is now fixed by the stage scripts.
+///
+/// @dev Required env vars (all required on every chain, no defaults):
+///        EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet
+///        ADMIN_ADDRESS         — receives ADMIN_ROLE and EMERGENCY_ROLE on the vault
+///        FEE_RECIPIENT_ADDRESS — vault fee recipient (the treasury, never the deployer)
+///        VAULT_TVL_CAP, VAULT_PER_DEPOSIT_CAP — vault caps, 6-decimal USDC units
+///        DEPLOYMENT_OUT        — output JSON path
+///      USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
+///      Optional (a malformed value reverts, it never falls back):
+///        VAULT_EXIT_FEE_BPS     — default 0
+///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC
+contract DeployVault is ExpectedChainGuard {
+    /// @notice Canonical Base mainnet USDC (FiatTokenProxy).
+    address public constant CANONICAL_BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+
+    // -- Real protocol contract addresses (Base mainnet) ----------------
+
+    /// @notice Aave V3 Pool on Base mainnet.
+    address public constant AAVE_V3_POOL = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+    /// @notice aBasUSDC — Aave V3 interest-bearing USDC receipt token on Base.
+    address public constant AAVE_V3_A_TOKEN = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
+    /// @notice Compound V3 (Comet) USDC market on Base.
+    /// @dev Verified against `cast call <compound-adapter> "COMET()(address)"` on Base mainnet.
+    address public constant COMPOUND_V3_COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F;
+    /// @notice The third venue: Moonwell Flagship USDC (mwUSDC), an ERC-4626 Morpho vault.
+    /// @dev Read on Base mainnet: `name()` is "Moonwell Flagship USDC" and `symbol()` is
+    ///      "mwUSDC". Until 2026-10-02 this constant was named MORPHO_GAUNTLET_USDC_PRIME and
+    ///      the manifest called the adapter `morpho_adapter`. The address was never Gauntlet
+    ///      (finding core-deploy-correctness-02). Whether the intended venue is this one or the
+    ///      Gauntlet Prime vault is an open owner decision (D-venue). The name now follows the
+    ///      address. Flipping the venue means changing this address and the name together.
+    address public constant MOONWELL_FLAGSHIP_USDC = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
+    /// @notice Display names the manifest records for the three venues. The third equals
+    ///         the venue's on-chain `name()`.
+    string public constant VENUE_NAME_AAVE = "Aave V3 USDC";
+    string public constant VENUE_NAME_COMPOUND = "Compound V3 USDC";
+    string public constant VENUE_NAME_THIRD = "Moonwell Flagship USDC";
+
+    /// @notice Devnet value used only by the in-process test seams.
+    uint256 public constant DEFAULT_TVL_CAP = 10_000_000 * 1e6;
+    /// @notice Devnet value used only by the in-process test seams.
+    uint256 public constant DEFAULT_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
+
+    /// @notice Default seed deposit for a broadcast run: 1 USDC (6 decimals). Protects
+    ///         against ERC-4626 share-price inflation on a zero-supply vault. See
+    ///         docs/technical/security-model.md §3. A mainnet ceremony sets
+    ///         `SEED_DEPOSIT_USDC` explicitly on its frozen sheet.
+    uint256 public constant SEED_DEPOSIT_AMOUNT = 1 * 1e6;
+
+    /// @notice Adapter bps caps, in registration order. They sum to 10 000.
+    uint16 public constant AAVE_BPS = 3_334;
+    uint16 public constant COMPOUND_BPS = 3_333;
+    uint16 public constant THIRD_VENUE_BPS = 3_333;
+
+    struct Params {
+        address admin;
+        address feeRecipient;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
+        address usdcAddress;
+    }
+
+    struct Deployed {
+        address usdc;
+        RobotMoneyVault vault;
+        AaveV3Adapter aaveAdapter;
+        CompoundV3Adapter compoundAdapter;
+        MorphoAdapter moonwellAdapter;
+        address admin;
+    }
+
+    /// @notice Forge broadcast entrypoint. Deploys, registers adapters, seeds, writes JSON.
+    function run() external returns (Deployed memory d) {
+        Params memory p = _readEnvParamsFrom("");
+        vm.startBroadcast();
+        d = _deploy(p);
+        // The broadcaster IS d.admin: msg.sender holds ADMIN_ROLE. vm.prank is prohibited here.
+        _approveAndRegisterAdapters(d);
+        uint256 seed = _seedAmount("");
+        IERC20(d.usdc).approve(address(d.vault), seed);
+        uint256 seedShares = d.vault.deposit(seed, d.admin);
+        _requireSeeded(d, seed);
+        console2.log("  seed deposit (USDC):", seed);
+        console2.log("  seed shares minted :", seedShares);
+        vm.stopBroadcast();
+        _writeDeploymentJson(d);
+    }
+
+    /// @notice In-process variant for forge tests, no seed deposit. Env-driven.
+    function runInProcess() external returns (Deployed memory d) {
+        d = _deploy(_readEnvParamsFrom(""));
+        vm.startPrank(d.admin);
+        _approveAndRegisterAdapters(d);
+        vm.stopPrank();
+    }
+
+    /// @notice Direct-parameter variant for forge tests. No env, no seed deposit.
+    function runInProcessWith(address admin_, address usdc_) external returns (Deployed memory d) {
+        d = _deploy(_testParams(admin_, usdc_));
+        vm.startPrank(d.admin);
+        _approveAndRegisterAdapters(d);
+        vm.stopPrank();
+    }
+
+    /// @notice Direct-parameter variant that also seeds. Needs real venue state (fork tests).
+    function runInProcessWithSeed(address admin_, address usdc_)
+        external
+        returns (Deployed memory d)
+    {
+        d = _deploy(_testParams(admin_, usdc_));
+        vm.startPrank(d.admin);
+        _approveAndRegisterAdapters(d);
+        IERC20(d.usdc).approve(address(d.vault), SEED_DEPOSIT_AMOUNT);
+        uint256 shares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, d.admin);
+        vm.stopPrank();
+        _requireSeeded(d, SEED_DEPOSIT_AMOUNT);
+        console2.log("  seed shares minted :", shares);
+    }
+
+    /// @notice Direct-parameter variant that takes every economic input. No seed.
+    function runInProcessWithParams(Params memory p) external returns (Deployed memory d) {
+        d = _deploy(p);
+        vm.startPrank(d.admin);
+        _approveAndRegisterAdapters(d);
+        vm.stopPrank();
+    }
+
+    function _testParams(address admin_, address usdc_) internal pure returns (Params memory p) {
+        p.admin = admin_;
+        p.feeRecipient = admin_;
+        p.tvlCap = DEFAULT_TVL_CAP;
+        p.perDepositCap = DEFAULT_PER_DEPOSIT_CAP;
+        p.usdcAddress = usdc_;
+    }
+
+    /// @dev The seed this broadcast run deposits: `<prefix>SEED_DEPOSIT_USDC`, default
+    ///      SEED_DEPOSIT_AMOUNT. Must be non-zero.
+    function _seedAmount(string memory prefix) internal view returns (uint256 seed) {
+        seed = _envOrDefault(string.concat(prefix, "SEED_DEPOSIT_USDC"), SEED_DEPOSIT_AMOUNT);
+        require(seed > 0, "SEED_DEPOSIT_USDC=0");
+    }
+
+    /// @dev `prefix` is "" in production. Tests pass their own prefix because env vars are
+    ///      process-wide and forge runs tests in parallel.
+    function _readEnvParamsFrom(string memory prefix) internal view returns (Params memory p) {
+        _requireExpectedChain(prefix);
+        p.admin = _envAddressRequired(string.concat(prefix, "ADMIN_ADDRESS"));
+        p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"));
+        p.tvlCap = _envUintRequired(string.concat(prefix, "VAULT_TVL_CAP"));
+        p.perDepositCap = _envUintRequired(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"));
+        p.exitFeeBps = _envOrDefault(string.concat(prefix, "VAULT_EXIT_FEE_BPS"), 0);
+        p.usdcAddress = BASE_USDC;
+    }
+
+    function _approveAndRegisterAdapters(Deployed memory d) internal {
+        _approveAdapter(d.vault, address(d.aaveAdapter));
+        _approveAdapter(d.vault, address(d.compoundAdapter));
+        _approveAdapter(d.vault, address(d.moonwellAdapter));
+        d.vault.addAdapter(address(d.aaveAdapter), AAVE_BPS);
+        d.vault.addAdapter(address(d.compoundAdapter), COMPOUND_BPS);
+        d.vault.addAdapter(address(d.moonwellAdapter), THIRD_VENUE_BPS);
+    }
+
+    /// @dev Allow up to 1 bps of rounding loss when real venues convert USDC to receipt
+    ///      tokens. The property is that assets landed (totalAssets > 0), not exact round trip.
+    function _requireSeeded(Deployed memory d, uint256 seed) internal view {
+        require(d.vault.totalAssets() >= seed * 9_999 / 10_000, "seed deposit: totalAssets too low");
+        require(d.vault.totalSupply() > 0, "seed deposit: totalSupply must be > 0");
+    }
+
+    /// @dev Approves `adapter_` on `vault_` after asserting the no-proxy invariant: the
+    ///      adapter's runtime bytecode must not contain a `DELEGATECALL` opcode (issue #448).
+    function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal {
+        AdapterBytecodeGuard.requireNoDelegatecall(adapter_);
+        vault_.setAdapterAllowed(adapter_, true);
+        vault_.setAdapterCodeHashAllowed(adapter_.codehash, true);
+    }
+
+    function _deploy(Params memory p) internal returns (Deployed memory d) {
+        require(p.admin != address(0), "ADMIN_ADDRESS=0");
+        require(p.usdcAddress != address(0), "USDC_ADDRESS=0");
+        require(p.usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
+        require(p.feeRecipient != address(0), "FEE_RECIPIENT_ADDRESS=0");
+        require(p.tvlCap > 0 && p.perDepositCap > 0, "VAULT_TVL_CAP / VAULT_PER_DEPOSIT_CAP = 0");
+        d.admin = p.admin;
+        d.usdc = p.usdcAddress;
+        d.vault = new RobotMoneyVault(
+            IERC20(d.usdc),
+            p.tvlCap,
+            p.perDepositCap,
+            p.exitFeeBps,
+            p.feeRecipient,
+            p.admin, // vaultAdmin — receives ADMIN_ROLE
+            p.admin // emergencyResponder — handed to the emergency key by the timelock stage
+        );
+        // Registration happens in the callers: the call context differs between broadcast
+        // and in-process modes.
+        d.aaveAdapter = new AaveV3Adapter(AAVE_V3_POOL, d.usdc, AAVE_V3_A_TOKEN, address(d.vault));
+        d.compoundAdapter = new CompoundV3Adapter(COMPOUND_V3_COMET, d.usdc, address(d.vault));
+        d.moonwellAdapter = new MorphoAdapter(MOONWELL_FLAGSHIP_USDC, d.usdc, address(d.vault));
+
+        console2.log("RobotMoneyVault + Aave V3, Compound V3, Moonwell Flagship adapters deployed");
+        console2.log("  usdc               :", d.usdc);
+        console2.log("  vault              :", address(d.vault));
+        console2.log("  aave_adapter       :", address(d.aaveAdapter));
+        console2.log("  compound_adapter   :", address(d.compoundAdapter));
+        console2.log("  moonwell_adapter   :", address(d.moonwellAdapter));
+        console2.log("  admin              :", d.admin);
+    }
+
+    /// @notice Manifest keys written by this stage: chain_id, usdc, vault, aave_adapter,
+    ///         compound_adapter, moonwell_flagship_adapter, admin, and one name/address pair
+    ///         per venue: aave_v3_venue_name / aave_v3_venue, compound_v3_venue_name /
+    ///         compound_v3_venue, moonwell_flagship_venue_name / moonwell_flagship_venue.
+    ///         `morpho_adapter` is gone: the third venue is named for the address it wraps.
+    function _writeDeploymentJson(Deployed memory d) internal {
+        _writeDeploymentJsonTo(d, _envStringRequired("DEPLOYMENT_OUT"));
+    }
+
+    function _writeDeploymentJsonTo(Deployed memory d, string memory outPath) internal {
+        string memory obj = "vault_deployment";
+        vm.serializeUint(obj, "chain_id", block.chainid);
+        vm.serializeAddress(obj, "usdc", d.usdc);
+        vm.serializeAddress(obj, "vault", address(d.vault));
+        vm.serializeAddress(obj, "aave_adapter", address(d.aaveAdapter));
+        vm.serializeAddress(obj, "compound_adapter", address(d.compoundAdapter));
+        vm.serializeAddress(obj, "moonwell_flagship_adapter", address(d.moonwellAdapter));
+        vm.serializeAddress(obj, "admin", d.admin);
+        vm.serializeString(obj, "aave_v3_venue_name", VENUE_NAME_AAVE);
+        vm.serializeAddress(obj, "aave_v3_venue", AAVE_V3_POOL);
+        vm.serializeString(obj, "compound_v3_venue_name", VENUE_NAME_COMPOUND);
+        vm.serializeAddress(obj, "compound_v3_venue", COMPOUND_V3_COMET);
+        vm.serializeString(obj, "moonwell_flagship_venue_name", VENUE_NAME_THIRD);
+        string memory json =
+            vm.serializeAddress(obj, "moonwell_flagship_venue", MOONWELL_FLAGSHIP_USDC);
+
+        vm.writeJson(json, outPath);
+        console2.log("Wrote vault deployment JSON to", outPath);
+    }
+}

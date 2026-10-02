@@ -5,7 +5,9 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 
-import {Deploy} from "../script/Deploy.s.sol";
+import {DeployLibs} from "../script/DeployLibs.s.sol";
+import {DeployVault} from "../script/DeployVault.s.sol";
+import {DeployGateway} from "../script/DeployGateway.s.sol";
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
 import {DeployPortfolioRouter} from "../script/DeployPortfolioRouter.s.sol";
 import {DeployVaultRegistry} from "../script/DeployVaultRegistry.s.sol";
@@ -31,8 +33,20 @@ contract DeployScriptChainGuardsTest is Test {
         vm.chainId(8453);
     }
 
-    function test_deploy_run_requiresExpectedChainOnBase() public {
-        Deploy s = new Deploy();
+    function test_libs_run_requiresExpectedChainOnBase() public {
+        DeployLibs s = new DeployLibs();
+        vm.expectRevert(bytes(MSG));
+        s.run();
+    }
+
+    function test_vault_run_requiresExpectedChainOnBase() public {
+        DeployVault s = new DeployVault();
+        vm.expectRevert(bytes(MSG));
+        s.run();
+    }
+
+    function test_gateway_run_requiresExpectedChainOnBase() public {
+        DeployGateway s = new DeployGateway();
         vm.expectRevert(bytes(MSG));
         s.run();
     }

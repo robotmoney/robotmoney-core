@@ -12,9 +12,12 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployPortfolioRouter
 /// @notice Foundry deploy script for the PortfolioRouter contract.
+///         Stage 4 of the core deploy (libs, vault, registry, router, gateway).
 ///         Deploys PortfolioRouter, sets initial weights (10 000 bps to
-///         RobotMoneyVault — the sole active vault), and writes the router
-///         address to a deployment JSON alongside the registry address.
+///         RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`,
+///         and writes the router address to a deployment JSON alongside the registry
+///         address. The router comes BEFORE the gateway: the gateway stores the router as
+///         an immutable (core 1493).
 ///
 ///         The smoke-test devnet startup sequence runs this script so that
 ///         `rmpc get-router` and the dapp router view return real data in CI.
@@ -118,6 +121,14 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
         uint256[] memory bps = new uint256[](1);
         bps[0] = INITIAL_VAULT_WEIGHT_BPS;
         d.router.setWeights(vaults, bps);
+
+        // Link the router into the registry at the router stage (core S3). This is the one
+        // and only `registry.setRouter` call of the deploy: the gateway stage that follows
+        // takes this router as its immutable, and the timelock stage hands the registry over
+        // with the link already in place. Eligibility was set above, before the link, so the
+        // registry's stale-default-length guard is inactive.
+        d.registry.setRouter(address(d.router));
+        require(address(d.registry.router()) == address(d.router), "registry.router != router");
     }
 
     function _logResult(Deployed memory d) internal view {

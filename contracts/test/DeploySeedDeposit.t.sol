@@ -6,7 +6,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {Deploy} from "../script/Deploy.s.sol";
+import {DeployVault} from "../script/DeployVault.s.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 
 /// @title DeploySeedDeposit
@@ -39,7 +39,7 @@ contract DeploySeedDeposit is Test {
     address internal agent;
     address internal shareReceiver;
 
-    Deploy internal script;
+    DeployVault internal script;
 
     // ─── Fork helpers ──────────────────────────────────────────────────────────
 
@@ -69,7 +69,7 @@ contract DeploySeedDeposit is Test {
         pauser = makeAddr("pauser");
         agent = makeAddr("agent");
         shareReceiver = makeAddr("shareReceiver");
-        script = new Deploy();
+        script = new DeployVault();
 
         // Fund admin with the seed deposit amount so the deploy can execute it.
         deal(BASE_USDC, admin, script.SEED_DEPOSIT_AMOUNT());
@@ -80,8 +80,8 @@ contract DeploySeedDeposit is Test {
     /// @dev Run the deploy script in-process with real Base USDC and seed deposit.
     ///      Adapters are deployed against real Base mainnet protocol addresses.
     ///      Uses runInProcessWithSeed() which includes the mandatory seed deposit step.
-    function _runDeploy() internal returns (Deploy.Deployed memory) {
-        return script.runInProcessWithSeed(admin, pauser, agent, shareReceiver, BASE_USDC);
+    function _runDeploy() internal returns (DeployVault.Deployed memory) {
+        return script.runInProcessWithSeed(admin, BASE_USDC);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -96,7 +96,7 @@ contract DeploySeedDeposit is Test {
     function test_fork_deploySeed_totalAssetsAtLeastMinSeed() public {
         _setUp();
 
-        Deploy.Deployed memory d = _runDeploy();
+        DeployVault.Deployed memory d = _runDeploy();
 
         assertGe(
             d.vault.totalAssets(),
@@ -113,7 +113,7 @@ contract DeploySeedDeposit is Test {
     function test_fork_deploySeed_totalSupplyPositive() public {
         _setUp();
 
-        Deploy.Deployed memory d = _runDeploy();
+        DeployVault.Deployed memory d = _runDeploy();
 
         assertGt(
             d.vault.totalSupply(), 0, "vault.totalSupply must be > 0 before any public deposit"
@@ -127,7 +127,7 @@ contract DeploySeedDeposit is Test {
     function test_fork_deploySeed_adminHoldsShares() public {
         _setUp();
 
-        Deploy.Deployed memory d = _runDeploy();
+        DeployVault.Deployed memory d = _runDeploy();
 
         assertGt(d.vault.balanceOf(admin), 0, "admin must hold seed shares after deploy");
     }
@@ -140,7 +140,7 @@ contract DeploySeedDeposit is Test {
     function test_fork_deploySeed_firstPublicDepositReceivesFairShares() public {
         _setUp();
 
-        Deploy.Deployed memory d = _runDeploy();
+        DeployVault.Deployed memory d = _runDeploy();
 
         address publicUser = makeAddr("publicUser");
         uint256 publicDeposit = 1_000 * 1e6; // 1,000 USDC
