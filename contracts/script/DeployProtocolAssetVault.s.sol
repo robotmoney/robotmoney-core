@@ -59,6 +59,19 @@ contract DeployProtocolAssetVault is ExpectedChainGuard {
     /// @notice Vault name registered in VaultRegistry.
     string public constant VAULT_NAME = "Robot Money Protocol";
 
+    /// @dev Sheet inputs for one deploy, grouped to stay under the stack limit.
+    struct VaultParams {
+        address admin;
+        address emergencyResponder;
+        address swapRouter;
+        address usdc;
+        address registry;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
+        address feeRecipient;
+    }
+
     /// @notice Result returned to in-process callers (e.g. forge tests).
     struct Deployed {
         address vault;
@@ -90,15 +103,17 @@ contract DeployProtocolAssetVault is ExpectedChainGuard {
 
         vm.startBroadcast();
         d = _deployAndRegister(
-            admin,
-            emergencyResponder,
-            swapRouter,
-            usdc,
-            registry,
-            tvlCap,
-            perDepositCap,
-            exitFeeBps,
-            feeRecipient
+            VaultParams({
+                admin: admin,
+                emergencyResponder: emergencyResponder,
+                swapRouter: swapRouter,
+                usdc: usdc,
+                registry: registry,
+                tvlCap: tvlCap,
+                perDepositCap: perDepositCap,
+                exitFeeBps: exitFeeBps,
+                feeRecipient: feeRecipient
+            })
         );
         vm.stopBroadcast();
 
@@ -125,15 +140,17 @@ contract DeployProtocolAssetVault is ExpectedChainGuard {
         require(usdc_ != address(0), "usdc=0");
 
         d = _deployAndRegister(
-            admin_,
-            emergencyResponder_,
-            swapRouter_,
-            usdc_,
-            address(0),
-            DEFAULT_TVL_CAP,
-            DEFAULT_PER_DEPOSIT_CAP,
-            0,
-            admin_
+            VaultParams({
+                admin: admin_,
+                emergencyResponder: emergencyResponder_,
+                swapRouter: swapRouter_,
+                usdc: usdc_,
+                registry: address(0),
+                tvlCap: DEFAULT_TVL_CAP,
+                perDepositCap: DEFAULT_PER_DEPOSIT_CAP,
+                exitFeeBps: 0,
+                feeRecipient: admin_
+            })
         );
 
         if (registry_ != address(0)) {
@@ -149,33 +166,23 @@ contract DeployProtocolAssetVault is ExpectedChainGuard {
 
     // ─── Internal ─────────────────────────────────────────────────────────────
 
-    function _deployAndRegister(
-        address admin,
-        address emergencyResponder,
-        address swapRouter,
-        address usdc,
-        address registry,
-        uint256 tvlCap,
-        uint256 perDepositCap,
-        uint256 exitFeeBps,
-        address feeRecipient
-    ) internal returns (Deployed memory d) {
+    function _deployAndRegister(VaultParams memory v) internal returns (Deployed memory d) {
         ProtocolAssetVault vault = new ProtocolAssetVault(
-            IERC20(usdc),
-            ISwapRouter(swapRouter),
-            tvlCap,
-            perDepositCap,
-            exitFeeBps,
-            feeRecipient,
-            admin,
-            emergencyResponder
+            IERC20(v.usdc),
+            ISwapRouter(v.swapRouter),
+            v.tvlCap,
+            v.perDepositCap,
+            v.exitFeeBps,
+            v.feeRecipient,
+            v.admin,
+            v.emergencyResponder
         );
         d.vault = address(vault);
 
         // The in-process seam passes address(0) and registers itself under a prank.
-        if (registry != address(0)) {
-            _registerIfAbsent(VaultRegistry(registry), address(vault), usdc);
-            d.registry = registry;
+        if (v.registry != address(0)) {
+            _registerIfAbsent(VaultRegistry(v.registry), address(vault), v.usdc);
+            d.registry = v.registry;
             d.registered = true;
         }
     }

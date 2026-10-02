@@ -64,6 +64,18 @@ contract DeployAgentTokenVault is ExpectedChainGuard {
     ///         tokens in this order, and the dapp/tests assert on it.
     string[3] internal SYMBOLS = ["BNKR", "JUNO", "RM"];
 
+    /// @dev Sheet inputs for one deploy, grouped to stay under the stack limit.
+    struct VaultParams {
+        address admin;
+        address emergencyResponder;
+        address swapRouter;
+        address usdc;
+        address registry;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        address feeRecipient;
+    }
+
     /// @notice A single resolved shortlist entry.
     struct Entry {
         string symbol;
@@ -108,14 +120,16 @@ contract DeployAgentTokenVault is ExpectedChainGuard {
 
         vm.startBroadcast();
         d = _deployAndSeed(
-            admin,
-            emergencyResponder,
-            swapRouter,
-            usdc,
-            registry,
-            tvlCap,
-            perDepositCap,
-            feeRecipient,
+            VaultParams({
+                admin: admin,
+                emergencyResponder: emergencyResponder,
+                swapRouter: swapRouter,
+                usdc: usdc,
+                registry: registry,
+                tvlCap: tvlCap,
+                perDepositCap: perDepositCap,
+                feeRecipient: feeRecipient
+            }),
             entries
         );
         vm.stopBroadcast();
@@ -126,26 +140,19 @@ contract DeployAgentTokenVault is ExpectedChainGuard {
 
     /// @dev Deploys the vault, adds each shortlist asset (in config order), and
     ///      registers the vault if REGISTRY_ADDRESS is set.
-    function _deployAndSeed(
-        address admin,
-        address emergencyResponder,
-        address swapRouter,
-        address usdc,
-        address registry,
-        uint256 tvlCap,
-        uint256 perDepositCap,
-        address feeRecipient,
-        Entry[3] memory entries
-    ) internal returns (Deployed memory d) {
+    function _deployAndSeed(VaultParams memory v, Entry[3] memory entries)
+        internal
+        returns (Deployed memory d)
+    {
         AgentTokenVault vault = new AgentTokenVault(
-            IERC20(usdc),
-            ISwapRouter(swapRouter),
-            tvlCap,
-            perDepositCap,
+            IERC20(v.usdc),
+            ISwapRouter(v.swapRouter),
+            v.tvlCap,
+            v.perDepositCap,
             0,
-            feeRecipient,
-            admin,
-            emergencyResponder
+            v.feeRecipient,
+            v.admin,
+            v.emergencyResponder
         );
 
         d.vault = address(vault);
@@ -161,7 +168,7 @@ contract DeployAgentTokenVault is ExpectedChainGuard {
             d.tokens[i] = entries[i].token;
         }
 
-        _registerIfAbsent(VaultRegistry(registry), address(vault), usdc);
+        _registerIfAbsent(VaultRegistry(v.registry), address(vault), v.usdc);
         d.registered = true;
     }
 

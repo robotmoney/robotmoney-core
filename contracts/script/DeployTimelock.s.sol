@@ -166,6 +166,12 @@ contract DeployTimelock is ExpectedChainGuard {
     bytes32 public constant SAFE_FALLBACK_HANDLER_SLOT =
         0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
 
+    /// @notice SAFE_OWNERS and SAFE_THRESHOLD: what the Safe at SAFE_ADDRESS must look like.
+    struct SafeSpec {
+        address[] owners;
+        uint256 threshold;
+    }
+
     struct Deployed {
         TimelockController timelock;
         address vault;
@@ -179,9 +185,6 @@ contract DeployTimelock is ExpectedChainGuard {
         address icPolicy;
         address consensusReceipt;
         address receiptAdmin;
-        /// Owners and threshold the Safe at `safe` must have (SAFE_OWNERS, SAFE_THRESHOLD).
-        address[] safeOwners;
-        uint256 safeThreshold;
         /// Deployer-owned gateway agents handed to the timelock (issue #1476).
         address[] agents;
     }
@@ -210,8 +213,8 @@ contract DeployTimelock is ExpectedChainGuard {
         d.safe = _envAddressRequired(string.concat(prefix, "SAFE_ADDRESS"));
         d.emergency = _envAddressRequired(string.concat(prefix, "EMERGENCY_ADDRESS"));
         d.minDelay = _envUintRequired(string.concat(prefix, "TIMELOCK_MIN_DELAY"));
-        d.safeThreshold = _envUintRequired(string.concat(prefix, "SAFE_THRESHOLD"));
-        d.safeOwners = _readAddressList(string.concat(prefix, "SAFE_OWNERS"));
+        uint256 safeThreshold = _envUintRequired(string.concat(prefix, "SAFE_THRESHOLD"));
+        address[] memory safeOwners = _readAddressList(string.concat(prefix, "SAFE_OWNERS"));
         // One deployment scheme: these inputs are required on every chain. No input
         // silently skips the committee handover or defaults to the deployer.
         d.icPolicy = _envAddressRequired(string.concat(prefix, "IC_POLICY_ADDRESS"));
@@ -227,7 +230,7 @@ contract DeployTimelock is ExpectedChainGuard {
         // floor lives in `_validate`, so every entry point enforces it.
         _requireExpectedChain(prefix);
 
-        _validate(d);
+        _validate(d, SafeSpec({owners: safeOwners, threshold: safeThreshold}));
 
         vm.startBroadcast();
         d.timelock = _deployAndWire(d);
@@ -251,8 +254,7 @@ contract DeployTimelock is ExpectedChainGuard {
         address safe_,
         address emergency_,
         uint256 minDelay_,
-        address[] memory safeOwners_,
-        uint256 safeThreshold_
+        SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
         d.vault = vault_;
         d.gateway = gateway_;
@@ -262,10 +264,8 @@ contract DeployTimelock is ExpectedChainGuard {
         d.safe = safe_;
         d.emergency = emergency_;
         d.minDelay = minDelay_;
-        d.safeOwners = safeOwners_;
-        d.safeThreshold = safeThreshold_;
 
-        _validate(d);
+        _validate(d, safeSpec_);
         d.timelock = _deployAndWire(d);
     }
 
@@ -289,8 +289,7 @@ contract DeployTimelock is ExpectedChainGuard {
         address icPolicy_,
         address consensusReceipt_,
         address receiptAdmin_,
-        address[] memory safeOwners_,
-        uint256 safeThreshold_
+        SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
         d.vault = vault_;
         d.gateway = gateway_;
@@ -300,13 +299,11 @@ contract DeployTimelock is ExpectedChainGuard {
         d.safe = safe_;
         d.emergency = emergency_;
         d.minDelay = minDelay_;
-        d.safeOwners = safeOwners_;
-        d.safeThreshold = safeThreshold_;
         d.icPolicy = icPolicy_;
         d.consensusReceipt = consensusReceipt_;
         d.receiptAdmin = receiptAdmin_;
 
-        _validate(d);
+        _validate(d, safeSpec_);
         d.timelock = _deployAndWire(d);
     }
 
@@ -325,8 +322,7 @@ contract DeployTimelock is ExpectedChainGuard {
         address emergency_,
         uint256 minDelay_,
         address[] calldata agents_,
-        address[] memory safeOwners_,
-        uint256 safeThreshold_
+        SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
         d.vault = vault_;
         d.gateway = gateway_;
@@ -336,11 +332,9 @@ contract DeployTimelock is ExpectedChainGuard {
         d.safe = safe_;
         d.emergency = emergency_;
         d.minDelay = minDelay_;
-        d.safeOwners = safeOwners_;
-        d.safeThreshold = safeThreshold_;
         d.agents = agents_;
 
-        _validate(d);
+        _validate(d, safeSpec_);
         d.timelock = _deployAndWire(d);
     }
 
@@ -370,7 +364,8 @@ contract DeployTimelock is ExpectedChainGuard {
         return vm.envAddress(name, ",");
     }
 
-    function _validate(Deployed memory d) internal view {
+    /// @param spec SAFE_OWNERS and SAFE_THRESHOLD: the owners and threshold the Safe must have.
+    function _validate(Deployed memory d, SafeSpec memory spec) internal view {
         require(d.vault != address(0), "VAULT_ADDRESS=0");
         require(d.gateway != address(0), "GATEWAY_ADDRESS=0");
         require(d.registry != address(0), "REGISTRY_ADDRESS=0");
@@ -397,7 +392,7 @@ contract DeployTimelock is ExpectedChainGuard {
             );
         }
 
-        _requireRealSafe(d.safe, d.safeOwners, d.safeThreshold);
+        _requireRealSafe(d.safe, spec.owners, spec.threshold);
     }
 
     /// @dev The full Safe check. The address must be a SafeProxy 1.4.1 (code and

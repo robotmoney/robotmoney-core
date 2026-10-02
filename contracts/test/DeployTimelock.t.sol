@@ -20,6 +20,9 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
+import {SafeFixture} from "./helpers/SafeFixture.sol";
+import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
+import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 
 /// @dev Fork-style unit tests for DeployTimelock.s.sol (issue #414).
 ///
@@ -44,7 +47,7 @@ import {RoleHolders} from "./helpers/RoleHolders.sol";
 /// schedule → mine delay → execute path, reverts on a direct ADMIN_ROLE EOA call,
 /// atomically flips registry status `Retired` + the vault deposit-halt in one
 /// executed call, and leaves the emergency `shutdownVault` overlay unchanged.
-contract DeployTimelockTest is Test {
+contract DeployTimelockTest is SafeFixture {
     // ─── Roles ────────────────────────────────────────────────────────────────
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -55,9 +58,9 @@ contract DeployTimelockTest is Test {
     // ─── Test addresses ───────────────────────────────────────────────────────
 
     address internal admin = makeAddr("admin");
-    // `safe` is set in setUp() to the deployed MockHighThresholdSafe contract.
-    // It cannot be a plain EOA (makeAddr) because DeployTimelock now requires
-    // SAFE_ADDRESS to have deployed bytecode and getThreshold() >= 2 (issue #422).
+    // `safe` is set in setUp() to a real SafeL2 1.4.1 proxy built by SafeFixture.
+    // DeployTimelock runs the full Safe checks on it (code, codehash, singleton,
+    // owners, threshold, modules, guard, fallback handler).
     address internal safe;
     // Independent emergency hot key that receives the vault EMERGENCY_ROLE at
     // handover (ACL-1 / F-01). Distinct from the deployer (address(script)).
@@ -102,9 +105,10 @@ contract DeployTimelockTest is Test {
         script = new DeployTimelock();
         deployer = address(script);
 
-        // Deploy a mock Safe contract with threshold=2 so DeployTimelock's new
-        // code-length and threshold guards (issue #422) are satisfied.
-        safe = address(new MockHighThresholdSafe());
+        // A real SafeL2 1.4.1 proxy from the vendored sources, 2-of-3, so DeployTimelock's
+        // full Safe checks pass on a genuine Safe (no stub, no mock).
+        _installSafeSet();
+        safe = _newDefaultSafe();
 
         // In a real `forge script --broadcast` run one address does both jobs:
         // the broadcaster sends every grant and revoke, and it is also the
@@ -163,8 +167,7 @@ contract DeployTimelockTest is Test {
             address(governance),
             safe,
             emergency,
-            MIN_DELAY
-        );
+            MIN_DELAY, _fixtureSpec());
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         address[5] memory governed = _governed();
@@ -872,8 +875,7 @@ contract DeployTimelockTest is Test {
             address(governance),
             address(0), // safe = zero
             emergency,
-            MIN_DELAY
-        );
+            MIN_DELAY, _fixtureSpec());
         vm.stopPrank();
     }
 
@@ -888,75 +890,246 @@ contract DeployTimelockTest is Test {
             address(governance),
             safe,
             emergency,
-            0 // zero delay
+            0, // zero delay
+            _fixtureSpec()
         );
         vm.stopPrank();
     }
 
-    // ─── AC: SAFE_ADDRESS must not be an EOA (issue #422) ─────────────────────
+    // ─── AC: SAFE_ADDRESS must be a real Safe (issue #422, core S1) ────────────
 
-    /// @notice DeployTimelock.s.sol aborts when SAFE_ADDRESS has no deployed code.
-    ///
-    /// @dev We pass a freshly-minted address that has no bytecode.  The script's
-    ///      new `code.length` guard should revert before attempting any state writes.
-    function test_deploy_revertsWhenSafeIsEOA() public {
-        address eoaSafe = makeAddr("eoaSafe");
-        // Confirm this address is truly an EOA (no bytecode).
-        assertEq(eoaSafe.code.length, 0, "pre-condition: address must be an EOA");
-
-        vm.expectRevert(bytes("SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first"));
+    function _runWithSafe(address safe_, address[] memory owners_, uint256 threshold_) internal {
         script.runInProcess(
             address(registry),
             address(registry),
             address(registry),
             address(router),
             address(governance),
-            eoaSafe,
+            safe_,
             emergency,
-            MIN_DELAY
+            MIN_DELAY,
+            DeployTimelock.SafeSpec({owners: owners_, threshold: threshold_})
         );
     }
 
-    // ─── AC: SAFE_ADDRESS threshold must be >= 2 (issue #422) ────────────────
+    function test_deploy_revertsWhenSafeIsEOA() public {
+        address eoaSafe = makeAddr("eoaSafe");
+        assertEq(eoaSafe.code.length, 0, "pre-condition: address must be an EOA");
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first"));
+        _runWithSafe(eoaSafe, owners, FIXTURE_THRESHOLD);
+    }
 
-    /// @notice DeployTimelock.s.sol aborts when the Safe at SAFE_ADDRESS has threshold < 2.
-    ///
-    /// @dev We deploy a `MockLowThresholdSafe` that returns `1` from `getThreshold()`.
-    ///      Passing a 1-of-N Safe as PROPOSER would reduce multisig security to a
-    ///      single-key model.
+    /// @notice A 10-byte code stub is not a Safe.
+    function test_deploy_rejectsTenByteCodeStub() public {
+        address stub = makeAddr("tenByteStub");
+        vm.etch(stub, hex"60016000526001601ff3");
+        assertEq(stub.code.length, 10);
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("SAFE_ADDRESS is not a SafeProxy 1.4.1: codehash mismatch"));
+        _runWithSafe(stub, owners, FIXTURE_THRESHOLD);
+    }
+
+    /// @notice A contract that answers getThreshold() with 2 is not a Safe.
+    function test_deploy_rejectsConstantThresholdContract() public {
+        address fake = address(new RejectedSafeStub());
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("SAFE_ADDRESS is not a SafeProxy 1.4.1: codehash mismatch"));
+        _runWithSafe(fake, owners, FIXTURE_THRESHOLD);
+    }
+
+    /// @notice A Safe proxy that does not delegate to the canonical SafeL2 singleton.
+    function test_deploy_rejectsWrongSingleton() public {
+        address other = _newDefaultSafe();
+        vm.store(other, bytes32(0), bytes32(uint256(uint160(makeAddr("other-singleton")))));
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("SAFE_ADDRESS does not delegate to the canonical SafeL2 singleton"));
+        _runWithSafe(other, owners, FIXTURE_THRESHOLD);
+    }
+
+    function test_deploy_rejectsWrongOwners() public {
+        address[] memory strangers = new address[](3);
+        strangers[0] = makeAddr("stranger-owner-1");
+        strangers[1] = makeAddr("stranger-owner-2");
+        strangers[2] = makeAddr("stranger-owner-3");
+        address wrongSafe = _newSafe(strangers, 2);
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("SAFE_OWNERS entry is not a Safe owner"));
+        _runWithSafe(wrongSafe, owners, FIXTURE_THRESHOLD);
+    }
+
+    function test_deploy_rejectsOwnerCountMismatch() public {
+        address[] memory two = new address[](2);
+        two[0] = makeAddr("safe-owner-1");
+        two[1] = makeAddr("safe-owner-2");
+        address defaultSafe = _newDefaultSafe();
+        vm.expectRevert(bytes("Safe owner count != SAFE_OWNERS"));
+        _runWithSafe(defaultSafe, two, 2);
+    }
+
+    /// @notice The Safe's real threshold is 1: rejected against SAFE_THRESHOLD=2.
     function test_deploy_revertsWhenSafeThresholdTooLow() public {
-        MockLowThresholdSafe lowSafe = new MockLowThresholdSafe();
+        address[] memory owners = _fixtureOwners();
+        address lowSafe = _newSafe(owners, 1);
+        vm.expectRevert(bytes("Safe threshold != SAFE_THRESHOLD"));
+        _runWithSafe(lowSafe, owners, 2);
+    }
 
-        vm.expectRevert(bytes("SAFE_ADDRESS threshold < 2: configure at least 2-of-N quorum"));
-        script.runInProcess(
-            address(registry),
-            address(registry),
-            address(registry),
-            address(router),
-            address(governance),
-            address(lowSafe),
-            emergency,
-            MIN_DELAY
+    /// @notice SAFE_THRESHOLD itself must be a real quorum.
+    function test_deploy_revertsWhenExpectedThresholdBelowTwo() public {
+        address[] memory owners = _fixtureOwners();
+        address lowSafe = _newSafe(owners, 1);
+        vm.expectRevert(bytes("SAFE_THRESHOLD < 2: configure at least 2-of-N quorum"));
+        _runWithSafe(lowSafe, owners, 1);
+    }
+
+    function test_deploy_revertsWhenSafeThresholdIsWrongNumber() public {
+        address[] memory owners = _fixtureOwners();
+        address threeSafe = _newSafe(owners, 3);
+        vm.expectRevert(bytes("Safe threshold != SAFE_THRESHOLD"));
+        _runWithSafe(threeSafe, owners, 2);
+    }
+
+    function test_deploy_rejectsEnabledModule() public {
+        address withModule = _newDefaultSafe();
+        address module = makeAddr("evil-module");
+        // modules[SENTINEL(1)] = module; modules[module] = SENTINEL (mapping at slot 1).
+        vm.store(
+            withModule,
+            keccak256(abi.encode(address(0x1), uint256(1))),
+            bytes32(uint256(uint160(module)))
         );
+        vm.store(withModule, keccak256(abi.encode(module, uint256(1))), bytes32(uint256(1)));
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("Safe has an enabled module"));
+        _runWithSafe(withModule, owners, FIXTURE_THRESHOLD);
+    }
+
+    function test_deploy_rejectsGuard() public {
+        address guarded = _newDefaultSafe();
+        bytes32 guardSlot = script.SAFE_GUARD_SLOT();
+        vm.store(guarded, guardSlot, bytes32(uint256(uint160(makeAddr("guard")))));
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("Safe has a transaction guard set"));
+        _runWithSafe(guarded, owners, FIXTURE_THRESHOLD);
+    }
+
+    function test_deploy_rejectsWrongFallbackHandler() public {
+        address[] memory owners = _fixtureOwners();
+        address odd = _newSafeWith(owners, 2, makeAddr("odd-handler"));
+        vm.expectRevert(
+            bytes("Safe fallback handler is not the canonical CompatibilityFallbackHandler")
+        );
+        _runWithSafe(odd, owners, FIXTURE_THRESHOLD);
+    }
+
+    function test_deploy_rejectsDuplicateOwnersInList() public {
+        address[] memory dup = new address[](3);
+        dup[0] = makeAddr("safe-owner-1");
+        dup[1] = makeAddr("safe-owner-1");
+        dup[2] = makeAddr("safe-owner-3");
+        address defaultSafe = _newDefaultSafe();
+        vm.expectRevert(bytes("SAFE_OWNERS contains a duplicate"));
+        _runWithSafe(defaultSafe, dup, 2);
     }
 }
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
-/// @dev Minimal stub that mimics a compliant 2-of-3 Safe — `getThreshold()` returns 2.
-///      Used as the SAFE_ADDRESS in setUp() so DeployTimelock's code-length and
-///      threshold guards (issue #422) are satisfied without deploying a real Safe.
-contract MockHighThresholdSafe {
+/// @dev NEGATIVE sample only: a contract that answers `getThreshold()` with 2 but is
+///      not a Safe. DeployTimelock must reject it. It is never accepted as a Safe.
+contract RejectedSafeStub {
     function getThreshold() external pure returns (uint256) {
         return 2;
     }
 }
 
-/// @dev Minimal stub that mimics a 1-of-N Safe — `getThreshold()` returns 1.
-///      Used to prove DeployTimelock rejects low-threshold Safes.
-contract MockLowThresholdSafe {
-    function getThreshold() external pure returns (uint256) {
-        return 1;
+/// @dev Delay floor keyed to chain id, and a real Safe accepted end to end (core S1).
+///      Each test builds a fresh, un-handed-over topology.
+contract DeployTimelockChainFloorTest is SafeFixture {
+    bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    uint256 internal constant TWIN_CHAIN_ID = 918453;
+    uint256 internal constant BASE_CHAIN_ID = 8453;
+
+    DeployTimelock internal script;
+    address internal deployer;
+    address internal safe;
+    address internal emergency = makeAddr("floor-emergency");
+    RobotMoneyVault internal vault;
+    RobotMoneyGateway internal gateway;
+    VaultRegistry internal registry;
+    PortfolioRouter internal router;
+    RouterGovernance internal governance;
+
+    function setUp() public {
+        TestERC20 usdc = new TestERC20();
+        script = new DeployTimelock();
+        deployer = address(script);
+        _installSafeSet();
+        safe = _newDefaultSafe();
+        vault = new RobotMoneyVault(
+            usdc, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
+        );
+        gateway = new RobotMoneyGateway(usdc, vault, deployer, makeAddr("floor-pauser"), address(0));
+        registry = new VaultRegistry(deployer);
+        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        vm.prank(deployer);
+        router.grantRole(ADMIN_ROLE, address(governance));
+    }
+
+    function _run(uint256 delay) internal returns (DeployTimelock.Deployed memory) {
+        address[] memory owners = _fixtureOwners();
+        vm.prank(deployer);
+        return script.runInProcess(
+            address(vault),
+            address(gateway),
+            address(registry),
+            address(router),
+            address(governance),
+            safe,
+            emergency,
+            delay,
+            DeployTimelock.SafeSpec({owners: owners, threshold: FIXTURE_THRESHOLD})
+        );
+    }
+
+    /// @notice On chain id 8453 a 60 second delay reverts.
+    function test_delay60_revertsOnBase() public {
+        vm.chainId(BASE_CHAIN_ID);
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
+        _run(60);
+    }
+
+    function test_delayJustBelowFloor_revertsOnBase() public {
+        vm.chainId(BASE_CHAIN_ID);
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
+        _run(172_799);
+    }
+
+    function test_delayAtFloor_passesOnBase() public {
+        vm.chainId(BASE_CHAIN_ID);
+        DeployTimelock.Deployed memory d = _run(172_800);
+        assertEq(d.timelock.getMinDelay(), 172_800);
+    }
+
+    /// @notice On the Twin chain (918453) the same 60 second delay passes.
+    function test_delay60_passesOnTwinChain() public {
+        vm.chainId(TWIN_CHAIN_ID);
+        DeployTimelock.Deployed memory d = _run(60);
+        assertEq(d.timelock.getMinDelay(), 60);
+    }
+
+    function test_delay1_passesOnTwinChain() public {
+        vm.chainId(TWIN_CHAIN_ID);
+        DeployTimelock.Deployed memory d = _run(1);
+        assertEq(d.timelock.getMinDelay(), 1);
+    }
+
+    /// @notice A SafeL2 1.4.1 proxy made by the factory is accepted.
+    function test_factoryMadeSafeL2_isAccepted() public {
+        DeployTimelock.Deployed memory d = _run(2 days);
+        assertTrue(IAccessControl(address(vault)).hasRole(ADMIN_ROLE, address(d.timelock)));
     }
 }
 
@@ -1004,7 +1177,7 @@ contract ManifestHarness is DeployTimelock {
 
 /// @notice The manifest must answer, from one file: which chain, which
 ///         addresses, which bytecode, holding which roles.
-contract DeployTimelockManifestTest is Test {
+contract DeployTimelockManifestTest is SafeFixture {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -1019,7 +1192,8 @@ contract DeployTimelockManifestTest is Test {
         TestERC20 usdc = new TestERC20();
         DeployTimelock script = new DeployTimelock();
         address deployer = address(script);
-        address safe = address(new MockHighThresholdSafe());
+        _installSafeSet();
+        address safe = _newDefaultSafe();
         address emergency = makeAddr("manifest-emergency");
 
         RobotMoneyVault vault = new RobotMoneyVault(
@@ -1046,8 +1220,7 @@ contract DeployTimelockManifestTest is Test {
             address(governance),
             safe,
             emergency,
-            2 days
-        );
+            2 days, _fixtureSpec());
 
         harness = new ManifestHarness();
         outPath = "/tmp/r7-manifest-test.json";
@@ -1135,7 +1308,7 @@ contract DeployTimelockManifestTest is Test {
 ///         afterwards. After the handover the timelock owns both, both keep
 ///         AGENT_ROLE, and the deployer can no longer call setPolicy or
 ///         revokeAgent on them.
-contract DeployTimelockAgentHandoverTest is Test {
+contract DeployTimelockAgentHandoverTest is SafeFixture {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
     uint256 public constant MIN_DELAY = 2 days;
@@ -1169,7 +1342,8 @@ contract DeployTimelockAgentHandoverTest is Test {
         // from address(script), so that is the account the roles and the
         // agents must belong to.
         deployer = address(script);
-        safe = address(new MockHighThresholdSafe());
+        _installSafeSet();
+        safe = _newDefaultSafe();
 
         // Deploy.s.sol: vault, adapters, gateway, and the deploy agent,
         // authorized by the admin (the deployer).
@@ -1207,8 +1381,7 @@ contract DeployTimelockAgentHandoverTest is Test {
             safe,
             emergency,
             MIN_DELAY,
-            listed
-        );
+            listed, _fixtureSpec());
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; i++) {
@@ -1345,8 +1518,7 @@ contract DeployTimelockAgentHandoverTest is Test {
             safe,
             emergency,
             MIN_DELAY,
-            bad
-        );
+            bad, _fixtureSpec());
         assertEq(gateway2.agentOwner(otherAgent), other, "owner changed by a reverted handover");
     }
 
@@ -1464,8 +1636,7 @@ contract DeployTimelockAgentHandoverTest is Test {
             safe,
             emergency,
             MIN_DELAY,
-            agents_
-        );
+            agents_, _fixtureSpec());
     }
 
     /// @dev Asserts the handover moved both agents to the timelock, left
@@ -1539,7 +1710,7 @@ contract DeployTimelockAgentHandoverTest is Test {
 ///         gateway agents or to the literal `none`. Each reader case uses its
 ///         own variable name, because env vars are process-wide and forge runs
 ///         tests in parallel.
-contract DeployTimelockAgentListInputTest is Test {
+contract DeployTimelockAgentListInputTest is SafeFixture {
     ManifestHarness internal harness;
 
     function setUp() public {
@@ -1596,7 +1767,7 @@ contract DeployTimelockAgentListInputTest is Test {
 ///         the broadcast path against a Deploy.s.sol stack. Every env var it
 ///         reads carries a prefix only this test sets, because env vars are
 ///         process-wide and forge runs tests in parallel.
-abstract contract DeployTimelockRunEntrypointBase is Test {
+abstract contract DeployTimelockRunEntrypointBase is SafeFixture {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -1672,10 +1843,28 @@ abstract contract DeployTimelockRunEntrypointBase is Test {
         _set("REGISTRY_ADDRESS", vm.toString(address(registry)));
         _set("ROUTER_ADDRESS", vm.toString(address(router)));
         _set("GOVERNANCE_ADDRESS", vm.toString(address(governance)));
-        _set("SAFE_ADDRESS", vm.toString(address(new MockHighThresholdSafe())));
+        _installSafeSet();
+        address[] memory owners = _fixtureOwners();
+        _set("SAFE_ADDRESS", vm.toString(_newSafe(owners, FIXTURE_THRESHOLD)));
+        _set(
+            "SAFE_OWNERS",
+            string.concat(
+                vm.toString(owners[0]), ",", vm.toString(owners[1]), ",", vm.toString(owners[2])
+            )
+        );
+        _set("SAFE_THRESHOLD", vm.toString(FIXTURE_THRESHOLD));
         _set("EMERGENCY_ADDRESS", vm.toString(makeAddr("run-emergency")));
         _set("TIMELOCK_MIN_DELAY", "172800");
         _set("DEPLOYMENT_OUT", OUT_PATH);
+        // The committee contracts are required inputs on every chain. The deployer
+        // holds their admin roles until the handover.
+        InvestmentCommitteePolicy ic =
+            new InvestmentCommitteePolicy(deployer, address(gateway));
+        ConsensusRecommendationReceipt receipt =
+            new ConsensusRecommendationReceipt(deployer, address(gateway), address(ic));
+        _set("IC_POLICY_ADDRESS", vm.toString(address(ic)));
+        _set("CONSENSUS_RECEIPT_ADDRESS", vm.toString(address(receipt)));
+        _set("RECEIPT_ADMIN_ADDRESS", vm.toString(deployer));
         if (vm.exists(OUT_PATH)) vm.removeFile(OUT_PATH);
     }
 }
@@ -1728,29 +1917,73 @@ contract DeployTimelockDelayFloorTest is DeployTimelockRunEntrypointBase {
         return "RM_REVIEW_R04_FLOOR_";
     }
 
-    /// @notice R-04: a delay under 48 hours is refused on the broadcast path
-    ///         unless the devnet override is set explicitly.
-    function test_run_revertsBelowDelayFloor() public {
+    /// @notice R-04: on chain id 8453 a delay under 48 hours is refused on the
+    ///         broadcast path. No flag lifts it.
+    function test_run_revertsBelowDelayFloorOnBase() public {
+        vm.chainId(8453);
+        _set("EXPECTED_CHAIN_ID", "8453");
         _set("TIMELOCK_MIN_DELAY", "60");
-        vm.expectRevert(
-            bytes(
-                "TIMELOCK_MIN_DELAY below 172800 (48h): set ALLOW_SHORT_TIMELOCK_DELAY=true only on a devnet"
-            )
-        );
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
     }
 }
 
-contract DeployTimelockDelayOverrideTest is DeployTimelockRunEntrypointBase {
+contract DeployTimelockTwinChainDelayTest is DeployTimelockRunEntrypointBase {
     function _prefix() internal pure override returns (string memory) {
-        return "RM_REVIEW_R04_OVERRIDE_";
+        return "RM_REVIEW_R04_TWIN_";
     }
 
-    function test_run_shortDelayAllowedWithExplicitOverride() public {
+    /// @notice On the Twin chain (918453) the same short delay is a plain parameter.
+    function test_run_shortDelayAllowedOnTwinChain() public {
+        vm.chainId(918453);
         _set("TIMELOCK_MIN_DELAY", "60");
-        _set("ALLOW_SHORT_TIMELOCK_DELAY", "true");
         DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
-        assertEq(d.timelock.getMinDelay(), 60, "override not honoured");
+        assertEq(d.timelock.getMinDelay(), 60, "short delay not honoured on the Twin chain");
+    }
+}
+
+contract DeployTimelockStrictChainGuardTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_STRICT_CHAIN_";
+    }
+
+    /// @notice On 8453 an unset EXPECTED_CHAIN_ID no longer disables the guard.
+    function test_run_revertsOnBaseWhenExpectedChainUnset() public {
+        vm.chainId(8453);
+        vm.expectRevert(bytes("EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+
+    function test_run_revertsOnBaseWhenExpectedChainIsOther() public {
+        vm.chainId(8453);
+        _set("EXPECTED_CHAIN_ID", "918453");
+        vm.expectRevert(bytes("EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+}
+
+/// @notice Required inputs: unset or malformed values revert on every chain.
+contract DeployTimelockRequiredInputsTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_REQUIRED_";
+    }
+
+    function test_run_revertsWhenIcPolicyUnset() public {
+        _set("IC_POLICY_ADDRESS", vm.toString(address(0)));
+        vm.expectRevert(bytes("IC_POLICY_ADDRESS=0"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+
+    function test_run_revertsWhenSafeOwnersMalformed() public {
+        _set("SAFE_OWNERS", "not-an-address");
+        vm.expectRevert();
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+
+    function test_run_revertsWhenDelayMalformed() public {
+        _set("TIMELOCK_MIN_DELAY", "two-days");
+        vm.expectRevert(bytes("RM_S1_REQUIRED_TIMELOCK_MIN_DELAY is malformed: expected an unsigned integer"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
     }
 }
 

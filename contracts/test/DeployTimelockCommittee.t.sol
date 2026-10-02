@@ -10,7 +10,7 @@ import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
-import {MockHighThresholdSafe} from "./DeployTimelock.t.sol";
+import {SafeFixture} from "./helpers/SafeFixture.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
@@ -36,7 +36,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 ///         authorized to run the handover.
 ///
 ///         In-process identity note (mirrors contracts/test/fv/DeployAssertions.t.sol):
-///         when a test calls `script.runInProcessWithCommittee(...)` directly,
+///         when a test calls `script.runInProcessWithCommittee(..., _fixtureSpec())` directly,
 ///         `msg.sender` INSIDE the script's own code is `address(this)` (the
 ///         test contract) — that is the value substituted wherever the script
 ///         revokes "from msg.sender" or defaults `receiptAdmin_ == address(0)`
@@ -50,7 +50,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 ///         AND separately grants `address(script)` the same roles (matching
 ///         the grant/revoke authority every one of the script's external
 ///         calls actually executes under).
-contract DeployTimelockCommitteeTest is Test {
+contract DeployTimelockCommitteeTest is SafeFixture {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
@@ -78,7 +78,8 @@ contract DeployTimelockCommitteeTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         script = new DeployTimelock();
-        safe = address(new MockHighThresholdSafe());
+        _installSafeSet();
+        safe = _newDefaultSafe();
 
         // The five core contracts: admin_ == address(script), matching
         // DeployTimelock.t.sol's convention (their revocation is already
@@ -142,8 +143,7 @@ contract DeployTimelockCommitteeTest is Test {
             MIN_DELAY,
             address(icPolicy),
             address(receipts),
-            receiptAdminArg
-        );
+            receiptAdminArg, _fixtureSpec());
     }
 
     // ─── Positive: full handover ──────────────────────────────────────────────
@@ -241,8 +241,7 @@ contract DeployTimelockCommitteeTest is Test {
             MIN_DELAY,
             address(0), // icPolicy_ skipped
             address(0), // consensusReceipt_ skipped
-            address(0)
-        );
+            address(0), _fixtureSpec());
         assertTrue(
             IAccessControl(address(vault)).hasRole(ADMIN_ROLE, address(d.timelock)),
             "five-core handover must still work when committee addresses are unset"
@@ -286,7 +285,6 @@ contract DeployTimelockCommitteeTest is Test {
             MIN_DELAY,
             address(icPolicy),
             address(receipts),
-            independentReceiptAdmin
-        );
+            independentReceiptAdmin, _fixtureSpec());
     }
 }

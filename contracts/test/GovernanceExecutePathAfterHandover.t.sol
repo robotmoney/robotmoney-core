@@ -184,7 +184,8 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             address(gov),
             address(safe),
             emergency,
-            MIN_DELAY
+            MIN_DELAY,
+            DeployTimelock.SafeSpec({owners: _ownersOfSafe(), threshold: 2})
         );
         timelock = t.timelock;
     }
@@ -377,6 +378,14 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             ISafeProxyFactory(SAFE_PROXY_FACTORY)
                 .createProxyWithNonce(SAFE_SINGLETON_L2, setup, uint256(keccak256("handover-safe")))
         );
+    }
+
+    /// @dev The owners `_createSafe` set up, for DeployTimelock's SAFE_OWNERS check.
+    function _ownersOfSafe() internal view returns (address[] memory owners) {
+        owners = new address[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            owners[i] = vm.addr(ownerPks[i]);
+        }
     }
 
     /// @dev Owner keys ordered by owner address, ascending (Safe requirement).

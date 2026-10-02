@@ -44,6 +44,7 @@ import {BasketVault} from "../../vaults/BasketVault.sol";
 import {BasketAssetConfigGuard} from "../../lib/BasketAssetConfigGuard.sol";
 import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 import {TestERC20} from "../helpers/TestERC20.sol";
+import {SafeFixture} from "../helpers/SafeFixture.sol";
 
 /// @dev Minimal 18-dec basket token for the ORA-3 addAsset rig.
 contract Ora3Token is ERC20 {
@@ -109,14 +110,6 @@ contract Ora3BasketVault is BasketVault {
     }
 }
 
-/// @dev Minimal 2-of-N Safe stub (code + threshold>=2) so DeployTimelock's
-///      SAFE_ADDRESS guards are satisfied without a real Safe.
-contract _FvSafeStub {
-    function getThreshold() external pure returns (uint256) {
-        return 2;
-    }
-}
-
 /// @dev Stand-in for the deployer EOA. It holds the constructor-granted roles and
 ///      itself calls `runHandover`, so inside the handover `msg.sender` (the
 ///      address revoked) is this harness — mirroring the broadcast path where the
@@ -156,15 +149,24 @@ contract _FvDeployerHarness {
         address governance_,
         address safe_,
         address emergency_,
-        uint256 minDelay_
+        uint256 minDelay_,
+        DeployTimelock.SafeSpec memory safeSpec_
     ) external returns (DeployTimelock.Deployed memory) {
         return script_.runInProcess(
-            vault_, gateway_, registry_, router_, governance_, safe_, emergency_, minDelay_
+            vault_,
+            gateway_,
+            registry_,
+            router_,
+            governance_,
+            safe_,
+            emergency_,
+            minDelay_,
+            safeSpec_
         );
     }
 }
 
-contract DeployAssertionsTest is Test {
+contract DeployAssertionsTest is SafeFixture {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     bytes32 internal constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
@@ -331,7 +333,8 @@ contract DeployAssertionsTest is Test {
         TestERC20 usdc = new TestERC20();
         DeployTimelock script = new DeployTimelock();
         _FvDeployerHarness harness = new _FvDeployerHarness();
-        address safe = address(new _FvSafeStub());
+        _installSafeSet();
+        address safe = _newDefaultSafe();
         _aclDeployer = address(harness);
         _aclEmergency = makeAddr("fv-emergency");
 
@@ -386,7 +389,8 @@ contract DeployAssertionsTest is Test {
             address(_aclGovernance),
             safe,
             _aclEmergency,
-            2 days
+            2 days,
+            _fixtureSpec()
         );
         return address(d.timelock);
     }

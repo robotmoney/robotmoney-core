@@ -335,7 +335,8 @@ contract SafeIntegrationTest is Test {
             address(safe),
             makeAddr("emergency"), // independent emergency hot key (ACL-1 / F-01)
             MIN_DELAY,
-            agents
+            agents,
+            DeployTimelock.SafeSpec({owners: _sortedOwners(), threshold: 2})
         );
 
         // Verify wiring.
