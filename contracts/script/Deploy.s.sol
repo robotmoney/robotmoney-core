@@ -449,7 +449,7 @@ contract Deploy is ExpectedChainGuard {
         // Protocol addresses are Base mainnet constants — production or Anvil
         // fork deployments where real protocol state is available (the devnet
         // genesis/fork-state snapshot carries real Aave V3 / Compound V3 /
-        // Morpho storage; see scripts/devnet/snapshot-fork.sh).
+        // Morpho storage; see scripts/devnet/snapshot-fork.ts).
         d.aaveAdapter = new AaveV3Adapter(AAVE_V3_POOL, d.usdc, AAVE_V3_A_TOKEN, address(d.vault));
         d.compoundAdapter = new CompoundV3Adapter(COMPOUND_V3_COMET, d.usdc, address(d.vault));
         d.morphoAdapter = new MorphoAdapter(MORPHO_GAUNTLET_USDC_PRIME, d.usdc, address(d.vault));

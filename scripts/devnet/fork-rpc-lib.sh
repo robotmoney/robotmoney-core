@@ -20,7 +20,7 @@
 # read with "Archive requests require a personal token" (measured 2026-09-28:
 # refused even at tip-100 by number, served at tip-5000 by block hash). forge
 # forks by block hash, so publicnode still works for the merge-gating fork
-# steps. `cast storage --block N` and snapshot-fork.sh do not, which is why the
+# steps. `cast storage --block N` and snapshot-fork.ts do not, which is why the
 # old publicnode default could never complete a fixture capture. publicnode
 # stays second as a fallback with a separate rate-limit budget.
 

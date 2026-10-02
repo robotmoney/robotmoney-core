@@ -2,7 +2,7 @@
 
 **Scout issue:** #913
 **Date:** 2026-06-18
-**Canonical docs:** `.github/workflows/suite-11b-opencode-headless.yml`, `contracts/script/Deploy.s.sol`, `scripts/devnet/snapshot-fork.sh`, `docs/development/ci-suites.md`
+**Canonical docs:** `.github/workflows/suite-11b-opencode-headless.yml`, `contracts/script/Deploy.s.sol`, `scripts/devnet/snapshot-fork.ts`, `docs/development/ci-suites.md`
 **Downstream same-phase issues:** #912 (passthrough removal), #901
 **Phase:** Testcode removal
 
@@ -108,15 +108,15 @@ for it.
   likely pin chain-id / block to match the fixture manifest in
   `CURRENT.json`). Note the fixture is the pair
   `CURRENT.anvil-state` (load-state file) + `CURRENT.json` (manifest), **not** a
-  `<CURRENT>` directory/symlink — `scripts/devnet/snapshot-fork.sh` writes
+  `<CURRENT>` directory/symlink — `scripts/devnet/snapshot-fork.ts` writes
   `CURRENT.anvil-state` by copying the freshly-dumped `base-<BLOCK>.anvil-state`
   (~lines 524–542).
 - `--dump-state`/`--load-state` schema is anvil-version-sensitive: the
-  snapshot is produced inside the foundry Docker image (snapshot-fork.sh
+  snapshot is produced inside the foundry Docker image (snapshot-fork.ts
   ~lines 40–49, 75–85) so the fixture round-trips into the CI anvil. suite-11b
   must use a compatible anvil version when it starts loading state.
 
-### 2.3 `scripts/devnet/snapshot-fork.sh`
+### 2.3 `scripts/devnet/snapshot-fork.ts`
 
 - Generates `testing/fixtures/fork-state/base-<BLOCK>.anvil-state` + `.json`
   and updates `CURRENT.anvil-state` / `CURRENT.json` (~lines 16–26, 494–542).
@@ -137,7 +137,7 @@ Production / harness code (removal targets for #912):
   `USE_PASSTHROUGH_ADAPTER=true` by default** into the deploy env unless the
   caller overrides it. This default injection is the main runtime removal in
   the e2e harness.
-- `scripts/devnet/snapshot-fork.sh` — only mentions it in comments (does not
+- `scripts/devnet/snapshot-fork.ts` — only mentions it in comments (does not
   set it); confirm no live use.
 - `testing/smoke-test/src/lib.rs` (~lines 271, 954) and
   `testing/smoke-test/src/real_adapter_state.rs` (~lines 18–20) — comments

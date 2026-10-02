@@ -634,7 +634,7 @@ impl Fixture {
     /// script, and fund the test EOAs.
     ///
     /// The Geth devnet boots from a genesis snapshot that carries real Aave V3,
-    /// Compound V3, and Morpho storage (produced by `scripts/devnet/snapshot-fork.sh`
+    /// Compound V3, and Morpho storage (produced by `scripts/devnet/snapshot-fork.ts`
     /// with the adapter warming step from issue #685).  Deploy.s.sol deploys the
     /// three real protocol adapters by default.
     pub fn new() -> Result<Self, HarnessError> {

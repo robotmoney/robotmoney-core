@@ -8,7 +8,7 @@
 # now-deleted test-only no-yield deploy hatch (issue #912).
 #
 # This mirrors testing/fork-e2e-rust/src/lib.rs::ForkFixture (the canonical
-# --load-state consumer) and scripts/devnet/snapshot-fork.sh:
+# --load-state consumer) and scripts/devnet/snapshot-fork.ts:
 #   1. anvil --load-state CURRENT.anvil-state --chain-id <devnet pin>
 #   2. Replay the canonical Base USDC proxy storage seed + implementation
 #      bytecode (usdc-storage-seed.json) so the forked FiatTokenProxy behaves

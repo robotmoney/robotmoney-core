@@ -289,7 +289,7 @@ jobs:
           # run reverts with ERC20InsufficientBalance unless the generated key
           # actually holds USDC. The fork-state USDC is the canonical Base
           # FiatToken (no permissionless mint), so write the agent's balance
-          # slot directly — the same hermetic technique scripts/devnet/snapshot-fork.sh
+          # slot directly — the same hermetic technique scripts/devnet/snapshot-fork.ts
           # uses for the deployer. FiatToken balances mapping lives at slot 9.
           AGENT_BAL_SLOT=$(cast index address "$AGENT_ADDR_FROM_KEYSTORE" 9)
           cast rpc anvil_setStorageAt "$USDC_ADDRESS" "$AGENT_BAL_SLOT" \

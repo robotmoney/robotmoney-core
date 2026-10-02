@@ -17,7 +17,7 @@
 #   write  <state_file> <manifest_json>
 #     Computes sha256 of the raw state_file bytes and writes/overwrites the
 #     manifest's `state_sha256` field in place (all other fields preserved).
-#     Used by snapshot-fork.sh at capture time, and reusable directly by an
+#     Used by snapshot-fork.ts at capture time, and reusable directly by an
 #     offline round-trip self-test.
 #
 #   verify <state_file> <manifest_json>

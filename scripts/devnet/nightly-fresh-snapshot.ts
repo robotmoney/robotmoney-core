@@ -4,7 +4,7 @@
  *
  * Canonical: docs/development/ci-suites.md (nightly fresh snapshot), owner
  * design 2026-10-02. Orchestration is Bun TypeScript; the capture itself stays
- * scripts/devnet/snapshot-fork.sh (anvil forking Base, deploying nothing the
+ * scripts/devnet/snapshot-fork.ts (anvil forking Base, deploying nothing the
  * production scheme does not ship) and the Twin chain genesis is built by the
  * existing smoke-test-genesis-ingester.
  *
@@ -34,10 +34,6 @@ import { dirname, join, relative, resolve } from "node:path";
 
 const REPO = resolve(dirname(import.meta.path), "..", "..");
 const LIB = join(REPO, "scripts/devnet/fork-rpc-lib.sh");
-
-// The published anvil dev mnemonic. snapshot-fork.sh already hard-codes it for
-// the node it launches; it is public test material with no value on any chain.
-const ANVIL_DEV_MNEMONIC = "test test test test test test test test test test test junk";
 
 const FORK_STATE_REL = "testing/fixtures/fork-state";
 const CONFIG_REL = "testing/ethereum-testnet/config";
@@ -160,20 +156,13 @@ async function snapshot(out: string): Promise<void> {
   }
   if (!endpoint) die("no public Base endpoint served the latest block");
 
-  // The deployer for the snapshot's local anvil node is anvil account 0. It is
-  // derived at run time from the public dev mnemonic and handed to the child
-  // through its environment only: nothing is written to disk or to a log.
-  const key = (
-    await run(["cast", "wallet", "private-key", "--mnemonic", ANVIL_DEV_MNEMONIC, "--mnemonic-index", "0"], {}, true)
-  ).trim();
-
-  await run(["bash", "scripts/devnet/snapshot-fork.sh"], {
+  // The capture deploys nothing and needs no key: transactions run from anvil's
+  // unlocked dev account inside the snapshot node.
+  await run(["bun", "scripts/devnet/snapshot-fork.ts"], {
     RMPC_FORK_RPC_URL: endpoint,
     FORK_PIN_LAG: "0",
     FIXTURE_DIR: join(out, "fork-state"),
-    DEPLOYMENTS_DIR: join(out, "deployments"),
     ANVIL_EXTRA_ARGS: process.env.ANVIL_EXTRA_ARGS ?? "--retries 30 --fork-retry-backoff 2000",
-    DEVNET_DEPLOYER_KEY: key,
   });
 
   const current = JSON.parse(readFileSync(join(out, "fork-state/CURRENT.json"), "utf8"));

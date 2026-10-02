@@ -35,7 +35,7 @@
 #
 # GOTCHAS
 # - The devnet's genesis-alloc.json must stay in sync with CURRENT.json (the fork pin).
-#   If the fixture is refreshed (snapshot-fork.sh), re-run smoke-test-genesis-ingester
+#   If the fixture is refreshed (snapshot-fork.ts), re-run smoke-test-genesis-ingester
 #   and commit the new genesis-alloc.json.
 # - The governance slot must NOT set RMPC_TESTNET_RPC_URL; omitting it makes
 #   ForkFixture fall through to the checked-in .anvil-state fixture.
@@ -200,6 +200,15 @@ jobs:
           scripts/devnet/fork-state-digest.sh verify
           testing/fixtures/fork-state/CURRENT.anvil-state
           testing/fixtures/fork-state/CURRENT.json
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Snapshot contents check (core issue 1498)
+        # Boots anvil from CURRENT.anvil-state with no fork URL and asserts
+        # SwapRouter02, the V3 factory and every configured pool answer with
+        # live values, and that no Robot Money contract exists at genesis.
+        if: ${{ matrix.devnet == false }}
+        run: bun scripts/devnet/check-fork-snapshot-contents.ts
 
       - name: Fork integration tests (${{ matrix.group }})
         working-directory: testing/fork-e2e-rust

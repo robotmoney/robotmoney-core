@@ -122,7 +122,7 @@ it works, but the event stream production tooling expects is absent.
 
 | Requirement | Where it is now enforced |
 |---|---|
-| R2, R3 | The fork fixture carries all five §2.2 contracts with their canonical code, and both singletons carry the lock their constructor writes (threshold = 1 in storage slot 4, so `setup()` on the singleton reverts `GS200`, as on Base). `scripts/devnet/snapshot-fork.sh` warms the five in a step that aborts on a missing one, writes the singletons' slot 4 read from Base at the pin block, checks every `anvil_setCode`/`anvil_setStorageAt` response, and runs the gate on what it captured. `scripts/devnet/check-fork-safe-set.sh` fails with exit 14 naming any contract that is absent, whose code does not hash to its pinned keccak256 (table below), or (singletons) whose slot 4 is not 1. The gate runs inside `check-fork-manifest.sh`, which is run by `run-golden-forge-forks.sh` — the suite-01-02 `forge-fork-vault-regressions` job, once per fork target (VaultForkRegressions, DeploySeedDeposit, SafeIntegration, GovernanceExecutePathAfterHandover) — and by suite-14 (smoke test). It does **not** run in suite-05's `anvil-goldens`/`anvil-governance` groups, which load `CURRENT.anvil-state` directly and verify only its sha256 digest. Its offline self-test runs in the same suite-01-02 job. |
+| R2, R3 | The fork fixture carries all five §2.2 contracts with their canonical code, and both singletons carry the lock their constructor writes (threshold = 1 in storage slot 4, so `setup()` on the singleton reverts `GS200`, as on Base). `scripts/devnet/snapshot-fork.ts` warms the five in a step that aborts on a missing one, writes the singletons' slot 4 read from Base at the pin block, checks every `anvil_setCode`/`anvil_setStorageAt` response, and runs the gate on what it captured. `scripts/devnet/check-fork-safe-set.sh` fails with exit 14 naming any contract that is absent, whose code does not hash to its pinned keccak256 (table below), or (singletons) whose slot 4 is not 1. The gate runs inside `check-fork-manifest.sh`, which is run by `run-golden-forge-forks.sh` — the suite-01-02 `forge-fork-vault-regressions` job, once per fork target (VaultForkRegressions, DeploySeedDeposit, SafeIntegration, GovernanceExecutePathAfterHandover) — and by suite-14 (smoke test). It does **not** run in suite-05's `anvil-goldens`/`anvil-governance` groups, which load `CURRENT.anvil-state` directly and verify only its sha256 digest. Its offline self-test runs in the same suite-01-02 job. |
 | R4 | `SafeIntegration.t.sol` and the stage ceremony both use `SafeL2` (`0x29fcB43b…`); the test asserts the proxy's `masterCopy` slot, and `verify` checks the same slot on stage. |
 | R5–R8 | `fusion-ceremony.sh run` creates a `SafeProxy` via `SafeProxyFactory.createProxyWithNonce` on `SafeL2` with the canonical fallback handler, threshold 2. It refuses a chain without the Safe set; there is no stand-in. `RehearsalSafe` and `DeployRehearsalSafe.s.sol` are deleted. |
 | R9–R11 | Every Safe operation (`release`, `propose`) goes through `execTransaction` with two owner signatures over the Safe's own `getTransactionHash`, from keystores via `cast wallet sign --no-hash`, packed ascending by owner; each signature's `v` must be 27/28. A missing keystore or password stops the operation with exit 65 before anything is sent. Keystore passwords reach `cast wallet new` as `CAST_PASSWORD`, never on the command line, and never empty. A `run` that dies before its record is written shreds the keys it minted; on SIGINT/SIGTERM it shreds them and exits 130/143. A `run` that writes its record keeps every key the record names. |
@@ -199,7 +199,7 @@ must be deleted, not satisfied.
 ### 3.3 The fixture does not carry the full Safe set
 
 Stage and CI both run `anvil --load-state testing/fixtures/fork-state/CURRENT.anvil-state`.
-The fixture is produced by `scripts/devnet/snapshot-fork.sh`, which boots
+The fixture is produced by `scripts/devnet/snapshot-fork.ts`, which boots
 `anvil --fork-url <Base> --fork-block-number <tip-100> --dump-state`, warms
 selected state, then flushes on `SIGINT`.
 
@@ -217,7 +217,7 @@ Measured on the live stage chain:
 | `CompatibilityFallbackHandler` `0xfd0732Dc…` | **no** |
 | `MultiSend` `0x38869bf6…` | **no** |
 
-`snapshot-fork.sh` contains **no Safe warming step** — it warms USDC and the real
+`snapshot-fork.ts` contains **no Safe warming step** — it warms USDC and the real
 adapters (#685) only. The two contracts that are present are incidental. Nothing
 guarantees them, and the next `refresh-fork-fixture.sh` may silently drop them,
 breaking `SafeIntegration.t.sol` in CI with no diagnostic pointing at the cause.
@@ -322,7 +322,7 @@ fixture instead of regenerating it (§7 Q5), and step 3's owners are three
 dedicated approver keys rather than three of the existing ephemeral keys (§7 Q1).
 
 **Step 1 — make the fixture carry Safe (R2, R3).** Add a Safe warming step to
-`snapshot-fork.sh` touching all five §2.2 addresses. Add the assertion to
+`snapshot-fork.ts` touching all five §2.2 addresses. Add the assertion to
 `check-fork-manifest.sh`. Regenerate the fixture. Nothing downstream is safe to
 build until the contracts are guaranteed present; today's two are incidental.
 
@@ -392,7 +392,7 @@ would have changed was removed outright (issue #1458, PR #1451); there is no
    does not yet say anything about the `RouterGovernance` voter set, which is a
    separate governing body with its own quorum. Whether the two need a single
    unified isomorphism statement is unresolved.
-5. **Re-pinning the fixture.** Step 1 did run `snapshot-fork.sh` end to end
+5. **Re-pinning the fixture.** Step 1 did run `snapshot-fork.ts` end to end
    (mainnet.base.org, tip-100 = block 51734246, `foundry:latest` = anvil 1.8.1).
    The capture succeeded and carried all five Safe contracts, but its dump
    omitted EIP-1967 implementation contracts the committed fixture carries
@@ -402,5 +402,5 @@ would have changed was removed outright (issue #1458, PR #1451); there is no
    succeed on the committed fixture. That re-pin would have broken every offline
    fork suite, so step 1 instead added the three contracts (code, nonce and
    balance read from Base at block 48896605) to the committed fixture, leaving
-   every other account byte-identical. The next re-pin needs `snapshot-fork.sh`
+   every other account byte-identical. The next re-pin needs `snapshot-fork.ts`
    to warm proxy implementations (or a pinned foundry image) first.

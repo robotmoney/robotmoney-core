@@ -4,7 +4,7 @@
   "chain": "base",
   "tolerance_pct": 0.5,
   "$tolerance_note": "0.5% (issue #890). Values are captured from the checked-in golden fixture at fork_block. The tolerance absorbs display rounding while still catching wrong decimals, inverted pairs, and material fixture drift.",
-  "$capture_note": "Capture slot0 for every configured pool from CURRENT.anvil-state after scripts/devnet/snapshot-fork.sh refreshes the golden fixture. Decode sqrtPriceX96 with clients/dapp/src/lib/uniswapV3.ts, update expected_price and fork_block together, then run the fork-manifest guards and dapp E2E suite.",
+  "$capture_note": "Capture slot0 for every configured pool from CURRENT.anvil-state after scripts/devnet/snapshot-fork.ts refreshes the golden fixture. Decode sqrtPriceX96 with clients/dapp/src/lib/uniswapV3.ts, update expected_price and fork_block together, then run the fork-manifest guards and dapp E2E suite.",
   "captured": true,
   "$pinned_on_archive_fork_note": "When true, the freshness-chip Playwright test asserts block >= fork_block (the devnet is an Anvil or Geth chain that continues from the fork point). When false, only asserts block > 0. The Geth+Lighthouse smoke-test devnet boots from genesis (block 0) even when the fork state is ingested from block 46698556, so the freshness-chip test can only assert block > 0 — set this to false to avoid a spurious >= 46698556 assertion.",
   "pinned_on_archive_fork": false,

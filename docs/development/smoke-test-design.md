@@ -135,7 +135,7 @@ scenario that reproduces on one harness reproduces on the other. The
 manifest validator unit test
 `smoke_test::fork_manifest::tests::fork_block_aligns_with_anvil_fixture_current`
 enforces this alignment in CI; refreshing the pin is a single
-`scripts/devnet/snapshot-fork.sh` invocation that updates both.
+`scripts/devnet/snapshot-fork.ts` invocation that updates both.
 
 ### USDC faucet via genesis-time balance grant
 

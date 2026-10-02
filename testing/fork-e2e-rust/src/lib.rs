@@ -313,7 +313,7 @@ pub const USDC_PROXY_ADMIN_SLOT: B256 =
 /// proxy's runtime bytecode, not its admin/impl storage — becomes
 /// a fully-functional USDC at the canonical address.
 ///
-/// Authored offline by `scripts/devnet/snapshot-fork.sh` and
+/// Authored offline by `scripts/devnet/snapshot-fork.ts` and
 /// consumed both here (fork-e2e harness) and by
 /// `testing/smoke-test/src/genesis_alloc.rs`.
 const USDC_STORAGE_SEED_REL: &str = "testing/fixtures/fork-state/usdc-storage-seed.json";

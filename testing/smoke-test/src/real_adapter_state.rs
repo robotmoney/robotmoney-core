@@ -6,7 +6,7 @@
 //!
 //! # What changed (issue #685)
 //!
-//! `scripts/devnet/snapshot-fork.sh` now executes a deposit→redeem round-trip
+//! `scripts/devnet/snapshot-fork.ts` now executes a deposit→redeem round-trip
 //! through each real adapter (Aave V3, Compound V3, Morpho) after the forge
 //! deploy. This forces anvil to fetch the reserve config, liquidity/borrow
 //! index, aToken supply, Comet base tracking, and Morpho market+position slots
@@ -23,7 +23,7 @@
 //!
 //! Issue #685 owns `testing/smoke-test`, `testing/fixtures/fork-state`,
 //! `testing/ethereum-testnet/config`, `contracts/script/Deploy.s.sol`, and
-//! `scripts/devnet/snapshot-fork.sh`. Issue #658 consumes the fixture API
+//! `scripts/devnet/snapshot-fork.ts`. Issue #658 consumes the fixture API
 //! after #685 lands.
 
 // This module intentionally contains no runtime code.

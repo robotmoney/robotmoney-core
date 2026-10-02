@@ -191,14 +191,14 @@ drift-alarm issue. There is no monthly cadence.
 # Requires RMPC_FORK_RPC_URL (archive depth for the pinned block).
 # Run when an integration change requires a new fixture, or in response to a
 # nightly drift-alarm issue — not on a schedule (ADR-0011).
-bash scripts/devnet/snapshot-fork.sh
+bash scripts/devnet/snapshot-fork.ts
 # Or via the convenience wrapper:
 bash scripts/devnet/refresh-fork-fixture.sh
 ```
 
 Validates the fixture manifest before use — including the sha256 integrity
 check (`state_sha256` in `CURRENT.json`, ADR-0011 addendum, issue #1152):
-`snapshot-fork.sh` writes the digest, so a legitimate refresh always updates
+`snapshot-fork.ts` writes the digest, so a legitimate refresh always updates
 it; a hand-edited blob with a stale or missing digest fails loudly here
 instead of loading silently:
 
