@@ -1295,3 +1295,13 @@ Takes a snapshot of Base at the latest block with `scripts/devnet/nightly-fresh-
 
 Suite 26 needs the shared fusion devnet configuration. In a fresh-snapshot run an unconfigured suite 26 fails instead of skipping.
 
+
+## Nightly and release-record checks (cores 1495, 1496, 1497, 1498)
+
+The `nightly-and-release-checks` job in `suite-13-doc-checks.yml` runs on every pull request. It runs, offline:
+
+- `.github/scripts/tests/test_nightly_dispatch_list.sh` (core 1495): the nightly dispatch list covers every suite workflow, a removed suite is detected, the fork-pin age step has `continue-on-error: true`, and the deleted drift job, script and alarm text are gone. The list check itself is `check_nightly_dispatch_list.py`.
+- `scripts/devnet/check-nightly-fresh-snapshot-selftest.sh` (core 1496): suites 5, 7, 8, 10, 11b, 14 and 26 are present, no secret other than `GITHUB_TOKEN` and no keyed RPC appear, manifest fields and the one-hour limit hold, a failing suite result fails the gate, the final workflow step is `git diff --exit-code` over the fixture paths, and a stub HTTP 429 is retried.
+- The nightly third-party drift workflow check, the dependency manifest self-test and the manifest address check (core 1497). The address check runs on a manifest recorded from the committed snapshot, so it checks something before the first release commits one.
+
+The committed snapshot contents check is a Bun TypeScript script, `scripts/devnet/check-fork-snapshot-contents.ts` (core 1498; the issue says `.sh`, orchestration is TypeScript). Suite 14's `smoke-test-guards` job runs it, plus `check-fork-manifest.sh --require-pinned` (fixture lockstep) and a floor on the `cargo test -p smoke-test --lib` test count. Suite 14's `twin_publish` matrix row runs the real Twin chain publish, verify and stage 13 govern matrix, then `label-diff.ts` and `sheet-diff.ts` against the mainnet verifier labels and production sheet.
