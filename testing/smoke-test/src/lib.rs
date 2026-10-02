@@ -497,7 +497,7 @@ impl Fixture {
         Self::with_deploy_env(&[])
     }
 
-    /// Like [`Self::new`] but passes extra env vars to `forge script Deploy`.
+    /// Like [`Self::new`] but passes allow-listed sheet parameter overrides to publish contracts.
     /// Used to override deploy-time parameters (e.g. `AGENT_MAX_PER_WINDOW`).
     pub fn with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
         Self::with_backend(ChainBackend::Geth, extra_deploy_env)
@@ -508,7 +508,7 @@ impl Fixture {
     /// With [`ChainBackend::Geth`] this is exactly [`Self::with_deploy_env`].
     /// With [`ChainBackend::Anvil`] the `ethereum-testnet` compose stack is
     /// never brought up: [`anvil_fixture::AnvilFixture`] supplies the chain and
-    /// everything downstream — funding, `forge script Deploy`, the dapp
+    /// everything downstream — funding, publish contracts, the dapp
     /// stack — runs unchanged against its RPC.
     pub fn with_backend(
         backend: ChainBackend,

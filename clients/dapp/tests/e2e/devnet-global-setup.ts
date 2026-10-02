@@ -169,7 +169,7 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     throw err;
   }
 
-  const endpoints: Record<RequiredKey, string | number> = {
+  const endpoints: Record<RequiredKey | "admin_addr" | "admin_private_key", string | number> = {
     rpc_url: raw.rpc_url,
     dapp_url: raw.dapp_url,
     explorer_api_url: raw.explorer_api_url,
@@ -178,6 +178,11 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     vault_addr: raw.vault_addr,
     usdc_addr: raw.usdc_addr,
     agent_addr: raw.agent_addr,
+    // One deployment scheme (core 1488): the deployer holds no role after handover.
+    // `admin_*` is now a plain funded EOA (the harness USDC holder) that specs use as a
+    // depositor. Specs that need a real admin must drive govern rows through the Safe.
+    admin_addr: raw.harness_usdc_holder_addr,
+    admin_private_key: raw.harness_usdc_holder_private_key,
     pauser_addr: raw.pauser_addr,
     share_receiver_addr: raw.share_receiver_addr,
     pauser_private_key: raw.pauser_private_key,

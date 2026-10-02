@@ -14,7 +14,7 @@
 //! the canonical `--load-state` consumer in this repo. It boots Anvil from the
 //! committed warmed Base fork state, replays the canonical USDC proxy storage
 //! seed, stamps the devnet chain id, and funds the harness EOAs — so the same
-//! `forge script Deploy` path the Geth fixture runs works unchanged.
+//! publish contracts call the Geth fixture makes works unchanged.
 //!
 //! Lifecycle contract (mirrors the Geth chain fixture inside [`crate::Fixture`]):
 //!   * [`AnvilFixture::boot`] — start the chain and return only once its RPC
