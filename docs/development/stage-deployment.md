@@ -33,8 +33,8 @@ All four vaults ship with assets that have usable pools: rmUSDC, rmPROTO (wETH a
 
 ## What was deleted
 
-- `scripts/stage/fusion-ceremony.sh` and its self-test (the bash ceremony and handover).
-- `scripts/stage/deploy-core-stack.sh` (including the stale `timelock-918453` fallback).
+- the stage ceremony script and its self-test (the bash ceremony and handover).
+- `scripts/stage/the deleted stage deploy script.sh` (including the stale `timelock-918453` fallback).
 - The Rust harness deployment of core, registry, router, governance and the IC policy (`run_forge_deploy_*`), the demo vault and stub-pool deploys, `seed_demo_depositors`, the `demo-seed-depositors` binary, and the dapp faucet funding.
 - `.github/workflows/deploy-contracts.yml`.
 - The single-key release in `scripts/fusion/cross-repo-acceptance.sh`.
