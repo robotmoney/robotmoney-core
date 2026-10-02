@@ -168,6 +168,8 @@ jobs:
           forge test -vvv --match-path "contracts/test/ActivateBasketVaultEligibility.t.sol"
           forge test -vvv --match-contract 'BasketVault|AgentTokenVault|ProtocolAssetVault'
           bash scripts/ci/check-no-devnet-config.sh
+          bash scripts/ci/check-set-registry-owner.sh
+          forge test -vvv --match-path "contracts/test/DeployTimelock.t.sol"
 
       - name: forge test (unified-vault ERC-4626 conformance per composition + EIP-170 size gate — issue #1127)
         # Explicit, named guard so the ADR-0010 unified-vault deliverables cannot

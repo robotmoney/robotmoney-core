@@ -23,6 +23,11 @@ import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {SafeFixture} from "./helpers/SafeFixture.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
+import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
+import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 
 /// @dev Fork-style unit tests for DeployTimelock.s.sol (issue #414).
 ///
@@ -1838,7 +1843,7 @@ abstract contract DeployTimelockRunEntrypointBase is SafeFixture {
         _set(
             "AGENT_ADDRESSES", string.concat(vm.toString(deployAgent), ",", vm.toString(submitter))
         );
-        _set("VAULT_ADDRESS", vm.toString(address(dep.vault)));
+        _set("VAULT_ADDRESSES", vm.toString(address(dep.vault)));
         _set("GATEWAY_ADDRESS", vm.toString(address(gateway)));
         _set("REGISTRY_ADDRESS", vm.toString(address(registry)));
         _set("ROUTER_ADDRESS", vm.toString(address(router)));
@@ -2029,5 +2034,242 @@ contract ReceiptRoleStub is AccessControl {
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(ADMIN_ROLE, admin);
+    }
+}
+
+// ─── S5 (core 1487): the timelock stage hands over every vault ────────────────
+
+interface IVaultLinkRead {
+    function registry() external view returns (address);
+    function setRegistry(address newRegistry) external;
+    function retired() external view returns (bool);
+}
+
+/// @notice The one deployment scheme ships four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA). The
+///         timelock stage treats each the same way: setRegistry once, EMERGENCY to the emergency
+///         key, ADMIN to the timelock, deployer revoked. These tests use the real vault contracts,
+///         a real Safe and the real timelock.
+contract DeployTimelockFourVaultsTest is SafeFixture {
+    using stdJson for string;
+
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+    uint256 public constant MIN_DELAY = 2 days;
+
+    ManifestHarness internal script;
+    address internal deployer;
+    address internal safe;
+    address internal emergency = makeAddr("four-emergency");
+    TestERC20 internal usdc;
+    address[] internal vaults;
+    VaultRegistry internal registry;
+    RobotMoneyGateway internal gateway;
+    PortfolioRouter internal router;
+    RouterGovernance internal governance;
+    DeployTimelock.Deployed internal d;
+
+    function setUp() public {
+        usdc = new TestERC20();
+        script = new ManifestHarness();
+        deployer = address(script);
+        _installSafeSet();
+        safe = _newDefaultSafe();
+
+        address swapRouter = makeAddr("four-swap-router");
+        RobotMoneyVault rmUsdc = new RobotMoneyVault(
+            usdc, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
+        );
+        vaults.push(address(rmUsdc));
+        vaults.push(
+            address(
+                new ProtocolAssetVault(
+                    IERC20(address(usdc)),
+                    ISwapRouter(swapRouter),
+                    type(uint256).max,
+                    type(uint256).max,
+                    0,
+                    safe,
+                    deployer,
+                    deployer
+                )
+            )
+        );
+        vaults.push(
+            address(
+                new AgentTokenVault(
+                    IERC20(address(usdc)),
+                    ISwapRouter(swapRouter),
+                    type(uint256).max,
+                    type(uint256).max,
+                    0,
+                    safe,
+                    deployer,
+                    deployer
+                )
+            )
+        );
+        vaults.push(
+            address(
+                new RwaBasketVault(
+                    IERC20(address(usdc)),
+                    ISwapRouter(swapRouter),
+                    type(uint256).max,
+                    type(uint256).max,
+                    0,
+                    safe,
+                    deployer,
+                    deployer
+                )
+            )
+        );
+
+        gateway = new RobotMoneyGateway(
+            usdc, rmUsdc, deployer, makeAddr("four-pauser"), address(0)
+        );
+        registry = new VaultRegistry(deployer);
+        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        vm.prank(deployer);
+        router.grantRole(ADMIN_ROLE, address(governance));
+
+        // Register every vault while the deployer still administers the registry (the vault
+        // stages and registry stage do this in the ceremony).
+        for (uint256 i = 0; i < vaults.length; i++) {
+            vm.prank(deployer);
+            registry.registerVault(
+                vaults[i],
+                VaultRegistry.VaultMetadata({
+                    name: "four-vault", asset: address(usdc), registeredAt: 0
+                })
+            );
+        }
+
+        vm.prank(deployer);
+        d = script.runInProcessVaults(
+            vaults,
+            address(gateway),
+            address(registry),
+            address(router),
+            address(governance),
+            safe,
+            emergency,
+            MIN_DELAY,
+            _fixtureSpec()
+        );
+    }
+
+    function test_deployerHoldsNoRoleOnAnyVault() public view {
+        for (uint256 i = 0; i < vaults.length; i++) {
+            assertFalse(IAccessControl(vaults[i]).hasRole(ADMIN_ROLE, deployer), "deployer ADMIN");
+            assertFalse(
+                IAccessControl(vaults[i]).hasRole(EMERGENCY_ROLE, deployer), "deployer EMERGENCY"
+            );
+            assertFalse(IAccessControl(vaults[i]).hasRole(0x00, deployer), "deployer DEFAULT_ADMIN");
+        }
+    }
+
+    function test_everyVaultHasTimelockAdminEmergencyKeyAndRegistry() public view {
+        for (uint256 i = 0; i < vaults.length; i++) {
+            assertTrue(IAccessControl(vaults[i]).hasRole(ADMIN_ROLE, address(d.timelock)), "admin");
+            assertTrue(IAccessControl(vaults[i]).hasRole(EMERGENCY_ROLE, emergency), "emergency");
+            assertEq(IVaultLinkRead(vaults[i]).registry(), address(registry), "registry link");
+        }
+    }
+
+    function test_secondSetRegistryRevertsOnEveryVault() public {
+        for (uint256 i = 0; i < vaults.length; i++) {
+            vm.prank(address(d.timelock));
+            vm.expectRevert();
+            IVaultLinkRead(vaults[i]).setRegistry(makeAddr("other-registry"));
+        }
+    }
+
+    function test_registryRetireSucceedsOnEveryVault() public {
+        for (uint256 i = 0; i < vaults.length; i++) {
+            bytes memory callData = abi.encodeCall(VaultRegistry.retire, (vaults[i]));
+            bytes32 salt = keccak256(abi.encode("retire", i));
+            vm.prank(safe);
+            d.timelock.schedule(address(registry), 0, callData, bytes32(0), salt, MIN_DELAY);
+            vm.warp(block.timestamp + MIN_DELAY + 1);
+            vm.prank(safe);
+            d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+            (, VaultRegistry.VaultStatus st) = registry.getVault(vaults[i]);
+            assertEq(uint256(st), uint256(VaultRegistry.VaultStatus.Retired), "status");
+            assertTrue(IVaultLinkRead(vaults[i]).retired(), "vault deposit-halt");
+        }
+    }
+
+    function test_emptyVaultListReverts() public {
+        address[] memory none = new address[](0);
+        vm.prank(deployer);
+        vm.expectRevert(bytes("VAULT_ADDRESSES is empty"));
+        script.runInProcessVaults(
+            none,
+            address(gateway),
+            address(registry),
+            address(router),
+            address(governance),
+            safe,
+            emergency,
+            MIN_DELAY,
+            _fixtureSpec()
+        );
+    }
+
+    function test_duplicateVaultReverts() public {
+        address[] memory dup = new address[](2);
+        dup[0] = vaults[0];
+        dup[1] = vaults[0];
+        vm.prank(deployer);
+        vm.expectRevert(bytes("VAULT_ADDRESSES contains a duplicate"));
+        script.runInProcessVaults(
+            dup,
+            address(gateway),
+            address(registry),
+            address(router),
+            address(governance),
+            safe,
+            emergency,
+            MIN_DELAY,
+            _fixtureSpec()
+        );
+    }
+
+    function test_manifestHasAHandoverEntryForEachVault() public {
+        string memory out = "/tmp/s5-four-vault-manifest.json";
+        if (vm.exists(out)) vm.removeFile(out);
+        vm.prank(deployer);
+        script.exposedWriteJsonTo(d, out);
+        string memory manifest = vm.readFile(out);
+        address[] memory listed = manifest.readAddressArray(".vaults");
+        assertEq(listed.length, vaults.length, "vaults array length");
+        assertEq(manifest.readUint(".roles.vaults_handed_over_count"), vaults.length);
+        for (uint256 i = 0; i < vaults.length; i++) {
+            string memory base = string.concat(".vault_handover.vault_", vm.toString(i));
+            assertEq(listed[i], vaults[i], "listed vault");
+            assertEq(manifest.readAddress(string.concat(base, ".address")), vaults[i]);
+            assertEq(manifest.readAddress(string.concat(base, ".registry")), address(registry));
+            assertTrue(manifest.readBool(string.concat(base, ".registry_linked")));
+            assertTrue(manifest.readBool(string.concat(base, ".timelock_has_admin_role")));
+            assertTrue(manifest.readBool(string.concat(base, ".emergency_key_has_emergency_role")));
+            assertFalse(manifest.readBool(string.concat(base, ".deployer_has_admin_role")));
+            assertFalse(manifest.readBool(string.concat(base, ".deployer_has_emergency_role")));
+        }
+        vm.removeFile(out);
+    }
+}
+
+/// @notice VAULT_ADDRESSES is required on the broadcast path: unset reverts (empty reverts in process).
+contract DeployTimelockVaultListInputTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S5_VAULT_LIST_";
+    }
+
+    function test_run_revertsWhenVaultAddressesUnset() public {
+        // A prefix nothing else sets: only the agent list is present, so the run reaches the
+        // vault list and finds it missing.
+        vm.setEnv("RM_S5_NEVER_AGENT_ADDRESSES", "none");
+        vm.expectRevert(bytes("VAULT_ADDRESSES must be set: every vault, comma-separated"));
+        RunEntrypointRelay(deployer).runFrom(harness, "RM_S5_NEVER_");
     }
 }

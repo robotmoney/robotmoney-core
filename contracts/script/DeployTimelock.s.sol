@@ -174,7 +174,8 @@ contract DeployTimelock is ExpectedChainGuard {
 
     struct Deployed {
         TimelockController timelock;
-        address vault;
+        /// Every vault handed over (VAULT_ADDRESSES), all treated the same way.
+        address[] vaults;
         address gateway;
         address registry;
         address router;
@@ -205,7 +206,7 @@ contract DeployTimelock is ExpectedChainGuard {
     function _runFrom(string memory prefix) internal returns (Deployed memory d) {
         // Read first, so a run that leaves the list out stops on that input.
         d.agents = _readAgentList(string.concat(prefix, "AGENT_ADDRESSES"));
-        d.vault = _envAddressRequired(string.concat(prefix, "VAULT_ADDRESS"));
+        d.vaults = _readVaultList(string.concat(prefix, "VAULT_ADDRESSES"));
         d.gateway = _envAddressRequired(string.concat(prefix, "GATEWAY_ADDRESS"));
         d.registry = _envAddressRequired(string.concat(prefix, "REGISTRY_ADDRESS"));
         d.router = _envAddressRequired(string.concat(prefix, "ROUTER_ADDRESS"));
@@ -218,8 +219,7 @@ contract DeployTimelock is ExpectedChainGuard {
         // One deployment scheme: these inputs are required on every chain. No input
         // silently skips the committee handover or defaults to the deployer.
         d.icPolicy = _envAddressRequired(string.concat(prefix, "IC_POLICY_ADDRESS"));
-        d.consensusReceipt =
-            _envAddressRequired(string.concat(prefix, "CONSENSUS_RECEIPT_ADDRESS"));
+        d.consensusReceipt = _envAddressRequired(string.concat(prefix, "CONSENSUS_RECEIPT_ADDRESS"));
         d.receiptAdmin = _envAddressRequired(string.concat(prefix, "RECEIPT_ADMIN_ADDRESS"));
         require(d.icPolicy != address(0), "IC_POLICY_ADDRESS=0");
         require(d.consensusReceipt != address(0), "CONSENSUS_RECEIPT_ADDRESS=0");
@@ -256,7 +256,7 @@ contract DeployTimelock is ExpectedChainGuard {
         uint256 minDelay_,
         SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
-        d.vault = vault_;
+        d.vaults = _single(vault_);
         d.gateway = gateway_;
         d.registry = registry_;
         d.router = router_;
@@ -267,6 +267,39 @@ contract DeployTimelock is ExpectedChainGuard {
 
         _validate(d, safeSpec_);
         d.timelock = _deployAndWire(d);
+    }
+
+    /// @notice In-process variant for the one deployment scheme: hands over every
+    ///         vault in `vaults_` (the in-process form of VAULT_ADDRESSES). Caller
+    ///         sets up prank context. No JSON is written; no env vars are read.
+    function runInProcessVaults(
+        address[] memory vaults_,
+        address gateway_,
+        address registry_,
+        address router_,
+        address governance_,
+        address safe_,
+        address emergency_,
+        uint256 minDelay_,
+        SafeSpec memory safeSpec_
+    ) external returns (Deployed memory d) {
+        d.vaults = vaults_;
+        d.gateway = gateway_;
+        d.registry = registry_;
+        d.router = router_;
+        d.governance = governance_;
+        d.safe = safe_;
+        d.emergency = emergency_;
+        d.minDelay = minDelay_;
+
+        _validate(d, safeSpec_);
+        d.timelock = _deployAndWire(d);
+    }
+
+    /// @dev One-element vault list for the single-vault in-process entry points.
+    function _single(address v) internal pure returns (address[] memory a) {
+        a = new address[](1);
+        a[0] = v;
     }
 
     /// @notice In-process variant that also exercises the optional IC policy /
@@ -291,7 +324,7 @@ contract DeployTimelock is ExpectedChainGuard {
         address receiptAdmin_,
         SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
-        d.vault = vault_;
+        d.vaults = _single(vault_);
         d.gateway = gateway_;
         d.registry = registry_;
         d.router = router_;
@@ -324,7 +357,7 @@ contract DeployTimelock is ExpectedChainGuard {
         address[] calldata agents_,
         SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
-        d.vault = vault_;
+        d.vaults = _single(vault_);
         d.gateway = gateway_;
         d.registry = registry_;
         d.router = router_;
@@ -357,6 +390,13 @@ contract DeployTimelock is ExpectedChainGuard {
         return vm.envAddress(name, ",");
     }
 
+    /// @dev VAULT_ADDRESSES: required, no default, comma-separated, at least one vault.
+    function _readVaultList(string memory name) internal view returns (address[] memory) {
+        require(vm.envExists(name), "VAULT_ADDRESSES must be set: every vault, comma-separated");
+        require(bytes(vm.envString(name)).length != 0, "VAULT_ADDRESSES is empty");
+        return vm.envAddress(name, ",");
+    }
+
     /// @dev A required comma-separated address list from env var `name`.
     function _readAddressList(string memory name) internal view returns (address[] memory) {
         require(vm.envExists(name), string.concat(name, " must be set"));
@@ -366,7 +406,13 @@ contract DeployTimelock is ExpectedChainGuard {
 
     /// @param spec SAFE_OWNERS and SAFE_THRESHOLD: the owners and threshold the Safe must have.
     function _validate(Deployed memory d, SafeSpec memory spec) internal view {
-        require(d.vault != address(0), "VAULT_ADDRESS=0");
+        require(d.vaults.length > 0, "VAULT_ADDRESSES is empty");
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            require(d.vaults[i] != address(0), "VAULT_ADDRESSES contains the zero address");
+            for (uint256 j = 0; j < i; j++) {
+                require(d.vaults[i] != d.vaults[j], "VAULT_ADDRESSES contains a duplicate");
+            }
+        }
         require(d.gateway != address(0), "GATEWAY_ADDRESS=0");
         require(d.registry != address(0), "REGISTRY_ADDRESS=0");
         require(d.router != address(0), "ROUTER_ADDRESS=0");
@@ -404,7 +450,9 @@ contract DeployTimelock is ExpectedChainGuard {
         view
     {
         // An EOA at SAFE_ADDRESS would let one key control every ADMIN_ROLE operation.
-        require(safe.code.length > 0, "SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first");
+        require(
+            safe.code.length > 0, "SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first"
+        );
         require(
             safe.codehash == SAFE_PROXY_1_4_1_CODEHASH,
             "SAFE_ADDRESS is not a SafeProxy 1.4.1: codehash mismatch"
@@ -493,41 +541,44 @@ contract DeployTimelock is ExpectedChainGuard {
         // the set-once ADMIN_ROLE-gated `setRegistry`, so it must run while the
         // deployer still holds ADMIN_ROLE on the vault (i.e. before the revoke
         // below). The vault gates `retire()`/`unretire()` to this registry only.
-        IRetirableVaultLink(d.vault).setRegistry(d.registry);
-        require(
-            IRetirableVaultLink(d.vault).registry() == d.registry, "Vault registry link not set"
-        );
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            address vault_ = d.vaults[i];
+            IRetirableVaultLink(vault_).setRegistry(d.registry);
+            require(
+                IRetirableVaultLink(vault_).registry() == d.registry, "Vault registry link not set"
+            );
 
-        // RobotMoneyVault
-        //
-        // ACL-1 / F-01: the deployer EOA also holds the vault EMERGENCY_ROLE
-        // (granted as `_emergencyResponder` at construction). Move it to the
-        // independent emergency hot key, then revoke it from the deployer, BEFORE
-        // revoking the deployer's ADMIN_ROLE — EMERGENCY_ROLE's admin is
-        // ADMIN_ROLE (see RobotMoneyVault `_setRoleAdmin`), so the deployer must
-        // still hold ADMIN_ROLE to perform the grant/revoke. After this block no
-        // EOA except the dedicated emergency hot key holds any vault role.
-        IAccessControl(d.vault).grantRole(EMERGENCY_ROLE, d.emergency);
-        require(
-            IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, d.emergency),
-            "Emergency key missing EMERGENCY_ROLE on vault"
-        );
-        IAccessControl(d.vault).revokeRole(EMERGENCY_ROLE, msg.sender);
-        require(
-            !IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, msg.sender),
-            "Deployer still has EMERGENCY_ROLE on vault"
-        );
+            // RobotMoneyVault
+            //
+            // ACL-1 / F-01: the deployer EOA also holds the vault EMERGENCY_ROLE
+            // (granted as `_emergencyResponder` at construction). Move it to the
+            // independent emergency hot key, then revoke it from the deployer, BEFORE
+            // revoking the deployer's ADMIN_ROLE — EMERGENCY_ROLE's admin is
+            // ADMIN_ROLE (see RobotMoneyVault `_setRoleAdmin`), so the deployer must
+            // still hold ADMIN_ROLE to perform the grant/revoke. After this block no
+            // EOA except the dedicated emergency hot key holds any vault role.
+            IAccessControl(vault_).grantRole(EMERGENCY_ROLE, d.emergency);
+            require(
+                IAccessControl(vault_).hasRole(EMERGENCY_ROLE, d.emergency),
+                "Emergency key missing EMERGENCY_ROLE on vault"
+            );
+            IAccessControl(vault_).revokeRole(EMERGENCY_ROLE, msg.sender);
+            require(
+                !IAccessControl(vault_).hasRole(EMERGENCY_ROLE, msg.sender),
+                "Deployer still has EMERGENCY_ROLE on vault"
+            );
 
-        IAccessControl(d.vault).grantRole(ADMIN_ROLE, address(timelock));
-        require(
-            IAccessControl(d.vault).hasRole(ADMIN_ROLE, address(timelock)),
-            "Timelock missing ADMIN_ROLE on vault"
-        );
-        IAccessControl(d.vault).revokeRole(ADMIN_ROLE, msg.sender);
-        require(
-            !IAccessControl(d.vault).hasRole(ADMIN_ROLE, msg.sender),
-            "Deployer still has ADMIN_ROLE on vault"
-        );
+            IAccessControl(vault_).grantRole(ADMIN_ROLE, address(timelock));
+            require(
+                IAccessControl(vault_).hasRole(ADMIN_ROLE, address(timelock)),
+                "Timelock missing ADMIN_ROLE on vault"
+            );
+            IAccessControl(vault_).revokeRole(ADMIN_ROLE, msg.sender);
+            require(
+                !IAccessControl(vault_).hasRole(ADMIN_ROLE, msg.sender),
+                "Deployer still has ADMIN_ROLE on vault"
+            );
+        }
 
         // RobotMoneyGateway
         //
@@ -772,7 +823,9 @@ contract DeployTimelock is ExpectedChainGuard {
         console2.log("  safe        :", d.safe);
         console2.log("  emergency   :", d.emergency);
         console2.log("  min_delay   :", d.minDelay);
-        console2.log("  vault       :", d.vault);
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            console2.log("  vault       :", d.vaults[i]);
+        }
         console2.log("  gateway     :", d.gateway);
         console2.log("  registry    :", d.registry);
         console2.log("  router      :", d.router);
@@ -810,7 +863,8 @@ contract DeployTimelock is ExpectedChainGuard {
         vm.serializeAddress(addrs, "timelock", address(d.timelock));
         vm.serializeAddress(addrs, "safe", d.safe);
         vm.serializeAddress(addrs, "emergency", d.emergency);
-        vm.serializeAddress(addrs, "vault", d.vault);
+        vm.serializeAddress(addrs, "vault", d.vaults[0]);
+        vm.serializeAddress(addrs, "vaults", d.vaults);
         vm.serializeAddress(addrs, "gateway", d.gateway);
         vm.serializeAddress(addrs, "registry", d.registry);
         vm.serializeAddress(addrs, "router", d.router);
@@ -821,7 +875,7 @@ contract DeployTimelock is ExpectedChainGuard {
         string memory hashes = "manifest_code_hashes";
         vm.serializeBytes32(hashes, "timelock", address(d.timelock).codehash);
         vm.serializeBytes32(hashes, "safe", d.safe.codehash);
-        vm.serializeBytes32(hashes, "vault", d.vault.codehash);
+        vm.serializeBytes32(hashes, "vault", d.vaults[0].codehash);
         vm.serializeBytes32(hashes, "gateway", d.gateway.codehash);
         vm.serializeBytes32(hashes, "registry", d.registry.codehash);
         vm.serializeBytes32(hashes, "router", d.router.codehash);
@@ -849,7 +903,8 @@ contract DeployTimelock is ExpectedChainGuard {
         vm.serializeAddress(obj, "timelock", address(d.timelock));
         vm.serializeAddress(obj, "safe", d.safe);
         vm.serializeAddress(obj, "emergency", d.emergency);
-        vm.serializeAddress(obj, "vault", d.vault);
+        vm.serializeAddress(obj, "vault", d.vaults[0]);
+        vm.serializeAddress(obj, "vaults", d.vaults);
         vm.serializeAddress(obj, "gateway", d.gateway);
         vm.serializeAddress(obj, "registry", d.registry);
         vm.serializeAddress(obj, "router", d.router);
@@ -858,10 +913,43 @@ contract DeployTimelock is ExpectedChainGuard {
         vm.serializeString(obj, "code_hashes", hashesJson);
         // Issue #1476: the gateway agents this run handed to the timelock.
         vm.serializeAddress(obj, "timelock_owned_agents", d.agents);
+        // One handover entry per vault in VAULT_ADDRESSES, read back from the chain.
+        vm.serializeString(obj, "vault_handover", _serializeVaultHandovers(d));
         string memory json = vm.serializeString(obj, "roles", rolesJson);
 
         vm.writeJson(json, outPath);
         console2.log("Wrote timelock deployment manifest to", outPath);
+    }
+
+    /// @dev The per-vault handover record: one object per vault in VAULT_ADDRESSES,
+    ///      keyed `vault_<index>`. Every field is a live read from the chain.
+    function _serializeVaultHandovers(Deployed memory d) internal returns (string memory out) {
+        string memory all = "manifest_vault_handover";
+        out = "{}";
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            address vault_ = d.vaults[i];
+            IAccessControl v = IAccessControl(vault_);
+            string memory k = string.concat("manifest_vault_handover_", vm.toString(i));
+            vm.serializeAddress(k, "address", vault_);
+            vm.serializeBytes32(k, "code_hash", vault_.codehash);
+            vm.serializeAddress(k, "registry", IRetirableVaultLink(vault_).registry());
+            vm.serializeBool(
+                k, "registry_linked", IRetirableVaultLink(vault_).registry() == d.registry
+            );
+            vm.serializeAddress(k, "admin", address(d.timelock));
+            vm.serializeBool(
+                k, "timelock_has_admin_role", v.hasRole(ADMIN_ROLE, address(d.timelock))
+            );
+            vm.serializeAddress(k, "emergency", d.emergency);
+            vm.serializeBool(
+                k, "emergency_key_has_emergency_role", v.hasRole(EMERGENCY_ROLE, d.emergency)
+            );
+            vm.serializeBool(k, "deployer_has_admin_role", v.hasRole(ADMIN_ROLE, msg.sender));
+            string memory entry = vm.serializeBool(
+                k, "deployer_has_emergency_role", v.hasRole(EMERGENCY_ROLE, msg.sender)
+            );
+            out = vm.serializeString(all, string.concat("vault_", vm.toString(i)), entry);
+        }
     }
 
     /// @dev The role table, read back from the chain after the handover.
@@ -894,11 +982,20 @@ contract DeployTimelock is ExpectedChainGuard {
             "timelock_has_governance_admin_role",
             IAccessControl(d.governance).hasRole(ADMIN_ROLE, address(d.timelock))
         );
-        vm.serializeBool(
-            roles,
-            "timelock_has_vault_admin_role",
-            IAccessControl(d.vault).hasRole(ADMIN_ROLE, address(d.timelock))
-        );
+        // Aggregates over every vault; the per-vault rows are in `vault_handover`.
+        bool allTimelockAdmin = true;
+        bool allEmergencyKey = true;
+        bool deployerHoldsVaultRole;
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            IAccessControl v = IAccessControl(d.vaults[i]);
+            if (!v.hasRole(ADMIN_ROLE, address(d.timelock))) allTimelockAdmin = false;
+            if (!v.hasRole(EMERGENCY_ROLE, d.emergency)) allEmergencyKey = false;
+            if (v.hasRole(ADMIN_ROLE, msg.sender) || v.hasRole(EMERGENCY_ROLE, msg.sender)) {
+                deployerHoldsVaultRole = true;
+            }
+        }
+        vm.serializeBool(roles, "timelock_has_vault_admin_role", allTimelockAdmin);
+        vm.serializeUint(roles, "vaults_handed_over_count", d.vaults.length);
         vm.serializeBool(
             roles,
             "timelock_has_registry_admin_role",
@@ -909,16 +1006,8 @@ contract DeployTimelock is ExpectedChainGuard {
             "timelock_has_gateway_default_admin_role",
             IAccessControl(d.gateway).hasRole(DEFAULT_ADMIN_ROLE, address(d.timelock))
         );
-        vm.serializeBool(
-            roles,
-            "emergency_key_has_vault_emergency_role",
-            IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, d.emergency)
-        );
-        vm.serializeBool(
-            roles,
-            "deployer_has_vault_emergency_role",
-            IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, msg.sender)
-        );
+        vm.serializeBool(roles, "emergency_key_has_vault_emergency_role", allEmergencyKey);
+        vm.serializeBool(roles, "deployer_has_vault_emergency_role", deployerHoldsVaultRole);
         // Issue #1476: read from the gateway like the rows above. run() writes
         // the manifest only after _deployAndWire requires every listed agent to
         // have left the deployer, so a manifest run() writes records false; it
