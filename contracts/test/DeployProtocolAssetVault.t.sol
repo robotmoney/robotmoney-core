@@ -102,8 +102,7 @@ contract DeployProtocolAssetVaultTest is Test {
 
     /// @notice The deploy script must NOT call setRouterEligible. Router
     ///         eligibility activation is separated into
-    ///         ActivateBasketVaultEligibility.s.sol and is gated behind the
-    ///         BASKET_VAULT_AUDIT_COMPLETE env flag.
+    ///         ActivateBasketVaultEligibility.s.sol.
     function test_deploy_doesNotSetRouterEligible() public {
         DeployProtocolAssetVault.Deployed memory d = script.runInProcessWith(
             admin, emergencyResponder, address(swapRouter), address(usdc), address(registry)

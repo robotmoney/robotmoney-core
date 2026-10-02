@@ -121,8 +121,7 @@ function test_deploy_vaultIsActiveAfterRegistration() public;
 
 The deploy script must NOT call setRouterEligible. Router
 eligibility activation is separated into
-ActivateBasketVaultEligibility.s.sol and is gated behind the
-BASKET_VAULT_AUDIT_COMPLETE env flag.
+ActivateBasketVaultEligibility.s.sol.
 
 ```solidity
 function test_deploy_doesNotSetRouterEligible() public;

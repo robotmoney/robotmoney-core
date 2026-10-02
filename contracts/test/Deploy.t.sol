@@ -297,12 +297,21 @@ contract DeployTest is Test {
         vm.setEnv("PAUSER_ADDRESS", vm.toString(pauser));
         vm.setEnv("AGENT_ADDRESS", vm.toString(agent));
         vm.setEnv("SHARE_RECEIVER_ADDRESS", vm.toString(shareReceiver));
-        vm.setEnv("USDC_ADDRESS", vm.toString(address(usdc)));
+        vm.setEnv("FEE_RECIPIENT_ADDRESS", vm.toString(makeAddr("env-treasury")));
+        vm.setEnv("AGENT_VALID_UNTIL", vm.toString(block.timestamp + 30 days));
+        vm.setEnv("AGENT_MAX_PER_PAYMENT", "10000000000");
+        vm.setEnv("AGENT_MAX_PER_WINDOW", "100000000000");
+        vm.setEnv("AGENT_MAX_WITHDRAW_PER_PAYMENT", "10000000000");
+        vm.setEnv("AGENT_MAX_WITHDRAW_PER_WINDOW", "100000000000");
+        vm.setEnv("VAULT_TVL_CAP", "10000000000000");
+        vm.setEnv("VAULT_PER_DEPOSIT_CAP", "1000000000000");
+        // USDC is the canonical constant on every chain: install a token there.
+        vm.etch(script.CANONICAL_BASE_USDC(), address(usdc).code);
         Deploy.Deployed memory d = script.runInProcess();
         assertEq(d.admin, admin);
         assertEq(d.pauser, pauser);
         assertEq(d.agent, agent);
-        assertEq(d.usdc, address(usdc));
+        assertEq(d.usdc, script.CANONICAL_BASE_USDC());
     }
 
     // --- L3-D1: TickMath link integrity ------------------------------------

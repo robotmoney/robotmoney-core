@@ -12,12 +12,7 @@ description: "Tests for ActivateBasketVaultEligibility.s.sol."
 Tests for ActivateBasketVaultEligibility.s.sol.
 
 The acceptance criteria (issue #692):
-- Reverts when `BASKET_VAULT_AUDIT_COMPLETE` is not set (passed as false).
-- Succeeds with `isRouterEligible` returning true for both vaults when
-`BASKET_VAULT_AUDIT_COMPLETE` is set to "true".
-
-Uses `runInProcessWith(auditComplete=true/false)` to exercise both paths
-without requiring env var manipulation inside forge tests.
+- Succeeds with `isRouterEligible` returning true for both vaults.
 
 ## State Variables
 

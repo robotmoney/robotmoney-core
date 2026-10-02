@@ -51,15 +51,15 @@ SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + EXECUTOR)
 EMERGENCY_ADDRESS      — independent hot key that receives the vault
 EMERGENCY_ROLE (must differ from the deployer
 EOA; ACL-1 / F-01)
-TIMELOCK_MIN_DELAY     — minimum delay in seconds. Must be >= 172800
-(48 hours, security-model.md §4) unless
-ALLOW_SHORT_TIMELOCK_DELAY=true (devnets only).
+SAFE_OWNERS            — comma-separated owners the Safe must have
+SAFE_THRESHOLD         — threshold the Safe must have (>= 2)
+TIMELOCK_MIN_DELAY     — minimum delay in seconds. On chain id 8453 it must
+be >= 172800 (48 hours, security-model.md §4).
+On any other chain it must be >= 1.
 
 Optional env vars:
-EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches
-(set 8453 for Base mainnet)
-ALLOW_SHORT_TIMELOCK_DELAY — `true` lifts the 48-hour floor. Devnets only.
-DEPLOYMENT_OUT         — output JSON path; default deployments/timelock-&lt;chain_id>.json
+EXPECTED_CHAIN_ID      — mandatory and equal to 8453 on Base mainnet
+DEPLOYMENT_OUT         — output JSON path (no default)
 IC_POLICY_ADDRESS      — InvestmentCommitteePolicy (issue #1319, one-
 ceremony rule #1247 AC10 / INV-3). When set,
 the same grant→verify→revoke handover runs on

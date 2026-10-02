@@ -21,6 +21,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {SafeFixture} from "./helpers/SafeFixture.sol";
 import {DeployDemoExtraVaults} from "../script/DeployDemoExtraVaults.s.sol";
 
 /// @dev Uniswap V3 pool mock: token0/token1 reads for addAsset validation plus
@@ -331,7 +332,7 @@ contract AgentTokenVaultTest is Test {
 //   - Veto: any canceller may cancel a queued shortlist change before execution
 //   - Unauthorized rejection: non-admin direct calls revert with AccessControl error
 
-contract AgentTokenVaultGovernanceTest is Test {
+contract AgentTokenVaultGovernanceTest is SafeFixture {
     uint256 internal constant ONE_USDC = 1e6;
 
     // Governance timing per ADR-0004.
@@ -345,7 +346,7 @@ contract AgentTokenVaultGovernanceTest is Test {
     // TimelockController holds ADMIN_ROLE on vault (production model).
     TimelockController internal timelock;
 
-    // MockHighThresholdSafe acts as the Safe multisig (proposer + executor + canceller).
+    // A real SafeL2 1.4.1 proxy (SafeFixture) acts as the Safe multisig (proposer + executor + canceller).
     address internal safe;
     // A separate canceller (any Safe signer may cancel unilaterally per ADR-0004).
     address internal signer = makeAddr("signer");
@@ -386,7 +387,8 @@ contract AgentTokenVaultGovernanceTest is Test {
         // signer also gets PROPOSER_ROLE (OpenZeppelin 5.x TimelockController grants
         // CANCELLER_ROLE to every proposer automatically). This models the ADR-0004
         // pattern where any Safe signer may cancel a queued change unilaterally.
-        safe = address(new MockHighThresholdSafeGov());
+        _installSafeSet();
+        safe = _newDefaultSafe();
         address[] memory proposers = new address[](2);
         proposers[0] = safe;
         proposers[1] = signer; // signer is also a proposer so it gets CANCELLER_ROLE
@@ -676,12 +678,5 @@ contract AgentTokenVaultGovernanceTest is Test {
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
         vm.prank(safe);
         timelock.execute(address(vault), 0, callData, bytes32(0), salt);
-    }
-}
-
-/// @dev Minimal Safe stub with threshold=2 for TimelockController proposer/executor/canceller role.
-contract MockHighThresholdSafeGov {
-    function getThreshold() external pure returns (uint256) {
-        return 2;
     }
 }

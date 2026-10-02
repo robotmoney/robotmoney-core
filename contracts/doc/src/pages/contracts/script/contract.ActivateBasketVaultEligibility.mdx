@@ -14,12 +14,8 @@ description: "Calls `VaultRegistry.setRouterEligible(vault, true)` for both `Pro
 Calls `VaultRegistry.setRouterEligible(vault, true)` for both
 `ProtocolAssetVault` (rmPROTO) and `AgentTokenVault` (rmAGENT).
 
-SAFETY GATE: the script reverts unless `BASKET_VAULT_AUDIT_COMPLETE`
-env var is set to exactly `"true"`. This prevents accidental execution
-before the Architecture §4.1 certification checklist is satisfied.
-
 Required env vars:
-BASKET_VAULT_AUDIT_COMPLETE — must be "true" (reverts otherwise)
+EXPECTED_CHAIN_ID           — mandatory and equal to 8453 on Base mainnet
 REGISTRY_ADDRESS            — deployed VaultRegistry
 PROTOCOL_VAULT_ADDRESS      — deployed ProtocolAssetVault (rmPROTO)
 AGENT_VAULT_ADDRESS         — deployed AgentTokenVault (rmAGENT)
@@ -111,17 +107,6 @@ function _activate(VaultRegistry registry, address protocolVault, address agentV
 | ---- | ---- | ----------- |
 | a | `Activated` |  |
 
-<a id="_requireauditcomplete"></a>
-
-### _requireAuditComplete
-
-<i>
-
-Revert unless `BASKET_VAULT_AUDIT_COMPLETE` env var equals "true".
-This guards the broadcast path so the operator cannot accidentally
-activate eligibility before the Architecture §4.1 checklist is done.
-
-</i>
 
 ```solidity
 function _requireAuditComplete() internal view;

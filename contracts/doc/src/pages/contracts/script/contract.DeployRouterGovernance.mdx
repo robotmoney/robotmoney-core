@@ -39,13 +39,10 @@ EXECUTION_DELAY    — delay from voting end to execution in seconds
 (default: 3600 — 1 hour, the contract's MIN_EXECUTION_DELAY)
 QUORUM_THRESHOLD   — minimum FOR voting power for quorum
 (default: 2; must be greater than 1)
-DEPLOYMENT_OUT     — path for the output JSON
-(default: "deployments/governance-&lt;chain_id>.json")
-SKIP_ROUTER_ADMIN_GRANT — set to true ONLY when the router's
-ADMIN_ROLE has already moved to the timelock
-and the grant will be scheduled through it.
-The script then refuses to pretend the wiring
-is complete and says so loudly.
+EXPECTED_CHAIN_ID  — mandatory and equal to 8453 on Base mainnet
+DEPLOYMENT_OUT     — path for the output JSON (required, no default)
+
+The router ADMIN_ROLE grant always runs: no flag skips it.
 
 ## Constants
 

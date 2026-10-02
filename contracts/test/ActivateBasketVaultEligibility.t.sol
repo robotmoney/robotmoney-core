@@ -13,7 +13,6 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 ///
 /// The acceptance criteria (issue #692):
 ///   - Succeeds with `isRouterEligible` returning true for both vaults.
-///   - The BASKET_VAULT_AUDIT_COMPLETE flag no longer exists (core S1).
 contract ActivateBasketVaultEligibilityTest is Test {
     ActivateBasketVaultEligibility internal script;
     TestERC20 internal usdc;

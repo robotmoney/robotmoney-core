@@ -29,6 +29,7 @@ import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
 import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
 import {IUniswapV4SwapRouter} from "../interfaces/IUniswapV4SwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {SafeFixture} from "./helpers/SafeFixture.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
@@ -4023,14 +4024,7 @@ contract BasketVaultVenueSelectorTest is Test {
 // for sweeps (not a settable address) — the quarantine-address setter is only on
 // RobotMoneyVault and PortfolioRouter. AC3 quarantine tests are in DeployTimelock.t.sol.
 
-/// @dev A minimal mock Safe with threshold >= 2 (satisfies DeployTimelock guards).
-contract MockSafe929 {
-    function getThreshold() external pure returns (uint256) {
-        return 2;
-    }
-}
-
-contract BasketVaultTimelockTest is Test {
+contract BasketVaultTimelockTest is SafeFixture {
     uint256 internal constant ONE_USDC = 1e6;
     uint256 internal constant MIN_DELAY = 2 days;
 
@@ -4052,7 +4046,8 @@ contract BasketVaultTimelockTest is Test {
         vault = new BasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(swapRouter)), admin, emergencyResponder
         );
-        safe = address(new MockSafe929());
+        _installSafeSet();
+        safe = _newDefaultSafe();
 
         // Deploy a TimelockController with `safe` as proposer + executor.
         address[] memory proposers = new address[](1);
