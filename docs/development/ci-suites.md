@@ -1322,3 +1322,22 @@ The `nightly-and-release-checks` job in `suite-13-doc-checks.yml` runs on every 
 - The nightly third-party drift workflow check, the dependency manifest self-test and the manifest address check (core 1497). The address check runs on a manifest recorded from the committed snapshot, so it checks something before the first release commits one.
 
 The committed snapshot contents check is a Bun TypeScript script, `scripts/devnet/check-fork-snapshot-contents.ts` (core 1498; the issue says `.sh`, orchestration is TypeScript). Suite 14's `smoke-test-guards` job runs it, plus `check-fork-manifest.sh --require-pinned` (fixture lockstep) and a floor on the `cargo test -p smoke-test --lib` test count. Suite 14's `twin_publish` matrix row runs the real Twin chain publish, verify and stage 13 govern matrix, then `label-diff.ts` and `sheet-diff.ts` against the mainnet verifier labels and production sheet.
+
+## check-sha-green (core 1502)
+
+`scripts/ci/check-sha-green.ts` is the deploy gate on CI state. The devops publish plan job (devops 58) runs it with `DEPLOY_SHA` before any approval.
+
+```
+bun scripts/ci/check-sha-green.ts <sha> [--repo owner/name] [--config path] [--api-url url]
+```
+
+- Reads every check-run of the commit through `GET /repos/{repo}/commits/{sha}/check-runs?per_page=100` and follows `rel="next"` Link headers until none remain.
+- Token: `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token`. The token stays in memory.
+- Reads `scripts/ci/required-checks.json` (`version`, `required`, `optional`). An entry has either `name` (exact) or `prefix`.
+- Exit 0: every required name has at least one check-run and every run of it completed with `success`.
+- Exit 1: a required name failed, is missing, or is pending (`queued`, `in_progress`). The output names each one under `FAILING`, `MISSING` or `PENDING`. A name with both a failed and a successful run fails.
+- Exit 2: bad arguments, bad config or an API error.
+- Optional entries that are not green are printed as `optional (does not gate)` and never change the exit code.
+- The initial required list is the set of jobs that run unconditionally on push to `dev` (no draft skip, no path filter, no matrix). Failing live-fork or drift alarms stay optional.
+- `fusion-ceremony-selftest` no longer exists: the ceremony shell and its selftest were deleted by S9 (core 1488). `deleted-stage-gate` is the surviving gate and is required.
+- Tests: `bun test scripts/ci/check-sha-green.test.ts`, run by the `check-sha-green-tests` job (suite 30), which fails when zero tests were collected. The same file asserts `dapp-lint-build` and `bun-audit` carry no skip condition and no `continue-on-error`.
