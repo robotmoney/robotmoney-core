@@ -73,7 +73,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
 
       - name: Removed deploy flags are absent
-        run: bun scripts/ci/check-removed-flags.ts
+        run: |
+          bun scripts/ci/check-removed-flags.ts
+          bun test scripts/ci/check-removed-flags.test.ts
 
       # Core S10 (issue 1489): no test-only code ships. The gate fails when it scans zero
       # files, and its self-test plants a Demo contract, a stub and a mock Safe.
@@ -175,7 +177,8 @@ jobs:
           forge test -vvv --match-path "contracts/test/ActivateBasketVaultEligibility.t.sol"
           forge test -vvv --match-contract 'BasketVault|AgentTokenVault|ProtocolAssetVault'
           bash scripts/ci/check-no-devnet-config.sh
-          bash scripts/ci/check-set-registry-owner.sh
+          bun scripts/ci/check-set-registry-owner.ts
+          bun test scripts/ci/check-set-registry-owner.test.ts
           forge test -vvv --match-path "contracts/test/DeployTimelock.t.sol"
 
       - name: forge test (non-zero test count guard for deploy input and timelock suites — core 1483)

@@ -140,6 +140,11 @@ const HISTORY_DIRS = [
 const NAME_CHECK_EXEMPT = [
   "scripts/ci/check-no-test-only-code.ts",
   "scripts/ci/check-no-test-only-code.test.ts",
+  // The audit-ledger gate and its test, and the doc-checks workflow comment, name the deleted
+  // contracts on purpose: the ledger gate bans them in source headers and its test plants them.
+  "scripts/check-audit-ledger.sh",
+  "scripts/check-audit-ledger.test.sh",
+  ".github/workflows/suite-13-doc-checks.yml",
   "scripts/stage/check-deleted-stage-scripts.ts", // the second gate: it lists the deleted stage paths to keep them gone
   "scripts/stage/tests/check-deleted-stage-scripts.test.ts",
   "docs/audits.md", // the finding register keeps findings that named deleted contracts as history
