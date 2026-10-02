@@ -12,7 +12,7 @@
 #      in the manifest, so a keyed URL never lands in a log or a commit.
 #   2. Queries the upstream for the current Base block number.
 #   3. Boots a local Anvil forking that block and chain-id 8453.
-#   4. Runs contracts/script/Deploy.s.sol so the gateway/vault/USDC
+#   4. Runs the core stage scripts (DeployLibs, DeployVault, ..., DeployGateway) so the gateway/vault/USDC
 #      deployment becomes part of the cached state.
 #   5. Calls anvil_dumpState via JSON-RPC and writes the resulting hex
 #      blob, plus metadata, to:
@@ -189,7 +189,7 @@ DEPLOYER_PK="$DEVNET_DEPLOYER_KEY"
 #   *pending* block timestamp to the fork block's own timestamp, which can
 #   predate the reserve's last accrual (recorded in a later block),
 #   causing an arithmetic underflow/overflow and reverting every call that
-#   touches the reserve index — including Deploy.s.sol's mandatory seed
+#   touches the reserve index — including the vault stage's mandatory seed
 #   deposit (issue #656) and the warming round-trip added in issue #685.
 #
 #   Advancing the timestamp to wall-clock now (always ≥ any on-chain
@@ -206,7 +206,7 @@ curl -sS -X POST -H 'content-type: application/json' \
 
 # 3-pre-usdc. Fund deployer with USDC before the forge deploy.
 #
-#   Deploy.s.sol run() executes a mandatory 1,000 USDC seed deposit from
+#   The vault stage (DeployVault.s.sol) executes a mandatory seed deposit from
 #   the broadcaster (issue #656). The deployer (ADMIN_ADDRESS, mnemonic
 #   index 0) holds no USDC in the fork state, so we write its balance slot
 #   directly to avoid whale-impersonation and keep the snapshot hermetic.
@@ -217,7 +217,20 @@ SEED_BAL_HEX=$(cast to-uint256 "$SEED_USDC_UNITS")
 echo "[snapshot] funding deployer with $SEED_USDC_UNITS USDC via storage slot write"
 anvil_set anvil_setStorageAt "$(jq -nc --arg a "$USDC_ADDRESS" --arg s "$DEPLOYER_BAL_SLOT" --arg v "$SEED_BAL_HEX" '[$a,$s,$v]')"
 
-forge script contracts/script/Deploy.s.sol:Deploy \
+# Core S3: the single Deploy.s.sol is split into stages: libs, vault, registry, router,
+# gateway. The gateway takes the router as an immutable, so it is deployed after the router
+# (below). The vault stage seeds the vault from the deployer.
+LIBS_OUT_TMP=$(mktemp -t deploy.libs.XXXXXX.json)
+DEPLOYMENT_OUT="$LIBS_OUT_TMP" \
+forge script contracts/script/DeployLibs.s.sol:DeployLibs \
+  --rpc-url "$ANVIL_RPC" \
+  --private-key "$DEPLOYER_PK" \
+  --broadcast
+
+FEE_RECIPIENT_ADDRESS="${FEE_RECIPIENT_ADDRESS:-$SHARE_RECEIVER_ADDRESS}" \
+VAULT_TVL_CAP="${VAULT_TVL_CAP:-10000000000000}" \
+VAULT_PER_DEPOSIT_CAP="${VAULT_PER_DEPOSIT_CAP:-1000000000000}" \
+forge script contracts/script/DeployVault.s.sol:DeployVault \
   --rpc-url "$ANVIL_RPC" \
   --private-key "$DEPLOYER_PK" \
   --broadcast
@@ -273,6 +286,32 @@ fi
 PORTFOLIO_ROUTER_ADDR=$(jq -r '.router' "$ROUTER_OUT_TMP")
 echo "[snapshot] PortfolioRouter deployed at $PORTFOLIO_ROUTER_ADDR"
 
+echo "[snapshot] running forge script DeployGateway (after the router: it takes the router as an immutable)"
+GATEWAY_OUT_TMP=$(mktemp -t deploy.gateway.XXXXXX.json)
+VAULT_ADDRESS="$VAULT_ADDR" \
+ROUTER_ADDRESS="$PORTFOLIO_ROUTER_ADDR" \
+AGENT_VALID_UNTIL="${AGENT_VALID_UNTIL:-4102444800}" \
+AGENT_MAX_PER_PAYMENT="${AGENT_MAX_PER_PAYMENT:-10000000000}" \
+AGENT_MAX_PER_WINDOW="${AGENT_MAX_PER_WINDOW:-100000000000}" \
+AGENT_MAX_WITHDRAW_PER_PAYMENT="${AGENT_MAX_WITHDRAW_PER_PAYMENT:-10000000000}" \
+AGENT_MAX_WITHDRAW_PER_WINDOW="${AGENT_MAX_WITHDRAW_PER_WINDOW:-100000000000}" \
+DEPLOYMENT_OUT="$GATEWAY_OUT_TMP" \
+forge script contracts/script/DeployGateway.s.sol:DeployGateway \
+  --rpc-url "$ANVIL_RPC" \
+  --private-key "$DEPLOYER_PK" \
+  --broadcast
+
+if [ ! -s "$GATEWAY_OUT_TMP" ]; then
+  echo "ERROR: forge script DeployGateway did not write deployment artifact" >&2
+  exit 1
+fi
+GATEWAY_ROUTER_ADDR=$(jq -r '.gateway_router' "$GATEWAY_OUT_TMP")
+if [ "${GATEWAY_ROUTER_ADDR,,}" != "${PORTFOLIO_ROUTER_ADDR,,}" ]; then
+  echo "ERROR: gateway.router $GATEWAY_ROUTER_ADDR != deployed router $PORTFOLIO_ROUTER_ADDR" >&2
+  exit 1
+fi
+echo "[snapshot] RobotMoneyGateway deployed with router $GATEWAY_ROUTER_ADDR"
+
 echo "[snapshot] running forge script DeployRouterGovernance"
 GOV_OUT_TMP=$(mktemp -t deploy.governance.XXXXXX.json)
 ADMIN_ADDRESS="$ADMIN_ADDRESS" \
@@ -298,7 +337,12 @@ jq --arg registry "$REGISTRY_ADDR" \
    '. + {registry: $registry, portfolio_router: $portfolio_router, router_governance: $router_governance}' \
    "$DEPLOYMENT_OUT_TMP" > "$MERGED_TMP"
 mv "$MERGED_TMP" "$DEPLOYMENT_OUT_TMP"
-rm -f "$REG_OUT_TMP" "$ROUTER_OUT_TMP" "$GOV_OUT_TMP"
+# Fold the gateway stage manifest in (gateway, agent, share_receiver, gateway_runtime_hash).
+MERGED_TMP=$(mktemp -t deploy.merged.XXXXXX.json)
+jq -s '.[0] + (.[1] | del(.chain_id, .usdc, .vault, .gateway_router))' \
+   "$DEPLOYMENT_OUT_TMP" "$GATEWAY_OUT_TMP" > "$MERGED_TMP"
+mv "$MERGED_TMP" "$DEPLOYMENT_OUT_TMP"
+rm -f "$REG_OUT_TMP" "$ROUTER_OUT_TMP" "$GOV_OUT_TMP" "$GATEWAY_OUT_TMP" "$LIBS_OUT_TMP"
 
 # 3a-warm. Real-adapter storage warming (issue #685).
 #
@@ -401,7 +445,7 @@ WARM_ADDRESSES=(
   "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"  # cbBTC on Base
   "0x1C61629598e4a901136a81BC138E5828dc150d67"  # wSOL on Base
   # Yield protocol contracts (Morpho, Aave V3, Compound V3).
-  "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca"  # Morpho Gauntlet USDC Prime
+  "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca"  # Moonwell Flagship USDC (Morpho)
   "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"  # Aave V3 Pool
   "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB"  # Aave V3 aUSDC
   "0xb125E6687d4313864e53df431d5425969c15Eb2F"  # Compound V3 cUSDCv3

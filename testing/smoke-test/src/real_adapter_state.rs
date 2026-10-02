@@ -22,7 +22,7 @@
 //! # Ownership
 //!
 //! Issue #685 owns `testing/smoke-test`, `testing/fixtures/fork-state`,
-//! `testing/ethereum-testnet/config`, `contracts/script/Deploy.s.sol`, and
+//! `testing/ethereum-testnet/config`, `contracts/script/DeployVault.s.sol`, and
 //! `scripts/devnet/snapshot-fork.sh`. Issue #658 consumes the fixture API
 //! after #685 lands.
 

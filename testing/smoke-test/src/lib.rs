@@ -175,16 +175,37 @@ struct DeploymentJson {
     /// Absent on legacy deployments (pre-#363).
     #[serde(default)]
     compound_adapter: String,
-    /// Morpho strategy adapter address registered with the vault at deploy time.
-    /// Absent on legacy deployments (pre-#363).
+    /// Third-venue (Moonwell Flagship USDC, an ERC-4626 Morpho vault) strategy adapter
+    /// address registered with the vault at deploy time. Core S3 renamed the manifest key
+    /// to `moonwell_flagship_adapter`: the name now follows the address.
     #[serde(default)]
-    morpho_adapter: String,
+    moonwell_flagship_adapter: String,
+    /// Written by the gateway stage, which runs after the router stage (core S3).
+    #[serde(default)]
     gateway: String,
     #[serde(default)]
     #[allow(dead_code)]
     admin: String,
     #[serde(default)]
     #[allow(dead_code)]
+    pauser: String,
+    #[serde(default)]
+    agent: String,
+    #[serde(default)]
+    share_receiver: String,
+    #[serde(default)]
+    gateway_runtime_hash: String,
+}
+
+/// Typed view over the gateway-stage manifest produced by DeployGateway.s.sol (core S3).
+#[derive(Debug, Deserialize)]
+struct GatewayDeploymentJson {
+    gateway: String,
+    /// The router the gateway was built with. Asserted equal to the router stage's address.
+    gateway_router: String,
+    #[serde(default)]
+    admin: String,
+    #[serde(default)]
     pauser: String,
     agent: String,
     share_receiver: String,
@@ -938,7 +959,7 @@ impl Fixture {
             "post-readiness chain RPC stable; starting deployment",
         );
 
-        // Deploy.s.sol run() performs a mandatory 1,000 USDC seed deposit from
+        // The vault stage (DeployVault.s.sol) performs a mandatory seed deposit from
         // the broadcaster (issue #656), so the deployer must hold USDC before
         // the forge script runs. Drip from HARNESS_USDC_HOLDER (genesis grant).
         const DEPLOYER_USDC_GRANT: u128 = 10_000 * 1_000_000; // 10k USDC, 6dp
@@ -955,16 +976,17 @@ impl Fixture {
             cleanup();
         })?;
 
+        // Core S3: the single Deploy.s.sol is split into stages. Order: libs, vault, registry,
+        // router, gateway. The gateway takes the router as its immutable, so it runs last.
+        let libs_out = tmp.path().join("libs.json");
+        run_forge_deploy_libs(&repo_root, &rpc_url, &libs_out).inspect_err(|err| {
+            logging::error("smoke-test", format!("forge deploy libs failed: {err}"));
+            cleanup();
+        })?;
+
         let dep_out = tmp.path().join("deployment.json");
         let agent_hex = format!("{:#x}", agent_address());
-        run_forge_deploy_with_env(
-            &repo_root,
-            &rpc_url,
-            &dep_out,
-            &agent_hex,
-            PAUSER_ADDRESS_HEX,
-            extra_deploy_env,
-        )
+        run_forge_deploy_with_env(&repo_root, &rpc_url, &dep_out, extra_deploy_env)
         .inspect_err(|err| {
             logging::error("smoke-test", format!("forge deploy failed: {err}"));
             log_compose_state(
@@ -978,7 +1000,7 @@ impl Fixture {
             cleanup();
         })?;
 
-        let deployment = read_deployment(&dep_out)?;
+        let mut deployment = read_deployment(&dep_out)?;
         let chain_id = deployment.chain_id;
 
         // Deploy VaultRegistry and register RobotMoneyVault as the first active vault
@@ -1066,6 +1088,50 @@ impl Fixture {
         })?;
 
         let router_deployment = read_router_deployment(&router_out)?;
+
+        // Gateway stage, AFTER the router: the gateway is constructed with the router and the
+        // stage asserts `gateway.router()` is that router. Agent authorization is part of this
+        // stage, so it also runs after the gateway exists (core S3, core 1493).
+        let gateway_out = tmp.path().join("gateway.json");
+        run_forge_deploy_gateway(
+            &repo_root,
+            &rpc_url,
+            &gateway_out,
+            &deployment.vault,
+            &router_deployment.router,
+            &agent_hex,
+            PAUSER_ADDRESS_HEX,
+            extra_deploy_env,
+        )
+        .inspect_err(|err| {
+            logging::error("smoke-test", format!("forge deploy gateway failed: {err}"));
+            log_compose_state(
+                &compose_dir,
+                &compose_files_owned,
+                &compose_log_env,
+                "chain-compose",
+                "gateway deployment failure",
+                200,
+            );
+            cleanup();
+        })?;
+        let gateway_deployment = read_gateway_deployment(&gateway_out)?;
+        if !gateway_deployment
+            .gateway_router
+            .eq_ignore_ascii_case(&router_deployment.router)
+        {
+            cleanup();
+            return Err(HarnessError::DeployFailed(format!(
+                "gateway.router {} != deployed router {}",
+                gateway_deployment.gateway_router, router_deployment.router
+            )));
+        }
+        deployment.gateway = gateway_deployment.gateway;
+        deployment.admin = gateway_deployment.admin;
+        deployment.pauser = gateway_deployment.pauser;
+        deployment.agent = gateway_deployment.agent;
+        deployment.share_receiver = gateway_deployment.share_receiver;
+        deployment.gateway_runtime_hash = gateway_deployment.gateway_runtime_hash;
 
         // Deploy RouterGovernance and wire it to the PortfolioRouter (issue #364).
         // ADMIN_ROLE is held by the deployer; voting power is assigned per test.
@@ -1369,13 +1435,13 @@ impl Fixture {
             parse_addr(&self.deployment.compound_adapter)
         }
     }
-    /// MorphoAdapter address registered with the vault at deploy time (issue #363).
-    /// Returns `Address::ZERO` for legacy deployments that predate issue #363.
-    pub fn morpho_adapter(&self) -> Address {
-        if self.deployment.morpho_adapter.is_empty() {
+    /// Third-venue (Moonwell Flagship USDC) adapter address registered with the vault at
+    /// deploy time. Returns `Address::ZERO` when the manifest carries no such key.
+    pub fn moonwell_flagship_adapter(&self) -> Address {
+        if self.deployment.moonwell_flagship_adapter.is_empty() {
             Address::ZERO
         } else {
-            parse_addr(&self.deployment.morpho_adapter)
+            parse_addr(&self.deployment.moonwell_flagship_adapter)
         }
     }
     pub fn agent(&self) -> Address {
@@ -3533,47 +3599,119 @@ fn pinned_cast_send(
     .inspect_err(|_| tracker.release_pin_if_unused(&from_hex, nonce))
 }
 
-fn run_forge_deploy_with_env(
+/// Run one core stage script with the deployer key and return its captured output.
+fn run_forge_stage(
     repo_root: &Path,
     rpc_url: &str,
-    dep_out: &Path,
-    agent_address_hex: &str,
-    pauser_address_hex: &str,
+    target: &str,
+    label: &str,
+    envs: &[(&str, String)],
     extra_env: &[(&str, &str)],
 ) -> Result<(), HarnessError> {
     let mut cmd = Command::new("forge");
-    cmd.args(["script", "contracts/script/Deploy.s.sol:Deploy"])
+    cmd.args(["script", target])
         .args(["--rpc-url", rpc_url])
         .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
         .arg("--broadcast")
         .arg("--slow")
         .arg("-vvv")
-        .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
-        .env("PAUSER_ADDRESS", pauser_address_hex)
-        .env("AGENT_ADDRESS", agent_address_hex)
-        .env("SHARE_RECEIVER_ADDRESS", SHARE_RECEIVER_ADDRESS_HEX)
-        // Bind the gateway to the canonical Base USDC seeded into genesis
-        // (issue #255). Tells Deploy.s.sol to skip MockUSDC + the
-        // permissioned post-deploy mint. The harness funds the agent via
-        // `Fixture::fund_usdc` (real ERC-20 transfer from
-        // HARNESS_USDC_HOLDER) instead.
-        .env("USDC_ADDRESS", genesis_alloc::BASE_USDC_ADDR)
-        .env("DEPLOYMENT_OUT", dep_out)
         .current_dir(repo_root);
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
     let out = cmd.output()?;
-    logging::log_command_output("forge", &out);
+    logging::log_command_output(label, &out);
     if !out.status.success() {
         return Err(HarnessError::DeployFailed(format!(
-            "forge script exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            "forge script {target} exited {:?}\nstdout:\n{}\nstderr:\n{}",
             out.status,
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         )));
     }
     Ok(())
+}
+
+/// Libs stage: deploys the linked TickMath library and proves it is canonical.
+fn run_forge_deploy_libs(repo_root: &Path, rpc_url: &str, out: &Path) -> Result<(), HarnessError> {
+    run_forge_stage(
+        repo_root,
+        rpc_url,
+        "contracts/script/DeployLibs.s.sol:DeployLibs",
+        "forge-libs",
+        &[("DEPLOYMENT_OUT", out.display().to_string())],
+        &[],
+    )
+}
+
+/// Vault stage: RobotMoneyVault, its three adapters, adapter registration and the seed
+/// deposit. The gateway is NOT deployed here (core S3).
+fn run_forge_deploy_with_env(
+    repo_root: &Path,
+    rpc_url: &str,
+    dep_out: &Path,
+    extra_env: &[(&str, &str)],
+) -> Result<(), HarnessError> {
+    run_forge_stage(
+        repo_root,
+        rpc_url,
+        "contracts/script/DeployVault.s.sol:DeployVault",
+        "forge-vault",
+        &[
+            ("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX.to_string()),
+            ("FEE_RECIPIENT_ADDRESS", SHARE_RECEIVER_ADDRESS_HEX.to_string()),
+            ("VAULT_TVL_CAP", (10_000_000u64 * 1_000_000).to_string()),
+            ("VAULT_PER_DEPOSIT_CAP", (1_000_000u64 * 1_000_000).to_string()),
+            ("DEPLOYMENT_OUT", dep_out.display().to_string()),
+        ],
+        extra_env,
+    )
+}
+
+/// Gateway stage: runs after the router stage. Takes the router, asserts it is non-zero,
+/// then authorizes the agent.
+#[allow(clippy::too_many_arguments)]
+fn run_forge_deploy_gateway(
+    repo_root: &Path,
+    rpc_url: &str,
+    out: &Path,
+    vault_address: &str,
+    router_address: &str,
+    agent_address_hex: &str,
+    pauser_address_hex: &str,
+    extra_env: &[(&str, &str)],
+) -> Result<(), HarnessError> {
+    run_forge_stage(
+        repo_root,
+        rpc_url,
+        "contracts/script/DeployGateway.s.sol:DeployGateway",
+        "forge-gateway",
+        &[
+            ("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX.to_string()),
+            ("PAUSER_ADDRESS", pauser_address_hex.to_string()),
+            ("AGENT_ADDRESS", agent_address_hex.to_string()),
+            ("SHARE_RECEIVER_ADDRESS", SHARE_RECEIVER_ADDRESS_HEX.to_string()),
+            ("VAULT_ADDRESS", vault_address.to_string()),
+            ("ROUTER_ADDRESS", router_address.to_string()),
+            ("AGENT_VALID_UNTIL", "4102444800".to_string()),
+            ("AGENT_MAX_PER_PAYMENT", (10_000u64 * 1_000_000).to_string()),
+            ("AGENT_MAX_PER_WINDOW", (100_000u64 * 1_000_000).to_string()),
+            ("AGENT_MAX_WITHDRAW_PER_PAYMENT", (10_000u64 * 1_000_000).to_string()),
+            ("AGENT_MAX_WITHDRAW_PER_WINDOW", (100_000u64 * 1_000_000).to_string()),
+            ("DEPLOYMENT_OUT", out.display().to_string()),
+        ],
+        extra_env,
+    )
+}
+
+fn read_gateway_deployment(path: &Path) -> Result<GatewayDeploymentJson, HarnessError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
 }
 
 /// Interpret a transaction receipt `status` word from `cast send --json`.

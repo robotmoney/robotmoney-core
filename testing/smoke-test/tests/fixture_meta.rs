@@ -75,7 +75,7 @@ fn deployed_addresses_are_non_zero() {
         Address::ZERO,
         "compound_adapter is zero"
     );
-    assert_ne!(fx.morpho_adapter(), Address::ZERO, "morpho_adapter is zero");
+    assert_ne!(fx.moonwell_flagship_adapter(), Address::ZERO, "moonwell_flagship_adapter is zero");
     assert_ne!(fx.agent(), Address::ZERO, "agent is zero");
 }
 
@@ -92,7 +92,7 @@ fn contracts_have_code() {
         ("vault", fx.vault()),
         ("aave_adapter", fx.aave_adapter()),
         ("compound_adapter", fx.compound_adapter()),
-        ("morpho_adapter", fx.morpho_adapter()),
+        ("moonwell_flagship_adapter", fx.moonwell_flagship_adapter()),
     ] {
         let code = get_code(fx.rpc_url(), addr);
         assert!(

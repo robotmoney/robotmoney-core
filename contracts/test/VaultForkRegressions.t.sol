@@ -44,7 +44,7 @@ contract VaultForkRegressions is Test {
     /// @dev aBasUSDC rebasing token — balanceOf returns live underlying USDC.
     address internal constant AAVE_A_TOKEN = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
 
-    /// @dev Morpho Gauntlet USDC Prime vault on Base (ERC-4626).
+    /// @dev Moonwell Flagship USDC (Morpho) vault on Base (ERC-4626).
     address internal constant MORPHO_VAULT = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
 
     /// @dev Compound V3 Comet (cUSDCv3) on Base.
@@ -221,7 +221,7 @@ contract VaultForkRegressions is Test {
 
     /// @notice AC2: Morpho adapter donation cannot make victim deposit mint zero/unfair shares.
     ///
-    /// @dev Deploys vault + MorphoAdapter against real Base Morpho Gauntlet USDC Prime vault.
+    /// @dev Deploys vault + MorphoAdapter against real Base Moonwell Flagship USDC (Morpho) vault.
     function test_fork_morpho_donationAttack_victimSharesFair() public {
         _setUp();
 

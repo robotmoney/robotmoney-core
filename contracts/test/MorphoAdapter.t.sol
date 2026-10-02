@@ -400,7 +400,7 @@ contract MorphoAdapterTest is Test {
     // -----------------------------------------------------------------------
 
     /// @notice AC5: harvestRewards() is a permissionless no-op for MorphoAdapter.
-    ///         Morpho Gauntlet USDC Prime yield accrues automatically in the
+    ///         Moonwell Flagship USDC (Morpho) yield accrues automatically in the
     ///         ERC-4626 share price — there are no discrete claimable rewards.
     ///         Anyone may call; it must not revert and the vault asset is
     ///         never moved (no value leakage through harvest).

@@ -96,7 +96,7 @@ import { aaveV3ErrorCodes, cometErrorAbi, metaMorphoErrorAbi } from "./protocol-
 
 /**
  * Error fragments for the three strategy adapters the primary vault routes
- * through (`contracts/script/Deploy.s.sol:_approveAndRegisterAdapters` adds
+ * through (`contracts/script/DeployVault.s.sol:_approveAndRegisterAdapters` adds
  * exactly AaveV3Adapter, CompoundV3Adapter and MorphoAdapter, at 3334/3333/3333
  * capBps), plus the two shared `IPositionAdapter` errors they inherit.
  *

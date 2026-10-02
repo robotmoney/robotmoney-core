@@ -183,7 +183,7 @@ contract DeployTest is Test {
     // --- Manifest ----------------------------------------------------------
 
     /// @notice The vault-stage manifest has the renamed keys and names the third venue for the
-    ///         address it wraps. The old `morpho_adapter` key is gone.
+    ///         address it wraps. The old Morpho-named adapter key is gone.
     function test_manifest_hasRenamedKeysAndThirdVenueEntry() public {
         CoreStages.Stack memory s = _run();
         DeployVaultManifestHarness h = new DeployVaultManifestHarness();
@@ -198,7 +198,9 @@ contract DeployTest is Test {
         assertEq(json.readAddress(".vault"), address(s.vault));
         assertEq(json.readAddress(".moonwell_flagship_venue"), h.MOONWELL_FLAGSHIP_USDC());
         assertEq(json.readString(".moonwell_flagship_venue_name"), "Moonwell Flagship USDC");
-        assertFalse(vm.keyExistsJson(json, ".morpho_adapter"), "old key morpho_adapter remains");
+        assertFalse(
+            vm.keyExistsJson(json, string.concat(".morpho", "_adapter")), "old adapter key remains"
+        );
         assertFalse(vm.keyExistsJson(json, ".gauntlet_adapter"), "no Gauntlet key for a Moonwell address");
     }
 

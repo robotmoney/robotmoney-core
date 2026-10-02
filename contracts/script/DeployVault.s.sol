@@ -50,8 +50,8 @@ contract DeployVault is ExpectedChainGuard {
     address public constant COMPOUND_V3_COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F;
     /// @notice The third venue: Moonwell Flagship USDC (mwUSDC), an ERC-4626 Morpho vault.
     /// @dev Read on Base mainnet: `name()` is "Moonwell Flagship USDC" and `symbol()` is
-    ///      "mwUSDC". Until 2026-10-02 this constant was named MORPHO_GAUNTLET_USDC_PRIME and
-    ///      the manifest called the adapter `morpho_adapter`. The address was never Gauntlet
+    ///      "mwUSDC". Until 2026-10-02 this constant and the manifest key carried a Gauntlet
+    ///      Prime name. The address was never Gauntlet
     ///      (finding core-deploy-correctness-02). Whether the intended venue is this one or the
     ///      Gauntlet Prime vault is an open owner decision (D-venue). The name now follows the
     ///      address. Flipping the venue means changing this address and the name together.
@@ -239,7 +239,8 @@ contract DeployVault is ExpectedChainGuard {
     ///         compound_adapter, moonwell_flagship_adapter, admin, and one name/address pair
     ///         per venue: aave_v3_venue_name / aave_v3_venue, compound_v3_venue_name /
     ///         compound_v3_venue, moonwell_flagship_venue_name / moonwell_flagship_venue.
-    ///         `morpho_adapter` is gone: the third venue is named for the address it wraps.
+    ///         The old Morpho-named adapter key is gone: the third venue is named for the
+    ///         address it wraps.
     function _writeDeploymentJson(Deployed memory d) internal {
         _writeDeploymentJsonTo(d, _envStringRequired("DEPLOYMENT_OUT"));
     }

@@ -40,7 +40,9 @@ NATSPEC_SCOPE=(
   "contracts/adapters/AaveV3Adapter.sol"
   "contracts/adapters/CompoundV3Adapter.sol"
   "contracts/adapters/MorphoAdapter.sol"
-  "contracts/script/Deploy.s.sol"
+  "contracts/script/DeployLibs.s.sol"
+  "contracts/script/DeployVault.s.sol"
+  "contracts/script/DeployGateway.s.sol"
 )
 
 # ---------------------------------------------------------------------------
