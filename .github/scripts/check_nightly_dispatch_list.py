@@ -21,6 +21,7 @@ EXCLUDED = {
     "release-dapp.yml": "release workflow",
     "release-rmpc.yml": "release workflow",
     "release-tag-suite-dispatch.yml": "release workflow",
+    "nightly-third-party-drift.yml": "nightly job (c), shipped disabled: workflow_dispatch only, schedule commented out until the owner enables it (issue 1497)",
     "suite-29-nightly-fresh-snapshot.yml": "nightly (b) on its own schedule: it calls the chain suites itself with a fresh Base snapshot (issue 1496)",
 }
 

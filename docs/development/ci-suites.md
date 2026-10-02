@@ -256,7 +256,7 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 **Jobs:**
 - `pr-smoke` — fast subset against the **golden fixture** (offline, no secret); runs on every PR trigger
 - `full-suite` — all scenarios against the **golden fixture**; runs on push to `dev` and `workflow_dispatch`; no dependency on `pr-smoke` (different trigger context, not sequential)
-- `live-drift-alarm` — **nightly, non-blocking** (ADR-0011): forks live Base mainnet at latest via a **free public RPC** (public default, no secret) and re-runs the suite as a drift alarm; on failure opens/updates a tracking issue rather than blocking merges. Schedule-only (dispatched by suite 21); never a PR gate.
+- Fresh-snapshot coverage: the nightly fresh-snapshot workflow (suite 29, issue 1496) reruns the chain suites against Base at the latest block. It is not a PR gate.
 
 **Steps (`pr-smoke` / `full-suite`, golden-fixture path):**
 1. Checkout repository
@@ -1213,7 +1213,6 @@ Every workflow's `name:` and its tier.
 | `solidity-fmt-natspec-slither` | quick | |
 | `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) and `test-target-coverage` (issue #1282 integration-test target inventory) |
 | `fork-protocol-adapter-integration` | heavy | 4 Geth/Anvil devnet slots (20-25 min); gates PRs into `dev`; runs against the **golden fixture** — offline, no secret (ADR-0011) |
-| `fork-live-drift-alarm` | nightly | live Base-mainnet fork at latest via free public RPC (no secret); **non-blocking** drift alarm, opens a tracking issue on failure; dispatched by `nightly-full-suite` (ADR-0011) |
 | `rust-client-unit-tests` | quick | |
 | `rust-client-devnet-integration` | heavy | devnet e2e matrix (`smoke`, `scenarios`, `window_cap`, `withdraw`) |
 | `explorer-indexer-migrations-reorg` | quick | |
@@ -1264,7 +1263,7 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 1–2 | `forge-tests.yml` | `unit` \| `invariant` → `coverage` | `anvil` |
 | 3 | `solidity-quality.yml` | `lint` → `slither` | `none` |
 | 4 | `rust-quality.yml` | `lint` → `doc-coverage` \| `audit` \| `test-target-coverage` | `none` |
-| 5 | `fork-integration.yml` | `pr-smoke` / `full-suite` (golden fixture) + `live-drift-alarm` (nightly, non-blocking) | `fork` |
+| 5 | `fork-integration.yml` | `pr-smoke` / `full-suite` (golden fixture) | `fork` |
 | 6 | `rmpc-unit.yml` | `unit` | `none` |
 | 7 | `rmpc-integration.yml` | `geth-tests` \| `nonce-race-stress` | `devnet` |
 | 8 | `explorer-indexer.yml` | `fast` \| `explorer-api` \| `devnet` | `devnet` / `postgres-testcontainer` |

@@ -26,6 +26,8 @@
 #   core-stack.sh governance ensure    [--out-dir DIR]         # publish contracts govern
 #   core-stack.sh governance verify    [--out-dir DIR]         # publish contracts verify
 #   core-stack.sh governance release --receipt-id ID [--out-dir DIR]
+#   core-stack.sh parity labels   --mainnet FILE [--out-dir DIR]  # stage vs mainnet verifier labels
+#   core-stack.sh parity sheet    --production FILE               # stage vs production sheet
 #   core-stack.sh dapp status
 #   core-stack.sh rmpc check
 #   core-stack.sh record write    [--record FILE] [--out-dir DIR]
@@ -66,6 +68,12 @@
 #   governance verify   publish contracts `verify`: the one verifier.
 #   governance release  one govern row, `release-receipt`, for a recorded
 #                 consensus receipt.
+#   parity labels  run the verifier on the booted chain, save its output as
+#                 $OUT_DIR/verify-labels.txt and run label-diff.ts against the
+#                 mainnet verifier output FILE. Any difference exits non-zero.
+#   parity sheet  run sheet-diff.ts on the stage sheet (STAGE_SHEET or the
+#                 harness summary's sheet_path) against the production sheet.
+#                 Only parameter lines may differ.
 #   dapp status   rpc, explorer-api /health and the dapp answer, once.
 #   rmpc check    both signing binaries are present and answer the exit-code
 #                 contract downstream steps rely on.
@@ -100,6 +108,8 @@ ENVIRONMENT="stage"
 REF=""
 RECORD=""
 RECEIPT_ID=""
+MAINNET_FILE=""
+PRODUCTION_FILE=""
 TIMEOUT_SECS=3600               # boot plus a full publish contracts run
 PATH_ONLY=0
 # Internal: `record show --list-required-fields` is the schema-drift guard's
@@ -139,6 +149,8 @@ while (( $# )); do
     --out-dir) value_of "$@"; OUT_DIR="$2"; shift 2 ;;
     --timeout) value_of "$@"; TIMEOUT_SECS="$2"; shift 2 ;;
     --receipt-id) value_of "$@"; RECEIPT_ID="$2"; shift 2 ;;
+    --mainnet) value_of "$@"; MAINNET_FILE="$2"; shift 2 ;;
+    --production) value_of "$@"; PRODUCTION_FILE="$2"; shift 2 ;;
     --path) PATH_ONLY=1; shift ;;
     --list-required-fields) LIST_REQUIRED_FIELDS=1; shift ;;
     -h|--help) usage ;;
@@ -504,6 +516,27 @@ governance_verb() {
   esac
 }
 
+# ─── parity: stage must equal mainnet except for parameters ──────────────────
+# Both checks run the real tools on real output: the verifier's own output from
+# the booted chain, and the sheet the harness used.
+parity_verb() {
+  need "$BUN"
+  case "$VERB" in
+    labels)
+      [[ -n "$MAINNET_FILE" && -f "$MAINNET_FILE" ]] || { echo "parity labels needs --mainnet FILE (the mainnet verifier output)" >&2; usage; }
+      local saved="$OUT_DIR/verify-labels.txt" rc=0
+      publish_contracts verify >"$saved" || rc=$?
+      (( rc == 0 )) || { cat "$saved" >&2; fail "the verifier did not pass on the stage chain (exit $rc)" "$rc"; }
+      "$BUN" "$HERE/label-diff.ts" "$saved" "$MAINNET_FILE" ;;
+    sheet)
+      [[ -n "$PRODUCTION_FILE" && -f "$PRODUCTION_FILE" ]] || { echo "parity sheet needs --production FILE" >&2; usage; }
+      local sheet="${STAGE_SHEET:-$(summary_value sheet_path)}"
+      [[ -f "$sheet" ]] || fail "no stage sheet: set STAGE_SHEET or boot with \`chain up\`" 65
+      "$BUN" "$HERE/sheet-diff.ts" "$sheet" "$PRODUCTION_FILE" ;;
+    *) usage ;;
+  esac
+}
+
 # ─── dapp ─────────────────────────────────────────────────────────────────────
 dapp_status() {
   need curl; need jq
@@ -657,6 +690,7 @@ case "$NOUN" in
     case "$VERB" in up) chain_up ;; down) chain_down ;; status) chain_status ;; *) usage ;; esac ;;
   publish) publish_verb ;;
   governance) governance_verb ;;
+  parity) parity_verb ;;
   dapp) if [[ "$VERB" == status ]]; then dapp_status; else usage; fi ;;
   rmpc) if [[ "$VERB" == check ]]; then rmpc_check; else usage; fi ;;
   record)

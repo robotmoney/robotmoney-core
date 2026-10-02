@@ -22,9 +22,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
-  INFRA_ADDRESSES, QUOTER_V2, REPO, SAFE_SET, SWAP_ROUTER02, V3_FACTORY, addrOf, calldata, decodeSlot0, loadConfiguredPools,
+  BNKR, INFRA_ADDRESSES, QUOTER_V2, REPO, SAFE_SET, SWAP_ROUTER02, V3_FACTORY, addrOf, calldata, decodeSlot0, loadConfiguredPools,
   robotMoneyAddresses, rpc, sleep, word,
 } from "./fork-snapshot-lib.ts";
+
+/** BNKR on Base, read from the one config file that lists it (no second hand-kept list). */
+function bnkrAddress(): string {
+  const cfg = JSON.parse(readFileSync(join(REPO, "config/agent-token-shortlist.json"), "utf8"));
+  const row = (cfg.mainnet?.shortlist ?? []).find((r: { symbol: string }) => r.symbol === "BNKR");
+  if (!row?.token || !/^0x[0-9a-fA-F]{40}$/.test(row.token)) throw new Error("config/agent-token-shortlist.json has no mainnet BNKR token address");
+  return row.token;
+}
 
 function arg(name: string, dflt?: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -79,9 +87,13 @@ async function main() {
       [SWAP_ROUTER02, "Uniswap V3 SwapRouter02"],
       [QUOTER_V2, "Uniswap V3 QuoterV2"],
       [V3_FACTORY, "Uniswap V3 factory"],
+      [bnkrAddress(), "BNKR token (from config/agent-token-shortlist.json)"],
       ...INFRA_ADDRESSES,
       ...SAFE_SET.map((a): [string, string] => [a, "Safe v1.4.1 set member"]),
     ];
+    if (bnkrAddress().toLowerCase() !== BNKR.toLowerCase()) fail(`BNKR in fork-snapshot-lib.ts (${BNKR}) differs from config/agent-token-shortlist.json (${bnkrAddress()})`);
+    const bnkrCode: string = await rpc(url!, "eth_getCode", [BNKR, "latest"]);
+    bnkrCode && bnkrCode !== "0x" ? ok(`eth_getCode non-empty for BNKR ${BNKR}`) : fail(`eth_getCode is empty for BNKR ${BNKR}`);
     const seen = new Set<string>();
     for (const [a, label] of required) {
       if (seen.has(a.toLowerCase())) continue;

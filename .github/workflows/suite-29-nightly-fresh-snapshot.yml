@@ -204,3 +204,8 @@ jobs:
             --manifest "$RUNNER_TEMP/manifest/snapshot-manifest.json" \
             --max-age-seconds 28800 \
             --suite-results "$RUNNER_TEMP/suite-results"
+
+      # Nothing is committed: the snapshot lives in runner temp and artifacts only.
+      # Final step, so a snapshot file written into the checkout fails the run.
+      - name: Assert no snapshot file is committed or changed
+        run: git diff --exit-code -- testing/fixtures/fork-state testing/ethereum-testnet/config

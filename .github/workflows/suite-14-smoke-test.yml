@@ -142,6 +142,34 @@ jobs:
       - name: fork-block manifest + alloc-ingester guard
         run: bash scripts/devnet/check-fork-manifest.sh
 
+      # Core 1498: the committed fixtures are one pin. CURRENT.json,
+      # fork-block.json and genesis-alloc.json must agree on block number and hash.
+      - name: fixture lockstep gate (--require-pinned)
+        run: bash scripts/devnet/check-fork-manifest.sh --require-pinned
+
+      # Core 1498: the committed snapshot holds SwapRouter02, the V3 factory,
+      # BNKR and the pool state, and no Robot Money code at genesis.
+      - name: committed snapshot contents (code, pool calls, no Robot Money)
+        run: bun scripts/devnet/check-fork-snapshot-contents.ts
+
+      # Core 1488: the Twin chain publish run has a unit-test floor. cargo test
+      # -p smoke-test --lib must execute a non-zero number of tests, and at
+      # least SMOKE_TEST_LIB_TEST_FLOOR of them, so the deletions cannot
+      # silently empty the crate.
+      - name: smoke-test lib test count floor
+        working-directory: testing/smoke-test
+        env:
+          SMOKE_TEST_LIB_TEST_FLOOR: "20"
+        run: |
+          set -o pipefail
+          cargo test -p smoke-test --lib 2>&1 | tee "$RUNNER_TEMP/smoke-lib.log"
+          n="$(grep -E '^test result: ok\. [0-9]+ passed' "$RUNNER_TEMP/smoke-lib.log" | sed -E 's/^test result: ok\. ([0-9]+) passed.*/\1/' | awk '{s+=$1} END {print s+0}')"
+          echo "smoke-test lib tests executed: ${n:-0} (floor $SMOKE_TEST_LIB_TEST_FLOOR)"
+          if [ -z "$n" ] || [ "$n" -lt "$SMOKE_TEST_LIB_TEST_FLOOR" ]; then
+            echo "::error::cargo test -p smoke-test ran ${n:-0} tests, floor is $SMOKE_TEST_LIB_TEST_FLOOR"
+            exit 1
+          fi
+
       # Issue #558 CI gate: assert fork-block.json, expected-prices.json, and
       # ingested_addresses stay in sync after a fork-block bump.  Runs as a
       # hermetic lib-test (no Docker required).  Also exercises the simulated
@@ -169,6 +197,8 @@ jobs:
   #   (demo_seeding, full_stack_demo_tvl, faucet_eth and faucet_rm were deleted in core 1488 with demo seeding
   #   and the dapp faucet funding: the one deployment scheme has no demo-only code.)
   #   - fund_usdc:           real-signed-transfer assertions incl. the Geth-not-Anvil check (issue #255 step 7)
+  #   - twin_publish:        the real Twin chain publish, verify and govern matrix: four manifests,
+  #                          the one verifier green, every govern row tx hash + receipt status 1
   #   - governance:          the deployer holds no voting power or admin; the timelock is admin (core 1488)
   #
   # faucet_eth/faucet_rm/fund_usdc/governance were folded in by issue #1311: each
@@ -227,6 +257,7 @@ jobs:
             fixture_meta,
             fund_usdc,
             governance,
+            twin_publish,
           ]
     steps:
       - uses: actions/checkout@v4

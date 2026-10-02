@@ -188,11 +188,24 @@ fn write_random_password(path: &Path) -> Result<(), HarnessError> {
     Ok(())
 }
 
+/// A directory name no earlier boot used: pid, a process-wide counter and the clock.
+/// Two boots in one process (a redeploy from a new SHA) never share a keystore directory.
+pub fn fresh_root_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static BOOTS: AtomicU64 = AtomicU64::new(0);
+    let n = BOOTS.fetch_add(1, Ordering::SeqCst);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("rehearsal-{}-{n}-{nanos}", std::process::id())
+}
+
 /// Mint a fresh set of rehearsal keystores under `parent` (a memory-backed
 /// directory when one exists). One call per boot, so every redeploy has a fresh keystore.
 pub fn make_keys(cfg: &PublishConfig, parent: &Path) -> Result<RehearsalKeys, HarnessError> {
     use std::os::unix::fs::DirBuilderExt;
-    let root = parent.join(format!("rehearsal-{}", std::process::id()));
+    let root = parent.join(fresh_root_name());
     std::fs::DirBuilder::new()
         .mode(0o700)
         .recursive(true)
@@ -384,6 +397,12 @@ impl Published {
         Ok(rows)
     }
 
+    /// Run the one verifier. Exits non-zero (an Err here) unless every label passes.
+    /// Returns the verifier's output so a caller can diff its labels against mainnet's.
+    pub fn verify(&self) -> Result<String, HarnessError> {
+        run_cli(&self.cfg, self, "verify", &[])
+    }
+
     /// The whole stage-13 govern matrix, the same on stage and mainnet.
     pub fn govern_matrix(&self) -> Result<Vec<GovernRow>, HarnessError> {
         let out = run_cli(&self.cfg, self, "govern", &[])?;
@@ -566,6 +585,22 @@ pub fn load_topology(dir: &Path) -> Result<Topology, HarnessError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_boot_gets_its_own_keystore_directory() {
+        let names: std::collections::BTreeSet<String> =
+            (0..50).map(|_| fresh_root_name()).collect();
+        assert_eq!(names.len(), 50, "a redeploy must never reuse a keystore directory");
+    }
+
+    /// `verify` is the one verifier on every target: the argument list differs only in the verb.
+    #[test]
+    fn verify_args_equal_publish_args_but_the_verb() {
+        let a = publish_args("publish", "http://r", Path::new("/s"), "abc");
+        let b = publish_args("verify", "http://r", Path::new("/s"), "abc");
+        assert_eq!(a[1..], b[1..]);
+        assert_eq!(b[0], "verify");
+    }
 
     #[test]
     fn fragment_parser_reads_export_and_plain_lines() {

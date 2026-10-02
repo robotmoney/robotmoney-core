@@ -41,6 +41,9 @@ export const SAFE_SINGLETONS = [SAFE_SET[0], SAFE_SET[1]];
  * own contracts are NOT here: they are deployed on the Twin chain by the same
  * scripts that deploy mainnet (one deployment scheme).
  */
+/** BNKR on Base. The same address as config/agent-token-shortlist.json mainnet.shortlist[BNKR]; the contents check asserts they agree. */
+export const BNKR = "0x22aF33FE49fD1Fa80c7149773dDe5890D3C76F3b";
+
 export const INFRA_ADDRESSES: Array<[string, string]> = [
   [USDC, "Base mainnet USDC (Circle)"],
   [WETH, "WETH9 on Base"],
@@ -48,6 +51,7 @@ export const INFRA_ADDRESSES: Array<[string, string]> = [
   [SWAP_ROUTER02, "Uniswap V3 SwapRouter02"],
   [QUOTER_V2, "Uniswap V3 QuoterV2"],
   [CBBTC, "cbBTC"],
+  [BNKR, "BNKR (agent-token shortlist)"],
   [DESPXA, "deSPXA token (Centrifuge ShareToken)"],
   [DESPXA_POOL, "deSPXA/USDC Uniswap V3 0.01% pool"],
   ["0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca", "Morpho Gauntlet USDC Prime"],
