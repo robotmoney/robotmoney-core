@@ -86,7 +86,6 @@ export const sidebar = [
         { text: "IBasketSwapAdapter", link: "/contracts/interfaces/interface.IBasketSwapAdapter" },
         { text: "IComet", link: "/contracts/interfaces/interface.IComet" },
         { text: "IObservablePool", link: "/contracts/interfaces/interface.IObservablePool" },
-        { text: "IPositionAdapter", link: "/contracts/interfaces/interface.IPositionAdapter" },
         { text: "IStrategyAdapter", link: "/contracts/interfaces/interface.IStrategyAdapter" },
         { text: "ISwapRouter", link: "/contracts/interfaces/interface.ISwapRouter" },
         { text: "IUniswapV3Pool", link: "/contracts/interfaces/interface.IUniswapV3Pool" },

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "rmRWA (RwaVault) launch assets: deSPXA only, a plain basket row with no oracle, on its Uniswap V3 fee 500 USDC pool (live pool fee() is 500 at Base block 52082423). Coinbase tokenized stocks are phase two.",
+  "description": "rmRWA (RwaBasketVault) launch assets: deSPXA only, a plain basket row with no oracle, on its Uniswap V3 fee 500 USDC pool (live pool fee() is 500 at Base block 52082423). Coinbase tokenized stocks are phase two.",
   "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
   "swapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481",

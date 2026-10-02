@@ -26,8 +26,8 @@ interface ISafeSetupCall {
 
 /// @title SafeFixture
 /// @notice Builds REAL Safe 1.4.1 proxies in-process from the vendored Safe sources
-///         (contracts/test/vendor/safe-1.4.1). Replaces MockHighThresholdSafe,
-///         MockLowThresholdSafe and every constant-threshold stub.
+///         (contracts/test/vendor/safe-1.4.1). Replaces every hand-written Safe
+///         stand-in.
 /// @dev The vendored sources compile with this repo's solc settings, so their runtime
 ///      bytecode differs from the canonical on-chain deployments. The fixture therefore
 ///      installs the vendored SafeL2 and CompatibilityFallbackHandler at the canonical

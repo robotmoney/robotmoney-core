@@ -200,8 +200,8 @@ flag's value differs across environments. See
 The source tree also contains `RwaBasketVault`, the rmRWA vault. rmRWA is
 a plain basket row: it holds deSPXA (Centrifuge / Janus Henderson / Anemoy
 tokenised S&P 500 on Base) priced from its Uniswap V3 fee 500 pool through
-the existing `UniswapV3SwapAdapter`. It has no oracle. `RwaVault`,
-`ChronicleOracleAdapter` and `DeSpxaAssetPositionAdapter` are deleted.
+the existing `UniswapV3SwapAdapter`. It has no oracle. The earlier
+Chronicle-priced RWA vault and its two adapters are deleted.
 Characteristics:
 
 - **Entry and exit via the secondary market only.** Primary NAV redemption
@@ -218,10 +218,10 @@ Characteristics:
 #### ADR-0010 is Rejected
 
 [ADR-0010](adr/ADR-0010-unified-vault-architecture.md) proposed one unified
-`Vault` contract composed with an `IPositionAdapter` interface. It is
+`Vault` contract composed with a position-adapter interface. It is
 Rejected. A fifth contract kind breaks the one-deployment-scheme rule, so
-`Vault.sol`, `IPositionAdapter.sol`, the AssetPosition adapters and
-`DeployVaultThemes.s.sol` are deleted. Four vault kinds ship: `RobotMoneyVault`
+that contract, its interface, its asset adapters and its theme deploy script
+are deleted. Four vault kinds ship: `RobotMoneyVault`
 (rmUSDC, lending adapters) and the `BasketVault` family (`ProtocolAssetVault`,
 `AgentTokenVault`, `RwaBasketVault`) that swap through `IBasketSwapAdapter`.
 The registry-eligibility model (`isRouterEligible`), the lifecycle in §4.7
@@ -309,7 +309,7 @@ The adapter seam stays split. Lending positions use `IStrategyAdapter`
 (`AaveV3Adapter`, `MorphoAdapter`, `CompoundV3Adapter`, held by
 `RobotMoneyVault`). Basket assets use `IBasketSwapAdapter`
 (`AerodromeSwapAdapter`, `UniswapV3SwapAdapter`, held by the basket
-vaults). There is no `IPositionAdapter` and no `AssetPositionAdapter`.
+vaults). There is no position-adapter interface and no asset-position adapter.
 
 ### 4.4 Synchronous Redemption
 
@@ -1482,7 +1482,7 @@ this architecture:
 | `docs/product/20260623-product-proposal-investment-committee-v0.md` | Investment Committee scope: extend `rmpc`/analyst/dapp, a signalling-only IC policy contract feeding RouterGovernance, gateway-routed signed votes, admin-gated membership, and local-devnet consensus receipt anchoring. Used for §2.4, §4.8/§4.9, §5.1/§5.3/§5.4/§5.5, §7.4/§7.5. | Product positioning and GTM framing; committee capabilities the proposal excludes from scope (inter-agent debate, retail conversion, network-effect mechanics, engineered Sybil resistance). |
 | `docs/technical/definitions.md` | Canonical meanings for vault, underlying vault, adapter, receipt, router, portfolio position, composite view, router weights, governance, and agent policy. | None. |
 | `docs/technical/adapter-architecture.md` | Adapter interface, vault flow, implemented adapters, adapter controls, risk model, router-vs-adapter separation. | Portfolio Router implementation details; the doc explicitly excludes router design. |
-| `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation, VaultRegistry, PortfolioRouter, RouterGovernance, and basket-vault family (BasketVault base class and ProtocolAssetVault/AgentTokenVault/RwaVault subclasses). | None. |
+| `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation, VaultRegistry, PortfolioRouter, RouterGovernance, and basket-vault family (BasketVault base class and ProtocolAssetVault/AgentTokenVault/RwaBasketVault subclasses). | None. |
 | `docs/technical/security-model.md` | Role separation, live-chain safety decisions, dapp/web2 risks, upstream protocol risks, infrastructure risks, triage backlog. | Exhaustive attack table details; kept in the security model. |
 | `docs/technical/rmpc-read-output-contract.md` | Stable JSON envelope, JSON-RPC source lock, partial-read contract, decimal-string integer serialization. | Per-command flag spelling and future indexer source variant. |
 | `docs/technical/explorer-schema-decisions.md` | Postgres, JSON-RPC-only ingestion, poll cadence, reorg handling, single-chain scoping, read-only API boundary. | Optional later tables and future multi-chain expansion. |

@@ -4,7 +4,7 @@
 //! Asserts the smoke-test devnet boots in the four-vault shape:
 //!   1. `VaultRegistry.listVaults()` returns four **Active** vaults — the
 //!      primary `RobotMoneyVault` (§11.1), `ProtocolAssetVault` (§11.2),
-//!      `AgentTokenVault` (§11.3) and the deSPXA `RwaVault` (§11.4). All four
+//!      `AgentTokenVault` (§11.3) and the deSPXA `RwaBasketVault` (§11.4). All four
 //!      are router-eligible (rmRWA at 500 bps, ADR-0006 §1 amended 2026-06-05
 //!      / issue #621) and each is also seeded by a direct deposit.
 //!   2. `PortfolioRouter.getWeights()` returns four weight entries — all four

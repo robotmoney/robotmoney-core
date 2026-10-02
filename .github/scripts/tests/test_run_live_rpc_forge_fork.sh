@@ -32,7 +32,7 @@ run_test() { if "$2"; then pass "$1"; else fail "$1"; fi; }
 # --- canned forge outputs -----------------------------------------------------
 
 cat >"$T/ok.txt" <<'EOF'
-Ran 4 tests for contracts/test/UniswapV3AssetPositionAdapter.t.sol:UniV3AssetPositionAdapterForkTest
+Ran 4 tests for contracts/test/ExampleV3Fork.t.sol:ExampleV3ForkTest
 [PASS] test_navGuard() (gas: 123)
 Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 14.83s (17.84s CPU time)
 
@@ -47,7 +47,7 @@ Ran 0 test suites in 1.00ms (0.00ns CPU time): 0 tests passed, 0 failed, 0 skipp
 EOF
 
 cat >"$T/provider.txt" <<'EOF'
-Ran 1 test for contracts/test/UniswapV4AssetPositionAdapter.t.sol:UniV4AssetPositionAdapterForkTest
+Ran 1 test for contracts/test/ExampleV4Fork.t.sol:ExampleV4ForkTest
 [FAIL: vm.createSelectFork: could not instantiate forked environment with provider 127.0.0.1; failed to retrieve chain ID from fork endpoint; Max retries exceeded HTTP error 429 with body: error code: 1015
 
 HTTP diagnostics:
@@ -58,7 +58,7 @@ Ran 1 test suite in 13.17s (13.00s CPU time): 0 tests passed, 1 failed, 0 skippe
 EOF
 
 cat >"$T/archive.txt" <<'EOF'
-Ran 4 tests for contracts/test/AerodromeAssetPositionAdapter.t.sol:AerodromeAssetPositionAdapterForkTest
+Ran 4 tests for contracts/test/ExampleAeroFork.t.sol:ExampleAeroForkTest
 [FAIL: backend: failed while inspecting; failed to get storage for 0xd0b53D9277642d899DF5C87A3966A349A798F224 at 7: HTTP error 403 with body: {"jsonrpc":"2.0","error":{"code":-32602,"message":"Archive requests require a personal token. Get one at: https://www.allnodes.com/publicnode"},"id":0}] test_twapPricedTotalAssets() (gas: 0)
 [FAIL: backend: failed while inspecting; failed to get account for 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913: FatalExternalError] test_slippageFloorReverts() (gas: 0)
 Suite result: FAILED. 2 passed; 2 failed; 0 skipped; finished in 40.00s (0.00ns CPU time)
@@ -66,10 +66,10 @@ EOF
 
 # A real regression whose trace happens to contain 429 in an amount.
 cat >"$T/assert.txt" <<'EOF'
-Ran 4 tests for contracts/test/UniswapV3AssetPositionAdapter.t.sol:UniV3AssetPositionAdapterForkTest
+Ran 4 tests for contracts/test/ExampleV3Fork.t.sol:ExampleV3ForkTest
 [FAIL: NAV deviation 1429 bps below guard 1500: 1429 < 1500] test_navGuardRevertsOnManipulatedSpot() (gas: 4290000)
 Traces:
-  [4290000] UniV3AssetPositionAdapterForkTest::test_navGuardRevertsOnManipulatedSpot()
+  [4290000] ExampleV3ForkTest::test_navGuardRevertsOnManipulatedSpot()
     ├─ [429] USDC::balanceOf(0x0000000000000000000000000000000000000001) [staticcall]
     │   └─ ← [Return] 429000000
 Suite result: FAILED. 3 passed; 1 failed; 0 skipped; finished in 18.00s (20.00s CPU time)
@@ -77,7 +77,7 @@ EOF
 
 # Same run: one test died on the provider, one failed a real assertion.
 cat >"$T/mixed.txt" <<'EOF'
-Ran 4 tests for contracts/test/UniswapV3AssetPositionAdapter.t.sol:UniV3AssetPositionAdapterForkTest
+Ran 4 tests for contracts/test/ExampleV3Fork.t.sol:ExampleV3ForkTest
 [FAIL: backend: failed while inspecting; failed to get storage for 0xd0b53D9277642d899DF5C87A3966A349A798F224 at 0: HTTP error 429 with body: error code: 1015] test_twapPricedTotalAssets() (gas: 0)
 [FAIL: slippage floor did not revert] test_slippageFloorReverts() (gas: 812345)
 Suite result: FAILED. 2 passed; 2 failed; 0 skipped; finished in 18.00s (20.00s CPU time)
@@ -94,7 +94,7 @@ EOF
 # transport diagnostic that actually explains it prints separately, above
 # the trace/Suite-result block.
 cat >"$T/bare_revert_provider.txt" <<'EOF'
-Ran 4 tests for contracts/test/AerodromeAssetPositionAdapter.t.sol:AerodromeAssetPositionAdapterForkTest
+Ran 4 tests for contracts/test/ExampleAeroFork.t.sol:ExampleAeroForkTest
 ERROR sharedbackend: Failed to send/recv `basic` err=failed to get account for 0x0AD08370c76Ff426F534bb2AFFD9b5555338ee68: Max retries exceeded HTTP error 429 with body: {"jsonrpc":"2.0","error":{"code":-32016,"message":"over rate limit"},"id":109}
 [FAIL: EvmError: Revert] test_fork_deploySwapsUsdcToWethAndPricesViaTwap() (block: 51915757) (gas: 7370)
 [FAIL: EvmError: Revert] test_fork_navDeviationGuardRevertsOnManipulatedSpot() (block: 51915757) (gas: 546203)
@@ -108,7 +108,7 @@ EOF
 # stay a test failure, never retried -- proves the bare-revert heuristic
 # does not just wave every unexplained revert through as "provider".
 cat >"$T/bare_revert_real_bug.txt" <<'EOF'
-Ran 1 test for contracts/test/AerodromeAssetPositionAdapter.t.sol:AerodromeAssetPositionAdapterForkTest
+Ran 1 test for contracts/test/ExampleAeroFork.t.sol:ExampleAeroForkTest
 [FAIL: EvmError: Revert] test_fork_withdrawRevertsBelowSlippageFloor() (block: 51915757) (gas: 7520)
 Suite result: FAILED. 0 passed; 1 failed; 0 skipped; finished in 8.35s (29.17s CPU time)
 EOF
@@ -139,7 +139,7 @@ run() {
   STUB_SCRIPT="$T/plan" FORGE_BIN="$T/forge" FORK_RPC_RETRY_DELAY_SECONDS=0 \
     FORK_RPC_PUBLIC_ENDPOINTS="${PUBLIC:-https://pub-a.invalid https://pub-b.invalid}" \
     GITHUB_OUTPUT="$T/gh_output" GITHUB_ACTIONS=false \
-    "$SCRIPT" "UniV3 fork" --match-contract UniV3AssetPositionAdapterForkTest -vvv \
+    "$SCRIPT" "UniV3 fork" --match-contract ExampleV3ForkTest -vvv \
     >"$T/out" 2>&1 && status=0 || status=$?
   echo "$status" >"$T/status"
 }

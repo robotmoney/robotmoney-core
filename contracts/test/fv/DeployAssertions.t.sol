@@ -19,7 +19,7 @@
 //     independently and never asserts they resolve to one pool. The #966 fix adds
 //     the equality check in addAsset; this asserts addAsset reverts on mismatch.
 //
-//   - ORA-6 (retired): the Chronicle decimals-scale guard went with ChronicleOracleAdapter
+//   - ORA-6 (retired): the Chronicle decimals-scale guard went with the Chronicle adapter
 //     (core 1492). rmRWA prices through the UniswapV3SwapAdapter TWAP.
 pragma solidity ^0.8.24;
 

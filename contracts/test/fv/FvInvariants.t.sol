@@ -222,7 +222,7 @@ contract FvInvariantsTest is Test {
     /// @notice ACL-5 (FLIPPED GREEN by #966) — the stale-override setter sits at a
     ///         higher tier than the unwind executor. Fix:
     ///         the unwind override setters are ADMIN_ROLE while `emergencyUnwind` stays
-    ///         EMERGENCY_ROLE (F-08). The RwaVault stale-override setter is deleted
+    ///         EMERGENCY_ROLE (F-08). The retired Chronicle vault's stale-override setter is deleted
     ///         with the Chronicle oracle (core 1492).
     function test_ACL5_expectedFail_emergencyOverrideIsHigherTier() public pure {
         _assertHolds("ACL-5");

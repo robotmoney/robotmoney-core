@@ -2,7 +2,7 @@
 // Canonical: docs/technical/smart-contract-invariants.md (ORA-7 — highest-leverage
 //            new invariant; ORA-1)
 //            docs/code-review/20260619-code-review-pekshield.md
-//            (Load-bearing insight: BasketVault/RwaVault maxSlippageBps floor is
+//            (Load-bearing insight: BasketVault maxSlippageBps floor is
 //             derived from the SAME TWAP that prices NAV → not an independent
 //             backstop; F-09/F-11/F-16 compose because of it.)
 //

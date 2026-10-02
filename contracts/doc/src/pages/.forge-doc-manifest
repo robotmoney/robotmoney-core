@@ -28,7 +28,6 @@ contracts/interfaces/interface.IAerodromeSlipstreamRouter.mdx
 contracts/interfaces/interface.IBasketSwapAdapter.mdx
 contracts/interfaces/interface.IComet.mdx
 contracts/interfaces/interface.IObservablePool.mdx
-contracts/interfaces/interface.IPositionAdapter.mdx
 contracts/interfaces/interface.IStrategyAdapter.mdx
 contracts/interfaces/interface.ISwapRouter.mdx
 contracts/interfaces/interface.IUniswapV3Pool.mdx

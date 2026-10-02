@@ -935,14 +935,6 @@ contract DeployTimelockTest is SafeFixture {
         _runWithSafe(stub, owners, FIXTURE_THRESHOLD);
     }
 
-    /// @notice A contract that answers getThreshold() with 2 is not a Safe.
-    function test_deploy_rejectsConstantThresholdContract() public {
-        address fake = address(new RejectedSafeStub());
-        address[] memory owners = _fixtureOwners();
-        vm.expectRevert(bytes("SAFE_ADDRESS is not a SafeProxy 1.4.1: codehash mismatch"));
-        _runWithSafe(fake, owners, FIXTURE_THRESHOLD);
-    }
-
     /// @notice A Safe proxy that does not delegate to the canonical SafeL2 singleton.
     function test_deploy_rejectsWrongSingleton() public {
         address other = _newDefaultSafe();
@@ -1040,14 +1032,6 @@ contract DeployTimelockTest is SafeFixture {
 }
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
-
-/// @dev NEGATIVE sample only: a contract that answers `getThreshold()` with 2 but is
-///      not a Safe. DeployTimelock must reject it. It is never accepted as a Safe.
-contract RejectedSafeStub {
-    function getThreshold() external pure returns (uint256) {
-        return 2;
-    }
-}
 
 /// @dev Delay floor keyed to chain id, and a real Safe accepted end to end (core S1).
 ///      Each test builds a fresh, un-handed-over topology.

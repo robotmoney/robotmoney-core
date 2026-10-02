@@ -71,13 +71,13 @@ contract ProtocolAssetVault is BasketVault {
     ///      call here reverted and the composition panel rendered "unavailable".
     ///
     ///      Declared per-vault rather than hoisted onto `BasketVault` because the
-    ///      base is shared with `RwaVault`, which has 82 bytes of EIP-170 runtime
+    ///      base is shared with `RwaBasketVault`, which has 82 bytes of EIP-170 runtime
     ///      margin. Measured on this branch: the hoist costs every `BasketVault`
-    ///      subclass 764 bytes, taking `RwaVault` from 24,494 B to 25,258 B —
+    ///      subclass 764 bytes, taking `RwaBasketVault` from 24,494 B to 25,258 B —
     ///      682 B OVER the 24,576 B limit, so `forge build --sizes` fails. Making
-    ///      room would mean refactoring `RwaVault`, which is out of scope for
+    ///      room would mean refactoring `RwaBasketVault`, which is out of scope for
     ///      #1364 (and the vault-family convergence that would give the family one
-    ///      declaration site is #1286). `RwaVault` is registered inactive and is
+    ///      declaration site is #1286). `RwaBasketVault` is registered inactive and is
     ///      not currently classified as a basket by the dapp; giving it
     ///      `shortlist()`, and the byte budget that would allow the hoist, are
     ///      tracked in #1435.

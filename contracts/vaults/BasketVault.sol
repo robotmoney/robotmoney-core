@@ -102,7 +102,7 @@ abstract contract BasketVault is
     ///         inspect which DEX each asset is wired to without parsing the
     ///         opaque adapter address.
     ///         V3       — Uniswap V3 via the built-in SWAP_ROUTER (adapter = address(0)).
-    ///         V4       — Uniswap V4 via a UniswapV4SwapAdapter.
+    ///         V4       — reserved; no V4 adapter ships.
     ///         Aerodrome — Aerodrome CL pool via an AerodromeSwapAdapter.
     enum Venue {
         V3,
@@ -462,7 +462,7 @@ abstract contract BasketVault is
     // ─── totalAssets ─────────────────────────────────────────────────
 
     /// @notice USDC value of all held assets (idle USDC + TWAP-priced basket assets).
-    /// @dev Marked `virtual` so subclasses (e.g. RwaVault) can inject oracle-freshness
+    /// @dev Marked `virtual` so subclasses (e.g. RwaBasketVault) can inject oracle-freshness
     ///      checks before delegating to this base implementation.
     function totalAssets() public view virtual override returns (uint256) {
         uint256 sum = _USDC.balanceOf(address(this));
@@ -988,7 +988,7 @@ abstract contract BasketVault is
     ///                  address and the corresponding `venue_`.
     /// @param venue_    DEX venue selector. Must match the adapter type:
     ///                  `Venue.V3` with `adapter_=address(0)`,
-    ///                  `Venue.V4` with a `UniswapV4SwapAdapter`,
+    ///                  `Venue.V4` (reserved; no V4 adapter ships),
     ///                  `Venue.Aerodrome` with an `AerodromeSwapAdapter`.
     ///                  Stored on `AssetInfo` so governance tooling can inspect
     ///                  the venue without decoding the adapter address.
