@@ -42,6 +42,10 @@ describe("static rules", () => {
     const c = fixture((f) => { f["dex-pools.json"].devnet = { pools: {} }; });
     expect(failures(c).some((x) => x.rule === "forbidden-key")).toBe(true);
   });
+  test("an agent config without swapRouter02 fails", () => {
+    const c = fixture((f) => { delete f["agent-token-shortlist.json"].swapRouter02; });
+    expect(failures(c).some((x) => x.rule === "swap-router-recorded")).toBe(true);
+  });
   test("a non-empty agent shortlist fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist = [{ symbol: "X" }]; });
     expect(failures(c).some((x) => x.rule === "launch-list-empty")).toBe(true);
@@ -95,10 +99,10 @@ describe("live rules against a fake RPC", () => {
 
   /** Per-pool live facts. Defaults match the committed config, so a test overrides one thing. */
   interface Live { fee?: number; cardinality?: number; liquidity?: bigint; factoryPool?: string }
-  function rpcFor(over: Record<string, Live> = {}): Rpc {
+  function rpcFor(over: Record<string, Live> = {}, noCode: string[] = []): Rpc {
     const feeOf = (pool: string) => Number(all.find((x) => x.pool.toLowerCase() === pool)!.poolFee);
     return async (method, params) => {
-      if (method === "eth_getCode") return "0x6001";
+      if (method === "eth_getCode") return noCode.includes(String(params[0]).toLowerCase()) ? "0x" : "0x6001";
       const { to, data } = params[0] as { to: string; data: string };
       const sel = data.slice(0, 10);
       const t = to.toLowerCase();
@@ -153,14 +157,33 @@ describe("live rules against a fake RPC", () => {
       expect(await bad({ [sym]: { liquidity: 0n } }, "liquidity>0", sym)).toBe(true);
     });
   }
-  test("a config whose wETH or cbBTC pool address is altered fails the factory rule", async () => {
-    const c = fixture((f) => {
-      f["protocol-assets.json"].assets[0].pool = "0x3333333333333333333333333333333333333333";
-      f["protocol-assets.json"].assets[1].poolFee = 3000;
+  // Config mutations against live truth (the committed config is the truth the fake RPC serves).
+  const failedRules = async (c: ReturnType<typeof loadConfigs>, noCode: string[] = []) => {
+    const r = await liveFindings(rpcFor({}, noCode), "latest", c);
+    return r.findings.filter((f) => !f.ok).map((f) => `${f.scope.split(":").pop()}/${f.rule}`);
+  };
+  const GHOST = "0x3333333333333333333333333333333333333333";
+  for (const [sym, idx, other] of [["wETH", 0, 1], ["cbBTC", 1, 0]] as const) {
+    test(`${sym}: a pool address with no code fails code:pool`, async () => {
+      const c = fixture((f) => { f["protocol-assets.json"].assets[idx].pool = GHOST; });
+      expect(await failedRules(c, [GHOST])).toContain(`${sym}/code:pool`);
     });
-    const r = await liveFindings(rpcFor(), "latest", c);
-    const failed = r.findings.filter((f) => !f.ok);
-    expect(failed.some((f) => f.scope.endsWith(":wETH") || f.scope.endsWith(":cbBTC"))).toBe(true);
+    test(`${sym}: another asset's pool address fails the token pairing and the factory rule`, async () => {
+      const c = fixture((f) => {
+        const as = f["protocol-assets.json"].assets;
+        as[idx].pool = as[other].pool;
+      });
+      const rules = await failedRules(c);
+      expect(rules).toContain(`${sym}/pool-is-token-usdc`);
+      expect(rules).toContain(`${sym}/factory-getPool-equals-config`);
+    });
+    test(`${sym}: a config fee that differs from the live pool fee fails`, async () => {
+      const c = fixture((f) => { f["protocol-assets.json"].assets[idx].poolFee = 3000; });
+      expect(await failedRules(c)).toContain(`${sym}/pool-fee-equals-config`);
+    });
+  }
+  test("the committed config has no failing rule with the same fake RPC", async () => {
+    expect(await failedRules(cfg)).toEqual([]);
   });
   test("main exits non-zero when any live rule fails", async () => {
     const r = await liveFindings(rpcFor({ cbBTC: { liquidity: 0n } }), "latest", cfg);

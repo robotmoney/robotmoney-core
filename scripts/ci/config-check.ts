@@ -8,7 +8,7 @@
 //   - deSPXA is listed with Uniswap V3 fee 500 and nothing else in rwa-assets.json
 //   - wSOL, BNKR, JUNO and RM are absent (no usable pool at launch)
 //   - no Chronicle, V4, Aerodrome, mainnet or devnet key anywhere in config/
-//   - agent-token-shortlist.json launch list is empty
+//   - agent-token-shortlist.json launch list is empty and records swapRouter02 (the script parser needs it)
 // Live rules (per asset, pinned to one block): token, pool, factory and router have code,
 //   pool fee() equals config, factory.getPool equals config, observationCardinality >= 2,
 //   liquidity() > 0, USD TVL (USDC reserve plus other side at slot0 price) >= the file's
@@ -45,7 +45,7 @@ export interface AssetFile {
 export interface Configs {
   protocol: AssetFile;
   rwa: AssetFile;
-  agent: { shortlist: unknown[] };
+  agent: { shortlist: unknown[]; swapRouter02?: string };
   dexPools: Record<string, unknown>;
   /** Raw parsed JSON of every config/*.json, keyed by file name. */
   raw: Record<string, unknown>;
@@ -69,7 +69,7 @@ export function loadConfigs(dir: string): Configs {
   return {
     protocol: need("protocol-assets.json") as AssetFile,
     rwa: need("rwa-assets.json") as AssetFile,
-    agent: need("agent-token-shortlist.json") as { shortlist: unknown[] },
+    agent: need("agent-token-shortlist.json") as { shortlist: unknown[]; swapRouter02?: string },
     dexPools: need("dex-pools.json") as Record<string, unknown>,
     raw,
   };
@@ -114,6 +114,9 @@ export function staticFindings(c: Configs): Finding[] {
   const protoSyms = (c.protocol.assets ?? []).map((a) => a.symbol).sort();
   add("protocol-assets.json", "weth-cbbtc-only", JSON.stringify(protoSyms) === JSON.stringify(["cbBTC", "wETH"]), `symbols=${protoSyms.join(",")}`);
   add("agent-token-shortlist.json", "launch-list-empty", Array.isArray(c.agent.shortlist) && c.agent.shortlist.length === 0, `entries=${c.agent.shortlist?.length}`);
+  // The rmAGENT script reads swapRouter02 from this file even while the list is empty.
+  add("agent-token-shortlist.json", "swap-router-recorded",
+    c.agent.swapRouter02?.toLowerCase() === "0x2626664c2603336e57b271c5c0b26f421741e481", `router=${c.agent.swapRouter02}`);
   for (const [name, f] of [["protocol-assets.json", c.protocol], ["rwa-assets.json", c.rwa]] as const) {
     add(name, "venues-recorded",
       f.swapRouter02?.toLowerCase() === "0x2626664c2603336e57b271c5c0b26f421741e481" &&
