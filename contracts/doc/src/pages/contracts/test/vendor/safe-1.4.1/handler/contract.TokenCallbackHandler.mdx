@@ -1,0 +1,146 @@
+---
+title: "TokenCallbackHandler"
+---
+
+# TokenCallbackHandler
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/vendor/safe-1.4.1/handler/TokenCallbackHandler.sol)
+
+**Inherits:** [ERC1155TokenReceiver](/contracts/test/vendor/safe-1.4.1/interfaces/interface.ERC1155TokenReceiver), [ERC777TokensRecipient](/contracts/test/vendor/safe-1.4.1/interfaces/interface.ERC777TokensRecipient), [ERC721TokenReceiver](/contracts/test/vendor/safe-1.4.1/interfaces/interface.ERC721TokenReceiver), [IERC165](/contracts/test/vendor/safe-1.4.1/interfaces/interface.IERC165)
+
+**Title:** Default Callback Handler - Handles supported tokens' callbacks, allowing Safes receiving these tokens.
+
+**Author:** Richard Meissner - @rmeissner
+
+## Functions
+
+<a id="onerc1155received-address-address-uint256-uint256-bytes"></a>
+
+### onERC1155Received
+
+Handles ERC1155 Token callback.
+return Standardized onERC1155Received return value.
+
+```solidity
+function onERC1155Received(address, address, uint256, uint256, bytes calldata) external pure override returns (bytes4);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+| _ | `address` |  |
+| _ | `uint256` |  |
+| _ | `uint256` |  |
+| _ | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes4` |  |
+
+<a id="onerc1155batchreceived-address-address-uint256-uint256-bytes"></a>
+
+### onERC1155BatchReceived
+
+Handles ERC1155 Token batch callback.
+return Standardized onERC1155BatchReceived return value.
+
+```solidity
+function onERC1155BatchReceived(
+        address,
+        address,
+        uint256[] calldata,
+        uint256[] calldata,
+        bytes calldata
+    ) external pure override returns (bytes4);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+| _ | `address` |  |
+| _ | `uint256[]` |  |
+| _ | `uint256[]` |  |
+| _ | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes4` |  |
+
+<a id="onerc721received-address-address-uint256-bytes"></a>
+
+### onERC721Received
+
+Handles ERC721 Token callback.
+ return Standardized onERC721Received return value.
+
+```solidity
+function onERC721Received(address, address, uint256, bytes calldata) external pure override returns (bytes4);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+| _ | `address` |  |
+| _ | `uint256` |  |
+| _ | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes4` |  |
+
+<a id="tokensreceived-address-address-address-uint256-bytes-bytes"></a>
+
+### tokensReceived
+
+Handles ERC777 Token callback.
+return nothing (not standardized)
+
+```solidity
+function tokensReceived(address, address, address, uint256, bytes calldata, bytes calldata) external pure override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+| _ | `address` |  |
+| _ | `address` |  |
+| _ | `uint256` |  |
+| _ | `bytes` |  |
+| _ | `bytes` |  |
+
+<a id="supportsinterface-bytes4"></a>
+
+### supportsInterface
+
+Implements ERC165 interface support for ERC1155TokenReceiver, ERC721TokenReceiver and IERC165.
+
+```solidity
+function supportsInterface(bytes4 interfaceId) external view virtual override returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| interfaceId | `bytes4` | Id of the interface. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` | if the interface is supported. |
+

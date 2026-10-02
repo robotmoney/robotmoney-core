@@ -28,10 +28,11 @@ Every name in `requiredEnv` is read with no fallback. An unset or malformed valu
 - `DEPLOYMENT_OUT` for every stage. The core runner sets it. A devops caller that runs a script directly must set it too. There is no `deployments/<vault>-<chainid>.json` default.
 - `vault`: `SEED_DEPOSIT_USDC` (non-zero, 6-decimal units) and `VAULT_EXIT_FEE_BPS`.
 - `governance`: `QUORUM_THRESHOLD` (greater than 1), `VOTING_PERIOD` and `EXECUTION_DELAY` (seconds, at least the contract minimum).
-- `proto`, `agent`, `rwa`: `EXIT_FEE_BPS`.
+- `registry`: `VAULT_NAME` (the registered name comes from the sheet; there is no default).
+- `proto`, `agent`, `rwa`: the same four names as `vault` (`FEE_RECIPIENT_ADDRESS`, `VAULT_TVL_CAP`, `VAULT_PER_DEPOSIT_CAP`, `VAULT_EXIT_FEE_BPS`). Every vault is set up the same way.
 
 The `vault` manifest (`vault.json`) exposes the seed result: `seed_share_receiver`, `seed_shares` and `deployer_share_balance_after` (always 0, read from the vault after the seed). `SEED_SHARE_RECEIVER` is never zero and never the deployer.
 
 For devops: verify must assert `deployer_share_balance_after == 0` in the manifest, and must read `vault.balanceOf(deployer) == 0` and `vault.balanceOf(seed_share_receiver) >= seed_shares` on chain.
 
-The frozen sheet must carry a value for each of these. `0` is a valid exit fee. `optionalEnv` now holds only `EXPECTED_CHAIN_ID` and `VAULT_NAME`.
+The frozen sheet must carry a value for each of these. `0` is a valid exit fee. `optionalEnv` now holds only `EXPECTED_CHAIN_ID`.

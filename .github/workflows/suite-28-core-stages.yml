@@ -1,4 +1,4 @@
-# Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S3 (1485), S5 (1487), 1493.
+# Canonical: the one-deployment-scheme plan, core S3 (1485), S5 (1487), 1493.
 #
 # The core stage runner (scripts/deploy/core-stages.ts) and its assertion scripts replace the old
 # shell stack. The offline job runs on every pull request: the stage table, the manifest rules and the
@@ -107,9 +107,8 @@ jobs:
       TIMELOCK_MIN_DELAY: ${{ inputs.timelock_min_delay }}
       RECEIPT_ADMIN_ADDRESS: ${{ inputs.deployer }}
       SWAP_ROUTER: "0x2626664c2603336E57B271c5C0b26F421741e481"
-      TVL_CAP: "1000000000"
-      PER_DEPOSIT_CAP: "100000000"
-      FEE_RECIPIENT: ${{ inputs.fee_recipient_address }}
+      VAULT_NAME: "Robot Money USDC"
+      VAULT_EXIT_FEE_BPS: "0"
       VAULT_TVL_CAP: "1000000000"
       VAULT_PER_DEPOSIT_CAP: "100000000"
       EXPECTED_CHAIN_ID: "918453"

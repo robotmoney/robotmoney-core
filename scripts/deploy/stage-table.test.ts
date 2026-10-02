@@ -1,4 +1,4 @@
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core stage table.
+// Canonical: the one-deployment-scheme plan, core stage table.
 // Offline test: stage-table.json agrees with the real scripts. Run: bun test scripts/deploy/stage-table.test.ts
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";

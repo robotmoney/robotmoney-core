@@ -5,7 +5,7 @@ description: "Foundry deploy script for the VaultRegistry contract. Deploys Vaul
 
 # DeployVaultRegistry
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/DeployVaultRegistry.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/script/DeployVaultRegistry.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -16,29 +16,30 @@ Deploys VaultRegistry and registers RobotMoneyVault as an Active vault.
 Idempotent: if the vault is already registered the registration step
 is skipped without reverting.
 
-The deployed registry address is appended to the shared devnet
-deployment JSON so rmpc and the dapp can discover it without
-manual editing.
+The deployed registry address is written to the manifest at
+DEPLOYMENT_OUT so rmpc and the dapp discover it without manual editing.
 
 Required env vars:
 ADMIN_ADDRESS    — receives ADMIN_ROLE on the registry
 VAULT_ADDRESS    — RobotMoneyVault to register
-USDC_ADDRESS     — ERC-20 asset the vault denominates in
 
-Optional env vars:
-VAULT_NAME       — human-readable vault name
-(default: "Robot Money USDC")
-DEPLOYMENT_OUT   — path for the output JSON
-(default: "deployments/registry-&lt;chain_id>.json")
+VAULT_NAME       — registered vault name, from the frozen sheet (no default)
+USDC is the canonical Base USDC constant on every chain.
+Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
+(mandatory and equal to 8453 on Base mainnet).
 
 ## Constants
 
-### DEFAULT_VAULT_NAME
+### MANIFEST_FILE
 
-Default vault name used when VAULT_NAME env var is unset.
+<i>
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+</i>
 
 ```solidity
-string public constant DEFAULT_VAULT_NAME = "Robot Money USDC";
+string public constant MANIFEST_FILE = "registry.json";
 ```
 
 ## Functions
@@ -50,8 +51,8 @@ string public constant DEFAULT_VAULT_NAME = "Robot Money USDC";
 Forge broadcast entrypoint. Reads env vars, deploys registry,
 registers the vault (idempotently), and writes a deployment JSON.
 
-In broadcast mode the broadcaster IS admin (the smoke-test devnet
-runs the script with the admin private key), so msg.sender on
+In broadcast mode the broadcaster IS admin (the deployer signs
+the broadcast), so msg.sender on
 registerVault holds ADMIN_ROLE. No vm.prank is needed or allowed.
 
 ```solidity
@@ -144,30 +145,6 @@ function _logResult(Deployed memory d) internal view;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
-
-<a id="_envstringordefault-string-string"></a>
-
-### _envStringOrDefault
-
-```solidity
-function _envStringOrDefault(string memory key, string memory fallback_)
-        internal
-        view
-        returns (string memory);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| key | `string` |  |
-| fallback_ | `string` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `string` |  |
 
 <a id="_writedeploymentjson-deployed"></a>
 

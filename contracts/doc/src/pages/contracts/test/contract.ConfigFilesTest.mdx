@@ -1,0 +1,67 @@
+---
+title: "ConfigFilesTest"
+description: "Reads the launch config files and pins the facts S2 fixed. Offline: no RPC."
+---
+
+# ConfigFilesTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/ConfigFiles.t.sol)
+
+**Inherits:** Test
+
+Reads the launch config files and pins the facts S2 fixed. Offline: no RPC.
+
+## Constants
+
+### DESPXA_POOL
+
+```solidity
+address internal constant DESPXA_POOL = 0xD08f1fb797BfaCdeD23323178672557034c64CfA;
+```
+
+### SWAP_ROUTER02
+
+```solidity
+address internal constant SWAP_ROUTER02 = 0x2626664c2603336E57B271c5C0b26F421741e481;
+```
+
+### V3_FACTORY
+
+```solidity
+address internal constant V3_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
+```
+
+## Functions
+
+<a id="test_config_rwaassetsisdespxaonlyonfee500"></a>
+
+### test_Config_rwaAssetsIsDespxaOnlyOnFee500
+
+```solidity
+function test_Config_rwaAssetsIsDespxaOnlyOnFee500() public view;
+```
+
+<a id="test_config_protocolassetsiswethandcbbtc"></a>
+
+### test_Config_protocolAssetsIsWethAndCbbtc
+
+```solidity
+function test_Config_protocolAssetsIsWethAndCbbtc() public view;
+```
+
+<a id="test_config_agentshortlistisempty"></a>
+
+### test_Config_agentShortlistIsEmpty
+
+```solidity
+function test_Config_agentShortlistIsEmpty() public view;
+```
+
+<a id="test_config_agentshortlistcarriesswaprouter02"></a>
+
+### test_Config_agentShortlistCarriesSwapRouter02
+
+```solidity
+function test_Config_agentShortlistCarriesSwapRouter02() public view;
+```
+

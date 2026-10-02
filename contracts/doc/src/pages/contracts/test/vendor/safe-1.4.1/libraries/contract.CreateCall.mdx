@@ -1,0 +1,80 @@
+---
+title: "CreateCall"
+description: "This contract provides functions for deploying a new contract using the create and create2 opcodes."
+---
+
+# CreateCall
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/vendor/safe-1.4.1/libraries/CreateCall.sol)
+
+**Title:** Create Call - Allows to use the different create opcodes to deploy a contract.
+
+**Author:** Richard Meissner - @rmeissner
+
+This contract provides functions for deploying a new contract using the create and create2 opcodes.
+
+## Functions
+
+<a id="performcreate2-uint256-bytes-bytes32"></a>
+
+### performCreate2
+
+Deploys a new contract using the create2 opcode.
+
+```solidity
+function performCreate2(uint256 value, bytes memory deploymentData, bytes32 salt) public returns (address newContract);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `uint256` | The value in wei to be sent with the contract creation. |
+| deploymentData | `bytes` | The initialisation code of the contract to be created. |
+| salt | `bytes32` | The salt value to use for the contract creation. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newContract | `address` | The address of the newly created contract. |
+
+<a id="performcreate-uint256-bytes"></a>
+
+### performCreate
+
+Deploys a new contract using the create opcode.
+
+```solidity
+function performCreate(uint256 value, bytes memory deploymentData) public returns (address newContract);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `uint256` | The value in wei to be sent with the contract creation. |
+| deploymentData | `bytes` | The initialisation code of the contract to be created. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newContract | `address` | The address of the newly created contract. |
+
+## Events
+
+### ContractCreation
+
+Emitted when a new contract is created
+
+```solidity
+event ContractCreation(address indexed newContract);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newContract | `address` |  |
+

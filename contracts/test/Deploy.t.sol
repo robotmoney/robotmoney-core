@@ -2,6 +2,7 @@
 // Canonical: none — Foundry test for the core stage scripts (libs, vault, registry, router, gateway)
 pragma solidity ^0.8.24;
 
+import {VaultTestParams} from "./helpers/VaultTestParams.sol";
 import {Test, Vm} from "forge-std/Test.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 
@@ -307,14 +308,14 @@ contract DeployTest is Test {
     function test_deploy_revertsWhenUsdcAddressZero() public {
         DeployVault vs = stages.vaultScript();
         vm.expectRevert(bytes("USDC_ADDRESS=0"));
-        vs.runInProcessWith(admin, address(0));
+        vs.runInProcessWithParams(VaultTestParams.params(admin, address(0)));
     }
 
     function test_deploy_revertsWhenUsdcAddressHasNoCode() public {
         DeployVault vs = stages.vaultScript();
         address eoa = makeAddr("not-a-token");
         vm.expectRevert(bytes("USDC_ADDRESS has no code"));
-        vs.runInProcessWith(admin, eoa);
+        vs.runInProcessWithParams(VaultTestParams.params(admin, eoa));
     }
 
     // --- Role-separation invariant (issue #10's headline test) ----------
@@ -382,7 +383,7 @@ contract DeployTest is Test {
 
     function test_deploy_seedDepositAmount_isOneUsdc() public view {
         assertEq(
-            stages.vaultScript().SEED_DEPOSIT_AMOUNT(),
+            VaultTestParams.SEED_DEPOSIT_AMOUNT,
             1_000_000,
             "SEED_DEPOSIT_AMOUNT must be 1_000_000 (1 USDC in 6-decimal units)"
         );

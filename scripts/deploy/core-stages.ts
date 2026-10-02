@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S3 (issue 1485), core 1493.
+// Canonical: the one-deployment-scheme plan, core S3 (issue 1485), core 1493.
 //
 // The core deploy as data: scripts/deploy/stage-table.json (the one table, read by devops too), one runner. The order is libs, vault, registry,
 // router, gateway, governance, ic-policy, proto, agent, rwa (rmPROTO, rmAGENT, rmRWA), then the
@@ -31,7 +31,7 @@
 // A failing proof stops the run with a non-zero exit. A proof whose stage did not run is not run.
 // Inputs come from the environment, the same names the scripts read (ADMIN_ADDRESS, PAUSER_ADDRESS,
 // AGENT_ADDRESS, SHARE_RECEIVER_ADDRESS, FEE_RECIPIENT_ADDRESS, SEED_SHARE_RECEIVER, VAULT_TVL_CAP,
-// VAULT_PER_DEPOSIT_CAP, AGENT_*). The runner sets DEPLOYMENT_OUT, VAULT_ADDRESS, REGISTRY_ADDRESS
+// VAULT_PER_DEPOSIT_CAP, VAULT_EXIT_FEE_BPS, VAULT_NAME, AGENT_*). The runner sets DEPLOYMENT_OUT, VAULT_ADDRESS, REGISTRY_ADDRESS
 // and ROUTER_ADDRESS per stage from the stage manifests.
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";

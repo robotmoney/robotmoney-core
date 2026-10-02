@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S2 (issue 1484).
+// Canonical: the one-deployment-scheme plan, core S2 (issue 1484).
 //
 // Read-only check of the launch config against live Base. Never sends a transaction.
 //

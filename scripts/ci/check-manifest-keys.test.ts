@@ -1,4 +1,4 @@
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S3 (issue 1485).
+// Canonical: the one-deployment-scheme plan, core S3 (issue 1485).
 // The gate exits non-zero when a retired key is planted and zero on the final tree.
 // Run: bun test scripts/ci/check-manifest-keys.test.ts
 import { describe, expect, test } from "bun:test";

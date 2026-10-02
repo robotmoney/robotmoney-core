@@ -1,7 +1,7 @@
 // Sheet diff: the stage sheet versus the production sheet differ only in parameter lines.
 // Usage: bun scripts/stage/sheet-diff.ts <stage-sheet> <production-sheet>
 // Exits non-zero on any difference outside the allow-list below.
-// Canonical: robotmoney/devops docs/plans/one-deployment-scheme.md (principles 2, 24; S9, core 1488).
+// Canonical: the one-deployment-scheme plan (principles 2, 24; S9, core 1488).
 import { readFileSync } from "node:fs";
 
 /** Keys whose VALUE may differ between stage and production (run parameters). */
@@ -15,7 +15,6 @@ export const PARAMETER_KEYS = new Set([
   "VAULT_PER_DEPOSIT_CAP",
   "SEED_DEPOSIT_USDC",
   "VAULT_EXIT_FEE_BPS",
-  "EXIT_FEE_BPS",
   "AGENT_MAX_PER_PAYMENT",
   "AGENT_MAX_PER_WINDOW",
   "AGENT_WINDOW_SECONDS",

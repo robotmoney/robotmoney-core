@@ -4,7 +4,7 @@ title: "AgentTokenVaultTest"
 
 # AgentTokenVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/AgentTokenVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/AgentTokenVault.t.sol)
 
 **Inherits:** Test
 
@@ -145,19 +145,5 @@ function test_governance_shortlist_add_delay_is_48h() public view;
 
 ```solidity
 function test_governance_shortlist_remove_delay_is_24h() public view;
-```
-
-<a id="test_demo_seed_registers_agent_token_vault_with_shortlist"></a>
-
-### test_demo_seed_registers_agent_token_vault_with_shortlist
-
-Exercises the real demo seed chain: DeployDemoExtraVaults.run()
-deploys + seeds AgentTokenVault with the three real-asset demo
-tokens (BNKR/V3, JUNO/V4, RM/Aerodrome), registers it in
-VaultRegistry, and makes it router-eligible (issue #560).
-The vault is reachable via the same registry path the dapp uses.
-
-```solidity
-function test_demo_seed_registers_agent_token_vault_with_shortlist() public;
 ```
 

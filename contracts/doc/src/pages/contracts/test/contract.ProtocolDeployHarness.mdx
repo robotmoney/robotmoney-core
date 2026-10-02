@@ -1,0 +1,34 @@
+---
+title: "ProtocolDeployHarness"
+---
+
+# ProtocolDeployHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/DeployProtocolAssetVault.t.sol)
+
+**Inherits:** [DeployProtocolAssetVault](/contracts/script/contract.DeployProtocolAssetVault)
+
+<i>
+
+Exposes the manifest writer so a test reads the file back without the process-wide env.
+
+</i>
+
+## Functions
+
+<a id="writemanifestto-string-deployed-string"></a>
+
+### writeManifestTo
+
+```solidity
+function writeManifestTo(string memory path, Deployed memory d, string memory json) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| path | `string` |  |
+| d | `Deployed` |  |
+| json | `string` |  |
+

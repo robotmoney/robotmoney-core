@@ -1,0 +1,295 @@
+---
+title: "ModuleManager"
+description: "Modules are extensions with unlimited access to a Safe that can be added to a Safe by its owners. ⚠️ WARNING: Modules are a security risk since they can execute arbitrary transactions, so only trusted and audited modules should be added to a Safe. A malicious module can completely takeover a Safe."
+---
+
+# ModuleManager
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/vendor/safe-1.4.1/base/ModuleManager.sol)
+
+**Inherits:** [SelfAuthorized](/contracts/test/vendor/safe-1.4.1/common/abstract.SelfAuthorized), [Executor](/contracts/test/vendor/safe-1.4.1/base/abstract.Executor)
+
+**Title:** Module Manager - A contract managing Safe modules
+
+**Authors:** Stefan George - @Georgi87, Richard Meissner - @rmeissner
+
+Modules are extensions with unlimited access to a Safe that can be added to a Safe by its owners.
+           ⚠️ WARNING: Modules are a security risk since they can execute arbitrary transactions, 
+           so only trusted and audited modules should be added to a Safe. A malicious module can
+           completely takeover a Safe.
+
+## Constants
+
+### SENTINEL_MODULES
+
+```solidity
+address internal constant SENTINEL_MODULES = address(0x1);
+```
+
+## State Variables
+
+### modules
+
+```solidity
+mapping(address => address) internal modules;
+```
+
+## Functions
+
+<a id="setupmodules-address-bytes"></a>
+
+### setupModules
+
+Setup function sets the initial storage of the contract.
+        Optionally executes a delegate call to another contract to setup the modules.
+
+```solidity
+function setupModules(address to, bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` | Optional destination address of call to execute. |
+| data | `bytes` | Optional data of call to execute. |
+
+<a id="enablemodule-address"></a>
+
+### enableModule
+
+Enables the module `module` for the Safe.
+
+<i>
+
+This can only be done via a Safe transaction.
+
+</i>
+
+```solidity
+function enableModule(address module) public authorized;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| module | `address` | Module to be whitelisted. |
+
+<a id="disablemodule-address-address"></a>
+
+### disableModule
+
+Disables the module `module` for the Safe.
+
+<i>
+
+This can only be done via a Safe transaction.
+
+</i>
+
+```solidity
+function disableModule(address prevModule, address module) public authorized;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prevModule | `address` | Previous module in the modules linked list. |
+| module | `address` | Module to be removed. |
+
+<a id="exectransactionfrommodule-address-uint256-bytes-enum-operation"></a>
+
+### execTransactionFromModule
+
+Execute `operation` (0: Call, 1: DelegateCall) to `to` with `value` (Native Token)
+
+<i>
+
+Function is virtual to allow overriding for L2 singleton to emit an event for indexing.
+
+</i>
+
+```solidity
+function execTransactionFromModule(
+        address to,
+        uint256 value,
+        bytes memory data,
+        Enum.Operation operation
+    ) public virtual returns (bool success);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` | Destination address of module transaction. |
+| value | `uint256` | Ether value of module transaction. |
+| data | `bytes` | Data payload of module transaction. |
+| operation | `Enum.Operation` | Operation type of module transaction. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| success | `bool` | Boolean flag indicating if the call succeeded. |
+
+<a id="exectransactionfrommodulereturndata-address-uint256-bytes-enum-operation"></a>
+
+### execTransactionFromModuleReturnData
+
+Execute `operation` (0: Call, 1: DelegateCall) to `to` with `value` (Native Token) and return data
+
+```solidity
+function execTransactionFromModuleReturnData(
+        address to,
+        uint256 value,
+        bytes memory data,
+        Enum.Operation operation
+    ) public returns (bool success, bytes memory returnData);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` | Destination address of module transaction. |
+| value | `uint256` | Ether value of module transaction. |
+| data | `bytes` | Data payload of module transaction. |
+| operation | `Enum.Operation` | Operation type of module transaction. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| success | `bool` | Boolean flag indicating if the call succeeded. |
+| returnData | `bytes` | Data returned by the call. |
+
+<a id="ismoduleenabled-address"></a>
+
+### isModuleEnabled
+
+Returns if an module is enabled
+
+```solidity
+function isModuleEnabled(address module) public view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| module | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` | True if the module is enabled |
+
+<a id="getmodulespaginated-address-uint256"></a>
+
+### getModulesPaginated
+
+Returns an array of modules.
+        If all entries fit into a single page, the next pointer will be 0x1.
+        If another page is present, next will be the last element of the returned array.
+
+```solidity
+function getModulesPaginated(address start, uint256 pageSize) external view returns (address[] memory array, address next);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| start | `address` | Start of the page. Has to be a module or start pointer (0x1 address) |
+| pageSize | `uint256` | Maximum number of modules that should be returned. Has to be > 0 |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| array | `address[]` | Array of modules. |
+| next | `address` | Start of the next page. |
+
+<a id="iscontract-address"></a>
+
+### isContract
+
+Returns true if `account` is a contract.
+
+<i>
+
+This function will return false if invoked during the constructor of a contract,
+     as the code is not actually created until after the constructor finishes.
+
+</i>
+
+```solidity
+function isContract(address account) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` | The address being queried |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+## Events
+
+### EnabledModule
+
+```solidity
+event EnabledModule(address indexed module);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| module | `address` |  |
+
+### DisabledModule
+
+```solidity
+event DisabledModule(address indexed module);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| module | `address` |  |
+
+### ExecutionFromModuleSuccess
+
+```solidity
+event ExecutionFromModuleSuccess(address indexed module);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| module | `address` |  |
+
+### ExecutionFromModuleFailure
+
+```solidity
+event ExecutionFromModuleFailure(address indexed module);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| module | `address` |  |
+

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops) — core S3, stage "libs"
+// Canonical: the one-deployment-scheme plan — core S3, stage "libs"
 pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";

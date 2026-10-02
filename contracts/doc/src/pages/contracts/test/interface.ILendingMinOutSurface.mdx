@@ -1,0 +1,152 @@
+---
+title: "ILendingMinOutSurface"
+---
+
+# ILendingMinOutSurface
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/AdapterPositionConformance.t.sol)
+
+<i>
+
+Test-local view of the min-out surface the lending adapters expose
+beside `IStrategyAdapter`. Shared errors (`OnlyVault`, `SlippageExceeded`)
+have identical selectors on every adapter.
+
+</i>
+
+## Functions
+
+<a id="deploy-uint256-uint256"></a>
+
+### deploy
+
+```solidity
+function deploy(uint256 usdcIn, uint256 minValueOut) external returns (uint256 valueAdded);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcIn | `uint256` |  |
+| minValueOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| valueAdded | `uint256` |  |
+
+<a id="withdraw-uint256-uint256"></a>
+
+### withdraw
+
+```solidity
+function withdraw(uint256 usdcWanted, uint256 minUsdcOut) external returns (uint256 usdcOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcWanted | `uint256` |  |
+| minUsdcOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcOut | `uint256` |  |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+```solidity
+function totalAssets() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="isexact"></a>
+
+### isExact
+
+```solidity
+function isExact() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="harvestrewards"></a>
+
+### harvestRewards
+
+```solidity
+function harvestRewards() external;
+```
+
+<a id="sweepforeigntoken-address"></a>
+
+### sweepForeignToken
+
+```solidity
+function sweepForeignToken(address token) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
+<a id="usdc"></a>
+
+### USDC
+
+```solidity
+function USDC() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="vault"></a>
+
+### VAULT
+
+```solidity
+function VAULT() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+## Errors
+
+### OnlyVault
+
+```solidity
+error OnlyVault();
+```
+
+### SlippageExceeded
+
+```solidity
+error SlippageExceeded();
+```
+

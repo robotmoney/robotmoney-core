@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S4 (issue 1486)
+// Canonical: the one-deployment-scheme plan, core S4 (issue 1486)
 //            docs/architecture.md §4.1 — Vault Family (basket vaults)
 //
 // One production path for the three basket vaults (rmPROTO, rmAGENT, rmRWA). The scripts differ
@@ -95,10 +95,10 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         p.swapRouter = _envAddressRequired(string.concat(prefix, "SWAP_ROUTER"));
         p.usdc = BASE_USDC;
         p.registry = _envAddressRequired(string.concat(prefix, "REGISTRY_ADDRESS"));
-        p.tvlCap = _envUintRequired(string.concat(prefix, "TVL_CAP"));
-        p.perDepositCap = _envUintRequired(string.concat(prefix, "PER_DEPOSIT_CAP"));
-        p.exitFeeBps = _envUintRequired(string.concat(prefix, "EXIT_FEE_BPS"));
-        p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT"));
+        p.tvlCap = _envUintRequired(string.concat(prefix, "VAULT_TVL_CAP"));
+        p.perDepositCap = _envUintRequired(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"));
+        p.exitFeeBps = _envUintRequired(string.concat(prefix, "VAULT_EXIT_FEE_BPS"));
+        p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"));
     }
 
     /// @dev The broadcast entrypoint shared by the three scripts. The chain guard is the first
@@ -163,10 +163,12 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         require(p.swapRouter != address(0), "SWAP_ROUTER=0");
         require(p.usdc != address(0), "usdc=0");
         require(p.registry != address(0), "REGISTRY_ADDRESS=0");
-        require(p.feeRecipient != address(0), "FEE_RECIPIENT=0");
-        require(p.tvlCap != 0, "TVL_CAP missing from the sheet");
-        require(p.perDepositCap != 0, "PER_DEPOSIT_CAP missing from the sheet");
-        require(p.perDepositCap <= p.tvlCap, "PER_DEPOSIT_CAP exceeds TVL_CAP");
+        require(p.feeRecipient != address(0), "FEE_RECIPIENT_ADDRESS=0");
+        require(p.feeRecipient != msg.sender, "FEE_RECIPIENT_ADDRESS=deployer");
+        require(p.feeRecipient != p.admin, "FEE_RECIPIENT_ADDRESS=admin");
+        require(p.tvlCap != 0, "VAULT_TVL_CAP missing from the sheet");
+        require(p.perDepositCap != 0, "VAULT_PER_DEPOSIT_CAP missing from the sheet");
+        require(p.perDepositCap <= p.tvlCap, "VAULT_PER_DEPOSIT_CAP exceeds VAULT_TVL_CAP");
         require(cfg.swapRouter02 != address(0), "config swapRouter02 unset");
         require(p.swapRouter == cfg.swapRouter02, "SWAP_ROUTER is not SwapRouter02");
 

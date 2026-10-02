@@ -1,17 +1,17 @@
 ---
 title: "DeployTimelockAgentHandoverTest"
-description: "A full Deploy -> DeployTimelock run hands every deployer-owned gateway agent to the TimelockController: the deploy agent Deploy.s.sol authorizes and a stage-style submitter agent the deployer authorizes afterwards. After the handover the timelock owns both, both keep AGENT_ROLE, and the deployer can no longer call setPolicy or revokeAgent on them."
+description: "A full stage-sequence -> DeployTimelock run hands every deployer-owned gateway agent to the TimelockController: the deploy agent the gateway stage authorizes and a stage-style submitter agent the deployer authorizes afterwards. After the handover the timelock owns both, both keep AGENT_ROLE, and the deployer can no longer call setPolicy or revokeAgent on them."
 ---
 
 # DeployTimelockAgentHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0bc10c273f691fbe4d3070da0bd42a62fa604443/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/DeployTimelock.t.sol)
 
-**Inherits:** Test
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
 
-A full Deploy -> DeployTimelock run hands every deployer-owned gateway
-agent to the TimelockController: the deploy agent Deploy.s.sol
-authorizes and a stage-style submitter agent the deployer authorizes
+A full stage-sequence -> DeployTimelock run hands every deployer-owned gateway
+agent to the TimelockController: the deploy agent the gateway
+stage authorizes and a stage-style submitter agent the deployer authorizes
 afterwards. After the handover the timelock owns both, both keep
 AGENT_ROLE, and the deployer can no longer call setPolicy or
 revokeAgent on them.
@@ -77,7 +77,7 @@ address internal submitter = makeAddr("stage-submitter");
 ### dep
 
 ```solidity
-Deploy.Deployed internal dep;
+CoreStages.Stack internal dep;
 ```
 
 ### gateway
@@ -266,7 +266,7 @@ function test_manifestRecordsDeployerOwnedListedAgent_whenOneIsStillOwned() publ
 
 <i>
 
-A fresh Deploy.s.sol stack owned by `script_`, plus a second agent
+A fresh core stack (CoreStages) owned by `script_`, plus a second agent
 the deployer authorizes, so a case can change the agents' roles
 before its own handover.
 
@@ -275,7 +275,7 @@ before its own handover.
 ```solidity
 function _freshStack(DeployTimelock script_, address agent_, address second_)
         internal
-        returns (Deploy.Deployed memory dep_, address[] memory agents_);
+        returns (CoreStages.Stack memory dep_, address[] memory agents_);
 ```
 
 **Parameters**
@@ -290,10 +290,10 @@ function _freshStack(DeployTimelock script_, address agent_, address second_)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| dep_ | `Deploy.Deployed` |  |
+| dep_ | `CoreStages.Stack` |  |
 | agents_ | `address[]` |  |
 
-<a id="_handover-deploytimelock-deploy-deployed-address"></a>
+<a id="_handover-deploytimelock-corestages-stack-address"></a>
 
 ### _handover
 
@@ -307,7 +307,7 @@ owned by `script_`'s address.
 ```solidity
 function _handover(
         DeployTimelock script_,
-        Deploy.Deployed memory dep_,
+        CoreStages.Stack memory dep_,
         address[] memory agents_
     ) internal returns (DeployTimelock.Deployed memory out);
 ```
@@ -317,7 +317,7 @@ function _handover(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | script_ | `DeployTimelock` |  |
-| dep_ | `Deploy.Deployed` |  |
+| dep_ | `CoreStages.Stack` |  |
 | agents_ | `address[]` |  |
 
 **Returns**
@@ -326,7 +326,7 @@ function _handover(
 | ---- | ---- | ----------- |
 | out | `DeployTimelock.Deployed` |  |
 
-<a id="_asserthandedoverroleunchanged-deploytimelock-deploy-deployed-deploytimelock-deployed-address-address"></a>
+<a id="_asserthandedoverroleunchanged-deploytimelock-corestages-stack-deploytimelock-deployed-address-address"></a>
 
 ### _assertHandedOverRoleUnchanged
 
@@ -341,7 +341,7 @@ left the deployer no setPolicy or revokeAgent over either.
 ```solidity
 function _assertHandedOverRoleUnchanged(
         DeployTimelock script_,
-        Deploy.Deployed memory dep_,
+        CoreStages.Stack memory dep_,
         DeployTimelock.Deployed memory out,
         address withRole,
         address withoutRole
@@ -353,7 +353,7 @@ function _assertHandedOverRoleUnchanged(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | script_ | `DeployTimelock` |  |
-| dep_ | `Deploy.Deployed` |  |
+| dep_ | `CoreStages.Stack` |  |
 | out | `DeployTimelock.Deployed` |  |
 | withRole | `address` |  |
 | withoutRole | `address` |  |

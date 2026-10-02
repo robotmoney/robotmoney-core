@@ -19,8 +19,8 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         address. The router comes BEFORE the gateway: the gateway stores the router as
 ///         an immutable (core 1493).
 ///
-///         The smoke-test devnet startup sequence runs this script so that
-///         `rmpc get-router` and the dapp router view return real data in CI.
+///         The stage driver runs this script on every chain so that
+///         `rmpc get-router` and the dapp router view return real data.
 ///
 ///         Required env vars:
 ///           ADMIN_ADDRESS      — receives ADMIN_ROLE on the router
@@ -51,8 +51,8 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys the router,
     ///         sets initial weights, and writes a deployment JSON.
     ///
-    ///         In broadcast mode the broadcaster IS admin (the smoke-test devnet
-    ///         runs the script with the admin private key), so msg.sender on
+    ///         In broadcast mode the broadcaster IS admin (the deployer signs
+    ///         the broadcast), so msg.sender on
     ///         setWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
     /// @return d Struct containing the deployed router and key parameters.
     function run() external returns (Deployed memory d) {

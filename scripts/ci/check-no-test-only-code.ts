@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S10 (issue 1489).
+// Canonical: the one-deployment-scheme plan, core S10 (issue 1489).
 //
 // CI gate: the build contains no test-only code. Production contracts are the tested contracts.
 // Usage: bun scripts/ci/check-no-test-only-code.ts [--root DIR] [--list-allowlist]
@@ -10,7 +10,7 @@
 //
 // Checks
 //   A. contracts/script holds no Demo* contract or file, no stub, mock, fake or rehearsal
-//      contract, no mock Safe, no Slot0 stub, no MOCK_ALL and no vm.etch.
+//      contract, no mock Safe, no Slot0 stub, no MOCK_ALL, no vm.etch and no DEFAULT_*_CAP.
 //   B. Every block.chainid in contracts/script matches the allowlist below.
 //   C. The deleted paths do not exist.
 //   D. No forge test defines a mock Safe or a constant-threshold Safe stub.
@@ -65,6 +65,8 @@ const SCRIPT_FORBIDDEN: { name: string; re: RegExp }[] = [
   { name: "MOCK_ALL", re: /\bMOCK_ALL\b/ },
   { name: "vm.etch in a deploy script", re: /\bvm\.etch\s*\(/ },
   { name: "CREATE2 factory install", re: /Arachnid/i },
+  { name: "default cap constant (caps come from the sheet)", re: /\bDEFAULT_(?:TVL|PER_DEPOSIT)_CAP\b/ },
+  { name: "default vault name (the name comes from the sheet)", re: /\bDEFAULT_VAULT_NAME\b/ },
 ];
 
 // ---------------------------------------------------------------------------------------------

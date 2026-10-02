@@ -1,0 +1,37 @@
+---
+title: "DeployVaultManifestHarness"
+---
+
+# DeployVaultManifestHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/Deploy.t.sol)
+
+**Inherits:** [DeployVault](/contracts/script/contract.DeployVault)
+
+<i>
+
+Exposes the vault stage's manifest writer so a test can read the keys back from a file
+without the process-wide DEPLOYMENT_OUT variable.
+
+</i>
+
+## Functions
+
+<a id="writemanifest-deployed-address-uint256-string"></a>
+
+### writeManifest
+
+```solidity
+function writeManifest(Deployed memory d, address receiver, uint256 shares, string memory path)
+        external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+| path | `string` |  |
+

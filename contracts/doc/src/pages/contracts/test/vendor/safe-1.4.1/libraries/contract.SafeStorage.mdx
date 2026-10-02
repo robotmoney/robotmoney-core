@@ -1,0 +1,74 @@
+---
+title: "SafeStorage"
+---
+
+# SafeStorage
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/vendor/safe-1.4.1/libraries/SafeStorage.sol)
+
+**Title:** SafeStorage - Storage layout of the Safe contracts to be used in libraries.
+
+**Author:** Richard Meissner - @rmeissner
+
+<i>
+
+Should be always the first base contract of a library that is used with a Safe.
+
+</i>
+
+## State Variables
+
+### singleton
+
+```solidity
+address internal singleton;
+```
+
+### modules
+
+```solidity
+mapping(address => address) internal modules;
+```
+
+### owners
+
+```solidity
+mapping(address => address) internal owners;
+```
+
+### ownerCount
+
+```solidity
+uint256 internal ownerCount;
+```
+
+### threshold
+
+```solidity
+uint256 internal threshold;
+```
+
+### nonce
+
+```solidity
+uint256 internal nonce;
+```
+
+### _deprecatedDomainSeparator
+
+```solidity
+bytes32 internal _deprecatedDomainSeparator;
+```
+
+### signedMessages
+
+```solidity
+mapping(bytes32 => uint256) internal signedMessages;
+```
+
+### approvedHashes
+
+```solidity
+mapping(address => mapping(bytes32 => uint256)) internal approvedHashes;
+```
+

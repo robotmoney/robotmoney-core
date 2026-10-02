@@ -4,7 +4,7 @@ title: "DeployPortfolioRouterTest"
 
 # DeployPortfolioRouterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeployPortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/DeployPortfolioRouter.t.sol)
 
 **Inherits:** Test
 
@@ -101,6 +101,17 @@ setWeights emits WeightsSet event with the correct args.
 
 ```solidity
 function test_deploy_emitsWeightsSet() public;
+```
+
+<a id="test_deploy_linksregistrytorouterexactlyonce"></a>
+
+### test_deploy_linksRegistryToRouterExactlyOnce
+
+The router stage links the registry to the router (core S3): `registry.router()`
+equals the deployed router, and the link event fires exactly once.
+
+```solidity
+function test_deploy_linksRegistryToRouterExactlyOnce() public;
 ```
 
 <a id="test_deploy_structfieldsmatchinputs"></a>

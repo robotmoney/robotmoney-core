@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (agent-token basket)
 //            docs/prd.md §11.3 — Agent Token Vault (rmAGENT)
-//            docs/plans/one-deployment-scheme.md (robotmoney/devops), core S4 (issue 1486)
+//            the one-deployment-scheme plan, core S4 (issue 1486)
 //
 // Deploys `AgentTokenVault`, pauses it and registers it. The launch shortlist is empty, so the
 // vault ships with zero assets. The loop below stays in place: adding a token later is one
@@ -26,11 +26,11 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 ///                             vault and ADMIN_ROLE on the registry until the timelock stage.
 ///           SWAP_ROUTER       must equal `swapRouter02` in agent-token-shortlist.json (Uniswap V3 SwapRouter02)
 ///           REGISTRY_ADDRESS  the vault is registered here as "Robot Money Agent Tokens"
-///           TVL_CAP, PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
-///           FEE_RECIPIENT     recipient for exit fees
+///           VAULT_TVL_CAP, VAULT_PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
+///           FEE_RECIPIENT_ADDRESS   recipient for exit fees (not the deployer, not the admin)
 ///           DEPLOYMENT_OUT    output manifest path (required, no default)
 ///           EXPECTED_CHAIN_ID mandatory and equal to 8453 on Base mainnet
-///           EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
+///           VAULT_EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
 ///
 ///         Assets come from `agent-token-shortlist.json` (empty at launch; tokens are added through the timelock). The vault is deployed paused.
 contract DeployAgentTokenVault is BasketVaultDeployBase {

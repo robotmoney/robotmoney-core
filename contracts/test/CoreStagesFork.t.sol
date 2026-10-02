@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S3 (issue 1485), core 1493
+// Canonical: the one-deployment-scheme plan, core S3 (issue 1485), core 1493
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S3 (issue 1485), core 1493.
+// Canonical: the one-deployment-scheme plan, core S3 (issue 1485), core 1493.
 //
 // CI gate: no reader of the deploy manifest may name a key or a script that core S3 retired.
 //   - `morpho_adapter` is now `moonwell_flagship_adapter` (the third venue is named for its address).

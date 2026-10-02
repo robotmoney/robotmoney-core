@@ -1,0 +1,253 @@
+---
+title: "OwnerManager"
+---
+
+# OwnerManager
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/vendor/safe-1.4.1/base/OwnerManager.sol)
+
+**Inherits:** [SelfAuthorized](/contracts/test/vendor/safe-1.4.1/common/abstract.SelfAuthorized)
+
+**Title:** OwnerManager - Manages Safe owners and a threshold to authorize transactions.
+
+**Authors:** Stefan George - @Georgi87, Richard Meissner - @rmeissner
+
+<i>
+
+Uses a linked list to store the owners because the code generate by the solidity compiler
+     is more efficient than using a dynamic array.
+
+</i>
+
+## Constants
+
+### SENTINEL_OWNERS
+
+```solidity
+address internal constant SENTINEL_OWNERS = address(0x1);
+```
+
+## State Variables
+
+### owners
+
+```solidity
+mapping(address => address) internal owners;
+```
+
+### ownerCount
+
+```solidity
+uint256 internal ownerCount;
+```
+
+### threshold
+
+```solidity
+uint256 internal threshold;
+```
+
+## Functions
+
+<a id="setupowners-address-uint256"></a>
+
+### setupOwners
+
+Sets the initial storage of the contract.
+
+```solidity
+function setupOwners(address[] memory _owners, uint256 _threshold) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _owners | `address[]` | List of Safe owners. |
+| _threshold | `uint256` | Number of required confirmations for a Safe transaction. |
+
+<a id="addownerwiththreshold-address-uint256"></a>
+
+### addOwnerWithThreshold
+
+Adds the owner `owner` to the Safe and updates the threshold to `_threshold`.
+
+<i>
+
+This can only be done via a Safe transaction.
+
+</i>
+
+```solidity
+function addOwnerWithThreshold(address owner, uint256 _threshold) public authorized;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` | New owner address. |
+| _threshold | `uint256` | New threshold. |
+
+<a id="removeowner-address-address-uint256"></a>
+
+### removeOwner
+
+Removes the owner `owner` from the Safe and updates the threshold to `_threshold`.
+
+<i>
+
+This can only be done via a Safe transaction.
+
+</i>
+
+```solidity
+function removeOwner(address prevOwner, address owner, uint256 _threshold) public authorized;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prevOwner | `address` | Owner that pointed to the owner to be removed in the linked list |
+| owner | `address` | Owner address to be removed. |
+| _threshold | `uint256` | New threshold. |
+
+<a id="swapowner-address-address-address"></a>
+
+### swapOwner
+
+Replaces the owner `oldOwner` in the Safe with `newOwner`.
+
+<i>
+
+This can only be done via a Safe transaction.
+
+</i>
+
+```solidity
+function swapOwner(address prevOwner, address oldOwner, address newOwner) public authorized;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prevOwner | `address` | Owner that pointed to the owner to be replaced in the linked list |
+| oldOwner | `address` | Owner address to be replaced. |
+| newOwner | `address` | New owner address. |
+
+<a id="changethreshold-uint256"></a>
+
+### changeThreshold
+
+Changes the threshold of the Safe to `_threshold`.
+
+<i>
+
+This can only be done via a Safe transaction.
+
+</i>
+
+```solidity
+function changeThreshold(uint256 _threshold) public authorized;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _threshold | `uint256` | New threshold. |
+
+<a id="getthreshold"></a>
+
+### getThreshold
+
+Returns the number of required confirmations for a Safe transaction aka the threshold.
+
+```solidity
+function getThreshold() public view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | Threshold number. |
+
+<a id="isowner-address"></a>
+
+### isOwner
+
+Returns if `owner` is an owner of the Safe.
+
+```solidity
+function isOwner(address owner) public view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` | Boolean if owner is an owner of the Safe. |
+
+<a id="getowners"></a>
+
+### getOwners
+
+Returns a list of Safe owners.
+
+```solidity
+function getOwners() public view returns (address[] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` | Array of Safe owners. |
+
+## Events
+
+### AddedOwner
+
+```solidity
+event AddedOwner(address indexed owner);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+### RemovedOwner
+
+```solidity
+event RemovedOwner(address indexed owner);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+### ChangedThreshold
+
+```solidity
+event ChangedThreshold(uint256 threshold);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| threshold | `uint256` |  |
+

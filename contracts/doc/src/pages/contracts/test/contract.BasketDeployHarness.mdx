@@ -1,0 +1,34 @@
+---
+title: "BasketDeployHarness"
+---
+
+# BasketDeployHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/Deploy.t.sol)
+
+**Inherits:** [DeployProtocolAssetVault](/contracts/script/contract.DeployProtocolAssetVault)
+
+<i>
+
+Test-only subclass exposing the internal TickMath link-integrity
+assertion of the basket vault deploy scripts so a deliberately wrong/zero
+linked address can be shown to fail the deploy assertion (finding L3-D1).
+
+</i>
+
+## Functions
+
+<a id="asserttickmathlinkintegrity-address"></a>
+
+### assertTickMathLinkIntegrity
+
+```solidity
+function assertTickMathLinkIntegrity(address vault) external view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
+

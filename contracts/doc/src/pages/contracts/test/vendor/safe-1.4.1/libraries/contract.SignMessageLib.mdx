@@ -1,0 +1,86 @@
+---
+title: "SignMessageLib"
+---
+
+# SignMessageLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/vendor/safe-1.4.1/libraries/SignMessageLib.sol)
+
+**Inherits:** [SafeStorage](/contracts/test/vendor/safe-1.4.1/libraries/contract.SafeStorage)
+
+**Title:** SignMessageLib - Allows to sign messages on-chain by writing the signed message hashes on-chain.
+
+**Author:** Richard Meissner - @rmeissner
+
+## Constants
+
+### SAFE_MSG_TYPEHASH
+
+```solidity
+bytes32 private constant SAFE_MSG_TYPEHASH = 0x60b3cbf8b4a223d68d641b3b6ddf9a298e7f33710cf3d3a9d1146b5a6150fbca;
+```
+
+## Functions
+
+<a id="signmessage-bytes"></a>
+
+### signMessage
+
+Marks a message (`_data`) as signed.
+
+<i>
+
+Can be verified using EIP-1271 validation method by passing the pre-image of the message hash and empty bytes as the signature.
+
+</i>
+
+```solidity
+function signMessage(bytes calldata _data) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _data | `bytes` | Arbitrary length data that should be marked as signed on the behalf of address(this). |
+
+<a id="getmessagehash-bytes"></a>
+
+### getMessageHash
+
+<i>
+
+Returns hash of a message that can be signed by owners.
+
+</i>
+
+```solidity
+function getMessageHash(bytes memory message) public view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| message | `bytes` | Message that should be hashed. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` | Message hash. |
+
+## Events
+
+### SignMsg
+
+```solidity
+event SignMsg(bytes32 indexed msgHash);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| msgHash | `bytes32` |  |
+

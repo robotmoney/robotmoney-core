@@ -1,0 +1,87 @@
+---
+title: "CoreStagesFork"
+description: "Fork regression: the stack the split stages build takes a router deposit and a router withdraw through the gateway against the real Base venues and real USDC. It is the in-process twin of scripts/deploy/assert-core-router.ts. Run through scripts/devnet/run-golden-forge-forks.sh (pinned fixture) or with FORK_RPC_URL set to an archive node. `setUp` reverts when no fork resolves, so it never silent-skips."
+---
+
+# CoreStagesFork
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/CoreStagesFork.t.sol)
+
+**Inherits:** Test
+
+Fork regression: the stack the split stages build takes a router deposit and a router
+withdraw through the gateway against the real Base venues and real USDC. It is the
+in-process twin of scripts/deploy/assert-core-router.ts. Run through
+scripts/devnet/run-golden-forge-forks.sh (pinned fixture) or with FORK_RPC_URL set to
+an archive node. `setUp` reverts when no fork resolves, so it never silent-skips.
+
+## Constants
+
+### BASE_USDC
+
+```solidity
+address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### FORK_BLOCK
+
+```solidity
+uint256 internal constant FORK_BLOCK = 52082423;
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("agent");
+```
+
+### shareReceiver
+
+```solidity
+address internal shareReceiver = makeAddr("shareReceiver");
+```
+
+### stages
+
+```solidity
+CoreStages internal stages;
+```
+
+### s
+
+```solidity
+CoreStages.Stack internal s;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_fork_routerdepositandwithdraw_throughsplitstagegateway"></a>
+
+### test_fork_routerDepositAndWithdraw_throughSplitStageGateway
+
+```solidity
+function test_fork_routerDepositAndWithdraw_throughSplitStageGateway() public;
+```
+

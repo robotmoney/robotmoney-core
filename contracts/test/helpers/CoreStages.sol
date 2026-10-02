@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops) — core S3
+// Canonical: the one-deployment-scheme plan — core S3
 pragma solidity ^0.8.24;
 
+import {VaultTestParams} from "./VaultTestParams.sol";
 import {Vm} from "forge-std/Vm.sol";
 
 import {DeployLibs} from "../../script/DeployLibs.s.sol";
@@ -75,7 +76,7 @@ contract CoreStages {
         libsScript.runInProcess();
         stages.push("libs");
 
-        s.vaultStage = vaultScript.runInProcessWith(admin_, usdc_);
+        s.vaultStage = vaultScript.runInProcessWithParams(VaultTestParams.params(admin_, usdc_));
         s.vault = s.vaultStage.vault;
         stages.push("vault");
 

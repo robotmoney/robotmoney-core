@@ -133,9 +133,9 @@ interface IRouterGovernanceQuorum {
 ///                                    DEFAULT_ADMIN_ROLE on the receipt contract (the
 ///                                    RECEIPT_ADMIN_ADDRESS DeployInvestmentCommittee-
 ///                                    Policy granted them to — not necessarily the
-///                                    deployer EOA). Only meaningful when
-///                                    CONSENSUS_RECEIPT_ADDRESS is set; revoked from
-///                                    here instead of msg.sender. Required, no default.
+///                                    deployer EOA). Required on every chain together
+///                                    with CONSENSUS_RECEIPT_ADDRESS; revoked from
+///                                    here instead of msg.sender. No default.
 ///
 /// @dev After deploying, the broadcaster (current ADMIN_ROLE holder) is no
 ///      longer the admin on any contract. Verify with:
@@ -749,9 +749,8 @@ contract DeployTimelock is ExpectedChainGuard {
         //
         // DeployInvestmentCommitteePolicy grants DEFAULT_ADMIN_ROLE + ADMIN_ROLE
         // on the receipt contract to RECEIPT_ADMIN_ADDRESS, which is NOT
-        // necessarily the deployer EOA (it defaults to ADMIN_ADDRESS for devnet
-        // ceremonies but may be configured independently). Resolve the actual
-        // current holder (d.receiptAdmin, defaulting to msg.sender when unset)
+        // necessarily the deployer EOA (it is a required input and may differ
+        // from ADMIN_ADDRESS). Resolve the actual current holder (d.receiptAdmin)
         // and revoke from there instead of assuming msg.sender.
         if (d.consensusReceipt != address(0)) {
             address currentReceiptAdmin = d.receiptAdmin == address(0) ? msg.sender : d.receiptAdmin;

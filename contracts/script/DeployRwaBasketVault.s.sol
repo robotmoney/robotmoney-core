@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (RWA basket)
 //            docs/prd.md §11.4 — RWA / Thematic Vault (rmRWA)
-//            docs/plans/one-deployment-scheme.md (robotmoney/devops), core S4 (issue 1486)
+//            the one-deployment-scheme plan, core S4 (issue 1486)
 //
 // Deploys `RwaBasketVault` (a plain BasketVault) with deSPXA priced from its Uniswap V3 fee 500
 // pool TWAP through the existing `UniswapV3SwapAdapter`, pauses it and registers it. No oracle.
@@ -25,11 +25,11 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 ///                             vault and ADMIN_ROLE on the registry until the timelock stage.
 ///           SWAP_ROUTER       must equal `swapRouter02` in rwa-assets.json (Uniswap V3 SwapRouter02)
 ///           REGISTRY_ADDRESS  the vault is registered here as "Robot Money RWA"
-///           TVL_CAP, PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
-///           FEE_RECIPIENT     recipient for exit fees
+///           VAULT_TVL_CAP, VAULT_PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
+///           FEE_RECIPIENT_ADDRESS   recipient for exit fees (not the deployer, not the admin)
 ///           DEPLOYMENT_OUT    output manifest path (required, no default)
 ///           EXPECTED_CHAIN_ID mandatory and equal to 8453 on Base mainnet
-///           EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
+///           VAULT_EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
 ///
 ///         Assets come from `rwa-assets.json` (deSPXA only at launch). The vault is deployed paused.
 contract DeployRwaBasketVault is BasketVaultDeployBase {

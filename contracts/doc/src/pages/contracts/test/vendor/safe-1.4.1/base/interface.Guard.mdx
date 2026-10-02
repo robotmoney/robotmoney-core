@@ -1,0 +1,63 @@
+---
+title: "Guard"
+---
+
+# Guard
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/vendor/safe-1.4.1/base/GuardManager.sol)
+
+**Inherits:** [IERC165](/contracts/test/vendor/safe-1.4.1/interfaces/interface.IERC165)
+
+## Functions
+
+<a id="checktransaction-address-uint256-bytes-enum-operation-uint256-uint256-uint256-address-address-payable-bytes-address"></a>
+
+### checkTransaction
+
+```solidity
+function checkTransaction(
+        address to,
+        uint256 value,
+        bytes memory data,
+        Enum.Operation operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address payable refundReceiver,
+        bytes memory signatures,
+        address msgSender
+    ) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| value | `uint256` |  |
+| data | `bytes` |  |
+| operation | `Enum.Operation` |  |
+| safeTxGas | `uint256` |  |
+| baseGas | `uint256` |  |
+| gasPrice | `uint256` |  |
+| gasToken | `address` |  |
+| refundReceiver | `address payable` |  |
+| signatures | `bytes` |  |
+| msgSender | `address` |  |
+
+<a id="checkafterexecution-bytes32-bool"></a>
+
+### checkAfterExecution
+
+```solidity
+function checkAfterExecution(bytes32 txHash, bool success) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| txHash | `bytes32` |  |
+| success | `bool` |  |
+

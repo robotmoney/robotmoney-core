@@ -37,7 +37,10 @@ export const SHIM_MAX_LINES = 15;
 /** core-stack wraps boot, health, the record and parity only. These strings mean deploy or ceremony logic crept back. */
 export const CORE_STACK_FORBIDDEN = [/forge script/, /cast send/, /fusion-ceremony/, /deploy-core-stack/, /--private-key/];
 
-const SCAN_ROOTS = ["testing", "clients", "scripts", ".github", "docs"];
+const SCAN_ROOTS = ["testing", "clients", "scripts", ".github"];
+/** Docs are scanned only for the deleted deploy workflow: older design docs may still name demo harness pieces. */
+const DOC_ROOT = "docs";
+const DOC_FORBIDDEN = FORBIDDEN_PATTERNS.filter((f) => f.re.test("deploy-contracts.yml"));
 const SKIP_DIRS = new Set(["node_modules", "target", ".git", "dist", "lib", "out", "cache"]);
 /** Files whose job is to NAME the deleted paths (ban lists). They are not a second deployment path. */
 const SELF = new Set([
@@ -75,6 +78,12 @@ export function check(root: string): string[] {
       const text = readFileSync(p, "utf8");
       for (const { re, why } of FORBIDDEN_PATTERNS) if (re.test(text)) out.push(`${rel}: mentions ${why} (${re})`);
     }
+  }
+  for (const p of walk(join(root, DOC_ROOT))) {
+    const rel = relative(root, p);
+    if (SELF.has(rel) || !p.endsWith(".md")) continue;
+    const text = readFileSync(p, "utf8");
+    for (const { re, why } of DOC_FORBIDDEN) if (re.test(text)) out.push(`${rel}: mentions ${why} (${re})`);
   }
   const sh = join(root, "scripts/stage/core-stack.sh");
   if (existsSync(sh)) {

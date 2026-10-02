@@ -44,11 +44,11 @@
       "requiredEnv": [
         "ADMIN_ADDRESS",
         "VAULT_ADDRESS",
+        "VAULT_NAME",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
-        "EXPECTED_CHAIN_ID",
-        "VAULT_NAME"
+        "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/registry.json",
       "libraries": [],
@@ -140,10 +140,10 @@
         "ADMIN_ADDRESS",
         "SWAP_ROUTER",
         "REGISTRY_ADDRESS",
-        "TVL_CAP",
-        "PER_DEPOSIT_CAP",
-        "FEE_RECIPIENT",
-        "EXIT_FEE_BPS",
+        "VAULT_TVL_CAP",
+        "VAULT_PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT_ADDRESS",
+        "VAULT_EXIT_FEE_BPS",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -163,10 +163,10 @@
         "ADMIN_ADDRESS",
         "SWAP_ROUTER",
         "REGISTRY_ADDRESS",
-        "TVL_CAP",
-        "PER_DEPOSIT_CAP",
-        "FEE_RECIPIENT",
-        "EXIT_FEE_BPS",
+        "VAULT_TVL_CAP",
+        "VAULT_PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT_ADDRESS",
+        "VAULT_EXIT_FEE_BPS",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -186,10 +186,10 @@
         "ADMIN_ADDRESS",
         "SWAP_ROUTER",
         "REGISTRY_ADDRESS",
-        "TVL_CAP",
-        "PER_DEPOSIT_CAP",
-        "FEE_RECIPIENT",
-        "EXIT_FEE_BPS",
+        "VAULT_TVL_CAP",
+        "VAULT_PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT_ADDRESS",
+        "VAULT_EXIT_FEE_BPS",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [

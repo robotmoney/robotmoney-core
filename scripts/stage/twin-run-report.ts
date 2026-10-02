@@ -13,7 +13,7 @@
 // Usage:
 //   bun scripts/stage/twin-run-report.ts --manifest-dir DIR [--run-manifest FILE] [--labels FILE]
 //        [--table FILE] [--merged-out FILE] [--json-out FILE]
-// Canonical: robotmoney/devops docs/plans/one-deployment-scheme.md (S9; core 1488, 1485, 1486).
+// Canonical: the one-deployment-scheme plan (S9; core 1488, 1485, 1486).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";

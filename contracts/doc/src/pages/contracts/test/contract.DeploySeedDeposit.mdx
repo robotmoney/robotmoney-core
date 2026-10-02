@@ -5,7 +5,7 @@ description: "Fork test asserting that after running the deploy script the vault
 
 # DeploySeedDeposit
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeploySeedDeposit.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/DeploySeedDeposit.t.sol)
 
 **Inherits:** Test
 
@@ -75,7 +75,7 @@ address internal shareReceiver;
 ### script
 
 ```solidity
-Deploy internal script;
+DeployVault internal script;
 ```
 
 ## Functions
@@ -156,14 +156,14 @@ Uses runInProcessWithSeed() which includes the mandatory seed deposit step.
 </i>
 
 ```solidity
-function _runDeploy() internal returns (Deploy.Deployed memory);
+function _runDeploy() internal returns (DeployVault.Deployed memory);
 ```
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `Deploy.Deployed` |  |
+| &lt;none&gt; | `DeployVault.Deployed` |  |
 
 <a id="test_fork_deployseed_totalassetsatleastminseed"></a>
 
@@ -193,17 +193,44 @@ offset.  The seed deposit eliminates this window.
 function test_fork_deploySeed_totalSupplyPositive() public;
 ```
 
-<a id="test_fork_deployseed_adminholdsshares"></a>
+<a id="test_fork_deployseed_receiverholdsshares"></a>
 
-### test_fork_deploySeed_adminHoldsShares
+### test_fork_deploySeed_receiverHoldsShares
 
-Admin (deployer) holds seed shares after deploy.
-
-The seed deposit mints shares to the admin/deployer; the
-public cannot exploit a zero-supply state even briefly.
+The seed receiver holds the seed shares and the deployer holds none.
 
 ```solidity
-function test_fork_deploySeed_adminHoldsShares() public;
+function test_fork_deploySeed_receiverHoldsShares() public;
+```
+
+<a id="test_seedstep_unsetreceiver_reverts"></a>
+
+### test_seedStep_unsetReceiver_reverts
+
+An unset receiver reads as the zero address: the seed step reverts.
+
+```solidity
+function test_seedStep_unsetReceiver_reverts() public;
+```
+
+<a id="test_seedstep_zeroreceiver_reverts"></a>
+
+### test_seedStep_zeroReceiver_reverts
+
+A zero receiver reverts the seed step.
+
+```solidity
+function test_seedStep_zeroReceiver_reverts() public;
+```
+
+<a id="test_seedstep_deployerreceiver_reverts"></a>
+
+### test_seedStep_deployerReceiver_reverts
+
+The deployer as receiver reverts the seed step (the deployer is retired).
+
+```solidity
+function test_seedStep_deployerReceiver_reverts() public;
 ```
 
 <a id="test_fork_deployseed_firstpublicdepositreceivesfairshares"></a>

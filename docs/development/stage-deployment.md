@@ -1,6 +1,6 @@
 # Stage deployment: the one deployment scheme
 
-Canonical plan: `robotmoney/devops` `docs/plans/one-deployment-scheme.md`. Core issue 1488 (S9).
+Canonical plan: the one-deployment-scheme plan. Core issue 1488 (S9).
 
 Stage is the same deployment as mainnet. Only parameters differ. There is one runbook, "publish contracts" (devops, Bun TypeScript). It runs on the Twin chain (918453) and on Base mainnet (8453). A rehearsal and production differ only in the arguments given to it.
 
@@ -70,7 +70,7 @@ SEED_DEPOSIT_USDC=1000000
 VAULT_EXIT_FEE_BPS=<basis points, 0 allowed>
 VAULT_TVL_CAP=<6-decimal USDC units>
 VAULT_PER_DEPOSIT_CAP=<6-decimal USDC units>
-EXIT_FEE_BPS=<basis points, 0 allowed, proto agent and rwa stages>
+VAULT_NAME=<registered name of the rmUSDC vault in the registry>
 QUORUM_THRESHOLD=<greater than 1>
 VOTING_PERIOD=<seconds>
 EXECUTION_DELAY=<seconds>

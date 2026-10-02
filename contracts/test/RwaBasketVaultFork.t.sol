@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core 1492 (AC2)
+// Canonical: the one-deployment-scheme plan, core 1492 (AC2)
 //            docs/prd.md §11.4 — RWA / Thematic Vault (rmRWA)
 pragma solidity ^0.8.24;
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops) principle 11 — no mock Safes
+// Canonical: the one-deployment-scheme plan principle 11 — no mock Safes
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";

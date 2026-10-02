@@ -15,17 +15,14 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         Idempotent: if the vault is already registered the registration step
 ///         is skipped without reverting.
 ///
-///         The deployed registry address is appended to the shared devnet
-///         deployment JSON so rmpc and the dapp can discover it without
-///         manual editing.
+///         The deployed registry address is written to the manifest at
+///         DEPLOYMENT_OUT so rmpc and the dapp discover it without manual editing.
 ///
 ///         Required env vars:
 ///           ADMIN_ADDRESS    — receives ADMIN_ROLE on the registry
 ///           VAULT_ADDRESS    — RobotMoneyVault to register
 ///
-///         Optional env vars:
-///           VAULT_NAME       — human-readable vault name
-///                              (default: "Robot Money USDC")
+///           VAULT_NAME       — registered vault name, from the frozen sheet (no default)
 ///         USDC is the canonical Base USDC constant on every chain.
 ///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
 ///         (mandatory and equal to 8453 on Base mainnet).
@@ -44,14 +41,11 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         bool registered;
     }
 
-    /// @notice Default vault name used when VAULT_NAME env var is unset.
-    string public constant DEFAULT_VAULT_NAME = "Robot Money USDC";
-
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys registry,
     ///         registers the vault (idempotently), and writes a deployment JSON.
     ///
-    ///         In broadcast mode the broadcaster IS admin (the smoke-test devnet
-    ///         runs the script with the admin private key), so msg.sender on
+    ///         In broadcast mode the broadcaster IS admin (the deployer signs
+    ///         the broadcast), so msg.sender on
     ///         registerVault holds ADMIN_ROLE. No vm.prank is needed or allowed.
     /// @return d Struct containing the deployed registry and key parameters.
     function run() external returns (Deployed memory d) {
@@ -59,7 +53,7 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         address admin = _envAddressRequired("ADMIN_ADDRESS");
         address vault = _envAddressRequired("VAULT_ADDRESS");
         address asset = BASE_USDC;
-        string memory vaultName = _envStringOrDefault("VAULT_NAME", DEFAULT_VAULT_NAME);
+        string memory vaultName = _envStringRequired("VAULT_NAME");
         // The registry stores these two addresses without reading them; a wrong-chain
         // or mistyped address would register a vault with no code behind it.
         require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
@@ -141,19 +135,6 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         console2.log("  vault     :", d.vault);
         console2.log("  asset     :", d.asset);
         console2.log("  registered:", d.registered);
-    }
-
-    function _envStringOrDefault(string memory key, string memory fallback_)
-        internal
-        view
-        returns (string memory)
-    {
-        try vm.envString(key) returns (string memory v) {
-            if (bytes(v).length > 0) return v;
-            return fallback_;
-        } catch {
-            return fallback_;
-        }
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {

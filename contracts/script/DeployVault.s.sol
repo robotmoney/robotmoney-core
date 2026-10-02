@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops) — core S3, stage "vault"
+// Canonical: the one-deployment-scheme plan — core S3, stage "vault"
 // (See also: docs/architecture.md §6 — Roles)
 pragma solidity ^0.8.24;
 
@@ -63,17 +63,6 @@ contract DeployVault is ExpectedChainGuard {
     string public constant VENUE_NAME_COMPOUND = "Compound V3 USDC";
     string public constant VENUE_NAME_THIRD = "Moonwell Flagship USDC";
 
-    /// @notice Devnet value used only by the in-process test seams.
-    uint256 public constant DEFAULT_TVL_CAP = 10_000_000 * 1e6;
-    /// @notice Devnet value used only by the in-process test seams.
-    uint256 public constant DEFAULT_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
-
-    /// @notice Seed amount used only by the in-process test seams: 1 USDC (6 decimals). Protects
-    ///         against ERC-4626 share-price inflation on a zero-supply vault. See
-    ///         docs/technical/security-model.md §3. A broadcast run reads
-    ///         the required `SEED_DEPOSIT_USDC` from its frozen sheet.
-    uint256 public constant SEED_DEPOSIT_AMOUNT = 1 * 1e6;
-
     /// @notice Adapter bps caps, in registration order. They sum to 10 000.
     uint16 public constant AAVE_BPS = 3_334;
     uint16 public constant COMPOUND_BPS = 3_333;
@@ -122,24 +111,17 @@ contract DeployVault is ExpectedChainGuard {
         vm.stopPrank();
     }
 
-    /// @notice Direct-parameter variant for forge tests. No env, no seed deposit.
-    function runInProcessWith(address admin_, address usdc_) external returns (Deployed memory d) {
-        d = _deploy(_testParams(admin_, usdc_));
-        vm.startPrank(d.admin);
-        _approveAndRegisterAdapters(d);
-        vm.stopPrank();
-    }
-
-    /// @notice Direct-parameter variant that also seeds. Needs real venue state (fork tests).
-    function runInProcessWithSeed(address admin_, address usdc_, address seedReceiver_)
+    /// @notice Explicit-parameter variant that also seeds. Needs real venue state (fork tests).
+    ///         The caller passes every input: the script holds no default cap, recipient or seed.
+    function runInProcessWithSeed(Params memory p, address seedReceiver_, uint256 seed_)
         external
         returns (Deployed memory d)
     {
-        _requireSeedReceiver(seedReceiver_, admin_);
-        d = _deploy(_testParams(admin_, usdc_));
+        _requireSeedReceiver(seedReceiver_, p.admin);
+        d = _deploy(p);
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
-        uint256 shares = _seedStep(d, seedReceiver_, SEED_DEPOSIT_AMOUNT);
+        uint256 shares = _seedStep(d, seedReceiver_, seed_);
         vm.stopPrank();
         console2.log("  seed shares minted :", shares);
     }
@@ -150,14 +132,6 @@ contract DeployVault is ExpectedChainGuard {
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
         vm.stopPrank();
-    }
-
-    function _testParams(address admin_, address usdc_) internal pure returns (Params memory p) {
-        p.admin = admin_;
-        p.feeRecipient = admin_;
-        p.tvlCap = DEFAULT_TVL_CAP;
-        p.perDepositCap = DEFAULT_PER_DEPOSIT_CAP;
-        p.usdcAddress = usdc_;
     }
 
     /// @dev The seed step itself, shared by the broadcast run and the in-process seeded run.
@@ -238,6 +212,8 @@ contract DeployVault is ExpectedChainGuard {
         require(p.usdcAddress != address(0), "USDC_ADDRESS=0");
         require(p.usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
         require(p.feeRecipient != address(0), "FEE_RECIPIENT_ADDRESS=0");
+        require(p.feeRecipient != msg.sender, "FEE_RECIPIENT_ADDRESS=deployer");
+        require(p.feeRecipient != p.admin, "FEE_RECIPIENT_ADDRESS=admin");
         require(p.tvlCap > 0 && p.perDepositCap > 0, "VAULT_TVL_CAP / VAULT_PER_DEPOSIT_CAP = 0");
         d.admin = p.admin;
         d.usdc = p.usdcAddress;

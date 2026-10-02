@@ -1,35 +1,49 @@
 ---
 title: "DeployPortfolioRouter"
-description: "Foundry deploy script for the PortfolioRouter contract. Deploys PortfolioRouter, sets initial weights (10 000 bps to RobotMoneyVault — the sole active vault), and writes the router address to a deployment JSON alongside the registry address."
+description: "Foundry deploy script for the PortfolioRouter contract. Stage 4 of the core deploy (libs, vault, registry, router, gateway). Deploys PortfolioRouter, sets initial weights (10 000 bps to RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`, and writes the router address to a deployment JSON alongside the registry address. The router comes BEFORE the gateway: the gateway stores the router as an immutable (core 1493)."
 ---
 
 # DeployPortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/DeployPortfolioRouter.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/script/DeployPortfolioRouter.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
 **Title:** DeployPortfolioRouter
 
 Foundry deploy script for the PortfolioRouter contract.
+Stage 4 of the core deploy (libs, vault, registry, router, gateway).
 Deploys PortfolioRouter, sets initial weights (10 000 bps to
-RobotMoneyVault — the sole active vault), and writes the router
-address to a deployment JSON alongside the registry address.
+RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`,
+and writes the router address to a deployment JSON alongside the registry
+address. The router comes BEFORE the gateway: the gateway stores the router as
+an immutable (core 1493).
 
-The smoke-test devnet startup sequence runs this script so that
-`rmpc get-router` and the dapp router view return real data in CI.
+The stage driver runs this script on every chain so that
+`rmpc get-router` and the dapp router view return real data.
 
 Required env vars:
 ADMIN_ADDRESS      — receives ADMIN_ROLE on the router
 REGISTRY_ADDRESS   — deployed VaultRegistry address
 VAULT_ADDRESS      — RobotMoneyVault (sole active vault, 10 000 bps)
-USDC_ADDRESS       — ERC-20 asset the router accepts
 
-Optional env vars:
-DEPLOYMENT_OUT     — path for the output JSON
-(default: "deployments/router-&lt;chain_id>.json")
+USDC is the canonical Base USDC constant on every chain.
+Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
+(mandatory and equal to 8453 on Base mainnet).
 
 ## Constants
+
+### MANIFEST_FILE
+
+<i>
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+</i>
+
+```solidity
+string public constant MANIFEST_FILE = "router.json";
+```
 
 ### INITIAL_VAULT_WEIGHT_BPS
 
@@ -48,8 +62,8 @@ uint256 public constant INITIAL_VAULT_WEIGHT_BPS = 10_000;
 Forge broadcast entrypoint. Reads env vars, deploys the router,
 sets initial weights, and writes a deployment JSON.
 
-In broadcast mode the broadcaster IS admin (the smoke-test devnet
-runs the script with the admin private key), so msg.sender on
+In broadcast mode the broadcaster IS admin (the deployer signs
+the broadcast), so msg.sender on
 setWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
 
 ```solidity

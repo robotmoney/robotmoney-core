@@ -1,0 +1,164 @@
+---
+title: "SafeToL2Setup"
+description: "This contract facilitates the deployment of a Safe to the same address on all networks by automatically changing the singleton to the L2 version when not on chain ID 1."
+---
+
+# SafeToL2Setup
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/vendor/safe-1.4.1/libraries/SafeToL2Setup.sol)
+
+**Inherits:** [SafeStorage](/contracts/test/vendor/safe-1.4.1/libraries/contract.SafeStorage)
+
+**Title:** Safe to L2 Setup Contract
+
+<i>
+
+This contract expects the singleton to be the [Safe](/contracts/test/vendor/safe-1.4.1/contract.Safe) by default. Even if there are more
+[SafeL2](/contracts/test/vendor/safe-1.4.1/contract.SafeL2) proxies deployed, the average gas cost on L2s is significantly lower, making the
+current design more economically efficient overall.
+
+</i>
+
+This contract facilitates the deployment of a Safe to the same address on all networks by
+        automatically changing the singleton to the L2 version when not on chain ID 1.
+
+## Constants
+
+### SELF
+
+<i>
+
+Address of the contract.
+     This is used to ensure that the contract is only ever `DELEGATECALL`-ed.
+
+</i>
+
+```solidity
+address private immutable SELF;
+```
+
+## Functions
+
+<a id="constructor"></a>
+
+### constructor
+
+Initializes a new [SafeToL2Setup](/contracts/test/vendor/safe-1.4.1/libraries/contract.SafeToL2Setup) instance.
+
+```solidity
+constructor();
+```
+
+<a id="onlydelegatecall"></a>
+
+### onlyDelegateCall
+
+Modifier ensure a function is only called via `DELEGATECALL`. Will revert otherwise.
+
+```solidity
+modifier onlyDelegateCall();
+```
+
+<a id="onlynoncezero"></a>
+
+### onlyNonceZero
+
+Modifier to prevent using initialized Safes.
+
+```solidity
+modifier onlyNonceZero();
+```
+
+<a id="onlycontract-address"></a>
+
+### onlyContract
+
+Modifier to ensure that the specified account is a contract.
+
+```solidity
+modifier onlyContract(address account);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+<a id="setuptol2-address"></a>
+
+### setupToL2
+
+Setup the Safe with the provided L2 singleton if needed.
+
+<i>
+
+This function checks that the chain ID is not 1, and if it isn't updates the singleton
+     to the provided L2 singleton.
+
+</i>
+
+```solidity
+function setupToL2(address l2Singleton) external onlyDelegateCall onlyNonceZero onlyContract(l2Singleton);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| l2Singleton | `address` |  |
+
+<a id="chainid"></a>
+
+### chainId
+
+Returns the current chain ID.
+
+```solidity
+function chainId() private view returns (uint256 result);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| result | `uint256` |  |
+
+<a id="codesize-address"></a>
+
+### codeSize
+
+Returns the code size of the specified account.
+
+```solidity
+function codeSize(address account) internal view returns (uint256 result);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| result | `uint256` |  |
+
+## Events
+
+### ChangedMasterCopy
+
+Event indicating a change of master copy address.
+
+```solidity
+event ChangedMasterCopy(address singleton);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| singleton | `address` | New master copy address |
+

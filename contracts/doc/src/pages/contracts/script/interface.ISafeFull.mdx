@@ -1,0 +1,103 @@
+---
+title: "ISafeFull"
+---
+
+# ISafeFull
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/script/DeployTimelock.s.sol)
+
+<i>
+
+Safe 1.4.1 read surface used by the full deploy-time Safe checks.
+
+</i>
+
+## Functions
+
+<a id="getthreshold"></a>
+
+### getThreshold
+
+```solidity
+function getThreshold() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="getowners"></a>
+
+### getOwners
+
+```solidity
+function getOwners() external view returns (address[] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
+
+<a id="isowner-address"></a>
+
+### isOwner
+
+```solidity
+function isOwner(address owner) external view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="version"></a>
+
+### VERSION
+
+```solidity
+function VERSION() external view returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="getmodulespaginated-address-uint256"></a>
+
+### getModulesPaginated
+
+```solidity
+function getModulesPaginated(address start, uint256 pageSize)
+        external
+        view
+        returns (address[] memory array, address next);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| start | `address` |  |
+| pageSize | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| array | `address[]` |  |
+| next | `address` |  |
+

@@ -3,6 +3,7 @@
 // Covers: issue #656 — CI fork test for ERC-4626 seed deposit precondition
 pragma solidity ^0.8.24;
 
+import {VaultTestParams} from "./helpers/VaultTestParams.sol";
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -72,7 +73,7 @@ contract DeploySeedDeposit is Test {
         script = new DeployVault();
 
         // Fund admin with the seed deposit amount so the deploy can execute it.
-        deal(BASE_USDC, admin, script.SEED_DEPOSIT_AMOUNT());
+        deal(BASE_USDC, admin, VaultTestParams.SEED_DEPOSIT_AMOUNT);
 
         return true;
     }
@@ -81,7 +82,11 @@ contract DeploySeedDeposit is Test {
     ///      Adapters are deployed against real Base mainnet protocol addresses.
     ///      Uses runInProcessWithSeed() which includes the mandatory seed deposit step.
     function _runDeploy() internal returns (DeployVault.Deployed memory) {
-        return script.runInProcessWithSeed(admin, BASE_USDC, shareReceiver);
+        return script.runInProcessWithSeed(
+            VaultTestParams.params(admin, BASE_USDC),
+            shareReceiver,
+            VaultTestParams.SEED_DEPOSIT_AMOUNT
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -100,7 +105,7 @@ contract DeploySeedDeposit is Test {
 
         assertGe(
             d.vault.totalAssets(),
-            script.SEED_DEPOSIT_AMOUNT() * 9_999 / 10_000,
+            VaultTestParams.SEED_DEPOSIT_AMOUNT * 9_999 / 10_000,
             "vault.totalAssets must retain >= 99.99% of deploy seed"
         );
     }
@@ -139,7 +144,9 @@ contract DeploySeedDeposit is Test {
         DeployVault s = new DeployVault();
         address a = makeAddr("seed-admin");
         vm.expectRevert(bytes("SEED_SHARE_RECEIVER=0"));
-        s.runInProcessWithSeed(a, BASE_USDC, address(0));
+        s.runInProcessWithSeed(
+            VaultTestParams.params(a, BASE_USDC), address(0), VaultTestParams.SEED_DEPOSIT_AMOUNT
+        );
     }
 
     /// @notice A zero receiver reverts the seed step.
@@ -147,7 +154,9 @@ contract DeploySeedDeposit is Test {
         DeployVault s = new DeployVault();
         address a = makeAddr("seed-admin");
         vm.expectRevert(bytes("SEED_SHARE_RECEIVER=0"));
-        s.runInProcessWithSeed(a, BASE_USDC, address(0x0));
+        s.runInProcessWithSeed(
+            VaultTestParams.params(a, BASE_USDC), address(0x0), VaultTestParams.SEED_DEPOSIT_AMOUNT
+        );
     }
 
     /// @notice The deployer as receiver reverts the seed step (the deployer is retired).
@@ -155,7 +164,9 @@ contract DeploySeedDeposit is Test {
         DeployVault s = new DeployVault();
         address a = makeAddr("seed-admin");
         vm.expectRevert(bytes("SEED_SHARE_RECEIVER=deployer"));
-        s.runInProcessWithSeed(a, BASE_USDC, a);
+        s.runInProcessWithSeed(
+            VaultTestParams.params(a, BASE_USDC), a, VaultTestParams.SEED_DEPOSIT_AMOUNT
+        );
     }
 
     /// @notice A public deposit made immediately after deploy mints fair shares.

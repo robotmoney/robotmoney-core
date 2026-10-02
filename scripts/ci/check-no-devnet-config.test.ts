@@ -1,4 +1,4 @@
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S4 (issues 1486, 1491).
+// Canonical: the one-deployment-scheme plan, core S4 (issues 1486, 1491).
 // The gate exits 0 on the tree and non-zero on a planted DEVNET_, CONFIG_PATH or chain-id branch.
 // Run: bun test scripts/ci/check-no-devnet-config.test.ts
 import { describe, expect, test } from "bun:test";

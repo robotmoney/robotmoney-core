@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S1 (issue 1483) and S5 (issue 1487).
+// Canonical: the one-deployment-scheme plan, core S1 (issue 1483) and S5 (issue 1487).
 //
 // Twin chain proof for the timelock stage. Run after `core-stages.ts` has run the full stage table
 // (Deploy, then DeployTimelock). Reads the merged manifest and asserts, with read-only `cast call`:

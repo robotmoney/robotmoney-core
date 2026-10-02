@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops) — core S3, stage "gateway"
+// Canonical: the one-deployment-scheme plan — core S3, stage "gateway"
 // (See also: docs/architecture.md §6 — Roles)
 pragma solidity ^0.8.24;
 

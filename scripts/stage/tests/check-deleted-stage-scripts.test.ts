@@ -63,3 +63,8 @@ test("an empty tree scans zero files, and the CLI exits 1 because zero checks ra
   expect(p.exitCode).toBe(1);
   expect(p.stderr.toString()).toContain("zero checks ran");
 });
+
+test("a doc that describes the deleted deploy workflow as a gate fails", () => {
+  const root = tree({ "docs/technical/security-model.md": "CI gate: .github/workflows/deploy-contracts.yml\n", "scripts/x.ts": "export {};\n" });
+  expect(check(root).join("\n")).toContain("docs/technical/security-model.md");
+});

@@ -4,7 +4,7 @@ title: "DeployRouterGovernanceDefaultsTest"
 
 # DeployRouterGovernanceDefaultsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/test/DeployRouterGovernanceDefaults.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/DeployRouterGovernanceDefaults.t.sol)
 
 **Inherits:** Test
 
@@ -18,6 +18,32 @@ devnet ended up reporting `quorumThreshold() == 1`. The gap was a
 DEFAULT, so the test has to be about the default.
 
 </i>
+
+## Constants
+
+### VOTING_PERIOD
+
+<i>
+
+Explicit values the test passes. The script has no defaults for any of them.
+
+</i>
+
+```solidity
+uint64 internal constant VOTING_PERIOD = 3600;
+```
+
+### EXECUTION_DELAY
+
+```solidity
+uint64 internal constant EXECUTION_DELAY = 3600;
+```
+
+### QUORUM_THRESHOLD
+
+```solidity
+uint256 internal constant QUORUM_THRESHOLD = 2;
+```
 
 ## State Variables
 
@@ -47,16 +73,6 @@ address internal admin = makeAddr("gov-admin");
 
 ```solidity
 function setUp() public;
-```
-
-<a id="test_defaultquorumthresholdisabovetheplaceholder"></a>
-
-### test_defaultQuorumThresholdIsAboveThePlaceholder
-
-The shipped default is greater than the placeholder `1`.
-
-```solidity
-function test_defaultQuorumThresholdIsAboveThePlaceholder() public view;
 ```
 
 <a id="test_deployingwiththedefaultyieldsameaningfulonchainquorum"></a>

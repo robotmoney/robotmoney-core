@@ -1,4 +1,4 @@
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S2 (issue 1484).
+// Canonical: the one-deployment-scheme plan, core S2 (issue 1484).
 // Offline test of scripts/ci/config-check.ts. No network. Run: bun test scripts/ci/config-check.test.ts
 import { describe, expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";

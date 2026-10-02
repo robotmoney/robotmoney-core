@@ -2,7 +2,7 @@
 // Usage: bun scripts/stage/label-diff.ts <stage-labels> <mainnet-labels>
 // Each file is the verifier's `--json` output (one {"label":...} object per line)
 // or a plain list with one label per line. Exits non-zero on ANY difference.
-// Canonical: robotmoney/devops docs/plans/one-deployment-scheme.md (S8, S9; core 1488).
+// Canonical: the one-deployment-scheme plan (S8, S9; core 1488).
 import { readFileSync } from "node:fs";
 
 export function parseLabels(text: string): string[] {

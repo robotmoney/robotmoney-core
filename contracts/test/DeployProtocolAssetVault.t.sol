@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S4 (issues 1486, 1490)
+// Canonical: the one-deployment-scheme plan, core S4 (issues 1486, 1490)
 pragma solidity ^0.8.24;
 
 import {stdJson} from "forge-std/StdJson.sol";
@@ -148,7 +148,7 @@ contract DeployProtocolAssetVaultTest is BasketDeployFixture {
         (string memory json,) = _twoAssets();
         BasketVaultDeployBase.Params memory p = _params();
         p.tvlCap = 0;
-        vm.expectRevert(bytes("TVL_CAP missing from the sheet"));
+        vm.expectRevert(bytes("VAULT_TVL_CAP missing from the sheet"));
         script.runInProcess(p, json);
     }
 
@@ -156,7 +156,7 @@ contract DeployProtocolAssetVaultTest is BasketDeployFixture {
         (string memory json,) = _twoAssets();
         BasketVaultDeployBase.Params memory p = _params();
         p.perDepositCap = 0;
-        vm.expectRevert(bytes("PER_DEPOSIT_CAP missing from the sheet"));
+        vm.expectRevert(bytes("VAULT_PER_DEPOSIT_CAP missing from the sheet"));
         script.runInProcess(p, json);
     }
 
@@ -164,7 +164,7 @@ contract DeployProtocolAssetVaultTest is BasketDeployFixture {
         (string memory json,) = _twoAssets();
         BasketVaultDeployBase.Params memory p = _params();
         p.feeRecipient = address(0);
-        vm.expectRevert(bytes("FEE_RECIPIENT=0"));
+        vm.expectRevert(bytes("FEE_RECIPIENT_ADDRESS=0"));
         script.runInProcess(p, json);
     }
 

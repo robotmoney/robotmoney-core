@@ -1,0 +1,43 @@
+---
+title: "MultiSendCallOnly"
+description: "The guard logic is not required here as this contract doesn't support nested delegate calls"
+---
+
+# MultiSendCallOnly
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/vendor/safe-1.4.1/libraries/MultiSendCallOnly.sol)
+
+**Title:** Multi Send Call Only - Allows to batch multiple transactions into one, but only calls
+
+**Authors:** Stefan George - @Georgi87, Richard Meissner - @rmeissner
+
+The guard logic is not required here as this contract doesn't support nested delegate calls
+
+## Functions
+
+<a id="multisend-bytes"></a>
+
+### multiSend
+
+<i>
+
+Sends multiple transactions and reverts all if one fails.
+
+</i>
+
+The code is for most part the same as the normal MultiSend (to keep compatibility),
+        but reverts if a transaction tries to use a delegatecall.
+
+This method is payable as delegatecalls keep the msg.value from the previous call
+        If the calling method (e.g. execTransaction) received ETH this would revert otherwise
+
+```solidity
+function multiSend(bytes memory transactions) public payable;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| transactions | `bytes` | Encoded transactions. Each transaction is encoded as a packed bytes of<br/>                    operation has to be uint8(0) in this version (=> 1 byte),<br/>                    to as a address (=> 20 bytes),<br/>                    value as a uint256 (=> 32 bytes),<br/>                    data length as a uint256 (=> 32 bytes),<br/>                    data as bytes.<br/>                    see abi.encodePacked for more information on packed encoding |
+

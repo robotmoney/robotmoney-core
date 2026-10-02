@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S4 (issue 1486),
+// Canonical: the one-deployment-scheme plan, core S4 (issue 1486),
 //            core 1490 (config equals chain) and core 1491 (rmAGENT empty and paused).
 //
 // Twin chain proof for the three basket vaults. Reads the merged manifest the core stages wrote and

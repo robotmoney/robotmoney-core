@@ -5,9 +5,9 @@ description: "These tests run in-process using Forge cheatcodes so they do not r
 
 # DeployTimelockTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6a5a4efb7af758963b9507b608985ed6f60e373a/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/DeployTimelock.t.sol)
 
-**Inherits:** Test
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
 
 <i>
 
@@ -638,38 +638,123 @@ function test_deploy_revertsOnZeroSafe() public;
 function test_deploy_revertsOnZeroMinDelay() public;
 ```
 
+<a id="_runwithsafe-address-address-uint256"></a>
+
+### _runWithSafe
+
+```solidity
+function _runWithSafe(address safe_, address[] memory owners_, uint256 threshold_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| owners_ | `address[]` |  |
+| threshold_ | `uint256` |  |
+
 <a id="test_deploy_revertswhensafeiseoa"></a>
 
 ### test_deploy_revertsWhenSafeIsEOA
 
-DeployTimelock.s.sol aborts when SAFE_ADDRESS has no deployed code.
-
-<i>
-
-We pass a freshly-minted address that has no bytecode.  The script's
-new `code.length` guard should revert before attempting any state writes.
-
-</i>
-
 ```solidity
 function test_deploy_revertsWhenSafeIsEOA() public;
+```
+
+<a id="test_deploy_rejectstenbytecodestub"></a>
+
+### test_deploy_rejectsTenByteCodeStub
+
+A 10-byte code stub is not a Safe.
+
+```solidity
+function test_deploy_rejectsTenByteCodeStub() public;
+```
+
+<a id="test_deploy_rejectswrongsingleton"></a>
+
+### test_deploy_rejectsWrongSingleton
+
+A Safe proxy that does not delegate to the canonical SafeL2 singleton.
+
+```solidity
+function test_deploy_rejectsWrongSingleton() public;
+```
+
+<a id="test_deploy_rejectswrongowners"></a>
+
+### test_deploy_rejectsWrongOwners
+
+```solidity
+function test_deploy_rejectsWrongOwners() public;
+```
+
+<a id="test_deploy_rejectsownercountmismatch"></a>
+
+### test_deploy_rejectsOwnerCountMismatch
+
+```solidity
+function test_deploy_rejectsOwnerCountMismatch() public;
 ```
 
 <a id="test_deploy_revertswhensafethresholdtoolow"></a>
 
 ### test_deploy_revertsWhenSafeThresholdTooLow
 
-DeployTimelock.s.sol aborts when the Safe at SAFE_ADDRESS has threshold &lt; 2.
-
-<i>
-
-We deploy a `MockLowThresholdSafe` that returns `1` from `getThreshold()`.
-Passing a 1-of-N Safe as PROPOSER would reduce multisig security to a
-single-key model.
-
-</i>
+The Safe's real threshold is 1: rejected against SAFE_THRESHOLD=2.
 
 ```solidity
 function test_deploy_revertsWhenSafeThresholdTooLow() public;
+```
+
+<a id="test_deploy_revertswhenexpectedthresholdbelowtwo"></a>
+
+### test_deploy_revertsWhenExpectedThresholdBelowTwo
+
+SAFE_THRESHOLD itself must be a real quorum.
+
+```solidity
+function test_deploy_revertsWhenExpectedThresholdBelowTwo() public;
+```
+
+<a id="test_deploy_revertswhensafethresholdiswrongnumber"></a>
+
+### test_deploy_revertsWhenSafeThresholdIsWrongNumber
+
+```solidity
+function test_deploy_revertsWhenSafeThresholdIsWrongNumber() public;
+```
+
+<a id="test_deploy_rejectsenabledmodule"></a>
+
+### test_deploy_rejectsEnabledModule
+
+```solidity
+function test_deploy_rejectsEnabledModule() public;
+```
+
+<a id="test_deploy_rejectsguard"></a>
+
+### test_deploy_rejectsGuard
+
+```solidity
+function test_deploy_rejectsGuard() public;
+```
+
+<a id="test_deploy_rejectswrongfallbackhandler"></a>
+
+### test_deploy_rejectsWrongFallbackHandler
+
+```solidity
+function test_deploy_rejectsWrongFallbackHandler() public;
+```
+
+<a id="test_deploy_rejectsduplicateownersinlist"></a>
+
+### test_deploy_rejectsDuplicateOwnersInList
+
+```solidity
+function test_deploy_rejectsDuplicateOwnersInList() public;
 ```
 

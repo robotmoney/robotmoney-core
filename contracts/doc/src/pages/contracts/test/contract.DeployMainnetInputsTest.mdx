@@ -1,15 +1,16 @@
 ---
 title: "DeployMainnetInputsTest"
-description: "The vault economics, the seed and the chain check are explicit script inputs."
+description: "The vault economics, the agent policy, the seed and the chain check are explicit script inputs. Nothing falls back to a devnet default."
 ---
 
 # DeployMainnetInputsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/test/DeployMainnetInputs.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/DeployMainnetInputs.t.sol)
 
 **Inherits:** Test
 
-The vault economics, the seed and the chain check are explicit script inputs.
+The vault economics, the agent policy, the seed and the chain check are explicit
+script inputs. Nothing falls back to a devnet default.
 
 ## State Variables
 
@@ -17,6 +18,12 @@ The vault economics, the seed and the chain check are explicit script inputs.
 
 ```solidity
 DeployInputsHarness internal h;
+```
+
+### g
+
+```solidity
+GatewayInputsHarness internal g;
 ```
 
 ### admin
@@ -41,9 +48,57 @@ address internal treasury = makeAddr("inputs-treasury");
 function setUp() public;
 ```
 
+<a id="_set-string-string-string"></a>
+
+### _set
+
+```solidity
+function _set(string memory prefix, string memory key, string memory value) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+| key | `string` |  |
+| value | `string` |  |
+
+<a id="_basenofeeseed-string"></a>
+
+### _baseNoFeeSeed
+
+<i>
+
+Sets every required input under `prefix`.
+
+</i>
+
+<i>
+
+Every required input except the exit fee and the seed.
+
+</i>
+
+```solidity
+function _baseNoFeeSeed(string memory prefix) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
 <a id="_base-string"></a>
 
 ### _base
+
+<i>
+
+Every required input. Exit fee and seed are explicit: the scripts have no defaults.
+
+</i>
 
 ```solidity
 function _base(string memory prefix) internal;
@@ -55,20 +110,22 @@ function _base(string memory prefix) internal;
 | ---- | ---- | ----------- |
 | prefix | `string` |  |
 
-<a id="test_defaults_aredevnetvalues"></a>
+<a id="test_inputs_areread"></a>
 
-### test_defaults_areDevnetValues
+### test_inputs_areRead
 
 ```solidity
-function test_defaults_areDevnetValues() public;
+function test_inputs_areRead() public;
 ```
 
-<a id="test_overrides_areread"></a>
+<a id="test_exitfeeandseed_requiredwhenunset"></a>
 
-### test_overrides_areRead
+### test_exitFeeAndSeed_requiredWhenUnset
+
+Exit fee and seed are required: unset reverts, there is no default.
 
 ```solidity
-function test_overrides_areRead() public;
+function test_exitFeeAndSeed_requiredWhenUnset() public;
 ```
 
 <a id="test_inputs_reachthevault"></a>
@@ -79,6 +136,233 @@ The inputs reach the vault constructor: the fee recipient is no longer the deplo
 
 ```solidity
 function test_inputs_reachTheVault() public;
+```
+
+<a id="_assertmissing-string-string"></a>
+
+### _assertMissing
+
+```solidity
+function _assertMissing(string memory p, string memory key) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `string` |  |
+| key | `string` |  |
+
+<a id="_isvaultkey-string"></a>
+
+### _isVaultKey
+
+```solidity
+function _isVaultKey(string memory key) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_copyallexcept-string-string-string"></a>
+
+### _copyAllExcept
+
+```solidity
+function _copyAllExcept(string memory from, string memory to, string memory skip) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `string` |  |
+| to | `string` |  |
+| skip | `string` |  |
+
+<a id="test_missingfeerecipient_reverts"></a>
+
+### test_missingFeeRecipient_reverts
+
+```solidity
+function test_missingFeeRecipient_reverts() public;
+```
+
+<a id="test_missingtvlcap_reverts"></a>
+
+### test_missingTvlCap_reverts
+
+```solidity
+function test_missingTvlCap_reverts() public;
+```
+
+<a id="test_missingperdepositcap_reverts"></a>
+
+### test_missingPerDepositCap_reverts
+
+```solidity
+function test_missingPerDepositCap_reverts() public;
+```
+
+<a id="test_missingagentmaxperpayment_reverts"></a>
+
+### test_missingAgentMaxPerPayment_reverts
+
+```solidity
+function test_missingAgentMaxPerPayment_reverts() public;
+```
+
+<a id="test_missingagentmaxperwindow_reverts"></a>
+
+### test_missingAgentMaxPerWindow_reverts
+
+```solidity
+function test_missingAgentMaxPerWindow_reverts() public;
+```
+
+<a id="test_missingagentwithdrawcaps_revert"></a>
+
+### test_missingAgentWithdrawCaps_revert
+
+```solidity
+function test_missingAgentWithdrawCaps_revert() public;
+```
+
+<a id="test_missingagentvaliduntil_reverts"></a>
+
+### test_missingAgentValidUntil_reverts
+
+```solidity
+function test_missingAgentValidUntil_reverts() public;
+```
+
+<a id="test_missingrouteraddress_reverts"></a>
+
+### test_missingRouterAddress_reverts
+
+The gateway stage has no default router: ROUTER_ADDRESS must be set (core 1493).
+
+```solidity
+function test_missingRouterAddress_reverts() public;
+```
+
+<a id="test_missingvaultaddress_reverts"></a>
+
+### test_missingVaultAddress_reverts
+
+```solidity
+function test_missingVaultAddress_reverts() public;
+```
+
+<a id="test_malformedcap_reverts"></a>
+
+### test_malformedCap_reverts
+
+```solidity
+function test_malformedCap_reverts() public;
+```
+
+<a id="test_malformedfeerecipient_reverts"></a>
+
+### test_malformedFeeRecipient_reverts
+
+```solidity
+function test_malformedFeeRecipient_reverts() public;
+```
+
+<a id="test_malformedagentcap_reverts"></a>
+
+### test_malformedAgentCap_reverts
+
+```solidity
+function test_malformedAgentCap_reverts() public;
+```
+
+<a id="test_envuintrequired_revertsonbadinput"></a>
+
+### test_envUintRequired_revertsOnBadInput
+
+A required integer reverts when malformed.
+
+```solidity
+function test_envUintRequired_revertsOnBadInput() public;
+```
+
+<a id="test_envuintrequired_revertswhenunset"></a>
+
+### test_envUintRequired_revertsWhenUnset
+
+A required integer reverts when unset. There is no fallback.
+
+```solidity
+function test_envUintRequired_revertsWhenUnset() public;
+```
+
+<a id="test_envuint64required_revertsaboverange"></a>
+
+### test_envUint64Required_revertsAboveRange
+
+A required uint64 reverts above the uint64 range.
+
+```solidity
+function test_envUint64Required_revertsAboveRange() public;
+```
+
+<a id="test_malformedexitfee_reverts"></a>
+
+### test_malformedExitFee_reverts
+
+```solidity
+function test_malformedExitFee_reverts() public;
+```
+
+<a id="test_seedsharereceiver_isread"></a>
+
+### test_seedShareReceiver_isRead
+
+```solidity
+function test_seedShareReceiver_isRead() public;
+```
+
+<a id="test_missingseedsharereceiver_reverts"></a>
+
+### test_missingSeedShareReceiver_reverts
+
+```solidity
+function test_missingSeedShareReceiver_reverts() public;
+```
+
+<a id="test_zeroseedsharereceiver_reverts"></a>
+
+### test_zeroSeedShareReceiver_reverts
+
+```solidity
+function test_zeroSeedShareReceiver_reverts() public;
+```
+
+<a id="test_deployerseedsharereceiver_reverts"></a>
+
+### test_deployerSeedShareReceiver_reverts
+
+```solidity
+function test_deployerSeedShareReceiver_reverts() public;
+```
+
+<a id="test_malformedseedsharereceiver_reverts"></a>
+
+### test_malformedSeedShareReceiver_reverts
+
+```solidity
+function test_malformedSeedShareReceiver_reverts() public;
 ```
 
 <a id="test_zeroseed_reverts"></a>
@@ -119,5 +403,41 @@ function test_wrongExpectedChain_reverts() public;
 
 ```solidity
 function test_matchingExpectedChain_passes() public;
+```
+
+<a id="test_basemainnet_unsetexpectedchain_reverts"></a>
+
+### test_baseMainnet_unsetExpectedChain_reverts
+
+On chain id 8453 an unset EXPECTED_CHAIN_ID reverts.
+
+```solidity
+function test_baseMainnet_unsetExpectedChain_reverts() public;
+```
+
+<a id="test_basemainnet_otherexpectedchain_reverts"></a>
+
+### test_baseMainnet_otherExpectedChain_reverts
+
+```solidity
+function test_baseMainnet_otherExpectedChain_reverts() public;
+```
+
+<a id="test_basemainnet_matchingexpectedchain_passes"></a>
+
+### test_baseMainnet_matchingExpectedChain_passes
+
+```solidity
+function test_baseMainnet_matchingExpectedChain_passes() public;
+```
+
+<a id="test_twinchain_unsetexpectedchain_passes"></a>
+
+### test_twinChain_unsetExpectedChain_passes
+
+Off 8453 an unset EXPECTED_CHAIN_ID is allowed (Twin chain, anvil).
+
+```solidity
+function test_twinChain_unsetExpectedChain_passes() public;
 ```
 

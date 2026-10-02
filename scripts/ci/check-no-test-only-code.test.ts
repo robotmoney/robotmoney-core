@@ -1,4 +1,4 @@
-// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S10 (issue 1489).
+// Canonical: the one-deployment-scheme plan, core S10 (issue 1489).
 // The gate exits 0 on the tree and non-zero, naming the file, on a planted Demo contract, a stub,
 // a mock Safe, a bad block.chainid use, a restored deleted path and a deleted name in a script.
 // Run: bun test scripts/ci/check-no-test-only-code.test.ts
@@ -52,6 +52,12 @@ describe("no test-only code gate", () => {
     const r = planted("contracts/script/PoolSlot0Stub.sol", "contract UniswapV3PoolSlot0Stub {}\n");
     expect(r.code).not.toBe(0);
     expect(r.out).toContain("contracts/script/PoolSlot0Stub.sol");
+  });
+
+  test("a planted default cap constant in contracts/script fails", () => {
+    const r = planted("contracts/script/PlantedCap.s.sol", "contract PlantedCap { uint256 constant DEFAULT_TVL_CAP = 1; }\n");
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain("contracts/script/PlantedCap.s.sol");
   });
 
   test("a planted mock Safe in contracts/script fails", () => {

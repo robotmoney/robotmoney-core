@@ -1,0 +1,51 @@
+---
+title: "ERC777TokensRecipient"
+---
+
+# ERC777TokensRecipient
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/vendor/safe-1.4.1/interfaces/ERC777TokensRecipient.sol)
+
+**Title:** ERC777TokensRecipient
+
+<i>
+
+Interface for contracts that will be called with the ERC777 token's `tokensReceived` method.
+The contract receiving the tokens must implement this interface in order to receive the tokens.
+
+</i>
+
+## Functions
+
+<a id="tokensreceived-address-address-address-uint256-bytes-bytes"></a>
+
+### tokensReceived
+
+<i>
+
+Called by the ERC777 token contract after a successful transfer or a minting operation.
+
+</i>
+
+```solidity
+function tokensReceived(
+        address operator,
+        address from,
+        address to,
+        uint256 amount,
+        bytes calldata data,
+        bytes calldata operatorData
+    ) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| operator | `address` | The address of the operator performing the transfer or minting operation. |
+| from | `address` | The address of the sender. |
+| to | `address` | The address of the recipient. |
+| amount | `uint256` | The amount of tokens that were transferred or minted. |
+| data | `bytes` | Additional data that was passed during the transfer or minting operation. |
+| operatorData | `bytes` | Additional data that was passed by the operator during the transfer or minting operation. |
+
