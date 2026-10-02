@@ -144,7 +144,7 @@ Three boundary properties are load-bearing and are enforced architecturally:
 | Contract libraries | OpenZeppelin v5 ERC-4626, ERC-20, AccessControl, Pausable, ReentrancyGuard | Standardizes vault accounting, role separation, pause behavior, and reentrancy protection. | `docs/technical/smart-contracts.md` §3.1 |
 | Primary asset | USDC, 6 decimals | Product accepts USDC as the treasury input asset. | `docs/prd.md` §1; `docs/technical/smart-contracts.md` §1 |
 | Vault standard | ERC-4626 for individual vaults | Standard deposit, withdraw, redeem, preview, conversion, and `totalAssets()` surface. | `docs/technical/adapter-architecture.md` §1 |
-| Stable-yield venues | Morpho Gauntlet USDC Prime, Aave V3, Compound V3 through vault adapters | Current deployed stable-yield vault normalizes these venues behind adapters. | `docs/technical/adapter-architecture.md` §4; `docs/technical/smart-contracts.md` §4 |
+| Stable-yield venues | Moonwell Flagship USDC, Aave V3, Compound V3 through vault adapters | Current deployed stable-yield vault normalizes these venues behind adapters. | `docs/technical/adapter-architecture.md` §4; `docs/technical/smart-contracts.md` §4 |
 | IC policy contract | Solidity 0.8.24, OpenZeppelin AccessControl + admin-floor, same Foundry toolchain | Signalling-only registry of committee agents and signed tilts; mirrors `RouterGovernance`/`VaultRegistry` role and event conventions; routed via the gateway. | `docs/prd.md` §"Committee", §12 INV-4; proposal doc; issue #1044 |
 | Committee vote schema | Fixed-shape JSON schema committed to the repo, validated in CI | Committee votes are the core auditable signal; a valid fixture must pass and an invalid fixture must fail a CI schema job. | `docs/prd.md` §"Committee" (constraints); issue #1044 |
 | Committee agent plugin | Skill/plugin extending `robotmoney-analyst` | Reuses the analyst's regime/market datasources, adds form-tilt → sign → submit-vote; proprietary methods stay out of the published surface. | `plugins/robotmoney-analyst/`; proposal doc §3 |
@@ -283,7 +283,7 @@ arbitrary-recipient `rescueTokens(token,to)` (deleted, INV-1).
 
 Current stable-yield adapters (for `RobotMoneyVault`):
 
-- `MorphoAdapter` deposits USDC into the Morpho Gauntlet USDC Prime
+- `MorphoAdapter` deposits USDC into the Moonwell Flagship USDC
   ERC-4626 vault.
 - `AaveV3Adapter` supplies USDC to Aave V3 on Base and holds aToken
   exposure.
@@ -1449,7 +1449,7 @@ this architecture:
 | Base | Production chain | Current chain for verified deployments and fork tests. | `docs/technical/smart-contracts.md` §2 |
 | Circle USDC | Asset | Current accepted treasury asset. | `docs/prd.md` §1 |
 | OpenZeppelin | Contract library | Used for ERC-4626, AccessControl, Pausable, and ReentrancyGuard. | `docs/technical/smart-contracts.md` §3.1 |
-| Morpho Gauntlet USDC Prime | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
+| Moonwell Flagship USDC | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Aave V3 | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Compound V3 Comet | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Postgres | Explorer database | Accepted for every environment that runs the indexer. | `docs/technical/explorer-schema-decisions.md` §3.1 |

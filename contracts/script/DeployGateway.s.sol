@@ -41,8 +41,11 @@ contract DeployGateway is ExpectedChainGuard {
     /// @notice In-process test seam defaults. Env runs require every agent cap.
     uint256 public constant DEFAULT_MAX_PER_PAYMENT = 10_000 * 1e6;
     uint256 public constant DEFAULT_MAX_PER_WINDOW = 100_000 * 1e6;
-    uint256 public constant DEFAULT_MAX_WITHDRAW_PER_PAYMENT = 10_000 * 1e6;
-    uint256 public constant DEFAULT_MAX_WITHDRAW_PER_WINDOW = 100_000 * 1e6;
+    /// @dev Withdraw caps count raw rmUSDC shares, not USDC: the vault's share offset is 18, so
+    ///      1 USDC (1e6 units) is 1e24 raw shares on a fresh vault. A cap sized in USDC units
+    ///      would block every withdraw (core 1493).
+    uint256 public constant DEFAULT_MAX_WITHDRAW_PER_PAYMENT = 10_000 * 1e6 * 1e18;
+    uint256 public constant DEFAULT_MAX_WITHDRAW_PER_WINDOW = 100_000 * 1e6 * 1e18;
     uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
 
     struct Params {
@@ -168,9 +171,8 @@ contract DeployGateway is ExpectedChainGuard {
         d.vault = p.vault;
         d.router = p.router;
 
-        d.gateway = new RobotMoneyGateway(
-            IERC20(d.usdc), IERC4626(d.vault), d.admin, d.pauser, d.router
-        );
+        d.gateway =
+            new RobotMoneyGateway(IERC20(d.usdc), IERC4626(d.vault), d.admin, d.pauser, d.router);
 
         // The core 1493 defect, closed: the immutable router must be the one the router
         // stage deployed, and never zero.

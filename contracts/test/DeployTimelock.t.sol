@@ -172,7 +172,9 @@ contract DeployTimelockTest is SafeFixture {
             address(governance),
             safe,
             emergency,
-            MIN_DELAY, _fixtureSpec());
+            MIN_DELAY,
+            _fixtureSpec()
+        );
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         address[5] memory governed = _governed();
@@ -880,7 +882,9 @@ contract DeployTimelockTest is SafeFixture {
             address(governance),
             address(0), // safe = zero
             emergency,
-            MIN_DELAY, _fixtureSpec());
+            MIN_DELAY,
+            _fixtureSpec()
+        );
         vm.stopPrank();
     }
 
@@ -1209,7 +1213,9 @@ contract DeployTimelockManifestTest is SafeFixture {
             address(governance),
             safe,
             emergency,
-            2 days, _fixtureSpec());
+            2 days,
+            _fixtureSpec()
+        );
 
         harness = new ManifestHarness();
         outPath = "/tmp/r7-manifest-test.json";
@@ -1370,7 +1376,9 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
             safe,
             emergency,
             MIN_DELAY,
-            listed, _fixtureSpec());
+            listed,
+            _fixtureSpec()
+        );
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; i++) {
@@ -1507,7 +1515,9 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
             safe,
             emergency,
             MIN_DELAY,
-            bad, _fixtureSpec());
+            bad,
+            _fixtureSpec()
+        );
         assertEq(gateway2.agentOwner(otherAgent), other, "owner changed by a reverted handover");
     }
 
@@ -1625,7 +1635,9 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
             safe,
             emergency,
             MIN_DELAY,
-            agents_, _fixtureSpec());
+            agents_,
+            _fixtureSpec()
+        );
     }
 
     /// @dev Asserts the handover moved both agents to the timelock, left
@@ -1847,8 +1859,7 @@ abstract contract DeployTimelockRunEntrypointBase is SafeFixture {
         _set("DEPLOYMENT_OUT", OUT_PATH);
         // The committee contracts are required inputs on every chain. The deployer
         // holds their admin roles until the handover.
-        InvestmentCommitteePolicy ic =
-            new InvestmentCommitteePolicy(deployer, address(gateway));
+        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(deployer, address(gateway));
         ConsensusRecommendationReceipt receipt =
             new ConsensusRecommendationReceipt(deployer, address(gateway), address(ic));
         _set("IC_POLICY_ADDRESS", vm.toString(address(ic)));
@@ -1951,10 +1962,12 @@ contract DeployTimelockStrictChainGuardTest is DeployTimelockRunEntrypointBase {
     }
 }
 
-/// @notice Required inputs: unset or malformed values revert on every chain.
-contract DeployTimelockRequiredInputsTest is DeployTimelockRunEntrypointBase {
+/// @notice Required inputs: unset or malformed values revert on every chain. One contract per
+///         test with its own prefix: forge runs the tests of a contract in parallel over a
+///         process-wide environment, so two tests that mutate inputs would leak into each other.
+contract DeployTimelockRequiredIcPolicyTest is DeployTimelockRunEntrypointBase {
     function _prefix() internal pure override returns (string memory) {
-        return "RM_S1_REQUIRED_";
+        return "RM_S1_REQUIRED_IC_";
     }
 
     function test_run_revertsWhenIcPolicyUnset() public {
@@ -1962,16 +1975,32 @@ contract DeployTimelockRequiredInputsTest is DeployTimelockRunEntrypointBase {
         vm.expectRevert(bytes("IC_POLICY_ADDRESS=0"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
     }
+}
+
+contract DeployTimelockRequiredSafeOwnersTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_REQUIRED_OWNERS_";
+    }
 
     function test_run_revertsWhenSafeOwnersMalformed() public {
         _set("SAFE_OWNERS", "not-an-address");
         vm.expectRevert();
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
     }
+}
+
+contract DeployTimelockRequiredDelayTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_REQUIRED_DELAY_";
+    }
 
     function test_run_revertsWhenDelayMalformed() public {
         _set("TIMELOCK_MIN_DELAY", "two-days");
-        vm.expectRevert(bytes("RM_S1_REQUIRED_TIMELOCK_MIN_DELAY is malformed: expected an unsigned integer"));
+        vm.expectRevert(
+            bytes(
+                "RM_S1_REQUIRED_DELAY_TIMELOCK_MIN_DELAY is malformed: expected an unsigned integer"
+            )
+        );
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
     }
 }
@@ -2107,9 +2136,7 @@ contract DeployTimelockFourVaultsTest is SafeFixture {
             )
         );
 
-        gateway = new RobotMoneyGateway(
-            usdc, rmUsdc, deployer, makeAddr("four-pauser"), address(0)
-        );
+        gateway = new RobotMoneyGateway(usdc, rmUsdc, deployer, makeAddr("four-pauser"), address(0));
         registry = new VaultRegistry(deployer);
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
         governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);

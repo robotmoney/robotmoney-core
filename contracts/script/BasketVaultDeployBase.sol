@@ -85,14 +85,38 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
 
     /// @dev Reads the sheet inputs. Every value is required: no default for a cap or a recipient.
     function _readParams() internal view returns (Params memory p) {
-        p.admin = _envAddressRequired("ADMIN_ADDRESS");
-        p.swapRouter = _envAddressRequired("SWAP_ROUTER");
+        return _readParamsFrom("");
+    }
+
+    /// @dev `_readParams` with a name prefix. Production passes "". Tests pass a unique prefix
+    ///      because env vars are process-wide and forge runs test contracts in parallel.
+    function _readParamsFrom(string memory prefix) internal view returns (Params memory p) {
+        p.admin = _envAddressRequired(string.concat(prefix, "ADMIN_ADDRESS"));
+        p.swapRouter = _envAddressRequired(string.concat(prefix, "SWAP_ROUTER"));
         p.usdc = BASE_USDC;
-        p.registry = _envAddressRequired("REGISTRY_ADDRESS");
-        p.tvlCap = _envUintRequired("TVL_CAP");
-        p.perDepositCap = _envUintRequired("PER_DEPOSIT_CAP");
-        p.exitFeeBps = _envOrDefault("EXIT_FEE_BPS", 0);
-        p.feeRecipient = _envAddressRequired("FEE_RECIPIENT");
+        p.registry = _envAddressRequired(string.concat(prefix, "REGISTRY_ADDRESS"));
+        p.tvlCap = _envUintRequired(string.concat(prefix, "TVL_CAP"));
+        p.perDepositCap = _envUintRequired(string.concat(prefix, "PER_DEPOSIT_CAP"));
+        p.exitFeeBps = _envOrDefault(string.concat(prefix, "EXIT_FEE_BPS"), 0);
+        p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT"));
+    }
+
+    /// @dev The broadcast entrypoint shared by the three scripts. The chain guard is the first
+    ///      statement, then the sheet inputs, then the config file, then the deploy. `prefix` is
+    ///      "" in production.
+    function _runFrom(string memory prefix, string memory configFile, string memory arrayKey)
+        internal
+        returns (Deployed memory d)
+    {
+        _requireExpectedChain(prefix);
+        Params memory p = _readParamsFrom(prefix);
+        Cfg memory cfg = _parseCfg(vm.readFile(configFile), arrayKey);
+
+        vm.startBroadcast();
+        d = _deployAll(p, cfg);
+        vm.stopBroadcast();
+
+        _writeManifest(d, cfg);
     }
 
     // ─── Config parsing ───────────────────────────────────────────────────────
@@ -244,7 +268,8 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         for (uint256 i = 0; i < label.length; i++) {
             if (label[i] == "_") label[i] = "-";
         }
-        return string.concat("deployments/", string(label), "-", vm.toString(block.chainid), ".json");
+        return
+            string.concat("deployments/", string(label), "-", vm.toString(block.chainid), ".json");
     }
 
     function _writeManifestTo(string memory outPath, Deployed memory d, Cfg memory cfg) internal {

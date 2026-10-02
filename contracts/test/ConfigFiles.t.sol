@@ -15,9 +15,8 @@ contract ConfigFilesTest is Test {
 
     function test_Config_rwaAssetsIsDespxaOnlyOnFee500() public view {
         string memory j = vm.readFile("config/rwa-assets.json");
-        string[] memory symbols = j.readStringArray(".assets[*].symbol");
-        assertEq(symbols.length, 1);
-        assertEq(symbols[0], "deSPXA");
+        assertEq(j.readString(".assets[0].symbol"), "deSPXA");
+        assertFalse(vm.keyExistsJson(j, ".assets[1]"), "deSPXA only");
         assertEq(j.readString(".assets[0].venue"), "UniswapV3");
         assertEq(j.readUint(".assets[0].poolFee"), 500);
         assertEq(j.readAddress(".assets[0].pool"), DESPXA_POOL);
@@ -27,10 +26,9 @@ contract ConfigFilesTest is Test {
 
     function test_Config_protocolAssetsIsWethAndCbbtc() public view {
         string memory j = vm.readFile("config/protocol-assets.json");
-        string[] memory symbols = j.readStringArray(".assets[*].symbol");
-        assertEq(symbols.length, 2);
-        assertEq(symbols[0], "wETH");
-        assertEq(symbols[1], "cbBTC");
+        assertEq(j.readString(".assets[0].symbol"), "wETH");
+        assertEq(j.readString(".assets[1].symbol"), "cbBTC");
+        assertFalse(vm.keyExistsJson(j, ".assets[2]"), "wETH and cbBTC only");
         assertEq(j.readUint(".assets[0].poolFee"), 500);
         assertEq(j.readUint(".assets[1].poolFee"), 500);
         assertEq(j.readAddress(".swapRouter02"), SWAP_ROUTER02);
@@ -42,5 +40,11 @@ contract ConfigFilesTest is Test {
         bytes memory raw = j.parseRaw(".shortlist");
         // An empty JSON array ABI-decodes to a zero-length dynamic array.
         assertEq(abi.decode(raw, (address[])).length, 0);
+    }
+
+    function test_Config_agentShortlistCarriesSwapRouter02() public view {
+        string memory j = vm.readFile("config/agent-token-shortlist.json");
+        assertEq(j.readAddress(".swapRouter02"), SWAP_ROUTER02);
+        assertEq(j.readAddress(".uniswapV3Factory"), V3_FACTORY);
     }
 }

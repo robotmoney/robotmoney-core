@@ -39,15 +39,7 @@ contract DeployAgentTokenVault is BasketVaultDeployBase {
 
     /// @notice Forge broadcast entrypoint.
     function run() external returns (Deployed memory d) {
-        _requireExpectedChain("");
-        Params memory p = _readParams();
-        Cfg memory cfg = _parseCfg(vm.readFile(CONFIG_FILE), "shortlist");
-
-        vm.startBroadcast();
-        d = _deployAll(p, cfg);
-        vm.stopBroadcast();
-
-        _writeManifest(d, cfg);
+        d = _runFrom("", CONFIG_FILE, "shortlist");
         console2Log(d.vault);
     }
 

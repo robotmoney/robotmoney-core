@@ -54,7 +54,7 @@ export const INFRA_ADDRESSES: Array<[string, string]> = [
   [BNKR, "BNKR (agent-token shortlist)"],
   [DESPXA, "deSPXA token (Centrifuge ShareToken)"],
   [DESPXA_POOL, "deSPXA/USDC Uniswap V3 0.01% pool"],
-  ["0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca", "Morpho Gauntlet USDC Prime"],
+  ["0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca", "Moonwell Flagship USDC"],
   [AAVE_POOL, "Aave V3 Pool"],
   ["0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB", "Aave V3 aUSDC"],
   [COMET_USDC, "Compound V3 cUSDCv3"],

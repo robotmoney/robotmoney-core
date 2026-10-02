@@ -55,11 +55,8 @@ contract DeployVault is ExpectedChainGuard {
     address public constant COMPOUND_V3_COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F;
     /// @notice The third venue: Moonwell Flagship USDC (mwUSDC), an ERC-4626 Morpho vault.
     /// @dev Read on Base mainnet: `name()` is "Moonwell Flagship USDC" and `symbol()` is
-    ///      "mwUSDC". Until 2026-10-02 this constant and the manifest key carried a Gauntlet
-    ///      Prime name. The address was never Gauntlet
-    ///      (finding core-deploy-correctness-02). Whether the intended venue is this one or the
-    ///      Gauntlet Prime vault is an open owner decision (D-venue). The name now follows the
-    ///      address. Flipping the venue means changing this address and the name together.
+    ///      "mwUSDC". Decided 2026-10-02 (core 1485): the third venue is Moonwell Flagship, not
+    ///      Gauntlet Prime. The constant, the manifest keys and every doc use this name.
     address public constant MOONWELL_FLAGSHIP_USDC = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
     /// @notice Display names the manifest records for the three venues. The third equals
     ///         the venue's on-chain `name()`.

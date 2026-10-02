@@ -422,16 +422,16 @@ to support either model: swapping a custom adapter for a Giza- or
 Zyfai-managed allocation requires only deploying a new IStrategyAdapter
 wrapper, not changing the vault contract.
 
-### Morpho Gauntlet USDC Prime
+### Moonwell Flagship USDC
 
-A curated ERC-4626 vault on Base, managed by Gauntlet, that optimally
-allocates USDC across Morpho Blue lending pools. It is itself a vault —
-the MorphoAdapter holds Morpho Gauntlet shares, not raw Morpho Blue
-positions — which means depositors benefit from Gauntlet's active
-allocation without the stable-yield vault needing to manage Morpho Blue
-directly. This two-layer structure (Robot Money vault → Morpho Gauntlet
-vault → Morpho Blue pools) is a practical example of the multi-vault
-nesting the Portfolio Router generalises.
+A curated ERC-4626 vault on Base (mwUSDC) that allocates USDC across Morpho Blue
+lending pools. It is itself a vault: the MorphoAdapter holds Moonwell Flagship
+shares, not raw Morpho Blue positions, so depositors benefit from the curator's
+active allocation without the stable-yield vault managing Morpho Blue directly.
+This two-layer structure (Robot Money vault, Moonwell Flagship vault, Morpho Blue
+pools) is a practical example of the multi-vault nesting the Portfolio Router
+generalises. The owner chose Moonwell Flagship as the third venue (2026-10-02,
+core 1485): it is the address in the deploy script and the name the manifest records.
 
 ## 11. Vault Catalog
 
@@ -448,7 +448,7 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Receipt token | rmUSDC |
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | STABLE_YIELD |
-| Exposure | USDC yield across Morpho Gauntlet USDC Prime, Aave V3, Compound V3 on Base |
+| Exposure | USDC yield across Moonwell Flagship USDC, Aave V3, Compound V3 on Base |
 | Allocation model | Equal-weight target across strategies; the mix is kept near target through ordinary deposit and withdrawal activity |
 | Exit fee | Configurable 0–1%; 0.1% at launch |
 | Management fee | Not implemented in current phase |

@@ -38,15 +38,7 @@ contract DeployRwaBasketVault is BasketVaultDeployBase {
 
     /// @notice Forge broadcast entrypoint.
     function run() external returns (Deployed memory d) {
-        _requireExpectedChain("");
-        Params memory p = _readParams();
-        Cfg memory cfg = _parseCfg(vm.readFile(CONFIG_FILE), "assets");
-
-        vm.startBroadcast();
-        d = _deployAll(p, cfg);
-        vm.stopBroadcast();
-
-        _writeManifest(d, cfg);
+        d = _runFrom("", CONFIG_FILE, "assets");
         console2Log(d.vault);
     }
 

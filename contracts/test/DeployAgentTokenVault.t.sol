@@ -17,6 +17,10 @@ contract AgentDeployHarness is DeployAgentTokenVault {
         _writeManifestTo(path, d, _parseCfg(json, "shortlist"));
     }
 
+    function parse(string memory json) external view returns (Cfg memory) {
+        return _parseCfg(json, "shortlist");
+    }
+
     function defaultPath() external view returns (string memory) {
         return _defaultManifestPath();
     }
@@ -38,12 +42,22 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         return vm.readFile("config/agent-token-shortlist.json");
     }
 
+    /// @dev Runs the SHIPPED config file through the script's parser, with no substitute body.
+    ///      The test points SWAP_ROUTER at the file's own swapRouter02 value.
     function _runLaunch() internal returns (BasketVaultDeployBase.Deployed memory) {
-        // The launch config carries no swapRouter02. The script reads it, so the test supplies a
-        // body with the same empty shortlist and a router.
-        string memory json =
-            string.concat('{"swapRouter02":"', vm.toString(router02), '","shortlist":[]}');
-        return script.runInProcess(_params(), json);
+        string memory json = _launchConfig();
+        BasketVaultDeployBase.Params memory p = _params();
+        p.swapRouter = _configRouter(json);
+        return script.runInProcess(p, json);
+    }
+
+    /// @notice The shipped rmAGENT config carries swapRouter02 and an empty shortlist, so the
+    ///         script's parser accepts it (review defect: it used to revert on a missing key).
+    function test_shippedConfig_parsesThroughTheScriptParser() public {
+        AgentDeployHarness h = new AgentDeployHarness();
+        BasketVaultDeployBase.Cfg memory cfg = h.parse(_launchConfig());
+        assertEq(cfg.swapRouter02, 0x2626664c2603336E57B271c5C0b26F421741e481);
+        assertEq(cfg.assets.length, 0);
     }
 
     // ─── Launch path ──────────────────────────────────────────────────────────
@@ -92,8 +106,7 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
     function test_manifest_hasEmptyAssetList() public {
         BasketVaultDeployBase.Deployed memory d = _runLaunch();
         AgentDeployHarness h = new AgentDeployHarness();
-        string memory json =
-            string.concat('{"swapRouter02":"', vm.toString(router02), '","shortlist":[]}');
+        string memory json = _launchConfig();
         string memory path =
             string.concat(vm.projectRoot(), "/deployments/test-agent-manifest.json");
         h.writeManifestTo(path, d, json);

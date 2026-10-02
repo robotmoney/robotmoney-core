@@ -523,8 +523,9 @@ contract DeployTest is Test {
 
     /// @notice A router deposit through the gateway the split stages built reaches the vault leg:
     ///         gateway, router, registry eligibility and the USDC pull all pass, and the call
-    ///         stops only at the vault, whose venues have no code in process. The full deposit
-    ///         and withdraw round trip against real venues is `CoreStagesFork.t.sol`.
+    ///         stops only at the vault, whose venues have no code here. The completed deposit and
+    ///         withdraw round trip, with the venues etched, is `GatewayRouter.t.sol`
+    ///         (`GatewayRouterSplitStagesTest`).
     function test_routerDeposit_throughSplitStageGateway_reachesVaultLeg() public {
         CoreStages.Stack memory s = _run();
         uint256 amount = 5 * 1e6;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/architecture.md §4.3 — Vault Adapters (Morpho Gauntlet venue)
+// Canonical: docs/architecture.md §4.3 — Vault Adapters (Moonwell Flagship venue)
 // (See also: docs/prd.md §11.1 — Stable Yield Vault)
 pragma solidity ^0.8.24;
 
@@ -10,7 +10,7 @@ import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
 /// @title MorphoAdapter
-/// @notice Wraps the Morpho Gauntlet USDC Prime vault on Base.
+/// @notice Wraps the Moonwell Flagship USDC vault on Base.
 /// @dev MORPHO_VAULT is itself an ERC-4626 vault; shares are held by this adapter.
 ///      Deployed: 0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9 (Base mainnet)
 ///      Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun
@@ -25,7 +25,7 @@ import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 contract MorphoAdapter is IStrategyAdapter {
     using SafeERC20 for IERC20;
 
-    /// @notice Morpho Gauntlet USDC Prime ERC-4626 vault address.
+    /// @notice Moonwell Flagship USDC ERC-4626 vault address.
     IERC4626 public immutable MORPHO_VAULT;
     /// @notice USDC token address used for deposits and withdrawals.
     /// @dev Stored as `address` so the auto-generated getter satisfies the
@@ -191,7 +191,7 @@ contract MorphoAdapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    /// @dev Morpho Gauntlet USDC Prime yield accrues automatically into the
+    /// @dev Moonwell Flagship USDC yield accrues automatically into the
     ///      ERC-4626 share price — there are no discrete claimable reward tokens
     ///      on this venue. This function is a no-op and always succeeds.
     function harvestRewards() external override {}

@@ -1,5 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "rmAGENT (AgentTokenVault) launch shortlist. Empty: the vault ships empty and paused until replacement agent tokens with Base liquidity are named. Tokens are added later through the timelock. One list for every chain.",
+  "description": "rmAGENT (AgentTokenVault) launch shortlist. Empty: the vault ships empty and paused until replacement agent tokens with Base liquidity are named. Tokens are added later through the timelock. One list for every chain. swapRouter02 is the Uniswap V3 SwapRouter02 the vault trades through.",
+  "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+  "swapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481",
   "shortlist": []
 }
