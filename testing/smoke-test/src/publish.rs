@@ -36,9 +36,8 @@ pub const PUBLISH_DIR_ENV: &str = "PUBLISH_CONTRACTS_DIR";
 pub const STAGE_SHEET_ENV: &str = "STAGE_SHEET";
 /// Env var: where the driver writes its manifests (one JSON per stage, one per vault).
 pub const MANIFEST_DIR_ENV: &str = "PUBLISH_MANIFEST_DIR";
-/// Env vars handed to the driver so a keystore signer finds its files. Paths only, never secrets.
-pub const KEY_DIR_ENV: &str = "REHEARSAL_KEY_DIR";
-pub const PASSWORD_FILE_ENV: &str = "REHEARSAL_PASSWORD_FILE";
+/// File name of the deployer keystore inside the key directory (the devops key helper names it).
+pub const DEPLOYER_KEY_NAME: &str = "DEPLOYER";
 
 /// Sheet keys the harness may add to the stage sheet from its caller (for
 /// example a window-cap test that needs `AGENT_MAX_PER_WINDOW`). Anything else
@@ -291,8 +290,24 @@ pub fn render_sheet(
     Ok(out)
 }
 
+/// The signer string publish contracts accepts for the deployer keystore:
+/// `keystore:PATH:PASSFILE`. Paths only, never a key or a passphrase.
+pub fn signer_spec(keys: &RehearsalKeys) -> String {
+    format!(
+        "keystore:{}:{}",
+        keys.key_dir.join(DEPLOYER_KEY_NAME).display(),
+        keys.password_file.display()
+    )
+}
+
 /// The argument list publish contracts takes on the Twin chain.
-pub fn publish_args(verb: &str, rpc: &str, sheet: &Path, core_sha: &str) -> Vec<String> {
+pub fn publish_args(
+    verb: &str,
+    rpc: &str,
+    sheet: &Path,
+    signer: &str,
+    core_sha: &str,
+) -> Vec<String> {
     vec![
         verb.to_string(),
         "--chain".into(),
@@ -302,7 +317,7 @@ pub fn publish_args(verb: &str, rpc: &str, sheet: &Path, core_sha: &str) -> Vec<
         "--sheet".into(),
         sheet.display().to_string(),
         "--signer".into(),
-        "keystore".into(),
+        signer.to_string(),
         "--environment".into(),
         STAGE_ENVIRONMENT.into(),
         "--core-sha".into(),
@@ -326,13 +341,12 @@ fn run_cli(
     verb: &str,
     extra: &[String],
 ) -> Result<String, HarnessError> {
-    let mut args = publish_args(verb, &p.rpc_url, &p.sheet_path, &cfg.core_sha);
+    let signer = signer_spec(&p.keys);
+    let mut args = publish_args(verb, &p.rpc_url, &p.sheet_path, &signer, &cfg.core_sha);
     args.extend(extra.iter().cloned());
     let out = Command::new("bun")
         .arg(cfg.cli())
         .args(&args)
-        .env(KEY_DIR_ENV, &p.keys.key_dir)
-        .env(PASSWORD_FILE_ENV, &p.keys.password_file)
         .env(MANIFEST_DIR_ENV, &p.manifest_dir)
         .stdin(Stdio::null())
         .output()?;
@@ -590,14 +604,44 @@ mod tests {
     fn every_boot_gets_its_own_keystore_directory() {
         let names: std::collections::BTreeSet<String> =
             (0..50).map(|_| fresh_root_name()).collect();
-        assert_eq!(names.len(), 50, "a redeploy must never reuse a keystore directory");
+        assert_eq!(
+            names.len(),
+            50,
+            "a redeploy must never reuse a keystore directory"
+        );
+    }
+
+    #[test]
+    fn signer_spec_is_keystore_path_and_passphrase_file() {
+        let keys = RehearsalKeys {
+            root: PathBuf::from("/r"),
+            key_dir: PathBuf::from("/r/keys"),
+            password_file: PathBuf::from("/r/passphrase"),
+            fragment: BTreeMap::new(),
+        };
+        assert_eq!(
+            signer_spec(&keys),
+            "keystore:/r/keys/DEPLOYER:/r/passphrase"
+        );
     }
 
     /// `verify` is the one verifier on every target: the argument list differs only in the verb.
     #[test]
     fn verify_args_equal_publish_args_but_the_verb() {
-        let a = publish_args("publish", "http://r", Path::new("/s"), "abc");
-        let b = publish_args("verify", "http://r", Path::new("/s"), "abc");
+        let a = publish_args(
+            "publish",
+            "http://r",
+            Path::new("/s"),
+            "keystore:/k/DEPLOYER:/k/pw",
+            "abc",
+        );
+        let b = publish_args(
+            "verify",
+            "http://r",
+            Path::new("/s"),
+            "keystore:/k/DEPLOYER:/k/pw",
+            "abc",
+        );
         assert_eq!(a[1..], b[1..]);
         assert_eq!(b[0], "verify");
     }
@@ -635,6 +679,7 @@ mod tests {
             "publish",
             "http://127.0.0.1:18545",
             Path::new("/s.env"),
+            "keystore:/k/DEPLOYER:/k/pw",
             "abc",
         );
         assert_eq!(
@@ -648,7 +693,7 @@ mod tests {
                 "--sheet",
                 "/s.env",
                 "--signer",
-                "keystore",
+                "keystore:/k/DEPLOYER:/k/pw",
                 "--environment",
                 "stage",
                 "--core-sha",
