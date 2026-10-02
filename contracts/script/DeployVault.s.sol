@@ -106,15 +106,12 @@ contract DeployVault is ExpectedChainGuard {
         // The broadcaster IS d.admin: msg.sender holds ADMIN_ROLE. vm.prank is prohibited here.
         _approveAndRegisterAdapters(d);
         uint256 seed = _seedAmount("");
-        IERC20(d.usdc).approve(address(d.vault), seed);
-        uint256 seedShares = d.vault.deposit(seed, seedReceiver);
-        require(d.vault.balanceOf(d.admin) == 0, "deployer must hold no seed shares");
-        _requireSeeded(d, seed);
+        uint256 seedShares = _seedStep(d, seedReceiver, seed);
         console2.log("  seed deposit (USDC):", seed);
         console2.log("  seed shares minted :", seedShares);
         console2.log("  seed share receiver:", seedReceiver);
         vm.stopBroadcast();
-        _writeDeploymentJson(d);
+        _writeDeploymentJsonTo(d, seedReceiver, seedShares, _envStringRequired("DEPLOYMENT_OUT"));
     }
 
     /// @notice In-process variant for forge tests, no seed deposit. Env-driven.
@@ -142,11 +139,8 @@ contract DeployVault is ExpectedChainGuard {
         d = _deploy(_testParams(admin_, usdc_));
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
-        IERC20(d.usdc).approve(address(d.vault), SEED_DEPOSIT_AMOUNT);
-        uint256 shares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, seedReceiver_);
+        uint256 shares = _seedStep(d, seedReceiver_, SEED_DEPOSIT_AMOUNT);
         vm.stopPrank();
-        require(d.vault.balanceOf(d.admin) == 0, "deployer must hold no seed shares");
-        _requireSeeded(d, SEED_DEPOSIT_AMOUNT);
         console2.log("  seed shares minted :", shares);
     }
 
@@ -164,6 +158,20 @@ contract DeployVault is ExpectedChainGuard {
         p.tvlCap = DEFAULT_TVL_CAP;
         p.perDepositCap = DEFAULT_PER_DEPOSIT_CAP;
         p.usdcAddress = usdc_;
+    }
+
+    /// @dev The seed step itself, shared by the broadcast run and the in-process seeded run.
+    ///      Refuses an unset (zero) or deployer receiver, deposits the seed for the receiver and
+    ///      asserts the deployer holds no shares afterwards. The caller must be the deployer.
+    function _seedStep(Deployed memory d, address receiver, uint256 seed)
+        internal
+        returns (uint256 shares)
+    {
+        _requireSeedReceiver(receiver, d.admin);
+        IERC20(d.usdc).approve(address(d.vault), seed);
+        shares = d.vault.deposit(seed, receiver);
+        require(d.vault.balanceOf(d.admin) == 0, "deployer must hold no seed shares");
+        _requireSeeded(d, seed);
     }
 
     /// @dev The seed share receiver: `<prefix>SEED_SHARE_RECEIVER`, required on every chain.
@@ -263,11 +271,15 @@ contract DeployVault is ExpectedChainGuard {
     ///         compound_v3_venue, moonwell_flagship_venue_name / moonwell_flagship_venue.
     ///         The old Morpho-named adapter key is gone: the third venue is named for the
     ///         address it wraps.
-    function _writeDeploymentJson(Deployed memory d) internal {
-        _writeDeploymentJsonTo(d, _envStringRequired("DEPLOYMENT_OUT"));
-    }
-
-    function _writeDeploymentJsonTo(Deployed memory d, string memory outPath) internal {
+    ///         Seed fields: seed_share_receiver, seed_shares (minted to the receiver) and
+    ///         deployer_share_balance_after (read from the vault at write time, must be 0).
+    ///         The verifier asserts the deployer balance is 0 and the receiver holds the seed.
+    function _writeDeploymentJsonTo(
+        Deployed memory d,
+        address seedReceiver,
+        uint256 seedShares,
+        string memory outPath
+    ) internal {
         string memory obj = "vault_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "usdc", d.usdc);
@@ -276,6 +288,9 @@ contract DeployVault is ExpectedChainGuard {
         vm.serializeAddress(obj, "compound_adapter", address(d.compoundAdapter));
         vm.serializeAddress(obj, "moonwell_flagship_adapter", address(d.moonwellAdapter));
         vm.serializeAddress(obj, "admin", d.admin);
+        vm.serializeAddress(obj, "seed_share_receiver", seedReceiver);
+        vm.serializeUint(obj, "seed_shares", seedShares);
+        vm.serializeUint(obj, "deployer_share_balance_after", d.vault.balanceOf(d.admin));
         vm.serializeString(obj, "aave_v3_venue_name", VENUE_NAME_AAVE);
         vm.serializeAddress(obj, "aave_v3_venue", AAVE_V3_POOL);
         vm.serializeString(obj, "compound_v3_venue_name", VENUE_NAME_COMPOUND);

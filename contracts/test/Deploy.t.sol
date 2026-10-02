@@ -58,8 +58,10 @@ contract BasketDeployHarness is DeployProtocolAssetVault {
 /// @dev Exposes the vault stage's manifest writer so a test can read the keys back from a file
 ///      without the process-wide DEPLOYMENT_OUT variable.
 contract DeployVaultManifestHarness is DeployVault {
-    function writeManifest(Deployed memory d, string memory path) external {
-        _writeDeploymentJsonTo(d, path);
+    function writeManifest(Deployed memory d, address receiver, uint256 shares, string memory path)
+        external
+    {
+        _writeDeploymentJsonTo(d, receiver, shares, path);
     }
 }
 
@@ -186,7 +188,8 @@ contract DeployTest is Test {
         DeployVaultManifestHarness h = new DeployVaultManifestHarness();
         string memory path =
             string.concat("/tmp/rm-core-s3-manifest-", vm.toString(address(h)), ".json");
-        h.writeManifest(s.vaultStage, path);
+        address receiver = makeAddr("manifest-seed-receiver");
+        h.writeManifest(s.vaultStage, receiver, 0, path);
         string memory json = vm.readFile(path);
         vm.removeFile(path);
 
@@ -196,6 +199,8 @@ contract DeployTest is Test {
         assertEq(json.readAddress(".aave_adapter"), address(s.vaultStage.aaveAdapter));
         assertEq(json.readAddress(".compound_adapter"), address(s.vaultStage.compoundAdapter));
         assertEq(json.readAddress(".vault"), address(s.vault));
+        assertEq(json.readAddress(".seed_share_receiver"), receiver, "manifest seed receiver");
+        assertEq(json.readUint(".deployer_share_balance_after"), 0, "deployer shares after");
         assertEq(json.readAddress(".moonwell_flagship_venue"), h.MOONWELL_FLAGSHIP_USDC());
         assertEq(json.readString(".moonwell_flagship_venue_name"), "Moonwell Flagship USDC");
         assertFalse(

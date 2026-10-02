@@ -33,6 +33,7 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/vault.json",
+      "manifestNotes": "Seed fields: seed_share_receiver (SEED_SHARE_RECEIVER), seed_shares (minted to the receiver) and deployer_share_balance_after (must be 0). Verify asserts the deployer holds zero shares and the receiver holds the seed shares.",
       "libraries": [],
       "vault": "USDC"
     },

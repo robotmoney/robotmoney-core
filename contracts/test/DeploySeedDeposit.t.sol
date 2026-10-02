@@ -131,6 +131,33 @@ contract DeploySeedDeposit is Test {
         assertEq(d.vault.balanceOf(shareReceiver), d.vault.totalSupply(), "receiver holds all");
     }
 
+    // The seed step refuses an unset (zero) or deployer receiver before it deploys anything,
+    // so these three need no fork state.
+
+    /// @notice An unset receiver reads as the zero address: the seed step reverts.
+    function test_seedStep_unsetReceiver_reverts() public {
+        DeployVault s = new DeployVault();
+        address a = makeAddr("seed-admin");
+        vm.expectRevert(bytes("SEED_SHARE_RECEIVER=0"));
+        s.runInProcessWithSeed(a, BASE_USDC, address(0));
+    }
+
+    /// @notice A zero receiver reverts the seed step.
+    function test_seedStep_zeroReceiver_reverts() public {
+        DeployVault s = new DeployVault();
+        address a = makeAddr("seed-admin");
+        vm.expectRevert(bytes("SEED_SHARE_RECEIVER=0"));
+        s.runInProcessWithSeed(a, BASE_USDC, address(0x0));
+    }
+
+    /// @notice The deployer as receiver reverts the seed step (the deployer is retired).
+    function test_seedStep_deployerReceiver_reverts() public {
+        DeployVault s = new DeployVault();
+        address a = makeAddr("seed-admin");
+        vm.expectRevert(bytes("SEED_SHARE_RECEIVER=deployer"));
+        s.runInProcessWithSeed(a, BASE_USDC, a);
+    }
+
     /// @notice A public deposit made immediately after deploy mints fair shares.
     ///
     ///         This is the downstream consequence of the seed precondition:
