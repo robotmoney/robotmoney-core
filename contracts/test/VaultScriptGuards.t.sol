@@ -66,6 +66,7 @@ abstract contract VaultScriptGuardBase is BasketDeployFixture {
         _setIf(prefix, skip, "TVL_CAP", "50000000000");
         _setIf(prefix, skip, "PER_DEPOSIT_CAP", "5000000000");
         _setIf(prefix, skip, "FEE_RECIPIENT", vm.toString(feeRecipient));
+        _setIf(prefix, skip, "EXIT_FEE_BPS", "0");
     }
 
     function _setIf(
@@ -177,6 +178,13 @@ abstract contract VaultScriptGuardBase is BasketDeployFixture {
         vm.expectRevert(
             bytes(string.concat(prefix, "FEE_RECIPIENT is malformed: expected an address"))
         );
+        _readPrefixed(prefix);
+    }
+
+    function test_sheet_missingExitFeeReverts() public {
+        string memory prefix = _p("noexit");
+        _setSheet(prefix, "EXIT_FEE_BPS");
+        vm.expectRevert(bytes(string.concat(prefix, "EXIT_FEE_BPS must be set")));
         _readPrefixed(prefix);
     }
 

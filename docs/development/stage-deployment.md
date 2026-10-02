@@ -67,9 +67,16 @@ ADMIN_ADDRESS=<deployer address>
 FEE_RECIPIENT_ADDRESS=<treasury address>
 SEED_SHARE_RECEIVER=<seed share holder, not the deployer>
 SEED_DEPOSIT_USDC=1000000
+VAULT_EXIT_FEE_BPS=<basis points, 0 allowed>
 VAULT_TVL_CAP=<6-decimal USDC units>
 VAULT_PER_DEPOSIT_CAP=<6-decimal USDC units>
+EXIT_FEE_BPS=<basis points, 0 allowed, proto agent and rwa stages>
+QUORUM_THRESHOLD=<greater than 1>
+VOTING_PERIOD=<seconds>
+EXECUTION_DELAY=<seconds>
 ```
+
+Every line above is required. No script has a default for it (`scripts/deploy/README.md`).
 
 ## Checks
 

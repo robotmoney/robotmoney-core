@@ -21,8 +21,8 @@ contract AgentDeployHarness is DeployAgentTokenVault {
         return _parseCfg(json, "shortlist");
     }
 
-    function defaultPath() external view returns (string memory) {
-        return _defaultManifestPath();
+    function manifestPath() external view returns (string memory) {
+        return _manifestPath();
     }
 }
 
@@ -118,13 +118,11 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         assertFalse(vm.keyExistsJson(out, ".assets[0]"), "empty asset list");
     }
 
-    /// @notice With no DEPLOYMENT_OUT the manifest is named deployments/agent-token-vault-<chainid>.json.
-    function test_manifest_defaultNameIsAgentTokenVaultChainId() public {
+    /// @notice DEPLOYMENT_OUT is required: an unset variable reverts, there is no default path.
+    function test_manifest_deploymentOutIsRequired() public {
         AgentDeployHarness h = new AgentDeployHarness();
-        vm.chainId(918453);
-        assertEq(h.defaultPath(), "deployments/agent-token-vault-918453.json");
-        vm.chainId(8453);
-        assertEq(h.defaultPath(), "deployments/agent-token-vault-8453.json");
+        vm.expectRevert(bytes("DEPLOYMENT_OUT must be set"));
+        h.manifestPath();
     }
 
     // ─── Adding an asset later is one config entry ────────────────────────────

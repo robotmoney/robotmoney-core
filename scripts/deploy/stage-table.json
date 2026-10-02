@@ -5,7 +5,9 @@
       "name": "libs",
       "kind": "forge",
       "script": "contracts/script/DeployLibs.s.sol:DeployLibs",
-      "requiredEnv": [],
+      "requiredEnv": [
+        "DEPLOYMENT_OUT"
+      ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID"
       ],
@@ -22,12 +24,13 @@
         "FEE_RECIPIENT_ADDRESS",
         "VAULT_TVL_CAP",
         "VAULT_PER_DEPOSIT_CAP",
-        "SEED_SHARE_RECEIVER"
+        "SEED_SHARE_RECEIVER",
+        "SEED_DEPOSIT_USDC",
+        "VAULT_EXIT_FEE_BPS",
+        "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
-        "EXPECTED_CHAIN_ID",
-        "SEED_DEPOSIT_USDC",
-        "VAULT_EXIT_FEE_BPS"
+        "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/vault.json",
       "libraries": [],
@@ -39,7 +42,8 @@
       "script": "contracts/script/DeployVaultRegistry.s.sol:DeployVaultRegistry",
       "requiredEnv": [
         "ADMIN_ADDRESS",
-        "VAULT_ADDRESS"
+        "VAULT_ADDRESS",
+        "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID",
@@ -56,7 +60,8 @@
       "requiredEnv": [
         "ADMIN_ADDRESS",
         "REGISTRY_ADDRESS",
-        "VAULT_ADDRESS"
+        "VAULT_ADDRESS",
+        "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID"
@@ -80,7 +85,8 @@
         "AGENT_MAX_PER_PAYMENT",
         "AGENT_MAX_PER_WINDOW",
         "AGENT_MAX_WITHDRAW_PER_PAYMENT",
-        "AGENT_MAX_WITHDRAW_PER_WINDOW"
+        "AGENT_MAX_WITHDRAW_PER_WINDOW",
+        "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID"
@@ -95,13 +101,14 @@
       "script": "contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance",
       "requiredEnv": [
         "ADMIN_ADDRESS",
-        "ROUTER_ADDRESS"
-      ],
-      "optionalEnv": [
-        "EXPECTED_CHAIN_ID",
+        "ROUTER_ADDRESS",
         "QUORUM_THRESHOLD",
         "VOTING_PERIOD",
-        "EXECUTION_DELAY"
+        "EXECUTION_DELAY",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/governance.json",
       "libraries": [],
@@ -114,7 +121,8 @@
       "requiredEnv": [
         "ADMIN_ADDRESS",
         "GATEWAY_ADDRESS",
-        "RECEIPT_ADMIN_ADDRESS"
+        "RECEIPT_ADMIN_ADDRESS",
+        "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID"
@@ -133,11 +141,12 @@
         "REGISTRY_ADDRESS",
         "TVL_CAP",
         "PER_DEPOSIT_CAP",
-        "FEE_RECIPIENT"
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
+        "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
-        "EXPECTED_CHAIN_ID",
-        "EXIT_FEE_BPS"
+        "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/protocol-asset-vault.json",
       "libraries": [
@@ -155,11 +164,12 @@
         "REGISTRY_ADDRESS",
         "TVL_CAP",
         "PER_DEPOSIT_CAP",
-        "FEE_RECIPIENT"
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
+        "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
-        "EXPECTED_CHAIN_ID",
-        "EXIT_FEE_BPS"
+        "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/agent-token-vault.json",
       "libraries": [
@@ -177,11 +187,12 @@
         "REGISTRY_ADDRESS",
         "TVL_CAP",
         "PER_DEPOSIT_CAP",
-        "FEE_RECIPIENT"
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
+        "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
-        "EXPECTED_CHAIN_ID",
-        "EXIT_FEE_BPS"
+        "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/rwa-basket-vault.json",
       "libraries": [
@@ -207,7 +218,8 @@
         "TIMELOCK_MIN_DELAY",
         "IC_POLICY_ADDRESS",
         "CONSENSUS_RECEIPT_ADDRESS",
-        "RECEIPT_ADMIN_ADDRESS"
+        "RECEIPT_ADMIN_ADDRESS",
+        "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID"

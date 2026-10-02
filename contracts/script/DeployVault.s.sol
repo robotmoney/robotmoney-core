@@ -34,9 +34,8 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///                                The deployer holds no shares after this stage.
 ///        DEPLOYMENT_OUT        — output JSON path
 ///      USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
-///      Optional (a malformed value reverts, it never falls back):
-///        VAULT_EXIT_FEE_BPS     — default 0
-///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC
+///        VAULT_EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
+///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units (non-zero)
 contract DeployVault is ExpectedChainGuard {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "vault.json";
@@ -69,10 +68,10 @@ contract DeployVault is ExpectedChainGuard {
     /// @notice Devnet value used only by the in-process test seams.
     uint256 public constant DEFAULT_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
 
-    /// @notice Default seed deposit for a broadcast run: 1 USDC (6 decimals). Protects
+    /// @notice Seed amount used only by the in-process test seams: 1 USDC (6 decimals). Protects
     ///         against ERC-4626 share-price inflation on a zero-supply vault. See
-    ///         docs/technical/security-model.md §3. A mainnet ceremony sets
-    ///         `SEED_DEPOSIT_USDC` explicitly on its frozen sheet.
+    ///         docs/technical/security-model.md §3. A broadcast run reads
+    ///         the required `SEED_DEPOSIT_USDC` from its frozen sheet.
     uint256 public constant SEED_DEPOSIT_AMOUNT = 1 * 1e6;
 
     /// @notice Adapter bps caps, in registration order. They sum to 10 000.
@@ -183,10 +182,10 @@ contract DeployVault is ExpectedChainGuard {
         require(receiver != deployer, "SEED_SHARE_RECEIVER=deployer");
     }
 
-    /// @dev The seed this broadcast run deposits: `<prefix>SEED_DEPOSIT_USDC`, default
-    ///      SEED_DEPOSIT_AMOUNT. Must be non-zero.
+    /// @dev The seed this broadcast run deposits: `<prefix>SEED_DEPOSIT_USDC`, required.
+    ///      Must be non-zero.
     function _seedAmount(string memory prefix) internal view returns (uint256 seed) {
-        seed = _envOrDefault(string.concat(prefix, "SEED_DEPOSIT_USDC"), SEED_DEPOSIT_AMOUNT);
+        seed = _envUintRequired(string.concat(prefix, "SEED_DEPOSIT_USDC"));
         require(seed > 0, "SEED_DEPOSIT_USDC=0");
     }
 
@@ -198,7 +197,7 @@ contract DeployVault is ExpectedChainGuard {
         p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"));
         p.tvlCap = _envUintRequired(string.concat(prefix, "VAULT_TVL_CAP"));
         p.perDepositCap = _envUintRequired(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"));
-        p.exitFeeBps = _envOrDefault(string.concat(prefix, "VAULT_EXIT_FEE_BPS"), 0);
+        p.exitFeeBps = _envUintRequired(string.concat(prefix, "VAULT_EXIT_FEE_BPS"));
         p.usdcAddress = BASE_USDC;
     }
 

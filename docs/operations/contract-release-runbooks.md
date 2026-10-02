@@ -126,8 +126,8 @@ Before any transaction is broadcast:
    addresses, a canonical asset address with deployed bytecode, and a real
    timelock/Safe destination for the eventual role handover.
 3. **Funding.** The deployer EOA holds enough native gas token and enough of
-   the seed asset (`SEED_DEPOSIT_USDC` on the frozen sheet; the default `SEED_DEPOSIT_AMOUNT` in
-   `DeployVault.s.sol` is 1 USDC) for the
+   the seed asset (`SEED_DEPOSIT_USDC` on the frozen sheet, required, no default; 1 USDC is the
+   planned value) for the
    mandatory seed deposit.
 4. **Network identity.** Confirm the RPC's reported chain id matches the
    target network's expected chain id before broadcasting anything. Every

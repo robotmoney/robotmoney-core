@@ -75,18 +75,10 @@ abstract contract ExpectedChainGuard is Script {
         require(bytes(v).length != 0, string.concat(key, " is empty"));
     }
 
-    /// @dev An unsigned integer with a default. Unset uses the default. A value that
-    ///      is set but malformed reverts: a typo never silently becomes the default.
-    function _envOrDefault(string memory key, uint256 fallbackValue)
-        internal
-        view
-        returns (uint256)
-    {
-        if (!vm.envExists(key)) return fallbackValue;
-        try vm.envUint(key) returns (uint256 v) {
-            return v;
-        } catch {
-            revert(string.concat(key, " is malformed: expected an unsigned integer"));
-        }
+    /// @dev A required uint64. Reverts when unset, malformed or above uint64 max.
+    function _envUint64Required(string memory key) internal view returns (uint64) {
+        uint256 v = _envUintRequired(key);
+        require(v <= type(uint64).max, string.concat(key, " exceeds uint64"));
+        return uint64(v);
     }
 }

@@ -97,7 +97,7 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         p.registry = _envAddressRequired(string.concat(prefix, "REGISTRY_ADDRESS"));
         p.tvlCap = _envUintRequired(string.concat(prefix, "TVL_CAP"));
         p.perDepositCap = _envUintRequired(string.concat(prefix, "PER_DEPOSIT_CAP"));
-        p.exitFeeBps = _envOrDefault(string.concat(prefix, "EXIT_FEE_BPS"), 0);
+        p.exitFeeBps = _envUintRequired(string.concat(prefix, "EXIT_FEE_BPS"));
         p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT"));
     }
 
@@ -254,22 +254,9 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         _writeManifestTo(_manifestPath(), d, cfg);
     }
 
-    /// @dev `DEPLOYMENT_OUT` when set and non-empty. Otherwise the default name
-    ///      `deployments/<label>-<chainid>.json` with dashes for underscores, for example
-    ///      `deployments/agent-token-vault-918453.json` (core 1491).
+    /// @dev `DEPLOYMENT_OUT` is required. There is no default path.
     function _manifestPath() internal view returns (string memory) {
-        string memory out = vm.envOr("DEPLOYMENT_OUT", string(""));
-        if (bytes(out).length != 0) return out;
-        return _defaultManifestPath();
-    }
-
-    function _defaultManifestPath() internal view returns (string memory) {
-        bytes memory label = bytes(_label());
-        for (uint256 i = 0; i < label.length; i++) {
-            if (label[i] == "_") label[i] = "-";
-        }
-        return
-            string.concat("deployments/", string(label), "-", vm.toString(block.chainid), ".json");
+        return _envStringRequired("DEPLOYMENT_OUT");
     }
 
     function _writeManifestTo(string memory outPath, Deployed memory d, Cfg memory cfg) internal {

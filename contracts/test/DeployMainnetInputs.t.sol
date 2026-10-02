@@ -33,8 +33,12 @@ contract DeployInputsHarness is DeployVault {
         return _deploy(p);
     }
 
-    function envOrDefault(string memory key, uint256 fallbackValue) external view returns (uint256) {
-        return _envOrDefault(key, fallbackValue);
+    function envUintRequired(string memory key) external view returns (uint256) {
+        return _envUintRequired(key);
+    }
+
+    function envUint64Required(string memory key) external view returns (uint64) {
+        return _envUint64Required(key);
     }
 
     function requireChain(string memory prefix) external view {
@@ -67,7 +71,8 @@ contract DeployMainnetInputsTest is Test {
     }
 
     /// @dev Sets every required input under `prefix`.
-    function _base(string memory prefix) internal {
+    /// @dev Every required input except the exit fee and the seed.
+    function _baseNoFeeSeed(string memory prefix) internal {
         _set(prefix, "ADMIN_ADDRESS", vm.toString(admin));
         _set(prefix, "PAUSER_ADDRESS", vm.toString(makeAddr("inputs-pauser")));
         _set(prefix, "AGENT_ADDRESS", vm.toString(makeAddr("inputs-agent")));
@@ -82,6 +87,13 @@ contract DeployMainnetInputsTest is Test {
         _set(prefix, "VAULT_PER_DEPOSIT_CAP", "100000000000");
         _set(prefix, "VAULT_ADDRESS", vm.toString(makeAddr("inputs-vault")));
         _set(prefix, "ROUTER_ADDRESS", vm.toString(makeAddr("inputs-router")));
+    }
+
+    /// @dev Every required input. Exit fee and seed are explicit: the scripts have no defaults.
+    function _base(string memory prefix) internal {
+        _baseNoFeeSeed(prefix);
+        _set(prefix, "VAULT_EXIT_FEE_BPS", "0");
+        _set(prefix, "SEED_DEPOSIT_USDC", "1000000");
     }
 
     // --- explicit inputs are read ----------------------------------------------------------
@@ -103,13 +115,14 @@ contract DeployMainnetInputsTest is Test {
         assertEq(h.seed(p), 1_000_000_000, "seed override");
     }
 
-    /// @notice The only optional values keep a default when unset.
-    function test_optionalValues_defaultWhenUnset() public {
+    /// @notice Exit fee and seed are required: unset reverts, there is no default.
+    function test_exitFeeAndSeed_requiredWhenUnset() public {
         string memory p = "RM_INPUTS_OPTIONAL_";
-        _base(p);
-        DeployVault.Params memory r = h.readParams(p);
-        assertEq(r.exitFeeBps, 0, "default exit fee");
-        assertEq(h.seed(p), h.SEED_DEPOSIT_AMOUNT(), "default seed");
+        _baseNoFeeSeed(p);
+        vm.expectRevert(bytes("RM_INPUTS_OPTIONAL_VAULT_EXIT_FEE_BPS must be set"));
+        h.readParams(p);
+        vm.expectRevert(bytes("RM_INPUTS_OPTIONAL_SEED_DEPOSIT_USDC must be set"));
+        h.seed(p);
     }
 
     /// @notice The inputs reach the vault constructor: the fee recipient is no longer the deployer.
@@ -241,15 +254,24 @@ contract DeployMainnetInputsTest is Test {
         g.readParams(p);
     }
 
-    /// @notice `_envOrDefault` reverts on a malformed value instead of using the default.
-    function test_envOrDefault_revertsOnBadInput() public {
+    /// @notice A required integer reverts when malformed.
+    function test_envUintRequired_revertsOnBadInput() public {
         _set("RM_INPUTS_EOD_", "EXIT", "abc");
         vm.expectRevert(bytes("RM_INPUTS_EOD_EXIT is malformed: expected an unsigned integer"));
-        h.envOrDefault("RM_INPUTS_EOD_EXIT", 7);
+        h.envUintRequired("RM_INPUTS_EOD_EXIT");
     }
 
-    function test_envOrDefault_usesDefaultOnlyWhenUnset() public view {
-        assertEq(h.envOrDefault("RM_INPUTS_EOD_NEVER_SET", 7), 7);
+    /// @notice A required integer reverts when unset. There is no fallback.
+    function test_envUintRequired_revertsWhenUnset() public {
+        vm.expectRevert(bytes("RM_INPUTS_EOD_NEVER_SET must be set"));
+        h.envUintRequired("RM_INPUTS_EOD_NEVER_SET");
+    }
+
+    /// @notice A required uint64 reverts above the uint64 range.
+    function test_envUint64Required_revertsAboveRange() public {
+        _set("RM_INPUTS_EOD_", "BIG", "18446744073709551616");
+        vm.expectRevert(bytes("RM_INPUTS_EOD_BIG exceeds uint64"));
+        h.envUint64Required("RM_INPUTS_EOD_BIG");
     }
 
     function test_malformedExitFee_reverts() public {

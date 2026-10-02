@@ -398,6 +398,7 @@ contract DeployTest is Test {
         vm.setEnv("AGENT_MAX_WITHDRAW_PER_WINDOW", "100000000000");
         vm.setEnv("VAULT_TVL_CAP", "10000000000000");
         vm.setEnv("VAULT_PER_DEPOSIT_CAP", "1000000000000");
+        vm.setEnv("VAULT_EXIT_FEE_BPS", "0");
         // USDC is the canonical constant on every chain: install a token there.
         DeployVault vs = stages.vaultScript();
         vm.etch(vs.CANONICAL_BASE_USDC(), address(usdc).code);

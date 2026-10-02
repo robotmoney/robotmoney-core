@@ -10,8 +10,8 @@
   - `name`: `libs|vault|registry|router|gateway|governance|ic-policy|proto|agent|rwa|timelock`.
   - `kind`: always `forge`.
   - `script`: `contracts/script/<File>.s.sol:<Contract>`.
-  - `requiredEnv`: names the script reads with no default. Some are fed by earlier manifests (for example `REGISTRY_ADDRESS`).
-  - `optionalEnv`: names the script reads with a default.
+  - `requiredEnv`: names the script reads with no default. This includes `DEPLOYMENT_OUT`. Some are fed by earlier manifests (for example `REGISTRY_ADDRESS`).
+  - `optionalEnv`: names the script may read but does not need (no value here changes a deploy parameter).
   - `manifest`: template `deployments/<chain>/<file>.json`. Replace `<chain>` with the chain id. The driver sets `DEPLOYMENT_OUT` to this file.
   - `libraries`: names from the top-level `libraries` to link with `forge script --libraries`. Empty when none.
   - `vault`: `USDC|PROTO|AGENT|RWA` for a vault stage, else `null`.
@@ -20,3 +20,14 @@
 - `artifacts`: forge contract names for `gateway`, `router`, `registry`, `governance`, `timelock`, `icPolicy`, `receipt`.
 
 Run order, manifest keys and per-stage wiring between stages live in `core-stages.ts` (the runner), not in the table.
+
+## Required env (no defaults)
+
+Every name in `requiredEnv` is read with no fallback. An unset or malformed value reverts the stage. The table lists them per stage. Names that used to default and are now required:
+
+- `DEPLOYMENT_OUT` for every stage. The core runner sets it. A devops caller that runs a script directly must set it too. There is no `deployments/<vault>-<chainid>.json` default.
+- `vault`: `SEED_DEPOSIT_USDC` (non-zero, 6-decimal units) and `VAULT_EXIT_FEE_BPS`.
+- `governance`: `QUORUM_THRESHOLD` (greater than 1), `VOTING_PERIOD` and `EXECUTION_DELAY` (seconds, at least the contract minimum).
+- `proto`, `agent`, `rwa`: `EXIT_FEE_BPS`.
+
+The frozen sheet must carry a value for each of these. `0` is a valid exit fee. `optionalEnv` now holds only `EXPECTED_CHAIN_ID` and `VAULT_NAME`.

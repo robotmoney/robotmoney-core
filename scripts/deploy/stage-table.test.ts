@@ -44,6 +44,16 @@ describe("stage-table.json", () => {
         const src = scriptSource(file);
         for (const name of s.requiredEnv) expect(src).toContain(`"${name}"`);
       });
+      test("DEPLOYMENT_OUT is required and the script has no default for it", () => {
+        expect(s.requiredEnv).toContain("DEPLOYMENT_OUT");
+        expect(s.optionalEnv).not.toContain("DEPLOYMENT_OUT");
+        const src = scriptSource(file);
+        expect(src).not.toContain("_defaultManifestPath");
+        expect(src).not.toMatch(/envOr\(\s*"DEPLOYMENT_OUT"/);
+      });
+      test("no env default helper is left in the script", () => {
+        expect(scriptSource(file)).not.toContain("_envOrDefault");
+      });
       test("every optionalEnv name appears in the script", () => {
         const src = scriptSource(file);
         for (const name of s.optionalEnv) expect(src).toContain(`"${name}"`);
