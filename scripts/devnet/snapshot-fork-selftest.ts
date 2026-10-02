@@ -92,6 +92,27 @@ check(/robotMoneyAddresses/.test(contents) && /fail\(`Robot Money contract has c
   check(lockstepErrors({ fork_block: 10 }, fb, side, alloc).length > 0, "lockstep: missing CURRENT.json hash fails");
 }
 
+// ── lockstep CLI against committed fixtures ────────────────────────────────
+{
+  const run = (name: string) => {
+    const d = join(REPO, "scripts/devnet/fixtures/lockstep", name);
+    return Bun.spawnSync(["bun", join(REPO, "scripts/devnet/check-fork-lockstep.ts"), "--fork-state", join(d, "state"), "--config", join(d, "config")], { stdout: "pipe", stderr: "pipe" });
+  };
+  check(run("good").exitCode === 0, "lockstep fixture good: exits 0");
+  for (const bad of ["hash-mismatch", "number-mismatch", "alloc-hash-mismatch"]) {
+    const r = run(bad);
+    check(r.exitCode === 1 && /FAIL/.test(r.stderr.toString()), `lockstep fixture ${bad}: exits non-zero naming the disagreement`);
+  }
+}
+
+// ── explicit exclusions (wSOL, BNKR) ───────────────────────────────────────
+{
+  const { EXCLUDED_BASKET_SYMBOLS, excludedSymbolRows } = await import("./fork-snapshot-lib.ts");
+  check("wsol" in EXCLUDED_BASKET_SYMBOLS && "bnkr" in EXCLUDED_BASKET_SYMBOLS, "wSOL and BNKR are excluded explicitly");
+  check(excludedSymbolRows().length === 0, "no config row names an excluded symbol");
+  check(/EXCLUDED_BASKET_SYMBOLS/.test(contents) && /BNKR/.test(contents), "contents check documents the BNKR and wSOL exclusions");
+}
+
 if (failures > 0) {
   console.error(`${failures} selftest assertion(s) failed`);
   process.exit(1);

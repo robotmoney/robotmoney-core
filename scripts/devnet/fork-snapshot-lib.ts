@@ -134,6 +134,32 @@ export function loadConfiguredPools(repo: string = REPO): PoolEntry[] {
   return [...byAddr.values()];
 }
 
+/**
+ * Symbols that must never appear as a launch basket row, named here so the exclusion is explicit
+ * and checked (core 1498), not silently skipped inside an assertion. wSOL has no usable Base pool
+ * at launch. BNKR has no address in config (rmAGENT ships empty), so it is not warmed or asserted.
+ * scripts/ci/config-check.ts forbids the same symbols in config.
+ */
+export const EXCLUDED_BASKET_SYMBOLS: Record<string, string> = {
+  wsol: "no usable pool at launch; excluded from the checked basket list",
+  bnkr: "no address in config (rmAGENT ships empty); excluded from the checked basket list",
+};
+
+/** Config rows (pools map ids and basket asset symbols) that name an excluded symbol. Must be empty. */
+export function excludedSymbolRows(repo: string = REPO): string[] {
+  const read = (f: string) => JSON.parse(readFileSync(join(repo, f), "utf8"));
+  const hits: string[] = [];
+  const test = (where: string, sym: unknown) => {
+    const k = String(sym ?? "").toLowerCase();
+    if (k in EXCLUDED_BASKET_SYMBOLS) hits.push(`${where}: ${sym}`);
+  };
+  for (const id of Object.keys(read("config/dex-pools.json").pools ?? {})) test("config/dex-pools.json pools", id.split("-")[0]);
+  for (const f of ["config/protocol-assets.json", "config/rwa-assets.json"]) {
+    for (const row of read(f).assets ?? []) test(f, row.symbol);
+  }
+  return hits;
+}
+
 /** Robot Money addresses to refuse at genesis: the fixed list plus any recorded deployments. */
 export function robotMoneyAddresses(repo: string = REPO): Array<[string, string]> {
   const out = [...ROBOT_MONEY_ADDRESSES];
