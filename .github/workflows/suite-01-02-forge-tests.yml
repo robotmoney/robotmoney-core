@@ -126,7 +126,7 @@ jobs:
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork}.t.sol"
 
       # Fusion's named evidence files need an execution boundary in the CI log.
       # A whole-suite `forge test` is not enough for a fail-closed external
@@ -173,6 +173,18 @@ jobs:
           bash scripts/ci/check-no-devnet-config.sh
           bash scripts/ci/check-set-registry-owner.sh
           forge test -vvv --match-path "contracts/test/DeployTimelock.t.sol"
+
+      - name: forge test (non-zero test count guard for deploy input and timelock suites — core 1483)
+        # A path filter that matches nothing must be red, not green. Each named file has to run
+        # at least one test, counted from the JSON result.
+        run: |
+          set -euo pipefail
+          for f in DeployTimelock DeployMainnetInputs DeployScriptChainGuards; do
+            forge test --json --match-path "contracts/test/${f}.t.sol" > "/tmp/${f}.json"
+            count="$(jq '[.. | objects | select(has("status"))] | length' "/tmp/${f}.json")"
+            echo "${f}.t.sol executed ${count} tests"
+            [[ "${count}" -gt 0 ]] || { echo "zero tests executed for ${f}.t.sol" >&2; exit 1; }
+          done
 
       - name: forge test (EIP-170 size gate)
         # VaultCodeSizeGuard asserts every deployable vault and adapter fits under
@@ -292,6 +304,12 @@ jobs:
           echo "::group::contracts/test/GovernanceExecutePathAfterHandover.t.sol:"
           scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/GovernanceExecutePathAfterHandover.t.sol"
           echo "::endgroup::"
+
+      - name: forge test (rmRWA fork regression — core 1492)
+        run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/RwaBasketVaultFork.t.sol"
+
+      - name: forge test (split-stage router deposit and withdraw on the fork — core 1485)
+        run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/CoreStagesFork.t.sol"
 
       - name: Assert missing fixture is red
         run: |
@@ -524,7 +542,7 @@ jobs:
           forge coverage --report lcov
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

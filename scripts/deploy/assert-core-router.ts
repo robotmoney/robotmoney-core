@@ -102,7 +102,7 @@ async function main() {
   const sharesOf = async (who: string) => BigInt((await call(m.vault, "balanceOf(address)(uint256)", who)).split(/\s/)[0]);
   const agentUsdc = await usdcOf(m.agent);
   if (agentUsdc < a.amount) throw new Error(`agent holds ${agentUsdc} USDC units, needs ${a.amount}: fund it first`);
-  const deadline = String(Math.floor(Date.now() / 1000) + 3600);
+  const deadline = String(Math.floor(Date.now() / 1000) + 300);
   const tag = String(Date.now());
   const idem = (s: string) => "0x" + Buffer.from(`core-s3-${s}-${tag}`).toString("hex").padEnd(64, "0").slice(0, 64);
 

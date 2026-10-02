@@ -518,4 +518,31 @@ contract DeployTest is Test {
         vm.expectRevert(bytes("TickMath: vault links non-canonical library"));
         harness.assertTickMathLinkIntegrity(wrongVault);
     }
+
+    // --- Router deposit through the split-stage gateway (core 1485) --------------------------
+
+    /// @notice A router deposit through the gateway the split stages built reaches the vault leg:
+    ///         gateway, router, registry eligibility and the USDC pull all pass, and the call
+    ///         stops only at the vault, whose venues have no code in process. The full deposit
+    ///         and withdraw round trip against real venues is `CoreStagesFork.t.sol`.
+    function test_routerDeposit_throughSplitStageGateway_reachesVaultLeg() public {
+        CoreStages.Stack memory s = _run();
+        uint256 amount = 5 * 1e6;
+        usdc.mint(agent, amount);
+        uint64 deadline = uint64(block.timestamp + 300);
+
+        vm.startPrank(agent);
+        usdc.approve(address(s.gateway), amount);
+        vm.expectRevert(abi.encodeWithSignature("UsdcLegTransferFailed(address)", address(s.vault)));
+        s.gateway
+            .depositTo(
+                bytes32("dep-order"),
+                amount,
+                deadline,
+                bytes32("dep-idem"),
+                address(s.router),
+                new uint256[](0)
+            );
+        vm.stopPrank();
+    }
 }
