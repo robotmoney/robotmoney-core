@@ -247,7 +247,7 @@ struct IcPolicyDeploymentJson {
 /// Typed view over the Uniswap V3 stub deployment JSON produced by
 /// DeployDemoUniswapV3Stubs.s.sol (issue #531). Four `UniswapV3PoolSlot0Stub`
 /// contracts deployed at deterministic CREATE2 addresses (Arachnid factory,
-/// fixed salts). Addresses are pre-committed in `config/dex-pools.json::devnet.pools`
+/// fixed salts). Addresses are pre-committed in `config/dex-pools.json::pools`
 /// so the dapp Docker image is built with the correct pool addresses.
 #[derive(Debug, Deserialize)]
 struct DemoUniswapV3StubsDeploymentJson {
@@ -368,7 +368,7 @@ pub struct Fixture {
     /// Demo-only Uniswap V3 stub pool contracts deployed on the devnet so the
     /// landing-page price strip can read slot0 (issue #531). Addresses are
     /// deterministic (CREATE2 via Arachnid factory) and pre-committed in
-    /// `config/dex-pools.json::devnet.pools`.
+    /// `config/dex-pools.json::pools`.
     demo_uniswap_v3_stubs: DemoUniswapV3StubsDeploymentJson,
     repo_root: PathBuf,
     /// Harness-owned nonce source of truth for every EOA this devnet sends
@@ -1158,7 +1158,7 @@ impl Fixture {
 
         // Deploy Uniswap V3 stub pools via the Arachnid CREATE2 factory
         // (issue #531). Four `UniswapV3PoolSlot0Stub` instances are deployed at
-        // deterministic addresses pre-committed in `config/dex-pools.json::devnet.pools`.
+        // deterministic addresses pre-committed in `config/dex-pools.json::pools`.
         // The Arachnid factory is pre-installed in the devnet genesis alloc by
         // `genesis_alloc::ARACHNID_FACTORY_ADDR`. This step makes the
         // landing-page price strip resolve slot0 on the fresh devnet instead of
@@ -1524,7 +1524,7 @@ impl Fixture {
 
     /// ETH/USD devnet stub pool address (issue #531). Deployed by
     /// `DeployDemoUniswapV3Stubs.s.sol` via Arachnid CREATE2 factory.
-    /// Pre-committed address in `config/dex-pools.json::devnet.pools.eth-usd`.
+    /// Pre-committed address in `config/dex-pools.json::pools.eth-usd`.
     pub fn stub_pool_eth_usd(&self) -> Address {
         parse_addr(&self.demo_uniswap_v3_stubs.eth_usd)
     }
@@ -4050,7 +4050,7 @@ fn read_demo_extra_vaults_deployment(
 /// CREATE2 factory (issue #531). The factory is pre-installed in the devnet
 /// genesis alloc (`genesis_alloc::ARACHNID_FACTORY_ADDR`). Each stub is
 /// deployed with a fixed salt producing the same address across devnet resets.
-/// These addresses are pre-committed in `config/dex-pools.json::devnet.pools`
+/// These addresses are pre-committed in `config/dex-pools.json::pools`
 /// so the dapp Docker image is built with the correct pool addresses.
 fn run_forge_deploy_demo_uniswap_v3_stubs(
     repo_root: &Path,

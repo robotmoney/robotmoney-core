@@ -1,0 +1,38 @@
+# Core S2 (issue 1484): required job. Read-only check of the launch config against live Base head.
+# Public RPC, no secret. Output file name carries the Base block number and is uploaded.
+name: config-check
+
+on:
+  pull_request:
+    paths:
+      - "config/**"
+      - "scripts/ci/config-check*.ts"
+      - ".github/workflows/config-check.yml"
+  push:
+    branches: [main, dev]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  config-check:
+    name: config-check-live-base
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Check config against live Base head
+        run: bun scripts/ci/config-check.ts --rpc https://mainnet.base.org --out-dir config-check-output
+      - name: Upload config-check output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-check-output
+          path: config-check-output/config-check-block-*.json
+          if-no-files-found: warn

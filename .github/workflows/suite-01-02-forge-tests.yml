@@ -75,6 +75,10 @@ jobs:
       - name: Removed deploy flags are absent
         run: bun scripts/ci/check-removed-flags.ts
 
+      # Core S2 (issue 1484): config rules and the offline config-check test.
+      - name: Config-check offline test
+        run: bun test scripts/ci/config-check.test.ts
+
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:

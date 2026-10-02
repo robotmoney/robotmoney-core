@@ -1,14 +1,13 @@
 // Canonical: docs/prd.md#112-protocol-asset-vault
 
 /**
- * LandingPriceStrip — compact four-cell live DEX price strip rendered above
+ * LandingPriceStrip — compact three-cell live DEX price strip rendered above
  * VaultCards on the landing page (issue #482).
  *
- * Cells: ETH/USD, wETH/USDC, cbBTC/USDC, wSOL/USDC. Each price is the current
+ * Cells: ETH/USD, wETH/USDC, cbBTC/USDC. Each price is the current
  * Uniswap V3 mid price read from the pool's `slot0().sqrtPriceX96` via
  * wagmi/useReadContract on the dapp's configured RPC — no off-chain price
- * source. Pool addresses come from `config/dex-pools.json` (chain-aware: the
- * devnet override map is used when the dapp targets the forked-Base devnet).
+ * source. Pool addresses come from `config/dex-pools.json` (one map for every chain).
  *
  * Each cell shows the block number the price was read at (matching the
  * VaultCards freshness-chip pattern) and a small freshness indicator. Errors
@@ -21,7 +20,7 @@
  * mirrors the BalancesPanelView pattern (docs/development/react-guide.md
  * §Layout).
  */
-import { useChainId, useReadContract } from "wagmi";
+import { useReadContract } from "wagmi";
 import {
   PRICE_STRIP_PAIRS,
   resolvePoolConfig,
@@ -167,12 +166,11 @@ function usePoolPrice(pair: PairMeta, config: PoolConfig | undefined): PriceCell
  * mixed-block state when the indexer lags behind the chain (issue #612).
  */
 export function LandingPriceStrip() {
-  const chainId = useChainId();
   const { blockNumber } = useExplorer();
 
   const cells = PRICE_STRIP_PAIRS.map((pair) =>
     // eslint-disable-next-line react-hooks/rules-of-hooks -- PRICE_STRIP_PAIRS is a static, fixed-length config array; iteration order never changes.
-    usePoolPrice(pair, resolvePoolConfig(pair.id, chainId)),
+    usePoolPrice(pair, resolvePoolConfig(pair.id)),
   );
 
   return <LandingPriceStripView cells={cells} blockNumber={blockNumber} />;
