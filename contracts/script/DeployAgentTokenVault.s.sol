@@ -5,13 +5,13 @@
 //
 // This script deploys `AgentTokenVault` and registers it in `VaultRegistry`.
 // It intentionally does NOT call `setRouterEligible`: that step is separated into
-// `ActivateBasketVaultEligibility.s.sol` and is gated behind a
-// `BASKET_VAULT_AUDIT_COMPLETE` env flag that must be set only after the
+// `ActivateBasketVaultEligibility.s.sol`, which the operator runs only after the
 // Architecture §4.1 certification checklist is satisfied and the contract has
 // passed audit.
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
@@ -44,27 +44,25 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 ///                                        use a distinct address from ADMIN_ADDRESS
 ///                                        in production for two-role key separation
 ///           SWAP_ROUTER                — Uniswap V3 SwapRouter02
-///           USDC_ADDRESS               — ERC-20 asset the vault denominates in
+///           REGISTRY_ADDRESS           — the vault is registered here as
+///                                        "Robot Money Agent Tokens" (no default)
+///           TVL_CAP, PER_DEPOSIT_CAP   — USDC caps, 6-decimal units (no default)
+///           FEE_RECIPIENT              — recipient for exit fees (no default)
+///           DEPLOYMENT_OUT             — output JSON path (no default)
+///           EXPECTED_CHAIN_ID          — mandatory and equal to 8453 on Base mainnet
+///
+///         USDC is the canonical Base USDC constant on every chain.
 ///
 ///         Optional env vars:
-///           REGISTRY_ADDRESS  — when set, the vault is registered here as
-///                               "Robot Money Agent Tokens" (the same path the
-///                               demo seed and dapp Portfolio Explorer use)
 ///           CONFIG_PATH       — shortlist config path
 ///                               (default: config/agent-token-shortlist.json)
-///           DEPLOYMENT_OUT    — output JSON path
-///                               (default: deployments/agent-token-vault-<chain_id>.json)
-contract DeployAgentTokenVault is Script {
+contract DeployAgentTokenVault is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Active shortlist symbols in deploy order.
     ///         Ordering is load-bearing: AgentTokenVault.shortlist() returns
     ///         tokens in this order, and the dapp/tests assert on it.
     string[3] internal SYMBOLS = ["BNKR", "JUNO", "RM"];
-
-    /// @notice TVL/per-deposit caps mirrored from the other demo vaults.
-    uint256 public constant TVL_CAP = 10_000_000 * 1e6;
-    uint256 public constant PER_DEPOSIT_CAP = 1_000_000 * 1e6;
 
     /// @notice A single resolved shortlist entry.
     struct Entry {
@@ -90,19 +88,36 @@ contract DeployAgentTokenVault is Script {
     /// @notice Broadcast entrypoint. Deploys the vault, seeds the three-token
     ///         shortlist, optionally registers it, and writes a deployment JSON.
     function run() external returns (Deployed memory d) {
-        address admin = vm.envAddress("ADMIN_ADDRESS");
-        address emergencyResponder = vm.envAddress("EMERGENCY_RESPONDER_ADDRESS");
-        address swapRouter = vm.envAddress("SWAP_ROUTER");
-        address usdc = vm.envAddress("USDC_ADDRESS");
+        _requireExpectedChain("");
+        address admin = _envAddressRequired("ADMIN_ADDRESS");
+        address emergencyResponder = _envAddressRequired("EMERGENCY_RESPONDER_ADDRESS");
+        address swapRouter = _envAddressRequired("SWAP_ROUTER");
+        address usdc = BASE_USDC;
         require(admin != address(0), "ADMIN_ADDRESS=0");
         require(emergencyResponder != address(0), "EMERGENCY_RESPONDER_ADDRESS=0");
         require(swapRouter != address(0), "SWAP_ROUTER=0");
-        require(usdc != address(0), "USDC_ADDRESS=0");
+        // Caps, fee recipient and registry come from the frozen sheet: required.
+        uint256 tvlCap = _envUintRequired("TVL_CAP");
+        uint256 perDepositCap = _envUintRequired("PER_DEPOSIT_CAP");
+        address feeRecipient = _envAddressRequired("FEE_RECIPIENT");
+        address registry = _envAddressRequired("REGISTRY_ADDRESS");
+        require(feeRecipient != address(0), "FEE_RECIPIENT=0");
+        require(registry != address(0), "REGISTRY_ADDRESS=0");
 
         Entry[3] memory entries = _resolveShortlist();
 
         vm.startBroadcast();
-        d = _deployAndSeed(admin, emergencyResponder, swapRouter, usdc, entries);
+        d = _deployAndSeed(
+            admin,
+            emergencyResponder,
+            swapRouter,
+            usdc,
+            registry,
+            tvlCap,
+            perDepositCap,
+            feeRecipient,
+            entries
+        );
         vm.stopBroadcast();
 
         _writeDeploymentJson(d);
@@ -116,15 +131,19 @@ contract DeployAgentTokenVault is Script {
         address emergencyResponder,
         address swapRouter,
         address usdc,
+        address registry,
+        uint256 tvlCap,
+        uint256 perDepositCap,
+        address feeRecipient,
         Entry[3] memory entries
     ) internal returns (Deployed memory d) {
         AgentTokenVault vault = new AgentTokenVault(
             IERC20(usdc),
             ISwapRouter(swapRouter),
-            TVL_CAP,
-            PER_DEPOSIT_CAP,
+            tvlCap,
+            perDepositCap,
             0,
-            admin,
+            feeRecipient,
             admin,
             emergencyResponder
         );
@@ -142,11 +161,8 @@ contract DeployAgentTokenVault is Script {
             d.tokens[i] = entries[i].token;
         }
 
-        address registry = _envAddressOrZero("REGISTRY_ADDRESS");
-        if (registry != address(0)) {
-            _registerIfAbsent(VaultRegistry(registry), address(vault), usdc);
-            d.registered = true;
-        }
+        _registerIfAbsent(VaultRegistry(registry), address(vault), usdc);
+        d.registered = true;
     }
 
     /// @dev Resolve the three shortlist entries from config (mainnet) or env
@@ -174,7 +190,7 @@ contract DeployAgentTokenVault is Script {
                 entries[i].token = vm.envAddress(string.concat("DEVNET_AGENT_TOKEN_", sym));
                 entries[i].pool = vm.envAddress(string.concat("DEVNET_AGENT_POOL_", sym));
                 entries[i].swapFee =
-                    uint24(_envUintOrDefault(string.concat("DEVNET_AGENT_FEE_", sym), 10_000));
+                    uint24(_envOrDefault(string.concat("DEVNET_AGENT_FEE_", sym), 10_000));
                 entries[i].adapter = _envAddressOrZero(string.concat("DEVNET_AGENT_ADAPTER_", sym));
                 entries[i].venue = i == 0
                     ? BasketVault.Venue.V3
@@ -218,10 +234,7 @@ contract DeployAgentTokenVault is Script {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath = _envStringOrDefault(
-            "DEPLOYMENT_OUT",
-            string.concat("deployments/agent-token-vault-", vm.toString(block.chainid), ".json")
-        );
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
         string memory obj = "agent_token_vault_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         string memory json = vm.serializeAddress(obj, "vault", d.vault);
@@ -236,18 +249,6 @@ contract DeployAgentTokenVault is Script {
             return v;
         } catch {
             return address(0);
-        }
-    }
-
-    function _envUintOrDefault(string memory key, uint256 fallback_)
-        internal
-        view
-        returns (uint256)
-    {
-        try vm.envUint(key) returns (uint256 v) {
-            return v;
-        } catch {
-            return fallback_;
         }
     }
 

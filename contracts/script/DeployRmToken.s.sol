@@ -5,6 +5,7 @@
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 import {console2} from "forge-std/console2.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 
@@ -25,7 +26,7 @@ import {RmToken} from "../RmToken.sol";
 ///           RM_TOKEN_SUPPLY     — initial supply in base units (default: 1_000_000 * 10^18)
 ///           DEPLOYMENT_OUT      — path for the output JSON
 ///                                 (default: "deployments/rm-token-<chain_id>.json")
-contract DeployRmToken is Script {
+contract DeployRmToken is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Default initial supply: 1 000 000 RM (18 decimals).
@@ -42,7 +43,8 @@ contract DeployRmToken is Script {
     ///         and writes a deployment JSON.
     /// @return d Struct containing the deployed token and key parameters.
     function run() external returns (Deployed memory d) {
-        address initialHolder = vm.envAddress("INITIAL_HOLDER");
+        _requireExpectedChain("");
+        address initialHolder = _envAddressRequired("INITIAL_HOLDER");
         string memory tokenName = vm.envOr("RM_TOKEN_NAME", string("Robot Money Token"));
         string memory tokenSymbol = vm.envOr("RM_TOKEN_SYMBOL", string("RM"));
         uint256 initialSupply = vm.envOr("RM_TOKEN_SUPPLY", DEFAULT_INITIAL_SUPPLY);
@@ -89,12 +91,7 @@ contract DeployRmToken is Script {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
-            outPath = s;
-        } catch {
-            outPath = string.concat("deployments/rm-token-", vm.toString(block.chainid), ".json");
-        }
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
 
         string memory obj = "rm_token_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);

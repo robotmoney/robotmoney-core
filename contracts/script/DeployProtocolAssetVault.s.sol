@@ -6,14 +6,14 @@
 //
 // This script deploys `ProtocolAssetVault` and registers it in `VaultRegistry`.
 // It intentionally does NOT call `setRouterEligible`: that step is separated into
-// `ActivateBasketVaultEligibility.s.sol` and is gated behind a
-// `BASKET_VAULT_AUDIT_COMPLETE` env flag that must be set only after the
+// `ActivateBasketVaultEligibility.s.sol`, which the operator runs only after the
 // Architecture §4.1 certification checklist (pool cardinality, per-asset TWAP
 // windows, intra-vault rebalancing model) is satisfied and the contract has
 // passed audit.
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
@@ -36,18 +36,18 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 ///                                        use a distinct address from ADMIN_ADDRESS
 ///                                        in production for two-role key separation
 ///           SWAP_ROUTER                — Uniswap V3 SwapRouter02
-///           USDC_ADDRESS               — ERC-20 asset the vault denominates in
+///           REGISTRY_ADDRESS           — the vault is registered here as
+///                                        "Robot Money Protocol" (no default)
+///           TVL_CAP, PER_DEPOSIT_CAP   — USDC caps, 6-decimal units (no default)
+///           FEE_RECIPIENT              — recipient for exit fees (no default)
+///           DEPLOYMENT_OUT             — output JSON path (no default)
+///           EXPECTED_CHAIN_ID          — mandatory and equal to 8453 on Base mainnet
+///
+///         USDC is the canonical Base USDC constant on every chain.
 ///
 ///         Optional env vars:
-///           REGISTRY_ADDRESS  — when set, the vault is registered here as
-///                               "Robot Money Protocol" (VaultMetadata.name)
-///           TVL_CAP           — USDC TVL ceiling (default: 10_000_000 * 1e6)
-///           PER_DEPOSIT_CAP   — USDC per-deposit ceiling (default: 1_000_000 * 1e6)
-///           EXIT_FEE_BPS      — exit fee in basis points (default: 0)
-///           FEE_RECIPIENT     — recipient for exit fees (default: ADMIN_ADDRESS)
-///           DEPLOYMENT_OUT    — output JSON path
-///                               (default: deployments/protocol-asset-vault-<chain_id>.json)
-contract DeployProtocolAssetVault is Script {
+///           EXIT_FEE_BPS      — exit fee in basis points (default: 0; malformed reverts)
+contract DeployProtocolAssetVault is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Default TVL cap: 10M USDC (6 decimals).
@@ -69,20 +69,24 @@ contract DeployProtocolAssetVault is Script {
     /// @notice Forge broadcast entrypoint. Deploys the vault, optionally
     ///         registers it in VaultRegistry, and writes a deployment JSON.
     function run() external returns (Deployed memory d) {
-        address admin = vm.envAddress("ADMIN_ADDRESS");
-        address emergencyResponder = vm.envAddress("EMERGENCY_RESPONDER_ADDRESS");
-        address swapRouter = vm.envAddress("SWAP_ROUTER");
-        address usdc = vm.envAddress("USDC_ADDRESS");
+        _requireExpectedChain("");
+        address admin = _envAddressRequired("ADMIN_ADDRESS");
+        address emergencyResponder = _envAddressRequired("EMERGENCY_RESPONDER_ADDRESS");
+        address swapRouter = _envAddressRequired("SWAP_ROUTER");
+        address usdc = BASE_USDC;
+        address registry = _envAddressRequired("REGISTRY_ADDRESS");
 
         require(admin != address(0), "ADMIN_ADDRESS=0");
         require(emergencyResponder != address(0), "EMERGENCY_RESPONDER_ADDRESS=0");
         require(swapRouter != address(0), "SWAP_ROUTER=0");
-        require(usdc != address(0), "USDC_ADDRESS=0");
+        require(registry != address(0), "REGISTRY_ADDRESS=0");
 
-        uint256 tvlCap = _envUintOrDefault("TVL_CAP", DEFAULT_TVL_CAP);
-        uint256 perDepositCap = _envUintOrDefault("PER_DEPOSIT_CAP", DEFAULT_PER_DEPOSIT_CAP);
-        uint256 exitFeeBps = _envUintOrDefault("EXIT_FEE_BPS", 0);
-        address feeRecipient = _envAddressOrDefault("FEE_RECIPIENT", admin);
+        // Caps and fee recipient come from the frozen sheet: required, no defaults.
+        uint256 tvlCap = _envUintRequired("TVL_CAP");
+        uint256 perDepositCap = _envUintRequired("PER_DEPOSIT_CAP");
+        uint256 exitFeeBps = _envOrDefault("EXIT_FEE_BPS", 0);
+        address feeRecipient = _envAddressRequired("FEE_RECIPIENT");
+        require(feeRecipient != address(0), "FEE_RECIPIENT=0");
 
         vm.startBroadcast();
         d = _deployAndRegister(
@@ -90,6 +94,7 @@ contract DeployProtocolAssetVault is Script {
             emergencyResponder,
             swapRouter,
             usdc,
+            registry,
             tvlCap,
             perDepositCap,
             exitFeeBps,
@@ -124,6 +129,7 @@ contract DeployProtocolAssetVault is Script {
             emergencyResponder_,
             swapRouter_,
             usdc_,
+            address(0),
             DEFAULT_TVL_CAP,
             DEFAULT_PER_DEPOSIT_CAP,
             0,
@@ -148,6 +154,7 @@ contract DeployProtocolAssetVault is Script {
         address emergencyResponder,
         address swapRouter,
         address usdc,
+        address registry,
         uint256 tvlCap,
         uint256 perDepositCap,
         uint256 exitFeeBps,
@@ -165,7 +172,7 @@ contract DeployProtocolAssetVault is Script {
         );
         d.vault = address(vault);
 
-        address registry = _envAddressOrDefault("REGISTRY_ADDRESS", address(0));
+        // The in-process seam passes address(0) and registers itself under a prank.
         if (registry != address(0)) {
             _registerIfAbsent(VaultRegistry(registry), address(vault), usdc);
             d.registry = registry;
@@ -189,10 +196,7 @@ contract DeployProtocolAssetVault is Script {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath = _envStringOrDefault(
-            "DEPLOYMENT_OUT",
-            string.concat("deployments/protocol-asset-vault-", vm.toString(block.chainid), ".json")
-        );
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
         string memory obj = "protocol_asset_vault_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "vault", d.vault);
@@ -200,44 +204,5 @@ contract DeployProtocolAssetVault is Script {
         string memory json = vm.serializeBool(obj, "registered", d.registered);
         vm.writeJson(json, outPath);
         console2.log("Wrote protocol-asset-vault deployment JSON to", outPath);
-    }
-
-    // ─── env helpers ──────────────────────────────────────────────────────────
-
-    function _envAddressOrDefault(string memory key, address fallback_)
-        internal
-        view
-        returns (address)
-    {
-        try vm.envAddress(key) returns (address v) {
-            return v;
-        } catch {
-            return fallback_;
-        }
-    }
-
-    function _envUintOrDefault(string memory key, uint256 fallback_)
-        internal
-        view
-        returns (uint256)
-    {
-        try vm.envUint(key) returns (uint256 v) {
-            return v;
-        } catch {
-            return fallback_;
-        }
-    }
-
-    function _envStringOrDefault(string memory key, string memory fallback_)
-        internal
-        view
-        returns (string memory)
-    {
-        try vm.envString(key) returns (string memory v) {
-            if (bytes(v).length > 0) return v;
-            return fallback_;
-        } catch {
-            return fallback_;
-        }
     }
 }

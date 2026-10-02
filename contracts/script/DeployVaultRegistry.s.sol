@@ -22,13 +22,13 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         Required env vars:
 ///           ADMIN_ADDRESS    — receives ADMIN_ROLE on the registry
 ///           VAULT_ADDRESS    — RobotMoneyVault to register
-///           USDC_ADDRESS     — ERC-20 asset the vault denominates in
 ///
 ///         Optional env vars:
 ///           VAULT_NAME       — human-readable vault name
 ///                              (default: "Robot Money USDC")
-///           DEPLOYMENT_OUT   — path for the output JSON
-///                              (default: "deployments/registry-<chain_id>.json")
+///         USDC is the canonical Base USDC constant on every chain.
+///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
+///         (mandatory and equal to 8453 on Base mainnet).
 contract DeployVaultRegistry is ExpectedChainGuard {
     using stdJson for string;
 
@@ -53,9 +53,9 @@ contract DeployVaultRegistry is ExpectedChainGuard {
     /// @return d Struct containing the deployed registry and key parameters.
     function run() external returns (Deployed memory d) {
         _requireExpectedChain("");
-        address admin = vm.envAddress("ADMIN_ADDRESS");
-        address vault = vm.envAddress("VAULT_ADDRESS");
-        address asset = vm.envAddress("USDC_ADDRESS");
+        address admin = _envAddressRequired("ADMIN_ADDRESS");
+        address vault = _envAddressRequired("VAULT_ADDRESS");
+        address asset = BASE_USDC;
         string memory vaultName = _envStringOrDefault("VAULT_NAME", DEFAULT_VAULT_NAME);
         // The registry stores these two addresses without reading them; a wrong-chain
         // or mistyped address would register a vault with no code behind it.
@@ -154,12 +154,7 @@ contract DeployVaultRegistry is ExpectedChainGuard {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
-            outPath = s;
-        } catch {
-            outPath = string.concat("deployments/registry-", vm.toString(block.chainid), ".json");
-        }
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
 
         string memory obj = "registry_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);

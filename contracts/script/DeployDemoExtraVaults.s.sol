@@ -3,6 +3,7 @@
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
@@ -506,7 +507,7 @@ contract DemoAgentBatchDeployer {
 ///                                (default: "Robot Money RWA / Thematic")
 ///           DEPLOYMENT_OUT     — output JSON path
 ///                                (default: "deployments/demo-extra-vaults-<chain_id>.json")
-contract DeployDemoExtraVaults is Script {
+contract DeployDemoExtraVaults is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
@@ -588,6 +589,7 @@ contract DeployDemoExtraVaults is Script {
     ///         AgentTokenVault, the RWA placeholder; registers all three;
     ///         seeds the two basket vaults; resets the router weight vector.
     function run() external returns (Deployed memory d) {
+        _requireExpectedChain("");
         Params memory p = _readParams();
 
         vm.startBroadcast();
@@ -609,12 +611,12 @@ contract DeployDemoExtraVaults is Script {
     }
 
     function _readParams() internal view returns (Params memory p) {
-        p.admin = vm.envAddress("ADMIN_ADDRESS");
-        p.emergencyResponder = vm.envAddress("EMERGENCY_RESPONDER_ADDRESS");
-        p.registry = vm.envAddress("REGISTRY_ADDRESS");
-        p.router = vm.envAddress("ROUTER_ADDRESS");
-        p.primaryVault = vm.envAddress("PRIMARY_VAULT");
-        p.usdc = vm.envAddress("USDC_ADDRESS");
+        p.admin = _envAddressRequired("ADMIN_ADDRESS");
+        p.emergencyResponder = _envAddressRequired("EMERGENCY_RESPONDER_ADDRESS");
+        p.registry = _envAddressRequired("REGISTRY_ADDRESS");
+        p.router = _envAddressRequired("ROUTER_ADDRESS");
+        p.primaryVault = _envAddressRequired("PRIMARY_VAULT");
+        p.usdc = BASE_USDC;
         p.swapRouter = _envAddressOrDefault("SWAP_ROUTER", DEFAULT_SWAP_ROUTER);
         p.rwaName = _envStringOrDefault("RWA_VAULT_NAME", DEFAULT_RWA_NAME);
 
@@ -1008,14 +1010,7 @@ contract DeployDemoExtraVaults is Script {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
-            outPath = s;
-        } catch {
-            outPath = string.concat(
-                "deployments/demo-extra-vaults-", vm.toString(block.chainid), ".json"
-            );
-        }
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
 
         string memory obj = "demo_extra_vaults_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);

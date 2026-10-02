@@ -37,19 +37,16 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///           ADMIN_ADDRESS      — receives ADMIN_ROLE on the governance contract
 ///           ROUTER_ADDRESS     — deployed PortfolioRouter address
 ///
-///         Optional env vars:
+///         Optional env vars (a malformed value reverts, it never falls back):
 ///           VOTING_PERIOD      — voting period in seconds (default: 3600 — 1 hour)
 ///           EXECUTION_DELAY    — delay from voting end to execution in seconds
 ///                                (default: 3600 — 1 hour, the contract's MIN_EXECUTION_DELAY)
 ///           QUORUM_THRESHOLD   — minimum FOR voting power for quorum
 ///                                (default: 2; must be greater than 1)
-///           DEPLOYMENT_OUT     — path for the output JSON
-///                                (default: "deployments/governance-<chain_id>.json")
-///           SKIP_ROUTER_ADMIN_GRANT — set to true ONLY when the router's
-///                                ADMIN_ROLE has already moved to the timelock
-///                                and the grant will be scheduled through it.
-///                                The script then refuses to pretend the wiring
-///                                is complete and says so loudly.
+///           EXPECTED_CHAIN_ID  — mandatory and equal to 8453 on Base mainnet
+///           DEPLOYMENT_OUT     — path for the output JSON (required, no default)
+///
+///         The router ADMIN_ROLE grant always runs: no flag skips it.
 contract DeployRouterGovernance is ExpectedChainGuard {
     using stdJson for string;
 
@@ -88,16 +85,16 @@ contract DeployRouterGovernance is ExpectedChainGuard {
         // scheduled test files, and this repo has already been burned by
         // exactly that race on ADMIN_ADDRESS (see AgentTokenVault.t.sol's
         // note and Deploy.t.sol::test_deploy_envDriven_runInProcessSucceeds).
-        uint256 quorumThreshold = vm.envOr("QUORUM_THRESHOLD", DEFAULT_QUORUM_THRESHOLD);
+        uint256 quorumThreshold = _envOrDefault("QUORUM_THRESHOLD", DEFAULT_QUORUM_THRESHOLD);
         require(quorumThreshold > 1, "QUORUM_THRESHOLD must be greater than 1");
 
-        address admin = vm.envAddress("ADMIN_ADDRESS");
-        address router = vm.envAddress("ROUTER_ADDRESS");
+        address admin = _envAddressRequired("ADMIN_ADDRESS");
+        address router = _envAddressRequired("ROUTER_ADDRESS");
         require(router.code.length > 0, "ROUTER_ADDRESS has no code on this chain");
 
-        uint64 votingPeriod = uint64(vm.envOr("VOTING_PERIOD", uint256(DEFAULT_VOTING_PERIOD)));
+        uint64 votingPeriod = uint64(_envOrDefault("VOTING_PERIOD", uint256(DEFAULT_VOTING_PERIOD)));
         uint64 executionDelay =
-            uint64(vm.envOr("EXECUTION_DELAY", uint256(DEFAULT_EXECUTION_DELAY)));
+            uint64(_envOrDefault("EXECUTION_DELAY", uint256(DEFAULT_EXECUTION_DELAY)));
 
         // `msg.sender` is the broadcasting account under `forge script`, and it
         // is that account whose router ADMIN_ROLE the grant below depends on.
@@ -173,21 +170,9 @@ contract DeployRouterGovernance is ExpectedChainGuard {
         bytes32 routerAdminRole = d.router.ADMIN_ROLE();
         address governance = address(d.governance);
 
-        if (vm.envOr("SKIP_ROUTER_ADMIN_GRANT", false)) {
-            // Deliberate opt-out: the router's ADMIN_ROLE has already left the
-            // deployer. Refuse to leave the operator believing the topology is
-            // wired; the grant is now a timelock proposal they must schedule.
-            console2.log(
-                "SKIP_ROUTER_ADMIN_GRANT=true: RouterGovernance has NOT been granted router"
-                " ADMIN_ROLE. execute() WILL revert until you schedule"
-                " router.grantRole(ADMIN_ROLE, governance) through the TimelockController."
-            );
-            return;
-        }
-
         require(
             IAccessControl(address(d.router)).hasRole(routerAdminRole, granter_),
-            "caller lacks router ADMIN_ROLE: cannot wire governance (set SKIP_ROUTER_ADMIN_GRANT=true to route the grant through the timelock instead)"
+            "caller lacks router ADMIN_ROLE: cannot wire governance (run this script before DeployTimelock hands the router ADMIN_ROLE away)"
         );
 
         IAccessControl(address(d.router)).grantRole(routerAdminRole, governance);
@@ -208,12 +193,7 @@ contract DeployRouterGovernance is ExpectedChainGuard {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
-            outPath = s;
-        } catch {
-            outPath = string.concat("deployments/governance-", vm.toString(block.chainid), ".json");
-        }
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
 
         string memory obj = "governance_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);

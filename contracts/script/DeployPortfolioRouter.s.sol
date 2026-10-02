@@ -23,11 +23,10 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///           ADMIN_ADDRESS      — receives ADMIN_ROLE on the router
 ///           REGISTRY_ADDRESS   — deployed VaultRegistry address
 ///           VAULT_ADDRESS      — RobotMoneyVault (sole active vault, 10 000 bps)
-///           USDC_ADDRESS       — ERC-20 asset the router accepts
 ///
-///         Optional env vars:
-///           DEPLOYMENT_OUT     — path for the output JSON
-///                                (default: "deployments/router-<chain_id>.json")
+///         USDC is the canonical Base USDC constant on every chain.
+///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
+///         (mandatory and equal to 8453 on Base mainnet).
 contract DeployPortfolioRouter is ExpectedChainGuard {
     using stdJson for string;
 
@@ -52,10 +51,10 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
     /// @return d Struct containing the deployed router and key parameters.
     function run() external returns (Deployed memory d) {
         _requireExpectedChain("");
-        address admin = vm.envAddress("ADMIN_ADDRESS");
-        address registry = vm.envAddress("REGISTRY_ADDRESS");
-        address vault = vm.envAddress("VAULT_ADDRESS");
-        address usdc = vm.envAddress("USDC_ADDRESS");
+        address admin = _envAddressRequired("ADMIN_ADDRESS");
+        address registry = _envAddressRequired("REGISTRY_ADDRESS");
+        address vault = _envAddressRequired("VAULT_ADDRESS");
+        address usdc = BASE_USDC;
         require(registry.code.length > 0, "REGISTRY_ADDRESS has no code on this chain");
         require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
         require(usdc.code.length > 0, "USDC_ADDRESS has no code on this chain");
@@ -131,12 +130,7 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
-            outPath = s;
-        } catch {
-            outPath = string.concat("deployments/router-", vm.toString(block.chainid), ".json");
-        }
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
 
         string memory obj = "router_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);

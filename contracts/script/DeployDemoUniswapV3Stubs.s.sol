@@ -3,6 +3,7 @@
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
@@ -31,7 +32,7 @@ import {UniswapV3PoolSlot0Stub} from "../UniswapV3PoolSlot0Stub.sol";
 ///                            (default: "deployments/demo-uniswap-v3-stubs-<chain_id>.json")
 ///
 ///         NEVER use on a real chain.  Demo/devnet only.
-contract DeployDemoUniswapV3Stubs is Script {
+contract DeployDemoUniswapV3Stubs is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Arachnid deterministic-deployment-proxy.
@@ -81,6 +82,7 @@ contract DeployDemoUniswapV3Stubs is Script {
 
     /// @notice Forge broadcast entrypoint.
     function run() external returns (Deployed memory d) {
+        _requireExpectedChain("");
         vm.startBroadcast();
         d = _doDeploy();
         vm.stopBroadcast();
@@ -133,14 +135,7 @@ contract DeployDemoUniswapV3Stubs is Script {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
-            outPath = s;
-        } catch {
-            outPath = string.concat(
-                "deployments/demo-uniswap-v3-stubs-", vm.toString(block.chainid), ".json"
-            );
-        }
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
 
         string memory obj = "demo_uniswap_v3_stubs";
         vm.serializeUint(obj, "chain_id", block.chainid);

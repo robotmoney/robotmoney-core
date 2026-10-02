@@ -28,6 +28,7 @@
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -40,7 +41,7 @@ import {Vault} from "../Vault.sol";
 ///         spec §8). Exposes the theme matrix, the vault constructor call, the
 ///         variable-length adapter-set wiring, the rmAGENT per-theme
 ///         `TimelockController` handoff, and the rmRWA active-adapter-count cap.
-contract DeployVaultThemes is Script {
+contract DeployVaultThemes is ExpectedChainGuard {
     /// @notice The four unified-vault themes (ADR-0010 §7). Each is one `Vault`
     ///         deployment distinguished only by its parameters + adapter set.
     enum Theme {
@@ -281,27 +282,25 @@ contract DeployVaultThemes is Script {
     ///         governed follow-up (their own scripts, then `wireThemeBroadcast`);
     ///         the registry/router eligibility interlock is Phase-6 (ADR-0010 §8).
     ///
-    ///         Required env: THEME, USDC_ADDRESS, ADMIN_ADDRESS,
-    ///         EMERGENCY_RESPONDER_ADDRESS. Optional: TVL_CAP, PER_DEPOSIT_CAP,
-    ///         EXIT_FEE_BPS, MAX_NAV_GROWTH_RATE_BPS, FEE_RECIPIENT.
+    ///         Required env: THEME, ADMIN_ADDRESS, EMERGENCY_RESPONDER_ADDRESS,
+    ///         TVL_CAP, PER_DEPOSIT_CAP, FEE_RECIPIENT, EXPECTED_CHAIN_ID (8453 on
+    ///         mainnet). Optional: EXIT_FEE_BPS, MAX_NAV_GROWTH_RATE_BPS.
     function run() external returns (address vault) {
+        _requireExpectedChain("");
         Theme t = _themeFromEnv();
-        address usdc = vm.envAddress("USDC_ADDRESS");
-        address admin = vm.envAddress("ADMIN_ADDRESS");
-        address emergency = vm.envAddress("EMERGENCY_RESPONDER_ADDRESS");
-        require(usdc != address(0), "USDC_ADDRESS=0");
+        address usdc = BASE_USDC;
+        address admin = _envAddressRequired("ADMIN_ADDRESS");
+        address emergency = _envAddressRequired("EMERGENCY_RESPONDER_ADDRESS");
         require(admin != address(0), "ADMIN_ADDRESS=0");
         require(emergency != address(0), "EMERGENCY_RESPONDER_ADDRESS=0");
 
         VaultConfig memory cfg = VaultConfig({
             usdc: IERC20(usdc),
-            tvlCap: _envUintOrDefault("TVL_CAP", DEFAULT_TVL_CAP),
-            perDepositCap: _envUintOrDefault("PER_DEPOSIT_CAP", DEFAULT_PER_DEPOSIT_CAP),
-            exitFeeBps: _envUintOrDefault("EXIT_FEE_BPS", 0),
-            maxNavGrowthRateBps: _envUintOrDefault(
-                "MAX_NAV_GROWTH_RATE_BPS", DEFAULT_MAX_NAV_GROWTH_RATE_BPS
-            ),
-            feeRecipient: _envAddressOrDefault("FEE_RECIPIENT", admin),
+            tvlCap: _envUintRequired("TVL_CAP"),
+            perDepositCap: _envUintRequired("PER_DEPOSIT_CAP"),
+            exitFeeBps: _envOrDefault("EXIT_FEE_BPS", 0),
+            maxNavGrowthRateBps: _envOrDefault("MAX_NAV_GROWTH_RATE_BPS", DEFAULT_MAX_NAV_GROWTH_RATE_BPS),
+            feeRecipient: _envAddressRequired("FEE_RECIPIENT"),
             admin: admin,
             emergency: emergency
         });
@@ -335,27 +334,4 @@ contract DeployVaultThemes is Script {
         revert("THEME must be one of USDC|PROTO|AGENT|RWA");
     }
 
-    function _envAddressOrDefault(string memory key, address fallback_)
-        internal
-        view
-        returns (address)
-    {
-        try vm.envAddress(key) returns (address v) {
-            return v;
-        } catch {
-            return fallback_;
-        }
-    }
-
-    function _envUintOrDefault(string memory key, uint256 fallback_)
-        internal
-        view
-        returns (uint256)
-    {
-        try vm.envUint(key) returns (uint256 v) {
-            return v;
-        } catch {
-            return fallback_;
-        }
-    }
 }
