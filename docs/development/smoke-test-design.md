@@ -247,7 +247,8 @@ new():
   2. docker compose up -d geth beacon validator-{1..4}
      (ports injected via env vars, fork block injected via FORK_BLOCK env var)
   3. poll geth RPC on allocated port until healthy (eth_blockNumber succeeds)
-  4. forge script Deploy.s.sol  →  parse addresses from output
+  4. fund fresh rehearsal keystores, then call publish contracts (devops, Bun
+     TypeScript) with the Twin chain arguments  →  read the manifests
   5. docker compose up -d postgres explorer-indexer explorer-api dapp
      (addresses + ports injected as env vars)
   6. poll explorer-api /health on allocated port until 200
@@ -257,10 +258,16 @@ Drop:
   docker compose down -v --remove-orphans
 ```
 
-Contract deployment (step 4) is a `std::process::Command` call to
-`forge script`. The addresses are parsed from the JSON deployment output
-and passed to the remaining services as environment variables — no
-deployer container, no chicken-and-egg problem in the compose file.
+Contract deployment (step 4) is not done by this harness. The harness boots the
+Twin chain, mints a fresh set of rehearsal keystores (encrypted, 0700 directory,
+passphrase in a 0600 file, never an argument), funds them, and calls the one
+runbook, "publish contracts", with `--chain 918453 --rpc <twin rpc> --sheet
+<stage sheet> --signer keystore --environment stage --core-sha <sha>`. The
+addresses come from the manifests the driver writes (`core.json`, `registry.json`,
+`router.json`, `governance.json`, `ic-policy.json`, `timelock.json`, `safe.json`,
+`libraries.json`, one `vault-<key>.json` per extra vault) and are passed to the
+remaining services as environment variables. See
+`docs/development/stage-deployment.md`.
 
 ---
 
@@ -304,10 +311,13 @@ The `DevnetEndpoints` interface tracks the fields emitted by the binary:
 | `vault_addr` | `Fixture.vault()` | Primary RobotMoneyVault address |
 | `usdc_addr` | `Fixture.usdc()` | USDC ERC-20 address |
 | `agent_addr` | `Fixture.agent()` | Test agent EOA address |
-| `admin_addr` | `DEPLOYER_ADDRESS_HEX` | Deployer / admin EOA address |
+| `deployer_addr` | rehearsal key helper | The fresh keystore deployer. It holds nothing after handover. |
+| `safe_addr` | `Fixture.safe()` | The real 2-of-3 Safe |
+| `timelock_addr` | `Fixture.timelock()` | The TimelockController that holds admin |
+| `manifest_dir`, `sheet_path`, `core_sha` | publish contracts run | Where the manifests and the run sheet are |
+| `key_dir`, `password_file` | rehearsal key helper | Paths only, never secrets |
 | `pauser_addr` | `PAUSER_ADDRESS_HEX` | Pauser EOA address |
 | `share_receiver_addr` | `SHARE_RECEIVER_ADDRESS_HEX` | Vault share receiver address |
-| `admin_private_key` | `DEPLOYER_PRIVATE_KEY_HEX` | Admin signing key (test-only) |
 | `pauser_private_key` | `PAUSER_PRIVATE_KEY_HEX` | Pauser signing key (test-only) |
 | `agent_private_key` | `AGENT_PRIVATE_KEY` | Agent signing key (test-only) |
 | `gateway_runtime_hash` | `Fixture.gateway_runtime_hash()` | keccak256(getBytecode(gateway)) |
@@ -316,7 +326,6 @@ The `DevnetEndpoints` interface tracks the fields emitted by the binary:
 | `registry_addr` | `Fixture.registry()` | VaultRegistry contract address (issue #320) |
 | `router_addr` | `Fixture.router()` | PortfolioRouter contract address (issue #320) |
 | `governance_addr` | `Fixture.governance()` | RouterGovernance contract address (issue #477) |
-| `rm_token_addr` | `Fixture.rm_token()` | RmToken ERC-20 address (issue #477) |
 
 **Adding new fields.** Emit the field in `testing/smoke-test/src/bin/smoke-test.rs`
 inside the `--- endpoint summary ---` block, add it to `REQUIRED_KEYS` in
@@ -340,7 +349,6 @@ Two mechanisms keep that from recurring.
 
 | Spec | Subject | May skip? |
 | --- | --- | --- |
-| `consensus-receipts-seeded.spec.ts` | the two receipts `Fixture::seed_consensus_receipts` seeds on every `--full-stack` boot | **No** |
 | `consensus-receipts.spec.ts` | the receipt a Fusion QA run really anchored, named by `FUSION_RECEIPT_ID` / `FUSION_RECEIPT_URL` | Yes |
 
 The seeded pair is core's own fixture bytes — enough to prove the four rendered
