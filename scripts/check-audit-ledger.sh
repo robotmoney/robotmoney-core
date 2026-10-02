@@ -162,4 +162,53 @@ if grep -qiE '#1010 (TODO|backfills)|_TBD — #1010' "${AUDITS_DOC}"; then
   fail "docs/audits.md still contains #1010-TODO placeholder rows; backfill the real ledger (§9/§14)"
 fi
 
-echo "check-audit-ledger: OK (audit-scope ledger + finding register [${DATA_ROWS} rows] + SECURITY.md enforced)"
+# --- Contract coverage: every shipped .sol has a ledger row (S10, core 1489) ---
+# Shipped Solidity = contracts/*.sol + contracts/{adapters,gateway,vaults,lib}/*.sol
+# (the audit-scope ledger comment in docs/audits.md defines the same set).
+# Interfaces, scripts, tests and the generated doc mirror are excluded.
+# shellcheck disable=SC2016  # backticks are literal markdown.
+LEDGER_ROWS="$(
+  sed -nE 's/^\|[[:space:]]*`([^`]+\.sol)`[[:space:]]*\|.*/\1/p' \
+    "${AUDITS_DOC}" | sort -u
+)"
+SHIPPED=""
+for f in "${REPO_ROOT}"/contracts/*.sol \
+         "${REPO_ROOT}"/contracts/adapters/*.sol \
+         "${REPO_ROOT}"/contracts/gateway/*.sol \
+         "${REPO_ROOT}"/contracts/vaults/*.sol \
+         "${REPO_ROOT}"/contracts/lib/*.sol; do
+  [ -f "${f}" ] || continue
+  SHIPPED="${SHIPPED}${f#"${REPO_ROOT}"/contracts/}"$'\n'
+done
+SHIPPED="$(printf '%s' "${SHIPPED}" | sed '/^$/d' | sort -u)"
+[ -n "${SHIPPED}" ] || fail "no shipped contracts found under contracts/ (zero checks would run)"
+
+MISSING="$(comm -23 <(printf '%s\n' "${SHIPPED}") <(printf '%s\n' "${LEDGER_ROWS}"))"
+if [ -n "${MISSING}" ]; then
+  printf '%s\n' "${MISSING}" | sed 's/^/  no audit-scope ledger row: /' >&2
+  fail "shipped contract(s) with no row in the docs/audits.md audit-scope ledger; add a row or a documented exception (§14)"
+fi
+STALE_ROWS="$(comm -13 <(printf '%s\n' "${SHIPPED}") <(printf '%s\n' "${LEDGER_ROWS}") | grep -v '^$' || true)"
+if [ -n "${STALE_ROWS}" ]; then
+  printf '%s\n' "${STALE_ROWS}" | sed 's/^/  ledger row for a file that does not exist: /' >&2
+  fail "audit-scope ledger names contract(s) that are not shipped; remove the row (§14)"
+fi
+
+# --- Source header vs ledger reconciliation ----------------------------------
+# A source header that claims "not audited" must have a ledger row whose Status
+# is not a bare "Audited" with an empty exception.
+RECON_BAD=0
+while IFS= read -r rel; do
+  [ -n "${rel}" ] || continue
+  if head -30 "${REPO_ROOT}/contracts/${rel}" | grep -qiE '^//.*not audited'; then
+    row="$(grep -E "^\|[[:space:]]*\`${rel//\//\\/}\`" "${AUDITS_DOC}" | head -1 || true)"
+    if printf '%s' "${row}" | grep -qE '\|[[:space:]]*Audited[[:space:]]*\|[[:space:]]*—[[:space:]]*\|[[:space:]]*$'; then
+      echo "  header says 'not audited' but ledger says Audited with no exception: ${rel}" >&2
+      RECON_BAD=$((RECON_BAD + 1))
+    fi
+  fi
+done <<< "${SHIPPED}"
+[ "${RECON_BAD}" -eq 0 ] || fail "${RECON_BAD} source header(s) contradict the audit-scope ledger (§14)"
+SHIPPED_COUNT="$(printf '%s\n' "${SHIPPED}" | wc -l | tr -d ' ')"
+
+echo "check-audit-ledger: OK (${SHIPPED_COUNT} shipped contracts all have ledger rows; finding register [${DATA_ROWS} rows] + SECURITY.md enforced)"

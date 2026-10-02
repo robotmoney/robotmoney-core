@@ -82,7 +82,9 @@
 
 Every production contract under `contracts/` (excluding `contracts/test/`,
 `contracts/script/`, `contracts/interfaces/`, and the generated
-`contracts/doc/` mirror) is mapped to the audit report(s) that covered it.
+`contracts/doc/` mirror) is mapped. `scripts/check-audit-ledger.sh` fails when
+a shipped `.sol` has no row here and when a row names a file that no longer
+exists. Test-only contracts live under `contracts/test/` and are not shipped to the audit report(s) that covered it.
 
 | Contract | Audit report(s) | Status | Exception (if any) |
 |---|---|---|---|
@@ -92,10 +94,10 @@ Every production contract under `contracts/` (excluding `contracts/test/`,
 | `RouterGovernance.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
 | `VaultRegistry.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
 | `FeatureFlags.sol` | VA-0609 | Audited | Pre-mainnet re-audit pending under the bucket-B/C economic-audit gate (security-model.md §14) |
-| `UniswapV3PoolSlot0Stub.sol` | VA-0609, HR-0618 | Audited | Devnet/demo helper; not router-eligible. Documented exception: fail-closed at the vault, not a production swap surface |
 | `gateway/RobotMoneyGateway.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | — |
 | `gateway/AccessRoles.sol` | VA-0609, HR-0618, MC-0619, CD-0602 | Audited | — |
-| `gateway/MockVault.sol` | VA-0609, HR-0618 | Audited | Test/mock surface (constructor asset-mismatch revert pinned, HR-0618 I-9); not production-reachable |
+| `gateway/ConsensusRecommendationReceipt.sol` | none | Not separately audited | Investment-committee receipt contract; no snapshot in docs/code-review/ covers it. Audit exception pending owner |
+| `gateway/InvestmentCommitteePolicy.sol` | none | Not separately audited | Investment-committee policy contract; no snapshot in docs/code-review/ covers it. Audit exception pending owner |
 | `vaults/BasketVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | Bucket-B/C economic-model audit required before router-eligible production use (security-model.md §14; gap BASKET-001/ECONOMIC-AUDIT-001) |
 | `vaults/RwaBasketVault.sol` | none (thin subclass of `BasketVault`: name, symbol, asset cap) | Not separately audited | Same bucket-B/C economic-audit gate as BasketVault. Replaces the retired Chronicle-priced RWA vault (core 1492). Audit exception pending owner (plan decision 5) |
 | `vaults/AgentTokenVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate |
@@ -108,6 +110,7 @@ Every production contract under `contracts/` (excluding `contracts/test/`,
 | `lib/TickMath.sol` | HR-0618 | Audited | Externalized library (HR-0618 L3-D1); `pure` math, byte-identical, mis-link operational risk noted |
 | `lib/TwapTickMath.sol` | HR-0618 (via BasketVault TWAP path) | Audited | TWAP helper exercised through BasketVault NAV review |
 | `lib/AdminFloorAccessControl.sol` | MC-0619 (via F-06 admin-floor remediation) | Audited | Admin-floor mixin introduced by the F-06 remediation |
+| `lib/AdminFloorAccessControlCounter.sol` | HR-0618 (L-10) | Audited | Counter variant of the admin-floor mixin used by `RobotMoneyVault` and `BasketVault`; introduced by the HR-0618 L-10 remediation |
 | `lib/BasketAssetConfigGuard.sol` | HR-0618, MC-0619 (via BasketVault addAsset path) | Audited | Reviewed through BasketVault `addAsset` config-validation findings |
 | `lib/BasketViews.sol` | HR-0618 (via BasketVault NAV/preview path) | Audited | View helper exercised through BasketVault preview findings |
 | `lib/BpsMath.sol` | VA-0609, HR-0618 (via exit-fee rounding findings) | Audited | Basis-point math exercised through exit-fee rounding findings |
@@ -119,7 +122,7 @@ Every production contract under `contracts/` (excluding `contracts/test/`,
 >
 > No production contract ships without coverage above. The recorded exceptions
 > (FeatureFlags pre-mainnet re-audit, the bucket-B/C basket-vault economic-audit
-> gate, and the devnet-only `UniswapV3PoolSlot0Stub` / `MockVault` helpers) are
+> gate, and the not-separately-audited gateway and swap-adapter rows) are
 > the documented, team-approved carve-outs required by §14.
 
 ## Finding register
