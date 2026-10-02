@@ -34,36 +34,23 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///      satisfies issue #10. Inputs are env-driven so the same script works
 ///      on Anvil, the docker devnet, and (with care) any throwaway L1.
 ///
-///      Required env vars:
+///      Required env vars (all required on every chain, no defaults):
+///        EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet
 ///        ADMIN_ADDRESS         — receives DEFAULT_ADMIN_ROLE + ADMIN_ROLE
 ///        PAUSER_ADDRESS        — receives PAUSER_ROLE (must differ from ADMIN)
 ///        AGENT_ADDRESS         — receives AGENT_ROLE  (must differ from both)
 ///        SHARE_RECEIVER_ADDRESS — recipient of minted rmUSDC shares
-///        USDC_ADDRESS          — address of the USDC token to bind the
-///                                gateway to. The smoke-test devnet seeds the
-///                                canonical Base USDC into genesis alloc and
-///                                exports this address (see issue #255 and
-///                                `Fixture::fund_usdc` in the smoke-test
-///                                crate). Forge unit tests deploy a
-///                                `TestERC20` helper and pass its address
-///                                via `runInProcessWithUsdc`.
+///        FEE_RECIPIENT_ADDRESS — vault fee recipient (the treasury, never the deployer)
+///        AGENT_VALID_UNTIL, AGENT_MAX_PER_PAYMENT, AGENT_MAX_PER_WINDOW,
+///        AGENT_MAX_WITHDRAW_PER_PAYMENT, AGENT_MAX_WITHDRAW_PER_WINDOW — agent policy
+///        VAULT_TVL_CAP, VAULT_PER_DEPOSIT_CAP — vault caps, 6-decimal USDC units
 ///
-///      Optional env vars (with safe defaults):
-///        AGENT_VALID_UNTIL               — uint64, default = block.timestamp + 30 days
-///        AGENT_MAX_PER_PAYMENT           — uint256, default = 10_000 * 1e6 (USDC, 6dp)
-///        AGENT_MAX_PER_WINDOW            — uint256, default = 100_000 * 1e6
-///        AGENT_MAX_WITHDRAW_PER_PAYMENT  — uint256, default = 10_000 * 1e6 (shares, 6dp)
-///        AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256, default = 100_000 * 1e6
-///        DEPLOYMENT_OUT         — output JSON path,
-///                                 default = "deployments/<chain_id>.json"
-///        EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches (8453 on Base)
-///        FEE_RECIPIENT_ADDRESS  — vault fee recipient, default ADMIN_ADDRESS (devnet only:
-///                                 a mainnet ceremony must name the treasury, never the deployer)
-///        VAULT_TVL_CAP          — default 10M USDC (devnet)
-///        VAULT_PER_DEPOSIT_CAP  — default 1M USDC (devnet)
+///      USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
+///
+///      Optional env vars (a malformed value reverts, it never falls back):
 ///        VAULT_EXIT_FEE_BPS     — default 0
-///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC. A mainnet ceremony
-///                                 sets it explicitly (devops runbook frozen sheet)
+///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC
+///        DEPLOYMENT_OUT         — output JSON path
 contract Deploy is ExpectedChainGuard {
     using stdJson for string;
 
@@ -112,7 +99,7 @@ contract Deploy is ExpectedChainGuard {
     ///      (ending in 28) was a typo — the actual Comet ends in 2F.
     address public constant COMPOUND_V3_COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F;
 
-    /// @notice Default per-payment cap if `AGENT_MAX_PER_PAYMENT` is unset.
+    /// @notice In-process test seam only: env runs require `AGENT_MAX_PER_PAYMENT`.
     uint256 public constant DEFAULT_MAX_PER_PAYMENT = 10_000 * 1e6;
     /// @notice Default per-window cap if `AGENT_MAX_PER_WINDOW` is unset.
     uint256 public constant DEFAULT_MAX_PER_WINDOW = 100_000 * 1e6;
@@ -311,32 +298,21 @@ contract Deploy is ExpectedChainGuard {
     ///      vars are process-wide and forge runs tests in parallel.
     function _readEnvParamsFrom(string memory prefix) internal view returns (Params memory p) {
         _requireExpectedChain(prefix);
-        p.admin = vm.envAddress(string.concat(prefix, "ADMIN_ADDRESS"));
-        p.pauser = vm.envAddress(string.concat(prefix, "PAUSER_ADDRESS"));
-        p.agent = vm.envAddress(string.concat(prefix, "AGENT_ADDRESS"));
-        p.shareReceiver = vm.envAddress(string.concat(prefix, "SHARE_RECEIVER_ADDRESS"));
-        p.validUntil = uint64(
-            _envOrDefault(
-                string.concat(prefix, "AGENT_VALID_UNTIL"),
-                block.timestamp + DEFAULT_VALID_UNTIL_OFFSET
-            )
-        );
-        p.maxPerPayment =
-            _envOrDefault(string.concat(prefix, "AGENT_MAX_PER_PAYMENT"), DEFAULT_MAX_PER_PAYMENT);
-        p.maxPerWindow =
-            _envOrDefault(string.concat(prefix, "AGENT_MAX_PER_WINDOW"), DEFAULT_MAX_PER_WINDOW);
-        p.maxWithdrawPerPayment = _envOrDefault(
-            string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_PAYMENT"),
-            DEFAULT_MAX_WITHDRAW_PER_PAYMENT
-        );
-        p.maxWithdrawPerWindow = _envOrDefault(
-            string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_WINDOW"), DEFAULT_MAX_WITHDRAW_PER_WINDOW
-        );
-        p.usdcAddress = vm.envAddress(string.concat(prefix, "USDC_ADDRESS"));
-        p.feeRecipient = vm.envOr(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"), p.admin);
-        p.tvlCap = _envOrDefault(string.concat(prefix, "VAULT_TVL_CAP"), DEFAULT_TVL_CAP);
-        p.perDepositCap =
-            _envOrDefault(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"), DEFAULT_PER_DEPOSIT_CAP);
+        p.admin = _envAddressRequired(string.concat(prefix, "ADMIN_ADDRESS"));
+        p.pauser = _envAddressRequired(string.concat(prefix, "PAUSER_ADDRESS"));
+        p.agent = _envAddressRequired(string.concat(prefix, "AGENT_ADDRESS"));
+        p.shareReceiver = _envAddressRequired(string.concat(prefix, "SHARE_RECEIVER_ADDRESS"));
+        p.validUntil = uint64(_envUintRequired(string.concat(prefix, "AGENT_VALID_UNTIL")));
+        p.maxPerPayment = _envUintRequired(string.concat(prefix, "AGENT_MAX_PER_PAYMENT"));
+        p.maxPerWindow = _envUintRequired(string.concat(prefix, "AGENT_MAX_PER_WINDOW"));
+        p.maxWithdrawPerPayment =
+            _envUintRequired(string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_PAYMENT"));
+        p.maxWithdrawPerWindow =
+            _envUintRequired(string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_WINDOW"));
+        p.usdcAddress = BASE_USDC;
+        p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"));
+        p.tvlCap = _envUintRequired(string.concat(prefix, "VAULT_TVL_CAP"));
+        p.perDepositCap = _envUintRequired(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"));
         p.exitFeeBps = _envOrDefault(string.concat(prefix, "VAULT_EXIT_FEE_BPS"), 0);
     }
 
@@ -538,25 +514,8 @@ contract Deploy is ExpectedChainGuard {
         require(d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.pauser), "pauser missing PAUSER_ROLE");
     }
 
-    function _envOrDefault(string memory key, uint256 fallbackValue)
-        internal
-        view
-        returns (uint256)
-    {
-        try vm.envUint(key) returns (uint256 v) {
-            return v;
-        } catch {
-            return fallbackValue;
-        }
-    }
-
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
-            outPath = s;
-        } catch {
-            outPath = string.concat("deployments/", vm.toString(block.chainid), ".json");
-        }
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
 
         string memory obj = "deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
