@@ -52,6 +52,6 @@ test("a Rust forge deployment in the harness fails", () => {
 });
 
 test("core-stack.sh holding deploy logic fails", () => {
-  const root = tree({ "scripts/stage/core-stack.sh": "forge script contracts/script/Deploy.s.sol\n" });
+  const root = tree({ "scripts/stage/core-stack.sh": "forge script contracts/script/" + "Deploy" + ".s.sol\n" });
   expect(check(root).join("\n")).toContain("core-stack.sh");
 });

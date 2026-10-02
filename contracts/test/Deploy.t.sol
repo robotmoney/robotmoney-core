@@ -13,6 +13,7 @@ import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitt
 import {CoreStages} from "./helpers/CoreStages.sol";
 
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {VenueEtcher} from "./helpers/VenueMocks.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {AccessRoles} from "../gateway/AccessRoles.sol";
@@ -529,20 +530,20 @@ contract DeployTest is Test {
 
     // --- Router deposit through the split-stage gateway (core 1485) --------------------------
 
-    /// @notice A router deposit through the gateway the split stages built reaches the vault leg:
-    ///         gateway, router, registry eligibility and the USDC pull all pass, and the call
-    ///         stops only at the vault, whose venues have no code here. The completed deposit and
-    ///         withdraw round trip, with the venues etched, is `GatewayRouter.t.sol`
-    ///         (`GatewayRouterSplitStagesTest`).
-    function test_routerDeposit_throughSplitStageGateway_reachesVaultLeg() public {
+    /// @notice The gateway the split stages built completes a router deposit and a router withdraw.
+    ///         Unit, not fork: the three external lending venues are etched at their real addresses
+    ///         (`VenueEtcher`). Gateway, router, registry and vault are production code.
+    function test_routerDepositAndWithdraw_throughSplitStageGateway_roundTrip() public {
+        VenueEtcher.etchAll(address(usdc));
         CoreStages.Stack memory s = _run();
+        assertEq(s.gateway.router(), address(s.router), "gateway.router != router");
+
         uint256 amount = 5 * 1e6;
         usdc.mint(agent, amount);
         uint64 deadline = uint64(block.timestamp + 300);
 
         vm.startPrank(agent);
         usdc.approve(address(s.gateway), amount);
-        vm.expectRevert(abi.encodeWithSignature("UsdcLegTransferFailed(address)", address(s.vault)));
         s.gateway
             .depositTo(
                 bytes32("dep-order"),
@@ -553,5 +554,29 @@ contract DeployTest is Test {
                 new uint256[](0)
             );
         vm.stopPrank();
+
+        uint256 minted = s.vault.balanceOf(shareReceiver);
+        assertGt(minted, 0, "router deposit minted rmUSDC shares");
+        assertEq(usdc.balanceOf(address(s.gateway)), 0, "gateway holds USDC");
+
+        vm.prank(shareReceiver);
+        s.vault.approve(address(s.gateway), minted);
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(s.vault);
+        uint256[] memory shares = new uint256[](1);
+        shares[0] = minted;
+
+        uint256 before = usdc.balanceOf(shareReceiver);
+        vm.prank(agent);
+        s.gateway
+            .withdrawFromRouter(
+                bytes32("wd-order"), vaults, shares, new uint256[](1), deadline, bytes32("wd-idem")
+            );
+        assertGe(
+            usdc.balanceOf(shareReceiver) - before,
+            (amount * 9_999) / 10_000,
+            "USDC returned within one bps"
+        );
+        assertEq(s.vault.balanceOf(shareReceiver), 0, "shares left after full withdraw");
     }
 }
