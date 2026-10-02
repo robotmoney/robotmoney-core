@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.3 — Vault Adapters (Morpho Gauntlet venue)
-//            docs/technical/unified-vault-spec.md §2 (`IPositionAdapter`), §3 (lending retrofit)
 // (See also: docs/prd.md §11.1 — Stable Yield Vault)
 pragma solidity ^0.8.24;
 
@@ -8,7 +7,6 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
-import {IPositionAdapter} from "../interfaces/IPositionAdapter.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
 /// @title MorphoAdapter
@@ -17,22 +15,21 @@ import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 ///      Deployed: 0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9 (Base mainnet)
 ///      Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun
 ///
-///      ADR-0010 retrofit: implements BOTH the v1 `IStrategyAdapter` (still
-///      called by the deployed RobotMoneyVault) and the unified-vault
-///      `IPositionAdapter`. The v2 `deploy`/`withdraw` add min-out slippage
+///      Implements the `IStrategyAdapter` called by RobotMoneyVault. The
+///      two-argument `deploy`/`withdraw` overloads add min-out slippage
 ///      floors and a realized-value return; because Morpho USDC↔share
 ///      conversion is treated as exact (1:1 redemption claim), the min-out
 ///      checks are trivially satisfied but still enforced (revert
 ///      `SlippageExceeded` below the floor). `isExact()` returns true; the vault
 ///      attests exactness separately at `addAdapter` (spec §2.2, C2).
-contract MorphoAdapter is IStrategyAdapter, IPositionAdapter {
+contract MorphoAdapter is IStrategyAdapter {
     using SafeERC20 for IERC20;
 
     /// @notice Morpho Gauntlet USDC Prime ERC-4626 vault address.
     IERC4626 public immutable MORPHO_VAULT;
     /// @notice USDC token address used for deposits and withdrawals.
     /// @dev Stored as `address` so the auto-generated getter satisfies the
-    ///      `IPositionAdapter.USDC()` identity view (returns `address`).
+    ///      `USDC()` identity view (returns `address`).
     address public immutable USDC;
     /// @notice Address of the RobotMoneyVault that owns this adapter.
     address public immutable VAULT;
@@ -41,6 +38,10 @@ contract MorphoAdapter is IStrategyAdapter, IPositionAdapter {
     /// @param requested Amount of USDC requested for withdrawal.
     /// @param actual    Amount of USDC actually received by VAULT.
     error WithdrawShortfall(uint256 requested, uint256 actual);
+    /// @notice The caller of a mutating function is not the bound `VAULT`.
+    error OnlyVault();
+    /// @notice A min-out slippage floor was breached.
+    error SlippageExceeded();
     /// @notice Constructor passed `address(0)` for one of the immutable addresses.
     error ZeroAddress();
     /// @notice Proposed deployment would push adapter balance above `maxExposure`.
@@ -100,7 +101,7 @@ contract MorphoAdapter is IStrategyAdapter, IPositionAdapter {
         _deposit(amount);
     }
 
-    /// @inheritdoc IPositionAdapter
+    /// @notice Min-out variant of `deploy`: reverts `SlippageExceeded` below `minValueOut`.
     function deploy(uint256 usdcIn, uint256 minValueOut)
         external
         onlyVault
@@ -132,7 +133,7 @@ contract MorphoAdapter is IStrategyAdapter, IPositionAdapter {
         return actual;
     }
 
-    /// @inheritdoc IPositionAdapter
+    /// @notice Min-out variant of `withdraw`: reverts `SlippageExceeded` below `minUsdcOut`.
     function withdraw(uint256 usdcWanted, uint256 minUsdcOut)
         external
         onlyVault
@@ -160,28 +161,28 @@ contract MorphoAdapter is IStrategyAdapter, IPositionAdapter {
         if (usdcOut < minUsdcOut) revert SlippageExceeded();
     }
 
-    /// @inheritdoc IPositionAdapter
+    /// @inheritdoc IStrategyAdapter
     function totalAssets()
         external
         view
-        override(IStrategyAdapter, IPositionAdapter)
+        override
         returns (uint256)
     {
         uint256 shares = MORPHO_VAULT.balanceOf(address(this));
         return MORPHO_VAULT.convertToAssets(shares);
     }
 
-    /// @inheritdoc IPositionAdapter
+    /// @notice Bytecode-level exactness declaration (monitoring only).
     /// @dev Morpho USDC↔share redemption is treated as exact (1:1 hard claim).
     ///      Registration cross-check + monitoring only — never a per-call gate.
     function isExact() external pure returns (bool) {
         return true;
     }
 
-    /// @inheritdoc IPositionAdapter
+    /// @inheritdoc IStrategyAdapter
     function sweepForeignToken(address token)
         external
-        override(IStrategyAdapter, IPositionAdapter)
+        override
     {
         if (token == USDC || token == address(MORPHO_VAULT)) {
             revert ForeignTokenQuarantine.TokenIsProtected(token);
@@ -189,9 +190,9 @@ contract MorphoAdapter is IStrategyAdapter, IPositionAdapter {
         ForeignTokenQuarantine.sweep(token, msg.sender);
     }
 
-    /// @inheritdoc IPositionAdapter
+    /// @inheritdoc IStrategyAdapter
     /// @dev Morpho Gauntlet USDC Prime yield accrues automatically into the
     ///      ERC-4626 share price — there are no discrete claimable reward tokens
     ///      on this venue. This function is a no-op and always succeeds.
-    function harvestRewards() external override(IStrategyAdapter, IPositionAdapter) {}
+    function harvestRewards() external override {}
 }

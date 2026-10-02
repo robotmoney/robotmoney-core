@@ -7,7 +7,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
-import {IPositionAdapter} from "../interfaces/IPositionAdapter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
@@ -151,7 +150,7 @@ contract MorphoAdapterTest is Test {
 
     function test_deploy_revertsForNonVault() public {
         vm.prank(stranger);
-        vm.expectRevert(IPositionAdapter.OnlyVault.selector);
+        vm.expectRevert(MorphoAdapter.OnlyVault.selector);
         adapter.deploy(100 * ONE_USDC);
     }
 
@@ -181,7 +180,7 @@ contract MorphoAdapterTest is Test {
 
     function test_withdraw_revertsForNonVault() public {
         vm.prank(stranger);
-        vm.expectRevert(IPositionAdapter.OnlyVault.selector);
+        vm.expectRevert(MorphoAdapter.OnlyVault.selector);
         adapter.withdraw(100 * ONE_USDC);
     }
 
@@ -324,7 +323,7 @@ contract MorphoAdapterTest is Test {
     /// @notice setMaxExposure reverts when called by a non-VAULT address.
     function test_setMaxExposure_revertsForNonVault() public {
         vm.prank(stranger);
-        vm.expectRevert(IPositionAdapter.OnlyVault.selector);
+        vm.expectRevert(MorphoAdapter.OnlyVault.selector);
         adapter.setMaxExposure(500 * ONE_USDC);
     }
 

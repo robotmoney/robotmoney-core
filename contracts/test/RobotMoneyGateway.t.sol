@@ -10,7 +10,7 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "../gateway/MockVault.sol";
+import {MockVault} from "./helpers/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 
 /// @dev Minimal fee-on-transfer token used to assert the gateway's

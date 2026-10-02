@@ -56,8 +56,7 @@ contract VaultCodeSizeGuard is Test {
     ///         retirement-flag addition.
     function test_bytecodeSize_vaultFamilyUnderEip170() public {
         _assertUnderLimit("RobotMoneyVault.sol:RobotMoneyVault");
-        _assertUnderLimit("Vault.sol:Vault");
-        _assertUnderLimit("RwaVault.sol:RwaVault");
+        _assertUnderLimit("RwaBasketVault.sol:RwaBasketVault");
         _assertUnderLimit("AgentTokenVault.sol:AgentTokenVault");
         _assertUnderLimit("ProtocolAssetVault.sol:ProtocolAssetVault");
     }
@@ -77,10 +76,6 @@ contract VaultCodeSizeGuard is Test {
     // watching; this guard is that gate. It runs in the required `forge-unit-tests`
     // job (suite-01-02-forge-tests.yml) with a non-zero executed count.
 
-    function test_UnifiedVault_underEip170() public {
-        _assertUnderLimit("Vault.sol:Vault");
-    }
-
     function test_AaveV3Adapter_underEip170() public {
         _assertUnderLimit("AaveV3Adapter.sol:AaveV3Adapter");
     }
@@ -91,14 +86,6 @@ contract VaultCodeSizeGuard is Test {
 
     function test_MorphoAdapter_underEip170() public {
         _assertUnderLimit("MorphoAdapter.sol:MorphoAdapter");
-    }
-
-    function test_UniswapV3AssetPositionAdapter_underEip170() public {
-        _assertUnderLimit("UniswapV3AssetPositionAdapter.sol:UniswapV3AssetPositionAdapter");
-    }
-
-    function test_AerodromeAssetPositionAdapter_underEip170() public {
-        _assertUnderLimit("AerodromeAssetPositionAdapter.sol:AerodromeAssetPositionAdapter");
     }
 
     function test_UniswapV3SwapAdapter_underEip170() public {

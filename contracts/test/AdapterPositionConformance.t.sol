@@ -33,9 +33,25 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
-import {IPositionAdapter} from "../interfaces/IPositionAdapter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+
+/// @dev Test-local view of the min-out surface the lending adapters expose
+///      beside `IStrategyAdapter`. Shared errors (`OnlyVault`, `SlippageExceeded`)
+///      have identical selectors on every adapter.
+interface IPositionAdapter {
+    error OnlyVault();
+    error SlippageExceeded();
+
+    function deploy(uint256 usdcIn, uint256 minValueOut) external returns (uint256 valueAdded);
+    function withdraw(uint256 usdcWanted, uint256 minUsdcOut) external returns (uint256 usdcOut);
+    function totalAssets() external view returns (uint256);
+    function isExact() external view returns (bool);
+    function harvestRewards() external;
+    function sweepForeignToken(address token) external;
+    function USDC() external view returns (address);
+    function VAULT() external view returns (address);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Faithful 1:1 mock venues (uniquely named to avoid forge-doc re-link collisions)

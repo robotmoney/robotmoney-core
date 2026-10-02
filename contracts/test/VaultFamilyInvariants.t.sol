@@ -14,7 +14,6 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
-import {Vault} from "../Vault.sol";
 import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
@@ -93,23 +92,6 @@ contract VaultFamilyInvariantsTest is Test {
         );
     }
 
-    function _deployVault() internal returns (Vault) {
-        TestUSDC usdc = new TestUSDC();
-        return new Vault(
-            IERC20(address(usdc)),
-            "Robot Money USDC",
-            "rmUSDC",
-            type(uint256).max,
-            type(uint256).max,
-            0,
-            500, // maxSlippageBps
-            10_000, // maxNavGrowthRateBps (nonzero, effectively inert here)
-            feeRecipient,
-            admin,
-            emergencyResponder
-        );
-    }
-
     function _deployRwaVault() internal returns (RwaBasketVault) {
         TestERC20 usdc = new TestERC20();
         StubSwapRouter router = new StubSwapRouter();
@@ -162,7 +144,6 @@ contract VaultFamilyInvariantsTest is Test {
     ///         what happens when a type is missing the floor.
     function test_lastAdminFloor_holdsAcrossVaultFamily() public {
         _assertLastAdminFloorHolds(IAccessControl(address(_deployRobotMoneyVault())), admin);
-        _assertLastAdminFloorHolds(IAccessControl(address(_deployVault())), admin);
         _assertLastAdminFloorHolds(IAccessControl(address(_deployRwaVault())), admin);
         _assertLastAdminFloorHolds(IAccessControl(address(_deployAgentTokenVault())), admin);
         _assertLastAdminFloorHolds(IAccessControl(address(_deployProtocolAssetVault())), admin);
