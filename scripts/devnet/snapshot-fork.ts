@@ -85,8 +85,14 @@ async function setSlot(addr: string, slot: string, value: string): Promise<void>
 /** Send from the unlocked dev account and require success. */
 async function send(to: string, data: string, what: string): Promise<void> {
   const hash: string = await a("eth_sendTransaction", [{ from: EOA, to, data, gas: "0x1c9c380" }]);
-  const rcpt = await a("eth_getTransactionReceipt", [hash]);
-  if (!rcpt || rcpt.status !== "0x1") throw new Error(`${what} reverted (tx ${hash})`);
+  // anvil can answer eth_sendTransaction before the receipt is indexed: poll briefly, never treat "not yet" as a revert.
+  let rcpt = null;
+  for (let i = 0; i < 50 && !rcpt; i++) {
+    rcpt = await a("eth_getTransactionReceipt", [hash]);
+    if (!rcpt) await sleep(200);
+  }
+  if (!rcpt) throw new Error(`${what}: no receipt for tx ${hash} after 10s`);
+  if (rcpt.status !== "0x1") throw new Error(`${what} reverted (tx ${hash})`);
 }
 
 // ── contract pinning ───────────────────────────────────────────────────────
@@ -312,13 +318,21 @@ async function main(): Promise<void> {
       pools.push(info);
     }
 
-    // Factory registry: getPool both ways (mapping slot 2) and feeAmountTickSpacing (slot 1), owner (slot 0).
+    // Factory registry. The Base UniswapV3Factory layout (verified against the live factory, not
+    // the Ethereum mainnet layout): owner slot 3, feeAmountTickSpacing slot 4, getPool slot 5.
+    // getPool is written both ways.
     log("copying Uniswap V3 factory registry slots");
-    await setSlot(V3_FACTORY, "0x0", await getSlot(V3_FACTORY, "0x0"));
+    const FACTORY_OWNER_SLOT = "0x3";
+    const FACTORY_FEE_TICK_SPACING_SLOT = 4n;
+    const FACTORY_GET_POOL_SLOT = 5n;
+    await setSlot(V3_FACTORY, FACTORY_OWNER_SLOT, await getSlot(V3_FACTORY, FACTORY_OWNER_SLOT));
     for (const p of pools) {
-      await setSlot(V3_FACTORY, await mappingSlot(pad32(BigInt(p.fee)), 1n), await getSlot(V3_FACTORY, await mappingSlot(pad32(BigInt(p.fee)), 1n)));
+      const fts = await mappingSlot(pad32(BigInt(p.fee)), FACTORY_FEE_TICK_SPACING_SLOT);
+      const spacing = await getSlot(V3_FACTORY, fts);
+      if (BigInt(spacing) === 0n) throw new Error(`factory.feeAmountTickSpacing(${p.fee}) is empty upstream for ${p.id}`);
+      await setSlot(V3_FACTORY, fts, spacing);
       for (const [x, y] of [[p.token0, p.token1], [p.token1, p.token0]]) {
-        const s1 = await mappingSlot(pad32(BigInt(x)), 2n);
+        const s1 = await mappingSlot(pad32(BigInt(x)), FACTORY_GET_POOL_SLOT);
         const s2 = await mappingSlot(pad32(BigInt(y)), s1);
         const s3 = await mappingSlot(pad32(BigInt(p.fee)), s2);
         const v = await getSlot(V3_FACTORY, s3);
