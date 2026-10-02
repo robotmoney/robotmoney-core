@@ -63,6 +63,11 @@ echo "[check-fork-manifest] verifying the canonical Safe v1.4.1 set is in the fi
 echo "[check-fork-manifest] reporting fork pin age"
 "$REPO_ROOT/scripts/devnet/check-fork-pin-age.sh"
 
+# Block lockstep (core 1498): CURRENT.json, fork-block.json and genesis-alloc.json agree on block
+# number and hash. Hard failure.
+echo "[check-fork-manifest] verifying block number and hash lockstep"
+bun "$REPO_ROOT/scripts/devnet/check-fork-lockstep.ts"
+
 # Build the validator + ingester binaries once. Reuses the smoke-test
 # crate's existing cargo cache.
 echo "[check-fork-manifest] cargo build (smoke-test binaries)"

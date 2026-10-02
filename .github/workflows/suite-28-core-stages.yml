@@ -122,16 +122,15 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
-      - name: Deploy the core stages on the Twin chain
+      # The router, basket vault and timelock role proofs run inside core-stages.ts, right after the
+      # stage each one proves (core 1488). A failing proof fails this step. The agent and the share
+      # receiver sign the router deposit and withdraw through the dev node's unlocked accounts.
+      - name: Deploy the core stages and run their proofs on the Twin chain
         run: |
           bun scripts/deploy/core-stages.ts --rpc-url "$TWIN_RPC_URL" --out core-manifest.json \
-            --counts core-counts.json --forge-arg --unlocked --forge-arg --sender --forge-arg "$ADMIN_ADDRESS"
-      - name: Router, basket vault and timelock role proofs
-        run: |
-          bun scripts/deploy/assert-basket-vaults.ts --rpc-url "$TWIN_RPC_URL" --manifest core-manifest.json --out basket-proof.json
-          bun scripts/deploy/assert-timelock-roles.ts --rpc-url "$TWIN_RPC_URL" --manifest core-manifest.json \
-            --deployer "$ADMIN_ADDRESS" --safe "$SAFE_ADDRESS" --emergency "$EMERGENCY_ADDRESS" \
-            --min-delay "$TIMELOCK_MIN_DELAY" --out timelock-proof.json
+            --counts core-counts.json --forge-arg --unlocked --forge-arg --sender --forge-arg "$ADMIN_ADDRESS" \
+            --agent-arg --unlocked --agent-arg --from --agent-arg "$AGENT_ADDRESS" \
+            --receiver-arg --unlocked --receiver-arg --from --receiver-arg "$SHARE_RECEIVER_ADDRESS"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -139,5 +138,6 @@ jobs:
           path: |
             core-manifest.json
             core-counts.json
-            basket-proof.json
-            timelock-proof.json
+            proof-router.json
+            proof-basket.json
+            proof-timelock-roles.json

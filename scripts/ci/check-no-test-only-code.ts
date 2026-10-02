@@ -140,6 +140,8 @@ const HISTORY_DIRS = [
 const NAME_CHECK_EXEMPT = [
   "scripts/ci/check-no-test-only-code.ts",
   "scripts/ci/check-no-test-only-code.test.ts",
+  "scripts/stage/check-deleted-stage-scripts.ts", // the second gate: it lists the deleted stage paths to keep them gone
+  "scripts/stage/tests/check-deleted-stage-scripts.test.ts",
   "docs/audits.md", // the finding register keeps findings that named deleted contracts as history
   "contracts/test/DeployBasketVaultRwa.t.sol", // asserts the deleted paths are absent
   "docs/technical/base-tokenized-stocks-research.md", // phase-two research, not shipped code

@@ -120,7 +120,7 @@ Before any transaction is broadcast:
    `DEPENDENCY_MANIFEST_RPC_URL` in the environment): it records every
    third-party address, its code hash, its proxy implementation and the block
    into `deployments/dependency-manifests/<chain id>/<release>.json`. Commit that
-   file with the release deployment record. The nightly third-party drift
+   file with the release deployment record (hook: `scripts/release/record-release-dependencies.ts`; see `deployments/dependency-manifests/README.md`). The nightly third-party drift
    workflow (disabled by default) compares live state to the latest such file.
 2. **Role and address validation.** `Deploy.s.sol`'s and every companion
    deploy script's own `_validate` step enforces distinct non-zero role

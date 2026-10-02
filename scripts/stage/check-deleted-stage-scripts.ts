@@ -1,7 +1,8 @@
 // CI grep gate: exits 0 only when the second deployment path is gone.
 // Absent: the stage ceremony shell, deploy-core-stack.sh, the deploy workflow, the
 // Rust harness deployment (forge script calls, demo seeding, faucet funding).
-// core-stack.sh may exist only as a boot and health wrapper: it must hold no deploy or ceremony logic.
+// The stage verbs are Bun TypeScript (scripts/stage/core-stack.ts). core-stack.sh may exist only as a
+// one-screen shim that execs it. Neither file may hold deploy or ceremony logic.
 // Usage: bun scripts/stage/check-deleted-stage-scripts.ts [repo-root]
 // Canonical: robotmoney/devops docs/plans/one-deployment-scheme.md (S9, core 1488).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -29,14 +30,19 @@ export const FORBIDDEN_PATTERNS: { re: RegExp; why: string }[] = [
   { re: /timelock-918453/, why: "the stale timelock record fallback" },
 ];
 
-/** core-stack.sh wraps boot and health only. These strings mean deploy or ceremony logic crept back. */
+/** Longest the core-stack.sh shim may be. More than this means shell logic crept back. */
+export const SHIM_MAX_LINES = 15;
+
+/** core-stack wraps boot, health, the record and parity only. These strings mean deploy or ceremony logic crept back. */
 export const CORE_STACK_FORBIDDEN = [/forge script/, /cast send/, /fusion-ceremony/, /deploy-core-stack/, /--private-key/];
 
 const SCAN_ROOTS = ["testing", "clients", "scripts", ".github"];
 const SKIP_DIRS = new Set(["node_modules", "target", ".git", "dist", "lib", "out", "cache"]);
+/** Files whose job is to NAME the deleted paths (ban lists). They are not a second deployment path. */
 const SELF = new Set([
   "scripts/stage/check-deleted-stage-scripts.ts",
   "scripts/stage/tests/check-deleted-stage-scripts.test.ts",
+  "scripts/ci/check-no-test-only-code.ts",
 ]);
 const TEXT_EXT = /\.(rs|ts|tsx|js|mjs|sh|yml|yaml|toml|json|md|py|sol|env)$/;
 
@@ -62,10 +68,21 @@ export function check(root: string): string[] {
       for (const { re, why } of FORBIDDEN_PATTERNS) if (re.test(text)) out.push(`${rel}: mentions ${why} (${re})`);
     }
   }
-  const cs = join(root, "scripts/stage/core-stack.sh");
-  if (existsSync(cs)) {
-    const text = readFileSync(cs, "utf8").split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
-    for (const re of CORE_STACK_FORBIDDEN) if (re.test(text)) out.push(`scripts/stage/core-stack.sh holds deploy or ceremony logic (${re})`);
+  const sh = join(root, "scripts/stage/core-stack.sh");
+  if (existsSync(sh)) {
+    const text = readFileSync(sh, "utf8");
+    const lines = text.split("\n").length;
+    if (lines > SHIM_MAX_LINES) out.push(`scripts/stage/core-stack.sh is ${lines} lines: it may only be a shim of at most ${SHIM_MAX_LINES} that execs core-stack.ts`);
+    if (!/exec\b[^\n]*core-stack\.ts/.test(text)) out.push("scripts/stage/core-stack.sh must exec core-stack.ts");
+  }
+  for (const f of ["scripts/stage/core-stack.sh", "scripts/stage/core-stack.ts", "scripts/stage/parity.ts"]) {
+    const p = join(root, f);
+    if (!existsSync(p)) continue;
+    const text = readFileSync(p, "utf8")
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("#") && !l.trim().startsWith("//"))
+      .join("\n");
+    for (const re of CORE_STACK_FORBIDDEN) if (re.test(text)) out.push(`${f} holds deploy or ceremony logic (${re})`);
   }
   return out;
 }

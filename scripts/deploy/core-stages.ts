@@ -22,13 +22,20 @@
 // Usage:
 //   bun scripts/deploy/core-stages.ts --rpc-url URL --out MANIFEST.json [--counts COUNTS.json]
 //        [--dry-run] [--forge-arg ARG]... [--stages libs,vault,...]
+//        [--agent-arg ARG]... [--receiver-arg ARG]... [--proof-dir DIR]
+// The Twin chain proofs run in the same pass, right after the stage they prove (see PROOFS):
+//   after gateway   scripts/deploy/assert-core-router.ts   (router deposit and withdraw through the gateway;
+//                   it signs as the agent and the share receiver, so --agent-arg and --receiver-arg are required)
+//   after rwa       scripts/deploy/assert-basket-vaults.ts (registry lists four vaults, baskets paused, config equals chain)
+//   after timelock  scripts/deploy/assert-timelock-roles.ts (the timelock holds every role, the deployer holds none)
+// A failing proof stops the run with a non-zero exit. A proof whose stage did not run is not run.
 // Inputs come from the environment, the same names the scripts read (ADMIN_ADDRESS, PAUSER_ADDRESS,
 // AGENT_ADDRESS, SHARE_RECEIVER_ADDRESS, FEE_RECIPIENT_ADDRESS, SEED_SHARE_RECEIVER, VAULT_TVL_CAP,
 // VAULT_PER_DEPOSIT_CAP, AGENT_*). The runner sets DEPLOYMENT_OUT, VAULT_ADDRESS, REGISTRY_ADDRESS
 // and ROUTER_ADDRESS per stage from the stage manifests.
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export type StageName =
   | "libs"
@@ -171,6 +178,58 @@ export function stagesFromTable(t: StageTable = loadStageTable()): Stage[] {
 /** The stage table. Order is the deploy order. */
 export const STAGES: Stage[] = stagesFromTable();
 
+/** A Twin chain proof the runner runs right after the stage it proves. */
+export interface Proof {
+  name: string;
+  after: StageName;
+  script: string;
+  /** Flags the caller must pass for this proof (signer flags for the router proof). */
+  needs?: ("agentArgs" | "receiverArgs")[];
+}
+
+export const PROOFS: Proof[] = [
+  { name: "router", after: "gateway", script: "scripts/deploy/assert-core-router.ts", needs: ["agentArgs", "receiverArgs"] },
+  { name: "basket", after: "rwa", script: "scripts/deploy/assert-basket-vaults.ts" },
+  { name: "timelock-roles", after: "timelock", script: "scripts/deploy/assert-timelock-roles.ts" },
+];
+
+export interface ProofContext {
+  rpc: string;
+  manifest: string;
+  out: string;
+  agentArgs: string[];
+  receiverArgs: string[];
+  env: Record<string, string | undefined>;
+}
+
+/** The argument list for one proof script. Throws, naming the missing input, when one is absent. */
+export function proofArgs(p: Proof, c: ProofContext): string[] {
+  const base = ["--rpc-url", c.rpc, "--manifest", c.manifest, "--out", c.out];
+  for (const need of p.needs ?? []) {
+    if (c[need].length === 0) {
+      const flag = need === "agentArgs" ? "--agent-arg" : "--receiver-arg";
+      throw new Error(`proof ${p.name} needs ${flag} (signer flags for ${need === "agentArgs" ? "the agent" : "the share receiver"})`);
+    }
+  }
+  if (p.name === "router") {
+    return [...base, ...c.agentArgs.flatMap((x) => ["--agent-arg", x]), ...c.receiverArgs.flatMap((x) => ["--receiver-arg", x])];
+  }
+  if (p.name === "timelock-roles") {
+    const need = (n: string): string => {
+      const v = c.env[n];
+      if (!v) throw new Error(`proof ${p.name} needs ${n} in the environment`);
+      return v;
+    };
+    return [...base, "--deployer", need("ADMIN_ADDRESS"), "--safe", need("SAFE_ADDRESS"), "--emergency", need("EMERGENCY_ADDRESS"), "--min-delay", need("TIMELOCK_MIN_DELAY")];
+  }
+  return base;
+}
+
+/** Proofs to run after `stage`, given which stages ran. */
+export function proofsAfter(stage: StageName): Proof[] {
+  return PROOFS.filter((p) => p.after === stage);
+}
+
 /** Throws when the stage table breaks the rule: every stage's inputs come from an earlier stage. */
 export function assertStageOrder(stages: Stage[] = STAGES): void {
   const produced = new Set<string>();
@@ -223,7 +282,10 @@ async function nonce(addr: string, rpc: string): Promise<number> {
 }
 
 function parseArgs(argv: string[]) {
-  const a = { rpc: "", out: "", counts: "", dryRun: false, forgeArgs: [] as string[], only: [] as string[] };
+  const a = {
+    rpc: "", out: "", counts: "", proofDir: "", dryRun: false,
+    forgeArgs: [] as string[], agentArgs: [] as string[], receiverArgs: [] as string[], only: [] as string[],
+  };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === "--rpc-url") a.rpc = argv[++i];
@@ -232,10 +294,13 @@ function parseArgs(argv: string[]) {
     else if (k === "--dry-run") a.dryRun = true;
     else if (k === "--forge-arg") a.forgeArgs.push(argv[++i]);
     else if (k === "--stages") a.only = argv[++i].split(",");
+    else if (k === "--agent-arg") a.agentArgs.push(argv[++i]);
+    else if (k === "--receiver-arg") a.receiverArgs.push(argv[++i]);
+    else if (k === "--proof-dir") a.proofDir = argv[++i];
     else throw new Error(`unknown argument ${k}`);
   }
   if (!a.rpc || !a.out) throw new Error("--rpc-url and --out are required");
-  for (const f of a.forgeArgs) {
+  for (const f of [...a.forgeArgs, ...a.agentArgs, ...a.receiverArgs]) {
     if (/^--(private-key|password)(=|$)/.test(f)) throw new Error(`${f} is refused: no secret in an argument`);
   }
   return a;
@@ -250,6 +315,14 @@ async function main() {
   const manifests: Record<string, unknown>[] = [];
   const merged = () => mergeManifests(manifests);
   const counts: { stage: string; start_nonce: number; end_nonce: number; tx_count: number }[] = [];
+
+  // Refuse before any broadcast when a proof that will run lacks an input.
+  if (!a.dryRun) {
+    for (const p of PROOFS) {
+      if (a.only.length && !a.only.includes(p.after)) continue;
+      proofArgs(p, { rpc: a.rpc, manifest: "-", out: "-", agentArgs: a.agentArgs, receiverArgs: a.receiverArgs, env: process.env });
+    }
+  }
 
   for (const stage of STAGES) {
     if (a.only.length && !a.only.includes(stage.name)) continue;
@@ -282,6 +355,16 @@ async function main() {
     manifests.push(
       stage.ns ? Object.fromEntries(Object.entries(part).map(([k, v]) => [keyOf(stage, k), v])) : part,
     );
+    for (const proof of proofsAfter(stage.name)) {
+      if (stage.name === "gateway") assertGatewayRouter(merged());
+      // The proof reads the manifest as it stands after this stage, with the transaction counts so far.
+      const manifestSoFar = join(work, `manifest-after-${stage.name}.json`);
+      writeFileSync(manifestSoFar, JSON.stringify({ ...merged(), stages: counts }, null, 2) + "\n");
+      const proofOut = join(a.proofDir || dirname(a.out), `proof-${proof.name}.json`);
+      const args = proofArgs(proof, { rpc: a.rpc, manifest: manifestSoFar, out: proofOut, agentArgs: a.agentArgs, receiverArgs: a.receiverArgs, env: process.env });
+      console.log(`==> proof ${proof.name} (after stage ${stage.name})`);
+      console.log((await run(["bun", proof.script, ...args], {})).trimEnd());
+    }
   }
 
   if (a.dryRun) {

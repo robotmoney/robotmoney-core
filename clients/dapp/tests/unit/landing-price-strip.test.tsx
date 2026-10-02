@@ -174,11 +174,7 @@ describe("LandingPriceStrip isolates per-cell errors", () => {
 
 describe("LandingPriceStrip reads pool addresses from config", () => {
   it("exposes exactly the three landing pairs in display order", () => {
-    expect(PRICE_STRIP_PAIRS.map((p) => p.id)).toEqual([
-      "eth-usd",
-      "weth-usdc",
-      "cbbtc-usdc",
-    ]);
+    expect(PRICE_STRIP_PAIRS.map((p) => p.id)).toEqual(["eth-usd", "weth-usdc", "cbbtc-usdc"]);
   });
 
   it("resolves a pool address (a 0x40-hex string) for every pair from config", () => {

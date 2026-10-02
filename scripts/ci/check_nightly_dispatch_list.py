@@ -14,6 +14,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 NIGHTLY = "suite-21-nightly.yml"
+# Every other workflow file is dispatched by the nightly (the SUITES array), including
+# config-check.yml and suite-28-core-stages.yml (both declare workflow_dispatch; the
+# core-stages dispatch runs its offline job because its Twin chain inputs default empty).
 
 # Workflows that must NOT be dispatched by the nightly, with the reason.
 EXCLUDED = {
@@ -23,6 +26,8 @@ EXCLUDED = {
     "release-tag-suite-dispatch.yml": "release workflow",
     "nightly-third-party-drift.yml": "nightly job (c), shipped disabled: workflow_dispatch only, schedule commented out until the owner enables it (issue 1497)",
     "suite-29-nightly-fresh-snapshot.yml": "nightly (b) on its own schedule: it calls the chain suites itself with a fresh Base snapshot (issue 1496)",
+    # Add a workflow that must not be dispatched here with its reason, for example one that
+    # has no workflow_dispatch trigger or needs required inputs.
 }
 
 

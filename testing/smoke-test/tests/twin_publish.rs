@@ -3,7 +3,8 @@
 //! One test boots the Twin chain (918453) through the harness. The harness has already called
 //! `publish` (deploy all four vaults, real Safe handover). This test then asserts the four
 //! manifests, runs the one verifier, and runs the stage 13 govern matrix through the real Safe.
-//! Every govern row must carry a tx hash and receipt status 1 (checked by `govern_matrix`).
+//! The verifier output (SMOKE_TEST_VERIFY_OUT) and the run sheet (SMOKE_TEST_SHEET_OUT) are saved for the
+//! parity step in suite 14. Every govern row must carry a tx hash and receipt status 1 (checked by `govern_matrix`).
 //!
 //! Run with:
 //!   cargo test -p smoke-test --release --test twin_publish -- --test-threads=1 --nocapture
@@ -30,6 +31,11 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // Saved for scripts/stage/label-diff.ts: the stage label set must equal mainnet's.
     if let Ok(path) = std::env::var("SMOKE_TEST_VERIFY_OUT") {
         std::fs::write(&path, &verified).expect("write the verifier output");
+    }
+    // Saved for scripts/stage/parity.ts: the run sheet (parameter lines plus the generated identity
+    // lines) must differ from the production sheet only in parameter and identity lines.
+    if let Ok(path) = std::env::var("SMOKE_TEST_SHEET_OUT") {
+        std::fs::copy(&fx.published().sheet_path, &path).expect("copy the run sheet");
     }
     let rows = fx
         .published()

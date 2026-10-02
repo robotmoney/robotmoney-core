@@ -41,8 +41,22 @@ export const SAFE_SINGLETONS = [SAFE_SET[0], SAFE_SET[1]];
  * own contracts are NOT here: they are deployed on the Twin chain by the same
  * scripts that deploy mainnet (one deployment scheme).
  */
-/** BNKR on Base. The same address as config/agent-token-shortlist.json mainnet.shortlist[BNKR]; the contents check asserts they agree. */
-export const BNKR = "0x22aF33FE49fD1Fa80c7149773dDe5890D3C76F3b";
+/**
+ * BNKR on Base, read from config/agent-token-shortlist.json (the one list of agent tokens).
+ * Undefined when the shortlist does not name BNKR: rmAGENT ships empty, so BNKR is then
+ * not warmed and not asserted (core 1498: add BNKR only if an address exists in config).
+ */
+export function configuredBnkr(repo: string = REPO): string | undefined {
+  try {
+    const cfg = JSON.parse(readFileSync(join(repo, "config/agent-token-shortlist.json"), "utf8"));
+    const rows: Array<{ symbol?: string; token?: string }> = cfg.shortlist ?? cfg.mainnet?.shortlist ?? [];
+    const row = rows.find((r) => r.symbol === "BNKR");
+    return row?.token && /^0x[0-9a-fA-F]{40}$/.test(row.token) ? row.token : undefined;
+  } catch {
+    return undefined;
+  }
+}
+export const BNKR = configuredBnkr();
 
 export const INFRA_ADDRESSES: Array<[string, string]> = [
   [USDC, "Base mainnet USDC (Circle)"],
@@ -51,7 +65,6 @@ export const INFRA_ADDRESSES: Array<[string, string]> = [
   [SWAP_ROUTER02, "Uniswap V3 SwapRouter02"],
   [QUOTER_V2, "Uniswap V3 QuoterV2"],
   [CBBTC, "cbBTC"],
-  [BNKR, "BNKR (agent-token shortlist)"],
   [DESPXA, "deSPXA token (Centrifuge ShareToken)"],
   [DESPXA_POOL, "deSPXA/USDC Uniswap V3 0.01% pool"],
   ["0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca", "Moonwell Flagship USDC"],
@@ -64,6 +77,7 @@ export const INFRA_ADDRESSES: Array<[string, string]> = [
   ["0xf52D010c7d4ecBfda92c2509900593CE34535D86", "USDC PriceCapAdapter"],
   ["0x1550207eAeB590D1557a6E6C066D3d57B5A4Dc65", "USDC/USD EACAggregatorProxy"],
   ["0x0fB39aE1d48Faf8CA5ea8DbF7e134e07386A7877", "USDC/USD underlying aggregator"],
+  ...(BNKR ? [[BNKR, "BNKR (config/agent-token-shortlist.json)"] as [string, string]] : []),
 ];
 
 /**
@@ -85,36 +99,37 @@ export interface PoolEntry {
   pool: string;
   tokens: string[]; // tokens named in config (may be partial; the pool is the authority)
   source: string;
-  /** False only when config/dex-pools.json marks the basket row pool_status "no_liquidity": a fact about the upstream pool. */
+  /** Always true: every configured pool must return non-zero liquidity. */
   liquidityRequired: boolean;
 }
 
 /**
- * Every Uniswap V3 pool in config/dex-pools.json: the basket_assets rows with
- * venue UniswapV3 plus the mainnet.pools price-strip rows. Aerodrome and V4
- * rows are skipped (no V3 pool interface). Deduplicated by address.
+ * Every Uniswap V3 pool the launch config names: the config/dex-pools.json pools map
+ * plus the UniswapV3 rows of config/protocol-assets.json and config/rwa-assets.json.
+ * Deduplicated by address. Every pool must carry liquidity: a pool with none is removed
+ * from the config (core 1498), never skipped by the check.
  */
 export function loadConfiguredPools(repo: string = REPO): PoolEntry[] {
-  const cfg = JSON.parse(readFileSync(join(repo, "config/dex-pools.json"), "utf8"));
+  const read = (f: string) => JSON.parse(readFileSync(join(repo, f), "utf8"));
   const byAddr = new Map<string, PoolEntry>();
   const add = (e: PoolEntry) => {
     const k = e.pool.toLowerCase();
     const prev = byAddr.get(k);
     if (prev) {
       prev.id += `+${e.id}`;
-      prev.liquidityRequired = prev.liquidityRequired && e.liquidityRequired;
       return;
     }
     byAddr.set(k, e);
   };
-  for (const [id, row] of Object.entries<any>(cfg.basket_assets ?? {})) {
-    if (id.startsWith("$") || typeof row !== "object") continue;
-    if (row.venue !== "UniswapV3" || !row.pool) continue;
-    add({ id, pool: row.pool, tokens: [row.token].filter(Boolean), source: "basket_assets", liquidityRequired: row.pool_status !== "no_liquidity" });
+  for (const [id, row] of Object.entries<any>(read("config/dex-pools.json").pools ?? {})) {
+    if (typeof row !== "object" || !row.pool) continue;
+    add({ id, pool: row.pool, tokens: [row.token0, row.token1].filter(Boolean), source: "dex-pools.json", liquidityRequired: true });
   }
-  for (const [id, row] of Object.entries<any>(cfg.mainnet?.pools ?? {})) {
-    if (row.aerodromePool || !row.pool || !row.token0) continue;
-    add({ id, pool: row.pool, tokens: [row.token0, row.token1].filter(Boolean), source: "mainnet.pools", liquidityRequired: true });
+  for (const f of ["config/protocol-assets.json", "config/rwa-assets.json"]) {
+    for (const row of read(f).assets ?? []) {
+      if (row.venue !== "UniswapV3" || !row.pool) continue;
+      add({ id: row.symbol, pool: row.pool, tokens: [row.token].filter(Boolean), source: f, liquidityRequired: true });
+    }
   }
   return [...byAddr.values()];
 }

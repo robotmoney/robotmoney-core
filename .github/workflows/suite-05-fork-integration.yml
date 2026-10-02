@@ -239,7 +239,9 @@ jobs:
     name: base-testnet-adapters
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    # Skipped when called by the nightly fresh-snapshot run (core 1496): that run
+    # uses no secret, so this secret-backed job never starts there.
+    if: ${{ inputs.fresh_snapshot != true && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     env:
       CI_CLASS: system-correctness
       # Live Base public testnet RPC + faucet-funded EOA key. Absent ⇒ tests skip.

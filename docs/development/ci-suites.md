@@ -222,7 +222,7 @@ organization Actions **secret**.
 **Environment:** `fork`
 **Tier / triggers:** HEAVY — 4 Geth/Anvil devnet slots, 20-25 min wall-clock. Gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`. Feature PRs into phase branches skip this suite; `suite-06` (rmpc-unit) provides fast feedback on those.
 
-**Fixture, not live RPC — golden on the merge gate, live on the nightly (ADR-0011):**
+**Fixture, not live RPC — golden on the merge gate, fresh snapshot on the nightly (ADR-0011):**
 Merge-gating runs (feature-PR and `dev`-merge) fork the **checked-in golden
 fixture** (`testing/fixtures/fork-state/`, loaded via `anvil --load-state` for
 the Rust layer and via a pinned-block fork of `CURRENT.anvil-state` for the
@@ -812,7 +812,7 @@ signal regardless of whether that day's commits touch each suite's path filters.
   calls `gh workflow run <file> --ref dev`
 - `fork-pin-age-warning` — runs `scripts/devnet/check-fork-pin-age.sh` and
   only warns; it never fails the run.
-- Self-test: `.github/scripts/check_nightly_dispatch_list.py` (run in suite 13)
+- Self-test: `scripts/ci/check_nightly_dispatch_list.py` (run in suite 13)
   fails when a suite workflow is missing from the dispatch list.
 
 **Steps — `dispatch-all-suites` job:**
@@ -890,8 +890,8 @@ membership and asset config back from the chain. It takes no key.
 ### 28b. Core stack selftest, deleted-path gate and stage tooling tests
 **File:** `.github/workflows/suite-28-core-stack-selftest.yml`
 
-`scripts/stage/core-stack.sh` is a boot and health wrapper. It deploys and governs by calling publish contracts (devops, Bun TypeScript) with the Twin chain argument list. Jobs:
-- `core-stack-selftest` — `bash scripts/stage/tests/core-stack-selftest.sh` against a fake `bun` standing in for publish contracts: the exact argument list, exit-code passthrough, the four-manifest count, the govern row gate (tx hash and receipt status 1 on every row), the usage errors and the record contract with its schema drift guard. Executed-assertion floor held here and in the script.
+`scripts/stage/core-stack.ts` (Bun TypeScript; `core-stack.sh` is a shim that execs it) is the boot, health, record and parity tool. It deploys and governs by calling publish contracts (devops, Bun TypeScript) with the Twin chain argument list. Jobs:
+- `core-stack-selftest` — `bun test scripts/stage/tests/core-stack.test.ts` against a fake runner standing in for publish contracts: the exact argument list with the `keystore:PATH:PASSFILE` signer, a fresh keystore set per boot, exit-code passthrough, the four-manifest count, the govern row gate (tx hash and receipt status 1 on every row), the usage errors and the record contract with its schema drift guard. Executed-test floor held in the workflow.
 - `deleted-stage-gate` — `bun scripts/stage/check-deleted-stage-scripts.ts .` exits 0 only when the stage ceremony shell, the stage deploy script, the deploy workflow and the Rust harness deployment (forge script calls, demo seeding, faucet funding) are absent and `core-stack.sh` holds no deploy or ceremony logic.
 - `stage-tooling-tests` — `bun test scripts/stage/tests`: the govern row parser, the sheet-diff allow-list (stage versus production sheet differ only in parameter lines), the label-diff (verifier labels on stage equal the mainnet set) and the gate.
 
@@ -1308,17 +1308,36 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 **File:** `.github/workflows/suite-29-nightly-fresh-snapshot.yml` (issue 1496, nightly job (b)).
 **Tier / triggers:** nightly (05:30 UTC) and `workflow_dispatch`. Never a merge gate. No secret, no archive node.
 
-Takes a snapshot of Base at the latest block with `scripts/devnet/nightly-fresh-snapshot.ts` (wrapping `snapshot-fork.ts` with `FORK_PIN_LAG=0`, public endpoints from `fork-rpc-lib.sh`, 429 back-off). Builds the Twin chain genesis alloc with the existing ingester and aligns `fork-block.json` and `expected-prices.json` in an overlay. The overlay is an artifact, never committed. Each chain suite (5, 7, 8, 10, 11b, 14, 26) is called with `workflow_call` and `fresh_snapshot: true`; its chain jobs apply the overlay through `.github/actions/apply-fresh-snapshot`. `scripts/devnet/check-nightly-fresh-snapshot.ts` asserts the block is within one hour and that every suite succeeded. Artifacts: `snapshot-manifest` (block number, hash, timestamp), `suite-results`, `fresh-snapshot`.
+Takes a snapshot of Base at the latest block with `scripts/devnet/nightly-fresh-snapshot.ts` (wrapping `snapshot-fork.ts` with `FORK_PIN_LAG=0`, public endpoints from `fork-rpc-lib.sh`, 429 back-off). Builds the Twin chain genesis alloc with the existing ingester and aligns `fork-block.json` and `expected-prices.json` in an overlay. The overlay is an artifact, never committed. Each chain suite (5, 7, 8, 10, 11b, 14) is called with `workflow_call` and `fresh_snapshot: true`; its chain jobs apply the overlay through `.github/actions/apply-fresh-snapshot`. `scripts/devnet/check-nightly-fresh-snapshot.ts` asserts the block is within one hour and that every suite succeeded. Artifacts: `snapshot-manifest` (block number, hash, timestamp), `suite-results`, `fresh-snapshot`.
 
-Suite 26 needs the shared fusion devnet configuration. In a fresh-snapshot run an unconfigured suite 26 fails instead of skipping.
+Suite 26 is not in this run: it needs `secrets.FUSION_RMPC_CONFIG` and targets the shared fusion devnet, so it cannot run on the fresh Twin snapshot with no secret. Suite 5's `base-testnet-adapters` job (BASE_TESTNET secrets) is skipped when called with `fresh_snapshot: true`. Details and the one remaining exception (suite 14 reads the private devops repo with `DEVOPS_READ_TOKEN`) are in `docs/development/nightly-fresh-snapshot.md`.
 
 
 ## Nightly and release-record checks (cores 1495, 1496, 1497, 1498)
 
 The `nightly-and-release-checks` job in `suite-13-doc-checks.yml` runs on every pull request. It runs, offline:
 
-- `.github/scripts/tests/test_nightly_dispatch_list.sh` (core 1495): the nightly dispatch list covers every suite workflow, a removed suite is detected, the fork-pin age step has `continue-on-error: true`, and the deleted drift job, script and alarm text are gone. The list check itself is `check_nightly_dispatch_list.py`.
-- `scripts/devnet/check-nightly-fresh-snapshot-selftest.sh` (core 1496): suites 5, 7, 8, 10, 11b, 14 and 26 are present, no secret other than `GITHUB_TOKEN` and no keyed RPC appear, manifest fields and the one-hour limit hold, a failing suite result fails the gate, the final workflow step is `git diff --exit-code` over the fixture paths, and a stub HTTP 429 is retried.
+- `scripts/ci/check-nightly-dispatch-selftest.ts` (core 1495, Bun): the nightly dispatch list covers every suite workflow, a removed suite is detected, the fork-pin age step has `continue-on-error: true`, and the deleted drift job, script and alarm text are gone. The list check itself is `scripts/ci/check_nightly_dispatch_list.py`; config-check, suite 28 core-stages and suite 30 are in the SUITES list, and the release workflows, the nightly itself, the third-party drift workflow and suite 29 are on the exclusion list with reasons.
+- `scripts/devnet/check-nightly-fresh-snapshot-selftest.ts` (core 1496, Bun, run in suite 13): suites 5, 7, 8, 10, 11b and 14 are present, no secret other than `GITHUB_TOKEN` and no keyed RPC appear, manifest fields and the one-hour limit hold, a failing suite result fails the gate, the final workflow step is `git diff --exit-code` over the fixture paths, and a stub HTTP 429 is retried.
 - The nightly third-party drift workflow check, the dependency manifest self-test and the manifest address check (core 1497). The address check runs on a manifest recorded from the committed snapshot, so it checks something before the first release commits one.
 
 The committed snapshot contents check is a Bun TypeScript script, `scripts/devnet/check-fork-snapshot-contents.ts` (core 1498; the issue says `.sh`, orchestration is TypeScript). Suite 14's `smoke-test-guards` job runs it, plus `check-fork-manifest.sh --require-pinned` (fixture lockstep) and a floor on the `cargo test -p smoke-test --lib` test count. Suite 14's `twin_publish` matrix row runs the real Twin chain publish, verify and stage 13 govern matrix, then `label-diff.ts` and `sheet-diff.ts` against the mainnet verifier labels and production sheet.
+
+## check-sha-green (core 1502)
+
+`scripts/ci/check-sha-green.ts` is the deploy gate on CI state. The devops publish plan job (devops 58) runs it with `DEPLOY_SHA` before any approval.
+
+```
+bun scripts/ci/check-sha-green.ts <sha> [--repo owner/name] [--config path] [--api-url url]
+```
+
+- Reads every check-run of the commit through `GET /repos/{repo}/commits/{sha}/check-runs?per_page=100` and follows `rel="next"` Link headers until none remain.
+- Token: `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token`. The token stays in memory.
+- Reads `scripts/ci/required-checks.json` (`version`, `required`, `optional`). An entry has either `name` (exact) or `prefix`.
+- Exit 0: every required name has at least one check-run and every run of it completed with `success`.
+- Exit 1: a required name failed, is missing, or is pending (`queued`, `in_progress`). The output names each one under `FAILING`, `MISSING` or `PENDING`. A name with both a failed and a successful run fails.
+- Exit 2: bad arguments, bad config or an API error.
+- Optional entries that are not green are printed as `optional (does not gate)` and never change the exit code.
+- The initial required list is the set of jobs that run unconditionally on push to `dev` (no draft skip, no path filter, no matrix). Failing nightly jobs stay optional.
+- `fusion-ceremony-selftest` no longer exists: the ceremony shell and its selftest were deleted by S9 (core 1488). `deleted-stage-gate` is the surviving gate and is required.
+- Tests: `bun test scripts/ci/check-sha-green.test.ts`, run by the `check-sha-green-tests` job (suite 30), which fails when zero tests were collected. The same file asserts `dapp-lint-build` and `bun-audit` carry no skip condition and no `continue-on-error`.

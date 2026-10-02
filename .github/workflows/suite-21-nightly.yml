@@ -30,7 +30,7 @@
 # (03:00 UTC). The nightly run should complete before those fire so artifacts
 # don't overlap.
 #
-# SELF-TEST: .github/scripts/check_nightly_dispatch_list.py (run by
+# SELF-TEST: scripts/ci/check_nightly_dispatch_list.py (run by
 # suite-13-doc-checks.yml) fails when a suite workflow is missing from the
 # SUITES list below, unless it is on that script's explicit exclusion list.
 #
@@ -101,6 +101,9 @@ jobs:
             suite-27-rmpc-unit-releases.yml
             suite-28-core-stack-selftest.yml
             fusion-cross-repo-drift.yml
+            config-check.yml
+            suite-28-core-stages.yml
+            suite-30-check-sha-green.yml
           )
           for workflow in "${SUITES[@]}"; do
             echo "Dispatching $workflow..."
@@ -119,9 +122,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Never fails the run. check-fork-pin-age.sh without --max-age-days only
-      # reports the age and emits a ::warning:: past the refresh cadence. The
-      # trailing `|| true` keeps an unexpected script error from reddening the
-      # nightly: this step is a maintenance signal, not a gate.
+      # reports the age and emits a ::warning:: past the refresh cadence.
+      # continue-on-error: true keeps an unexpected script error from reddening
+      # the nightly: this step is a maintenance signal, not a gate. The selftest
+      # (scripts/ci/check-nightly-dispatch-selftest.ts) asserts the flag by yq.
       - name: Fork pin age warning
         continue-on-error: true
-        run: scripts/devnet/check-fork-pin-age.sh || true
+        run: scripts/devnet/check-fork-pin-age.sh

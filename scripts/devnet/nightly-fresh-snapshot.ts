@@ -232,6 +232,14 @@ async function realign(out: string): Promise<void> {
     "--output", join(overlayFork, "genesis-alloc.json"),
     "--require-pinned",
   ]);
+  // Block lockstep: stamp the hash on CURRENT.json and write the alloc sidecar (see check-fork-lockstep.ts).
+  const cur = JSON.parse(readFileSync(join(overlayFork, "CURRENT.json"), "utf8"));
+  cur.fork_block_hash = manifest.block_hash;
+  writeFileSync(join(overlayFork, "CURRENT.json"), JSON.stringify(cur, null, 2) + "\n");
+  writeFileSync(
+    join(overlayFork, "genesis-alloc.block.json"),
+    JSON.stringify({ block_number: manifest.block_number, block_hash: manifest.block_hash, alloc_sha256: sha256(join(overlayFork, "genesis-alloc.json")) }, null, 2) + "\n",
+  );
 
   // expected-prices.json: the landing-strip prices at the fresh block, read from
   // the pools' slot0 at that same block over the public endpoint.
