@@ -91,3 +91,44 @@ fork_rpc_redact() {
       s/\Q$t\E/<redacted>/g if length $t;
     '
 }
+
+# fork_rpc_retry <command...>   (nightly fresh snapshot, issue #1496)
+#
+# Runs a command that reads from a public Base endpoint and retries it when the
+# endpoint rate-limits (HTTP 429, "Too Many Requests", "rate limit"). The public
+# endpoints above are shared and 429 under a burst of reads. Any other failure
+# is returned at once: a retry must never hide a real error. stdout of the
+# successful attempt is passed through; stderr of every attempt goes to stderr.
+#
+#   FORK_RPC_RETRY_MAX      attempts (default 8)
+#   FORK_RPC_RETRY_SLEEP    first back-off in seconds, doubled each attempt,
+#                           capped at 60 (default 2)
+fork_rpc_retry() {
+  local max="${FORK_RPC_RETRY_MAX:-8}" delay="${FORK_RPC_RETRY_SLEEP:-2}"
+  local attempt=1 out err_file rc
+  err_file="$(mktemp)"
+  while :; do
+    rc=0
+    out="$("$@" 2>"$err_file")" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      cat "$err_file" >&2
+      rm -f "$err_file"
+      printf '%s' "$out"
+      [ -z "$out" ] || printf '\n'
+      return 0
+    fi
+    cat "$err_file" >&2
+    if [ "$attempt" -ge "$max" ] || \
+       ! { grep -qiE '429|too many requests|rate.?limit' "$err_file" || \
+           printf '%s' "$out" | grep -qiE '429|too many requests|rate.?limit'; }; then
+      rm -f "$err_file"
+      printf '%s' "$out"
+      return "$rc"
+    fi
+    echo "[fork-rpc] rate limited (attempt $attempt/$max); retrying in ${delay}s" >&2
+    sleep "$delay"
+    delay=$((delay * 2))
+    [ "$delay" -le 60 ] || delay=60
+    attempt=$((attempt + 1))
+  done
+}

@@ -22,6 +22,7 @@ EXCLUDED = {
     "release-rmpc.yml": "release workflow",
     "release-tag-suite-dispatch.yml": "release workflow",
     "deploy-contracts.yml": "deploy workflow",
+    "suite-29-nightly-fresh-snapshot.yml": "nightly (b) on its own schedule: it calls the chain suites itself with a fresh Base snapshot (issue 1496)",
 }
 
 

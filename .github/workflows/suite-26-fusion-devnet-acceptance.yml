@@ -61,6 +61,17 @@
 name: fusion-devnet-acceptance
 
 on:
+  # Nightly job (b), core issue 1496: reused by suite-NN-nightly-fresh-snapshot.yml
+  # with fresh_snapshot=true so this suite boots the Twin chain from a snapshot
+  # taken at the latest Base block instead of the checked-in pin. Steps are not
+  # copied: the nightly calls this very workflow.
+  workflow_call:
+    inputs:
+      fresh_snapshot:
+        description: "Apply the nightly fresh snapshot overlay before booting a chain."
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
     inputs:
       stages:
@@ -114,6 +125,7 @@ jobs:
           HAVE_RMPC_CONFIG: ${{ secrets.FUSION_RMPC_CONFIG != '' }}
           HAVE_KEYSTORE: ${{ secrets.FUSION_RELEASE_KEYSTORE != '' }}
           HAVE_PASSWORD: ${{ secrets.FUSION_RELEASE_PASSWORD != '' }}
+          FRESH_SNAPSHOT_RUN: ${{ inputs.fresh_snapshot == true }}
         run: |
           set -euo pipefail
           missing=()
@@ -141,6 +153,13 @@ jobs:
               echo "**Nothing was executed. This is not a passing acceptance run.**"
             } | tee -a "$GITHUB_STEP_SUMMARY"
             echo "configured=false" >> "$GITHUB_OUTPUT"
+            # The nightly fresh-snapshot run (core issue 1496) calls this suite
+            # with fresh_snapshot=true. A skipped suite is not a pass there:
+            # fail the run so the missing configuration is red, not green.
+            if [[ "$FRESH_SNAPSHOT_RUN" == "true" ]]; then
+              echo "::error::suite 26 was required by the nightly fresh-snapshot run but is not configured; a skip is not a pass"
+              exit 1
+            fi
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi

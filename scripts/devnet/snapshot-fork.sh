@@ -52,7 +52,11 @@ ANVIL_RPC="http://${ANVIL_HOST}:${ANVIL_PORT}"
 FOUNDRY_IMAGE="${FOUNDRY_IMAGE:-ghcr.io/foundry-rs/foundry:latest}"
 ANVIL_CONTAINER_NAME="rm-snapshot-anvil-$$"
 
-FIXTURE_DIR="testing/fixtures/fork-state"
+# FIXTURE_DIR and DEPLOYMENTS_DIR default to the committed locations. The
+# nightly fresh-snapshot job (issue #1496) points both at a runner temp dir so
+# nothing it captures lands in a tracked path.
+FIXTURE_DIR="${FIXTURE_DIR:-testing/fixtures/fork-state}"
+DEPLOYMENTS_DIR="${DEPLOYMENTS_DIR:-deployments}"
 mkdir -p "$FIXTURE_DIR"
 
 for tool in cast forge cargo jq curl docker; do
@@ -80,7 +84,7 @@ anvil_set() {
 
 # 1. Look up the current upstream block number.
 echo "[snapshot] querying upstream block number from $UPSTREAM_ORIGIN"
-UPSTREAM_BLOCK_HEX=$(curl -sS -X POST -H 'content-type: application/json' \
+UPSTREAM_BLOCK_HEX=$(fork_rpc_retry curl -fsS -X POST -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
   "$RMPC_FORK_RPC_URL" | jq -r '.result')
 
@@ -91,7 +95,11 @@ fi
 # Pin 100 blocks behind tip to stay clear of reorg risk
 # (matches docs/technical/fork-e2e-decisions.md §3.2 cadence note).
 TIP=$((UPSTREAM_BLOCK_HEX))
-PIN_BLOCK=$((TIP - 100))
+# FORK_PIN_LAG overrides the 100-block lag. The nightly fresh-snapshot job
+# sets 0: it wants the latest block, and a public endpoint serves the tip
+# without an archive node (issue #1496).
+PIN_LAG="${FORK_PIN_LAG:-100}"
+PIN_BLOCK=$((TIP - PIN_LAG))
 echo "[snapshot] upstream tip=$TIP pinning at block=$PIN_BLOCK"
 
 # 2. Boot Anvil INSIDE the foundry Docker image so the dump-state JSON
@@ -128,7 +136,7 @@ docker run --rm --detach \
   --publish "127.0.0.1:${ANVIL_PORT}:8545" \
   --volume "$ANVIL_STATE_HOST_DIR:/state" \
   "$FOUNDRY_IMAGE" \
-  "exec anvil --fork-url $RMPC_FORK_RPC_URL --fork-block-number $PIN_BLOCK --chain-id $FORK_CHAIN_ID --host 0.0.0.0 --port 8545 --mnemonic 'test test test test test test test test test test test junk' --accounts 10 --balance 10000 --dump-state /state/state.json --silent" \
+  "exec anvil --fork-url $RMPC_FORK_RPC_URL --fork-block-number $PIN_BLOCK --chain-id $FORK_CHAIN_ID --host 0.0.0.0 --port 8545 --mnemonic 'test test test test test test test test test test test junk' --accounts 10 --balance 10000 --dump-state /state/state.json --silent ${ANVIL_EXTRA_ARGS:-}" \
   >/dev/null
 
 cleanup() {
@@ -483,7 +491,7 @@ for addr in "${SAFE_SET[@]}"; do
 done
 SAFE_LOCKED_THRESHOLD="0x0000000000000000000000000000000000000000000000000000000000000001"
 for addr in "0x41675C099F32341bf84BFc5382aF534df5C7461a" "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"; do
-  SLOT4=$(cast storage "$addr" 4 --rpc-url "$RMPC_FORK_RPC_URL" --block "$PIN_BLOCK")
+  SLOT4=$(fork_rpc_retry cast storage "$addr" 4 --rpc-url "$RMPC_FORK_RPC_URL" --block "$PIN_BLOCK")
   if [ "$SLOT4" != "$SAFE_LOCKED_THRESHOLD" ]; then
     echo "ERROR: Safe singleton $addr has threshold slot 4 = '$SLOT4' upstream at block $PIN_BLOCK, not 1: it is not the locked canonical singleton" >&2
     exit 1
@@ -513,7 +521,7 @@ PRICE_STRIP_POOLS=(
 )
 echo "[snapshot] capturing slot0 storage for price-strip pools"
 for pool in "${PRICE_STRIP_POOLS[@]}"; do
-  SLOT0=$(cast storage "$pool" 0 --rpc-url "$RMPC_FORK_RPC_URL" --block "$PIN_BLOCK")
+  SLOT0=$(fork_rpc_retry cast storage "$pool" 0 --rpc-url "$RMPC_FORK_RPC_URL" --block "$PIN_BLOCK")
   if [ -z "$SLOT0" ] || [ "$SLOT0" = "0x0000000000000000000000000000000000000000000000000000000000000000" ]; then
     echo "[snapshot]   $pool: slot0 is zero or empty; skipping storage write"
     continue
@@ -628,11 +636,11 @@ jq -n \
 # 7. Persist a copy of the deployment artifact at the canonical path so
 #    the indexer (and CI smoke jobs) can read it without re-running the
 #    deployer.
-mkdir -p deployments
-printf '%s' "$DEPLOYMENT_JSON" > deployments/full-stack.json
+mkdir -p "$DEPLOYMENTS_DIR"
+printf '%s' "$DEPLOYMENT_JSON" > "$DEPLOYMENTS_DIR/full-stack.json"
 
 echo "[snapshot] done."
 echo "  fixture     : $FIXTURE_FILE"
 echo "  state_file  : $ANVIL_STATE_FILE"
 echo "  current     : $CURRENT_FILE"
-echo "  deployments : deployments/full-stack.json"
+echo "  deployments : $DEPLOYMENTS_DIR/full-stack.json"

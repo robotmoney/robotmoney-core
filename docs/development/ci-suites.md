@@ -1369,3 +1369,14 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | devnet `918453` |
 | 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |
 | 28 | `suite-28-core-stack-selftest.yml` | `core-stack-selftest` | `none` |
+| 29 | `suite-29-nightly-fresh-snapshot.yml` | `snapshot-at-latest-block` → suites 5, 7, 8, 10, 11b, 14, 26 (called) → `record-results` | Twin chain `918453` from a fresh Base snapshot |
+
+### 29. Nightly fresh snapshot (nightly-fresh-snapshot)
+
+**File:** `.github/workflows/suite-29-nightly-fresh-snapshot.yml` (issue 1496, nightly job (b)).
+**Tier / triggers:** nightly (05:30 UTC) and `workflow_dispatch`. Never a merge gate. No secret, no archive node.
+
+Takes a snapshot of Base at the latest block with `scripts/devnet/nightly-fresh-snapshot.ts` (wrapping `snapshot-fork.sh` with `FORK_PIN_LAG=0`, public endpoints from `fork-rpc-lib.sh`, 429 back-off). Builds the Twin chain genesis alloc with the existing ingester and aligns `fork-block.json` and `expected-prices.json` in an overlay. The overlay is an artifact, never committed. Each chain suite (5, 7, 8, 10, 11b, 14, 26) is called with `workflow_call` and `fresh_snapshot: true`; its chain jobs apply the overlay through `.github/actions/apply-fresh-snapshot`. `scripts/devnet/check-nightly-fresh-snapshot.ts` asserts the block is within one hour and that every suite succeeded. Artifacts: `snapshot-manifest` (block number, hash, timestamp), `suite-results`, `fresh-snapshot`.
+
+Suite 26 needs the shared fusion devnet configuration. In a fresh-snapshot run an unconfigured suite 26 fails instead of skipping.
+
