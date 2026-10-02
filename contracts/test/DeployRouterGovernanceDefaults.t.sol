@@ -45,11 +45,7 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     ///         THE CHAIN, so assert the deployed value, not the constant.
     function test_deployingWithTheDefaultYieldsAMeaningfulOnChainQuorum() public {
         DeployRouterGovernance.Deployed memory d = script.runInProcessWith(
-            admin,
-            address(router),
-            VOTING_PERIOD,
-            EXECUTION_DELAY,
-            QUORUM_THRESHOLD
+            admin, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
         );
         assertEq(d.governance.quorumThreshold(), QUORUM_THRESHOLD);
         assertGt(d.governance.quorumThreshold(), 1, "deployed quorum is still the placeholder");
@@ -64,11 +60,7 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     ///         GovernanceSeparationInvariant.t.sol::test_quorumReflectsTheVoterSet.
     function test_defaultQuorumExceedsOneUnitOfVotingPower() public {
         DeployRouterGovernance.Deployed memory d = script.runInProcessWith(
-            admin,
-            address(router),
-            VOTING_PERIOD,
-            EXECUTION_DELAY,
-            QUORUM_THRESHOLD
+            admin, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
         );
         address soloVoter = makeAddr("solo-voter");
         vm.prank(admin);
@@ -133,11 +125,7 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     ///         if the two ever drift apart in the weaker direction.
     function test_theDeployDefaultIsNotBelowTheContractFloor() public {
         DeployRouterGovernance.Deployed memory d = script.runInProcessWith(
-            admin,
-            address(router),
-            VOTING_PERIOD,
-            EXECUTION_DELAY,
-            QUORUM_THRESHOLD
+            admin, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
         );
         assertEq(d.governance.MIN_QUORUM_THRESHOLD(), 2, "contract floor is no longer 2 (D16)");
         assertGe(
