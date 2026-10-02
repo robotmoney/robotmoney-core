@@ -2,15 +2,16 @@
 //!
 //! Devnet fixture library for Robot Money integration tests.
 //!
-//! Boot the Geth+Lighthouse devnet and deploy contracts by constructing
-//! [`Fixture`]. Drop tears the Docker Compose stack down unconditionally.
+//! Boot the Twin chain (918453), fund keys and call the one runbook "publish
+//! contracts" by constructing [`Fixture`]. The harness deploys nothing itself.
+//! Drop tears the Docker Compose stack down unconditionally.
 //!
 //! This crate is chain-level only — no knowledge of any client binary
 //! (rmpc, dapp, explorer). Callers that need client helpers import this
 //! crate as a dependency and build on top of [`Fixture`].
 //!
 //! Public surface:
-//! - [`Fixture::new`] / [`Fixture::with_deploy_env`] — boot and deploy.
+//! - [`Fixture::new`] / [`Fixture::with_deploy_env`] — boot the Twin chain, fund keys, call publish contracts.
 //! - Address accessors: [`Fixture::rpc_url`], [`Fixture::gateway`], etc.
 //! - On-chain poke helpers: [`Fixture::pause_gateway`], [`Fixture::fund_usdc`], etc.
 //! - [`prerequisites_available`] — check for docker/forge/cast on PATH.
@@ -27,6 +28,8 @@ pub mod base_testnet;
 pub mod fork_manifest;
 pub mod genesis_alloc;
 pub mod logging;
+/// The one runbook, "publish contracts": the harness calls it, it deploys nothing itself.
+pub mod publish;
 /// Dev-scout map for the real-adapter state injection boundary (issue #739).
 pub mod real_adapter_state;
 
@@ -45,19 +48,16 @@ use tempfile::TempDir;
 
 // -- Genesis account constants ----------------------------------------
 
-/// Genesis-funded deployer. Used as `--from` for `forge script` and is
-/// the recorded **agent owner** in the smoke-test fixture (issue #269 —
-/// each depositor is the sole authority over her own agent, so the
-/// deployer EOA stands in as the depositor for `revoke_agent` and
-/// `reauthorize_agent`). Also holds `ADMIN_ROLE`, which is now scoped to
-/// protocol-wide kill switches (`unpause`) and no longer gates any
-/// agent's lifecycle.
+/// Genesis-funded FUNDER (the constant keeps its historic name). It sends the
+/// boot-time ETH grants and nothing else. It holds no role on any contract:
+/// the real deployer is a fresh rehearsal keystore minted per boot, and after
+/// handover only the real Safe and the timelock hold admin.
 pub const DEPLOYER_PRIVATE_KEY_HEX: &str =
     "0xbcdf20249abf0ed6d944c0288fad489e33f66b3960d9e6229c1cd214ed3bbe31";
 pub const DEPLOYER_ADDRESS_HEX: &str = "0x8943545177806ED17B9F23F0a21ee5948eCaa776";
 
 /// Key paired with PAUSER_ROLE. The derived address (`0x6145…`) is
-/// granted PAUSER_ROLE at deploy time so [`Fixture::pause_gateway`] can
+/// the sheet's PAUSER_ADDRESS, granted PAUSER_ROLE by publish contracts, so [`Fixture::pause_gateway`] can
 /// use `cast send` with a real signed transaction.
 pub const PAUSER_PRIVATE_KEY_HEX: &str =
     "0x53321db7c1e331d93a11a41d16f004d7ff63972ec8ec7c25db329728ceeb1710";
@@ -89,8 +89,7 @@ pub const HARNESS_USDC_HOLDER_ADDRESS_HEX: &str = "0xaE67A1B2A267a124Cf762098E3C
 /// container_name is already fixed (`dapp-receipt-fixtures`), so this
 /// compose project is already single-instance-per-host; using a fixed port
 /// here matches that existing constraint rather than introducing a new one.
-/// See `testing/ethereum-testnet/config/docker-compose.dapp.yaml` and
-/// `Fixture::seed_consensus_receipts`.
+/// See `testing/ethereum-testnet/config/docker-compose.dapp.yaml`.
 pub const RECEIPT_FIXTURES_PORT: u16 = 8097;
 
 /// Compose profile that gates the `receipt-fixtures` service.
@@ -128,11 +127,8 @@ pub fn agent_address() -> Address {
     derive_address(&AGENT_PRIVATE_KEY)
 }
 
-/// Demo router weight (bps) for the primary RobotMoneyVault (PRD §11.1 Stable
-/// Yield) after demo seeding. The primary vault carries 8500 bps; the remaining
-/// 1500 bps are split equally across rmRWA (§11.4), rmPROTO (§11.2), and rmAGENT
-/// (§11.3) at 500 bps each. Issue #621.
-pub const DEMO_WEIGHT_PRIMARY_BPS: u64 = 8_500;
+/// Zero address, the dapp build arg for contracts this scheme does not deploy (no RM token).
+const ZERO_ADDRESS_HEX: &str = "0x0000000000000000000000000000000000000000";
 
 // -- Error type -------------------------------------------------------
 
@@ -158,134 +154,6 @@ impl HarnessError {
     pub fn other<S: Into<String>>(s: S) -> Self {
         HarnessError::Other(s.into())
     }
-}
-
-// -- Deployment JSON --------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-struct DeploymentJson {
-    chain_id: u64,
-    usdc: String,
-    vault: String,
-    /// Aave V3 strategy adapter address registered with the vault at deploy time.
-    /// Absent on legacy deployments (pre-#363).
-    #[serde(default)]
-    aave_adapter: String,
-    /// Compound V3 strategy adapter address registered with the vault at deploy time.
-    /// Absent on legacy deployments (pre-#363).
-    #[serde(default)]
-    compound_adapter: String,
-    /// Morpho strategy adapter address registered with the vault at deploy time.
-    /// Absent on legacy deployments (pre-#363).
-    #[serde(default)]
-    morpho_adapter: String,
-    gateway: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    admin: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pauser: String,
-    agent: String,
-    share_receiver: String,
-    gateway_runtime_hash: String,
-}
-
-/// Typed view over the registry deployment JSON produced by DeployVaultRegistry.s.sol.
-#[derive(Debug, Deserialize)]
-struct RegistryDeploymentJson {
-    registry: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    chain_id: u64,
-    #[serde(default)]
-    #[allow(dead_code)]
-    vault_registered: bool,
-}
-
-/// Typed view over the router deployment JSON produced by DeployPortfolioRouter.s.sol.
-#[derive(Debug, Deserialize)]
-struct RouterDeploymentJson {
-    router: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    chain_id: u64,
-}
-
-/// Typed view over the governance deployment JSON produced by DeployRouterGovernance.s.sol.
-#[derive(Debug, Deserialize)]
-struct GovernanceDeploymentJson {
-    governance: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    chain_id: u64,
-}
-
-/// Typed view over the RM token deployment JSON produced by DeployRmToken.s.sol (issue #365).
-#[derive(Debug, Deserialize)]
-struct RmTokenDeploymentJson {
-    rm_token: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    chain_id: u64,
-}
-
-/// Typed view over the IC policy + consensus receipt deployment JSON
-/// produced by DeployInvestmentCommitteePolicy.s.sol. Deploys BOTH
-/// `InvestmentCommitteePolicy` and `ConsensusRebalanceReceipt` in one
-/// ceremony (issue #1247 AC10) so a single ceremony wires both into the
-/// gateway. Issue #1294: consumed by the dapp e2e devnet wiring.
-#[derive(Debug, Deserialize)]
-struct IcPolicyDeploymentJson {
-    policy: String,
-    consensus_receipt: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    chain_id: u64,
-}
-
-/// Typed view over the Uniswap V3 stub deployment JSON produced by
-/// DeployDemoUniswapV3Stubs.s.sol (issue #531). Four `UniswapV3PoolSlot0Stub`
-/// contracts deployed at deterministic CREATE2 addresses (Arachnid factory,
-/// fixed salts). Addresses are pre-committed in `config/dex-pools.json::devnet.pools`
-/// so the dapp Docker image is built with the correct pool addresses.
-#[derive(Debug, Deserialize)]
-struct DemoUniswapV3StubsDeploymentJson {
-    eth_usd: String,
-    weth_usdc: String,
-    cbbtc_usdc: String,
-    wsol_usdc: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    chain_id: u64,
-}
-
-/// Typed view over the demo-extra-vaults deployment JSON produced by
-/// DeployDemoExtraVaults.s.sol. Surfaces the PRD §11 vault catalog seeded into
-/// the demo so smoke-test assertions and downstream tooling can resolve every
-/// Active vault and the RWA placeholder. The demo seed deploys the canonical
-/// `ProtocolAssetVault` (§11.2) and `AgentTokenVault` (§11.3) with devnet
-/// basket stubs, plus an RWA placeholder (§11.4) registered Paused. All three
-/// extra entries plus the primary `RobotMoneyVault` (§11.1) make up the
-/// four-vault catalog. Router-eligibility is restricted to the primary vault
-/// per PRD §11.2/§11.3 — basket vaults stay gap-blocked.
-#[derive(Debug, Deserialize)]
-struct DemoExtraVaultsDeploymentJson {
-    protocol_vault: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    protocol_tokens: Vec<String>,
-    agent_token_vault: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    agent_tokens: Vec<String>,
-    /// RWA/Thematic placeholder (PRD §11.4). Registered non-Active (Paused)
-    /// and never router-eligible — rounds the deployed set to the four PRD §11
-    /// categories without entering the router weight vector.
-    rwa_vault: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    chain_id: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -352,24 +220,12 @@ pub struct Fixture {
     rpc_port: u16,
     rpc_url: String,
     chain_id: u64,
-    deployment: DeploymentJson,
-    registry_deployment: RegistryDeploymentJson,
-    router_deployment: RouterDeploymentJson,
-    governance_deployment: GovernanceDeploymentJson,
-    rm_token_deployment: RmTokenDeploymentJson,
-    /// InvestmentCommitteePolicy + ConsensusRebalanceReceipt (issue #1247
-    /// AC10, issue #1294). One ceremony deploys both.
-    ic_policy_deployment: IcPolicyDeploymentJson,
-    /// Demo-only extra vaults registered alongside the primary RobotMoneyVault
-    /// (issue #465). Two passthrough-backed `RobotMoneyVault` stand-ins that
-    /// let the smoke-test exercise multi-vault router weights without
-    /// depending on the still-ADR-blocked basket vaults.
-    demo_extra_vaults: DemoExtraVaultsDeploymentJson,
-    /// Demo-only Uniswap V3 stub pool contracts deployed on the devnet so the
-    /// landing-page price strip can read slot0 (issue #531). Addresses are
-    /// deterministic (CREATE2 via Arachnid factory) and pre-committed in
-    /// `config/dex-pools.json::devnet.pools`.
-    demo_uniswap_v3_stubs: DemoUniswapV3StubsDeploymentJson,
+    /// The deployed topology, read from the manifests the publish-contracts driver wrote.
+    topology: publish::Topology,
+    /// The publish run: generated sheet, rehearsal keystores, manifest directory.
+    published: publish::Published,
+    /// keccak256 of the gateway's runtime code on this chain.
+    gateway_runtime_hash: String,
     repo_root: PathBuf,
     /// Harness-owned nonce source of truth for every EOA this devnet sends
     /// from (issue #1241, extended to the funding path by issue #1374).
@@ -938,303 +794,94 @@ impl Fixture {
             "post-readiness chain RPC stable; starting deployment",
         );
 
-        // Deploy.s.sol run() performs a mandatory 1,000 USDC seed deposit from
-        // the broadcaster (issue #656), so the deployer must hold USDC before
-        // the forge script runs. Drip from HARNESS_USDC_HOLDER (genesis grant).
+        // The harness deploys nothing itself. It funds keys, then calls the one
+        // runbook, "publish contracts", with the Twin chain arguments: all four
+        // vaults, the real Safe, the timelock handover and the verifier. A fresh
+        // rehearsal keystore set is minted for every boot, so a redeploy from a
+        // new SHA never reuses a deployer.
+        let publish_cfg = publish::PublishConfig::from_env(&repo_root).inspect_err(|err| {
+            logging::error("smoke-test", format!("publish contracts config: {err}"));
+            cleanup();
+        })?;
+        let key_parent = if Path::new("/dev/shm").is_dir() {
+            PathBuf::from("/dev/shm")
+        } else {
+            tmp.path().to_path_buf()
+        };
+        let keys = publish::make_keys(&publish_cfg, &key_parent).inspect_err(|err| {
+            logging::error("smoke-test", format!("rehearsal key helper failed: {err}"));
+            cleanup();
+        })?;
+
+        // The deployer seeds rmUSDC with real USDC, so it needs USDC before the run.
         const DEPLOYER_USDC_GRANT: u128 = 10_000 * 1_000_000; // 10k USDC, 6dp
-        fund_usdc_to_deployer(&nonce_tracker, DEPLOYER_USDC_GRANT).inspect_err(|err| {
-            logging::error("smoke-test", format!("deployer USDC funding failed: {err}"));
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "deployer USDC funding failure",
-                200,
-            );
-            cleanup();
-        })?;
-
-        let dep_out = tmp.path().join("deployment.json");
+        const ONE_ETH_WEI: &str = "1000000000000000000";
+        const DEPLOYER_ETH_WEI: &str = "10000000000000000000";
         let agent_hex = format!("{:#x}", agent_address());
-        run_forge_deploy_with_env(
-            &repo_root,
+        let deployer_hex = keys.address("ADMIN_ADDRESS")?.to_string();
+        let fund = || -> Result<(), HarnessError> {
+            fund_usdc_to(&nonce_tracker, &deployer_hex, DEPLOYER_USDC_GRANT)?;
+            fund_eth_from_deployer(&nonce_tracker, &deployer_hex, DEPLOYER_ETH_WEI)?;
+            let mut gas_only: Vec<String> = Vec::new();
+            gas_only.extend(keys.address_list("SAFE_OWNERS"));
+            gas_only.extend(keys.address_list("VOTER_ADDRESSES"));
+            gas_only.push(keys.address("EMERGENCY_ADDRESS")?.to_string());
+            gas_only.push(agent_hex.clone());
+            gas_only.push(PAUSER_ADDRESS_HEX.to_string());
+            for a in gas_only {
+                fund_eth_from_deployer(&nonce_tracker, &a, ONE_ETH_WEI)?;
+            }
+            Ok(())
+        };
+        fund().inspect_err(|err| {
+            logging::error("smoke-test", format!("funding keys failed: {err}"));
+            log_compose_state(
+                &compose_dir,
+                &compose_files_owned,
+                &compose_log_env,
+                "chain-compose",
+                "key funding failure",
+                200,
+            );
+            cleanup();
+        })?;
+
+        // Identity lines are addresses only. The agent and the pauser are the
+        // harness's own known keys, so the e2e suites can sign as them.
+        let mut identity = keys.fragment.clone();
+        identity.insert("CHAIN_ID".into(), publish::TWIN_CHAIN_ID.to_string());
+        identity.insert("PAUSER_ADDRESS".into(), PAUSER_ADDRESS_HEX.to_string());
+        identity.insert("AGENT_ADDRESS".into(), agent_hex.clone());
+        identity.insert(
+            "SHARE_RECEIVER_ADDRESS".into(),
+            SHARE_RECEIVER_ADDRESS_HEX.to_string(),
+        );
+        let published = publish::Published::deploy(
+            &publish_cfg,
             &rpc_url,
-            &dep_out,
-            &agent_hex,
-            PAUSER_ADDRESS_HEX,
+            keys,
+            &identity,
             extra_deploy_env,
+            tmp.path(),
         )
         .inspect_err(|err| {
-            logging::error("smoke-test", format!("forge deploy failed: {err}"));
+            logging::error("smoke-test", format!("publish contracts failed: {err}"));
             log_compose_state(
                 &compose_dir,
                 &compose_files_owned,
                 &compose_log_env,
                 "chain-compose",
-                "deployment failure",
+                "publish contracts failure",
                 200,
             );
             cleanup();
         })?;
-
-        let deployment = read_deployment(&dep_out)?;
-        let chain_id = deployment.chain_id;
-
-        // Deploy VaultRegistry and register RobotMoneyVault as the first active vault
-        // (issue #294). The registry deployment JSON is written to a separate path in
-        // the same tempdir so rmpc and downstream tooling can discover the registry
-        // address without manual editing.
-        let reg_out = tmp.path().join("registry.json");
-        run_forge_deploy_registry(
-            &repo_root,
-            &rpc_url,
-            &reg_out,
-            &deployment.vault,
-            &deployment.usdc,
-        )
-        .inspect_err(|err| {
-            logging::error("smoke-test", format!("forge deploy registry failed: {err}"));
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "registry deployment failure",
-                200,
-            );
+        let topology = publish::load_topology(&published.manifest_dir).inspect_err(|err| {
+            logging::error("smoke-test", format!("manifest read failed: {err}"));
             cleanup();
         })?;
-
-        let registry_deployment = read_registry_deployment(&reg_out)?;
-
-        // Confirm the registry actually reports the vault as registered before
-        // pinning the router simulation's fork block. `--slow` waits for the
-        // registerVault receipt, but Geth's "latest" can still briefly lag the
-        // mined block on a loaded runner, so fetching the head immediately can
-        // pin a fork block that predates the registration — intermittently
-        // failing the router deploy with NotRegistered() (issue #880).
-        wait_for_vault_registered(&rpc_url, &registry_deployment.registry, &deployment.vault)
-            .inspect_err(|err| {
-                logging::error(
-                    "smoke-test",
-                    format!("vault registration wait failed: {err}"),
-                );
-                cleanup();
-            })?;
-
-        // Pin the fork block for the router simulation to the current chain
-        // head — guarantees the simulation sees the registerVault tx that
-        // run_forge_deploy_registry just mined (avoids a race where Geth
-        // reports a stale "latest" before the block propagates to the RPC).
-        let fork_block = fetch_current_block_number(&rpc_url).inspect_err(|err| {
-            logging::error("smoke-test", format!("fetch block number failed: {err}"));
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "block number fetch failure",
-                200,
-            );
-            cleanup();
-        })?;
-
-        // Deploy PortfolioRouter and wire initial weights (issue #303).
-        // 10 000 bps → RobotMoneyVault as the sole active vault.
-        let router_out = tmp.path().join("router.json");
-        run_forge_deploy_router(
-            &repo_root,
-            &rpc_url,
-            fork_block,
-            &router_out,
-            &registry_deployment.registry,
-            &deployment.vault,
-            &deployment.usdc,
-        )
-        .inspect_err(|err| {
-            logging::error("smoke-test", format!("forge deploy router failed: {err}"));
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "router deployment failure",
-                200,
-            );
-            cleanup();
-        })?;
-
-        let router_deployment = read_router_deployment(&router_out)?;
-
-        // Deploy RouterGovernance and wire it to the PortfolioRouter (issue #364).
-        // ADMIN_ROLE is held by the deployer; voting power is assigned per test.
-        let governance_out = tmp.path().join("governance.json");
-        run_forge_deploy_governance(
-            &repo_root,
-            &rpc_url,
-            &governance_out,
-            &router_deployment.router,
-        )
-        .inspect_err(|err| {
-            logging::error(
-                "smoke-test",
-                format!("forge deploy governance failed: {err}"),
-            );
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "governance deployment failure",
-                200,
-            );
-            cleanup();
-        })?;
-
-        let governance_deployment = read_governance_deployment(&governance_out)?;
-
-        // Deploy RmToken — the ERC-20 governance voting token (issue #365).
-        // The entire initial supply is minted to HARNESS_USDC_HOLDER so that
-        // `Fixture::fund_rm_token` can drip RM to test accounts using the same
-        // signed-transfer pattern as `fund_usdc`. The deployer EOA signs the
-        // broadcast; the initial holder receives the supply.
-        let rm_token_out = tmp.path().join("rm-token.json");
-        run_forge_deploy_rm_token(
-            &repo_root,
-            &rpc_url,
-            &rm_token_out,
-            HARNESS_USDC_HOLDER_ADDRESS_HEX,
-        )
-        .inspect_err(|err| {
-            logging::error("smoke-test", format!("forge deploy rm-token failed: {err}"));
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "rm-token deployment failure",
-                200,
-            );
-            cleanup();
-        })?;
-
-        let rm_token_deployment = read_rm_token_deployment(&rm_token_out)?;
-
-        // Deploy demo-only extra vaults and reset the router weight vector to a
-        // three-way split (issue #465). Two additional RobotMoneyVault
-        // instances are registered via DeployDemoExtraVaults.s.sol; the basket
-        // vaults ProtocolAssetVault/AgentTokenVault remain ADR-blocked (see
-        // `docs/technical/basket-vault-gap-report.md`) so we ship passthrough-
-        // backed stand-ins. The weight split mirrors the dapp's Router
-        // Governance demo (5000/3000/2000 bps).
-        let extra_vaults_out = tmp.path().join("demo-extra-vaults.json");
-        run_forge_deploy_demo_extra_vaults(
-            &repo_root,
-            &rpc_url,
-            &extra_vaults_out,
-            &registry_deployment.registry,
-            &router_deployment.router,
-            &deployment.vault,
-            &deployment.usdc,
-        )
-        .inspect_err(|err| {
-            logging::error(
-                "smoke-test",
-                format!("forge deploy demo extra vaults failed: {err}"),
-            );
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "demo extra vaults deployment failure",
-                200,
-            );
-            cleanup();
-        })?;
-
-        let demo_extra_vaults = read_demo_extra_vaults_deployment(&extra_vaults_out)?;
-
-        // Deploy Uniswap V3 stub pools via the Arachnid CREATE2 factory
-        // (issue #531). Four `UniswapV3PoolSlot0Stub` instances are deployed at
-        // deterministic addresses pre-committed in `config/dex-pools.json::devnet.pools`.
-        // The Arachnid factory is pre-installed in the devnet genesis alloc by
-        // `genesis_alloc::ARACHNID_FACTORY_ADDR`. This step makes the
-        // landing-page price strip resolve slot0 on the fresh devnet instead of
-        // rendering 'unavailable' (Base pool addresses have no bytecode here).
-        let stubs_out = tmp.path().join("demo-uniswap-v3-stubs.json");
-        run_forge_deploy_demo_uniswap_v3_stubs(&repo_root, &rpc_url, &stubs_out).inspect_err(
-            |err| {
-                logging::error(
-                    "smoke-test",
-                    format!("forge deploy demo uniswap v3 stubs failed: {err}"),
-                );
-                log_compose_state(
-                    &compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "demo uniswap v3 stubs deployment failure",
-                    200,
-                );
-                cleanup();
-            },
-        )?;
-
-        let demo_uniswap_v3_stubs = read_demo_uniswap_v3_stubs_deployment(&stubs_out)?;
-
-        // Deploy InvestmentCommitteePolicy + ConsensusRebalanceReceipt in one
-        // ceremony (issue #1247 AC10, issue #1294). RECEIPT_ADMIN_ADDRESS is
-        // left unset so the script defaults it to ADMIN_ADDRESS (the deployer)
-        // for this devnet ceremony — in production it is the TimelockController.
-        let ic_policy_out = tmp.path().join("ic-policy.json");
-        run_forge_deploy_ic_policy(&repo_root, &rpc_url, &ic_policy_out, &deployment.gateway)
-            .inspect_err(|err| {
-                logging::error(
-                    "smoke-test",
-                    format!("forge deploy IC policy failed: {err}"),
-                );
-                log_compose_state(
-                    &compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "IC policy deployment failure",
-                    200,
-                );
-                cleanup();
-            })?;
-
-        let ic_policy_deployment = read_ic_policy_deployment(&ic_policy_out)?;
-
-        fund_eth_from_deployer(&nonce_tracker, &agent_hex, "1000000000000000000").inspect_err(
-            |err| {
-                logging::error("smoke-test", format!("funding agent failed: {err}"));
-                log_compose_state(
-                    &compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "agent funding failure",
-                    200,
-                );
-                cleanup();
-            },
-        )?;
-        fund_eth_from_deployer(&nonce_tracker, PAUSER_ADDRESS_HEX, "1000000000000000000")
-            .inspect_err(|err| {
-                logging::error("smoke-test", format!("funding pauser failed: {err}"));
-                log_compose_state(
-                    &compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "funding failure",
-                    200,
-                );
-                cleanup();
-            })?;
+        let gateway_runtime_hash = runtime_code_hash(&rpc_url, &topology.gateway)?;
+        let chain_id = publish::TWIN_CHAIN_ID;
 
         let fx = Fixture {
             compose_dir,
@@ -1246,64 +893,23 @@ impl Fixture {
             rpc_port: chain_ports.rpc_port,
             rpc_url,
             chain_id,
-            deployment,
-            registry_deployment,
-            router_deployment,
-            governance_deployment,
-            rm_token_deployment,
-            ic_policy_deployment,
-            demo_extra_vaults,
-            demo_uniswap_v3_stubs,
+            topology,
+            published,
+            gateway_runtime_hash,
             repo_root,
             nonce_tracker,
         };
 
-        // Fund the agent's USDC balance. Deploy.s.sol no longer mints (USDC
-        // is now real Base USDC seeded into genesis alloc, not MockUSDC), so
-        // the harness funds via a real ERC-20 transfer from
-        // HARNESS_USDC_HOLDER. Use a generous amount that comfortably
-        // exceeds every scenario's deposit (largest is
-        // OVER_PAYMENT_CAP_DEPOSIT = 20_000 USDC) but stays well under the
-        // genesis grant (1M USDC by default in fork-block.json).
+        // Fund the agent's USDC balance. USDC is real Base USDC from the Twin
+        // chain snapshot, so the harness funds via a real ERC-20 transfer from
+        // HARNESS_USDC_HOLDER. Generous amount: the largest scenario deposit is
+        // OVER_PAYMENT_CAP_DEPOSIT = 20_000 USDC.
         const AGENT_USDC_GRANT: u128 = 500_000 * 1_000_000; // 500k USDC, 6dp
         fx.fund_usdc(fx.agent(), AGENT_USDC_GRANT)
             .inspect_err(|err| {
                 logging::error("smoke-test", format!("funding USDC failed: {err}"));
-                log_compose_state(
-                    &fx.compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "USDC funding failure",
-                    200,
-                );
                 cleanup();
             })?;
-
-        // Seed two fixture consensus receipts (issue #1294) so the dapp e2e
-        // spec has something to assert on: one verifies + is released, one
-        // does not verify + stays unreleased + does not match live router
-        // weights. Payload bytes only need to exist by the time the indexer's
-        // first tick fetches `payload_uri` — well after `--full-stack` brings
-        // up the `receipt-fixtures` compose service — so seeding here (before
-        // that service exists) is safe.
-        if receipt_fixtures_enabled() {
-            fx.seed_consensus_receipts().inspect_err(|err| {
-                logging::error(
-                    "smoke-test",
-                    format!("consensus receipt fixture seeding failed: {err}"),
-                );
-                log_compose_state(
-                    &fx.compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "consensus receipt fixture seeding failure",
-                    200,
-                );
-                cleanup();
-            })?;
-        }
 
         Ok(fx)
     }
@@ -1343,212 +949,128 @@ impl Fixture {
         self.chain_id
     }
     pub fn gateway(&self) -> Address {
-        parse_addr(&self.deployment.gateway)
+        parse_addr(&self.topology.gateway)
     }
     pub fn usdc(&self) -> Address {
-        parse_addr(&self.deployment.usdc)
+        parse_addr(&self.topology.usdc)
     }
+    /// rmUSDC, the primary vault.
     pub fn vault(&self) -> Address {
-        parse_addr(&self.deployment.vault)
+        parse_addr(&self.topology.vault)
     }
-    /// AaveV3Adapter address registered with the vault at deploy time (issue #363).
-    /// Returns `Address::ZERO` for legacy deployments that predate issue #363.
+    /// Strategy adapters registered with the primary vault, read from the core manifest.
+    /// Returns `Address::ZERO` when the manifest does not name one.
     pub fn aave_adapter(&self) -> Address {
-        if self.deployment.aave_adapter.is_empty() {
-            Address::ZERO
-        } else {
-            parse_addr(&self.deployment.aave_adapter)
-        }
+        parse_addr(&self.topology.aave_adapter)
     }
-    /// CompoundV3Adapter address registered with the vault at deploy time (issue #363).
-    /// Returns `Address::ZERO` for legacy deployments that predate issue #363.
     pub fn compound_adapter(&self) -> Address {
-        if self.deployment.compound_adapter.is_empty() {
-            Address::ZERO
-        } else {
-            parse_addr(&self.deployment.compound_adapter)
-        }
+        parse_addr(&self.topology.compound_adapter)
     }
-    /// MorphoAdapter address registered with the vault at deploy time (issue #363).
-    /// Returns `Address::ZERO` for legacy deployments that predate issue #363.
     pub fn morpho_adapter(&self) -> Address {
-        if self.deployment.morpho_adapter.is_empty() {
-            Address::ZERO
-        } else {
-            parse_addr(&self.deployment.morpho_adapter)
-        }
+        parse_addr(&self.topology.morpho_adapter)
     }
+    /// The harness agent key's address (the sheet's AGENT_ADDRESS).
     pub fn agent(&self) -> Address {
-        parse_addr(&self.deployment.agent)
+        agent_address()
     }
     pub fn share_receiver(&self) -> Address {
-        parse_addr(&self.deployment.share_receiver)
+        parse_addr(SHARE_RECEIVER_ADDRESS_HEX)
     }
     pub fn gateway_runtime_hash(&self) -> &str {
-        &self.deployment.gateway_runtime_hash
+        &self.gateway_runtime_hash
     }
     /// Raw string form of the gateway address (for TOML/config templating).
     pub fn gateway_hex(&self) -> &str {
-        &self.deployment.gateway
+        &self.topology.gateway
     }
-    /// Raw string form of the USDC address.
     pub fn usdc_hex(&self) -> &str {
-        &self.deployment.usdc
+        &self.topology.usdc
     }
-    /// Raw string form of the vault address.
     pub fn vault_hex(&self) -> &str {
-        &self.deployment.vault
+        &self.topology.vault
     }
-    /// VaultRegistry address deployed by DeployVaultRegistry.s.sol (issue #294).
-    /// RobotMoneyVault is registered as the first active vault in this registry.
     pub fn registry(&self) -> Address {
-        parse_addr(&self.registry_deployment.registry)
+        parse_addr(&self.topology.registry)
     }
-    /// Raw string form of the VaultRegistry address.
     pub fn registry_hex(&self) -> &str {
-        &self.registry_deployment.registry
+        &self.topology.registry
     }
-    /// PortfolioRouter address deployed by DeployPortfolioRouter.s.sol (issue #303).
-    /// Initial weights: 10 000 bps to RobotMoneyVault.
     pub fn router(&self) -> Address {
-        parse_addr(&self.router_deployment.router)
+        parse_addr(&self.topology.router)
     }
-    /// Raw string form of the PortfolioRouter address.
     pub fn router_hex(&self) -> &str {
-        &self.router_deployment.router
+        &self.topology.router
     }
-    /// RouterGovernance address deployed by DeployRouterGovernance.s.sol (issue #364).
-    /// Deployer holds ADMIN_ROLE; voting power is assigned per test via setVotingPower.
+    /// RouterGovernance. Its admin is the timelock after handover; the deployer holds nothing.
     pub fn governance(&self) -> Address {
-        parse_addr(&self.governance_deployment.governance)
+        parse_addr(&self.topology.governance)
     }
-    /// Raw string form of the RouterGovernance address.
     pub fn governance_hex(&self) -> &str {
-        &self.governance_deployment.governance
+        &self.topology.governance
     }
-    /// RmToken ERC-20 address deployed by DeployRmToken.s.sol (issue #365).
-    /// The entire initial supply is held by HARNESS_USDC_HOLDER; tests drip
-    /// RM to recipients via `Fixture::fund_rm_token`.
-    pub fn rm_token(&self) -> Address {
-        parse_addr(&self.rm_token_deployment.rm_token)
-    }
-    /// Raw string form of the RmToken address.
-    pub fn rm_token_hex(&self) -> &str {
-        &self.rm_token_deployment.rm_token
-    }
-    /// `InvestmentCommitteePolicy` deployed by
-    /// `DeployInvestmentCommitteePolicy.s.sol` (issue #1247/#1294).
     pub fn ic_policy(&self) -> Address {
-        parse_addr(&self.ic_policy_deployment.policy)
+        parse_addr(&self.topology.ic_policy)
     }
-    /// Raw string form of the InvestmentCommitteePolicy address.
     pub fn ic_policy_hex(&self) -> &str {
-        &self.ic_policy_deployment.policy
+        &self.topology.ic_policy
     }
-    /// `ConsensusRebalanceReceipt` deployed in the same ceremony as
-    /// [`Fixture::ic_policy`] (issue #1247 AC10, issue #1294).
     pub fn consensus_receipt(&self) -> Address {
-        parse_addr(&self.ic_policy_deployment.consensus_receipt)
+        parse_addr(&self.topology.consensus_receipt)
     }
-    /// Raw string form of the ConsensusRebalanceReceipt address.
     pub fn consensus_receipt_hex(&self) -> &str {
-        &self.ic_policy_deployment.consensus_receipt
+        &self.topology.consensus_receipt
     }
-
-    /// `ProtocolAssetVault` (PRD §11.2). Seeded with devnet stand-in basket
-    /// tokens (wETH, cbBTC, wSOL) and made router-eligible by the demo seed
-    /// override — see DeployDemoExtraVaults.s.sol header.
-    pub fn demo_protocol_vault(&self) -> Address {
-        parse_addr(&self.demo_extra_vaults.protocol_vault)
+    /// The TimelockController that holds the admin roles after handover.
+    pub fn timelock(&self) -> Address {
+        parse_addr(&self.topology.timelock)
     }
-    /// Raw string form of the ProtocolAssetVault address.
-    pub fn demo_protocol_vault_hex(&self) -> &str {
-        &self.demo_extra_vaults.protocol_vault
+    /// The real 2-of-3 Safe (SafeL2 1.4.1 proxy) that proposes to the timelock.
+    pub fn safe(&self) -> Address {
+        parse_addr(&self.topology.safe)
     }
-    /// `AgentTokenVault` (PRD §11.3). Seeded with the six MVP shortlist
-    /// symbols and made router-eligible by the demo seed override.
-    pub fn demo_agent_vault(&self) -> Address {
-        parse_addr(&self.demo_extra_vaults.agent_token_vault)
+    /// A vault by its key: rmUSDC, rmPROTO, rmAGENT or rmRWA.
+    pub fn vault_by_key(&self, key: &str) -> Address {
+        self.topology
+            .vaults
+            .get(key)
+            .map(|a| parse_addr(a))
+            .unwrap_or(Address::ZERO)
     }
-    /// Raw string form of the AgentTokenVault address.
-    pub fn demo_agent_vault_hex(&self) -> &str {
-        &self.demo_extra_vaults.agent_token_vault
+    /// rmPROTO (ProtocolAssetVault: wETH and cbBTC).
+    pub fn proto_vault(&self) -> Address {
+        self.vault_by_key("rmPROTO")
     }
-    /// Convenience accessor returning the three non-RWA router-eligible Active
-    /// vaults in the demo set (primary §11.1, protocol §11.2, agent §11.3). After
-    /// issues #559/#560 all three carry router weight and receive router flow
-    /// from `seed_demo_depositors`. The §11.4 RWA vault is separately returned by
-    /// [`Fixture::rwa_vault`] — after issue #621 it is also router-eligible at
-    /// 500 bps (ADR-0006 §1 amended 2026-06-05).
-    pub fn all_demo_vaults(&self) -> [Address; 3] {
-        [
-            self.vault(),
-            self.demo_protocol_vault(),
-            self.demo_agent_vault(),
-        ]
+    /// rmAGENT (AgentTokenVault: deployed empty and paused).
+    pub fn agent_vault(&self) -> Address {
+        self.vault_by_key("rmAGENT")
     }
-    /// RWA/Thematic vault (deSPXA) registered by `DeployDemoExtraVaults.s.sol`
-    /// (PRD §11.4, ADR-0006). Registered **Active** and router-eligible at
-    /// 500 bps (issue #621, ADR-0006 §1 amended 2026-06-05 — product owner
-    /// confirmed). The router deposit routes 500 bps of each deposit into rmRWA
-    /// via the Aerodrome swap + Chronicle NAV oracle path. `seed_demo_depositors`
-    /// also issues a direct deposit for belt-and-suspenders TVL seeding.
+    /// rmRWA (deSPXA only, plain basket row).
     pub fn rwa_vault(&self) -> Address {
-        parse_addr(&self.demo_extra_vaults.rwa_vault)
+        self.vault_by_key("rmRWA")
     }
-    /// Raw string form of the RWA/Thematic placeholder address.
-    pub fn rwa_vault_hex(&self) -> &str {
-        &self.demo_extra_vaults.rwa_vault
-    }
-    /// JSON `{rmUSDC,rmPROTO,rmAGENT,rmRWA}` bucket-vault-symbol map matching
-    /// `tests/fixtures/consensus-receipt.bucket-vault-map.json`'s
-    /// `required_vault_symbols` (issue #1294). Threaded through as
-    /// `VITE_VAULT_ADDRESSES` so `consensusReceiptApi.ts::parseVaultAddressMap`
-    /// can compute the applied-vs-not-applied consensus receipt state against
-    /// live router weights instead of always reporting "cannot determine".
+    /// JSON `{rmUSDC,rmPROTO,rmAGENT,rmRWA}` map, threaded to the dapp as
+    /// `VITE_VAULT_ADDRESSES`. Read from the manifests, never hand-typed.
     pub fn vault_address_map_json(&self) -> String {
         serde_json::json!({
-            "rmUSDC": format!("{:#x}", self.vault()),
-            "rmPROTO": format!("{:#x}", self.demo_protocol_vault()),
-            "rmAGENT": format!("{:#x}", self.demo_agent_vault()),
-            "rmRWA": format!("{:#x}", self.rwa_vault()),
+            "rmUSDC": self.topology.vaults.get("rmUSDC"),
+            "rmPROTO": self.topology.vaults.get("rmPROTO"),
+            "rmAGENT": self.topology.vaults.get("rmAGENT"),
+            "rmRWA": self.topology.vaults.get("rmRWA"),
         })
         .to_string()
     }
-    /// Router weight (bps) assigned to the primary vault after demo seeding.
-    /// The primary is the only router-eligible vault, so this is always
-    /// 10 000.
-    pub fn demo_weight_primary_bps(&self) -> u64 {
-        DEMO_WEIGHT_PRIMARY_BPS
+    /// The publish run behind this fixture (sheet, keystores, manifests).
+    pub fn published(&self) -> &publish::Published {
+        &self.published
     }
-
-    /// ETH/USD devnet stub pool address (issue #531). Deployed by
-    /// `DeployDemoUniswapV3Stubs.s.sol` via Arachnid CREATE2 factory.
-    /// Pre-committed address in `config/dex-pools.json::devnet.pools.eth-usd`.
-    pub fn stub_pool_eth_usd(&self) -> Address {
-        parse_addr(&self.demo_uniswap_v3_stubs.eth_usd)
+    /// The manifest directory the driver wrote.
+    pub fn manifest_dir(&self) -> &Path {
+        &self.published.manifest_dir
     }
-    /// wETH/USDC devnet stub pool address (issue #531).
-    pub fn stub_pool_weth_usdc(&self) -> Address {
-        parse_addr(&self.demo_uniswap_v3_stubs.weth_usdc)
-    }
-    /// cbBTC/USDC devnet stub pool address (issue #531).
-    pub fn stub_pool_cbbtc_usdc(&self) -> Address {
-        parse_addr(&self.demo_uniswap_v3_stubs.cbbtc_usdc)
-    }
-    /// wSOL/USDC devnet stub pool address (issue #531).
-    pub fn stub_pool_wsol_usdc(&self) -> Address {
-        parse_addr(&self.demo_uniswap_v3_stubs.wsol_usdc)
-    }
-    /// All four devnet stub pool addresses in `config/dex-pools.json` order:
-    /// [eth-usd, weth-usdc, cbbtc-usdc, wsol-usdc] (issue #531).
-    pub fn all_stub_pools(&self) -> [Address; 4] {
-        [
-            self.stub_pool_eth_usd(),
-            self.stub_pool_weth_usdc(),
-            self.stub_pool_cbbtc_usdc(),
-            self.stub_pool_wsol_usdc(),
-        ]
+    /// Run one governance row through the real Safe and the timelock. Returns the first tx hash.
+    pub fn govern(&self, row: &str, args: &[&str]) -> Result<String, HarnessError> {
+        let rows = self.published.govern(row, args)?;
+        Ok(rows.first().map(|r| r.tx_hash.clone()).unwrap_or_default())
     }
 
     /// Path to the fixture's private tempdir. Callers may write
@@ -2128,52 +1650,6 @@ impl Fixture {
         Ok(if high_nonzero { u128::MAX } else { low_val })
     }
 
-    /// `approve(spender, amount)` on `token` from `private_key_hex`, then poll
-    /// `allowance(owner, spender)` until the on-chain read reflects the
-    /// approved amount before returning.
-    ///
-    /// On the Geth devnet, `cast send` exits as soon as the approve tx mines,
-    /// but Geth's state-read can briefly race the state-update so an immediate
-    /// `eth_call`/`transferFrom` still sees the pre-approve (zero) allowance —
-    /// the same state-lag fixed for the registry harness in issue #1081 / PR
-    /// #1094. That surfaced here as an intermittent
-    /// `ERC20: transfer amount exceeds allowance` revert on the dependent
-    /// deposit. Polling the allowance read (>=5 attempts, 200ms apart) closes
-    /// that read-after-write window deterministically — a real race fix, not a
-    /// skip. Canonical doc: `docs/testing/geth-state-lag.md`.
-    fn approve_and_confirm(
-        &self,
-        private_key_hex: &str,
-        token: Address,
-        owner: Address,
-        spender: Address,
-        amount: u128,
-    ) -> Result<String, HarnessError> {
-        let spender_hex = format!("{spender:#x}");
-        let tx = self.cast_send(
-            private_key_hex,
-            token,
-            "approve(address,uint256)",
-            &[&spender_hex, &amount.to_string()],
-        )?;
-
-        const ATTEMPTS: u32 = 5;
-        const INTERVAL: Duration = Duration::from_millis(200);
-        for attempt in 0..ATTEMPTS {
-            let allowance = self.erc20_allowance(token, owner, spender)?;
-            if allowance >= amount {
-                return Ok(tx);
-            }
-            if attempt + 1 < ATTEMPTS {
-                thread::sleep(INTERVAL);
-            }
-        }
-        Err(HarnessError::other(format!(
-            "approve({spender_hex}, {amount}) on {token:#x} not visible to {owner:#x} after \
-             {ATTEMPTS} attempts ({INTERVAL:?} apart): Geth state-lag did not settle (tx={tx})"
-        )))
-    }
-
     /// Estimate gas for a `cast send` and return a 1.5x-buffered limit.
     ///
     /// A failing estimate means the transaction would revert on-chain (the node
@@ -2233,22 +1709,19 @@ impl Fixture {
         self.cast_send(PAUSER_PRIVATE_KEY_HEX, self.gateway(), "pause()", &[])
     }
 
-    /// Unpause the gateway. Unpause is ADMIN_ROLE-only.
+    /// Unpause the gateway through the real Safe and the timelock (govern row `unpause-gateway`).
     pub fn unpause_gateway(&self) -> Result<String, HarnessError> {
-        self.cast_send(DEPLOYER_PRIVATE_KEY_HEX, self.gateway(), "unpause()", &[])
+        self.govern("unpause-gateway", &[])
     }
 
-    /// Revoke the agent's `AGENT_ROLE`.
+    /// Revoke the agent's `AGENT_ROLE` through the real Safe and the timelock (govern row `revoke-agent`).
     pub fn revoke_agent(&self) -> Result<String, HarnessError> {
-        self.cast_send(
-            DEPLOYER_PRIVATE_KEY_HEX,
-            self.gateway(),
-            "revokeAgent(address)",
-            &[&format!("{:#x}", self.agent())],
-        )
+        let agent = format!("{:#x}", self.agent());
+        self.govern("revoke-agent", &["--agent", &agent])
     }
 
-    /// Re-grant the agent's `AGENT_ROLE` with the given policy caps.
+    /// Re-grant the agent's `AGENT_ROLE` with the given policy caps through the
+    /// real Safe and the timelock (govern row `authorize-agent`).
     pub fn reauthorize_agent(
         &self,
         max_per_payment: u128,
@@ -2256,27 +1729,18 @@ impl Fixture {
     ) -> Result<String, HarnessError> {
         let agent = format!("{:#x}", self.agent());
         let share_receiver = format!("{:#x}", self.share_receiver());
-        // allowedDestinations left empty ([]) for smoke-test: open policy
-        // allows any registered destination (vault or router).
-        let policy = format!(
-            "(true,18446744073709551615,{max_per_payment},{max_per_window},{share_receiver},[],0x0000000000000000000000000000000000000000,0,0,[])"
-        );
-        self.cast_send(
-            DEPLOYER_PRIVATE_KEY_HEX,
-            self.gateway(),
-            "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
-            &[&agent, &policy],
-        )
-    }
-
-    /// Assign `power` voting power to `voter` on the RouterGovernance contract.
-    /// Callable by the deployer, who holds ADMIN_ROLE on the governance contract.
-    pub fn set_voting_power(&self, voter: Address, power: u128) -> Result<String, HarnessError> {
-        self.cast_send(
-            DEPLOYER_PRIVATE_KEY_HEX,
-            self.governance(),
-            "setVotingPower(address,uint256)",
-            &[&format!("{voter:#x}"), &power.to_string()],
+        self.govern(
+            "authorize-agent",
+            &[
+                "--agent",
+                &agent,
+                "--max-per-payment",
+                &max_per_payment.to_string(),
+                "--max-per-window",
+                &max_per_window.to_string(),
+                "--share-receiver",
+                &share_receiver,
+            ],
         )
     }
 
@@ -2297,378 +1761,6 @@ impl Fixture {
             "transfer(address,uint256)",
             &[&format!("{recipient:#x}"), &amount.to_string()],
         )
-    }
-
-    /// Seed `count` deterministic simulated-depositor EOAs so that **all four**
-    /// PRD §11 vaults report non-zero `totalAssets` and real depositor share
-    /// balances the moment the dapp first loads (issues #465, #532, #563, #621).
-    ///
-    /// Each depositor performs two real on-chain deposits, both denominated in
-    /// `per_user_usdc`:
-    ///
-    /// 1. **Router deposit** — `PortfolioRouter.deposit(uint256,uint256[])`
-    ///    splits `per_user_usdc` across all four router-eligible vaults by the
-    ///    on-chain 8500/500/500/500 bps weight vector (issue #621): the primary
-    ///    `RobotMoneyVault` (§11.1, real Aave/Compound/Morpho adapters), `RwaVault` (§11.4,
-    ///    rmRWA, ADR-0006 §1 amended 2026-06-05), `ProtocolAssetVault` (§11.2,
-    ///    rmPROTO) and `AgentTokenVault` (§11.3, rmAGENT, issues #559/#560). The
-    ///    basket and RWA legs execute real USDC → token swaps through the demo
-    ///    swap routers (`DemoV3SwapRouter`, `DemoV4SwapRouter`, `DemoAerodromeRouter`),
-    ///    so every router-eligible vault ends boot with non-zero TVL. An empty
-    ///    `minSharesPerLeg` array skips per-leg slippage protection — acceptable
-    ///    for the seed against the demo stub pools.
-    ///
-    /// 2. **Direct RWA deposit** — `RwaVault.deposit(uint256,address)` deposits
-    ///    `per_user_usdc` straight into the §11.4 RWA vault as a belt-and-suspenders
-    ///    guarantee. While the router now funds rmRWA at 500 bps (issue #621), the
-    ///    direct deposit ensures the depositor holds rmRWA receipt shares and
-    ///    exercises the full Aerodrome/Chronicle deposit path end to end.
-    ///
-    /// Each depositor is therefore funded with `2 * per_user_usdc` USDC (one
-    /// budget per deposit path) plus a small ETH gas grant.
-    ///
-    /// Returns the list of `(depositor_address, router_deposit_tx_hash)` pairs,
-    /// ordered by depositor index. The keys are derived from
-    /// `keccak256("rm-demo-depositor-vN")` so the seed is reproducible across
-    /// runs and keys never collide with the harness EOAs (deployer / pauser /
-    /// agent / share-receiver / USDC holder).
-    ///
-    /// ## Why this is parallelised
-    ///
-    /// The smoke-test devnet is a real Geth+Lighthouse PoS chain with a 12s
-    /// slot time, and `cast send` blocks until its transaction is mined (one
-    /// confirmation). A naive serial seed of N depositors does `6N`
-    /// confirmation-bound transactions back to back — at four depositors that
-    /// is 24 block-waits (~5–8 min) on top of the multi-minute chain+dapp boot,
-    /// which pushed the `smoke-test-devnet` CI job (30-min budget) into a
-    /// timeout (issue #563). The work splits into two phases so the wall-clock
-    /// collapses to ~8 block-waits without changing the on-chain outcome:
-    ///
-    /// - **Funding phase** — ETH grants are signed by the shared DEPLOYER key
-    ///   and USDC grants by the shared HARNESS_USDC_HOLDER key. Same-key sends
-    ///   must stay serial (sequential nonces), but the two streams use
-    ///   *different* keys, so they run concurrently in two scoped threads.
-    /// - **Deposit phase** — each depositor's four deposit transactions
-    ///   (approve+deposit router, approve+deposit RWA) are signed by that
-    ///   depositor's unique key, so the per-depositor sequences are fully
-    ///   independent and run concurrently, one scoped thread per depositor.
-    ///   Transactions from distinct EOAs are mined together in the same block.
-    pub fn seed_demo_depositors(
-        &self,
-        count: u32,
-        per_user_usdc: u128,
-    ) -> Result<Vec<(Address, String)>, HarnessError> {
-        // Each depositor runs the router split plus a direct belt-and-suspenders
-        // deposit into ALL FOUR vaults (primary §11.1, Protocol §11.2, Agent
-        // §11.3, RWA §11.4). The router's weighted split can intermittently
-        // under-fund a vault on a busy chain — leaving it at zero TVL or leaving
-        // a depositor with no shares (issue #882) — so the direct deposits
-        // guarantee every vault has non-zero TVL and every depositor holds shares
-        // in each. Fund five per-path budgets (router + four direct deposits).
-        let total_usdc = per_user_usdc.saturating_mul(5);
-        let keys: Vec<(String, Address)> = (0..count).map(demo_depositor_key).collect();
-
-        // ── Funding phase ────────────────────────────────────────────────
-        // Fund all depositors with gas ETH (DEPLOYER key) and USDC (harness
-        // holder key) before any deposits. The two faucet streams use distinct
-        // shared keys, so they run concurrently; within each stream the sends
-        // stay serial to keep that key's nonce sequence well-ordered.
-        thread::scope(|s| -> Result<(), HarnessError> {
-            let eth = s.spawn(|| -> Result<(), HarnessError> {
-                for (_pk, depositor) in &keys {
-                    let depositor_hex = format!("{depositor:#x}");
-                    // 0.05 ETH comfortably covers two approves + two deposits
-                    // (the basket-vault swap legs are the costliest step).
-                    fund_eth_from_deployer(
-                        &self.nonce_tracker,
-                        &depositor_hex,
-                        "50000000000000000",
-                    )?;
-                }
-                Ok(())
-            });
-            let usdc = s.spawn(|| -> Result<(), HarnessError> {
-                for (_pk, depositor) in &keys {
-                    self.fund_usdc(*depositor, total_usdc)?;
-                }
-                Ok(())
-            });
-            eth.join()
-                .map_err(|_| HarnessError::other("eth-funding thread panicked"))??;
-            usdc.join()
-                .map_err(|_| HarnessError::other("usdc-funding thread panicked"))??;
-            Ok(())
-        })?;
-
-        // ── Deposit phase ────────────────────────────────────────────────
-        // Run each depositor's deposit sequence on its own scoped thread. The
-        // sequences are signed by distinct keys, so they neither share nonces
-        // nor depend on one another; the chain mines them in parallel.
-        // `primary_hex` is interpolated into the zero-shares error message
-        // below. Approve targets (router/vaults) are now passed to
-        // `approve_and_confirm` as typed `Address`es, so their hex forms are no
-        // longer materialised here.
-        let primary_hex = format!("{:#x}", self.vault());
-        let results = thread::scope(|s| -> Result<Vec<(Address, String)>, HarnessError> {
-            let handles: Vec<_> = keys
-                .iter()
-                .map(|(pk_hex, depositor)| {
-                    let primary_hex = &primary_hex;
-                    s.spawn(move || -> Result<(Address, String), HarnessError> {
-                        let depositor_hex = format!("{depositor:#x}");
-
-                        // Approve the router for the router-leg budget, then
-                        // deposit. The router splits the amount across the three
-                        // router-eligible vaults by the on-chain weight vector
-                        // and mints shares to the depositor (msg.sender). Empty
-                        // minSharesPerLeg skips slippage protection (demo stubs).
-                        self.approve_and_confirm(
-                            pk_hex,
-                            self.usdc(),
-                            *depositor,
-                            self.router(),
-                            per_user_usdc,
-                        )?;
-                        let router_tx = self.cast_send(
-                            pk_hex,
-                            self.router(),
-                            "deposit(uint256,uint256[])",
-                            &[&per_user_usdc.to_string(), "[]"],
-                        )?;
-
-                        // Direct deposit into the primary vault too. The router
-                        // leg already routes ~8500 bps here, but the router
-                        // deposit can intermittently leave a depositor with no
-                        // primary-vault shares on a busy chain (issue #882); a
-                        // direct deposit guarantees every depositor holds primary
-                        // shares. NOTE: the primary RobotMoneyVault on the Geth
-                        // devnet routes deposits through the real Aave/Compound/
-                        // Morpho strategy adapters (NOT a 1:1 no-yield adapter,
-                        // an earlier comment claimed that in error). That real-
-                        // adapter path can intermittently revert under load, which
-                        // — when swallowed — left the depositor with zero primary
-                        // shares (issue #904). We now assert the receipt status in
-                        // cast_send and re-read the post-deposit share balance so a
-                        // mis-minted deposit surfaces the true on-chain failure
-                        // here rather than as a downstream per-depositor flake.
-                        self.approve_and_confirm(
-                            pk_hex,
-                            self.usdc(),
-                            *depositor,
-                            self.vault(),
-                            per_user_usdc,
-                        )?;
-                        self.cast_send(
-                            pk_hex,
-                            self.vault(),
-                            "deposit(uint256,address)",
-                            &[&per_user_usdc.to_string(), &depositor_hex],
-                        )?;
-                        // ERC-4626 `deposit` mints shares to `depositor`; the
-                        // primary-share guarantee this seeding exists to provide
-                        // only holds if those shares actually landed. Verify a
-                        // non-zero primary-vault `balanceOf(depositor)` and fail
-                        // loudly (with the on-chain context) otherwise.
-                        let primary_shares = self.erc20_balance_of(self.vault(), *depositor)?;
-                        if primary_shares == 0 {
-                            return Err(HarnessError::other(format!(
-                                "primary-vault deposit minted no shares to depositor {depositor_hex}: \
-                                 balanceOf(vault={primary_hex}) == 0 after deposit(amount={per_user_usdc}). \
-                                 The primary vault's real-adapter routing likely reverted on the Geth devnet."
-                            )));
-                        }
-
-                        // Approve and deposit directly into the §11.4 RWA vault,
-                        // which is Active but not router-eligible. Shares go to
-                        // the depositor.
-                        self.approve_and_confirm(
-                            pk_hex,
-                            self.usdc(),
-                            *depositor,
-                            self.rwa_vault(),
-                            per_user_usdc,
-                        )?;
-                        self.cast_send(
-                            pk_hex,
-                            self.rwa_vault(),
-                            "deposit(uint256,address)",
-                            &[&per_user_usdc.to_string(), &depositor_hex],
-                        )?;
-
-                        // Direct belt-and-suspenders deposits into the two basket
-                        // vaults (Protocol §11.2, Agent §11.3). The router's
-                        // weighted split can under-fund a basket leg on a busy
-                        // chain (issue #882); a direct deposit guarantees non-zero
-                        // TVL. Each swaps USDC -> basket via the demo stub routers.
-                        self.approve_and_confirm(
-                            pk_hex,
-                            self.usdc(),
-                            *depositor,
-                            self.demo_protocol_vault(),
-                            per_user_usdc,
-                        )?;
-                        self.cast_send(
-                            pk_hex,
-                            self.demo_protocol_vault(),
-                            "deposit(uint256,address)",
-                            &[&per_user_usdc.to_string(), &depositor_hex],
-                        )?;
-                        self.approve_and_confirm(
-                            pk_hex,
-                            self.usdc(),
-                            *depositor,
-                            self.demo_agent_vault(),
-                            per_user_usdc,
-                        )?;
-                        self.cast_send(
-                            pk_hex,
-                            self.demo_agent_vault(),
-                            "deposit(uint256,address)",
-                            &[&per_user_usdc.to_string(), &depositor_hex],
-                        )?;
-
-                        Ok((*depositor, router_tx))
-                    })
-                })
-                .collect();
-
-            let mut out = Vec::with_capacity(handles.len());
-            for h in handles {
-                out.push(
-                    h.join()
-                        .map_err(|_| HarnessError::other("depositor-seed thread panicked"))??,
-                );
-            }
-            Ok(out)
-        })?;
-
-        Ok(results)
-    }
-
-    /// Fund `recipient` with `amount` RM tokens by signing a real
-    /// `transfer(address,uint256)` from [`HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`].
-    ///
-    /// The harness EOA holds the entire RmToken initial supply (minted at
-    /// deploy time by DeployRmToken.s.sol). The transfer is a vanilla ERC-20
-    /// call — no Anvil cheats, no impersonation. The signature is recoverable
-    /// and the `Transfer` event fires, matching production semantics (issue #365).
-    pub fn fund_rm_token(&self, recipient: Address, amount: u128) -> Result<String, HarnessError> {
-        self.cast_send(
-            HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
-            self.rm_token(),
-            "transfer(address,uint256)",
-            &[&format!("{recipient:#x}"), &amount.to_string()],
-        )
-    }
-
-    /// keccak256(abi.encodePacked(RECEIPT_ID_DOMAIN, sessionId, "\n",
-    /// subjectId)), mirroring `ConsensusRebalanceReceipt.computeReceiptId`
-    /// exactly (contracts/gateway/ConsensusRebalanceReceipt.sol). `abi.encodePacked`
-    /// on `string` params is a plain byte concatenation, so this is
-    /// reproducible off-chain without an RPC round trip.
-    fn compute_receipt_id(session_id: &str, subject_id: &str) -> [u8; 32] {
-        const RECEIPT_ID_DOMAIN: &str = "robotmoney:consensus-receipt-id:v1\n";
-        let mut buf =
-            Vec::with_capacity(RECEIPT_ID_DOMAIN.len() + session_id.len() + 1 + subject_id.len());
-        buf.extend_from_slice(RECEIPT_ID_DOMAIN.as_bytes());
-        buf.extend_from_slice(session_id.as_bytes());
-        buf.push(b'\n');
-        buf.extend_from_slice(subject_id.as_bytes());
-        keccak256(&buf).0
-    }
-
-    /// Seed two fixture consensus receipts (issue #1294) so the dapp e2e
-    /// spec can assert every rendered state distinctly:
-    ///
-    /// - `receipt-a.json`: submitted with its OWN correct digest and
-    ///   released — renders "Verified" and "Released", and its weights
-    ///   match the live 8 500/500/500/500 bps router split from
-    ///   `DeployDemoExtraVaults.s.sol::_applyFourVaultWeights` — renders
-    ///   "Applied".
-    /// - `receipt-b.json`: submitted with a deliberately WRONG digest and
-    ///   never released — renders "Unverified" and "Recorded, not
-    ///   released", and its weights deliberately do not match the live
-    ///   split — renders "Not applied".
-    ///
-    /// Both payload files are served by the `receipt-fixtures` compose
-    /// service (issue #1294) at [`RECEIPT_FIXTURES_PORT`] under the
-    /// hostname `receipt-fixtures` — reachable from the indexer container
-    /// via Docker's embedded DNS on the compose `default` network, and from
-    /// the Playwright browser via a `--host-resolver-rules` mapping of that
-    /// same hostname straight to 127.0.0.1 (see
-    /// `clients/dapp/playwright.config.ts`), which resolves to the SAME
-    /// published host port. One literal on-chain `payload_uri` string is
-    /// therefore fetchable, byte-identically, from both vantage points.
-    fn seed_consensus_receipts(&self) -> Result<(), HarnessError> {
-        let fixtures_dir = self
-            .repo_root
-            .join("testing/ethereum-testnet/config/consensus-receipt-fixtures");
-        let receipt_a_bytes = std::fs::read(fixtures_dir.join("receipt-a.json"))
-            .map_err(|e| HarnessError::other(format!("read receipt-a.json: {e}")))?;
-        // receipt-b.json is served byte-for-byte too, but its ON-CHAIN digest
-        // is deliberately wrong (below) — its own bytes are never hashed.
-
-        // Allowlist the agent EOA as a committee member: gateway.committeeRegister
-        // requires ADMIN_ROLE on the gateway (the deployer), and forwards to
-        // InvestmentCommitteePolicy.registerAgent, which the gateway may call
-        // because DeployInvestmentCommitteePolicy.s.sol already granted it the
-        // IC contract's ADMIN_ROLE.
-        let agent_hex = format!("{:#x}", self.agent());
-        self.cast_send(
-            DEPLOYER_PRIVATE_KEY_HEX,
-            self.gateway(),
-            "committeeRegister(address,string)",
-            &[&agent_hex, "smoke-test-receipt-agent"],
-        )?;
-
-        let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
-        let uri_a = format!("http://receipt-fixtures:{RECEIPT_FIXTURES_PORT}/receipt-a.json");
-        let uri_b = format!("http://receipt-fixtures:{RECEIPT_FIXTURES_PORT}/receipt-b.json");
-
-        let session_a = "smoke-test-fusion-1294-a";
-        let subject_a = "treasury-allocation";
-        let receipt_id_a = Self::compute_receipt_id(session_a, subject_a);
-        let digest_a = keccak256(&receipt_a_bytes).0;
-        self.cast_send(
-            &agent_pk_hex,
-            self.gateway(),
-            "consensusRecordReceipt(bytes32,bytes32,string)",
-            &[
-                &format!("0x{}", hex::encode(receipt_id_a)),
-                &format!("0x{}", hex::encode(digest_a)),
-                &uri_a,
-            ],
-        )?;
-        // Release receipt A — an admin signalling-only act (no funds move, no
-        // router weight changes). RECEIPT_ADMIN_ADDRESS defaults to the
-        // deployer for this devnet ceremony.
-        self.cast_send(
-            DEPLOYER_PRIVATE_KEY_HEX,
-            self.consensus_receipt(),
-            "releaseReceipt(bytes32)",
-            &[&format!("0x{}", hex::encode(receipt_id_a))],
-        )?;
-
-        let session_b = "smoke-test-fusion-1294-b";
-        let subject_b = "treasury-allocation";
-        let receipt_id_b = Self::compute_receipt_id(session_b, subject_b);
-        // Deliberately WRONG digest — receipt-b.json is valid JSON the
-        // browser can still render, but the indexer's re-fetched keccak256
-        // will never match this value, so `verified` stays false.
-        let digest_b = keccak256(b"smoke-test-wrong-digest-marker-for-1294").0;
-        self.cast_send(
-            &agent_pk_hex,
-            self.gateway(),
-            "consensusRecordReceipt(bytes32,bytes32,string)",
-            &[
-                &format!("0x{}", hex::encode(receipt_id_b)),
-                &format!("0x{}", hex::encode(digest_b)),
-                &uri_b,
-            ],
-        )?;
-        // Receipt B is deliberately left unreleased.
-
-        Ok(())
     }
 
     /// Fund `recipient` with `value_wei` native ETH by signing a plain value
@@ -2792,65 +1884,6 @@ fn derive_address(privkey: &[u8; 32]) -> Address {
     let pubkey = vk.to_encoded_point(false);
     let hash = keccak256(&pubkey.as_bytes()[1..]);
     Address::from_slice(&hash[12..])
-}
-
-/// Derive a deterministic harness EOA from an arbitrary domain-separated
-/// seed. Shared by [`demo_depositor_key`] and [`dapp_faucet_key`] so neither
-/// needs a hand-picked, hand-verified hex literal: the key is reproducible
-/// across runs and, by construction (domain-separated seed input), cannot
-/// collide with any other harness key. Returns `(0x-prefixed hex private
-/// key, derived address)`.
-fn derive_deterministic_key(seed: &[u8]) -> (String, Address) {
-    let mut pk = keccak256(seed).0;
-    // secp256k1 keys must be in (0, n-1); the chance of `keccak256 >= n` is
-    // ~2^-127. If it ever happens (or the all-zero edge case), perturb by
-    // hashing again. This loop is bounded; in practice it executes once.
-    loop {
-        if pk != [0u8; 32] {
-            // Try to construct a SigningKey to confirm validity.
-            use k256::ecdsa::SigningKey;
-            if SigningKey::from_bytes((&pk).into()).is_ok() {
-                let addr = derive_address(&pk);
-                return (format!("0x{}", hex::encode(pk)), addr);
-            }
-        }
-        pk = keccak256(pk).0;
-    }
-}
-
-/// Derive a deterministic simulated-depositor key for the demo seeding flow
-/// (issues #465, #503). Seed is `keccak256("rm-demo-depositor-v1\0" || index)`
-/// so the resulting key is reproducible across runs and cannot collide with the
-/// hand-picked harness keys (deployer/pauser/agent/share-receiver/USDC holder).
-/// Returns `(0x-prefixed hex private key, derived address)`.
-///
-/// Public so the `demo-seed-depositors` standalone binary can reuse the same
-/// key derivation without depending on the full [`Fixture`] struct (issue #503).
-pub fn demo_depositor_key(index: u32) -> (String, Address) {
-    let mut seed = Vec::with_capacity(64);
-    seed.extend_from_slice(b"rm-demo-depositor-v1\0");
-    seed.extend_from_slice(&index.to_be_bytes());
-    derive_deterministic_key(&seed)
-}
-
-/// Derive the dedicated dapp-faucet EOA (issue #1241).
-///
-/// `HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX` used to be both the key
-/// [`Fixture::fund_usdc`] signs seeding transactions with AND the key baked
-/// into the dapp bundle as `VITE_FAUCET_HARNESS_PRIVATE_KEY`. The dapp is
-/// live and health-checked *before* `seed_demo_depositors` runs, so a
-/// browser-triggered faucet drip during seeding was a genuinely concurrent
-/// sender sharing the harness's own nonce sequence for that key — a hazard
-/// no amount of nonce-pinning inside `cast_send` can fix, because the
-/// browser's `cast`-equivalent (viem) never goes through this harness at
-/// all. Giving the faucet its own EOA, funded once at boot (see
-/// `DappStack::boot`), removes the shared signer entirely.
-///
-/// Seed is `keccak256("rm-dapp-faucet-v1\0")`, following the same
-/// deterministic derivation as [`demo_depositor_key`] so this key also needs
-/// no hand-verified hex literal.
-pub fn dapp_faucet_key() -> (String, Address) {
-    derive_deterministic_key(b"rm-dapp-faucet-v1\0")
 }
 
 fn parse_addr(s: &str) -> Address {
@@ -3383,30 +2416,28 @@ fn parse_compose_ps_stdout(stdout: &[u8]) -> Result<Vec<String>, HarnessError> {
     Ok(running)
 }
 
-/// Fund the deployer EOA with USDC from HARNESS_USDC_HOLDER before the forge
-/// deploy runs. Deploy.s.sol `run()` executes a mandatory seed deposit of
-/// `SEED_DEPOSIT_AMOUNT` (1,000 USDC) from the broadcaster (issue #656), so
-/// the deployer must hold USDC *before* deployment — `Fixture::fund_usdc` is
-/// not available yet at that point in the boot sequence.
-fn fund_usdc_to_deployer(
+/// Fund `recipient_hex` with USDC from HARNESS_USDC_HOLDER (a real ERC-20
+/// transfer of the genesis grant). Used at boot, before a `Fixture` exists.
+fn fund_usdc_to(
     tracker: &NonceTracker,
+    recipient_hex: &str,
     amount_units: u128,
 ) -> Result<String, HarnessError> {
     logging::debug(
         "rpc",
         format!(
-            "eth_sendRawTransaction via cast send usdc transfer {amount_units} -> {DEPLOYER_ADDRESS_HEX}"
+            "eth_sendRawTransaction via cast send usdc transfer {amount_units} -> {recipient_hex}"
         ),
     );
     let amount_s = amount_units.to_string();
     let v = pinned_cast_send(
         tracker,
-        "fund deployer usdc",
+        "fund usdc",
         HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
         &[
             genesis_alloc::BASE_USDC_ADDR,
             "transfer(address,uint256)",
-            DEPLOYER_ADDRESS_HEX,
+            recipient_hex,
             &amount_s,
         ],
     )?;
@@ -3414,6 +2445,26 @@ fn fund_usdc_to_deployer(
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string())
+}
+
+/// keccak256 of the runtime code at `addr`, read with `cast code`.
+fn runtime_code_hash(rpc_url: &str, addr: &str) -> Result<String, HarnessError> {
+    let out = Command::new("cast")
+        .args(["code", addr, "--rpc-url", rpc_url])
+        .output()?;
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "cast code {addr} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let bytes = hex::decode(raw.trim_start_matches("0x"))
+        .map_err(|e| HarnessError::other(format!("cast code {addr} is not hex: {e}")))?;
+    if bytes.is_empty() {
+        return Err(HarnessError::other(format!("{addr} has no code")));
+    }
+    Ok(format!("0x{}", hex::encode(keccak256(&bytes).0)))
 }
 
 fn fund_eth_from_deployer(
@@ -3533,49 +2584,6 @@ fn pinned_cast_send(
     .inspect_err(|_| tracker.release_pin_if_unused(&from_hex, nonce))
 }
 
-fn run_forge_deploy_with_env(
-    repo_root: &Path,
-    rpc_url: &str,
-    dep_out: &Path,
-    agent_address_hex: &str,
-    pauser_address_hex: &str,
-    extra_env: &[(&str, &str)],
-) -> Result<(), HarnessError> {
-    let mut cmd = Command::new("forge");
-    cmd.args(["script", "contracts/script/Deploy.s.sol:Deploy"])
-        .args(["--rpc-url", rpc_url])
-        .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
-        .arg("--broadcast")
-        .arg("--slow")
-        .arg("-vvv")
-        .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
-        .env("PAUSER_ADDRESS", pauser_address_hex)
-        .env("AGENT_ADDRESS", agent_address_hex)
-        .env("SHARE_RECEIVER_ADDRESS", SHARE_RECEIVER_ADDRESS_HEX)
-        // Bind the gateway to the canonical Base USDC seeded into genesis
-        // (issue #255). Tells Deploy.s.sol to skip MockUSDC + the
-        // permissioned post-deploy mint. The harness funds the agent via
-        // `Fixture::fund_usdc` (real ERC-20 transfer from
-        // HARNESS_USDC_HOLDER) instead.
-        .env("USDC_ADDRESS", genesis_alloc::BASE_USDC_ADDR)
-        .env("DEPLOYMENT_OUT", dep_out)
-        .current_dir(repo_root);
-    for (k, v) in extra_env {
-        cmd.env(k, v);
-    }
-    let out = cmd.output()?;
-    logging::log_command_output("forge", &out);
-    if !out.status.success() {
-        return Err(HarnessError::DeployFailed(format!(
-            "forge script exited {:?}\nstdout:\n{}\nstderr:\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    Ok(())
-}
-
 /// Interpret a transaction receipt `status` word from `cast send --json`.
 ///
 /// Foundry emits the status as a hex quantity: `"0x1"` for a successful tx and
@@ -3687,408 +2695,6 @@ fn run_cast_send_retry(
         }
     }
     unreachable!("loop above always returns before exhausting max_attempts")
-}
-
-fn read_deployment(path: &Path) -> Result<DeploymentJson, HarnessError> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
-}
-
-/// Run the DeployVaultRegistry forge script (issue #294) and write the
-/// registry deployment JSON to `reg_out`. The deployer EOA (which holds
-/// `ADMIN_ROLE` on the newly-deployed registry) broadcasts via its private
-/// key, so `msg.sender` on `registerVault` is the admin — no `vm.prank` is
-/// needed inside the script's `run()` entrypoint.
-fn run_forge_deploy_registry(
-    repo_root: &Path,
-    rpc_url: &str,
-    reg_out: &Path,
-    vault_address: &str,
-    usdc_address: &str,
-) -> Result<(), HarnessError> {
-    let mut cmd = Command::new("forge");
-    cmd.args([
-        "script",
-        "contracts/script/DeployVaultRegistry.s.sol:DeployVaultRegistry",
-    ])
-    .args(["--rpc-url", rpc_url])
-    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
-    .arg("--broadcast")
-    .arg("--slow")
-    .arg("-vvv")
-    .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
-    .env("VAULT_ADDRESS", vault_address)
-    .env("USDC_ADDRESS", usdc_address)
-    .env("VAULT_NAME", "Robot Money USDC")
-    .env("DEPLOYMENT_OUT", reg_out)
-    .current_dir(repo_root);
-    let out = cmd.output()?;
-    logging::log_command_output("forge-registry", &out);
-    if !out.status.success() {
-        return Err(HarnessError::DeployFailed(format!(
-            "forge script DeployVaultRegistry exited {:?}\nstdout:\n{}\nstderr:\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    Ok(())
-}
-
-fn read_registry_deployment(path: &Path) -> Result<RegistryDeploymentJson, HarnessError> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
-}
-
-/// Run the DeployPortfolioRouter forge script (issue #303) and write the
-/// router deployment JSON to `router_out`. Sets initial weights to 10 000 bps
-/// (100%) pointing at RobotMoneyVault — the sole active vault at this phase.
-///
-/// `fork_block` pins the forge simulation to a specific chain head so that
-/// the simulation sees the `registerVault` tx from `run_forge_deploy_registry`
-/// regardless of Geth's "latest" propagation timing.
-fn run_forge_deploy_router(
-    repo_root: &Path,
-    rpc_url: &str,
-    fork_block: u64,
-    router_out: &Path,
-    registry_address: &str,
-    vault_address: &str,
-    usdc_address: &str,
-) -> Result<(), HarnessError> {
-    let mut cmd = Command::new("forge");
-    cmd.args([
-        "script",
-        "contracts/script/DeployPortfolioRouter.s.sol:DeployPortfolioRouter",
-    ])
-    .args(["--rpc-url", rpc_url])
-    .args(["--fork-block-number", &fork_block.to_string()])
-    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
-    .arg("--broadcast")
-    .arg("--slow")
-    .arg("-vvv")
-    .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
-    .env("REGISTRY_ADDRESS", registry_address)
-    .env("VAULT_ADDRESS", vault_address)
-    .env("USDC_ADDRESS", usdc_address)
-    .env("DEPLOYMENT_OUT", router_out)
-    .current_dir(repo_root);
-    let out = cmd.output()?;
-    logging::log_command_output("forge-router", &out);
-    if !out.status.success() {
-        return Err(HarnessError::DeployFailed(format!(
-            "forge script DeployPortfolioRouter exited {:?}\nstdout:\n{}\nstderr:\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    Ok(())
-}
-
-/// Query the chain head block number via `cast block-number`. Used to pin
-/// the forge simulation fork block after `run_forge_deploy_registry` so the
-/// router simulation sees the `registerVault` tx regardless of Geth's
-/// "latest" propagation timing.
-fn fetch_current_block_number(rpc_url: &str) -> Result<u64, HarnessError> {
-    let out = Command::new("cast")
-        .args(["block-number", "--rpc-url", rpc_url])
-        .output()?;
-    if !out.status.success() {
-        return Err(HarnessError::Other(format!(
-            "cast block-number failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    s.parse::<u64>().map_err(|e| {
-        HarnessError::Other(format!("cast block-number returned non-integer {s:?}: {e}"))
-    })
-}
-
-/// Poll the VaultRegistry until `vault` appears in `listVaults()`, so the
-/// PortfolioRouter deploy — whose simulation is pinned to the chain head right
-/// after — forks a block that already includes the `registerVault` tx. Avoids
-/// the intermittent `setRouterEligible -> NotRegistered()` race where Geth's
-/// "latest" lags the just-mined registration on a loaded CI runner (issue #880).
-/// This is an instance of the Geth read-after-write state-lag class; canonical
-/// doc: `docs/testing/geth-state-lag.md`.
-fn wait_for_vault_registered(
-    rpc_url: &str,
-    registry: &str,
-    vault: &str,
-) -> Result<(), HarnessError> {
-    let needle = vault.to_lowercase();
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let mut last = String::new();
-    while std::time::Instant::now() < deadline {
-        match Command::new("cast")
-            .args([
-                "call",
-                registry,
-                "listVaults()(address[])",
-                "--rpc-url",
-                rpc_url,
-            ])
-            .output()
-        {
-            Ok(out) if out.status.success() => {
-                last = String::from_utf8_lossy(&out.stdout).to_lowercase();
-                if last.contains(&needle) {
-                    return Ok(());
-                }
-            }
-            Ok(out) => last = String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            Err(e) => last = e.to_string(),
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    Err(HarnessError::Other(format!(
-        "vault {vault} not visible in registry {registry} listVaults() after 30s; last: {last}"
-    )))
-}
-
-fn read_router_deployment(path: &Path) -> Result<RouterDeploymentJson, HarnessError> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
-}
-
-/// Deploy RouterGovernance via forge script. The deployer holds ADMIN_ROLE.
-/// Voting power is assigned per-test via `setVotingPower` (issue #364).
-fn run_forge_deploy_governance(
-    repo_root: &Path,
-    rpc_url: &str,
-    governance_out: &Path,
-    router_address: &str,
-) -> Result<(), HarnessError> {
-    let mut cmd = Command::new("forge");
-    cmd.args([
-        "script",
-        "contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance",
-    ])
-    .args(["--rpc-url", rpc_url])
-    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
-    .arg("--broadcast")
-    .arg("--slow")
-    .arg("-vvv")
-    .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
-    .env("ROUTER_ADDRESS", router_address)
-    .env("DEPLOYMENT_OUT", governance_out)
-    .current_dir(repo_root);
-    let out = cmd.output()?;
-    logging::log_command_output("forge-governance", &out);
-    if !out.status.success() {
-        return Err(HarnessError::DeployFailed(format!(
-            "forge script DeployRouterGovernance exited {:?}\nstdout:\n{}\nstderr:\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    Ok(())
-}
-
-fn read_governance_deployment(path: &Path) -> Result<GovernanceDeploymentJson, HarnessError> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
-}
-
-/// Deploy the RmToken ERC-20 contract and write its address to `rm_token_out`
-/// (issue #365). The entire initial supply goes to `initial_holder` so that
-/// `Fixture::fund_rm_token` can drip RM without forge/Anvil cheats.
-fn run_forge_deploy_rm_token(
-    repo_root: &Path,
-    rpc_url: &str,
-    rm_token_out: &Path,
-    initial_holder: &str,
-) -> Result<(), HarnessError> {
-    let mut cmd = Command::new("forge");
-    cmd.args([
-        "script",
-        "contracts/script/DeployRmToken.s.sol:DeployRmToken",
-    ])
-    .args(["--rpc-url", rpc_url])
-    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
-    .arg("--broadcast")
-    .arg("--slow")
-    .arg("-vvv")
-    .env("INITIAL_HOLDER", initial_holder)
-    .env("DEPLOYMENT_OUT", rm_token_out)
-    .current_dir(repo_root);
-    let out = cmd.output()?;
-    logging::log_command_output("forge-rm-token", &out);
-    if !out.status.success() {
-        return Err(HarnessError::DeployFailed(format!(
-            "forge script DeployRmToken exited {:?}\nstdout:\n{}\nstderr:\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    Ok(())
-}
-
-fn read_rm_token_deployment(path: &Path) -> Result<RmTokenDeploymentJson, HarnessError> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
-}
-
-/// Deploy InvestmentCommitteePolicy + ConsensusRebalanceReceipt in one
-/// ceremony via `DeployInvestmentCommitteePolicy.s.sol` (issue #1247 AC10,
-/// issue #1294). `RECEIPT_ADMIN_ADDRESS` is left unset so the script
-/// defaults it to `ADMIN_ADDRESS` (the deployer) for this devnet ceremony —
-/// production deployments hold it with the TimelockController.
-fn run_forge_deploy_ic_policy(
-    repo_root: &Path,
-    rpc_url: &str,
-    ic_policy_out: &Path,
-    gateway_address: &str,
-) -> Result<(), HarnessError> {
-    let mut cmd = Command::new("forge");
-    cmd.args([
-        "script",
-        "contracts/script/DeployInvestmentCommitteePolicy.s.sol:DeployInvestmentCommitteePolicy",
-    ])
-    .args(["--rpc-url", rpc_url])
-    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
-    .arg("--broadcast")
-    .arg("--slow")
-    .arg("-vvv")
-    .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
-    .env("GATEWAY_ADDRESS", gateway_address)
-    .env("DEPLOYMENT_OUT", ic_policy_out)
-    .current_dir(repo_root);
-    let out = cmd.output()?;
-    logging::log_command_output("forge-ic-policy", &out);
-    if !out.status.success() {
-        return Err(HarnessError::DeployFailed(format!(
-            "forge script DeployInvestmentCommitteePolicy exited {:?}\nstdout:\n{}\nstderr:\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    Ok(())
-}
-
-fn read_ic_policy_deployment(path: &Path) -> Result<IcPolicyDeploymentJson, HarnessError> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
-}
-
-/// Deploy the PRD §11 demo vault catalog via `DeployDemoExtraVaults.s.sol`:
-/// ProtocolAssetVault (§11.2) seeded with wETH/cbBTC/wSOL stand-ins,
-/// AgentTokenVault (§11.3) seeded with the six MVP shortlist symbols, and an
-/// RWA/Thematic placeholder (§11.4) registered Paused. Resets the router
-/// weight vector to a single-leg pointing at the primary vault — the basket
-/// vaults stay router-ineligible per PRD §11.2/§11.3.
-fn run_forge_deploy_demo_extra_vaults(
-    repo_root: &Path,
-    rpc_url: &str,
-    out: &Path,
-    registry_address: &str,
-    router_address: &str,
-    primary_vault: &str,
-    usdc_address: &str,
-) -> Result<(), HarnessError> {
-    let mut cmd = Command::new("forge");
-    cmd.args([
-        "script",
-        "contracts/script/DeployDemoExtraVaults.s.sol:DeployDemoExtraVaults",
-    ])
-    .args(["--rpc-url", rpc_url])
-    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
-    .arg("--broadcast")
-    .arg("--slow")
-    .arg("-vvv")
-    .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
-    // EMERGENCY_RESPONDER_ADDRESS is required by DeployDemoExtraVaults after issue #506.
-    // For the devnet demo seed, use the same deployer address as the emergency responder
-    // (equal admin/emergency is explicitly allowed by the constructor).
-    .env("EMERGENCY_RESPONDER_ADDRESS", DEPLOYER_ADDRESS_HEX)
-    .env("REGISTRY_ADDRESS", registry_address)
-    .env("ROUTER_ADDRESS", router_address)
-    .env("PRIMARY_VAULT", primary_vault)
-    .env("USDC_ADDRESS", usdc_address)
-    .env("DEPLOYMENT_OUT", out)
-    .current_dir(repo_root);
-    let output = cmd.output()?;
-    logging::log_command_output("forge-demo-extra-vaults", &output);
-    if !output.status.success() {
-        return Err(HarnessError::DeployFailed(format!(
-            "forge script DeployDemoExtraVaults exited {:?}\nstdout:\n{}\nstderr:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    Ok(())
-}
-
-fn read_demo_extra_vaults_deployment(
-    path: &Path,
-) -> Result<DemoExtraVaultsDeploymentJson, HarnessError> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
-}
-
-/// Deploy the four `UniswapV3PoolSlot0Stub` contracts via the Arachnid
-/// CREATE2 factory (issue #531). The factory is pre-installed in the devnet
-/// genesis alloc (`genesis_alloc::ARACHNID_FACTORY_ADDR`). Each stub is
-/// deployed with a fixed salt producing the same address across devnet resets.
-/// These addresses are pre-committed in `config/dex-pools.json::devnet.pools`
-/// so the dapp Docker image is built with the correct pool addresses.
-fn run_forge_deploy_demo_uniswap_v3_stubs(
-    repo_root: &Path,
-    rpc_url: &str,
-    out: &Path,
-) -> Result<(), HarnessError> {
-    let mut cmd = Command::new("forge");
-    cmd.args([
-        "script",
-        "contracts/script/DeployDemoUniswapV3Stubs.s.sol:DeployDemoUniswapV3Stubs",
-    ])
-    .args(["--rpc-url", rpc_url])
-    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
-    .arg("--broadcast")
-    .arg("--slow")
-    .arg("-vvv")
-    .env("DEPLOYMENT_OUT", out)
-    .current_dir(repo_root);
-    let output = cmd.output()?;
-    logging::log_command_output("forge-uniswap-v3-stubs", &output);
-    if !output.status.success() {
-        return Err(HarnessError::DeployFailed(format!(
-            "forge script DeployDemoUniswapV3Stubs exited {:?}\nstdout:\n{}\nstderr:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    Ok(())
-}
-
-fn read_demo_uniswap_v3_stubs_deployment(
-    path: &Path,
-) -> Result<DemoUniswapV3StubsDeploymentJson, HarnessError> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
 }
 
 /// Walk up from the crate manifest dir until we find the repo root
@@ -4423,47 +3029,6 @@ impl DappStack {
         // without first booting the chain fixture.
         ensure_run_identity();
 
-        // Fund the dedicated dapp-faucet EOA (issue #1241) before the dapp
-        // container comes up, so the first browser-triggered faucet drip has
-        // USDC/RM/ETH to send. This key is distinct from
-        // `HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX` (see `dapp_faucet_key`),
-        // closing the concurrent-signer hazard where a live faucet drip and
-        // `Fixture::seed_demo_depositors`'s own holder-key sends could race
-        // on the same nonce — a hazard nonce-pinning inside `cast_send`
-        // cannot fix on its own, because a browser wallet signing via viem
-        // never goes through this harness's nonce tracker at all.
-        let (faucet_private_key_hex, faucet_address) = dapp_faucet_key();
-        const DAPP_FAUCET_ETH_WEI: &str = "500000000000000000"; // 0.5 ETH
-        const DAPP_FAUCET_USDC_RESERVE: u128 = 50_000 * 1_000_000; // 50k USDC, 6dp
-        const DAPP_FAUCET_RM_RESERVE: u128 = 50_000 * 1_000_000_000_000_000_000; // 50k RM, 18dp
-        fund_eth_from_deployer(
-            &fixture.nonce_tracker,
-            &format!("{faucet_address:#x}"),
-            DAPP_FAUCET_ETH_WEI,
-        )
-        .inspect_err(|err| {
-            logging::error(
-                "smoke-test",
-                format!("funding dapp-faucet EOA {faucet_address:#x} with ETH failed: {err}"),
-            );
-        })?;
-        fixture
-            .fund_usdc(faucet_address, DAPP_FAUCET_USDC_RESERVE)
-            .inspect_err(|err| {
-                logging::error(
-                    "smoke-test",
-                    format!("funding dapp-faucet EOA {faucet_address:#x} with USDC failed: {err}"),
-                );
-            })?;
-        fixture
-            .fund_rm_token(faucet_address, DAPP_FAUCET_RM_RESERVE)
-            .inspect_err(|err| {
-                logging::error(
-                    "smoke-test",
-                    format!("funding dapp-faucet EOA {faucet_address:#x} with RM failed: {err}"),
-                );
-            })?;
-
         let compose_dir = fixture.repo_root().join("testing/ethereum-testnet/config");
 
         // Proactively purge any stale dapp compose state (containers, networks,
@@ -4548,7 +3113,7 @@ impl DappStack {
             // main-page balances panel renders the RM row and the Faucet tab's
             // RM drip + balance reads point at the real ERC-20 contract
             // instead of falling back to the compose 0x0 default.
-            ("VITE_RM_TOKEN_ADDRESS", fixture.rm_token_hex().to_string()),
+            ("VITE_RM_TOKEN_ADDRESS", ZERO_ADDRESS_HEX.to_string()),
             // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
             // compute applied vs not-applied against live router weights.
             ("VITE_VAULT_ADDRESSES", fixture.vault_address_map_json()),
@@ -4565,7 +3130,7 @@ impl DappStack {
                 fixture.consensus_receipt_hex().to_string(),
             ),
             // Issue #1294: fixed port for the receipt-fixtures compose service
-            // (see Fixture::seed_consensus_receipts and RECEIPT_FIXTURES_PORT).
+            // (see RECEIPT_FIXTURES_PORT).
             ("RECEIPT_FIXTURES_PORT", RECEIPT_FIXTURES_PORT.to_string()),
             // Issue #775: indexer reaches Geth via the chain Docker network
             // (ethereum-testnet_default) using the service name, not via
@@ -4574,10 +3139,7 @@ impl DappStack {
             ("VITE_DEVNET_RPC_URL", "".to_string()),
             ("VITE_EXPLORER_API_URL", "".to_string()),
             ("VITE_DAPP_URL", "".to_string()),
-            (
-                "VITE_FAUCET_HARNESS_PRIVATE_KEY",
-                faucet_private_key_hex.clone(),
-            ),
+            ("VITE_FAUCET_HARNESS_PRIVATE_KEY", String::new()),
             ("INDEXER_CHAIN_ID", "918453".to_string()),
             ("INDEXER_CHAIN_NAME", "devnet".to_string()),
             ("EXPLORER_API_CHAIN_ID", "918453".to_string()),
@@ -4649,10 +3211,7 @@ impl DappStack {
             // main-page balances panel renders the RM row and the Faucet tab's
             // RM drip + balance reads point at the real ERC-20 contract
             // instead of falling back to the compose 0x0 default.
-            (
-                "VITE_RM_TOKEN_ADDRESS".into(),
-                fixture.rm_token_hex().to_string(),
-            ),
+            ("VITE_RM_TOKEN_ADDRESS".into(), ZERO_ADDRESS_HEX.into()),
             // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
             // compute applied vs not-applied against live router weights.
             (
@@ -4689,10 +3248,7 @@ impl DappStack {
                 vite_explorer_api_url.clone(),
             ),
             ("VITE_DAPP_URL".into(), vite_dapp_url.clone()),
-            (
-                "VITE_FAUCET_HARNESS_PRIVATE_KEY".into(),
-                faucet_private_key_hex.clone(),
-            ),
+            ("VITE_FAUCET_HARNESS_PRIVATE_KEY".into(), String::new()),
             ("INDEXER_CHAIN_ID".into(), "918453".into()),
             ("INDEXER_CHAIN_NAME".into(), "devnet".into()),
             ("EXPLORER_API_CHAIN_ID".into(), "918453".into()),
@@ -4725,7 +3281,7 @@ impl DappStack {
             // so the main-page balances panel renders the RM row and the RM
             // drip points at the real ERC-20 contract instead of the compose
             // 0x0 default.
-            .env("VITE_RM_TOKEN_ADDRESS", fixture.rm_token_hex())
+            .env("VITE_RM_TOKEN_ADDRESS", ZERO_ADDRESS_HEX)
             // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
             // compute applied vs not-applied against live router weights.
             .env("VITE_VAULT_ADDRESSES", fixture.vault_address_map_json())
@@ -4754,15 +3310,8 @@ impl DappStack {
             .env("VITE_DEVNET_RPC_URL", &vite_rpc_url)
             .env("VITE_EXPLORER_API_URL", &vite_explorer_api_url)
             .env("VITE_DAPP_URL", &vite_dapp_url)
-            // Issue #261 (superseded by issue #1241): thread the dedicated
-            // dapp-faucet key (`dapp_faucet_key`, funded at the top of
-            // `DappStack::boot`) through to the dapp build so the testnet
-            // Faucet tab + onboarding seed can drip USDC/RM/ETH via a real
-            // signed transfer. This is now a distinct EOA from
-            // `HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX` — a live browser drip
-            // during `Fixture::seed_demo_depositors` can no longer race the
-            // harness's own nonce sequence for the holder key.
-            .env("VITE_FAUCET_HARNESS_PRIVATE_KEY", &faucet_private_key_hex)
+            // The dapp faucet is not part of the one deployment scheme: no faucet key is baked in.
+            .env("VITE_FAUCET_HARNESS_PRIVATE_KEY", "")
             .env("INDEXER_CHAIN_ID", "918453")
             .env("INDEXER_CHAIN_NAME", "devnet")
             .env("EXPLORER_API_CHAIN_ID", "918453")
@@ -4869,80 +3418,6 @@ impl DappStack {
             );
             cleanup();
         })?;
-
-        // Seed demo depositors automatically so vault TVL is non-zero on
-        // first load. 4 depositors with 1000 USDC each gives a visible
-        // balance on all router-eligible vaults without requiring the
-        // operator to run `make demo-seed-depositors` manually (issue #532).
-        // The seeding uses the harness USDC holder key (no new secrets).
-        const DEMO_SEED_DEPOSITOR_COUNT: u32 = 4;
-        const DEMO_SEED_PER_USER_USDC: u128 = 1_000 * 1_000_000; // 1000 USDC (6dp)
-
-        // Surface the seeding phase on stderr. Readiness has already
-        // passed by this point, but every step below logs only to the
-        // log file, so without this banner the terminal sits on the
-        // "waiting for dapp containers to become ready..." line for the
-        // ~2-3 minutes seeding takes (one approve+deposit per depositor,
-        // each cast send waiting for a receipt) and looks frozen.
-        eprintln!(
-            "smoke-test: seeding {} demo depositors (this takes ~2-3 min; follow progress with `tail -f artifacts/smoke-test/smoke-test.log`)...",
-            DEMO_SEED_DEPOSITOR_COUNT,
-        );
-        logging::info(
-            "smoke-test",
-            format!(
-                "seeding {} demo depositors ({} USDC each) so vault TVL is non-zero on first load",
-                DEMO_SEED_DEPOSITOR_COUNT,
-                DEMO_SEED_PER_USER_USDC / 1_000_000,
-            ),
-        );
-        fixture
-            .seed_demo_depositors(DEMO_SEED_DEPOSITOR_COUNT, DEMO_SEED_PER_USER_USDC)
-            .inspect_err(|err| {
-                logging::error(
-                    "smoke-test",
-                    format!("demo depositor seeding failed: {err}"),
-                );
-                log_compose_state(
-                    &compose_dir,
-                    &dapp_compose_files,
-                    &dapp_log_env,
-                    "dapp-compose",
-                    "demo depositor seeding failure",
-                    200,
-                );
-                cleanup();
-            })?;
-
-        // Fund the deployer (admin EOA) with USDC so the 3 Playwright e2e
-        // specs (vault-deposit-withdraw, router-deposit, multi-vault-withdrawal)
-        // can run without their own bespoke fundUsdc() calls (issue #603).
-        const ADMIN_SEED_USDC: u128 = 100_000_000; // 100 USDC (6dp)
-        let admin_addr: Address = DEPLOYER_ADDRESS_HEX
-            .parse()
-            .expect("valid deployer address");
-        fixture
-            .fund_usdc(admin_addr, ADMIN_SEED_USDC)
-            .inspect_err(|err| {
-                logging::error("smoke-test", format!("admin USDC seeding failed: {err}"));
-                cleanup();
-            })?;
-        logging::info(
-            "smoke-test",
-            format!("seeded admin EOA with {ADMIN_SEED_USDC} USDC (6dp)"),
-        );
-
-        eprintln!(
-            "smoke-test: demo depositor seeding complete ({} depositors)",
-            DEMO_SEED_DEPOSITOR_COUNT,
-        );
-        logging::info(
-            "smoke-test",
-            format!(
-                "demo depositor seeding complete ({} depositors)",
-                DEMO_SEED_DEPOSITOR_COUNT,
-            ),
-        );
 
         Ok(DappStack {
             compose_dir,
@@ -5470,41 +3945,6 @@ ccc333\t\teth-beacon
     #[test]
     fn parse_hex_rpc_result_rejects_non_hex_payload() {
         assert!(parse_hex_rpc_result(b"not-hex", "test").is_err());
-    }
-
-    #[test]
-    fn dapp_faucet_key_is_distinct_from_every_other_harness_key() {
-        // issue #1241 AC: the dapp faucet must sign from an EOA distinct
-        // from the harness USDC holder (and, defensively, every other
-        // hand-picked harness key and the deterministic depositor keys).
-        let (_priv, faucet_addr) = dapp_faucet_key();
-        assert_ne!(
-            format!("{faucet_addr:#x}"),
-            HARNESS_USDC_HOLDER_ADDRESS_HEX.to_lowercase()
-        );
-        assert_ne!(
-            format!("{faucet_addr:#x}"),
-            DEPLOYER_ADDRESS_HEX.to_lowercase()
-        );
-        assert_ne!(
-            format!("{faucet_addr:#x}"),
-            PAUSER_ADDRESS_HEX.to_lowercase()
-        );
-        assert_ne!(
-            format!("{faucet_addr:#x}"),
-            SHARE_RECEIVER_ADDRESS_HEX.to_lowercase()
-        );
-        for i in 0..8 {
-            let (_priv, depositor_addr) = demo_depositor_key(i);
-            assert_ne!(faucet_addr, depositor_addr);
-        }
-    }
-
-    #[test]
-    fn dapp_faucet_key_is_deterministic_across_calls() {
-        // Reproducible across process restarts, matching the deterministic
-        // derivation contract of `demo_depositor_key`.
-        assert_eq!(dapp_faucet_key(), dapp_faucet_key());
     }
 
     // -- issue #1374: the funding-path nonce race ------------------------

@@ -166,12 +166,10 @@ jobs:
   # (suite ~38m -> ~18m). fail-fast: false keeps every binary's signal independent.
   #   - cli_meta:            boots `smoke-test --full-stack`, asserts summary + Ctrl-C teardown
   #   - fixture_meta:        boots devnet, deploys contracts, asserts RPC + block production
-  #   - demo_seeding:        boots the four-vault catalog and asserts all four vaults seed
-  #   - full_stack_demo_tvl: boots full compose stack, asserts all four PRD §11 vaults report non-zero TVL
-  #   - faucet_eth:          native Base ETH faucet drip round-trip (issue #466)
-  #   - faucet_rm:           RM token faucet drip round-trip (issue #365)
+  #   (demo_seeding, full_stack_demo_tvl, faucet_eth and faucet_rm were deleted in core 1488 with demo seeding
+  #   and the dapp faucet funding: the one deployment scheme has no demo-only code.)
   #   - fund_usdc:           real-signed-transfer assertions incl. the Geth-not-Anvil check (issue #255 step 7)
-  #   - governance:          RouterGovernance deploy + setVotingPower round-trip (issue #364)
+  #   - governance:          the deployer holds no voting power or admin; the timelock is admin (core 1488)
   #
   # faucet_eth/faucet_rm/fund_usdc/governance were folded in by issue #1311: each
   # only adds a Fixture boot (already paid by every other row) plus a handful of
@@ -227,10 +225,6 @@ jobs:
           [
             cli_meta,
             fixture_meta,
-            demo_seeding,
-            full_stack_demo_tvl,
-            faucet_eth,
-            faucet_rm,
             fund_usdc,
             governance,
           ]
@@ -242,6 +236,23 @@ jobs:
         uses: ./.github/actions/apply-fresh-snapshot
         with:
           enabled: ${{ inputs.fresh_snapshot == true }}
+
+      # The harness calls the one runbook, "publish contracts" (devops, Bun TypeScript).
+      # Same devops SHA as every other run; the Twin chain arguments are the only difference.
+      - name: Check out devops (publish contracts)
+        uses: actions/checkout@v4
+        with:
+          repository: robotmoney/devops
+          ref: ${{ vars.DEVOPS_PUBLISH_REF || 'main' }}
+          token: ${{ secrets.DEVOPS_READ_TOKEN }}
+          path: devops
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install publish-contracts dependencies
+        working-directory: devops/publish-contracts
+        run: bun install --frozen-lockfile
 
       - name: Verify Docker is available
         run: |
@@ -304,6 +315,8 @@ jobs:
         working-directory: testing/smoke-test
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-${{ matrix.binary }}.log
+          PUBLISH_CONTRACTS_DIR: ${{ github.workspace }}/devops/publish-contracts
+          STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
         run: >-
           bash ../../.github/scripts/cargo_test_require_executed.sh
           -p smoke-test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture

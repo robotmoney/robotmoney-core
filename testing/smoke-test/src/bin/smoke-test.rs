@@ -282,14 +282,33 @@ fn run() -> i32 {
         println!("vault_addr={:#x}", fixture.vault());
         println!("usdc_addr={:#x}", fixture.usdc());
         println!("agent_addr={:#x}", fixture.agent());
-        println!("admin_addr={}", smoke_test::DEPLOYER_ADDRESS_HEX);
+        // The deployer is a fresh rehearsal keystore. After handover it holds
+        // nothing: the Safe and the timelock are the admin.
+        println!(
+            "deployer_addr={}",
+            fixture
+                .published()
+                .keys
+                .address("ADMIN_ADDRESS")
+                .unwrap_or("unknown")
+        );
+        println!("safe_addr={:#x}", fixture.safe());
+        println!("timelock_addr={:#x}", fixture.timelock());
+        println!("manifest_dir={}", fixture.manifest_dir().display());
+        println!("sheet_path={}", fixture.published().sheet_path.display());
+        // Paths only, never secrets: the keystore directory and the 0600 passphrase file.
+        println!("key_dir={}", fixture.published().keys.key_dir.display());
+        println!(
+            "password_file={}",
+            fixture.published().keys.password_file.display()
+        );
+        println!("core_sha={}", fixture.published().cfg.core_sha);
         println!("pauser_addr={}", smoke_test::PAUSER_ADDRESS_HEX);
         println!(
             "share_receiver_addr={}",
             smoke_test::SHARE_RECEIVER_ADDRESS_HEX
         );
         if cli.print_test_keys {
-            println!("admin_private_key={}", smoke_test::DEPLOYER_PRIVATE_KEY_HEX);
             println!("pauser_private_key={}", smoke_test::PAUSER_PRIVATE_KEY_HEX);
             println!(
                 "agent_private_key=0x{}",
@@ -305,7 +324,6 @@ fn run() -> i32 {
         // fresh-account drip-ETH-then-RM-then-vote E2E spec can locate
         // RouterGovernance and RmToken without hard-coding them.
         println!("governance_addr={:#x}", fixture.governance());
-        println!("rm_token_addr={:#x}", fixture.rm_token());
         // Issue #1294: surface the IC policy + consensus receipt addresses so
         // the dapp e2e consensus-receipts spec can locate them without
         // hard-coding devnet addresses.

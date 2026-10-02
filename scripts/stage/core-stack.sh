@@ -1,73 +1,78 @@
 #!/usr/bin/env bash
-# One verb per stage-deployment job for the core stack (chain 918453).
+# One verb per stage job for the core stack on the Twin chain (918453).
 #
-# A thin, stable surface over deploy-core-stack.sh and fusion-ceremony.sh, so a
-# caller (the devops runbooks, an operator at a terminal) names WHAT it wants
-# and this repo owns HOW. Every mutating verb is safe to repeat, and every one
-# has a read-only partner that says whether its goal already holds — that pair
-# is exactly a runbook step's `run` and `check`. Nothing here re-implements
-# what the wrapped scripts do.
+# This script only wraps BOOT and HEALTH. It deploys nothing and governs
+# nothing itself. Stage runs the same runbook as mainnet, "publish contracts"
+# (devops, Bun TypeScript), with the Twin chain arguments:
+#
+#   --chain 918453 --rpc <twin rpc> --sheet <stage sheet> --signer keystore \
+#   --environment stage --core-sha <sha>
+#
+# The smoke harness (`cargo run -p smoke-test -- --full-stack`) boots the Twin
+# chain, funds fresh rehearsal keystores and calls publish contracts. A fresh
+# keystore set is minted on every boot, so a redeploy from a new SHA never
+# reuses a deployer. The deploy, the real Safe handover, the verifier and the
+# stage 13 govern matrix all run through publish contracts and the Safe SDK
+# tool. Voting power, quorum, agent registration and weights are govern rows
+# executed through the real Safe and the timelock, never set by a deployer.
 #
 # Usage (run from the repo root on the stage host):
 #   core-stack.sh chain up        [--ref REF] [--timeout SECS] [--out-dir DIR]
 #   core-stack.sh chain down      [--out-dir DIR]
 #   core-stack.sh chain status    [--ref REF] [--out-dir DIR]
+#   core-stack.sh publish args    [--out-dir DIR]              # print the argument list
+#   core-stack.sh publish run     [--out-dir DIR]              # publish contracts, resumes
 #   core-stack.sh governance preflight [--out-dir DIR]
-#   core-stack.sh governance ensure    [--out-dir DIR]
-#   core-stack.sh governance verify    [--record FILE] [--out-dir DIR]
-#   core-stack.sh dapp up         [--out-dir DIR]
+#   core-stack.sh governance ensure    [--out-dir DIR]         # publish contracts govern
+#   core-stack.sh governance verify    [--out-dir DIR]         # publish contracts verify
+#   core-stack.sh governance release --receipt-id ID [--out-dir DIR]
 #   core-stack.sh dapp status
 #   core-stack.sh rmpc check
+#   core-stack.sh record write    [--record FILE] [--out-dir DIR]
 #   core-stack.sh record show     [--record FILE] [--out-dir DIR] [--path]
+#
+# Needed in the environment for chain up and the publish/governance verbs:
+#   PUBLISH_CONTRACTS_DIR  the devops publish-contracts directory (src/cli.ts)
+#   STAGE_SHEET            the stage sheet: parameter lines only
 #
 # --ref resolves branch (origin/REF) -> tag -> commit. With no --ref, or
 # --ref HEAD, the candidate is this checkout's own HEAD.
 #
 # Verbs:
-#   chain up      boot the full-stack devnet (`deploy-core-stack.sh smoke`, which
-#                 always rebuilds rmpc from this checkout first), detached in its
-#                 own process group, and wait for its endpoint summary. The
-#                 harness boots from the checkout, so --ref must resolve to HEAD
-#                 (exit 65 otherwise). A no-op when `chain status` already passes.
-#                 Refuses (exit 66) while an earlier harness is still alive:
-#                 `chain down` first. Once the summary is out and the live stack
-#                 checks out, it writes the boot stamp `chain status` requires.
-#   chain down    clear the boot stamp, then `deploy-core-stack.sh down`: stop the
-#                 harness's process group (SIGINT, then SIGTERM) and the dapp
-#                 stack. A no-op against a stack that is already down.
+#   chain up      rebuild rmpc from this checkout, then boot the full-stack
+#                 harness, detached in its own process group, and wait for its
+#                 endpoint summary. The summary prints only after publish
+#                 contracts finished inside the harness. The harness boots from
+#                 the checkout, so --ref must resolve to HEAD (exit 65
+#                 otherwise). A no-op when `chain status` already passes.
+#                 Refuses (exit 66) while an earlier harness is still alive.
+#   chain down    clear the boot stamp, stop the harness's process group
+#                 (SIGINT, then SIGTERM) and the dapp stack.
 #   chain status  the chain answers 918453, a container of the harness's
 #                 robotmoney-dapp compose project is healthy, target/debug/rmpc
-#                 was built from --ref, and the boot stamp names that same commit
-#                 and a harness that is still running. Live state only; never a
-#                 log file. rmpc's build-info alone is not enough: `dapp up` and
-#                 a failed `chain up` both rebuild rmpc without booting a chain.
-#   governance preflight  the booted chain is one `governance ensure` can
-#                 provision on: summary complete, chain id 918453, the canonical
-#                 Safe v1.4.1 set present, every summary contract has code, no
-#                 receipt fixtures, the deployer key derives the summary's admin
-#                 and still holds gateway ADMIN_ROLE, no Safe was ever created on
-#                 this chain, quorum readable. Each mirrors a refusal in
-#                 fusion-ceremony.sh `run`/`ensure`, named in advance.
-#   governance ensure     `fusion-ceremony.sh ensure`: provision the Safe, the
-#                 TimelockController and the ceremony keys only when the record
-#                 on disk is not live on this chain; then verify. A used chain
-#                 whose ceremony cannot be driven any more exits 65 (from the
-#                 ceremony): reboot it with `chain down` + `chain up`.
-#   governance verify     `fusion-ceremony.sh verify --record`: the on-chain
-#                 governance topology, read from the chain, not the record. Its
-#                 Safe quorum controls sign with the owner keystores, so it fails
-#                 once they are discarded. On failure it adds one classed line.
-#   dapp up       `deploy-core-stack.sh up`: the pinned-image dapp stack from
-#                 the record. Not needed after `chain up`, whose --full-stack
-#                 harness already runs the dapp; kept for the prebuilt path. It
-#                 rebuilds rmpc from this checkout, so it refuses (exit 65) unless
-#                 the running chain was booted by `chain up` from this same HEAD.
+#                 was built from --ref, and the boot stamp names that same
+#                 commit and a harness that is still running. Live state only.
+#   publish args  print the publish contracts argument list for this boot.
+#   publish run   publish contracts `publish` against the booted chain with the
+#                 harness's sheet and keystores. The driver adopts what exists
+#                 and skips finished stages.
+#   governance preflight  the booted chain is one publish contracts can drive:
+#                 summary complete, chain id 918453, the canonical Safe v1.4.1
+#                 set present, four vault manifests, the Safe and the timelock
+#                 have code, the keystore directory exists.
+#   governance ensure   publish contracts `govern`: the stage 13 matrix through
+#                 the real Safe and the timelock. Every row prints a tx hash and
+#                 receipt status; any row without status 1 fails this verb.
+#   governance verify   publish contracts `verify`: the one verifier.
+#   governance release  one govern row, `release-receipt`, for a recorded
+#                 consensus receipt.
 #   dapp status   rpc, explorer-api /health and the dapp answer, once.
-#   rmpc check    both signing binaries rebuild_rmpc builds are present, and
-#                 answer the exit-code contract downstream steps rely on.
-#   record show   print the live ceremony record (or --path: its path) after
-#                 checking every field the cross-repo contract names has the
-#                 shape that contract gives it.
+#   rmpc check    both signing binaries are present and answer the exit-code
+#                 contract downstream steps rely on.
+#   record write  derive the cross-repo record from the manifests, the sheet and
+#                 the chain. Nothing in it is typed by hand.
+#   record show   print the record after checking every field the cross-repo
+#                 contract names has the shape that contract gives it.
 #
 # Output: results on stdout, progress on stderr. A read-only verb that fails
 # prints one line `<class>: <detail>` on stdout, so a caller can tell WHICH
@@ -75,59 +80,54 @@
 #
 # Exit codes: 0 ok / satisfied; 1 not satisfied (a status/check verb's honest
 # "no"); 3 required tool missing; 64 usage; 65 bad input (record, summary, ref);
-# 66 an action failed. Codes from the wrapped scripts pass through unchanged.
+# 66 an action failed. Codes from publish contracts pass through unchanged.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 cd "$REPO_ROOT"
 
-DEPLOY="$HERE/deploy-core-stack.sh"
-CEREMONY="$HERE/fusion-ceremony.sh"
 RMPC="$REPO_ROOT/target/debug/rmpc"
 RMPC_IMPORT="$REPO_ROOT/target/debug/rmpc-keystore-import"
 CAST="${CAST:-cast}"
+BUN="${BUN:-bun}"
 
 OUT_DIR="/opt/fusion-stage"
 RPC_URL="http://127.0.0.1:18545"
 CHAIN_ID="918453"
 CHAIN_ID_HEX="0xe03b5"
+ENVIRONMENT="stage"
 REF=""
 RECORD=""
-TIMEOUT_SECS=1800               # the harness's own worst case; callers add headroom
+RECEIPT_ID=""
+TIMEOUT_SECS=3600               # boot plus a full publish contracts run
 PATH_ONLY=0
-# Internal, undocumented in the usage banner: `record show --list-required-fields`
-# is the schema-drift guard's only consumer (see RECORD_REQUIRED_FIELDS below).
+# Internal: `record show --list-required-fields` is the schema-drift guard's
+# only consumer (see RECORD_REQUIRED_FIELDS below).
 LIST_REQUIRED_FIELDS=0
 # Seconds between readiness polls while `chain up` waits. Overridable so the
 # offline self-test does not spend minutes sleeping.
 POLL_SECS="${CORE_STACK_POLL_SECS:-3}"
 
-# The harness's dapp stack: its compose project (docker-compose.dapp.yaml
-# `name:`) and the run-identity label every one of its services carries. Only
-# these count as "the harness's containers"; anything else on the host does not.
+# The harness's dapp stack: its compose project and the run-identity label every
+# one of its services carries.
 DAPP_PROJECT="robotmoney-dapp"
 TESTNET_LABEL="com.robotmoney.testnet=1"
+DAPP_COMPOSE="$REPO_ROOT/testing/ethereum-testnet/config/docker-compose.dapp.yaml"
 
-# Canonical Safe v1.4.1, mirrored from fusion-ceremony.sh (require_safe_set,
-# used_chain_evidence). The ceremony refuses a chain without them, and a chain
-# whose factory has already created a Safe.
+# Canonical Safe v1.4.1 on the Twin chain: publish contracts needs all three.
 SAFE_L2_SINGLETON="0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"
 SAFE_PROXY_FACTORY="0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"
 SAFE_FALLBACK_HANDLER="0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99"
-PROXY_CREATION_SIG='ProxyCreation(address,address)'
 
-# root's non-login shell on the stage host resolves neither cargo nor cast.
-# Prepended here, once, so no caller has to carry a PATH workaround of its own.
-export PATH="$HOME/.cargo/bin:$HOME/.foundry/bin:$PATH"
+# root's non-login shell on the stage host resolves neither cargo, cast nor bun.
+export PATH="$HOME/.cargo/bin:$HOME/.foundry/bin:$HOME/.bun/bin:$PATH"
 
 usage() { awk 'NR > 1 { if (!/^#/) exit; print }' "$0" >&2; exit 64; }
 info() { echo "==> [core-stack] $*" >&2; }
 fail() { echo "FAIL: [core-stack] $1" >&2; exit "${2:-66}"; }
 # A read-only verb's "no": one classed line on stdout, exit 1.
 unsatisfied() { echo "$1: $2"; exit 1; }
-# A flag that takes a value must have one: `--ref` as the last word is a usage
-# error, not an unbound-variable crash.
 value_of() { [[ $# -ge 2 && -n "$2" ]] || { echo "$1 needs a value" >&2; usage; }; }
 
 NOUN="${1:-}"; [[ $# -gt 0 ]] && shift
@@ -138,6 +138,7 @@ while (( $# )); do
     --record) value_of "$@"; RECORD="$2"; shift 2 ;;
     --out-dir) value_of "$@"; OUT_DIR="$2"; shift 2 ;;
     --timeout) value_of "$@"; TIMEOUT_SECS="$2"; shift 2 ;;
+    --receipt-id) value_of "$@"; RECEIPT_ID="$2"; shift 2 ;;
     --path) PATH_ONLY=1; shift ;;
     --list-required-fields) LIST_REQUIRED_FIELDS=1; shift ;;
     -h|--help) usage ;;
@@ -151,18 +152,16 @@ SUMMARY="$OUT_DIR/core-smoke.log"
 # "PID START": the harness pid and its start time (/proc/PID/stat field 22), so
 # a pid the kernel has since handed to another process is never mistaken for it.
 PID_FILE="$OUT_DIR/core-smoke.pid"
-# Written by `chain up` only after the booted stack checked out; `chain status`
-# passes only while it names the candidate and a harness that is still running.
+# Written by `chain up` only after the booted stack checked out.
 STAMP="$OUT_DIR/core-stack.stamp"
 LOCK="$OUT_DIR/.core-stack.lock"
 RECORD="${RECORD:-$OUT_DIR/fusion-stage-record.json}"
 
 need() { command -v "$1" >/dev/null 2>&1 || fail "required tool '$1' not on PATH" 3; }
+need_env() { [[ -n "${!1:-}" ]] || fail "$1 is not set: $2" 65; }
 
 # The candidate commit. No --ref (or HEAD) is this checkout's HEAD, never
-# origin/HEAD. Otherwise branch -> tag -> raw commit, the same three-way order
-# the devops pin step checks out with, so a branch target (dev) resolves here
-# exactly as it did there.
+# origin/HEAD. Otherwise branch -> tag -> raw commit.
 candidate_commit() {
   if [[ -z "$REF" || "$REF" == HEAD ]]; then
     git rev-parse --verify --quiet 'HEAD^{commit}' || true
@@ -181,9 +180,7 @@ rpc_chain_id() {
     | jq -r '.result // empty' 2>/dev/null || true
 }
 
-# /proc/PID/stat field 22 (start time, in clock ticks since boot) of a live
-# process; a zombie counts as gone. The comm field may hold spaces and
-# parentheses, so fields are counted after its last ')'.
+# /proc/PID/stat field 22 (start time) of a live process; a zombie counts as gone.
 proc_start_time() {
   local stat
   stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
@@ -192,8 +189,7 @@ proc_start_time() {
   awk '{ print $20 }' <<<"$stat"
 }
 
-# Prints the pid of the live harness the pid file names, or returns 1. A pid
-# file whose start time no longer matches names a recycled pid, not the harness.
+# Prints the pid of the live harness the pid file names, or returns 1.
 harness_pid() {
   local pid="" start="" rest="" now
   [[ -f "$PID_FILE" ]] || return 1
@@ -203,26 +199,58 @@ harness_pid() {
   if [[ -n "$start" ]]; then
     [[ "$now" == "$start" ]] || return 1
   else
-    # A bare pid (written by a launcher that predates the start time): only
-    # while that process is still the smoke harness.
-    tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -Eq 'deploy-core-stack\.sh smoke|smoke-test' || return 1
+    tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -Eq 'smoke-test' || return 1
   fi
   echo "$pid"
 }
 
-# One writer at a time per out dir: two `chain up`s would boot two harnesses on
-# the same ports, and a `down` racing an `up` removes the pid file mid-write.
+# One writer at a time per out dir.
 take_lock() {
   need flock
   mkdir -p "$OUT_DIR"
   exec 9>"$LOCK"
-  flock -n 9 || fail "another chain up / chain down / dapp up holds $LOCK; wait for it, or stop it first" 66
+  flock -n 9 || fail "another chain up / chain down holds $LOCK; wait for it, or stop it first" 66
+}
+
+# key=value lines from the harness summary; the last one wins.
+summary_value() { awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); v = $0 } END { print v }' "$SUMMARY" 2>/dev/null; }
+
+# ─── publish contracts: the one runbook ──────────────────────────────────────
+# The argument list is the same on every target. Only the values differ.
+publish_args() { # publish_args VERB
+  local sha
+  sha="$(candidate_commit)"
+  [[ -n "$sha" ]] || fail "cannot resolve the candidate commit" 65
+  printf '%s\n' "$1" --chain "$CHAIN_ID" --rpc "$RPC_URL" --sheet "$(summary_value sheet_path)" \
+    --signer keystore --environment "$ENVIRONMENT" --core-sha "$sha"
+}
+
+publish_contracts() { # publish_contracts VERB [extra args...]
+  local verb="$1"; shift
+  need "$BUN"
+  need_env PUBLISH_CONTRACTS_DIR "point it at the devops publish-contracts directory"
+  [[ -f "$PUBLISH_CONTRACTS_DIR/src/cli.ts" ]] || fail "$PUBLISH_CONTRACTS_DIR/src/cli.ts not found" 65
+  local sheet keydir pwfile mdir
+  sheet="$(summary_value sheet_path)"; keydir="$(summary_value key_dir)"
+  pwfile="$(summary_value password_file)"; mdir="$(summary_value manifest_dir)"
+  [[ -f "$sheet" && -d "$keydir" && -f "$pwfile" && -d "$mdir" ]] \
+    || fail "the harness summary names no usable sheet, keystore directory or manifest directory: boot with \`chain up\`" 65
+  local -a args
+  mapfile -t args < <(publish_args "$verb")
+  REHEARSAL_KEY_DIR="$keydir" REHEARSAL_PASSWORD_FILE="$pwfile" PUBLISH_MANIFEST_DIR="$mdir" \
+    "$BUN" "$PUBLISH_CONTRACTS_DIR/src/cli.ts" "${args[@]}" "$@"
+}
+
+# ─── rmpc, always rebuilt from the checkout ──────────────────────────────────
+# Not a conditional check: a stale binary silently invalidates a whole run.
+rebuild_rmpc() {
+  need cargo
+  info "rebuilding rmpc from $(git describe --tags --always 2>/dev/null || echo 'this checkout')"
+  cargo build -p rust-payment-client --bin rmpc --bin rmpc-keystore-import \
+    || fail "rmpc rebuild failed; refusing to run against whatever binary was already there" 66
 }
 
 # ─── chain ────────────────────────────────────────────────────────────────────
-# The live facts, all required, so "something healthy is running" is never read
-# as "the RIGHT candidate is healthy". Returns the classed line rather than
-# exiting, so `chain up` can ask the same question without ending the script.
 chain_facts_line() {
   local want="$1" got healthy built
   got="$(rpc_chain_id)"
@@ -238,22 +266,9 @@ chain_facts_line() {
   echo "ok: chain $CHAIN_ID_HEX, $healthy healthy $DAPP_PROJECT container(s), rmpc built from $want"
 }
 
-# The stamp: which commit the running chain was booted from, and by which
-# harness process. Without it, rmpc's build-info would vouch for a chain that a
-# later rebuild (a failed `chain up`, `dapp up`) never booted.
-#
-# boot-mismatch vs. candidate-mismatch (devops#42): these name two different
-# facts on purpose and are not merged into one class. boot-mismatch is a
-# CHAIN fact: the stamp `chain up` wrote says which commit is actually
-# running, and it disagrees with what `--ref` (or HEAD) asks about now — the
-# operator's fix is `chain down` + `chain up --ref <the one they want>`.
-# candidate-mismatch (chain_facts_line, below) is a BUILD-ARTIFACT fact: the
-# stamp and the candidate already agree, but target/debug/rmpc on disk was
-# rebuilt for something else since (a failed `chain up`, a bare `dapp up`,
-# a stray `cargo build`) without booting a new chain — the fix there is just
-# rebuilding rmpc for the candidate, not touching the chain at all. Collapsing
-# both into one class would cost the operator exactly the information that
-# tells them which of those two unrelated actions to take.
+# boot-mismatch is a CHAIN fact (the running chain was booted from another
+# commit: `chain down` + `chain up`). candidate-mismatch is a BUILD-ARTIFACT
+# fact (rmpc was rebuilt for something else since): rebuild rmpc only.
 stamp_line() {
   local want="$1" commit pid start now
   [[ -f "$STAMP" ]] || { echo "not-booted: no completed \`chain up\` stamp at $STAMP"; return 1; }
@@ -285,12 +300,12 @@ write_stamp() {
 
 chain_up() {
   need curl; need jq; need docker
+  need_env PUBLISH_CONTRACTS_DIR "the harness calls publish contracts: point it at the devops publish-contracts directory"
+  need_env STAGE_SHEET "the harness needs the stage sheet (parameter lines only)"
   local want head pid start line rc
   want="$(candidate_commit)"
   [[ -n "$want" ]] || fail "--ref '${REF:-HEAD}' is not a branch, tag or commit in this checkout" 65
   head="$(git rev-parse --verify --quiet 'HEAD^{commit}' || true)"
-  # The harness boots whatever is checked out; booting it for a ref it is not
-  # would spend half an hour on a chain `chain status --ref` can never accept.
   [[ "$want" == "$head" ]] \
     || fail "--ref '${REF:-HEAD}' is $want, but this checkout is at ${head:-nothing}: check the ref out first" 65
   take_lock
@@ -302,19 +317,23 @@ chain_up() {
   if pid="$(harness_pid)"; then
     fail "an earlier harness (pid $pid) is still running but is not the healthy candidate; run \`core-stack.sh chain down\` first" 66
   fi
-  # Whatever the stamp vouched for, this boot replaces it; a boot that fails
-  # from here on must leave nothing behind that `chain status` would accept.
   rm -f "$STAMP" "$PID_FILE"
-  # Truncated here, before the harness exists, and the harness only ever
-  # appends: the summary grep below can match only this boot's output, never a
-  # summary a previous run left behind.
+  # Truncated before the harness exists; the harness only appends.
   : >"$SUMMARY"
+  rebuild_rmpc
   # Detached, in its own process group (set -m), so `chain down` can signal the
-  # harness and every child it spawned at once — and so it does not inherit the
-  # SIGINT-ignored disposition a non-interactive shell gives background jobs.
-  # fd 9 (the lock) is closed for it: the harness must not hold the lock.
+  # harness and every child at once. fd 9 (the lock) is closed for it.
+  # The Twin chain is the harness default backend (geth). No fork, no anvil.
   set -m
-  nohup stdbuf -oL -eL bash "$DEPLOY" smoke --out-dir "$OUT_DIR" >>"$SUMMARY" 2>&1 </dev/null 9>&- &
+  nohup stdbuf -oL -eL cargo run -p smoke-test -- \
+    --full-stack \
+    --rpc-port 18545 \
+    --explorer-port 18546 \
+    --dapp-port 5173 \
+    --public-rpc-url https://stage-rpc.robotmoney-labs.dev \
+    --public-explorer-url https://stage-explorer.robotmoney-labs.dev \
+    --public-dapp-url https://stage-dapp.robotmoney-labs.dev \
+    --no-receipt-fixtures >>"$SUMMARY" 2>&1 </dev/null 9>&- &
   pid=$!
   set +m
   if ! start="$(proc_start_time "$pid")"; then
@@ -349,127 +368,130 @@ chain_up() {
   fail "no endpoint summary within ${TIMEOUT_SECS}s; the harness (pid $pid) is still running: \`core-stack.sh chain down\` stops it" 66
 }
 
+SMOKE_INT_GRACE_SECS="${SMOKE_INT_GRACE_SECS:-60}"
+SMOKE_TERM_GRACE_SECS="${SMOKE_TERM_GRACE_SECS:-30}"
+
+# signal_and_wait <SIG> <secs> <target>: true once nothing in <target> is left.
+signal_and_wait() {
+  kill -"$1" -- "$3" 2>/dev/null || true
+  for _attempt in $(seq 1 "$2"); do
+    kill -0 -- "$3" 2>/dev/null || return 0
+    sleep 1
+  done
+  ! kill -0 -- "$3" 2>/dev/null
+}
+
+stop_harness() {
+  local pid="" start="" rest="" stat live_start pgrp target
+  [[ -f "$PID_FILE" ]] || return 0
+  read -r pid start rest <"$PID_FILE" || true
+  stat=""
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then stat="$(cat "/proc/$pid/stat" 2>/dev/null || true)"; fi
+  stat="${stat##*) }"
+  if [[ -z "$stat" || "${stat%% *}" == Z ]]; then
+    info "pid file names no running process; clearing it"
+    rm -f "$PID_FILE"; return 0
+  fi
+  live_start="$(awk '{ print $20 }' <<<"$stat")"
+  pgrp="$(awk '{ print $3 }' <<<"$stat")"
+  if [[ -n "$start" && "$start" != "$live_start" ]]; then
+    info "pid $pid now belongs to another process; not signalling it"
+    rm -f "$PID_FILE"; return 0
+  fi
+  if [[ -z "$start" ]] && ! tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -Eq 'smoke-test'; then
+    info "pid $pid is not the smoke harness; not signalling it"
+    rm -f "$PID_FILE"; return 0
+  fi
+  target="$pid"
+  [[ "$pgrp" == "$pid" ]] && target="-$pid"
+  info "stopping the smoke harness (pid $pid; signalling $target)"
+  signal_and_wait INT "$SMOKE_INT_GRACE_SECS" "$target" \
+    || { info "the harness ignored SIGINT for ${SMOKE_INT_GRACE_SECS}s; sending SIGTERM"
+         signal_and_wait TERM "$SMOKE_TERM_GRACE_SECS" "$target"; } \
+    || fail "core smoke harness (pid $pid) survived SIGINT and SIGTERM" 66
+  rm -f "$PID_FILE"
+}
+
 chain_down() {
   take_lock
-  # The stamp goes first: from here on nothing vouches for the running chain,
-  # whether or not the teardown below completes.
+  # The stamp goes first: from here on nothing vouches for the running chain.
   rm -f "$STAMP"
-  exec bash "$DEPLOY" down --out-dir "$OUT_DIR"
+  stop_harness
+  # The compose file's `:?` guards interpolate even for `down`.
+  env INDEXER_GATEWAY=teardown INDEXER_VAULT=teardown VITE_GATEWAY_ADDRESS=teardown \
+      VITE_VAULT_ADDRESS=teardown VITE_GATEWAY_EXPECTED_CODE_HASH=teardown \
+      COMPOSE_PROFILES=receipt-fixtures \
+    docker compose --project-name "$DAPP_PROJECT" -f "$DAPP_COMPOSE" down \
+    || fail "dapp stack down failed" 66
+  info "down done"
+}
+
+# ─── publish ──────────────────────────────────────────────────────────────────
+publish_verb() {
+  case "$VERB" in
+    args) need jq; publish_args publish ;;
+    run) publish_contracts publish ;;
+    *) usage ;;
+  esac
 }
 
 # ─── governance ───────────────────────────────────────────────────────────────
-# The ceremony's own preconditions on the chain, each enforced inside
-# fusion-ceremony.sh by a `die` well into a run. Asserted here, before `ensure`
-# spends anything, each with its own class. They describe a FRESH chain, so this
-# runs only when provisioning is about to happen, not as a standing check.
+# What publish contracts needs from the booted chain, each with its own class.
 governance_preflight() {
   need jq
-  # Every check below shells out to cast. Without this, a missing cast makes
-  # `"$CAST" chain-id` fail exactly like a dead RPC does (both print nothing
-  # on stdout), so the first check below would misreport a tool-missing host
-  # as rpc-unreachable: exit 1, not exit 3. Checked explicitly, first.
   need "$CAST"
   grep -q -- '--- end endpoint summary ---' "$SUMMARY" 2>/dev/null \
     || unsatisfied summary-incomplete "$SUMMARY is absent or carries no end-of-summary marker"
-  # summary_address (fusion-ceremony.sh): last key=value line wins.
-  addr() { awk -F= -v k="$1" '$1 == k { v = $2 } END { print v }' "$SUMMARY"; }
   has_code() { [[ -n "$("$CAST" code "$1" --rpc-url "$RPC_URL" 2>/dev/null | tr -d '[:space:]0x')" ]]; }
-  # Its own class, ahead of the code checks: `cast code` against a dead RPC
-  # returns empty exactly like a codeless address does.
-  local chain
+  local chain name key a mdir n
   chain="$("$CAST" chain-id --rpc-url "$RPC_URL" 2>/dev/null)" \
     || unsatisfied rpc-unreachable "nothing answering at $RPC_URL"
-  [[ "$chain" == "$CHAIN_ID" ]] || unsatisfied wrong-chain "$RPC_URL is chain '$chain', the ceremony runs only on $CHAIN_ID"
-  local name
+  [[ "$chain" == "$CHAIN_ID" ]] || unsatisfied wrong-chain "$RPC_URL is chain '$chain', stage runs only on $CHAIN_ID"
   for name in "SafeL2 singleton:$SAFE_L2_SINGLETON" "SafeProxyFactory:$SAFE_PROXY_FACTORY" \
               "CompatibilityFallbackHandler:$SAFE_FALLBACK_HANDLER"; do
     has_code "${name#*:}" \
       || unsatisfied safe-set-missing "canonical ${name%%:*} ${name#*:} has no code: this chain lacks the Safe v1.4.1 set"
   done
-  local key a n d k q vaults admin_role is_admin
-  for key in gateway_addr vault_addr registry_addr router_addr \
-             governance_addr ic_policy_addr consensus_receipt_addr admin_addr; do
-    a="$(addr "$key")"
+  for key in gateway_addr vault_addr registry_addr router_addr governance_addr \
+             ic_policy_addr consensus_receipt_addr safe_addr timelock_addr; do
+    a="$(summary_value "$key")"
     [[ "$a" =~ ^0x[0-9a-fA-F]{40}$ ]] || unsatisfied summary-malformed "$key is not address-shaped ('$a')"
-    [[ "$key" == admin_addr ]] && continue
-    has_code "$a" || unsatisfied no-code "$key $a has no code on $RPC_URL — the summary is from an older boot"
+    has_code "$a" || unsatisfied no-code "$key $a has no code on $RPC_URL: the summary is from an older boot"
   done
-  vaults="$(awk -F= '$1 == "vault_addresses_json" { sub(/^[^=]*=/, ""); v = $0 } END { print v }' "$SUMMARY")"
-  jq -e '.rmUSDC and .rmPROTO and .rmAGENT and .rmRWA' <<<"$vaults" >/dev/null 2>&1 \
-    || unsatisfied summary-malformed "vault_addresses_json does not name rmUSDC, rmPROTO, rmAGENT and rmRWA"
-  # `call` swallows reverts, so an unreadable receipt store is its own class
-  # rather than being blamed on the --no-receipt-fixtures boot flag.
-  n="$("$CAST" call "$(addr consensus_receipt_addr)" 'receiptCount()(uint256)' --rpc-url "$RPC_URL" 2>/dev/null | awk '{print $1; exit}' || true)"
-  [[ "$n" =~ ^[0-9]+$ ]] || unsatisfied receipt-unreadable "receiptCount() returned '$n' from $(addr consensus_receipt_addr)"
-  [[ "$n" == "0" ]] || unsatisfied receipt-fixtures-present "receiptCount()=$n, so this boot lost --no-receipt-fixtures"
-  # repo_deployer_key: the ceremony signs as the address DERIVED from the repo
-  # constant, and dies if that is not the summary's admin_addr.
-  k="$(sed -n '/pub const DEPLOYER_PRIVATE_KEY_HEX/{n;p}' testing/smoke-test/src/lib.rs | tr -d ' ";')"
-  d="$("$CAST" wallet address --private-key "$k" 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
-  [[ -n "$d" && "$d" == "$(addr admin_addr | tr '[:upper:]' '[:lower:]')" ]] \
-    || unsatisfied deployer-mismatch "DEPLOYER_PRIVATE_KEY_HEX derives '$d', summary admin_addr is '$(addr admin_addr)'"
-  # A deployer without gateway ADMIN_ROLE means the chain was handed over already.
-  admin_role="$("$CAST" keccak ADMIN_ROLE 2>/dev/null || true)"
-  is_admin="$("$CAST" call "$(addr gateway_addr)" 'hasRole(bytes32,address)(bool)' "$admin_role" "$(addr admin_addr)" --rpc-url "$RPC_URL" 2>/dev/null | awk '{print $1; exit}' || true)"
-  [[ "$is_admin" == "true" ]] \
-    || unsatisfied deployer-not-admin "the deployer $(addr admin_addr) holds no gateway ADMIN_ROLE (hasRole: '${is_admin:-unreadable}'): this chain was already handed over; reboot it"
-  # used_chain_evidence: a factory that already created a Safe here means a
-  # ceremony ran on this chain, and `ensure` refuses (65) to provision another.
-  n="$("$CAST" logs --rpc-url "$RPC_URL" --from-block 0 --address "$SAFE_PROXY_FACTORY" --json "$PROXY_CREATION_SIG" 2>/dev/null \
-    | jq 'length' 2>/dev/null || true)"
-  [[ "$n" =~ ^[0-9]+$ ]] || unsatisfied chain-history-unreadable "the SafeProxyFactory's ProxyCreation logs are unreadable, so this chain cannot be shown fresh"
-  [[ "$n" == "0" ]] || unsatisfied chain-used "the SafeProxyFactory already created $n Safe(s) on this chain; reboot it (chain down, chain up)"
-  # Readability only: the VALUE is ceremony-set.
-  q="$("$CAST" call "$(addr governance_addr)" 'quorumThreshold()(uint256)' --rpc-url "$RPC_URL" 2>/dev/null | awk '{print $1; exit}' || true)"
-  [[ "$q" =~ ^[0-9]+$ ]] || unsatisfied governance-unreadable "quorumThreshold() returned '$q'"
-  echo "ok: the booted chain meets every ceremony precondition"
+  mdir="$(summary_value manifest_dir)"
+  [[ -d "$mdir" ]] || unsatisfied manifests-missing "manifest_dir '${mdir:-none}' is not a directory"
+  n="$(find "$mdir" -maxdepth 1 -name 'vault-*.json' | wc -l | tr -d ' ')"
+  [[ -f "$mdir/core.json" && "$n" -ge 3 ]] \
+    || unsatisfied vault-manifests-missing "want core.json (rmUSDC) plus three vault-*.json manifests in $mdir, found $n"
+  [[ -d "$(summary_value key_dir)" ]] \
+    || unsatisfied keys-discarded "the rehearsal keystores ($(summary_value key_dir)) are gone, so nobody can drive the Safe; rebuild the stack (chain down, chain up)"
+  echo "ok: the booted chain meets every publish contracts precondition"
 }
 
-governance_ensure() {
-  info "governance_ensure: RPC_URL=$RPC_URL OUT_DIR=$OUT_DIR SUMMARY=$SUMMARY"
-  info "governance_ensure: calling: bash $CEREMONY ensure --out-dir $OUT_DIR --summary $SUMMARY --rpc-url $RPC_URL"
-  bash "$CEREMONY" ensure --out-dir "$OUT_DIR" --summary "$SUMMARY" --rpc-url "$RPC_URL"
-  rc=$?
-  info "governance_ensure: ceremony returned $rc"
-  return $rc
+# The govern matrix prints one JSON line per row: {"row","txHash","status"}.
+# Any row without a 32-byte tx hash and receipt status 1 fails this verb.
+govern_run() { # govern_run [extra args...]
+  local out rc=0
+  out="$(publish_contracts govern "$@")" || rc=$?
+  printf '%s\n' "$out"
+  (( rc == 0 )) || return "$rc"
+  printf '%s\n' "$out" | "$BUN" "$HERE/govern-rows.ts" >&2 \
+    || fail "a govern row has no tx hash or receipt status 1" 66
 }
 
-governance_verify() {
-  local rc=0 keydir out
-  [[ -f "$RECORD" ]] || unsatisfied record-missing "$RECORD does not exist — run \`core-stack.sh governance ensure\`"
-  # Captured, not inherited: on success the ceremony's own PASS lines are the
-  # caller's evidence and are printed verbatim. On its "no" (rc 1) they move to
-  # stderr instead, so stdout still carries exactly the one classed line the
-  # one-stdout-line rule promises every failing read-only verb (the survived
-  # mutant this closes: two_stdout_lines, PASS/FAIL lines above a classed
-  # line).
-  out="$(bash "$CEREMONY" verify --record "$RECORD" --rpc-url "$RPC_URL" 2>&1)" || rc=$?
-  if (( rc != 1 )); then
-    echo "$out"
-    exit "$rc"
-  fi
-  echo "$out" >&2
-  # verify's own PASS/FAIL lines are on stderr above; this names the one thing to do.
-  keydir="$(jq -r '.ephemeral.keystore_dir // empty' "$RECORD" 2>/dev/null || true)"
-  if [[ -z "$keydir" || ! -d "$keydir" ]]; then
-    unsatisfied keys-discarded "the ceremony keystores (${keydir:-none named}) are gone, so nobody can drive the Safe; rebuild the stack (chain down, chain up, governance ensure)"
-  fi
-  unsatisfied governance-unverified "fusion-ceremony.sh verify failed against $RECORD (see FAIL lines on stderr above)"
+governance_verb() {
+  case "$VERB" in
+    preflight) governance_preflight ;;
+    ensure) govern_run ;;
+    verify) publish_contracts verify ;;
+    release)
+      [[ -n "$RECEIPT_ID" ]] || { echo "release needs --receipt-id" >&2; usage; }
+      govern_run --row release-receipt --receipt-id "$RECEIPT_ID" ;;
+    *) usage ;;
+  esac
 }
 
 # ─── dapp ─────────────────────────────────────────────────────────────────────
-dapp_up() {
-  need jq
-  local head line
-  take_lock
-  head="$(git rev-parse --verify --quiet 'HEAD^{commit}' || true)"
-  # `up` rebuilds rmpc from this checkout. Onto a chain booted from another
-  # commit, that would make rmpc vouch for a candidate the chain is not.
-  line="$(stamp_line "$head")" \
-    || fail "the running chain is not one \`chain up\` booted from this checkout ($line); run \`core-stack.sh chain up\` first" 65
-  exec bash "$DEPLOY" up --out-dir "$OUT_DIR"
-}
-
 dapp_status() {
   need curl; need jq
   local got
@@ -481,20 +503,14 @@ dapp_status() {
 }
 
 # ─── rmpc ─────────────────────────────────────────────────────────────────────
-# Everything about the signing path that is a property of the freshly built
-# candidate. Not a full `self-check --config`: that needs an operator config, a
-# keystore and a passphrase, which the ceremony mints, not the build.
 rmpc_check() {
   local rc
   [[ -x "$RMPC" ]] || unsatisfied missing-binary "$RMPC"
   [[ -x "$RMPC_IMPORT" ]] || unsatisfied missing-binary "$RMPC_IMPORT"
   "$RMPC" self-check --help >/dev/null 2>&1 \
-    || unsatisfied missing-subcommand "this rmpc has no self-check — the candidate predates it"
-  # 3 is "config/keystore could not load", distinct from 2, "a preflight rule
-  # refused" (self_check.rs EXIT_STARTUP_FAIL / EXIT_PREFLIGHT_FAIL).
+    || unsatisfied missing-subcommand "this rmpc has no self-check: the candidate predates it"
   rc=0; "$RMPC" self-check -c /nonexistent/rmpc.toml >/dev/null 2>&1 || rc=$?
   [[ "$rc" == 3 ]] || unsatisfied startup-exit-drift "self-check on a missing config exited $rc, want 3"
-  # 2 is bad input (bin/rmpc_keystore_import.rs); proves it links and runs.
   rc=0; "$RMPC_IMPORT" >/dev/null 2>&1 || rc=$?
   [[ "$rc" == 2 ]] || unsatisfied import-exit-drift "rmpc-keystore-import with no argv exited $rc, want 2"
   echo "ok: rmpc and rmpc-keystore-import answer their exit-code contracts"
@@ -503,13 +519,9 @@ rmpc_check() {
 # ─── record ───────────────────────────────────────────────────────────────────
 # The cross-repo record contract (devops docs/plans/core-runbook-verbs.md, "The
 # record"), field by field. A record that breaks it is refused rather than
-# printed, so a reader never builds on a partial topology. Exit 65, with one
-# classed line on stdout.
+# printed. Exit 65, with one classed line on stdout.
 record_bad() { echo "$1: $2"; exit 65; }
 
-# RV: the field's value as text ("" when absent or null; objects and arrays as
-# JSON). A global, not a command substitution, so record_bad's exit is the
-# script's and not a subshell's.
 RV=""
 record_get() {
   RV="$(jq -r "($1) // empty | if type == \"string\" then . else tojson end" "$RECORD" 2>/dev/null || true)"
@@ -521,14 +533,9 @@ record_addr() {
     || record_bad record-field-malformed "${2:-$1} is not a non-zero address ('$RV')"
 }
 
-# The record contract's exhaustive required-field set (devops
-# docs/plans/core-runbook-verbs.md, "The record"), used two ways: record_show
-# checks every one of these for presence below, before any shape check runs,
-# and `record show --list-required-fields` prints this same array as JSON so
-# schemas/fusion-stage-record.schema.json's `required` array can be diffed
-# against it. That is the whole drift guard (devops#42): the schema and this
-# array are read from the one place each, and the selftest fails the moment
-# they stop matching, rather than the two silently drifting apart.
+# The exhaustive required-field set. `record show --list-required-fields` prints
+# this array as JSON so schemas/fusion-stage-record.schema.json's `required`
+# array can be diffed against it (the drift guard).
 RECORD_REQUIRED_FIELDS=(
   .chain_id .run_id .core_tag .core_sha .generated_at .min_delay .deployer
   .addresses.gateway .addresses.vault .addresses.registry .addresses.router .addresses.governance
@@ -543,14 +550,60 @@ record_list_required_fields() {
   printf '%s\n' "${RECORD_REQUIRED_FIELDS[@]}" | jq -R . | jq -s .
 }
 
+# Derive the record from the manifests, the sheet and the chain. The roster is
+# what the key helper minted. The voters are the sheet's VOTER_ADDRESSES: their
+# voting power is set by govern rows through the real Safe, never by a deployer.
+record_write() {
+  need jq; need "$CAST"
+  local mdir sheet sha tag delay gw hash tl owners voters
+  mdir="$(summary_value manifest_dir)"; sheet="$(summary_value sheet_path)"
+  [[ -d "$mdir" && -f "$sheet" ]] || fail "the harness summary names no manifest directory or sheet: boot with \`chain up\`" 65
+  sha="$(summary_value core_sha)"
+  tag="$(git describe --tags --always "$sha" 2>/dev/null || echo "$sha")"
+  gw="$(jq -r '.gateway' "$mdir/core.json")"
+  tl="$(jq -r '.timelock' "$mdir/timelock.json")"
+  delay="$("$CAST" call "$tl" 'getMinDelay()(uint256)' --rpc-url "$RPC_URL" | awk '{print $1; exit}')"
+  hash="$("$CAST" keccak "$("$CAST" code "$gw" --rpc-url "$RPC_URL")")"
+  sheet_get() { sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?$1=[\"']?([^\"'#]*)[\"']?.*$/\2/p" "$sheet" | tail -1 | tr -d ' '; }
+  owners="$(sheet_get SAFE_OWNERS)"; voters="$(sheet_get VOTER_ADDRESSES)"
+  jq -n \
+    --argjson chain "$CHAIN_ID" --arg run_id "$(basename "$(dirname "$mdir")")-$(date -u +%Y%m%dT%H%M%SZ)" \
+    --arg tag "$tag" --arg sha "$sha" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson delay "$delay" \
+    --arg deployer "$(summary_value deployer_addr)" --arg hash "$hash" \
+    --arg keydir "$(summary_value key_dir)" --arg owners "$owners" --arg voters "$voters" \
+    --arg emergency "$(sheet_get EMERGENCY_ADDRESS)" --arg agent "$(sheet_get AGENT_ADDRESS)" \
+    --slurpfile core "$mdir/core.json" --slurpfile reg "$mdir/registry.json" --slurpfile rtr "$mdir/router.json" \
+    --slurpfile gov "$mdir/governance.json" --slurpfile ic "$mdir/ic-policy.json" \
+    --slurpfile tlk "$mdir/timelock.json" --slurpfile safe "$mdir/safe.json" \
+    --slurpfile proto "$mdir/vault-rmPROTO.json" --slurpfile agentv "$mdir/vault-rmAGENT.json" \
+    --slurpfile rwa "$mdir/vault-rmRWA.json" '
+    ($owners | split(",")) as $o |
+    {
+      chain_id: $chain, run_id: $run_id, core_tag: $tag, core_sha: $sha, generated_at: $at,
+      generated_by: "scripts/stage/core-stack.sh record write (publish contracts manifests)",
+      min_delay: $delay, deployer: $deployer,
+      addresses: {
+        gateway: $core[0].gateway, vault: $core[0].vault, registry: $reg[0].registry, router: $rtr[0].router,
+        governance: $gov[0].governance, consensus_receipt: $ic[0].consensus_receipt, ic_policy: $ic[0].policy,
+        timelock: $tlk[0].timelock, safe: $safe[0].safe, emergency: $emergency
+      },
+      code_hashes: { gateway: $hash },
+      vault_addresses: { rmUSDC: $core[0].vault, rmPROTO: $proto[0].vault, rmAGENT: $agentv[0].vault, rmRWA: $rwa[0].vault },
+      ephemeral: {
+        submitter: $agent, approver: $o[0], voters: ($voters | split(",")), emergency: $emergency,
+        keystore_dir: $keydir,
+        safe_signers: [ {role: "approver", address: $o[0]}, {role: "approver-b", address: $o[1]}, {role: "approver-c", address: $o[2]} ]
+      }
+    }' >"$RECORD.tmp"
+  mv "$RECORD.tmp" "$RECORD"
+  info "wrote $RECORD"
+}
+
 record_show() {
   need jq
   (( LIST_REQUIRED_FIELDS )) && { record_list_required_fields; return 0; }
   [[ -f "$RECORD" ]] || record_bad record-missing "$RECORD does not exist"
   jq -e 'type == "object"' "$RECORD" >/dev/null 2>&1 || record_bad record-unparseable "$RECORD is not a JSON object"
-  # Every required field, present, before any shape check runs — see
-  # RECORD_REQUIRED_FIELDS above. record_get already dies with
-  # record-field-missing on the first absent one.
   local rfield
   for rfield in "${RECORD_REQUIRED_FIELDS[@]}"; do record_get "$rfield"; done
   local field role approver=""
@@ -573,8 +626,8 @@ record_show() {
   record_get .code_hashes.gateway
   [[ "$RV" =~ ^0x[0-9a-fA-F]{64}$ && ! "$RV" =~ ^0x0{64}$ ]] \
     || record_bad record-field-malformed ".code_hashes.gateway is not a non-zero bytes32 ('$RV')"
-  # The real 2-of-3 Safe (#1474): the three owner keys, each an address, with
-  # the approver (the relayer every Safe call is sent from) among them.
+  # The real 2-of-3 Safe: the three owner keys, each an address, with the
+  # approver (the relayer every Safe call is sent from) among them.
   for role in approver approver-b approver-c; do
     record_addr "first(.ephemeral.safe_signers[]? | select(.role == \"$role\") | .address)" \
       ".ephemeral.safe_signers $role"
@@ -586,16 +639,14 @@ record_show() {
   if (( PATH_ONLY )); then echo "$RECORD"; else jq . "$RECORD"; fi
 }
 
-case "$NOUN $VERB" in
-  "chain up") chain_up ;;
-  "chain down") chain_down ;;
-  "chain status") chain_status ;;
-  "governance preflight") governance_preflight ;;
-  "governance ensure") governance_ensure ;;
-  "governance verify") governance_verify ;;
-  "dapp up") dapp_up ;;
-  "dapp status") dapp_status ;;
-  "rmpc check") rmpc_check ;;
-  "record show") record_show ;;
+case "$NOUN" in
+  chain)
+    case "$VERB" in up) chain_up ;; down) chain_down ;; status) chain_status ;; *) usage ;; esac ;;
+  publish) publish_verb ;;
+  governance) governance_verb ;;
+  dapp) if [[ "$VERB" == status ]]; then dapp_status; else usage; fi ;;
+  rmpc) if [[ "$VERB" == check ]]; then rmpc_check; else usage; fi ;;
+  record)
+    case "$VERB" in write) record_write ;; show) record_show ;; *) usage ;; esac ;;
   *) usage ;;
 esac
