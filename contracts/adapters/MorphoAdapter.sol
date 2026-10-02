@@ -162,12 +162,7 @@ contract MorphoAdapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    function totalAssets()
-        external
-        view
-        override
-        returns (uint256)
-    {
+    function totalAssets() external view override returns (uint256) {
         uint256 shares = MORPHO_VAULT.balanceOf(address(this));
         return MORPHO_VAULT.convertToAssets(shares);
     }
@@ -180,10 +175,7 @@ contract MorphoAdapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    function sweepForeignToken(address token)
-        external
-        override
-    {
+    function sweepForeignToken(address token) external override {
         if (token == USDC || token == address(MORPHO_VAULT)) {
             revert ForeignTokenQuarantine.TokenIsProtected(token);
         }

@@ -183,12 +183,15 @@ contract DeployTest is Test {
     function test_manifest_hasRenamedKeysAndThirdVenueEntry() public {
         CoreStages.Stack memory s = _run();
         DeployVaultManifestHarness h = new DeployVaultManifestHarness();
-        string memory path = string.concat("/tmp/rm-core-s3-manifest-", vm.toString(address(h)), ".json");
+        string memory path =
+            string.concat("/tmp/rm-core-s3-manifest-", vm.toString(address(h)), ".json");
         h.writeManifest(s.vaultStage, path);
         string memory json = vm.readFile(path);
         vm.removeFile(path);
 
-        assertEq(json.readAddress(".moonwell_flagship_adapter"), address(s.vaultStage.moonwellAdapter));
+        assertEq(
+            json.readAddress(".moonwell_flagship_adapter"), address(s.vaultStage.moonwellAdapter)
+        );
         assertEq(json.readAddress(".aave_adapter"), address(s.vaultStage.aaveAdapter));
         assertEq(json.readAddress(".compound_adapter"), address(s.vaultStage.compoundAdapter));
         assertEq(json.readAddress(".vault"), address(s.vault));
@@ -197,7 +200,9 @@ contract DeployTest is Test {
         assertFalse(
             vm.keyExistsJson(json, string.concat(".morpho", "_adapter")), "old adapter key remains"
         );
-        assertFalse(vm.keyExistsJson(json, ".gauntlet_adapter"), "no Gauntlet key for a Moonwell address");
+        assertFalse(
+            vm.keyExistsJson(json, ".gauntlet_adapter"), "no Gauntlet key for a Moonwell address"
+        );
     }
 
     // --- Happy path -----------------------------------------------------
@@ -253,7 +258,9 @@ contract DeployTest is Test {
         assertTrue(compound != moonwell, "compound aliases moonwell");
 
         assertEq(address(d.aaveAdapter.POOL()), vs.AAVE_V3_POOL(), "aave POOL mismatch");
-        assertEq(address(d.compoundAdapter.COMET()), vs.COMPOUND_V3_COMET(), "compound COMET mismatch");
+        assertEq(
+            address(d.compoundAdapter.COMET()), vs.COMPOUND_V3_COMET(), "compound COMET mismatch"
+        );
         assertEq(
             address(d.moonwellAdapter.MORPHO_VAULT()),
             vs.MOONWELL_FLAGSHIP_USDC(),
@@ -398,8 +405,10 @@ contract DeployTest is Test {
         assertEq(v.usdc, vs.CANONICAL_BASE_USDC());
 
         // The router stage runs between the vault and the gateway.
-        VaultRegistry registry = stages.registryScript()
-            .runInProcessWith(admin, address(v.vault), v.usdc, "Robot Money USDC").registry;
+        VaultRegistry registry =
+        stages.registryScript()
+        .runInProcessWith(admin, address(v.vault), v.usdc, "Robot Money USDC")
+        .registry;
         DeployPortfolioRouter.Deployed memory rt = stages.routerScript()
             .runInProcessWith(admin, address(registry), address(v.vault), v.usdc);
         vm.setEnv("VAULT_ADDRESS", vm.toString(address(v.vault)));
@@ -419,7 +428,6 @@ contract DeployTest is Test {
         assertEq(d.tickMath, address(TickMath));
         assertGt(d.tickMath.code.length, 0, "TickMath must have code");
     }
-
 
     /// @dev The audited reference is the TickMath library linked into the test
     ///      artifact set, which is identical to the one linked into the deploy
