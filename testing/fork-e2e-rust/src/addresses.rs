@@ -90,9 +90,6 @@ pub const POOL_WETH_USDC: Address = address!("d0b53d9277642d899df5c87a3966a349a7
 /// Uniswap V3 cbBTC/USDC pool on Base.
 pub const POOL_CBBTC_USDC: Address = address!("fbb6eed8e7aa03b138556eedaf5d271a5e1e43ef");
 
-/// Uniswap V3 wSOL/USDC pool on Base (Wormhole-wrapped SOL).
-pub const POOL_WSOL_USDC: Address = address!("c1bf8adf6e62cc9c56e2b246b03d3e74da45a0e1");
-
 // -- Basket vault asset addresses (ProtocolAssetVault + AgentTokenVault) ----
 // Canonical: config/protocol-assets.json; docs/prd.md §11.2–11.3.
 // These are the underlying token and pool addresses used when deploying

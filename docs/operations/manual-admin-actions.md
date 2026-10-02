@@ -118,8 +118,8 @@ contract-enforced rather than operational convention.
    log whose second topic is the deployer, plus every
    `AgentOwnershipTransferred` log whose third topic is the deployer, keeping
    only the agents whose `agentOwner(agent)` is still the deployer (the
-   `deployer_owned_agents` helper in `scripts/stage/publish contracts` does
-   exactly this). Deploy.s.sol's deploy agent is among them unless it was
+   `deployer_owned_agents` helper in the devops publish-contracts CLI does
+   exactly this). The gateway stage's deploy agent is among them unless it was
    already revoked or handed over.
 
    ```bash

@@ -102,7 +102,11 @@ abstract contract BasketVault is
     ///         inspect which DEX each asset is wired to without parsing the
     ///         opaque adapter address.
     ///         V3       — Uniswap V3 via the built-in SWAP_ROUTER (adapter = address(0)).
-    ///         V4       — reserved; no V4 adapter ships.
+    ///         V4       — reserved ordinal; no V4 adapter ships. Kept on purpose: `Venue` is
+    ///                    ABI-visible (`addAsset(..., uint8 venue_)`, `AssetInfo.venue`, the
+    ///                    fork-e2e Rust bindings, `BasketAssetConfigGuard.Venue` and the
+    ///                    `BasketVault` tests all use the ordinals), and deleting V4 would
+    ///                    renumber Aerodrome from 2 to 1.
     ///         Aerodrome — Aerodrome CL pool via an AerodromeSwapAdapter.
     enum Venue {
         V3,
@@ -1019,7 +1023,7 @@ abstract contract BasketVault is
         // shared, linked `TickMath` library on the TWAP path, so a blanket runtime
         // DELEGATECALL scan is inapplicable here; codehash pinning subsumes the
         // no-hot-swap-proxy guarantee. The no-proxy bytecode scan remains a
-        // deploy-time invariant (`AdapterBytecodeGuard` in `Deploy.s.sol`).
+        // deploy-time invariant (`AdapterBytecodeGuard`, run by the basket vault deploy scripts).
         BasketAssetConfigGuard.requireAllowedAdapter(
             adapter_, adapter_ == address(0) || adapterCodeHashAllowed[adapter_.codehash]
         );

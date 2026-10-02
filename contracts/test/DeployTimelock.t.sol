@@ -1297,9 +1297,9 @@ contract DeployTimelockManifestTest is SafeFixture {
 
 // ─── Issue #1476: deployer-owned gateway agents move to the timelock ──────────
 
-/// @notice A full Deploy -> DeployTimelock run hands every deployer-owned gateway
-///         agent to the TimelockController: the deploy agent Deploy.s.sol
-///         authorizes and a stage-style submitter agent the deployer authorizes
+/// @notice A full stage-sequence -> DeployTimelock run hands every deployer-owned gateway
+///         agent to the TimelockController: the deploy agent the gateway
+///         stage authorizes and a stage-style submitter agent the deployer authorizes
 ///         afterwards. After the handover the timelock owns both, both keep
 ///         AGENT_ROLE, and the deployer can no longer call setPolicy or
 ///         revokeAgent on them.
@@ -1586,7 +1586,7 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
         );
     }
 
-    /// @dev A fresh Deploy.s.sol stack owned by `script_`, plus a second agent
+    /// @dev A fresh core stack (CoreStages) owned by `script_`, plus a second agent
     ///      the deployer authorizes, so a case can change the agents' roles
     ///      before its own handover.
     function _freshStack(DeployTimelock script_, address agent_, address second_)
@@ -1765,7 +1765,7 @@ contract DeployTimelockAgentListInputTest is SafeFixture {
 
 /// @notice `run()` hands the AGENT_ADDRESSES list it reads to the handover
 ///         (issue #1476). This drives run()'s own body, `_runFrom`, through
-///         the broadcast path against a Deploy.s.sol stack. Every env var it
+///         the broadcast path against a core stack (CoreStages). Every env var it
 ///         reads carries a prefix only this test sets, because env vars are
 ///         process-wide and forge runs tests in parallel.
 abstract contract DeployTimelockRunEntrypointBase is SafeFixture {

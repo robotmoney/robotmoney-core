@@ -127,7 +127,7 @@ contract SafeIntegrationTest is Test {
     /// @dev Safe L2 singleton (implementation) on Base mainnet.
     ///      This is the SafeL2.sol variant that emits extra events for L2 indexers.
     ///      Until issue #1447 this constant held 0x41675C09…, the L1 `Safe` singleton,
-    ///      despite its name (governance-isomorphism.md §3.4).
+    ///      despite its name (see governance-isomorphism.md §2.2, R4).
     address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
 
     /// @dev Safe Compatibility Fallback Handler on Base mainnet.
@@ -189,7 +189,7 @@ contract SafeIntegrationTest is Test {
     address[] internal gatewayRootHolders;
 
     /// A gateway agent the deployer authorizes before the handover, as
-    /// Deploy.s.sol does for its deploy agent (issue #1476).
+    /// the gateway stage does for its deploy agent (issue #1476).
     address internal deployAgent;
     /// Every agent named by an AgentAuthorized or AgentOwnershipTransferred log
     /// the gateway emitted from before the contracts were built.
@@ -315,7 +315,7 @@ contract SafeIntegrationTest is Test {
         assertGt(SAFE_MULTISEND.code.length, 0, "MultiSend has no code on this fork");
 
         // A deployer-owned gateway agent, authorized before the handover the
-        // way Deploy.s.sol authorizes its deploy agent (issue #1476).
+        // way the gateway stage authorizes its deploy agent (issue #1476).
         deployAgent = makeAddr("deploy-agent");
         vm.prank(deployer);
         gateway.authorizeAgent(deployAgent, _agentPolicy(makeAddr("deploy-share-receiver")));

@@ -72,7 +72,7 @@ cargo run -p smoke-test
 
 ### Contract address source
 
-`deployments/devnet.json` — written by `Deploy.s.sol` at deploy time.
+`deployments/devnet.json` — written by the stage runner (`scripts/stage/core-stack.ts`) at deploy time.
 Read the addresses out with:
 
 ```bash

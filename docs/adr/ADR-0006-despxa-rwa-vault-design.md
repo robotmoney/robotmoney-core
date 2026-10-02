@@ -1,7 +1,6 @@
 # ADR-0006: deSPXA RWA vault — asset, Chronicle oracle, Aerodrome swap-only entry/exit, freeze risk
 
-- **Status:** Accepted
-- **Affected by:** [ADR-0010 (Proposed)](ADR-0010-unified-vault-architecture.md) — in the unified `Vault`, `RwaVault` ceases to be a `BasketVault` subclass; deSPXA becomes a Chronicle-priced `AssetPositionAdapter` deployment. The asset choice, Aerodrome-only entry/exit, oracle, and freeze-risk decisions here carry over unchanged; the deployed v1 `RwaVault` stays untouched.
+- **Status:** Superseded in part (2026-10-02, product owner). The asset choice and the freeze-risk analysis stand. The Chronicle oracle and the Aerodrome-only entry and exit are replaced: rmRWA ships as a plain `RwaBasketVault` basket row, priced from the deSPXA Uniswap V3 fee 500 pool through the existing `UniswapV3SwapAdapter`, with no oracle. The older custom vault, the Chronicle adapter and the unified-vault proposal ([ADR-0010](ADR-0010-unified-vault-architecture.md), Rejected) are deleted code.
 - **Date:** 2026-06-03
 - **Deciders:** Product owner
 - **Related:**

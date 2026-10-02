@@ -450,7 +450,7 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Risk label | STABLE_YIELD |
 | Exposure | USDC yield across Moonwell Flagship USDC, Aave V3, Compound V3 on Base |
 | Allocation model | Equal-weight target across strategies; the mix is kept near target through ordinary deposit and withdrawal activity |
-| Exit fee | Configurable 0–1%; 0.1% at launch |
+| Exit fee | Configurable 0–1%; the live vault charges 25 bps (0.25%) |
 | Management fee | Not implemented in current phase |
 | Swap-fee share | Not implemented in current phase |
 | Withdrawal | Synchronous; single transaction |

@@ -712,8 +712,8 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            vec!["eth-usd", "weth-usdc", "cbbtc-usdc", "wsol-usdc"],
-            "expected-prices.json must list the four landing-strip pairs in order"
+            vec!["eth-usd", "weth-usdc", "cbbtc-usdc"],
+            "expected-prices.json must list the three landing-strip pairs in order (wSOL has no usable pool)"
         );
 
         // Guard: every pool address referenced in expected-prices.json must be

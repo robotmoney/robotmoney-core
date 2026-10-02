@@ -9,8 +9,8 @@
 > Modeled on the sibling frontend repo's `docs/technical/release-runbooks.md`
 > policy, adapted for immutable Solidity contract deployments rather than a
 > mutable Postgres-backed application: there is no schema migration, no
-> in-place rollback, and "the release branch" is `Deploy.s.sol` and its
-> companion deploy scripts at a specific commit, not a database.
+> in-place rollback, and "the release branch" is the stage scripts under `contracts/script/` (listed in
+> `scripts/deploy/stage-table.json`) at a specific commit, not a database.
 
 This is not the process for landing ordinary feature work — that is PR review
 against `dev`, covered by the repo's CI taxonomy. This document is
@@ -40,8 +40,8 @@ rehearsal that does not produce a lasting, addressed deployment record does
 not consume a version number.
 
 Unlike the frontend's `releases-A.B.x` branch convention, contract releases
-do not need a dedicated long-lived branch: `contracts/script/Deploy.s.sol`
-and its companion scripts already read every deploy-time parameter from
+do not need a dedicated long-lived branch: the scripts under `contracts/script/`
+already read every deploy-time parameter from
 environment variables, so the same scripts at a single commit on `dev`
 deploy to every target network. The version tag `vA.B.C` is cut on `dev` at
 the exact commit that was deployed and verified — there is no cherry-pick
@@ -122,13 +122,12 @@ Before any transaction is broadcast:
    into `deployments/dependency-manifests/<chain id>/<release>.json`. Commit that
    file with the release deployment record (hook: `scripts/release/record-release-dependencies.ts`; see `deployments/dependency-manifests/README.md`). The nightly third-party drift
    workflow (disabled by default) compares live state to the latest such file.
-2. **Role and address validation.** `Deploy.s.sol`'s and every companion
-   deploy script's own `_validate` step enforces distinct non-zero role
+2. **Role and address validation.** Every deploy script's own `_validate` step enforces distinct non-zero role
    addresses, a canonical asset address with deployed bytecode, and a real
    timelock/Safe destination for the eventual role handover.
 3. **Funding.** The deployer EOA holds enough native gas token and enough of
-   the seed asset (`SEED_DEPOSIT_AMOUNT` in `Deploy.s.sol` — see
-   `docs/future/review-usdc-seed.md` for its current temporary value) for the
+   the seed asset (`SEED_DEPOSIT_USDC` on the frozen sheet; the default `SEED_DEPOSIT_AMOUNT` in
+   `DeployVault.s.sol` is 1 USDC) for the
    mandatory seed deposit.
 4. **Network identity.** Confirm the RPC's reported chain id matches the
    target network's expected chain id before broadcasting anything. Every

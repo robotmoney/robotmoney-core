@@ -137,8 +137,9 @@ Assertion script: `.github/scripts/assert_headless_deposit_transcript.py`
 The nightly job:
 - Installs OpenCode 1.14.29, `rmpc`, and `rmpc-keystore-import` from source.
 - Boots an Anvil fork at the pinned block with `--chain-id 8453`.
-- Runs `forge script contracts/script/Deploy.s.sol:Deploy` to deploy
-  MockUSDC + MockVault + RobotMoneyGateway on the fork.
+- Runs the stage runner (`scripts/stage/core-stack.ts`, driven by
+  `scripts/deploy/stage-table.json`) to deploy the production core contracts
+  (libraries, vault, registry, router, gateway) on the fork.
 - Generates an ephemeral agent EOA; funds it with ETH and sets a USDC
   allowance via `anvil_impersonateAccount`.
 - Creates an encrypted keystore for the agent via `rmpc-keystore-import`.
@@ -294,7 +295,7 @@ authorization, real signed deposit — is exactly what the replay restores.
 `$RMPC_IMPORT_PRIVKEY_HEX` (never set in that step), treats argv[1] as
 the output keystore path, and prints a bare address (not JSON). Even if
 the step had succeeded, the generated key was never authorized:
-`contracts/script/Deploy.s.sol` called `gateway.authorizeAgent` on a
+the old single deploy script called `gateway.authorizeAgent` on a
 pre-baked Anvil account (`AGENT_ADDRESS`), while the generated keystore
 was funded via `anvil_setBalance` and orphaned. No assertion read
 `gateway.agentOwner` or `hasRole(AGENT_ROLE)` for the generated key.
@@ -313,7 +314,7 @@ against the same freshly-generated key, one assertable step at a time:
 | 2 | OpenCode skill invocation | `opencode run` exits 0 and emits a transcript. |
 | 3 | rmpc built and configured | `cargo build --release ... --bin rmpc` and a generated `config.toml` pinning the devnet chain id, RPC, gateway/vault/USDC addresses, gateway runtime hash, and the freshly-generated keystore path. |
 | 4 | Fresh keypair + keystore | `cast wallet new --json` produces a secp256k1 keypair; the private key is fed via `RMPC_IMPORT_PRIVKEY_HEX` + `RMPC_KEYSTORE_PASSPHRASE` into `rmpc-keystore-import <output-path>`. Step fails unless the keystore file exists, the printed address matches `^0x[0-9a-fA-F]{40}$`, and the keystore-derived address equals the cast-wallet address. |
-| 5 | On-chain authorization | `AGENT_ADDRESS` env points at the generated key, so `Deploy.s.sol` calls `gateway.authorizeAgent(generatedKey, policy)` with `msg.sender = ADMIN_ADDRESS = PARENT_ADDRESS`. A dedicated step then runs `cast call gateway "agentOwner(address)(address)" $AGENT_ADDRESS` and `cast call gateway "hasRole(bytes32,address)(bool)" $AGENT_ROLE $AGENT_ADDRESS` BEFORE the deposit and fails the job if either check is wrong. |
+| 5 | On-chain authorization | `AGENT_ADDRESS` env points at the generated key, so the gateway stage (`DeployGateway.s.sol`) calls `gateway.authorizeAgent(generatedKey, policy)` with `msg.sender = ADMIN_ADDRESS = PARENT_ADDRESS`. A dedicated step then runs `cast call gateway "agentOwner(address)(address)" $AGENT_ADDRESS` and `cast call gateway "hasRole(bytes32,address)(bool)" $AGENT_ROLE $AGENT_ADDRESS` BEFORE the deposit and fails the job if either check is wrong. |
 | 6 | Deposit signs with generated key | The headless deposit reads the generated keystore via `config.toml`; `.github/scripts/assert_headless_deposit_sender.py` parses the deposit `tx_hash` from the transcript, calls `eth_getTransactionByHash`, and asserts `from == AGENT_ADDRESS`. |
 | 7 | On-chain vault delta | `.github/scripts/assert_headless_deposit_delta.py` confirms `vault.total_assets` increased by the transcript-reported amount (pre-existing from #461). |
 

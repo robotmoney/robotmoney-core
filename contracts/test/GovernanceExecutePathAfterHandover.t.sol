@@ -361,7 +361,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     }
 
     /// @dev A 2-of-3 SafeProxy on SafeL2 through the canonical factory — the
-    ///      same call stage's ceremony makes (fusion-ceremony.sh create_safe).
+    ///      same call the stage deploy makes through the Safe SDK.
     function _createSafe() internal returns (ISafe created) {
         ownerPks[0] = uint256(keccak256("handover-safe-owner-1"));
         ownerPks[1] = uint256(keccak256("handover-safe-owner-2"));

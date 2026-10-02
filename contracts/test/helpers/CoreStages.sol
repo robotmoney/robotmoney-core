@@ -15,8 +15,7 @@ import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 
 /// @notice Runs the core stage scripts in process, in production order:
-///         libs, vault, registry, router, gateway. Tests use it where they used to call the
-///         single `Deploy.s.sol`. Agent authorization is part of the gateway stage and runs
+///         libs, vault, registry, router, gateway. Tests use it where a single deploy script used to be called. Agent authorization is part of the gateway stage and runs
 ///         after the gateway exists. The IC policy stage is a separate script that tests call
 ///         when they need it.
 /// @dev Not a Script: it carries no cheatcode state of its own. The stage scripts it creates

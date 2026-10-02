@@ -115,8 +115,7 @@ compare (it names the mismatch rather than reporting stale docs).
 
 #### Live-RPC fork steps (issue #1239)
 
-Three `fork-regressions` steps — the Uniswap V3, Uniswap V4 and Aerodrome
-`AssetPositionAdapter` fork tests — cannot use the offline golden fixture,
+Three `fork-regressions` steps — the Uniswap V3 and Aerodrome fork tests — cannot use the offline golden fixture,
 because it never touched those pools. They fork live Base, so they run through
 `scripts/devnet/run-live-rpc-forge-fork.sh` instead of a bare `forge test`:
 
@@ -1339,5 +1338,4 @@ bun scripts/ci/check-sha-green.ts <sha> [--repo owner/name] [--config path] [--a
 - Exit 2: bad arguments, bad config or an API error.
 - Optional entries that are not green are printed as `optional (does not gate)` and never change the exit code.
 - The initial required list is the set of jobs that run unconditionally on push to `dev` (no draft skip, no path filter, no matrix). Failing nightly jobs stay optional.
-- `fusion-ceremony-selftest` no longer exists: the ceremony shell and its selftest were deleted by S9 (core 1488). `deleted-stage-gate` is the surviving gate and is required.
 - Tests: `bun test scripts/ci/check-sha-green.test.ts`, run by the `check-sha-green-tests` job (suite 30), which fails when zero tests were collected. The same file asserts `dapp-lint-build` and `bun-audit` carry no skip condition and no `continue-on-error`.

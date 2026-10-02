@@ -115,8 +115,8 @@ interface IRouterGovernanceQuorum {
 ///                                    same rule). ADMIN_ROLE +
 ///                                    DEFAULT_ADMIN_ROLE move to the timelock.
 ///           AGENT_ADDRESSES        — comma-separated gateway agents the deployer
-///                                    owns (issue #1476): the deploy agent from
-///                                    Deploy.s.sol, the stage ceremony's submitter.
+///                                    owns (issue #1476): the deploy agent the
+///                                    gateway stage authorizes (DeployGateway.s.sol).
 ///                                    Each is handed to the timelock with
 ///                                    transferAgentOwnership while the timelock
 ///                                    already holds gateway ADMIN_ROLE and before
