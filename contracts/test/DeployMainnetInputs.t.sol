@@ -249,7 +249,9 @@ contract DeployMainnetInputsTest is Test {
         _base(p);
         _set(p, "AGENT_MAX_PER_WINDOW", "-5");
         vm.expectRevert(
-            bytes("RM_INPUTS_BAD_AGENT_AGENT_MAX_PER_WINDOW is malformed: expected an unsigned integer")
+            bytes(
+                "RM_INPUTS_BAD_AGENT_AGENT_MAX_PER_WINDOW is malformed: expected an unsigned integer"
+            )
         );
         g.readParams(p);
     }
@@ -279,7 +281,9 @@ contract DeployMainnetInputsTest is Test {
         _base(p);
         _set(p, "VAULT_EXIT_FEE_BPS", "five");
         vm.expectRevert(
-            bytes("RM_INPUTS_BAD_EXIT_VAULT_EXIT_FEE_BPS is malformed: expected an unsigned integer")
+            bytes(
+                "RM_INPUTS_BAD_EXIT_VAULT_EXIT_FEE_BPS is malformed: expected an unsigned integer"
+            )
         );
         h.readParams(p);
     }
