@@ -103,9 +103,12 @@ worker_out="$(FUSION_RECEIPT_FILE="$FUSION_FRONTEND_RECEIPT_FILE" \
 record "submit-worker.json" "$worker_out"
 printf '%s\n' "$worker_out" >&2
 
-# D9 permits a local/devnet release ceremony. Use a keystore, never a private
-# key on argv. Timelock-controlled staging must perform its normal schedule /
-# delay / execute ceremony externally, then rerun with FUSION_SKIP_RELEASE=1.
+# The release is a governance action. It goes through the real Safe and the
+# timelock, run by `scripts/stage/core-stack.sh governance release` (publish
+# contracts govern, row release-receipt). A single keystore never releases a
+# receipt: after handover no EOA holds the receipt contract's admin role, so a
+# direct send would only revert. Run the govern row first, then run this script
+# with FUSION_SKIP_RELEASE=1, or set FUSION_GOVERN_CMD so this script runs it.
 #
 # T29: IDEMPOTENT, BECAUSE THIS SCRIPT IS THE AC-E2E-05 SEAM AND IS RUN TWICE.
 # `releaseReceipt` is a one-shot state transition: a second `cast send` reverts
@@ -126,11 +129,10 @@ else
     release_action="already_released"
     echo "fusion-cross-repo: receipt $receipt_id is already released; no second broadcast" >&2
   else
-    : "${FUSION_RELEASE_KEYSTORE:?required for direct local/devnet release}"
-    : "${FUSION_RELEASE_PASSWORD_FILE:?required for direct local/devnet release}"
-    "$CAST_BIN" send "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$receipt_id" \
-      --rpc-url "$FUSION_RPC_URL" --keystore "$FUSION_RELEASE_KEYSTORE" \
-      --password-file "$FUSION_RELEASE_PASSWORD_FILE" >/dev/null
+    : "${FUSION_GOVERN_CMD:?the release goes through the real Safe and the timelock: set FUSION_GOVERN_CMD to the govern release command (core-stack.sh governance release), or run it first and set FUSION_SKIP_RELEASE=1}"
+    # shellcheck disable=SC2086 # the command is a word list by contract
+    $FUSION_GOVERN_CMD --receipt-id "$receipt_id" >/dev/null \
+      || fail "the govern release row failed for receipt $receipt_id"
   fi
 fi
 

@@ -1300,8 +1300,8 @@ impl NonceTracker {
     /// the RPC — as this did before #1374 — let two concurrent callers both
     /// observe the same `prev`, read the same `pending`, and pin the *same*
     /// nonce; the second send to reach geth was then rejected with
-    /// `replacement transaction underpriced`. `seed_demo_depositors` funds
-    /// from two shared keys on two scoped threads, so that window was live.
+    /// `replacement transaction underpriced`. the boot-time funding sends
+    /// from shared keys, so that window was live.
     fn pin_next_nonce(&self, from_hex: &str) -> Result<u64, HarnessError> {
         self.pin_next_nonce_with(from_hex, |addr| {
             self.eth_get_transaction_count(addr, "pending")
@@ -3983,7 +3983,7 @@ ccc333\t\teth-beacon
 
     #[test]
     fn concurrent_pins_never_hand_out_a_colliding_nonce() {
-        // Reproduces the race at its source. `seed_demo_depositors` funds on
+        // Reproduces the race at its source. boot-time funding runs on
         // two scoped threads and `DappStack::boot` funds while the fixture is
         // live, so concurrent pins for one sender are a real shape here.
         //

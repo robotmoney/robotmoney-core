@@ -36,10 +36,8 @@ const REQUIRED_KEYS = [
   "vault_addr",
   "usdc_addr",
   "agent_addr",
-  "admin_addr",
   "pauser_addr",
   "share_receiver_addr",
-  "admin_private_key",
   "pauser_private_key",
   "agent_private_key",
   "gateway_runtime_hash",
@@ -50,7 +48,6 @@ const REQUIRED_KEYS = [
   "router_addr",
   // Issue #477: governance fresh-account E2E.
   "governance_addr",
-  "rm_token_addr",
   // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
   "ic_policy_addr",
   "consensus_receipt_addr",
@@ -181,10 +178,8 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     vault_addr: raw.vault_addr,
     usdc_addr: raw.usdc_addr,
     agent_addr: raw.agent_addr,
-    admin_addr: raw.admin_addr,
     pauser_addr: raw.pauser_addr,
     share_receiver_addr: raw.share_receiver_addr,
-    admin_private_key: raw.admin_private_key,
     pauser_private_key: raw.pauser_private_key,
     agent_private_key: raw.agent_private_key,
     gateway_runtime_hash: raw.gateway_runtime_hash,
@@ -195,7 +190,6 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     router_addr: raw.router_addr,
     // Issue #477: governance fresh-account E2E.
     governance_addr: raw.governance_addr,
-    rm_token_addr: raw.rm_token_addr,
     // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
     ic_policy_addr: raw.ic_policy_addr,
     consensus_receipt_addr: raw.consensus_receipt_addr,

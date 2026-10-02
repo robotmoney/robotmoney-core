@@ -213,7 +213,7 @@ take_lock() {
 }
 
 # key=value lines from the harness summary; the last one wins.
-summary_value() { awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); v = $0 } END { print v }' "$SUMMARY" 2>/dev/null; }
+summary_value() { awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); v = $0 } END { print v }' "$SUMMARY" 2>/dev/null || true; }
 
 # ─── publish contracts: the one runbook ──────────────────────────────────────
 # The argument list is the same on every target. Only the values differ.
@@ -430,9 +430,22 @@ chain_down() {
 publish_verb() {
   case "$VERB" in
     args) need jq; publish_args publish ;;
-    run) publish_contracts publish ;;
+    run) publish_contracts publish; manifest_count_check ;;
     *) usage ;;
   esac
+}
+
+# After a publish run every one of the four vaults has a manifest: rmUSDC in
+# core.json and one vault-<key>.json each for rmPROTO, rmAGENT and rmRWA.
+manifest_count_check() {
+  local mdir key n=0
+  mdir="$(summary_value manifest_dir)"
+  [[ -f "$mdir/core.json" ]] && n=$((n + 1))
+  for key in rmPROTO rmAGENT rmRWA; do
+    [[ -f "$mdir/vault-$key.json" ]] && n=$((n + 1))
+  done
+  [[ "$n" == 4 ]] || fail "publish contracts wrote $n of 4 vault manifests in $mdir (rmUSDC, rmPROTO, rmAGENT, rmRWA)" 66
+  info "four vault manifests present in $mdir"
 }
 
 # ─── governance ───────────────────────────────────────────────────────────────

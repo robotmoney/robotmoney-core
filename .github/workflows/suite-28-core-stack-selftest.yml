@@ -47,22 +47,18 @@ jobs:
       # MIN_EXPECTED_ASSERTIONS so a run that silently did less (a section
       # skipped, a truncated file, a lost exit status) is red either way. Raise
       # both together when cases are added.
-      CORE_STACK_SELFTEST_FLOOR: "296"
+      CORE_STACK_SELFTEST_FLOOR: "42"
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # scripts/stage/tests/core-stack-selftest.sh: the stage verbs in
-    # scripts/stage/core-stack.sh (chain / governance / dapp / rmpc / record)
-    # against stub wrapped scripts and fake curl / docker / cast, offline. The
-    # harness processes it starts are real, so process groups, /proc start
-    # times, signals and the out-dir lock are exercised for real.
+    # scripts/stage/core-stack.sh (publish / governance / record) against a fake
+    # `bun` standing in for publish contracts, offline: the exact Twin chain
+    # argument list, exit-code passthrough, the govern row gate and the record
+    # contract. core-stack.sh deploys nothing itself (core 1488).
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          # Same pinned release as fusion-ceremony-selftest (suite 1-2), so the
-          # two stage self-tests always run against one toolchain.
-          version: v1.8.3
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
 
       - name: core-stack self-test
         run: |
@@ -80,3 +76,37 @@ jobs:
             echo "::error::core-stack selftest: $passed passed / $failed failed, floor $CORE_STACK_SELFTEST_FLOOR"
             exit 1
           fi
+
+  # The grep gate: exits 0 only when the second deployment path is gone. The
+  # stage ceremony shell, the deleted stage deploy script, the deploy workflow and the Rust
+  # harness deployment (forge script calls, demo seeding, faucet funding) must be
+  # absent, and core-stack.sh must hold no deploy or ceremony logic.
+  deleted-stage-gate:
+    name: deleted-stage-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Grep gate for the deleted stage paths
+        run: bun scripts/stage/check-deleted-stage-scripts.ts .
+
+  # Pure Bun TypeScript tests for the stage tooling: the govern row parser (tx
+  # hash and receipt status 1 on every row), the sheet-diff allow-list, the
+  # label-diff, and the gate itself. Fast, no chain.
+  stage-tooling-tests:
+    name: stage-tooling-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: bun test scripts/stage/tests
+        working-directory: scripts/stage
+        run: bun test tests

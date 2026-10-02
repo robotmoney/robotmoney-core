@@ -55,7 +55,7 @@
 //!   PACKED blacklist bit (FiatToken V2_1-vs-V2_2 storage-layout mismatch), so
 //!   on a V2_2 snapshot the grant can target/leave a stale blacklist slot.
 //!   Lives in the USDC-seed path (`src/base_testnet.rs` /
-//!   `src/bin/demo-seed-depositors.rs`), NOT this manifest module. Seam for
+//!   the deleted demo seeder), NOT this manifest module. Seam for
 //!   #1026: detect the FiatToken minor version and compute the blacklist slot
 //!   from the packed layout rather than the hardcoded V2_1 slot.
 //!
