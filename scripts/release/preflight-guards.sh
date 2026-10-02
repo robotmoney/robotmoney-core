@@ -17,7 +17,14 @@
 #      separate-body control, so 1 is refused exactly like 0).
 #
 # Usage:
-#   preflight-guards.sh [--contract NAME ...]
+#   preflight-guards.sh [--contract NAME ...] [--dependency-manifest CHAIN_ID:RELEASE]
+#
+# --dependency-manifest records the third-party dependency manifest for this
+# release (core 1497) with scripts/release/dependency-manifest-record.ts, into
+# deployments/dependency-manifests/<chain id>/<release>.json, to be committed
+# with the release deployment record. It reads the chain through the endpoint
+# named in DEPENDENCY_MANIFEST_RPC_URL (an environment variable, never an
+# argument), and refuses to run without it. Nothing it reads or writes is a secret.
 #
 # Exit codes: 0 = all guards pass; non-zero = a hard guard failed and the
 # ceremony MUST NOT proceed. No transaction is ever sent by this script.
@@ -63,6 +70,15 @@ fail() {
 warn() {
   echo "WARN: [preflight] $*" >&2
 }
+
+DEP_MANIFEST=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dependency-manifest) [[ $# -ge 2 ]] || fail "--dependency-manifest needs CHAIN_ID:RELEASE"; DEP_MANIFEST="$2"; shift 2 ;;
+    --contract) shift; while [[ $# -gt 0 && "$1" != --* ]]; do shift; done ;;
+    *) fail "unknown argument: $1" ;;
+  esac
+done
 
 # ─── 1. Hard env-default guard (#864 class) ──────────────────────────────────
 for var in EXECUTION_DELAY TIMELOCK_MIN_DELAY QUORUM_THRESHOLD; do
@@ -142,3 +158,18 @@ print("OK: [preflight] all ceremony artifacts within EIP-170/EIP-3860 hard limit
 PYEOF
 
 echo "OK: [preflight] size + env-default guards passed"
+
+# ─── 3. Dependency manifest (core 1497) ──────────────────────────────────────
+# Third-party state does not depend on our deploy, so it is recorded here, at
+# the same block the release is deployed against. Skipped only when the flag is
+# absent: a release deploy passes it.
+if [[ -n "$DEP_MANIFEST" ]]; then
+  [[ "$DEP_MANIFEST" =~ ^[0-9]+:[A-Za-z0-9._-]+$ ]] || fail "--dependency-manifest wants CHAIN_ID:RELEASE, got '$DEP_MANIFEST'"
+  [[ -n "${DEPENDENCY_MANIFEST_RPC_URL:-}" ]] || fail "DEPENDENCY_MANIFEST_RPC_URL is not set: the manifest reads the chain it records"
+  command -v bun >/dev/null || fail "bun is required to record the dependency manifest"
+  bun "$REPO_ROOT/scripts/release/dependency-manifest-record.ts" \
+    --chain-id "${DEP_MANIFEST%%:*}" --release "${DEP_MANIFEST#*:}" \
+    --rpc-url "$DEPENDENCY_MANIFEST_RPC_URL" --repo-root "$REPO_ROOT" \
+    || fail "dependency manifest was not recorded"
+  echo "OK: [preflight] dependency manifest recorded under deployments/dependency-manifests/${DEP_MANIFEST%%:*}/"
+fi

@@ -351,3 +351,66 @@ jobs:
         # and services/explorer-indexer/src/feature_flags.rs.
         # Implements: issue #389
         run: python3 .github/scripts/check_feature_flag_consistency.py
+
+  # Nightly and release-record checks (core 1495, 1496, 1497, 1498). No paths
+  # filter on this file, so these run on every pull request: the nightly dispatch
+  # list, the fresh-snapshot workflow and the dependency-manifest tools cannot
+  # drift while their own files are untouched. Offline and fast.
+  nightly-and-release-checks:
+    name: nightly-and-release-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      - name: actionlint on the three nightly workflows
+        run: ./actionlint .github/workflows/suite-21-nightly.yml .github/workflows/suite-29-nightly-fresh-snapshot.yml .github/workflows/nightly-third-party-drift.yml
+
+      # Core 1495: dispatch list covers every suite (negative control inside), the
+      # fork-pin age step has continue-on-error (yq), the deleted drift job and
+      # script are gone and unreferenced, the drift alarm text is gone.
+      - name: Nightly dispatch list self-test (core 1495)
+        run: bash .github/scripts/tests/test_nightly_dispatch_list.sh
+
+      # Core 1496: suites 5, 7, 8, 10, 11b, 14 and 26 present, no secret or keyed
+      # RPC, manifest fields and freshness, stubbed failing suite, final
+      # git diff gate, HTTP 429 retry. Runs on every PR, so a change to suite-29
+      # or scripts/devnet cannot skip it.
+      - name: Nightly fresh snapshot self-test (core 1496)
+        run: bash scripts/devnet/check-nightly-fresh-snapshot-selftest.sh
+
+      - name: Snapshot tooling self-test (HTTP 429 retry, no Deploy.s.sol; core 1498)
+        run: bun scripts/devnet/snapshot-fork-selftest.ts
+
+      # Core 1497: the third-party drift workflow ships disabled.
+      - name: yq asserts the drift workflow has no schedule and declares workflow_dispatch
+        run: |
+          f=.github/workflows/nightly-third-party-drift.yml
+          yq -e '.on | has("schedule") | not' "$f"
+          yq -e '.on | has("workflow_dispatch")' "$f"
+          bun scripts/release/check-nightly-third-party-workflow.ts
+
+      - name: Dependency manifest self-test (edited hash named, accurate manifest clean)
+        run: bun scripts/release/dependency-manifest-selftest.ts
+
+      # The address-presence loop over committed manifests checks nothing until the
+      # first release commits one, so also record a manifest from the committed
+      # snapshot and check that. A manifest address missing from the deploy config
+      # fails this step.
+      - name: Every manifest address is in the deploy config
+        run: |
+          set -euo pipefail
+          bun scripts/release/dependency-manifest-record.ts --chain-id 8453 --release ci-check \
+            --state-file testing/fixtures/fork-state/CURRENT.anvil-state --out "$RUNNER_TEMP/ci-check-manifest.json"
+          bun scripts/release/check-dependency-manifest-addresses.ts --manifest "$RUNNER_TEMP/ci-check-manifest.json"
+          shopt -s nullglob
+          for m in deployments/dependency-manifests/*/*.json; do
+            bun scripts/release/check-dependency-manifest-addresses.ts --manifest "$m"
+          done

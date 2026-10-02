@@ -116,6 +116,12 @@ Before any transaction is broadcast:
    build` artifacts, not a specific chain): the EIP-170 size gate on every
    contract in the ceremony's runtime set, and the env-default guard against
    an unsafe `RouterGovernance` `EXECUTION_DELAY`/`QUORUM_THRESHOLD`.
+   For a release deploy add `--dependency-manifest CHAIN_ID:RELEASE` (with
+   `DEPENDENCY_MANIFEST_RPC_URL` in the environment): it records every
+   third-party address, its code hash, its proxy implementation and the block
+   into `deployments/dependency-manifests/<chain id>/<release>.json`. Commit that
+   file with the release deployment record. The nightly third-party drift
+   workflow (disabled by default) compares live state to the latest such file.
 2. **Role and address validation.** `Deploy.s.sol`'s and every companion
    deploy script's own `_validate` step enforces distinct non-zero role
    addresses, a canonical asset address with deployed bytecode, and a real
