@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { check } from "../check-deleted-stage-scripts.ts";
+import { check, countScanned } from "../check-deleted-stage-scripts.ts";
 
 function tree(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "gate-"));
@@ -54,4 +54,12 @@ test("a Rust forge deployment in the harness fails", () => {
 test("core-stack.sh holding deploy logic fails", () => {
   const root = tree({ "scripts/stage/core-stack.sh": "forge script contracts/script/" + "Deploy" + ".s.sol\n" });
   expect(check(root).join("\n")).toContain("core-stack.sh");
+});
+
+test("an empty tree scans zero files, and the CLI exits 1 because zero checks ran", () => {
+  const root = tree({});
+  expect(countScanned(root)).toBe(0);
+  const p = Bun.spawnSync(["bun", join(import.meta.dir, "..", "check-deleted-stage-scripts.ts"), root], { stdout: "pipe", stderr: "pipe" });
+  expect(p.exitCode).toBe(1);
+  expect(p.stderr.toString()).toContain("zero checks ran");
 });

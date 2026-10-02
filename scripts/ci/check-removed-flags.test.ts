@@ -48,3 +48,13 @@ describe("removed flags gate", () => {
     expect(planted("scripts/stage/y.ts", 'const k = "STAGE_REHEARSAL_X";\n').code).toBe(0);
   });
 });
+
+describe("removed flags gate, zero checks", () => {
+  test("a root with no files fails because zero checks ran", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rf-empty-"));
+    temps.push(dir);
+    const r = run(dir);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("zero checks ran");
+  });
+});

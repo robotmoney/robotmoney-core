@@ -51,6 +51,10 @@ for (const root of ["contracts/script", "scripts"]) {
   }
 }
 
+if (scanned === 0) {
+  console.error("check-set-registry-owner: FAIL: no files scanned (zero checks ran)");
+  process.exit(1);
+}
 if (hits.length > 0) {
   console.error(hits.join("\n"));
   process.exit(1);

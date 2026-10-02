@@ -3,7 +3,7 @@
 //
 // CI gate: the flags that used to lift a deploy floor must not come back. Exit 0 when no file
 // under contracts/ or scripts/ names any of them. Exit 1 and print each hit otherwise.
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 // Usage: bun scripts/ci/check-removed-flags.ts [--root DIR]
@@ -56,8 +56,10 @@ const flagRe = (flag: string): RegExp => new RegExp(`(?<![A-Za-z0-9_])${flag}(?!
 const rootArg = process.argv.indexOf("--root");
 const repo = resolve(rootArg >= 0 ? process.argv[rootArg + 1]! : join(import.meta.dir, "..", ".."));
 const hits: string[] = [];
+let scanned = 0;
 
 function walk(dir: string): void {
+  if (!existsSync(dir)) return;
   for (const name of readdirSync(dir)) {
     if (SKIP_DIRS.has(name)) continue;
     const path = join(dir, name);
@@ -65,6 +67,7 @@ function walk(dir: string): void {
     if (st.isDirectory()) {
       walk(path);
     } else if (resolve(path) !== SELF) {
+      scanned++;
       const text = readFileSync(path, "utf8");
       text.split("\n").forEach((line, i) => {
         const rel = relative(repo, path).split("\\").join("/");
@@ -80,8 +83,12 @@ function walk(dir: string): void {
 
 for (const root of ROOTS) walk(join(repo, root));
 
+if (scanned === 0) {
+  console.error("check-removed-flags: FAIL: no files scanned under " + ROOTS.join(", ") + " (zero checks ran)");
+  process.exit(1);
+}
 if (hits.length > 0) {
   console.error("Removed deploy flags are back:\n" + hits.join("\n"));
   process.exit(1);
 }
-console.log(`ok: none of ${REMOVED.join(", ")} appears under ${ROOTS.join(", ")}`);
+console.log(`ok: none of ${REMOVED.join(", ")} appears under ${ROOTS.join(", ")} (${scanned} files scanned)`);

@@ -15,8 +15,9 @@ const ROOTS = ["contracts", "scripts", "testing", "clients", ".github", "deploym
 const SKIP_DIRS = new Set(["node_modules", "out", "cache", ".git", "lib", "target", "fixtures", "doc", "dist"]);
 const SELF = new Set([resolve(import.meta.path), resolve(import.meta.dir, "check-manifest-keys.test.ts")]);
 
-export function scan(roots: string[], base: string): string[] {
+export function scanCounted(roots: string[], base: string): { hits: string[]; scanned: number } {
   const hits: string[] = [];
+  let scanned = 0;
   const walk = (dir: string) => {
     let names: string[];
     try {
@@ -30,6 +31,7 @@ export function scan(roots: string[], base: string): string[] {
       const st = statSync(path);
       if (st.isDirectory()) walk(path);
       else if (!SELF.has(resolve(path)) && st.size < 2_000_000) {
+        scanned++;
         readFileSync(path, "utf8")
           .split("\n")
           .forEach((line, i) => {
@@ -39,12 +41,20 @@ export function scan(roots: string[], base: string): string[] {
     }
   };
   for (const r of roots) walk(join(base, r));
-  return hits;
+  return { hits, scanned };
+}
+
+export function scan(roots: string[], base: string): string[] {
+  return scanCounted(roots, base).hits;
 }
 
 if (import.meta.main) {
   const repo = resolve(import.meta.dir, "..", "..");
-  const hits = scan(ROOTS, repo);
+  const { hits, scanned } = scanCounted(ROOTS, repo);
+  if (scanned === 0) {
+    console.error("check-manifest-keys: FAIL: no files scanned (zero checks ran)");
+    process.exit(1);
+  }
   if (hits.length > 0) {
     console.error("Retired manifest keys or scripts are still read:\n" + hits.join("\n"));
     process.exit(1);

@@ -57,6 +57,13 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
+/** Files the pattern scan reads. The CLI fails when this is zero: a gate that read nothing proved nothing. */
+export function countScanned(root: string): number {
+  let n = 0;
+  for (const r of SCAN_ROOTS) for (const _ of walk(join(root, r))) n++;
+  return n;
+}
+
 export function check(root: string): string[] {
   const out: string[] = [];
   for (const f of MUST_BE_ABSENT) if (existsSync(join(root, f))) out.push(`${f} must be absent`);
@@ -89,6 +96,10 @@ export function check(root: string): string[] {
 
 if (import.meta.main) {
   const root = process.argv[2] ?? process.cwd();
+  if (countScanned(root) === 0) {
+    console.error("deleted-stage-gate: FAIL: no files scanned (zero checks ran)");
+    process.exit(1);
+  }
   const v = check(root);
   for (const m of v) console.error(`deleted-stage-gate: ${m}`);
   if (v.length) process.exit(1);

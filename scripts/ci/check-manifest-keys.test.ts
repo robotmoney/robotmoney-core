@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { scan } from "./check-manifest-keys";
+import { scan, scanCounted } from "./check-manifest-keys";
 
 const repo = resolve(import.meta.dir, "..", "..");
 
@@ -30,5 +30,12 @@ describe("manifest key gate", () => {
   test("the CLI exits 1 on a planted key and 0 on the tree", async () => {
     const ok = Bun.spawnSync(["bun", join(repo, "scripts/ci/check-manifest-keys.ts")]);
     expect(ok.exitCode).toBe(0);
+  });
+  test("an empty root scans zero files, and the CLI would fail", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mk-empty-"));
+    expect(scanCounted(["scripts", "contracts"], dir).scanned).toBe(0);
+  });
+  test("the tree scans more than zero files", () => {
+    expect(scanCounted(["scripts"], repo).scanned).toBeGreaterThan(0);
   });
 });

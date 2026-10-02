@@ -6,7 +6,7 @@
  * Asserts:
  *   1. every suite workflow is in SUITES or the documented exclusion list
  *      (scripts/ci/check_nightly_dispatch_list.py), and removing one suite is detected, naming it;
- *   2. suite-21-nightly.yml passes actionlint (CI installs it; set NIGHTLY_SELFTEST_ALLOW_NO_ACTIONLINT=1 to skip locally);
+ *   2. suite-21-nightly.yml passes actionlint (CI installs it and CI=true makes a missing one fatal; locally it is skipped with a loud warning);
  *   3. the fork-pin age step carries continue-on-error: true (yq), found by the script it runs;
  *   4. the live-base-fork-drift job, its script and its test are gone and nothing in .github, scripts or docs
  *      names them or the other deleted files;
@@ -57,10 +57,13 @@ if (run(["which", "actionlint"]).code === 0) {
   const a = run(["actionlint", NIGHTLY]);
   if (a.code) bad(`actionlint rejects ${NIGHTLY}: ${a.out}`);
   ok(`actionlint passes on ${NIGHTLY}`);
-} else if (process.env.NIGHTLY_SELFTEST_ALLOW_NO_ACTIONLINT === "1") {
-  console.log("skip - actionlint not installed (NIGHTLY_SELFTEST_ALLOW_NO_ACTIONLINT=1)");
+} else if (process.env.CI === "true") {
+  bad("actionlint is not installed, and CI must install it");
 } else {
-  bad("actionlint is not installed: CI installs it, set NIGHTLY_SELFTEST_ALLOW_NO_ACTIONLINT=1 to skip locally");
+  console.warn("WARNING ******************************************************************");
+  console.warn("WARNING actionlint is not installed: SKIPPING the actionlint check locally.");
+  console.warn("WARNING CI installs it and runs this check. Install actionlint to run it here.");
+  console.warn("WARNING ******************************************************************");
 }
 
 // 3. the fork-pin age step cannot fail the run: found by the script it runs, not by an exact string.

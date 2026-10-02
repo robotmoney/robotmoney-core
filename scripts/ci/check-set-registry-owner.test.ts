@@ -43,3 +43,13 @@ describe("setRegistry owner gate", () => {
     expect(planted("contracts/script/DeployTimelock.s.sol", "vault.setRegistry(x);\n").code).toBe(0);
   });
 });
+
+describe("setRegistry owner gate, zero checks", () => {
+  test("a root with no files fails because zero checks ran", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sr-empty-"));
+    temps.push(dir);
+    const r = run(dir);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("zero checks ran");
+  });
+});
