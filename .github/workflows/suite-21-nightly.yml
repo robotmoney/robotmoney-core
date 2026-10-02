@@ -105,12 +105,20 @@ jobs:
             suite-28-core-stages.yml
             suite-30-check-sha-green.yml
           )
+          FAILED=0
           for workflow in "${SUITES[@]}"; do
             echo "Dispatching $workflow..."
-            gh api -X POST \
+            if ! gh api -X POST \
               "repos/${REPO}/actions/workflows/${workflow}/dispatches" \
-              --field ref="${REF}" || echo "WARNING: failed to dispatch $workflow"
+              --field ref="${REF}"; then
+              echo "::error::failed to dispatch $workflow"
+              FAILED=$((FAILED + 1))
+            fi
           done
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::${FAILED} suite dispatch(es) failed; the nightly did not start the whole suite"
+            exit 1
+          fi
           echo "All dispatches sent."
 
   fork-pin-age-warning:

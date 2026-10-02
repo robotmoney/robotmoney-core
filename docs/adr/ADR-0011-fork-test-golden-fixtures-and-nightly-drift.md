@@ -1,6 +1,6 @@
 # ADR-0011: Fork tests run against checked-in golden fixtures on every merge; live drift is a non-blocking nightly
 
-- **Status:** Accepted
+- **Status:** Accepted. Superseded in part by core 1495/1496: the live drift alarm (Decision 2) is replaced by suite 29 (fresh snapshot) and the third-party drift workflow.
 - **Date:** 2026-07-20
 - **Deciders:** Product owner
 - **Supersedes (in part):** `docs/technical/fork-e2e-decisions.md` —
@@ -113,6 +113,8 @@ it never silent-skips. A missing fixture or an empty fork run is red, not
 green. This is the direct fix for the pre-existing legacy silent-skip.
 
 ### 2. Live-drift detection is a non-blocking nightly alarm on a free public RPC
+
+> **Superseded in part by core 1495/1496.** The live-RPC drift alarm described here no longer exists. It is replaced by suite 29 (nightly fresh snapshot) and the third-party drift workflow. The text below is kept as history.
 
 A **schedule-only, non-blocking** nightly job forks **Base mainnet at latest**
 via a **free public RPC** and re-runs the fork suite as a **drift alarm**.

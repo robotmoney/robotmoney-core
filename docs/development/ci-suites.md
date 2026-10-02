@@ -808,15 +808,15 @@ signal regardless of whether that day's commits touch each suite's path filters.
 
 **Jobs:**
 - `dispatch-all-suites` — single job; iterates over all suite workflow files and
-  calls `gh workflow run <file> --ref dev`
+  calls `gh api` (workflow dispatches) against `dev`; any failed dispatch fails the job
 - `fork-pin-age-warning` — runs `scripts/devnet/check-fork-pin-age.sh` and
   only warns; it never fails the run.
 - Self-test: `scripts/ci/check_nightly_dispatch_list.py` (run in suite 13)
   fails when a suite workflow is missing from the dispatch list.
 
 **Steps — `dispatch-all-suites` job:**
-1. Dispatch each suite workflow via `gh workflow run` against the `dev` ref
-2. (Suites run independently; this job only fires the dispatches and exits)
+1. Dispatch each suite workflow via `gh api` against the `dev` ref, counting failures
+2. Exit 1 when any dispatch failed (suites run independently; the job fires the dispatches)
 
 ---
 

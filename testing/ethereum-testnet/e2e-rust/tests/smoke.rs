@@ -1,8 +1,8 @@
 //! Canonical: Plan tracking issue #109 §5 — Geth+Lighthouse smoke test
 //!
 //! Smoke test for the e2e harness scaffold. Boots the Docker
-//! Geth+Lighthouse devnet via [`Fixture::new`], runs `forge script
-//! Deploy` from the host, decrypts the harness keystore, and invokes
+//! Geth+Lighthouse devnet via [`Fixture::new`] (no contract deployment:
+//! the harness never runs `forge script`), decrypts the harness keystore, and invokes
 //! `rmpc self-check`. Expects `ok: true` in the JSON output.
 //!
 //! Issue #37 dropped the prior Anvil flavor; the e2e crate now has a

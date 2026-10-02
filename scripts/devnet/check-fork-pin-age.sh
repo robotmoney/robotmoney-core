@@ -19,12 +19,13 @@
 # 48 days without a refresh and nothing in CI said so. Silence is the defect
 # this script fixes: the age is now printed on every run that validates the
 # manifest, annotated as a GitHub `::warning::` past a soft threshold, and can
-# be hard-gated with `--max-age-days` where failing is affordable (nightly).
+# be hard-gated with `--max-age-days` by a caller that wants a failure. The
+# nightly (suite 21) does not: it only warns.
 #
 # It deliberately does NOT hard-fail by default. A stale pin is a maintenance
 # signal, not a reason to red every pull request in the queue — that is exactly
 # the kind of unactionable blocking failure the CI-truthfulness work exists to
-# remove. Pass `--max-age-days` from a scheduled job to get the hard signal.
+# remove. Pass `--max-age-days` to get the hard signal in a caller that opts in.
 #
 # HOW TO REFRESH THE PIN when this reports a stale fixture:
 #   RMPC_FORK_RPC_URL=<Base archive RPC> scripts/devnet/snapshot-fork.ts

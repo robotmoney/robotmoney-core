@@ -4,7 +4,7 @@
 // The stage verbs are Bun TypeScript (scripts/stage/core-stack.ts). core-stack.sh may exist only as a
 // one-screen shim that execs it. Neither file may hold deploy or ceremony logic.
 // Usage: bun scripts/stage/check-deleted-stage-scripts.ts [repo-root]
-// Canonical: robotmoney/devops docs/plans/one-deployment-scheme.md (S9, core 1488).
+// Canonical: the one-deployment-scheme plan (S9, core 1488).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -27,6 +27,7 @@ export const FORBIDDEN_PATTERNS: { re: RegExp; why: string }[] = [
   { re: /seed_demo_depositors|demo-seed-depositors|demo_depositor_key/, why: "demo depositor seeding" },
   { re: /dapp_faucet_key|fund_rm_token/, why: "dapp faucet funding" },
   { re: /fusion-ceremony\.sh|deploy-core-stack\.sh/, why: "a deleted stage script" },
+  { re: /deploy-contracts\.yml/, why: "the deleted deploy workflow (deployment is publish contracts in devops)" },
   { re: /timelock-918453/, why: "the stale timelock record fallback" },
 ];
 
@@ -36,7 +37,7 @@ export const SHIM_MAX_LINES = 15;
 /** core-stack wraps boot, health, the record and parity only. These strings mean deploy or ceremony logic crept back. */
 export const CORE_STACK_FORBIDDEN = [/forge script/, /cast send/, /fusion-ceremony/, /deploy-core-stack/, /--private-key/];
 
-const SCAN_ROOTS = ["testing", "clients", "scripts", ".github"];
+const SCAN_ROOTS = ["testing", "clients", "scripts", ".github", "docs"];
 const SKIP_DIRS = new Set(["node_modules", "target", ".git", "dist", "lib", "out", "cache"]);
 /** Files whose job is to NAME the deleted paths (ban lists). They are not a second deployment path. */
 const SELF = new Set([
