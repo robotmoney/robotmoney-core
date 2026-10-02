@@ -197,62 +197,35 @@ same contracts ship into test, demo, and mainnet — only the registry
 flag's value differs across environments. See
 `docs/development/single-production-codebase.md` for the principle.
 
-The source tree also contains `RwaVault`, a shipped ERC-4626 USDC vault
-for tokenised real-world assets. The current deployment holds deSPXA
-(Centrifuge / Janus Henderson / Anemoy tokenised S&P 500 on Base).
-Key architectural characteristics:
+The source tree also contains `RwaBasketVault`, the rmRWA vault. rmRWA is
+a plain basket row: it holds deSPXA (Centrifuge / Janus Henderson / Anemoy
+tokenised S&P 500 on Base) priced from its Uniswap V3 fee 500 pool through
+the existing `UniswapV3SwapAdapter`. It has no oracle. `RwaVault`,
+`ChronicleOracleAdapter` and `DeSpxaAssetPositionAdapter` are deleted.
+Characteristics:
 
-- **Entry and exit via Aerodrome secondary market only.** NAV (TWAP) prices
-  protocol-level guards (growth limit, ORA-4 deviation, TVL cap); user share
-  value = market price of held deSPXA tokens. See
-  `docs/technical/asset-valuation-hybrid.md` for the hybrid design rationale.
-  Primary NAV redemption through the Centrifuge V3 ERC-7540 epoch operator
-  is a permanent non-goal: a permissionless smart-contract vault cannot
-  satisfy the KYC requirement. All deposits and withdrawals swap
-  USDC↔deSPXA through an Aerodrome CL pool.
-- **Chronicle push oracle for NAV pricing.** Aerodrome DEX TWAP is
-  unsuitable for thin RWA liquidity. `ChronicleOracleAdapter` prices NAV
-  and slippage floors via a Chronicle on-chain signed price feed.
-  `RwaVault` enforces a heartbeat window (default 24 h); price-sensitive
-  operations revert with `StalePriceFeed` if the feed is stale. NAV used
-  for system guards only; user position value via separate market pricing.
+- **Entry and exit via the secondary market only.** Primary NAV redemption
+  through the Centrifuge V3 ERC-7540 epoch operator is a permanent non-goal:
+  a permissionless smart-contract vault cannot satisfy the KYC requirement.
 - **Issuer freeze-control risk.** The deSPXA issuer may freeze token
-  transfers at any time, blocking all Aerodrome swaps and therefore all
-  vault deposits and withdrawals. Existing rmRWA holders retain their
-  shares; no funds are confiscated. Admin should pause the vault when a
-  freeze is detected to surface user-facing messages instead of opaque
-  ERC-20 reverts. See `docs/adr/ADR-0006-despxa-rwa-vault-design.md` §4.
-- **Single-asset basket.** `RwaVault` holds exactly one basket asset
-  (deSPXA). `maxAssets()` returns 1 to enforce this constraint.
-- **Router eligibility.** `RwaVault` is a `BasketVault` subclass.
-  Router eligibility follows the same `VaultRegistry.isRouterEligible`
-  registry-flag model as other basket vaults. The flag is flipped by
-  ADMIN_ROLE once pool cardinality, oracle freshness, and the intra-vault
-  rebalancing model are certified. `RwaVault` is marked Active — real
-  asset, seeded, Router-eligible per `docs/prd.md` §11.4.
+  transfers, blocking swaps and therefore deposits and withdrawals. Existing
+  holders keep their shares. Admin should pause the vault when a freeze is
+  detected. See `docs/adr/ADR-0006-despxa-rwa-vault-design.md` §4.
+- **Router eligibility.** Eligibility follows the same
+  `VaultRegistry.isRouterEligible` flag as other basket vaults, flipped by
+  ADMIN_ROLE once pool cardinality and the rebalancing model are certified.
 
-#### Target architecture (ADR-0010, Proposed)
+#### ADR-0010 is Rejected
 
-[ADR-0010](adr/ADR-0010-unified-vault-architecture.md) (status:
-Proposed) unifies the two vault families described above into a single
-`Vault` contract composed with an `IPositionAdapter` interface — the
-`RobotMoneyVault` adapter architecture taken as the general case. Under
-that model the abstract `BasketVault` base and its
-`ProtocolAssetVault`/`AgentTokenVault`/`RwaVault` subclasses stop being
-contract subclasses: each basket asset becomes a per-asset
-`AssetPositionAdapter` that custodies the token, executes swaps through
-the existing `IBasketSwapAdapter` venue seam, and self-prices via TWAP
-or Chronicle. Themes (stable-yield, protocol-asset, agent-token, RWA)
-become deployments plus configuration, not subclasses. Migration
-follows [ADR-0009](adr/ADR-0009-vault-retirement-no-assisted-migration.md):
-deploy v2, shift router weights, retire v1 — the v1 contracts described
-in this section stay untouched, so the current-state text above remains
-accurate for the deployed contracts. Once v2 ships, the description of
-a distinct basket-vault subclass family (and per-subclass certification
-framing) becomes historical; the registry-eligibility model
-(`isRouterEligible`), the lifecycle in §4.7, and the
-single-production-codebase principle carry over unchanged. Canonical
-spec: `docs/technical/unified-vault-spec.md`.
+[ADR-0010](adr/ADR-0010-unified-vault-architecture.md) proposed one unified
+`Vault` contract composed with an `IPositionAdapter` interface. It is
+Rejected. A fifth contract kind breaks the one-deployment-scheme rule, so
+`Vault.sol`, `IPositionAdapter.sol`, the AssetPosition adapters and
+`DeployVaultThemes.s.sol` are deleted. Four vault kinds ship: `RobotMoneyVault`
+(rmUSDC, lending adapters) and the `BasketVault` family (`ProtocolAssetVault`,
+`AgentTokenVault`, `RwaBasketVault`) that swap through `IBasketSwapAdapter`.
+The registry-eligibility model (`isRouterEligible`), the lifecycle in §4.7
+and the single-production-codebase principle are unchanged.
 
 ### 4.2 Portfolio Router
 
@@ -318,62 +291,25 @@ Current stable-yield adapters (for `RobotMoneyVault`):
   forwards withdrawn USDC back to the vault.
 
 Current basket-vault swap adapters (implement `IBasketSwapAdapter` for
-`BasketVault` subclasses including `RwaVault`, `ProtocolAssetVault`, and
+`BasketVault` subclasses `RwaBasketVault`, `ProtocolAssetVault`, and
 `AgentTokenVault`):
 
+- `UniswapV3SwapAdapter` routes USDC↔asset swaps through Uniswap V3 and
+  prices NAV and slippage floors via the pool TWAP.
 - `AerodromeSwapAdapter` routes USDC↔asset swaps through the Aerodrome
   Finance Router on Base (concentrated-liquidity CL pools). NAV and
   slippage floors are priced via an Aerodrome CL pool TWAP (arithmetic-mean
   tick over a configurable window, using the same `observe()` ABI as
   Uniswap V3). Only Aerodrome CL pools are supported; classic stable/volatile
   pools do not expose `observe()`.
-- `UniswapV4SwapAdapter` routes USDC↔asset swaps through the Uniswap V4
-  Router (`exactInputSingle`) on Base. TWAP reads use the V4 pool's
-  `observe()` method (EIP-7680 compatible, identical ABI to V3). Tick
-  spacing is derived from the fee tier using Uniswap V4's standard mapping
-  (500→10, 3000→60, 10000→200). Pools with hooks or custom tick spacings
-  require a bespoke adapter.
-- `ChronicleOracleAdapter` routes USDC↔asset swaps through the Aerodrome
-  Router (same swap path as `AerodromeSwapAdapter`) but prices NAV via a
-  Chronicle on-chain push oracle instead of a DEX TWAP. Used by `RwaVault`
-  for deSPXA where DEX liquidity is insufficient for a manipulation-resistant
-  TWAP. Staleness enforcement (heartbeat check) is delegated to the owning
-  vault, keeping the adapter stateless.
 
-#### Target architecture (ADR-0010, Proposed)
+#### ADR-0010 is Rejected
 
-Under [ADR-0010](adr/ADR-0010-unified-vault-architecture.md) (Proposed),
-the adapter seam described above becomes the general case for every
-vault: a single `Vault` contract routes through `IPositionAdapter`
-implementations, collapsing the current split between stable-yield
-`IStrategyAdapter`s (vault-internal lending positions) and basket-vault
-`IBasketSwapAdapter`s (vault-held tokens priced by the vault). Key
-deltas from the current state:
-
-- Basket assets are held by per-asset `AssetPositionAdapter` contracts
-  that custody the token, execute swaps via the existing
-  `IBasketSwapAdapter` venue seam (Aerodrome, Uniswap V4,
-  Chronicle-priced Aerodrome), and self-price via TWAP or Chronicle —
-  custody and pricing move out of the vault and into the adapter.
-- The vault mints on realized NAV delta for **protocol-level guards only**
-  (NAV growth limit, ORA-4 deviation, TVL cap, withdrawal liveness). User
-  share VALUE = market price of underlying assets held; NAV is system
-  accounting. See `docs/technical/asset-valuation-hybrid.md` for the hybrid
-  design rationale.
-  The vault's realized NAV delta degenerates to the exact-amount accounting
-  the lending adapters already exhibit (at protocol level, not user level).
-- `withdraw()` is permitted iff every active adapter reports
-  `isExact()`; otherwise the vault is redeem-only.
-- Governance controls apply uniformly per adapter: allowlist plus
-  codehash pinning, `capBps`, ADP-2 NAV exclusion, rebalance throttles,
-  and registry retire/unretire.
-
-`IBasketSwapAdapter` (ADR-0005) survives as the venue seam inside
-`AssetPositionAdapter`. The adapter descriptions above remain accurate
-for the deployed v1 contracts (which stay untouched per ADR-0009); the
-statement that swap adapters serve "`BasketVault` subclasses" becomes
-historical once v2 ships. Canonical spec:
-`docs/technical/unified-vault-spec.md`.
+The adapter seam stays split. Lending positions use `IStrategyAdapter`
+(`AaveV3Adapter`, `MorphoAdapter`, `CompoundV3Adapter`, held by
+`RobotMoneyVault`). Basket assets use `IBasketSwapAdapter`
+(`AerodromeSwapAdapter`, `UniswapV3SwapAdapter`, held by the basket
+vaults). There is no `IPositionAdapter` and no `AssetPositionAdapter`.
 
 ### 4.4 Synchronous Redemption
 
