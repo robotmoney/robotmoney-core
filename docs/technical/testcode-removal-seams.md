@@ -1,5 +1,7 @@
 # Testcode Removal — Seam Map
 
+> **Historical.** A scout report from before the one-deployment-scheme work. The demo contracts, stubs and scripts it names are deleted. It does not describe shipped code.
+
 **Scout issue:** #913
 **Date:** 2026-06-18
 **Canonical docs:** `.github/workflows/suite-11b-opencode-headless.yml`, `contracts/script/Deploy.s.sol`, `scripts/devnet/snapshot-fork.ts`, `docs/development/ci-suites.md`

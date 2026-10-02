@@ -162,11 +162,9 @@ const NAME_CHECK_EXEMPT = [
   "docs/technical/demo-seeding-seams.md",
   "docs/technical/testcode-removal-seams.md",
   "docs/technical/asset-flow-semantics.md",
-  "docs/technical/adapter-architecture.md",
   "docs/technical/asset-valuation.md",
   "docs/technical/asset-valuation-hybrid.md",
   "docs/technical/smart-contract-invariants.md",
-  "docs/technical/governance-isomorphism.md",
   "docs/technical/security-model.md",
 ];
 // Transitional debt. Each prefix is owned by another lane of the one-deployment-scheme plan and

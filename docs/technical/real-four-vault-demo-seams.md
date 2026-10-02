@@ -1,5 +1,7 @@
 # Real Four-Vault Demo — Seam Map
 
+> **Historical.** A scout report from before the one-deployment-scheme work. The demo contracts, stubs and scripts it names are deleted. It does not describe shipped code.
+
 **Scout issue:** #541
 **Date:** 2026-06-02
 **Canonical docs:** `Plan tracking issue #109`, `docs/prd.md` §11, `docs/technical/basket-vault-gap-report.md`

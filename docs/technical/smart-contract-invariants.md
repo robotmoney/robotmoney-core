@@ -15,19 +15,11 @@ bugs FV must pin once fixed).
 - Implementing code is in `contracts/`; current FV lives in `contracts/test/*Invariant*.t.sol`
   (Foundry `StdInvariant` handler-driven) plus the static guard tests
   (`CustodyInvariantGuard`, `AdapterDelegatecallGuard`, `AccessRoles`, `ERC4626PreconditionChecks`).
-- Unified-vault re-homing (ADR-0010, landed): the per-family vault contracts
-  (`RobotMoneyVault`, `BasketVault` and its `RwaVault`/`AgentTokenVault`/
-  `ProtocolAssetVault` subclasses) are subsumed by one `contracts/Vault.sol` +
-  `IPositionAdapter` set (`contracts/adapters/*AssetPositionAdapter.sol` for
-  priced-asset themes; the retrofitted `MorphoAdapter`/`AaveV3Adapter`/
-  `CompoundV3Adapter` for the lending theme). Every invariant below is stated
-  against those unified homes; the old→new enforcement mapping is the
-  **invariant-preservation matrix** in
-  [`docs/technical/unified-vault-spec.md` §6](unified-vault-spec.md), and the
-  test re-pointing (fixture swap, no invariant deleted) is spec §7. Where a
-  property is now split across the vault shell and an adapter, both loci are
-  named. The legacy per-family `.t.sol` suites still run against the matching
-  composition until each is ported.
+- The unified-vault re-homing proposed by ADR-0010 was Rejected and its code is deleted. The
+  shipped vaults are `RobotMoneyVault` and `BasketVault` with its `AgentTokenVault`,
+  `ProtocolAssetVault` and `RwaBasketVault` subclasses. Entries below that mention a unified
+  `Vault`, `IPositionAdapter`, `AssetPositionAdapter` or a Chronicle composition are historical
+  findings and are kept for the audit trail only (`docs/audits.md`).
 
 ## How to read an entry
 
