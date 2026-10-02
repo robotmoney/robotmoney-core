@@ -1,14 +1,14 @@
 // Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S10 (issue 1489).
 // The gate exits 0 on the tree and non-zero, naming the file, on a planted Demo contract, a stub,
 // a mock Safe, a bad block.chainid use, a restored deleted path and a deleted name in a script.
-// Run: bun test scripts/check-no-test-only-code.test.ts
+// Run: bun test scripts/ci/check-no-test-only-code.test.ts
 import { afterAll, describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const repo = resolve(import.meta.dir, "..");
-const gate = join(repo, "scripts/check-no-test-only-code.ts");
+const repo = resolve(import.meta.dir, "..", "..");
+const gate = join(repo, "scripts/ci/check-no-test-only-code.ts");
 const temps: string[] = [];
 
 /** A temp copy of the parts of the repo the gate scans. */

@@ -4,9 +4,9 @@
 > pieces fit). For the generated per-contract / per-symbol NatSpec reference,
 > see `contracts/doc/` (produced by `forge doc`).
 
-> Scope: verified source code for all Robot Money smart contracts deployed on Base mainnet. The main production vaults are RobotMoneyVault and the basket-vault family (BasketVault base class with ProtocolAssetVault, AgentTokenVault, and RwaVault subclasses). Allocation and governance infrastructure includes VaultRegistry, PortfolioRouter, and RouterGovernance. All contracts are verified on BaseScan. Source files are in `contracts/` at the repo root. Compiler: `v0.8.24+commit.e11b9ed9`, optimization 200 runs, EVM Cancun. The previous version of this document was a reverse-engineering exercise from ABIs; this version is authoritative from source.
+> Scope: verified source code for all Robot Money smart contracts deployed on Base mainnet. The main production vaults are RobotMoneyVault and the basket-vault family (BasketVault base class with ProtocolAssetVault, AgentTokenVault, and RwaBasketVault subclasses). Allocation and governance infrastructure includes VaultRegistry, PortfolioRouter, and RouterGovernance. All contracts are verified on BaseScan. Source files are in `contracts/` at the repo root. Compiler: `v0.8.24+commit.e11b9ed9`, optimization 200 runs, EVM Cancun. The previous version of this document was a reverse-engineering exercise from ABIs; this version is authoritative from source.
 
-> Planned evolution: `docs/adr/ADR-0010-unified-vault-architecture.md` (Proposed) unifies the two vault families into a single `Vault` + `IPositionAdapter` for v2 (spec: `docs/technical/unified-vault-spec.md`). The v1 contracts documented here stay deployed and untouched; migration is v2-deploy + router-weight shift + retire v1 per ADR-0009.
+> Planned evolution: `docs/adr/ADR-0010-unified-vault-architecture.md` is Rejected. The shipped design keeps `RobotMoneyVault` and the plain `BasketVault` family: rmRWA is a plain basket row (`RwaBasketVault`), with no oracle and no position adapter.
 
 ---
 
@@ -34,7 +34,7 @@
         │ • Morpho Adapter  │ │   Vault          │ │ • Reads weights│
         │ • Aave Adapter    │ │ • AgentToken     │ │   from Registry│
         │ • Compound Adapter│ │   Vault          │ │ • Reads votes  │
-        │                   │ │ • RwaVault       │ │   from Router- │
+        │                   │ │ • RwaBasketVault │ │   from Router- │
         │ ERC-4626 shares   │ │                  │ │   Governance   │
         │ (rmUSDC)          │ │ ERC-4626 shares  │ │                │
         │                   │ │ (rmPROTO / rmAGT │ │ USDC → Vaults  │
@@ -89,10 +89,10 @@
 
 | Contract | Role | Source file | Mainnet address |
 |---|---|---|---|
-| BasketVault (base) | Abstract ERC-4626 USDC → basket asset mix. Subclassed by ProtocolAssetVault, AgentTokenVault, RwaVault. | `contracts/vaults/BasketVault.sol` | N/A (abstract) |
-| ProtocolAssetVault | USDC → wETH, cbBTC, wSOL, etc. (volatile protocol assets) | `contracts/vaults/ProtocolAssetVault.sol` | (devnet in demo) |
+| BasketVault (base) | Abstract ERC-4626 USDC → basket asset mix. Subclassed by ProtocolAssetVault, AgentTokenVault, RwaBasketVault. | `contracts/vaults/BasketVault.sol` | N/A (abstract) |
+| ProtocolAssetVault | USDC → wETH, cbBTC (volatile protocol assets; assets with no usable pool are added later through the timelock) | `contracts/vaults/ProtocolAssetVault.sol` | (devnet in demo) |
 | AgentTokenVault | USDC → RM governance and agent-earned tokens | `contracts/vaults/AgentTokenVault.sol` | (devnet in demo) |
-| RwaVault | USDC → real-world asset tokens | `contracts/vaults/RwaVault.sol` | (devnet in demo) |
+| RwaBasketVault | USDC → deSPXA, a plain basket row priced from its fee 500 pool TWAP | `contracts/vaults/RwaBasketVault.sol` | set at the mainnet deploy |
 
 ### 2.4 Admin and fee recipient
 
@@ -593,13 +593,13 @@ Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or low
 | ADMIN_ROLE | Add/remove/activate assets, set TWAP windows, adjust TVL and per-deposit caps, set exit fee (max 1%), set fee recipient, set max slippage, pause deposits, trigger emergency-unwind. |
 | EMERGENCY_ROLE | `emergencyUnwind()` to liquidate the basket in a lossy, fast path (no slippage limit) if normal withdrawal is blocked (oracle failure, liquidity crash). Override allowed only if loss is within `maxLossBps` of the oracle-derived floor. |
 
-### 9.3.6 Subclasses: ProtocolAssetVault, AgentTokenVault, RwaVault
+### 9.3.6 Subclasses: ProtocolAssetVault, AgentTokenVault, RwaBasketVault
 
 | Subclass | Share symbol | Basket composition | Status | Use case |
 |---|---|---|---|---|
-| **ProtocolAssetVault** | rmPROTO | Volatile protocol assets (wETH, cbBTC, wSOL on Base). | Prototype (not audited) | Exposure to Base protocol ecosystem assets. |
+| **ProtocolAssetVault** | rmPROTO | Volatile protocol assets (wETH, cbBTC on Base). | Prototype (not audited) | Exposure to Base protocol ecosystem assets. |
 | **AgentTokenVault** | rmAGT | RM governance token and agent-earned tokens. | Prototype (not audited) | Agent incentive and governance participation. |
-| **RwaVault** | rmRWA | Real-world asset tokens. | Prototype (not audited) | Diversification into real-world collateral. |
+| **RwaBasketVault** | rmRWA | deSPXA, one plain basket row. | Prototype (not audited) | Diversification into real-world collateral. |
 
 All three subclasses inherit BasketVault behavior and are configured with:
 - Vault name and share symbol.

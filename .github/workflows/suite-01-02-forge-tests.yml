@@ -79,8 +79,8 @@ jobs:
       # files, and its self-test plants a Demo contract, a stub and a mock Safe.
       - name: No test-only code in the build
         run: |
-          bun scripts/check-no-test-only-code.ts
-          bun test scripts/check-no-test-only-code.test.ts
+          bun scripts/ci/check-no-test-only-code.ts
+          bun test scripts/ci/check-no-test-only-code.test.ts
 
       - name: Audit ledger covers every shipped contract
         run: |
@@ -380,54 +380,6 @@ jobs:
         env:
           RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
         run: scripts/devnet/check-fork-rpc-configured.sh "$RMPC_FORK_RPC_URL_RAW"
-
-  ceremony-selftest:
-    name: fusion-ceremony-selftest
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      CI_CLASS: system-correctness
-      # Executed-assertion floor, held here independently of the script's own
-      # ASSERTION_FLOOR so a run that silently did less (a section skipped, a
-      # truncated file, a lost exit status) is red either way. Raise both
-      # together when cases are added.
-      CEREMONY_SELFTEST_FLOOR: "136"
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
-    # scripts/stage/tests/fusion-ceremony-selftest.sh (issue #1447): the stage
-    # governance ceremony's verify/ensure/run/release/propose/vote/execute
-    # paths driven against a fake chain and a fake 2-of-3 Safe, offline, with
-    # real foundry `cast` for keccak/abi encoding. It runs beside the
-    # fork-regressions job's Safe-set gate self-test rather than inside it, so
-    # its several minutes of fake-chain round trips do not eat that job's
-    # 20-minute budget for the forge fork suites.
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          # Pinned, not the floating `stable` channel: the self-test reads cast's
-          # output formats (abi-decode, wallet, keccak) through a fake chain, so
-          # a cast release that changes one must be adopted on purpose. v1.8.3 is
-          # the release this suite was last run green on.
-          version: v1.8.3
-
-      - name: Fusion ceremony self-test (issue #1447)
-        run: |
-          set -o pipefail
-          bash scripts/stage/tests/fusion-ceremony-selftest.sh 2>&1 | tee ceremony-selftest.log
-          tally="$(grep -E '^fusion-ceremony selftest TOTAL: [0-9]+ passed, [0-9]+ failed' ceremony-selftest.log | tail -1)"
-          if [ -z "$tally" ]; then
-            echo "::error::fusion-ceremony selftest printed no TOTAL line: the run ended before its tally"
-            exit 1
-          fi
-          passed="$(sed -E 's/^fusion-ceremony selftest TOTAL: ([0-9]+) passed.*/\1/' <<<"$tally")"
-          failed="$(sed -E 's/^.* ([0-9]+) failed.*/\1/' <<<"$tally")"
-          echo "fusion-ceremony selftest: $passed assertions executed, $failed failed, floor $CEREMONY_SELFTEST_FLOOR"
-          if [ "$failed" != 0 ] || [ "$passed" -lt "$CEREMONY_SELFTEST_FLOOR" ]; then
-            echo "::error::fusion-ceremony selftest: $passed passed / $failed failed, floor $CEREMONY_SELFTEST_FLOOR"
-            exit 1
-          fi
 
   coverage:
     name: forge-coverage-gate

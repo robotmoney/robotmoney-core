@@ -2,7 +2,7 @@
 // Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S10 (issue 1489).
 //
 // CI gate: the build contains no test-only code. Production contracts are the tested contracts.
-// Usage: bun scripts/check-no-test-only-code.ts [--root DIR] [--list-allowlist]
+// Usage: bun scripts/ci/check-no-test-only-code.ts [--root DIR] [--list-allowlist]
 //   --root DIR          scan DIR instead of the repo (the self-test plants files in a temp copy)
 //   --list-allowlist    print the block.chainid allowlist and exit 0
 // Exit 0 when every check passes and at least one file was scanned. Exit 1 and print each hit
@@ -138,27 +138,37 @@ const HISTORY_DIRS = [
 ];
 // Files that must name the deleted things on purpose.
 const NAME_CHECK_EXEMPT = [
-  "scripts/check-no-test-only-code.ts",
-  "scripts/check-no-test-only-code.test.ts",
+  "scripts/ci/check-no-test-only-code.ts",
+  "scripts/ci/check-no-test-only-code.test.ts",
   "docs/audits.md", // the finding register keeps findings that named deleted contracts as history
   "contracts/test/DeployBasketVaultRwa.t.sol", // asserts the deleted paths are absent
   "docs/technical/base-tokenized-stocks-research.md", // phase-two research, not shipped code
+  // Design records of the rejected unified-vault architecture (ADR-0010 Rejected) and the retired
+  // v1 vault. They describe what was considered or retired and are kept as history, not as a
+  // description of shipped code.
+  "docs/operations/retired-v1-vault-maintenance.md",
+  "docs/technical/unified-vault-spec.md",
+  "docs/technical/unified-vault-seam-map.json",
+  "docs/technical/fixtures/unified-vault-seam-map.missing-entry.json",
+  "docs/technical/unified-vault-open-questions-resolution.md",
+  "docs/technical/real-four-vault-demo-seams.md",
+  "docs/technical/demo-seeding-seams.md",
+  "docs/technical/testcode-removal-seams.md",
+  "docs/technical/asset-flow-semantics.md",
+  "docs/technical/adapter-architecture.md",
+  "docs/technical/asset-valuation.md",
+  "docs/technical/asset-valuation-hybrid.md",
+  "docs/technical/smart-contract-invariants.md",
+  "docs/technical/governance-isomorphism.md",
+  "docs/technical/security-model.md",
 ];
 // Transitional debt. Each prefix is owned by another lane of the one-deployment-scheme plan and
 // is deleted or rewritten there. A hit under a prefix is printed as a WARNING and does not fail
 // the gate. Remove the prefix when its lane lands, so the gate then fails on any regression.
-//   scripts/stage, testing/smoke-test: S9 stage driver replaces the shell ceremony and the Rust
-//     demo harness (the Arachnid CREATE2 install and the demo deploy calls go with them).
-//   docs/technical, docs/development, docs/operations: S12 rewrites the prose docs.
+//   testing/smoke-test: S9 stage driver replaces the Rust demo harness (the Arachnid CREATE2
+//     install and the demo deploy calls go with it).
 //   .github/scripts/tests/fixtures: recorded transcripts of old sessions.
-export const TRANSITIONAL_PREFIXES = [
-  "scripts/stage/",
-  "testing/smoke-test/",
-  "docs/technical/",
-  "docs/development/",
-  "docs/operations/",
-  ".github/scripts/tests/fixtures/",
-];
+export const TRANSITIONAL_PREFIXES = ["testing/smoke-test/", ".github/scripts/tests/fixtures/"];
 const isTransitional = (r: string): boolean => TRANSITIONAL_PREFIXES.some((p) => r.startsWith(p));
 const SKIP_DIRS = new Set(["node_modules", "out", "cache", ".git", "lib", "target", "broadcast"]);
 const TEXT_EXT = /\.(sol|ts|tsx|js|mjs|json|yml|yaml|sh|md|toml|rs|py|mdx|txt)$|(^|\/)Makefile[^/]*$/;
@@ -169,7 +179,7 @@ if (args.includes("--list-allowlist")) {
   process.exit(0);
 }
 const rootArg = args.indexOf("--root");
-const repo = resolve(rootArg >= 0 ? args[rootArg + 1]! : join(import.meta.dir, ".."));
+const repo = resolve(rootArg >= 0 ? args[rootArg + 1]! : join(import.meta.dir, "..", ".."));
 
 const hits: string[] = [];
 const warnings: string[] = [];

@@ -1,0 +1,138 @@
+# Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S3 (1485), S5 (1487), 1493.
+#
+# The core stage runner (scripts/deploy/core-stages.ts) and its assertion scripts replace the old
+# shell stack. The offline job runs on every pull request: the stage table, the manifest rules and the
+# proof rules (router wiring, timelock roles, basket vault config equals chain) against fake readers.
+# The Twin chain job runs the real stages against a Twin chain RPC (918453) on demand. It takes no key:
+# the dev node signs for the deployer (`--unlocked`), the same flags the runner documents.
+name: core-stages
+
+on:
+  pull_request: {}
+  push:
+    branches: ["releases-*"]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      twin_rpc_url:
+        description: "Twin chain (918453) RPC URL. Leave empty to run the offline job only."
+        required: false
+        default: ""
+      deployer:
+        description: "Unlocked deployer address on the Twin chain node"
+        required: false
+        default: ""
+      safe_address:
+        description: "safe_address for the Twin chain run (public address or number, never a secret)"
+        required: false
+        default: ""
+      safe_owners:
+        description: "safe_owners for the Twin chain run (public address or number, never a secret)"
+        required: false
+        default: ""
+      safe_threshold:
+        description: "safe_threshold for the Twin chain run (public address or number, never a secret)"
+        required: false
+        default: ""
+      emergency_address:
+        description: "emergency_address for the Twin chain run (public address or number, never a secret)"
+        required: false
+        default: ""
+      pauser_address:
+        description: "pauser_address for the Twin chain run (public address or number, never a secret)"
+        required: false
+        default: ""
+      agent_address:
+        description: "agent_address for the Twin chain run (public address or number, never a secret)"
+        required: false
+        default: ""
+      share_receiver_address:
+        description: "share_receiver_address for the Twin chain run (public address or number, never a secret)"
+        required: false
+        default: ""
+      fee_recipient_address:
+        description: "fee_recipient_address for the Twin chain run (public address or number, never a secret)"
+        required: false
+        default: ""
+      timelock_min_delay:
+        description: "Timelock delay in seconds on the Twin chain"
+        required: false
+        default: "60"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  core-stages-offline:
+    name: core-stages-offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Stage table, assertion rules and config-check fixtures
+        run: |
+          set -euo pipefail
+          bun test scripts/deploy scripts/ci 2>&1 | tee core-stages.log
+          grep -Eq '^ *[1-9][0-9]* pass' core-stages.log || { echo "zero tests passed" >&2; exit 1; }
+
+  core-stages-twin:
+    name: core-stages-twin-chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.twin_rpc_url != '' }}
+    env:
+      CI_CLASS: system-correctness
+      TWIN_RPC_URL: ${{ inputs.twin_rpc_url }}
+      ADMIN_ADDRESS: ${{ inputs.deployer }}
+      SAFE_ADDRESS: ${{ inputs.safe_address }}
+      SAFE_OWNERS: ${{ inputs.safe_owners }}
+      SAFE_THRESHOLD: ${{ inputs.safe_threshold }}
+      EMERGENCY_ADDRESS: ${{ inputs.emergency_address }}
+      PAUSER_ADDRESS: ${{ inputs.pauser_address }}
+      AGENT_ADDRESS: ${{ inputs.agent_address }}
+      SHARE_RECEIVER_ADDRESS: ${{ inputs.share_receiver_address }}
+      FEE_RECIPIENT_ADDRESS: ${{ inputs.fee_recipient_address }}
+      TIMELOCK_MIN_DELAY: ${{ inputs.timelock_min_delay }}
+      RECEIPT_ADMIN_ADDRESS: ${{ inputs.deployer }}
+      SWAP_ROUTER: "0x2626664c2603336E57B271c5C0b26F421741e481"
+      TVL_CAP: "1000000000"
+      PER_DEPOSIT_CAP: "100000000"
+      FEE_RECIPIENT: ${{ inputs.fee_recipient_address }}
+      VAULT_TVL_CAP: "1000000000"
+      VAULT_PER_DEPOSIT_CAP: "100000000"
+      EXPECTED_CHAIN_ID: "918453"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Deploy the core stages on the Twin chain
+        run: |
+          bun scripts/deploy/core-stages.ts --rpc-url "$TWIN_RPC_URL" --out core-manifest.json \
+            --counts core-counts.json --forge-arg --unlocked --forge-arg --sender --forge-arg "$ADMIN_ADDRESS"
+      - name: Router, basket vault and timelock role proofs
+        run: |
+          bun scripts/deploy/assert-basket-vaults.ts --rpc-url "$TWIN_RPC_URL" --manifest core-manifest.json --out basket-proof.json
+          bun scripts/deploy/assert-timelock-roles.ts --rpc-url "$TWIN_RPC_URL" --manifest core-manifest.json \
+            --deployer "$ADMIN_ADDRESS" --safe "$SAFE_ADDRESS" --emergency "$EMERGENCY_ADDRESS" \
+            --min-delay "$TIMELOCK_MIN_DELAY" --out timelock-proof.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-stages-proof
+          path: |
+            core-manifest.json
+            core-counts.json
+            basket-proof.json
+            timelock-proof.json
