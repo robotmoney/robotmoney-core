@@ -4,10 +4,6 @@ name: config-check
 
 on:
   pull_request:
-    paths:
-      - "config/**"
-      - "scripts/ci/config-check*.ts"
-      - ".github/workflows/config-check.yml"
   push:
     branches: [main, dev]
   schedule:
@@ -26,11 +22,30 @@ jobs:
       CI_CLASS: feature-correctness
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+        with:
+          fetch-depth: 0
+      - name: Decide whether config paths changed
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -Eq '^(config/|scripts/ci/config-check|\.github/workflows/config-check\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No config path changed: live Base check skipped, check reports success."
+          fi
+      - if: steps.paths.outputs.run == 'true'
+        uses: oven-sh/setup-bun@v2
       - name: Check config against live Base head
+        if: steps.paths.outputs.run == 'true'
         run: bun scripts/ci/config-check.ts --rpc https://mainnet.base.org --out-dir config-check-output
       - name: Upload config-check output
-        if: always()
+        if: always() && steps.paths.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: config-check-output

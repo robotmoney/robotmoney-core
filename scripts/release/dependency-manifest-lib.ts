@@ -92,10 +92,15 @@ export interface CollectResult {
   warnings: string[];
 }
 
-/** JSON config files and the top-level keys that hold third-party addresses per chain id. */
-export const JSON_ADDRESS_SOURCES: { file: string; sections: Record<number, string[]> }[] = [
-  { file: "config/dex-pools.json", sections: { 8453: ["mainnet", "basket_assets"], 918453: ["devnet", "basket_assets"] } },
-  { file: "config/agent-token-shortlist.json", sections: { 8453: ["mainnet"], 918453: ["mainnet"] } },
+/**
+ * JSON config files that hold third-party addresses. Each is one map for every chain
+ * (one deployment scheme), so the whole file is walked and the chain id does not select a section.
+ */
+export const JSON_ADDRESS_SOURCES: { file: string }[] = [
+  { file: "config/dex-pools.json" },
+  { file: "config/protocol-assets.json" },
+  { file: "config/rwa-assets.json" },
+  { file: "config/agent-token-shortlist.json" },
 ];
 /** Solidity deploy scripts: `address ... constant NAME = 0x...;` lines are third-party pins. */
 export const SOLIDITY_SCRIPT_DIR = "contracts/script";
@@ -120,22 +125,18 @@ function walk(node: unknown, path: string, out: { address: string; label: string
   }
 }
 
-export function collectThirdPartyAddresses(repoRoot: string, chainId: number): CollectResult {
+export function collectThirdPartyAddresses(repoRoot: string, _chainId?: number): CollectResult {
   const root = resolve(repoRoot);
   const found: Dependency[] = [];
   const warnings: string[] = [];
 
   for (const src of JSON_ADDRESS_SOURCES) {
-    const sections = src.sections[chainId];
     const p = join(root, src.file);
-    if (!sections || !existsSync(p)) continue;
-    const json = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
-    for (const sec of sections) {
-      if (!(sec in json)) continue;
-      const hits: { address: string; label: string }[] = [];
-      walk(json[sec], sec, hits, warnings, src.file);
-      for (const h of hits) found.push({ ...h, source: src.file });
-    }
+    if (!existsSync(p)) continue;
+    const json = JSON.parse(readFileSync(p, "utf8")) as unknown;
+    const hits: { address: string; label: string }[] = [];
+    walk(json, "", hits, warnings, src.file);
+    for (const h of hits) found.push({ ...h, source: src.file });
   }
 
   const scriptDir = join(root, SOLIDITY_SCRIPT_DIR);
