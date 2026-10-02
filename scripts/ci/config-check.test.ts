@@ -90,35 +90,80 @@ describe("live rules against a fake RPC", () => {
   const cfg = loadConfigs(realDir);
   const w = (n: bigint | number) => BigInt(n).toString(16).padStart(64, "0");
   const a = (x: string) => x.replace(/^0x/, "").toLowerCase().padStart(64, "0");
-  function rpcFor(fee: number, poolOverride?: string): Rpc {
+  const all = [...cfg.protocol.assets, ...cfg.rwa.assets];
+  const FACTORY = cfg.rwa.uniswapV3Factory.toLowerCase();
+
+  /** Per-pool live facts. Defaults match the committed config, so a test overrides one thing. */
+  interface Live { fee?: number; cardinality?: number; liquidity?: bigint; factoryPool?: string }
+  function rpcFor(over: Record<string, Live> = {}): Rpc {
+    const feeOf = (pool: string) => Number(all.find((x) => x.pool.toLowerCase() === pool)!.poolFee);
     return async (method, params) => {
       if (method === "eth_getCode") return "0x6001";
       const { to, data } = params[0] as { to: string; data: string };
       const sel = data.slice(0, 10);
       const t = to.toLowerCase();
-      const pool = cfg.rwa.assets[0].pool.toLowerCase();
-      const isPool = t === pool;
-      if (sel === "0xddca3f43") return "0x" + w(fee);
+      const asset = all.find((x) => x.pool.toLowerCase() === t);
+      const o = (asset && over[asset.symbol]) || {};
+      if (sel === "0xddca3f43") return "0x" + w(o.fee ?? feeOf(t));
       if (sel === "0x0dfe1681") return "0x" + a(cfg.rwa.usdc);
-      if (sel === "0xd21220a7") return "0x" + a(cfg.rwa.assets[0].token);
-      if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(0) + w(50) + w(0) + w(1);
-      if (sel === "0x1a686502") return "0x" + w(10n ** 18n);
+      if (sel === "0xd21220a7") return "0x" + a(asset!.token);
+      if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(0) + w(o.cardinality ?? 50) + w(0) + w(1);
+      if (sel === "0x1a686502") return "0x" + w(o.liquidity ?? 10n ** 18n);
       if (sel === "0x70a08231") return "0x" + w(2_000_000n * 10n ** 6n);
-      if (sel === "0x1698ee82") return "0x" + a(poolOverride ?? cfg.rwa.assets[0].pool);
-      void isPool;
+      if (sel === "0x1698ee82" && t === FACTORY) {
+        // getPool(token, usdc, fee): the first argument is the asset token.
+        const tok = "0x" + data.slice(10, 74).slice(24);
+        const x = all.find((y) => y.token.toLowerCase() === tok.toLowerCase());
+        const o2 = (x && over[x.symbol]) || {};
+        return "0x" + a(o2.factoryPool ?? x!.pool);
+      }
       return "0x" + w(0);
     };
   }
-  test("passes when live facts match", async () => {
-    const r = await liveFindings(rpcFor(500), "latest", cfg);
-    expect(r.findings.filter((f) => f.scope.startsWith("rwa") && !f.ok)).toEqual([]);
+  const bad = async (over: Record<string, Live>, rule: string, symbol?: string) => {
+    const r = await liveFindings(rpcFor(over), "latest", cfg);
+    return r.findings.some((f) => f.rule === rule && !f.ok && (!symbol || f.scope.endsWith(`:${symbol}`)));
+  };
+
+  test("passes when live facts match, for every asset", async () => {
+    const r = await liveFindings(rpcFor(), "latest", cfg);
+    expect(r.findings.filter((f) => !f.ok)).toEqual([]);
   });
   test("fails when the live pool fee differs", async () => {
-    const r = await liveFindings(rpcFor(100), "latest", cfg);
-    expect(r.findings.some((f) => f.rule === "pool-fee-equals-config" && !f.ok)).toBe(true);
+    expect(await bad({ deSPXA: { fee: 100 } }, "pool-fee-equals-config", "deSPXA")).toBe(true);
   });
   test("fails when the factory returns another pool", async () => {
-    const r = await liveFindings(rpcFor(500, "0x1111111111111111111111111111111111111111"), "latest", cfg);
-    expect(r.findings.some((f) => f.rule === "factory-getPool-equals-config" && !f.ok)).toBe(true);
+    expect(await bad({ deSPXA: { factoryPool: "0x1111111111111111111111111111111111111111" } }, "factory-getPool-equals-config", "deSPXA")).toBe(true);
+  });
+  test("fails when observation cardinality is below 2", async () => {
+    expect(await bad({ deSPXA: { cardinality: 1 } }, "observation-cardinality>=2", "deSPXA")).toBe(true);
+  });
+  test("fails when liquidity is zero", async () => {
+    expect(await bad({ deSPXA: { liquidity: 0n } }, "liquidity>0", "deSPXA")).toBe(true);
+  });
+  for (const sym of ["wETH", "cbBTC"]) {
+    test(`${sym}: a live fee that differs from config fails`, async () => {
+      expect(await bad({ [sym]: { fee: 3000 } }, "pool-fee-equals-config", sym)).toBe(true);
+    });
+    test(`${sym}: a factory that returns another pool fails`, async () => {
+      expect(await bad({ [sym]: { factoryPool: "0x2222222222222222222222222222222222222222" } }, "factory-getPool-equals-config", sym)).toBe(true);
+    });
+    test(`${sym}: cardinality below 2 and zero liquidity fail`, async () => {
+      expect(await bad({ [sym]: { cardinality: 0 } }, "observation-cardinality>=2", sym)).toBe(true);
+      expect(await bad({ [sym]: { liquidity: 0n } }, "liquidity>0", sym)).toBe(true);
+    });
+  }
+  test("a config whose wETH or cbBTC pool address is altered fails the factory rule", async () => {
+    const c = fixture((f) => {
+      f["protocol-assets.json"].assets[0].pool = "0x3333333333333333333333333333333333333333";
+      f["protocol-assets.json"].assets[1].poolFee = 3000;
+    });
+    const r = await liveFindings(rpcFor(), "latest", c);
+    const failed = r.findings.filter((f) => !f.ok);
+    expect(failed.some((f) => f.scope.endsWith(":wETH") || f.scope.endsWith(":cbBTC"))).toBe(true);
+  });
+  test("main exits non-zero when any live rule fails", async () => {
+    const r = await liveFindings(rpcFor({ cbBTC: { liquidity: 0n } }), "latest", cfg);
+    expect(r.findings.some((f) => !f.ok)).toBe(true);
   });
 });
