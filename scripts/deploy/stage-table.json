@@ -21,7 +21,8 @@
         "ADMIN_ADDRESS",
         "FEE_RECIPIENT_ADDRESS",
         "VAULT_TVL_CAP",
-        "VAULT_PER_DEPOSIT_CAP"
+        "VAULT_PER_DEPOSIT_CAP",
+        "SEED_SHARE_RECEIVER"
       ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID",

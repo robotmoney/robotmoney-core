@@ -17,6 +17,14 @@ contract DeployInputsHarness is DeployVault {
         return _readEnvParamsFrom(prefix);
     }
 
+    function seedReceiver(string memory prefix, address deployer) external view returns (address) {
+        return _seedShareReceiver(prefix, deployer);
+    }
+
+    function requireReceiver(address receiver, address deployer) external pure {
+        _requireSeedReceiver(receiver, deployer);
+    }
+
     function seed(string memory prefix) external view returns (uint256) {
         return _seedAmount(prefix);
     }
@@ -255,6 +263,42 @@ contract DeployMainnetInputsTest is Test {
     }
 
     // --- refusals ------------------------------------------------------------------------
+
+    function test_seedShareReceiver_isRead() public {
+        string memory p = "RM_INPUTS_SEED_RECV_";
+        address recv = makeAddr("seed-receiver");
+        _set(p, "SEED_SHARE_RECEIVER", vm.toString(recv));
+        assertEq(h.seedReceiver(p, admin), recv);
+    }
+
+    function test_missingSeedShareReceiver_reverts() public {
+        string memory p = "RM_INPUTS_SEED_RECV_MISSING_";
+        vm.expectRevert(bytes(string.concat(p, "SEED_SHARE_RECEIVER must be set")));
+        h.seedReceiver(p, admin);
+    }
+
+    function test_zeroSeedShareReceiver_reverts() public {
+        string memory p = "RM_INPUTS_SEED_RECV_ZERO_";
+        _set(p, "SEED_SHARE_RECEIVER", vm.toString(address(0)));
+        vm.expectRevert(bytes("SEED_SHARE_RECEIVER=0"));
+        h.seedReceiver(p, admin);
+    }
+
+    function test_deployerSeedShareReceiver_reverts() public {
+        string memory p = "RM_INPUTS_SEED_RECV_DEPLOYER_";
+        _set(p, "SEED_SHARE_RECEIVER", vm.toString(admin));
+        vm.expectRevert(bytes("SEED_SHARE_RECEIVER=deployer"));
+        h.seedReceiver(p, admin);
+    }
+
+    function test_malformedSeedShareReceiver_reverts() public {
+        string memory p = "RM_INPUTS_SEED_RECV_BAD_";
+        _set(p, "SEED_SHARE_RECEIVER", "nope");
+        vm.expectRevert(
+            bytes("RM_INPUTS_SEED_RECV_BAD_SEED_SHARE_RECEIVER is malformed: expected an address")
+        );
+        h.seedReceiver(p, admin);
+    }
 
     function test_zeroSeed_reverts() public {
         string memory p = "RM_INPUTS_ZERO_SEED_";

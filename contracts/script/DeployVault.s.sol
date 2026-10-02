@@ -30,6 +30,8 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///        ADMIN_ADDRESS         — receives ADMIN_ROLE and EMERGENCY_ROLE on the vault
 ///        FEE_RECIPIENT_ADDRESS — vault fee recipient (the treasury, never the deployer)
 ///        VAULT_TVL_CAP, VAULT_PER_DEPOSIT_CAP — vault caps, 6-decimal USDC units
+///        SEED_SHARE_RECEIVER   — receives the seed shares. Not zero, not the deployer (ADMIN_ADDRESS).
+///                                The deployer holds no shares after this stage.
 ///        DEPLOYMENT_OUT        — output JSON path
 ///      USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
 ///      Optional (a malformed value reverts, it never falls back):
@@ -102,16 +104,19 @@ contract DeployVault is ExpectedChainGuard {
     /// @notice Forge broadcast entrypoint. Deploys, registers adapters, seeds, writes JSON.
     function run() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
+        address seedReceiver = _seedShareReceiver("", p.admin);
         vm.startBroadcast();
         d = _deploy(p);
         // The broadcaster IS d.admin: msg.sender holds ADMIN_ROLE. vm.prank is prohibited here.
         _approveAndRegisterAdapters(d);
         uint256 seed = _seedAmount("");
         IERC20(d.usdc).approve(address(d.vault), seed);
-        uint256 seedShares = d.vault.deposit(seed, d.admin);
+        uint256 seedShares = d.vault.deposit(seed, seedReceiver);
+        require(d.vault.balanceOf(d.admin) == 0, "deployer must hold no seed shares");
         _requireSeeded(d, seed);
         console2.log("  seed deposit (USDC):", seed);
         console2.log("  seed shares minted :", seedShares);
+        console2.log("  seed share receiver:", seedReceiver);
         vm.stopBroadcast();
         _writeDeploymentJson(d);
     }
@@ -133,16 +138,18 @@ contract DeployVault is ExpectedChainGuard {
     }
 
     /// @notice Direct-parameter variant that also seeds. Needs real venue state (fork tests).
-    function runInProcessWithSeed(address admin_, address usdc_)
+    function runInProcessWithSeed(address admin_, address usdc_, address seedReceiver_)
         external
         returns (Deployed memory d)
     {
+        _requireSeedReceiver(seedReceiver_, admin_);
         d = _deploy(_testParams(admin_, usdc_));
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
         IERC20(d.usdc).approve(address(d.vault), SEED_DEPOSIT_AMOUNT);
-        uint256 shares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, d.admin);
+        uint256 shares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, seedReceiver_);
         vm.stopPrank();
+        require(d.vault.balanceOf(d.admin) == 0, "deployer must hold no seed shares");
         _requireSeeded(d, SEED_DEPOSIT_AMOUNT);
         console2.log("  seed shares minted :", shares);
     }
@@ -161,6 +168,22 @@ contract DeployVault is ExpectedChainGuard {
         p.tvlCap = DEFAULT_TVL_CAP;
         p.perDepositCap = DEFAULT_PER_DEPOSIT_CAP;
         p.usdcAddress = usdc_;
+    }
+
+    /// @dev The seed share receiver: `<prefix>SEED_SHARE_RECEIVER`, required on every chain.
+    function _seedShareReceiver(string memory prefix, address deployer)
+        internal
+        view
+        returns (address receiver)
+    {
+        receiver = _envAddressRequired(string.concat(prefix, "SEED_SHARE_RECEIVER"));
+        _requireSeedReceiver(receiver, deployer);
+    }
+
+    /// @dev The receiver is never zero and never the deployer, so the deployer keeps no shares.
+    function _requireSeedReceiver(address receiver, address deployer) internal pure {
+        require(receiver != address(0), "SEED_SHARE_RECEIVER=0");
+        require(receiver != deployer, "SEED_SHARE_RECEIVER=deployer");
     }
 
     /// @dev The seed this broadcast run deposits: `<prefix>SEED_DEPOSIT_USDC`, default

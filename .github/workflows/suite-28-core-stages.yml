@@ -50,6 +50,10 @@ on:
         description: "share_receiver_address for the Twin chain run (public address or number, never a secret)"
         required: false
         default: ""
+      seed_share_receiver:
+        description: "seed_share_receiver for the Twin chain run (public address, not the deployer)"
+        required: true
+        type: string
       fee_recipient_address:
         description: "fee_recipient_address for the Twin chain run (public address or number, never a secret)"
         required: false
@@ -99,6 +103,7 @@ jobs:
       AGENT_ADDRESS: ${{ inputs.agent_address }}
       SHARE_RECEIVER_ADDRESS: ${{ inputs.share_receiver_address }}
       FEE_RECIPIENT_ADDRESS: ${{ inputs.fee_recipient_address }}
+      SEED_SHARE_RECEIVER: ${{ inputs.seed_share_receiver }}
       TIMELOCK_MIN_DELAY: ${{ inputs.timelock_min_delay }}
       RECEIPT_ADMIN_ADDRESS: ${{ inputs.deployer }}
       SWAP_ROUTER: "0x2626664c2603336E57B271c5C0b26F421741e481"

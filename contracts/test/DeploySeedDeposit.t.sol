@@ -81,7 +81,7 @@ contract DeploySeedDeposit is Test {
     ///      Adapters are deployed against real Base mainnet protocol addresses.
     ///      Uses runInProcessWithSeed() which includes the mandatory seed deposit step.
     function _runDeploy() internal returns (DeployVault.Deployed memory) {
-        return script.runInProcessWithSeed(admin, BASE_USDC);
+        return script.runInProcessWithSeed(admin, BASE_USDC, shareReceiver);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -120,16 +120,15 @@ contract DeploySeedDeposit is Test {
         );
     }
 
-    /// @notice Admin (deployer) holds seed shares after deploy.
-    ///
-    ///         The seed deposit mints shares to the admin/deployer; the
-    ///         public cannot exploit a zero-supply state even briefly.
-    function test_fork_deploySeed_adminHoldsShares() public {
+    /// @notice The seed receiver holds the seed shares and the deployer holds none.
+    function test_fork_deploySeed_receiverHoldsShares() public {
         _setUp();
 
         DeployVault.Deployed memory d = _runDeploy();
 
-        assertGt(d.vault.balanceOf(admin), 0, "admin must hold seed shares after deploy");
+        assertGt(d.vault.balanceOf(shareReceiver), 0, "receiver must hold seed shares");
+        assertEq(d.vault.balanceOf(admin), 0, "deployer must hold no seed shares");
+        assertEq(d.vault.balanceOf(shareReceiver), d.vault.totalSupply(), "receiver holds all");
     }
 
     /// @notice A public deposit made immediately after deploy mints fair shares.

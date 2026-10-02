@@ -46,6 +46,28 @@ All four vaults ship with assets that have usable pools: rmUSDC, rmPROTO (wETH a
 
 Voting power, quorum, agent registration and weights are govern rows executed through the real Safe and the timelock. Nothing sets them from a deployer key. `Fixture::set_voting_power` is gone. `Fixture::unpause_gateway`, `revoke_agent` and `reauthorize_agent` call govern rows. The Fusion acceptance release stage runs `core-stack.sh governance release` (govern row `release-receipt`). No release keystore exists.
 
+## Seed share receiver (verifier note for devops)
+
+The vault stage reads a required `SEED_SHARE_RECEIVER`. It must not be the zero address and must not be the deployer (`ADMIN_ADDRESS`). The stage reverts otherwise. The seed deposit is made on behalf of the receiver, so the receiver holds the seed shares and the deployer holds none.
+
+Devops verifies after the vault stage:
+
+- `rmUSDC.balanceOf(deployer) == 0` (deployer share balance 0).
+- `rmUSDC.balanceOf(SEED_SHARE_RECEIVER) == rmUSDC.totalSupply()`.
+
+`SEED_SHARE_RECEIVER` is an identity key in the sheet (`scripts/stage/sheet-diff.ts`). It is an address and differs per run.
+
+Frozen sheet example (identity and parameter lines only, placeholders for addresses):
+
+```
+ADMIN_ADDRESS=<deployer address>
+FEE_RECIPIENT_ADDRESS=<treasury address>
+SEED_SHARE_RECEIVER=<seed share holder, not the deployer>
+SEED_DEPOSIT_USDC=1000000
+VAULT_TVL_CAP=<6-decimal USDC units>
+VAULT_PER_DEPOSIT_CAP=<6-decimal USDC units>
+```
+
 ## Checks
 
 | Check | Where |

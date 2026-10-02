@@ -23,7 +23,7 @@
 //   bun scripts/deploy/core-stages.ts --rpc-url URL --out MANIFEST.json [--counts COUNTS.json]
 //        [--dry-run] [--forge-arg ARG]... [--stages libs,vault,...]
 // Inputs come from the environment, the same names the scripts read (ADMIN_ADDRESS, PAUSER_ADDRESS,
-// AGENT_ADDRESS, SHARE_RECEIVER_ADDRESS, FEE_RECIPIENT_ADDRESS, VAULT_TVL_CAP,
+// AGENT_ADDRESS, SHARE_RECEIVER_ADDRESS, FEE_RECIPIENT_ADDRESS, SEED_SHARE_RECEIVER, VAULT_TVL_CAP,
 // VAULT_PER_DEPOSIT_CAP, AGENT_*). The runner sets DEPLOYMENT_OUT, VAULT_ADDRESS, REGISTRY_ADDRESS
 // and ROUTER_ADDRESS per stage from the stage manifests.
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
