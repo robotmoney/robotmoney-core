@@ -1,215 +1,99 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (protocol-asset basket)
 //            docs/prd.md §11.2 — Protocol Asset Vault (rmPROTO)
-//            docs/development/single-production-codebase.md — router eligibility
-//            is registry state set by ADMIN_ROLE, not a per-environment code variant.
+//            docs/plans/one-deployment-scheme.md (robotmoney/devops), core S4 (issue 1486)
 //
-// This script deploys `ProtocolAssetVault` and registers it in `VaultRegistry`.
-// It intentionally does NOT call `setRouterEligible`: that step is separated into
-// `ActivateBasketVaultEligibility.s.sol`, which the operator runs only after the
-// Architecture §4.1 certification checklist (pool cardinality, per-asset TWAP
-// windows, intra-vault rebalancing model) is satisfied and the contract has
-// passed audit.
+// Deploys `ProtocolAssetVault` with the config assets (wETH and cbBTC), pauses it and registers it.
+// It does NOT call `setRouterEligible`: that step is `ActivateBasketVaultEligibility.s.sol`,
+// run through the timelock after the checks pass.
 pragma solidity ^0.8.24;
 
-import {Script} from "forge-std/Script.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
-import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
-
+import {BasketVaultDeployBase} from "./BasketVaultDeployBase.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+import {BasketVault} from "../vaults/BasketVault.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
-import {VaultRegistry} from "../VaultRegistry.sol";
 
 /// @title DeployProtocolAssetVault
-/// @notice Production deploy script for `ProtocolAssetVault` (PRD §11.2 — rmPROTO).
-///         Deploys the vault, registers it in `VaultRegistry`, and emits the
-///         deployed address. Router eligibility activation is intentionally
-///         separated into `ActivateBasketVaultEligibility.s.sol`.
+/// @notice Production deploy script for `ProtocolAssetVault` (rmPROTO). One path on every chain.
 ///
-///         Required env vars:
-///           ADMIN_ADDRESS              — receives ADMIN_ROLE on the vault and
-///                                        must hold ADMIN_ROLE on VaultRegistry
-///           EMERGENCY_RESPONDER_ADDRESS — receives EMERGENCY_ROLE on the vault;
-///                                        use a distinct address from ADMIN_ADDRESS
-///                                        in production for two-role key separation
-///           SWAP_ROUTER                — Uniswap V3 SwapRouter02
-///           REGISTRY_ADDRESS           — the vault is registered here as
-///                                        "Robot Money Protocol" (no default)
-///           TVL_CAP, PER_DEPOSIT_CAP   — USDC caps, 6-decimal units (no default)
-///           FEE_RECIPIENT              — recipient for exit fees (no default)
-///           DEPLOYMENT_OUT             — output JSON path (no default)
-///           EXPECTED_CHAIN_ID          — mandatory and equal to 8453 on Base mainnet
+///         Required env vars (no defaults):
+///           ADMIN_ADDRESS     the broadcaster. Holds ADMIN_ROLE and EMERGENCY_ROLE on the new
+///                             vault and ADMIN_ROLE on the registry until the timelock stage.
+///           SWAP_ROUTER       must equal `swapRouter02` in protocol-assets.json (Uniswap V3 SwapRouter02)
+///           REGISTRY_ADDRESS  the vault is registered here as "Robot Money Protocol"
+///           TVL_CAP, PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
+///           FEE_RECIPIENT     recipient for exit fees
+///           DEPLOYMENT_OUT    output manifest path
+///           EXPECTED_CHAIN_ID mandatory and equal to 8453 on Base mainnet
+///         Optional: EXIT_FEE_BPS (default 0; a malformed value reverts).
 ///
-///         USDC is the canonical Base USDC constant on every chain.
-///
-///         Optional env vars:
-///           EXIT_FEE_BPS      — exit fee in basis points (default: 0; malformed reverts)
-contract DeployProtocolAssetVault is ExpectedChainGuard {
-    using stdJson for string;
-
-    /// @notice Default TVL cap: 10M USDC (6 decimals).
-    uint256 public constant DEFAULT_TVL_CAP = 10_000_000 * 1e6;
-
-    /// @notice Default per-deposit cap: 1M USDC (6 decimals).
-    uint256 public constant DEFAULT_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
-
-    /// @notice Vault name registered in VaultRegistry.
+///         Assets come from `protocol-assets.json` (wETH and cbBTC at launch). The vault is deployed paused.
+contract DeployProtocolAssetVault is BasketVaultDeployBase {
     string public constant VAULT_NAME = "Robot Money Protocol";
+    string public constant CONFIG_FILE = "config/protocol-assets.json";
 
-    /// @dev Sheet inputs for one deploy, grouped to stay under the stack limit.
-    struct VaultParams {
-        address admin;
-        address emergencyResponder;
-        address swapRouter;
-        address usdc;
-        address registry;
-        uint256 tvlCap;
-        uint256 perDepositCap;
-        uint256 exitFeeBps;
-        address feeRecipient;
-    }
-
-    /// @notice Result returned to in-process callers (e.g. forge tests).
-    struct Deployed {
-        address vault;
-        address registry;
-        bool registered;
-    }
-
-    /// @notice Forge broadcast entrypoint. Deploys the vault, optionally
-    ///         registers it in VaultRegistry, and writes a deployment JSON.
+    /// @notice Forge broadcast entrypoint.
     function run() external returns (Deployed memory d) {
         _requireExpectedChain("");
-        address admin = _envAddressRequired("ADMIN_ADDRESS");
-        address emergencyResponder = _envAddressRequired("EMERGENCY_RESPONDER_ADDRESS");
-        address swapRouter = _envAddressRequired("SWAP_ROUTER");
-        address usdc = BASE_USDC;
-        address registry = _envAddressRequired("REGISTRY_ADDRESS");
-
-        require(admin != address(0), "ADMIN_ADDRESS=0");
-        require(emergencyResponder != address(0), "EMERGENCY_RESPONDER_ADDRESS=0");
-        require(swapRouter != address(0), "SWAP_ROUTER=0");
-        require(registry != address(0), "REGISTRY_ADDRESS=0");
-
-        // Caps and fee recipient come from the frozen sheet: required, no defaults.
-        uint256 tvlCap = _envUintRequired("TVL_CAP");
-        uint256 perDepositCap = _envUintRequired("PER_DEPOSIT_CAP");
-        uint256 exitFeeBps = _envOrDefault("EXIT_FEE_BPS", 0);
-        address feeRecipient = _envAddressRequired("FEE_RECIPIENT");
-        require(feeRecipient != address(0), "FEE_RECIPIENT=0");
+        Params memory p = _readParams();
+        Cfg memory cfg = _parseCfg(vm.readFile(CONFIG_FILE), "assets");
 
         vm.startBroadcast();
-        d = _deployAndRegister(
-            VaultParams({
-                admin: admin,
-                emergencyResponder: emergencyResponder,
-                swapRouter: swapRouter,
-                usdc: usdc,
-                registry: registry,
-                tvlCap: tvlCap,
-                perDepositCap: perDepositCap,
-                exitFeeBps: exitFeeBps,
-                feeRecipient: feeRecipient
-            })
-        );
+        d = _deployAll(p, cfg);
         vm.stopBroadcast();
 
-        _writeDeploymentJson(d);
-        console2.log("DeployProtocolAssetVault complete:", d.vault);
-        if (d.registered) {
-            console2.log("  registered in VaultRegistry:", d.registry);
-        }
+        _writeManifest(d, cfg);
+        console2Log(d.vault);
     }
 
-    /// @notice In-process variant for forge tests. No broadcast, no JSON written.
-    ///         Caller must ensure the call context holds ADMIN_ROLE on the registry
-    ///         (or pass admin_ as the test contract so startPrank can be used).
-    function runInProcessWith(
-        address admin_,
-        address emergencyResponder_,
-        address swapRouter_,
-        address usdc_,
-        address registry_
-    ) external returns (Deployed memory d) {
-        require(admin_ != address(0), "admin=0");
-        require(emergencyResponder_ != address(0), "emergencyResponder=0");
-        require(swapRouter_ != address(0), "swapRouter=0");
-        require(usdc_ != address(0), "usdc=0");
-
-        d = _deployAndRegister(
-            VaultParams({
-                admin: admin_,
-                emergencyResponder: emergencyResponder_,
-                swapRouter: swapRouter_,
-                usdc: usdc_,
-                registry: address(0),
-                tvlCap: DEFAULT_TVL_CAP,
-                perDepositCap: DEFAULT_PER_DEPOSIT_CAP,
-                exitFeeBps: 0,
-                feeRecipient: admin_
-            })
-        );
-
-        if (registry_ != address(0)) {
-            vm.startPrank(admin_);
-            _registerIfAbsent(VaultRegistry(registry_), d.vault, usdc_);
-            vm.stopPrank();
-            d.registry = registry_;
-            d.registered = true;
-        }
-
-        console2.log("DeployProtocolAssetVault (in-process):", d.vault);
+    /// @notice In-process variant for forge tests and the stage driver's simulation. No
+    ///         broadcast and no manifest. Every call runs as `p.admin` under a prank, so
+    ///         `p.admin` becomes the vault's ADMIN and EMERGENCY holder as in a broadcast.
+    /// @param p    Sheet inputs.
+    /// @param json Body of the config file (the test passes a fixture, the driver passes the file).
+    function runInProcess(Params memory p, string memory json)
+        external
+        returns (Deployed memory d)
+    {
+        Cfg memory cfg = _parseCfg(json, "assets");
+        vm.startPrank(p.admin);
+        d = _deployAll(p, cfg);
+        vm.stopPrank();
     }
 
-    // ─── Internal ─────────────────────────────────────────────────────────────
-
-    function _deployAndRegister(VaultParams memory v) internal returns (Deployed memory d) {
-        ProtocolAssetVault vault = new ProtocolAssetVault(
-            IERC20(v.usdc),
-            ISwapRouter(v.swapRouter),
-            v.tvlCap,
-            v.perDepositCap,
-            v.exitFeeBps,
-            v.feeRecipient,
-            v.admin,
-            v.emergencyResponder
-        );
-        d.vault = address(vault);
-
-        // The in-process seam passes address(0) and registers itself under a prank.
-        if (v.registry != address(0)) {
-            _registerIfAbsent(VaultRegistry(v.registry), address(vault), v.usdc);
-            d.registry = v.registry;
-            d.registered = true;
-        }
-    }
-
-    /// @dev Register `vault` in the registry if not already present.
-    ///      Caller must hold ADMIN_ROLE on the registry.
-    function _registerIfAbsent(VaultRegistry registry, address vault, address asset) internal {
-        address[] memory existing = registry.listVaults();
-        for (uint256 i = 0; i < existing.length; i++) {
-            if (existing[i] == vault) {
-                console2.log("DeployProtocolAssetVault: vault already registered, skipping");
-                return;
-            }
-        }
-        registry.registerVault(
-            vault, VaultRegistry.VaultMetadata({name: VAULT_NAME, asset: asset, registeredAt: 0})
+    function _newVault(Params memory p, address emergencyResponder)
+        internal
+        override
+        returns (BasketVault)
+    {
+        return new ProtocolAssetVault(
+            IERC20(p.usdc),
+            ISwapRouter(p.swapRouter),
+            p.tvlCap,
+            p.perDepositCap,
+            p.exitFeeBps,
+            p.feeRecipient,
+            p.admin,
+            emergencyResponder
         );
     }
 
-    function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
-        string memory obj = "protocol_asset_vault_deployment";
-        vm.serializeUint(obj, "chain_id", block.chainid);
-        vm.serializeAddress(obj, "vault", d.vault);
-        vm.serializeAddress(obj, "registry", d.registry);
-        string memory json = vm.serializeBool(obj, "registered", d.registered);
-        vm.writeJson(json, outPath);
-        console2.log("Wrote protocol-asset-vault deployment JSON to", outPath);
+    function _registryName() internal pure override returns (string memory) {
+        return VAULT_NAME;
+    }
+
+    function _label() internal pure override returns (string memory) {
+        return "protocol_asset_vault";
+    }
+
+    function _usesAdapter() internal pure override returns (bool) {
+        return false;
+    }
+
+    function console2Log(address vault) internal view {
+        console2.log("DeployProtocolAssetVault complete:", vault);
     }
 }

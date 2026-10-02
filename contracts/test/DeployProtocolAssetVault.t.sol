@@ -1,166 +1,243 @@
 // SPDX-License-Identifier: MIT
-// Canonical: none — Foundry test for contracts/script/DeployProtocolAssetVault.s.sol
+// Canonical: docs/plans/one-deployment-scheme.md (robotmoney/devops), core S4 (issues 1486, 1490)
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {stdJson} from "forge-std/StdJson.sol";
 
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
+import {BasketVaultDeployBase} from "../script/BasketVaultDeployBase.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
+import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
-import {TestERC20} from "./helpers/TestERC20.sol";
+import {BasketDeployFixture, ConstPool} from "./helpers/BasketDeployFixture.sol";
 
-/// @dev Minimal ISwapRouter stub for deploy tests. ProtocolAssetVault's
-///      constructor only stores the router address and does not call any
-///      router methods, so a zero-implementation stub is sufficient.
+/// @dev Zero-implementation router. Vault constructors only store the router address.
 contract StubSwapRouter is ISwapRouter {
     function exactInputSingle(ExactInputSingleParams calldata) external pure returns (uint256) {
         return 0;
     }
 }
 
-/// @notice Tests for DeployProtocolAssetVault.s.sol.
-///
-/// Acceptance criteria (issue #692):
-///   - Script deploys ProtocolAssetVault with a non-zero address.
-///   - Vault is registered in VaultRegistry when REGISTRY_ADDRESS is provided.
-///   - Script does NOT call setRouterEligible (vault stays ineligible after deploy).
-///   - Zero-address guards on required parameters revert with expected messages.
-contract DeployProtocolAssetVaultTest is Test {
-    DeployProtocolAssetVault internal script;
-    TestERC20 internal usdc;
-    StubSwapRouter internal swapRouter;
-    VaultRegistry internal registry;
+/// @dev Exposes the manifest writer so a test reads the file back without the process-wide env.
+contract ProtocolDeployHarness is DeployProtocolAssetVault {
+    function writeManifestTo(string memory path, Deployed memory d, string memory json) external {
+        _writeManifestTo(path, d, _parseCfg(json, "assets"));
+    }
+}
 
-    address internal admin = address(this);
-    address internal emergencyResponder = makeAddr("emergencyResponder");
+/// @notice rmPROTO script: paused, exactly wETH and cbBTC, config read back equals the file,
+///         registered, deployer holds EMERGENCY, and every sheet and venue input is enforced.
+contract DeployProtocolAssetVaultTest is BasketDeployFixture {
+    using stdJson for string;
+
+    DeployProtocolAssetVault internal script;
 
     function setUp() public {
+        _fixtureSetUp();
         script = new DeployProtocolAssetVault();
-        usdc = new TestERC20();
-        swapRouter = new StubSwapRouter();
-        registry = new VaultRegistry(admin);
     }
 
-    // ─── Happy path: without registry ─────────────────────────────────────────
-
-    /// @notice Vault address is non-zero after deploy without registry.
-    function test_deploy_vaultAddressNonZero() public {
-        DeployProtocolAssetVault.Deployed memory d = script.runInProcessWith(
-            admin, emergencyResponder, address(swapRouter), address(usdc), address(0)
-        );
-        assertTrue(d.vault != address(0), "vault address must be non-zero");
+    function _run(string memory json) internal returns (BasketVaultDeployBase.Deployed memory) {
+        return script.runInProcess(_params(), json);
     }
 
-    /// @notice Without REGISTRY_ADDRESS, registered flag is false.
-    function test_deploy_notRegisteredWhenNoRegistry() public {
-        DeployProtocolAssetVault.Deployed memory d = script.runInProcessWith(
-            admin, emergencyResponder, address(swapRouter), address(usdc), address(0)
-        );
-        assertFalse(d.registered, "registered should be false when registry not supplied");
+    function _twoAssets() internal returns (string memory json, address[] memory tokens) {
+        tokens = new address[](2);
+        address[] memory pools = new address[](2);
+        (tokens[0], pools[0]) = _tokenAndPool("weth");
+        (tokens[1], pools[1]) = _tokenAndPool("cbbtc");
+        json = _json("assets", tokens, pools, 500);
     }
 
-    // ─── Happy path: with registry ─────────────────────────────────────────────
+    // ─── Config file: the real config/protocol-assets.json ───────────────────
 
-    /// @notice Vault is registered in VaultRegistry when registry is provided.
-    function test_deploy_registersVaultInRegistry() public {
-        DeployProtocolAssetVault.Deployed memory d = script.runInProcessWith(
-            admin, emergencyResponder, address(swapRouter), address(usdc), address(registry)
-        );
+    function test_deploy_pausedWithExactlyWethAndCbbtc_configReadBackEqualsFile() public {
+        string memory json = _etchConfigPools("config/protocol-assets.json", "assets");
+        BasketVaultDeployBase.Params memory p = _params();
+        p.swapRouter = _configRouter(json);
+        BasketVaultDeployBase.Deployed memory d = script.runInProcess(p, json);
 
-        assertTrue(d.registered, "registered flag must be true");
-        assertEq(d.registry, address(registry), "registry address mismatch");
-        assertEq(registry.vaultCount(), 1, "registry should have one vault");
+        ProtocolAssetVault vault = ProtocolAssetVault(d.vault);
+        assertTrue(vault.paused(), "vault must be paused");
+        assertTrue(d.paused, "result reports paused");
 
-        address[] memory vaults = registry.listVaults();
-        assertEq(vaults[0], d.vault, "vault address mismatch in registry");
+        address[] memory cfgTokens = new address[](2);
+        address[] memory cfgPools = new address[](2);
+        uint256[] memory cfgFees = new uint256[](2);
+        assertFalse(vm.keyExistsJson(json, ".assets[2]"), "config has exactly two assets");
+        for (uint256 i = 0; i < 2; i++) {
+            string memory b = string.concat(".assets[", vm.toString(i), "]");
+            cfgTokens[i] = json.readAddress(string.concat(b, ".token"));
+            cfgPools[i] = json.readAddress(string.concat(b, ".pool"));
+            cfgFees[i] = json.readUint(string.concat(b, ".poolFee"));
+        }
+        assertEq(vault.assetCount(), 2, "vault has exactly two assets");
+        for (uint256 i = 0; i < 2; i++) {
+            (address token, address pool, uint24 fee, bool active, address adapter,) =
+                vault.assets(i);
+            assertEq(token, cfgTokens[i], "token equals config");
+            assertEq(pool, cfgPools[i], "pool equals config");
+            assertEq(uint256(fee), cfgFees[i], "fee equals config");
+            assertTrue(active, "asset active");
+            assertEq(adapter, address(0), "built-in SwapRouter02 path, no adapter");
+        }
+        // wETH then cbBTC, no wSOL.
+        assertEq(json.readString(".assets[0].symbol"), "wETH");
+        assertEq(json.readString(".assets[1].symbol"), "cbBTC");
+        assertEq(address(vault.SWAP_ROUTER()), json.readAddress(".swapRouter02"));
     }
 
-    /// @notice Vault metadata stored in registry matches expected values.
-    function test_deploy_metadataStoredCorrectly() public {
-        DeployProtocolAssetVault.Deployed memory d = script.runInProcessWith(
-            admin, emergencyResponder, address(swapRouter), address(usdc), address(registry)
-        );
+    // ─── Roles, registry, state ───────────────────────────────────────────────
 
-        (VaultRegistry.VaultMetadata memory meta,) = registry.getVault(d.vault);
-        assertEq(meta.name, "Robot Money Protocol", "vault name mismatch");
-        assertEq(meta.asset, address(usdc), "vault asset mismatch");
+    function test_deploy_deployerHoldsAdminAndEmergency() public {
+        (string memory json,) = _twoAssets();
+        BasketVaultDeployBase.Deployed memory d = _run(json);
+        BasketVault v = BasketVault(d.vault);
+        assertTrue(v.hasRole(v.ADMIN_ROLE(), deployer), "deployer holds ADMIN");
+        assertTrue(v.hasRole(v.EMERGENCY_ROLE(), deployer), "deployer holds EMERGENCY");
+        assertFalse(v.hasRole(v.ADMIN_ROLE(), address(script)), "script holds nothing");
     }
 
-    /// @notice Vault has Active status immediately after registration.
-    function test_deploy_vaultIsActiveAfterRegistration() public {
-        DeployProtocolAssetVault.Deployed memory d = script.runInProcessWith(
-            admin, emergencyResponder, address(swapRouter), address(usdc), address(registry)
-        );
-
-        (, VaultRegistry.VaultStatus status) = registry.getVault(d.vault);
-        assertEq(uint256(status), uint256(VaultRegistry.VaultStatus.Active), "vault not Active");
+    function test_deploy_registersVaultAndDoesNotSetRouterEligible() public {
+        (string memory json,) = _twoAssets();
+        BasketVaultDeployBase.Deployed memory d = _run(json);
+        assertTrue(d.registered, "registered flag");
+        address[] memory listed = registry.listVaults();
+        assertEq(listed.length, 1);
+        assertEq(listed[0], d.vault);
+        (VaultRegistry.VaultMetadata memory meta, VaultRegistry.VaultStatus status) =
+            registry.getVault(d.vault);
+        assertEq(meta.name, "Robot Money Protocol");
+        assertEq(meta.asset, address(usdc));
+        assertEq(uint256(status), uint256(VaultRegistry.VaultStatus.Active));
+        assertFalse(registry.isRouterEligible(d.vault), "eligibility is the govern stage");
     }
 
-    // ─── Critical: setRouterEligible NOT called ────────────────────────────────
-
-    /// @notice The deploy script must NOT call setRouterEligible. Router
-    ///         eligibility activation is separated into
-    ///         ActivateBasketVaultEligibility.s.sol.
-    function test_deploy_doesNotSetRouterEligible() public {
-        DeployProtocolAssetVault.Deployed memory d = script.runInProcessWith(
-            admin, emergencyResponder, address(swapRouter), address(usdc), address(registry)
-        );
-
-        assertFalse(
-            registry.isRouterEligible(d.vault),
-            "setRouterEligible must NOT be called by the deploy script"
-        );
+    function test_deploy_capsComeFromTheSheetAndNoSeed() public {
+        (string memory json,) = _twoAssets();
+        BasketVaultDeployBase.Deployed memory d = _run(json);
+        ProtocolAssetVault v = ProtocolAssetVault(d.vault);
+        assertEq(v.tvlCap(), TVL_CAP);
+        assertEq(v.perDepositCap(), PER_DEPOSIT_CAP);
+        assertEq(v.totalSupply(), 0, "no seed deposit");
+        assertEq(usdc.balanceOf(d.vault), 0, "no USDC in the vault");
     }
 
-    // ─── ERC-4626 / vault properties ──────────────────────────────────────────
-
-    /// @notice Vault's ERC-4626 asset() returns the configured USDC address.
-    function test_deploy_vaultAssetIsUsdc() public {
-        DeployProtocolAssetVault.Deployed memory d = script.runInProcessWith(
-            admin, emergencyResponder, address(swapRouter), address(usdc), address(0)
-        );
-
-        address vaultAsset = ProtocolAssetVault(d.vault).asset();
-        assertEq(vaultAsset, address(usdc), "vault asset() must equal USDC");
+    function test_deploy_exactlyTheConfiguredAssets() public {
+        (string memory json, address[] memory tokens) = _twoAssets();
+        BasketVaultDeployBase.Deployed memory d = _run(json);
+        assertEq(d.tokens.length, 2);
+        assertEq(d.tokens[0], tokens[0]);
+        assertEq(d.tokens[1], tokens[1]);
+        (address[] memory listed,,,,) = ProtocolAssetVault(d.vault).shortlist();
+        assertEq(listed.length, 2, "shortlist has no extra asset");
     }
 
-    /// @notice Admin holds ADMIN_ROLE on the deployed vault.
-    function test_deploy_adminHoldsAdminRole() public {
-        DeployProtocolAssetVault.Deployed memory d = script.runInProcessWith(
-            admin, emergencyResponder, address(swapRouter), address(usdc), address(0)
-        );
+    // ─── Reverts ──────────────────────────────────────────────────────────────
 
-        bytes32 adminRole = ProtocolAssetVault(d.vault).ADMIN_ROLE();
-        assertTrue(
-            ProtocolAssetVault(d.vault).hasRole(adminRole, admin), "admin must hold ADMIN_ROLE"
-        );
+    function test_reverts_whenSwapRouterIsNotSwapRouter02() public {
+        (string memory json,) = _twoAssets();
+        BasketVaultDeployBase.Params memory p = _params();
+        p.swapRouter = makeAddr("someOtherRouter");
+        vm.expectRevert(bytes("SWAP_ROUTER is not SwapRouter02"));
+        script.runInProcess(p, json);
     }
 
-    // ─── Zero-address guards ───────────────────────────────────────────────────
-
-    function test_reverts_on_zero_admin() public {
-        vm.expectRevert(bytes("admin=0"));
-        script.runInProcessWith(
-            address(0), emergencyResponder, address(swapRouter), address(usdc), address(0)
-        );
+    function test_reverts_whenTvlCapMissing() public {
+        (string memory json,) = _twoAssets();
+        BasketVaultDeployBase.Params memory p = _params();
+        p.tvlCap = 0;
+        vm.expectRevert(bytes("TVL_CAP missing from the sheet"));
+        script.runInProcess(p, json);
     }
 
-    function test_reverts_on_zero_emergencyResponder() public {
-        vm.expectRevert(bytes("emergencyResponder=0"));
-        script.runInProcessWith(admin, address(0), address(swapRouter), address(usdc), address(0));
+    function test_reverts_whenPerDepositCapMissing() public {
+        (string memory json,) = _twoAssets();
+        BasketVaultDeployBase.Params memory p = _params();
+        p.perDepositCap = 0;
+        vm.expectRevert(bytes("PER_DEPOSIT_CAP missing from the sheet"));
+        script.runInProcess(p, json);
     }
 
-    function test_reverts_on_zero_swapRouter() public {
-        vm.expectRevert(bytes("swapRouter=0"));
-        script.runInProcessWith(admin, emergencyResponder, address(0), address(usdc), address(0));
+    function test_reverts_whenFeeRecipientZero() public {
+        (string memory json,) = _twoAssets();
+        BasketVaultDeployBase.Params memory p = _params();
+        p.feeRecipient = address(0);
+        vm.expectRevert(bytes("FEE_RECIPIENT=0"));
+        script.runInProcess(p, json);
     }
 
-    function test_reverts_on_zero_usdc() public {
-        vm.expectRevert(bytes("usdc=0"));
-        script.runInProcessWith(
-            admin, emergencyResponder, address(swapRouter), address(0), address(0)
-        );
+    function test_reverts_whenPoolFeeDiffersFromConfig() public {
+        address[] memory tokens = new address[](1);
+        address[] memory pools = new address[](1);
+        (tokens[0], pools[0]) = _tokenAndPool("weth"); // pool fee() is 500
+        string memory json = _json("assets", tokens, pools, 3000); // config says 3000
+        vm.expectRevert(bytes("T0: pool fee does not equal config"));
+        _run(json);
+    }
+
+    function test_reverts_whenPoolHasNoCode() public {
+        address[] memory tokens = new address[](1);
+        address[] memory pools = new address[](1);
+        tokens[0] = makeAddr("tokenA");
+        pools[0] = makeAddr("emptyPool");
+        string memory json = _json("assets", tokens, pools, 500);
+        vm.expectRevert(bytes("T0: pool has no code"));
+        _run(json);
+    }
+
+    function test_reverts_whenPoolCardinalityTooLow() public {
+        address token = makeAddr("tokenB");
+        address pool = makeAddr("lowCardPool");
+        vm.etch(pool, address(new LowCardinalityPool(token, address(usdc), 500)).code);
+        address[] memory tokens = new address[](1);
+        address[] memory pools = new address[](1);
+        tokens[0] = token;
+        pools[0] = pool;
+        vm.expectRevert();
+        _run(_json("assets", tokens, pools, 500)); // InsufficientPoolCardinality from addAsset
+    }
+
+    function test_reverts_whenVenueUnsupported() public {
+        (string memory json,) = _twoAssets();
+        // Swap the venue string for an unsupported one.
+        string memory bad = vm.replace(json, "UniswapV3", "UniswapV4");
+        vm.expectRevert(bytes("unsupported venue: only UniswapV3"));
+        _run(bad);
+    }
+
+    // ─── Manifest ─────────────────────────────────────────────────────────────
+
+    function test_manifest_listsAssetsAndPausedState() public {
+        (string memory json, address[] memory tokens) = _twoAssets();
+        BasketVaultDeployBase.Deployed memory d = _run(json);
+        ProtocolDeployHarness h = new ProtocolDeployHarness();
+        string memory path =
+            string.concat(vm.projectRoot(), "/deployments/test-protocol-manifest.json");
+        h.writeManifestTo(path, d, json);
+        string memory out = vm.readFile(path);
+        vm.removeFile(path);
+        assertEq(out.readAddress(".vault"), d.vault);
+        assertEq(out.readAddress(".registry"), address(registry));
+        assertTrue(out.readBool(".paused"));
+        assertTrue(out.readBool(".registered"));
+        assertFalse(vm.keyExistsJson(out, ".assets[2]"));
+        assertEq(out.readAddress(".assets[0].token"), tokens[0]);
+        assertEq(out.readAddress(".assets[1].token"), tokens[1]);
+    }
+}
+
+/// @dev Reports observation cardinality 1: `addAsset` must refuse it.
+contract LowCardinalityPool is ConstPool {
+    constructor(address a, address b, uint24 fee_) ConstPool(a, b, fee_) {}
+
+    function slot0()
+        external
+        pure
+        override
+        returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
+    {
+        return (uint160(1 << 96), 0, 0, 1, 1, 0, true);
     }
 }

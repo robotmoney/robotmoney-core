@@ -15,16 +15,15 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {Vault} from "../Vault.sol";
-import {RwaVault} from "../vaults/RwaVault.sol";
+import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {AdminFloorAccessControlCounter} from "../lib/AdminFloorAccessControlCounter.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
-import {IChronicleOracle} from "../interfaces/IChronicleOracle.sol";
 
 import {TestERC20, MockSwapRouter, MockPool} from "./BasketVault.t.sol";
-import {StubSwapRouter, MockChronicle} from "./RwaVault.t.sol";
+import {StubSwapRouter} from "./DeployProtocolAssetVault.t.sol";
 import {MockAdapter, TestUSDC} from "./RobotMoneyVault.t.sol";
 
 /// @dev Deliberately unprotected mock "vault": bare `AccessControl` with a
@@ -111,14 +110,12 @@ contract VaultFamilyInvariantsTest is Test {
         );
     }
 
-    function _deployRwaVault() internal returns (RwaVault) {
+    function _deployRwaVault() internal returns (RwaBasketVault) {
         TestERC20 usdc = new TestERC20();
         StubSwapRouter router = new StubSwapRouter();
-        MockChronicle chronicle = new MockChronicle(1e18, block.timestamp);
-        return new RwaVault(
+        return new RwaBasketVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
-            IChronicleOracle(address(chronicle)),
             type(uint256).max,
             type(uint256).max,
             0,

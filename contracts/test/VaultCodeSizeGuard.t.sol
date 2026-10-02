@@ -41,8 +41,8 @@ contract VaultCodeSizeGuard is Test {
         _assertUnderLimit("ProtocolAssetVault.sol:ProtocolAssetVault");
     }
 
-    function test_RwaVault_underEip170() public {
-        _assertUnderLimit("RwaVault.sol:RwaVault");
+    function test_RwaBasketVault_underEip170() public {
+        _assertUnderLimit("RwaBasketVault.sol:RwaBasketVault");
     }
 
     function test_AgentTokenVault_underEip170() public {
@@ -97,31 +97,16 @@ contract VaultCodeSizeGuard is Test {
         _assertUnderLimit("UniswapV3AssetPositionAdapter.sol:UniswapV3AssetPositionAdapter");
     }
 
-    function test_UniswapV4AssetPositionAdapter_underEip170() public {
-        _assertUnderLimit("UniswapV4AssetPositionAdapter.sol:UniswapV4AssetPositionAdapter");
-    }
-
     function test_AerodromeAssetPositionAdapter_underEip170() public {
         _assertUnderLimit("AerodromeAssetPositionAdapter.sol:AerodromeAssetPositionAdapter");
-    }
-
-    function test_DeSpxaAssetPositionAdapter_underEip170() public {
-        _assertUnderLimit("DeSpxaAssetPositionAdapter.sol:DeSpxaAssetPositionAdapter");
     }
 
     function test_UniswapV3SwapAdapter_underEip170() public {
         _assertUnderLimit("UniswapV3SwapAdapter.sol:UniswapV3SwapAdapter");
     }
 
-    function test_UniswapV4SwapAdapter_underEip170() public {
-        _assertUnderLimit("UniswapV4SwapAdapter.sol:UniswapV4SwapAdapter");
-    }
-
     function test_AerodromeSwapAdapter_underEip170() public {
         _assertUnderLimit("AerodromeSwapAdapter.sol:AerodromeSwapAdapter");
     }
 
-    function test_ChronicleOracleAdapter_underEip170() public {
-        _assertUnderLimit("ChronicleOracleAdapter.sol:ChronicleOracleAdapter");
-    }
 }

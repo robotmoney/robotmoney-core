@@ -22,7 +22,7 @@ import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {TickMath} from "../lib/TickMath.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
-import {DeployDemoExtraVaults} from "../script/DeployDemoExtraVaults.s.sol";
+import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 
 /// @dev Mimics the per-vault `tickMathLibrary()` accessor the deploy assertion
 ///      reads, but returns a caller-chosen address — used to prove the deploy
@@ -46,15 +46,11 @@ contract BadTickMathVault {
 }
 
 /// @dev Test-only subclass exposing the internal TickMath link-integrity
-///      assertion of `DeployDemoExtraVaults` so a deliberately wrong/zero
+///      assertion of the basket vault deploy scripts so a deliberately wrong/zero
 ///      linked address can be shown to fail the deploy assertion (finding L3-D1).
-contract DeployDemoExtraVaultsHarness is DeployDemoExtraVaults {
-    function assertTickMathLinkIntegrity(
-        address protocolVault,
-        address rwaVault,
-        address agentVault
-    ) external view {
-        _assertTickMathLinkIntegrity(protocolVault, rwaVault, agentVault);
+contract BasketDeployHarness is DeployProtocolAssetVault {
+    function assertTickMathLinkIntegrity(address vault) external view {
+        _assertTickMathLinkIntegrity(vault, 10_000_000 * 1e6);
     }
 }
 
@@ -505,21 +501,21 @@ contract DeployTest is Test {
         );
     }
 
-    /// @notice The actual DeployDemoExtraVaults TickMath link-integrity assertion
+    /// @notice The actual basket deploy script TickMath link-integrity assertion
     ///         reverts when a vault links a zero (no-code) or wrong (non-TickMath)
     ///         library — proving the deploy assertion fails closed on mislink.
     function test_tickMathLink_deployAssertionRevertsOnMislink() public {
-        DeployDemoExtraVaultsHarness harness = new DeployDemoExtraVaultsHarness();
+        BasketDeployHarness harness = new BasketDeployHarness();
 
         // Zero linked library → reverts on the zero-address check.
         address zeroVault = address(new BadTickMathVault(address(0)));
         vm.expectRevert(bytes("TickMath: zero linked library"));
-        harness.assertTickMathLinkIntegrity(zeroVault, zeroVault, zeroVault);
+        harness.assertTickMathLinkIntegrity(zeroVault);
 
         // Wrong (non-TickMath) linked library with code → reverts because it is
         // not the script's canonical TickMath instance.
         address wrongVault = address(new BadTickMathVault(address(this)));
         vm.expectRevert(bytes("TickMath: vault links non-canonical library"));
-        harness.assertTickMathLinkIntegrity(wrongVault, wrongVault, wrongVault);
+        harness.assertTickMathLinkIntegrity(wrongVault);
     }
 }

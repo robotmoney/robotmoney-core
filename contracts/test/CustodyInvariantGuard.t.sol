@@ -23,7 +23,7 @@ contract CustodyInvariantGuardTest is Test {
     ///      contracts/doc). Kept as an explicit list so the guard is
     ///      deterministic and a newly-added contract is a deliberate edit here.
     function _productionSources() internal pure returns (string[] memory paths) {
-        paths = new string[](18);
+        paths = new string[](17);
         paths[0] = "contracts/PortfolioRouter.sol";
         paths[1] = "contracts/RobotMoneyVault.sol";
         paths[2] = "contracts/VaultRegistry.sol";
@@ -34,14 +34,13 @@ contract CustodyInvariantGuardTest is Test {
         paths[7] = "contracts/vaults/BasketVault.sol";
         paths[8] = "contracts/vaults/AgentTokenVault.sol";
         paths[9] = "contracts/vaults/ProtocolAssetVault.sol";
-        paths[10] = "contracts/vaults/RwaVault.sol";
+        paths[10] = "contracts/vaults/RwaBasketVault.sol";
         paths[11] = "contracts/adapters/AaveV3Adapter.sol";
         paths[12] = "contracts/adapters/CompoundV3Adapter.sol";
         paths[13] = "contracts/adapters/MorphoAdapter.sol";
         paths[14] = "contracts/adapters/AerodromeSwapAdapter.sol";
-        paths[15] = "contracts/adapters/UniswapV4SwapAdapter.sol";
-        paths[16] = "contracts/adapters/ChronicleOracleAdapter.sol";
-        paths[17] = "contracts/interfaces/IStrategyAdapter.sol";
+        paths[15] = "contracts/adapters/UniswapV3SwapAdapter.sol";
+        paths[16] = "contracts/interfaces/IStrategyAdapter.sol";
     }
 
     /// @dev True if `haystack` contains `needle` (naive substring scan).
