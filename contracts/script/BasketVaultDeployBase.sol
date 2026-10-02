@@ -227,7 +227,24 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
 
     /// @dev Manifest: chain id, vault, registry, adapter, paused flag and the asset list.
     function _writeManifest(Deployed memory d, Cfg memory cfg) internal {
-        _writeManifestTo(_envStringRequired("DEPLOYMENT_OUT"), d, cfg);
+        _writeManifestTo(_manifestPath(), d, cfg);
+    }
+
+    /// @dev `DEPLOYMENT_OUT` when set and non-empty. Otherwise the default name
+    ///      `deployments/<label>-<chainid>.json` with dashes for underscores, for example
+    ///      `deployments/agent-token-vault-918453.json` (core 1491).
+    function _manifestPath() internal view returns (string memory) {
+        string memory out = vm.envOr("DEPLOYMENT_OUT", string(""));
+        if (bytes(out).length != 0) return out;
+        return _defaultManifestPath();
+    }
+
+    function _defaultManifestPath() internal view returns (string memory) {
+        bytes memory label = bytes(_label());
+        for (uint256 i = 0; i < label.length; i++) {
+            if (label[i] == "_") label[i] = "-";
+        }
+        return string.concat("deployments/", string(label), "-", vm.toString(block.chainid), ".json");
     }
 
     function _writeManifestTo(string memory outPath, Deployed memory d, Cfg memory cfg) internal {

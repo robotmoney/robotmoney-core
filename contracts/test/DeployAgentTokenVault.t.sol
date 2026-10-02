@@ -16,6 +16,10 @@ contract AgentDeployHarness is DeployAgentTokenVault {
     function writeManifestTo(string memory path, Deployed memory d, string memory json) external {
         _writeManifestTo(path, d, _parseCfg(json, "shortlist"));
     }
+
+    function defaultPath() external view returns (string memory) {
+        return _defaultManifestPath();
+    }
 }
 
 /// @notice rmAGENT script: empty, paused and registered at launch. The same script adds an asset
@@ -99,6 +103,15 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         assertTrue(out.readBool(".paused"));
         assertTrue(vm.keyExistsJson(out, ".assets"), "assets key present");
         assertFalse(vm.keyExistsJson(out, ".assets[0]"), "empty asset list");
+    }
+
+    /// @notice With no DEPLOYMENT_OUT the manifest is named deployments/agent-token-vault-<chainid>.json.
+    function test_manifest_defaultNameIsAgentTokenVaultChainId() public {
+        AgentDeployHarness h = new AgentDeployHarness();
+        vm.chainId(918453);
+        assertEq(h.defaultPath(), "deployments/agent-token-vault-918453.json");
+        vm.chainId(8453);
+        assertEq(h.defaultPath(), "deployments/agent-token-vault-8453.json");
     }
 
     // ─── Adding an asset later is one config entry ────────────────────────────

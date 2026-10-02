@@ -26,7 +26,7 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 ///           REGISTRY_ADDRESS  the vault is registered here as "Robot Money Protocol"
 ///           TVL_CAP, PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
 ///           FEE_RECIPIENT     recipient for exit fees
-///           DEPLOYMENT_OUT    output manifest path
+///           DEPLOYMENT_OUT    output manifest path (optional: default deployments/<vault>-<chainid>.json)
 ///           EXPECTED_CHAIN_ID mandatory and equal to 8453 on Base mainnet
 ///         Optional: EXIT_FEE_BPS (default 0; a malformed value reverts).
 ///
