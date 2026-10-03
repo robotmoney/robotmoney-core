@@ -50,7 +50,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     let fx = Fixture::new().expect("smoke-test fixture boot failed");
     let dir = fx.manifest_dir();
     let table = smoke_test::stage_table::StageTable::load_default().expect("read the stage table");
-    let missing = table.missing(&dir);
+    let missing = table.missing(dir);
     assert!(
         missing.is_empty(),
         "manifests the stage table names are missing in {}: {missing:?}",
