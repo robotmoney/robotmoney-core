@@ -34,11 +34,38 @@ Effect: a call with too little gas reverts with a reason. The node estimate cann
 `contracts/test/RobotMoneyVaultRedeemGasMechanism.t.sol`: three unit tests with a gas-metered probe adapter (63/64 entry gas, tolerant callee never under-pays, guard limit window). Stubs only: the real Aave, Morpho and Compound adapters need a fork.
 `contracts/test/RobotMoneyVaultRedeemGas.t.sol`: unit suite (floor revert, gas sweep never opaque, bisect-estimate then execute) and a fork suite (skipped without FORK_RPC_URL).
 
+## Router and gateway guards (core 1482, pass 4)
+The same typed `InsufficientGas(available, required)` error now guards every path that fans out to a vault:
+- `PortfolioRouter._redeemLeg` (reached by `redeemFor`): `gasleft() >= REDEEM_LEG_GAS_FLOOR` (1_250_000) before each `vault.redeem`. The vault's own entry floor is 1_200_000 measured after the 63/64 forward, so the router needs about 1_219_000 to hand it that much. The margin is about 31k.
+- `RobotMoneyGateway.withdraw`: `gasleft() >= WITHDRAW_GAS_FLOOR` (1_300_000) before `sourceVault.redeem`, after the share pull and window writes.
+- `RobotMoneyGateway.withdrawFromRouter`: the same floor before `router.redeemFor`.
+- The floors are tunable constants, like the vault floors. They have no fork measurement behind them yet.
+- Effect on an estimate: the floor is checked after the caller's own cold writes, so `eth_estimateGas` returns the floor plus that spend (the unit tests show about 1_558_000 for the gateway paths). A wallet that sets its own limit below the floor gets the typed error, not an opaque revert.
+
+Tests: `contracts/test/RedeemGasGuards.t.sol`. A gas-metered stub vault (`GasMeteredStubVault`) burns 400k gas in `redeem` and records its entry gas. One test per path reverts `InsufficientGas` with the right `required` value below the floor. One estimate-then-execute test per path bisects the smallest passing gas limit (what `eth_estimateGas` does), then executes at exactly that limit and checks full payout and a vault entry gas of at least 1_200_000. The router test also sweeps every limit from 400k to the estimate and checks each one reverts typed, never opaque.
+
+## Proven and not proven
+Proven by unit tests (stubs only):
+- The vault, the router and both gateway withdraw paths revert with `InsufficientGas` below their floors.
+- At the bisect estimate each path pays in full, and the vault is entered with at least its own floor.
+- No redeem path swallows an adapter failure, so low gas cannot produce a short payout.
+
+NOT proven:
+- The root cause of the live out-of-gas at the node estimate. It needs a fork run against the real MetaMorpho, Aave and Compound adapters. The unit tests use stubs and cannot show it. The most likely cause stays state drift between estimate and inclusion.
+- That 400_000 per adapter, 1_200_000 at vault entry, 1_250_000 at the router leg and 1_300_000 at the gateway are enough for the real adapters.
+- That the new guards make the original failing run pass. That also needs the fork run.
+
+Fork command to run later (needs a Base archive RPC in `FORK_RPC_URL`, never put a key in a file):
+```
+FORK_RPC_URL="$BASE_RPC" forge test --match-path contracts/test/RobotMoneyVaultRedeemGas.t.sol --match-contract RobotMoneyVaultRedeemGasForkTest -vvv
+```
+Then, on a failing live transaction, `cast run <txhash> --trace --rpc-url "$BASE_RPC"` to see which inner call ran out of gas.
+
 ## Client buffer
 Not added. rmpc takes `--gas-limit` from the operator and does not call `eth_estimateGas`. Its withdraw path goes through the gateway. The contract guard is sufficient for the vault's own gaps, and whether it is sufficient for the real adapters depends on the fork measurement below. If that measurement shows a worst-case adapter withdraw above about 385k, the fix is to raise `ADAPTER_CALL_GAS_FLOOR` in the contract (floors are constants), not to add a client buffer.
 
 ## Open
 - Fork trace of a failing live run (`cast run --trace`) to confirm or refute state drift as the cause.
 - Measure worst-case cold gas of each real adapter `withdraw` on a fork, then set `ADAPTER_CALL_GAS_FLOOR` above it (with 64/63 headroom).
-- Router paths and the gateway are not covered by the guard beyond the vault calls they make.
+- Router and gateway floors (1_250_000 and 1_300_000) need the same fork measurement as the vault floors.
 - The "fails against the unfixed contract" criterion needs a fork run.

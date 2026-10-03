@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0e1a4a0cfda39f18814197e5dec65ff2f101a377/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
 
@@ -25,6 +25,21 @@ hash deliberately excludes `deadline`.
 </i>
 
 ## Constants
+
+### WITHDRAW_GAS_FLOOR
+
+<i>
+
+Gas that must remain before the gateway calls `vault.redeem` or `router.redeemFor`.
+The router's leg floor is 1_250_000 and the vault's is 1_200_000 (both measured
+after a 63/64 forward), so the gateway needs about 1_270_000 plus its own tail work.
+A tunable constant pending the fork measurement in docs/technical/redeem-gas-1482.md.
+
+</i>
+
+```solidity
+uint256 internal constant WITHDRAW_GAS_FLOOR = 1_300_000;
+```
 
 ### WINDOW_SECONDS
 
@@ -1450,6 +1465,23 @@ event ConsensusReceiptSet(address indexed by, address indexed receipt);
 | receipt | `address` | New receipt contract address (`address(0)` clears it). |
 
 ## Errors
+
+### InsufficientGas
+
+Gas left is below the floor a withdraw needs before it fans out to the vault
+(or to the router and its vaults). Raised before the external call so a
+gas limit that is too low reverts with a reason. Retry with more gas. (core 1482.)
+
+```solidity
+error InsufficientGas(uint256 available, uint256 required);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| available | `uint256` | `gasleft()` at the check. |
+| required | `uint256` | The floor that was not met. |
 
 ### ZeroAddress
 
