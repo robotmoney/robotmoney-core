@@ -113,6 +113,31 @@ check(/robotMoneyAddresses/.test(contents) && /fail\(`Robot Money contract has c
   check(/EXCLUDED_BASKET_SYMBOLS/.test(contents) && /BNKR/.test(contents), "contents check documents the BNKR and wSOL exclusions");
 }
 
+// ── QuoterV2 swap-quote assertion (core 1498), stub runner ──────────────────
+{
+  const { assertBasketQuotes, loadBasketQuoteRows, parseQuoteAmountOut, quoteCastArgs, QUOTER_V2: Q, USDC: U } = await import("./fork-snapshot-lib.ts");
+  const rows = loadBasketQuoteRows();
+  check(["wETH", "cbBTC", "deSPXA"].every((s) => rows.some((r) => r.symbol === s)) && rows.length === 3, "quote rows are exactly wETH, cbBTC and deSPXA from config");
+  check(/loadBasketQuoteRows/.test(contents) && /assertBasketQuotes/.test(contents), "contents check runs the QuoterV2 quote assertion");
+  const a = quoteCastArgs(rows[0], "http://stub");
+  check(a[0] === "call" && a[1] === Q && a[2].startsWith("quoteExactInputSingle(") && a[3].includes(U) && a[3].includes(String(rows[0].poolFee)), "cast call targets QuoterV2.quoteExactInputSingle with USDC, token and pool fee");
+  check(parseQuoteAmountOut("1234 [1.234e3]\n99\n1\n5") === 1234n && parseQuoteAmountOut("") === undefined, "amountOut parse reads the first return value");
+  const run = async (mk: (args: string[]) => Promise<string>) => {
+    const msgs = { ok: [] as string[], fail: [] as string[] };
+    const n = await assertBasketQuotes(rows, "http://stub", mk, { ok: (m) => msgs.ok.push(m), fail: (m) => msgs.fail.push(m) });
+    return { ...msgs, n };
+  };
+  let seen: string[][] = [];
+  let r = await run(async (args) => { seen.push(args); return "500000 [5e5]\n1\n2\n3"; });
+  check(r.n === 3 && r.ok.length === 3 && r.fail.length === 0 && seen.length === 3, "stub runner: a non-zero quote passes for all three pools");
+  r = await run(async () => "0 [0]\n0\n0\n0");
+  check(r.fail.length === 3 && r.fail.every((m) => /zero/.test(m)), "stub runner: a zero quote fails every pool");
+  r = await run(async (args) => { if (args[3].includes(rows[1].token)) throw new Error("execution reverted"); return "7"; });
+  check(r.fail.length === 1 && r.fail[0].includes("cbBTC") && r.ok.length === 2, "stub runner: a reverting quote fails only that pool and names it");
+  r = await run(async () => "");
+  check(r.fail.length === 3 && r.fail.every((m) => /no amountOut/.test(m)), "stub runner: empty output fails");
+}
+
 if (failures > 0) {
   console.error(`${failures} selftest assertion(s) failed`);
   process.exit(1);

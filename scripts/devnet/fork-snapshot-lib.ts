@@ -134,6 +134,75 @@ export function loadConfiguredPools(repo: string = REPO): PoolEntry[] {
   return [...byAddr.values()];
 }
 
+// ── swap quotes (core 1498) ────────────────────────────────────────────────
+/** One launch basket asset with the Uniswap V3 USDC pool fee the vault swaps through. */
+export interface BasketQuoteRow {
+  symbol: string;
+  token: string;
+  poolFee: number;
+}
+
+/**
+ * The basket rows whose swap path the snapshot must quote: every UniswapV3 row of
+ * config/protocol-assets.json (wETH, cbBTC) and config/rwa-assets.json (deSPXA).
+ */
+export function loadBasketQuoteRows(repo: string = REPO): BasketQuoteRow[] {
+  const out: BasketQuoteRow[] = [];
+  for (const f of ["config/protocol-assets.json", "config/rwa-assets.json"]) {
+    const j = JSON.parse(readFileSync(join(repo, f), "utf8"));
+    for (const row of j.assets ?? []) {
+      if (row.venue !== "UniswapV3" || !row.token || typeof row.poolFee !== "number") continue;
+      out.push({ symbol: row.symbol, token: row.token, poolFee: row.poolFee });
+    }
+  }
+  return out;
+}
+
+/** 10 USDC (6 decimals): small enough for every launch pool, large enough to move the price. */
+export const QUOTE_AMOUNT_IN_USDC = 10_000_000n;
+export const QUOTE_SIGNATURE = "quoteExactInputSingle((address,address,uint256,uint24,uint160))(uint256,uint160,uint32,uint256)";
+
+/** Runs `cast` with these arguments and returns stdout. Injected so a unit test can stub it. */
+export type CastRunner = (args: string[]) => Promise<string>;
+
+/** `cast call` arguments for QuoterV2.quoteExactInputSingle(USDC -> token, 10 USDC, pool fee). */
+export function quoteCastArgs(row: BasketQuoteRow, rpcUrl: string, usdc: string = USDC, quoter: string = QUOTER_V2): string[] {
+  const params = `(${usdc},${row.token},${QUOTE_AMOUNT_IN_USDC},${row.poolFee},0)`;
+  return ["call", quoter, QUOTE_SIGNATURE, params, "--rpc-url", rpcUrl];
+}
+
+/** First return value (amountOut) of the cast output, or undefined when it is not a number. */
+export function parseQuoteAmountOut(out: string): bigint | undefined {
+  const m = out.trim().match(/^(\d+)/);
+  return m ? BigInt(m[1]) : undefined;
+}
+
+/**
+ * Asserts a non-zero USDC -> token swap quote through QuoterV2 for every basket row. A row whose
+ * quote reverts, returns nothing or returns zero is reported through `fail`. Returns the number of
+ * rows checked. The runner is `cast` in production and a stub in the selftest.
+ */
+export async function assertBasketQuotes(
+  rows: BasketQuoteRow[],
+  rpcUrl: string,
+  run: CastRunner,
+  report: { ok: (m: string) => void; fail: (m: string) => void },
+): Promise<number> {
+  for (const row of rows) {
+    const tag = `quote ${row.symbol} (fee ${row.poolFee})`;
+    try {
+      const out = await run(quoteCastArgs(row, rpcUrl));
+      const amountOut = parseQuoteAmountOut(out);
+      if (amountOut === undefined) report.fail(`${tag}: QuoterV2 returned no amountOut`);
+      else if (amountOut === 0n) report.fail(`${tag}: QuoterV2 amountOut is zero`);
+      else report.ok(`${tag}: 10 USDC quotes ${amountOut} base units`);
+    } catch (e) {
+      report.fail(`${tag}: ${(e as Error).message}`);
+    }
+  }
+  return rows.length;
+}
+
 /**
  * Symbols that must never appear as a launch basket row, named here so the exclusion is explicit
  * and checked (core 1498), not silently skipped inside an assertion. wSOL has no usable Base pool

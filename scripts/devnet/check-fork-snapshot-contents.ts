@@ -11,6 +11,8 @@
  *      non-zero liquidity and a populated (initialised) observation.
  *   3. The V3 factory's getPool resolves each pool from its token pair and fee.
  *   4. No Robot Money contract address has code at genesis.
+ *   5. QuoterV2 quoteExactInputSingle (cast call) returns a non-zero USDC -> token quote for each
+ *      basket pool in config (wETH, cbBTC, deSPXA).
  *
  * Exit 0 when every assertion holds; non-zero otherwise, naming each failure.
  *
@@ -22,7 +24,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
-  BNKR, EXCLUDED_BASKET_SYMBOLS, INFRA_ADDRESSES, excludedSymbolRows, QUOTER_V2, REPO, SAFE_SET, SWAP_ROUTER02, V3_FACTORY, addrOf, calldata, decodeSlot0, loadConfiguredPools,
+  BNKR, EXCLUDED_BASKET_SYMBOLS, assertBasketQuotes, loadBasketQuoteRows, sh, INFRA_ADDRESSES, excludedSymbolRows, QUOTER_V2, REPO, SAFE_SET, SWAP_ROUTER02, V3_FACTORY, addrOf, calldata, decodeSlot0, loadConfiguredPools,
   robotMoneyAddresses, rpc, sleep, word,
 } from "./fork-snapshot-lib.ts";
 
@@ -142,7 +144,12 @@ async function main() {
       }
     }
 
-    // 3. no Robot Money contract at genesis
+    // 3. a swap quote through QuoterV2 for each basket pool (wETH, cbBTC, deSPXA)
+    const quoteRows = loadBasketQuoteRows();
+    if (quoteRows.length === 0) fail("no UniswapV3 basket row in config/protocol-assets.json or config/rwa-assets.json");
+    await assertBasketQuotes(quoteRows, url!, (args) => sh(["cast", ...args]), { ok, fail });
+
+    // 4. no Robot Money contract at genesis
     for (const [a, label] of robotMoneyAddresses()) {
       (await hasCode(a)) ? fail(`Robot Money contract has code at genesis: ${label} ${a}`) : ok(`no Robot Money code at ${label} ${a}`);
     }
