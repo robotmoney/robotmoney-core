@@ -4,6 +4,7 @@
 // keystore signer string, exit-code passthrough, the govern row gate, the usage errors, the record
 // contract with its schema drift guard, parity, and that a redeploy from a new SHA mints a fresh
 // keystore set. No network, no docker, no chain.
+import { allManifests, expectedManifestCount } from "../stage-manifests.ts";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -140,15 +141,14 @@ describe("publish", () => {
     expect((await run("publish", "args")).code).toBe(65);
   });
 
-  test("publish run fails when the four vault manifests are not all there", async () => {
+  test("publish run fails when the table's manifests are not all there", async () => {
     const r = await run("publish", "run");
     expect(r.code).toBe(66);
-    expect(r.err).toContain("0 of 4");
+    expect(r.err).toContain(`0 of ${expectedManifestCount()}`);
   });
 
-  test("publish run passes with four manifests and hands publish contracts the right argv", async () => {
-    writeFileSync(join(OUT, "manifests/core.json"), '{"vault":"0x1"}');
-    for (const k of ["rmPROTO", "rmAGENT", "rmRWA"]) writeFileSync(join(OUT, `manifests/vault-${k}.json`), '{"vault":"0x1"}');
+  test("publish run passes with every manifest the stage table names and hands publish contracts the right argv", async () => {
+    for (const f of allManifests()) writeFileSync(join(OUT, "manifests", f), '{"vault":"0x1"}');
     const r = await run("publish", "run");
     expect(r.code).toBe(0);
     const c = publishCall();
@@ -158,7 +158,9 @@ describe("publish", () => {
     expect(argv[argv.indexOf("--core-sha") + 1]).toBe(SHA);
     expect(argv[argv.indexOf("--signer") + 1]).toBe(`keystore:${join(OUT, "keys/DEPLOYER")}:${join(OUT, "pw")}`);
     expect(c.opts?.stream).toBe(true);
-    expect(Object.keys(c.opts?.env ?? {})).toEqual(["PUBLISH_MANIFEST_DIR"]);
+    expect(c.opts?.env?.PUBLISH_MANIFEST_DIR).toBe(join(OUT, "manifests"));
+    expect(c.opts?.env?.YES).toBe("1");
+    expect(c.opts?.env?.CONFIRM).toBeUndefined();
     expect(argv.join(" ")).not.toMatch(/--private-key|--password/);
   });
 

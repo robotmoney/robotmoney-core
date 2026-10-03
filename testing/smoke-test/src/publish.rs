@@ -22,6 +22,7 @@ use std::process::{Command, Stdio};
 
 use serde::Deserialize;
 
+use crate::stage_table::StageTable;
 use crate::HarnessError;
 
 /// The Twin chain id. Stage and rehearsal run only here.
@@ -34,7 +35,7 @@ pub const STAGE_ENVIRONMENT: &str = "stage";
 pub const PUBLISH_DIR_ENV: &str = "PUBLISH_CONTRACTS_DIR";
 /// Env var: the stage sheet (parameter lines only). Selected by input, never edited between runs.
 pub const STAGE_SHEET_ENV: &str = "STAGE_SHEET";
-/// Env var: where the driver writes its manifests (one JSON per stage, one per vault).
+/// Env var: where the driver writes its manifests (one JSON per stage in stage-table.json).
 pub const MANIFEST_DIR_ENV: &str = "PUBLISH_MANIFEST_DIR";
 /// File name of the deployer keystore inside the key directory (the devops key helper names it).
 pub const DEPLOYER_KEY_NAME: &str = "DEPLOYER";
@@ -344,12 +345,13 @@ fn run_cli(
     let signer = signer_spec(&p.keys);
     let mut args = publish_args(verb, &p.rpc_url, &p.sheet_path, &signer, &cfg.core_sha);
     args.extend(extra.iter().cloned());
-    let out = Command::new("bun")
-        .arg(cfg.cli())
+    let mut cmd = Command::new("bun");
+    cmd.arg(cfg.cli())
         .args(&args)
         .env(MANIFEST_DIR_ENV, &p.manifest_dir)
-        .stdin(Stdio::null())
-        .output()?;
+        .stdin(Stdio::null());
+    apply_publish_env(&mut cmd, TWIN_CHAIN_ID);
+    let out = cmd.output()?;
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     if !out.status.success() {
         return Err(HarnessError::DeployFailed(format!(
@@ -360,6 +362,17 @@ fn run_cli(
         )));
     }
     Ok(stdout)
+}
+
+/// The devops CLI refuses an unattended publish without `YES=1` (exit 17) and refuses `YES=1` on
+/// chain 8453. So `YES=1` and no `CONFIRM` go to the Twin chain (918453) only. Any other chain gets
+/// no `YES`, inherited values included.
+pub fn apply_publish_env(cmd: &mut Command, chain_id: u64) {
+    if chain_id == TWIN_CHAIN_ID {
+        cmd.env("YES", "1").env_remove("CONFIRM");
+    } else {
+        cmd.env_remove("YES");
+    }
 }
 
 impl Published {
@@ -390,11 +403,14 @@ impl Published {
             rpc_url: rpc_url.to_string(),
         };
         run_cli(cfg, &p, "publish", &[])?;
-        let n = count_vault_manifests(&p.manifest_dir);
-        if n != 4 {
+        let table = StageTable::load_default()?;
+        let n = table.count_present(&p.manifest_dir);
+        let want = table.expected_manifest_count();
+        if n != want {
             return Err(HarnessError::DeployFailed(format!(
-                "publish contracts wrote {n} vault manifests in {}, want 4 (rmUSDC, rmPROTO, rmAGENT, rmRWA)",
-                p.manifest_dir.display()
+                "publish contracts wrote {n} of {want} stage manifests in {} (missing: {})",
+                p.manifest_dir.display(),
+                table.missing(&p.manifest_dir).join(", ")
             )));
         }
         Ok(p)
@@ -424,22 +440,6 @@ impl Published {
         check_govern_rows(&rows)?;
         Ok(rows)
     }
-}
-
-fn count_vault_manifests(dir: &Path) -> usize {
-    let mut n = 0;
-    if dir.join("core.json").is_file() {
-        n += 1; // rmUSDC lives in core.json
-    }
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with("vault-") && name.ends_with(".json") {
-                n += 1;
-            }
-        }
-    }
-    n
 }
 
 // -- govern output ----------------------------------------------------
@@ -514,8 +514,8 @@ pub struct Topology {
     pub vaults: BTreeMap<String, String>,
 }
 
-fn read_json(dir: &Path, name: &str) -> Result<serde_json::Value, HarnessError> {
-    let p = dir.join(format!("{name}.json"));
+fn read_file(dir: &Path, file: &str) -> Result<serde_json::Value, HarnessError> {
+    let p = dir.join(file);
     let text = std::fs::read_to_string(&p)
         .map_err(|e| HarnessError::DeploymentJson(p.clone(), e.to_string()))?;
     serde_json::from_str(&text).map_err(|e| HarnessError::DeploymentJson(p, e.to_string()))
@@ -525,9 +525,7 @@ fn field(v: &serde_json::Value, file: &str, key: &str) -> Result<String, Harness
     v.get(key)
         .and_then(|x| x.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| {
-            HarnessError::other(format!("manifest {file}.json has no string field {key}"))
-        })
+        .ok_or_else(|| HarnessError::other(format!("manifest {file} has no string field {key}")))
 }
 
 fn opt_field(v: &serde_json::Value, key: &str) -> String {
@@ -541,29 +539,28 @@ fn opt_field(v: &serde_json::Value, key: &str) -> String {
 pub const BASE_USDC: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 pub fn load_topology(dir: &Path) -> Result<Topology, HarnessError> {
-    let core = read_json(dir, "core")?;
-    let registry = read_json(dir, "registry")?;
-    let router = read_json(dir, "router")?;
-    let governance = read_json(dir, "governance")?;
-    let ic = read_json(dir, "ic-policy")?;
-    let timelock = read_json(dir, "timelock")?;
-    let safe = read_json(dir, "safe")?;
+    load_topology_with(dir, &StageTable::load_default()?)
+}
+
+/// Manifest names come from the stage table. The USDC vault manifest holds the vault, the adapters
+/// and the asset; the gateway manifest holds the gateway; the timelock manifest holds the Safe.
+pub fn load_topology_with(dir: &Path, table: &StageTable) -> Result<Topology, HarnessError> {
+    let stem = |stage: &str| -> Result<(String, serde_json::Value), HarnessError> {
+        let file = table.manifest_of(stage)?;
+        let v = read_file(dir, &file)?;
+        Ok((file, v))
+    };
+    let (vault_f, vault_j) = stem("vault")?;
+    let (gw_f, gw_j) = stem("gateway")?;
+    let (reg_f, registry) = stem("registry")?;
+    let (rtr_f, router) = stem("router")?;
+    let (gov_f, governance) = stem("governance")?;
+    let (ic_f, ic) = stem("ic-policy")?;
+    let (tl_f, timelock) = stem("timelock")?;
     let mut vaults = BTreeMap::new();
-    vaults.insert("rmUSDC".to_string(), field(&core, "core", "vault")?);
-    for e in std::fs::read_dir(dir)?.flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
-        if let Some(stem) = name
-            .strip_prefix("vault-")
-            .and_then(|s| s.strip_suffix(".json"))
-        {
-            let j = read_json(dir, &format!("vault-{stem}"))?;
-            let key = j
-                .get("key")
-                .and_then(|x| x.as_str())
-                .unwrap_or(stem)
-                .to_string();
-            vaults.insert(key, field(&j, &name, "vault")?);
-        }
+    for (label, file) in table.vault_manifests() {
+        let j = read_file(dir, &file)?;
+        vaults.insert(label, field(&j, &file, "vault")?);
     }
     for k in ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"] {
         if !vaults.contains_key(k) {
@@ -571,7 +568,7 @@ pub fn load_topology(dir: &Path) -> Result<Topology, HarnessError> {
         }
     }
     let usdc = {
-        let u = opt_field(&core, "usdc");
+        let u = opt_field(&vault_j, "usdc");
         if u.is_empty() {
             BASE_USDC.to_string()
         } else {
@@ -579,19 +576,19 @@ pub fn load_topology(dir: &Path) -> Result<Topology, HarnessError> {
         }
     };
     Ok(Topology {
-        gateway: field(&core, "core", "gateway")?,
+        gateway: field(&gw_j, &gw_f, "gateway")?,
         usdc,
-        vault: field(&core, "core", "vault")?,
-        aave_adapter: opt_field(&core, "aave_adapter"),
-        compound_adapter: opt_field(&core, "compound_adapter"),
-        moonwell_flagship_adapter: opt_field(&core, "moonwell_flagship_adapter"),
-        registry: field(&registry, "registry", "registry")?,
-        router: field(&router, "router", "router")?,
-        governance: field(&governance, "governance", "governance")?,
-        ic_policy: field(&ic, "ic-policy", "policy")?,
-        consensus_receipt: field(&ic, "ic-policy", "consensus_receipt")?,
-        timelock: field(&timelock, "timelock", "timelock")?,
-        safe: field(&safe, "safe", "safe")?,
+        vault: field(&vault_j, &vault_f, "vault")?,
+        aave_adapter: opt_field(&vault_j, "aave_adapter"),
+        compound_adapter: opt_field(&vault_j, "compound_adapter"),
+        moonwell_flagship_adapter: opt_field(&vault_j, "moonwell_flagship_adapter"),
+        registry: field(&registry, &reg_f, "registry")?,
+        router: field(&router, &rtr_f, "router")?,
+        governance: field(&governance, &gov_f, "governance")?,
+        ic_policy: field(&ic, &ic_f, "policy")?,
+        consensus_receipt: field(&ic, &ic_f, "consensus_receipt")?,
+        timelock: field(&timelock, &tl_f, "timelock")?,
+        safe: field(&timelock, &tl_f, "safe")?,
         vaults,
     })
 }
@@ -715,5 +712,91 @@ mod tests {
         let no_hash = "{\"row\":\"x\",\"status\":1}";
         assert!(check_govern_rows(&parse_govern_output(no_hash).unwrap()).is_err());
         assert!(parse_govern_output("nothing here").is_err());
+    }
+
+    fn env_of(cmd: &Command, k: &str) -> Option<Option<String>> {
+        cmd.get_envs()
+            .find(|(n, _)| *n == k)
+            .map(|(_, v)| v.map(|s| s.to_string_lossy().to_string()))
+    }
+
+    #[test]
+    fn twin_chain_gets_yes_and_no_confirm() {
+        let mut c = Command::new("true");
+        apply_publish_env(&mut c, 918453);
+        assert_eq!(env_of(&c, "YES"), Some(Some("1".to_string())));
+        assert_eq!(env_of(&c, "CONFIRM"), Some(None), "CONFIRM must be removed");
+    }
+
+    #[test]
+    fn chain_8453_never_gets_yes() {
+        for chain in [8453u64, 1] {
+            let mut c = Command::new("true");
+            apply_publish_env(&mut c, chain);
+            assert_eq!(
+                env_of(&c, "YES"),
+                Some(None),
+                "YES must be removed on {chain}"
+            );
+        }
+    }
+
+    #[test]
+    fn topology_reads_the_manifest_names_the_table_gives() {
+        let real = std::fs::read_to_string(crate::stage_table::default_table_path()).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let a = |c: char| format!("0x{}", c.to_string().repeat(40));
+        let table = StageTable::parse(&real).unwrap();
+        let write = |t: &StageTable, rename: bool| {
+            let dir = tmp.path().join(if rename { "r" } else { "n" });
+            std::fs::create_dir_all(&dir).unwrap();
+            let n = |f: String| {
+                if rename && f == "router.json" {
+                    "router-x.json".to_string()
+                } else {
+                    f
+                }
+            };
+            let w = |stage: &str, body: String| {
+                std::fs::write(dir.join(n(t.manifest_of(stage).unwrap())), body).unwrap();
+            };
+            w("vault", format!("{{\"vault\":\"{}\"}}", a('1')));
+            w("gateway", format!("{{\"gateway\":\"{}\"}}", a('2')));
+            w("registry", format!("{{\"registry\":\"{}\"}}", a('3')));
+            w("router", format!("{{\"router\":\"{}\"}}", a('4')));
+            w("governance", format!("{{\"governance\":\"{}\"}}", a('5')));
+            w(
+                "ic-policy",
+                format!(
+                    "{{\"policy\":\"{}\",\"consensus_receipt\":\"{}\"}}",
+                    a('6'),
+                    a('7')
+                ),
+            );
+            w(
+                "timelock",
+                format!("{{\"timelock\":\"{}\",\"safe\":\"{}\"}}", a('8'), a('9')),
+            );
+            for (i, (_, f)) in t.vault_manifests().into_iter().enumerate().skip(1) {
+                std::fs::write(
+                    dir.join(n(f)),
+                    format!("{{\"vault\":\"0x{}\"}}", format!("{:x}", i + 10).repeat(20)),
+                )
+                .unwrap();
+            }
+            dir
+        };
+        let d = write(&table, false);
+        let topo = load_topology_with(&d, &table).unwrap();
+        assert_eq!(topo.gateway, a('2'));
+        assert_eq!(topo.safe, a('9'));
+        assert_eq!(topo.vaults.len(), 4);
+        assert_eq!(topo.vaults["rmUSDC"], a('1'));
+        // Rename the router manifest in a temp copy of the table: the reader follows it.
+        let renamed = StageTable::parse(&real.replace("router.json", "router-x.json")).unwrap();
+        let d2 = write(&renamed, true);
+        assert_eq!(load_topology_with(&d2, &renamed).unwrap().router, a('4'));
+        // The original table no longer finds the router manifest in the renamed directory.
+        assert!(load_topology_with(&d2, &table).is_err());
     }
 }

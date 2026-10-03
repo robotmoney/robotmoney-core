@@ -49,17 +49,13 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     }
     let fx = Fixture::new().expect("smoke-test fixture boot failed");
     let dir = fx.manifest_dir();
+    let table = smoke_test::stage_table::StageTable::load_default().expect("read the stage table");
+    let missing = table.missing(&dir);
     assert!(
-        dir.join("core.json").is_file(),
-        "rmUSDC manifest (core.json) missing"
+        missing.is_empty(),
+        "manifests the stage table names are missing in {}: {missing:?}",
+        dir.display()
     );
-    for key in ["rmPROTO", "rmAGENT", "rmRWA"] {
-        assert!(
-            dir.join(format!("vault-{key}.json")).is_file(),
-            "manifest for {key} missing in {}",
-            dir.display()
-        );
-    }
     let verified = fx
         .published()
         .verify()

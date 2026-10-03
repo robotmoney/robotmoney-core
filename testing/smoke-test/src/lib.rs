@@ -32,6 +32,7 @@ pub mod logging;
 pub mod publish;
 /// Dev-scout map for the real-adapter state injection boundary (issue #739).
 pub mod real_adapter_state;
+pub mod stage_table;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};

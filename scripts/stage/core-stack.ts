@@ -42,7 +42,6 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  readdirSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -53,6 +52,7 @@ import { parseArgs } from "node:util";
 import { checkRows, parseRows } from "./govern-rows.ts";
 import { labelParity, sheetParity } from "./parity.ts";
 import { parseSheet } from "./sheet-diff.ts";
+import { STAGE_TABLE, expectedManifestCount, manifestOf, missingManifests, presentManifests, publishEnv, vaultManifests, type StageTableShape } from "./stage-manifests.ts";
 
 // ─── constants ───────────────────────────────────────────────────────────────
 export const EXIT = { OK: 0, NO: 1, TOOL: 3, USAGE: 64, INPUT: 65, ACTION: 66 } as const;
@@ -70,7 +70,6 @@ export const SAFE_SET: [string, string][] = [
   ["SafeProxyFactory", "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"],
   ["CompatibilityFallbackHandler", "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99"],
 ];
-export const VAULT_KEYS = ["rmPROTO", "rmAGENT", "rmRWA"] as const;
 
 /** The exhaustive required-field set. The schema's `required` array must equal it (drift guard). */
 export const RECORD_REQUIRED_FIELDS = [
@@ -156,7 +155,7 @@ export function realDeps(repoRoot: string): Deps {
     async run(cmd, opts = {}) {
       const p = Bun.spawn(cmd, {
         cwd: opts.cwd ?? repoRoot,
-        env: { ...process.env, ...(opts.env ?? {}) },
+        env: Object.fromEntries(Object.entries({ ...process.env, ...(opts.env ?? {}) }).filter(([, v]) => v !== undefined)) as Record<string, string>,
         stdin: "ignore",
         stdout: opts.stream ? "inherit" : "pipe",
         stderr: opts.stream ? "inherit" : "pipe",
@@ -416,7 +415,7 @@ export class Stack {
     }
     const args = await this.publishArgs(verb);
     this.log("publish contracts", { verb });
-    return this.deps.run([this.bun, cli, ...args, ...extra], { env: { PUBLISH_MANIFEST_DIR: mdir }, stream });
+    return this.deps.run([this.bun, cli, ...args, ...extra], { env: publishEnv(CHAIN_ID, mdir), stream });
   }
 
   /** Forward a child's output and turn a non-zero exit into the same exit code. */
@@ -704,11 +703,9 @@ async function chainDown(s: Stack): Promise<void> {
 }
 
 // ─── publish ─────────────────────────────────────────────────────────────────
-/** After a publish run every one of the four vaults has a manifest: rmUSDC in core.json, one vault-<key>.json for each other. */
-export function countVaultManifests(mdir: string): number {
-  let n = existsSync(join(mdir, "core.json")) ? 1 : 0;
-  for (const k of VAULT_KEYS) if (existsSync(join(mdir, `vault-${k}.json`))) n++;
-  return n;
+/** After a publish run every stage with a manifest in scripts/deploy/stage-table.json has one. Counts the table's manifests present. */
+export function countStageManifests(mdir: string, table: StageTableShape = STAGE_TABLE): number {
+  return presentManifests(mdir, table).length;
 }
 
 async function publishVerb(s: Stack, verb: string): Promise<void> {
@@ -718,9 +715,10 @@ async function publishVerb(s: Stack, verb: string): Promise<void> {
     const r = await s.publishContracts("publish", [], true);
     if (r.code !== 0) throw new StackExit(r.code, `publish contracts exited ${r.code}`);
     const mdir = s.sv("manifest_dir");
-    const n = countVaultManifests(mdir);
-    if (n !== 4) throw fail(`publish contracts wrote ${n} of 4 vault manifests in ${mdir} (rmUSDC, rmPROTO, rmAGENT, rmRWA)`);
-    s.log("four vault manifests present", { mdir });
+    const n = countStageManifests(mdir);
+    const want = expectedManifestCount();
+    if (n !== want) throw fail(`publish contracts wrote ${n} of ${want} stage manifests in ${mdir} (missing: ${missingManifests(mdir).join(", ")})`);
+    s.log("stage manifests present", { mdir, count: n });
   } else throw usageError();
 }
 
@@ -746,8 +744,8 @@ async function governancePreflight(s: Stack): Promise<void> {
   }
   const mdir = s.sv("manifest_dir");
   if (!isDir(mdir)) throw unsatisfied("manifests-missing", `manifest_dir '${mdir || "none"}' is not a directory`);
-  const n = readdirSync(mdir).filter((f) => /^vault-.*\.json$/.test(f)).length;
-  if (!existsSync(join(mdir, "core.json")) || n < 3) throw unsatisfied("vault-manifests-missing", `want core.json (rmUSDC) plus three vault-*.json manifests in ${mdir}, found ${n}`);
+  const missing = missingManifests(mdir);
+  if (missing.length > 0) throw unsatisfied("manifests-missing", `want every manifest in stage-table.json in ${mdir}, missing: ${missing.join(", ")}`);
   if (!isDir(s.sv("key_dir"))) throw unsatisfied("keys-discarded", `the rehearsal keystores (${s.sv("key_dir")}) are gone, so nobody can drive the Safe; rebuild the stack (chain down, chain up)`);
   s.deps.out("ok: the booted chain meets every publish contracts precondition\n");
 }
@@ -871,21 +869,22 @@ async function recordWrite(s: Stack): Promise<void> {
   const tagR = await s.deps.run(["git", "describe", "--tags", "--always", sha]);
   const tag = tagR.code === 0 && tagR.stdout.trim() ? tagR.stdout.trim() : sha;
   const m = (f: string): Json => readJson(join(mdir, f), "manifest");
-  const core = m("core.json");
-  const reg = m("registry.json");
-  const rtr = m("router.json");
-  const gov = m("governance.json");
-  const ic = m("ic-policy.json");
-  const tlk = m("timelock.json");
-  const safe = m("safe.json");
-  const vaults: Record<string, Json> = Object.fromEntries(VAULT_KEYS.map((k) => [k, m(`vault-${k}.json`)]));
+  const gw = m(manifestOf("gateway"));
+  const reg = m(manifestOf("registry"));
+  const rtr = m(manifestOf("router"));
+  const gov = m(manifestOf("governance"));
+  const ic = m(manifestOf("ic-policy"));
+  const tlk = m(manifestOf("timelock"));
+  // The timelock manifest carries the Safe address; the table has no separate Safe manifest.
+  const safe = tlk;
+  const vaults: Record<string, Json> = Object.fromEntries(Object.entries(vaultManifests()).map(([k, f]) => [k, m(f)]));
   const call = async (cmd: string[]): Promise<string> => {
     const r = await s.deps.run(cmd);
     if (r.code !== 0) throw fail(`${cmd.slice(0, 2).join(" ")} failed: ${r.stderr.trim()}`);
     return r.stdout.trim();
   };
   const delayOut = await call([s.cast, "call", String(tlk.timelock), "getMinDelay()(uint256)", "--rpc-url", s.rpcUrl]);
-  const code = await call([s.cast, "code", String(core.gateway), "--rpc-url", s.rpcUrl]);
+  const code = await call([s.cast, "code", String(gw.gateway), "--rpc-url", s.rpcUrl]);
   const hash = await call([s.cast, "keccak", code]);
   const sheet = parseSheet(readFileSync(sheetPath, "utf8"));
   const sg = (k: string): string => (sheet.get(k) ?? "").replaceAll(" ", "");
@@ -903,8 +902,8 @@ async function recordWrite(s: Stack): Promise<void> {
     min_delay: Number(delayOut.split(/\s+/)[0]),
     deployer: s.sv("deployer_addr"),
     addresses: {
-      gateway: core.gateway,
-      vault: core.vault,
+      gateway: gw.gateway,
+      vault: vaults.rmUSDC!.vault,
       registry: reg.registry,
       router: rtr.router,
       governance: gov.governance,
@@ -915,7 +914,7 @@ async function recordWrite(s: Stack): Promise<void> {
       emergency,
     },
     code_hashes: { gateway: hash },
-    vault_addresses: { rmUSDC: core.vault, rmPROTO: vaults.rmPROTO!.vault, rmAGENT: vaults.rmAGENT!.vault, rmRWA: vaults.rmRWA!.vault },
+    vault_addresses: { rmUSDC: vaults.rmUSDC!.vault, rmPROTO: vaults.rmPROTO!.vault, rmAGENT: vaults.rmAGENT!.vault, rmRWA: vaults.rmRWA!.vault },
     ephemeral: {
       submitter: sg("AGENT_ADDRESS"),
       approver: owners[0],
