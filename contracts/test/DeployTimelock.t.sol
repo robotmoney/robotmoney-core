@@ -29,6 +29,14 @@ import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 
+/// @dev A manifest path no other test, thread or forge process shares. The manifest tests used fixed
+///      /tmp names (and the run-entrypoint subclasses all shared one), so two test contracts running in
+///      parallel, or two forge runs on one machine, could delete or overwrite each other's file and fail
+///      at random. `randomUint` is drawn per call, so every test that asks gets its own file.
+function uniqueManifestPath(Vm cheats, string memory tag) view returns (string memory) {
+    return string.concat("/tmp/", tag, "-", cheats.toString(cheats.randomUint()), ".json");
+}
+
 /// @dev Fork-style unit tests for DeployTimelock.s.sol (issue #414).
 ///
 ///      These tests run in-process using Forge cheatcodes so they do not
@@ -1218,7 +1226,7 @@ contract DeployTimelockManifestTest is SafeFixture {
         );
 
         harness = new ManifestHarness();
-        outPath = "/tmp/r7-manifest-test.json";
+        outPath = uniqueManifestPath(vm, "r7-manifest-test");
         // A file left by an earlier run must not stand in for this one.
         if (vm.exists(outPath)) vm.removeFile(outPath);
 
@@ -1525,7 +1533,7 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
     ///         that the deployer owns none of them.
     function test_manifestRecordsTimelockOwnedAgents() public {
         ManifestHarness harness = new ManifestHarness();
-        string memory outPath = "/tmp/1476-manifest-test.json";
+        string memory outPath = uniqueManifestPath(vm, "1476-manifest-test");
         if (vm.exists(outPath)) vm.removeFile(outPath);
         vm.prank(deployer);
         harness.exposedWriteJsonTo(d, outPath);
@@ -1570,7 +1578,7 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
         withKept.agents = agents;
 
         ManifestHarness harness = new ManifestHarness();
-        string memory outPath = "/tmp/1476-manifest-owned-test.json";
+        string memory outPath = uniqueManifestPath(vm, "1476-manifest-owned-test");
         if (vm.exists(outPath)) vm.removeFile(outPath);
         vm.prank(deployer);
         harness.exposedWriteJsonTo(withKept, outPath);
@@ -1779,7 +1787,8 @@ abstract contract DeployTimelockRunEntrypointBase is SafeFixture {
     function _prefix() internal pure virtual returns (string memory) {
         return "RM_1476_RUN_ENTRYPOINT_";
     }
-    string internal constant OUT_PATH = "/tmp/1476-run-entrypoint-manifest.json";
+    /// @dev Set per test in setUp from `uniqueManifestPath`: the subclasses below share this base, so a fixed name would be shared too.
+    string internal OUT_PATH;
 
     ManifestHarness internal harness;
     address internal deployer;
@@ -1856,6 +1865,7 @@ abstract contract DeployTimelockRunEntrypointBase is SafeFixture {
         _set("SAFE_THRESHOLD", vm.toString(FIXTURE_THRESHOLD));
         _set("EMERGENCY_ADDRESS", vm.toString(makeAddr("run-emergency")));
         _set("TIMELOCK_MIN_DELAY", "172800");
+        OUT_PATH = uniqueManifestPath(vm, "1476-run-entrypoint-manifest");
         _set("DEPLOYMENT_OUT", OUT_PATH);
         // The committee contracts are required inputs on every chain. The deployer
         // holds their admin roles until the handover.
@@ -2247,7 +2257,7 @@ contract DeployTimelockFourVaultsTest is SafeFixture {
     }
 
     function test_manifestHasAHandoverEntryForEachVault() public {
-        string memory out = "/tmp/s5-four-vault-manifest.json";
+        string memory out = uniqueManifestPath(vm, "s5-four-vault-manifest");
         if (vm.exists(out)) vm.removeFile(out);
         vm.prank(deployer);
         script.exposedWriteJsonTo(d, out);
