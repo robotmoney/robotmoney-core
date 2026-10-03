@@ -141,9 +141,11 @@ contract DeployTimelockCommitteeTest is SafeFixture {
             safe,
             emergency,
             MIN_DELAY,
-            address(icPolicy),
-            address(receipts),
-            receiptAdminArg,
+            DeployTimelock.Committee({
+                icPolicy: address(icPolicy),
+                consensusReceipt: address(receipts),
+                receiptAdmin: receiptAdminArg
+            }),
             _fixtureSpec()
         );
     }
@@ -241,9 +243,9 @@ contract DeployTimelockCommitteeTest is SafeFixture {
             safe,
             emergency,
             MIN_DELAY,
-            address(0), // icPolicy_ skipped
-            address(0), // consensusReceipt_ skipped
-            address(0),
+            DeployTimelock.Committee({
+                icPolicy: address(0), consensusReceipt: address(0), receiptAdmin: address(0)
+            }),
             _fixtureSpec()
         );
         assertTrue(
@@ -287,9 +289,11 @@ contract DeployTimelockCommitteeTest is SafeFixture {
             safe,
             emergency,
             MIN_DELAY,
-            address(icPolicy),
-            address(receipts),
-            independentReceiptAdmin,
+            DeployTimelock.Committee({
+                icPolicy: address(icPolicy),
+                consensusReceipt: address(receipts),
+                receiptAdmin: independentReceiptAdmin
+            }),
             _fixtureSpec()
         );
     }

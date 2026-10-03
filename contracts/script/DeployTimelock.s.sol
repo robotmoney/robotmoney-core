@@ -175,6 +175,15 @@ contract DeployTimelock is ExpectedChainGuard {
         uint256 threshold;
     }
 
+    /// @dev The optional committee handover inputs, grouped so
+    ///      `runInProcessWithCommittee` stays inside the non-viaIR stack limit
+    ///      (`forge coverage` compiles without the optimizer or viaIR).
+    struct Committee {
+        address icPolicy;
+        address consensusReceipt;
+        address receiptAdmin;
+    }
+
     struct Deployed {
         TimelockController timelock;
         /// Every vault handed over (VAULT_ADDRESSES), all treated the same way.
@@ -308,11 +317,12 @@ contract DeployTimelock is ExpectedChainGuard {
     /// @notice In-process variant that also exercises the optional IC policy /
     ///         consensus receipt handover (issue #1319). Caller sets up prank
     ///         context. No JSON is written; no env vars are read.
-    /// @param icPolicy_        InvestmentCommitteePolicy address, or address(0) to skip.
-    /// @param consensusReceipt_ ConsensusRecommendationReceipt address, or address(0) to skip.
-    /// @param receiptAdmin_    Current holder of ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the
-    ///                         receipt contract (RECEIPT_ADMIN_ADDRESS at its
-    ///                         construction); address(0) defaults to msg.sender.
+    /// @param committee_ `icPolicy`: InvestmentCommitteePolicy address, or address(0)
+    ///        to skip. `consensusReceipt`: ConsensusRecommendationReceipt address, or
+    ///        address(0) to skip. `receiptAdmin`: current holder of
+    ///        ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the receipt contract
+    ///        (RECEIPT_ADMIN_ADDRESS at its construction); address(0) defaults to
+    ///        msg.sender.
     function runInProcessWithCommittee(
         address vault_,
         address gateway_,
@@ -322,9 +332,7 @@ contract DeployTimelock is ExpectedChainGuard {
         address safe_,
         address emergency_,
         uint256 minDelay_,
-        address icPolicy_,
-        address consensusReceipt_,
-        address receiptAdmin_,
+        Committee memory committee_,
         SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
         d.vaults = _single(vault_);
@@ -335,9 +343,9 @@ contract DeployTimelock is ExpectedChainGuard {
         d.safe = safe_;
         d.emergency = emergency_;
         d.minDelay = minDelay_;
-        d.icPolicy = icPolicy_;
-        d.consensusReceipt = consensusReceipt_;
-        d.receiptAdmin = receiptAdmin_;
+        d.icPolicy = committee_.icPolicy;
+        d.consensusReceipt = committee_.consensusReceipt;
+        d.receiptAdmin = committee_.receiptAdmin;
 
         _validate(d, safeSpec_);
         d.timelock = _deployAndWire(d);
@@ -861,29 +869,8 @@ contract DeployTimelock is ExpectedChainGuard {
     ///      from the `DEPLOYMENT_OUT` read so a caller can name the path
     ///      without setting a process-wide variable.
     function _writeJsonTo(Deployed memory d, string memory outPath) internal {
-        string memory addrs = "manifest_addresses";
-        vm.serializeAddress(addrs, "timelock", address(d.timelock));
-        vm.serializeAddress(addrs, "safe", d.safe);
-        vm.serializeAddress(addrs, "emergency", d.emergency);
-        vm.serializeAddress(addrs, "vault", d.vaults[0]);
-        vm.serializeAddress(addrs, "vaults", d.vaults);
-        vm.serializeAddress(addrs, "gateway", d.gateway);
-        vm.serializeAddress(addrs, "registry", d.registry);
-        vm.serializeAddress(addrs, "router", d.router);
-        vm.serializeAddress(addrs, "ic_policy", d.icPolicy);
-        vm.serializeAddress(addrs, "consensus_receipt", d.consensusReceipt);
-        string memory addrsJson = vm.serializeAddress(addrs, "governance", d.governance);
-
-        string memory hashes = "manifest_code_hashes";
-        vm.serializeBytes32(hashes, "timelock", address(d.timelock).codehash);
-        vm.serializeBytes32(hashes, "safe", d.safe.codehash);
-        vm.serializeBytes32(hashes, "vault", d.vaults[0].codehash);
-        vm.serializeBytes32(hashes, "gateway", d.gateway.codehash);
-        vm.serializeBytes32(hashes, "registry", d.registry.codehash);
-        vm.serializeBytes32(hashes, "router", d.router.codehash);
-        vm.serializeBytes32(hashes, "ic_policy", d.icPolicy.codehash);
-        vm.serializeBytes32(hashes, "consensus_receipt", d.consensusReceipt.codehash);
-        string memory hashesJson = vm.serializeBytes32(hashes, "governance", d.governance.codehash);
+        string memory addrsJson = _serializeAddressSection(d);
+        string memory hashesJson = _serializeCodeHashSection(d);
 
         string memory rolesJson = _serializeRoles(d);
 
@@ -923,6 +910,37 @@ contract DeployTimelock is ExpectedChainGuard {
         console2.log("Wrote timelock deployment manifest to", outPath);
     }
 
+    /// @dev The `addresses` section of the manifest. Split out of `_writeJsonTo`
+    ///      to keep that function inside the non-viaIR stack limit (`forge coverage`).
+    function _serializeAddressSection(Deployed memory d) internal returns (string memory) {
+        string memory addrs = "manifest_addresses";
+        vm.serializeAddress(addrs, "timelock", address(d.timelock));
+        vm.serializeAddress(addrs, "safe", d.safe);
+        vm.serializeAddress(addrs, "emergency", d.emergency);
+        vm.serializeAddress(addrs, "vault", d.vaults[0]);
+        vm.serializeAddress(addrs, "vaults", d.vaults);
+        vm.serializeAddress(addrs, "gateway", d.gateway);
+        vm.serializeAddress(addrs, "registry", d.registry);
+        vm.serializeAddress(addrs, "router", d.router);
+        vm.serializeAddress(addrs, "ic_policy", d.icPolicy);
+        vm.serializeAddress(addrs, "consensus_receipt", d.consensusReceipt);
+        return vm.serializeAddress(addrs, "governance", d.governance);
+    }
+
+    /// @dev The `code_hashes` section of the manifest, read from the chain.
+    function _serializeCodeHashSection(Deployed memory d) internal returns (string memory) {
+        string memory hashes = "manifest_code_hashes";
+        vm.serializeBytes32(hashes, "timelock", address(d.timelock).codehash);
+        vm.serializeBytes32(hashes, "safe", d.safe.codehash);
+        vm.serializeBytes32(hashes, "vault", d.vaults[0].codehash);
+        vm.serializeBytes32(hashes, "gateway", d.gateway.codehash);
+        vm.serializeBytes32(hashes, "registry", d.registry.codehash);
+        vm.serializeBytes32(hashes, "router", d.router.codehash);
+        vm.serializeBytes32(hashes, "ic_policy", d.icPolicy.codehash);
+        vm.serializeBytes32(hashes, "consensus_receipt", d.consensusReceipt.codehash);
+        return vm.serializeBytes32(hashes, "governance", d.governance.codehash);
+    }
+
     /// @dev The per-vault handover record: one object per vault in VAULT_ADDRESSES,
     ///      keyed `vault_<index>`. Every field is a live read from the chain.
     function _serializeVaultHandovers(Deployed memory d) internal returns (string memory out) {
@@ -951,6 +969,33 @@ contract DeployTimelock is ExpectedChainGuard {
                 k, "deployer_has_emergency_role", v.hasRole(EMERGENCY_ROLE, msg.sender)
             );
             out = vm.serializeString(all, string.concat("vault_", vm.toString(i)), entry);
+        }
+    }
+
+    /// @dev Folds the per-vault role reads into three booleans for the manifest.
+    function _vaultRoleAggregates(Deployed memory d)
+        internal
+        view
+        returns (bool allTimelockAdmin, bool allEmergencyKey, bool deployerHoldsVaultRole)
+    {
+        allTimelockAdmin = true;
+        allEmergencyKey = true;
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            IAccessControl v = IAccessControl(d.vaults[i]);
+            if (!v.hasRole(ADMIN_ROLE, address(d.timelock))) allTimelockAdmin = false;
+            if (!v.hasRole(EMERGENCY_ROLE, d.emergency)) allEmergencyKey = false;
+            if (v.hasRole(ADMIN_ROLE, msg.sender) || v.hasRole(EMERGENCY_ROLE, msg.sender)) {
+                deployerHoldsVaultRole = true;
+            }
+        }
+    }
+
+    /// @dev True when the deployer still owns any gateway agent in `d.agents`.
+    function _deployerOwnsListedAgent(Deployed memory d) internal view returns (bool owns) {
+        for (uint256 i = 0; i < d.agents.length; i++) {
+            if (IGatewayAgentOwnership(d.gateway).agentOwner(d.agents[i]) == msg.sender) {
+                owns = true;
+            }
         }
     }
 
@@ -985,17 +1030,10 @@ contract DeployTimelock is ExpectedChainGuard {
             IAccessControl(d.governance).hasRole(ADMIN_ROLE, address(d.timelock))
         );
         // Aggregates over every vault; the per-vault rows are in `vault_handover`.
-        bool allTimelockAdmin = true;
-        bool allEmergencyKey = true;
-        bool deployerHoldsVaultRole;
-        for (uint256 i = 0; i < d.vaults.length; i++) {
-            IAccessControl v = IAccessControl(d.vaults[i]);
-            if (!v.hasRole(ADMIN_ROLE, address(d.timelock))) allTimelockAdmin = false;
-            if (!v.hasRole(EMERGENCY_ROLE, d.emergency)) allEmergencyKey = false;
-            if (v.hasRole(ADMIN_ROLE, msg.sender) || v.hasRole(EMERGENCY_ROLE, msg.sender)) {
-                deployerHoldsVaultRole = true;
-            }
-        }
+        // Computed in helpers so this function stays inside the non-viaIR stack
+        // limit that `forge coverage` compiles under.
+        (bool allTimelockAdmin, bool allEmergencyKey, bool deployerHoldsVaultRole) =
+            _vaultRoleAggregates(d);
         vm.serializeBool(roles, "timelock_has_vault_admin_role", allTimelockAdmin);
         vm.serializeUint(roles, "vaults_handed_over_count", d.vaults.length);
         vm.serializeBool(
@@ -1014,12 +1052,7 @@ contract DeployTimelock is ExpectedChainGuard {
         // the manifest only after _deployAndWire requires every listed agent to
         // have left the deployer, so a manifest run() writes records false; it
         // is a record for the reader, not a check.
-        bool deployerOwnsListedAgent;
-        for (uint256 i = 0; i < d.agents.length; i++) {
-            if (IGatewayAgentOwnership(d.gateway).agentOwner(d.agents[i]) == msg.sender) {
-                deployerOwnsListedAgent = true;
-            }
-        }
+        bool deployerOwnsListedAgent = _deployerOwnsListedAgent(d);
         vm.serializeBool(roles, "deployer_owns_a_listed_gateway_agent", deployerOwnsListedAgent);
         // The bool above covers the listed agents only; the count says how many
         // that is, so an empty list does not read as a checked one.
