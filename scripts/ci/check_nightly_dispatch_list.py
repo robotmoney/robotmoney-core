@@ -42,6 +42,8 @@ def dispatch_list(text: str) -> set:
 def check(workflows: set, nightly_text: str) -> list:
     listed = dispatch_list(nightly_text)
     errors = []
+    if not workflows or not listed:
+        errors.append("zero checks ran: no workflows found or the nightly dispatch list is empty")
     for w in sorted(workflows - listed - set(EXCLUDED)):
         errors.append(f"{w} is not in the nightly dispatch list and not in EXCLUDED")
     for w in sorted(listed - workflows):
@@ -64,6 +66,9 @@ def self_test() -> int:
     errs = check(wfs | {"suite-99-new.yml"}, text)
     if not any("suite-99-new.yml" in e for e in errs):
         print("self-test FAILED: a new suite was not detected")
+        return 1
+    if not check(set(), text) or not check(wfs, "SUITES=(\n)\n"):
+        print("self-test FAILED: an empty scan was not rejected")
         return 1
     print("self-test ok")
     return 0
