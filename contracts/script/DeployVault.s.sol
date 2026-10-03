@@ -37,7 +37,7 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///        EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
 ///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units (non-zero)
 contract DeployVault is ExpectedChainGuard {
-    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "vault.json";
 
     /// @notice Canonical Base mainnet USDC (FiatTokenProxy).
@@ -59,13 +59,19 @@ contract DeployVault is ExpectedChainGuard {
     address public constant MOONWELL_FLAGSHIP_USDC = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
     /// @notice Display names the manifest records for the three venues. The third equals
     ///         the venue's on-chain `name()`.
+    /// @notice Manifest display name of the Aave V3 venue.
     string public constant VENUE_NAME_AAVE = "Aave V3 USDC";
+    /// @notice Manifest display name of the Compound V3 venue.
     string public constant VENUE_NAME_COMPOUND = "Compound V3 USDC";
+    /// @notice Manifest display name of the third venue (Moonwell Flagship USDC).
     string public constant VENUE_NAME_THIRD = "Moonwell Flagship USDC";
 
     /// @notice Adapter bps caps, in registration order. They sum to 10 000.
+    /// @notice Aave V3 adapter cap in basis points.
     uint16 public constant AAVE_BPS = 3_334;
+    /// @notice Compound V3 adapter cap in basis points.
     uint16 public constant COMPOUND_BPS = 3_333;
+    /// @notice Third venue adapter cap in basis points.
     uint16 public constant THIRD_VENUE_BPS = 3_333;
 
     struct Params {
@@ -87,6 +93,7 @@ contract DeployVault is ExpectedChainGuard {
     }
 
     /// @notice Forge broadcast entrypoint. Deploys, registers adapters, seeds, writes JSON.
+    /// @return d The deployed contracts and admin.
     function run() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
         address seedReceiver = _seedShareReceiver("", p.admin);
@@ -104,6 +111,7 @@ contract DeployVault is ExpectedChainGuard {
     }
 
     /// @notice In-process variant for forge tests, no seed deposit. Env-driven.
+    /// @return d The deployed contracts and admin.
     function runInProcess() external returns (Deployed memory d) {
         d = _deploy(_readEnvParamsFrom(""));
         vm.startPrank(d.admin);
@@ -113,6 +121,10 @@ contract DeployVault is ExpectedChainGuard {
 
     /// @notice Explicit-parameter variant that also seeds. Needs real venue state (fork tests).
     ///         The caller passes every input: the script holds no default cap, recipient or seed.
+    /// @param p Deployment parameters (admin, caps, fee, USDC).
+    /// @param seedReceiver_ Address that receives the seed shares.
+    /// @param seed_ Seed deposit in 6-decimal USDC units.
+    /// @return d The deployed contracts and admin.
     function runInProcessWithSeed(Params memory p, address seedReceiver_, uint256 seed_)
         external
         returns (Deployed memory d)
@@ -127,6 +139,8 @@ contract DeployVault is ExpectedChainGuard {
     }
 
     /// @notice Direct-parameter variant that takes every economic input. No seed.
+    /// @param p Deployment parameters (admin, caps, fee, USDC).
+    /// @return d The deployed contracts and admin.
     function runInProcessWithParams(Params memory p) external returns (Deployed memory d) {
         d = _deploy(p);
         vm.startPrank(d.admin);

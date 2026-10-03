@@ -21,7 +21,7 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         Required env vars: EXPECTED_CHAIN_ID (mandatory and equal to 8453 on Base mainnet),
 ///         DEPLOYMENT_OUT (output JSON path).
 contract DeployLibs is ExpectedChainGuard {
-    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "libs.json";
 
     /// @notice sqrt(1.0001^0) * 2^96: the canonical answer for tick 0.
@@ -32,6 +32,7 @@ contract DeployLibs is ExpectedChainGuard {
     }
 
     /// @notice Forge broadcast entrypoint.
+    /// @return d The deployed library addresses.
     function run() external returns (Deployed memory d) {
         _requireExpectedChain("");
         vm.startBroadcast();
@@ -41,6 +42,7 @@ contract DeployLibs is ExpectedChainGuard {
     }
 
     /// @notice In-process variant for forge tests. No broadcast, no JSON written.
+    /// @return d The deployed library addresses.
     function runInProcess() external returns (Deployed memory d) {
         d = _deploy();
         console2.log("libs: tick_math", d.tickMath);

@@ -685,9 +685,14 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         return net.mulDiv(MAX_BPS, MAX_BPS - exitFeeBps, Math.Rounding.Ceil);
     }
 
+    /// @notice Burn `shares` from `owner` and send the net USDC to `receiver`.
     /// @dev core 1482: the share-to-asset preview reads every adapter's `totalAssets()` before
     ///      `_withdraw` runs, so the entry gas guard sits on the public entrypoints too. Share
     ///      and fee math is untouched: both forward to the inherited ERC-4626 implementation.
+    /// @param shares Amount of vault shares to burn.
+    /// @param receiver Address that receives the USDC.
+    /// @param owner Address whose shares are burned (the caller or an approved spender).
+    /// @return The amount of USDC sent to `receiver`.
     function redeem(uint256 shares, address receiver, address owner)
         public
         override
@@ -697,7 +702,12 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         return super.redeem(shares, receiver, owner);
     }
 
+    /// @notice Send `assets` USDC to `receiver` and burn the matching shares from `owner`.
     /// @dev See `redeem`.
+    /// @param assets Net amount of USDC the receiver should get.
+    /// @param receiver Address that receives the USDC.
+    /// @param owner Address whose shares are burned (the caller or an approved spender).
+    /// @return The amount of shares burned.
     function withdraw(uint256 assets, address receiver, address owner)
         public
         override

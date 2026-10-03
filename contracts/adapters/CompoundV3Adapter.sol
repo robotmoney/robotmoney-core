@@ -76,6 +76,9 @@ contract CompoundV3Adapter is IStrategyAdapter {
     }
 
     /// @notice Min-out variant of `deploy`: reverts `SlippageExceeded` below `minValueOut`.
+    /// @param usdcIn Amount of USDC (6-decimal units) to deploy into the venue.
+    /// @param minValueOut Minimum value the venue position must gain, else revert.
+    /// @return valueAdded Value added to the position, in USDC units.
     function deploy(uint256 usdcIn, uint256 minValueOut)
         external
         onlyVault
@@ -112,6 +115,9 @@ contract CompoundV3Adapter is IStrategyAdapter {
     }
 
     /// @notice Min-out variant of `withdraw`: reverts `SlippageExceeded` below `minUsdcOut`.
+    /// @param usdcWanted USDC to withdraw; `type(uint256).max` withdraws everything.
+    /// @param minUsdcOut Minimum USDC that must reach the vault, else revert.
+    /// @return usdcOut USDC actually sent to the vault.
     function withdraw(uint256 usdcWanted, uint256 minUsdcOut)
         external
         onlyVault

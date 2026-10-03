@@ -35,17 +35,21 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///        DEPLOYMENT_OUT        — output JSON path
 ///      USDC is the canonical Base USDC constant on every chain.
 contract DeployGateway is ExpectedChainGuard {
-    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "gateway.json";
 
     /// @notice In-process test seam defaults. Env runs require every agent cap.
     uint256 public constant DEFAULT_MAX_PER_PAYMENT = 10_000 * 1e6;
+    /// @notice Default agent spend cap per window in USDC units (test seam only).
     uint256 public constant DEFAULT_MAX_PER_WINDOW = 100_000 * 1e6;
+    /// @notice Default per-payment withdraw cap in raw rmUSDC shares (test seam only).
     /// @dev Withdraw caps count raw rmUSDC shares, not USDC: the vault's share offset is 18, so
     ///      1 USDC (1e6 units) is 1e24 raw shares on a fresh vault. A cap sized in USDC units
     ///      would block every withdraw (core 1493).
     uint256 public constant DEFAULT_MAX_WITHDRAW_PER_PAYMENT = 10_000 * 1e6 * 1e18;
+    /// @notice Default per-window withdraw cap in raw rmUSDC shares (test seam only).
     uint256 public constant DEFAULT_MAX_WITHDRAW_PER_WINDOW = 100_000 * 1e6 * 1e18;
+    /// @notice Default agent authorization lifetime from deployment (test seam only).
     uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
 
     struct Params {
@@ -76,6 +80,7 @@ contract DeployGateway is ExpectedChainGuard {
     }
 
     /// @notice Forge broadcast entrypoint.
+    /// @return d The deployed gateway and its wiring.
     function run() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
         vm.startBroadcast();
@@ -88,6 +93,7 @@ contract DeployGateway is ExpectedChainGuard {
     }
 
     /// @notice In-process variant, env-driven. Pranks the admin for the authorization.
+    /// @return d The deployed gateway and its wiring.
     function runInProcess() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
         d = _deployGateway(p);
@@ -97,6 +103,14 @@ contract DeployGateway is ExpectedChainGuard {
     }
 
     /// @notice Direct-parameter variant for forge tests. Skips env resolution.
+    /// @param admin_ Gateway admin.
+    /// @param pauser_ Address granted the pauser role.
+    /// @param agent_ Agent authorized to spend through the gateway.
+    /// @param shareReceiver_ Address that receives vault shares.
+    /// @param usdc_ USDC token address.
+    /// @param vault_ Robot Money vault address.
+    /// @param router_ Router address the gateway may call.
+    /// @return d The deployed gateway and its wiring.
     function runInProcessWith(
         address admin_,
         address pauser_,
