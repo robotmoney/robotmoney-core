@@ -4,7 +4,7 @@
 // The stage verbs are Bun TypeScript (scripts/stage/core-stack.ts), called directly. The core-stack.sh shim
 // is deleted (core 1488): it must stay absent, and core-stack.ts may not hold deploy or ceremony logic.
 // Usage: bun scripts/stage/check-deleted-stage-scripts.ts [repo-root]
-// Canonical: the one-deployment-scheme plan (S9, core 1488).
+// Canonical: robotmoney/devops issue 53 / core issue 1499 (S9, core 1488).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 

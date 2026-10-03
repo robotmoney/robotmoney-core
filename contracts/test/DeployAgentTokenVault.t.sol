@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: the one-deployment-scheme plan, core S4 (issues 1486, 1491)
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S4 (issues 1486, 1491)
 pragma solidity ^0.8.24;
 
 import {stdJson} from "forge-std/StdJson.sol";

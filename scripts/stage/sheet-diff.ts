@@ -1,7 +1,7 @@
 // Sheet diff: the stage sheet versus the production sheet differ only in parameter lines.
 // Usage: bun scripts/stage/sheet-diff.ts <stage-sheet> <production-sheet>
 // Exits non-zero on any difference outside the allow-list below.
-// Canonical: the one-deployment-scheme plan (principles 2, 24; S9, core 1488).
+// Canonical: robotmoney/devops issue 53 / core issue 1499 (principles 2, 24; S9, core 1488).
 import { readFileSync } from "node:fs";
 
 /** Keys whose VALUE may differ between stage and production (run parameters). */

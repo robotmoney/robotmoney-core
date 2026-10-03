@@ -227,6 +227,11 @@ are deleted. Four vault kinds ship: `RobotMoneyVault`
 The registry-eligibility model (`isRouterEligible`), the lifecycle in §4.7
 and the single-production-codebase principle are unchanged.
 
+**Retired contracts.** Every contract ADR-0010 proposed is deleted from the tree and is
+not coming back: the unified vault, its position-adapter interface, the two asset
+position adapters and the RWA vault. The generated pages under `contracts/doc/` for
+them are removed. Nothing here describes them as planned.
+
 ### 4.2 Portfolio Router
 
 The Portfolio Router is the outer allocation contract. It accepts USDC
@@ -358,7 +363,7 @@ See `docs/technical/security-model.md` §4 and issue #414.
 
 The PRD defines three fee classes per vault or Portfolio Router path:
 management fee, swap-fee share, and exit fee. The current deployed
-`RobotMoneyVault` source implements an exit fee only.
+`RobotMoneyVault` source implements an exit fee only. The live vault charges 25 bps (0.25%) against a 1% ceiling.
 
 **Current phase:** only exit fees are in scope. Management fee,
 swap-fee-share, protocol revenue collection, and buyback-and-burn are

@@ -365,7 +365,7 @@ Common edge cases:
 - Vault and Portfolio Router fee structures are limited to three
   classes: management fee, swap-fee share, and exit fee. Each fee
   class, its rate, and its recipient must be disclosed before user
-  approval. In the current phase only exit fees are implemented;
+  approval. In the current phase only exit fees are implemented (the live rmUSDC vault charges 25 bps);
   management fee and swap-fee share are deferred to a future phase.
 - Vaults must disclose risk labels, fees, caps, availability, and
   retirement or pause state.
@@ -450,7 +450,7 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Risk label | STABLE_YIELD |
 | Exposure | USDC yield across Moonwell Flagship USDC, Aave V3, Compound V3 on Base |
 | Allocation model | Equal-weight target across strategies; the mix is kept near target through ordinary deposit and withdrawal activity |
-| Exit fee | Configurable 0–1%; the live vault charges 25 bps (0.25%) |
+| Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
 | Management fee | Not implemented in current phase |
 | Swap-fee share | Not implemented in current phase |
 | Withdrawal | Synchronous; single transaction |
@@ -476,7 +476,7 @@ the shortfall from the remaining strategies before reverting.
 | Risk label | VOLATILE |
 | Exposure | Basket of protocol assets (wETH, cbBTC, wSOL) via Uniswap V3 swaps |
 | Allocation model | Equal-weight target across basket assets at deposit time; not actively rebalanced |
-| Exit fee | Configurable 0–1% |
+| Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
 | Status | Router-eligible after readiness review (see below) |
 
@@ -526,7 +526,7 @@ Router allocation.
 | Exposure | Admin-curated basket of agent-economy tokens via per-asset DEX routing (Uniswap V3, Uniswap V4, Aerodrome) — see [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md) |
 | MVP shortlist | BNKR, JUNO, RM (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
 | Allocation model | Equal-weight target across shortlisted tokens at deposit time; not actively rebalanced |
-| Exit fee | Configurable 0–1% |
+| Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
 | Status | Router-eligible after readiness review (see below) |
 

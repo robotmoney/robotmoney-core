@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: the one-deployment-scheme plan, core S1 (issue 1483)
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S1 (issue 1483)
 pragma solidity ^0.8.24;
 
 import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";

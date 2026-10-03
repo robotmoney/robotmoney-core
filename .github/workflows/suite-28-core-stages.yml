@@ -1,4 +1,4 @@
-# Canonical: the one-deployment-scheme plan, core S3 (1485), S5 (1487), 1493.
+# Canonical: robotmoney/devops issue 53 / core issue 1499, core S3 (1485), S5 (1487), 1493.
 #
 # The core stage runner (scripts/deploy/core-stages.ts) and its assertion scripts replace the old
 # shell stack. The offline job runs on every pull request: the stage table, the manifest rules and the

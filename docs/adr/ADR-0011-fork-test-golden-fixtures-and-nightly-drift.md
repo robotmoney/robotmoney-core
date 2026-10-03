@@ -1,6 +1,6 @@
-# ADR-0011: Fork tests run against checked-in golden fixtures on every merge; live drift is a non-blocking nightly
+# ADR-0011: Fork tests run against checked-in golden fixtures on every merge
 
-- **Status:** Accepted. Superseded in part by core 1495/1496: the live drift alarm (Decision 2) is replaced by suite 29 (fresh snapshot) and the third-party drift workflow.
+- **Status:** Superseded by the nightly redesign (core issues 1495 and 1496). The live drift alarm (Decision 2) no longer exists: suite 29 (the nightly fresh snapshot) and the third-party drift workflow replace it, and the nightly dispatch fails when any dispatch fails. Decision 1 (merge-gating fork tests on checked-in golden fixtures) is how the repository still runs fork tests. Decisions 3 and 4 stand as written. Read Decision 2 and the references to a nightly drift alarm below as history.
 - **Date:** 2026-07-20
 - **Deciders:** Product owner
 - **Supersedes (in part):** `docs/technical/fork-e2e-decisions.md` —
@@ -112,30 +112,15 @@ the golden fixture is missing, or if **zero** fork tests execute, CI **fails** �
 it never silent-skips. A missing fixture or an empty fork run is red, not
 green. This is the direct fix for the pre-existing legacy silent-skip.
 
-### 2. Live-drift detection is a non-blocking nightly alarm on a free public RPC
+### 2. Live drift is caught by the nightly redesign (core 1495, 1496)
 
-> **Superseded in part by core 1495/1496.** The live-RPC drift alarm described here no longer exists. It is replaced by suite 29 (nightly fresh snapshot) and the third-party drift workflow. The text below is kept as history.
+This decision first proposed a schedule-only, non-blocking live-fork drift alarm on a free public RPC. That alarm was deleted. The nightly redesign replaces it:
 
-A **schedule-only, non-blocking** nightly job forks **Base mainnet at latest**
-via a **free public RPC** and re-runs the fork suite as a **drift alarm**.
+- **Suite 29 (nightly fresh snapshot, core 1496)** re-captures the chain snapshot at the latest Base block and reruns the chain suites against it. It is not a pull request gate.
+- **The third-party drift workflow (core 1497)** compares the recorded dependency manifest with the live chain.
+- **The nightly dispatch (core 1495)** fails when any suite dispatch fails and lists each failed workflow. Nothing in it is swallowed.
 
-- Forking at latest needs only a **full node, not an archive node** — you only
-  read current state, not deep history. A free public endpoint is therefore
-  sufficient: e.g. `https://mainnet.base.org`, PublicNode
-  (`https://base-rpc.publicnode.com`), or LlamaRPC. A single nightly run will
-  not be rate-limited by these.
-- The endpoint URL is read from a **var with a public default** — **no CI
-  secret**. (`scripts/devnet/snapshot-fork.ts` already defaults
-  `RMPC_FORK_RPC_URL` to `https://base-rpc.publicnode.com`, so the same public
-  default applies.)
-- On failure the nightly **opens or updates a tracking issue** rather than
-  blocking any merge. It is the lane that catches **real upstream drift** —
-  pool migrations, ABI changes, oracle heartbeat changes — that a pinned
-  snapshot structurally cannot.
-
-The existing nightly full-suite orchestrator (`docs/development/ci-suites.md`
-§21, `suite-21-nightly.yml`) is the natural host/dispatcher for this run; the
-live-fork drift alarm is registered there rather than as a second scheduler.
+The live-drift job, its script and its alarm text are gone (`scripts/ci/check-nightly-dispatch-selftest.ts` keeps them absent). See `docs/development/ci-suites.md` sections 21 and 29.
 
 ### 3. Fixture refresh is developer-owned on change — no scheduled cadence
 
@@ -164,6 +149,8 @@ It is never a CI secret and never gates a merge. The nightly (§2) uses a
 public-default var, not a secret.
 
 ## Consequences
+
+> Superseded in part: where this section says the nightly live-fork alarm catches drift, read suite 29 and the third-party drift workflow (Decision 2).
 
 **Positive.**
 

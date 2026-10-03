@@ -1,4 +1,4 @@
-// Canonical: the one-deployment-scheme plan, core S3 (issue 1485).
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S3 (issue 1485).
 // Offline test of the core stage table. Run: bun test scripts/deploy/core-stages.test.ts
 import { describe, expect, test } from "bun:test";
 import { PROOFS, STAGES, assertGatewayRouter, assertStageOrder, mergeManifests, proofArgs, proofsAfter } from "./core-stages";

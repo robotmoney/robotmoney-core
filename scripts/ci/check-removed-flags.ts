@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: the one-deployment-scheme plan, core S1 (issue 1483).
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S1 (issue 1483).
 //
 // CI gate: the flags that used to lift a deploy floor must not come back. Exit 0 when no file
 // under contracts/ or scripts/ names any of them. Exit 1 and print each hit otherwise.

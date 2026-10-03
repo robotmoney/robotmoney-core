@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: the one-deployment-scheme plan, core S4 (issue 1486)
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486)
 pragma solidity ^0.8.24;
 
 import {ActivateBasketVaultEligibility} from "../script/ActivateBasketVaultEligibility.s.sol";

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (basket vault production path)
 //            docs/prd.md §11.2, §11.3, §11.4 — rmPROTO, rmAGENT, rmRWA
-//            the one-deployment-scheme plan, stage 13 step 4, core S4 (1486)
+//            robotmoney/devops issue 53 / core issue 1499, stage 13 step 4, core S4 (1486)
 //
 // Governed eligibility step for the three basket vaults. It uses `registry.migrateEligibility`
 // once per basket. That call flips eligibility and re-sets the router default weight vector in

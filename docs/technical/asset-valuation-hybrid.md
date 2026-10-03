@@ -175,7 +175,6 @@ The dapp needs to surface the NAV-versus-market gap explicitly:
 
 ### New/Updated ADRs
 - Consider ADR for "NAV dual role" — documenting the intentional separation of system NAV vs. user position value
-- Or update existing ADR-0010 (unified vault architecture) to footnote the hybrid model
 
 ## Diagram: Hybrid NAV Flow
 

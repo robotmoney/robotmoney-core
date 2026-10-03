@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (basket vaults);
-//            the one-deployment-scheme plan, core S4 (issue 1486).
+//            robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486).
 // (See also: docs/audits.md audit-scope ledger: this adapter is "Not separately audited",
 //  an exception pending the owner. docs/technical/unified-vault-seam-map.json records the seam.)
 //

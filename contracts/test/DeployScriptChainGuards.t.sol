@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: the one-deployment-scheme plan principles 4-6
+// Canonical: robotmoney/devops issue 53 / core issue 1499 principles 4-6
 // Implements: core S1 — strict ExpectedChainGuard on 8453 for EVERY deploy script, vault scripts included.
 pragma solidity ^0.8.24;
 

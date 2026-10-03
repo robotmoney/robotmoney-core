@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: the one-deployment-scheme plan, core S3 (issue 1485), core 1493.
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S3 (issue 1485), core 1493.
 //
 // Twin chain proof for the router-first split. Reads the manifest the core stages wrote and asserts,
 // on chain:

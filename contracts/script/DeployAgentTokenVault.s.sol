@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (agent-token basket)
 //            docs/prd.md §11.3 — Agent Token Vault (rmAGENT)
-//            the one-deployment-scheme plan, core S4 (issue 1486)
+//            robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486)
 //
 // Deploys `AgentTokenVault`, pauses it and registers it. The launch shortlist is empty, so the
 // vault ships with zero assets. The loop below stays in place: adding a token later is one

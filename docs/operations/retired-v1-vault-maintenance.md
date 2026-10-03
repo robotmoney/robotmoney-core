@@ -1,7 +1,7 @@
 # Retired v1 vault — indefinite maintenance obligation
 
 This runbook assigns the **ongoing operational obligation** that survives after a
-v1 vault is retired during the unified-Vault (ADR-0010) environment migration. It
+v1 vault is retired when the v2 core stack replaces it (the unified-Vault proposal, ADR-0010, is Rejected). It
 is a **recommendations registry entry** in the sense of
 [`manual-admin-actions.md`](manual-admin-actions.md): the actions here are manual,
 mainnet-touching, and deliberately out of scope for the automated development
@@ -116,8 +116,8 @@ would strand a still-redeemable holder, violating the redeemability guarantees
 
 - [`ADR-0009`](../adr/ADR-0009-vault-retirement-no-assisted-migration.md) —
   retirement is withdraw-only; no on-chain/assisted migration.
-- [`ADR-0010`](../adr/ADR-0010-unified-vault-architecture.md) — the unified-Vault
-  target the v1 vaults are retired into.
+- [`ADR-0010`](../adr/ADR-0010-unified-vault-architecture.md) — Rejected. The
+  unified-Vault proposal is not the target: v1 vaults are retired into the v2 vault families.
 - [`docs/technical/unified-vault-spec.md`](../technical/unified-vault-spec.md) §5.3
   (exit-liveness), §6 (invariant-preservation matrix).
 - [`docs/technical/smart-contract-invariants.md`](../technical/smart-contract-invariants.md)

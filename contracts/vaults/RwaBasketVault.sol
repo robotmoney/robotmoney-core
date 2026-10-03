@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/prd.md §11.4 — RWA / Thematic Vault (rmRWA)
-//            the one-deployment-scheme plan — decision 9: rmRWA is a
+//            robotmoney/devops issue 53 / core issue 1499 — decision 9: rmRWA is a
 //            plain basket row with no oracle.
 // (See also: docs/architecture.md §4.1 — Vault Family; docs/audits.md)
 // Audit status: see the audit-scope ledger in docs/audits.md. A thin subclass of BasketVault,

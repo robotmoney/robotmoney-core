@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: the one-deployment-scheme plan, core S1 (issue 1483): no default cap or recipient in a deploy script.
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S1 (issue 1483): no default cap or recipient in a deploy script.
 pragma solidity ^0.8.24;
 
 import {DeployVault} from "../../script/DeployVault.s.sol";

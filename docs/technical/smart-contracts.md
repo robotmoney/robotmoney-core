@@ -6,7 +6,7 @@
 
 > Scope: verified source code for all Robot Money smart contracts deployed on Base mainnet. The main production vaults are RobotMoneyVault and the basket-vault family (BasketVault base class with ProtocolAssetVault, AgentTokenVault, and RwaBasketVault subclasses). Allocation and governance infrastructure includes VaultRegistry, PortfolioRouter, and RouterGovernance. All contracts are verified on BaseScan. Source files are in `contracts/` at the repo root. Compiler: `v0.8.24+commit.e11b9ed9`, optimization 200 runs, EVM Cancun. The previous version of this document was a reverse-engineering exercise from ABIs; this version is authoritative from source.
 
-> Planned evolution: `docs/adr/ADR-0010-unified-vault-architecture.md` is Rejected. The shipped design keeps `RobotMoneyVault` and the plain `BasketVault` family: rmRWA is a plain basket row (`RwaBasketVault`), with no oracle and no position adapter.
+> `docs/adr/ADR-0010-unified-vault-architecture.md` is Rejected and dead. The shipped design keeps `RobotMoneyVault` and the plain `BasketVault` family: rmRWA is a plain basket row (`RwaBasketVault`), with no oracle and no position adapter.
 
 ---
 
@@ -185,7 +185,7 @@ Dust from integer division is swept from `lastActiveIdx`. If total adapter balan
 
 ### 3.7 Exit fee
 
-- Charged on every `withdraw` and `redeem`.
+- Charged on every `withdraw` and `redeem`. The live rmUSDC vault charges 25 bps (0.25%); the ceiling is `MAX_EXIT_FEE_BPS` = 100 (1%).
 - `previewRedeem(shares)` → `gross × (1 − exitFeeBps/10000)` — returns **net** USDC.
 - `previewWithdraw(assets)` → shares required for `assets` **net** — converts net to gross first (`assets × 10000 / (10000 − exitFeeBps)`), then shares.
 - Fee is `safeTransfer`-ed to `feeRecipient` before the net amount goes to the receiver.

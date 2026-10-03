@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (RWA basket)
 //            docs/prd.md §11.4 — RWA / Thematic Vault (rmRWA)
-//            the one-deployment-scheme plan, core S4 (issue 1486)
+//            robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486)
 //
 // Deploys `RwaBasketVault` (a plain BasketVault) with deSPXA priced from its Uniswap V3 fee 500
 // pool TWAP through the existing `UniswapV3SwapAdapter`, pauses it and registers it. No oracle.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (protocol-asset basket)
 //            docs/prd.md §11.2 — Protocol Asset Vault (rmPROTO)
-//            the one-deployment-scheme plan, core S4 (issue 1486)
+//            robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486)
 //
 // Deploys `ProtocolAssetVault` with the config assets (wETH and cbBTC), pauses it and registers it.
 // It does NOT call `setRouterEligible`: that step is `ActivateBasketVaultEligibility.s.sol`,

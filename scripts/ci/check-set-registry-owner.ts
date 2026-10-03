@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: the one-deployment-scheme plan, core S5 (issue 1487).
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S5 (issue 1487).
 //
 // CI gate: setRegistry is called nowhere under contracts/script or scripts except
 // DeployTimelock.s.sol. Vault deploy scripts must never link the registry.

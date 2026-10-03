@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: the one-deployment-scheme plan, core S4 (issue 1486)
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486)
 //            docs/architecture.md §4.1 — Vault Family (basket vaults)
 //
 // One production path for the three basket vaults (rmPROTO, rmAGENT, rmRWA). The scripts differ

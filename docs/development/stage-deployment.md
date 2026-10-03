@@ -1,6 +1,6 @@
 # Stage deployment: the one deployment scheme
 
-Canonical plan: the one-deployment-scheme plan. Core issue 1488 (S9).
+Canonical plan: robotmoney/devops issue 53 / core issue 1499. Core issue 1488 (S9).
 
 Stage is the same deployment as mainnet. Only parameters differ. There is one runbook, "publish contracts" (devops, Bun TypeScript). It runs on the Twin chain (918453) and on Base mainnet (8453). A rehearsal and production differ only in the arguments given to it.
 

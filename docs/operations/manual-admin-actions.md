@@ -209,8 +209,8 @@ roster, and that each signer has acknowledged the playbook.
 
 ## 5. Retired v1 vault — indefinite feed + pool-liquidity maintenance
 
-**What.** After a v1 vault is retired during the unified-Vault (ADR-0010)
-migration, keep every dependency its redemptions need — the Chronicle deSPXA feed
+**What.** After a v1 vault is retired when the v2 core stack replaces it
+(ADR-0010, the unified-Vault proposal, is Rejected), keep every dependency its redemptions need — the Chronicle deSPXA feed
 and the Aerodrome/execution-pool liquidity — funded and live until that vault's
 `totalSupply()` reaches zero.
 

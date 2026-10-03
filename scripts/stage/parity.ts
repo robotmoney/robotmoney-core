@@ -11,7 +11,7 @@
 //   bun scripts/stage/parity.ts --stage-labels F --stage-sheet F --fixtures-dir DIR
 //   bun scripts/stage/parity.ts --stage-labels F --stage-sheet F --mainnet-labels F --production-sheet F
 // Exit: 0 parity holds, 1 a difference or a missing input, 64 usage.
-// Canonical: the one-deployment-scheme plan (S8, S9; core 1488).
+// Canonical: robotmoney/devops issue 53 / core issue 1499 (S8, S9; core 1488).
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";

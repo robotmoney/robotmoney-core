@@ -2,7 +2,7 @@
 // {"row":"set-quorum","txHash":"0x..","status":1}) and exits non-zero unless
 // every row has a 32-byte tx hash and receipt status 1. Used by
 // bun scripts/stage/core-stack.ts and asserted by govern-rows.test.ts.
-// Canonical: the one-deployment-scheme plan (stage 13 govern).
+// Canonical: robotmoney/devops issue 53 / core issue 1499 (stage 13 govern).
 
 export interface GovernRow {
   row: string;

@@ -6,7 +6,7 @@
 //! fixups, no demo seeding. Production contracts only; stage differs from
 //! mainnet by sheet parameters.
 //!
-//! Plan: the one-deployment-scheme plan (S9, core 1488).
+//! Plan: robotmoney/devops issue 53 / core issue 1499 (S9, core 1488).
 //!
 //! Secrets: this module never holds a private key. The deployer, Safe owners,
 //! emergency and voters are encrypted Foundry keystores minted by the devops

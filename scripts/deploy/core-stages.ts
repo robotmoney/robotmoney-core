@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: the one-deployment-scheme plan, core S3 (issue 1485), core 1493.
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S3 (issue 1485), core 1493.
 //
 // The core deploy as data: scripts/deploy/stage-table.json (the one table, read by devops too), one runner. The order is libs, vault, registry,
 // router, gateway, governance, ic-policy, proto, agent, rwa (rmPROTO, rmAGENT, rmRWA), then the
