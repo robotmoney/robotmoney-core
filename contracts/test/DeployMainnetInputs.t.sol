@@ -77,14 +77,14 @@ contract DeployMainnetInputsTest is Test {
         _set(prefix, "PAUSER_ADDRESS", vm.toString(makeAddr("inputs-pauser")));
         _set(prefix, "AGENT_ADDRESS", vm.toString(makeAddr("inputs-agent")));
         _set(prefix, "SHARE_RECEIVER_ADDRESS", vm.toString(makeAddr("inputs-recv")));
-        _set(prefix, "FEE_RECIPIENT_ADDRESS", vm.toString(treasury));
+        _set(prefix, "FEE_RECIPIENT", vm.toString(treasury));
         _set(prefix, "AGENT_VALID_UNTIL", vm.toString(block.timestamp + 30 days));
         _set(prefix, "AGENT_MAX_PER_PAYMENT", "10000000000");
         _set(prefix, "AGENT_MAX_PER_WINDOW", "100000000000");
         _set(prefix, "AGENT_MAX_WITHDRAW_PER_PAYMENT", "10000000000");
         _set(prefix, "AGENT_MAX_WITHDRAW_PER_WINDOW", "100000000000");
-        _set(prefix, "VAULT_TVL_CAP", "2000000000000");
-        _set(prefix, "VAULT_PER_DEPOSIT_CAP", "100000000000");
+        _set(prefix, "TVL_CAP", "2000000000000");
+        _set(prefix, "PER_DEPOSIT_CAP", "100000000000");
         _set(prefix, "VAULT_ADDRESS", vm.toString(makeAddr("inputs-vault")));
         _set(prefix, "ROUTER_ADDRESS", vm.toString(makeAddr("inputs-router")));
     }
@@ -92,7 +92,7 @@ contract DeployMainnetInputsTest is Test {
     /// @dev Every required input. Exit fee and seed are explicit: the scripts have no defaults.
     function _base(string memory prefix) internal {
         _baseNoFeeSeed(prefix);
-        _set(prefix, "VAULT_EXIT_FEE_BPS", "0");
+        _set(prefix, "EXIT_FEE_BPS", "0");
         _set(prefix, "SEED_DEPOSIT_USDC", "1000000");
     }
 
@@ -101,7 +101,7 @@ contract DeployMainnetInputsTest is Test {
     function test_inputs_areRead() public {
         string memory p = "RM_INPUTS_READ_";
         _base(p);
-        _set(p, "VAULT_EXIT_FEE_BPS", "25");
+        _set(p, "EXIT_FEE_BPS", "25");
         _set(p, "SEED_DEPOSIT_USDC", "1000000000");
         DeployVault.Params memory r = h.readParams(p);
         DeployGateway.Params memory gp = g.readParams(p);
@@ -119,7 +119,7 @@ contract DeployMainnetInputsTest is Test {
     function test_exitFeeAndSeed_requiredWhenUnset() public {
         string memory p = "RM_INPUTS_OPTIONAL_";
         _baseNoFeeSeed(p);
-        vm.expectRevert(bytes("RM_INPUTS_OPTIONAL_VAULT_EXIT_FEE_BPS must be set"));
+        vm.expectRevert(bytes("RM_INPUTS_OPTIONAL_EXIT_FEE_BPS must be set"));
         h.readParams(p);
         vm.expectRevert(bytes("RM_INPUTS_OPTIONAL_SEED_DEPOSIT_USDC must be set"));
         h.seed(p);
@@ -129,9 +129,9 @@ contract DeployMainnetInputsTest is Test {
     function test_inputs_reachTheVault() public {
         string memory p = "RM_INPUTS_VAULT_";
         _base(p);
-        _set(p, "VAULT_TVL_CAP", "7000000");
-        _set(p, "VAULT_PER_DEPOSIT_CAP", "3000000");
-        _set(p, "VAULT_EXIT_FEE_BPS", "10");
+        _set(p, "TVL_CAP", "7000000");
+        _set(p, "PER_DEPOSIT_CAP", "3000000");
+        _set(p, "EXIT_FEE_BPS", "10");
         DeployVault.Params memory r = h.readParams(p);
         // The canonical USDC has no code on a bare test chain: bind a test token there.
         vm.etch(h.CANONICAL_BASE_USDC(), address(new TestERC20()).code);
@@ -157,8 +157,8 @@ contract DeployMainnetInputsTest is Test {
 
     function _isVaultKey(string memory key) internal pure returns (bool) {
         bytes32 k = keccak256(bytes(key));
-        return k == keccak256("ADMIN_ADDRESS") || k == keccak256("FEE_RECIPIENT_ADDRESS")
-            || k == keccak256("VAULT_TVL_CAP") || k == keccak256("VAULT_PER_DEPOSIT_CAP");
+        return k == keccak256("ADMIN_ADDRESS") || k == keccak256("FEE_RECIPIENT")
+            || k == keccak256("TVL_CAP") || k == keccak256("PER_DEPOSIT_CAP");
     }
 
     function _copyAllExcept(string memory from, string memory to, string memory skip) internal {
@@ -167,14 +167,14 @@ contract DeployMainnetInputsTest is Test {
             "PAUSER_ADDRESS",
             "AGENT_ADDRESS",
             "SHARE_RECEIVER_ADDRESS",
-            "FEE_RECIPIENT_ADDRESS",
+            "FEE_RECIPIENT",
             "AGENT_VALID_UNTIL",
             "AGENT_MAX_PER_PAYMENT",
             "AGENT_MAX_PER_WINDOW",
             "AGENT_MAX_WITHDRAW_PER_PAYMENT",
             "AGENT_MAX_WITHDRAW_PER_WINDOW",
-            "VAULT_TVL_CAP",
-            "VAULT_PER_DEPOSIT_CAP",
+            "TVL_CAP",
+            "PER_DEPOSIT_CAP",
             "VAULT_ADDRESS",
             "ROUTER_ADDRESS"
         ];
@@ -185,15 +185,15 @@ contract DeployMainnetInputsTest is Test {
     }
 
     function test_missingFeeRecipient_reverts() public {
-        _assertMissing("RM_INPUTS_M_FEE_", "FEE_RECIPIENT_ADDRESS");
+        _assertMissing("RM_INPUTS_M_FEE_", "FEE_RECIPIENT");
     }
 
     function test_missingTvlCap_reverts() public {
-        _assertMissing("RM_INPUTS_M_TVL_", "VAULT_TVL_CAP");
+        _assertMissing("RM_INPUTS_M_TVL_", "TVL_CAP");
     }
 
     function test_missingPerDepositCap_reverts() public {
-        _assertMissing("RM_INPUTS_M_PDC_", "VAULT_PER_DEPOSIT_CAP");
+        _assertMissing("RM_INPUTS_M_PDC_", "PER_DEPOSIT_CAP");
     }
 
     function test_missingAgentMaxPerPayment_reverts() public {
@@ -227,9 +227,9 @@ contract DeployMainnetInputsTest is Test {
     function test_malformedCap_reverts() public {
         string memory p = "RM_INPUTS_BAD_CAP_";
         _base(p);
-        _set(p, "VAULT_TVL_CAP", "ten-million");
+        _set(p, "TVL_CAP", "ten-million");
         vm.expectRevert(
-            bytes("RM_INPUTS_BAD_CAP_VAULT_TVL_CAP is malformed: expected an unsigned integer")
+            bytes("RM_INPUTS_BAD_CAP_TVL_CAP is malformed: expected an unsigned integer")
         );
         h.readParams(p);
     }
@@ -237,10 +237,8 @@ contract DeployMainnetInputsTest is Test {
     function test_malformedFeeRecipient_reverts() public {
         string memory p = "RM_INPUTS_BAD_FEE_";
         _base(p);
-        _set(p, "FEE_RECIPIENT_ADDRESS", "treasury");
-        vm.expectRevert(
-            bytes("RM_INPUTS_BAD_FEE_FEE_RECIPIENT_ADDRESS is malformed: expected an address")
-        );
+        _set(p, "FEE_RECIPIENT", "treasury");
+        vm.expectRevert(bytes("RM_INPUTS_BAD_FEE_FEE_RECIPIENT is malformed: expected an address"));
         h.readParams(p);
     }
 
@@ -279,11 +277,9 @@ contract DeployMainnetInputsTest is Test {
     function test_malformedExitFee_reverts() public {
         string memory p = "RM_INPUTS_BAD_EXIT_";
         _base(p);
-        _set(p, "VAULT_EXIT_FEE_BPS", "five");
+        _set(p, "EXIT_FEE_BPS", "five");
         vm.expectRevert(
-            bytes(
-                "RM_INPUTS_BAD_EXIT_VAULT_EXIT_FEE_BPS is malformed: expected an unsigned integer"
-            )
+            bytes("RM_INPUTS_BAD_EXIT_EXIT_FEE_BPS is malformed: expected an unsigned integer")
         );
         h.readParams(p);
     }
@@ -336,20 +332,20 @@ contract DeployMainnetInputsTest is Test {
     function test_zeroFeeRecipient_reverts() public {
         string memory p = "RM_INPUTS_ZERO_FEE_";
         _base(p);
-        _set(p, "FEE_RECIPIENT_ADDRESS", vm.toString(address(0)));
+        _set(p, "FEE_RECIPIENT", vm.toString(address(0)));
         DeployVault.Params memory r = h.readParams(p);
         vm.etch(h.CANONICAL_BASE_USDC(), address(new TestERC20()).code);
-        vm.expectRevert(bytes("FEE_RECIPIENT_ADDRESS=0"));
+        vm.expectRevert(bytes("FEE_RECIPIENT=0"));
         h.deployWith(r);
     }
 
     function test_zeroCaps_revert() public {
         string memory p = "RM_INPUTS_ZERO_CAP_";
         _base(p);
-        _set(p, "VAULT_TVL_CAP", "0");
+        _set(p, "TVL_CAP", "0");
         DeployVault.Params memory r = h.readParams(p);
         vm.etch(h.CANONICAL_BASE_USDC(), address(new TestERC20()).code);
-        vm.expectRevert(bytes("VAULT_TVL_CAP / VAULT_PER_DEPOSIT_CAP = 0"));
+        vm.expectRevert(bytes("TVL_CAP / PER_DEPOSIT_CAP = 0"));
         h.deployWith(r);
     }
 

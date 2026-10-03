@@ -1,0 +1,5 @@
+{
+  "description": "Pinned keccak256 code hashes of the canonical USDC (FiatTokenProxy) and the implementation behind its EIP-1967 slot, read once from Base mainnet. scripts/ci/config-check.ts checks the USDC address on every target chain against these, so a mock token fails. null means not pinned yet and is refused. Pin with: bun scripts/ci/config-check.ts --rpc <Base mainnet RPC> --print-usdc-hashes, then review the diff. Re-pin only after an owner-approved USDC upgrade (scripts/monitor-usdc-upgrade.sh).",
+  "proxyCodeHash": null,
+  "implementationCodeHash": null
+}

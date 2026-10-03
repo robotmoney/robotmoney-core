@@ -317,9 +317,9 @@ jobs:
           # broadcaster (= ADMIN_ADDRESS = PARENT_ADDRESS). After this step
           # the generated key is the AGENT_ROLE holder for the gateway.
           # The local anvil node unlocks the admin account: no key goes in an argument.
-          export FEE_RECIPIENT_ADDRESS="$SHARE_RECEIVER_ADDRESS"
+          export FEE_RECIPIENT="$SHARE_RECEIVER_ADDRESS"
           export SEED_SHARE_RECEIVER="$SHARE_RECEIVER_ADDRESS"
-          export VAULT_TVL_CAP=10000000000000 VAULT_PER_DEPOSIT_CAP=1000000000000
+          export TVL_CAP=10000000000000 PER_DEPOSIT_CAP=1000000000000
           export AGENT_VALID_UNTIL=4102444800
           export AGENT_MAX_PER_PAYMENT=10000000000 AGENT_MAX_PER_WINDOW=100000000000
           export AGENT_MAX_WITHDRAW_PER_PAYMENT=10000000000 AGENT_MAX_WITHDRAW_PER_WINDOW=100000000000
@@ -576,9 +576,9 @@ jobs:
         # the seed-deposit totalAssets() succeeds — no passthrough hatch needed).
         run: |
           mkdir -p deployments
-          export FEE_RECIPIENT_ADDRESS="$SHARE_RECEIVER_ADDRESS"
+          export FEE_RECIPIENT="$SHARE_RECEIVER_ADDRESS"
           export SEED_SHARE_RECEIVER="$SHARE_RECEIVER_ADDRESS"
-          export VAULT_TVL_CAP=10000000000000 VAULT_PER_DEPOSIT_CAP=1000000000000
+          export TVL_CAP=10000000000000 PER_DEPOSIT_CAP=1000000000000
           export AGENT_VALID_UNTIL=4102444800
           export AGENT_MAX_PER_PAYMENT=10000000000 AGENT_MAX_PER_WINDOW=100000000000
           export AGENT_MAX_WITHDRAW_PER_PAYMENT=10000000000 AGENT_MAX_WITHDRAW_PER_WINDOW=100000000000

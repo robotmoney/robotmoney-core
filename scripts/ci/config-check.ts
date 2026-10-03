@@ -14,17 +14,30 @@
 //   liquidity() > 0, USD TVL (USDC reserve plus other side at slot0 price) >= the file's
 //   minTvlUsd floor.
 //
-// Usage: bun scripts/ci/config-check.ts [--config-dir DIR] [--rpc URL] [--out-dir DIR] [--offline]
+// USDC code-hash rule (live, every chain): USDC is the one canonical constant on every chain, so
+// the proxy at USDC and the implementation behind its EIP-1967 slot must have the code hashes
+// pinned in config/usdc-hashes.json. A mock token fails this rule. An unpinned (null) hash is
+// refused too. Pin with --print-usdc-hashes against Base mainnet, then review the diff.
+//
+// CLI (devops calls this):
+//   bun scripts/ci/config-check.ts --rpc URL [--config-dir DIR] [--chain ID] [--out-dir DIR]
+//   bun scripts/ci/config-check.ts --offline [--config-dir DIR]        (static rules only)
+//   bun scripts/ci/config-check.ts --rpc URL --print-usdc-hashes       (prints the two hashes, exit 0)
+// --rpc        JSON-RPC URL of the target chain (required unless --offline)
+// --config-dir directory holding the config JSON files (default: <repo>/config)
+// --chain      expected chain id of the RPC (default 8453; 918453 for the Twin chain)
 // Output: <out-dir>/config-check-block-<N>.json (default out dir: config-check-output).
-// Exit 0 when every rule passes, 1 otherwise.
+// Exit codes: 0 every rule passes, 1 a check failed (or the RPC failed), 2 usage error.
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export const BASE_CHAIN_ID = 8453;
 export const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-export const DEFAULT_RPC = "https://mainnet.base.org";
+/** EIP-1967 implementation slot: keccak256("eip1967.proxy.implementation") - 1. */
+export const EIP1967_IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 export const FORBIDDEN_SYMBOLS = ["wsol", "bnkr", "juno", "rm"];
 const FORBIDDEN_KEY = /chronicle|v4|aerodrome|slipstream|^mainnet$|^devnet$|^wsol|^bnkr|^juno/i;
+const HASH_RE = /^0x[0-9a-f]{64}$/;
 const META_KEYS = new Set(["description", "$schema"]);
 
 export interface Asset {
@@ -47,8 +60,14 @@ export interface Configs {
   rwa: AssetFile;
   agent: { shortlist: unknown[]; swapRouter02?: string };
   dexPools: Record<string, unknown>;
+  /** Pinned USDC code hashes (config/usdc-hashes.json). null means not pinned yet: refused. */
+  usdcHashes: UsdcHashes;
   /** Raw parsed JSON of every config/*.json, keyed by file name. */
   raw: Record<string, unknown>;
+}
+export interface UsdcHashes {
+  proxyCodeHash: string | null;
+  implementationCodeHash: string | null;
 }
 export interface Finding {
   scope: string;
@@ -71,6 +90,7 @@ export function loadConfigs(dir: string): Configs {
     rwa: need("rwa-assets.json") as AssetFile,
     agent: need("agent-token-shortlist.json") as { shortlist: unknown[]; swapRouter02?: string },
     dexPools: need("dex-pools.json") as Record<string, unknown>,
+    usdcHashes: need("usdc-hashes.json") as UsdcHashes,
     raw,
   };
 }
@@ -96,7 +116,8 @@ export function staticFindings(c: Configs): Finding[] {
       if (key && !META_KEYS.has(key) && !key.startsWith("$") && FORBIDDEN_KEY.test(key)) badKey.push(path);
       const underMeta = path.split(".").some((p) => META_KEYS.has(p) || p.startsWith("$"));
       if (typeof val === "string" && !underMeta) {
-        if (/^0x[0-9a-fA-F]*$/.test(val) && val.length > 2 && val.length !== 42) badAddr.push(`${path}=${val} (${val.length - 2} digits)`);
+        const isHashKey = key !== null && /CodeHash$/.test(key);
+        if (!isHashKey && /^0x[0-9a-fA-F]*$/.test(val) && val.length > 2 && val.length !== 42) badAddr.push(`${path}=${val} (${val.length - 2} digits)`);
         const lower = val.toLowerCase();
         if (FORBIDDEN_SYMBOLS.includes(lower) || /wsol/.test(lower) || /chronicle|aerodrome|slipstream/.test(lower)) badSym.push(`${path}=${val}`);
       }
@@ -104,6 +125,11 @@ export function staticFindings(c: Configs): Finding[] {
     add(file, "address-format", badAddr.length === 0, badAddr.join("; ") || "all 0x values are 40 hex digits");
     add(file, "forbidden-key", badKey.length === 0, badKey.join("; ") || "no Chronicle, V4, Aerodrome, mainnet or devnet key");
     add(file, "forbidden-symbol", badSym.length === 0, badSym.join("; ") || "no wSOL, BNKR, JUNO, RM or Chronicle/Aerodrome value");
+  }
+
+  for (const k of ["proxyCodeHash", "implementationCodeHash"] as const) {
+    const v = c.usdcHashes?.[k];
+    add("usdc-hashes.json", `format:${k}`, v === null || (typeof v === "string" && HASH_RE.test(v)), `${k}=${v}`);
   }
 
   const rwaSyms = (c.rwa.assets ?? []).map((a) => a.symbol);
@@ -204,6 +230,11 @@ export async function liveFindings(rpc: Rpc, tag: string, c: Configs): Promise<{
     const code = await rpc("eth_getCode", [addr, tag]);
     return code !== "0x" && code.length > 2;
   };
+  try {
+    findings.push(...usdcHashFindings(c.usdcHashes, await readUsdcHashes(rpc, tag)));
+  } catch (e) {
+    add("usdc-hashes.json", "usdc-hash-read", false, String(e));
+  }
   for (const [name, f] of [["protocol-assets.json", c.protocol], ["rwa-assets.json", c.rwa]] as const) {
     add(name, "code:usdc", await hasCode(f.usdc), f.usdc);
     add(name, "code:factory", await hasCode(f.uniswapV3Factory), f.uniswapV3Factory);
@@ -235,19 +266,160 @@ export async function liveFindings(rpc: Rpc, tag: string, c: Configs): Promise<{
   return { findings, facts };
 }
 
-// ---- main -----------------------------------------------------------------------------
 
-function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(name);
-  return i > 0 ? process.argv[i + 1] : undefined;
+// ---- keccak256 (pure, so the hash check needs no extra tool) ------------------------------
+
+const RC = [
+  0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an, 0x8000000080008000n, 0x000000000000808bn,
+  0x0000000080000001n, 0x8000000080008081n, 0x8000000000008009n, 0x000000000000008an, 0x0000000000000088n,
+  0x0000000080008009n, 0x000000008000000an, 0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n,
+  0x8000000000008003n, 0x8000000000008002n, 0x8000000000000080n, 0x000000000000800an, 0x800000008000000an,
+  0x8000000080008081n, 0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n,
+];
+const ROT = [
+  [0, 36, 3, 41, 18], [1, 44, 10, 45, 2], [62, 6, 43, 15, 61], [28, 55, 25, 21, 56], [27, 20, 39, 8, 14],
+];
+const M64 = (1n << 64n) - 1n;
+const rotl = (x: bigint, n: number) => (n === 0 ? x : ((x << BigInt(n)) | (x >> BigInt(64 - n))) & M64);
+
+function keccakF(a: bigint[]): void {
+  for (let r = 0; r < 24; r++) {
+    const c = [0, 1, 2, 3, 4].map((x) => a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20]);
+    for (let x = 0; x < 5; x++) {
+      const d = c[(x + 4) % 5] ^ rotl(c[(x + 1) % 5], 1);
+      for (let y = 0; y < 5; y++) a[x + 5 * y] ^= d;
+    }
+    const b: bigint[] = new Array(25).fill(0n);
+    for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) b[y + 5 * ((2 * x + 3 * y) % 5)] = rotl(a[x + 5 * y], ROT[x][y]);
+    for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) a[x + 5 * y] = b[x + 5 * y] ^ (~b[((x + 1) % 5) + 5 * y] & M64 & b[((x + 2) % 5) + 5 * y]);
+    a[0] ^= RC[r];
+  }
 }
 
+/** Ethereum keccak256 of bytes, as 0x-hex. */
+export function keccak256(data: Uint8Array): string {
+  const rate = 136;
+  const padded = new Uint8Array(Math.ceil((data.length + 1) / rate) * rate);
+  padded.set(data);
+  padded[data.length] ^= 0x01;
+  padded[padded.length - 1] ^= 0x80;
+  const st: bigint[] = new Array(25).fill(0n);
+  for (let off = 0; off < padded.length; off += rate) {
+    for (let i = 0; i < rate / 8; i++) {
+      let lane = 0n;
+      for (let j = 7; j >= 0; j--) lane = (lane << 8n) | BigInt(padded[off + i * 8 + j]);
+      st[i] ^= lane;
+    }
+    keccakF(st);
+  }
+  let out = "";
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 8; j++) out += Number((st[i] >> BigInt(8 * j)) & 0xffn).toString(16).padStart(2, "0");
+  return "0x" + out;
+}
+
+export function keccakHex(hex: string): string {
+  const h = hex.replace(/^0x/, "");
+  const bytes = new Uint8Array(h.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+  return keccak256(bytes);
+}
+
+// ---- USDC code-hash check --------------------------------------------------------------
+
+/** Reads the live proxy and implementation code hashes of USDC on the target chain. */
+export async function readUsdcHashes(rpc: Rpc, tag: string): Promise<{ proxy: string; implementation: string; implementationAddress: string }> {
+  const proxyCode = await rpc("eth_getCode", [USDC, tag]);
+  const slot = await rpc("eth_getStorageAt", [USDC, EIP1967_IMPL_SLOT, tag]);
+  const implementationAddress = addrOf(slot.replace(/^0x/, "").padStart(64, "0"));
+  const implCode = await rpc("eth_getCode", [implementationAddress, tag]);
+  return {
+    proxy: proxyCode.length > 2 ? keccakHex(proxyCode) : "no-code",
+    implementation: implCode.length > 2 ? keccakHex(implCode) : "no-code",
+    implementationAddress,
+  };
+}
+
+/** Pure judgement: pinned hashes against live ones. A null pin is refused. */
+export function usdcHashFindings(
+  pinned: UsdcHashes,
+  live: { proxy: string; implementation: string; implementationAddress: string },
+): Finding[] {
+  const out: Finding[] = [];
+  const one = (rule: string, pin: string | null, got: string) => {
+    if (pin === null || !HASH_RE.test(pin)) {
+      out.push({ scope: "usdc-hashes.json", rule, ok: false, detail: `not pinned (value=${pin}): refused. Pin with --print-usdc-hashes against Base mainnet` });
+    } else {
+      out.push({ scope: "usdc-hashes.json", rule, ok: pin === got.toLowerCase(), detail: `pinned=${pin} live=${got}` });
+    }
+  };
+  one("usdc-proxy-code-hash", pinned.proxyCodeHash, live.proxy);
+  one("usdc-implementation-code-hash", pinned.implementationCodeHash, live.implementation);
+  return out;
+}
+
+// ---- cli --------------------------------------------------------------------------------
+
+export class UsageError extends Error {}
+export interface CliArgs {
+  rpc?: string;
+  configDir?: string;
+  chain: number;
+  outDir?: string;
+  offline: boolean;
+  printUsdcHashes: boolean;
+}
+
+/** Strict parser. Any unknown flag, missing value or missing --rpc (unless --offline) is a usage error. */
+export function parseCli(argv: string[]): CliArgs {
+  const a: CliArgs = { chain: BASE_CHAIN_ID, offline: false, printUsdcHashes: false };
+  for (let i = 0; i < argv.length; i++) {
+    const f = argv[i];
+    const val = () => {
+      const v = argv[++i];
+      if (v === undefined || v.startsWith("--")) throw new UsageError(`${f} needs a value`);
+      return v;
+    };
+    if (f === "--rpc") a.rpc = val();
+    else if (f === "--config-dir") a.configDir = val();
+    else if (f === "--out-dir") a.outDir = val();
+    else if (f === "--chain") {
+      const v = val();
+      if (!/^[1-9][0-9]*$/.test(v)) throw new UsageError(`--chain must be a positive integer, got ${v}`);
+      a.chain = Number(v);
+    } else if (f === "--offline") a.offline = true;
+    else if (f === "--print-usdc-hashes") a.printUsdcHashes = true;
+    else throw new UsageError(`unknown argument ${f}`);
+  }
+  if (!a.offline && !a.rpc) throw new UsageError("--rpc is required (or pass --offline)");
+  if (a.offline && a.printUsdcHashes) throw new UsageError("--print-usdc-hashes needs --rpc, not --offline");
+  return a;
+}
+
+export const USAGE =
+  "usage: config-check.ts --rpc URL [--config-dir DIR] [--chain ID] [--out-dir DIR] | --offline [--config-dir DIR] | --rpc URL --print-usdc-hashes";
+
+// ---- main -----------------------------------------------------------------------------
+
 async function main(): Promise<number> {
+  let cli: CliArgs;
+  try {
+    cli = parseCli(process.argv.slice(2));
+  } catch (e) {
+    console.error(`config-check: ${(e as Error).message}\n${USAGE}`);
+    return 2;
+  }
   const repo = resolve(import.meta.dir, "..", "..");
-  const dir = resolve(arg("--config-dir") ?? join(repo, "config"));
-  const outDir = resolve(arg("--out-dir") ?? join(repo, "config-check-output"));
-  const offline = process.argv.includes("--offline");
-  const rpcUrl = arg("--rpc") ?? process.env.BASE_RPC_URL ?? DEFAULT_RPC;
+  const dir = resolve(cli.configDir ?? join(repo, "config"));
+  const outDir = resolve(cli.outDir ?? join(repo, "config-check-output"));
+  const offline = cli.offline;
+  const rpcUrl = cli.rpc ?? "";
+
+  if (cli.printUsdcHashes) {
+    const rpc = httpRpc(rpcUrl);
+    const h = await readUsdcHashes(rpc, "latest");
+    console.log(JSON.stringify({ proxyCodeHash: h.proxy, implementationCodeHash: h.implementation, implementationAddress: h.implementationAddress }, null, 2));
+    return 0;
+  }
 
   const cfg = loadConfigs(dir);
   let findings = staticFindings(cfg);
@@ -257,7 +429,7 @@ async function main(): Promise<number> {
   if (!offline) {
     const rpc = httpRpc(rpcUrl);
     const chain = Number(BigInt(await rpc("eth_chainId", [])));
-    findings.push({ scope: "rpc", rule: "chain-id-8453", ok: chain === BASE_CHAIN_ID, detail: `chainId=${chain}` });
+    findings.push({ scope: "rpc", rule: "chain-id", ok: chain === cli.chain, detail: `live=${chain} expected=${cli.chain}` });
     block = Number(BigInt(await rpc("eth_blockNumber", [])));
     const live = await liveFindings(rpc, "0x" + block.toString(16), cfg);
     findings = findings.concat(live.findings);

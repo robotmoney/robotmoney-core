@@ -30,8 +30,8 @@
 //   after timelock  scripts/deploy/assert-timelock-roles.ts (the timelock holds every role, the deployer holds none)
 // A failing proof stops the run with a non-zero exit. A proof whose stage did not run is not run.
 // Inputs come from the environment, the same names the scripts read (ADMIN_ADDRESS, PAUSER_ADDRESS,
-// AGENT_ADDRESS, SHARE_RECEIVER_ADDRESS, FEE_RECIPIENT_ADDRESS, SEED_SHARE_RECEIVER, VAULT_TVL_CAP,
-// VAULT_PER_DEPOSIT_CAP, VAULT_EXIT_FEE_BPS, VAULT_NAME, AGENT_*). The runner sets DEPLOYMENT_OUT, VAULT_ADDRESS, REGISTRY_ADDRESS
+// AGENT_ADDRESS, SHARE_RECEIVER_ADDRESS, FEE_RECIPIENT, SEED_SHARE_RECEIVER, TVL_CAP,
+// PER_DEPOSIT_CAP, EXIT_FEE_BPS, VAULT_NAME, AGENT_*). The runner sets DEPLOYMENT_OUT, VAULT_ADDRESS, REGISTRY_ADDRESS
 // and ROUTER_ADDRESS per stage from the stage manifests.
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -24,11 +24,11 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 ///                             vault and ADMIN_ROLE on the registry until the timelock stage.
 ///           SWAP_ROUTER       must equal `swapRouter02` in protocol-assets.json (Uniswap V3 SwapRouter02)
 ///           REGISTRY_ADDRESS  the vault is registered here as "Robot Money Protocol"
-///           VAULT_TVL_CAP, VAULT_PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
-///           FEE_RECIPIENT_ADDRESS   recipient for exit fees (not the deployer, not the admin)
+///           TVL_CAP, PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
+///           FEE_RECIPIENT   recipient for exit fees (not the deployer, not the admin)
 ///           DEPLOYMENT_OUT    output manifest path (required, no default)
 ///           EXPECTED_CHAIN_ID mandatory and equal to 8453 on Base mainnet
-///           VAULT_EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
+///           EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
 ///
 ///         Assets come from `protocol-assets.json` (wETH and cbBTC at launch). The vault is deployed paused.
 contract DeployProtocolAssetVault is BasketVaultDeployBase {

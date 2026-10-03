@@ -148,7 +148,7 @@ contract DeployProtocolAssetVaultTest is BasketDeployFixture {
         (string memory json,) = _twoAssets();
         BasketVaultDeployBase.Params memory p = _params();
         p.tvlCap = 0;
-        vm.expectRevert(bytes("VAULT_TVL_CAP missing from the sheet"));
+        vm.expectRevert(bytes("TVL_CAP missing from the sheet"));
         script.runInProcess(p, json);
     }
 
@@ -156,7 +156,7 @@ contract DeployProtocolAssetVaultTest is BasketDeployFixture {
         (string memory json,) = _twoAssets();
         BasketVaultDeployBase.Params memory p = _params();
         p.perDepositCap = 0;
-        vm.expectRevert(bytes("VAULT_PER_DEPOSIT_CAP missing from the sheet"));
+        vm.expectRevert(bytes("PER_DEPOSIT_CAP missing from the sheet"));
         script.runInProcess(p, json);
     }
 
@@ -164,7 +164,7 @@ contract DeployProtocolAssetVaultTest is BasketDeployFixture {
         (string memory json,) = _twoAssets();
         BasketVaultDeployBase.Params memory p = _params();
         p.feeRecipient = address(0);
-        vm.expectRevert(bytes("FEE_RECIPIENT_ADDRESS=0"));
+        vm.expectRevert(bytes("FEE_RECIPIENT=0"));
         script.runInProcess(p, json);
     }
 

@@ -21,12 +21,12 @@
       "script": "contracts/script/DeployVault.s.sol:DeployVault",
       "requiredEnv": [
         "ADMIN_ADDRESS",
-        "FEE_RECIPIENT_ADDRESS",
-        "VAULT_TVL_CAP",
-        "VAULT_PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
         "SEED_SHARE_RECEIVER",
         "SEED_DEPOSIT_USDC",
-        "VAULT_EXIT_FEE_BPS",
+        "EXIT_FEE_BPS",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -140,10 +140,10 @@
         "ADMIN_ADDRESS",
         "SWAP_ROUTER",
         "REGISTRY_ADDRESS",
-        "VAULT_TVL_CAP",
-        "VAULT_PER_DEPOSIT_CAP",
-        "FEE_RECIPIENT_ADDRESS",
-        "VAULT_EXIT_FEE_BPS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -163,10 +163,10 @@
         "ADMIN_ADDRESS",
         "SWAP_ROUTER",
         "REGISTRY_ADDRESS",
-        "VAULT_TVL_CAP",
-        "VAULT_PER_DEPOSIT_CAP",
-        "FEE_RECIPIENT_ADDRESS",
-        "VAULT_EXIT_FEE_BPS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -186,10 +186,10 @@
         "ADMIN_ADDRESS",
         "SWAP_ROUTER",
         "REGISTRY_ADDRESS",
-        "VAULT_TVL_CAP",
-        "VAULT_PER_DEPOSIT_CAP",
-        "FEE_RECIPIENT_ADDRESS",
-        "VAULT_EXIT_FEE_BPS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [

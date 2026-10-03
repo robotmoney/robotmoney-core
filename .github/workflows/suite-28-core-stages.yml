@@ -102,15 +102,15 @@ jobs:
       PAUSER_ADDRESS: ${{ inputs.pauser_address }}
       AGENT_ADDRESS: ${{ inputs.agent_address }}
       SHARE_RECEIVER_ADDRESS: ${{ inputs.share_receiver_address }}
-      FEE_RECIPIENT_ADDRESS: ${{ inputs.fee_recipient_address }}
+      FEE_RECIPIENT: ${{ inputs.fee_recipient_address }}
       SEED_SHARE_RECEIVER: ${{ inputs.seed_share_receiver }}
       TIMELOCK_MIN_DELAY: ${{ inputs.timelock_min_delay }}
       RECEIPT_ADMIN_ADDRESS: ${{ inputs.deployer }}
       SWAP_ROUTER: "0x2626664c2603336E57B271c5C0b26F421741e481"
       VAULT_NAME: "Robot Money USDC"
-      VAULT_EXIT_FEE_BPS: "0"
-      VAULT_TVL_CAP: "1000000000"
-      VAULT_PER_DEPOSIT_CAP: "100000000"
+      EXIT_FEE_BPS: "0"
+      TVL_CAP: "1000000000"
+      PER_DEPOSIT_CAP: "100000000"
       EXPECTED_CHAIN_ID: "918453"
     steps:
       - uses: actions/checkout@v4

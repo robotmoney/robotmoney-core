@@ -28,13 +28,13 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 /// @dev Required env vars (all required on every chain, no defaults):
 ///        EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet
 ///        ADMIN_ADDRESS         — receives ADMIN_ROLE and EMERGENCY_ROLE on the vault
-///        FEE_RECIPIENT_ADDRESS — vault fee recipient (the treasury, never the deployer)
-///        VAULT_TVL_CAP, VAULT_PER_DEPOSIT_CAP — vault caps, 6-decimal USDC units
+///        FEE_RECIPIENT — vault fee recipient (the treasury, never the deployer)
+///        TVL_CAP, PER_DEPOSIT_CAP — vault caps, 6-decimal USDC units
 ///        SEED_SHARE_RECEIVER   — receives the seed shares. Not zero, not the deployer (ADMIN_ADDRESS).
 ///                                The deployer holds no shares after this stage.
 ///        DEPLOYMENT_OUT        — output JSON path
 ///      USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
-///        VAULT_EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
+///        EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
 ///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units (non-zero)
 contract DeployVault is ExpectedChainGuard {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
@@ -176,10 +176,10 @@ contract DeployVault is ExpectedChainGuard {
     function _readEnvParamsFrom(string memory prefix) internal view returns (Params memory p) {
         _requireExpectedChain(prefix);
         p.admin = _envAddressRequired(string.concat(prefix, "ADMIN_ADDRESS"));
-        p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"));
-        p.tvlCap = _envUintRequired(string.concat(prefix, "VAULT_TVL_CAP"));
-        p.perDepositCap = _envUintRequired(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"));
-        p.exitFeeBps = _envUintRequired(string.concat(prefix, "VAULT_EXIT_FEE_BPS"));
+        p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT"));
+        p.tvlCap = _envUintRequired(string.concat(prefix, "TVL_CAP"));
+        p.perDepositCap = _envUintRequired(string.concat(prefix, "PER_DEPOSIT_CAP"));
+        p.exitFeeBps = _envUintRequired(string.concat(prefix, "EXIT_FEE_BPS"));
         p.usdcAddress = BASE_USDC;
     }
 
@@ -211,10 +211,10 @@ contract DeployVault is ExpectedChainGuard {
         require(p.admin != address(0), "ADMIN_ADDRESS=0");
         require(p.usdcAddress != address(0), "USDC_ADDRESS=0");
         require(p.usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
-        require(p.feeRecipient != address(0), "FEE_RECIPIENT_ADDRESS=0");
-        require(p.feeRecipient != msg.sender, "FEE_RECIPIENT_ADDRESS=deployer");
-        require(p.feeRecipient != p.admin, "FEE_RECIPIENT_ADDRESS=admin");
-        require(p.tvlCap > 0 && p.perDepositCap > 0, "VAULT_TVL_CAP / VAULT_PER_DEPOSIT_CAP = 0");
+        require(p.feeRecipient != address(0), "FEE_RECIPIENT=0");
+        require(p.feeRecipient != msg.sender, "FEE_RECIPIENT=deployer");
+        require(p.feeRecipient != p.admin, "FEE_RECIPIENT=admin");
+        require(p.tvlCap > 0 && p.perDepositCap > 0, "TVL_CAP / PER_DEPOSIT_CAP = 0");
         d.admin = p.admin;
         d.usdc = p.usdcAddress;
         d.vault = new RobotMoneyVault(

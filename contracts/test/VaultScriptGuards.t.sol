@@ -63,10 +63,10 @@ abstract contract VaultScriptGuardBase is BasketDeployFixture {
         _setIf(prefix, skip, "ADMIN_ADDRESS", vm.toString(deployer));
         _setIf(prefix, skip, "SWAP_ROUTER", vm.toString(router02));
         _setIf(prefix, skip, "REGISTRY_ADDRESS", vm.toString(address(registry)));
-        _setIf(prefix, skip, "VAULT_TVL_CAP", "50000000000");
-        _setIf(prefix, skip, "VAULT_PER_DEPOSIT_CAP", "5000000000");
-        _setIf(prefix, skip, "FEE_RECIPIENT_ADDRESS", vm.toString(feeRecipient));
-        _setIf(prefix, skip, "VAULT_EXIT_FEE_BPS", "0");
+        _setIf(prefix, skip, "TVL_CAP", "50000000000");
+        _setIf(prefix, skip, "PER_DEPOSIT_CAP", "5000000000");
+        _setIf(prefix, skip, "FEE_RECIPIENT", vm.toString(feeRecipient));
+        _setIf(prefix, skip, "EXIT_FEE_BPS", "0");
     }
 
     function _setIf(
@@ -130,44 +130,42 @@ abstract contract VaultScriptGuardBase is BasketDeployFixture {
 
     function test_sheet_missingTvlCapReverts() public {
         string memory prefix = _p("notvl");
-        _setSheet(prefix, "VAULT_TVL_CAP");
-        vm.expectRevert(bytes(string.concat(prefix, "VAULT_TVL_CAP must be set")));
+        _setSheet(prefix, "TVL_CAP");
+        vm.expectRevert(bytes(string.concat(prefix, "TVL_CAP must be set")));
         _readPrefixed(prefix);
     }
 
     function test_sheet_missingPerDepositCapReverts() public {
         string memory prefix = _p("nopdc");
-        _setSheet(prefix, "VAULT_PER_DEPOSIT_CAP");
-        vm.expectRevert(bytes(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP must be set")));
+        _setSheet(prefix, "PER_DEPOSIT_CAP");
+        vm.expectRevert(bytes(string.concat(prefix, "PER_DEPOSIT_CAP must be set")));
         _readPrefixed(prefix);
     }
 
     function test_sheet_missingFeeRecipientReverts() public {
         string memory prefix = _p("nofee");
-        _setSheet(prefix, "FEE_RECIPIENT_ADDRESS");
-        vm.expectRevert(bytes(string.concat(prefix, "FEE_RECIPIENT_ADDRESS must be set")));
+        _setSheet(prefix, "FEE_RECIPIENT");
+        vm.expectRevert(bytes(string.concat(prefix, "FEE_RECIPIENT must be set")));
         _readPrefixed(prefix);
     }
 
     function test_sheet_malformedTvlCapReverts() public {
         string memory prefix = _p("badtvl");
-        _setSheet(prefix, "VAULT_TVL_CAP");
-        vm.setEnv(string.concat(prefix, "VAULT_TVL_CAP"), "50k");
+        _setSheet(prefix, "TVL_CAP");
+        vm.setEnv(string.concat(prefix, "TVL_CAP"), "50k");
         vm.expectRevert(
-            bytes(string.concat(prefix, "VAULT_TVL_CAP is malformed: expected an unsigned integer"))
+            bytes(string.concat(prefix, "TVL_CAP is malformed: expected an unsigned integer"))
         );
         _readPrefixed(prefix);
     }
 
     function test_sheet_malformedPerDepositCapReverts() public {
         string memory prefix = _p("badpdc");
-        _setSheet(prefix, "VAULT_PER_DEPOSIT_CAP");
-        vm.setEnv(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"), "-1");
+        _setSheet(prefix, "PER_DEPOSIT_CAP");
+        vm.setEnv(string.concat(prefix, "PER_DEPOSIT_CAP"), "-1");
         vm.expectRevert(
             bytes(
-                string.concat(
-                    prefix, "VAULT_PER_DEPOSIT_CAP is malformed: expected an unsigned integer"
-                )
+                string.concat(prefix, "PER_DEPOSIT_CAP is malformed: expected an unsigned integer")
             )
         );
         _readPrefixed(prefix);
@@ -175,31 +173,27 @@ abstract contract VaultScriptGuardBase is BasketDeployFixture {
 
     function test_sheet_malformedFeeRecipientReverts() public {
         string memory prefix = _p("badfee");
-        _setSheet(prefix, "FEE_RECIPIENT_ADDRESS");
-        vm.setEnv(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"), "not-an-address");
+        _setSheet(prefix, "FEE_RECIPIENT");
+        vm.setEnv(string.concat(prefix, "FEE_RECIPIENT"), "not-an-address");
         vm.expectRevert(
-            bytes(string.concat(prefix, "FEE_RECIPIENT_ADDRESS is malformed: expected an address"))
+            bytes(string.concat(prefix, "FEE_RECIPIENT is malformed: expected an address"))
         );
         _readPrefixed(prefix);
     }
 
     function test_sheet_missingExitFeeReverts() public {
         string memory prefix = _p("noexit");
-        _setSheet(prefix, "VAULT_EXIT_FEE_BPS");
-        vm.expectRevert(bytes(string.concat(prefix, "VAULT_EXIT_FEE_BPS must be set")));
+        _setSheet(prefix, "EXIT_FEE_BPS");
+        vm.expectRevert(bytes(string.concat(prefix, "EXIT_FEE_BPS must be set")));
         _readPrefixed(prefix);
     }
 
     function test_sheet_malformedExitFeeRevertsInsteadOfDefaulting() public {
         string memory prefix = _p("badexit");
         _setSheet(prefix, "");
-        vm.setEnv(string.concat(prefix, "VAULT_EXIT_FEE_BPS"), "ten");
+        vm.setEnv(string.concat(prefix, "EXIT_FEE_BPS"), "ten");
         vm.expectRevert(
-            bytes(
-                string.concat(
-                    prefix, "VAULT_EXIT_FEE_BPS is malformed: expected an unsigned integer"
-                )
-            )
+            bytes(string.concat(prefix, "EXIT_FEE_BPS is malformed: expected an unsigned integer"))
         );
         _readPrefixed(prefix);
     }
@@ -209,28 +203,28 @@ abstract contract VaultScriptGuardBase is BasketDeployFixture {
     function test_deploy_zeroTvlCapReverts() public {
         BasketVaultDeployBase.Params memory p = _params();
         p.tvlCap = 0;
-        vm.expectRevert(bytes("VAULT_TVL_CAP missing from the sheet"));
+        vm.expectRevert(bytes("TVL_CAP missing from the sheet"));
         _runInProcess(p);
     }
 
     function test_deploy_zeroPerDepositCapReverts() public {
         BasketVaultDeployBase.Params memory p = _params();
         p.perDepositCap = 0;
-        vm.expectRevert(bytes("VAULT_PER_DEPOSIT_CAP missing from the sheet"));
+        vm.expectRevert(bytes("PER_DEPOSIT_CAP missing from the sheet"));
         _runInProcess(p);
     }
 
     function test_deploy_perDepositAboveTvlReverts() public {
         BasketVaultDeployBase.Params memory p = _params();
         p.perDepositCap = p.tvlCap + 1;
-        vm.expectRevert(bytes("VAULT_PER_DEPOSIT_CAP exceeds VAULT_TVL_CAP"));
+        vm.expectRevert(bytes("PER_DEPOSIT_CAP exceeds TVL_CAP"));
         _runInProcess(p);
     }
 
     function test_deploy_zeroFeeRecipientReverts() public {
         BasketVaultDeployBase.Params memory p = _params();
         p.feeRecipient = address(0);
-        vm.expectRevert(bytes("FEE_RECIPIENT_ADDRESS=0"));
+        vm.expectRevert(bytes("FEE_RECIPIENT=0"));
         _runInProcess(p);
     }
 

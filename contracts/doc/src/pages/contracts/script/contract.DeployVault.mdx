@@ -26,13 +26,13 @@ router (core 1493). The order is now fixed by the stage scripts.
 Required env vars (all required on every chain, no defaults):
 EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet
 ADMIN_ADDRESS         — receives ADMIN_ROLE and EMERGENCY_ROLE on the vault
-FEE_RECIPIENT_ADDRESS — vault fee recipient (the treasury, never the deployer)
-VAULT_TVL_CAP, VAULT_PER_DEPOSIT_CAP — vault caps, 6-decimal USDC units
+FEE_RECIPIENT — vault fee recipient (the treasury, never the deployer)
+TVL_CAP, PER_DEPOSIT_CAP — vault caps, 6-decimal USDC units
 SEED_SHARE_RECEIVER   — receives the seed shares. Not zero, not the deployer (ADMIN_ADDRESS).
 The deployer holds no shares after this stage.
 DEPLOYMENT_OUT        — output JSON path
 USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
-VAULT_EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
+EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
 SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units (non-zero)
 
 </i>

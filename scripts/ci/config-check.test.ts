@@ -4,7 +4,11 @@ import { describe, expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { loadConfigs, staticFindings, liveFindings, type Rpc } from "./config-check";
+import {
+  loadConfigs, staticFindings, liveFindings, keccak256, keccakHex, parseCli, usdcHashFindings, readUsdcHashes, UsageError,
+  USDC, EIP1967_IMPL_SLOT, type Rpc,
+} from "./config-check";
+import { spawnSync } from "node:child_process";
 
 const repo = resolve(import.meta.dir, "..", "..");
 const realDir = join(repo, "config");
@@ -91,7 +95,10 @@ describe("reader test: removed keys are gone from clients/ and testing/", () => 
 });
 
 describe("live rules against a fake RPC", () => {
-  const cfg = loadConfigs(realDir);
+  // The fake chain serves the code "0x6001" at every address, so that code's hash is the pin.
+  const FAKE_HASH = keccakHex("0x6001");
+  const pin = (c: ReturnType<typeof loadConfigs>) => ({ ...c, usdcHashes: { proxyCodeHash: FAKE_HASH, implementationCodeHash: FAKE_HASH } });
+  const cfg = pin(loadConfigs(realDir));
   const w = (n: bigint | number) => BigInt(n).toString(16).padStart(64, "0");
   const a = (x: string) => x.replace(/^0x/, "").toLowerCase().padStart(64, "0");
   const all = [...cfg.protocol.assets, ...cfg.rwa.assets];
@@ -102,6 +109,7 @@ describe("live rules against a fake RPC", () => {
   function rpcFor(over: Record<string, Live> = {}, noCode: string[] = []): Rpc {
     const feeOf = (pool: string) => Number(all.find((x) => x.pool.toLowerCase() === pool)!.poolFee);
     return async (method, params) => {
+      if (method === "eth_getStorageAt") return "0x" + w(0) .slice(0, 24) + a("0x4444444444444444444444444444444444444444").slice(24);
       if (method === "eth_getCode") return noCode.includes(String(params[0]).toLowerCase()) ? "0x" : "0x6001";
       const { to, data } = params[0] as { to: string; data: string };
       const sel = data.slice(0, 10);
@@ -159,7 +167,7 @@ describe("live rules against a fake RPC", () => {
   }
   // Config mutations against live truth (the committed config is the truth the fake RPC serves).
   const failedRules = async (c: ReturnType<typeof loadConfigs>, noCode: string[] = []) => {
-    const r = await liveFindings(rpcFor({}, noCode), "latest", c);
+    const r = await liveFindings(rpcFor({}, noCode), "latest", pin(c));
     return r.findings.filter((f) => !f.ok).map((f) => `${f.scope.split(":").pop()}/${f.rule}`);
   };
   const GHOST = "0x3333333333333333333333333333333333333333";
@@ -188,5 +196,85 @@ describe("live rules against a fake RPC", () => {
   test("main exits non-zero when any live rule fails", async () => {
     const r = await liveFindings(rpcFor({ cbBTC: { liquidity: 0n } }), "latest", cfg);
     expect(r.findings.some((f) => !f.ok)).toBe(true);
+  });
+});
+
+describe("keccak256", () => {
+  test("matches the known empty-input and abc vectors", () => {
+    expect(keccak256(new Uint8Array())).toBe("0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
+    expect(keccak256(new TextEncoder().encode("abc"))).toBe("0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45");
+  });
+  test("matches cast on a multi-block input when cast is installed", () => {
+    const hex = "0x" + "ab".repeat(300);
+    const r = spawnSync("cast", ["keccak", hex], { encoding: "utf8" });
+    if (r.status !== 0) return;
+    expect(keccakHex(hex)).toBe(r.stdout.trim());
+  });
+});
+
+describe("USDC code-hash check", () => {
+  const IMPL = "0x4444444444444444444444444444444444444444";
+  const GOOD_PROXY = "0x6001";
+  const GOOD_IMPL = "0x6002";
+  const slotWord = "0x" + "0".repeat(24) + IMPL.slice(2);
+  const chain = (codes: Record<string, string>): Rpc => async (method, params) => {
+    if (method === "eth_getStorageAt") return params[1] === EIP1967_IMPL_SLOT ? slotWord : "0x" + "0".repeat(64);
+    if (method === "eth_getCode") return codes[String(params[0]).toLowerCase()] ?? "0x";
+    throw new Error(method);
+  };
+  const pins = { proxyCodeHash: keccakHex(GOOD_PROXY), implementationCodeHash: keccakHex(GOOD_IMPL) };
+  const run = async (codes: Record<string, string>, pinned = pins) =>
+    usdcHashFindings(pinned, await readUsdcHashes(chain(codes), "latest"));
+
+  test("the real proxy and implementation code pass", async () => {
+    const f = await run({ [USDC.toLowerCase()]: GOOD_PROXY, [IMPL]: GOOD_IMPL });
+    expect(f.every((x) => x.ok)).toBe(true);
+    expect(f.length).toBe(2);
+  });
+  test("a mock token at the USDC address fails the proxy hash", async () => {
+    const f = await run({ [USDC.toLowerCase()]: "0x60806040mock", [IMPL]: GOOD_IMPL });
+    expect(f.find((x) => x.rule === "usdc-proxy-code-hash")!.ok).toBe(false);
+  });
+  test("a swapped implementation fails the implementation hash", async () => {
+    const f = await run({ [USDC.toLowerCase()]: GOOD_PROXY, [IMPL]: "0x6099" });
+    expect(f.find((x) => x.rule === "usdc-implementation-code-hash")!.ok).toBe(false);
+  });
+  test("no code at USDC fails", async () => {
+    const f = await run({});
+    expect(f.every((x) => !x.ok)).toBe(true);
+  });
+  test("an unpinned (null) hash is refused", async () => {
+    const f = await run({ [USDC.toLowerCase()]: GOOD_PROXY, [IMPL]: GOOD_IMPL }, { proxyCodeHash: null, implementationCodeHash: null });
+    expect(f.every((x) => !x.ok && /not pinned/.test(x.detail))).toBe(true);
+  });
+  test("the committed pin file is well formed (null or 32-byte hex)", () => {
+    expect(staticFindings(loadConfigs(realDir)).filter((x) => x.rule.startsWith("format:") && !x.ok)).toEqual([]);
+  });
+  test("a malformed pin fails the static format rule", () => {
+    const c = fixture((f) => { f["usdc-hashes.json"].proxyCodeHash = "0x1234"; });
+    expect(staticFindings(c).some((x) => x.rule === "format:proxyCodeHash" && !x.ok)).toBe(true);
+  });
+});
+
+describe("cli arguments", () => {
+  test("accepts --rpc, --config-dir and --chain", () => {
+    expect(parseCli(["--rpc", "http://x", "--config-dir", "d", "--chain", "918453"])).toMatchObject({ rpc: "http://x", configDir: "d", chain: 918453 });
+  });
+  test("chain defaults to 8453", () => {
+    expect(parseCli(["--rpc", "http://x"]).chain).toBe(8453);
+  });
+  for (const bad of [[], ["--rpc"], ["--rpc", "u", "--chain", "abc"], ["--rpc", "u", "--bogus"], ["--offline", "--print-usdc-hashes"]]) {
+    test(`usage error for ${JSON.stringify(bad)}`, () => {
+      expect(() => parseCli(bad)).toThrow(UsageError);
+    });
+  }
+  test("the process exits 2 on a usage error", () => {
+    const r = spawnSync("bun", [join(repo, "scripts/ci/config-check.ts"), "--nope"], { encoding: "utf8" });
+    expect(r.status).toBe(2);
+  });
+  test("the process exits 0 offline on the committed config", () => {
+    const out = mkdtempSync(join(tmpdir(), "cc-out-"));
+    const r = spawnSync("bun", [join(repo, "scripts/ci/config-check.ts"), "--offline", "--out-dir", out], { encoding: "utf8" });
+    expect(r.status).toBe(0);
   });
 });

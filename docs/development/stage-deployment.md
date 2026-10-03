@@ -64,12 +64,12 @@ Frozen sheet example (identity and parameter lines only, placeholders for addres
 
 ```
 ADMIN_ADDRESS=<deployer address>
-FEE_RECIPIENT_ADDRESS=<treasury address>
+FEE_RECIPIENT=<treasury address>
 SEED_SHARE_RECEIVER=<seed share holder, not the deployer>
 SEED_DEPOSIT_USDC=1000000
-VAULT_EXIT_FEE_BPS=<basis points, 0 allowed>
-VAULT_TVL_CAP=<6-decimal USDC units>
-VAULT_PER_DEPOSIT_CAP=<6-decimal USDC units>
+EXIT_FEE_BPS=<basis points, 0 allowed>
+TVL_CAP=<6-decimal USDC units>
+PER_DEPOSIT_CAP=<6-decimal USDC units>
 VAULT_NAME=<registered name of the rmUSDC vault in the registry>
 QUORUM_THRESHOLD=<greater than 1>
 VOTING_PERIOD=<seconds>
