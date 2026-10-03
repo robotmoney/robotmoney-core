@@ -65,7 +65,9 @@ contract CoreStagesFork is Test {
         uint256 before = IERC20(BASE_USDC).balanceOf(shareReceiver);
         vm.prank(agent);
         s.gateway
-            .withdrawFromRouter(bytes32("wd-order"), vaults, shares, minAssets, deadline, bytes32("wd-idem"));
+            .withdrawFromRouter(
+                bytes32("wd-order"), vaults, shares, minAssets, deadline, bytes32("wd-idem")
+            );
         assertGe(
             IERC20(BASE_USDC).balanceOf(shareReceiver) - before,
             (amount * 9_999) / 10_000,

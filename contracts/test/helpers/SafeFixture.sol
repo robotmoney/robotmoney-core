@@ -7,8 +7,9 @@ import {Test} from "forge-std/Test.sol";
 import {DeployTimelock} from "../../script/DeployTimelock.s.sol";
 import {SafeL2} from "../vendor/safe-1.4.1/SafeL2.sol";
 import {SafeProxyFactory} from "../vendor/safe-1.4.1/proxies/SafeProxyFactory.sol";
-import {CompatibilityFallbackHandler} from
-    "../vendor/safe-1.4.1/handler/CompatibilityFallbackHandler.sol";
+import {
+    CompatibilityFallbackHandler
+} from "../vendor/safe-1.4.1/handler/CompatibilityFallbackHandler.sol";
 
 /// @dev Setup call of Safe 1.4.1 (`Safe.setup`).
 interface ISafeSetupCall {
@@ -38,7 +39,8 @@ interface ISafeSetupCall {
 ///      result by the same checks it runs on a real chain.
 abstract contract SafeFixture is Test {
     /// @dev Canonical Safe 1.4.1 addresses on Base (the Twin chain carries the same ones).
-    address internal constant FIXTURE_SAFE_L2_SINGLETON = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+    address internal constant FIXTURE_SAFE_L2_SINGLETON =
+        0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
     address internal constant FIXTURE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
     /// @dev Runtime of the SafeProxy 1.4.1 deployed by the canonical factory.
     bytes internal constant CANONICAL_SAFE_PROXY_RUNTIME =

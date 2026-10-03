@@ -50,8 +50,7 @@ contract DeployLibs is ExpectedChainGuard {
         d.tickMath = address(TickMath);
         // The call proves the library is linked to working code, not only to an address.
         require(
-            TickMath.getSqrtRatioAtTick(0) == SQRT_RATIO_AT_TICK_ZERO,
-            "TickMath: tick 0 mismatch"
+            TickMath.getSqrtRatioAtTick(0) == SQRT_RATIO_AT_TICK_ZERO, "TickMath: tick 0 mismatch"
         );
         _assertTickMathCanonical(d.tickMath);
     }

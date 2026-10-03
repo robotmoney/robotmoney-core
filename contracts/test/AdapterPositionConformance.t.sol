@@ -300,8 +300,9 @@ contract MorphoAdapterPositionTest is PositionConformanceBase {
 
     function _setUpAdapter() internal override {
         morpho = new PosConfMorphoVault(address(usdc));
-        adapter =
-            ILendingMinOutSurface(address(new MorphoAdapter(address(morpho), address(usdc), vault)));
+        adapter = ILendingMinOutSurface(
+            address(new MorphoAdapter(address(morpho), address(usdc), vault))
+        );
     }
 
     function _shareToken() internal view override returns (address) {
@@ -331,8 +332,9 @@ contract CompoundV3AdapterPositionTest is PositionConformanceBase {
 
     function _setUpAdapter() internal override {
         comet = new PosConfComet(address(usdc));
-        adapter =
-            ILendingMinOutSurface(address(new CompoundV3Adapter(address(comet), address(usdc), vault)));
+        adapter = ILendingMinOutSurface(
+            address(new CompoundV3Adapter(address(comet), address(usdc), vault))
+        );
     }
 
     function _shareToken() internal view override returns (address) {

@@ -88,5 +88,4 @@ contract VaultCodeSizeGuard is Test {
     function test_AerodromeSwapAdapter_underEip170() public {
         _assertUnderLimit("AerodromeSwapAdapter.sol:AerodromeSwapAdapter");
     }
-
 }

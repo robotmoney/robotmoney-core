@@ -103,7 +103,10 @@ contract DeployPortfolioRouterTest is Test {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         uint256 linked;
         for (uint256 i = 0; i < logs.length; i++) {
-            if (logs[i].emitter == address(registry) && logs[i].topics[0] == VaultRegistry.RouterSet.selector) {
+            if (
+                logs[i].emitter == address(registry)
+                    && logs[i].topics[0] == VaultRegistry.RouterSet.selector
+            ) {
                 linked++;
             }
         }

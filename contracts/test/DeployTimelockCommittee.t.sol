@@ -143,7 +143,9 @@ contract DeployTimelockCommitteeTest is SafeFixture {
             MIN_DELAY,
             address(icPolicy),
             address(receipts),
-            receiptAdminArg, _fixtureSpec());
+            receiptAdminArg,
+            _fixtureSpec()
+        );
     }
 
     // ─── Positive: full handover ──────────────────────────────────────────────
@@ -241,7 +243,9 @@ contract DeployTimelockCommitteeTest is SafeFixture {
             MIN_DELAY,
             address(0), // icPolicy_ skipped
             address(0), // consensusReceipt_ skipped
-            address(0), _fixtureSpec());
+            address(0),
+            _fixtureSpec()
+        );
         assertTrue(
             IAccessControl(address(vault)).hasRole(ADMIN_ROLE, address(d.timelock)),
             "five-core handover must still work when committee addresses are unset"
@@ -285,6 +289,8 @@ contract DeployTimelockCommitteeTest is SafeFixture {
             MIN_DELAY,
             address(icPolicy),
             address(receipts),
-            independentReceiptAdmin, _fixtureSpec());
+            independentReceiptAdmin,
+            _fixtureSpec()
+        );
     }
 }

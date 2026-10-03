@@ -142,12 +142,7 @@ contract CompoundV3Adapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    function totalAssets()
-        external
-        view
-        override
-        returns (uint256)
-    {
+    function totalAssets() external view override returns (uint256) {
         return COMET.balanceOf(address(this));
     }
 
@@ -159,10 +154,7 @@ contract CompoundV3Adapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    function sweepForeignToken(address token)
-        external
-        override
-    {
+    function sweepForeignToken(address token) external override {
         if (token == USDC || token == address(COMET)) {
             revert ForeignTokenQuarantine.TokenIsProtected(token);
         }

@@ -128,12 +128,7 @@ contract AaveV3Adapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    function totalAssets()
-        external
-        view
-        override
-        returns (uint256)
-    {
+    function totalAssets() external view override returns (uint256) {
         return A_TOKEN.balanceOf(address(this));
     }
 
@@ -145,10 +140,7 @@ contract AaveV3Adapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    function sweepForeignToken(address token)
-        external
-        override
-    {
+    function sweepForeignToken(address token) external override {
         if (token == USDC || token == address(A_TOKEN)) {
             revert ForeignTokenQuarantine.TokenIsProtected(token);
         }
