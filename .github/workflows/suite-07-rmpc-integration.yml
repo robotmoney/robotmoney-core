@@ -390,6 +390,14 @@ jobs:
         with:
           enabled: ${{ inputs.fresh_snapshot == true }}
 
+      # The Rust harness boots the devnet through the devops "publish contracts" runbook.
+      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
+        id: devops
+        if: inputs.fresh_snapshot != true
+        uses: ./.github/actions/devops-publish-contracts
+        with:
+          token: ${{ secrets.DEVOPS_READ_TOKEN }}
+
       - name: Verify Docker is available
         run: |
           docker version
@@ -413,6 +421,7 @@ jobs:
         run: docker compose pull --ignore-pull-failures || true
 
       - name: e2e ${{ matrix.binary }}
+        if: steps.devops.outputs.available != 'false'
         working-directory: testing/ethereum-testnet/e2e-rust
         run: cargo test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
 

@@ -293,20 +293,11 @@ jobs:
 
       # The harness calls the one runbook, "publish contracts" (devops, Bun TypeScript).
       # Same devops SHA as every other run; the Twin chain arguments are the only difference.
-      - name: Check out devops (publish contracts)
-        uses: actions/checkout@v4
+      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
+        id: devops
+        uses: ./.github/actions/devops-publish-contracts
         with:
-          repository: robotmoney/devops
-          ref: ${{ vars.DEVOPS_PUBLISH_REF || 'main' }}
           token: ${{ secrets.DEVOPS_READ_TOKEN }}
-          path: devops
-
-      - name: Install bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install publish-contracts dependencies
-        working-directory: devops/publish-contracts
-        run: bun install --frozen-lockfile
 
       - name: Verify Docker is available
         run: |
@@ -366,6 +357,7 @@ jobs:
       # nothing) fails loudly instead of reporting a false green — the same
       # guard suites 4/6/7/8/20 already use.
       - name: cargo test (${{ matrix.binary }} — boots + tears down its own devnet)
+        if: steps.devops.outputs.available != 'false'
         working-directory: testing/smoke-test
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-${{ matrix.binary }}.log
@@ -446,16 +438,11 @@ jobs:
         with:
           enabled: ${{ inputs.fresh_snapshot == true }}
 
-      - name: Check out devops (publish contracts)
-        uses: actions/checkout@v4
+      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
+        id: devops
+        uses: ./.github/actions/devops-publish-contracts
         with:
-          repository: robotmoney/devops
-          ref: ${{ vars.DEVOPS_PUBLISH_REF || 'main' }}
           token: ${{ secrets.DEVOPS_READ_TOKEN }}
-          path: devops
-
-      - name: Install bun
-        uses: oven-sh/setup-bun@v2
 
       - name: Install publish-contracts dependencies
         env:
@@ -492,6 +479,7 @@ jobs:
       # Non-zero test count floor (core 1488): cargo_test_require_executed.sh fails a run that executes
       # fewer than CARGO_TEST_MIN_EXECUTED tests, so a filter that matches nothing is a failure, not a green.
       - name: Twin chain publish, verify, assertion scripts and govern matrix
+        if: steps.devops.outputs.available != 'false'
         working-directory: testing/smoke-test
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-twin_publish.log
@@ -510,6 +498,7 @@ jobs:
       # (SMOKE_TEST_SHEET_OUT). The mainnet side is the devops production fixtures directory, given as
       # the input production_fixtures_dir. A missing or empty file fails this step and names the path.
       - name: Stage vs mainnet parity (label-diff, sheet-diff on real output)
+        if: steps.devops.outputs.available != 'false'
         env:
           FIXTURES_DIR: ${{ github.workspace }}/${{ inputs.production_fixtures_dir || 'devops/deployments/base-8453' }}
         run: >-

@@ -103,32 +103,23 @@ jobs:
         run: cargo build -p smoke-test
         working-directory: ${{ github.workspace }}
 
-      # The full-stack devnet publishes contracts through the devops "publish contracts" runbook,
-      # so it needs the same devops checkout as suite-14 (secret DEVOPS_READ_TOKEN, owner-provided).
-      - name: Check out devops (publish contracts)
+      # The full-stack devnet publishes contracts through the devops "publish contracts" runbook.
+      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
+        id: devops
         if: inputs.fresh_snapshot != true
-        uses: actions/checkout@v4
+        uses: ./.github/actions/devops-publish-contracts
         with:
-          repository: robotmoney/devops
-          ref: ${{ vars.DEVOPS_PUBLISH_REF || 'main' }}
           token: ${{ secrets.DEVOPS_READ_TOKEN }}
-          path: devops
-
-      - name: Install publish-contracts dependencies
-        if: inputs.fresh_snapshot != true
-        working-directory: devops/publish-contracts
-        run: bun install --frozen-lockfile
 
       - name: Install Playwright browsers
         run: bunx playwright install --with-deps chromium
 
       - name: Run Playwright (boots smoke-test full-stack devnet via globalSetup)
+        if: steps.devops.outputs.available != 'false'
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-suite-10.log
           PLAYWRIGHT_HTML_REPORT: ${{ runner.temp }}/robotmoney-playwright/report
           PLAYWRIGHT_OUTPUT_DIR: ${{ runner.temp }}/robotmoney-playwright/test-results
-          PUBLISH_CONTRACTS_DIR: ${{ github.workspace }}/devops/publish-contracts
-          STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
         run: bun run test:e2e
 
       - name: Upload Playwright report
