@@ -138,6 +138,10 @@ jobs:
         with:
           version: stable
 
+      # check-fork-manifest.sh also runs scripts/devnet/check-fork-lockstep.ts (core 1498).
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 

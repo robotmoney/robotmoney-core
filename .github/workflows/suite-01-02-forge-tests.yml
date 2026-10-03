@@ -270,6 +270,11 @@ jobs:
           # so this site no longer needs the floating `nightly` channel.
           version: stable
 
+      - name: Install Bun
+        # check-fork-manifest.sh runs scripts/devnet/check-fork-lockstep.ts (core 1498),
+        # so every job that calls run-golden-forge-forks.sh needs bun on PATH.
+        uses: oven-sh/setup-bun@v2
+
       - name: Fork Safe-set gate behaviour self-test (issue #1447)
         # Offline, no network/Docker: drives scripts/devnet/check-fork-safe-set.sh
         # against state files built from the committed fixture's five Safe
