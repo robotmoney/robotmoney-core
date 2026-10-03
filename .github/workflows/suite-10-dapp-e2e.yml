@@ -106,6 +106,7 @@ jobs:
       # The full-stack devnet publishes contracts through the devops "publish contracts" runbook,
       # so it needs the same devops checkout as suite-14 (secret DEVOPS_READ_TOKEN, owner-provided).
       - name: Check out devops (publish contracts)
+        if: inputs.fresh_snapshot != true
         uses: actions/checkout@v4
         with:
           repository: robotmoney/devops
@@ -114,6 +115,7 @@ jobs:
           path: devops
 
       - name: Install publish-contracts dependencies
+        if: inputs.fresh_snapshot != true
         working-directory: devops/publish-contracts
         run: bun install --frozen-lockfile
 
