@@ -202,6 +202,7 @@ export const sidebar = [
             { text: "BlacklistableUSDC", link: "/contracts/test/contract.BlacklistableUSDC" },
             { text: "BlacklistableVault", link: "/contracts/test/contract.BlacklistableVault" },
             { text: "BpsMathTest", link: "/contracts/test/contract.BpsMathTest" },
+            { text: "CardinalityOnePool", link: "/contracts/test/contract.CardinalityOnePool" },
             { text: "CompoundV3AdapterPositionTest", link: "/contracts/test/contract.CompoundV3AdapterPositionTest" },
             { text: "ConfigFilesTest", link: "/contracts/test/contract.ConfigFilesTest" },
             { text: "ConfusedDeputyGuardsTest", link: "/contracts/test/contract.ConfusedDeputyGuardsTest" },
@@ -213,6 +214,7 @@ export const sidebar = [
             { text: "CustodyInvariantTest", link: "/contracts/test/contract.CustodyInvariantTest" },
             { text: "DelegatecallProxyAdapter", link: "/contracts/test/contract.DelegatecallProxyAdapter" },
             { text: "DeployAgentTokenVaultTest", link: "/contracts/test/contract.DeployAgentTokenVaultTest" },
+            { text: "DeployBasketVaultPoolGuardsTest", link: "/contracts/test/contract.DeployBasketVaultPoolGuardsTest" },
             { text: "DeployBasketVaultRwaTest", link: "/contracts/test/contract.DeployBasketVaultRwaTest" },
             { text: "DeployConsensusRecommendationReceiptTest", link: "/contracts/test/contract.DeployConsensusRecommendationReceiptTest" },
             { text: "DeployInputsHarness", link: "/contracts/test/contract.DeployInputsHarness" },
@@ -221,6 +223,7 @@ export const sidebar = [
             { text: "DeployProtocolAssetVaultTest", link: "/contracts/test/contract.DeployProtocolAssetVaultTest" },
             { text: "DeployRouterGovernanceDefaultsTest", link: "/contracts/test/contract.DeployRouterGovernanceDefaultsTest" },
             { text: "DeployScriptChainGuardsTest", link: "/contracts/test/contract.DeployScriptChainGuardsTest" },
+            { text: "DeployScriptChainGuardsTwinTest", link: "/contracts/test/contract.DeployScriptChainGuardsTwinTest" },
             { text: "DeploySeedDeposit", link: "/contracts/test/contract.DeploySeedDeposit" },
             { text: "DeployTest", link: "/contracts/test/contract.DeployTest" },
             { text: "DeployTimelockAgentHandoverTest", link: "/contracts/test/contract.DeployTimelockAgentHandoverTest" },
@@ -324,6 +327,7 @@ export const sidebar = [
             { text: "RobotMoneyVaultRedeemGasUnitTest", link: "/contracts/test/contract.RobotMoneyVaultRedeemGasUnitTest" },
             { text: "RobotMoneyVaultRouteDepositTest", link: "/contracts/test/contract.RobotMoneyVaultRouteDepositTest" },
             { text: "RobotMoneyVaultTest", link: "/contracts/test/contract.RobotMoneyVaultTest" },
+            { text: "RobotMoneyVaultWithdrawDepositGasTest", link: "/contracts/test/contract.RobotMoneyVaultWithdrawDepositGasTest" },
             { text: "RouteHarness", link: "/contracts/test/contract.RouteHarness" },
             { text: "RouteUSDC", link: "/contracts/test/contract.RouteUSDC" },
             { text: "RouterGovernanceTest", link: "/contracts/test/contract.RouterGovernanceTest" },
@@ -353,6 +357,7 @@ export const sidebar = [
             { text: "VaultForkRegressions", link: "/contracts/test/contract.VaultForkRegressions" },
             { text: "VaultHarness", link: "/contracts/test/contract.VaultHarness" },
             { text: "VaultRegistryTest", link: "/contracts/test/contract.VaultRegistryTest" },
+            { text: "ZeroLiquidityPool", link: "/contracts/test/contract.ZeroLiquidityPool" },
           ],
         },
         {
@@ -382,6 +387,13 @@ export const sidebar = [
           collapsed: true,
           items: [
             { text: "ReferenceTwap", link: "/contracts/test/library.ReferenceTwap" },
+          ],
+        },
+        {
+          text: "Functions",
+          collapsed: true,
+          items: [
+            { text: "uniqueManifestPath", link: "/contracts/test/function.uniqueManifestPath" },
           ],
         },
       ],
@@ -454,6 +466,7 @@ export const sidebar = [
           text: "Libraries",
           collapsed: true,
           items: [
+            { text: "ForkSelect", link: "/contracts/test/helpers/library.ForkSelect" },
             { text: "RoleHolders", link: "/contracts/test/helpers/library.RoleHolders" },
             { text: "VaultTestParams", link: "/contracts/test/helpers/library.VaultTestParams" },
             { text: "VenueEtcher", link: "/contracts/test/helpers/library.VenueEtcher" },

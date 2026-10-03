@@ -5,7 +5,7 @@ description: "`run()` hands the AGENT_ADDRESSES list it reads to the handover (i
 
 # DeployTimelockRunEntrypointBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
 
@@ -29,13 +29,19 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 ```
 
+## State Variables
+
 ### OUT_PATH
 
-```solidity
-string internal constant OUT_PATH = "/tmp/1476-run-entrypoint-manifest.json";
-```
+<i>
 
-## State Variables
+Set per test in setUp from `uniqueManifestPath`: the subclasses below share this base, so a fixed name would be shared too.
+
+</i>
+
+```solidity
+string internal OUT_PATH;
+```
 
 ### harness
 

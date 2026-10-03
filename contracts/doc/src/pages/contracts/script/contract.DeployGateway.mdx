@@ -5,7 +5,7 @@ description: "Stage 5 of the core deploy (libs, vault, registry, router, gateway
 
 # DeployGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/script/DeployGateway.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployGateway.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -41,11 +41,7 @@ USDC is the canonical Base USDC constant on every chain.
 
 ### MANIFEST_FILE
 
-<i>
-
 Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
-
-</i>
 
 ```solidity
 string public constant MANIFEST_FILE = "gateway.json";
@@ -61,11 +57,15 @@ uint256 public constant DEFAULT_MAX_PER_PAYMENT = 10_000 * 1e6;
 
 ### DEFAULT_MAX_PER_WINDOW
 
+Default agent spend cap per window in USDC units (test seam only).
+
 ```solidity
 uint256 public constant DEFAULT_MAX_PER_WINDOW = 100_000 * 1e6;
 ```
 
 ### DEFAULT_MAX_WITHDRAW_PER_PAYMENT
+
+Default per-payment withdraw cap in raw rmUSDC shares (test seam only).
 
 <i>
 
@@ -81,11 +81,15 @@ uint256 public constant DEFAULT_MAX_WITHDRAW_PER_PAYMENT = 10_000 * 1e6 * 1e18;
 
 ### DEFAULT_MAX_WITHDRAW_PER_WINDOW
 
+Default per-window withdraw cap in raw rmUSDC shares (test seam only).
+
 ```solidity
 uint256 public constant DEFAULT_MAX_WITHDRAW_PER_WINDOW = 100_000 * 1e6 * 1e18;
 ```
 
 ### DEFAULT_VALID_UNTIL_OFFSET
+
+Default agent authorization lifetime from deployment (test seam only).
 
 ```solidity
 uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
@@ -107,7 +111,7 @@ function run() external returns (Deployed memory d);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` |  |
+| d | `Deployed` | The deployed gateway and its wiring. |
 
 <a id="runinprocess"></a>
 
@@ -123,7 +127,7 @@ function runInProcess() external returns (Deployed memory d);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` |  |
+| d | `Deployed` | The deployed gateway and its wiring. |
 
 <a id="runinprocesswith-address-address-address-address-address-address-address"></a>
 
@@ -147,19 +151,19 @@ function runInProcessWith(
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| admin_ | `address` |  |
-| pauser_ | `address` |  |
-| agent_ | `address` |  |
-| shareReceiver_ | `address` |  |
-| usdc_ | `address` |  |
-| vault_ | `address` |  |
-| router_ | `address` |  |
+| admin_ | `address` | Gateway admin. |
+| pauser_ | `address` | Address granted the pauser role. |
+| agent_ | `address` | Agent authorized to spend through the gateway. |
+| shareReceiver_ | `address` | Address that receives vault shares. |
+| usdc_ | `address` | USDC token address. |
+| vault_ | `address` | Robot Money vault address. |
+| router_ | `address` | Router address the gateway may call. |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` |  |
+| d | `Deployed` | The deployed gateway and its wiring. |
 
 <a id="_readenvparamsfrom-string"></a>
 

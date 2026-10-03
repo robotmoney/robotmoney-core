@@ -5,7 +5,7 @@ description: "Stage 1 of the core deploy: libs, vault, registry, router, gateway
 
 # DeployLibs
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/script/DeployLibs.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployLibs.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -28,11 +28,7 @@ DEPLOYMENT_OUT (output JSON path).
 
 ### MANIFEST_FILE
 
-<i>
-
 Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
-
-</i>
 
 ```solidity
 string public constant MANIFEST_FILE = "libs.json";
@@ -62,7 +58,7 @@ function run() external returns (Deployed memory d);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` |  |
+| d | `Deployed` | The deployed library addresses. |
 
 <a id="runinprocess"></a>
 
@@ -78,7 +74,7 @@ function runInProcess() external returns (Deployed memory d);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` |  |
+| d | `Deployed` | The deployed library addresses. |
 
 <a id="_deploy"></a>
 

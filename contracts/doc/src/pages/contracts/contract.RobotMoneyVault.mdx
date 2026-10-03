@@ -5,7 +5,7 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/RobotMoneyVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -708,6 +708,8 @@ function _netToGross(uint256 net) internal view returns (uint256);
 
 ### redeem
 
+Burn `shares` from `owner` and send the net USDC to `receiver`.
+
 <i>
 
 core 1482: the share-to-asset preview reads every adapter's `totalAssets()` before
@@ -727,19 +729,21 @@ function redeem(uint256 shares, address receiver, address owner)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| shares | `uint256` |  |
-| receiver | `address` |  |
-| owner | `address` |  |
+| shares | `uint256` | Amount of vault shares to burn. |
+| receiver | `address` | Address that receives the USDC. |
+| owner | `address` | Address whose shares are burned (the caller or an approved spender). |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint256` | The amount of USDC sent to `receiver`. |
 
 <a id="withdraw-uint256-address-address"></a>
 
 ### withdraw
+
+Send `assets` USDC to `receiver` and burn the matching shares from `owner`.
 
 <i>
 
@@ -758,15 +762,15 @@ function withdraw(uint256 assets, address receiver, address owner)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| assets | `uint256` |  |
-| receiver | `address` |  |
-| owner | `address` |  |
+| assets | `uint256` | Net amount of USDC the receiver should get. |
+| receiver | `address` | Address that receives the USDC. |
+| owner | `address` | Address whose shares are burned (the caller or an approved spender). |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint256` | The amount of shares burned. |
 
 <a id="_withdraw-address-address-address-uint256-uint256"></a>
 

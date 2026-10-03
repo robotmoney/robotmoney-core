@@ -1,0 +1,195 @@
+---
+title: "RobotMoneyVaultWithdrawDepositGasTest"
+---
+
+# RobotMoneyVaultWithdrawDepositGasTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RobotMoneyVaultWithdrawDepositGas.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### ONE
+
+```solidity
+uint256 internal constant ONE = 1e6;
+```
+
+### INSUFFICIENT_GAS
+
+```solidity
+bytes4 internal constant INSUFFICIENT_GAS =
+        bytes4(keccak256("InsufficientGas(uint256,uint256)"));
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+GasUSDC internal usdc;
+```
+
+### vault
+
+```solidity
+RobotMoneyVault internal vault;
+```
+
+### adapters
+
+```solidity
+GasBurningAdapter[3] internal adapters;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_call-bytes-uint256"></a>
+
+### _call
+
+```solidity
+function _call(bytes memory data, uint256 gasLimit)
+        internal
+        returns (bool ok, bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| gasLimit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+
+<a id="_estimate-bytes"></a>
+
+### _estimate
+
+```solidity
+function _estimate(bytes memory data) internal returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_sel-bytes"></a>
+
+### _sel
+
+```solidity
+function _sel(bytes memory ret) internal pure returns (bytes4 sel);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ret | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sel | `bytes4` |  |
+
+<a id="_setallcosts-uint256"></a>
+
+### _setAllCosts
+
+```solidity
+function _setAllCosts(uint256 c) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `uint256` |  |
+
+<a id="test_withdraw_belowfloor_revertsinsufficientgas"></a>
+
+### test_withdraw_belowFloor_revertsInsufficientGas
+
+Withdraw below the floor reverts with the typed error, never an opaque failure.
+
+```solidity
+function test_withdraw_belowFloor_revertsInsufficientGas() public;
+```
+
+<a id="test_withdraw_gassweep_neveropaque"></a>
+
+### test_withdraw_gasSweep_neverOpaque
+
+Every withdraw gas limit either succeeds or reverts InsufficientGas.
+
+```solidity
+function test_withdraw_gasSweep_neverOpaque() public;
+```
+
+<a id="test_withdraw_estimatethenexecute_overadapterstates"></a>
+
+### test_withdraw_estimateThenExecute_overAdapterStates
+
+Estimate (bisection) then execute withdraw at exactly that limit, over adapter states.
+
+```solidity
+function test_withdraw_estimateThenExecute_overAdapterStates() public;
+```
+
+<a id="test_deposit_estimatethenexecute_overadapterstates"></a>
+
+### test_deposit_estimateThenExecute_overAdapterStates
+
+Estimate then execute deposit at exactly that limit, over adapter states.
+
+```solidity
+function test_deposit_estimateThenExecute_overAdapterStates() public;
+```
+
+<a id="test_deposit_gassweep_neversilentpartial"></a>
+
+### test_deposit_gasSweep_neverSilentPartial
+
+Deposit at any gas limit either succeeds or fails with a reason, never silently.
+
+```solidity
+function test_deposit_gasSweep_neverSilentPartial() public;
+```
+

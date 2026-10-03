@@ -1,0 +1,140 @@
+---
+title: "DeployBasketVaultPoolGuardsTest"
+description: "Core 1490 and 1492: the rmPROTO and rmRWA scripts refuse an asset whose pool has zero liquidity, too little observation history or no code. These are the same three live-pool facts the config-check script rejects, so a pool shaped like wSOL (empty pool) cannot reach a deployed vault through either script."
+---
+
+# DeployBasketVaultPoolGuardsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployBasketVaultPoolGuards.t.sol)
+
+**Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
+
+Core 1490 and 1492: the rmPROTO and rmRWA scripts refuse an asset whose pool has zero
+liquidity, too little observation history or no code. These are the same three
+live-pool facts the config-check script rejects, so a pool shaped like wSOL
+(empty pool) cannot reach a deployed vault through either script.
+
+## State Variables
+
+### proto
+
+```solidity
+DeployProtocolAssetVault internal proto;
+```
+
+### rwa
+
+```solidity
+DeployRwaBasketVault internal rwa;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_oneassetjson-address-address"></a>
+
+### _oneAssetJson
+
+```solidity
+function _oneAssetJson(address pool, address token) internal view returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| token | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_zeroliquidity"></a>
+
+### _zeroLiquidity
+
+```solidity
+function _zeroLiquidity() internal returns (string memory json);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+<a id="_cardinalityone"></a>
+
+### _cardinalityOne
+
+```solidity
+function _cardinalityOne() internal returns (string memory json);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+<a id="test_proto_revertsonzeroliquiditypool"></a>
+
+### test_proto_revertsOnZeroLiquidityPool
+
+```solidity
+function test_proto_revertsOnZeroLiquidityPool() public;
+```
+
+<a id="test_proto_revertsoncardinalitybelowtwo"></a>
+
+### test_proto_revertsOnCardinalityBelowTwo
+
+```solidity
+function test_proto_revertsOnCardinalityBelowTwo() public;
+```
+
+<a id="test_rwa_revertsonzeroliquiditypool"></a>
+
+### test_rwa_revertsOnZeroLiquidityPool
+
+```solidity
+function test_rwa_revertsOnZeroLiquidityPool() public;
+```
+
+<a id="test_rwa_revertsoncardinalitybelowtwo"></a>
+
+### test_rwa_revertsOnCardinalityBelowTwo
+
+```solidity
+function test_rwa_revertsOnCardinalityBelowTwo() public;
+```
+
+<a id="test_rwa_revertswhenpoolhasnocode"></a>
+
+### test_rwa_revertsWhenPoolHasNoCode
+
+```solidity
+function test_rwa_revertsWhenPoolHasNoCode() public;
+```
+
+<a id="test_proto_controlusablepooldeploys"></a>
+
+### test_proto_controlUsablePoolDeploys
+
+Control: the same shape with liquidity and cardinality deploys, so the reverts
+above are caused by the pool facts and not by the harness.
+
+```solidity
+function test_proto_controlUsablePoolDeploys() public;
+```
+

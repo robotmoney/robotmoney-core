@@ -5,7 +5,7 @@ description: "Wraps the Moonwell Flagship USDC vault on Base."
 
 # MorphoAdapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/adapters/MorphoAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/adapters/MorphoAdapter.sol)
 
 **Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter)
 
@@ -170,14 +170,14 @@ function deploy(uint256 usdcIn, uint256 minValueOut)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| usdcIn | `uint256` |  |
-| minValueOut | `uint256` |  |
+| usdcIn | `uint256` | Amount of USDC (6-decimal units) to deploy into the venue. |
+| minValueOut | `uint256` | Minimum value the venue position must gain, else revert. |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| valueAdded | `uint256` |  |
+| valueAdded | `uint256` | Value added to the position, in USDC units. |
 
 <a id="withdraw-uint256"></a>
 
@@ -218,14 +218,14 @@ function withdraw(uint256 usdcWanted, uint256 minUsdcOut)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| usdcWanted | `uint256` |  |
-| minUsdcOut | `uint256` |  |
+| usdcWanted | `uint256` | USDC to withdraw; `type(uint256).max` withdraws everything. |
+| minUsdcOut | `uint256` | Minimum USDC that must reach the vault, else revert. |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| usdcOut | `uint256` |  |
+| usdcOut | `uint256` | USDC actually sent to the vault. |
 
 <a id="totalassets"></a>
 

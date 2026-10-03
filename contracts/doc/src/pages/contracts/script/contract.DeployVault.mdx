@@ -5,7 +5,7 @@ description: "Stage 2 of the core deploy (libs, vault, registry, router, gateway
 
 # DeployVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58e088ac53759285525112de9eee810ef2094dce/contracts/script/DeployVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployVault.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -41,11 +41,7 @@ SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units (non-zero)
 
 ### MANIFEST_FILE
 
-<i>
-
 Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
-
-</i>
 
 ```solidity
 string public constant MANIFEST_FILE = "vault.json";
@@ -110,17 +106,23 @@ address public constant MOONWELL_FLAGSHIP_USDC = 0xc1256Ae5FF1cf2719D4937adb3bbC
 Display names the manifest records for the three venues. The third equals
 the venue's on-chain `name()`.
 
+Manifest display name of the Aave V3 venue.
+
 ```solidity
 string public constant VENUE_NAME_AAVE = "Aave V3 USDC";
 ```
 
 ### VENUE_NAME_COMPOUND
 
+Manifest display name of the Compound V3 venue.
+
 ```solidity
 string public constant VENUE_NAME_COMPOUND = "Compound V3 USDC";
 ```
 
 ### VENUE_NAME_THIRD
+
+Manifest display name of the third venue (Moonwell Flagship USDC).
 
 ```solidity
 string public constant VENUE_NAME_THIRD = "Moonwell Flagship USDC";
@@ -130,17 +132,23 @@ string public constant VENUE_NAME_THIRD = "Moonwell Flagship USDC";
 
 Adapter bps caps, in registration order. They sum to 10 000.
 
+Aave V3 adapter cap in basis points.
+
 ```solidity
 uint16 public constant AAVE_BPS = 3_334;
 ```
 
 ### COMPOUND_BPS
 
+Compound V3 adapter cap in basis points.
+
 ```solidity
 uint16 public constant COMPOUND_BPS = 3_333;
 ```
 
 ### THIRD_VENUE_BPS
+
+Third venue adapter cap in basis points.
 
 ```solidity
 uint16 public constant THIRD_VENUE_BPS = 3_333;
@@ -162,7 +170,7 @@ function run() external returns (Deployed memory d);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` |  |
+| d | `Deployed` | The deployed contracts and admin. |
 
 <a id="runinprocess"></a>
 
@@ -178,7 +186,7 @@ function runInProcess() external returns (Deployed memory d);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` |  |
+| d | `Deployed` | The deployed contracts and admin. |
 
 <a id="runinprocesswithseed-params-address-uint256"></a>
 
@@ -197,15 +205,15 @@ function runInProcessWithSeed(Params memory p, address seedReceiver_, uint256 se
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| p | `Params` |  |
-| seedReceiver_ | `address` |  |
-| seed_ | `uint256` |  |
+| p | `Params` | Deployment parameters (admin, caps, fee, USDC). |
+| seedReceiver_ | `address` | Address that receives the seed shares. |
+| seed_ | `uint256` | Seed deposit in 6-decimal USDC units. |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` |  |
+| d | `Deployed` | The deployed contracts and admin. |
 
 <a id="runinprocesswithparams-params"></a>
 
@@ -221,13 +229,13 @@ function runInProcessWithParams(Params memory p) external returns (Deployed memo
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| p | `Params` |  |
+| p | `Params` | Deployment parameters (admin, caps, fee, USDC). |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` |  |
+| d | `Deployed` | The deployed contracts and admin. |
 
 <a id="_seedstep-deployed-address-uint256"></a>
 
