@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7e7d4997a6e03af61ea2ee0f6218ea9e88f622ae/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -380,7 +380,7 @@ function _single(address v) internal pure returns (address[] memory a);
 | ---- | ---- | ----------- |
 | a | `address[]` |  |
 
-<a id="runinprocesswithcommittee-address-address-address-address-address-address-address-uint256-address-address-address-safespec"></a>
+<a id="runinprocesswithcommittee-address-address-address-address-address-address-address-uint256-committee-safespec"></a>
 
 ### runInProcessWithCommittee
 
@@ -398,9 +398,7 @@ function runInProcessWithCommittee(
         address safe_,
         address emergency_,
         uint256 minDelay_,
-        address icPolicy_,
-        address consensusReceipt_,
-        address receiptAdmin_,
+        Committee memory committee_,
         SafeSpec memory safeSpec_
     ) external returns (Deployed memory d);
 ```
@@ -417,9 +415,7 @@ function runInProcessWithCommittee(
 | safe_ | `address` |  |
 | emergency_ | `address` |  |
 | minDelay_ | `uint256` |  |
-| icPolicy_ | `address` | InvestmentCommitteePolicy address, or address(0) to skip. |
-| consensusReceipt_ | `address` | ConsensusRecommendationReceipt address, or address(0) to skip. |
-| receiptAdmin_ | `address` | Current holder of ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the<br/>receipt contract (RECEIPT_ADMIN_ADDRESS at its<br/>construction); address(0) defaults to msg.sender. |
+| committee_ | `Committee` | `icPolicy`: InvestmentCommitteePolicy address, or address(0)<br/>to skip. `consensusReceipt`: ConsensusRecommendationReceipt address, or<br/>address(0) to skip. `receiptAdmin`: current holder of<br/>ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the receipt contract<br/>(RECEIPT_ADMIN_ADDRESS at its construction); address(0) defaults to<br/>msg.sender. |
 | safeSpec_ | `SafeSpec` |  |
 
 **Returns**
@@ -717,6 +713,59 @@ function _writeJsonTo(Deployed memory d, string memory outPath) internal;
 | d | `Deployed` |  |
 | outPath | `string` |  |
 
+<a id="_serializeaddresssection-deployed"></a>
+
+### _serializeAddressSection
+
+<i>
+
+The `addresses` section of the manifest. Split out of `_writeJsonTo`
+to keep that function inside the non-viaIR stack limit (`forge coverage`).
+
+</i>
+
+```solidity
+function _serializeAddressSection(Deployed memory d) internal returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_serializecodehashsection-deployed"></a>
+
+### _serializeCodeHashSection
+
+<i>
+
+The `code_hashes` section of the manifest, read from the chain.
+
+</i>
+
+```solidity
+function _serializeCodeHashSection(Deployed memory d) internal returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
 <a id="_serializevaulthandovers-deployed"></a>
 
 ### _serializeVaultHandovers
@@ -743,6 +792,63 @@ function _serializeVaultHandovers(Deployed memory d) internal returns (string me
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | out | `string` |  |
+
+<a id="_vaultroleaggregates-deployed"></a>
+
+### _vaultRoleAggregates
+
+<i>
+
+Folds the per-vault role reads into three booleans for the manifest.
+
+</i>
+
+```solidity
+function _vaultRoleAggregates(Deployed memory d)
+        internal
+        view
+        returns (bool allTimelockAdmin, bool allEmergencyKey, bool deployerHoldsVaultRole);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| allTimelockAdmin | `bool` |  |
+| allEmergencyKey | `bool` |  |
+| deployerHoldsVaultRole | `bool` |  |
+
+<a id="_deployerownslistedagent-deployed"></a>
+
+### _deployerOwnsListedAgent
+
+<i>
+
+True when the deployer still owns any gateway agent in `d.agents`.
+
+</i>
+
+```solidity
+function _deployerOwnsListedAgent(Deployed memory d) internal view returns (bool owns);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owns | `bool` |  |
 
 <a id="_serializeroles-deployed"></a>
 
@@ -791,6 +897,32 @@ struct SafeSpec {
 | ---- | ---- | ----------- |
 | owners | `address[]` |  |
 | threshold | `uint256` |  |
+
+### Committee
+
+<i>
+
+The optional committee handover inputs, grouped so
+`runInProcessWithCommittee` stays inside the non-viaIR stack limit
+(`forge coverage` compiles without the optimizer or viaIR).
+
+</i>
+
+```solidity
+struct Committee {
+        address icPolicy;
+        address consensusReceipt;
+        address receiptAdmin;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| icPolicy | `address` |  |
+| consensusReceipt | `address` |  |
+| receiptAdmin | `address` |  |
 
 ### Deployed
 
