@@ -80,7 +80,7 @@ function configDir(mutate: (files: Record<string, any>) => void = () => {}): str
 
 // Async spawn: the fake RPC server lives in this process, so a blocking spawn would deadlock it.
 async function exec(args: string[]): Promise<{ code: number; out: string }> {
-  const p = Bun.spawn(["bun", script, ...args], { stdout: "pipe", stderr: "pipe" });
+  const p = Bun.spawn(["bun", script, ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, CONFIG_CHECK_RPC_SPACING_MS: "0" } });
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return { code, out: out + err };
 }

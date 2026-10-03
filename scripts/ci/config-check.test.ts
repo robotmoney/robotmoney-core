@@ -5,8 +5,8 @@ import { cpSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
-  loadConfigs, staticFindings, liveFindings, keccak256, keccakHex, parseCli, usdcHashFindings, readUsdcHashes, UsageError,
-  USDC, EIP1967_IMPL_SLOT, type Rpc,
+  loadConfigs, staticFindings, liveFindings, keccak256, keccakHex, parseCli, httpRpc, redactUrl, usdcHashFindings, readUsdcHashes, UsageError,
+  USDC, USDC_IMPL_SLOT, type Rpc,
 } from "./config-check";
 import { spawnSync } from "node:child_process";
 
@@ -218,7 +218,7 @@ describe("USDC code-hash check", () => {
   const GOOD_IMPL = "0x6002";
   const slotWord = "0x" + "0".repeat(24) + IMPL.slice(2);
   const chain = (codes: Record<string, string>): Rpc => async (method, params) => {
-    if (method === "eth_getStorageAt") return params[1] === EIP1967_IMPL_SLOT ? slotWord : "0x" + "0".repeat(64);
+    if (method === "eth_getStorageAt") return params[1] === USDC_IMPL_SLOT ? slotWord : "0x" + "0".repeat(64);
     if (method === "eth_getCode") return codes[String(params[0]).toLowerCase()] ?? "0x";
     throw new Error(method);
   };
@@ -250,6 +250,13 @@ describe("USDC code-hash check", () => {
   test("the committed pin file is well formed (null or 32-byte hex)", () => {
     expect(staticFindings(loadConfigs(realDir)).filter((x) => x.rule.startsWith("format:") && !x.ok)).toEqual([]);
   });
+  test("the committed pins are real hashes, never null", () => {
+    const pins = JSON.parse(readFileSync(join(realDir, "usdc-hashes.json"), "utf8"));
+    for (const k of ["proxyCodeHash", "implementationCodeHash"]) {
+      expect(pins[k], `${k} must be pinned`).not.toBeNull();
+      expect(pins[k]).toMatch(/^0x[0-9a-f]{64}$/);
+    }
+  });
   test("a malformed pin fails the static format rule", () => {
     const c = fixture((f) => { f["usdc-hashes.json"].proxyCodeHash = "0x1234"; });
     expect(staticFindings(c).some((x) => x.rule === "format:proxyCodeHash" && !x.ok)).toBe(true);
@@ -276,5 +283,61 @@ describe("cli arguments", () => {
     const out = mkdtempSync(join(tmpdir(), "cc-out-"));
     const r = spawnSync("bun", [join(repo, "scripts/ci/config-check.ts"), "--offline", "--out-dir", out], { encoding: "utf8" });
     expect(r.status).toBe(0);
+  });
+});
+
+describe("httpRpc retry and spacing", () => {
+  const ok = () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x1" }), { status: 200 });
+  const limited = () => new Response("slow down", { status: 429 });
+  function harness(responses: Array<() => Response>) {
+    const sleeps: number[] = [];
+    let calls = 0;
+    const fetchImpl = (async () => {
+      const r = responses[Math.min(calls, responses.length - 1)];
+      calls++;
+      return r();
+    }) as unknown as typeof fetch;
+    const rpc = httpRpc("https://rpc.example/key-SECRET", {
+      fetchImpl, sleep: async (ms) => { sleeps.push(ms); }, random: () => 0.5, minSpacingMs: 0,
+    });
+    return { rpc, sleeps, calls: () => calls };
+  }
+  test("429 twice then success returns the result after backoff", async () => {
+    const h = harness([limited, limited, ok]);
+    expect(await h.rpc("eth_blockNumber", [])).toBe("0x1");
+    expect(h.calls()).toBe(3);
+    expect(h.sleeps.length).toBe(2);
+    expect(h.sleeps[1]).toBeGreaterThan(h.sleeps[0]);
+  });
+  test("gives up after 6 tries and never leaks the URL", async () => {
+    const h = harness([limited]);
+    let msg = "";
+    try { await h.rpc("eth_call", []); } catch (e) { msg = (e as Error).message; }
+    expect(h.calls()).toBe(6);
+    expect(msg).toMatch(/http 429/);
+    expect(msg).not.toMatch(/SECRET|rpc\.example/);
+  });
+  test("a non-retryable status fails at once", async () => {
+    const h = harness([() => new Response("no", { status: 400 })]);
+    await expect(h.rpc("eth_call", [])).rejects.toThrow(/http 400/);
+    expect(h.calls()).toBe(1);
+  });
+  test("concurrent calls are serialized and spaced", async () => {
+    let inFlight = 0, maxInFlight = 0;
+    const gaps: number[] = [];
+    const fetchImpl = (async () => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
+      inFlight--;
+      return ok();
+    }) as unknown as typeof fetch;
+    const rpc = httpRpc("http://x", { fetchImpl, sleep: async (ms) => { gaps.push(ms); }, minSpacingMs: 250 });
+    await Promise.all([rpc("a", []), rpc("b", []), rpc("c", [])]);
+    expect(maxInFlight).toBe(1);
+    expect(gaps).toEqual([250, 250, 250]);
+  });
+  test("redactUrl keeps only the origin", () => {
+    expect(redactUrl("https://rpc.example/v2/key-SECRET?k=1")).toBe("https://rpc.example");
+    expect(redactUrl("garbage")).toBe("<invalid-url>");
   });
 });

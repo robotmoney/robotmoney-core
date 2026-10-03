@@ -15,7 +15,7 @@
 //   minTvlUsd floor.
 //
 // USDC code-hash rule (live, every chain): USDC is the one canonical constant on every chain, so
-// the proxy at USDC and the implementation behind its EIP-1967 slot must have the code hashes
+// the proxy at USDC and the implementation behind its FiatTokenProxy slot must have the code hashes
 // pinned in config/usdc-hashes.json. A mock token fails this rule. An unpinned (null) hash is
 // refused too. Pin with --print-usdc-hashes against Base mainnet, then review the diff.
 //
@@ -33,8 +33,12 @@ import { join, resolve } from "node:path";
 
 export const BASE_CHAIN_ID = 8453;
 export const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-/** EIP-1967 implementation slot: keccak256("eip1967.proxy.implementation") - 1. */
-export const EIP1967_IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+/**
+ * Implementation slot of Circle's FiatTokenProxy: keccak256("org.zeppelinos.proxy.implementation").
+ * It is NOT the EIP-1967 slot: on Base the EIP-1967 slot reads zero for USDC. Verified on Base
+ * mainnet: this slot holds 0x2Ce6311ddAE708829bc0784C967b7d77D19FD779, equal to implementation().
+ */
+export const USDC_IMPL_SLOT = "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3";
 export const FORBIDDEN_SYMBOLS = ["wsol", "bnkr", "juno", "rm"];
 const FORBIDDEN_KEY = /chronicle|v4|aerodrome|slipstream|^mainnet$|^devnet$|^wsol|^bnkr|^juno/i;
 const HASH_RE = /^0x[0-9a-f]{64}$/;
@@ -157,19 +161,95 @@ export function staticFindings(c: Configs): Finding[] {
 
 export type Rpc = (method: string, params: unknown[]) => Promise<string>;
 
-export function httpRpc(url: string): Rpc {
+export interface HttpRpcOptions {
+  /** Injected for tests. Defaults to the global fetch. */
+  fetchImpl?: typeof fetch;
+  /** Injected for tests. Defaults to setTimeout. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Injected for tests. Returns a number in [0, 1). Defaults to Math.random. */
+  random?: () => number;
+  /** Maximum attempts per call, first try included. Default 6. */
+  maxTries?: number;
+  /** First backoff delay in ms. It doubles on each retry. Default 500. */
+  baseDelayMs?: number;
+  /** Minimum gap between the starts of two requests in ms. Default 250. */
+  minSpacingMs?: number;
+}
+
+/** True for failures worth retrying: rate limit (429) and transient server or network errors. */
+function isRetryable(status: number | null): boolean {
+  return status === null || status === 429 || status >= 500;
+}
+
+/** Spacing between requests in ms. Env CONFIG_CHECK_RPC_SPACING_MS overrides (tests use 0 for a local fake). */
+function spacingFromEnv(): number {
+  const v = Number(process.env.CONFIG_CHECK_RPC_SPACING_MS);
+  return process.env.CONFIG_CHECK_RPC_SPACING_MS !== undefined && Number.isFinite(v) && v >= 0 ? v : 150;
+}
+
+/**
+ * JSON-RPC client over HTTP. Requests are serialized and spaced so a public endpoint is not
+ * flooded. A 429, a 5xx or a network error is retried with exponential backoff and full jitter,
+ * up to `maxTries` attempts. The URL is never put in an error message (it may carry a key).
+ */
+export function httpRpc(url: string, opts: HttpRpcOptions = {}): Rpc {
+  const doFetch = opts.fetchImpl ?? fetch;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const random = opts.random ?? Math.random;
+  const maxTries = opts.maxTries ?? 6;
+  const baseDelayMs = opts.baseDelayMs ?? 500;
+  const minSpacingMs = opts.minSpacingMs ?? spacingFromEnv();
   let id = 0;
-  return async (method, params) => {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
-    });
-    if (!res.ok) throw new Error(`rpc ${method} http ${res.status}`);
-    const j = (await res.json()) as { result?: string; error?: { message: string } };
-    if (j.error) throw new Error(`rpc ${method}: ${j.error.message}`);
-    return j.result as string;
+  let queue: Promise<unknown> = Promise.resolve();
+
+  const attempt = async (method: string, params: unknown[]): Promise<string> => {
+    let lastErr = "";
+    for (let t = 0; t < maxTries; t++) {
+      if (t > 0) await sleep(Math.floor(random() * baseDelayMs * 2 ** (t - 1)) + 1);
+      let status: number | null = null;
+      try {
+        const res = await doFetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
+        });
+        status = res.status;
+        if (!res.ok) {
+          lastErr = `rpc ${method} http ${res.status}`;
+          if (!isRetryable(status)) throw new Error(lastErr);
+          continue;
+        }
+        const j = (await res.json()) as { result?: string; error?: { message: string } };
+        if (j.error) throw new Error(`rpc ${method}: ${j.error.message}`);
+        return j.result as string;
+      } catch (e) {
+        if (status !== null) throw e; // an HTTP-level or JSON-RPC error that is final
+        lastErr = `rpc ${method} network error`;
+      }
+    }
+    throw new Error(`${lastErr} (gave up after ${maxTries} tries)`);
   };
+
+  return (method, params) => {
+    const run = queue.then(async () => {
+      try {
+        return await attempt(method, params);
+      } finally {
+        if (minSpacingMs > 0) await sleep(minSpacingMs);
+      }
+    });
+    queue = run.catch(() => undefined);
+    return run;
+  };
+}
+
+/** Host only: a keyed RPC URL carries its secret in the path or query, so never record it. */
+export function redactUrl(u: string): string {
+  try {
+    return new URL(u).origin;
+  } catch {
+    return "<invalid-url>";
+  }
 }
 
 const pad = (hex: string) => hex.replace(/^0x/, "").toLowerCase().padStart(64, "0");
@@ -329,7 +409,7 @@ export function keccakHex(hex: string): string {
 /** Reads the live proxy and implementation code hashes of USDC on the target chain. */
 export async function readUsdcHashes(rpc: Rpc, tag: string): Promise<{ proxy: string; implementation: string; implementationAddress: string }> {
   const proxyCode = await rpc("eth_getCode", [USDC, tag]);
-  const slot = await rpc("eth_getStorageAt", [USDC, EIP1967_IMPL_SLOT, tag]);
+  const slot = await rpc("eth_getStorageAt", [USDC, USDC_IMPL_SLOT, tag]);
   const implementationAddress = addrOf(slot.replace(/^0x/, "").padStart(64, "0"));
   const implCode = await rpc("eth_getCode", [implementationAddress, tag]);
   return {
@@ -440,7 +520,7 @@ async function main(): Promise<number> {
   const report = {
     checkedAt: new Date().toISOString(),
     configDir: dir,
-    rpc: offline ? null : rpcUrl,
+    rpc: offline ? null : redactUrl(rpcUrl),
     blockNumber: block,
     ok: failed.length === 0,
     findings,

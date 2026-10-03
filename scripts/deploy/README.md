@@ -61,4 +61,4 @@ Live checks: code at USDC, the factory and the router, each pool's fee, factory 
 
 ### USDC code-hash check
 
-USDC is one constant on every chain, so the check runs on every chain. The proxy code hash at the USDC address and the implementation code hash behind its EIP-1967 slot must equal the values pinned in `config/usdc-hashes.json`. A mock token at the USDC address fails. A `null` pin is refused. Pin the two values once from Base mainnet with `--print-usdc-hashes`, review the diff, and commit. Re-pin only after an owner-approved USDC upgrade.
+USDC is one constant on every chain, so the check runs on every chain. The proxy code hash at the USDC address and the implementation code hash behind its FiatTokenProxy implementation slot must equal the values pinned in `config/usdc-hashes.json`. A mock token at the USDC address fails. A `null` pin is refused. Pin the two values once from Base mainnet with `--print-usdc-hashes`, review the diff, and commit. Re-pin only after an owner-approved USDC upgrade.
