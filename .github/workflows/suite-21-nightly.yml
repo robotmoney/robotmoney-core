@@ -105,18 +105,18 @@ jobs:
             suite-28-core-stages.yml
             suite-30-check-sha-green.yml
           )
-          FAILED=0
+          FAILED_LIST=()
           for workflow in "${SUITES[@]}"; do
             echo "Dispatching $workflow..."
             if ! gh api -X POST \
               "repos/${REPO}/actions/workflows/${workflow}/dispatches" \
               --field ref="${REF}"; then
               echo "::error::failed to dispatch $workflow"
-              FAILED=$((FAILED + 1))
+              FAILED_LIST+=("$workflow")
             fi
           done
-          if [ "$FAILED" -gt 0 ]; then
-            echo "::error::${FAILED} suite dispatch(es) failed; the nightly did not start the whole suite"
+          if [ "${#FAILED_LIST[@]}" -gt 0 ]; then
+            echo "::error::${#FAILED_LIST[@]} suite dispatch(es) failed; the nightly did not start the whole suite: ${FAILED_LIST[*]}"
             exit 1
           fi
           echo "All dispatches sent."

@@ -138,4 +138,34 @@ for (const f of walk("docs/technical")) {
 }
 ok("the nightly drift alarm text is absent from the docs and the forge test headers");
 
+// 6. a failed dispatch fails the job and names the workflow (core 1495). The real step script runs against a stub `gh`.
+{
+  const nightlyText = readFileSync(NIGHTLY, "utf8");
+  if (/\|\|\s*echo\s+["']?WARNING/i.test(nightlyText)) bad("the nightly still swallows a dispatch failure with '|| echo WARNING'");
+  ok("no '|| echo WARNING' swallow in the nightly");
+  const script = run(["yq", "-r", '.jobs."dispatch-all-suites".steps[] | select(.name == "Dispatch suites") | .run', NIGHTLY]);
+  if (script.code || !script.out.includes("gh api")) bad(`could not read the dispatch step script: ${script.out}`);
+  const stubDir = join(tmp, "stub-bin");
+  mkdirSync(stubDir, { recursive: true });
+  const dispatchRun = (failing: string[]) => {
+    writeFileSync(join(stubDir, "gh"), `#!/usr/bin/env bash\nfor f in ${failing.map((w) => `"${w}"`).join(" ")} _; do case "$*" in *"/$f/dispatches"*) exit 1;; esac; done\nexit 0\n`, { mode: 0o755 });
+    const r = Bun.spawnSync(["bash", "-c", script.out], {
+      env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}`, REPO: "o/r", REF: "dev", GH_TOKEN: "stub" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString() };
+  };
+  const good = dispatchRun([]);
+  if (good.code !== 0 || !good.out.includes("All dispatches sent.")) bad(`all dispatches succeeding did not exit 0: ${good.out}`);
+  ok("all dispatches succeeding exits 0");
+  const two = dispatchRun(["suite-12-openclaw.yml", "config-check.yml"]);
+  if (two.code === 0) bad("two failed dispatches still exited 0");
+  if (!two.out.includes("suite-12-openclaw.yml") || !two.out.includes("config-check.yml") || !/2 suite dispatch/.test(two.out))
+    bad(`the failure did not list both workflows: ${two.out}`);
+  ok("two failed dispatches exit non-zero and list both workflows, after trying every suite");
+  if (!two.out.includes("Dispatching suite-30-check-sha-green.yml")) bad("the loop stopped at the first failure instead of trying every suite");
+  ok("a failure does not stop the remaining dispatches");
+}
+
 console.log(`nightly dispatch list selftest: ${pass} checks passed`);
