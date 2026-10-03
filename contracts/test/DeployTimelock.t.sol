@@ -947,6 +947,17 @@ contract DeployTimelockTest is SafeFixture {
         _runWithSafe(stub, owners, FIXTURE_THRESHOLD);
     }
 
+    /// @notice A mock Safe that answers VERSION, getOwners and getThreshold with exactly the
+    ///         expected values is still not a Safe: the proxy code hash gate refuses it.
+    function test_deploy_rejectsMockSafeWithMatchingOwnersAndThreshold() public {
+        address[] memory owners = _fixtureOwners();
+        MockSafeAnswers mock = new MockSafeAnswers(owners, FIXTURE_THRESHOLD);
+        assertEq(mock.getThreshold(), FIXTURE_THRESHOLD, "mock mirrors the expected threshold");
+        assertEq(mock.getOwners().length, owners.length, "mock mirrors the expected owners");
+        vm.expectRevert(bytes("SAFE_ADDRESS is not a SafeProxy 1.4.1: codehash mismatch"));
+        _runWithSafe(address(mock), owners, FIXTURE_THRESHOLD);
+    }
+
     /// @notice A Safe proxy that does not delegate to the canonical SafeL2 singleton.
     function test_deploy_rejectsWrongSingleton() public {
         address other = _newDefaultSafe();
@@ -2292,5 +2303,28 @@ contract DeployTimelockVaultListInputTest is DeployTimelockRunEntrypointBase {
         vm.setEnv("RM_S5_NEVER_AGENT_ADDRESSES", "none");
         vm.expectRevert(bytes("VAULT_ADDRESSES must be set: every vault, comma-separated"));
         RunEntrypointRelay(deployer).runFrom(harness, "RM_S5_NEVER_");
+    }
+}
+
+/// @dev A stand-in that only answers the Safe read calls. Used as a negative: it must be refused.
+contract MockSafeAnswers {
+    address[] internal owners_;
+    uint256 internal threshold_;
+
+    constructor(address[] memory o, uint256 t) {
+        owners_ = o;
+        threshold_ = t;
+    }
+
+    function VERSION() external pure returns (string memory) {
+        return "1.4.1";
+    }
+
+    function getOwners() external view returns (address[] memory) {
+        return owners_;
+    }
+
+    function getThreshold() external view returns (uint256) {
+        return threshold_;
     }
 }
