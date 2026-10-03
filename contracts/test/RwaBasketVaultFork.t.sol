@@ -4,6 +4,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {ForkSelect} from "./helpers/ForkSelect.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -40,7 +41,7 @@ contract RwaBasketVaultFork is Test {
 
     function setUp() public {
         string memory rpc = vm.envOr("FORK_RPC_URL", string("http://127.0.0.1:8545"));
-        vm.createSelectFork(rpc);
+        if (!ForkSelect.selectOrSkip(rpc)) return;
         // The pinned fixture is already at the pinned block. A live fork selects it explicitly.
         if (bytes(vm.envOr("FORK_RPC_URL", string(""))).length != 0) {
             vm.rollFork(FORK_BLOCK);

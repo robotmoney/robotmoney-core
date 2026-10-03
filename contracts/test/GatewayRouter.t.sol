@@ -2,6 +2,7 @@
 // Canonical: docs/architecture.md §5 — On-Chain Gateway, §4.2 — Portfolio Router
 pragma solidity ^0.8.24;
 
+import {ForkSelect} from "./helpers/ForkSelect.sol";
 import {Test, Vm} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -2767,7 +2768,7 @@ contract GatewayRouterSplitStagesForkTest is Test {
     }
 
     function test_fork_splitStages_routerDepositThenWithdraw_succeed() public {
-        vm.createSelectFork(_forkRpcUrl());
+        if (!ForkSelect.selectOrSkip(_forkRpcUrl())) return;
 
         CoreStages stages = new CoreStages();
         CoreStages.Stack memory s = stages.run(admin, pauser, agent, shareReceiver, BASE_USDC);

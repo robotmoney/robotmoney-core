@@ -3,6 +3,7 @@
 // Covers: issue #656 — CI fork test for ERC-4626 seed deposit precondition
 pragma solidity ^0.8.24;
 
+import {ForkSelect} from "./helpers/ForkSelect.sol";
 import {VaultTestParams} from "./helpers/VaultTestParams.sol";
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -56,8 +57,7 @@ contract DeploySeedDeposit is Test {
     ///      Returns false (skip signal) when no RPC URL is configured.
     function _trySelectFork() internal returns (bool) {
         string memory rpc = _forkRpcUrl();
-        vm.createSelectFork(rpc);
-        return true;
+        return ForkSelect.selectOrSkip(rpc);
     }
 
     /// @dev Shared setup: create the deploy script, named test accounts,
