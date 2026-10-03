@@ -34,7 +34,7 @@
 #     FUSION_VAULT_ADDRESSES, FUSION_SUBMITTER_ADDRESS,
 #     FUSION_RELEASE_ADDRESS, FUSION_UNAUTHORIZED_SUBMITTER,
 #     FUSION_UNAUTHORIZED_RELEASER, FUSION_GOVERN_CMD
-#       (FUSION_GOVERN_CMD is the govern release command, core-stack.sh
+#       (FUSION_GOVERN_CMD is the govern release command, bun scripts/stage/core-stack.ts
 #       governance release: the release goes through the real Safe and the
 #       timelock, so no release keystore exists here at all)
 #

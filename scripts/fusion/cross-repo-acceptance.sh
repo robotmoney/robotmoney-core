@@ -104,7 +104,7 @@ record "submit-worker.json" "$worker_out"
 printf '%s\n' "$worker_out" >&2
 
 # The release is a governance action. It goes through the real Safe and the
-# timelock, run by `scripts/stage/core-stack.sh governance release` (publish
+# timelock, run by `bun scripts/stage/core-stack.ts governance release` (publish
 # contracts govern, row release-receipt). A single keystore never releases a
 # receipt: after handover no EOA holds the receipt contract's admin role, so a
 # direct send would only revert. Run the govern row first, then run this script
@@ -129,7 +129,7 @@ else
     release_action="already_released"
     echo "fusion-cross-repo: receipt $receipt_id is already released; no second broadcast" >&2
   else
-    : "${FUSION_GOVERN_CMD:?the release goes through the real Safe and the timelock: set FUSION_GOVERN_CMD to the govern release command (core-stack.sh governance release), or run it first and set FUSION_SKIP_RELEASE=1}"
+    : "${FUSION_GOVERN_CMD:?the release goes through the real Safe and the timelock: set FUSION_GOVERN_CMD to the govern release command (bun scripts/stage/core-stack.ts governance release), or run it first and set FUSION_SKIP_RELEASE=1}"
     # shellcheck disable=SC2086 # the command is a word list by contract
     $FUSION_GOVERN_CMD --receipt-id "$receipt_id" >/dev/null \
       || fail "the govern release row failed for receipt $receipt_id"

@@ -15,7 +15,7 @@
 // and weights are govern rows executed through the real Safe and the timelock, never set by a
 // deployer. The passphrase stays in a 0600 file: only its PATH is passed, never its content.
 //
-// Usage (from the repo root on the stage host; scripts/stage/core-stack.sh execs this file):
+// Usage (from the repo root on the stage host):
 //   core-stack chain up        [--ref REF] [--timeout SECS] [--out-dir DIR]
 //   core-stack chain down      [--out-dir DIR]
 //   core-stack chain status    [--ref REF] [--out-dir DIR]

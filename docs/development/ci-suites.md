@@ -889,9 +889,9 @@ membership and asset config back from the chain. It takes no key.
 ### 28b. Core stack selftest, deleted-path gate and stage tooling tests
 **File:** `.github/workflows/suite-28-core-stack-selftest.yml`
 
-`scripts/stage/core-stack.ts` (Bun TypeScript; `core-stack.sh` is a shim that execs it) is the boot, health, record and parity tool. It deploys and governs by calling publish contracts (devops, Bun TypeScript) with the Twin chain argument list. Jobs:
+`scripts/stage/core-stack.ts` (Bun TypeScript, called directly; the old `core-stack.sh` shim is deleted) is the boot, health, record and parity tool. It deploys and governs by calling publish contracts (devops, Bun TypeScript) with the Twin chain argument list. Jobs:
 - `core-stack-selftest` — `bun test scripts/stage/tests/core-stack.test.ts` against a fake runner standing in for publish contracts: the exact argument list with the `keystore:PATH:PASSFILE` signer, a fresh keystore set per boot, exit-code passthrough, the four-manifest count, the govern row gate (tx hash and receipt status 1 on every row), the usage errors and the record contract with its schema drift guard. Executed-test floor held in the workflow.
-- `deleted-stage-gate` — `bun scripts/stage/check-deleted-stage-scripts.ts .` exits 0 only when the stage ceremony shell, the stage deploy script, the deploy workflow and the Rust harness deployment (forge script calls, demo seeding, faucet funding) are absent and `core-stack.sh` holds no deploy or ceremony logic.
+- `deleted-stage-gate` — `bun scripts/stage/check-deleted-stage-scripts.ts .` exits 0 only when the stage ceremony shell, the stage deploy script, the deploy workflow and the Rust harness deployment (forge script calls, demo seeding, faucet funding) and the `core-stack.sh` shim are absent and `core-stack.ts` holds no deploy or ceremony logic.
 - `stage-tooling-tests` — `bun test scripts/stage/tests`: the govern row parser, the sheet-diff allow-list (stage versus production sheet differ only in parameter lines), the label-diff (verifier labels on stage equal the mainnet set) and the gate.
 
 ---
@@ -1337,5 +1337,10 @@ bun scripts/ci/check-sha-green.ts <sha> [--repo owner/name] [--config path] [--a
 - Exit 1: a required name failed, is missing, or is pending (`queued`, `in_progress`). The output names each one under `FAILING`, `MISSING` or `PENDING`. A name with both a failed and a successful run fails.
 - Exit 2: bad arguments, bad config or an API error.
 - Optional entries that are not green are printed as `optional (does not gate)` and never change the exit code.
+- An entry may carry `"class": "required-on-deploy-paths"` and a `paths` list. `smoke-test-twin-publish` (suite 14 `twin_publish`, the Twin chain publish) is that class: it runs on every push to `dev`, so a deploy sha always carries it, and on a pull request only when a path in the list changed. The list repeats the `changes` job filter of `suite-14-smoke-test.yml`; a unit test asserts every path appears in that workflow.
 - The initial required list is the set of jobs that run unconditionally on push to `dev` (no draft skip, no path filter, no matrix). Failing nightly jobs stay optional.
 - Tests: `bun test scripts/ci/check-sha-green.test.ts`, run by the `check-sha-green-tests` job (suite 30), which fails when zero tests were collected. The same file asserts `dapp-lint-build` and `bun-audit` carry no skip condition and no `continue-on-error`.
+
+### Branch protection for the twin publish check (core 1488)
+
+`smoke-test-twin-publish` must be a required status check on `dev` in GitHub branch protection. That is a GitHub write only the repository owner can do: Settings, Branches, the `dev` rule, "Require status checks to pass", add `smoke-test-twin-publish`. The job is path-gated on pull requests. GitHub treats a skipped job as passing, so the requirement does not block a pull request that touches no deploy path. The `smoke-test-changes` job and the job itself must stay named exactly as they are, because the protection rule matches the check-run name. `scripts/ci/required-checks.json` records the same requirement for `check-sha-green` (class `required-on-deploy-paths`). Until the owner adds the protection rule, only `check-sha-green` enforces it, at deploy time.

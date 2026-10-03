@@ -2,7 +2,7 @@
 #
 # WHY A NEW FILE AND NOT A JOB FOLDED INTO suite-01-02
 # -----------------------------------------------------
-# core-stack (scripts/stage/core-stack.ts, Bun TypeScript; core-stack.sh is a shim) has nothing to do with the forge
+# core-stack (scripts/stage/core-stack.ts, Bun TypeScript) has nothing to do with the forge
 # unit/invariant/coverage gate suite-01-02 runs: it is the stage-deployment
 # verb surface (devops#42), not a Solidity test. It was folded into
 # suite-01-02-forge-tests.yml as a fourth job for convenience when it landed,

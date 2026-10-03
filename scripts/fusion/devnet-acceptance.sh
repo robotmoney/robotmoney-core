@@ -60,7 +60,7 @@
 # Required for the index stage:  FUSION_EXPLORER_API
 # Required for the dapp stage:   FUSION_DAPP_URL
 # Required for the release stage: FUSION_GOVERN_CMD (the govern release
-#   command, `scripts/stage/core-stack.sh governance release`; it is called with
+#   command, `bun scripts/stage/core-stack.ts governance release`; it is called with
 #   `--receipt-id ID` appended and runs publish contracts govern row
 #   release-receipt through the real Safe and the timelock), FUSION_RELEASE_ADDRESS
 #   (an EOA that does NOT hold ADMIN_ROLE on the receipt contract, used only for

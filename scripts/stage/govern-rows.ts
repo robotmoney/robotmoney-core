@@ -1,7 +1,7 @@
 // Govern output parser. Reads the govern run's stdout (one JSON line per row:
 // {"row":"set-quorum","txHash":"0x..","status":1}) and exits non-zero unless
 // every row has a 32-byte tx hash and receipt status 1. Used by
-// scripts/stage/core-stack.sh and asserted by govern-rows.test.ts.
+// bun scripts/stage/core-stack.ts and asserted by govern-rows.test.ts.
 // Canonical: the one-deployment-scheme plan (stage 13 govern).
 
 export interface GovernRow {

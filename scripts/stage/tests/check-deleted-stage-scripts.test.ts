@@ -13,21 +13,19 @@ function tree(files: Record<string, string>): string {
   return root;
 }
 
-const SHIM = '#!/usr/bin/env bash\n# shim\nset -euo pipefail\nexec bun "$(dirname "$0")/core-stack.ts" "$@"\n';
-
-test("a clean tree passes, core-stack.sh may exist as a one-screen shim that execs core-stack.ts", () => {
-  const root = tree({ "scripts/stage/core-stack.sh": SHIM, "scripts/stage/core-stack.ts": "// verbs\nexport const x = 1;\n" });
+test("a clean tree passes with core-stack.ts called directly", () => {
+  const root = tree({ "scripts/stage/core-stack.ts": "// verbs\nexport const x = 1;\n" });
   expect(check(root)).toEqual([]);
 });
 
-test("a long core-stack.sh fails: shell logic crept back", () => {
-  const root = tree({ "scripts/stage/core-stack.sh": SHIM + "echo hi\n".repeat(30) });
-  expect(check(root).join("\n")).toContain("shim");
+test("the core-stack.sh shim is no longer allowed", () => {
+  const root = tree({ "scripts/stage/core-stack.sh": '#!/usr/bin/env bash\nexec bun core-stack.ts "$@"\n' });
+  expect(check(root).join("\n")).toContain("scripts/stage/core-stack.sh must be absent");
 });
 
-test("a core-stack.sh that does not exec core-stack.ts fails", () => {
-  const root = tree({ "scripts/stage/core-stack.sh": "#!/usr/bin/env bash\necho hi\n" });
-  expect(check(root).join("\n")).toContain("must exec core-stack.ts");
+test("a caller that names core-stack.sh fails", () => {
+  const root = tree({ "scripts/fusion/x.sh": "scripts/stage/core-stack.sh governance release\n" });
+  expect(check(root).join("\n")).toContain("core-stack.sh shim");
 });
 
 test("core-stack.ts holding deploy logic fails", () => {
@@ -49,11 +47,6 @@ test("each deleted file fails when it comes back", () => {
 test("a Rust forge deployment in the harness fails", () => {
   const root = tree({ "testing/smoke-test/src/lib.rs": "fn run_forge_deploy_registry() {}\n" });
   expect(check(root).join("\n")).toContain("run_forge_deploy");
-});
-
-test("core-stack.sh holding deploy logic fails", () => {
-  const root = tree({ "scripts/stage/core-stack.sh": "forge script contracts/script/" + "Deploy" + ".s.sol\n" });
-  expect(check(root).join("\n")).toContain("core-stack.sh");
 });
 
 test("an empty tree scans zero files, and the CLI exits 1 because zero checks ran", () => {

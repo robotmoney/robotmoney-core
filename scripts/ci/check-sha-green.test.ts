@@ -89,6 +89,17 @@ describe("parseConfig", () => {
     expect(names).toContain("bun-audit");
     expect(names).toContain("deleted-stage-gate");
   });
+  test("the twin publish job is required-on-deploy-paths with the suite 14 path filter", () => {
+    const c = parseConfig(JSON.parse(readFileSync(resolve(repo, "scripts/ci/required-checks.json"), "utf8")));
+    const twin = c.required.find((s) => s.name === "smoke-test-twin-publish");
+    expect(twin?.class).toBe("required-on-deploy-paths");
+    const wf = readFileSync(resolve(repo, ".github/workflows/suite-14-smoke-test.yml"), "utf8");
+    for (const path of twin?.paths ?? []) expect(wf.includes(path.replace(/\./g, "\\."))).toBe(true);
+  });
+  test("rejects an unknown class and a deploy-paths entry with no paths", () => {
+    expect(() => parseConfig({ version: 1, required: [{ name: "a", class: "x" }], optional: [] })).toThrow();
+    expect(() => parseConfig({ version: 1, required: [{ name: "a", class: "required-on-deploy-paths" }], optional: [] })).toThrow();
+  });
 });
 
 describe("fetchAllCheckRuns pagination", () => {

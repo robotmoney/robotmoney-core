@@ -6,7 +6,7 @@ Stage is the same deployment as mainnet. Only parameters differ. There is one ru
 
 ## What runs on stage
 
-1. `bun scripts/stage/core-stack.ts chain up` (the old `core-stack.sh` is a one-screen shim that execs it) rebuilds `rmpc` from this checkout and boots the smoke harness (`cargo run -p smoke-test -- --full-stack`).
+1. `bun scripts/stage/core-stack.ts chain up` rebuilds `rmpc` from this checkout and boots the smoke harness (`cargo run -p smoke-test -- --full-stack`).
 2. The harness boots the Twin chain. It does not use a fork and does not use a lazy anvil.
 3. The harness mints a **fresh keystore set** with the devops rehearsal key helper. Every boot gets new keys, so a redeploy from a new SHA never reuses a deployer. The keystores are encrypted. The passphrase is random, lives in a 0600 file, and is never an argument or an exported variable.
 4. The harness funds the keys, then calls publish contracts:
@@ -43,7 +43,7 @@ Stage has no second deployment path. These do not exist and a CI gate keeps them
 - a single-key release in the Fusion acceptance script. The release is a govern row.
 - a committed timelock or governance record for chain 918453. Manifests are written by each run.
 
-The stage verbs (chain boot and health, publish and governance calls, parity, the record, dapp and rmpc checks) are Bun TypeScript in `scripts/stage/core-stack.ts` with typed arguments and structured JSON log lines. `scripts/stage/core-stack.sh` is a shim of a few lines that execs it, kept so older callers still work. Neither file holds deploy or ceremony logic. A CI grep gate (`scripts/stage/check-deleted-stage-scripts.ts`) enforces that and caps the shim at 15 lines.
+The stage verbs (chain boot and health, publish and governance calls, parity, the record, dapp and rmpc checks) are Bun TypeScript in `scripts/stage/core-stack.ts` with typed arguments and structured JSON log lines. The old `core-stack.sh` shim is deleted: every caller runs `bun scripts/stage/core-stack.ts` directly. The file holds no deploy or ceremony logic. A CI grep gate (`scripts/stage/check-deleted-stage-scripts.ts`) enforces that and fails if the shim or any mention of it returns.
 
 ## No deployer-set voters
 

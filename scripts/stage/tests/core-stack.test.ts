@@ -389,10 +389,4 @@ describe("the tool holds no deploy or ceremony logic", () => {
       test(`${file} does not match ${re}`, () => expect(re.test(code)).toBe(false));
     }
   }
-  test("core-stack.sh is a one-screen shim that execs bun", () => {
-    const sh = readFileSync(join(HERE, "../core-stack.sh"), "utf8");
-    expect(sh.split("\n").length).toBeLessThanOrEqual(15);
-    expect(sh).toContain("exec ");
-    expect(sh).toContain("core-stack.ts");
-  });
 });

@@ -20,6 +20,9 @@ export interface CheckSpec {
   name?: string;
   prefix?: string;
   source?: string;
+  /** "required-on-deploy-paths": runs on every push, on a pull request only when a path in `paths` changed. */
+  class?: string;
+  paths?: string[];
 }
 
 export interface RequiredChecks {
@@ -55,6 +58,11 @@ export function parseConfig(raw: unknown): RequiredChecks {
     if ((s.name === undefined) === (s.prefix === undefined)) {
       throw new Error(`each entry needs exactly one of name or prefix: ${JSON.stringify(s)}`);
     }
+  }
+  for (const s of c.required) {
+    if (s.class === undefined) continue;
+    if (s.class !== "required-on-deploy-paths") throw new Error(`unknown check class ${s.class}: ${JSON.stringify(s)}`);
+    if (!Array.isArray(s.paths) || s.paths.length === 0) throw new Error(`class required-on-deploy-paths needs a paths list: ${JSON.stringify(s)}`);
   }
   if (c.required.length === 0) throw new Error("required list is empty");
   return c;

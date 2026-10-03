@@ -1,8 +1,8 @@
 // CI grep gate: exits 0 only when the second deployment path is gone.
 // Absent: the stage ceremony shell, deploy-core-stack.sh, the deploy workflow, the
 // Rust harness deployment (forge script calls, demo seeding, faucet funding).
-// The stage verbs are Bun TypeScript (scripts/stage/core-stack.ts). core-stack.sh may exist only as a
-// one-screen shim that execs it. Neither file may hold deploy or ceremony logic.
+// The stage verbs are Bun TypeScript (scripts/stage/core-stack.ts), called directly. The core-stack.sh shim
+// is deleted (core 1488): it must stay absent, and core-stack.ts may not hold deploy or ceremony logic.
 // Usage: bun scripts/stage/check-deleted-stage-scripts.ts [repo-root]
 // Canonical: the one-deployment-scheme plan (S9, core 1488).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -19,6 +19,7 @@ export const MUST_BE_ABSENT = [
   "testing/smoke-test/tests/faucet_eth.rs",
   "testing/smoke-test/tests/faucet_rm.rs",
   "deployments/timelock-918453.json",
+  "scripts/stage/core-stack.sh",
 ];
 
 /** Patterns that must not appear in the harness, clients, scripts or workflows. */
@@ -27,12 +28,10 @@ export const FORBIDDEN_PATTERNS: { re: RegExp; why: string }[] = [
   { re: /seed_demo_depositors|demo-seed-depositors|demo_depositor_key/, why: "demo depositor seeding" },
   { re: /dapp_faucet_key|fund_rm_token/, why: "dapp faucet funding" },
   { re: /fusion-ceremony\.sh|deploy-core-stack\.sh/, why: "a deleted stage script" },
+  { re: /core-stack\.sh/, why: "the deleted core-stack.sh shim (call scripts/stage/core-stack.ts directly)" },
   { re: /deploy-contracts\.yml/, why: "the deleted deploy workflow (deployment is publish contracts in devops)" },
   { re: /timelock-918453/, why: "the stale timelock record fallback" },
 ];
-
-/** Longest the core-stack.sh shim may be. More than this means shell logic crept back. */
-export const SHIM_MAX_LINES = 15;
 
 /** core-stack wraps boot, health, the record and parity only. These strings mean deploy or ceremony logic crept back. */
 export const CORE_STACK_FORBIDDEN = [/forge script/, /cast send/, /fusion-ceremony/, /deploy-core-stack/, /--private-key/];
@@ -85,14 +84,7 @@ export function check(root: string): string[] {
     const text = readFileSync(p, "utf8");
     for (const { re, why } of DOC_FORBIDDEN) if (re.test(text)) out.push(`${rel}: mentions ${why} (${re})`);
   }
-  const sh = join(root, "scripts/stage/core-stack.sh");
-  if (existsSync(sh)) {
-    const text = readFileSync(sh, "utf8");
-    const lines = text.split("\n").length;
-    if (lines > SHIM_MAX_LINES) out.push(`scripts/stage/core-stack.sh is ${lines} lines: it may only be a shim of at most ${SHIM_MAX_LINES} that execs core-stack.ts`);
-    if (!/exec\b[^\n]*core-stack\.ts/.test(text)) out.push("scripts/stage/core-stack.sh must exec core-stack.ts");
-  }
-  for (const f of ["scripts/stage/core-stack.sh", "scripts/stage/core-stack.ts", "scripts/stage/parity.ts"]) {
+  for (const f of ["scripts/stage/core-stack.ts", "scripts/stage/parity.ts"]) {
     const p = join(root, f);
     if (!existsSync(p)) continue;
     const text = readFileSync(p, "utf8")
