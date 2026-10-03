@@ -6,6 +6,7 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {CoreStages} from "./helpers/CoreStages.sol";
+import {ForkSelect} from "./helpers/ForkSelect.sol";
 
 /// @notice Fork regression: the stack the split stages build takes a router deposit and a router
 ///         withdraw through the gateway against the real Base venues and real USDC. It is the
@@ -26,7 +27,7 @@ contract CoreStagesFork is Test {
 
     function setUp() public {
         string memory rpc = vm.envOr("FORK_RPC_URL", string("http://127.0.0.1:8545"));
-        vm.createSelectFork(rpc);
+        if (!ForkSelect.selectOrSkip(rpc)) return;
         if (bytes(vm.envOr("FORK_RPC_URL", string(""))).length != 0) vm.rollFork(FORK_BLOCK);
         stages = new CoreStages();
         s = stages.run(admin, pauser, agent, shareReceiver, BASE_USDC);

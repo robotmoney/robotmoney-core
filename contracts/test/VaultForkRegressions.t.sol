@@ -13,6 +13,7 @@ import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
+import {ForkSelect} from "./helpers/ForkSelect.sol";
 
 /// @title VaultForkRegressions
 /// @notice Fork-level regression suite for vault accounting attack paths.
@@ -82,8 +83,7 @@ contract VaultForkRegressions is Test {
     /// @dev Select the already-running offline golden-fixture RPC.
     function _trySelectFork() internal returns (bool selected) {
         string memory rpc = _forkRpcUrl();
-        vm.createSelectFork(rpc);
-        return true;
+        return ForkSelect.selectOrSkip(rpc);
     }
 
     /// @dev Shared preamble: select fork, fund accounts.

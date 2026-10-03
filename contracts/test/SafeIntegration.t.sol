@@ -17,6 +17,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
+import {ForkSelect} from "./helpers/ForkSelect.sol";
 
 /// @title ISafe — minimal interface for the Safe (Gnosis Safe) multisig contract.
 ///
@@ -204,14 +205,13 @@ contract SafeIntegrationTest is Test {
             if (bytes(s).length > 0) rpc = s;
         } catch {}
         if (bytes(rpc).length == 0) rpc = "http://127.0.0.1:8545";
-        vm.createSelectFork(rpc);
-        return true;
+        return ForkSelect.selectOrSkip(rpc);
     }
 
     /// @dev Deploy the five governed contracts, wire them to a fresh TimelockController
     ///      whose PROPOSER is the deployed 2-of-3 Safe proxy.
     function setUp() public {
-        _trySelectFork();
+        if (!_trySelectFork()) return;
         vm.recordLogs();
 
         // Generate 3 deterministic signing keys.

@@ -23,6 +23,7 @@ import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.so
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
 import {ISafe, ISafeProxyFactory, _ISafeSetup} from "./SafeIntegration.t.sol";
+import {ForkSelect} from "./helpers/ForkSelect.sol";
 
 /// @title GovernanceExecutePathAfterHandover
 /// @notice R7's two halves, proved on one topology built the way the deploy
@@ -108,7 +109,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
 
     function setUp() public {
         string memory rpc = vm.envOr("FORK_RPC_URL", string("http://127.0.0.1:8545"));
-        vm.createSelectFork(rpc);
+        if (!ForkSelect.selectOrSkip(rpc)) return;
 
         timelockScript = new DeployTimelock();
         govScript = new DeployRouterGovernance();
