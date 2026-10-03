@@ -26,7 +26,7 @@ contract ConstPool {
         return _fee;
     }
 
-    function liquidity() external pure returns (uint128) {
+    function liquidity() external pure virtual returns (uint128) {
         return 1e18;
     }
 
