@@ -170,7 +170,7 @@ export interface HttpRpcOptions {
   random?: () => number;
   /** Maximum attempts per call, first try included. Default 6. */
   maxTries?: number;
-  /** First backoff delay in ms. It doubles on each retry. Default 500. */
+  /** First backoff delay in ms. It doubles on each retry. Default 1000. */
   baseDelayMs?: number;
   /** Minimum gap between the starts of two requests in ms. Default 250. */
   minSpacingMs?: number;
@@ -184,28 +184,34 @@ function isRetryable(status: number | null): boolean {
 /** Spacing between requests in ms. Env CONFIG_CHECK_RPC_SPACING_MS overrides (tests use 0 for a local fake). */
 function spacingFromEnv(): number {
   const v = Number(process.env.CONFIG_CHECK_RPC_SPACING_MS);
-  return process.env.CONFIG_CHECK_RPC_SPACING_MS !== undefined && Number.isFinite(v) && v >= 0 ? v : 150;
+  return process.env.CONFIG_CHECK_RPC_SPACING_MS !== undefined && Number.isFinite(v) && v >= 0 ? v : 300;
 }
 
 /**
  * JSON-RPC client over HTTP. Requests are serialized and spaced so a public endpoint is not
  * flooded. A 429, a 5xx or a network error is retried with exponential backoff and full jitter,
- * up to `maxTries` attempts. The URL is never put in an error message (it may carry a key).
+ * up to `maxTries` attempts (equal jitter, honors Retry-After). The URL is never put in an error message (it may carry a key).
  */
 export function httpRpc(url: string, opts: HttpRpcOptions = {}): Rpc {
   const doFetch = opts.fetchImpl ?? fetch;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const random = opts.random ?? Math.random;
   const maxTries = opts.maxTries ?? 6;
-  const baseDelayMs = opts.baseDelayMs ?? 500;
+  const baseDelayMs = opts.baseDelayMs ?? 1000;
   const minSpacingMs = opts.minSpacingMs ?? spacingFromEnv();
   let id = 0;
   let queue: Promise<unknown> = Promise.resolve();
 
   const attempt = async (method: string, params: unknown[]): Promise<string> => {
     let lastErr = "";
+    let retryAfterMs = 0;
     for (let t = 0; t < maxTries; t++) {
-      if (t > 0) await sleep(Math.floor(random() * baseDelayMs * 2 ** (t - 1)) + 1);
+      if (t > 0) {
+        const cap = baseDelayMs * 2 ** (t - 1);
+        const jittered = Math.floor(cap / 2 + (random() * cap) / 2);
+        await sleep(Math.max(jittered, retryAfterMs));
+      }
+      retryAfterMs = 0;
       let status: number | null = null;
       try {
         const res = await doFetch(url, {
@@ -216,6 +222,8 @@ export function httpRpc(url: string, opts: HttpRpcOptions = {}): Rpc {
         status = res.status;
         if (!res.ok) {
           lastErr = `rpc ${method} http ${res.status}`;
+          const ra = Number(res.headers.get("retry-after"));
+          retryAfterMs = Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 30_000) : 0;
           if (!isRetryable(status)) throw new Error(lastErr);
           continue;
         }
