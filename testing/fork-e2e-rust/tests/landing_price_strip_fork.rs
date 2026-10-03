@@ -195,23 +195,22 @@ fn landing_price_strip_cbbtc_pool_exists_at_fork_block() {
 
     // cbBTC is the smaller pool, most likely to be absent if the fork manifest
     // drifts; assert it returns a positive sqrtPriceX96.
-    for id in ["cbbtc-usdc"] {
-        let pair = fixture
-            .pairs
-            .iter()
-            .find(|p| p.id == id)
-            .unwrap_or_else(|| panic!("fixture missing pair {id}"));
-        let call = IUniswapV3PoolSlot0::slot0Call {};
-        let ret = fx
-            .rpc()
-            .eth_call(caller, pair.pool, call.abi_encode().into())
-            .unwrap_or_else(|e| panic!("slot0 read failed for {id} ({}): {e}", pair.pool));
-        let decoded = IUniswapV3PoolSlot0::slot0Call::abi_decode_returns(&ret, true)
-            .unwrap_or_else(|e| panic!("slot0 decode failed for {id}: {e}"));
-        assert!(
-            U256::from(decoded.sqrtPriceX96) > U256::ZERO,
-            "{id} pool {} has no liquidity at fork block — manifest drift?",
-            pair.pool
-        );
-    }
+    let id = "cbbtc-usdc";
+    let pair = fixture
+        .pairs
+        .iter()
+        .find(|p| p.id == id)
+        .unwrap_or_else(|| panic!("fixture missing pair {id}"));
+    let call = IUniswapV3PoolSlot0::slot0Call {};
+    let ret = fx
+        .rpc()
+        .eth_call(caller, pair.pool, call.abi_encode().into())
+        .unwrap_or_else(|e| panic!("slot0 read failed for {id} ({}): {e}", pair.pool));
+    let decoded = IUniswapV3PoolSlot0::slot0Call::abi_decode_returns(&ret, true)
+        .unwrap_or_else(|e| panic!("slot0 decode failed for {id}: {e}"));
+    assert!(
+        U256::from(decoded.sqrtPriceX96) > U256::ZERO,
+        "{id} pool {} has no liquidity at fork block — manifest drift?",
+        pair.pool
+    );
 }
