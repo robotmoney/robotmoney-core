@@ -1825,6 +1825,22 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "InsufficientGas",
+    inputs: [
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "required",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "InvalidAmount",
     inputs: [],
   },
@@ -5451,6 +5467,22 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "InsufficientGas",
+    inputs: [
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "required",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "InvalidCap",
     inputs: [],
   },
@@ -7266,6 +7298,22 @@ export const routerAbiGenerated = [
     type: "error",
     name: "FailedInnerCall",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "InsufficientGas",
+    inputs: [
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "required",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
   },
   {
     type: "error",
