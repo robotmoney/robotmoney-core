@@ -18,6 +18,10 @@ export const SET_REGISTRY_ALLOWLIST: { file: string; reason: string }[] = [
     file: "scripts/deploy/assert-timelock-roles.ts",
     reason: "post-deploy verifier: an eth_call probe that a second setRegistry reverts; it never sends the call",
   },
+  {
+    file: "scripts/deploy/twin-chain-proofs.test.ts",
+    reason: "names the verifier probe in a skipIf test title; the test only runs assert-timelock-roles.ts",
+  },
   { file: "scripts/deploy/core-stages.test.ts", reason: "unit test of that verifier, with an injected reader" },
 ];
 
