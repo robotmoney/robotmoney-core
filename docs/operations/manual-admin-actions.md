@@ -118,8 +118,8 @@ contract-enforced rather than operational convention.
    log whose second topic is the deployer, plus every
    `AgentOwnershipTransferred` log whose third topic is the deployer, keeping
    only the agents whose `agentOwner(agent)` is still the deployer (the
-   `deployer_owned_agents` helper in `scripts/stage/fusion-ceremony.sh` does
-   exactly this). Deploy.s.sol's deploy agent is among them unless it was
+   `deployer_owned_agents` helper in the devops publish-contracts CLI does
+   exactly this). The gateway stage's deploy agent is among them unless it was
    already revoked or handed over.
 
    ```bash
@@ -209,8 +209,8 @@ roster, and that each signer has acknowledged the playbook.
 
 ## 5. Retired v1 vault — indefinite feed + pool-liquidity maintenance
 
-**What.** After a v1 vault is retired during the unified-Vault (ADR-0010)
-migration, keep every dependency its redemptions need — the Chronicle deSPXA feed
+**What.** After a v1 vault is retired when the v2 core stack replaces it
+(ADR-0010, the unified-Vault proposal, is Rejected), keep every dependency its redemptions need — the Chronicle deSPXA feed
 and the Aerodrome/execution-pool liquidity — funded and live until that vault's
 `totalSupply()` reaches zero.
 

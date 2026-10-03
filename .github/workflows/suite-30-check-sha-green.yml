@@ -1,0 +1,39 @@
+# Canonical: docs/development/ci-suites.md (check-sha-green), core 1502.
+# Runs the fixture tests of scripts/ci/check-sha-green.ts. The devops publish plan job
+# calls that script with DEPLOY_SHA before any approval.
+name: check-sha-green-tests
+
+on:
+  push:
+    branches: [dev, "dev-phase-*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CI_CLASS: feature-correctness
+
+permissions:
+  contents: read
+
+jobs:
+  check-sha-green-tests:
+    name: check-sha-green-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: bun test with a nonzero-tests guard
+        run: |
+          set -euo pipefail
+          bun test scripts/ci/check-sha-green.test.ts 2>&1 | tee test.log
+          # Fail when no test was collected: a green run of zero tests proves nothing.
+          pass=$(grep -Eo '^ *[0-9]+ pass' test.log | grep -Eo '[0-9]+' || echo 0)
+          if [ "${pass:-0}" -lt 1 ]; then
+            echo "check-sha-green-tests: zero tests ran" >&2
+            exit 1
+          fi

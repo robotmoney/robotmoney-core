@@ -38,10 +38,8 @@ security design. Veda (BoringVault) was evaluated as an off-the-shelf
 provider for the Portfolio Router layer; the team chose to build in-house,
 diverging from Veda primarily by not issuing an outer share token.
 
-Planned evolution: `docs/adr/ADR-0010-unified-vault-architecture.md`
-(Proposed) extends this vault-plus-adapter pattern to every vault — basket
-vaults become a single unified `Vault` holding per-asset position adapters
-instead of `BasketVault` subclasses.
+ADR-0010 proposed extending this vault-plus-adapter pattern to every vault. It
+is Rejected and its code is deleted: basket vaults stay `BasketVault` subclasses.
 
 **Enzyme Finance** uses a two-contract model per fund: `VaultProxy` (persistent
 asset holder, ERC-20 shares) and `ComptrollerProxy` (accounting, fee accrual,
@@ -180,7 +178,7 @@ collects the exact fee. No depositor governance exists.
 ### 2.4 Fee Architecture
 
 **Robot Money** currently ships exit fees only. The fee amount is bounded and
-disclosed before signing. Management fees and performance fees are explicitly
+disclosed before signing (the live rmUSDC vault charges 25 bps, 0.25%). Management fees and performance fees are explicitly
 deferred to a future phase and require a separate ADR before implementation.
 Fee recipient changes are admin-timelock operations. This is the most
 conservative fee model in the comparison.

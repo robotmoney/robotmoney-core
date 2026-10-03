@@ -1379,7 +1379,7 @@ contract PortfolioRouterTest is Test {
         vm.startPrank(admin);
         registry.registerVault(address(rwa), meta);
         // Non-Active status; isRouterEligible stays false (the registry
-        // default). This mirrors DeployDemoExtraVaults' RWA placeholder.
+        // default). This is a plain basket-row placeholder.
         registry.setVaultStatus(address(rwa), VaultRegistry.VaultStatus.Paused);
         vm.stopPrank();
     }

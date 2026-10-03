@@ -46,7 +46,7 @@ use crate::fork_manifest::{ForkManifest, ManifestError};
 pub const BASE_USDC_ADDR: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 /// Arachnid deterministic-deployment-proxy (CREATE2 factory).
-/// Used by `DeployDemoUniswapV3Stubs.s.sol` to deploy stub Uniswap V3 pools
+/// Retained as a canonical CREATE2 factory for deterministic deploys
 /// at pre-computable addresses (issue #531). The bytecode is the canonical
 /// Nick Johnson proxy; the address is the same on every EVM chain that has
 /// had it deployed via the signed deployment transaction. We inject it into
@@ -431,7 +431,7 @@ fn build_alloc_from_anvil(
 
     // 2b. Arachnid deterministic-deployment-proxy (issue #531).
     //     Pre-install the CREATE2 factory at the well-known address so that
-    //     `DeployDemoUniswapV3Stubs.s.sol` can deploy stub Uniswap V3 pools
+    //     deterministic CREATE2 deploys can run
     //     via `ARACHNID_FACTORY.call(salt ++ initcode)` during the smoke-test
     //     fixture boot.  The factory bytecode is the canonical 67-byte
     //     runtime; the balance is zero (the factory does not hold ETH).

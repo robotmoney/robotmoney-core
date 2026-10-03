@@ -4,7 +4,7 @@ title: "ShortlistMockPool"
 
 # ShortlistMockPool
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0721b5607579ae8fe57f7d16428d23a62c533404/contracts/test/ProtocolAssetVaultShortlist.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/ProtocolAssetVaultShortlist.t.sol)
 
 <i>
 
@@ -65,6 +65,34 @@ constructor(address token0_, address token1_, uint24 fee_);
 | token0_ | `address` |  |
 | token1_ | `address` |  |
 | fee_ | `uint24` |  |
+
+<a id="setcardinality-uint16"></a>
+
+### setCardinality
+
+```solidity
+function setCardinality(uint16 c) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `uint16` |  |
+
+<a id="setliquidity-uint128"></a>
+
+### setLiquidity
+
+```solidity
+function setLiquidity(uint128 l) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| l | `uint128` |  |
 
 <a id="fee"></a>
 

@@ -37,6 +37,17 @@
 name: opencode-headless-deposit-read
 
 on:
+  # Nightly job (b), core issue 1496: reused by suite-NN-nightly-fresh-snapshot.yml
+  # with fresh_snapshot=true so this suite boots the Twin chain from a snapshot
+  # taken at the latest Base block instead of the checked-in pin. Steps are not
+  # copied: the nightly calls this very workflow.
+  workflow_call:
+    inputs:
+      fresh_snapshot:
+        description: "Apply the nightly fresh snapshot overlay before booting a chain."
+        type: boolean
+        required: false
+        default: false
   schedule:
     - cron: "17 3 * * *"  # nightly
   workflow_dispatch:
@@ -119,6 +130,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
+        uses: ./.github/actions/apply-fresh-snapshot
+        with:
+          enabled: ${{ inputs.fresh_snapshot == true }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -148,6 +163,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
+        uses: ./.github/actions/apply-fresh-snapshot
+        with:
+          enabled: ${{ inputs.fresh_snapshot == true }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -156,6 +175,9 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
+
+      - name: Install Bun (core stage runner)
+        uses: oven-sh/setup-bun@v2
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
@@ -188,7 +210,7 @@ jobs:
       # Issue #469: derive ADMIN/PAUSER/SHARE_RECEIVER from Anvil's funded
       # accounts, but DO NOT pre-bake AGENT_ADDRESS from an Anvil account.
       # The agent EOA is generated fresh in a later step and that generated
-      # address is what Deploy.s.sol authorizes — this is the proof that the
+      # address is what the gateway stage authorizes — this is the proof that the
       # entire onboarding path (key generation -> authorizeAgent -> deposit)
       # works against a single identity.
       - name: Derive deploy addresses from Anvil accounts
@@ -219,7 +241,7 @@ jobs:
       #      passphrase under RMPC_KEYSTORE_PASSPHRASE.
       #   3. Run rmpc-keystore-import with the desired keystore path as
       #      argv[1] and capture the printed address from stdout.
-      #   4. Persist the captured address as AGENT_ADDRESS so Deploy.s.sol
+      #   4. Persist the captured address as AGENT_ADDRESS so the gateway stage
       #      authorizes THIS key (not a pre-baked Anvil account).
       # A non-empty 0x[0-9a-fA-F]{40} address and an existing keystore file
       # are both required; either being missing fails the step.
@@ -270,7 +292,7 @@ jobs:
           # run reverts with ERC20InsufficientBalance unless the generated key
           # actually holds USDC. The fork-state USDC is the canonical Base
           # FiatToken (no permissionless mint), so write the agent's balance
-          # slot directly — the same hermetic technique scripts/devnet/snapshot-fork.sh
+          # slot directly — the same hermetic technique scripts/devnet/snapshot-fork.ts
           # uses for the deployer. FiatToken balances mapping lives at slot 9.
           AGENT_BAL_SLOT=$(cast index address "$AGENT_ADDR_FROM_KEYSTORE" 9)
           cast rpc anvil_setStorageAt "$USDC_ADDRESS" "$AGENT_BAL_SLOT" \
@@ -289,11 +311,22 @@ jobs:
         # the seed-deposit totalAssets() succeeds — no passthrough hatch needed).
         run: |
           mkdir -p deployments
-          # Deploy.s.sol reads AGENT_ADDRESS from env and calls
+          # Core S3: the stage runner deploys libs, vault, registry, router, gateway in that
+          # order. The gateway stage reads AGENT_ADDRESS from env and calls
           # gateway.authorizeAgent(AGENT_ADDRESS, policy) under msg.sender =
           # broadcaster (= ADMIN_ADDRESS = PARENT_ADDRESS). After this step
           # the generated key is the AGENT_ROLE holder for the gateway.
-          forge script contracts/script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
+          # The local anvil node unlocks the admin account: no key goes in an argument.
+          export FEE_RECIPIENT="$SHARE_RECEIVER_ADDRESS"
+          export SEED_SHARE_RECEIVER="$SHARE_RECEIVER_ADDRESS"
+          export TVL_CAP=10000000000000 PER_DEPOSIT_CAP=1000000000000
+          export AGENT_VALID_UNTIL=4102444800
+          export AGENT_MAX_PER_PAYMENT=10000000000 AGENT_MAX_PER_WINDOW=100000000000
+          export AGENT_MAX_WITHDRAW_PER_PAYMENT=10000000000 AGENT_MAX_WITHDRAW_PER_WINDOW=100000000000
+          CHAIN_ID=$(cast chain-id --rpc-url http://127.0.0.1:8545)
+          bun scripts/deploy/core-stages.ts --rpc-url http://127.0.0.1:8545 \
+            --out "deployments/${CHAIN_ID}.json" \
+            --forge-arg --unlocked --forge-arg --sender --forge-arg "$ADMIN_ADDRESS"
 
       # Issue #469 acceptance criterion: assert ON-CHAIN that
       # gateway.authorizeAgent has actually been called for the
@@ -485,6 +518,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
+        uses: ./.github/actions/apply-fresh-snapshot
+        with:
+          enabled: ${{ inputs.fresh_snapshot == true }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -493,6 +530,9 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
+
+      - name: Install Bun (core stage runner)
+        uses: oven-sh/setup-bun@v2
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
@@ -536,7 +576,16 @@ jobs:
         # the seed-deposit totalAssets() succeeds — no passthrough hatch needed).
         run: |
           mkdir -p deployments
-          forge script contracts/script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
+          export FEE_RECIPIENT="$SHARE_RECEIVER_ADDRESS"
+          export SEED_SHARE_RECEIVER="$SHARE_RECEIVER_ADDRESS"
+          export TVL_CAP=10000000000000 PER_DEPOSIT_CAP=1000000000000
+          export AGENT_VALID_UNTIL=4102444800
+          export AGENT_MAX_PER_PAYMENT=10000000000 AGENT_MAX_PER_WINDOW=100000000000
+          export AGENT_MAX_WITHDRAW_PER_PAYMENT=10000000000 AGENT_MAX_WITHDRAW_PER_WINDOW=100000000000
+          CHAIN_ID=$(cast chain-id --rpc-url http://127.0.0.1:8545)
+          bun scripts/deploy/core-stages.ts --rpc-url http://127.0.0.1:8545 \
+            --out "deployments/${CHAIN_ID}.json" \
+            --forge-arg --unlocked --forge-arg --sender --forge-arg "$ADMIN_ADDRESS"
 
       - name: Read-only isolation assertions
         run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_read_only -- --nocapture

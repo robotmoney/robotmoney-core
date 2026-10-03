@@ -29,6 +29,19 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     // Errors
     // -------------------------------------------------------------------
 
+    /// @notice Gas left is below the floor a withdraw needs before it fans out to the vault
+    ///         (or to the router and its vaults). Raised before the external call so a
+    ///         gas limit that is too low reverts with a reason. Retry with more gas. (core 1482.)
+    /// @param available `gasleft()` at the check.
+    /// @param required  The floor that was not met.
+    error InsufficientGas(uint256 available, uint256 required);
+
+    /// @dev Gas that must remain before the gateway calls `vault.redeem` or `router.redeemFor`.
+    ///      The router's leg floor is 1_250_000 and the vault's is 1_200_000 (both measured
+    ///      after a 63/64 forward), so the gateway needs about 1_270_000 plus its own tail work.
+    ///      A tunable constant pending the fork measurement in docs/technical/redeem-gas-1482.md.
+    uint256 internal constant WITHDRAW_GAS_FLOOR = 1_300_000;
+
     /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();
     /// @notice Constructor-time check: vault.asset() does not match the configured USDC token.
@@ -1183,6 +1196,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         uint256 usdcBefore = usdcToken.balanceOf(address(this));
 
         // 12. Call vault.redeem — sends USDC to assetRecipient directly.
+        //     Gas guard (core 1482): a limit too low for the vault fan-out reverts typed.
+        if (gasleft() < WITHDRAW_GAS_FLOOR) revert InsufficientGas(gasleft(), WITHDRAW_GAS_FLOOR);
         assetsOut = IERC4626(sourceVault).redeem(shares, p.assetRecipient, address(this));
 
         // 13. Verify the vault did not leave unexpected USDC in the gateway.
@@ -1562,6 +1577,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         //     forwarded verbatim: each non-zero leg reverts `SlippageExceeded`
         //     when realized USDC proceeds fall below the floor. The gateway no
         //     longer fabricates an all-zero floor vector (GW-5 / F-11).
+        //     Gas guard (core 1482): a limit too low for the router and vault fan-out reverts typed.
+        if (gasleft() < WITHDRAW_GAS_FLOOR) revert InsufficientGas(gasleft(), WITHDRAW_GAS_FLOOR);
         assetsPerLeg = routerContract.redeemFor(
             address(this),
             args.assetRecipient,

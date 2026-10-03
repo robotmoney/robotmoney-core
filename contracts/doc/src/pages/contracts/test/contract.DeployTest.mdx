@@ -1,41 +1,30 @@
 ---
 title: "DeployTest"
-description: "Note: adapter constructors only check for address(0) — they do NOT require the protocol contracts to have bytecode. The in-process test therefore succeeds even though AAVE_V3_POOL et al. are not deployed in the forge unit-test environment. Actual protocol interaction is tested by the fork regression suite (VaultForkRegressions.t.sol) and the fork-e2e-rust harness."
 ---
 
 # DeployTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/459241c745781d17f5089e0f4c2b94d7d9e255a1/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/Deploy.t.sol)
 
 **Inherits:** Test
 
 <i>
 
-Exercises the deploy script in-process and asserts the post-deploy
-invariants the operator and downstream tooling rely on (issue #10).
-The script deploys RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter
-+ MorphoAdapter (issue #363) instead of MockVault.
-MockVault is retained only for its own unit
-tests.  The script always binds the gateway to an externally-supplied
-USDC token; this test deploys a `TestERC20` helper and passes its
-address in.  The smoke-test devnet does the same with the canonical
-Base USDC proxy seeded into genesis alloc (issue #255).
+Runs the split stage scripts in process, in production order, and asserts the
+post-deploy invariants the operator and downstream tooling rely on (core S3).
+The stages are libs, vault, registry, router, gateway. The gateway takes the router as
+its immutable, so the router stage comes first (core 1493). Adapter constructors only
+check for address(0), so the in-process run succeeds although the venues have no
+code here. Venue interaction is covered by the fork regression suite.
 
 </i>
 
-Note: adapter constructors only check for address(0) — they do NOT
-require the protocol contracts to have bytecode. The in-process test
-therefore succeeds even though AAVE_V3_POOL et al. are not deployed
-in the forge unit-test environment. Actual protocol interaction is
-tested by the fork regression suite (VaultForkRegressions.t.sol) and
-the fork-e2e-rust harness.
-
 ## State Variables
 
-### script
+### stages
 
 ```solidity
-Deploy internal script;
+CoreStages internal stages;
 ```
 
 ### usdc
@@ -83,14 +72,74 @@ function setUp() public;
 ### _run
 
 ```solidity
-function _run() internal returns (Deploy.Deployed memory);
+function _run() internal returns (CoreStages.Stack memory);
 ```
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `Deploy.Deployed` |  |
+| &lt;none&gt; | `CoreStages.Stack` |  |
+
+<a id="test_stages_runinproductionorder"></a>
+
+### test_stages_runInProductionOrder
+
+```solidity
+function test_stages_runInProductionOrder() public;
+```
+
+<a id="test_gateway_routerequalsdeployedrouter_notzero"></a>
+
+### test_gateway_routerEqualsDeployedRouter_notZero
+
+The gateway is built with the deployed router: not zero, and equal to it.
+
+```solidity
+function test_gateway_routerEqualsDeployedRouter_notZero() public;
+```
+
+<a id="test_routerstage_callsregistrysetrouteronce"></a>
+
+### test_routerStage_callsRegistrySetRouterOnce
+
+The router stage links the registry exactly once and the link equals the router.
+
+```solidity
+function test_routerStage_callsRegistrySetRouterOnce() public;
+```
+
+<a id="test_gatewaystage_revertsonzerooremptyrouter"></a>
+
+### test_gatewayStage_revertsOnZeroOrEmptyRouter
+
+The gateway stage refuses a zero router and a router with no code.
+
+```solidity
+function test_gatewayStage_revertsOnZeroOrEmptyRouter() public;
+```
+
+<a id="test_agentauthorizationandicpolicy_runaftergateway_bindfinalgateway"></a>
+
+### test_agentAuthorizationAndIcPolicy_runAfterGateway_bindFinalGateway
+
+Agent authorization runs in the gateway stage, after the gateway exists, and
+the IC policy stage that follows binds the final gateway address.
+
+```solidity
+function test_agentAuthorizationAndIcPolicy_runAfterGateway_bindFinalGateway() public;
+```
+
+<a id="test_manifest_hasrenamedkeysandthirdvenueentry"></a>
+
+### test_manifest_hasRenamedKeysAndThirdVenueEntry
+
+The vault-stage manifest has the renamed keys and names the third venue for the
+address it wraps. The old Morpho-named adapter key is gone.
+
+```solidity
+function test_manifest_hasRenamedKeysAndThirdVenueEntry() public;
+```
 
 <a id="test_deploy_wiresusdcvaultandadminpauserroles"></a>
 
@@ -104,14 +153,8 @@ function test_deploy_wiresUsdcVaultAndAdminPauserRoles() public;
 
 ### test_deploy_wiresThreeDistinctRealAdapterAddresses
 
-The production deploy path wires exactly three DISTINCT real
-adapter addresses — no single-address aliasing. This is the
-regression guard for the removed test-only no-yield deploy hatch
-(issue #912), which used to alias all three typed adapter fields
-to one no-yield adapter instance. `runInProcessWith` shares the
-same `_doDeploy` adapter-construction code path as the broadcast
-`run()` entrypoint, so this exercises the `run()`-equivalent
-wiring.
+Exactly three DISTINCT real adapters, and the third wraps the Moonwell
+Flagship address the constant names.
 
 ```solidity
 function test_deploy_wiresThreeDistinctRealAdapterAddresses() public;
@@ -148,6 +191,20 @@ function test_deploy_revertsWhenUsdcAddressZero() public;
 ```solidity
 function test_deploy_revertsWhenUsdcAddressHasNoCode() public;
 ```
+
+<a id="_openpolicy"></a>
+
+### _openPolicy
+
+```solidity
+function _openPolicy() internal view returns (IGateway.AgentPolicy memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IGateway.AgentPolicy` |  |
 
 <a id="test_deploy_grantingagentroletoadminreverts"></a>
 
@@ -193,20 +250,26 @@ function test_deploy_revertsWhenPauserEqualsAgent() public;
 
 ### test_deploy_seedDepositAmount_isOneUsdc
 
-SEED_DEPOSIT_AMOUNT constant equals 1 USDC (1_000_000 units). A mainnet
-ceremony sets SEED_DEPOSIT_USDC explicitly, so this default is the
-rehearsal and devnet seed.
-
 ```solidity
 function test_deploy_seedDepositAmount_isOneUsdc() public view;
 ```
 
-<a id="test_deploy_envdriven_runinprocesssucceeds"></a>
+<a id="test_deploy_envdriven_vaultandgatewaystages"></a>
 
-### test_deploy_envDriven_runInProcessSucceeds
+### test_deploy_envDriven_vaultAndGatewayStages
 
 ```solidity
-function test_deploy_envDriven_runInProcessSucceeds() public;
+function test_deploy_envDriven_vaultAndGatewayStages() public;
+```
+
+<a id="test_libsstage_proveslinkedtickmath"></a>
+
+### test_libsStage_provesLinkedTickMath
+
+The libs stage proves the linked TickMath answers a known value.
+
+```solidity
+function test_libsStage_provesLinkedTickMath() public;
 ```
 
 <a id="_canonicaltickmath"></a>
@@ -270,18 +333,6 @@ range. Positive arm of the deploy-time assertion.
 function test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange() public;
 ```
 
-<a id="test_tickmathlink_deployassertscanonicallibrary"></a>
-
-### test_tickMathLink_deployAssertsCanonicalLibrary
-
-The Deploy.s.sol deploy path asserts the linked TickMath is
-present: a successful in-process deploy implies the link-sanity
-check inside _doDeploy passed.
-
-```solidity
-function test_tickMathLink_deployAssertsCanonicalLibrary() public;
-```
-
 <a id="test_tickmathlink_wrongorzeroaddressfailscodehashcheck"></a>
 
 ### test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck
@@ -298,11 +349,23 @@ function test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck() public;
 
 ### test_tickMathLink_deployAssertionRevertsOnMislink
 
-The actual DeployDemoExtraVaults TickMath link-integrity assertion
+The actual basket deploy script TickMath link-integrity assertion
 reverts when a vault links a zero (no-code) or wrong (non-TickMath)
 library — proving the deploy assertion fails closed on mislink.
 
 ```solidity
 function test_tickMathLink_deployAssertionRevertsOnMislink() public;
+```
+
+<a id="test_routerdepositandwithdraw_throughsplitstagegateway_roundtrip"></a>
+
+### test_routerDepositAndWithdraw_throughSplitStageGateway_roundTrip
+
+The gateway the split stages built completes a router deposit and a router withdraw.
+Unit, not fork: the three external lending venues are etched at their real addresses
+(`VenueEtcher`). Gateway, router, registry and vault are production code.
+
+```solidity
+function test_routerDepositAndWithdraw_throughSplitStageGateway_roundTrip() public;
 ```
 

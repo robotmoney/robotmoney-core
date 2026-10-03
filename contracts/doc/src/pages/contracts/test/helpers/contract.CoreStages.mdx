@@ -1,0 +1,160 @@
+---
+title: "CoreStages"
+description: "Runs the core stage scripts in process, in production order: libs, vault, registry, router, gateway. Tests use it where a single deploy script used to be called. Agent authorization is part of the gateway stage and runs after the gateway exists. The IC policy stage is a separate script that tests call when they need it."
+---
+
+# CoreStages
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/helpers/CoreStages.sol)
+
+Runs the core stage scripts in process, in production order:
+libs, vault, registry, router, gateway. Tests use it where a single deploy script used to be called. Agent authorization is part of the gateway stage and runs
+after the gateway exists. The IC policy stage is a separate script that tests call
+when they need it.
+
+<i>
+
+Not a Script: it carries no cheatcode state of its own. The stage scripts it creates
+are the production scripts. `stages` is the order the run followed, for tests that
+assert the order.
+
+</i>
+
+## Constants
+
+### vm
+
+```solidity
+Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+```
+
+## State Variables
+
+### libsScript
+
+```solidity
+DeployLibs public libsScript;
+```
+
+### vaultScript
+
+```solidity
+DeployVault public vaultScript;
+```
+
+### registryScript
+
+```solidity
+DeployVaultRegistry public registryScript;
+```
+
+### routerScript
+
+```solidity
+DeployPortfolioRouter public routerScript;
+```
+
+### gatewayScript
+
+```solidity
+DeployGateway public gatewayScript;
+```
+
+### stages
+
+Stage names in the order `run` executed them.
+
+```solidity
+string[] public stages;
+```
+
+## Functions
+
+<a id="constructor"></a>
+
+### constructor
+
+```solidity
+constructor();
+```
+
+<a id="stagecount"></a>
+
+### stageCount
+
+```solidity
+function stageCount() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="run-address-address-address-address-address"></a>
+
+### run
+
+```solidity
+function run(
+        address admin_,
+        address pauser_,
+        address agent_,
+        address shareReceiver_,
+        address usdc_
+    ) external returns (Stack memory s);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin_ | `address` |  |
+| pauser_ | `address` |  |
+| agent_ | `address` |  |
+| shareReceiver_ | `address` |  |
+| usdc_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Stack` |  |
+
+## Structs
+
+### Stack
+
+```solidity
+struct Stack {
+        address usdc;
+        RobotMoneyVault vault;
+        RobotMoneyGateway gateway;
+        VaultRegistry registry;
+        PortfolioRouter router;
+        DeployVault.Deployed vaultStage;
+        address admin;
+        address pauser;
+        address agent;
+        address shareReceiver;
+        bytes32 gatewayRuntimeHash;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+| vault | `RobotMoneyVault` |  |
+| gateway | `RobotMoneyGateway` |  |
+| registry | `VaultRegistry` |  |
+| router | `PortfolioRouter` |  |
+| vaultStage | `DeployVault.Deployed` |  |
+| admin | `address` |  |
+| pauser | `address` |  |
+| agent | `address` |  |
+| shareReceiver | `address` |  |
+| gatewayRuntimeHash | `bytes32` |  |
+

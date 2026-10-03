@@ -15,7 +15,8 @@ import {IObservablePool} from "../interfaces/IObservablePool.sol";
 ///      single deployed library instead of being inlined into every vault in the
 ///      already-EIP-170-tight basket family.
 library BasketAssetConfigGuard {
-    /// @dev Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals).
+    /// @dev Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is a reserved ordinal that no
+    ///      adapter implements; it stays so Aerodrome keeps ordinal 2 (see `BasketVault.Venue`).
     enum Venue {
         V3,
         V4,

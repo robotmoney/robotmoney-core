@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/adr/ADR-0010-unified-vault-architecture.md §4 (AssetPositionAdapter);
-//            docs/technical/unified-vault-spec.md §4.3;
-//            docs/technical/unified-vault-seam-map.json (contracts/adapters/ +
-//            contracts/interfaces/IBasketSwapAdapter.sol entries).
+// Canonical: docs/architecture.md §4.1 — Vault Family (basket vaults);
+//            robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486).
+// (See also: docs/audits.md audit-scope ledger: this adapter is "Not separately audited",
+//  an exception pending the owner. docs/technical/unified-vault-seam-map.json records the seam.)
 //
 // Concrete Uniswap V3 venue executor behind the IBasketSwapAdapter seam. It
 // replaces BasketVault's inline `adapter == address(0)` special case
@@ -21,7 +21,7 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {TwapTickMath} from "../lib/TwapTickMath.sol";
 
 /// @title UniswapV3SwapAdapter
-/// @notice BasketVault / AssetPositionAdapter swap adapter for Uniswap V3 pools.
+/// @notice BasketVault swap adapter for Uniswap V3 pools.
 ///         Swaps USDC↔asset via the Uniswap V3 SwapRouter02 (`exactInputSingle`);
 ///         prices NAV and slippage floors via a V3 pool TWAP (arithmetic-mean
 ///         tick over `window` seconds).

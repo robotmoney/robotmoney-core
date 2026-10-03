@@ -13,7 +13,7 @@
 //! # Design notes
 //!
 //! Base testnet fixture funding differs from devnet fixture funding:
-//! - Devnet: deploys contracts fresh, funds via `forge script`
+//! - Devnet: contracts come from the stage deployment (publish contracts); the harness deploys nothing
 //! - Base testnet: contracts pre-deployed, accounts funded via faucet or seeded transfers
 //!
 //! The smoke-test `Fixture` is devnet-only (boots Geth+Lighthouse).

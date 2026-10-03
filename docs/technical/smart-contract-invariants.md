@@ -15,19 +15,11 @@ bugs FV must pin once fixed).
 - Implementing code is in `contracts/`; current FV lives in `contracts/test/*Invariant*.t.sol`
   (Foundry `StdInvariant` handler-driven) plus the static guard tests
   (`CustodyInvariantGuard`, `AdapterDelegatecallGuard`, `AccessRoles`, `ERC4626PreconditionChecks`).
-- Unified-vault re-homing (ADR-0010, landed): the per-family vault contracts
-  (`RobotMoneyVault`, `BasketVault` and its `RwaVault`/`AgentTokenVault`/
-  `ProtocolAssetVault` subclasses) are subsumed by one `contracts/Vault.sol` +
-  `IPositionAdapter` set (`contracts/adapters/*AssetPositionAdapter.sol` for
-  priced-asset themes; the retrofitted `MorphoAdapter`/`AaveV3Adapter`/
-  `CompoundV3Adapter` for the lending theme). Every invariant below is stated
-  against those unified homes; the old→new enforcement mapping is the
-  **invariant-preservation matrix** in
-  [`docs/technical/unified-vault-spec.md` §6](unified-vault-spec.md), and the
-  test re-pointing (fixture swap, no invariant deleted) is spec §7. Where a
-  property is now split across the vault shell and an adapter, both loci are
-  named. The legacy per-family `.t.sol` suites still run against the matching
-  composition until each is ported.
+- The unified-vault re-homing proposed by ADR-0010 was Rejected and its code is deleted. The
+  shipped vaults are `RobotMoneyVault` and `BasketVault` with its `AgentTokenVault`,
+  `ProtocolAssetVault` and `RwaBasketVault` subclasses. Entries below that mention a unified
+  `Vault`, `IPositionAdapter`, `AssetPositionAdapter` or a Chronicle composition are historical
+  findings and are kept for the audit trail only (`docs/audits.md`).
 
 ## How to read an entry
 
@@ -147,7 +139,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · every gateway flow pulls USDC from `msg.sender`; this is why F-01 is governance-capture, not theft · stateful-invariant (already implied by GW-1/GW-3).
 
 > **`ACL-8` — After the deployment handover, no gateway agent listed in `AGENT_ADDRESSES` is owned by the deployer EOA.**
-> ✅ PROVEN (issue #1476) for the listed agents · agent ownership carries `setPolicy`/`revokeAgent` authority, so `DeployTimelock` hands every agent listed in `AGENT_ADDRESSES` to the TimelockController with `transferAgentOwnership` (after the timelock's gateway `ADMIN_ROLE` grant, before the deployer's revoke) and requires afterwards that none is still deployer-owned. The transfer does not change `AGENT_ROLE`: a listed agent that held it still holds it, and a listed agent without it (renounced, or revoked by `ADMIN_ROLE`) is handed over without it. Ownership of such an agent still carries `setPolicy`/`revokeAgent` authority over its stored policy, which applies again if the agent is later granted `AGENT_ROLE`, so it is handed over too. The gateway cannot enumerate an owner's agents, so the guarantee is only as complete as the list: the broadcast run requires `AGENT_ADDRESSES` to be set (a comma-separated list, or `none`; unset or empty reverts before any broadcast), and the manifest records `roles.gateway_agents_listed_count` so a reader can compare the list's length with the deployer-owned agents the gateway logs name. The stage ceremony derives the list from the gateway's `AgentAuthorized`/`AgentOwnershipTransferred` logs, and `fusion-ceremony.sh verify` fails when any agent those logs give the deployer is still deployer-owned, so on stage the claim covers every agent the deployer ever owned. A direct `DeployTimelock` run (`docs/operations/manual-admin-actions.md`) must list every deployer-owned agent the same way · deploy-assertion (`DeployTimelock.t.sol::DeployTimelockAgentHandoverTest`, `DeployTimelock.t.sol::DeployTimelockRunEntrypointTest`, `SafeIntegration.t.sol::test_handover_noDeployerOwnedAgentRemains`) + ceremony check (`scripts/stage/tests/fusion-ceremony-selftest.sh`).
+> ✅ PROVEN (issue #1476) for the listed agents · agent ownership carries `setPolicy`/`revokeAgent` authority, so `DeployTimelock` hands every agent listed in `AGENT_ADDRESSES` to the TimelockController with `transferAgentOwnership` (after the timelock's gateway `ADMIN_ROLE` grant, before the deployer's revoke) and requires afterwards that none is still deployer-owned. The transfer does not change `AGENT_ROLE`: a listed agent that held it still holds it, and a listed agent without it (renounced, or revoked by `ADMIN_ROLE`) is handed over without it. Ownership of such an agent still carries `setPolicy`/`revokeAgent` authority over its stored policy, which applies again if the agent is later granted `AGENT_ROLE`, so it is handed over too. The gateway cannot enumerate an owner's agents, so the guarantee is only as complete as the list: the broadcast run requires `AGENT_ADDRESSES` to be set (a comma-separated list, or `none`; unset or empty reverts before any broadcast), and the manifest records `roles.gateway_agents_listed_count` so a reader can compare the list's length with the deployer-owned agents the gateway logs name. The stage ceremony derives the list from the gateway's `AgentAuthorized`/`AgentOwnershipTransferred` logs, and the publish contracts verifier fails when any agent those logs give the deployer is still deployer-owned, so on stage the claim covers every agent the deployer ever owned. A direct `DeployTimelock` run (`docs/operations/manual-admin-actions.md`) must list every deployer-owned agent the same way · deploy-assertion (`DeployTimelock.t.sol::DeployTimelockAgentHandoverTest`, `DeployTimelock.t.sol::DeployTimelockRunEntrypointTest`, `SafeIntegration.t.sol::test_handover_noDeployerOwnedAgentRemains`) + ceremony check (the publish contracts verifier and govern matrix (devops, `docs/development/stage-deployment.md`)).
 
 > **`ACL-7` — Registering an agent never blocks a future intended ADMIN/PAUSER address from being granted its role.**
 > ✅ PROVEN · the DeployTimelock handover asserts every intended ADMIN/PAUSER address is AGENT-free **before** any gateway grant, so the permissionless-registration grant-DoS becomes an explicit, typed deploy-time precondition rather than a late-stage `RoleSeparationViolated` brick — fixed by **NC-10 (#970)** · `DeployAssertions.t.sol::test_ACL7_agentRegistrationCannotBlockRoleGrant` · deploy-assertion.

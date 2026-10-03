@@ -44,12 +44,6 @@ if grep -nE '^[[:space:]]*forge test .*ForkTest' "$FORGE"; then
   echo "live-RPC fork suites must run via scripts/devnet/run-live-rpc-forge-fork.sh (issue #1239)" >&2
   exit 1
 fi
-for contract in UniV3AssetPositionAdapterForkTest UniV4AssetPositionAdapterForkTest AerodromeAssetPositionAdapterForkTest; do
-  grep -qE "scripts/devnet/run-live-rpc-forge-fork\.sh .*\"$contract\"" "$FORGE" || {
-    echo "suite-01-02 fork-regressions no longer runs $contract through run-live-rpc-forge-fork.sh (issue #1239)" >&2
-    exit 1
-  }
-done
 grep -q 'bash .github/scripts/tests/test_run_live_rpc_forge_fork.sh' "$FORGE"
 grep -q 'Open or update fork drift tracking issue' "$NIGHTLY"
 if ! grep -q 'RMPC_FORK_RPC_URL_RAW: \${{ secrets\.RMPC_FORK_RPC_URL }}' "$NIGHTLY"; then

@@ -17,6 +17,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
+import {ForkSelect} from "./helpers/ForkSelect.sol";
 
 /// @title ISafe — minimal interface for the Safe (Gnosis Safe) multisig contract.
 ///
@@ -109,7 +110,7 @@ interface ISafeProxyFactory {
 ///      factory (0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67) with the canonical
 ///      `SafeL2` singleton (0x29fcB43b46531BcA003ddC8FCB67FFE91900C762). Base is an L2,
 ///      so `SafeL2` is the singleton production uses (governance-isomorphism.md §2.2, R4).
-///      The golden fixture carries it because snapshot-fork.sh warms the whole Safe set
+///      The golden fixture carries it because snapshot-fork.ts warms the whole Safe set
 ///      and check-fork-safe-set.sh refuses a fixture without it (R2, R3).
 ///      This proves the quorum is enforced by actual Safe contract code, not vm.prank.
 ///
@@ -127,7 +128,7 @@ contract SafeIntegrationTest is Test {
     /// @dev Safe L2 singleton (implementation) on Base mainnet.
     ///      This is the SafeL2.sol variant that emits extra events for L2 indexers.
     ///      Until issue #1447 this constant held 0x41675C09…, the L1 `Safe` singleton,
-    ///      despite its name (governance-isomorphism.md §3.4).
+    ///      despite its name (see governance-isomorphism.md §2.2, R4).
     address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
 
     /// @dev Safe Compatibility Fallback Handler on Base mainnet.
@@ -189,7 +190,7 @@ contract SafeIntegrationTest is Test {
     address[] internal gatewayRootHolders;
 
     /// A gateway agent the deployer authorizes before the handover, as
-    /// Deploy.s.sol does for its deploy agent (issue #1476).
+    /// the gateway stage does for its deploy agent (issue #1476).
     address internal deployAgent;
     /// Every agent named by an AgentAuthorized or AgentOwnershipTransferred log
     /// the gateway emitted from before the contracts were built.
@@ -204,14 +205,13 @@ contract SafeIntegrationTest is Test {
             if (bytes(s).length > 0) rpc = s;
         } catch {}
         if (bytes(rpc).length == 0) rpc = "http://127.0.0.1:8545";
-        vm.createSelectFork(rpc);
-        return true;
+        return ForkSelect.selectOrSkip(rpc);
     }
 
     /// @dev Deploy the five governed contracts, wire them to a fresh TimelockController
     ///      whose PROPOSER is the deployed 2-of-3 Safe proxy.
     function setUp() public {
-        _trySelectFork();
+        if (!_trySelectFork()) return;
         vm.recordLogs();
 
         // Generate 3 deterministic signing keys.
@@ -315,7 +315,7 @@ contract SafeIntegrationTest is Test {
         assertGt(SAFE_MULTISEND.code.length, 0, "MultiSend has no code on this fork");
 
         // A deployer-owned gateway agent, authorized before the handover the
-        // way Deploy.s.sol authorizes its deploy agent (issue #1476).
+        // way the gateway stage authorizes its deploy agent (issue #1476).
         deployAgent = makeAddr("deploy-agent");
         vm.prank(deployer);
         gateway.authorizeAgent(deployAgent, _agentPolicy(makeAddr("deploy-share-receiver")));
@@ -335,7 +335,8 @@ contract SafeIntegrationTest is Test {
             address(safe),
             makeAddr("emergency"), // independent emergency hot key (ACL-1 / F-01)
             MIN_DELAY,
-            agents
+            agents,
+            DeployTimelock.SafeSpec({owners: _sortedOwners(), threshold: 2})
         );
 
         // Verify wiring.

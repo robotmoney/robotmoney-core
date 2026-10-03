@@ -35,7 +35,7 @@
 #
 # GOTCHAS
 # - The devnet's genesis-alloc.json must stay in sync with CURRENT.json (the fork pin).
-#   If the fixture is refreshed (snapshot-fork.sh), re-run smoke-test-genesis-ingester
+#   If the fixture is refreshed (snapshot-fork.ts), re-run smoke-test-genesis-ingester
 #   and commit the new genesis-alloc.json.
 # - The governance slot must NOT set RMPC_TESTNET_RPC_URL; omitting it makes
 #   ForkFixture fall through to the checked-in .anvil-state fixture.
@@ -45,6 +45,17 @@
 name: fork-protocol-adapter-integration
 
 on:
+  # Nightly job (b), core issue 1496: reused by suite-NN-nightly-fresh-snapshot.yml
+  # with fresh_snapshot=true so this suite boots the Twin chain from a snapshot
+  # taken at the latest Base block instead of the checked-in pin. Steps are not
+  # copied: the nightly calls this very workflow.
+  workflow_call:
+    inputs:
+      fresh_snapshot:
+        description: "Apply the nightly fresh snapshot overlay before booting a chain."
+        type: boolean
+        required: false
+        default: false
   # System-correctness: boots isolated Geth/Anvil devnets (20-25 min wall-clock)
   # once a PR is ready for review, and reruns on push to dev for merged-commit
   # coverage. Draft PRs rely on suite-06 (rmpc-unit) for fast feedback.
@@ -63,7 +74,9 @@ on:
 # distinct concurrency lane per ref and never cancel, so merged-commit coverage
 # always completes. See docs/development/ci-suites.md (CI velocity tiers).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # suite tag keeps called copies (nightly fresh snapshot, issue 1496) in separate lanes:
+  # inside workflow_call github.workflow is the CALLER's name, shared by every suite.
+  group: ${{ github.workflow }}-suite05-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -118,6 +131,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
+        uses: ./.github/actions/apply-fresh-snapshot
+        with:
+          enabled: ${{ inputs.fresh_snapshot == true }}
 
       - name: Verify Docker is available
         if: matrix.devnet
@@ -184,6 +201,15 @@ jobs:
           testing/fixtures/fork-state/CURRENT.anvil-state
           testing/fixtures/fork-state/CURRENT.json
 
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Snapshot contents check (core issue 1498)
+        # Boots anvil from CURRENT.anvil-state with no fork URL and asserts
+        # SwapRouter02, the V3 factory and every configured pool answer with
+        # live values, and that no Robot Money contract exists at genesis.
+        if: ${{ matrix.devnet == false }}
+        run: bun scripts/devnet/check-fork-snapshot-contents.ts
+
       - name: Fork integration tests (${{ matrix.group }})
         working-directory: testing/fork-e2e-rust
         env:
@@ -213,7 +239,9 @@ jobs:
     name: base-testnet-adapters
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    # Skipped when called by the nightly fresh-snapshot run (core 1496): that run
+    # uses no secret, so this secret-backed job never starts there.
+    if: ${{ inputs.fresh_snapshot != true && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     env:
       CI_CLASS: system-correctness
       # Live Base public testnet RPC + faucet-funded EOA key. Absent ⇒ tests skip.
@@ -228,6 +256,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
+        uses: ./.github/actions/apply-fresh-snapshot
+        with:
+          enabled: ${{ inputs.fresh_snapshot == true }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

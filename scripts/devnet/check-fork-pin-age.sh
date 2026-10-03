@@ -19,22 +19,23 @@
 # 48 days without a refresh and nothing in CI said so. Silence is the defect
 # this script fixes: the age is now printed on every run that validates the
 # manifest, annotated as a GitHub `::warning::` past a soft threshold, and can
-# be hard-gated with `--max-age-days` where failing is affordable (nightly).
+# be hard-gated with `--max-age-days` by a caller that wants a failure. The
+# nightly (suite 21) does not: it only warns.
 #
 # It deliberately does NOT hard-fail by default. A stale pin is a maintenance
 # signal, not a reason to red every pull request in the queue — that is exactly
 # the kind of unactionable blocking failure the CI-truthfulness work exists to
-# remove. Pass `--max-age-days` from a scheduled job to get the hard signal.
+# remove. Pass `--max-age-days` to get the hard signal in a caller that opts in.
 #
 # HOW TO REFRESH THE PIN when this reports a stale fixture:
-#   RMPC_FORK_RPC_URL=<Base archive RPC> scripts/devnet/snapshot-fork.sh
+#   RMPC_FORK_RPC_URL=<Base archive RPC> scripts/devnet/snapshot-fork.ts
 # then update testing/ethereum-testnet/config/fork-block.json's `block_number`
 # and `block_hash` to match the new CURRENT.json, and regenerate
 # testing/fixtures/fork-state/genesis-alloc.json with
 # `smoke-test-genesis-ingester` and
 # testing/ethereum-testnet/config/expected-prices.json.
 #
-# NOTE ON THE RPC: snapshot-fork.sh used to default to
+# NOTE ON THE RPC: snapshot-fork.ts used to default to
 # https://base-rpc.publicnode.com, which rejects every numeric-block state read
 # below the tip with "Archive requests require a personal token", so a capture
 # could not complete. It now defaults to the first public endpoint in
@@ -127,7 +128,7 @@ if [ -z "$CAPTURED_AT" ]; then
   exit 2
 fi
 
-# `captured_at` is written by snapshot-fork.sh as `date -u +%Y-%m-%dT%H:%M:%SZ`.
+# `captured_at` is written by snapshot-fork.ts as `date -u +%Y-%m-%dT%H:%M:%SZ`.
 # GNU date parses it with -d; BSD/macOS date needs -j -f. Try both rather than
 # making this script Linux-only, since a maintainer refreshing the fixture is
 # exactly who runs check-fork-manifest.sh by hand.
@@ -157,7 +158,7 @@ AGE_DAYS=$((AGE_SECONDS / 86400))
 
 echo "[check-fork-pin-age] fork_block=$FORK_BLOCK captured_at=$CAPTURED_AT age_days=$AGE_DAYS warn_days=$WARN_DAYS max_age_days=${MAX_AGE_DAYS:-none}"
 
-REFRESH_HINT="Refresh with RMPC_FORK_RPC_URL=<Base archive RPC> scripts/devnet/snapshot-fork.sh, then realign testing/ethereum-testnet/config/fork-block.json, genesis-alloc.json and expected-prices.json. Prefer a keyed Base archive endpoint; the public default in scripts/devnet/fork-rpc-lib.sh is rate-limited (issue #1239)."
+REFRESH_HINT="Refresh with RMPC_FORK_RPC_URL=<Base archive RPC> scripts/devnet/snapshot-fork.ts, then realign testing/ethereum-testnet/config/fork-block.json, genesis-alloc.json and expected-prices.json. Prefer a keyed Base archive endpoint; the public default in scripts/devnet/fork-rpc-lib.sh is rate-limited (issue #1239)."
 
 if [ -n "$MAX_AGE_DAYS" ] && [ "$AGE_DAYS" -gt "$MAX_AGE_DAYS" ]; then
   echo "::error::The devnet's Base fork pin (block $FORK_BLOCK, captured $CAPTURED_AT) is $AGE_DAYS days old, over the $MAX_AGE_DAYS-day limit. The devnet clock is wall-clock now while the forked Aave/Compound/Morpho state is frozen at the pin, so the simulated accrual interval grows every day this is not refreshed (issue #1386). $REFRESH_HINT"

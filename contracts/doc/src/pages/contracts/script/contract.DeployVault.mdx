@@ -1,0 +1,536 @@
+---
+title: "DeployVault"
+description: "Stage 2 of the core deploy (libs, vault, registry, router, gateway). Deploys RobotMoneyVault (rmUSDC) with its three real strategy adapters (Aave V3, Compound V3, Moonwell Flagship USDC through the ERC-4626 `MorphoAdapter`), allows the adapters, registers them with 3334 / 3333 / 3333 bps caps, and makes the seed deposit that anchors the share price before the vault is opened."
+---
+
+# DeployVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployVault.s.sol)
+
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+
+**Title:** DeployVault
+
+Stage 2 of the core deploy (libs, vault, registry, router, gateway).
+Deploys RobotMoneyVault (rmUSDC) with its three real strategy adapters (Aave V3,
+Compound V3, Moonwell Flagship USDC through the ERC-4626 `MorphoAdapter`), allows
+the adapters, registers them with 3334 / 3333 / 3333 bps caps, and makes the
+seed deposit that anchors the share price before the vault is opened.
+
+The gateway, router and registry are NOT deployed here: the registry, router and
+gateway stages follow. The old single script deployed the gateway with a zero
+router (core 1493). The order is now fixed by the stage scripts.
+
+<i>
+
+Required env vars (all required on every chain, no defaults):
+EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet
+ADMIN_ADDRESS         — receives ADMIN_ROLE and EMERGENCY_ROLE on the vault
+FEE_RECIPIENT — vault fee recipient (the treasury, never the deployer)
+TVL_CAP, PER_DEPOSIT_CAP — vault caps, 6-decimal USDC units
+SEED_SHARE_RECEIVER   — receives the seed shares. Not zero, not the deployer (ADMIN_ADDRESS).
+The deployer holds no shares after this stage.
+DEPLOYMENT_OUT        — output JSON path
+USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
+EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
+SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units (non-zero)
+
+</i>
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+```solidity
+string public constant MANIFEST_FILE = "vault.json";
+```
+
+### CANONICAL_BASE_USDC
+
+Canonical Base mainnet USDC (FiatTokenProxy).
+
+```solidity
+address public constant CANONICAL_BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### AAVE_V3_POOL
+
+Aave V3 Pool on Base mainnet.
+
+```solidity
+address public constant AAVE_V3_POOL = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+```
+
+### AAVE_V3_A_TOKEN
+
+aBasUSDC — Aave V3 interest-bearing USDC receipt token on Base.
+
+```solidity
+address public constant AAVE_V3_A_TOKEN = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
+```
+
+### COMPOUND_V3_COMET
+
+Compound V3 (Comet) USDC market on Base.
+
+<i>
+
+Verified against `cast call &lt;compound-adapter> "COMET()(address)"` on Base mainnet.
+
+</i>
+
+```solidity
+address public constant COMPOUND_V3_COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F;
+```
+
+### MOONWELL_FLAGSHIP_USDC
+
+The third venue: Moonwell Flagship USDC (mwUSDC), an ERC-4626 Morpho vault.
+
+<i>
+
+Read on Base mainnet: `name()` is "Moonwell Flagship USDC" and `symbol()` is
+"mwUSDC". Decided 2026-10-02 (core 1485): the third venue is Moonwell Flagship, not
+Gauntlet Prime. The constant, the manifest keys and every doc use this name.
+
+</i>
+
+```solidity
+address public constant MOONWELL_FLAGSHIP_USDC = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
+```
+
+### VENUE_NAME_AAVE
+
+Display names the manifest records for the three venues. The third equals
+the venue's on-chain `name()`.
+
+Manifest display name of the Aave V3 venue.
+
+```solidity
+string public constant VENUE_NAME_AAVE = "Aave V3 USDC";
+```
+
+### VENUE_NAME_COMPOUND
+
+Manifest display name of the Compound V3 venue.
+
+```solidity
+string public constant VENUE_NAME_COMPOUND = "Compound V3 USDC";
+```
+
+### VENUE_NAME_THIRD
+
+Manifest display name of the third venue (Moonwell Flagship USDC).
+
+```solidity
+string public constant VENUE_NAME_THIRD = "Moonwell Flagship USDC";
+```
+
+### AAVE_BPS
+
+Adapter bps caps, in registration order. They sum to 10 000.
+
+Aave V3 adapter cap in basis points.
+
+```solidity
+uint16 public constant AAVE_BPS = 3_334;
+```
+
+### COMPOUND_BPS
+
+Compound V3 adapter cap in basis points.
+
+```solidity
+uint16 public constant COMPOUND_BPS = 3_333;
+```
+
+### THIRD_VENUE_BPS
+
+Third venue adapter cap in basis points.
+
+```solidity
+uint16 public constant THIRD_VENUE_BPS = 3_333;
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint. Deploys, registers adapters, seeds, writes JSON.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` | The deployed contracts and admin. |
+
+<a id="runinprocess"></a>
+
+### runInProcess
+
+In-process variant for forge tests, no seed deposit. Env-driven.
+
+```solidity
+function runInProcess() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` | The deployed contracts and admin. |
+
+<a id="runinprocesswithseed-params-address-uint256"></a>
+
+### runInProcessWithSeed
+
+Explicit-parameter variant that also seeds. Needs real venue state (fork tests).
+The caller passes every input: the script holds no default cap, recipient or seed.
+
+```solidity
+function runInProcessWithSeed(Params memory p, address seedReceiver_, uint256 seed_)
+        external
+        returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` | Deployment parameters (admin, caps, fee, USDC). |
+| seedReceiver_ | `address` | Address that receives the seed shares. |
+| seed_ | `uint256` | Seed deposit in 6-decimal USDC units. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` | The deployed contracts and admin. |
+
+<a id="runinprocesswithparams-params"></a>
+
+### runInProcessWithParams
+
+Direct-parameter variant that takes every economic input. No seed.
+
+```solidity
+function runInProcessWithParams(Params memory p) external returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` | Deployment parameters (admin, caps, fee, USDC). |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` | The deployed contracts and admin. |
+
+<a id="_seedstep-deployed-address-uint256"></a>
+
+### _seedStep
+
+<i>
+
+The seed step itself, shared by the broadcast run and the in-process seeded run.
+Refuses an unset (zero) or deployer receiver, deposits the seed for the receiver and
+asserts the deployer holds no shares afterwards. The caller must be the deployer.
+
+</i>
+
+```solidity
+function _seedStep(Deployed memory d, address receiver, uint256 seed)
+        internal
+        returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| receiver | `address` |  |
+| seed | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="_seedsharereceiver-string-address"></a>
+
+### _seedShareReceiver
+
+<i>
+
+The seed share receiver: `&lt;prefix>SEED_SHARE_RECEIVER`, required on every chain.
+
+</i>
+
+```solidity
+function _seedShareReceiver(string memory prefix, address deployer)
+        internal
+        view
+        returns (address receiver);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+| deployer | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+
+<a id="_requireseedreceiver-address-address"></a>
+
+### _requireSeedReceiver
+
+<i>
+
+The receiver is never zero and never the deployer, so the deployer keeps no shares.
+
+</i>
+
+```solidity
+function _requireSeedReceiver(address receiver, address deployer) internal pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+| deployer | `address` |  |
+
+<a id="_seedamount-string"></a>
+
+### _seedAmount
+
+<i>
+
+The seed this broadcast run deposits: `&lt;prefix>SEED_DEPOSIT_USDC`, required.
+Must be non-zero.
+
+</i>
+
+```solidity
+function _seedAmount(string memory prefix) internal view returns (uint256 seed);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seed | `uint256` |  |
+
+<a id="_readenvparamsfrom-string"></a>
+
+### _readEnvParamsFrom
+
+<i>
+
+`prefix` is "" in production. Tests pass their own prefix because env vars are
+process-wide and forge runs tests in parallel.
+
+</i>
+
+```solidity
+function _readEnvParamsFrom(string memory prefix) internal view returns (Params memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+
+<a id="_approveandregisteradapters-deployed"></a>
+
+### _approveAndRegisterAdapters
+
+```solidity
+function _approveAndRegisterAdapters(Deployed memory d) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_requireseeded-deployed-uint256"></a>
+
+### _requireSeeded
+
+<i>
+
+Allow up to 1 bps of rounding loss when real venues convert USDC to receipt
+tokens. The property is that assets landed (totalAssets > 0), not exact round trip.
+
+</i>
+
+```solidity
+function _requireSeeded(Deployed memory d, uint256 seed) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| seed | `uint256` |  |
+
+<a id="_approveadapter-robotmoneyvault-address"></a>
+
+### _approveAdapter
+
+<i>
+
+Approves `adapter_` on `vault_` after asserting the no-proxy invariant: the
+adapter's runtime bytecode must not contain a `DELEGATECALL` opcode (issue #448).
+
+</i>
+
+```solidity
+function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault_ | `RobotMoneyVault` |  |
+| adapter_ | `address` |  |
+
+<a id="_deploy-params"></a>
+
+### _deploy
+
+```solidity
+function _deploy(Params memory p) internal returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_writedeploymentjsonto-deployed-address-uint256-string"></a>
+
+### _writeDeploymentJsonTo
+
+Manifest keys written by this stage: chain_id, usdc, vault, aave_adapter,
+compound_adapter, moonwell_flagship_adapter, admin, and one name/address pair
+per venue: aave_v3_venue_name / aave_v3_venue, compound_v3_venue_name /
+compound_v3_venue, moonwell_flagship_venue_name / moonwell_flagship_venue.
+The old Morpho-named adapter key is gone: the third venue is named for the
+address it wraps.
+Seed fields: seed_share_receiver, seed_shares (minted to the receiver) and
+deployer_share_balance_after (read from the vault at write time, must be 0).
+The verifier asserts the deployer balance is 0 and the receiver holds the seed.
+
+```solidity
+function _writeDeploymentJsonTo(
+        Deployed memory d,
+        address seedReceiver,
+        uint256 seedShares,
+        string memory outPath
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| seedReceiver | `address` |  |
+| seedShares | `uint256` |  |
+| outPath | `string` |  |
+
+## Structs
+
+### Params
+
+```solidity
+struct Params {
+        address admin;
+        address feeRecipient;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
+        address usdcAddress;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin | `address` |  |
+| feeRecipient | `address` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| usdcAddress | `address` |  |
+
+### Deployed
+
+```solidity
+struct Deployed {
+        address usdc;
+        RobotMoneyVault vault;
+        AaveV3Adapter aaveAdapter;
+        CompoundV3Adapter compoundAdapter;
+        MorphoAdapter moonwellAdapter;
+        address admin;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+| vault | `RobotMoneyVault` |  |
+| aaveAdapter | `AaveV3Adapter` |  |
+| compoundAdapter | `CompoundV3Adapter` |  |
+| moonwellAdapter | `MorphoAdapter` |  |
+| admin | `address` |  |
+

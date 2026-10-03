@@ -1,31 +1,19 @@
 # Governance isomorphism: CI, Stage and Production
 
-**Status: governance is NOT isomorphic yet.** Tracked by issue #1447, whose
-"Definition of done" is the only authority for saying otherwise. Migration steps
-1–4 (§5) make the **stage ceremony** and the two forge fork tests
-(`SafeIntegration`, `GovernanceExecutePathAfterHandover`) use a real 2-of-3
-`SafeL2`; §3.0 says what changed. Still open, per #1447: the `DeployTimelock`
-Safe gate accepts a constant-threshold stub; stub Safes and `vm.prank(safe)`
-flows remain in the unit suites; several timelocks use EOA proposers; the
-smoke, dapp and fork e2e devnets govern from the deployer EOA; and production
-has no Safe → Timelock deploy or operating path. The stage host keeps running
-the single-key stand-in until it is redeployed from a ref that carries these
-steps, so the §3.1–§3.4 measurements still describe the live stage chain.
+**Status: one deployment scheme.** Stage, rehearsal and production run the same
+contracts, the same deploy scripts and the same governance path. They differ by
+parameters only (section 1.1). Tracked by issue #1447.
 
 This document specifies the governance topology every environment must present,
-and the verification that proves it. It exists because one environment currently
-does not comply, and the non-compliance is invisible to every check we run.
-
-Companion to [security-model.md](./security-model.md) §4 (Access control &
-admin), which states the production requirement, and to
-`devops/docs/technical/runbook-yaml-architecture.md`'s "Post-flight verification"
-section, which explains why the deploy runbook cannot assert any of this on its
-own.
+and the verification that proves it. Companion to
+[security-model.md](./security-model.md) section 4 (Access control and admin), which
+states the production requirement.
 
 **Paths in this document are relative to this repository unless prefixed
-`devops/`.** The governance topology lives here — the Safe, the ceremony, the
-fork fixture, `DeployTimelock` — while the acceptance driver that grades it lives
-in the `devops` repo. Requirements in §4 bind both.
+`devops/`.** The governance topology lives here (the Safe, `DeployTimelock`, the
+stage table in `scripts/deploy/stage-table.json`). The runbook that deploys it,
+"publish contracts", and the acceptance driver that grades it live in the `devops`
+repo. Requirements in section 4 bind both.
 
 ---
 
@@ -33,37 +21,43 @@ in the `devops` repo. Requirements in §4 bind both.
 
 **Governance is isomorphic across CI, Stage and Production.** The same contract
 code, the same quorum enforcement, the same signing path, the same assertions.
-An environment that cannot enforce quorum is not a weaker version of production —
-it is a different system, and any release decision made from it is unfounded.
+An environment that cannot enforce quorum is not a weaker version of production.
+It is a different system, and any release decision made from it is unfounded.
 
-This is stricter than "staging resembles production". Governance is the one
-subsystem where a stand-in is indistinguishable from the real thing right up to
-the moment it matters, because a single-key forwarder and a 2-of-N multisig
-present the same interface to everything downstream: the TimelockController, the
-router, the QA driver, and every assertion in this repo.
+Governance is the one subsystem where a stand-in is indistinguishable from the real
+thing right up to the moment it matters, because a single-key forwarder and a 2-of-N
+multisig present the same interface to everything downstream. So no stand-in
+exists: every environment creates a real Safe through the canonical factory and
+drives it through `execTransaction`.
 
-`docs/technical/security-model.md:328` already draws the line for unit tests — "Must not use
-`vm.prank` as a substitute for real Safe quorum verification." This document
+`docs/technical/security-model.md` already draws the line for unit tests: they must
+not use `vm.prank` as a substitute for real Safe quorum verification. This document
 extends the same rule to every deployed environment.
 
 ### 1.1 What isomorphic does and does not mean
 
 Isomorphic here means **the governance path is the same code exercised the same
-way**. It does not mean the environments are identical in every respect:
+way**. Exactly four things may differ between environments. Everything else must
+match.
 
-| Property | CI | Stage | Production | Must match? |
-|---|---|---|---|---|
-| Safe contract code | canonical | canonical | canonical | **yes** |
-| Quorum enforced by Safe | yes | yes | yes | **yes** |
-| Signing path (`execTransaction`) | yes | yes | yes | **yes** |
-| Threshold ≥ 2 | yes | yes | yes | **yes** |
-| Owner key custody | in-memory test keys | ephemeral keystores | hardware wallets | no |
-| Owner set membership | test addresses | ceremony keys | named humans | no |
-| Chain | forked Base snapshot | forked Base snapshot | Base mainnet | no |
+| Property | CI and Twin chain (stage) | Production (Base 8453) | Must match? |
+|---|---|---|---|
+| Safe contract code (`SafeL2` through the canonical factory) | canonical | canonical | **yes** |
+| Quorum enforced by the Safe | yes | yes | **yes** |
+| Signing path (`execTransaction`, two or more owner signatures) | yes | yes | **yes** |
+| Threshold at least 2 | yes | yes | **yes** |
+| Deploy scripts and contracts | same | same | **yes** |
+| Chain id | 918453 (or the forge test chain) | 8453 | no, allowed difference |
+| Owner keys | throwaway keys | named humans' keys | no, allowed difference |
+| Owner key custody | encrypted keystores | hardware wallets | no, allowed difference |
+| Timelock delay value | short, off chain 8453 only | 172800 s (48 hours), enforced as a floor on chain 8453 | no, allowed difference |
 
-Key *custody* legitimately differs — CI cannot hold a hardware wallet. What may
-never differ is that **two distinct owner signatures are required, and the Safe
-contract is what enforces it.**
+Key custody legitimately differs: CI cannot hold a hardware wallet. The delay value
+legitimately differs: the Twin chain cannot move its clock forward, so a rehearsal
+cannot wait 48 hours. A short delay proves the scripts run. It never proves the real
+delay. The real delay and the real signers are proven on Base mainnet through the
+real Safe (runbook Q2). What may never differ is that **two distinct owner
+signatures are required, and the Safe contract is what enforces it.**
 
 ---
 
@@ -116,127 +110,43 @@ it works, but the event stream production tooling expects is absent.
 
 ---
 
-## 3. Current state
+## 3. Where each requirement is enforced
 
-### 3.0 What issue #1447 changed
-
-| Requirement | Where it is now enforced |
+| Requirement | Where it is enforced |
 |---|---|
-| R2, R3 | The fork fixture carries all five §2.2 contracts with their canonical code, and both singletons carry the lock their constructor writes (threshold = 1 in storage slot 4, so `setup()` on the singleton reverts `GS200`, as on Base). `scripts/devnet/snapshot-fork.sh` warms the five in a step that aborts on a missing one, writes the singletons' slot 4 read from Base at the pin block, checks every `anvil_setCode`/`anvil_setStorageAt` response, and runs the gate on what it captured. `scripts/devnet/check-fork-safe-set.sh` fails with exit 14 naming any contract that is absent, whose code does not hash to its pinned keccak256 (table below), or (singletons) whose slot 4 is not 1. The gate runs inside `check-fork-manifest.sh`, which is run by `run-golden-forge-forks.sh` — the suite-01-02 `forge-fork-vault-regressions` job, once per fork target (VaultForkRegressions, DeploySeedDeposit, SafeIntegration, GovernanceExecutePathAfterHandover) — and by suite-14 (smoke test). It does **not** run in suite-05's `anvil-goldens`/`anvil-governance` groups, which load `CURRENT.anvil-state` directly and verify only its sha256 digest. Its offline self-test runs in the same suite-01-02 job. |
-| R4 | `SafeIntegration.t.sol` and the stage ceremony both use `SafeL2` (`0x29fcB43b…`); the test asserts the proxy's `masterCopy` slot, and `verify` checks the same slot on stage. |
-| R5–R8 | `fusion-ceremony.sh run` creates a `SafeProxy` via `SafeProxyFactory.createProxyWithNonce` on `SafeL2` with the canonical fallback handler, threshold 2. It refuses a chain without the Safe set; there is no stand-in. `RehearsalSafe` and `DeployRehearsalSafe.s.sol` are deleted. |
-| R9–R11 | Every Safe operation (`release`, `propose`) goes through `execTransaction` with two owner signatures over the Safe's own `getTransactionHash`, from keystores via `cast wallet sign --no-hash`, packed ascending by owner; each signature's `v` must be 27/28. A missing keystore or password stops the operation with exit 65 before anything is sent. Keystore passwords reach `cast wallet new` as `CAST_PASSWORD`, never on the command line, and never empty. A `run` that dies before its record is written shreds the keys it minted; on SIGINT/SIGTERM it shreds them and exits 130/143. A `run` that writes its record keeps every key the record names. |
-| R10 (CI handover) | `SafeIntegration.t.sol` and `DeployTimelock.t.sol` run `DeployTimelock` from the deployer that holds the roles, so the script revokes what the deployer actually holds; before, the script contract kept `ADMIN_ROLE` on all five governed contracts and the gateway `DEFAULT_ADMIN_ROLE`. The tests list every holder from the `RoleGranted`/`RoleRevoked` logs (the contracts are not `AccessControlEnumerable`) and assert the timelock is the only `ADMIN_ROLE` holder on each governed contract (the router also has RouterGovernance, by design) and the only gateway `DEFAULT_ADMIN_ROLE` holder. A real `forge script --broadcast` run of `DeployTimelock.s.sol` was already correct: it leaves the deployer EOA with no role. |
-| R12–R14 | `verify` reads everything from the Safe: its runtime code must hash to the canonical SafeProxy's (table below), threshold 2, owner set equal to the record's signers, `SafeL2` as singleton, no module (`getModulesPaginated(0x1, 10)` empty), no guard (slot `keccak256("guard_manager.guard.address")` zero), and the canonical fallback handler in slot `keccak256("fallback_manager.handler.address")`. Quorum is proved enforced by four eth_calls of one harmless SafeTx: one owner signature must revert `GS020`; the lowest owner's signature twice, and two non-owner signatures (the existing submitter and voter-a keystores), must each revert `GS026`; threshold signatures must return `true`. Every unreadable fact is a FAIL line and `verify` always reaches its summary. It no longer carries the single-key check. The devops driver grades these as `AC-ID-06#safe-quorum`, now a required AC-ID-06 clause. CI adds the GS020 negative control with its positive twin and a GS026 same-owner-twice control, asserts the fallback handler slot and that the handler and MultiSend carry code, and cancels a timelock operation through a two-signature `execTransaction`. |
-| Provisioning | `ensure` provisions only a fresh chain. It first asks the RPC for its chain id, and an RPC that does not answer is exit 66 "rpc unreachable: <url>", never a reboot instruction. The recorded ceremony's own timelock (its code hash is the record's `code_hashes.timelock`, or it makes the recorded Safe its proposer), a recorded Safe that still has code, a `ProxyCreation` from the canonical factory, or (in `run`) a deployer that no longer holds gateway `ADMIN_ROLE` makes it exit 65 with "reboot the devnet (chain down/up)" and the stale record's path. Other code at the recorded timelock address is not evidence: the timelock's address follows the deployer's nonce, so a rebooted chain can put another contract there. A ceremony is live only with all three Safe owner keystores, the non-owner control keystores `verify` signs with (submitter, voter-a), and their `.pw` files. |
-| Self-test | `scripts/stage/tests/fusion-ceremony-selftest.sh` drives all of the above against a fake chain and a fake 2-of-3 Safe (digest over every SafeTx field, DELEGATECALL refused, owners recorded in descending address order). It also drives a whole `run` through a fake forge that plays `DeployTimelock`, and a SIGTERM to a `run` blocked inside cast. It runs as the suite-01-02 `fusion-ceremony-selftest` job on every non-draft PR, with a pinned foundry release, and fails unless the run prints its tally with 0 failures and at least the executed-assertion floor. |
+| R1 to R3 | The fork fixture carries all five contracts of section 2.2 with their canonical code, and both singletons carry the lock their constructor writes (threshold 1 in storage slot 4, so `setup()` on a singleton reverts `GS200`, as on Base). `scripts/devnet/snapshot-fork.ts` warms the five and aborts on a missing one. `scripts/devnet/check-fork-safe-set.sh` fails naming any contract that is absent, whose code does not hash to its pinned keccak256 (table below), or (singletons) whose slot 4 is not 1. |
+| R4 | `SafeIntegration.t.sol` and the stage deploy both use `SafeL2` (`0x29fcB43b...`). The verifier checks the proxy's `masterCopy` slot. |
+| R5 to R8 | The devops publish-contracts runbook creates the `SafeProxy` through `@safe-global/protocol-kit` (`SafeProxyFactory.createProxyWithNonce` on `SafeL2`, canonical fallback handler, threshold 2). It refuses a chain without the Safe set. There is no fallback. |
+| R9 to R11 | Every Safe operation goes through `execTransaction` with two owner signatures over the Safe's own `getTransactionHash`, packed ascending by owner. Keystore passphrases are never on a command line. |
+| R10 (CI handover) | `SafeIntegration.t.sol` and `DeployTimelock.t.sol` run `DeployTimelock` from the deployer that holds the roles, list every holder from the `RoleGranted` and `RoleRevoked` logs (the contracts are not `AccessControlEnumerable`), and assert the timelock is the only `ADMIN_ROLE` holder on each governed contract (the router also has RouterGovernance, by design) and the only gateway `DEFAULT_ADMIN_ROLE` holder. |
+| R12 to R14 | The verifier reads everything from the Safe: runtime code hash equal to the canonical SafeProxy's, threshold 2, owner set equal to the sheet's signers, `SafeL2` as singleton, no module, no guard, the canonical fallback handler. Quorum is proved enforced by eth_calls of one harmless SafeTx: one owner signature must revert `GS020`, the same owner twice and two non-owners must each revert `GS026`, and threshold signatures must return `true`. The devops driver grades these as `AC-ID-06#safe-quorum`. |
+| Timelock delay | `DeployTimelock.s.sol` enforces the 172800 s floor and the Safe floors only when `block.chainid == 8453`. Off that chain the delay is a parameter. |
 
 Pinned code hashes (keccak256 of runtime code), derived from the committed fixture
 and cross-checked with `cast codehash` on anvil loaded from it:
 
 | Contract | Code hash | Pinned in |
 |---|---|---|
-| `SafeProxy` v1.4.1 (every proxy the factory creates) | `0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c` | `fusion-ceremony.sh` (`verify`) |
-| `Safe` singleton (L1) | `0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4` | `check-fork-safe-set.sh` |
-| `SafeL2` singleton | `0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff` | `check-fork-safe-set.sh` |
-| `SafeProxyFactory` | `0x50c3cdc4074750a7a974204a716c999edd37482f907608d960b2b025ee0b3317` | `check-fork-safe-set.sh` |
-| `CompatibilityFallbackHandler` | `0x7c6007a5d711cea8dfd5d91f5940ec29c7f200fe511eb1fc1397b367af3c42f9` | `check-fork-safe-set.sh` |
-| `MultiSend` | `0x0e4f7fc66550a322d1e7688e181b75e217e662a4f3f4d6a29b22bc61217c4b77` | `check-fork-safe-set.sh` |
+| `SafeProxy` v1.4.1 (every proxy the factory creates) | `0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c` | the devops publish-contracts verifier (`verify`) |
+| `Safe` singleton (L1) | `0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4` | `scripts/devnet/check-fork-safe-set.sh` |
+| `SafeL2` singleton | `0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff` | `scripts/devnet/check-fork-safe-set.sh` |
+| `SafeProxyFactory` | `0x50c3cdc4074750a7a974204a716c999edd37482f907608d960b2b025ee0b3317` | `scripts/devnet/check-fork-safe-set.sh` |
+| `CompatibilityFallbackHandler` | `0x7c6007a5d711cea8dfd5d91f5940ec29c7f200fe511eb1fc1397b367af3c42f9` | `scripts/devnet/check-fork-safe-set.sh` |
+| `MultiSend` | `0x0e4f7fc66550a322d1e7688e181b75e217e662a4f3f4d6a29b22bc61217c4b77` | `scripts/devnet/check-fork-safe-set.sh` |
 
 The SafeProxy hash was measured on a proxy created by the canonical factory on
 anvil loaded from the committed fixture; SafeProxy has no immutables, so every
 proxy carries the same runtime code.
 
-The stage Safe's owners are three dedicated keys — `approver`, `approver-b`,
-`approver-c` — minted with the other ephemeral keys (§7 Q1).
+The SafeProxy hash was measured on a proxy created by the canonical factory on
+anvil loaded from the committed fixture. SafeProxy has no immutables, so every
+proxy carries the same runtime code.
 
-The fixture change adds the three missing contracts to the committed block
-48896605 fixture rather than re-pinning it; see §7 Q5 for why.
-
-The subsections below are the measurements that motivated the change. They
-describe the stage chain as it was on 2026-09-18, and still describe it until it
-is redeployed.
-
-Measured against the live stage chain and the committed sources, 2026-09-18.
-
-### 3.1 Per environment
-
-| Environment | Safe | Quorum enforced | Drives the timelock |
-|---|---|---|---|
-| **CI** (`suite-01-02-forge-tests.yml`, step "forge test (Safe multisig integration — issue 422)") | real proxy, 2-of-3, via canonical factory | **yes** | `execTransaction`, two packed signatures |
-| **Stage** (`scripts/stage/fusion-ceremony.sh:479`) | `RehearsalSafe` stand-in, unconditional | **no** | one EOA calls `exec()` |
-| **Production** (`docs/technical/security-model.md:89`) | real 2-of-N, hardware wallets | yes | N signers |
-
-**Stage is the only environment that unconditionally cannot enforce quorum, and
-it is the one that gates release.**
-
-### 3.2 Why the stand-in is undetectable
-
-`contracts/script/DeployRehearsalSafe.s.sol` defines `RehearsalSafe`:
-
-- one `immutable owner`, set at construction to the deploying EOA;
-- `getThreshold()` declared `pure`, returning a hardcoded `2`;
-- `exec(target, value, data)`, callable only by that one owner.
-
-`DeployTimelock.s.sol:_validate` requires `SAFE_ADDRESS` to have deployed
-bytecode and `getThreshold() >= 2`, specifically so that — in its own words — an
-EOA at `SAFE_ADDRESS` cannot let a single private key control all of governance.
-
-`RehearsalSafe` satisfies that check while **being** the thing it forbids. A
-`pure` function returning a constant is not a threshold; it is an assertion that
-cannot fail. Every downstream check inherits the same blindness.
-
-The ceremony then compounds it. `fusion-ceremony.sh:292` asserts:
-
-```
-AC-ID-06 the approver is the only key that drives the safe
-```
-
-That check does not detect the defect. **It codifies it.** A check asserting
-single-key control cannot coexist with a requirement for 2-of-N quorum, and it
-must be deleted, not satisfied.
-
-### 3.3 The fixture does not carry the full Safe set
-
-Stage and CI both run `anvil --load-state testing/fixtures/fork-state/CURRENT.anvil-state`.
-The fixture is produced by `scripts/devnet/snapshot-fork.sh`, which boots
-`anvil --fork-url <Base> --fork-block-number <tip-100> --dump-state`, warms
-selected state, then flushes on `SIGINT`.
-
-**`--dump-state` persists only accounts touched during that session.** The
-fixture is therefore a pruned snapshot, not a Base mirror — and neither consumer
-passes `--fork-url`, so nothing can be fetched lazily afterwards.
-
-Measured on the live stage chain:
-
-| Contract | Present |
-|---|---|
-| `Safe` singleton `0x41675C09…` | yes, 47,161 bytes |
-| `SafeProxyFactory` `0x4e1DCf7A…` | yes, 6,111 bytes |
-| `SafeL2` singleton `0x29fcB43b…` | **no** |
-| `CompatibilityFallbackHandler` `0xfd0732Dc…` | **no** |
-| `MultiSend` `0x38869bf6…` | **no** |
-
-`snapshot-fork.sh` contains **no Safe warming step** — it warms USDC and the real
-adapters (#685) only. The two contracts that are present are incidental. Nothing
-guarantees them, and the next `refresh-fork-fixture.sh` may silently drop them,
-breaking `SafeIntegration.t.sol` in CI with no diagnostic pointing at the cause.
-
-### 3.4 Defect in the existing CI test
-
-`contracts/test/SafeIntegration.t.sol:120` declares:
-
-```solidity
-address internal constant SAFE_SINGLETON_L2 = 0x41675C099F32341bf84BFc5382aF534df5C7461a;
-```
-
-That address is the **L1 `Safe`** singleton. `SafeL2` is `0x29fcB43b…` — the
-address the file's own doc comment cites at line 104. The constant is therefore
-mislabelled, and on Base it selects the wrong singleton.
-
-This does not invalidate the test's quorum result: real Safe code enforces the
-2-of-3 either way. It does mean CI is not exercising the singleton production
-should use on an L2.
+The Twin chain Safe's owners are three dedicated throwaway keys, distinct from the
+submitter, the voters and the emergency key. The submitter is the agent whose
+receipts the Safe releases, the voters are RouterGovernance's approving body, and
+the emergency key is the independent hot key. The verifier asserts all of them are
+distinct.
 
 ---
 
@@ -279,11 +189,11 @@ Normative. "Must" is binding; a violation is a release blocker.
   ascending by owner address over the EIP-712 `SafeTx` digest from
   `getTransactionHash`.
 - **R10.** No environment may expose a single-key path that bypasses signature
-  collection. `RehearsalSafe.exec()` is exactly such a path and must not exist.
+  collection. A contract that forwards calls for one key is such a path and must not exist.
 - **R11.** Owner private keys must not be written to disk unencrypted or passed
   on a command line. Signing reads from the keystore
-  (`cast wallet sign --no-hash --keystore`), matching how the ceremony already
-  handles every other key.
+  (`cast wallet sign --no-hash --keystore`), matching how every other key
+  is handled.
 
 ### 4.4 Verification
 
@@ -294,8 +204,7 @@ Normative. "Must" is binding; a violation is a release blocker.
   a `threshold - 1` signature attempt must revert. Configuration without a
   negative control proves nothing — this mirrors how `propose-negative` already
   makes `propose` meaningful.
-- **R14.** Any assertion that a single key drives the Safe must be deleted.
-  Specifically `fusion-ceremony.sh:292`.
+- **R14.** Any assertion that a single key drives the Safe must not exist.
 - **R15.** (issue #1476) Gateway agent ownership is governance authority too:
   the recorded owner alone can call `setPolicy` and `revokeAgent`. The handover
   must leave no gateway agent owned by the deployer. `DeployTimelock` hands
@@ -303,104 +212,25 @@ Normative. "Must" is binding; a violation is a release blocker.
   `transferAgentOwnership` and requires none is still deployer-owned. The
   list is a required input with no default (a comma-separated list, or
   `none`), because the gateway cannot enumerate an owner's agents; the stage
-  ceremony passes every deployer-owned agent the gateway logs name, and
-  `verify` fails `AC-CORE-05 no agent authorized by the deployer is still
+  runner passes every deployer-owned agent the gateway logs name, and the
+  verifier fails `AC-CORE-05 no agent authorized by the deployer is still
   deployer-owned` when an agent an `AgentAuthorized` or
   `AgentOwnershipTransferred` log gives the deployer is still deployer-owned.
-  This closes one gap in the handover; it does not by itself make stage and
-  production governance isomorphic (issue #1447 tracks that).
 
 ---
 
-## 5. Migration
-
-Ordered by dependency. Each step is independently reviewable.
-
-Steps 1–4 are done (issue #1447); §3.0 lists where each requirement now lives.
-Two places deviate from the plan as written: step 1 augmented the committed
-fixture instead of regenerating it (§7 Q5), and step 3's owners are three
-dedicated approver keys rather than three of the existing ephemeral keys (§7 Q1).
-
-**Step 1 — make the fixture carry Safe (R2, R3).** Add a Safe warming step to
-`snapshot-fork.sh` touching all five §2.2 addresses. Add the assertion to
-`check-fork-manifest.sh`. Regenerate the fixture. Nothing downstream is safe to
-build until the contracts are guaranteed present; today's two are incidental.
-
-**Step 2 — correct the singleton (R4).** Point `SafeIntegration.t.sol` at
-`SafeL2`, rename `SAFE_SINGLETON_L2` to match what it holds, and reconcile the
-doc comment at line 104. Self-contained; CI proves it.
-
-**Step 3 — real Safe in the ceremony (R5–R11).** Replace
-`fusion-ceremony.sh:479`'s `DeployRehearsalSafe` call with
-`createProxyWithNonce`, owners = the three ephemeral keys the ceremony already
-mints at `:440-447`, threshold 2. Replace the `exec()` drive with
-`execTransaction` plus two keystore signatures. Delete
-`DeployRehearsalSafe.s.sol` and the `RehearsalSafe` contract.
-
-The EIP-712 digest construction and ascending signature packing already exist in
-`SafeIntegration.t.sol` and have been exercised in CI since 2026-05-18. This step
-is a port, not new cryptographic work.
-
-**Step 4 — verification (R12–R14).** Delete `fusion-ceremony.sh:292`. Add
-`getThreshold() == 2` and `getOwners()` set-equality checks. Add the
-single-signature negative control (R13). Update `AC-ID-06`'s clause labels in
-`devops/fusion-qa/src/checks/ceremony-verify.ts` to match.
-
-**Step 5 — Base Sepolia (R8): moot.** The Base Sepolia rehearsal path this step
-would have changed was removed outright (issue #1458, PR #1451); there is no
-`rehearsal.sh` fallback left to fix.
-
 ---
 
-## 6. Consequences
+## 5. Open questions
 
-- Stage stops producing release verdicts from a governance topology production
-  will never run. This is the point of the document.
-- The ceremony gains a real dependency on the Safe set being present in the
-  fixture. R3 converts that from a latent failure into a build-time one.
-- `RehearsalSafe` disappears. Any chain without a canonical Safe deployment can
-  no longer run the ceremony at all — deliberately, per R8. The recourse is to
-  deploy Safe to that chain through Safe's own published process, not to
-  substitute a stand-in.
-- CI gains a negative control (R13) that means something. `SafeIntegration.t.sol`
-  had a 1-of-3 case, but it accepted any revert (`vm.expectRevert()`); it now
-  requires Safe's own `GS020` and then executes the same SafeTx with two
-  signatures, and a same-owner-twice case requires `GS026`.
-- AC-ID-06 cannot PASS on a stage still running the pre-#1447 stand-in: the
-  devops driver requires `AC-ID-06#safe-quorum`, which only this `verify` prints.
-
----
-
-## 7. Open questions
-
-1. **Owner set composition on stage.** *Decided for #1447:* three dedicated
-   keys, `approver`, `approver-b`, `approver-c`, minted like every other
-   ephemeral key. Reusing existing keys would fuse governing bodies: the
-   submitter is the agent whose receipts the Safe releases, the voters are
-   RouterGovernance's approving body, and the emergency key is the independent
-   hot key. `verify` asserts all of them are distinct. Still open: a
-   production-shaped set with one key deliberately withheld from the host.
-2. **Inheriting a production Safe.** Once a Robot Money Safe exists on Base
-   mainnet, a fork could inherit it directly, giving stage the real owner set and
-   threshold. Signatures would come from `approveHash` under
-   `anvil_impersonateAccount` rather than ECDSA. This is strictly more
-   isomorphic and should be revisited after the first mainnet deployment.
-3. **Fixture size.** *Measured:* adding the three missing contracts grew
-   `CURRENT.anvil-state` from 2,835,711 to 2,897,392 bytes (+2.2%); the two
-   singleton locks (slot 4 = 1) add 274 bytes, to 2,897,666.
-4. **Scope of R9.** This document covers the Safe → TimelockController path. It
-   does not yet say anything about the `RouterGovernance` voter set, which is a
-   separate governing body with its own quorum. Whether the two need a single
-   unified isomorphism statement is unresolved.
-5. **Re-pinning the fixture.** Step 1 did run `snapshot-fork.sh` end to end
-   (mainnet.base.org, tip-100 = block 51734246, `foundry:latest` = anvil 1.8.1).
-   The capture succeeded and carried all five Safe contracts, but its dump
-   omitted EIP-1967 implementation contracts the committed fixture carries
-   (Aave V3 Pool implementation `0xa4ab…`, aUSDC implementation `0x273e…`,
-   Compound and Morpho implementations). Loaded offline, `aUSDC.totalSupply()`
-   and `Pool.getReserveNormalizedIncome()` returned empty data; the same calls
-   succeed on the committed fixture. That re-pin would have broken every offline
-   fork suite, so step 1 instead added the three contracts (code, nonce and
-   balance read from Base at block 48896605) to the committed fixture, leaving
-   every other account byte-identical. The next re-pin needs `snapshot-fork.sh`
-   to warm proxy implementations (or a pinned foundry image) first.
+1. **Inheriting a production Safe.** Once a Robot Money Safe exists on Base mainnet,
+   a rehearsal could inherit its owner set and threshold, with signatures from
+   `approveHash`. This is strictly more isomorphic and should be revisited after the
+   first mainnet deployment.
+2. **Scope of R9.** This document covers the Safe to TimelockController path. It does
+   not yet say anything about the `RouterGovernance` voter set, which is a separate
+   governing body with its own quorum.
+3. **Fixture re-pin.** The next re-pin needs `snapshot-fork.ts` to warm EIP-1967
+   implementation contracts (the Aave V3 Pool and aUSDC implementations, Compound and
+   Morpho implementations), or a pinned foundry image. A dump that omits them breaks
+   every offline suite that reads `aUSDC.totalSupply()`.

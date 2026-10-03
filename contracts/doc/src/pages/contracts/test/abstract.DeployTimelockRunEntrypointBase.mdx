@@ -1,17 +1,17 @@
 ---
 title: "DeployTimelockRunEntrypointBase"
-description: "`run()` hands the AGENT_ADDRESSES list it reads to the handover (issue #1476). This drives run()'s own body, `_runFrom`, through the broadcast path against a Deploy.s.sol stack. Every env var it reads carries a prefix only this test sets, because env vars are process-wide and forge runs tests in parallel."
+description: "`run()` hands the AGENT_ADDRESSES list it reads to the handover (issue #1476). This drives run()'s own body, `_runFrom`, through the broadcast path against a core stack (CoreStages). Every env var it reads carries a prefix only this test sets, because env vars are process-wide and forge runs tests in parallel."
 ---
 
 # DeployTimelockRunEntrypointBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83eab89b8819bc1dd25ef3cee4ffbdd7220d6f63/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployTimelock.t.sol)
 
-**Inherits:** Test
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
 
 `run()` hands the AGENT_ADDRESSES list it reads to the handover
 (issue #1476). This drives run()'s own body, `_runFrom`, through
-the broadcast path against a Deploy.s.sol stack. Every env var it
+the broadcast path against a core stack (CoreStages). Every env var it
 reads carries a prefix only this test sets, because env vars are
 process-wide and forge runs tests in parallel.
 
@@ -29,13 +29,19 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 ```
 
+## State Variables
+
 ### OUT_PATH
 
-```solidity
-string internal constant OUT_PATH = "/tmp/1476-run-entrypoint-manifest.json";
-```
+<i>
 
-## State Variables
+Set per test in setUp from `uniqueManifestPath`: the subclasses below share this base, so a fixed name would be shared too.
+
+</i>
+
+```solidity
+string internal OUT_PATH;
+```
 
 ### harness
 
@@ -64,7 +70,7 @@ address internal submitter = makeAddr("run-stage-submitter");
 ### dep
 
 ```solidity
-Deploy.Deployed internal dep;
+CoreStages.Stack internal dep;
 ```
 
 ### gateway

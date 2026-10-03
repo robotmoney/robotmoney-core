@@ -4,8 +4,7 @@
 #
 # Issue #1239: no repo/org secret named RMPC_FORK_RPC_URL is provisioned yet,
 # so `secrets.RMPC_FORK_RPC_URL` is empty and the live-RPC fork steps in
-# suite-01-02-forge-tests.yml (fork-regressions job) and
-# suite-21-nightly.yml (live-base-fork-drift job) fall back to unkeyed public
+# suite-01-02-forge-tests.yml (fork-regressions job) fall back to unkeyed public
 # Base endpoints (the list lives in scripts/devnet/fork-rpc-lib.sh), which
 # rate-limit aggressively. That surfaced as an unexplained
 # Cloudflare 429 / "Archive requests require a personal token" deep in a job

@@ -1,0 +1,133 @@
+---
+title: "RwaBasketVault"
+description: "The rmRWA vault. A plain `BasketVault` row set: no oracle, no staleness halt, no custom adapter. Each asset is priced from its own Uniswap V3 pool TWAP through the existing `UniswapV3SwapAdapter`, exactly as the other basket vaults price theirs. The launch row is deSPXA on its fee 500 pool (config/rwa-assets.json)."
+---
+
+# RwaBasketVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/vaults/RwaBasketVault.sol)
+
+**Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
+
+**Title:** RwaBasketVault
+
+The rmRWA vault. A plain `BasketVault` row set: no oracle, no staleness halt, no
+custom adapter. Each asset is priced from its own Uniswap V3 pool TWAP through the
+existing `UniswapV3SwapAdapter`, exactly as the other basket vaults price theirs.
+The launch row is deSPXA on its fee 500 pool (config/rwa-assets.json).
+
+ISSUER FREEZE RISK. A tokenised-equity issuer may freeze transfers at any time. A
+freeze makes swaps revert, which blocks deposits and withdrawals until the issuer
+lifts it. Holders keep their shares. `pause()` surfaces the state to users.
+This vault never calls an issuer primary-redemption path. Entry and exit are
+secondary-market swaps only.
+
+The vault inherits every control of `BasketVault`: caps, slippage floors, TWAP
+cardinality and liquidity checks on `addAsset`, the adapter code-hash allowlist,
+pause and emergency unwind. It adds only a name, a symbol and an asset cap.
+
+## Constants
+
+### _MAX_ASSETS
+
+```solidity
+uint256 private constant _MAX_ASSETS = 10;
+```
+
+### _DEFAULT_SLIPPAGE_BPS
+
+```solidity
+uint256 private constant _DEFAULT_SLIPPAGE_BPS = 100;
+```
+
+## Functions
+
+<a id="constructor-ierc20-iswaprouter-uint256-uint256-uint256-address-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(
+        IERC20 usdc_,
+        ISwapRouter swapRouter_,
+        uint256 tvlCap_,
+        uint256 perDepositCap_,
+        uint256 exitFeeBps_,
+        address feeRecipient_,
+        address admin_,
+        address emergencyResponder_
+    )
+        BasketVault(
+            "Robot Money RWA",
+            "rmRWA",
+            usdc_,
+            swapRouter_,
+            tvlCap_,
+            perDepositCap_,
+            exitFeeBps_,
+            _DEFAULT_SLIPPAGE_BPS,
+            feeRecipient_,
+            admin_,
+            emergencyResponder_
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `IERC20` |  |
+| swapRouter_ | `ISwapRouter` |  |
+| tvlCap_ | `uint256` |  |
+| perDepositCap_ | `uint256` |  |
+| exitFeeBps_ | `uint256` |  |
+| feeRecipient_ | `address` |  |
+| admin_ | `address` |  |
+| emergencyResponder_ | `address` |  |
+
+<a id="maxassets"></a>
+
+### maxAssets
+
+Subclasses declare the maximum number of assets in the basket.
+
+```solidity
+function maxAssets() public pure override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="shortlist"></a>
+
+### shortlist
+
+Token, pool, fee tier, active flag and held balance for every basket row.
+Same shape as `ProtocolAssetVault.shortlist()` and `AgentTokenVault.shortlist()`.
+
+```solidity
+function shortlist()
+        external
+        view
+        returns (
+            address[] memory tokens,
+            address[] memory pools,
+            uint24[] memory fees,
+            bool[] memory active,
+            uint256[] memory balances
+        );
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokens | `address[]` |  |
+| pools | `address[]` |  |
+| fees | `uint24[]` |  |
+| active | `bool[]` |  |
+| balances | `uint256[]` |  |
+

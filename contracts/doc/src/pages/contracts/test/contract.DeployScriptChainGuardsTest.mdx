@@ -1,0 +1,138 @@
+---
+title: "DeployScriptChainGuardsTest"
+description: "On chain id 8453, every script's `run()` refuses to start when EXPECTED_CHAIN_ID is unset. Nothing else is set: the guard is the first statement of each `run()`, so a script that skipped it would fail later with a different message."
+---
+
+# DeployScriptChainGuardsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployScriptChainGuards.t.sol)
+
+**Inherits:** Test
+
+On chain id 8453, every script's `run()` refuses to start when EXPECTED_CHAIN_ID is
+unset. Nothing else is set: the guard is the first statement of each `run()`, so a
+script that skipped it would fail later with a different message.
+
+<i>
+
+No test here sets EXPECTED_CHAIN_ID: the name is read unprefixed by `run()`, env vars
+are process-wide and forge runs test contracts in parallel. A mismatching or non-8453
+value is covered through the prefixed readers in DeployMainnetInputs.t.sol and
+DeployTimelock.t.sol.
+
+</i>
+
+## Constants
+
+### MSG
+
+```solidity
+string internal constant MSG = "EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet";
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_libs_run_requiresexpectedchainonbase"></a>
+
+### test_libs_run_requiresExpectedChainOnBase
+
+```solidity
+function test_libs_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_vault_run_requiresexpectedchainonbase"></a>
+
+### test_vault_run_requiresExpectedChainOnBase
+
+```solidity
+function test_vault_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_gateway_run_requiresexpectedchainonbase"></a>
+
+### test_gateway_run_requiresExpectedChainOnBase
+
+```solidity
+function test_gateway_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_deploytimelock_run_requiresexpectedchainonbase"></a>
+
+### test_deployTimelock_run_requiresExpectedChainOnBase
+
+```solidity
+function test_deployTimelock_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_portfoliorouter_run_requiresexpectedchainonbase"></a>
+
+### test_portfolioRouter_run_requiresExpectedChainOnBase
+
+```solidity
+function test_portfolioRouter_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_vaultregistry_run_requiresexpectedchainonbase"></a>
+
+### test_vaultRegistry_run_requiresExpectedChainOnBase
+
+```solidity
+function test_vaultRegistry_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_routergovernance_run_requiresexpectedchainonbase"></a>
+
+### test_routerGovernance_run_requiresExpectedChainOnBase
+
+```solidity
+function test_routerGovernance_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_icpolicy_run_requiresexpectedchainonbase"></a>
+
+### test_icPolicy_run_requiresExpectedChainOnBase
+
+```solidity
+function test_icPolicy_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_protocolassetvault_run_requiresexpectedchainonbase"></a>
+
+### test_protocolAssetVault_run_requiresExpectedChainOnBase
+
+```solidity
+function test_protocolAssetVault_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_agenttokenvault_run_requiresexpectedchainonbase"></a>
+
+### test_agentTokenVault_run_requiresExpectedChainOnBase
+
+```solidity
+function test_agentTokenVault_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_rwabasketvault_run_requiresexpectedchainonbase"></a>
+
+### test_rwaBasketVault_run_requiresExpectedChainOnBase
+
+```solidity
+function test_rwaBasketVault_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_activateeligibility_run_requiresexpectedchainonbase"></a>
+
+### test_activateEligibility_run_requiresExpectedChainOnBase
+
+```solidity
+function test_activateEligibility_run_requiresExpectedChainOnBase() public;
+```
+

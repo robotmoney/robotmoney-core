@@ -4,7 +4,7 @@ title: "RobotMoneyVaultRouteDepositTest"
 
 # RobotMoneyVaultRouteDepositTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/bc45d15d9b60824c9fb575df196f7c638a354620/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
 
 **Inherits:** Test
 
@@ -80,7 +80,7 @@ uint256 internal constant METAMORPHO_TOTAL_ASSETS_GAS = 201_145;
 
 <i>
 
-The devnet / `Deploy.s.sol` cap set: 3334 / 3333 / 3333, summing to
+The devnet cap set (the stage default): 3334 / 3333 / 3333, summing to
 exactly `MAX_BPS`. Reproduced verbatim so the test models the real
 three-adapter vault the out-of-gas failure was observed on.
 
@@ -295,7 +295,7 @@ function test_routeDeposit_dustDeposit_isPlacedByPassOne() public;
 The exact devnet fork-fixture composition the out-of-gas failure
 was traced on (PR #1394): NAV 1 050 131 554 with the three
 adapters at 350 098 606 / 350 033 503 / 349 999 444 and the
-`Deploy.s.sol` cap set, taking the same 5 USDC deposit.
+devnet cap set, taking the same 5 USDC deposit.
 
 <i>
 

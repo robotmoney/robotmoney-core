@@ -5,7 +5,7 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7ad48f9065de8dddbe6591f3819711a68aaed6b6/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/RobotMoneyVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -95,6 +95,46 @@ Minimum enforced interval between rebalance calls (1 hour).
 
 ```solidity
 uint256 public constant MIN_REBALANCE_INTERVAL_FLOOR = 1 hours;
+```
+
+### ADAPTER_CALL_GAS_FLOOR
+
+<i>
+
+Gas that must remain before an adapter external call (its nested protocol calls
+and the 63/64 forwarding rule need headroom).
+
+</i>
+
+```solidity
+uint256 internal constant ADAPTER_CALL_GAS_FLOOR = 400_000;
+```
+
+### TAIL_GAS_FLOOR
+
+<i>
+
+Gas that must remain after the last adapter call for burn, fee and payout transfers.
+
+</i>
+
+```solidity
+uint256 internal constant TAIL_GAS_FLOOR = 150_000;
+```
+
+### PULL_ENTRY_GAS_FLOOR
+
+<i>
+
+Gas that must be available when the adapter-sourcing path starts (idle balance
+does not cover the withdrawal). The path reads every adapter's `totalAssets()`
+twice (MetaMorpho ~201k each), so it needs well over the per-call floor. Below
+this the call reverts `InsufficientGas` instead of running out of gas silently.
+
+</i>
+
+```solidity
+uint256 internal constant PULL_ENTRY_GAS_FLOOR = 1_200_000;
 ```
 
 ## State Variables
@@ -247,6 +287,20 @@ uint256 public lastRebalanceAt;
 ```
 
 ## Functions
+
+<a id="_requiregas-uint256"></a>
+
+### _requireGas
+
+```solidity
+function _requireGas(uint256 floor) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| floor | `uint256` |  |
 
 <a id="constructor-ierc20-uint256-uint256-uint256-address-address-address"></a>
 
@@ -649,6 +703,74 @@ function _netToGross(uint256 net) internal view returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+<a id="redeem-uint256-address-address"></a>
+
+### redeem
+
+Burn `shares` from `owner` and send the net USDC to `receiver`.
+
+<i>
+
+core 1482: the share-to-asset preview reads every adapter's `totalAssets()` before
+`_withdraw` runs, so the entry gas guard sits on the public entrypoints too. Share
+and fee math is untouched: both forward to the inherited ERC-4626 implementation.
+
+</i>
+
+```solidity
+function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Amount of vault shares to burn. |
+| receiver | `address` | Address that receives the USDC. |
+| owner | `address` | Address whose shares are burned (the caller or an approved spender). |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | The amount of USDC sent to `receiver`. |
+
+<a id="withdraw-uint256-address-address"></a>
+
+### withdraw
+
+Send `assets` USDC to `receiver` and burn the matching shares from `owner`.
+
+<i>
+
+See `redeem`.
+
+</i>
+
+```solidity
+function withdraw(uint256 assets, address receiver, address owner)
+        public
+        override
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` | Net amount of USDC the receiver should get. |
+| receiver | `address` | Address that receives the USDC. |
+| owner | `address` | Address whose shares are burned (the caller or an approved spender). |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | The amount of shares burned. |
 
 <a id="_withdraw-address-address-address-uint256-uint256"></a>
 
@@ -2194,6 +2316,23 @@ error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
 | ---- | ---- | ----------- |
 | requested | `uint256` | USDC needed from adapters (after idle balance is applied). |
 | available | `uint256` | Total USDC the active adapters actually delivered or report holding. |
+
+### InsufficientGas
+
+Gas left is below the floor needed to finish the current adapter call safely.
+Raised instead of an opaque out-of-gas so a limit that was too low reverts
+with a reason. Retry with a higher gas limit. (core 1482.)
+
+```solidity
+error InsufficientGas(uint256 available, uint256 required);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| available | `uint256` | `gasleft()` at the check. |
+| required | `uint256` | The floor that was not met. |
 
 ## Structs
 

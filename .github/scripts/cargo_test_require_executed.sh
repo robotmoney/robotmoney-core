@@ -57,7 +57,14 @@ RESULT_LINES="$(grep -cE '^test result:' "$LOG" || true)"
 
 echo "executed-test-guard: ${RESULT_LINES} test binary result line(s), ${PASSED_TOTAL} test(s) passed"
 
-if [ "${PASSED_TOTAL}" -le 0 ]; then
+# Floor: CARGO_TEST_MIN_EXECUTED (default 1) is the least number of passed tests this run may report.
+# A caller that knows how many tests its selection holds raises it (suite 14 does, core 1488).
+MIN_EXECUTED="${CARGO_TEST_MIN_EXECUTED:-1}"
+case "$MIN_EXECUTED" in ''|*[!0-9]*) echo "ERROR: CARGO_TEST_MIN_EXECUTED must be a non-negative integer" >&2; exit 2 ;; esac
+[ "$MIN_EXECUTED" -ge 1 ] || MIN_EXECUTED=1
+
+if [ "${PASSED_TOTAL}" -lt "${MIN_EXECUTED}" ]; then
+  echo "ERROR: ${PASSED_TOTAL} test(s) passed, the floor is ${MIN_EXECUTED}." >&2
   echo "ERROR: zero tests executed (no-tests-collected). A green run with 0 tests" >&2
   echo "       is a silent skip, not coverage. The selected test(s) did not run —" >&2
   echo "       likely the required resource (Postgres testcontainer / devnet) was" >&2

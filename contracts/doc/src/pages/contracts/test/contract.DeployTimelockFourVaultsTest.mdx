@@ -1,0 +1,170 @@
+---
+title: "DeployTimelockFourVaultsTest"
+description: "The one deployment scheme ships four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA). The timelock stage treats each the same way: setRegistry once, EMERGENCY to the emergency key, ADMIN to the timelock, deployer revoked. These tests use the real vault contracts, a real Safe and the real timelock."
+---
+
+# DeployTimelockFourVaultsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
+
+The one deployment scheme ships four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA). The
+timelock stage treats each the same way: setRegistry once, EMERGENCY to the emergency
+key, ADMIN to the timelock, deployer revoked. These tests use the real vault contracts,
+a real Safe and the real timelock.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### EMERGENCY_ROLE
+
+```solidity
+bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+```
+
+### MIN_DELAY
+
+```solidity
+uint256 public constant MIN_DELAY = 2 days;
+```
+
+## State Variables
+
+### script
+
+```solidity
+ManifestHarness internal script;
+```
+
+### deployer
+
+```solidity
+address internal deployer;
+```
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("four-emergency");
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vaults
+
+```solidity
+address[] internal vaults;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### governance
+
+```solidity
+RouterGovernance internal governance;
+```
+
+### d
+
+```solidity
+DeployTimelock.Deployed internal d;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_deployerholdsnoroleonanyvault"></a>
+
+### test_deployerHoldsNoRoleOnAnyVault
+
+```solidity
+function test_deployerHoldsNoRoleOnAnyVault() public view;
+```
+
+<a id="test_everyvaulthastimelockadminemergencykeyandregistry"></a>
+
+### test_everyVaultHasTimelockAdminEmergencyKeyAndRegistry
+
+```solidity
+function test_everyVaultHasTimelockAdminEmergencyKeyAndRegistry() public view;
+```
+
+<a id="test_secondsetregistryrevertsoneveryvault"></a>
+
+### test_secondSetRegistryRevertsOnEveryVault
+
+```solidity
+function test_secondSetRegistryRevertsOnEveryVault() public;
+```
+
+<a id="test_registryretiresucceedsoneveryvault"></a>
+
+### test_registryRetireSucceedsOnEveryVault
+
+```solidity
+function test_registryRetireSucceedsOnEveryVault() public;
+```
+
+<a id="test_emptyvaultlistreverts"></a>
+
+### test_emptyVaultListReverts
+
+```solidity
+function test_emptyVaultListReverts() public;
+```
+
+<a id="test_duplicatevaultreverts"></a>
+
+### test_duplicateVaultReverts
+
+```solidity
+function test_duplicateVaultReverts() public;
+```
+
+<a id="test_manifesthasahandoverentryforeachvault"></a>
+
+### test_manifestHasAHandoverEntryForEachVault
+
+```solidity
+function test_manifestHasAHandoverEntryForEachVault() public;
+```
+

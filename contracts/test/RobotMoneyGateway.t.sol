@@ -10,7 +10,7 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "../gateway/MockVault.sol";
+import {MockVault} from "./helpers/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 
 /// @dev Minimal fee-on-transfer token used to assert the gateway's
@@ -1487,6 +1487,36 @@ contract GatewayRollingDepositWindowTest is Test {
             gateway.effectiveDepositWindowGross(agent),
             0,
             "both entries expired; window fully drained"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // On a chain younger than one window (block.timestamp <= WINDOW_SECONDS)
+    // the effective-total cutoff clamps to zero instead of underflowing, so
+    // every entry is still live. Covers the `: 0` arm of the cutoff ternary
+    // in `_effectiveWindowTotal`, which setUp's 1.7e9 timestamp never reaches.
+    // -------------------------------------------------------------------
+
+    function test_effectiveWindowGross_chainYoungerThanWindow_cutoffClampsToZero() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        p.maxPerPayment = MAX_PER_WINDOW / 4;
+        p.maxPerWindow = MAX_PER_WINDOW;
+        _authorize(p);
+
+        uint64 windowSeconds = gateway.WINDOW_SECONDS();
+        uint256 leg = MAX_PER_WINDOW / 4;
+
+        // Empty windows read zero at a timestamp inside the first window.
+        vm.warp(windowSeconds);
+        assertEq(gateway.effectiveDepositWindowGross(agent), 0, "empty deposit window");
+        assertEq(gateway.effectiveWithdrawWindowGross(agent), 0, "empty withdraw window");
+
+        // A deposit made inside the first window stays fully live in the view.
+        vm.warp(windowSeconds / 2);
+        _fundAndApprove(leg);
+        _deposit(keccak256("young-chain"), leg, keccak256("young-chain-i"));
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent), leg, "entry inside the first window is live"
         );
     }
 

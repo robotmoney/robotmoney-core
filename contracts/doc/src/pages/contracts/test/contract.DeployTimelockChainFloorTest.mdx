@@ -1,0 +1,177 @@
+---
+title: "DeployTimelockChainFloorTest"
+---
+
+# DeployTimelockChainFloorTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
+
+<i>
+
+Delay floor keyed to chain id, and a real Safe accepted end to end (core S1).
+Each test builds a fresh, un-handed-over topology.
+
+</i>
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### TWIN_CHAIN_ID
+
+```solidity
+uint256 internal constant TWIN_CHAIN_ID = 918453;
+```
+
+### BASE_CHAIN_ID
+
+```solidity
+uint256 internal constant BASE_CHAIN_ID = 8453;
+```
+
+## State Variables
+
+### script
+
+```solidity
+DeployTimelock internal script;
+```
+
+### deployer
+
+```solidity
+address internal deployer;
+```
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("floor-emergency");
+```
+
+### vault
+
+```solidity
+RobotMoneyVault internal vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### governance
+
+```solidity
+RouterGovernance internal governance;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_run-uint256"></a>
+
+### _run
+
+```solidity
+function _run(uint256 delay) internal returns (DeployTimelock.Deployed memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| delay | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `DeployTimelock.Deployed` |  |
+
+<a id="test_delay60_revertsonbase"></a>
+
+### test_delay60_revertsOnBase
+
+On chain id 8453 a 60 second delay reverts.
+
+```solidity
+function test_delay60_revertsOnBase() public;
+```
+
+<a id="test_delayjustbelowfloor_revertsonbase"></a>
+
+### test_delayJustBelowFloor_revertsOnBase
+
+```solidity
+function test_delayJustBelowFloor_revertsOnBase() public;
+```
+
+<a id="test_delayatfloor_passesonbase"></a>
+
+### test_delayAtFloor_passesOnBase
+
+```solidity
+function test_delayAtFloor_passesOnBase() public;
+```
+
+<a id="test_delay60_passesontwinchain"></a>
+
+### test_delay60_passesOnTwinChain
+
+On the Twin chain (918453) the same 60 second delay passes.
+
+```solidity
+function test_delay60_passesOnTwinChain() public;
+```
+
+<a id="test_delay1_passesontwinchain"></a>
+
+### test_delay1_passesOnTwinChain
+
+```solidity
+function test_delay1_passesOnTwinChain() public;
+```
+
+<a id="test_factorymadesafel2_isaccepted"></a>
+
+### test_factoryMadeSafeL2_isAccepted
+
+A SafeL2 1.4.1 proxy made by the factory is accepted.
+
+```solidity
+function test_factoryMadeSafeL2_isAccepted() public;
+```
+

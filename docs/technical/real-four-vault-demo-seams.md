@@ -1,5 +1,7 @@
 # Real Four-Vault Demo — Seam Map
 
+> **Historical.** A scout report from before the one-deployment-scheme work. The demo contracts, stubs and scripts it names are deleted. It does not describe shipped code.
+
 **Scout issue:** #541
 **Date:** 2026-06-02
 **Canonical docs:** `Plan tracking issue #109`, `docs/prd.md` §11, `docs/technical/basket-vault-gap-report.md`
@@ -32,10 +34,8 @@ seeding harness. The four target vaults are:
 | Agent Tokens (rmAGENT) | `AgentTokenVault` | §11.3 | Prototype — eligibility ADRs pending |
 | RWA/Thematic (deSPXA) | `RobotMoneyVault` subclass or new vault | §11.4 | ADR pending; Aerodrome-only enter/exit |
 
-> Planned evolution: see `docs/adr/ADR-0010-unified-vault-architecture.md`
-> (Proposed) — the per-theme vault contracts in this table become
-> deployments of a single unified `Vault` with per-asset position
-> adapters in v2; the v1 contracts this seam map targets stay untouched.
+> ADR-0010 (unified vault) is Rejected and its code is deleted. The per-theme
+> vault contracts in this table are the shipped design.
 
 ---
 

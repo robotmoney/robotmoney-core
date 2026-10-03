@@ -6,7 +6,7 @@
   "compound_adapter": "0xd5302a14c46df0705fCaCE77951a4DA140BEB846",
   "gateway": "0x92E1Ba66b6CabaD0533DA5021F4D474Dc5D5E0B8",
   "gateway_runtime_hash": "0x38d284e10542083dd61807d940344a1bf8a7b58dbb7203c75270a5f7859e2e68",
-  "morpho_adapter": "0x059Fed0ea21d0b446eC3e475C88C72e73F825868",
+  "moonwell_flagship_adapter": "0x059Fed0ea21d0b446eC3e475C88C72e73F825868",
   "pauser": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
   "share_receiver": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
   "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",

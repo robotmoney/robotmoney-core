@@ -33,12 +33,13 @@
 #     FUSION_GOVERNANCE_ADDRESS, FUSION_ROUTER_ADDRESS,
 #     FUSION_VAULT_ADDRESSES, FUSION_SUBMITTER_ADDRESS,
 #     FUSION_RELEASE_ADDRESS, FUSION_UNAUTHORIZED_SUBMITTER,
-#     FUSION_UNAUTHORIZED_RELEASER
+#     FUSION_UNAUTHORIZED_RELEASER, FUSION_GOVERN_CMD
+#       (FUSION_GOVERN_CMD is the govern release command, bun scripts/stage/core-stack.ts
+#       governance release: the release goes through the real Safe and the
+#       timelock, so no release keystore exists here at all)
 #
 #   Repository SECRETS (secrets.*) — ephemeral devnet key material only:
 #     FUSION_RMPC_CONFIG          operator config TOML for the submitter
-#     FUSION_RELEASE_KEYSTORE     v3 keystore JSON for the admin releaser
-#     FUSION_RELEASE_PASSWORD     password that unlocks that keystore
 #
 # WHY IT SKIPS RATHER THAN FAILS WHEN SECRETS ARE ABSENT
 # A fork PR and a freshly-cloned repo have neither. Failing there would train
@@ -49,9 +50,8 @@
 # recorded in the result JSON and re-asserted below.
 #
 # GOTCHAS
-# - The keystore password reaches the script through a FILE
-#   (FUSION_RELEASE_PASSWORD_FILE), written under $RUNNER_TEMP and shredded in
-#   an `if: always()` step. It is never echoed and never an argument.
+# - No release keystore: an admin release is a govern row through the real Safe
+#   and the timelock (publish contracts govern), never a single-key send.
 # - `--stages` defaults to everything except `release`: a nightly run must not
 #   broadcast an admin release transaction unless someone asks for it. The
 #   dispatch input `stages` overrides that for a deliberate acceptance run.
@@ -61,6 +61,17 @@
 name: fusion-devnet-acceptance
 
 on:
+  # Nightly job (b), core issue 1496: reused by suite-NN-nightly-fresh-snapshot.yml
+  # with fresh_snapshot=true so this suite boots the Twin chain from a snapshot
+  # taken at the latest Base block instead of the checked-in pin. Steps are not
+  # copied: the nightly calls this very workflow.
+  workflow_call:
+    inputs:
+      fresh_snapshot:
+        description: "Apply the nightly fresh snapshot overlay before booting a chain."
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
     inputs:
       stages:
@@ -112,8 +123,7 @@ jobs:
         id: gate
         env:
           HAVE_RMPC_CONFIG: ${{ secrets.FUSION_RMPC_CONFIG != '' }}
-          HAVE_KEYSTORE: ${{ secrets.FUSION_RELEASE_KEYSTORE != '' }}
-          HAVE_PASSWORD: ${{ secrets.FUSION_RELEASE_PASSWORD != '' }}
+          FRESH_SNAPSHOT_RUN: ${{ inputs.fresh_snapshot == true }}
         run: |
           set -euo pipefail
           missing=()
@@ -122,13 +132,11 @@ jobs:
                    FUSION_GOVERNANCE_ADDRESS FUSION_ROUTER_ADDRESS \
                    FUSION_VAULT_ADDRESSES FUSION_SUBMITTER_ADDRESS \
                    FUSION_RELEASE_ADDRESS FUSION_UNAUTHORIZED_SUBMITTER \
-                   FUSION_UNAUTHORIZED_RELEASER; do
+                   FUSION_UNAUTHORIZED_RELEASER FUSION_GOVERN_CMD; do
             [[ -n "${!v:-}" ]] || missing+=("vars.$v")
           done
           [[ -n "${RECEIPT_URL_INPUT:-}" ]] || missing+=("vars.FUSION_RECEIPT_URL (or the receipt_url input)")
           [[ "$HAVE_RMPC_CONFIG" == "true" ]] || missing+=("secrets.FUSION_RMPC_CONFIG")
-          [[ "$HAVE_KEYSTORE" == "true" ]]    || missing+=("secrets.FUSION_RELEASE_KEYSTORE")
-          [[ "$HAVE_PASSWORD" == "true" ]]    || missing+=("secrets.FUSION_RELEASE_PASSWORD")
 
           if [[ "${#missing[@]}" -gt 0 ]]; then
             {
@@ -141,6 +149,13 @@ jobs:
               echo "**Nothing was executed. This is not a passing acceptance run.**"
             } | tee -a "$GITHUB_STEP_SUMMARY"
             echo "configured=false" >> "$GITHUB_OUTPUT"
+            # The nightly fresh-snapshot run (core issue 1496) calls this suite
+            # with fresh_snapshot=true. A skipped suite is not a pass there:
+            # fail the run so the missing configuration is red, not green.
+            if [[ "$FRESH_SNAPSHOT_RUN" == "true" ]]; then
+              echo "::error::suite 26 was required by the nightly fresh-snapshot run but is not configured; a skip is not a pass"
+              exit 1
+            fi
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
@@ -159,23 +174,18 @@ jobs:
         if: steps.gate.outputs.configured == 'true'
         env:
           RMPC_CONFIG_TOML: ${{ secrets.FUSION_RMPC_CONFIG }}
-          RELEASE_KEYSTORE_JSON: ${{ secrets.FUSION_RELEASE_KEYSTORE }}
-          RELEASE_PASSWORD: ${{ secrets.FUSION_RELEASE_PASSWORD }}
         run: |
           set -euo pipefail
           umask 077
           printf '%s' "$RMPC_CONFIG_TOML"     > "$RUNNER_TEMP/rmpc.toml"
-          printf '%s' "$RELEASE_KEYSTORE_JSON" > "$RUNNER_TEMP/release-keystore.json"
-          printf '%s' "$RELEASE_PASSWORD"      > "$RUNNER_TEMP/release.pass"
           # Nothing above is echoed. Only the byte counts are, as a liveness check.
-          echo "wrote rmpc.toml ($(wc -c <"$RUNNER_TEMP/rmpc.toml") bytes), keystore ($(wc -c <"$RUNNER_TEMP/release-keystore.json") bytes), password file"
+          echo "wrote rmpc.toml ($(wc -c <"$RUNNER_TEMP/rmpc.toml") bytes)"
 
       - name: Run scripts/fusion/devnet-acceptance.sh against the devnet
         if: steps.gate.outputs.configured == 'true'
         env:
           FUSION_RMPC_CONFIG: ${{ runner.temp }}/rmpc.toml
-          FUSION_RELEASE_KEYSTORE: ${{ runner.temp }}/release-keystore.json
-          FUSION_RELEASE_PASSWORD_FILE: ${{ runner.temp }}/release.pass
+          FUSION_GOVERN_CMD: ${{ vars.FUSION_GOVERN_CMD }}
           FUSION_EVIDENCE_DIR: ${{ github.workspace }}/fusion-evidence
           RMPC_BIN: ${{ github.workspace }}/target/release/rmpc
         run: |
@@ -221,7 +231,7 @@ jobs:
       - name: Shred the credential files
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/rmpc.toml" "$RUNNER_TEMP/release-keystore.json" "$RUNNER_TEMP/release.pass" || true
+          rm -f "$RUNNER_TEMP/rmpc.toml" || true
 
       - name: Upload the acceptance evidence
         if: always()

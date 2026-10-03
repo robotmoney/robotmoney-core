@@ -1,5 +1,7 @@
 # ADR — Demo seeding seam map (seed-script, dapp-balance, RM-token, faucet)
 
+> **Historical.** A scout report from before the one-deployment-scheme work. The demo contracts, stubs and scripts it names are deleted. It does not describe shipped code.
+
 > Scope: dev-scout report for issue #472, covering the **Demo seeding** phase
 > of the implementation plan. This document is documentation only: no seed
 > script, dapp balance, RM-token, or faucet behaviour is introduced or

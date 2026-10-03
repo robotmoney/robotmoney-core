@@ -1,0 +1,35 @@
+---
+title: "ISignatureValidator"
+---
+
+# ISignatureValidator
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/vendor/safe-1.4.1/interfaces/ISignatureValidator.sol)
+
+**Inherits:** [ISignatureValidatorConstants](/contracts/test/vendor/safe-1.4.1/interfaces/contract.ISignatureValidatorConstants)
+
+## Functions
+
+<a id="isvalidsignature-bytes-bytes"></a>
+
+### isValidSignature
+
+Legacy EIP1271 method to validate a signature.
+
+```solidity
+function isValidSignature(bytes memory _data, bytes memory _signature) public view virtual returns (bytes4);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _data | `bytes` | Arbitrary length data signed on the behalf of address(this). |
+| _signature | `bytes` | Signature byte array associated with _data.<br/><br/>MUST return the bytes4 magic value 0x20c13b0b when function passes.<br/>MUST NOT modify state (using STATICCALL for solc &lt; 0.5, view modifier for solc > 0.5)<br/>MUST allow external calls |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes4` |  |
+

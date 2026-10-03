@@ -80,7 +80,7 @@ jobs:
 
           # Self, and the release publishers that the tag push already triggers
           # directly (re-dispatching them would double-publish a release).
-          EXCLUDE="release-tag-suite-dispatch.yml release-dapp.yml release-rmpc.yml deploy-contracts.yml"
+          EXCLUDE="release-tag-suite-dispatch.yml release-dapp.yml release-rmpc.yml suite-29-nightly-fresh-snapshot.yml nightly-third-party-drift.yml"
 
           echo "target ref: $TARGET_REF"
           mapfile -t CANDIDATES < <(

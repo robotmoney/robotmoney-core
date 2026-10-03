@@ -207,6 +207,20 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param vault  The vault address whose status is Paused.
     error VaultPausedForRedeem(address vault);
 
+    /// @notice Gas left is below the floor a redeem leg needs. Raised before the leg
+    ///         calls `vault.redeem`, so a gas limit that is too low reverts with a
+    ///         reason instead of failing opaquely inside the vault fan-out. Retry
+    ///         with a higher gas limit. (core 1482.)
+    /// @param available `gasleft()` at the check.
+    /// @param required  The floor that was not met.
+    error InsufficientGas(uint256 available, uint256 required);
+
+    /// @dev Gas that must remain before a redeem leg calls `vault.redeem`. The vault's
+    ///      own adapter-sourcing floor is 1_200_000 measured after the 63/64 forward,
+    ///      so the router needs about 1_219_000 to hand it that much. 1_250_000 adds margin.
+    ///      A tunable constant pending the fork measurement in docs/technical/redeem-gas-1482.md.
+    uint256 internal constant REDEEM_LEG_GAS_FLOOR = 1_250_000;
+
     /// @notice The explicit `vaults[]` array supplied to `redeemFor` does not
     ///         match the length of `sharesPerLeg` (or `minAssetsPerLeg`). Each
     ///         redeem leg names exactly one vault address (NC-5 identity binding),
@@ -770,6 +784,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         if (msg.sender != shareHolder && IERC20(vault).allowance(shareHolder, msg.sender) < shares)
         {
             revert UnauthorizedRedeemer(shareHolder, msg.sender);
+        }
+
+        // Gas guard (core 1482): revert typed when the limit is too low for the
+        // vault's adapter fan-out, never fail opaquely inside it.
+        if (gasleft() < REDEEM_LEG_GAS_FLOOR) {
+            revert InsufficientGas(gasleft(), REDEEM_LEG_GAS_FLOOR);
         }
 
         // Redeem: shareHolder must have approved msg.sender (the gateway) to

@@ -1,21 +1,16 @@
 ---
 title: "DeployProtocolAssetVaultTest"
-description: "Tests for DeployProtocolAssetVault.s.sol."
+description: "rmPROTO script: paused, exactly wETH and cbBTC, config read back equals the file, registered, deployer holds EMERGENCY, and every sheet and venue input is enforced."
 ---
 
 # DeployProtocolAssetVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeployProtocolAssetVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployProtocolAssetVault.t.sol)
 
-**Inherits:** Test
+**Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
-Tests for DeployProtocolAssetVault.s.sol.
-
-Acceptance criteria (issue #692):
-- Script deploys ProtocolAssetVault with a non-zero address.
-- Vault is registered in VaultRegistry when REGISTRY_ADDRESS is provided.
-- Script does NOT call setRouterEligible (vault stays ineligible after deploy).
-- Zero-address guards on required parameters revert with expected messages.
+rmPROTO script: paused, exactly wETH and cbBTC, config read back equals the file,
+registered, deployer holds EMERGENCY, and every sheet and venue input is enforced.
 
 ## State Variables
 
@@ -23,36 +18,6 @@ Acceptance criteria (issue #692):
 
 ```solidity
 DeployProtocolAssetVault internal script;
-```
-
-### usdc
-
-```solidity
-TestERC20 internal usdc;
-```
-
-### swapRouter
-
-```solidity
-StubSwapRouter internal swapRouter;
-```
-
-### registry
-
-```solidity
-VaultRegistry internal registry;
-```
-
-### admin
-
-```solidity
-address internal admin = address(this);
-```
-
-### emergencyResponder
-
-```solidity
-address internal emergencyResponder = makeAddr("emergencyResponder");
 ```
 
 ## Functions
@@ -65,118 +30,150 @@ address internal emergencyResponder = makeAddr("emergencyResponder");
 function setUp() public;
 ```
 
-<a id="test_deploy_vaultaddressnonzero"></a>
+<a id="_run-string"></a>
 
-### test_deploy_vaultAddressNonZero
-
-Vault address is non-zero after deploy without registry.
+### _run
 
 ```solidity
-function test_deploy_vaultAddressNonZero() public;
+function _run(string memory json) internal returns (BasketVaultDeployBase.Deployed memory);
 ```
 
-<a id="test_deploy_notregisteredwhennoregistry"></a>
+**Parameters**
 
-### test_deploy_notRegisteredWhenNoRegistry
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
 
-Without REGISTRY_ADDRESS, registered flag is false.
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultDeployBase.Deployed` |  |
+
+<a id="_twoassets"></a>
+
+### _twoAssets
 
 ```solidity
-function test_deploy_notRegisteredWhenNoRegistry() public;
+function _twoAssets() internal returns (string memory json, address[] memory tokens);
 ```
 
-<a id="test_deploy_registersvaultinregistry"></a>
+**Returns**
 
-### test_deploy_registersVaultInRegistry
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+| tokens | `address[]` |  |
 
-Vault is registered in VaultRegistry when registry is provided.
+<a id="test_deploy_pausedwithexactlywethandcbbtc_configreadbackequalsfile"></a>
+
+### test_deploy_pausedWithExactlyWethAndCbbtc_configReadBackEqualsFile
 
 ```solidity
-function test_deploy_registersVaultInRegistry() public;
+function test_deploy_pausedWithExactlyWethAndCbbtc_configReadBackEqualsFile() public;
 ```
 
-<a id="test_deploy_metadatastoredcorrectly"></a>
+<a id="test_deploy_deployerholdsadminandemergency"></a>
 
-### test_deploy_metadataStoredCorrectly
-
-Vault metadata stored in registry matches expected values.
+### test_deploy_deployerHoldsAdminAndEmergency
 
 ```solidity
-function test_deploy_metadataStoredCorrectly() public;
+function test_deploy_deployerHoldsAdminAndEmergency() public;
 ```
 
-<a id="test_deploy_vaultisactiveafterregistration"></a>
+<a id="test_deploy_registersvaultanddoesnotsetroutereligible"></a>
 
-### test_deploy_vaultIsActiveAfterRegistration
-
-Vault has Active status immediately after registration.
+### test_deploy_registersVaultAndDoesNotSetRouterEligible
 
 ```solidity
-function test_deploy_vaultIsActiveAfterRegistration() public;
+function test_deploy_registersVaultAndDoesNotSetRouterEligible() public;
 ```
 
-<a id="test_deploy_doesnotsetroutereligible"></a>
+<a id="test_deploy_capscomefromthesheetandnoseed"></a>
 
-### test_deploy_doesNotSetRouterEligible
-
-The deploy script must NOT call setRouterEligible. Router
-eligibility activation is separated into
-ActivateBasketVaultEligibility.s.sol and is gated behind the
-BASKET_VAULT_AUDIT_COMPLETE env flag.
+### test_deploy_capsComeFromTheSheetAndNoSeed
 
 ```solidity
-function test_deploy_doesNotSetRouterEligible() public;
+function test_deploy_capsComeFromTheSheetAndNoSeed() public;
 ```
 
-<a id="test_deploy_vaultassetisusdc"></a>
+<a id="test_deploy_exactlytheconfiguredassets"></a>
 
-### test_deploy_vaultAssetIsUsdc
-
-Vault's ERC-4626 asset() returns the configured USDC address.
+### test_deploy_exactlyTheConfiguredAssets
 
 ```solidity
-function test_deploy_vaultAssetIsUsdc() public;
+function test_deploy_exactlyTheConfiguredAssets() public;
 ```
 
-<a id="test_deploy_adminholdsadminrole"></a>
+<a id="test_reverts_whenswaprouterisnotswaprouter02"></a>
 
-### test_deploy_adminHoldsAdminRole
-
-Admin holds ADMIN_ROLE on the deployed vault.
+### test_reverts_whenSwapRouterIsNotSwapRouter02
 
 ```solidity
-function test_deploy_adminHoldsAdminRole() public;
+function test_reverts_whenSwapRouterIsNotSwapRouter02() public;
 ```
 
-<a id="test_reverts_on_zero_admin"></a>
+<a id="test_reverts_whentvlcapmissing"></a>
 
-### test_reverts_on_zero_admin
+### test_reverts_whenTvlCapMissing
 
 ```solidity
-function test_reverts_on_zero_admin() public;
+function test_reverts_whenTvlCapMissing() public;
 ```
 
-<a id="test_reverts_on_zero_emergencyresponder"></a>
+<a id="test_reverts_whenperdepositcapmissing"></a>
 
-### test_reverts_on_zero_emergencyResponder
+### test_reverts_whenPerDepositCapMissing
 
 ```solidity
-function test_reverts_on_zero_emergencyResponder() public;
+function test_reverts_whenPerDepositCapMissing() public;
 ```
 
-<a id="test_reverts_on_zero_swaprouter"></a>
+<a id="test_reverts_whenfeerecipientzero"></a>
 
-### test_reverts_on_zero_swapRouter
+### test_reverts_whenFeeRecipientZero
 
 ```solidity
-function test_reverts_on_zero_swapRouter() public;
+function test_reverts_whenFeeRecipientZero() public;
 ```
 
-<a id="test_reverts_on_zero_usdc"></a>
+<a id="test_reverts_whenpoolfeediffersfromconfig"></a>
 
-### test_reverts_on_zero_usdc
+### test_reverts_whenPoolFeeDiffersFromConfig
 
 ```solidity
-function test_reverts_on_zero_usdc() public;
+function test_reverts_whenPoolFeeDiffersFromConfig() public;
+```
+
+<a id="test_reverts_whenpoolhasnocode"></a>
+
+### test_reverts_whenPoolHasNoCode
+
+```solidity
+function test_reverts_whenPoolHasNoCode() public;
+```
+
+<a id="test_reverts_whenpoolcardinalitytoolow"></a>
+
+### test_reverts_whenPoolCardinalityTooLow
+
+```solidity
+function test_reverts_whenPoolCardinalityTooLow() public;
+```
+
+<a id="test_reverts_whenvenueunsupported"></a>
+
+### test_reverts_whenVenueUnsupported
+
+```solidity
+function test_reverts_whenVenueUnsupported() public;
+```
+
+<a id="test_manifest_listsassetsandpausedstate"></a>
+
+### test_manifest_listsAssetsAndPausedState
+
+```solidity
+function test_manifest_listsAssetsAndPausedState() public;
 ```
 

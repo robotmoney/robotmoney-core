@@ -32,7 +32,7 @@ import {
 } from "../../src/components/LandingPriceStrip";
 import { ExplorerContext } from "../../src/lib/ExplorerContext";
 import { sqrtPriceX96ToPrice } from "../../src/lib/uniswapV3";
-import { DEVNET_CHAIN_ID, PRICE_STRIP_PAIRS, resolvePoolConfig } from "../../src/lib/dexPools";
+import { PRICE_STRIP_PAIRS, resolvePoolConfig } from "../../src/lib/dexPools";
 
 // Wagmi mock — applies to the container tests that render LandingPriceStrip
 // directly. The pure LandingPriceStripView tests are unaffected because the
@@ -52,7 +52,7 @@ vi.mock("wagmi", () => ({
 // sqrt(1) * 2^96 == 2^96.
 const SQRT_RATIO_ONE = 2n ** 96n;
 
-describe("LandingPriceStrip decimal-math conversion is correct for all four pairs", () => {
+describe("LandingPriceStrip decimal-math conversion is correct for all pairs", () => {
   it("wETH18/USDC6: applies the +12 decimal delta (token0 18, token1 6)", () => {
     // rawRatio 1 means 1 raw USDC per 1 raw wETH; human price scales by
     // 10^(18-6) = 1e12, so price == 1e12 USDC per wETH.
@@ -144,7 +144,7 @@ describe("LandingPriceStrip isolates per-cell errors", () => {
     expect(failed.textContent).toBe("unavailable");
 
     // The other three render a numeric (formatted) price, not 'unavailable'.
-    for (const id of ["eth-usd", "weth-usdc", "wsol-usdc"]) {
+    for (const id of ["eth-usd", "weth-usdc"]) {
       const value = screen.getByTestId(`${cellTestId(id)}-value`);
       expect(value.textContent).not.toBe("unavailable");
       expect(value.textContent).toMatch(/[0-9]/);
@@ -152,9 +152,9 @@ describe("LandingPriceStrip isolates per-cell errors", () => {
   });
 
   it("marks the cell container with data-cell-unavailable for QA targeting", () => {
-    const cells = makeCells({ "wsol-usdc": { unavailable: true, price: null } });
+    const cells = makeCells({ "cbbtc-usdc": { unavailable: true, price: null } });
     render(<LandingPriceStripView cells={cells} blockNumber={1} />);
-    expect(screen.getByTestId(cellTestId("wsol-usdc")).getAttribute("data-cell-unavailable")).toBe(
+    expect(screen.getByTestId(cellTestId("cbbtc-usdc")).getAttribute("data-cell-unavailable")).toBe(
       "true",
     );
     expect(screen.getByTestId(cellTestId("eth-usd")).getAttribute("data-cell-unavailable")).toBe(
@@ -162,10 +162,10 @@ describe("LandingPriceStrip isolates per-cell errors", () => {
     );
   });
 
-  it("renders the four landing-* test ids and a freshness chip", () => {
+  it("renders the three landing-* test ids and a freshness chip", () => {
     render(<LandingPriceStripView cells={makeCells()} blockNumber={45743443} />);
     expect(screen.getByTestId("landing-price-strip")).toBeTruthy();
-    for (const id of ["eth-usd", "weth-usdc", "cbbtc-usdc", "wsol-usdc"]) {
+    for (const id of ["eth-usd", "weth-usdc", "cbbtc-usdc"]) {
       expect(screen.getByTestId(cellTestId(id))).toBeTruthy();
       expect(screen.getByTestId(`${cellTestId(id)}-block`).textContent).toContain("45743443");
     }
@@ -173,35 +173,24 @@ describe("LandingPriceStrip isolates per-cell errors", () => {
 });
 
 describe("LandingPriceStrip reads pool addresses from config", () => {
-  it("exposes exactly the four landing pairs in display order", () => {
-    expect(PRICE_STRIP_PAIRS.map((p) => p.id)).toEqual([
-      "eth-usd",
-      "weth-usdc",
-      "cbbtc-usdc",
-      "wsol-usdc",
-    ]);
+  it("exposes exactly the three landing pairs in display order", () => {
+    expect(PRICE_STRIP_PAIRS.map((p) => p.id)).toEqual(["eth-usd", "weth-usdc", "cbbtc-usdc"]);
   });
 
   it("resolves a pool address (a 0x40-hex string) for every pair from config", () => {
     for (const pair of PRICE_STRIP_PAIRS) {
-      const cfg = resolvePoolConfig(pair.id, 8453);
+      const cfg = resolvePoolConfig(pair.id);
       expect(cfg).toBeDefined();
       expect(cfg?.pool).toMatch(/^0x[0-9a-fA-F]{40}$/);
     }
   });
 
-  it("honors the devnet override map for the forked-Base devnet chain id", () => {
-    const mainnet = resolvePoolConfig("weth-usdc", 8453);
-    const devnet = resolvePoolConfig("weth-usdc", DEVNET_CHAIN_ID);
-    expect(devnet).toBeDefined();
-    // The devnet map is a distinct lookup path; on a fresh fork the addresses
-    // match mainnet, but the override map must still be the one consulted.
-    expect(devnet?.pool).toMatch(/^0x[0-9a-fA-F]{40}$/);
-    expect(mainnet?.pool).toMatch(/^0x[0-9a-fA-F]{40}$/);
+  it("uses one pool map: no per-chain branch exists in the lookup", () => {
+    expect(resolvePoolConfig("weth-usdc")?.pool).toMatch(/^0x[0-9a-fA-F]{40}$/);
   });
 
   it("returns undefined for an unknown pair so the cell can isolate", () => {
-    expect(resolvePoolConfig("does-not-exist", 8453)).toBeUndefined();
+    expect(resolvePoolConfig("does-not-exist")).toBeUndefined();
   });
 });
 

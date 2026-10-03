@@ -421,7 +421,7 @@ export type VaultStatusValue = (typeof VaultStatus)[keyof typeof VaultStatus];
  *     contracts today; dropped. (A UI risk/mandate taxonomy, if wanted, is
  *     product scope for a future issue, not a mechanical field restore.)
  *   - `receiptToken`: redundant with `vault` — every vault contract
- *     (`RobotMoneyVault`, `BasketVault`, `RwaVault`, ...) is itself the
+ *     (`RobotMoneyVault`, `BasketVault`, `RwaBasketVault`, ...) is itself the
  *     ERC-4626 share token, so `receiptToken` always equals `vault`.
  *     Consumers that read the receipt token now use `.vault` directly.
  *   - `depositCap` / `exitFeeBps`: real per-vault getters (`tvlCap`/

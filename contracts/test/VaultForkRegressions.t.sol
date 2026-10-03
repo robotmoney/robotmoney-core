@@ -13,6 +13,7 @@ import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
+import {ForkSelect} from "./helpers/ForkSelect.sol";
 
 /// @title VaultForkRegressions
 /// @notice Fork-level regression suite for vault accounting attack paths.
@@ -44,7 +45,7 @@ contract VaultForkRegressions is Test {
     /// @dev aBasUSDC rebasing token — balanceOf returns live underlying USDC.
     address internal constant AAVE_A_TOKEN = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
 
-    /// @dev Morpho Gauntlet USDC Prime vault on Base (ERC-4626).
+    /// @dev Moonwell Flagship USDC (Morpho) vault on Base (ERC-4626).
     address internal constant MORPHO_VAULT = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
 
     /// @dev Compound V3 Comet (cUSDCv3) on Base.
@@ -82,8 +83,7 @@ contract VaultForkRegressions is Test {
     /// @dev Select the already-running offline golden-fixture RPC.
     function _trySelectFork() internal returns (bool selected) {
         string memory rpc = _forkRpcUrl();
-        vm.createSelectFork(rpc);
-        return true;
+        return ForkSelect.selectOrSkip(rpc);
     }
 
     /// @dev Shared preamble: select fork, fund accounts.
@@ -221,7 +221,7 @@ contract VaultForkRegressions is Test {
 
     /// @notice AC2: Morpho adapter donation cannot make victim deposit mint zero/unfair shares.
     ///
-    /// @dev Deploys vault + MorphoAdapter against real Base Morpho Gauntlet USDC Prime vault.
+    /// @dev Deploys vault + MorphoAdapter against real Base Moonwell Flagship USDC (Morpho) vault.
     function test_fork_morpho_donationAttack_victimSharesFair() public {
         _setUp();
 
@@ -354,7 +354,7 @@ contract VaultForkRegressions is Test {
         // rayMul on balanceOf), which rounds down by a few wei. That round-trip
         // loss grows with the *live* Aave liquidity index: the pinned golden
         // fixture saw <=1 wei, but live Base drifted to 2 wei and flapped this
-        // non-blocking nightly drift alarm (issue #1157). A small fixed dust
+        // test on live-fork runs (issue #1157). A small fixed dust
         // tolerance absorbs the benign Aave rounding while still catching a real
         // "idle not counted" regression — that would miss the whole 4 000e6 idle,
         // ~7 orders of magnitude larger than this tolerance.

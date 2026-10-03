@@ -1,0 +1,54 @@
+---
+title: "Executor"
+---
+
+# Executor
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/vendor/safe-1.4.1/base/Executor.sol)
+
+**Title:** Executor - A contract that can execute transactions
+
+**Author:** Richard Meissner - @rmeissner
+
+## Functions
+
+<a id="execute-address-uint256-bytes-enum-operation-uint256"></a>
+
+### execute
+
+Executes either a delegatecall or a call with provided parameters.
+
+<i>
+
+This method doesn't perform any sanity check of the transaction, such as:
+     - if the contract at `to` address has code or not
+     It is the responsibility of the caller to perform such checks.
+
+</i>
+
+```solidity
+function execute(
+        address to,
+        uint256 value,
+        bytes memory data,
+        Enum.Operation operation,
+        uint256 txGas
+    ) internal returns (bool success);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` | Destination address. |
+| value | `uint256` | Ether value. |
+| data | `bytes` | Data payload. |
+| operation | `Enum.Operation` | Operation type. |
+| txGas | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| success | `bool` | boolean flag indicating if the call succeeded. |
+

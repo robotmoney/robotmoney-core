@@ -5,7 +5,7 @@ description: "Foundry deploy script for the InvestmentCommitteePolicy contract."
 
 # DeployInvestmentCommitteePolicy
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/DeployInvestmentCommitteePolicy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployInvestmentCommitteePolicy.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -36,12 +36,25 @@ GATEWAY_ADDRESS  — deployed RobotMoneyGateway address; all committee
 writes (register, voteSubmit, receipt record)
 must originate here.
 
-Optional env vars:
+Also required, with no default:
 RECEIPT_ADMIN_ADDRESS — sole holder of ADMIN_ROLE on the receipt
-contract; the TimelockController in production.
-Defaults to ADMIN_ADDRESS for devnet ceremonies.
+contract (the deployer until DeployTimelock hands it over).
 DEPLOYMENT_OUT   — path for the output JSON
-(default: "deployments/ic-policy-&lt;chain_id>.json")
+EXPECTED_CHAIN_ID — mandatory and equal to 8453 on Base mainnet
+
+## Constants
+
+### MANIFEST_FILE
+
+<i>
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+</i>
+
+```solidity
+string public constant MANIFEST_FILE = "ic-policy.json";
+```
 
 ## Functions
 

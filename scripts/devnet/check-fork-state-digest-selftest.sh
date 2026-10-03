@@ -6,7 +6,7 @@
 #
 # Exercises the write/verify helper end-to-end with a throwaway temp blob and
 # manifest — no network, no Docker, no real fork fixture touched. This is the
-# offline proxy for the digest helper snapshot-fork.sh relies on to seed
+# offline proxy for the digest helper snapshot-fork.ts relies on to seed
 # state_sha256 at capture time: write must produce a digest verify accepts,
 # and a one-byte tamper of the blob must make verify reject it (non-zero
 # exit), never silently pass.

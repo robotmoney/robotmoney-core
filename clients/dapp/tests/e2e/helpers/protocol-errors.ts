@@ -12,9 +12,9 @@
  * flake produces must therefore come from `_allocateTo` (:511-518), whose only
  * external move is `adpt.deploy(amount)` — and on this devnet that lands in
  * REAL Base protocol code: the geth genesis alloc ingests Aave V3, Compound V3
- * Comet and the Morpho Gauntlet USDC Prime MetaMorpho vault at a pinned Base
+ * Comet and the Moonwell Flagship USDC (Morpho) MetaMorpho vault at a pinned Base
  * block (`testing/ethereum-testnet/config/fork-block.json`, addresses wired in
- * `contracts/script/Deploy.s.sol:399-401`).
+ * `contracts/script/DeployVault.s.sol`).
  *
  * A custom error raised inside a nested protocol call bubbles up as a bare
  * 4-byte selector with no indication of which contract raised it. Decoding
@@ -73,7 +73,7 @@ export const cometErrorAbi = [
 ] as const;
 
 /**
- * MetaMorpho (Morpho Gauntlet USDC Prime) custom errors. Morpho's `Id` type is
+ * MetaMorpho (Moonwell Flagship USDC (Morpho)) custom errors. Morpho's `Id` type is
  * a `bytes32` market id, rendered as such here.
  *
  * `AllCapsReached()` is the one to watch: MetaMorpho's deposit walks its supply

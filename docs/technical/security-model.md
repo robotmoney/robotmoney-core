@@ -60,7 +60,7 @@ go through explicit approval.
 | Storage collision via upgradeable proxies | All contracts must be direct non-proxy deployments. Upgradeable proxy patterns are prohibited. |
 | Self-destruct / `SELFDESTRUCT` ejection | No `selfdestruct` or `CREATE2`-replace pattern may be present in any contract. Post-Cancun semantics reduce this risk but the prohibition stands. |
 | Delegatecall to attacker-controlled target | `delegatecall` is prohibited in vault and adapter contracts. Any future use must be reviewed explicitly and justified in the PR. |
-| Adapter codehash allowlist bypass via delegatecall proxy | Approved RobotMoneyVault strategy adapters must be direct (non-proxy) deployments whose runtime bytecode contains no `DELEGATECALL` opcode (`0xF4`). This is enforced at deploy time by `AdapterBytecodeGuard.requireNoDelegatecall` in `contracts/script/Deploy.s.sol::_approveAdapter` and regression-tested in `contracts/test/AdapterDelegatecallGuard.t.sol` against every currently approved adapter (Aave V3, Compound V3, Morpho, Passthrough). Any future proxy-pattern adapter must instead pin both proxy and implementation codehashes in the allowlist, and the policy update must ship in the same PR. |
+| Adapter codehash allowlist bypass via delegatecall proxy | Approved RobotMoneyVault strategy adapters must be direct (non-proxy) deployments whose runtime bytecode contains no `DELEGATECALL` opcode (`0xF4`). This is enforced at deploy time by `AdapterBytecodeGuard.requireNoDelegatecall` in `contracts/script/DeployVault.s.sol::_approveAdapter` and regression-tested in `contracts/test/AdapterDelegatecallGuard.t.sol` against every currently approved adapter (Aave V3, Compound V3, Morpho, Passthrough). Any future proxy-pattern adapter must instead pin both proxy and implementation codehashes in the allowlist, and the policy update must ship in the same PR. |
 | Uninitialized storage / proxy initializer | Contracts must use constructors only. Initializer patterns are prohibited. |
 | Recursive self-liquidation (Euler-class) | No lending or liquidation logic may be present in the vault. This constraint must be re-evaluated if the product shape changes. |
 
@@ -70,7 +70,7 @@ go through explicit approval.
 
 | Attack | Required control |
 |---|---|
-| ERC-4626 inflation / first-depositor share-price attack | `RobotMoneyVault._decimalsOffset()` must return `18`, configuring OZ virtual shares to `10^18`. The deploy runbook must require a seed deposit of ≥ 1,000 USDC before the vault is opened to the public. This must be verified in CI fork tests. **CI coverage:** `Deploy.s.sol` includes a mandatory seed deposit step (`SEED_DEPOSIT_AMOUNT = 1_000_000_000`) in `run()` and `runInProcessWithSeed()`; `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) asserts `vault.totalAssets() >= 1_000_000_000` and `vault.totalSupply() > 0` before any public deposit; this test is wired into the `forge-fork-vault-regressions` CI job in `suite-01-02-forge-tests.yml`. |
+| ERC-4626 inflation / first-depositor share-price attack | `RobotMoneyVault._decimalsOffset()` must return `18`, configuring OZ virtual shares to `10^18`. The deploy runbook must require a seed deposit of ≥ 1,000 USDC before the vault is opened to the public. This must be verified in CI fork tests. **CI coverage:** `DeployVault.s.sol` (the vault stage) includes a mandatory seed deposit step (`SEED_DEPOSIT_AMOUNT`) in `run()` and `runInProcessWithSeed()`; `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) asserts `vault.totalAssets() >= 1_000_000_000` and `vault.totalSupply() > 0` before any public deposit; this test is wired into the `forge-fork-vault-regressions` CI job in `suite-01-02-forge-tests.yml`. |
 | Donation-to-reserves bypass (Euler/Venus class) | `totalAssets()` must be defined and documented to prevent direct ERC-20 transfer manipulation. The accounting model must be published and verified via fork tests that show a large direct USDC donation does not materially advantage a subsequent depositor. |
 | Supply-cap bypass via direct transfer | `tvlCap` must be enforced on the deposit path. `totalAssets()` accounting must be shown to not allow a direct-transfer-inflated cap bypass. |
 | Per-deposit-cap bypass via splitting | `perDepositCap` is per-call by design for rate-shaping, not anti-Sybil. This is an accepted limitation; it must be documented in the public risk disclosure. |
@@ -114,10 +114,7 @@ go through explicit approval.
 ### 5.1 BasketVault TWAP configuration (issue #451)
 
 `BasketVault` is the first contract in the codebase to consume a DEX price
-source. (Planned evolution: under `docs/adr/ADR-0010-unified-vault-architecture.md`
-(Proposed), TWAP/Chronicle pricing moves from the vault into per-asset
-`AssetPositionAdapter` contracts; the controls below carry over as adapter
-requirements.) The manipulation-resistance posture is:
+source. The manipulation-resistance posture is:
 
 - **Price source.** Uniswap V3 `IUniswapV3Pool.observe()` returning the
   cumulative tick over the configured per-asset window. The arithmetic-mean
@@ -195,7 +192,7 @@ requirements.) The manipulation-resistance posture is:
 | Attack | Required control |
 |---|---|
 | Pre-0.8 integer overflow inheritance | All contracts must use Solidity ≥0.8. OZ dependency versions must be pinned in `foundry.toml` / `package.json`. Any dependency upgrade requires a PR with an explicit compatibility review. |
-| Unverified bytecode | All production contracts must be verified on BaseScan within one hour of deployment. The verified source must match the tagged commit in this repository. **CI gate implemented** (issue #662): `.github/workflows/deploy-contracts.yml` runs `forge script --broadcast --verify` and then calls `scripts/assert-basescan-verified.sh` for every deployed address, blocking the deploy job until all contracts are source-verified or the 3600 s timeout expires. |
+| Unverified bytecode | All production contracts must be verified on BaseScan within one hour of deployment. The verified source must match the tagged commit in this repository. Deployment goes through the publish-contracts workflow in the devops repo (the only deploy path), and its verifier checks source verification for every deployed address before the run is accepted. |
 | Compromised npm/cargo dependency | `cargo audit`, npm/Bun dependency audit, and lockfile-integrity checks must run in CI and block on high-severity findings. Solidity, Rust, JS, and GitHub Actions dependencies must be pinned to exact versions or immutable SHAs. Any dependency update requires an explicit review comment in the PR. |
 | Compiler-bug exposure | Before each production deployment, the Solidity known-bug list for the compiler version in use must be reviewed and any applicable bugs documented and addressed. |
 | Adapter target contract upgrade | Compound v3 and Aave v3 are upgradeable by their own governance. This is an accepted upstream-trust assumption. A monitoring process must alert on upstream governance proposals that affect our adapter interfaces. Implemented by the governance-proposal monitor — see [docs/technical/upstream-monitoring-runbook.md](./upstream-monitoring-runbook.md#governance-proposal). |
@@ -274,7 +271,7 @@ This section maps onto `docs/architecture.md` §15.
 
 | Attack | Required control |
 |---|---|
-| Deploy-key compromise pushes a malicious contract | Deploy artifacts must match a tagged, reviewed commit. BaseScan verification must complete within one hour of deploy. At least one second reviewer must sign off on the deploy before execution. **CI gate implemented** (issue #662): `.github/workflows/deploy-contracts.yml` uses a GitHub Actions `environment` requiring sign-off before execution, and asserts BaseScan verification within 3600 s. |
+| Deploy-key compromise pushes a malicious contract | Deploy artifacts must match a tagged, reviewed commit. BaseScan verification must complete within one hour of deploy. At least one second reviewer must sign off on the deploy before execution. Deployment goes through the publish-contracts workflow in the devops repo, which uses a GitHub Environment with required reviewers (sign-off before execution), and its verifier checks source verification. |
 | Verified-source / deployed-bytecode mismatch | All contracts must be verified on BaseScan. The CI deploy pipeline must assert verification before closing the deploy job. **CI gate implemented** (issue #662): `scripts/assert-basescan-verified.sh` polls the BaseScan `getsourcecode` API for each deployed address and exits non-zero if any contract is unverified when the timeout is reached. |
 | Secret leak via repo | `.gitignore` must exclude all `.env`, keystore, and credential files. CI must run a secrets-scanning step on every PR. |
 | CI runner compromise injecting deploy artifact | Deploy jobs must run on pinned, hardened runners. Production deploys must require explicit human approval in the CI pipeline. |

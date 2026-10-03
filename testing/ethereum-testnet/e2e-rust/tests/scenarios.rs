@@ -65,7 +65,7 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
-use rmpc_e2e::{Fixture, AGENT_PRIVATE_KEY, DEPLOYER_PRIVATE_KEY_HEX};
+use rmpc_e2e::{Fixture, AGENT_PRIVATE_KEY};
 use serde_json::Value;
 
 /// USDC has 6 decimals throughout the harness.
@@ -563,37 +563,19 @@ fn role_separation_invariant() {
         return;
     }
     with_fixture(|fx| {
-        let admin = rmpc_e2e::DEPLOYER_ADDRESS_HEX;
-        // allowedDestinations is empty ([]) — open policy used only to
-        // trigger the RoleSeparationViolated revert path before deposit.
-        let policy_tuple = format!("(true,18446744073709551615,1,1,{admin},[],0x0000000000000000000000000000000000000000,0,0,[])");
-
-        let out = Command::new("cast")
-            .args([
-                "send",
-                "--rpc-url",
-                fx.rpc_url(),
-                "--private-key",
-                DEPLOYER_PRIVATE_KEY_HEX,
-                &format!("{:#x}", fx.gateway()),
-                "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
-                admin,
-                &policy_tuple,
-            ])
-            .output()
-            .expect("invoke cast send");
-
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            !out.status.success(),
-            "authorizeAgent(admin) must revert; got success.\nstdout={stdout}\nstderr={stderr}"
-        );
-        let combined = format!("{stdout}\n{stderr}");
+        // The admin is the timelock after handover. Authorizing an admin-holding
+        // address as an agent goes through the real Safe and the timelock (govern
+        // row `authorize-agent`); the inner `_grantRole` override in `AccessRoles`
+        // reverts with `RoleSeparationViolated()` at execution, so the govern run
+        // must fail. No deployer key is involved.
+        let admin = format!("{:#x}", fx.timelock());
+        let result = fx.govern("authorize-agent", &["--agent", &admin]);
+        let err = result.expect_err("authorizeAgent(admin) must revert; the govern run succeeded");
+        let combined = err.to_string();
         assert!(
             combined.contains("RoleSeparationViolated")
-                || combined.contains("0x") && combined.to_lowercase().contains("revert"),
-            "expected RoleSeparationViolated in revert output;\nstdout={stdout}\nstderr={stderr}"
+                || combined.to_lowercase().contains("revert"),
+            "expected RoleSeparationViolated in revert output;\n{combined}"
         );
 
         // Sanity: AGENT_PRIVATE_KEY constant is not silently empty.

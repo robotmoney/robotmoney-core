@@ -8,17 +8,15 @@
 #    and empty-vault share-price invariants across the exitFeeBps × adapter matrix.
 #    The matrix shards by exit-fee tier via the EXIT_FEE_BPS env var.
 #
-# 2. DEMO-TVL MATRIX (activated — issue #804)
-#    The full_stack_demo_tvl smoke test
-#    (testing/smoke-test/tests/full_stack_demo_tvl.rs) is wired here.
-#    Runs HEAVY tier — it gates pull_requests targeting dev (and push to dev),
-#    not ordinary feature PRs. Uses oven-sh/setup-bun@v2 for the DappStack dapp-build step.
-#
+# 2. DEMO-TVL MATRIX (removed — core 1488)
+#    The full_stack_demo_tvl smoke test depended on demo depositor seeding, which the
+#    one deployment scheme deletes. Vault TVL on stage comes from the real seed and
+#    the govern matrix, not from seeded depositors.
+
 # ACTIVATION HISTORY
 # - erc4626-precondition: activated in issue #814 — ERC4626PreconditionChecks.t.sol
 #   created and `if: false` removed.
-# - demo-tvl: activated in issue #804 — full_stack_demo_tvl.rs exists; bun runner
-#   dep resolved via oven-sh/setup-bun@v2.
+# - demo-tvl: removed in core 1488 with demo seeding.
 
 name: erc4626-demo-tvl-matrix
 
@@ -67,40 +65,3 @@ jobs:
             --match-contract ERC4626PreconditionChecks \
             --fuzz-runs 256 \
             -vv
-
-  # ── Full-stack demo-TVL ────────────────────────────────────────────────────
-  # Runs the full_stack_demo_tvl smoke test on HEAVY-tier branches.
-  # timeout-minutes: 60 to account for DappStack boot + seed_demo_depositors
-  # (typically 25-35 min on GitHub-hosted runners).
-  demo-tvl:
-    name: demo-tvl-full-stack
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Verify Docker is available
-        run: docker version && docker compose version
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
-      - name: Install bun (needed by DappStack dapp-build step)
-        uses: oven-sh/setup-bun@v2
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "testing/smoke-test -> target"
-      - name: cargo build (smoke-test crate)
-        working-directory: testing/smoke-test
-        run: cargo build -p smoke-test
-      - name: cargo test full_stack_demo_tvl
-        working-directory: testing/smoke-test
-        run: cargo test -p smoke-test --release --test full_stack_demo_tvl -- --test-threads=1 --nocapture
-      - name: Safety-net teardown (always)
-        if: always()
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans || true

@@ -10,7 +10,7 @@
 //
 //   1. RobotMoneyVault     — proven by CustodyInvariant.t.sol (StdInvariant handler)
 //   2. BasketVault         — live TWAP-pool/router rig below
-//   3. RwaVault            — live Chronicle-oracle/Aerodrome rig below
+//   3. RwaBasketVault      — live TWAP-pool/adapter rig below
 //   4. AgentTokenVault     — seam below (BasketVault descendant)
 //   5. ProtocolAssetVault  — seam below (BasketVault descendant)
 //
@@ -25,22 +25,13 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {RobotMoneyVault} from "../../RobotMoneyVault.sol";
 import {BasketVault} from "../../vaults/BasketVault.sol";
-import {RwaVault} from "../../vaults/RwaVault.sol";
-import {ChronicleOracleAdapter} from "../../adapters/ChronicleOracleAdapter.sol";
+import {RwaBasketVault} from "../../vaults/RwaBasketVault.sol";
+import {UniswapV3SwapAdapter} from "../../adapters/UniswapV3SwapAdapter.sol";
 import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
-import {IChronicleOracle} from "../../interfaces/IChronicleOracle.sol";
 import {InvUSDC} from "../CustodyInvariant.t.sol";
 import {NoYieldTestAdapter} from "../helpers/NoYieldTestAdapter.sol";
 import {TestERC20} from "../helpers/TestERC20.sol";
 import {BasketVaultHarness, MockPool, MockSwapRouter} from "../BasketVault.t.sol";
-import {
-    Sup5AeroRouter,
-    Sup5Chronicle,
-    Sup5Pool,
-    Sup5StubV3Router,
-    Sup5Token,
-    Sup5Usdc
-} from "./StaleOracleRedemption.t.sol";
 
 /// @dev Intentionally violates SUP-1: one holder can redeem twice the assets.
 ///      This test-only double proves the shared predicate is executed, not vacuous.
@@ -149,29 +140,17 @@ contract CustodyMultiVaultTest is Test {
         _assertRedeemableLeqTotalAssets(IERC4626(address(vault)), holders);
     }
 
-    /// @notice SUP-1 (RwaVault): a live Chronicle-priced RWA deposit keeps its
-    ///         holder's redeemable value within NAV.
+    /// @notice SUP-1 (RwaBasketVault): a live pool-TWAP-priced RWA deposit through the
+    ///         `UniswapV3SwapAdapter` keeps its holder's redeemable value within NAV.
     function test_SUP1_rwaVault_redeemableLeqTotalAssets() public {
-        Sup5Usdc usdc = new Sup5Usdc();
-        Sup5Token despxa = new Sup5Token();
-        Sup5Chronicle chronicle = new Sup5Chronicle(5e18, block.timestamp);
-        Sup5AeroRouter router = new Sup5AeroRouter();
-        (address token0, address token1) = address(despxa) < address(usdc)
-            ? (address(despxa), address(usdc))
-            : (address(usdc), address(despxa));
-        Sup5Pool pool = new Sup5Pool(token0, token1);
-        ChronicleOracleAdapter adapter = new ChronicleOracleAdapter(
-            address(router),
-            address(0xF00D),
-            false,
-            address(chronicle),
-            address(despxa),
-            address(usdc)
-        );
-        RwaVault vault = new RwaVault(
+        TestERC20 usdc = new TestERC20();
+        TestERC20 despxa = new TestERC20();
+        MockSwapRouter router = new MockSwapRouter();
+        MockPool pool = new MockPool(address(despxa), address(usdc), uint160(1 << 96));
+        UniswapV3SwapAdapter adapter = new UniswapV3SwapAdapter(address(router));
+        RwaBasketVault vault = new RwaBasketVault(
             IERC20(address(usdc)),
-            ISwapRouter(address(new Sup5StubV3Router())),
-            IChronicleOracle(address(chronicle)),
+            ISwapRouter(address(router)),
             type(uint256).max,
             type(uint256).max,
             0,
@@ -182,15 +161,13 @@ contract CustodyMultiVaultTest is Test {
 
         vm.startPrank(admin);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        vault.addAsset(
-            address(despxa), address(pool), 0, address(adapter), BasketVault.Venue.Aerodrome
-        );
+        vault.addAsset(address(despxa), address(pool), 500, address(adapter), BasketVault.Venue.V3);
         vm.stopPrank();
 
         address alice = makeAddr("rwaAlice");
         uint256 depositAmount = 1_000e6;
-        despxa.mint(address(router), 200e18);
-        router.setAmountOut(200e18);
+        despxa.mint(address(router), depositAmount);
+        router.setAmountOut(depositAmount);
         usdc.mint(alice, depositAmount);
         vm.startPrank(alice);
         usdc.approve(address(vault), depositAmount);

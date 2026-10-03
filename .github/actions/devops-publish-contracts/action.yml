@@ -1,0 +1,75 @@
+name: devops-publish-contracts
+description: >-
+  Checks out robotmoney/devops into ./devops, installs the publish-contracts
+  dependencies and exports PUBLISH_CONTRACTS_DIR (plus STAGE_SHEET and CORE_DIR)
+  for every job whose Rust harness boots the geth devnet through the devops
+  "publish contracts" runbook. The checkout needs the DEVOPS_READ_TOKEN secret,
+  which a composite action cannot read, so the caller passes it in `token`.
+  Missing token: the action fails with ONE message naming the secret. The one
+  exception is a pull request from a fork, where GitHub withholds secrets by
+  design: there the action prints a notice and sets `available=false` so the
+  caller skips the devnet steps (the job is NOT optional anywhere else).
+inputs:
+  token:
+    description: "The DEVOPS_READ_TOKEN secret (pass secrets.DEVOPS_READ_TOKEN)."
+    required: false
+    default: ""
+  ref:
+    description: >-
+      devops ref to check out. Callers pass the DEVOPS_PUBLISH_REF repository
+      variable (the vars context is not available inside a composite action). Empty:
+      the DEVOPS_REF env of the calling workflow, then the default below.
+    required: false
+    default: ""
+outputs:
+  available:
+    description: "'true' when devops is checked out and PUBLISH_CONTRACTS_DIR is exported, 'false' when skipped on a fork pull request."
+    value: ${{ steps.gate.outputs.available }}
+runs:
+  using: composite
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true }}
+        # TEMPORARY: the devops side of this change lives on a PR branch.
+        # SWITCH TO A PINNED devops SHA (set the DEVOPS_PUBLISH_REF variable or
+        # DEVOPS_REF env to the merge commit) ONCE THE DEVOPS PR MERGES.
+        DEFAULT_REF: impl/docs-removals
+        INPUT_REF: ${{ inputs.ref }}
+        ENV_REF: ${{ env.DEVOPS_REF }}
+      run: |
+        if [ -z "$TOKEN" ]; then
+          if [ "$IS_FORK_PR" = "true" ]; then
+            echo "::notice::DEVOPS_READ_TOKEN is not available to pull requests from forks: the devnet steps of this job are skipped."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::Secret DEVOPS_READ_TOKEN is missing (owner action: add it as a repository secret with read access to robotmoney/devops). Every job that boots the devnet needs it for the publish-contracts checkout."
+          exit 1
+        fi
+        ref="${INPUT_REF:-${ENV_REF:-$DEFAULT_REF}}"
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+        echo "available=true" >> "$GITHUB_OUTPUT"
+    - if: ${{ steps.gate.outputs.available == 'true' }}
+      uses: actions/checkout@v4
+      with:
+        repository: robotmoney/devops
+        ref: ${{ steps.gate.outputs.ref }}
+        token: ${{ inputs.token }}
+        path: devops
+    - if: ${{ steps.gate.outputs.available == 'true' }}
+      uses: oven-sh/setup-bun@v2
+    - if: ${{ steps.gate.outputs.available == 'true' }}
+      shell: bash
+      working-directory: devops/publish-contracts
+      run: bun install --frozen-lockfile
+    - if: ${{ steps.gate.outputs.available == 'true' }}
+      shell: bash
+      run: |
+        {
+          echo "PUBLISH_CONTRACTS_DIR=${GITHUB_WORKSPACE}/devops/publish-contracts"
+          echo "STAGE_SHEET=${GITHUB_WORKSPACE}/devops/deployments/twin-918453/stage-sheet.env"
+          echo "CORE_DIR=${GITHUB_WORKSPACE}"
+        } >> "$GITHUB_ENV"

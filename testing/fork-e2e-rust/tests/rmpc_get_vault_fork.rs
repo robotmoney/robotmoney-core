@@ -159,7 +159,7 @@ fn run_rmpc(cfg: &Path, args: &[&str], chain_id: u64) -> Value {
 // vault's bytecode but NOT its constructor-initialised storage
 // (name/symbol are written by `ERC20("Robot Money USDC", "rmUSDC")`
 // in the constructor and the fixture was captured via
-// `anvil_setCode`-only warming — see `scripts/devnet/snapshot-fork.sh`
+// `anvil_setCode`-only warming — see `scripts/devnet/snapshot-fork.ts`
 // `WARM_ADDRESSES` and the storage-vs-bytecode caveat there).
 //
 // The fix for THAT (vault storage seed analogous to

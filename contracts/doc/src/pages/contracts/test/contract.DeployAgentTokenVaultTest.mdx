@@ -1,0 +1,144 @@
+---
+title: "DeployAgentTokenVaultTest"
+description: "rmAGENT script: empty, paused and registered at launch. The same script adds an asset from one config entry (adapter deployed, code hash allowed, `addAsset` called)."
+---
+
+# DeployAgentTokenVaultTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployAgentTokenVault.t.sol)
+
+**Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
+
+rmAGENT script: empty, paused and registered at launch. The same script adds an asset
+from one config entry (adapter deployed, code hash allowed, `addAsset` called).
+
+## State Variables
+
+### script
+
+```solidity
+DeployAgentTokenVault internal script;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_launchconfig"></a>
+
+### _launchConfig
+
+```solidity
+function _launchConfig() internal view returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_runlaunch"></a>
+
+### _runLaunch
+
+<i>
+
+Runs the SHIPPED config file through the script's parser, with no substitute body.
+The test points SWAP_ROUTER at the file's own swapRouter02 value.
+
+</i>
+
+```solidity
+function _runLaunch() internal returns (BasketVaultDeployBase.Deployed memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultDeployBase.Deployed` |  |
+
+<a id="test_shippedconfig_parsesthroughthescriptparser"></a>
+
+### test_shippedConfig_parsesThroughTheScriptParser
+
+The shipped rmAGENT config carries swapRouter02 and an empty shortlist, so the
+script's parser accepts it (review defect: it used to revert on a missing key).
+
+```solidity
+function test_shippedConfig_parsesThroughTheScriptParser() public;
+```
+
+<a id="test_launchconfigshortlistisempty"></a>
+
+### test_launchConfigShortlistIsEmpty
+
+```solidity
+function test_launchConfigShortlistIsEmpty() public view;
+```
+
+<a id="test_deploy_isregisteredpausedandempty"></a>
+
+### test_deploy_isRegisteredPausedAndEmpty
+
+```solidity
+function test_deploy_isRegisteredPausedAndEmpty() public;
+```
+
+<a id="test_deploy_depositrevertswhilepaused"></a>
+
+### test_deploy_depositRevertsWhilePaused
+
+```solidity
+function test_deploy_depositRevertsWhilePaused() public;
+```
+
+<a id="test_deploy_deployerholdsemergencyuntilhandover"></a>
+
+### test_deploy_deployerHoldsEmergencyUntilHandover
+
+```solidity
+function test_deploy_deployerHoldsEmergencyUntilHandover() public;
+```
+
+<a id="test_manifest_hasemptyassetlist"></a>
+
+### test_manifest_hasEmptyAssetList
+
+```solidity
+function test_manifest_hasEmptyAssetList() public;
+```
+
+<a id="test_manifest_deploymentoutisrequired"></a>
+
+### test_manifest_deploymentOutIsRequired
+
+DEPLOYMENT_OUT is required: an unset variable reverts, there is no default path.
+
+```solidity
+function test_manifest_deploymentOutIsRequired() public;
+```
+
+<a id="test_oneconfigentryaddsanassetthroughtheadapterpath"></a>
+
+### test_oneConfigEntryAddsAnAssetThroughTheAdapterPath
+
+```solidity
+function test_oneConfigEntryAddsAnAssetThroughTheAdapterPath() public;
+```
+
+<a id="test_reverts_whenswaprouterisnotswaprouter02"></a>
+
+### test_reverts_whenSwapRouterIsNotSwapRouter02
+
+```solidity
+function test_reverts_whenSwapRouterIsNotSwapRouter02() public;
+```
+

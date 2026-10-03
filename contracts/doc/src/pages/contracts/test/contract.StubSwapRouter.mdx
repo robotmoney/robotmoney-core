@@ -4,14 +4,13 @@ title: "StubSwapRouter"
 
 # StubSwapRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RwaVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployProtocolAssetVault.t.sol)
 
 **Inherits:** [ISwapRouter](/contracts/interfaces/interface.ISwapRouter)
 
 <i>
 
-Stub Uniswap V3 SwapRouter (required by BasketVault constructor but never called
-in the RWA vault since all swaps go through ChronicleOracleAdapter/Aerodrome).
+Zero-implementation router. Vault constructors only store the router address.
 
 </i>
 
@@ -22,7 +21,7 @@ in the RWA vault since all swaps go through ChronicleOracleAdapter/Aerodrome).
 ### exactInputSingle
 
 ```solidity
-function exactInputSingle(ExactInputSingleParams calldata) external returns (uint256);
+function exactInputSingle(ExactInputSingleParams calldata) external pure returns (uint256);
 ```
 
 **Parameters**

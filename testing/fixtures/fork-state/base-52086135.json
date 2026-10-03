@@ -1,0 +1,8 @@
+{
+  "chain_id": 8453,
+  "fork_block": 52086135,
+  "captured_at": "2026-10-02T17:43:59Z",
+  "upstream_rpc": "https://mainnet.base.org",
+  "state_file": "base-52086135.anvil-state",
+  "state_sha256": "ec09deffc6ad43bfb1b15cf7f4392966588fcda2627f0fb85cb56404e46da70a"
+}

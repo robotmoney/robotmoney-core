@@ -5,7 +5,7 @@ description: "The config-validation interface the 2026-06-19 audit recommended f
 
 # BasketAssetConfigGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/lib/BasketAssetConfigGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/lib/BasketAssetConfigGuard.sol)
 
 **Title:** BasketAssetConfigGuard
 
@@ -285,7 +285,8 @@ struct AssetInfo {
 
 <i>
 
-Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals).
+Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is a reserved ordinal that no
+adapter implements; it stays so Aerodrome keeps ordinal 2 (see `BasketVault.Venue`).
 
 </i>
 

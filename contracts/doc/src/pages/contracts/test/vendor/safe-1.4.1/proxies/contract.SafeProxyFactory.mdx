@@ -1,0 +1,208 @@
+---
+title: "SafeProxyFactory"
+---
+
+# SafeProxyFactory
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/vendor/safe-1.4.1/proxies/SafeProxyFactory.sol)
+
+**Title:** Proxy Factory - Allows to create a new proxy contract and execute a message call to the new proxy within one transaction.
+
+**Author:** Stefan George - @Georgi87
+
+## Functions
+
+<a id="proxycreationcode"></a>
+
+### proxyCreationCode
+
+<i>
+
+Allows to retrieve the creation code used for the Proxy deployment. With this it is easily possible to calculate predicted address.
+
+</i>
+
+```solidity
+function proxyCreationCode() public pure returns (bytes memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="deployproxy-address-bytes-bytes32"></a>
+
+### deployProxy
+
+Internal method to create a new proxy contract using CREATE2. Optionally executes an initializer call to a new proxy.
+
+```solidity
+function deployProxy(address _singleton, bytes memory initializer, bytes32 salt) internal returns (SafeProxy proxy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _singleton | `address` | Address of singleton contract. Must be deployed at the time of execution. |
+| initializer | `bytes` | (Optional) Payload for a message call to be sent to a new proxy contract. |
+| salt | `bytes32` | Create2 salt to use for calculating the address of the new proxy contract. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `SafeProxy` | Address of the new proxy contract. |
+
+<a id="createproxywithnonce-address-bytes-uint256"></a>
+
+### createProxyWithNonce
+
+Deploys a new proxy with `_singleton` singleton and `saltNonce` salt. Optionally executes an initializer call to a new proxy.
+
+```solidity
+function createProxyWithNonce(address _singleton, bytes memory initializer, uint256 saltNonce) public returns (SafeProxy proxy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _singleton | `address` | Address of singleton contract. Must be deployed at the time of execution. |
+| initializer | `bytes` | Payload for a message call to be sent to a new proxy contract. |
+| saltNonce | `uint256` | Nonce that will be used to generate the salt to calculate the address of the new proxy contract. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `SafeProxy` |  |
+
+<a id="createchainspecificproxywithnonce-address-bytes-uint256"></a>
+
+### createChainSpecificProxyWithNonce
+
+Deploys a new chain-specific proxy with `_singleton` singleton and `saltNonce` salt. Optionally executes an initializer call to a new proxy.
+
+<i>
+
+Allows to create a new proxy contract that should exist only on 1 network (e.g. specific governance or admin accounts)
+     by including the chain id in the create2 salt. Such proxies cannot be created on other networks by replaying the transaction.
+
+</i>
+
+```solidity
+function createChainSpecificProxyWithNonce(
+        address _singleton,
+        bytes memory initializer,
+        uint256 saltNonce
+    ) public returns (SafeProxy proxy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _singleton | `address` | Address of singleton contract. Must be deployed at the time of execution. |
+| initializer | `bytes` | Payload for a message call to be sent to a new proxy contract. |
+| saltNonce | `uint256` | Nonce that will be used to generate the salt to calculate the address of the new proxy contract. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `SafeProxy` |  |
+
+<a id="createproxywithcallback-address-bytes-uint256-iproxycreationcallback"></a>
+
+### createProxyWithCallback
+
+Deploy a new proxy with `_singleton` singleton and `saltNonce` salt.
+        Optionally executes an initializer call to a new proxy and calls a specified callback address `callback`.
+
+```solidity
+function createProxyWithCallback(
+        address _singleton,
+        bytes memory initializer,
+        uint256 saltNonce,
+        IProxyCreationCallback callback
+    ) public returns (SafeProxy proxy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _singleton | `address` | Address of singleton contract. Must be deployed at the time of execution. |
+| initializer | `bytes` | Payload for a message call to be sent to a new proxy contract. |
+| saltNonce | `uint256` | Nonce that will be used to generate the salt to calculate the address of the new proxy contract. |
+| callback | `IProxyCreationCallback` | Callback that will be invoked after the new proxy contract has been successfully deployed and initialized. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `SafeProxy` |  |
+
+<a id="iscontract-address"></a>
+
+### isContract
+
+Returns true if `account` is a contract.
+
+<i>
+
+This function will return false if invoked during the constructor of a contract,
+     as the code is not actually created until after the constructor finishes.
+
+</i>
+
+```solidity
+function isContract(address account) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` | The address being queried |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` | True if `account` is a contract |
+
+<a id="getchainid"></a>
+
+### getChainId
+
+Returns the ID of the chain the contract is currently deployed on.
+
+```solidity
+function getChainId() public view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | The ID of the current chain as a uint256. |
+
+## Events
+
+### ProxyCreation
+
+```solidity
+event ProxyCreation(SafeProxy indexed proxy, address singleton);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `SafeProxy` |  |
+| singleton | `address` |  |
+

@@ -4,9 +4,9 @@ title: "DeployInputsHarness"
 
 # DeployInputsHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/test/DeployMainnetInputs.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployMainnetInputs.t.sol)
 
-**Inherits:** [Deploy](/contracts/script/contract.Deploy)
+**Inherits:** [DeployVault](/contracts/script/contract.DeployVault)
 
 <i>
 
@@ -37,6 +37,42 @@ function readParams(string memory prefix) external view returns (Params memory);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `Params` |  |
+
+<a id="seedreceiver-string-address"></a>
+
+### seedReceiver
+
+```solidity
+function seedReceiver(string memory prefix, address deployer) external view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+| deployer | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="requirereceiver-address-address"></a>
+
+### requireReceiver
+
+```solidity
+function requireReceiver(address receiver, address deployer) external pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+| deployer | `address` |  |
 
 <a id="seed-string"></a>
 
@@ -77,4 +113,58 @@ function deployWith(Params memory p) external returns (Deployed memory);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `Deployed` |  |
+
+<a id="envuintrequired-string"></a>
+
+### envUintRequired
+
+```solidity
+function envUintRequired(string memory key) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="envuint64required-string"></a>
+
+### envUint64Required
+
+```solidity
+function envUint64Required(string memory key) external view returns (uint64);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+
+<a id="requirechain-string"></a>
+
+### requireChain
+
+```solidity
+function requireChain(string memory prefix) external view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
 

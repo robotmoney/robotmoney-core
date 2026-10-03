@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "comment": "Required checks gate a DEPLOY_SHA. Derived from the workflow job names that run unconditionally on push to dev (jobs with a draft or event skip, a path filter, a matrix or a schedule-only trigger are excluded). A required entry needs a check-run with that exact name (or a name starting with prefix) and every run of that name must have concluded success. smoke-test-twin-publish (suite 14 twin_publish) is class required-on-deploy-paths: the job runs on every push to dev, so a DEPLOY_SHA always carries it, and on a pull request it runs only when a path in its paths list changed (GitHub reports the skipped job as passing for branch protection, so the owner marks it required in branch protection). config-check-live-base is required: its workflow runs on every PR and push and skips the heavy steps when no config path changed, so it always reports. Optional entries are reported and never change the exit code.",
+  "required": [
+    { "name": "forge-unit-tests", "source": "suite-01-02-forge-tests.yml" },
+    { "name": "forge-coverage-gate", "source": "suite-01-02-forge-tests.yml" },
+    { "name": "solidity-lint", "source": "suite-03-solidity-quality.yml" },
+    { "name": "rust-lint", "source": "suite-04-rust-quality.yml" },
+    { "name": "rust-audit", "source": "suite-04-rust-quality.yml" },
+    { "name": "rust-doc-coverage", "source": "suite-04-rust-quality.yml" },
+    { "name": "cargo-test-target-coverage", "source": "suite-04-rust-quality.yml" },
+    { "name": "rmpc-unit", "source": "suite-06-rmpc-unit.yml" },
+    { "name": "dapp-lint-build", "source": "suite-09-dapp-quality.yml" },
+    { "name": "bun-audit", "source": "suite-18-security-gates.yml" },
+    { "name": "cargo-audit", "source": "suite-18-security-gates.yml" },
+    { "name": "csp-gate", "source": "suite-18-security-gates.yml" },
+    { "name": "secrets-scan", "source": "suite-18-secrets-scan.yml" },
+    { "name": "doc-validators", "source": "suite-13-doc-checks.yml" },
+    { "name": "schema-validators", "source": "suite-13-doc-checks.yml" },
+    { "name": "generated-docs-freshness", "source": "suite-13-doc-checks.yml" },
+    { "name": "feature-flag-consistency", "source": "suite-13-doc-checks.yml" },
+    { "name": "deleted-stage-gate", "source": "suite-28-core-stack-selftest.yml" },
+    { "name": "stage-tooling-tests", "source": "suite-28-core-stack-selftest.yml" },
+    { "name": "core-stages-offline", "source": "suite-28-core-stages.yml" },
+    { "name": "check-sha-green-tests", "source": "suite-30-check-sha-green.yml" },
+    { "name": "config-check-live-base", "source": "config-check.yml" },
+    {
+      "name": "smoke-test-twin-publish",
+      "source": "suite-14-smoke-test.yml",
+      "class": "required-on-deploy-paths",
+      "paths": ["contracts/script/", "scripts/deploy/", "scripts/stage/", "config/", "testing/smoke-test/", ".github/workflows/suite-14-smoke-test.yml"]
+    }
+  ],
+  "optional": [
+    { "name": "cross-repo-fixture-drift", "source": "fusion-cross-repo-drift.yml" },
+    { "name": "solidity-slither", "source": "suite-03-solidity-quality.yml" },
+    { "name": "opencode-headless-deposit-replay", "source": "suite-11b-opencode-headless.yml" },
+    { "prefix": "fork-integration-", "source": "suite-05-fork-integration.yml" }
+  ]
+}

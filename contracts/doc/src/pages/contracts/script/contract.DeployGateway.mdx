@@ -1,0 +1,318 @@
+---
+title: "DeployGateway"
+description: "Stage 5 of the core deploy (libs, vault, registry, router, gateway). Deploys RobotMoneyGateway bound to the vault AND the router, asserts `gateway.router()` is the deployed router and not zero, then authorizes the deploy agent. The router must exist first: the gateway stores it as an immutable, so a gateway deployed with a zero router can never route (core 1493)."
+---
+
+# DeployGateway
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployGateway.s.sol)
+
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+
+**Title:** DeployGateway
+
+Stage 5 of the core deploy (libs, vault, registry, router, gateway).
+Deploys RobotMoneyGateway bound to the vault AND the router, asserts
+`gateway.router()` is the deployed router and not zero, then authorizes the
+deploy agent. The router must exist first: the gateway stores it as an immutable,
+so a gateway deployed with a zero router can never route (core 1493).
+
+The IC policy and the consensus receipt bind the gateway address, so they run in
+their own stage AFTER this one (`DeployInvestmentCommitteePolicy`).
+
+<i>
+
+Required env vars (all required on every chain, no defaults):
+EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet
+ADMIN_ADDRESS         — receives DEFAULT_ADMIN_ROLE + ADMIN_ROLE
+PAUSER_ADDRESS        — receives PAUSER_ROLE (must differ from ADMIN)
+AGENT_ADDRESS         — receives AGENT_ROLE  (must differ from both)
+SHARE_RECEIVER_ADDRESS — recipient of minted rmUSDC shares
+VAULT_ADDRESS         — the rmUSDC RobotMoneyVault
+ROUTER_ADDRESS        — the PortfolioRouter from the router stage, non-zero
+AGENT_VALID_UNTIL, AGENT_MAX_PER_PAYMENT, AGENT_MAX_PER_WINDOW,
+AGENT_MAX_WITHDRAW_PER_PAYMENT, AGENT_MAX_WITHDRAW_PER_WINDOW — agent policy
+DEPLOYMENT_OUT        — output JSON path
+USDC is the canonical Base USDC constant on every chain.
+
+</i>
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+```solidity
+string public constant MANIFEST_FILE = "gateway.json";
+```
+
+### DEFAULT_MAX_PER_PAYMENT
+
+In-process test seam defaults. Env runs require every agent cap.
+
+```solidity
+uint256 public constant DEFAULT_MAX_PER_PAYMENT = 10_000 * 1e6;
+```
+
+### DEFAULT_MAX_PER_WINDOW
+
+Default agent spend cap per window in USDC units (test seam only).
+
+```solidity
+uint256 public constant DEFAULT_MAX_PER_WINDOW = 100_000 * 1e6;
+```
+
+### DEFAULT_MAX_WITHDRAW_PER_PAYMENT
+
+Default per-payment withdraw cap in raw rmUSDC shares (test seam only).
+
+<i>
+
+Withdraw caps count raw rmUSDC shares, not USDC: the vault's share offset is 18, so
+1 USDC (1e6 units) is 1e24 raw shares on a fresh vault. A cap sized in USDC units
+would block every withdraw (core 1493).
+
+</i>
+
+```solidity
+uint256 public constant DEFAULT_MAX_WITHDRAW_PER_PAYMENT = 10_000 * 1e6 * 1e18;
+```
+
+### DEFAULT_MAX_WITHDRAW_PER_WINDOW
+
+Default per-window withdraw cap in raw rmUSDC shares (test seam only).
+
+```solidity
+uint256 public constant DEFAULT_MAX_WITHDRAW_PER_WINDOW = 100_000 * 1e6 * 1e18;
+```
+
+### DEFAULT_VALID_UNTIL_OFFSET
+
+Default agent authorization lifetime from deployment (test seam only).
+
+```solidity
+uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` | The deployed gateway and its wiring. |
+
+<a id="runinprocess"></a>
+
+### runInProcess
+
+In-process variant, env-driven. Pranks the admin for the authorization.
+
+```solidity
+function runInProcess() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` | The deployed gateway and its wiring. |
+
+<a id="runinprocesswith-address-address-address-address-address-address-address"></a>
+
+### runInProcessWith
+
+Direct-parameter variant for forge tests. Skips env resolution.
+
+```solidity
+function runInProcessWith(
+        address admin_,
+        address pauser_,
+        address agent_,
+        address shareReceiver_,
+        address usdc_,
+        address vault_,
+        address router_
+    ) external returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin_ | `address` | Gateway admin. |
+| pauser_ | `address` | Address granted the pauser role. |
+| agent_ | `address` | Agent authorized to spend through the gateway. |
+| shareReceiver_ | `address` | Address that receives vault shares. |
+| usdc_ | `address` | USDC token address. |
+| vault_ | `address` | Robot Money vault address. |
+| router_ | `address` | Router address the gateway may call. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` | The deployed gateway and its wiring. |
+
+<a id="_readenvparamsfrom-string"></a>
+
+### _readEnvParamsFrom
+
+<i>
+
+`prefix` is "" in production. Tests pass their own prefix because env vars are
+process-wide and forge runs tests in parallel.
+
+</i>
+
+```solidity
+function _readEnvParamsFrom(string memory prefix) internal view returns (Params memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+
+<a id="_deploygateway-params"></a>
+
+### _deployGateway
+
+```solidity
+function _deployGateway(Params memory p) internal returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_authorizedeployagent-deployed-params"></a>
+
+### _authorizeDeployAgent
+
+<i>
+
+Builds the agent policy, calls authorizeAgent, then runs role-separation checks.
+msg.sender must hold DEFAULT_ADMIN_ROLE (d.admin or the broadcast deployer).
+
+</i>
+
+```solidity
+function _authorizeDeployAgent(Deployed memory d, Params memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| p | `Params` |  |
+
+<a id="_writedeploymentjson-deployed"></a>
+
+### _writeDeploymentJson
+
+```solidity
+function _writeDeploymentJson(Deployed memory d) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+## Structs
+
+### Params
+
+```solidity
+struct Params {
+        address admin;
+        address pauser;
+        address agent;
+        address shareReceiver;
+        address vault;
+        address router;
+        uint64 validUntil;
+        uint256 maxPerPayment;
+        uint256 maxPerWindow;
+        uint256 maxWithdrawPerPayment;
+        uint256 maxWithdrawPerWindow;
+        address usdcAddress;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin | `address` |  |
+| pauser | `address` |  |
+| agent | `address` |  |
+| shareReceiver | `address` |  |
+| vault | `address` |  |
+| router | `address` |  |
+| validUntil | `uint64` |  |
+| maxPerPayment | `uint256` |  |
+| maxPerWindow | `uint256` |  |
+| maxWithdrawPerPayment | `uint256` |  |
+| maxWithdrawPerWindow | `uint256` |  |
+| usdcAddress | `address` |  |
+
+### Deployed
+
+```solidity
+struct Deployed {
+        RobotMoneyGateway gateway;
+        address usdc;
+        address vault;
+        address router;
+        address admin;
+        address pauser;
+        address agent;
+        address shareReceiver;
+        bytes32 gatewayRuntimeHash;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gateway | `RobotMoneyGateway` |  |
+| usdc | `address` |  |
+| vault | `address` |  |
+| router | `address` |  |
+| admin | `address` |  |
+| pauser | `address` |  |
+| agent | `address` |  |
+| shareReceiver | `address` |  |
+| gatewayRuntimeHash | `bytes32` |  |
+

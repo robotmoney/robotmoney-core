@@ -144,7 +144,7 @@ Three boundary properties are load-bearing and are enforced architecturally:
 | Contract libraries | OpenZeppelin v5 ERC-4626, ERC-20, AccessControl, Pausable, ReentrancyGuard | Standardizes vault accounting, role separation, pause behavior, and reentrancy protection. | `docs/technical/smart-contracts.md` §3.1 |
 | Primary asset | USDC, 6 decimals | Product accepts USDC as the treasury input asset. | `docs/prd.md` §1; `docs/technical/smart-contracts.md` §1 |
 | Vault standard | ERC-4626 for individual vaults | Standard deposit, withdraw, redeem, preview, conversion, and `totalAssets()` surface. | `docs/technical/adapter-architecture.md` §1 |
-| Stable-yield venues | Morpho Gauntlet USDC Prime, Aave V3, Compound V3 through vault adapters | Current deployed stable-yield vault normalizes these venues behind adapters. | `docs/technical/adapter-architecture.md` §4; `docs/technical/smart-contracts.md` §4 |
+| Stable-yield venues | Moonwell Flagship USDC, Aave V3, Compound V3 through vault adapters | Current deployed stable-yield vault normalizes these venues behind adapters. | `docs/technical/adapter-architecture.md` §4; `docs/technical/smart-contracts.md` §4 |
 | IC policy contract | Solidity 0.8.24, OpenZeppelin AccessControl + admin-floor, same Foundry toolchain | Signalling-only registry of committee agents and signed tilts; mirrors `RouterGovernance`/`VaultRegistry` role and event conventions; routed via the gateway. | `docs/prd.md` §"Committee", §12 INV-4; proposal doc; issue #1044 |
 | Committee vote schema | Fixed-shape JSON schema committed to the repo, validated in CI | Committee votes are the core auditable signal; a valid fixture must pass and an invalid fixture must fail a CI schema job. | `docs/prd.md` §"Committee" (constraints); issue #1044 |
 | Committee agent plugin | Skill/plugin extending `robotmoney-analyst` | Reuses the analyst's regime/market datasources, adds form-tilt → sign → submit-vote; proprietary methods stay out of the published surface. | `plugins/robotmoney-analyst/`; proposal doc §3 |
@@ -197,62 +197,40 @@ same contracts ship into test, demo, and mainnet — only the registry
 flag's value differs across environments. See
 `docs/development/single-production-codebase.md` for the principle.
 
-The source tree also contains `RwaVault`, a shipped ERC-4626 USDC vault
-for tokenised real-world assets. The current deployment holds deSPXA
-(Centrifuge / Janus Henderson / Anemoy tokenised S&P 500 on Base).
-Key architectural characteristics:
+The source tree also contains `RwaBasketVault`, the rmRWA vault. rmRWA is
+a plain basket row: it holds deSPXA (Centrifuge / Janus Henderson / Anemoy
+tokenised S&P 500 on Base) priced from its Uniswap V3 fee 500 pool through
+the existing `UniswapV3SwapAdapter`. It has no oracle. The earlier
+Chronicle-priced RWA vault and its two adapters are deleted.
+Characteristics:
 
-- **Entry and exit via Aerodrome secondary market only.** NAV (TWAP) prices
-  protocol-level guards (growth limit, ORA-4 deviation, TVL cap); user share
-  value = market price of held deSPXA tokens. See
-  `docs/technical/asset-valuation-hybrid.md` for the hybrid design rationale.
-  Primary NAV redemption through the Centrifuge V3 ERC-7540 epoch operator
-  is a permanent non-goal: a permissionless smart-contract vault cannot
-  satisfy the KYC requirement. All deposits and withdrawals swap
-  USDC↔deSPXA through an Aerodrome CL pool.
-- **Chronicle push oracle for NAV pricing.** Aerodrome DEX TWAP is
-  unsuitable for thin RWA liquidity. `ChronicleOracleAdapter` prices NAV
-  and slippage floors via a Chronicle on-chain signed price feed.
-  `RwaVault` enforces a heartbeat window (default 24 h); price-sensitive
-  operations revert with `StalePriceFeed` if the feed is stale. NAV used
-  for system guards only; user position value via separate market pricing.
+- **Entry and exit via the secondary market only.** Primary NAV redemption
+  through the Centrifuge V3 ERC-7540 epoch operator is a permanent non-goal:
+  a permissionless smart-contract vault cannot satisfy the KYC requirement.
 - **Issuer freeze-control risk.** The deSPXA issuer may freeze token
-  transfers at any time, blocking all Aerodrome swaps and therefore all
-  vault deposits and withdrawals. Existing rmRWA holders retain their
-  shares; no funds are confiscated. Admin should pause the vault when a
-  freeze is detected to surface user-facing messages instead of opaque
-  ERC-20 reverts. See `docs/adr/ADR-0006-despxa-rwa-vault-design.md` §4.
-- **Single-asset basket.** `RwaVault` holds exactly one basket asset
-  (deSPXA). `maxAssets()` returns 1 to enforce this constraint.
-- **Router eligibility.** `RwaVault` is a `BasketVault` subclass.
-  Router eligibility follows the same `VaultRegistry.isRouterEligible`
-  registry-flag model as other basket vaults. The flag is flipped by
-  ADMIN_ROLE once pool cardinality, oracle freshness, and the intra-vault
-  rebalancing model are certified. `RwaVault` is marked Active — real
-  asset, seeded, Router-eligible per `docs/prd.md` §11.4.
+  transfers, blocking swaps and therefore deposits and withdrawals. Existing
+  holders keep their shares. Admin should pause the vault when a freeze is
+  detected. See `docs/adr/ADR-0006-despxa-rwa-vault-design.md` §4.
+- **Router eligibility.** Eligibility follows the same
+  `VaultRegistry.isRouterEligible` flag as other basket vaults, flipped by
+  ADMIN_ROLE once pool cardinality and the rebalancing model are certified.
 
-#### Target architecture (ADR-0010, Proposed)
+#### ADR-0010 is Rejected
 
-[ADR-0010](adr/ADR-0010-unified-vault-architecture.md) (status:
-Proposed) unifies the two vault families described above into a single
-`Vault` contract composed with an `IPositionAdapter` interface — the
-`RobotMoneyVault` adapter architecture taken as the general case. Under
-that model the abstract `BasketVault` base and its
-`ProtocolAssetVault`/`AgentTokenVault`/`RwaVault` subclasses stop being
-contract subclasses: each basket asset becomes a per-asset
-`AssetPositionAdapter` that custodies the token, executes swaps through
-the existing `IBasketSwapAdapter` venue seam, and self-prices via TWAP
-or Chronicle. Themes (stable-yield, protocol-asset, agent-token, RWA)
-become deployments plus configuration, not subclasses. Migration
-follows [ADR-0009](adr/ADR-0009-vault-retirement-no-assisted-migration.md):
-deploy v2, shift router weights, retire v1 — the v1 contracts described
-in this section stay untouched, so the current-state text above remains
-accurate for the deployed contracts. Once v2 ships, the description of
-a distinct basket-vault subclass family (and per-subclass certification
-framing) becomes historical; the registry-eligibility model
-(`isRouterEligible`), the lifecycle in §4.7, and the
-single-production-codebase principle carry over unchanged. Canonical
-spec: `docs/technical/unified-vault-spec.md`.
+[ADR-0010](adr/ADR-0010-unified-vault-architecture.md) proposed one unified
+`Vault` contract composed with a position-adapter interface. It is
+Rejected. A fifth contract kind breaks the one-deployment-scheme rule, so
+that contract, its interface, its asset adapters and its theme deploy script
+are deleted. Four vault kinds ship: `RobotMoneyVault`
+(rmUSDC, lending adapters) and the `BasketVault` family (`ProtocolAssetVault`,
+`AgentTokenVault`, `RwaBasketVault`) that swap through `IBasketSwapAdapter`.
+The registry-eligibility model (`isRouterEligible`), the lifecycle in §4.7
+and the single-production-codebase principle are unchanged.
+
+**Retired contracts.** Every contract ADR-0010 proposed is deleted from the tree and is
+not coming back: the unified vault, its position-adapter interface, the two asset
+position adapters and the RWA vault. The generated pages under `contracts/doc/` for
+them are removed. Nothing here describes them as planned.
 
 ### 4.2 Portfolio Router
 
@@ -310,7 +288,7 @@ arbitrary-recipient `rescueTokens(token,to)` (deleted, INV-1).
 
 Current stable-yield adapters (for `RobotMoneyVault`):
 
-- `MorphoAdapter` deposits USDC into the Morpho Gauntlet USDC Prime
+- `MorphoAdapter` deposits USDC into the Moonwell Flagship USDC
   ERC-4626 vault.
 - `AaveV3Adapter` supplies USDC to Aave V3 on Base and holds aToken
   exposure.
@@ -318,62 +296,25 @@ Current stable-yield adapters (for `RobotMoneyVault`):
   forwards withdrawn USDC back to the vault.
 
 Current basket-vault swap adapters (implement `IBasketSwapAdapter` for
-`BasketVault` subclasses including `RwaVault`, `ProtocolAssetVault`, and
+`BasketVault` subclasses `RwaBasketVault`, `ProtocolAssetVault`, and
 `AgentTokenVault`):
 
+- `UniswapV3SwapAdapter` routes USDC↔asset swaps through Uniswap V3 and
+  prices NAV and slippage floors via the pool TWAP.
 - `AerodromeSwapAdapter` routes USDC↔asset swaps through the Aerodrome
   Finance Router on Base (concentrated-liquidity CL pools). NAV and
   slippage floors are priced via an Aerodrome CL pool TWAP (arithmetic-mean
   tick over a configurable window, using the same `observe()` ABI as
   Uniswap V3). Only Aerodrome CL pools are supported; classic stable/volatile
   pools do not expose `observe()`.
-- `UniswapV4SwapAdapter` routes USDC↔asset swaps through the Uniswap V4
-  Router (`exactInputSingle`) on Base. TWAP reads use the V4 pool's
-  `observe()` method (EIP-7680 compatible, identical ABI to V3). Tick
-  spacing is derived from the fee tier using Uniswap V4's standard mapping
-  (500→10, 3000→60, 10000→200). Pools with hooks or custom tick spacings
-  require a bespoke adapter.
-- `ChronicleOracleAdapter` routes USDC↔asset swaps through the Aerodrome
-  Router (same swap path as `AerodromeSwapAdapter`) but prices NAV via a
-  Chronicle on-chain push oracle instead of a DEX TWAP. Used by `RwaVault`
-  for deSPXA where DEX liquidity is insufficient for a manipulation-resistant
-  TWAP. Staleness enforcement (heartbeat check) is delegated to the owning
-  vault, keeping the adapter stateless.
 
-#### Target architecture (ADR-0010, Proposed)
+#### ADR-0010 is Rejected
 
-Under [ADR-0010](adr/ADR-0010-unified-vault-architecture.md) (Proposed),
-the adapter seam described above becomes the general case for every
-vault: a single `Vault` contract routes through `IPositionAdapter`
-implementations, collapsing the current split between stable-yield
-`IStrategyAdapter`s (vault-internal lending positions) and basket-vault
-`IBasketSwapAdapter`s (vault-held tokens priced by the vault). Key
-deltas from the current state:
-
-- Basket assets are held by per-asset `AssetPositionAdapter` contracts
-  that custody the token, execute swaps via the existing
-  `IBasketSwapAdapter` venue seam (Aerodrome, Uniswap V4,
-  Chronicle-priced Aerodrome), and self-price via TWAP or Chronicle —
-  custody and pricing move out of the vault and into the adapter.
-- The vault mints on realized NAV delta for **protocol-level guards only**
-  (NAV growth limit, ORA-4 deviation, TVL cap, withdrawal liveness). User
-  share VALUE = market price of underlying assets held; NAV is system
-  accounting. See `docs/technical/asset-valuation-hybrid.md` for the hybrid
-  design rationale.
-  The vault's realized NAV delta degenerates to the exact-amount accounting
-  the lending adapters already exhibit (at protocol level, not user level).
-- `withdraw()` is permitted iff every active adapter reports
-  `isExact()`; otherwise the vault is redeem-only.
-- Governance controls apply uniformly per adapter: allowlist plus
-  codehash pinning, `capBps`, ADP-2 NAV exclusion, rebalance throttles,
-  and registry retire/unretire.
-
-`IBasketSwapAdapter` (ADR-0005) survives as the venue seam inside
-`AssetPositionAdapter`. The adapter descriptions above remain accurate
-for the deployed v1 contracts (which stay untouched per ADR-0009); the
-statement that swap adapters serve "`BasketVault` subclasses" becomes
-historical once v2 ships. Canonical spec:
-`docs/technical/unified-vault-spec.md`.
+The adapter seam stays split. Lending positions use `IStrategyAdapter`
+(`AaveV3Adapter`, `MorphoAdapter`, `CompoundV3Adapter`, held by
+`RobotMoneyVault`). Basket assets use `IBasketSwapAdapter`
+(`AerodromeSwapAdapter`, `UniswapV3SwapAdapter`, held by the basket
+vaults). There is no position-adapter interface and no asset-position adapter.
 
 ### 4.4 Synchronous Redemption
 
@@ -422,7 +363,7 @@ See `docs/technical/security-model.md` §4 and issue #414.
 
 The PRD defines three fee classes per vault or Portfolio Router path:
 management fee, swap-fee share, and exit fee. The current deployed
-`RobotMoneyVault` source implements an exit fee only.
+`RobotMoneyVault` source implements an exit fee only. The live vault charges 25 bps (0.25%) against a 1% ceiling.
 
 **Current phase:** only exit fees are in scope. Management fee,
 swap-fee-share, protocol revenue collection, and buyback-and-burn are
@@ -1513,7 +1454,7 @@ this architecture:
 | Base | Production chain | Current chain for verified deployments and fork tests. | `docs/technical/smart-contracts.md` §2 |
 | Circle USDC | Asset | Current accepted treasury asset. | `docs/prd.md` §1 |
 | OpenZeppelin | Contract library | Used for ERC-4626, AccessControl, Pausable, and ReentrancyGuard. | `docs/technical/smart-contracts.md` §3.1 |
-| Morpho Gauntlet USDC Prime | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
+| Moonwell Flagship USDC | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Aave V3 | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Compound V3 Comet | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Postgres | Explorer database | Accepted for every environment that runs the indexer. | `docs/technical/explorer-schema-decisions.md` §3.1 |
@@ -1529,7 +1470,7 @@ this architecture:
 | Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The router is not yet on the production mainnet deployment manifest; mainnet onboarding remains planned work on the Plan tracking issue (#109). | — |
 | Vault registry contract | Resolved: `contracts/VaultRegistry.sol` is shipped with stable read methods and event history, indexed by the explorer. Router eligibility is expressed as `setRouterEligible(vault, eligible)` on the registry. | — |
 | Router-weight governance implementation | Resolved (MVP shipped): `contracts/RouterGovernance.sol` is deployed with admin-assigned voting power. `ADMIN_ROLE` assigns voter weights and creates proposals. Quorum, voting period, and execution delay are `ADMIN_ROLE`-configurable storage variables, not fixed in the contract: `setQuorumThreshold`, `setVotingPeriod`, and `setExecutionDelay` adjust them, bounded only by the constant floors `MIN_QUORUM_THRESHOLD` (2), `MIN_VOTING_PERIOD` (1 hour), and `MIN_EXECUTION_DELAY` (1 hour). There is no `cadenceWindow` variable and quorum is an absolute voting-power threshold, not a 5 %-of-`RM.totalSupply()` denominator. `contracts/script/DeployRouterGovernance.s.sol` defaults to a 1-hour voting period, 1-hour execution delay, and quorum 2, and also grants the deployed `RouterGovernance` `ADMIN_ROLE` on the `PortfolioRouter` so `execute()` can reach `setWeights` — without that grant the approving body can approve and cannot act. The quorum floor of 2 is enforced by the contract at both write sites (constructor and `setQuorumThreshold`), so a configured deployment cannot be walked back to a single-voter quorum; it is a bytecode constant, so raising it requires a redeploy rather than an upgrade. The 5 %/7-day/5-day/48 h figures are deferred token-holder-governance targets, not shipped contract constants. Token-holder voting (RM-balance snapshot via ERC-20 Votes) is a future goal; the snapshot-mechanism risk is documented in `docs/technical/governance-decisions.md` §6.1. | Current admin-assigned MVP is the active model; do not build RM-snapshot voting until `docs/technical/governance-decisions.md` §6.1 is resolved and a real token distribution exists. |
-| Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC/wSOL) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
+| Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC at launch; wSOL has no usable pool) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
 | On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure existing Safe as proposer and canceller; prefer open execution unless a restricted Safe executor is explicitly justified. See §4.5 and issue #414. |
@@ -1546,7 +1487,7 @@ this architecture:
 | `docs/product/20260623-product-proposal-investment-committee-v0.md` | Investment Committee scope: extend `rmpc`/analyst/dapp, a signalling-only IC policy contract feeding RouterGovernance, gateway-routed signed votes, admin-gated membership, and local-devnet consensus receipt anchoring. Used for §2.4, §4.8/§4.9, §5.1/§5.3/§5.4/§5.5, §7.4/§7.5. | Product positioning and GTM framing; committee capabilities the proposal excludes from scope (inter-agent debate, retail conversion, network-effect mechanics, engineered Sybil resistance). |
 | `docs/technical/definitions.md` | Canonical meanings for vault, underlying vault, adapter, receipt, router, portfolio position, composite view, router weights, governance, and agent policy. | None. |
 | `docs/technical/adapter-architecture.md` | Adapter interface, vault flow, implemented adapters, adapter controls, risk model, router-vs-adapter separation. | Portfolio Router implementation details; the doc explicitly excludes router design. |
-| `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation, VaultRegistry, PortfolioRouter, RouterGovernance, and basket-vault family (BasketVault base class and ProtocolAssetVault/AgentTokenVault/RwaVault subclasses). | None. |
+| `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation, VaultRegistry, PortfolioRouter, RouterGovernance, and basket-vault family (BasketVault base class and ProtocolAssetVault/AgentTokenVault/RwaBasketVault subclasses). | None. |
 | `docs/technical/security-model.md` | Role separation, live-chain safety decisions, dapp/web2 risks, upstream protocol risks, infrastructure risks, triage backlog. | Exhaustive attack table details; kept in the security model. |
 | `docs/technical/rmpc-read-output-contract.md` | Stable JSON envelope, JSON-RPC source lock, partial-read contract, decimal-string integer serialization. | Per-command flag spelling and future indexer source variant. |
 | `docs/technical/explorer-schema-decisions.md` | Postgres, JSON-RPC-only ingestion, poll cadence, reorg handling, single-chain scoping, read-only API boundary. | Optional later tables and future multi-chain expansion. |

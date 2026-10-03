@@ -1,64 +1,43 @@
 ---
 title: "DeployProtocolAssetVault"
-description: "Production deploy script for `ProtocolAssetVault` (PRD §11.2 — rmPROTO). Deploys the vault, registers it in `VaultRegistry`, and emits the deployed address. Router eligibility activation is intentionally separated into `ActivateBasketVaultEligibility.s.sol`."
+description: "Production deploy script for `ProtocolAssetVault` (rmPROTO). One path on every chain."
 ---
 
 # DeployProtocolAssetVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployProtocolAssetVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployProtocolAssetVault.s.sol)
 
-**Inherits:** Script
+**Inherits:** [BasketVaultDeployBase](/contracts/script/abstract.BasketVaultDeployBase)
 
 **Title:** DeployProtocolAssetVault
 
-Production deploy script for `ProtocolAssetVault` (PRD §11.2 — rmPROTO).
-Deploys the vault, registers it in `VaultRegistry`, and emits the
-deployed address. Router eligibility activation is intentionally
-separated into `ActivateBasketVaultEligibility.s.sol`.
+Production deploy script for `ProtocolAssetVault` (rmPROTO). One path on every chain.
 
-Required env vars:
-ADMIN_ADDRESS              — receives ADMIN_ROLE on the vault and
-must hold ADMIN_ROLE on VaultRegistry
-EMERGENCY_RESPONDER_ADDRESS — receives EMERGENCY_ROLE on the vault;
-use a distinct address from ADMIN_ADDRESS
-in production for two-role key separation
-SWAP_ROUTER                — Uniswap V3 SwapRouter02
-USDC_ADDRESS               — ERC-20 asset the vault denominates in
+Required env vars (no defaults):
+ADMIN_ADDRESS     the broadcaster. Holds ADMIN_ROLE and EMERGENCY_ROLE on the new
+vault and ADMIN_ROLE on the registry until the timelock stage.
+SWAP_ROUTER       must equal `swapRouter02` in protocol-assets.json (Uniswap V3 SwapRouter02)
+REGISTRY_ADDRESS  the vault is registered here as "Robot Money Protocol"
+TVL_CAP, PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
+FEE_RECIPIENT   recipient for exit fees (not the deployer, not the admin)
+DEPLOYMENT_OUT    output manifest path (required, no default)
+EXPECTED_CHAIN_ID mandatory and equal to 8453 on Base mainnet
+EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
 
-Optional env vars:
-REGISTRY_ADDRESS  — when set, the vault is registered here as
-"Robot Money Protocol" (VaultMetadata.name)
-TVL_CAP           — USDC TVL ceiling (default: 10_000_000 * 1e6)
-PER_DEPOSIT_CAP   — USDC per-deposit ceiling (default: 1_000_000 * 1e6)
-EXIT_FEE_BPS      — exit fee in basis points (default: 0)
-FEE_RECIPIENT     — recipient for exit fees (default: ADMIN_ADDRESS)
-DEPLOYMENT_OUT    — output JSON path
-(default: deployments/protocol-asset-vault-&lt;chain_id>.json)
+Assets come from `protocol-assets.json` (wETH and cbBTC at launch). The vault is deployed paused.
 
 ## Constants
 
-### DEFAULT_TVL_CAP
-
-Default TVL cap: 10M USDC (6 decimals).
-
-```solidity
-uint256 public constant DEFAULT_TVL_CAP = 10_000_000 * 1e6;
-```
-
-### DEFAULT_PER_DEPOSIT_CAP
-
-Default per-deposit cap: 1M USDC (6 decimals).
-
-```solidity
-uint256 public constant DEFAULT_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
-```
-
 ### VAULT_NAME
-
-Vault name registered in VaultRegistry.
 
 ```solidity
 string public constant VAULT_NAME = "Robot Money Protocol";
+```
+
+### CONFIG_FILE
+
+```solidity
+string public constant CONFIG_FILE = "config/protocol-assets.json";
 ```
 
 ## Functions
@@ -67,8 +46,7 @@ string public constant VAULT_NAME = "Robot Money Protocol";
 
 ### run
 
-Forge broadcast entrypoint. Deploys the vault, optionally
-registers it in VaultRegistry, and writes a deployment JSON.
+Forge broadcast entrypoint.
 
 ```solidity
 function run() external returns (Deployed memory d);
@@ -80,33 +58,26 @@ function run() external returns (Deployed memory d);
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="runinprocesswith-address-address-address-address-address"></a>
+<a id="runinprocess-params-string"></a>
 
-### runInProcessWith
+### runInProcess
 
-In-process variant for forge tests. No broadcast, no JSON written.
-Caller must ensure the call context holds ADMIN_ROLE on the registry
-(or pass admin_ as the test contract so startPrank can be used).
+In-process variant for forge tests and the stage driver's simulation. No
+broadcast and no manifest. Every call runs as `p.admin` under a prank, so
+`p.admin` becomes the vault's ADMIN and EMERGENCY holder as in a broadcast.
 
 ```solidity
-function runInProcessWith(
-        address admin_,
-        address emergencyResponder_,
-        address swapRouter_,
-        address usdc_,
-        address registry_
-    ) external returns (Deployed memory d);
+function runInProcess(Params memory p, string memory json)
+        external
+        returns (Deployed memory d);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| admin_ | `address` |  |
-| emergencyResponder_ | `address` |  |
-| swapRouter_ | `address` |  |
-| usdc_ | `address` |  |
-| registry_ | `address` |  |
+| p | `Params` | Sheet inputs. |
+| json | `string` | Body of the config file (the test passes a fixture, the driver passes the file). |
 
 **Returns**
 
@@ -114,144 +85,49 @@ function runInProcessWith(
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="_deployandregister-address-address-address-address-uint256-uint256-uint256-address"></a>
+<a id="_newvault-params-address"></a>
 
-### _deployAndRegister
-
-```solidity
-function _deployAndRegister(
-        address admin,
-        address emergencyResponder,
-        address swapRouter,
-        address usdc,
-        uint256 tvlCap,
-        uint256 perDepositCap,
-        uint256 exitFeeBps,
-        address feeRecipient
-    ) internal returns (Deployed memory d);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| admin | `address` |  |
-| emergencyResponder | `address` |  |
-| swapRouter | `address` |  |
-| usdc | `address` |  |
-| tvlCap | `uint256` |  |
-| perDepositCap | `uint256` |  |
-| exitFeeBps | `uint256` |  |
-| feeRecipient | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| d | `Deployed` |  |
-
-<a id="_registerifabsent-vaultregistry-address-address"></a>
-
-### _registerIfAbsent
+### _newVault
 
 <i>
 
-Register `vault` in the registry if not already present.
-Caller must hold ADMIN_ROLE on the registry.
+Construct the concrete vault. `emergencyResponder` is the deployer for this run.
 
 </i>
 
 ```solidity
-function _registerIfAbsent(VaultRegistry registry, address vault, address asset) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| registry | `VaultRegistry` |  |
-| vault | `address` |  |
-| asset | `address` |  |
-
-<a id="_writedeploymentjson-deployed"></a>
-
-### _writeDeploymentJson
-
-```solidity
-function _writeDeploymentJson(Deployed memory d) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| d | `Deployed` |  |
-
-<a id="_envaddressordefault-string-address"></a>
-
-### _envAddressOrDefault
-
-```solidity
-function _envAddressOrDefault(string memory key, address fallback_)
+function _newVault(Params memory p, address emergencyResponder)
         internal
-        view
-        returns (address);
+        override
+        returns (BasketVault);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| key | `string` |  |
-| fallback_ | `address` |  |
+| p | `Params` |  |
+| emergencyResponder | `address` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `address` |  |
+| &lt;none&gt; | `BasketVault` |  |
 
-<a id="_envuintordefault-string-uint256"></a>
+<a id="_registryname"></a>
 
-### _envUintOrDefault
+### _registryName
 
-```solidity
-function _envUintOrDefault(string memory key, uint256 fallback_)
-        internal
-        view
-        returns (uint256);
-```
+<i>
 
-**Parameters**
+Name stored in the registry.
 
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| key | `string` |  |
-| fallback_ | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
-<a id="_envstringordefault-string-string"></a>
-
-### _envStringOrDefault
+</i>
 
 ```solidity
-function _envStringOrDefault(string memory key, string memory fallback_)
-        internal
-        view
-        returns (string memory);
+function _registryName() internal pure override returns (string memory);
 ```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| key | `string` |  |
-| fallback_ | `string` |  |
 
 **Returns**
 
@@ -259,25 +135,58 @@ function _envStringOrDefault(string memory key, string memory fallback_)
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
-## Structs
+<a id="_label"></a>
 
-### Deployed
+### _label
 
-Result returned to in-process callers (e.g. forge tests).
+<i>
+
+Manifest object key and log label.
+
+</i>
 
 ```solidity
-struct Deployed {
-        address vault;
-        address registry;
-        bool registered;
-    }
+function _label() internal pure override returns (string memory);
 ```
 
-**Properties**
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_usesadapter"></a>
+
+### _usesAdapter
+
+<i>
+
+True when assets route through a deployed `UniswapV3SwapAdapter`. False uses the
+built-in SwapRouter02 path (adapter address 0).
+
+</i>
+
+```solidity
+function _usesAdapter() internal pure override returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="console2log-address"></a>
+
+### console2Log
+
+```solidity
+function console2Log(address vault) internal view;
+```
+
+**Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vault | `address` |  |
-| registry | `address` |  |
-| registered | `bool` |  |
 

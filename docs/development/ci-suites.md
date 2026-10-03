@@ -32,7 +32,7 @@ compare (it names the mismatch rather than reporting stale docs).
 |--------|---------|
 | `devnet` | Geth + Lighthouse Docker Compose stack (`testing/ethereum-testnet/config/`). Lifecycle owned by the test code. |
 | `anvil` | In-process Anvil EVM. No Docker. |
-| `fork` | Anvil forked from the checked-in golden fixture (`testing/fixtures/fork-state/`) at a pinned block — deterministic, offline, no secret, no live RPC (ADR-0011). CI fails loudly if the fixture is missing or zero fork tests run; it never silent-skips. (Live Base-mainnet forking survives only as the non-blocking **nightly drift alarm** via a free public RPC — see suite 5.) |
+| `fork` | Anvil forked from the checked-in golden fixture (`testing/fixtures/fork-state/`) at a pinned block — deterministic, offline, no secret, no live RPC (ADR-0011). CI fails loudly if the fixture is missing or zero fork tests run; it never silent-skips. |
 | `none` | No chain. Static analysis, pure unit tests, doc checks. |
 
 ---
@@ -58,11 +58,9 @@ compare (it names the mismatch rather than reporting stale docs).
 6. `forge test` — unit tests: every public function, access control boundary, revert path, event emission, ERC-4626 rounding invariant
 7. `forge test` (four-vault real-TVL pyramid, issue #592) — a dedicated, named
    step guards the real four-vault end state so it cannot silently regress:
-   `DeployDemoExtraVaults.t.sol` asserts **all four** PRD §11 vaults are
-   registered Active, three are router-eligible while the deSPXA RWA vault is
-   direct-seed-only (ADR-0006 §1), and every vault reports non-zero
-   `totalAssets` after a routed + direct deposit; `RwaVault.t.sol` covers the
-   deSPXA deposit/redeem round-trip and stale-oracle halt; the
+   the basket vault script suites assert all four PRD §11 vaults deploy
+   registered, paused and with config-equal assets (rmAGENT empty); `DeployBasketVaultRwa.t.sol` and
+   `RwaBasketVaultFork.t.sol` cover the deSPXA basket row and its NAV against the pool TWAP; the
    `BasketVault`/`AgentTokenVault` suites pin per-vault basket composition.
 
 **Steps — `invariant` job:**
@@ -117,8 +115,7 @@ compare (it names the mismatch rather than reporting stale docs).
 
 #### Live-RPC fork steps (issue #1239)
 
-Three `fork-regressions` steps — the Uniswap V3, Uniswap V4 and Aerodrome
-`AssetPositionAdapter` fork tests — cannot use the offline golden fixture,
+Three `fork-regressions` steps — the Uniswap V3 and Aerodrome fork tests — cannot use the offline golden fixture,
 because it never touched those pools. They fork live Base, so they run through
 `scripts/devnet/run-live-rpc-forge-fork.sh` instead of a bare `forge test`:
 
@@ -224,7 +221,7 @@ organization Actions **secret**.
 **Environment:** `fork`
 **Tier / triggers:** HEAVY — 4 Geth/Anvil devnet slots, 20-25 min wall-clock. Gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`. Feature PRs into phase branches skip this suite; `suite-06` (rmpc-unit) provides fast feedback on those.
 
-**Fixture, not live RPC — golden on the merge gate, live on the nightly (ADR-0011):**
+**Fixture, not live RPC — golden on the merge gate, fresh snapshot on the nightly (ADR-0011):**
 Merge-gating runs (feature-PR and `dev`-merge) fork the **checked-in golden
 fixture** (`testing/fixtures/fork-state/`, loaded via `anvil --load-state` for
 the Rust layer and via a pinned-block fork of `CURRENT.anvil-state` for the
@@ -233,13 +230,7 @@ Coverage is **loud** per the repo test-coverage policy: a missing fixture or
 zero executed fork tests fails CI, never silent-skips. (This corrects the
 legacy Solidity fork tests, which called `vm.createSelectFork` against a
 never-provisioned `RMPC_FORK_RPC_URL`/`FORK_RPC_URL` secret and therefore
-silently skip-cleaned to a false green.) A **non-blocking nightly drift alarm**
-forks live **Base mainnet at latest** via a **free public RPC** (public default,
-no secret — the list in `scripts/devnet/fork-rpc-lib.sh`) and re-runs the suite; on
-failure it opens/updates a tracking issue instead of blocking a merge. That
-nightly is what catches real upstream drift (pool migrations, ABI changes,
-oracle heartbeat changes) a pinned snapshot cannot see. It is dispatched by the
-nightly orchestrator (suite 21).
+silently skip-cleaned to a false green.) Live-Base drift is covered by the nightly jobs described in suite 21; there is no live-RPC fork alarm any more.
 
 **Why Anvil here, and why this is not redundant with the Geth+Lighthouse devnet harness:**
 This suite forks **Base mainnet** state (real deployed contracts, real DEX
@@ -262,7 +253,7 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 **Jobs:**
 - `pr-smoke` — fast subset against the **golden fixture** (offline, no secret); runs on every PR trigger
 - `full-suite` — all scenarios against the **golden fixture**; runs on push to `dev` and `workflow_dispatch`; no dependency on `pr-smoke` (different trigger context, not sequential)
-- `live-drift-alarm` — **nightly, non-blocking** (ADR-0011): forks live Base mainnet at latest via a **free public RPC** (public default, no secret) and re-runs the suite as a drift alarm; on failure opens/updates a tracking issue rather than blocking merges. Schedule-only (dispatched by suite 21); never a PR gate.
+- Fresh-snapshot coverage: the nightly fresh-snapshot workflow (suite 29, issue 1496) reruns the chain suites against Base at the latest block. It is not a PR gate.
 
 **Steps (`pr-smoke` / `full-suite`, golden-fixture path):**
 1. Checkout repository
@@ -497,7 +488,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 **Steps — `deposit` job (replay coverage):**
 1. Checkout repository
 2. Install Rust + Foundry
-3. Deploy the real Aave V3 / Compound V3 / Morpho adapter stack via `Deploy.s.sol` on the warmed Base fork-state devnet
+3. Deploy the real Aave V3 / Compound V3 / Morpho adapter stack via the core stage scripts on the warmed Base fork-state devnet
 4. Generate fresh agent EOA; write keystore via `rmpc-keystore-import`; assert on-chain authorization
 5. Fund agent ETH balance via `anvil_setBalance`; set USDC approval signed by the generated agent key
 6. `replay_headless_transcript.py` executes get-vault → get-agent → get-balance → get-allowance → self-check → deposit in that fixed order against the live devnet, then `assert_headless_live_transcript.py` — loud-fail guard that reds this step on an empty / zero-rmpc transcript
@@ -560,43 +551,25 @@ isolation, independent of any client (rmpc, dapp, explorer).
 8. `cargo clippy -p smoke-test --all-targets -- -D warnings` — type-checks the crate's 9 `tests/` integration binaries in the hermetic `smoke-test-guards` job (issue #1295); `cargo build` alone never compiles them
 9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
 10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly and writes `smoke-test-fixture_meta.log`
-11. `cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture` (four-vault real-TVL, issue #592) — boots the devnet fixture, seeds the simulated depositors, and asserts the four-vault real-TVL end state: `VaultRegistry.listVaults()` returns **exactly four Active** vaults (PRD §11.1–§11.4); `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1); and **all four** vaults report non-zero on-chain `totalAssets` after seeding. Writes `smoke-test-demo_seeding.log`. **This gate runs exactly once per suite run — on the `demo_seeding` matrix binary only** (see de-dup note below).
-12. Four more devnet matrix rows, folded in by issue #1311 (each boots its own `Fixture`, runs a handful of RPC/`cast` round-trips, and tears down — no dapp-stack build, no reseed):
-    - `cargo test -p smoke-test --release --test faucet_eth -- --test-threads=1 --nocapture` — native Base ETH faucet drip round-trip (issue #466): harness EOA holds non-zero ETH at boot, `fund_eth_from_harness` grows the recipient's balance by the exact drip amount
-    - `cargo test -p smoke-test --release --test faucet_rm -- --test-threads=1 --nocapture` — RM token faucet drip round-trip (issue #365): RmToken deployed non-zero, harness holds initial supply, `fund_rm_token` grows the recipient's balance by the exact amount and emits a matching `Transfer` log
-    - `cargo test -p smoke-test --release --test fund_usdc -- --test-threads=1 --nocapture` — real-signed-transfer assertions (issue #255 step 7): exact-amount USDC transfer, correct `Transfer` log, the tx signature recovers to `HARNESS_USDC_HOLDER`, and the devnet backend is Geth (`web3_clientVersion`) with Anvil cheat RPCs (`anvil_setBalance`) rejected
-    - `cargo test -p smoke-test --release --test governance -- --test-threads=1 --nocapture` — RouterGovernance deploy + `setVotingPower` round-trip (issue #364) against the **actual `forge script Deploy` output**: `RouterGovernance` non-zero with bytecode, `setVotingPower` round-trips, deployer holds `ADMIN_ROLE`
-    Each is wrapped in `cargo_test_require_executed.sh` so a run that silently collects zero tests fails red rather than green (issue #1311 AC). All four write `smoke-test-<binary>.log`.
+11. `cargo test -p smoke-test --release --test fund_usdc -- --test-threads=1 --nocapture` — real-signed-transfer assertions (issue #255 step 7): exact-amount USDC transfer, correct `Transfer` log, the tx signature recovers to `HARNESS_USDC_HOLDER`.
+12. `cargo test -p smoke-test --release --test governance -- --test-threads=1 --nocapture` — after the publish-contracts run, the deployer holds no voting power and no `ADMIN_ROLE` on `RouterGovernance`, and the timelock holds `ADMIN_ROLE` (core 1488). Voting power is set only by govern rows through the real Safe and the timelock.
+    Each is wrapped in `cargo_test_require_executed.sh` so a run that silently collects zero tests fails red rather than green (issue #1311 AC). All write `smoke-test-<binary>.log`.
+    The `demo_seeding`, `full_stack_demo_tvl`, `faucet_eth` and `faucet_rm` binaries were deleted in core 1488 with demo depositor seeding and the dapp faucet funding. Every devnet row now boots the Twin chain, funds fresh rehearsal keystores and calls publish contracts (checkout of the devops repo, `PUBLISH_CONTRACTS_DIR`, `STAGE_SHEET`).
 13. Upload smoke-test logs from `$RUNNER_TEMP/robotmoney-smoke-test/` as a CI artifact, then run `docker compose down -v --remove-orphans || true` for the safety-net teardown
 
 > **Note:** Step 10 exercises `Fixture::new()` end-to-end — the same code
 > path that all devnet-backed suites (7, 8, 10, 11, 12) depend on. A
 > failure here blocks those suites before they pay their own boot costs.
 >
-> **Four-vault coverage (issue #592):** Step 11 is the integration-layer half
-> of the four-vault real-TVL test pyramid; the forge layer (suite 1–2 step 7)
-> is the contract half. The companion full-stack assertion
-> `full_stack_demo_tvl::explorer_api_shows_four_active_nonzero_vaults_after_boot`
-> (`GET /v1/vaults` returns exactly four Active entries, each non-zero
-> `total_assets`) boots the heavier `DappStack` and is run locally / via the
-> dapp suites rather than this fixture-only suite.
->
-> **Parallel matrix + four-vault de-dup (issues #600, #915):** the
-> devnet-booting binaries run as a parallel matrix
-> `[cli_meta, fixture_meta, demo_seeding, full_stack_demo_tvl, faucet_eth,
-> faucet_rm, fund_usdc, governance]` (`fail-fast: false`), one runner per
-> binary, each booting and tearing down its own Geth+Lighthouse stack. The
-> four-vault real-TVL gate (step 11) **is** the `demo_seeding` matrix binary,
-> so it runs exactly once per suite run. It is *not* re-appended as an
-> unconditional final step on every binary: doing so previously booted a
-> second devnet + reseed on `cli_meta`/`fixture_meta`/`full_stack_demo_tvl`
-> (~25 min of redundant boot+seed on the slowest binary) with zero net
-> coverage, since the assertions already run as the `demo_seeding` binary.
-> The suite's total wall-clock stays bounded by the slowest row
-> (`full_stack_demo_tvl`, ~46 min measured) since the matrix runs in
-> parallel; the four rows added by issue #1311 add runner-minutes, not
-> suite latency — see "Resolution of the five smoke-test devnet targets"
-> below for the cost tradeoff.
+> **One deployment scheme (core 1488):** the harness deploys nothing itself.
+> `Fixture::new()` boots the Twin chain (918453), funds fresh rehearsal
+> keystores and calls the one runbook, "publish contracts" (devops, Bun
+> TypeScript), with `--chain 918453 --rpc <twin rpc> --sheet <stage sheet>
+> --signer keystore --environment stage --core-sha <sha>`. It then reads the
+> manifests. All four vaults ship (rmUSDC, rmPROTO, rmAGENT, rmRWA). The
+> deployer holds nothing after handover: the real Safe and the timelock are the
+> admin. The matrix is `[cli_meta, fixture_meta, fund_usdc, governance]`
+> (`fail-fast: false`), one runner per binary.
 
 ---
 
@@ -792,56 +765,22 @@ Catches CSP weakening by dependency upgrades before deployment.
 
 ---
 
-### 19. ERC-4626 precondition checks and full-stack demo-TVL matrix
+### 19. ERC-4626 precondition checks
 **Suggested file:** `.github/workflows/suite-19-erc4626-demo-tvl-matrix.yml`
-**Environment:** `anvil` (precondition) / `devnet` (demo-tvl)
-**Trigger paths:** `contracts/test/ERC4626PreconditionChecks.t.sol`, `testing/smoke-test/tests/full_stack_demo_tvl.rs`, and the workflow file itself
+**Environment:** `anvil`
+**Trigger paths:** `contracts/test/ERC4626PreconditionChecks.t.sol` and the workflow file itself
 
-**Tier:** HEAVY — the `dev` merge gate. Runs on every `pull_request` targeting `dev` (no `paths:` filter) and on `push` to `dev`. Not triggered on PRs to other branches, keeping routine feature-PR cycles fast.
+**Tier:** HEAVY — the `dev` merge gate. Runs on every `pull_request` targeting `dev` (no `paths:` filter) and on `push` to `dev`.
 
 **Jobs:**
-- `erc4626-precondition` — matrix-sharded forge tests; runs immediately
-- `demo-tvl` — full-stack demo-TVL integration test against Geth+Lighthouse devnet; runs in parallel with precondition
+- `erc4626-precondition` — matrix-sharded forge tests (`EXIT_FEE_BPS` = 0, 30, 100)
 
-**Design rationale (issue #814, #804):**
-Two complementary test-matrix expansions that live in one suite to keep the total workflow count manageable and share HEAVY-tier trigger logic.
-
-**ERC-4626 precondition tests (issue #814):**
-`contracts/test/ERC4626PreconditionChecks.t.sol` asserts invariants across the adapter and exit-fee matrix. The precondition suite validates:
-- `asset()` and `decimals()` correctness for each adapter (passthrough, aave, compound, morpho)
-- Empty-vault share-price invariants (no rounding drift when vault has zero assets)
-- Adapter pairing consistency
-
-The matrix shards by exit-fee tier (`EXIT_FEE_BPS` = 0, 30, 100) so each tier's Foundry fuzz run (256 runs per tier) stays isolated and fast. Uses an `exit_fee_bps` matrix variable to parameterize the test.
-
-**Full-stack demo-TVL test (issue #804):**
-`testing/smoke-test/tests/full_stack_demo_tvl.rs` is a heavy INTEGRATION test that boots the full DappStack (Geth+Lighthouse devnet, contracts deployed by Fixture, dapp bundled with keccak-256 hash verification) and seeds the demo depositors, then asserts the four-vault real-TVL end state:
-- `VaultRegistry.listVaults()` returns exactly four Active vaults (PRD §11.1–§11.4)
-- `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps, while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1)
-- All four vaults report non-zero `totalAssets` after seeding
-
-This is the HEAVY-tier integration-layer half of the four-vault real-TVL test pyramid (the contract-layer half is suite 1–2, step 7). It is not run on routine feature PRs because DappStack boot + seeding takes 25–35 minutes; instead, it runs as part of the `dev` merge gate (PRs into `dev` and push to `dev`).
-
-**Activation history:**
-- `erc4626-precondition`: activated in issue #814 — ERC4626PreconditionChecks.t.sol created and `if: false` removed
-- `demo-tvl`: activated in issue #804 — full_stack_demo_tvl.rs exists; bun runner dependency resolved via `oven-sh/setup-bun@v2`
+The `demo-tvl` job and its `full_stack_demo_tvl` test were deleted in core 1488. They depended on demo depositor seeding, which the one deployment scheme removes. Vault TVL on stage comes from the real seed and the govern matrix.
 
 **Steps — `erc4626-precondition` job (matrix over exit_fee_bps: [0, 30, 100]):**
 1. Checkout repository (recursive submodules)
 2. Install Foundry toolchain
 3. `forge test --match-contract ERC4626PreconditionChecks --fuzz-runs 256 -vv` with `EXIT_FEE_BPS` env var set to the matrix value
-4. Repeat for each exit-fee tier in parallel
-
-**Steps — `demo-tvl` job:**
-1. Checkout repository (recursive submodules)
-2. Verify Docker is available
-3. Install Rust toolchain (stable)
-4. Install Foundry toolchain
-5. Install Bun (needed by DappStack dapp-build step)
-6. Rust cache via `Swatinem/rust-cache@v2` pointing to `testing/smoke-test -> target`
-7. `cargo build -p smoke-test` (smoke-test crate)
-8. `cargo test -p smoke-test --release --test full_stack_demo_tvl -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, seeds demo depositors, asserts four-vault end state, then tears down
-9. Safety-net teardown: `docker compose down -v --remove-orphans || true` (always runs, even on failure)
 
 ---
 
@@ -869,18 +808,15 @@ signal regardless of whether that day's commits touch each suite's path filters.
 
 **Jobs:**
 - `dispatch-all-suites` — single job; iterates over all suite workflow files and
-  calls `gh workflow run <file> --ref dev`
-- `live-base-fork-drift` — non-blocking nightly alarm that classifies live
-  Base-mainnet fork drift vs. provider/harness failure (issue #1217); runs
-  `.github/scripts/tests/test_live_base_fork_drift.sh` (offline, stubbed
-  curl/forge, no live RPC) before `scripts/devnet/run-live-base-fork-drift.sh`
-  so a classification-logic regression is caught before spending the
-  live-RPC budget (issue #1235; the unit test previously existed but no
-  workflow invoked it).
+  calls `gh api` (workflow dispatches) against `dev`; any failed dispatch fails the job
+- `fork-pin-age-warning` — runs `scripts/devnet/check-fork-pin-age.sh` and
+  only warns; it never fails the run.
+- Self-test: `scripts/ci/check_nightly_dispatch_list.py` (run in suite 13)
+  fails when a suite workflow is missing from the dispatch list.
 
 **Steps — `dispatch-all-suites` job:**
-1. Dispatch each suite workflow via `gh workflow run` against the `dev` ref
-2. (Suites run independently; this job only fires the dispatches and exits)
+1. Dispatch each suite workflow via `gh api` against the `dev` ref, counting failures
+2. Exit 1 when any dispatch failed (suites run independently; the job fires the dispatches)
 
 ---
 
@@ -918,7 +854,7 @@ invariant it restores.
   `StaleOracleRedemption` (SUP-5/ORA-2), `TwapManipulation` (ORA-7), and
   `DeployAssertions` (ACL-1/ORA-3/ORA-6) carry the cross-family / stale-oracle /
   TWAP-manipulation / post-deploy proofs. `CustodyMultiVault` executes SUP-1
-  live against the RobotMoneyVault, BasketVault and RwaVault families plus a
+  live against the RobotMoneyVault, BasketVault and RwaBasketVault families plus a
   negative case proving the shared predicate is not vacuous — it contains no
   `vm.skip` (#1213).
 - LIGHT tier because the suite is forge unit + static-guard + bounded fuzz and
@@ -932,44 +868,31 @@ invariant it restores.
 
 ---
 
-### 28. Core stack selftest (core-stack-selftest)
-**File:** `.github/workflows/suite-28-core-stack-selftest.yml`
-**CI class / tier:** `system-correctness`
-**Environment:** `none` (offline; stubs and fakes only, no docker daemon, no chain)
+### 28. Core stages (core-stages)
+**File:** `.github/workflows/suite-28-core-stages.yml`
+**CI class / tier:** `feature-correctness` (offline job), `system-correctness` (Twin chain job)
+**Environment:** `none` for the offline job; the Twin chain (918453) for the dispatch job
 **Trigger:** `pull_request` (no path filter); `push` to `releases-*`; tags
-`v*.*.*`; `workflow_dispatch`. Foundry pinned to `v1.8.3`, the same release
-fusion-ceremony-selftest (suite 1–2) uses.
+`v*.*.*`; `workflow_dispatch`.
 
-Runs `scripts/stage/tests/core-stack-selftest.sh` — the offline self-test for
-`scripts/stage/core-stack.sh`, the one-verb-per-job surface over
-`deploy-core-stack.sh` and `fusion-ceremony.sh` that devops's core runbooks
-drive (devops#42). Every verb (`chain up/down/status`, `governance
-preflight/ensure/verify`, `dapp up/status`, `rmpc check`, `record show`) runs
-against stub wrapped scripts and fake `curl`/`docker`/`cast`, with real
-(sleeping) harness processes so process groups, `/proc` start times, signals
-and the out-dir lock are exercised for real.
+Replaces the retired shell stack. The offline job runs `bun test scripts/deploy
+scripts/ci`: the stage table (libs, vault, registry, router, gateway, governance,
+ic, three basket vaults, timelock), the manifest rules, and the proof rules of
+`assert-core-router.ts`, `assert-basket-vaults.ts` and `assert-timelock-roles.ts`
+against fake readers. It is red when zero tests pass. The Twin chain job runs only
+on `workflow_dispatch` with a Twin chain RPC URL: `scripts/deploy/core-stages.ts`
+deploys every stage, then the two assertion scripts read roles, registry
+membership and asset config back from the chain. It takes no key.
 
-**Why its own file, not a job in suite-01-02:** core-stack.sh has nothing to
-do with the forge unit/invariant/coverage gate; it rode along as a fourth job
-there only because that was the suite that happened to be open when it
-landed, which meant it inherited suite-01-02's trigger set (no `releases-*`,
-no `v*.*.*` tags) rather than the refs the stage tooling actually ships on.
+---
 
-**Jobs:**
-- `core-stack-selftest` — `bash scripts/stage/tests/core-stack-selftest.sh`
-  under `set -euo pipefail`; re-checks the printed
-  `CORE_STACK_SELFTESTS_EXECUTED` count against `CORE_STACK_SELFTEST_FLOOR`
-  (currently 296) independently of the script's own
-  `MIN_EXPECTED_ASSERTIONS`, so a run that silently did less is red either
-  way. Covers: usage errors (64) for an unknown noun/verb/flag and a
-  non-numeric `--timeout`; a required tool missing from `PATH` (3) for `chain
-  status`/`chain up` (docker), `governance preflight` (cast), `dapp status`
-  (curl) and `record show` (jq); every documented read-verb failure class,
-  each asserted to print exactly one `^<class>: ` stdout line; `chain
-  up`/`chain down` idempotency and refusal; the exact wrapped-script argv for
-  `governance ensure`/`verify`; and the `schemas/fusion-stage-record.schema.json`
-  drift guard — its `required` array must equal `record show
-  --list-required-fields`, the same field list `record show` enforces.
+### 28b. Core stack selftest, deleted-path gate and stage tooling tests
+**File:** `.github/workflows/suite-28-core-stack-selftest.yml`
+
+`scripts/stage/core-stack.ts` (Bun TypeScript, called directly; the old `core-stack.sh` shim is deleted) is the boot, health, record and parity tool. It deploys and governs by calling publish contracts (devops, Bun TypeScript) with the Twin chain argument list. Jobs:
+- `core-stack-selftest` — `bun test scripts/stage/tests/core-stack.test.ts` against a fake runner standing in for publish contracts: the exact argument list with the `keystore:PATH:PASSFILE` signer, a fresh keystore set per boot, exit-code passthrough, the four-manifest count, the govern row gate (tx hash and receipt status 1 on every row), the usage errors and the record contract with its schema drift guard. Executed-test floor held in the workflow.
+- `deleted-stage-gate` — `bun scripts/stage/check-deleted-stage-scripts.ts .` exits 0 only when the stage ceremony shell, the stage deploy script, the deploy workflow and the Rust harness deployment (forge script calls, demo seeding, faucet funding) and the `core-stack.sh` shim are absent and `core-stack.ts` holds no deploy or ceremony logic.
+- `stage-tooling-tests` — `bun test scripts/stage/tests`: the govern row parser, the sheet-diff allow-list (stage versus production sheet differ only in parameter lines), the label-diff (verifier labels on stage equal the mainnet set) and the gate.
 
 ---
 
@@ -1305,7 +1228,6 @@ Every workflow's `name:` and its tier.
 | `solidity-fmt-natspec-slither` | quick | |
 | `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) and `test-target-coverage` (issue #1282 integration-test target inventory) |
 | `fork-protocol-adapter-integration` | heavy | 4 Geth/Anvil devnet slots (20-25 min); gates PRs into `dev`; runs against the **golden fixture** — offline, no secret (ADR-0011) |
-| `fork-live-drift-alarm` | nightly | live Base-mainnet fork at latest via free public RPC (no secret); **non-blocking** drift alarm, opens a tracking issue on failure; dispatched by `nightly-full-suite` (ADR-0011) |
 | `rust-client-unit-tests` | quick | |
 | `rust-client-devnet-integration` | heavy | devnet e2e matrix (`smoke`, `scenarios`, `window_cap`, `withdraw`) |
 | `explorer-indexer-migrations-reorg` | quick | |
@@ -1314,7 +1236,7 @@ Every workflow's `name:` and its tier.
 | `opencode-plugin-validate-walkthrough-offline` | quick | |
 | `openclaw-safety-walkthrough` | quick | |
 | `doc-adr-runbook-migration-checks` | quick | |
-| `smoke-test-devnet-boot-teardown` | heavy | devnet matrix (`cli_meta`, `fixture_meta`, `demo_seeding`/four-vault) |
+| `smoke-test-devnet-boot-teardown` | heavy | devnet matrix (`cli_meta`, `fixture_meta`, `fund_usdc`, `governance`) |
 | `robotmoney-analyst-plugin-checks` | quick | |
 | `abi-drift-gate` | quick | |
 | `natspec-coverage` | quick | |
@@ -1326,7 +1248,6 @@ Every workflow's `name:` and its tier.
 | `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered. Owns the `v*.*.*` tag namespace (issue #1243) |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered. Owns the `rmpc-v*.*.*` tag namespace and opens the post-release manifest-bump PR (issue #1243). Runbook: `docs/development/releasing.md` |
-| `deploy-contracts` | release | dispatch-only; deploys protocol contracts and asserts BaseScan source verification within one hour (security-model.md §8 / §13) |
 
 ### Known limitations: release-rmpc selftest macOS non-vacuity guard
 
@@ -1357,7 +1278,7 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 1–2 | `forge-tests.yml` | `unit` \| `invariant` → `coverage` | `anvil` |
 | 3 | `solidity-quality.yml` | `lint` → `slither` | `none` |
 | 4 | `rust-quality.yml` | `lint` → `doc-coverage` \| `audit` \| `test-target-coverage` | `none` |
-| 5 | `fork-integration.yml` | `pr-smoke` / `full-suite` (golden fixture) + `live-drift-alarm` (nightly, non-blocking) | `fork` |
+| 5 | `fork-integration.yml` | `pr-smoke` / `full-suite` (golden fixture) | `fork` |
 | 6 | `rmpc-unit.yml` | `unit` | `none` |
 | 7 | `rmpc-integration.yml` | `geth-tests` \| `nonce-race-stress` | `devnet` |
 | 8 | `explorer-indexer.yml` | `fast` \| `explorer-api` \| `devnet` | `devnet` / `postgres-testcontainer` |
@@ -1369,7 +1290,7 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
 | 18 | `suite-18-secrets-scan.yml` | `secrets-scan` (gitleaks) | `none` |
 | 18b | `suite-18-security-gates.yml` | `cargo-audit` \| `bun-audit` \| `csp-gate` \| `audit-ledger` \| `seam-map-drift` \| `seam-map-validator` \| `release-workflow-authority-audit` | `none` |
-| 19 | `suite-19-erc4626-demo-tvl-matrix.yml` | `erc4626-precondition` (matrix) \| `demo-tvl` | `anvil` / `devnet` |
+| 19 | `suite-19-erc4626-demo-tvl-matrix.yml` | `erc4626-precondition` (matrix) | `anvil` |
 | 20 | `suite-20-watchdog.yml` | `watchdog-unit` \| `watchdog-integration` | `none` / `postgres-testcontainer` |
 | 21 | `suite-21-nightly.yml` | `dispatch-all-suites` | `none` |
 | 22 | `suite-22-formal-verification.yml` | `forge-formal-verification` | `none` |
@@ -1377,4 +1298,49 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 25 | `suite-25-fusion-harness-selftests.yml` | `fusion-harness-selftests` | `none` |
 | 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | devnet `918453` |
 | 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |
+| 28 | `suite-28-core-stages.yml` | `core-stages-offline`, `core-stages-twin-chain` (dispatch) | `none` / Twin `918453` |
 | 28 | `suite-28-core-stack-selftest.yml` | `core-stack-selftest` | `none` |
+| 29 | `suite-29-nightly-fresh-snapshot.yml` | `snapshot-at-latest-block` → suites 5, 7, 8, 10, 11b, 14, 26 (called) → `record-results` | Twin chain `918453` from a fresh Base snapshot |
+
+### 29. Nightly fresh snapshot (nightly-fresh-snapshot)
+
+**File:** `.github/workflows/suite-29-nightly-fresh-snapshot.yml` (issue 1496, nightly job (b)).
+**Tier / triggers:** nightly (05:30 UTC) and `workflow_dispatch`. Never a merge gate. No secret, no archive node.
+
+Takes a snapshot of Base at the latest block with `scripts/devnet/nightly-fresh-snapshot.ts` (wrapping `snapshot-fork.ts` with `FORK_PIN_LAG=0`, public endpoints from `fork-rpc-lib.sh`, 429 back-off). Builds the Twin chain genesis alloc with the existing ingester and aligns `fork-block.json` and `expected-prices.json` in an overlay. The overlay is an artifact, never committed. Each chain suite (5, 7, 8, 10, 11b, 14) is called with `workflow_call` and `fresh_snapshot: true`; its chain jobs apply the overlay through `.github/actions/apply-fresh-snapshot`. `scripts/devnet/check-nightly-fresh-snapshot.ts` asserts the block is within one hour and that every suite succeeded. Artifacts: `snapshot-manifest` (block number, hash, timestamp), `suite-results`, `fresh-snapshot`.
+
+Suite 26 is not in this run: it needs `secrets.FUSION_RMPC_CONFIG` and targets the shared fusion devnet, so it cannot run on the fresh Twin snapshot with no secret. Suite 5's `base-testnet-adapters` job (BASE_TESTNET secrets) is skipped when called with `fresh_snapshot: true`. Details and the one remaining exception (suite 14 reads the private devops repo with `DEVOPS_READ_TOKEN`) are in `docs/development/nightly-fresh-snapshot.md`.
+
+
+## Nightly and release-record checks (cores 1495, 1496, 1497, 1498)
+
+The `nightly-and-release-checks` job in `suite-13-doc-checks.yml` runs on every pull request. It runs, offline:
+
+- `scripts/ci/check-nightly-dispatch-selftest.ts` (core 1495, Bun): the nightly dispatch list covers every suite workflow, a removed suite is detected, the fork-pin age step has `continue-on-error: true`, and the deleted drift job, script and alarm text are gone. The list check itself is `scripts/ci/check_nightly_dispatch_list.py`; config-check, suite 28 core-stages and suite 30 are in the SUITES list, and the release workflows, the nightly itself, the third-party drift workflow and suite 29 are on the exclusion list with reasons.
+- `scripts/devnet/check-nightly-fresh-snapshot-selftest.ts` (core 1496, Bun, run in suite 13): suites 5, 7, 8, 10, 11b and 14 are present, no secret other than `GITHUB_TOKEN` and no keyed RPC appear, manifest fields and the one-hour limit hold, a failing suite result fails the gate, the final workflow step is `git diff --exit-code` over the fixture paths, and a stub HTTP 429 is retried.
+- The nightly third-party drift workflow check, the dependency manifest self-test and the manifest address check (core 1497). The address check runs on a manifest recorded from the committed snapshot, so it checks something before the first release commits one.
+
+The committed snapshot contents check is a Bun TypeScript script, `scripts/devnet/check-fork-snapshot-contents.ts` (core 1498; the issue says `.sh`, orchestration is TypeScript). It also asserts a non-zero QuoterV2 `quoteExactInputSingle` quote (10 USDC to token, through `cast call`) for each basket pool in config (wETH, cbBTC, deSPXA); `scripts/devnet/snapshot-fork-selftest.ts` tests that assertion with a stub runner. Suite 14's `smoke-test-guards` job runs it, plus `check-fork-manifest.sh --require-pinned` (fixture lockstep) and a floor on the `cargo test -p smoke-test --lib` test count. Suite 14's `twin_publish` job (its own job, not a matrix row) runs the real Twin chain publish through the devops CLI (directory given by the `publish_contracts_dir` input), the one verifier and the stage 13 govern matrix. While the chain is up it runs `scripts/deploy/assert-core-router.ts` (read-only mode: the share receiver is keyless on the Twin chain, so the signed round trip is not run here), `assert-basket-vaults.ts` and `assert-timelock-roles.ts`, then `scripts/stage/twin-run-report.ts` (stages, tx counts, vault set, labels), then `parity.ts` (label-diff and sheet-diff against the mainnet verifier labels and production sheet). It uploads the manifests, proofs and report. On `pull_request` it runs only when `contracts/script/`, `scripts/deploy/`, `scripts/stage/`, `config/` or `testing/smoke-test/` changed (a `changes` job reads the git diff); push, `workflow_dispatch` and the nightly `workflow_call` always run it. A non-zero test count floor applies through `cargo_test_require_executed.sh` (`CARGO_TEST_MIN_EXECUTED=1`) plus the `--lib` floor in the guards job. The job needs Docker and runs only in CI.
+
+## check-sha-green (core 1502)
+
+`scripts/ci/check-sha-green.ts` is the deploy gate on CI state. The devops publish plan job (devops 58) runs it with `DEPLOY_SHA` before any approval.
+
+```
+bun scripts/ci/check-sha-green.ts <sha> [--repo owner/name] [--config path] [--api-url url]
+```
+
+- Reads every check-run of the commit through `GET /repos/{repo}/commits/{sha}/check-runs?per_page=100` and follows `rel="next"` Link headers until none remain.
+- Token: `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token`. The token stays in memory.
+- Reads `scripts/ci/required-checks.json` (`version`, `required`, `optional`). An entry has either `name` (exact) or `prefix`.
+- Exit 0: every required name has at least one check-run and every run of it completed with `success`.
+- Exit 1: a required name failed, is missing, or is pending (`queued`, `in_progress`). The output names each one under `FAILING`, `MISSING` or `PENDING`. A name with both a failed and a successful run fails.
+- Exit 2: bad arguments, bad config or an API error.
+- Optional entries that are not green are printed as `optional (does not gate)` and never change the exit code.
+- An entry may carry `"class": "required-on-deploy-paths"` and a `paths` list. `smoke-test-twin-publish` (suite 14 `twin_publish`, the Twin chain publish) is that class: it runs on every push to `dev`, so a deploy sha always carries it, and on a pull request only when a path in the list changed. The list repeats the `changes` job filter of `suite-14-smoke-test.yml`; a unit test asserts every path appears in that workflow.
+- The initial required list is the set of jobs that run unconditionally on push to `dev` (no draft skip, no path filter, no matrix). Failing nightly jobs stay optional.
+- Tests: `bun test scripts/ci/check-sha-green.test.ts`, run by the `check-sha-green-tests` job (suite 30), which fails when zero tests were collected. The same file asserts `dapp-lint-build` and `bun-audit` carry no skip condition and no `continue-on-error`.
+
+### Branch protection for the twin publish check (core 1488)
+
+`smoke-test-twin-publish` must be a required status check on `dev` in GitHub branch protection. That is a GitHub write only the repository owner can do: Settings, Branches, the `dev` rule, "Require status checks to pass", add `smoke-test-twin-publish`. The job is path-gated on pull requests. GitHub treats a skipped job as passing, so the requirement does not block a pull request that touches no deploy path. The `smoke-test-changes` job and the job itself must stay named exactly as they are, because the protection rule matches the check-run name. `scripts/ci/required-checks.json` records the same requirement for `check-sha-green` (class `required-on-deploy-paths`). Until the owner adds the protection rule, only `check-sha-green` enforces it, at deploy time.

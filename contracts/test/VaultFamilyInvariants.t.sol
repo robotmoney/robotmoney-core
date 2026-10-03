@@ -14,17 +14,15 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
-import {Vault} from "../Vault.sol";
-import {RwaVault} from "../vaults/RwaVault.sol";
+import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {AdminFloorAccessControlCounter} from "../lib/AdminFloorAccessControlCounter.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
-import {IChronicleOracle} from "../interfaces/IChronicleOracle.sol";
 
 import {TestERC20, MockSwapRouter, MockPool} from "./BasketVault.t.sol";
-import {StubSwapRouter, MockChronicle} from "./RwaVault.t.sol";
+import {StubSwapRouter} from "./DeployProtocolAssetVault.t.sol";
 import {MockAdapter, TestUSDC} from "./RobotMoneyVault.t.sol";
 
 /// @dev Deliberately unprotected mock "vault": bare `AccessControl` with a
@@ -94,31 +92,12 @@ contract VaultFamilyInvariantsTest is Test {
         );
     }
 
-    function _deployVault() internal returns (Vault) {
-        TestUSDC usdc = new TestUSDC();
-        return new Vault(
-            IERC20(address(usdc)),
-            "Robot Money USDC",
-            "rmUSDC",
-            type(uint256).max,
-            type(uint256).max,
-            0,
-            500, // maxSlippageBps
-            10_000, // maxNavGrowthRateBps (nonzero, effectively inert here)
-            feeRecipient,
-            admin,
-            emergencyResponder
-        );
-    }
-
-    function _deployRwaVault() internal returns (RwaVault) {
+    function _deployRwaVault() internal returns (RwaBasketVault) {
         TestERC20 usdc = new TestERC20();
         StubSwapRouter router = new StubSwapRouter();
-        MockChronicle chronicle = new MockChronicle(1e18, block.timestamp);
-        return new RwaVault(
+        return new RwaBasketVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
-            IChronicleOracle(address(chronicle)),
             type(uint256).max,
             type(uint256).max,
             0,
@@ -165,7 +144,6 @@ contract VaultFamilyInvariantsTest is Test {
     ///         what happens when a type is missing the floor.
     function test_lastAdminFloor_holdsAcrossVaultFamily() public {
         _assertLastAdminFloorHolds(IAccessControl(address(_deployRobotMoneyVault())), admin);
-        _assertLastAdminFloorHolds(IAccessControl(address(_deployVault())), admin);
         _assertLastAdminFloorHolds(IAccessControl(address(_deployRwaVault())), admin);
         _assertLastAdminFloorHolds(IAccessControl(address(_deployAgentTokenVault())), admin);
         _assertLastAdminFloorHolds(IAccessControl(address(_deployProtocolAssetVault())), admin);

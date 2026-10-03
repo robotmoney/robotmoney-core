@@ -5,7 +5,7 @@ description: "Family-wide invariants that must hold identically across every vau
 
 # VaultFamilyInvariantsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/VaultFamilyInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/VaultFamilyInvariants.t.sol)
 
 **Inherits:** Test
 
@@ -83,33 +83,19 @@ function _deployRobotMoneyVault() internal returns (RobotMoneyVault);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `RobotMoneyVault` |  |
 
-<a id="_deployvault"></a>
-
-### _deployVault
-
-```solidity
-function _deployVault() internal returns (Vault);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `Vault` |  |
-
 <a id="_deployrwavault"></a>
 
 ### _deployRwaVault
 
 ```solidity
-function _deployRwaVault() internal returns (RwaVault);
+function _deployRwaVault() internal returns (RwaBasketVault);
 ```
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `RwaVault` |  |
+| &lt;none&gt; | `RwaBasketVault` |  |
 
 <a id="_deployagenttokenvault"></a>
 

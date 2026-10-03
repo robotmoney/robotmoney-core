@@ -1,138 +1,122 @@
 // SPDX-License-Identifier: MIT
-// Canonical: none — Foundry test for contracts/script/ActivateBasketVaultEligibility.s.sol
+// Canonical: robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486)
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-
 import {ActivateBasketVaultEligibility} from "../script/ActivateBasketVaultEligibility.s.sol";
+import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
+import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
+import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
+import {BasketVaultDeployBase} from "../script/BasketVaultDeployBase.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {TestERC20} from "./helpers/TestERC20.sol";
+import {PortfolioRouter} from "../PortfolioRouter.sol";
+import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";
 
-/// @notice Tests for ActivateBasketVaultEligibility.s.sol.
-///
-/// The acceptance criteria (issue #692):
-///   - Reverts when `BASKET_VAULT_AUDIT_COMPLETE` is not set (passed as false).
-///   - Succeeds with `isRouterEligible` returning true for both vaults when
-///     `BASKET_VAULT_AUDIT_COMPLETE` is set to "true".
-///
-/// Uses `runInProcessWith(auditComplete=true/false)` to exercise both paths
-/// without requiring env var manipulation inside forge tests.
-contract ActivateBasketVaultEligibilityTest is Test {
+/// @notice The governed eligibility step covers rmPROTO, rmAGENT and rmRWA. Each flip is one
+///         atomic `registry.migrateEligibility`, so it works with a default vector in place.
+contract ActivateBasketVaultEligibilityTest is BasketDeployFixture {
     ActivateBasketVaultEligibility internal script;
-    TestERC20 internal usdc;
-    VaultRegistry internal registry;
+    PortfolioRouter internal router;
 
-    address internal admin = address(this);
-    address internal protocolVault;
+    address internal protoVault;
     address internal agentVault;
+    address internal rwaVault;
 
     function setUp() public {
+        _fixtureSetUp();
         script = new ActivateBasketVaultEligibility();
-        usdc = new TestERC20();
-        registry = new VaultRegistry(admin);
+        router = new PortfolioRouter(address(usdc), address(registry), deployer);
 
-        // Create two mock vault addresses representing the basket vaults.
-        // They don't need real vault contracts for registry eligibility tests —
-        // VaultRegistry.setRouterEligible only checks registration.
-        protocolVault = makeAddr("protocolVault");
-        agentVault = makeAddr("agentVault");
-
-        // Register both vaults so setRouterEligible won't revert with NotRegistered.
-        registry.registerVault(
-            protocolVault,
-            VaultRegistry.VaultMetadata({
-                name: "Robot Money Protocol", asset: address(usdc), registeredAt: 0
-            })
-        );
-        registry.registerVault(
-            agentVault,
-            VaultRegistry.VaultMetadata({
-                name: "Robot Money Agent Tokens", asset: address(usdc), registeredAt: 0
-            })
-        );
+        string memory empty = _emptyJson("assets");
+        protoVault = new DeployProtocolAssetVault().runInProcess(_params(), empty).vault;
+        agentVault =
+        new DeployAgentTokenVault().runInProcess(_params(), _emptyJson("shortlist")).vault;
+        rwaVault = new DeployRwaBasketVault().runInProcess(_params(), empty).vault;
     }
 
-    // ─── Audit gate: revert path ───────────────────────────────────────────────
-
-    /// @notice The activation script reverts when auditComplete is false.
-    ///         This exercises the safety gate that prevents accidental activation
-    ///         before the Architecture §4.1 certification checklist is satisfied.
-    function test_reverts_when_auditComplete_false() public {
-        vm.expectRevert(bytes("BASKET_VAULT_AUDIT_COMPLETE not set - activation blocked"));
-        script.runInProcessWith(address(registry), protocolVault, agentVault, false);
+    function _emptyJson(string memory key) internal view returns (string memory) {
+        return string.concat('{"swapRouter02":"', vm.toString(router02), '","', key, '":[]}');
     }
 
-    /// @notice Both vaults remain ineligible after the gated revert.
-    function test_vaults_stay_ineligible_when_gate_reverts() public {
-        // Capture state before attempting gated activation.
-        bool protoBefore = registry.isRouterEligible(protocolVault);
-        bool agentBefore = registry.isRouterEligible(agentVault);
-
-        try script.runInProcessWith(address(registry), protocolVault, agentVault, false) {} catch {}
-
-        assertEq(registry.isRouterEligible(protocolVault), protoBefore, "proto eligibility changed");
-        assertEq(registry.isRouterEligible(agentVault), agentBefore, "agent eligibility changed");
-    }
-
-    // ─── Audit gate: success path ──────────────────────────────────────────────
-
-    /// @notice Both vaults become router-eligible after successful activation.
-    ///         The test contract is admin (setUp set admin = address(this) and
-    ///         deployed registry with that admin), so no prank is needed.
-    function test_activates_both_vaults_when_auditComplete_true() public {
-        assertFalse(registry.isRouterEligible(protocolVault), "proto should start ineligible");
-        assertFalse(registry.isRouterEligible(agentVault), "agent should start ineligible");
-
-        // Grant ADMIN_ROLE to the script so it can call setRouterEligible.
-        // In broadcast mode the broadcaster IS admin. In-process, we prank.
+    function _link() internal {
+        vm.startPrank(deployer);
+        registry.setRouter(address(router));
         registry.grantRole(registry.ADMIN_ROLE(), address(script));
-
-        script.runInProcessWith(address(registry), protocolVault, agentVault, true);
-
-        assertTrue(
-            registry.isRouterEligible(protocolVault), "protocolVault should be router-eligible"
-        );
-        assertTrue(registry.isRouterEligible(agentVault), "agentVault should be router-eligible");
+        vm.stopPrank();
     }
 
-    /// @notice The returned struct contains the correct vault addresses.
-    function test_returned_struct_matches_inputs() public {
-        registry.grantRole(registry.ADMIN_ROLE(), address(script));
+    function test_allThreeBecomeRouterEligible() public {
+        _link();
+        assertFalse(registry.isRouterEligible(protoVault));
+        assertFalse(registry.isRouterEligible(agentVault));
+        assertFalse(registry.isRouterEligible(rwaVault));
 
         ActivateBasketVaultEligibility.Activated memory a =
-            script.runInProcessWith(address(registry), protocolVault, agentVault, true);
+            script.runInProcessWith(address(registry), protoVault, agentVault, rwaVault);
 
-        assertEq(a.protocolVault, protocolVault, "protocolVault address mismatch");
-        assertEq(a.agentVault, agentVault, "agentVault address mismatch");
-        assertEq(a.registry, address(registry), "registry address mismatch");
+        assertTrue(registry.isRouterEligible(protoVault), "rmPROTO eligible");
+        assertTrue(registry.isRouterEligible(agentVault), "rmAGENT eligible");
+        assertTrue(registry.isRouterEligible(rwaVault), "rmRWA eligible");
+        assertEq(registry.routerEligibleCount(), 3);
+        assertEq(a.rwaVault, rwaVault);
+        assertEq(a.registry, address(registry));
     }
 
-    /// @notice `routerEligibleCount` increments by 2 after activating both vaults.
-    function test_routerEligibleCount_increments_by_two() public {
-        registry.grantRole(registry.ADMIN_ROLE(), address(script));
-
-        uint256 countBefore = registry.routerEligibleCount();
-        script.runInProcessWith(address(registry), protocolVault, agentVault, true);
-        assertEq(
-            registry.routerEligibleCount(), countBefore + 2, "routerEligibleCount should be +2"
-        );
+    function test_defaultVectorSpansTheEligibleSetAtEveryStep() public {
+        _link();
+        script.runInProcessWith(address(registry), protoVault, agentVault, rwaVault);
+        assertEq(router.defaultWeightsLength(), 3, "vector length equals eligible count");
+        (address[] memory vaults, uint256[] memory bps) = router.getDefaultWeights();
+        assertEq(vaults.length, 3);
+        uint256 total;
+        for (uint256 i = 0; i < 3; i++) {
+            total += bps[i];
+        }
+        assertEq(total, 10_000, "weights sum to 10000");
+        assertEq(vaults[0], protoVault);
+        assertEq(vaults[1], agentVault);
+        assertEq(vaults[2], rwaVault);
     }
 
-    // ─── Zero-address guards ───────────────────────────────────────────────────
+    function test_separateSetterDeadlocksOnceAVectorExists() public {
+        _link();
+        // Activate two, so a default vector of length 2 exists.
+        vm.startPrank(deployer);
+        address[] memory v1 = new address[](1);
+        uint256[] memory w1 = new uint256[](1);
+        v1[0] = protoVault;
+        w1[0] = 10_000;
+        registry.migrateEligibility(protoVault, true, v1, w1);
+        vm.stopPrank();
+        // The non-atomic setter now reverts: this is why the script uses migrateEligibility.
+        vm.prank(deployer);
+        vm.expectRevert();
+        registry.setRouterEligible(agentVault, true);
+    }
 
-    function test_reverts_on_zero_registry() public {
+    function test_rerunSkipsVaultsAlreadyEligible() public {
+        _link();
+        script.runInProcessWith(address(registry), protoVault, agentVault, rwaVault);
+        script.runInProcessWith(address(registry), protoVault, agentVault, rwaVault);
+        assertEq(registry.routerEligibleCount(), 3);
+        assertEq(router.defaultWeightsLength(), 3);
+    }
+
+    function test_reverts_whenNoRouterLinked() public {
+        bytes32 adminRole = registry.ADMIN_ROLE();
+        vm.prank(deployer);
+        registry.grantRole(adminRole, address(script));
+        vm.expectRevert(bytes("registry has no linked router: link it at stage 4 first"));
+        script.runInProcessWith(address(registry), protoVault, agentVault, rwaVault);
+    }
+
+    function test_reverts_onZeroInputs() public {
         vm.expectRevert(bytes("registry=0"));
-        script.runInProcessWith(address(0), protocolVault, agentVault, true);
-    }
-
-    function test_reverts_on_zero_protocolVault() public {
+        script.runInProcessWith(address(0), protoVault, agentVault, rwaVault);
         vm.expectRevert(bytes("protocolVault=0"));
-        script.runInProcessWith(address(registry), address(0), agentVault, true);
-    }
-
-    function test_reverts_on_zero_agentVault() public {
+        script.runInProcessWith(address(registry), address(0), agentVault, rwaVault);
         vm.expectRevert(bytes("agentVault=0"));
-        script.runInProcessWith(address(registry), protocolVault, address(0), true);
+        script.runInProcessWith(address(registry), protoVault, address(0), rwaVault);
+        vm.expectRevert(bytes("rwaVault=0"));
+        script.runInProcessWith(address(registry), protoVault, agentVault, address(0));
     }
 }

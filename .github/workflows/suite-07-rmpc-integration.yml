@@ -91,6 +91,17 @@ env:
   CI_CLASS: system-correctness
 
 on:
+  # Nightly job (b), core issue 1496: reused by suite-NN-nightly-fresh-snapshot.yml
+  # with fresh_snapshot=true so this suite boots the Twin chain from a snapshot
+  # taken at the latest Base block instead of the checked-in pin. Steps are not
+  # copied: the nightly calls this very workflow.
+  workflow_call:
+    inputs:
+      fresh_snapshot:
+        description: "Apply the nightly fresh snapshot overlay before booting a chain."
+        type: boolean
+        required: false
+        default: false
   # system-correctness: this devnet integration suite is a merge gate for `dev`. It
   # defers past draft PRs (ready_for_review onward) so drafts are not charged for the
   # Docker boot, and runs on push to dev for merged-commit coverage. paths-ignore
@@ -109,7 +120,9 @@ on:
 # distinct concurrency lane per ref and never cancel, so merged-commit coverage
 # always completes. See docs/development/ci-suites.md (CI velocity tiers).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # suite tag keeps called copies (nightly fresh snapshot, issue 1496) in separate lanes:
+  # inside workflow_call github.workflow is the CALLER's name, shared by every suite.
+  group: ${{ github.workflow }}-suite07-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -372,6 +385,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
+        uses: ./.github/actions/apply-fresh-snapshot
+        with:
+          enabled: ${{ inputs.fresh_snapshot == true }}
+
+      # The Rust harness boots the devnet through the devops "publish contracts" runbook.
+      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
+        id: devops
+        uses: ./.github/actions/devops-publish-contracts
+        with:
+          token: ${{ secrets.DEVOPS_READ_TOKEN }}
+          ref: ${{ vars.DEVOPS_PUBLISH_REF }}
 
       - name: Verify Docker is available
         run: |
@@ -396,6 +421,7 @@ jobs:
         run: docker compose pull --ignore-pull-failures || true
 
       - name: e2e ${{ matrix.binary }}
+        if: steps.devops.outputs.available != 'false'
         working-directory: testing/ethereum-testnet/e2e-rust
         run: cargo test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
 
@@ -411,6 +437,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
+        uses: ./.github/actions/apply-fresh-snapshot
+        with:
+          enabled: ${{ inputs.fresh_snapshot == true }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

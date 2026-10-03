@@ -318,6 +318,34 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @param requested USDC needed from adapters (after idle balance is applied).
     /// @param available Total USDC the active adapters actually delivered or report holding.
     error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
+    /// @notice Gas left is below the floor needed to finish the current adapter call safely.
+    ///         Raised instead of an opaque out-of-gas so a limit that was too low reverts
+    ///         with a reason. Retry with a higher gas limit. (core 1482.)
+    /// @param available `gasleft()` at the check.
+    /// @param required  The floor that was not met.
+    error InsufficientGas(uint256 available, uint256 required);
+
+    // CHANGELOG (core 1482, audit-impact: no change to share accounting or fee math):
+    //   Added `InsufficientGas` and `_requireGas` guards before each adapter `withdraw`
+    //   in `_pullProportional` (plus an entry floor), on the `redeem`/`withdraw` overrides, before `adpt.deploy` in `_routeDeposit`, and a tail
+    //   reserve before the burn and payout transfers. The guard only reverts earlier,
+    //   with a reason, when the caller supplied too little gas. Floors are tunable
+    //   constants pending fork measurement (see docs/technical/redeem-gas-1482.md).
+    /// @dev Gas that must remain before an adapter external call (its nested protocol calls
+    ///      and the 63/64 forwarding rule need headroom).
+    uint256 internal constant ADAPTER_CALL_GAS_FLOOR = 400_000;
+    /// @dev Gas that must remain after the last adapter call for burn, fee and payout transfers.
+    uint256 internal constant TAIL_GAS_FLOOR = 150_000;
+    /// @dev Gas that must be available when the adapter-sourcing path starts (idle balance
+    ///      does not cover the withdrawal). The path reads every adapter's `totalAssets()`
+    ///      twice (MetaMorpho ~201k each), so it needs well over the per-call floor. Below
+    ///      this the call reverts `InsufficientGas` instead of running out of gas silently.
+    uint256 internal constant PULL_ENTRY_GAS_FLOOR = 1_200_000;
+
+    function _requireGas(uint256 floor) private view {
+        uint256 g = gasleft();
+        if (g < floor) revert InsufficientGas(g, floor);
+    }
 
     // ─── Constructor ──────────────────────────────────────────────────
 
@@ -578,6 +606,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         address adptAddr = address(adpt);
         _requireAdapterEligible(adptAddr);
         IERC20(asset()).safeTransfer(adptAddr, amount);
+        _requireGas(ADAPTER_CALL_GAS_FLOOR);
         adpt.deploy(amount);
         emit Allocated(i, adptAddr, amount);
     }
@@ -656,6 +685,38 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         return net.mulDiv(MAX_BPS, MAX_BPS - exitFeeBps, Math.Rounding.Ceil);
     }
 
+    /// @notice Burn `shares` from `owner` and send the net USDC to `receiver`.
+    /// @dev core 1482: the share-to-asset preview reads every adapter's `totalAssets()` before
+    ///      `_withdraw` runs, so the entry gas guard sits on the public entrypoints too. Share
+    ///      and fee math is untouched: both forward to the inherited ERC-4626 implementation.
+    /// @param shares Amount of vault shares to burn.
+    /// @param receiver Address that receives the USDC.
+    /// @param owner Address whose shares are burned (the caller or an approved spender).
+    /// @return The amount of USDC sent to `receiver`.
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        returns (uint256)
+    {
+        _requireGas(PULL_ENTRY_GAS_FLOOR);
+        return super.redeem(shares, receiver, owner);
+    }
+
+    /// @notice Send `assets` USDC to `receiver` and burn the matching shares from `owner`.
+    /// @dev See `redeem`.
+    /// @param assets Net amount of USDC the receiver should get.
+    /// @param receiver Address that receives the USDC.
+    /// @param owner Address whose shares are burned (the caller or an approved spender).
+    /// @return The amount of shares burned.
+    function withdraw(uint256 assets, address receiver, address owner)
+        public
+        override
+        returns (uint256)
+    {
+        _requireGas(PULL_ENTRY_GAS_FLOOR);
+        return super.withdraw(assets, receiver, owner);
+    }
+
     function _withdraw(
         address caller,
         address receiver,
@@ -724,6 +785,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             return assetsNeeded;
         }
 
+        _requireGas(PULL_ENTRY_GAS_FLOOR);
         uint256 totalInAdapters;
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
@@ -751,6 +813,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             if (pull > remaining) pull = remaining;
             if (pull > adapterBalance) pull = adapterBalance;
             if (pull == 0) continue;
+            _requireGas(ADAPTER_CALL_GAS_FLOOR);
             uint256 actual = adpt.withdraw(pull);
             pulled += actual;
             remaining = actual >= remaining ? 0 : remaining - actual;
@@ -767,6 +830,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             uint256 adapterBalance = adpt.totalAssets();
             uint256 pull = adapterBalance < remaining ? adapterBalance : remaining;
             if (pull == 0) continue;
+            _requireGas(ADAPTER_CALL_GAS_FLOOR);
             uint256 actual = adpt.withdraw(pull);
             pulled += actual;
             remaining = actual >= remaining ? 0 : remaining - actual;
@@ -785,6 +849,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         // surplus idle for ALL holders rather than over-paying this one position. The fee and
         // payout are therefore bounded by the share-implied gross from above and by realised
         // proceeds from below — never socializing one holder's shortfall onto the others.
+        _requireGas(TAIL_GAS_FLOOR);
         uint256 realized = idleBalance + pulled;
         return realized < assetsNeeded ? realized : assetsNeeded;
     }

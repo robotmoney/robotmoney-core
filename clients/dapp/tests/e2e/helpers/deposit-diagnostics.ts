@@ -96,9 +96,9 @@ import { aaveV3ErrorCodes, cometErrorAbi, metaMorphoErrorAbi } from "./protocol-
 
 /**
  * Error fragments for the three strategy adapters the primary vault routes
- * through (`contracts/script/Deploy.s.sol:_approveAndRegisterAdapters` adds
+ * through (`contracts/script/DeployVault.s.sol:_approveAndRegisterAdapters` adds
  * exactly AaveV3Adapter, CompoundV3Adapter and MorphoAdapter, at 3334/3333/3333
- * capBps), plus the two shared `IPositionAdapter` errors they inherit.
+ * capBps), plus the two errors (`OnlyVault`, `SlippageExceeded`) each declares.
  *
  * Hand-maintained rather than generated: `.github/scripts/generate_abi_bindings.sh`
  * emits no adapter binding, and this is a test-only decode table, not a call
@@ -115,7 +115,7 @@ import { aaveV3ErrorCodes, cometErrorAbi, metaMorphoErrorAbi } from "./protocol-
  * swallowed.
  */
 export const strategyAdapterErrorAbi = [
-  // contracts/interfaces/IPositionAdapter.sol
+  // declared on each lending adapter
   { type: "error", name: "OnlyVault", inputs: [] },
   { type: "error", name: "SlippageExceeded", inputs: [] },
   // contracts/adapters/AaveV3Adapter.sol, CompoundV3Adapter.sol, MorphoAdapter.sol

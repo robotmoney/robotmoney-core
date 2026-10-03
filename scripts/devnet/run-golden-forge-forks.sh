@@ -25,10 +25,11 @@ done
 cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null
 
 unset FORK_RPC_URL RMPC_FORK_RPC_URL
+export FORK_REQUIRED=1
 if ! forge test --json "$@" >"$RESULTS"; then
   jq . "$RESULTS" >&2 || cat "$RESULTS" >&2
   exit 1
 fi
-COUNT="$(jq '[.. | objects | select(has("status"))] | length' "$RESULTS")"
-[[ "$COUNT" -gt 0 ]] || { echo "zero fork tests executed" >&2; cat "$RESULTS" >&2; exit 1; }
+COUNT="$(jq '[.. | objects | select(has("status") and .status != "Skip")] | length' "$RESULTS")"
+[[ "$COUNT" -gt 0 ]] || { echo "zero fork tests executed (skips do not count)" >&2; cat "$RESULTS" >&2; exit 1; }
 echo "executed $COUNT fork tests"
