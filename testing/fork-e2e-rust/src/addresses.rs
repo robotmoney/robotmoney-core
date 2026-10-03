@@ -47,8 +47,7 @@ pub const AAVE_V3_A_TOKEN: Address = address!("4e65fe4dba92790696d040ac24aa41470
 /// "Moonwell Flagship USDC" on chain. The underlying yield venue for [`MORPHO_ADAPTER`]
 /// and newly deployed MorphoAdapter instances. Core S3 renamed this from the old
 /// Gauntlet-prime name: the address was never Gauntlet.
-pub const MOONWELL_FLAGSHIP_USDC: Address =
-    address!("c1256ae5ff1cf2719d4937adb3bbccab2e00a2ca");
+pub const MOONWELL_FLAGSHIP_USDC: Address = address!("c1256ae5ff1cf2719d4937adb3bbccab2e00a2ca");
 
 /// Compound V3 (Comet) USDC market on Base. The underlying venue for
 /// [`COMPOUND_V3_ADAPTER`] and newly deployed CompoundV3Adapter instances.

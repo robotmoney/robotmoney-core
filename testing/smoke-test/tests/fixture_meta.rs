@@ -75,7 +75,11 @@ fn deployed_addresses_are_non_zero() {
         Address::ZERO,
         "compound_adapter is zero"
     );
-    assert_ne!(fx.moonwell_flagship_adapter(), Address::ZERO, "moonwell_flagship_adapter is zero");
+    assert_ne!(
+        fx.moonwell_flagship_adapter(),
+        Address::ZERO,
+        "moonwell_flagship_adapter is zero"
+    );
     assert_ne!(fx.agent(), Address::ZERO, "agent is zero");
 }
 
