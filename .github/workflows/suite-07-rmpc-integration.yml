@@ -393,10 +393,10 @@ jobs:
       # The Rust harness boots the devnet through the devops "publish contracts" runbook.
       - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
         id: devops
-        if: inputs.fresh_snapshot != true
         uses: ./.github/actions/devops-publish-contracts
         with:
           token: ${{ secrets.DEVOPS_READ_TOKEN }}
+          ref: ${{ vars.DEVOPS_PUBLISH_REF }}
 
       - name: Verify Docker is available
         run: |

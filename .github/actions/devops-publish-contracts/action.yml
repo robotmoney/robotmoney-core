@@ -16,9 +16,9 @@ inputs:
     default: ""
   ref:
     description: >-
-      devops ref to check out. Empty: the DEVOPS_REF env of the calling
-      workflow, then the DEVOPS_PUBLISH_REF repository variable, then the
-      default below.
+      devops ref to check out. Callers pass the DEVOPS_PUBLISH_REF repository
+      variable (the vars context is not available inside a composite action). Empty:
+      the DEVOPS_REF env of the calling workflow, then the default below.
     required: false
     default: ""
 outputs:
@@ -39,7 +39,6 @@ runs:
         DEFAULT_REF: impl/docs-removals
         INPUT_REF: ${{ inputs.ref }}
         ENV_REF: ${{ env.DEVOPS_REF }}
-        VAR_REF: ${{ vars.DEVOPS_PUBLISH_REF }}
       run: |
         if [ -z "$TOKEN" ]; then
           if [ "$IS_FORK_PR" = "true" ]; then
@@ -50,7 +49,7 @@ runs:
           echo "::error::Secret DEVOPS_READ_TOKEN is missing (owner action: add it as a repository secret with read access to robotmoney/devops). Every job that boots the devnet needs it for the publish-contracts checkout."
           exit 1
         fi
-        ref="${INPUT_REF:-${ENV_REF:-${VAR_REF:-$DEFAULT_REF}}}"
+        ref="${INPUT_REF:-${ENV_REF:-$DEFAULT_REF}}"
         echo "ref=$ref" >> "$GITHUB_OUTPUT"
         echo "available=true" >> "$GITHUB_OUTPUT"
     - if: ${{ steps.gate.outputs.available == 'true' }}

@@ -41,6 +41,10 @@ const SUITE_FILE: Record<string, string> = {
 const SUITES = Object.keys(SUITE_FILE);
 // Secrets a called suite is allowed to use in a fresh-snapshot run, with the reason.
 const KNOWN_SECRET_EXCEPTIONS: Record<string, string> = {
+  "suite-10-dapp-e2e.yml:DEVOPS_READ_TOKEN":
+    "the devops checkout step is itself gated by inputs.fresh_snapshot != true, so a nightly run never reads the secret",
+  "suite-07-rmpc-integration.yml:DEVOPS_READ_TOKEN":
+    "the devnet e2e matrix boots the chain through publish-contracts, so it needs the devops checkout like suite 14; the nightly caller must pass the token (secrets: inherit) or the job fails loudly naming the secret (owner decision, see devops-publish-contracts/action.yml)",
   "suite-14-smoke-test.yml:DEVOPS_READ_TOKEN":
     "checks out the private devops repo for publish-contracts; read-only token, to be replaced by a public checkout (documented in nightly-fresh-snapshot.md)",
 };
