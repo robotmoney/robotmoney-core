@@ -115,6 +115,8 @@ export interface StartOptions {
   forkRetryBackoffMs: number;
   computeUnitsPerSecond: number;
   timeoutMs?: number;
+  /** Seconds between blocks (anvil --block-time). Unset means mine on transaction only. */
+  blockTimeSec?: number;
 }
 export function buildAnvilArgv(o: StartOptions): string[] {
   if (!Number.isInteger(o.pinBlock) || o.pinBlock <= 0) throw new Error("pinBlock must be a positive integer");
@@ -131,6 +133,7 @@ export function buildAnvilArgv(o: StartOptions): string[] {
     "--quiet",
   ];
   if (o.timeoutMs) argv.push("--timeout", String(o.timeoutMs));
+  if (o.blockTimeSec) argv.push("--block-time", String(o.blockTimeSec));
   return argv;
 }
 /** The same argv with the upstream replaced by its host, safe to print. */
@@ -230,14 +233,15 @@ export async function fundUsdc(url: string, addr: string, units: bigint, opts: R
 }
 
 // ---------------------------------------------------------------- wait, process
-export async function waitReady(url: string, pinBlock: number, timeoutMs: number, chainId = TWIN_CHAIN_ID): Promise<void> {
+/** With allowAhead (a fork that mines on a timer) the head may already be past the pin. */
+export async function waitReady(url: string, pinBlock: number, timeoutMs: number, chainId = TWIN_CHAIN_ID, allowAhead = false): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let last = "no answer";
   while (Date.now() < deadline) {
     try {
       const id = parseInt(await rpc(url, "eth_chainId", [], { retries: 0 }), 16);
       const n = parseInt(await rpc(url, "eth_blockNumber", [], { retries: 0 }), 16);
-      if (id === chainId && n === pinBlock) return;
+      if (id === chainId && (n === pinBlock || (allowAhead && n > pinBlock))) return;
       last = `chain id ${id}, block ${n}`;
     } catch (e: any) {
       last = String(e?.message ?? e);

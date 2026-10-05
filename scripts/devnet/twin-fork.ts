@@ -26,12 +26,16 @@ const opts = {
   "ready-timeout": { type: "string", default: "120000" },
   "start-attempts": { type: "string", default: "4" },
   host: { type: "string", default: "127.0.0.1" },
+  "block-time": { type: "string" },
+  "rpc-url": { type: "string" },
 } as const;
 
 const { values: v, positionals } = parseArgs({ args: Bun.argv.slice(2), options: opts, allowPositionals: true });
 const [cmd, ...rest] = positionals;
 const port = Number(v.port);
-const rpcUrl = `http://127.0.0.1:${port}`;
+// An explicit --rpc-url (or TWIN_RPC_URL) lets fund-gas, fund-usdc and warp reach a fork this tool did not start.
+const localUrl = `http://127.0.0.1:${port}`;
+const rpcUrl = v["rpc-url"] ?? process.env.TWIN_RPC_URL ?? `http://127.0.0.1:${port}`;
 const stateDir = resolve(v["state-dir"] ?? join(process.env.TMPDIR ?? tmpdir(), `twin-fork-${port}`));
 const pidFile = join(stateDir, "anvil.json");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -51,6 +55,7 @@ async function start() {
     port, chainId: Number(v["chain-id"]), upstream, pinBlock: pin.block, host: v.host,
     retries: Number(v.retries), forkRetryBackoffMs: Number(v["fork-retry-backoff"]),
     computeUnitsPerSecond: Number(v["compute-units-per-second"]), timeoutMs: Number(v.timeout),
+    blockTimeSec: v["block-time"] ? Number(v["block-time"]) : undefined,
   });
   log(`anvil ${redactArgv(argv).join(" ")}`);
   // Anvil keeps its fork RPC cache under $HOME/.foundry/cache/rpc, so a cache dir is a HOME override.
@@ -67,12 +72,12 @@ async function start() {
     const pid = spawnAnvilDetached(argv, env, join(stateDir, "anvil.log"));
     writeFileSync(pidFile, JSON.stringify({ pid, pin, port }), { mode: 0o600 });
     try {
-      await waitReady(rpcUrl, pin.block, Number(v["ready-timeout"]), Number(v["chain-id"]));
+      await waitReady(localUrl, pin.block, Number(v["ready-timeout"]), Number(v["chain-id"]), Boolean(v["block-time"]));
       if (v["pin-file"]) {
         mkdirSync(dirname(resolve(v["pin-file"])), { recursive: true });
         writeFileSync(v["pin-file"], JSON.stringify(pin, null, 2) + "\n");
       }
-      log(`ready at ${rpcUrl} (pid ${pid})`);
+      log(`ready at ${localUrl} (pid ${pid})`);
       return;
     } catch (e: any) {
       lastErr = String(e?.message ?? e);
@@ -108,7 +113,7 @@ async function main() {
       const st = readState();
       const pin = v["pin-block"] !== "auto" ? Number(v["pin-block"]) : st?.pin.block;
       if (!pin) throw new Error("need --pin-block N (or a running tool state)");
-      await waitReady(rpcUrl, pin, Number(v["ready-timeout"]), Number(v["chain-id"]));
+      await waitReady(rpcUrl, pin, Number(v["ready-timeout"]), Number(v["chain-id"]), true);
       return log("ready");
     }
     case "stop": return stop();

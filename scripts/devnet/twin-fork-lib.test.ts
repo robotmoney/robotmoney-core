@@ -56,6 +56,9 @@ describe("argv", () => {
     expect(a).not.toContain("--load-state");
   });
   test("rejects a bad pin or port", () => {
+    expect(buildAnvilArgv(o)).not.toContain("--block-time");
+    const t = buildAnvilArgv({ ...o, blockTimeSec: 1 });
+    expect(t[t.indexOf("--block-time") + 1]).toBe("1");
     expect(() => buildAnvilArgv({ ...o, pinBlock: 0 })).toThrow();
     expect(() => buildAnvilArgv({ ...o, port: 70000 })).toThrow();
   });
