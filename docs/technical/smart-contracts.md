@@ -117,8 +117,7 @@
 RobotMoneyVault
   ├── ERC4626   (OpenZeppelin v5 — ERC-20 shares + ERC-4626 accounting)
   ├── AccessControl (three roles: ADMIN, EMERGENCY, KEEPER)
-  ├── Pausable
-  └── ReentrancyGuard
+  └── ReentrancyGuard   (pause is the vault's own `depositsPaused` flag, not OZ Pausable)
 ```
 
 ### 3.2 Access control roles
@@ -126,7 +125,7 @@ RobotMoneyVault
 | Role | Keccak | Granted at deploy | Powers |
 |---|---|---|---|
 | `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` constructor arg | Add/remove/reconfigure adapters, set caps/fees (governance-gated, INV-3: ADMIN_ROLE is held by the TimelockController in production), `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval`. **No** `rescueTokens` — arbitrary-recipient rescue is deleted (INV-1); the only token movement is the permissionless `sweepForeignToken` |
-| `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_admin` constructor arg | `pause`, `unpause`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault` |
+| `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_admin` constructor arg | `pause`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault`. `unpause` is `ADMIN_ROLE` only. |
 | `KEEPER_ROLE` | `keccak256("KEEPER_ROLE")` | **Not granted at launch** | `rebalance` |
 
 `ADMIN_ROLE` is its own admin (can grant/revoke itself). In production, the constructor arg is the Safe multisig `0x88bA…75A0`.
@@ -197,9 +196,9 @@ Dust from integer division is swept from `lastActiveIdx`. If total adapter balan
 
 | Function | Role | Effect |
 |---|---|---|
-| `pause()` | EMERGENCY | `whenNotPaused` blocks `deposit`, `withdraw`, `redeem`, `rebalance` |
-| `unpause()` | EMERGENCY | Reverses pause |
-| `emergencyWithdraw()` | EMERGENCY | Pauses vault, then tries `withdraw(balance)` on every active adapter with a `try/catch` — failures are logged but do not revert |
+| `pause()` | EMERGENCY | Sets `depositsPaused`: blocks `deposit` and `mint` only. `withdraw` and `redeem` stay open, so users can always exit (core 1494). `paused()` reads true. |
+| `unpause()` | ADMIN (timelock) | Clears `depositsPaused`, reopening deposits. Also clears the deposit halt the three functions below set. |
+| `emergencyWithdraw()` | EMERGENCY | Pauses deposits, then tries `withdraw(balance)` on every active adapter with a `try/catch` — failures are logged but do not revert |
 | `emergencyWithdrawAdapter(i)` | EMERGENCY | Same for a single adapter index |
 | `forceRemoveAdapter(i)` | EMERGENCY | Marks adapter inactive regardless of balance (accepts loss) — emits `AdapterForceRemoved(i, addr, lossAmount)` |
 | `shutdownVault()` | EMERGENCY | Sets `shutdown = true`, `tvlCap = 0`. Deposits revert with `VaultShutdown()`; withdrawals continue. Recoverable by ADMIN via `restoreVault` (see below). |
@@ -592,8 +591,8 @@ Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or low
 
 | Role | Powers |
 |---|---|
-| ADMIN_ROLE | Add/remove/activate assets, set TWAP windows, adjust TVL and per-deposit caps, set exit fee (max 1%), set fee recipient, set max slippage, pause deposits, trigger emergency-unwind. |
-| EMERGENCY_ROLE | `emergencyUnwind()` to liquidate the basket in a lossy, fast path (no slippage limit) if normal withdrawal is blocked (oracle failure, liquidity crash). Override allowed only if loss is within `maxLossBps` of the oracle-derived floor. |
+| ADMIN_ROLE | Add/remove/activate assets, set TWAP windows, adjust TVL and per-deposit caps, set exit fee (max 1%), set fee recipient, set max slippage, `unpause()` (also clears the deposit halt `emergencyUnwind` sets), set the emergency-unwind guard. |
+| EMERGENCY_ROLE | `pause()` (blocks new deposits only; `redeem` stays open, core 1494), `shutdownVault()`, and `emergencyUnwind()` to liquidate the basket in a lossy, fast path (no slippage limit) if normal withdrawal is blocked (oracle failure, liquidity crash). Override allowed only if loss is within `maxLossBps` of the oracle-derived floor. |
 
 ### 9.3.6 Subclasses: ProtocolAssetVault, AgentTokenVault, RwaBasketVault
 

@@ -119,9 +119,10 @@
 //! **State variables to split for issue #368:**
 //! - Replace OZ `Pausable` (single `_paused` bool) with two independent booleans:
 //!   `depositsPaused` and `withdrawalsPaused` (or equivalent modifier split).
-//! - `pause()` (EMERGENCY_ROLE) sets both to `true`.
+//! - `pause()` (EMERGENCY_ROLE) sets only `depositsPaused = true` (core 1494: a pause
+//!   stops new deposits only; no function sets `withdrawalsPaused`).
 //! - `emergencyWithdraw()` (EMERGENCY_ROLE) sets only `depositsPaused = true`.
-//! - `unpause()` (ADMIN_ROLE) clears both.
+//! - `unpause()` (ADMIN_ROLE) clears `depositsPaused`.
 //! - `_deposit` guards on `depositsPaused`; `_withdraw` guards on `withdrawalsPaused`.
 //! - Coupling risk: removing OZ `Pausable` also removes `Paused(address)`/`Unpaused(address)`
 //!   events from the inherited contract — those are re-declared in `IGateway` (gateway-side);

@@ -284,8 +284,9 @@ The `shareReceiver` routing rule:
 - `paymentId` replay protection: computed at the gateway level; the router
   receives it as `orderId` and emits it in `RouterDeposit` for correlation but
   does not re-check it.
-- Pause: the gateway's stop-the-world pause blocks all destinations including
-  the router.
+- Pause: the gateway pause blocks new deposits to all destinations including
+  the router. It never blocks `withdrawFromRouter`: exits stay open while
+  paused (core 1494).
 
 ### 3.6 Unavailable-leg detection logic
 

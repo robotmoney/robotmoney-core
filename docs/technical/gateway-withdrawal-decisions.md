@@ -135,8 +135,8 @@ Parameter notes:
 
 The checks run in this order before any state mutation or external call:
 
-1. `!_paused` — gateway not paused.
-2. `shares > 0` — non-zero amount.
+1. `shares > 0` — non-zero amount. (No pause check: a gateway pause stops
+   deposits only, so withdrawals stay open while paused — core 1494.)
 3. `shares <= policy.maxWithdrawPerPayment` — per-payment cap.
 4. `block.timestamp <= deadline` — deadline not expired.
 5. `deadline <= block.timestamp + MAX_DEADLINE_SKEW` — deadline not too far.
@@ -190,7 +190,8 @@ error InsufficientAssetsOut();         // assetsReceived < minAssetsOut
 
 1. `eth_chainId` — matches `config.chain_id`.
 2. `keccak256(eth_getCode(gateway))` — matches `config.gateway_runtime_hash`.
-3. `gateway.paused()` — must be false.
+3. `gateway.paused()` — read and reported only. A paused gateway still
+   withdraws (core 1494), so rmpc never refuses on it.
 4. `gateway.agents(self)` — `active`, `validUntil >= now`, `allowedSourceVaults contains sourceVault`.
 5. `shares <= agents(self).maxWithdrawPerPayment`.
 6. `agentWithdrawWindowGross(self, currentWindow) + shares <= maxWithdrawPerWindow`.
@@ -248,8 +249,7 @@ Router-position withdrawal is implemented as
 
 ### Design
 
-`withdrawFromRouter` applies all existing gateway policy checks (pause,
-agent active, valid-until, per-payment cap, rolling window cap,
+`withdrawFromRouter` applies all existing gateway policy checks (agent active, valid-until, per-payment cap, rolling window cap,
 `allowedSourceVaults` whitelist, idempotency key) then delegates
 execution to `PortfolioRouter.redeemFor(shareHolder, assetRecipient, sharesPerLeg)`.
 

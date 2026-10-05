@@ -209,8 +209,8 @@ Characteristics:
   a permissionless smart-contract vault cannot satisfy the KYC requirement.
 - **Issuer freeze-control risk.** The deSPXA issuer may freeze token
   transfers, blocking swaps and therefore deposits and withdrawals. Existing
-  holders keep their shares. Admin should pause the vault when a freeze is
-  detected. See `docs/adr/ADR-0006-despxa-rwa-vault-design.md` §4.
+  holders keep their shares. The emergency key should pause deposits when a
+  freeze is detected; the pause never blocks redeem (the freeze itself does). See `docs/adr/ADR-0006-despxa-rwa-vault-design.md` §4.
 - **Router eligibility.** Eligibility follows the same
   `VaultRegistry.isRouterEligible` flag as other basket vaults, flipped by
   ADMIN_ROLE once pool cardinality and the rebalancing model are certified.
@@ -409,7 +409,7 @@ in `contracts/VaultRegistry.sol`); the `shut-down` overlay is the
 | State / transition | Layer | Mechanism (at HEAD) | Trigger role | Effect |
 |---|---|---|---|---|
 | **Active** | registry | `VaultStatus.Active` | — | Router routes new deposits (if also router-eligible); direct deposits open. |
-| **Paused** | registry / vault | `VaultStatus.Paused`; vault `pause()` | `setVaultStatus`: governance · `pause()`: emergency (hot key) | Reversible halt. Router stops routing; vault `pause()` halts deposits and withdrawals. `unpause()` is governance. |
+| **Paused** | registry / vault | `VaultStatus.Paused`; vault `pause()` | `setVaultStatus`: governance · `pause()`: emergency (hot key) | Reversible deposit halt. Router stops routing new deposits; vault `pause()` halts new deposits only. Withdrawals and redeems stay open, and the router still redeems from a `Paused` vault (core 1494). `unpause()` is governance. |
 | **Active → Retired** (unified) | registry + vault | `VaultRegistry.retire(vault)` | governance (`ADMIN_ROLE` = timelock) | Atomic in one call: sets registry status `Retired` **and** halts **direct** vault deposits (`IRetirableVault.retire()`, sets the vault `retired` flag → `VaultRetired()`). Withdraw-only thereafter; existing depositors keep unconditional `redeem`. Emits `VaultStatusChanged` + `Retired`. The two enforcement layers can no longer drift. **Precondition (#1173):** reverts `RetireWhileRouterEligible` if the vault is still router-eligible — drop it from `routerEligibleCount` first (see the retire strand invariant below). |
 | **shut-down** (overlay) | vault | `shutdownVault()` (sets `shutdown = true`, zeroes `tvlCap`) | emergency (`EMERGENCY_ROLE`, hot key) | Hard-stops **direct** vault deposits (`VaultShutdown()`); withdrawals continue. Vault-level only — makes no lifecycle/registry decision. Emits `Shutdown`. |
 | **shut-down → reopened** | vault | `restoreVault(newTvlCap)` | governance (`ADMIN_ROLE`) | Clears `shutdown`, sets a fresh `tvlCap`, re-opens deposits. Emits `VaultRestored`. Deliberately asymmetric with the fast emergency shutdown. |
@@ -866,7 +866,7 @@ agent withdrawals across single-vault and Portfolio Router paths:
 - the agent cannot add vaults, change mandates, alter router weights, or
   bypass disabled vaults;
 - the gateway enforces amount, expiry, window usage, destination,
-  idempotency, pause, receiver, and recipient constraints on-chain;
+  idempotency, deposit pause, receiver, and recipient constraints on-chain;
 - the client must read registry, vault status, router weights, policy,
   allowance, balance, and projected cap usage before signing.
 
@@ -880,8 +880,9 @@ spender. The depositor or configured receipt owner grants the gateway the
 needed vault-receipt allowance, or uses an owner contract that exposes
 the same policy boundary. The agent submits a gateway withdrawal request;
 the gateway verifies policy, cap usage, allowed source vault/router path,
-receipt allowance, receipt balance, previewed assets out, pause state,
-and recipient, then calls the vault or Portfolio Router redemption path.
+receipt allowance, receipt balance, previewed assets out, and recipient,
+then calls the vault or Portfolio Router redemption path. A gateway or vault
+pause stops new deposits only, so a withdrawal never checks it (core 1494).
 Withdrawn USDC is sent only to the policy-configured asset recipient.
 The agent cannot redirect proceeds to itself.
 
@@ -1144,7 +1145,10 @@ path constructs and submits a `gateway.pause()` EIP-155 transaction through
 or the `action.pauser_private_key_hex` literal (local dev). Whichever source
 supplies it, the daemon consumes the raw key exactly once at startup, derives
 the signing key, and drops the hex — the poll loop signs from that derived
-state and no code path re-reads a raw pauser secret from the config. The
+state and no code path re-reads a raw pauser secret from the config. A gateway pause
+stops new gateway deposits (`deposit`, `depositTo`) only. Gateway
+withdrawals stay open while paused (core 1494), so on a burn-rate breach the
+pause stops new inflow, not exits. The
 pauser is distinct from `ADMIN_ROLE`:
 it can pause but cannot unpause, matching the guardian/quorum separation in
 security-model.md §9. Unpause still requires `ADMIN_ROLE` through the

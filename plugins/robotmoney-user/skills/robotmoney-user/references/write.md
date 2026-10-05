@@ -154,9 +154,9 @@ rmpc withdraw --config <CONFIG> \
 ```
 
 Redeem vault shares through the gateway (agent-initiated redemption). Performs
-the same preflight discipline as `deposit` (chain id, code hash, gateway paused,
-agent policy) plus withdraw-specific checks: vault paused, vault share
-allowance(agent, gateway), and vault share balance.
+the same preflight discipline as `deposit` (chain id, code hash, agent policy)
+plus withdraw-specific checks: vault share allowance(agent, gateway) and vault
+share balance. A paused gateway or vault does not refuse a withdrawal.
 
 Required flags:
 
@@ -191,8 +191,9 @@ JSON on stdout including:
 ### Output (refusal / error)
 
 Non-zero exit, structured JSON on stdout, with a stable `error` field. Hard
-refusals include: `ErrVaultPaused`, `ErrShareAllowanceInsufficient`,
-`ErrShareBalanceInsufficient`, `ErrAgentNotAuthorized`, `ErrGatewayPaused`.
+refusals include: `ErrShareAllowanceInsufficient`,
+`ErrShareBalanceInsufficient`, `ErrAgentNotAuthorized`. A paused gateway or
+vault never refuses a withdrawal: a pause stops new deposits only.
 
 ---
 

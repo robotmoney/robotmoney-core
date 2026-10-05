@@ -194,9 +194,9 @@ Keeper/admin rebalance:
 
 Emergency controls:
 
-- `emergencyWithdraw()` pauses the vault and attempts to drain all
-  active adapters.
-- `emergencyWithdrawAdapter(index)` pauses the vault and attempts to
+- `emergencyWithdraw()` pauses deposits and attempts to drain all
+  active adapters. Withdrawals stay open (core 1494).
+- `emergencyWithdrawAdapter(index)` pauses deposits and attempts to
   drain one adapter.
 - `forceRemoveAdapter(index)` marks an adapter inactive without
   withdrawing. Assets left there are treated as lost.

@@ -22,7 +22,8 @@ rmpc get-agent   --config ./config.toml --agent 0xAGENT --pretty
 
 **Expected agent behavior:**
 
-- Confirm `paused == false` on both vault (if exposed) and gateway.
+- Confirm `paused == false` on both vault (if exposed) and gateway before a
+  deposit. A pause stops new deposits only; withdrawals stay open.
 - Confirm `agents[self].active == true` and `validUntil > now`.
 - Report remaining `maxPerWindow - agentWindowGross[self][windowId]` so the
   user knows the available capacity.
@@ -111,7 +112,8 @@ Returns non-zero exit and JSON error `{"code": "ErrGatewayPaused", ...}`.
 
 - Surface the refusal. Do not retry on a timer.
 - Note that pause is asymmetric: `PAUSER_ROLE` may have triggered it
-  unilaterally as a stop-the-world tool, and only `ADMIN_ROLE` can unpause.
+  unilaterally, and only `ADMIN_ROLE` can unpause. A pause stops new deposits
+  only, so `rmpc withdraw` still works while the gateway is paused.
 
 ---
 

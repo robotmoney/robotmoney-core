@@ -21,7 +21,7 @@ Before signing any deposit transaction, the client RPC-reads:
 
 | Condition | Error code | Meaning |
 |---|---|---|
-| `gateway.paused() == true` | `ErrGatewayPaused` | Operations are halted by `PAUSER_ROLE`; only `ADMIN_ROLE` can unpause. |
+| `gateway.paused() == true` | `ErrGatewayPaused` | New deposits are halted by `PAUSER_ROLE`; only `ADMIN_ROLE` can unpause. Deposits only: a paused gateway still withdraws. |
 | Agent record missing or `active == false` | `ErrAgentNotAuthorized` | This address is not (or no longer) an authorized agent. |
 | `validUntil < block.timestamp` | `ErrAgentExpired` | The authorization has expired; ADMIN must re-authorize. |
 | `amount > maxPerPayment` | `ErrPerPaymentCapExceeded` | Operator-set per-payment cap. |
