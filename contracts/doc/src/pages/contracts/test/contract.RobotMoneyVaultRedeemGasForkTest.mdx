@@ -4,23 +4,19 @@ title: "RobotMoneyVaultRedeemGasForkTest"
 
 # RobotMoneyVaultRedeemGasForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RobotMoneyVaultRedeemGas.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ff779339cf5b6e69f5be1d75f08dd6c9d091c8e0/contracts/test/RobotMoneyVaultRedeemGas.t.sol)
 
 **Inherits:** Test
 
 <i>
 
 Fork suite. Skipped without FORK_RPC_URL. Not part of the fast unit run.
+Clean room: the test deploys its OWN vault through the real DeployVault stage script
+(real adapters, real seed) on the Twin chain and never reads a production v1 vault.
 
 </i>
 
 ## Constants
-
-### RM_USDC
-
-```solidity
-address internal constant RM_USDC = 0x4f835c9F54BcF17daf9040F60Cb72951Ccbb49dD;
-```
 
 ### USDC_BASE
 
@@ -40,6 +36,18 @@ RobotMoneyVault internal vault;
 
 ```solidity
 address internal user = makeAddr("gasUser");
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("gasAdmin");
+```
+
+### seedReceiver
+
+```solidity
+address internal seedReceiver = makeAddr("gasSeedReceiver");
 ```
 
 ## Functions
