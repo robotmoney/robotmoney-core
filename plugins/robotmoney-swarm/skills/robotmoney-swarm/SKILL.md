@@ -40,8 +40,8 @@ Invoke this skill when:
 Do **not** invoke this skill when:
 
 - The operator only wants to read the regime (use `robotmoney-analyst` instead).
-- The operator wants to submit a RouterGovernance vote (the `vote`
-  command on the analyst skill covers that flow; proposals are signed by the Safe, not rmpc).
+- The operator wants to submit a RouterGovernance proposal (`propose` or `vote`
+  commands on the analyst skill cover that flow).
 - `ic_contract_address` is absent from the rmpc config — surface the
   `MissingICConfig` error instead.
 
@@ -173,5 +173,5 @@ All abort paths exit non-zero and print a named error code to stderr.
 - Proprietary allocation methods (the published surface specifies output shape only)
 - IC policy contract or gateway changes
 - Explorer or dapp surfaces
-- Registering committee agents (an ADMIN_ROLE Safe action; rmpc has no `committee register`)
-- RouterGovernance proposals (signed by the Safe, not rmpc) and votes (robotmoney-analyst `vote`)
+- `rmpc committee register` (one-time setup, not part of the vote flow)
+- RouterGovernance proposals (covered by robotmoney-analyst `propose`/`vote`)
