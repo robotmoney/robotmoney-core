@@ -99,11 +99,13 @@ function* walk(dir: string): Generator<string> {
     else yield p;
   }
 }
+// Files that hold the retired names on purpose, as a deny-list they assert the absence of.
+const DENYLISTS = new Set(["scripts/devnet/check-twin-chain-ci-selftest.ts"]);
 function grepTree(re: RegExp): string[] {
   const hits: string[] = [];
   for (const d of [".github", "scripts", "docs"]) {
     for (const f of walk(d)) {
-      if (f === SELF) continue;
+      if (f === SELF || DENYLISTS.has(f)) continue;
       let text: string;
       try { text = readFileSync(f, "utf8"); } catch { continue; }
       text.split("\n").forEach((l, i) => { if (re.test(l)) hits.push(`${f}:${i + 1}:${l.trim().slice(0, 120)}`); });
