@@ -76,11 +76,16 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Write a minimal rmpc.toml that points at `rpc_url`, with `chain_id`
-/// = Base, vault = the deployed Robot Money vault, and a
+/// = Base, vault = the vault this test deployed itself, and a
 /// throwaway gateway address (the gateway is not deployed on Base; the
 /// gateway-side sub-reads are expected to fail and be recorded as
 /// per-field errors in the `partial`/`errors` envelope).
-fn write_config(tmp: &tempfile::TempDir, rpc_url: &str, chain_id: u64) -> PathBuf {
+fn write_config(
+    tmp: &tempfile::TempDir,
+    rpc_url: &str,
+    chain_id: u64,
+    vault: alloy_primitives::Address,
+) -> PathBuf {
     // The read commands don't load the signer, but Config::from_path
     // requires a parseable [signer] block. The keystore file is
     // referenced but never read, so we just point at a non-existent
@@ -102,7 +107,7 @@ keystore_path           = "{ks}"
 "#,
         chain_id = chain_id,
         usdc = addresses::USDC,
-        vault = addresses::VAULT,
+        vault = vault,
         zeros = "0".repeat(64),
         ks = keystore.display(),
     );
@@ -150,12 +155,9 @@ fn run_rmpc(cfg: &Path, args: &[&str], chain_id: u64) -> Value {
     v
 }
 
-// This test reads the live production v1 vault (`addresses::VAULT`) on the Twin chain. The clean
-// room rule (core 1498) says no test reads that vault: every test deploys its own vault through the
-// deploy scripts and reads its address from the manifests. It stays `#[ignore]`d until it is
-// rewritten that way (symbol, name and decimals of a vault the test deployed itself).
+// Clean room rule (core 1498): this test deploys its own vault through the vault stage script
+// (`fx.vault()`) and reads symbol, asset and decimals of that vault.
 #[test]
-#[ignore = "reads the live production v1 vault; rewrite to deploy its own vault (clean room rule, core 1498)"]
 fn rmpc_get_vault_fork_robotmoney_devnet() {
     skip_if_no_fork!();
     let fx = ForkFixture::new().expect("boot fork");
@@ -165,7 +167,7 @@ fn rmpc_get_vault_fork_robotmoney_devnet() {
     );
 
     let tmp = tempfile::TempDir::new().expect("tempdir");
-    let cfg = write_config(&tmp, &fx.rpc_url, fx.chain_id);
+    let cfg = write_config(&tmp, &fx.rpc_url, fx.chain_id, fx.vault());
 
     // ---- get-vault: happy path against the real Base vault. -------
     let v = run_rmpc(&cfg, &["get-vault"], fx.chain_id);
@@ -184,7 +186,7 @@ fn rmpc_get_vault_fork_robotmoney_devnet() {
     let d = &v["data"];
     assert_eq!(
         d["address"].as_str().unwrap().to_lowercase(),
-        format!("{:#x}", addresses::VAULT)
+        format!("{:#x}", fx.vault())
     );
     assert_eq!(
         d["asset"].as_str().unwrap().to_lowercase(),

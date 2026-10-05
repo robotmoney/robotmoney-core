@@ -29,8 +29,8 @@ pub fn vault_read_u256<C: SolCall>(
     caller: &Account<'_>,
     call: &C,
 ) -> Result<U256, HarnessError> {
-    let _ = fx; // future-proofing — caller already routes through the fixture's RPC
-    let bytes: Bytes = caller.call(crate::addresses::VAULT, call)?;
+    // The fixture's own vault, deployed through the stage script (clean room rule, core 1498).
+    let bytes: Bytes = caller.call(fx.deployed()?.vault, call)?;
     decode_u256(&bytes)
 }
 
@@ -113,16 +113,6 @@ pub fn approve_usdc_on(
     account.send(usdc_token, &call, U256::ZERO, 100_000)
 }
 
-/// Deposit USDC into the vault on behalf of `receiver`.
-pub fn vault_deposit(
-    account: &Account<'_>,
-    assets: U256,
-    receiver: Address,
-) -> Result<Receipt, HarnessError> {
-    let call = IRobotMoneyVault::depositCall { assets, receiver };
-    account.send(crate::addresses::VAULT, &call, U256::ZERO, 800_000)
-}
-
 pub fn vault_deposit_at(
     account: &Account<'_>,
     vault: Address,
@@ -133,21 +123,7 @@ pub fn vault_deposit_at(
     account.send(vault, &call, U256::ZERO, 5_000_000)
 }
 
-/// Redeem `shares` from the vault.
-pub fn vault_redeem(
-    account: &Account<'_>,
-    shares: U256,
-    receiver: Address,
-    owner: Address,
-) -> Result<Receipt, HarnessError> {
-    let call = IRobotMoneyVault::redeemCall {
-        shares,
-        receiver,
-        owner,
-    };
-    account.send(crate::addresses::VAULT, &call, U256::ZERO, 1_200_000)
-}
-
+/// Redeem `shares` from the vault at `vault`.
 pub fn vault_redeem_at(
     account: &Account<'_>,
     vault: Address,

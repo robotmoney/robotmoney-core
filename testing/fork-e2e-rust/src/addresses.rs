@@ -2,40 +2,24 @@
 //! deployed addresses) and docs/technical/fork-e2e-decisions.md §3.1
 //! (chain target = Base).
 //!
-//! Hard-coded contract addresses for the Phase 2 fork harness.
-//! Every address here is verified against the source of truth in
-//! `docs/technical/smart-contracts.md`. The `address_set_hash`
-//! helper lets the harness print a stable digest of the full
-//! address set so accidental drift is loud (see ADR §3.2).
+//! Third-party contract addresses (USDC, venues, DEX, pools, tokens) for the fork harness. This is
+//! the one place the harness names an address, and none is a Robot Money contract: the clean room
+//! rule (core 1498) says every test deploys its own vault through the deploy scripts and reads its
+//! address from the manifests (see `crate::deployed`). `scripts/deploy/third-party-addresses.json`
+//! lists the same set for config-check and docs. The `address_set_hash` helper prints a stable
+//! digest of the set so accidental drift is loud (see ADR §3.2).
 
 use alloy_primitives::{address, keccak256, Address, B256};
 
-/// `RobotMoneyVault` (ERC-4626) — canonical Robot Money product
-/// vault on Base. asset = USDC, share token symbol =
-/// rmUSDC.
-pub const VAULT: Address = address!("4f835c9f54bcf17daf9040f60cb72951ccbb49dd");
-
 /// USDC on Base (Circle's native USDC).
 pub const USDC: Address = address!("833589fcd6edb6e08f4c7c32d4f71b54bda02913");
-
-/// Morpho strategy adapter registered with [`VAULT`].
-pub const MORPHO_ADAPTER: Address = address!("a6ed7b03bc82d7c6d4ac4feb971a06550a7817e9");
-
-/// Aave V3 strategy adapter registered with [`VAULT`].
-pub const AAVE_V3_ADAPTER: Address = address!("218695bdab0fe4f8d0a8ee590bc6f35820fc0bea");
-
-/// Compound V3 strategy adapter registered with [`VAULT`].
-pub const COMPOUND_V3_ADAPTER: Address = address!("8247da22a59fce074c102431048d0ce7294c2652");
-
-/// Admin / fee-recipient Safe multisig.
-pub const ADMIN_SAFE: Address = address!("88ba7364cc6ce5054981d571b33f8fb3e91475a0");
 
 // -- Protocol-level contract addresses (Base) -----------------
 // These are the underlying protocol contracts that the Robot Money
 // strategy adapters delegate to. Used by Deploy.s.sol when deploying
 // fresh adapter instances against a new vault (e.g. smoke-test devnet).
 
-/// Aave V3 Pool on Base. Used by [`AAVE_V3_ADAPTER`] and by
+/// Aave V3 Pool on Base. Used by
 /// Deploy.s.sol to construct new AaveV3Adapter instances.
 pub const AAVE_V3_POOL: Address = address!("a238dd80c259a72e81d7e4664a9801593f98d1c5");
 
@@ -44,13 +28,13 @@ pub const AAVE_V3_POOL: Address = address!("a238dd80c259a72e81d7e4664a9801593f98
 pub const AAVE_V3_A_TOKEN: Address = address!("4e65fe4dba92790696d040ac24aa414708f5c0ab");
 
 /// Moonwell Flagship USDC (mwUSDC) ERC-4626 Morpho vault on Base. `name()` reads
-/// "Moonwell Flagship USDC" on chain. The underlying yield venue for [`MORPHO_ADAPTER`]
-/// and newly deployed MorphoAdapter instances. Core S3 renamed this from the old
+/// "Moonwell Flagship USDC" on chain. The underlying yield venue for newly deployed
+/// MorphoAdapter instances. Core S3 renamed this from the old
 /// Gauntlet-prime name: the address was never Gauntlet.
 pub const MOONWELL_FLAGSHIP_USDC: Address = address!("c1256ae5ff1cf2719d4937adb3bbccab2e00a2ca");
 
-/// Compound V3 (Comet) USDC market on Base. The underlying venue for
-/// [`COMPOUND_V3_ADAPTER`] and newly deployed CompoundV3Adapter instances.
+/// Compound V3 (Comet) USDC market on Base. The underlying venue for newly
+/// deployed CompoundV3Adapter instances.
 /// Verified against `cast call <compound-adapter> "COMET()(address)"` on Base.
 pub const COMPOUND_V3_COMET: Address = address!("b125e6687d4313864e53df431d5425969c15eb2f");
 
@@ -121,29 +105,9 @@ pub const BASKET_AGENT_POOL_JUNO: Address = address!("6f320f066d41e8896da5baee73
 /// Uniswap V3 pool fee tier for the JUNO/USDC pool (10000 = 1%).
 pub const BASKET_AGENT_POOL_JUNO_FEE: u32 = 10_000;
 
-/// All Robot Money contract addresses in canonical order. Used to
-/// derive the address-set hash that scenarios print at the top of
-/// their output (ADR §3.2).
-pub const ROBOTMONEY_ADDRESSES: &[Address] = &[
-    VAULT,
-    MORPHO_ADAPTER,
-    AAVE_V3_ADAPTER,
-    COMPOUND_V3_ADAPTER,
-    ADMIN_SAFE,
-];
-
-/// Re-export the ROBOTMONEY_ADDRESSES list together with USDC and
-/// WETH9 — the full surface tested by the harness.
-pub const BASE_ADDRESSES: &[Address] = &[
-    VAULT,
-    MORPHO_ADAPTER,
-    AAVE_V3_ADAPTER,
-    COMPOUND_V3_ADAPTER,
-    ADMIN_SAFE,
-    USDC,
-    WETH9,
-    UNISWAP_V3_SWAP_ROUTER,
-];
+/// Third-party addresses the harness checks for deployed code: USDC, WETH9 and the Uniswap
+/// router. Venue and pool addresses are checked by the tests that use them.
+pub const BASE_ADDRESSES: &[Address] = &[USDC, WETH9, UNISWAP_V3_SWAP_ROUTER];
 
 /// keccak256 of all addresses in [`BASE_ADDRESSES`] concatenated in
 /// declaration order. Stable so a single tampered address fails

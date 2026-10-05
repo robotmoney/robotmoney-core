@@ -12,7 +12,7 @@
 //! a 2x regression, not a 10% drift.
 
 use alloy_primitives::U256;
-use rmpc_fork_e2e::{addresses, scenarios, skip_if_no_devnet_fork, ForkFixture};
+use rmpc_fork_e2e::{scenarios, skip_if_no_devnet_fork, ForkFixture};
 
 const DEPOSIT_USDC: u64 = 50_000_000;
 
@@ -39,14 +39,15 @@ fn gas_estimate_reality_check() {
         .ephemeral(one_eth * U256::from(5u64), amount)
         .expect("fund ephemeral");
 
-    let approve_r = scenarios::approve_usdc(&user, addresses::VAULT, amount).expect("approve");
+    let approve_r = scenarios::approve_usdc(&user, fx.vault(), amount).expect("approve");
     assert!(
         approve_r.gas_used <= MAX_GAS_APPROVE,
         "approve gasUsed {} exceeded budget {MAX_GAS_APPROVE}",
         approve_r.gas_used
     );
 
-    let dep_r = scenarios::vault_deposit(&user, amount, user.address).expect("deposit");
+    let dep_r =
+        scenarios::vault_deposit_at(&user, fx.vault(), amount, user.address).expect("deposit");
     assert!(
         dep_r.gas_used <= MAX_GAS_DEPOSIT,
         "deposit gasUsed {} exceeded budget {MAX_GAS_DEPOSIT}",
@@ -75,7 +76,8 @@ fn gas_estimate_reality_check() {
         shares
     };
     let red_r =
-        scenarios::vault_redeem(&user, redeem_amt, user.address, user.address).expect("redeem");
+        scenarios::vault_redeem_at(&user, fx.vault(), redeem_amt, user.address, user.address)
+            .expect("redeem");
     assert!(
         red_r.gas_used <= MAX_GAS_REDEEM,
         "redeem gasUsed {} exceeded budget {MAX_GAS_REDEEM}",

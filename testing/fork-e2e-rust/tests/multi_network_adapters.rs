@@ -252,7 +252,8 @@ fn exercise_aave(fx: &ForkFixture, network: Network) -> Result<(), HarnessError>
 /// network (testnet vault deploy is a prerequisite, out of scope for #839).
 fn exercise_vault_adapter_stack(fx: &ForkFixture, network: Network) -> Result<(), HarnessError> {
     let vault = match network {
-        Network::RobotMoneyDevnet => Some(rmpc_fork_e2e::addresses::VAULT),
+        // Clean room rule (core 1498): the vault this test deploys itself through the vault stage.
+        Network::RobotMoneyDevnet => Some(fx.deployed()?.vault),
         Network::BaseTestnet => base_testnet_addresses::robotmoney_vault(),
     };
     let Some(vault) = vault else {

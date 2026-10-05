@@ -54,6 +54,8 @@ pub mod base_testnet;
 /// Mirror of [`addresses`] for the parameterized multi-network e2e tests
 /// (issue #839).
 pub mod base_testnet_addresses;
+/// The vault a test deploys for itself through the stage scripts (clean room rule, core 1498).
+pub mod deployed;
 pub mod scenarios;
 
 // -- Deployed addresses module is re-exported for ergonomic use ----
@@ -320,6 +322,9 @@ pub struct ForkFixture {
     /// Captured tx hashes for output; kept under a Mutex so
     /// scenarios can append from any helper.
     tx_hashes: Mutex<Vec<B256>>,
+    /// This fixture's own vault, deployed on first use through the vault stage (or read from the
+    /// publish contracts manifest). Never a production address.
+    deployed: std::sync::OnceLock<Result<deployed::DeployedVault, String>>,
 }
 
 impl ForkFixture {
@@ -398,6 +403,7 @@ impl ForkFixture {
             chain_id: BASE_CHAIN_ID,
             rpc,
             tx_hashes: Mutex::new(Vec::new()),
+            deployed: std::sync::OnceLock::new(),
         })
     }
 
@@ -468,6 +474,7 @@ impl ForkFixture {
             chain_id,
             rpc,
             tx_hashes: Mutex::new(Vec::new()),
+            deployed: std::sync::OnceLock::new(),
         })
     }
 
@@ -597,6 +604,20 @@ impl ForkFixture {
             self.rpc_label,
             hex::encode(h)
         )
+    }
+
+    /// The vault this fixture's tests run against: deployed through the real vault stage on first
+    /// call (or read from `RMPC_DEPLOY_MANIFEST`), then cached. Clean room rule (core 1498).
+    pub fn deployed(&self) -> Result<&deployed::DeployedVault, HarnessError> {
+        self.deployed
+            .get_or_init(|| deployed::resolve(self).map_err(|e| e.to_string()))
+            .as_ref()
+            .map_err(|e| HarnessError::Rpc(e.clone()))
+    }
+
+    /// Address of this fixture's own vault. Panics with the deploy error when the stage fails.
+    pub fn vault(&self) -> Address {
+        self.deployed().expect("deploy own vault").vault
     }
 
     /// Top up `addr` with `amount` USDC by writing directly to the
