@@ -5,7 +5,7 @@ description: >-
   their addresses, gas and USDC for the deployer (Twin environment steps), then the publish run (libs through
   the timelock handover and the real Safe). Exports TWIN_MANIFEST_DIR (the stage manifests),
   TWIN_DEPLOYER_ADDRESS and, with verify, TWIN_VERIFY_LABELS. No secret reaches a file in the repo, an argument or a log: the passphrase is a random
-  0600 file in RUNNER_TEMP. Never use this against Base mainnet.
+  0600 file in a 0700 directory under /tmp. Never use this against Base mainnet.
 inputs:
   rpc-url:
     description: "The Twin chain RPC."
@@ -36,9 +36,8 @@ runs:
       run: |
         set -euo pipefail
         core="$GITHUB_WORKSPACE"
-        rh="$RUNNER_TEMP/twin-publish"
-        rm -rf "$rh"
-        mkdir -m 700 "$rh"
+        # Under /tmp: foundry.toml fs_permissions lets the deploy scripts write their manifests there only.
+        rh="$(mktemp -d /tmp/twin-publish.XXXXXX)"
         mkdir "$rh/manifests" "$rh/counts"
         # A random passphrase in a 0600 file. It is never an argument or an exported variable.
         (umask 077; head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$rh/passphrase")
