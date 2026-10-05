@@ -15,18 +15,17 @@ import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
 
 /// @notice Fork regression for rmRWA. The real `DeployRwaBasketVault` script runs against the real
-///         deSPXA fee 500 pool, real SwapRouter02 and real USDC at Base block 52082423. A deposit
+///         deSPXA fee 500 pool, real SwapRouter02 and real USDC on the Twin chain pin. A deposit
 ///         buys real deSPXA. NAV (`totalAssets`) must equal the idle USDC plus the pool TWAP value
 ///         of the held deSPXA, and must sit within the vault slippage bound of the deposit.
 ///
-///         Run through scripts/devnet/run-golden-forge-forks.sh (pinned fixture) or with
-///         FORK_RPC_URL pointing at an archive node. It never silent-skips: `setUp` reverts
-///         when no fork resolves.
+///         Runs on the Twin chain (a pinned lazy anvil fork of real Base state): start it
+///         with scripts/devnet/twin-fork.ts and set FORK_RPC_URL to its URL. With FORK_RPC_URL
+///         unset the test skips with a named reason.
 contract RwaBasketVaultFork is Test {
     using stdJson for string;
 
     address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-    uint256 internal constant FORK_BLOCK = 52082423;
     uint256 internal constant DEPOSIT = 1_000 * 1e6;
     /// @dev Same tolerance the other basket vault tests use: the vault slippage bound (100 bps)
     ///      plus the pool fee (5 bps) between spot execution and the TWAP.
@@ -40,12 +39,8 @@ contract RwaBasketVaultFork is Test {
     string internal cfg;
 
     function setUp() public {
-        string memory rpc = vm.envOr("FORK_RPC_URL", string("http://127.0.0.1:8545"));
+        string memory rpc = vm.envOr("FORK_RPC_URL", string(""));
         if (!ForkSelect.selectOrSkip(rpc)) return;
-        // The pinned fixture is already at the pinned block. A live fork selects it explicitly.
-        if (bytes(vm.envOr("FORK_RPC_URL", string(""))).length != 0) {
-            vm.rollFork(FORK_BLOCK);
-        }
 
         cfg = vm.readFile("config/rwa-assets.json");
         VaultRegistry registry = new VaultRegistry(admin);

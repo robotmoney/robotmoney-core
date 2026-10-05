@@ -10,12 +10,11 @@ import {ForkSelect} from "./helpers/ForkSelect.sol";
 
 /// @notice Fork regression: the stack the split stages build takes a router deposit and a router
 ///         withdraw through the gateway against the real Base venues and real USDC. It is the
-///         in-process twin of scripts/deploy/assert-core-router.ts. Run through
-///         scripts/devnet/run-golden-forge-forks.sh (pinned fixture) or with FORK_RPC_URL set to
-///         an archive node. `setUp` reverts when no fork resolves, so it never silent-skips.
+///         in-process twin of scripts/deploy/assert-core-router.ts. It runs on the Twin chain
+///         (a pinned lazy anvil fork of real Base state): start it with scripts/devnet/twin-fork.ts
+///         and set FORK_RPC_URL to its URL. With FORK_RPC_URL unset the test skips with a named reason.
 contract CoreStagesFork is Test {
     address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-    uint256 internal constant FORK_BLOCK = 52082423;
 
     address internal admin = makeAddr("admin");
     address internal pauser = makeAddr("pauser");
@@ -26,9 +25,8 @@ contract CoreStagesFork is Test {
     CoreStages.Stack internal s;
 
     function setUp() public {
-        string memory rpc = vm.envOr("FORK_RPC_URL", string("http://127.0.0.1:8545"));
+        string memory rpc = vm.envOr("FORK_RPC_URL", string(""));
         if (!ForkSelect.selectOrSkip(rpc)) return;
-        if (bytes(vm.envOr("FORK_RPC_URL", string(""))).length != 0) vm.rollFork(FORK_BLOCK);
         stages = new CoreStages();
         s = stages.run(admin, pauser, agent, shareReceiver, BASE_USDC);
     }

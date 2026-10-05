@@ -98,11 +98,11 @@ interface ISafeProxyFactory {
 ///         `SafeProxyFactory` enforces quorum for all ADMIN_ROLE operations on the five
 ///         governed Robot Money contracts.
 ///
-/// @dev CI starts Anvil from the checked-in Base fixture at localhost:8545. A
-///      live fork remains available locally through `FORK_RPC_URL`.
+/// @dev CI runs this on the Twin chain (a pinned lazy anvil fork of real Base state).
+///      Locally, start it and point FORK_RPC_URL at it. Unset, the test skips with a named reason.
 ///
 ///      To run locally:
-///        FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<key> \
+///        bun scripts/devnet/twin-fork.ts start && FORK_RPC_URL=http://127.0.0.1:8545 \
 ///          forge test --match-contract SafeIntegration -vvv
 ///
 /// @dev Safe deployment approach:
@@ -110,8 +110,7 @@ interface ISafeProxyFactory {
 ///      factory (0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67) with the canonical
 ///      `SafeL2` singleton (0x29fcB43b46531BcA003ddC8FCB67FFE91900C762). Base is an L2,
 ///      so `SafeL2` is the singleton production uses (governance-isomorphism.md §2.2, R4).
-///      The golden fixture carries it because snapshot-fork.ts warms the whole Safe set
-///      and check-fork-safe-set.sh refuses a fixture without it (R2, R3).
+///      The Twin chain carries it because it is real Base state (R2, R3).
 ///      This proves the quorum is enforced by actual Safe contract code, not vm.prank.
 ///
 /// @dev EIP-712 signing:
@@ -198,13 +197,13 @@ contract SafeIntegrationTest is Test {
 
     // ─── Set-up ────────────────────────────────────────────────────────────────
 
-    /// @dev Select an override URL or the offline golden-fixture RPC.
+    /// @dev Select the Twin chain named by FORK_RPC_URL, or skip.
     function _trySelectFork() internal returns (bool) {
         string memory rpc;
         try vm.envString("FORK_RPC_URL") returns (string memory s) {
             if (bytes(s).length > 0) rpc = s;
         } catch {}
-        if (bytes(rpc).length == 0) rpc = "http://127.0.0.1:8545";
+
         return ForkSelect.selectOrSkip(rpc);
     }
 

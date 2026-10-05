@@ -45,9 +45,9 @@ import {ForkSelect} from "./helpers/ForkSelect.sol";
 ///         runs (issue #1447): a SafeProxy created through the canonical
 ///         SafeProxyFactory on the canonical SafeL2 singleton, 2-of-3, driven
 ///         by `execTransaction` with two owner signatures. Those contracts
-///         exist only on a Base fork, so CI runs this file through
-///         scripts/devnet/run-golden-forge-forks.sh against the golden
-///         fixture, like SafeIntegration.t.sol.
+///         exist only on a Base fork, so CI runs this file with
+///         FORK_RPC_URL set to the Twin chain (a pinned lazy fork of real Base), like
+///         SafeIntegration.t.sol. Unset, it skips with a named reason.
 contract GovernanceExecutePathAfterHandoverTest is Test {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
@@ -108,7 +108,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     uint256 internal constant MIN_DELAY = 2 days;
 
     function setUp() public {
-        string memory rpc = vm.envOr("FORK_RPC_URL", string("http://127.0.0.1:8545"));
+        string memory rpc = vm.envOr("FORK_RPC_URL", string(""));
         if (!ForkSelect.selectOrSkip(rpc)) return;
 
         timelockScript = new DeployTimelock();

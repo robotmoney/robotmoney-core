@@ -18,14 +18,14 @@ import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 ///           - vault.totalSupply() > 0
 ///         before any simulated public deposit.
 ///
-/// @dev CI boots the checked-in Base golden fixture at localhost:8545. A local
-///      live fork remains possible by overriding `FORK_RPC_URL`.
+/// @dev CI runs this on the Twin chain (a pinned lazy anvil fork of real Base state) named by
+///      `FORK_RPC_URL`. Unset, the tests skip with a named reason.
 ///
 ///      To run locally:
-///        FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<key> \
-///          forge test --match-contract DeploySeedDeposit --fork-url $FORK_RPC_URL -vvv
+///        bun scripts/devnet/twin-fork.ts start && FORK_RPC_URL=http://127.0.0.1:8545 \
+///          forge test --match-contract DeploySeedDeposit -vvv
 ///
-///      CI uses `CURRENT.anvil-state`; no live RPC secret is involved.
+///      No secret is needed: the upstream is the public Base endpoint unless BASE_UPSTREAM_RPC is set.
 ///
 /// See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
 contract DeploySeedDeposit is Test {
@@ -45,12 +45,12 @@ contract DeploySeedDeposit is Test {
 
     // ─── Fork helpers ──────────────────────────────────────────────────────────
 
-    /// @dev Use an explicit local override, otherwise the offline fixture RPC.
+    /// @dev Use the Twin chain named by FORK_RPC_URL, or skip.
     function _forkRpcUrl() internal view returns (string memory) {
         try vm.envString("FORK_RPC_URL") returns (string memory s) {
             if (bytes(s).length > 0) return s;
         } catch {}
-        return "http://127.0.0.1:8545";
+        return "";
     }
 
     /// @dev Create and select a Base mainnet fork.

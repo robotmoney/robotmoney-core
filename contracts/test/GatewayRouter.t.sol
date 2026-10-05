@@ -2749,8 +2749,9 @@ contract GatewayRouterSplitStagesTest is Test {
 ///         real Base state, then routes a deposit and a withdraw through the gateway that the
 ///         gateway stage built. Before core S3 the gateway held a zero router, so both calls
 ///         reverted (`InvalidDestination`, `RouterNotConfigured`). Real USDC and the real
-///         Aave, Compound and Moonwell venues are needed, so this test runs on the Base
-///         golden fixture the other fork tests use. `FORK_RPC_URL` overrides the fixture RPC.
+///         Aave, Compound and Moonwell venues are needed, so this test runs on the Twin
+///         chain (pinned lazy fork of real Base) the other fork tests use. `FORK_RPC_URL` names it;
+///         unset, the test skips with a named reason.
 contract GatewayRouterSplitStagesForkTest is Test {
     address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
     uint256 internal constant ONE_USDC = 1e6;
@@ -2764,7 +2765,7 @@ contract GatewayRouterSplitStagesForkTest is Test {
         try vm.envString("FORK_RPC_URL") returns (string memory s) {
             if (bytes(s).length > 0) return s;
         } catch {}
-        return "http://127.0.0.1:8545";
+        return "";
     }
 
     function test_fork_splitStages_routerDepositThenWithdraw_succeed() public {

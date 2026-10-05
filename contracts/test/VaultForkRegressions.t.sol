@@ -18,14 +18,14 @@ import {ForkSelect} from "./helpers/ForkSelect.sol";
 /// @title VaultForkRegressions
 /// @notice Fork-level regression suite for vault accounting attack paths.
 ///
-/// @dev CI boots the checked-in Base golden fixture at localhost:8545. A local
-///      live fork remains possible by overriding `FORK_RPC_URL`.
+/// @dev CI runs this on the Twin chain (a pinned lazy anvil fork of real Base state) named by
+///      `FORK_RPC_URL`. Unset, the tests skip with a named reason.
 ///
 ///      To run locally:
-///        FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<key> \
+///        bun scripts/devnet/twin-fork.ts start && FORK_RPC_URL=http://127.0.0.1:8545 \
 ///          forge test --match-path "contracts/test/VaultForkRegressions.t.sol" -vvv
 ///
-///      CI uses `CURRENT.anvil-state`; no live RPC secret is involved.
+///      No secret is needed: the upstream is the public Base endpoint unless BASE_UPSTREAM_RPC is set.
 ///
 /// Attack paths covered (per issue #209 acceptance criteria):
 ///   AC1  Aave adapter donation cannot make a victim deposit mint zero/unfair shares.
@@ -72,15 +72,15 @@ contract VaultForkRegressions is Test {
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
-    /// @dev Use an explicit local override, otherwise the offline fixture RPC.
+    /// @dev Use the Twin chain named by FORK_RPC_URL, or skip.
     function _forkRpcUrl() internal view returns (string memory url) {
         try vm.envString("FORK_RPC_URL") returns (string memory s) {
             if (bytes(s).length > 0) return s;
         } catch {}
-        return "http://127.0.0.1:8545";
+        return "";
     }
 
-    /// @dev Select the already-running offline golden-fixture RPC.
+    /// @dev Select the Twin chain.
     function _trySelectFork() internal returns (bool selected) {
         string memory rpc = _forkRpcUrl();
         return ForkSelect.selectOrSkip(rpc);
@@ -352,8 +352,8 @@ contract VaultForkRegressions is Test {
         // The idle 4 000 USDC is exact (set via deal), but the 15 000 supplied to
         // Aave is read back through the aToken's ray-math (rayDiv on supply,
         // rayMul on balanceOf), which rounds down by a few wei. That round-trip
-        // loss grows with the *live* Aave liquidity index: the pinned golden
-        // fixture saw <=1 wei, but live Base drifted to 2 wei and flapped this
+        // loss grows with the Aave liquidity index at the pin: an older
+        // pin saw <=1 wei, but a later Base state drifted to 2 wei and flapped this
         // test on live-fork runs (issue #1157). A small fixed dust
         // tolerance absorbs the benign Aave rounding while still catching a real
         // "idle not counted" regression — that would miss the whole 4 000e6 idle,
@@ -401,7 +401,7 @@ contract VaultForkRegressions is Test {
         // This was `depositAmt / 2 - 1` before #1391: pass 1 filled the adapter to
         // exactly its cap balance, Morpho's share conversion then reported one wei
         // LESS than was deployed, and pass 2 spent a whole second round of
-        // `MorphoAdapter.totalAssets()` (201,145 gas on the fork fixture) to place
+        // `MorphoAdapter.totalAssets()` (201,145 gas on the Twin fork) to place
         // that single wei. #1391 gates pass 2 on the cap headroom pass 1 observed,
         // scoring an allocated adapter at the amount deployed — an upper bound on
         // what a share-priced adapter reports back, so headroom is under-stated by
