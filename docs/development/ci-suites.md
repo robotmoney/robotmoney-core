@@ -123,7 +123,7 @@ The `fork-regressions` job (`forge-fork-vault-regressions`) runs the forge fork 
 - **Runner.** `bun scripts/devnet/forge-fork-tests.ts -- <forge args>` sets `FORK_RPC_URL` to `$TWIN_RPC_URL` and fails a run in which no test executed (skips do not count).
 - **Safe set.** `bun scripts/devnet/safe-set.ts` reads the canonical Safe v1.4.1 contracts from the chain and checks each code hash and the singleton lock (core 1447).
 - **Clean room.** Each test deploys its own contracts through the production deploy scripts. None reads the live production v1 vault.
-- **Required check.** `forge-fork-vault-regressions` is an optional entry in `scripts/ci/required-checks.json`: it depends on a public upstream that can rate limit, so a provider outage must not block a deploy sha.
+- **Deploy-gate entry.** `forge-fork-vault-regressions` is an optional entry in `scripts/ci/required-checks.json` (the deploy-sha gate list of `check-sha-green`): it depends on a public upstream that can rate limit, so a provider outage must not block a deploy sha.
 
 The offline unit tests (`bun test scripts/devnet`) run in the `unit` job: the Twin fork tool, the Safe set check against a stub chain and the runner's executed-test counter.
 
@@ -574,6 +574,10 @@ below is what keeps it from drifting into a dangling reference.
 10. `check_evidence_scripts.py --self-test` then `check_evidence_scripts.py` — sweeps every `.github/scripts/...` path named in `docs/**` or `.github/workflows/**` for two of the shapes catalogued in [false-green-shapes.md](./false-green-shapes.md) (issue #1235).
 11. `check_false_green_catalogue.py --self-test` then `check_false_green_catalogue.py` — asserts [false-green-shapes.md](./false-green-shapes.md) exists, every section carries its four required parts, and every workflow path and issue number it cites resolves (issue #1272).
 
+- `nightly-and-release-checks` — Bun gates that run on every PR: the nightly dispatch list self-test (`bun scripts/ci/check-nightly-dispatch-selftest.ts`), the Twin chain CI wiring self-test (`bun scripts/devnet/check-twin-chain-ci-selftest.ts`), and the core has no dependency on devops gate.
+
+**No devops dependency gate.** `bun scripts/ci/check-no-devops-dependency.ts` (unit test: `scripts/ci/check-no-devops-dependency.test.ts`, which plants each violation) fails when a core workflow, script, test or doc contains a checkout of the devops repository, the devops read token, the driver-directory variable or an import path into a devops checkout. The dependency direction is devops to core only: devops checks core out, core is public and checks nothing of devops out. The allowlist is in the script: the four files that name the strings to ban them (this gate, its test, the deleted-path gate and its test), a line that says devops checks core out, and an issue reference such as `robotmoney/devops issue 53` (history). The deleted-path gate (`deleted-stage-gate`, suite 28) bans the same strings in its own grep.
+
 **Steps — `schema-validators` job:**
 1. Checkout repository
 2. Install Python
@@ -849,7 +853,7 @@ invariant it restores.
 There is one deploy driver: the publish-contracts CLI (`bun publish-contracts/src/cli.ts`). The offline job runs `bun test scripts/deploy
 scripts/ci`: the stage table (libs, vault, registry, router, gateway, governance,
 ic, three basket vaults, timelock, read by the CLI from the repo root) and the manifest rules. It is red when zero tests
-pass. The `publish-contracts-tests` job typechecks and unit-tests the CLI package (stub forge and cast, no chain). The Twin chain job runs only
+pass. The `publish-contracts-tests` job runs in `publish-contracts/`: `bun install --frozen-lockfile`, `bun x tsc --noEmit`, then `bun test --timeout 60000`, and it is red when the pass count is zero (the stub forge and cast, no chain). It is listed in the deploy-gate list of `check-sha-green` and is not a branch protection rule. The Twin chain job runs only
 on `workflow_dispatch` with a Twin chain RPC URL: the `twin-publish` action makes throwaway keystores,
 merges the committed stage sheet (`deployments/twin-918453/stage-sheet.env`), funds the deployer and runs `publish`, then `verify`.
 The router, basket vault and timelock role proofs are labels of the one verifier. No key is passed in an argument.
@@ -861,7 +865,7 @@ The router, basket vault and timelock role proofs are labels of the one verifier
 
 `scripts/stage/core-stack.ts` (Bun TypeScript, called directly; the old `core-stack.sh` shim is deleted) is the boot, health, record and parity tool. It deploys and governs by calling publish contracts (`publish-contracts/` in this repo, Bun TypeScript) with the Twin chain argument list. Jobs:
 - `core-stack-selftest` — `bun test scripts/stage/tests/core-stack.test.ts` against a fake runner standing in for publish contracts: the exact argument list with the `keystore:PATH:PASSFILE` signer, a fresh keystore set per boot, exit-code passthrough, the four-manifest count, the govern row gate (tx hash and receipt status 1 on every row), the usage errors and the record contract with its schema drift guard. Executed-test floor held in the workflow.
-- `deleted-stage-gate` — `bun scripts/stage/check-deleted-stage-scripts.ts .` exits 0 only when the stage ceremony shell, the stage deploy script, the old core runner (`core-stages.ts`) and its assert scripts, the devops checkout action, the deploy workflow and the Rust harness deployment (forge script calls, demo seeding, faucet funding) and the `core-stack.sh` shim are absent and `core-stack.ts` holds no deploy or ceremony logic.
+- `deleted-stage-gate` — `bun scripts/stage/check-deleted-stage-scripts.ts .` exits 0 only when the stage ceremony shell, the stage deploy script, the old core runner (`core-stages.ts`) and its assert scripts, the devops checkout action, the devops read token, the driver-directory variable, the deploy workflow and the Rust harness deployment (forge script calls, demo seeding, faucet funding) and the `core-stack.sh` shim are absent and `core-stack.ts` holds no deploy or ceremony logic.
 - `stage-tooling-tests` — `bun test scripts/stage/tests`: the govern row parser, the sheet-diff allow-list (stage versus production sheet differ only in parameter lines), the label-diff (verifier labels on stage equal the mainnet set) and the gate.
 
 ---
@@ -1171,8 +1175,8 @@ cross-feature interactions actually land.
   Every branch that opens a PR into `dev` runs the full heavy battery before it
   can land.
 
-To make a heavy suite actually *block* a merge, add its check to the required
-status checks on `dev`'s branch-protection rule (a GitHub setting, not repo YAML).
+Branch protection is not used (a won't-fix owner decision), so no check blocks a merge by GitHub setting.
+The deploy gate is `check-sha-green` (below): it reads a deploy sha's check-runs before any approval.
 
 Structural conventions (kept by convention; a prior static tier-guard workflow
 that enforced them was removed as overkill):
@@ -1279,7 +1283,7 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 **File:** `.github/workflows/suite-29-nightly-twin-fork.yml` (issue 1496, nightly job (b); replaces the nightly fresh snapshot, `suite-29-nightly-fresh-snapshot.yml`).
 **Tier / triggers:** nightly (05:30 UTC) and `workflow_dispatch`. Never a merge gate.
 
-Every Twin chain run already pins the upstream head minus 2, so there is no snapshot to take, no genesis to build and no overlay to apply. This nightly runs every chain suite in ONE workflow run with ONE shared pin: a `pin` job chooses the block (`.github/actions/twin-pin`) and each suite (5, 7, 8, 10, 11b, 14) is called with `workflow_call` and `pin_block: ${{ needs.pin.outputs.block }}` and `secrets: inherit`. Each suite's own pin job hands that block through unchanged, then its chain jobs start their own Twin fork at it. Anvil's RPC cache is persisted per pin block. `secrets: inherit` hands the suites what they already use alone: `DEVOPS_READ_TOKEN`, the optional `BASE_UPSTREAM_RPC` (a paid upstream, never printed) and the `BASE_TESTNET_*` secrets of suite 5; the workflow itself references none, and no secret is required (`BASE_UPSTREAM_RPC` is optional). The `pin` job uploads `twin-pin` (the pin file: block, run id and time, never the upstream URL). The `results` job fails when the pin job or any suite did not succeed (failure, cancelled and skipped all count as not passing) and uploads `suite-results` (one JSON per suite, with the pin block).
+Every Twin chain run already pins the upstream head minus 2, so there is no snapshot to take, no genesis to build and no overlay to apply. This nightly runs every chain suite in ONE workflow run with ONE shared pin: a `pin` job chooses the block (`.github/actions/twin-pin`) and each suite (5, 7, 8, 10, 11b, 14) is called with `workflow_call` and `pin_block: ${{ needs.pin.outputs.block }}` and `secrets: inherit`. Each suite's own pin job hands that block through unchanged, then its chain jobs start their own Twin fork at it. Anvil's RPC cache is persisted per pin block. `secrets: inherit` hands the suites what they already use alone: the optional `BASE_UPSTREAM_RPC` (a paid upstream, never printed) and the `BASE_TESTNET_*` secrets of suite 5; the workflow itself references none, and no secret is required (`BASE_UPSTREAM_RPC` is optional). The `pin` job uploads `twin-pin` (the pin file: block, run id and time, never the upstream URL). The `results` job fails when the pin job or any suite did not succeed (failure, cancelled and skipped all count as not passing) and uploads `suite-results` (one JSON per suite, with the pin block).
 
 Suite 26 is not in this run: it targets the shared stage Twin fork (a service on the stage host) and needs `secrets.FUSION_RMPC_CONFIG`; it starts no fork per run.
 
@@ -1304,15 +1308,15 @@ bun scripts/ci/check-sha-green.ts <sha> [--repo owner/name] [--config path] [--a
 
 - Reads every check-run of the commit through `GET /repos/{repo}/commits/{sha}/check-runs?per_page=100` and follows `rel="next"` Link headers until none remain.
 - Token: `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token`. The token stays in memory.
-- Reads `scripts/ci/required-checks.json` (`version`, `required`, `optional`). An entry has either `name` (exact) or `prefix`.
+- Reads the deploy-gate list `scripts/ci/required-checks.json` (`version`, `required`, `optional`; the keys keep their names, the list gates a deploy sha and nothing else). An entry has either `name` (exact) or `prefix`.
 - Exit 0: every required name has at least one check-run and every run of it completed with `success`.
 - Exit 1: a required name failed, is missing, or is pending (`queued`, `in_progress`). The output names each one under `FAILING`, `MISSING` or `PENDING`. A name with both a failed and a successful run fails.
 - Exit 2: bad arguments, bad config or an API error.
 - Optional entries that are not green are printed as `optional (does not gate)` and never change the exit code.
 - An entry may carry `"class": "required-on-deploy-paths"` and a `paths` list. `smoke-test-twin-publish` (suite 14 `twin_publish`, the Twin chain publish) is that class: it runs on every push to `dev`, so a deploy sha always carries it, and on a pull request only when a path in the list changed. The list repeats the `changes` job filter of `suite-14-smoke-test.yml`; a unit test asserts every path appears in that workflow.
-- The initial required list is the set of jobs that run unconditionally on push to `dev` (no draft skip, no path filter, no matrix). Failing nightly jobs stay optional.
+- The initial deploy-gate list is the set of jobs that run unconditionally on push to `dev` (no draft skip, no path filter, no matrix). Failing nightly jobs stay optional.
 - Tests: `bun test scripts/ci/check-sha-green.test.ts`, run by the `check-sha-green-tests` job (suite 30), which fails when zero tests were collected. The same file asserts `dapp-lint-build` and `bun-audit` carry no skip condition and no `continue-on-error`.
 
-### Branch protection for the twin publish check (core 1488)
+### Branch protection (won't fix)
 
-`smoke-test-twin-publish` must be a required status check on `dev` in GitHub branch protection. That is a GitHub write only the repository owner can do: Settings, Branches, the `dev` rule, "Require status checks to pass", add `smoke-test-twin-publish`. The job is path-gated on pull requests. GitHub treats a skipped job as passing, so the requirement does not block a pull request that touches no deploy path. The `smoke-test-changes` job and the job itself must stay named exactly as they are, because the protection rule matches the check-run name. `scripts/ci/required-checks.json` records the same requirement for `check-sha-green` (class `required-on-deploy-paths`). Until the owner adds the protection rule, only `check-sha-green` enforces it, at deploy time.
+Branch protection is a won't-fix owner decision: no check is a GitHub status check that blocks a merge. `smoke-test-twin-publish` is path-gated on pull requests and runs on every push to `dev`, so a deploy sha always carries it. `scripts/ci/required-checks.json` lists it with class `required-on-deploy-paths` for `check-sha-green`, which enforces it at deploy time only. The `smoke-test-changes` job and the job itself keep their names, because `check-sha-green` matches the check-run name.

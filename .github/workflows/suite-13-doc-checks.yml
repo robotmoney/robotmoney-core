@@ -392,6 +392,13 @@ jobs:
       - name: Nightly dispatch list self-test (core 1495)
         run: bun scripts/ci/check-nightly-dispatch-selftest.ts
 
+      # Owner decision 2026-10-05: core never depends on devops (no devops checkout, no devops read token, no
+      # driver-directory variable, no import path into a devops checkout). The unit test plants each violation first.
+      - name: Core has no dependency on devops (self-test, then the gate)
+        run: |
+          bun test scripts/ci/check-no-devops-dependency.test.ts --timeout 60000
+          bun scripts/ci/check-no-devops-dependency.ts
+
       # Core 1496, 1498: the Twin chain CI wiring. The nightly calls suites 5, 7, 8, 10, 11b and 14 with
       # ONE pin from its pin job. Each suite has a pin input, a pin job and takes the pin in every
       # twin-fork step. Nothing still names the retired geth+lighthouse devnet, the genesis alloc, the

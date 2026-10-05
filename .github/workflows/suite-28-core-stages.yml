@@ -54,12 +54,12 @@ jobs:
       - uses: ./.github/actions/publish-contracts-setup
       - name: Typecheck
         working-directory: publish-contracts
-        run: bun run typecheck
+        run: bun x tsc --noEmit
       - name: Unit tests (stub forge and cast, no chain)
         working-directory: publish-contracts
         run: |
           set -euo pipefail
-          bun test --timeout 120000 2>&1 | tee ../publish-contracts-tests.log
+          bun test --timeout 60000 2>&1 | tee ../publish-contracts-tests.log
           grep -Eq '^ *[1-9][0-9]* pass' ../publish-contracts-tests.log || { echo "zero tests passed" >&2; exit 1; }
 
   core-stages-twin:

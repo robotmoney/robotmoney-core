@@ -22,6 +22,7 @@
     { "name": "deleted-stage-gate", "source": "suite-28-core-stack-selftest.yml" },
     { "name": "stage-tooling-tests", "source": "suite-28-core-stack-selftest.yml" },
     { "name": "core-stages-offline", "source": "suite-28-core-stages.yml" },
+    { "name": "publish-contracts-tests", "source": "suite-28-core-stages.yml" },
     { "name": "check-sha-green-tests", "source": "suite-30-check-sha-green.yml" },
     { "name": "config-check-live-base", "source": "config-check.yml" },
     {

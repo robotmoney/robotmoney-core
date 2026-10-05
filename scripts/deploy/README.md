@@ -62,3 +62,7 @@ Live checks: code at USDC, the factory and the router, each pool's fee, factory 
 ### USDC code-hash check
 
 USDC is one constant on every chain, so the check runs on every chain. The proxy code hash at the USDC address and the implementation code hash behind its FiatTokenProxy implementation slot must equal the values pinned in `config/usdc-hashes.json`. A mock token at the USDC address fails. A `null` pin is refused. Pin the two values once from Base mainnet with `--print-usdc-hashes`, review the diff, and commit. Re-pin only after an owner-approved USDC upgrade.
+
+## CI
+
+`suite-28-core-stages.yml` runs `bun test scripts/deploy scripts/ci` (this table against the real scripts) and the publish-contracts package tests. The Twin chain workflows call `bun publish-contracts/src/cli.ts publish` (through `.github/actions/twin-publish`) with `--chain 918453 --rpc $TWIN_RPC_URL`. The deleted-path gate (`bun scripts/stage/check-deleted-stage-scripts.ts .`) keeps the old runner and its assert scripts absent. `bun scripts/ci/check-no-devops-dependency.ts` keeps core free of any dependency on devops: devops checks core out, never the reverse.

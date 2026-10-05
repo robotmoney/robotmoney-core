@@ -58,6 +58,8 @@ const DOC_FORBIDDEN = FORBIDDEN_PATTERNS.filter((f) => f.re.test("deploy-contrac
 const SKIP_DIRS = new Set(["node_modules", "target", ".git", "dist", "lib", "out", "cache"]);
 /** Files whose job is to NAME the deleted paths (ban lists). They are not a second deployment path. */
 const SELF = new Set([
+  "scripts/ci/check-no-devops-dependency.ts",
+  "scripts/ci/check-no-devops-dependency.test.ts",
   "scripts/stage/check-deleted-stage-scripts.ts",
   "scripts/stage/tests/check-deleted-stage-scripts.test.ts",
   "scripts/ci/check-no-test-only-code.ts",

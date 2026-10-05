@@ -70,13 +70,13 @@ The test doubles in that test (stub forge and cast, a fake Safe API and timelock
 
 ## Stages (data from core's stage table)
 
-Core owns the stage table: `scripts/deploy/stage-table.json` (version 1) in the core checkout at `--core-sha` (see core `scripts/deploy/README.md`). `src/stage-table.ts` reads it from `--core-dir` at the start of every run. This repo keeps no forge script path, required env name, artifact name, library name or manifest name of its own (devops issues 64 and 66, option "core owns the table and publish contracts reads it"). Core's own runner reads the same file.
+The stage table is DATA: `scripts/deploy/stage-table.json` (version 1) at the repo root (see `scripts/deploy/README.md`). `src/stage-table.ts` reads it from the repo root at the start of every run (`--core-dir` only names a checkout elsewhere, such as the one devops makes). This package keeps no forge script path, required env name, artifact name, library name or manifest name of its own. There is no second runner: core's old runner is deleted.
 
 Order: safe (the real Safe, from `src/safe`), then the table's stages in table order (libs, vault, registry, router, gateway, governance, ic-policy, proto, agent, rwa, timelock), then verify and govern. `src/stages.ts` builds the rows from the table and adds only those three orchestration rows. A vault is a row, so one loop registers, hands over and verifies all four.
 
 What the table does not carry lives in ONE mapping module, `src/core-wiring.ts`: which sheet name feeds which env name (core's env name `TVL_CAP` is fed by the sheet name `VAULT_<KEY>_TVL_CAP`, with the vault key in it, and there is no unprefixed `VAULT_TVL_CAP`; `FEE_RECIPIENT` is `FEE_RECIPIENT_ADDRESS`, `SEED_SHARE_RECEIVER` is `SHARE_RECEIVER_ADDRESS`, `SWAP_ROUTER` is its own sheet name), which earlier manifest field feeds which env name (`REGISTRY_ADDRESS` is the registry stage manifest's `registry`, `VAULT_ADDRESSES` is the `vault` field of every table vault), and which manifest fields the verifier reads. Basket stages (rmPROTO, rmAGENT, rmRWA) get `--libraries <path>:<artifact>:<address>` for every library the table lists, the address read from the libs stage manifest under the table's `manifestKey`. The verifier checks each vault against the table's `vaults[].artifact` (rmRWA is `RwaBasketVault`, rmAGENT is `AgentTokenVault`), each library against `libraries[].artifact` and each core contract against `artifacts`.
 
-Core parity (`src/ci/core-parity.ts`, `tests/core-parity.test.ts`): reads the repo root and fails, naming the row, when a stage's script or contract is missing, a required env name is not read by that script, a manifest file is not written by it, a manifest field the tool reads is not serialized, or an artifact does not exist in core. `CORE_DIR` defaults to the core worktree `/drive2/home/lucas/robotmoney/impl-wt/core-contracts` in local runs. The `publish-contracts` job in `.github/workflows/ci.yml` checks core out at `vars.CORE_DEPLOY_SHA` into `core/` and runs the parity suite through `src/ci/require-tests.ts --suite parity`, which fails on zero tests. All other tests load the same table through `tests/preload.ts` (`bunfig.toml`).
+Core parity (`src/ci/core-parity.ts`, `tests/core-parity.test.ts`): reads the repo root and fails, naming the row, when a stage's script or contract is missing, a required env name is not read by that script, a manifest file is not written by it, a manifest field the tool reads is not serialized, or an artifact does not exist. It runs with every other test in `bun test` (the repo root is found by walking up, there is no `CORE_DIR` variable). The CI job `publish-contracts-tests` (`.github/workflows/suite-28-core-stages.yml`) runs `bun install --frozen-lockfile`, `bun x tsc --noEmit` and `bun test --timeout 60000` in this directory and fails when the pass count is zero. All tests load the same table through `tests/preload.ts` (`bunfig.toml`).
 
 Per stage: inputs, start nonce (must equal the summed frozen counts of earlier stages), simulate, dry-run count equals frozen count, confirmation, broadcast, broadcast count and nonce delta equal the frozen count (hard failure otherwise), manifest written. The run manifest `evidence/.../publish-run.json` keeps each stage's start nonce and count.
 
@@ -98,7 +98,33 @@ Per stage: inputs, start nonce (must equal the summed frozen counts of earlier s
 
 ## Devops-owned files
 
-This package lives in core and imports nothing from devops. The sheet templates, the verifier-label fixture, the CI workflows that call this CLI and the credential tooling stay in devops, which checks core out. Devops supplies the `--correlated-owners-file` from its credential tool. The tests here use copies of the example sheet and the verifier labels under `tests/fixtures/`.
+This package lives in core and imports nothing from devops. Core has no checkout of devops, no devops read token and no path variable that points at a devops checkout (`scripts/ci/check-no-devops-dependency.ts` fails on each). The sheet templates, the verifier-label fixture, the CI workflows that call this CLI and the credential tooling stay in devops, which checks core out. Devops supplies the `--correlated-owners-file` from its credential tool. The tests here use copies of the example sheet and the verifier labels under `tests/fixtures/`.
+
+## CLI contract
+
+```
+bun publish-contracts/src/cli.ts [VERB] --chain N --rpc URL --sheet FILE --signer SPEC --environment NAME --core-sha SHA [flags]
+```
+
+**Verbs** (the optional first word; a verb and `--stage` are never combined, usage error 2):
+
+| Verb | Runs | Resume |
+|---|---|---|
+| `publish` | the Safe, then every table stage through the timelock handover | no (refuses a stage whose manifest exists) |
+| `verify` | the one verifier (labels) | implied |
+| `govern` | stage 13: one 48-hour round per step | implied |
+| none | `--stage` decides (default: everything through verify) | `--resume` |
+
+**Flags.** The full list with meanings is in the table under Run it. Required on every run: `--chain` (8453 or 918453, equal to `cast chain-id` of the RPC), `--rpc`, `--sheet`, `--core-sha` (alias `--deploy-sha`), `--signer` (never a key: `keystore:PATH[:PASSFILE]`, `env:signer`, `ledger`, `trezor`; `address:0xADMIN` with `--dry-run` only), `--environment`. Optional: `--stage`, `--row`, `--resume`, `--dry-run`, `--measure`, `--owner-signer` (repeat), `--correlated-owners-file` (required on 8453), `--core-dir`, `--evidence`, `--counts-dir`, `--compare-sheet`, `--max-wait`. Aliases: `--chain-id`, `--deploy-sha`. `--help` prints the usage and exits 2 (usage).
+
+**Environment.** `PUBLISH_MANIFEST_DIR` (where the stage manifests go), `CORRELATED_OWNERS_FILE`, `YES=1` (unattended, refused on 8453), `CONFIRM=typed|environment`. `BASE_UPSTREAM_RPC` is an optional override read by the Twin fork tooling. No secret is ever an argument or a file in the repo.
+
+**Outputs.**
+- stdout: `govern` prints one JSON line per Safe transaction (`{"row","phase","txHash","status","readyAt"}`). `verify` prints `[verify]` then one label per line. `publish` prints nothing on stdout.
+- stderr: the structured log, one JSON object per line, secret-looking field names redacted.
+- files: the stage manifests in `PUBLISH_MANIFEST_DIR` (default `deployments/<chain>/`), the run manifest `publish-run.json`, the isomorphism report and `--measure` counts (`deployments/frozen-counts/<sha>.json`) under `--evidence` and `--counts-dir`.
+
+**Exit codes.** 0 success. A failure exits with its kind: usage 2, sheet 3, floor 4, chain 5, signer 6, counts missing 7, simulation 8, broadcast 9, count mismatch 10, nonce 11, manifest 12, verify 13, govern 14, govern pending 15 (a wait is not over: run the same command again), resume 16, refused 17, tool 18, safe 19, input missing 20. Any other failure exits 1.
 
 ## Exit codes
 
@@ -114,7 +140,7 @@ usage 2, sheet 3, floor 4, chain 5, signer 6, counts missing 7, simulation 8, br
 
 ## Tests
 
-`bun test` (reads the stage table from the repo root; the runner tests spawn stub forge and cast from `tests/stubs`, about 30 s, pass `--timeout 120000` on a slow machine), `bun run typecheck`. Verifier standalone: `bun src/verify/cli.ts ... --core-dir <core checkout>`.
+`bun test` (reads the stage table from the repo root; the runner tests spawn stub forge and cast from `tests/stubs`, about 30 s, CI passes `--timeout 60000`), `bun x tsc --noEmit` (or `bun run typecheck`). Verifier standalone: `bun src/verify/cli.ts ... --core-dir <core checkout>`.
 
 ## CI workflows
 
