@@ -164,7 +164,7 @@ jobs:
       - name: smoke-test lib test count floor
         working-directory: testing/smoke-test
         env:
-          SMOKE_TEST_LIB_TEST_FLOOR: "50"
+          SMOKE_TEST_LIB_TEST_FLOOR: "52"
         run: |
           set -o pipefail
           cargo test -p smoke-test --lib 2>&1 | tee "$RUNNER_TEMP/smoke-lib.log"
