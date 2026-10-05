@@ -1,0 +1,46 @@
+name: twin-pin
+description: >-
+  Core issues 1498, 1496. Chooses the ONE pinned Base block a workflow run uses for the Twin chain:
+  the upstream head at the start of the run minus 2 (reorg safety). Run it in a setup job, output
+  the block, and pass the block to every job that uses .github/actions/twin-fork. A caller that
+  already has a pin (a reusable workflow called by a parent run) passes it in and gets it back
+  unchanged, so a whole run, nested workflows included, shares one pin. The optional upstream
+  secret is passed through the BASE_UPSTREAM_RPC env and is never printed.
+inputs:
+  pin-block:
+    description: "Pin handed down by a parent workflow. Empty means choose one now."
+    required: false
+    default: ""
+  upstream-secret:
+    description: "Optional paid upstream RPC URL (a secret). Empty uses https://mainnet.base.org."
+    required: false
+    default: ""
+outputs:
+  block:
+    description: The pinned Base block (a positive integer).
+    value: ${{ steps.pin.outputs.block }}
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+    - id: pin
+      shell: bash
+      env:
+        BASE_UPSTREAM_RPC: ${{ inputs.upstream-secret }}
+        GIVEN_PIN: ${{ inputs.pin-block }}
+      run: |
+        set -euo pipefail
+        if [ -n "$GIVEN_PIN" ]; then
+          case "$GIVEN_PIN" in (*[!0-9]*|0*) echo "::error::pin-block must be a positive integer"; exit 1;; esac
+          echo "block=$GIVEN_PIN" >> "$GITHUB_OUTPUT"
+          echo "Twin pin handed down: $GIVEN_PIN"
+          exit 0
+        fi
+        out="$(bun -e '
+          import {selectPin, DEFAULT_UPSTREAM} from "./scripts/devnet/twin-fork-lib.ts";
+          const up = process.env.BASE_UPSTREAM_RPC || DEFAULT_UPSTREAM;
+          const p = await selectPin(up, "auto", {secrets: process.env.BASE_UPSTREAM_RPC ? [process.env.BASE_UPSTREAM_RPC] : []});
+          console.log("block=" + p.block);
+        ')"
+        echo "$out" >> "$GITHUB_OUTPUT"
+        echo "Twin pin chosen: ${out#block=} (upstream head minus 2)"

@@ -18,6 +18,18 @@ inputs:
     description: Local port.
     required: false
     default: "8545"
+  host:
+    description: >-
+      Interface anvil listens on. Use 0.0.0.0 when a docker container (the explorer-indexer) must
+      reach the fork over the Docker bridge. The default stays on loopback.
+    required: false
+    default: "127.0.0.1"
+  block-time:
+    description: >-
+      Seconds between blocks (anvil --block-time). Empty mines on transaction only. Set 1 when the
+      explorer-indexer runs (its safe head is tip minus 5, so the tip must keep moving).
+    required: false
+    default: ""
 outputs:
   rpc-url:
     description: Twin chain RPC URL.
@@ -56,7 +68,8 @@ runs:
         set -euo pipefail
         args=(--port "${{ inputs.port }}" --pin-block "${{ steps.pin.outputs.block }}"
               --cache-dir "$RUNNER_TEMP/twin-cache" --state-dir "$RUNNER_TEMP/twin-state"
-              --pin-file "$RUNNER_TEMP/twin-pin.json")
+              --pin-file "$RUNNER_TEMP/twin-pin.json" --host "${{ inputs.host }}")
+        if [ -n "${{ inputs.block-time }}" ]; then args+=(--block-time "${{ inputs.block-time }}"); fi
         bun "${{ github.workspace }}/scripts/devnet/twin-fork.ts" start "${args[@]}"
         bun "${{ github.workspace }}/scripts/devnet/twin-fork.ts" wait-ready "${args[@]}"
         pin="$(bun -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).block)' "$RUNNER_TEMP/twin-pin.json")"
@@ -64,3 +77,4 @@ runs:
         echo "pin-block=$pin" >> "$GITHUB_OUTPUT"
         echo "TWIN_RPC_URL=http://127.0.0.1:${{ inputs.port }}" >> "$GITHUB_ENV"
         echo "TWIN_PIN_BLOCK=$pin" >> "$GITHUB_ENV"
+        echo "TWIN_CACHE_DIR=$RUNNER_TEMP/twin-cache" >> "$GITHUB_ENV"

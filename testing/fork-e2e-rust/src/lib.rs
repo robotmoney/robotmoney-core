@@ -10,6 +10,10 @@
 //! (via direct storage-slot writes), then exercises the deployed
 //! Robot Money contracts plus the surrounding USDC / DEX state.
 //!
+//! `RMPC_FORK_RPC_URL` may be a real archive endpoint or the Twin fork (core 1498): the Twin chain
+//! is a pinned lazy fork of real Base state, and anvil can fork it again. `RMPC_TESTNET_RPC_URL`
+//! connects straight to a running Twin fork instead. There is no saved state fixture.
+//!
 //! The harness intentionally keeps a small public surface:
 //!
 //! - [`ForkFixture::new`] — boot anvil-fork at the configured pin
@@ -111,19 +115,19 @@ macro_rules! skip_if_no_fork {
     () => {
         if !$crate::can_run() {
             eprintln!(
-                "[fork-e2e] skipping: no RMPC_TESTNET_RPC_URL, no RMPC_FORK_RPC_URL, \
-                 and anvil+fixture not available. Set RMPC_TESTNET_RPC_URL to run against \
-                 the shared devnet, or install Foundry (https://getfoundry.sh)."
+                "[fork-e2e] skipping: no RMPC_TESTNET_RPC_URL and no RMPC_FORK_RPC_URL. \
+                 Point RMPC_TESTNET_RPC_URL at a running Twin fork (anvil on real Base state), \
+                 or RMPC_FORK_RPC_URL at an upstream for a fresh local fork \
+                 (install Foundry: https://getfoundry.sh)."
             );
             return;
         }
     };
 }
 
-/// Skip the test when running in testnet mode (`RMPC_TESTNET_RPC_URL` is set).
-/// Use this for tests that require Anvil-specific admin RPCs such as
-/// `evm_increaseTime` / `evm_mine` that Geth does not expose. The test still
-/// runs against the checked-in fixture and a live `RMPC_FORK_RPC_URL` fork.
+/// Skip the test when it runs directly on the shared Twin fork (`RMPC_TESTNET_RPC_URL` is set).
+/// Use this for tests that move time or rewind state: warping the shared Twin would leak into
+/// every other test. The test still runs against its own `RMPC_FORK_RPC_URL` fork.
 #[macro_export]
 macro_rules! skip_in_testnet_mode {
     () => {
@@ -133,8 +137,8 @@ macro_rules! skip_in_testnet_mode {
         {
             eprintln!(
                 "[fork-e2e] skipping: RMPC_TESTNET_RPC_URL is set (testnet mode). \
-                 This test requires evm_increaseTime which Geth does not support. \
-                 Run against anvil (RMPC_FORK_RPC_URL or checked-in fixture) to exercise it."
+                 This test moves chain time, which must not leak into the shared Twin fork. \
+                 Run it against its own fork (RMPC_FORK_RPC_URL) to exercise it."
             );
             return;
         }
@@ -144,8 +148,7 @@ macro_rules! skip_in_testnet_mode {
 /// Skip the test unless a live forked-Base RPC is available via
 /// `RMPC_FORK_RPC_URL`. Use this for tests that read storage from
 /// production Base contracts (e.g. `abi_address_sanity`),
-/// which require a real fork rather than the checked-in fixture
-/// (the fixture has bytecode but not full storage for Base contracts).
+/// which require real Base state (the Twin fork or any upstream archive).
 #[macro_export]
 macro_rules! skip_if_no_devnet_fork {
     () => {
@@ -232,58 +235,20 @@ macro_rules! parameterized_e2e {
     };
 }
 
-/// Path to the checked-in Anvil state snapshot relative to the workspace root.
-const FIXTURE_STATE_REL: &str = "testing/fixtures/fork-state/CURRENT.anvil-state";
-const FIXTURE_META_REL: &str = "testing/fixtures/fork-state/CURRENT.json";
-
-/// Private key for the harness USDC holder EOA. Test-only — this key is also
-/// hardcoded in `testing/smoke-test/src/lib.rs` and the genesis alloc.
-/// Matches address `HARNESS_USDC_HOLDER_ADDR_HEX` below.
-const HARNESS_USDC_HOLDER_KEY_HEX: &str =
-    "0xd2dffaf3c3c5e3e2f5cb5cef1a3a2e0e0a8b9d4ae2f6c1d3e8a5b7c9e0f1a2b3";
-/// Address derived from `HARNESS_USDC_HOLDER_KEY_HEX`. Pre-funded with 1000 ETH
-/// and a USDC grant in the devnet genesis alloc. Used as the faucet in testnet mode.
-const HARNESS_USDC_HOLDER_ADDR_HEX: &str = "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5";
-
-fn workspace_root() -> Option<std::path::PathBuf> {
-    test_utils::find_workspace_root()
-}
-
-/// Returns the path to the checked-in fork-state metadata if it exists on disk.
-/// Used by the harness to find the pinned fork block and chain id when
-/// `RMPC_FORK_RPC_URL` is unset.
-pub fn fixture_state_path() -> Option<std::path::PathBuf> {
-    // Look for the paired .anvil-state file (same basename, different ext).
-    let meta = workspace_root()
-        .map(|r| r.join(FIXTURE_STATE_REL))
-        .filter(|p| p.exists())?;
-    // The anvil-state file sits next to the .json meta file.
-    let state = meta.with_extension("anvil-state");
-    if state.exists() {
-        Some(state)
-    } else {
-        None
-    }
-}
-
-/// Returns true iff the harness can run fork-e2e tests — either via
-/// `RMPC_TESTNET_RPC_URL` (shared Geth devnet), `RMPC_FORK_RPC_URL` (live
-/// archive upstream for anvil fork), or a checked-in fork-state fixture.
+/// Returns true iff the harness can run fork-e2e tests: `RMPC_TESTNET_RPC_URL` (the shared Twin
+/// fork, no second anvil) or `RMPC_FORK_RPC_URL` (an upstream for a fresh local anvil fork, the
+/// Twin fork included).
 pub fn can_run() -> bool {
-    // Testnet mode: no anvil required.
     if std::env::var("RMPC_TESTNET_RPC_URL")
         .map(|v| !v.is_empty())
         .unwrap_or(false)
     {
         return true;
     }
-    if which::which("anvil").is_err() {
-        return false;
-    }
-    let has_rpc = std::env::var("RMPC_FORK_RPC_URL")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    has_rpc || fixture_state_path().is_some()
+    which::which("anvil").is_ok()
+        && std::env::var("RMPC_FORK_RPC_URL")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
 }
 
 // -- Configuration -------------------------------------------------
@@ -295,58 +260,6 @@ const LOCAL_LAG_BLOCKS: u64 = 50;
 /// Base chain id. Hard-coded — Phase 2 only targets Base
 /// per §3.1 of the ADR.
 pub const BASE_CHAIN_ID: u64 = 8453;
-
-/// Storage slot used by the Base USDC `FiatTokenProxy` to record
-/// the proxy admin. Equal to `keccak256("org.zeppelinos.proxy.admin")`
-/// (see Centre's `AdminUpgradeabilityProxy` source). Used by
-/// [`ForkFixture::apply_usdc_storage_seed`] to verify the
-/// `address(0)` admin / `address(0)` caller collision documented
-/// in issue #249 is resolved after the seed is applied.
-pub const USDC_PROXY_ADMIN_SLOT: B256 =
-    alloy_primitives::b256!("10d6a54a4754c8869d6886b5f5d7fbfa5b4522237ea5c60d11bc4e7a1ff9390b");
-
-/// Path (relative to workspace root) of the committed USDC storage
-/// seed: proxy storage slots + implementation address and bytecode
-/// captured from a Base block. Applied by
-/// [`ForkFixture::apply_usdc_storage_seed`] on every boot so the
-/// checked-in `--load-state` snapshot — which only carries the
-/// proxy's runtime bytecode, not its admin/impl storage — becomes
-/// a fully-functional USDC at the canonical address.
-///
-/// Authored offline by `scripts/devnet/snapshot-fork.ts` and
-/// consumed both here (fork-e2e harness) and by
-/// `testing/smoke-test/src/genesis_alloc.rs`.
-const USDC_STORAGE_SEED_REL: &str = "testing/fixtures/fork-state/usdc-storage-seed.json";
-
-/// Typed view over the committed USDC storage seed JSON. Kept
-/// minimal — we only consume `proxy.storage` and `implementation.*`;
-/// any other top-level fields (`fork_block`, `chain`, ...) are
-/// metadata for humans and are ignored here.
-#[derive(Debug, Clone, Deserialize)]
-struct UsdcStorageSeed {
-    proxy: UsdcProxySeed,
-    implementation: UsdcImplSeed,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct UsdcProxySeed {
-    /// 0x-hex address of the proxy. Sanity-checked against
-    /// [`addresses::USDC`] at load time.
-    address: String,
-    /// `slot_hex -> value_hex`. Preserves insertion order from the
-    /// authored JSON so admin/impl slots are written before the
-    /// implementation bytecode is installed.
-    storage: std::collections::BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct UsdcImplSeed {
-    /// 0x-hex address that the proxy's impl slot points to. We
-    /// `anvil_setCode` the bytecode here so delegatecalls resolve.
-    address: String,
-    /// 0x-prefixed runtime bytecode for the implementation.
-    code: String,
-}
 
 /// Compute the storage slot of `balances[holder]` for a Solidity
 /// `mapping(address => uint256) balances` declared at base slot
@@ -371,43 +284,6 @@ fn balances_mapping_slot(holder: Address, mapping_slot: u64) -> B256 {
 /// Pack a [`U256`] into a 32-byte storage word (big-endian).
 fn u256_to_b256(v: U256) -> B256 {
     B256::from(v.to_be_bytes::<32>())
-}
-
-impl UsdcStorageSeed {
-    /// Read + parse the seed at the canonical workspace-relative
-    /// path. Returns a clear `HarnessError::Rpc` (carrying the path)
-    /// if the file is missing or malformed — the fork-e2e suite has
-    /// no other way of working around this so a hard failure here
-    /// is the right outcome.
-    fn load_default() -> Result<Self, HarnessError> {
-        let path = workspace_root()
-            .map(|r| r.join(USDC_STORAGE_SEED_REL))
-            .ok_or_else(|| {
-                HarnessError::Rpc(format!(
-                    "usdc-storage-seed: workspace root not found while resolving {USDC_STORAGE_SEED_REL}"
-                ))
-            })?;
-        let raw = std::fs::read_to_string(&path).map_err(|e| {
-            HarnessError::Rpc(format!("usdc-storage-seed: read {}: {e}", path.display()))
-        })?;
-        let seed: UsdcStorageSeed = serde_json::from_str(&raw).map_err(|e| {
-            HarnessError::Rpc(format!("usdc-storage-seed: parse {}: {e}", path.display()))
-        })?;
-        // Sanity: the seed must describe the canonical Base USDC
-        // proxy, otherwise we would silently corrupt a different
-        // account's storage on the fork.
-        let got: Address =
-            seed.proxy.address.parse().map_err(|e| {
-                HarnessError::Rpc(format!("usdc-storage-seed: bad proxy address: {e}"))
-            })?;
-        if got != addresses::USDC {
-            return Err(HarnessError::Rpc(format!(
-                "usdc-storage-seed: proxy address mismatch: seed {got:#x} vs canonical USDC {:#x}",
-                addresses::USDC
-            )));
-        }
-        Ok(seed)
-    }
 }
 
 /// Effective fork pin resolved from environment.
@@ -450,16 +326,14 @@ impl ForkFixture {
     /// Boot a fresh fixture backend.
     ///
     /// Mode selection (in priority order):
-    /// 1. `RMPC_TESTNET_RPC_URL` — point at a shared Geth+Lighthouse devnet;
-    ///    no anvil required, accounts funded via signed transactions from the
-    ///    harness USDC holder (pre-funded in genesis).
-    /// 2. `RMPC_FORK_RPC_URL` — live archive fork via anvil.
-    /// 3. Checked-in fork-state fixture — anvil `--load-state`.
+    /// 1. `RMPC_TESTNET_RPC_URL` — connect directly to the shared Twin fork (anvil on real Base
+    ///    state, chain id 918453). No second anvil. Accounts are funded with the anvil admin RPCs.
+    /// 2. `RMPC_FORK_RPC_URL` — a fresh local `anvil --fork-url` of that upstream (a real archive
+    ///    endpoint, or the Twin fork itself) at a pinned block, chain id 8453.
     ///
-    /// Returns [`HarnessError::SkipNoRpc`] only when none of the above are
-    /// available.
+    /// Returns [`HarnessError::SkipNoRpc`] when neither is set. There is no saved state fixture.
     pub fn new() -> Result<Self, HarnessError> {
-        // Testnet mode: shared devnet, no anvil.
+        // Shared Twin fork: no anvil child.
         if let Ok(url) = std::env::var("RMPC_TESTNET_RPC_URL") {
             if !url.is_empty() {
                 return Self::new_testnet(&url);
@@ -470,61 +344,27 @@ impl ForkFixture {
             return Err(HarnessError::AnvilMissing);
         }
 
-        let upstream = std::env::var("RMPC_FORK_RPC_URL")
+        let url = std::env::var("RMPC_FORK_RPC_URL")
             .ok()
-            .filter(|v| !v.is_empty());
+            .filter(|v| !v.is_empty())
+            .ok_or(HarnessError::SkipNoRpc)?;
 
         let port = pick_free_port()?;
         let rpc_url = format!("http://127.0.0.1:{port}");
 
-        let (mut cmd, pin, rpc_label) = if let Some(ref url) = upstream {
-            // Live fork path: --fork-url + --fork-block-number
-            let pin = resolve_fork_pin(url)?;
-            let mut c = Command::new("anvil");
-            c.arg("--port")
-                .arg(port.to_string())
-                .arg("--fork-url")
-                .arg(url)
-                .arg("--fork-block-number")
-                .arg(pin.block.to_string())
-                .arg("--chain-id")
-                .arg(BASE_CHAIN_ID.to_string())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            let label = sanitize_rpc_label(url);
-            (c, pin, label)
-        } else {
-            // Fixture path: --load-state from checked-in snapshot
-            let state = fixture_state_path().ok_or(HarnessError::SkipNoRpc)?;
-            let meta_path = workspace_root()
-                .map(|r| r.join(FIXTURE_META_REL))
-                .filter(|p| p.exists());
-            let meta_json = meta_path
-                .and_then(|p| std::fs::read_to_string(p).ok())
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-            let block = meta_json
-                .as_ref()
-                .and_then(|v| v["fork_block"].as_u64())
-                .unwrap_or(0);
-            let chain_id = meta_json
-                .as_ref()
-                .and_then(|v| v["chain_id"].as_u64())
-                .unwrap_or(BASE_CHAIN_ID);
-            let pin = ForkPin {
-                block,
-                source: PinSource::Pinned,
-            };
-            let mut c = Command::new("anvil");
-            c.arg("--port")
-                .arg(port.to_string())
-                .arg("--load-state")
-                .arg(&state)
-                .arg("--chain-id")
-                .arg(chain_id.to_string())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            (c, pin, "fixture".to_string())
-        };
+        let pin = resolve_fork_pin(&url)?;
+        let mut cmd = Command::new("anvil");
+        cmd.arg("--port")
+            .arg(port.to_string())
+            .arg("--fork-url")
+            .arg(&url)
+            .arg("--fork-block-number")
+            .arg(pin.block.to_string())
+            .arg("--chain-id")
+            .arg(BASE_CHAIN_ID.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let rpc_label = sanitize_rpc_label(&url);
 
         let child = cmd
             .spawn()
@@ -533,7 +373,7 @@ impl ForkFixture {
         let rpc = Rpc::new(&rpc_url);
         let mut backend = Some(child);
 
-        if let Err(e) = wait_for_rpc_url(&rpc_url, Duration::from_secs(20)) {
+        if let Err(e) = wait_for_rpc_url(&rpc_url, Duration::from_secs(60)) {
             if let Some(mut c) = backend.take() {
                 let _ = c.kill();
             }
@@ -550,7 +390,7 @@ impl ForkFixture {
             )));
         }
 
-        let fx = ForkFixture {
+        Ok(ForkFixture {
             backend,
             rpc_url,
             rpc_label,
@@ -558,90 +398,7 @@ impl ForkFixture {
             chain_id: BASE_CHAIN_ID,
             rpc,
             tx_hashes: Mutex::new(Vec::new()),
-        };
-        fx.apply_usdc_storage_seed()?;
-        Ok(fx)
-    }
-
-    /// Apply the canonical Base USDC storage seed to the proxy on the
-    /// running anvil backend so the forked USDC behaves like the
-    /// production token.
-    ///
-    /// Background (issue #249): the checked-in `--load-state` fixture
-    /// captures the USDC `FiatTokenProxy` runtime bytecode but NOT its
-    /// admin / implementation / token-config storage (those slots are
-    /// lazy-fetched on demand against the live upstream, and `anvil
-    /// --dump-state` only persists *modified* accounts). On the
-    /// fixture, the admin slot, implementation slot, name/symbol
-    /// slots, and balances are all `address(0)` / empty. Two
-    /// symptoms follow:
-    ///   1. `ifAdmin` collision — `eth_call` with the default
-    ///      `from = address(0)` matches the empty admin slot, and the
-    ///      proxy reverts non-admin selectors with `"Cannot call
-    ///      fallback function from the proxy admin"` before reaching
-    ///      any implementation.
-    ///   2. Empty delegatecall target — even after the admin slot is
-    ///      repaired, the `DELEGATECALL` resolves to `address(0)` and
-    ///      returns `0x` (no revert), which downstream callers decode
-    ///      as a buffer overrun.
-    ///
-    /// rmpc is the production client and must never spoof `from` or
-    /// branch on environment — so the fix is fully inside the fork
-    /// fixture: load `testing/fixtures/fork-state/usdc-storage-seed.json`
-    /// (the same artifact consumed by `testing/smoke-test` for its
-    /// genesis-alloc devnet) and replay each slot with
-    /// `anvil_setStorageAt`, plus `anvil_setCode` for the
-    /// implementation contract pointed to by the proxy's impl slot.
-    ///
-    /// Idempotent / safe on live forks: if the proxy admin slot is
-    /// already non-zero (e.g. a live `RMPC_FORK_RPC_URL` upstream
-    /// where the real admin is set), the seed is skipped entirely.
-    fn apply_usdc_storage_seed(&self) -> Result<(), HarnessError> {
-        // If the upstream has already populated the admin slot, the
-        // forked USDC is real; do nothing.
-        let admin_before = self
-            .rpc
-            .get_storage_at(addresses::USDC, USDC_PROXY_ADMIN_SLOT)?;
-        if self.rpc_label != "fixture" && admin_before != B256::ZERO {
-            return Ok(());
-        }
-
-        let seed = UsdcStorageSeed::load_default()?;
-
-        // 1. Apply proxy storage slots (admin, impl, owner, name,
-        //    symbol, decimals, totalSupply, ...). The admin and impl
-        //    slots together break both symptoms above.
-        for (slot_hex, value_hex) in &seed.proxy.storage {
-            let slot = parse_b256(slot_hex)?;
-            let value = parse_b256(value_hex)?;
-            self.rpc.set_storage_at(addresses::USDC, slot, value)?;
-        }
-
-        // 2. Install the implementation contract bytecode at the
-        //    address recorded in the proxy's impl slot so the
-        //    `DELEGATECALL` from the proxy resolves to real code.
-        let impl_addr: Address = seed
-            .implementation
-            .address
-            .parse()
-            .map_err(|e| HarnessError::Rpc(format!("seed: bad impl address: {e}")))?;
-        let impl_code = decode_hex_bytes(&seed.implementation.code)?;
-        self.rpc.set_code(impl_addr, impl_code)?;
-
-        // 3. Regression guard: after replay the admin slot MUST be
-        //    non-zero. If it isn't, the proxy admin collision will
-        //    silently come back — fail loudly here instead of
-        //    surfacing as an opaque ABI-decode error in rmpc.
-        let admin_after = self
-            .rpc
-            .get_storage_at(addresses::USDC, USDC_PROXY_ADMIN_SLOT)?;
-        if admin_after == B256::ZERO {
-            return Err(HarnessError::Rpc(format!(
-                "USDC proxy admin slot at {:?} still resolves to address(0) after applying usdc-storage-seed.json — fork-fixture repair failed (issue #249)",
-                USDC_PROXY_ADMIN_SLOT
-            )));
-        }
-        Ok(())
+        })
     }
 
     /// Boot a fixture for a specific [`Network`] (issue #839 multi-network e2e).
@@ -660,21 +417,9 @@ impl ForkFixture {
     pub fn for_network(network: Network) -> Result<Self, HarnessError> {
         match network {
             Network::RobotMoneyDevnet => {
-                // These are *live third-party service* tests (Aave/Uniswap/Curve
-                // pools). The checked-in `--load-state` fixture carries vault +
-                // USDC storage but NOT the full external-pool storage, so a swap
-                // against it reverts. Require a live upstream — `RMPC_FORK_RPC_URL`
-                // (anvil-fork) or `RMPC_TESTNET_RPC_URL` (shared devnet) — and skip
-                // the fixture-only case, mirroring `skip_if_no_devnet_fork!`.
-                let has_live_upstream = std::env::var("RMPC_FORK_RPC_URL")
-                    .map(|v| !v.is_empty())
-                    .unwrap_or(false)
-                    || std::env::var("RMPC_TESTNET_RPC_URL")
-                        .map(|v| !v.is_empty())
-                        .unwrap_or(false);
-                if !has_live_upstream {
-                    return Err(HarnessError::SkipNoRpc);
-                }
+                // Live third-party service tests (Aave, Uniswap, Curve pools) need real Base state:
+                // the Twin fork (RMPC_TESTNET_RPC_URL) or an upstream (RMPC_FORK_RPC_URL).
+                // `new` returns SkipNoRpc when neither is set.
                 Self::new()
             }
             Network::BaseTestnet => {
@@ -704,10 +449,9 @@ impl ForkFixture {
         Self::new_testnet(url)
     }
 
-    /// Connect to a shared Geth+Lighthouse devnet at `url`. No anvil is spawned.
-    /// USDC storage is pre-seeded in the genesis alloc (genesis-alloc.json loaded
-    /// via docker-compose.alloc.yaml), so `apply_usdc_storage_seed` is NOT called
-    /// — Geth does not support `anvil_setStorageAt`.
+    /// Connect directly to a running chain at `url` (the shared Twin fork, or Base's public
+    /// testnet through [`Self::new_live`]). No anvil child is spawned. USDC is the real token on
+    /// real Base state, so nothing is seeded.
     fn new_testnet(url: &str) -> Result<Self, HarnessError> {
         let rpc = Rpc::new(url);
         let block = rpc.block_number()?;
@@ -727,93 +471,18 @@ impl ForkFixture {
         })
     }
 
-    /// Fund `to` with ETH and USDC by sending signed transactions from
-    /// `HARNESS_USDC_HOLDER` — the pre-funded faucet account in the devnet
-    /// genesis alloc. Used in testnet mode in place of `anvil_setBalance` /
-    /// `anvil_setStorageAt`.
-    ///
-    /// NOTE: serialize calls to this function when running with `--test-threads=1`
-    /// to avoid nonce collisions on the shared faucet account.
-    fn fund_from_harness_holder(
-        &self,
-        to: Address,
-        eth_wei: U256,
-        usdc_units: U256,
-    ) -> Result<(), HarnessError> {
-        let key_hex = HARNESS_USDC_HOLDER_KEY_HEX.trim_start_matches("0x");
-        let key_bytes: Vec<u8> =
-            hex::decode(key_hex).map_err(|e| HarnessError::Rpc(format!("holder key hex: {e}")))?;
-        let key_arr: [u8; 32] = key_bytes
-            .try_into()
-            .map_err(|_| HarnessError::Rpc("holder key wrong length".into()))?;
-        let holder_signer = SigningKey::from_bytes((&key_arr).into())
-            .map_err(|e| HarnessError::Rpc(format!("holder signer: {e}")))?;
-        let holder_addr: Address = HARNESS_USDC_HOLDER_ADDR_HEX.parse().map_err(
-            |e: alloy_primitives::hex::FromHexError| HarnessError::Rpc(format!("holder addr: {e}")),
-        )?;
-
-        let holder_tx_hashes = Mutex::new(Vec::<B256>::new());
-        let holder = Account {
-            signer: holder_signer,
-            address: holder_addr,
-            fixture_rpc_url: self.rpc_url.clone(),
-            chain_id: self.chain_id,
-            rpc: self.rpc.clone(),
-            tx_hashes: &holder_tx_hashes,
-        };
-
-        if eth_wei > U256::ZERO {
-            holder.send_raw(to, alloy_primitives::Bytes::new(), eth_wei, 21_000)?;
-        }
-        if usdc_units > U256::ZERO {
-            let call = IERC20::transferCall {
-                to,
-                amount: usdc_units,
-            };
-            holder.send(addresses::USDC, &call, U256::ZERO, 200_000)?;
-        }
-        Ok(())
-    }
-
     /// Build a fresh ephemeral account funded with ETH and (optionally) USDC.
     ///
-    /// In anvil mode: uses `anvil_setBalance` / `anvil_setStorageAt` admin RPCs.
-    /// In testnet mode (`RMPC_TESTNET_RPC_URL`): sends signed transactions from
-    /// `HARNESS_USDC_HOLDER` (the genesis-funded faucet). Run with
-    /// `--test-threads=1` when using testnet mode to avoid nonce collisions.
+    /// Uses the anvil admin RPCs (`anvil_setBalance`, `anvil_setStorageAt` on the real USDC
+    /// balance slot). Both the shared Twin fork and a local fork are anvil. These are the Twin
+    /// chain environment steps (fund gas, fund USDC). A live external chain has no admin RPCs:
+    /// use [`Self::ephemeral_testnet`] there.
     pub fn ephemeral(&self, eth_wei: U256, usdc_units: U256) -> Result<Account<'_>, HarnessError> {
         let signer = SigningKey::random(&mut rand_core::OsRng);
         let addr = derive_address(&signer);
-        if self.backend.is_none() {
-            // Testnet mode: fund via transfers from the harness holder.
-            self.fund_from_harness_holder(addr, eth_wei, usdc_units)?;
-            // Geth devnet: wait_for_receipt confirms the funding TX is mined, but
-            // Geth's tx-pool balance check may race the state-update and see the
-            // pre-funding balance for a brief window (blocker #1090). Poll until
-            // eth_getBalance reflects the funded amount before returning.
-            if eth_wei > U256::ZERO {
-                let start = Instant::now();
-                let timeout = Duration::from_secs(10);
-                loop {
-                    let bal = self.rpc.eth_get_balance(addr)?;
-                    if bal >= eth_wei {
-                        break;
-                    }
-                    if start.elapsed() > timeout {
-                        return Err(HarnessError::Rpc(format!(
-                            "ephemeral: balance of {addr:#x} not visible after {timeout:?}: \
-                             got {bal} want {eth_wei}"
-                        )));
-                    }
-                    std::thread::sleep(Duration::from_millis(200));
-                }
-            }
-        } else {
-            // Anvil mode: use admin RPCs.
-            self.rpc.set_balance(addr, eth_wei)?;
-            if usdc_units > U256::ZERO {
-                self.fund_usdc(addr, usdc_units)?;
-            }
+        self.rpc.set_balance(addr, eth_wei)?;
+        if usdc_units > U256::ZERO {
+            self.fund_usdc(addr, usdc_units)?;
         }
         Ok(Account {
             signer,
@@ -828,8 +497,7 @@ impl ForkFixture {
     /// Build a fresh ephemeral account on a **live external chain** (Base's
     /// public testnet), funded by seeded transfers from a pre-funded funder EOA.
     ///
-    /// On Base's public testnet there are no anvil admin RPCs and the genesis-funded
-    /// `HARNESS_USDC_HOLDER` does not exist, so the funder key is supplied via
+    /// On Base's public testnet there are no anvil admin RPCs, so the funder key is supplied via
     /// the `BASE_TESTNET_FUNDER_KEY` env var (a faucet-funded testnet EOA's
     /// private key). The funder sends `eth_wei` native ETH and, when
     /// `usdc_units > 0`, `usdc_units` of `usdc_token` to the new account.
@@ -864,8 +532,7 @@ impl ForkFixture {
     }
 
     /// Seed `to` with native ETH and USDC by signing transfers from the
-    /// `BASE_TESTNET_FUNDER_KEY` EOA. Live-chain analogue of
-    /// [`Self::fund_from_harness_holder`]; uses only standard JSON-RPC.
+    /// `BASE_TESTNET_FUNDER_KEY` EOA. Uses only standard JSON-RPC.
     fn fund_from_external_funder(
         &self,
         funder_key_hex: &str,
@@ -933,13 +600,9 @@ impl ForkFixture {
     }
 
     /// Top up `addr` with `amount` USDC by writing directly to the
-    /// FiatTokenV1 `balances` mapping slot (slot 9). This is robust to
-    /// whale-balance drift: when the fork fixture has the real USDC admin
-    /// slot already set, `apply_usdc_storage_seed` skips the whale grant
-    /// (early-return), leaving the whale with whatever on-chain balance it
-    /// held at the fork block — which may be zero. Whale impersonation then
-    /// fails silently (no status check on the transfer receipt) and the
-    /// caller ends up with 0 USDC. Direct slot writes bypass that entirely.
+    /// FiatToken `balances` mapping slot (slot 9). This is the Twin chain
+    /// environment step "fund USDC": robust to whale-balance drift, and the
+    /// real token's own code then reads and spends the balance.
     pub fn fund_usdc(&self, addr: Address, amount: U256) -> Result<(), HarnessError> {
         let balance_slot = balances_mapping_slot(addr, 9);
         self.rpc
@@ -1373,7 +1036,7 @@ impl Rpc {
     /// Install runtime `code` at `addr`. Thin wrapper over
     /// `anvil_setCode`. Used by the fixture to materialise the
     /// USDC implementation contract that the proxy delegates to
-    /// (see [`ForkFixture::apply_usdc_storage_seed`], issue #249).
+    /// (real USDC funded through its balance slot).
     pub fn set_code(&self, addr: Address, code: Bytes) -> Result<(), HarnessError> {
         let _: serde_json::Value = self.rpc(
             "anvil_setCode",
