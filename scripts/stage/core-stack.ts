@@ -307,7 +307,8 @@ export class Stack {
   readonly stampPath: string;
   readonly lockPath: string;
   readonly recordPath: string;
-  readonly rpcUrl = DEFAULT_RPC_URL;
+  /** The Twin chain RPC: the fork named by TWIN_RPC_URL (a service on the stage host), else the one the harness starts on DEFAULT_RPC_URL. */
+  readonly rpcUrl: string;
   readonly rmpc: string;
   readonly rmpcImport: string;
   readonly bun: string;
@@ -329,6 +330,7 @@ export class Stack {
     this.rmpcImport = join(deps.repoRoot, "target/debug/rmpc-keystore-import");
     this.bun = deps.env.BUN || "bun";
     this.cast = deps.env.CAST || "cast";
+    this.rpcUrl = (deps.env.TWIN_RPC_URL ?? "").trim().replace(/\/+$/, "") || DEFAULT_RPC_URL;
     const poll = Number(deps.env.CORE_STACK_POLL_SECS);
     this.pollMs = (Number.isInteger(poll) && poll > 0 ? poll : 3) * 1000;
     this.intGraceSecs = Number(deps.env.SMOKE_INT_GRACE_SECS) > 0 ? Number(deps.env.SMOKE_INT_GRACE_SECS) : 60;
@@ -594,7 +596,10 @@ async function chainUp(s: Stack): Promise<void> {
     // Truncated before the harness exists; the harness only appends.
     writeFileSync(s.summaryPath, "");
     await s.rebuildRmpc();
-    // The Twin chain is the harness default backend (geth). No fork, no anvil.
+    // The Twin chain (918453) is a pinned lazy anvil fork of real Base state. The harness reuses the fork named by
+    // TWIN_RPC_URL (the stage host service, see scripts/devnet/README-twin-fork.md) or starts its own on --rpc-port
+    // with scripts/devnet/twin-fork.ts and stops it when the harness exits. BASE_UPSTREAM_RPC and TWIN_PIN_BLOCK pass
+    // through the environment and are never logged.
     const pid = s.deps.spawnDetached(
       ["stdbuf", "-oL", "-eL", "cargo", "run", "-p", "smoke-test", "--", "--full-stack", "--rpc-port", "18545", "--explorer-port", "18546", "--dapp-port", "5173",
         "--public-rpc-url", "https://stage-rpc.robotmoney-labs.dev", "--public-explorer-url", "https://stage-explorer.robotmoney-labs.dev",

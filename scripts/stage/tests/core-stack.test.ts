@@ -128,6 +128,14 @@ describe("publish", () => {
     ]);
   });
 
+  test("TWIN_RPC_URL (the stage host Twin fork service) is the rpc, trailing slashes removed", async () => {
+    env = { ...env, TWIN_RPC_URL: "http://127.0.0.1:8545/" };
+    const r = await run("publish", "args");
+    expect(r.code).toBe(0);
+    const lines = r.out.trimEnd().split("\n");
+    expect(lines[lines.indexOf("--rpc") + 1]).toBe("http://127.0.0.1:8545");
+  });
+
   test("the signer is keystore:PATH:PASSFILE, never the bare word keystore", async () => {
     const r = await run("publish", "args");
     const lines = r.out.trimEnd().split("\n");

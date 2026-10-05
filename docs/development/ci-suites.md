@@ -30,9 +30,9 @@ compare (it names the mismatch rather than reporting stale docs).
 
 | Symbol | Meaning |
 |--------|---------|
-| `devnet` | Geth + Lighthouse Docker Compose stack (`testing/ethereum-testnet/config/`). Lifecycle owned by the test code. |
+| `devnet` | The Twin chain (id 918453): a pinned lazy anvil fork of real Base state, started by `.github/actions/twin-fork` (`scripts/devnet/twin-fork.ts`). One pin per workflow run. The Rust harness reuses it through `TWIN_RPC_URL` or starts its own. No geth, no lighthouse, no genesis snapshot (core 1498, 1496). Services that only need an RPC (explorer-indexer, dapp) point at `TWIN_RPC_URL`. |
 | `anvil` | In-process Anvil EVM. No Docker. |
-| `fork` | Anvil forked from the checked-in golden fixture (`testing/fixtures/fork-state/`) at a pinned block — deterministic, offline, no secret, no live RPC (ADR-0011). CI fails loudly if the fixture is missing or zero fork tests run; it never silent-skips. |
+| `fork` | A local anvil forked from the Twin fork (`RMPC_FORK_RPC_URL=$TWIN_RPC_URL`, `RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK`) so each test can warp and rewind without touching the shared chain. The saved `.anvil-state` fixture is not used by these suites. The forge golden fork tests of suites 1 and 2 still load it (ADR-0011). CI fails loudly if zero fork tests run; it never silent-skips. |
 | `none` | No chain. Static analysis, pure unit tests, doc checks. |
 
 ---
@@ -219,51 +219,48 @@ organization Actions **secret**.
 ### 5. Fork integration tests (protocol adapters)
 **Suggested file:** `.github/workflows/fork-integration.yml`
 **Environment:** `fork`
-**Tier / triggers:** HEAVY — 4 Geth/Anvil devnet slots, 20-25 min wall-clock. Gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`. Feature PRs into phase branches skip this suite; `suite-06` (rmpc-unit) provides fast feedback on those.
+**Tier / triggers:** HEAVY — 5 matrix slots on the Twin chain, 20-25 min wall-clock. Gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`. Feature PRs into phase branches skip this suite; `suite-06` (rmpc-unit) provides fast feedback on those.
 
-**Fixture, not live RPC — golden on the merge gate, fresh snapshot on the nightly (ADR-0011):**
-Merge-gating runs (feature-PR and `dev`-merge) fork the **checked-in golden
-fixture** (`testing/fixtures/fork-state/`, loaded via `anvil --load-state` for
-the Rust layer and via a pinned-block fork of `CURRENT.anvil-state` for the
-Solidity forge tests) — deterministic, offline, **no CI secret, no live RPC**.
-Coverage is **loud** per the repo test-coverage policy: a missing fixture or
-zero executed fork tests fails CI, never silent-skips. (This corrects the
-legacy Solidity fork tests, which called `vm.createSelectFork` against a
-never-provisioned `RMPC_FORK_RPC_URL`/`FORK_RPC_URL` secret and therefore
-silently skip-cleaned to a false green.) Live-Base drift is covered by the nightly jobs described in suite 21; there is no live-RPC fork alarm any more.
+**The chain is the Twin fork (core 1498, 1496):**
+A `pin` job chooses ONE pinned Base block per workflow run (upstream head minus 2, `.github/actions/twin-pin`). Every slot starts the Twin fork at that pin with `.github/actions/twin-fork` (anvil `--fork-url <upstream> --fork-block-number <pin> --chain-id 918453`, upstream `https://mainnet.base.org` unless the optional secret `BASE_UPSTREAM_RPC` is set; anvil's RPC cache is persisted per pin block). There is no saved `.anvil-state` fixture, no genesis alloc and no docker chain. Slots (matrix `include`):
 
-**Why Anvil here, and why this is not redundant with the Geth+Lighthouse devnet harness:**
-This suite forks **Base mainnet** state (real deployed contracts, real DEX
-pools, real USDC — committed as the golden fixture, refreshed live only by the
-nightly) and runs the Rust client (`rmpc`) against it. The goal is to catch ABI encoding drift, address-constant mistakes, and real-world RPC error shapes — bugs that only show up against actually-deployed mainnet contracts. The smoke-test devnet (Geth+Lighthouse, see suite 14) cannot do this: it deploys fresh contracts on an empty chain, so it cannot tell you "the calldata `rmpc` generates still matches what is deployed at the real gateway address on Base."
-
-Anvil is used specifically because `anvil --fork-url` is the only ergonomic way to mount mainnet state at a pinned block and let tests mutate it locally (cheat codes like `anvil_setBalance` to fund test accounts on forked USDC). One anvil child per test gives cheap fork-restart-per-test isolation (per the ADR), with no snapshot/revert orchestration. Geth+Lighthouse cannot fork mainnet state this way; that stack is purpose-built for the empty-devnet "boot a real chain locally" scenario.
-
-| Concern | Suite 5 (Anvil fork) | Devnet harness (suite 14, smoke-test `--full-stack`) |
+| Slot | Tests | Mode |
 |---|---|---|
-| Chain | Anvil forking Base mainnet | Real Geth+Lighthouse, empty genesis |
-| Contracts | Already-deployed mainnet ones | Freshly deployed by Fixture |
-| Catches | ABI/address/RPC-shape drift vs prod | Full-stack flow (dapp→indexer→explorer), real block times |
-| Speed | Seconds per test (instant mining) | ~12s blocks, minutes |
+| `twin-router` | `router` | straight on the Twin fork (`RMPC_TESTNET_RPC_URL`) |
+| `twin-withdrawal-registry` | `withdrawal`, `registry` | straight on the Twin fork |
+| `twin-light` | `failure_surface_smoke`, the `rmpc_get_*` fork tests, `devnet_adapter_round_trip`, `gas_estimate_reality_check`, `landing_price_strip_fork`, `basket_vault_round_trip` | straight on the Twin fork |
+| `anvil-goldens` | `abi_address_sanity`, `dex_route_smoke`, `vault_deposit_redeem_smoke` | each test forks the Twin (`RMPC_FORK_RPC_URL=$TWIN_RPC_URL`, `RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK`) |
+| `anvil-governance` | `governance` | each test forks the Twin; governance scenarios warp (`evm_increaseTime`) instead of waiting |
 
-The two suites are complements, not duplicates. The retired Anvil "OpenClaw demo" suite (#242/#244) used Anvil to demo the whole product — that role was correctly taken over by the Geth+Lighthouse smoke-test. Suite 5's Anvil usage targets a job Geth+Lighthouse cannot do.
+Coverage is **loud** per the repo test-coverage policy: zero executed fork tests fails CI, never silent-skips. Live-Base drift is covered by the nightly Twin chain run (suite 29): every run pins the current head. The landing price strip golden (`expected-prices.json`) is compared within `tolerance_pct` only at its golden block. At any other block (the Twin pin) the price must be within a factor of 5, which still catches wrong decimals, inverted pairs and a missing pool.
+
+Known gap: the `fork-e2e-rust` scenarios and several tests still read the live production v1 addresses from `testing/fork-e2e-rust/src/addresses.rs`. The clean room rule (each test deploys its own vault and reads manifests) is met by suites 7, 8, 10, 14 and the explorer-indexer `fork_indexer` test, not yet by these.
+
+**Why a fork of real Base here, and how it differs from the smoke-test harness (suite 14):**
+This suite runs the Rust client (`rmpc`) against **real Base state** (real deployed contracts, real DEX pools, real USDC). The goal is to catch ABI encoding drift, address-constant mistakes, and real-world RPC error shapes. The smoke-test harness (suite 14) runs on the same Twin chain but deploys its own contracts through the one deployment scheme (publish contracts) and tests the stack end to end.
+
+| Concern | Suite 5 | Smoke-test harness (suite 14, `--full-stack`) |
+|---|---|---|
+| Chain | Twin fork, or a local anvil fork of it | Twin fork |
+| Contracts | Already-deployed ones | Freshly deployed through publish contracts |
+| Catches | ABI/address/RPC-shape drift | Full-stack flow (dapp→indexer→explorer), the real Safe, the timelock |
+| Speed | Seconds per test (instant mining) | Minutes (publish run, image builds) |
 
 A per-test audit of suite-05's coverage against the alternative suites is recorded in [suite-05-audit.md](./suite-05-audit.md) (issue #248). The audit's recommendation is **keep**, with a follow-up slim of two tests that duplicate suite-6 coverage.
 
 **Jobs:**
-- `pr-smoke` — fast subset against the **golden fixture** (offline, no secret); runs on every PR trigger
-- `full-suite` — all scenarios against the **golden fixture**; runs on push to `dev` and `workflow_dispatch`; no dependency on `pr-smoke` (different trigger context, not sequential)
-- Fresh-snapshot coverage: the nightly fresh-snapshot workflow (suite 29, issue 1496) reruns the chain suites against Base at the latest block. It is not a PR gate.
+- `pin` — chooses the run's one pin
+- `fork-integration` — the five matrix slots above (`needs: pin`)
+- `base-testnet-adapters` — Base public testnet (secrets); skips cleanly without them
+- Nightly: the nightly Twin chain workflow (suite 29, issue 1496) reruns the chain suites with one shared pin. It is not a PR gate.
 
-**Steps (`pr-smoke` / `full-suite`, golden-fixture path):**
+**Steps (`fork-integration`, per slot):**
 1. Checkout repository
-2. Install Rust toolchain + clippy
-3. Install Foundry toolchain
-4. Cargo cache
-5. `cargo fmt --check` + `cargo clippy`
-6. `cargo test --no-run` — build test binaries
-7. _(pr-smoke only)_ `abi_address_sanity` + `vault_deposit_redeem_smoke` — fast subset
-8. _(full-suite only)_ All scenarios: `abi_address_sanity`, `vault_deposit_redeem_smoke`, `dex_route_smoke`, `failure_surface_smoke`, `gas_estimate_reality_check`, plus the remaining `rmpc_get_*` fork tests: `rmpc_get_vault_fork_base_mainnet`, `rmpc_get_balance_fork`, `rmpc_get_allowance_fork`, `rmpc_get_tx_fork`
+2. Install Rust toolchain, Cargo cache
+3. Start the Twin chain at the run pin (`.github/actions/twin-fork`: installs Foundry and Bun, restores the RPC cache keyed by the pin block, exports `TWIN_RPC_URL` and `TWIN_PIN_BLOCK`)
+4. `forge build`
+5. `cargo test --no-run --release` — build test binaries
+6. `cargo test --release <slot tests> -- --test-threads=1 --nocapture` with `RMPC_TESTNET_RPC_URL` (shared slots) or `RMPC_FORK_RPC_URL` and `RMPC_FORK_BLOCK` (fork slots)
 
 ---
 
@@ -291,30 +288,21 @@ the false-green shape #1199/#1203 were filed about (issue #1231).
 
 ### 7. Rust client integration tests
 **Suggested file:** `.github/workflows/rmpc-integration.yml`
-**Environment:** `devnet` (Geth + Lighthouse)
+**Environment:** `devnet` (the Twin chain)
 **Tier / triggers:** HEAVY — gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`.
 
 **Jobs:**
-- `geth-tests` — devnet-backed scenarios; runs immediately; should not run if suite 6 (`rmpc-unit`) is failing on the same commit (enforce via `workflow_run` dependency or branch protection)
-- `nonce-race-stress` — in-process stress test, no chain; runs in parallel with `geth-tests`
+- `pin` — chooses the run's one pin (`.github/actions/twin-pin`)
+- `parity` — the binary-only rmpc tests (no chain)
+- `devnet-e2e` — one runner per e2e binary (`smoke`, `scenarios`, `window_cap`, `withdraw`), each with its OWN Twin fork at the run pin; `needs: pin`
+- `nonce-race-stress` — in-process stress test, no chain
 
-**Steps — `geth-tests` job:**
+**Steps — `devnet-e2e` job (per matrix row):**
 1. Checkout repository
-2. Verify Docker is available
-3. Install Rust toolchain + clippy
-4. Install Foundry toolchain
-5. Cargo cache
-6. `cargo fmt --check` + `cargo clippy` on both `rmpc` and `e2e-rust` crates
-7. Pre-pull Docker images
-8. `cargo build --release` — produce `rmpc` binary
-9. `cargo test --test skill_docs_parity` — skill-package parity (no Docker)
-10. `cargo test --test dapp_toml_roundtrip` — dApp TOML round-trip (no Docker)
-11. `cargo test --release --test smoke --test-threads=1` — devnet boots inside test
-12. `docker compose down -v` — explicit teardown between binaries
-13. `cargo test --release --test scenarios --test-threads=1` — all policy/failure scenarios
-14. `docker compose down -v`
-15. `cargo test --release --test window_cap --test-threads=1`
-16. `docker compose down -v` (always, on failure)
+2. Check out devops and export `PUBLISH_CONTRACTS_DIR` (publish contracts)
+3. Install Rust toolchain, Cargo cache
+4. Start the Twin chain at the run pin (`.github/actions/twin-fork`, exports `TWIN_RPC_URL`; the harness reuses it)
+5. `cargo test --release --test <binary> -- --test-threads=1 --nocapture` in `testing/ethereum-testnet/e2e-rust`. Each binary deploys its own vault through publish contracts. Time-dependent flows warp.
 
 **Steps — `nonce-race-stress` job:**
 1. Checkout repository
@@ -347,7 +335,8 @@ cap, concurrent lock, receipt timeout, duplicate replay and revert. Wrapped in
 **Jobs:**
 - `fast` — migration idempotency, block ingestion, RPC failure recovery, consensus-receipt indexing, and the reorg + read-path suites; uses a Postgres testcontainer; runs immediately
 - `explorer-api` — the `clients/explorer-api` read API: IC committee / regime / consensus-receipt endpoints, plus the HTTP contract, CORS, router-shape and schema-parity suites; Postgres testcontainer
-- `devnet` — reorg handling and finality-gated indexing against real Geth+Lighthouse; runs in parallel with `fast` (independent environments)
+- `pin` — chooses the run's one Twin chain pin (`.github/actions/twin-pin`)
+- `devnet` — the `fork_indexer` test: deploys its OWN vault through publish contracts on the Twin chain (`.github/actions/twin-fork` at the run pin, `TWIN_RPC_URL`) and indexes it; runs in parallel with `fast` (independent environments). Reorg handling is covered by the stub-RPC reorg suites of the `fast` job (an instant-finality anvil chain cannot produce competing tips).
 
 **Steps — `fast` job:**
 1. Checkout repository
@@ -375,7 +364,7 @@ Steps 9 and 10 run through `.github/scripts/cargo_test_require_executed.sh`, whi
 2. Verify Docker is available
 3. Install Rust toolchain
 4. Cargo cache
-5. `cargo test --test fork_indexer` — reorg handling (orphaned-block row removal) and finality-gated indexing against devnet (requires real Geth + Lighthouse fork choice)
+5. _(`devnet` job)_ `cargo test --test fork_indexer` — nine tables populated, the heartbeat snapshot lands and a re-run inserts nothing, against a vault deployed by the test on the Twin chain
 
 ---
 
@@ -406,9 +395,11 @@ Steps 9 and 10 run through `.github/scripts/cargo_test_require_executed.sh`, whi
 **Environment:** `devnet` (smoke-test full stack)
 **Tier / triggers:** HEAVY — gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`.
 
-Single job runs every Playwright spec against a real Geth+Lighthouse
-devnet booted by Playwright's `globalSetup` (`devnet-global-setup.ts`),
-which spawns `cargo run -p smoke-test -- --full-stack`. The dapp
+A `pin` job chooses the run's one Twin chain pin. The `e2e` job starts the Twin fork at that
+pin (`.github/actions/twin-fork` with `host: 0.0.0.0` and `block-time: 1`, so the indexer
+container can reach it and its safe head keeps moving) and runs every Playwright spec against
+the Twin chain through Playwright's `globalSetup` (`devnet-global-setup.ts`), which spawns
+`cargo run -p smoke-test -- --full-stack`. The harness reuses the fork through `TWIN_RPC_URL`. The dapp
 container in that stack is built with the gateway's runtime keccak-256
 pinned via `VITE_GATEWAY_EXPECTED_CODE_HASH`, so verification succeeds
 the prod way. There is no local-dev fast path: every spec exercises a
@@ -534,41 +525,43 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 
 ### 14. smoke-test library
 **Suggested file:** `.github/workflows/smoke-test.yml`
-**Environment:** `devnet` (Geth + Lighthouse)
+**Environment:** `devnet` (the Twin chain)
 **Tier / triggers:** HEAVY — gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`.
 
 Validates the `smoke-test` crate — the canonical devnet fixture library — in
 isolation, independent of any client (rmpc, dapp, explorer).
 
-**Steps:**
+**Jobs:** `smoke-test-guards` (hermetic, no chain), `pin` (the run's one Twin chain pin), `devnet` (matrix, `needs: pin`), `changes`, `twin_publish` (`needs: [changes, pin]`).
+
+**Steps (`devnet` matrix row):**
 1. Checkout repository
-2. Verify Docker is available
-3. Install Rust toolchain + clippy
-4. Install Foundry toolchain
-5. Cargo cache
-6. `cargo fmt --check -p smoke-test`
-7. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
-8. `cargo clippy -p smoke-test --all-targets -- -D warnings` — type-checks the crate's 9 `tests/` integration binaries in the hermetic `smoke-test-guards` job (issue #1295); `cargo build` alone never compiles them
-9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
-10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly and writes `smoke-test-fixture_meta.log`
-11. `cargo test -p smoke-test --release --test fund_usdc -- --test-threads=1 --nocapture` — real-signed-transfer assertions (issue #255 step 7): exact-amount USDC transfer, correct `Transfer` log, the tx signature recovers to `HARNESS_USDC_HOLDER`.
+2. Check out devops and export `PUBLISH_CONTRACTS_DIR` (publish contracts)
+3. Verify Docker is available (the dapp compose stack of `cli_meta`)
+4. Install Rust toolchain, Cargo cache
+5. Start the Twin chain at the run pin (`.github/actions/twin-fork`, `host: 0.0.0.0`, `block-time: 1`; exports `TWIN_RPC_URL`)
+6. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
+7. `cargo clippy -p smoke-test --all-targets -- -D warnings` — type-checks the crate's `tests/` integration binaries in the hermetic `smoke-test-guards` job (issue #1295); `cargo build` alone never compiles them
+8. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
+9. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — deploys contracts, asserts a healthy RPC on a real Base head, the four-vault manifests and the handover
+10. `cargo test -p smoke-test --release --test fund_usdc -- --test-threads=1 --nocapture` — the Twin environment steps: fund USDC (a grant of the exact amount on the real FiatToken slot, spendable through the real token's `transfer`), fund gas (exact balance), the chain is the anvil Twin fork (id 918453), and warp moves block time 48h without real waiting.
+11. `cargo test -p smoke-test --release --test twin_fork_env -- --test-threads=1 --nocapture` — the same three environment steps straight through `TwinFork` on the real Base USDC, with no publish run: fund USDC sets the real balance slot, fund gas, warp, and the fork is the anvil Twin fork on a real Base head.
 12. `cargo test -p smoke-test --release --test governance -- --test-threads=1 --nocapture` — after the publish-contracts run, the deployer holds no voting power and no `ADMIN_ROLE` on `RouterGovernance`, and the timelock holds `ADMIN_ROLE` (core 1488). Voting power is set only by govern rows through the real Safe and the timelock.
     Each is wrapped in `cargo_test_require_executed.sh` so a run that silently collects zero tests fails red rather than green (issue #1311 AC). All write `smoke-test-<binary>.log`.
-    The `demo_seeding`, `full_stack_demo_tvl`, `faucet_eth` and `faucet_rm` binaries were deleted in core 1488 with demo depositor seeding and the dapp faucet funding. Every devnet row now boots the Twin chain, funds fresh rehearsal keystores and calls publish contracts (checkout of the devops repo, `PUBLISH_CONTRACTS_DIR`, `STAGE_SHEET`).
-13. Upload smoke-test logs from `$RUNNER_TEMP/robotmoney-smoke-test/` as a CI artifact, then run `docker compose down -v --remove-orphans || true` for the safety-net teardown
+    The `demo_seeding`, `full_stack_demo_tvl`, `faucet_eth` and `faucet_rm` binaries were deleted in core 1488 with demo depositor seeding and the dapp faucet funding. Every devnet row now starts or reuses the Twin chain, funds fresh rehearsal keystores and calls publish contracts (checkout of the devops repo, `PUBLISH_CONTRACTS_DIR`, `STAGE_SHEET`).
+13. Upload smoke-test logs from `$RUNNER_TEMP/robotmoney-smoke-test/` as a CI artifact, then remove any dapp containers by label as the safety-net teardown. The Twin fork needs none: it dies with the runner.
 
-> **Note:** Step 10 exercises `Fixture::new()` end-to-end — the same code
+> **Note:** Step 9 exercises `Fixture::new()` end-to-end — the same code
 > path that all devnet-backed suites (7, 8, 10, 11, 12) depend on. A
 > failure here blocks those suites before they pay their own boot costs.
 >
 > **One deployment scheme (core 1488):** the harness deploys nothing itself.
-> `Fixture::new()` boots the Twin chain (918453), funds fresh rehearsal
-> keystores and calls the one runbook, "publish contracts" (devops, Bun
+> `Fixture::new()` starts or reuses the Twin chain (918453), funds fresh rehearsal
+> keystores (fund gas, fund USDC) and calls the one runbook, "publish contracts" (devops, Bun
 > TypeScript), with `--chain 918453 --rpc <twin rpc> --sheet <stage sheet>
 > --signer keystore --environment stage --core-sha <sha>`. It then reads the
 > manifests. All four vaults ship (rmUSDC, rmPROTO, rmAGENT, rmRWA). The
 > deployer holds nothing after handover: the real Safe and the timelock are the
-> admin. The matrix is `[cli_meta, fixture_meta, fund_usdc, governance]`
+> admin. The matrix is `[cli_meta, fixture_meta, fund_usdc, governance, twin_fork_env]`
 > (`fail-fast: false`), one runner per binary.
 
 ---
@@ -983,6 +976,8 @@ suite 20 `pg` 20→30).
 
 ### Resolution of the five smoke-test devnet targets (issue #1311)
 
+> **Historical.** This section records the decision of issue #1311, taken when `Fixture` booted the Geth + Lighthouse compose stack. The devnet is now the Twin chain (core 1498, 1496): a test binary shares one pinned fork through `TWIN_RPC_URL`, and `fund_usdc` asserts the Twin environment steps. The wiring outcomes below still stand.
+
 `smoke-test::faucet_eth`, `faucet_rm`, `fund_usdc`, `governance` and
 `vault_deposit_redeem` were allowlisted (issue #1282) rather than wired,
 because each calls `smoke_test::Fixture`, which boots the full Geth +
@@ -1194,7 +1189,7 @@ cross-feature interactions actually land.
   into `dev`) and on `push` to `dev` for merged-commit coverage. The devnet e2e
   matrices (`rust-client-devnet-integration`, `smoke-test-devnet-boot-teardown`),
   the fork-adapter integration matrix (`fork-protocol-adapter-integration`,
-  4 Geth/Anvil slots, 20-25 min), the full-devnet `dapp-e2e` Playwright suite,
+  5 Twin chain slots, 20-25 min), the full-stack `dapp-e2e` Playwright suite,
   the `erc4626-demo-tvl-matrix`, and the `forge-coverage-gate` job all live here.
   Every branch that opens a PR into `dev` runs the full heavy battery before it
   can land.
@@ -1211,10 +1206,10 @@ that enforced them was removed as overkill):
   non-cancelling lane and merged-commit coverage always completes.
 - `rust-client-devnet-integration` (suite-07) and `smoke-test-devnet-boot-teardown`
   (suite-14) express their devnet binaries as a `fail-fast: false` job matrix —
-  one runner per binary, each booting and tearing down its own stack with an
-  `if: always()` `docker compose down` step. No devnet binary runs as a sequential
-  step in a shared job, so the port-8545 contention that forced serial execution
-  is gone.
+  one runner per binary, each starting its own Twin fork at the run's one pin
+  (a `pin` job outputs it, `.github/actions/twin-fork` consumes it). No devnet binary
+  runs as a sequential step in a shared job, so the port-8545 contention that forced
+  serial execution is gone.
 - No Rust-building workflow uses a hand-rolled `actions/cache` for cargo
   target/registry; each uses `Swatinem/rust-cache@v2`.
 
@@ -1227,7 +1222,7 @@ Every workflow's `name:` and its tier.
 | `forge-unit-invariant-coverage` | quick | `unit`/`invariant` are light (PRs to any branch); the `forge-coverage-gate` job is heavy and `if:`-gated to push-to-`dev` / PR-into-`dev` |
 | `solidity-fmt-natspec-slither` | quick | |
 | `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) and `test-target-coverage` (issue #1282 integration-test target inventory) |
-| `fork-protocol-adapter-integration` | heavy | 4 Geth/Anvil devnet slots (20-25 min); gates PRs into `dev`; runs against the **golden fixture** — offline, no secret (ADR-0011) |
+| `fork-protocol-adapter-integration` | heavy | 5 Twin chain slots (20-25 min); gates PRs into `dev`; one pin per run, no saved fixture, optional secret `BASE_UPSTREAM_RPC` |
 | `rust-client-unit-tests` | quick | |
 | `rust-client-devnet-integration` | heavy | devnet e2e matrix (`smoke`, `scenarios`, `window_cap`, `withdraw`) |
 | `explorer-indexer-migrations-reorg` | quick | |
@@ -1278,16 +1273,16 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 1–2 | `forge-tests.yml` | `unit` \| `invariant` → `coverage` | `anvil` |
 | 3 | `solidity-quality.yml` | `lint` → `slither` | `none` |
 | 4 | `rust-quality.yml` | `lint` → `doc-coverage` \| `audit` \| `test-target-coverage` | `none` |
-| 5 | `fork-integration.yml` | `pr-smoke` / `full-suite` (golden fixture) | `fork` |
+| 5 | `fork-integration.yml` | `pin` → `fork-integration` (5 slots) \| `base-testnet-adapters` | `devnet` / `fork` |
 | 6 | `rmpc-unit.yml` | `unit` | `none` |
-| 7 | `rmpc-integration.yml` | `geth-tests` \| `nonce-race-stress` | `devnet` |
-| 8 | `explorer-indexer.yml` | `fast` \| `explorer-api` \| `devnet` | `devnet` / `postgres-testcontainer` |
+| 7 | `rmpc-integration.yml` | `pin` → `devnet-e2e` (matrix) \| `parity` \| `nonce-race-stress` | `devnet` |
+| 8 | `explorer-indexer.yml` | `fast` \| `explorer-api` \| `pin` → `devnet` | `devnet` / `postgres-testcontainer` |
 | 9 | `dapp-quality.yml` | `lint-build` | `none` |
 | 10 | `dapp-e2e.yml` | needs suite 9 → `e2e` \| `e2e-history-pane` \| `devnet-e2e` \| `fork-roundtrip` | `devnet` |
 | 11 | `opencode-smoke.yml` + `opencode-headless.yml` | smoke: `plugin-validate` \| `walkthrough-offline` → `walkthrough-fork`; headless: `asserter-tests` (offline, PR + nightly) \| `refusal` (offline, nightly/dispatch) \| explicit unavailable-live-coverage failure (nightly/dispatch) | `none` / `devnet` |
 | 12 | `openclaw.yml` | `safety` → `walkthrough` | `devnet` |
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
-| 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
+| 14 | `smoke-test.yml` | `smoke-test-guards` \| `pin` → `devnet` (matrix), `twin_publish` | `devnet` |
 | 18 | `suite-18-secrets-scan.yml` | `secrets-scan` (gitleaks) | `none` |
 | 18b | `suite-18-security-gates.yml` | `cargo-audit` \| `bun-audit` \| `csp-gate` \| `audit-ledger` \| `seam-map-drift` \| `seam-map-validator` \| `release-workflow-authority-audit` | `none` |
 | 19 | `suite-19-erc4626-demo-tvl-matrix.yml` | `erc4626-precondition` (matrix) | `anvil` |
@@ -1296,20 +1291,20 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 22 | `suite-22-formal-verification.yml` | `forge-formal-verification` | `none` |
 | 23 | `suite-23-skill-url-reachability.yml` (live, sweep-only) + `suite-23-skill-url-monitor-selftest.yml` (`reachability-selftest`, every PR) | asserts every published raw `SKILL.md` URL returns 200, including the deprecated compat stubs; the selftest proves the monitor fails red (#1199) | `none` (live network) |
 | 25 | `suite-25-fusion-harness-selftests.yml` | `fusion-harness-selftests` | `none` |
-| 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | devnet `918453` |
+| 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | the shared stage Twin fork `918453` (a service on the stage host, not started per run) |
 | 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |
 | 28 | `suite-28-core-stages.yml` | `core-stages-offline`, `core-stages-twin-chain` (dispatch) | `none` / Twin `918453` |
 | 28 | `suite-28-core-stack-selftest.yml` | `core-stack-selftest` | `none` |
-| 29 | `suite-29-nightly-fresh-snapshot.yml` | `snapshot-at-latest-block` → suites 5, 7, 8, 10, 11b, 14, 26 (called) → `record-results` | Twin chain `918453` from a fresh Base snapshot |
+| 29 | `suite-29-nightly-twin-chain.yml` | `pin` → suites 5, 7, 8, 10, 11b, 14 (called with `pin_block`) → `record-results` | Twin chain `918453`, one shared pin |
 
-### 29. Nightly fresh snapshot (nightly-fresh-snapshot)
+### 29. Nightly Twin chain (nightly-twin-chain)
 
-**File:** `.github/workflows/suite-29-nightly-fresh-snapshot.yml` (issue 1496, nightly job (b)).
-**Tier / triggers:** nightly (05:30 UTC) and `workflow_dispatch`. Never a merge gate. No secret, no archive node.
+**File:** `.github/workflows/suite-29-nightly-twin-chain.yml` (issue 1496, nightly job (b); replaces the nightly fresh snapshot).
+**Tier / triggers:** nightly (05:30 UTC) and `workflow_dispatch`. Never a merge gate.
 
-Takes a snapshot of Base at the latest block with `scripts/devnet/nightly-fresh-snapshot.ts` (wrapping `snapshot-fork.ts` with `FORK_PIN_LAG=0`, public endpoints from `fork-rpc-lib.sh`, 429 back-off). Builds the Twin chain genesis alloc with the existing ingester and aligns `fork-block.json` and `expected-prices.json` in an overlay. The overlay is an artifact, never committed. Each chain suite (5, 7, 8, 10, 11b, 14) is called with `workflow_call` and `fresh_snapshot: true`; its chain jobs apply the overlay through `.github/actions/apply-fresh-snapshot`. `scripts/devnet/check-nightly-fresh-snapshot.ts` asserts the block is within one hour and that every suite succeeded. Artifacts: `snapshot-manifest` (block number, hash, timestamp), `suite-results`, `fresh-snapshot`.
+Every Twin chain run already pins the upstream head minus 2, so there is no snapshot to take, no genesis to build and no overlay to apply. This nightly runs every chain suite in ONE workflow run with ONE shared pin: a `pin` job chooses the block (`.github/actions/twin-pin`) and each suite (5, 7, 8, 10, 11b, 14) is called with `workflow_call` and `pin_block: ${{ needs.pin.outputs.block }}` and `secrets: inherit`. Each suite's own pin job hands that block through unchanged, then its chain jobs start their own Twin fork at it. Anvil's RPC cache is persisted per pin block. `secrets: inherit` hands the suites what they already use alone: `DEVOPS_READ_TOKEN`, the optional `BASE_UPSTREAM_RPC` (a paid upstream, never printed) and the `BASE_TESTNET_*` secrets of suite 5; the workflow itself references none. The `results` job fails when the pin job or any suite did not succeed (failure, cancelled and skipped all count as not passing) and uploads `suite-results` (one JSON per suite, with the pin block).
 
-Suite 26 is not in this run: it needs `secrets.FUSION_RMPC_CONFIG` and targets the shared fusion devnet, so it cannot run on the fresh Twin snapshot with no secret. Suite 5's `base-testnet-adapters` job (BASE_TESTNET secrets) is skipped when called with `fresh_snapshot: true`. Details and the one remaining exception (suite 14 reads the private devops repo with `DEVOPS_READ_TOKEN`) are in `docs/development/nightly-fresh-snapshot.md`.
+Suite 26 is not in this run: it targets the shared stage Twin fork (a service on the stage host) and needs `secrets.FUSION_RMPC_CONFIG`; it starts no fork per run.
 
 
 ## Nightly and release-record checks (cores 1495, 1496, 1497, 1498)
@@ -1317,10 +1312,10 @@ Suite 26 is not in this run: it needs `secrets.FUSION_RMPC_CONFIG` and targets t
 The `nightly-and-release-checks` job in `suite-13-doc-checks.yml` runs on every pull request. It runs, offline:
 
 - `scripts/ci/check-nightly-dispatch-selftest.ts` (core 1495, Bun): the nightly dispatch list covers every suite workflow, a removed suite is detected, the fork-pin age step has `continue-on-error: true`, and the deleted drift job, script and alarm text are gone. The list check itself is `scripts/ci/check_nightly_dispatch_list.py`; config-check, suite 28 core-stages and suite 30 are in the SUITES list, and the release workflows, the nightly itself, the third-party drift workflow and suite 29 are on the exclusion list with reasons.
-- `scripts/devnet/check-nightly-fresh-snapshot-selftest.ts` (core 1496, Bun, run in suite 13): suites 5, 7, 8, 10, 11b and 14 are present, no secret other than `GITHUB_TOKEN` and no keyed RPC appear, manifest fields and the one-hour limit hold, a failing suite result fails the gate, the final workflow step is `git diff --exit-code` over the fixture paths, and a stub HTTP 429 is retried.
+- `scripts/devnet/check-twin-chain-ci-selftest.ts` (cores 1496, 1498, Bun, run in suite 13, needs `yq`): the nightly calls suites 5, 7, 8, 10, 11b and 14 with `pin_block` from its own pin job and `secrets: inherit`; each of those suites declares the `pin_block` input, has a `pin` job using `.github/actions/twin-pin`, and every `twin-fork` step takes `pin-block` from that job and sits in a job that needs it; nothing in `.github`, `scripts`, `testing`, the dapp e2e tests or `services` still names the retired geth devnet, the genesis alloc or the fresh-snapshot overlay; the retired files are gone.
 - The nightly third-party drift workflow check, the dependency manifest self-test and the manifest address check (core 1497). The address check runs on a manifest recorded from the committed snapshot, so it checks something before the first release commits one.
 
-The committed snapshot contents check is a Bun TypeScript script, `scripts/devnet/check-fork-snapshot-contents.ts` (core 1498; the issue says `.sh`, orchestration is TypeScript). It also asserts a non-zero QuoterV2 `quoteExactInputSingle` quote (10 USDC to token, through `cast call`) for each basket pool in config (wETH, cbBTC, deSPXA); `scripts/devnet/snapshot-fork-selftest.ts` tests that assertion with a stub runner. Suite 14's `smoke-test-guards` job runs it, plus `check-fork-manifest.sh --require-pinned` (fixture lockstep) and a floor on the `cargo test -p smoke-test --lib` test count. Suite 14's `twin_publish` job (its own job, not a matrix row) runs the real Twin chain publish through the devops CLI (directory given by the `publish_contracts_dir` input), the one verifier and the stage 13 govern matrix. While the chain is up it runs `scripts/deploy/assert-core-router.ts` (read-only mode: the share receiver is keyless on the Twin chain, so the signed round trip is not run here), `assert-basket-vaults.ts` and `assert-timelock-roles.ts`, then `scripts/stage/twin-run-report.ts` (stages, tx counts, vault set, labels), then `parity.ts` (label-diff and sheet-diff against the mainnet verifier labels and production sheet). It uploads the manifests, proofs and report. On `pull_request` it runs only when `contracts/script/`, `scripts/deploy/`, `scripts/stage/`, `config/` or `testing/smoke-test/` changed (a `changes` job reads the git diff); push, `workflow_dispatch` and the nightly `workflow_call` always run it. A non-zero test count floor applies through `cargo_test_require_executed.sh` (`CARGO_TEST_MIN_EXECUTED=1`) plus the `--lib` floor in the guards job. The job needs Docker and runs only in CI.
+The committed snapshot contents check is a Bun TypeScript script, `scripts/devnet/check-fork-snapshot-contents.ts` (core 1498; the issue says `.sh`, orchestration is TypeScript). It also asserts a non-zero QuoterV2 `quoteExactInputSingle` quote (10 USDC to token, through `cast call`) for each basket pool in config (wETH, cbBTC, deSPXA); `scripts/devnet/snapshot-fork-selftest.ts` tests that assertion with a stub runner. Suite 14's `smoke-test-guards` job runs it, plus `check-fork-manifest.sh --require-pinned` (fixture lockstep) and a floor on the `cargo test -p smoke-test --lib` test count. Suite 14's `twin_publish` job (its own job, not a matrix row) runs the real Twin chain publish through the devops CLI (directory given by the `publish_contracts_dir` input), the one verifier and the stage 13 govern matrix. While the chain is up it runs `scripts/deploy/assert-core-router.ts` (read-only mode: the share receiver is keyless on the Twin chain, so the signed round trip is not run here), `assert-basket-vaults.ts` and `assert-timelock-roles.ts`, then `scripts/stage/twin-run-report.ts` (stages, tx counts, vault set, labels), then `parity.ts` (label-diff and sheet-diff against the mainnet verifier labels and production sheet). It uploads the manifests, proofs and report. On `pull_request` it runs only when `contracts/script/`, `scripts/deploy/`, `scripts/stage/`, `config/` or `testing/smoke-test/` changed (a `changes` job reads the git diff); push, `workflow_dispatch` and the nightly `workflow_call` always run it. A non-zero test count floor applies through `cargo_test_require_executed.sh` (`CARGO_TEST_MIN_EXECUTED=1`) plus the `--lib` floor in the guards job. The job needs no Docker and runs only in CI.
 
 ## check-sha-green (core 1502)
 

@@ -19,7 +19,8 @@ PUBLIC_EXPLORER_URL ?= https://robotmoney-dev-explorer.superfield.co
 # Compose stamps automatically on every service — so teardown reaps them all with
 # no hand-maintained name list to drift out of sync, and it also catches legacy
 # containers booted before the com.robotmoney.testnet run-id labels existed.
-TESTNET_COMPOSE_PROJECTS := ethereum-testnet robotmoney-dapp
+# The chain is the Twin fork (anvil, chain id 918453), a host process, not a container.
+TESTNET_COMPOSE_PROJECTS := robotmoney-dapp
 
 ##
 ## Project targets
@@ -29,7 +30,8 @@ help: ## Print this help message
 	@grep -E '^[a-zA-Z_-]+:.*## .*$$' $(MAKEFILE_LIST) | \
 	    awk 'BEGIN {FS = ":.*## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-teardown-zombies: ## Force-remove every smoke-test devnet container (any run)
+teardown-zombies: ## Force-remove every smoke-test devnet container and Twin fork (any run)
+	@pkill -f -- '--chain-id 918453' 2>/dev/null || true
 	@ids=$$(for p in $(TESTNET_COMPOSE_PROJECTS); do \
 		docker ps -aq --filter "label=com.docker.compose.project=$$p"; \
 	done | sort -u); \

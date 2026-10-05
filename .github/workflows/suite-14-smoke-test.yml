@@ -213,6 +213,8 @@ jobs:
     name: twin-pin
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      CI_CLASS: feature-correctness
     outputs:
       block: ${{ steps.pin.outputs.block }}
     steps:
@@ -230,7 +232,9 @@ jobs:
   #   - fixture_meta:        deploys contracts, asserts RPC + the four-vault manifests
   #   (demo_seeding, full_stack_demo_tvl, faucet_eth and faucet_rm were deleted in core 1488 with demo seeding
   #   and the dapp faucet funding: the one deployment scheme has no demo-only code.)
-  #   - fund_usdc:           the Twin environment steps: fund USDC (real FiatToken slot), fund gas, warp
+  #   - fund_usdc:           the Fixture wrappers of the Twin environment steps: fund USDC (a grant on the real
+  #                          FiatToken slot), fund gas, warp
+  #   - twin_fork_env:       the same three steps straight through TwinFork on the real Base USDC, no publish run
   #   - twin_publish:        its own job below (not a matrix row): path-gated on pull_request
   #   - governance:          the deployer holds no voting power or admin; the timelock is admin (core 1488)
   #
@@ -276,6 +280,7 @@ jobs:
             fixture_meta,
             fund_usdc,
             governance,
+            twin_fork_env,
           ]
     steps:
       - uses: actions/checkout@v4

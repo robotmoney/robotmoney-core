@@ -1,138 +1,155 @@
 # Devnet runbook
 
-> **Canonical:** `Plan tracking issue #109` §2 (Phase 1 gateway + vault).
+> **Canonical:** `Plan tracking issue #109` §2 (Phase 1 gateway + vault). Twin chain: core issues 1498, 1496, owner decision 2026-10-05.
 
-The devnet is a local Geth + Lighthouse proof-of-stake chain managed by
-the `testing/smoke-test` crate. All integration tests that need a live
-chain boot through `Fixture::new()`, which starts the compose stack,
-deploys contracts, and tears down on drop.
+The devnet is the **Twin chain** (chain id 918453): a **pinned lazy fork of real Base state**,
+made with anvil. It replaces the Geth + Lighthouse proof-of-stake devnet, its docker compose
+chain stack, its genesis alloc and its snapshot genesis. All integration tests that need a live
+chain boot through `Fixture::new()` in `testing/smoke-test`, which starts (or reuses) the Twin
+fork, funds keys, deploys a vault of its own through the deploy scripts and reads every address
+from the manifests.
+
+```
+anvil --fork-url <upstream> --fork-block-number <pin> --chain-id 918453
+```
+
+- **Upstream** defaults to the public endpoint `https://mainnet.base.org` (no key, no archive
+  node). The env `BASE_UPSTREAM_RPC` overrides it. It is an optional secret for a paid provider.
+  Nothing prints a URL that may carry a key: logs show the host only.
+- **Pin** is the upstream head at the start of a run minus 2 (reorg safety). Every job of one CI
+  run uses the same pin: one setup job chooses it (`.github/actions/twin-pin`) and the chain jobs
+  take it as input (`.github/actions/twin-fork`).
+- **Lazy** means anvil fetches state from the upstream on first read. There is no warm list, no
+  `anvil_dumpState` snapshot, no patched state and no geth/lighthouse snapshot genesis. Anvil's
+  RPC cache directory is persisted in CI (`actions/cache` keyed by the pin block). Anvil retries
+  and our own startup retry handle HTTP 429.
+- The fork contains the real production v1 Robot Money contracts because it is real Base state.
+  **Clean room rule:** every test deploys its OWN vault through our deploy scripts and reads
+  addresses from the manifests. No test reads the live production v1 vault, its adapters, the old
+  admin Safe or any hard-coded Robot Money address.
+
+## Environment steps that may differ from production
+
+Only these three. Everything else (contracts, Safe, timelock, handover) runs exactly as in
+production.
+
+| Step | Tool | What it does |
+|---|---|---|
+| Fund gas | `bun scripts/devnet/twin-fork.ts fund-gas <address> <eth>` | `anvil_setBalance`. |
+| Fund USDC | `bun scripts/devnet/twin-fork.ts fund-usdc <address> <base units>` | Writes the real FiatToken `balanceAndBlacklistStates[holder]` slot (mapping at slot 9), then checks `balanceOf`. Total supply is not changed. |
+| Warp time | `bun scripts/devnet/twin-fork.ts warp <seconds>` | `evm_increaseTime` then `evm_mine`. Refuses chain id 8453. This is how the 48h governance waits run: no real waiting. |
+
+The Rust harness calls the same tool: `Fixture::fund_gas`, `Fixture::fund_usdc` (a grant: it reads
+the balance and sets balance + amount) and `Fixture::warp`.
 
 ## Starting the devnet
 
 ```bash
-# Boot Geth + Lighthouse and deploy gateway/vault contracts.
-# Stays running until you Ctrl-C.
-cargo run -p smoke-test
+# Start (or reuse) the Twin chain, deploy a vault, print the endpoints. Stays up until Ctrl-C.
+cargo run -p smoke-test            # add --full-stack for the dapp, explorer-api and indexer
 ```
 
 Or from a Rust test:
 
 ```rust
 let fixture = smoke_test::Fixture::new()?;
-// fixture tears down when dropped
+// A fork the fixture started is stopped when it drops.
 ```
+
+### Reusing a running fork (`TWIN_RPC_URL`)
+
+```bash
+bun scripts/devnet/twin-fork.ts start --port 8545 --host 0.0.0.0 --block-time 1
+export TWIN_RPC_URL=http://127.0.0.1:8545
+cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1
+```
+
+`Fixture::new()` reuses the fork named by `TWIN_RPC_URL` and never stops a fork it did not start.
+Test binaries keep their fixture in a `OnceLock` static, which Rust never drops, so run test
+binaries with `TWIN_RPC_URL` set (CI does). Without it a binary starts its own fork that outlives
+the process: stop it with `make teardown-zombies`.
+
+The fork needs `--host 0.0.0.0` when containers must reach it (the explorer-indexer reaches it
+over the Docker bridge) and `--block-time 1` when the indexer runs (its safe head is tip minus 5,
+so the tip must keep moving). A fork the harness starts uses both.
+
+| Env | Meaning |
+|---|---|
+| `TWIN_RPC_URL` | A running Twin fork to reuse. |
+| `TWIN_PIN_BLOCK` | Pinned block for a fork the harness starts. Empty means upstream head minus 2. |
+| `TWIN_CACHE_DIR` | Directory that persists anvil's RPC cache (HOME for the anvil process). |
+| `BASE_UPSTREAM_RPC` | Optional paid upstream. Never printed. |
+| `SMOKE_TEST_RPC_PORT` | Pins the port of a fork the harness starts. |
+
+See `scripts/devnet/README-twin-fork.md` for every flag, the stage host service (systemd unit and
+docker one-liner) and the CI snippet.
 
 ## Prerequisites
 
-- `docker` on PATH (for `docker compose`)
-- `forge` and `cast` on PATH (Foundry)
+- `anvil`, `forge` and `cast` on PATH (Foundry) and `bun`. `smoke_test::prerequisites_available()`
+  checks all four.
+- `docker` on PATH only for `--full-stack` (the dapp compose stack: Postgres, explorer
+  indexer, explorer API, dapp) and for the explorer-indexer test containers.
 
-`smoke_test::prerequisites_available()` checks all three and returns
-`false` if any is missing.
+## Compose stack (dapp only)
 
-## Compose stack
+`testing/ethereum-testnet/config/docker-compose.dapp.yaml` is the only compose file. The chain is
+no longer a container: the indexer reaches the host-side Twin fork through the Docker bridge
+(`INDEXER_RPC_URL`, the bridge gateway address and the fork port). Services that only need an RPC
+(explorer-indexer, dapp) point at `TWIN_RPC_URL`.
 
-The compose file is `testing/ethereum-testnet/config/docker-compose.yaml`.
-It defines:
+## CI
 
-- `geth` — execution layer (chain-id 918453), genesis seeded from a
-  pinned Base mainnet block (`alloc` populated from a Base state snapshot,
-  not empty). Real Base contracts (USDC, WETH, …) are present at their
-  canonical addresses from block 0 of the devnet.
-- `lighthouse` — consensus layer (12-second blocks)
-- `setup` — one-shot service that (a) patches token balance storage
-  in genesis to grant a clean-history harness EOA a large balance of
-  each test-relevant token (USDC at minimum), and (b) deploys Robot
-  Money contracts via `forge script`. See
-  `docs/development/smoke-test-design.md` for the genesis-time balance
-  grant faucet design and the rationale for not impersonating a real
-  Base whale.
+Every chain suite (5, 7, 8, 10, 11b and 14) has a `pin` job and starts the Twin fork with
+`.github/actions/twin-fork` at that pin. The nightly (`suite-29-nightly-twin-chain.yml`) runs all
+of them in one run with one shared pin. Suite 26 targets the shared stage Twin fork. See
+`docs/development/ci-suites.md`.
 
-## Fork-state fixture
+## Saved fork-state fixture (forge golden fork tests only)
 
-`testing/fork-e2e-rust` loads a separate checked-in Anvil fork-state fixture
-(`testing/fixtures/fork-state/CURRENT.anvil-state`) via `anvil --load-state`,
-requiring no live RPC at test time. For the fixture's purpose, the
-`RMPC_FORK_RPC_URL` regeneration variable, and the developer-owned-on-change
-refresh command (`scripts/devnet/snapshot-fork.ts`), see
-`docs/development/environments.md` §2 ("Fork e2e") and ADR-0011.
+The Twin chain uses no saved state. A checked-in Anvil fork-state fixture
+(`testing/fixtures/fork-state/CURRENT.anvil-state`) is still loaded by the forge golden fork tests
+of suites 1 and 2 (`scripts/devnet/run-golden-forge-forks.sh`). For its purpose, the
+`RMPC_FORK_RPC_URL` regeneration variable and the refresh command
+(`scripts/devnet/snapshot-fork.ts`), see `docs/development/environments.md` §2 and ADR-0011.
+The `anvil-goldens` and `anvil-governance` groups of suite 5 do not use it: they point
+`RMPC_FORK_RPC_URL` at the Twin fork.
 
 ### Pin age (issue #1386)
 
-The devnet's chain clock is wall-clock `now` — `generate.sh` falls back to
-`date +%s`, and the smoke-test harness sets `GENESIS_TIMESTAMP` to now + 15s.
-The Aave V3 / Compound V3 / Morpho state the three adapters call is frozen at
-the pinned Base block. Those protocols accrue interest as a function of
-`block.timestamp - lastUpdateTimestamp`, so the *simulated* interval between
-the snapshot and the devnet's present grows by one day per day the pin is not
-refreshed. The fixture was historically refreshed every one to four weeks; in
-2026 it went 48 days with nothing in CI reporting the fact.
+The Aave V3 / Compound V3 / Morpho state the saved fixture holds is frozen at its pinned Base
+block. Those protocols accrue interest as a function of `block.timestamp - lastUpdateTimestamp`,
+so the simulated interval grows by one day per day the fixture is not refreshed.
+`scripts/devnet/check-fork-pin-age.sh` makes the age visible: `check-fork-manifest.sh` calls it on
+every run and annotates a `::warning::` past the 21-day cadence. It never fails there. Measured
+from `CURRENT.json`'s `captured_at`, because `snapshot-fork.ts` advances the fork clock to
+wall-clock now before warming the adapters. The Twin chain has no such age: its pin is the
+upstream head minus 2 at the start of every run.
 
-`scripts/devnet/check-fork-pin-age.sh` makes the age visible:
-
-- `scripts/devnet/check-fork-manifest.sh` calls it on every run, so the age is
-  printed on the pull-request path and annotated as a `::warning::` once the
-  pin passes the 21-day cadence. It never fails there — a stale pin is a
-  maintenance signal, not a reason to red the merge queue.
-- The nightly `fork-pin-age-warning` job calls it without a limit (warning only);
-  it never fails the nightly.
-- `scripts/devnet/check-fork-pin-age-selftest.sh` drives every branch of the
-  gate offline; `suite-01-02-forge-tests.yml` runs it before the real fixture
-  is judged.
-
-Measured, deliberately, from `CURRENT.json`'s `captured_at` rather than the
-block's own timestamp: `snapshot-fork.ts` advances the fork clock to wall-clock
-now *before* warming the adapters, so the protocol `lastUpdateTimestamp` values
-baked into the fixture are the capture wall-clock, not the fork block's
-timestamp.
-
-That last point also rules out "set `GENESIS_TIMESTAMP` to the forked block's
-timestamp" as a way to hold the delta at zero: the fixture's protocol
-timestamps are *later* than the fork block's, so booting the devnet at the fork
-block's timestamp makes `block.timestamp - lastUpdateTimestamp` underflow and
-reverts every adapter call — the same failure `snapshot-fork.ts` step "3-pre"
-already documents and works around. Anchoring genesis to `captured_at` instead
-avoids the underflow but puts the beacon genesis in the past by the pin's full
-age, which Lighthouse would have to traverse as empty slots before producing a
-block. Refreshing the pin is the supported way to keep the delta small.
-
-### Refreshing the pin
+### Refreshing the saved fixture
 
 ```bash
 bun scripts/devnet/snapshot-fork.ts
 ```
 
-The script uses public Base endpoints only (with back-off on HTTP 429) and needs no
-key or archive node. It deploys nothing: the snapshot holds third-party Base state
-(Uniswap V3 factory, SwapRouter02, QuoterV2, every pool in `config/dex-pools.json`
-and its tokens, Aave, Compound, Morpho and the Safe v1.4.1 set) and no Robot Money
-contract. A public RPC cannot enumerate storage, so the capture runs quotes and
-USDC round-trip swaps on every pool, plus supply and withdraw on each yield
-protocol, so the slots they load are in the dump. Into the committed fixture dir
-it also realigns `fork-block.json`, regenerates `genesis-alloc.json` with
-`smoke-test-genesis-ingester` and recaptures `expected-prices.json`, all at the
-same block as `CURRENT.json`. A refreshed fixture is judged by
-`bun scripts/devnet/check-fork-snapshot-contents.ts` (code, live pool values, no
-Robot Money code at genesis) and `scripts/devnet/check-fork-manifest.sh --require-pinned`.
+The script uses public Base endpoints only (with back-off on HTTP 429) and needs no key or
+archive node. It deploys nothing: the snapshot holds third-party Base state and no Robot Money
+contract. Into the committed fixture dir it also realigns `fork-block.json` and recaptures
+`expected-prices.json`, at the same block as `CURRENT.json`. A refreshed fixture is judged by
+`bun scripts/devnet/check-fork-snapshot-contents.ts` and
+`scripts/devnet/check-fork-manifest.sh --require-pinned`.
 `bun scripts/devnet/snapshot-fork-selftest.ts` is the offline selftest.
-
-The script's default endpoint is the first public entry in
-`scripts/devnet/fork-rpc-lib.sh`, `mainnet.base.org`, which serves archive state
-by block number. The previous default, `https://base-rpc.publicnode.com`, refuses
-every numeric-block state read below the tip with "Archive requests require a
-personal token", so a capture (which reads with `cast storage --block N`) could
-never finish against it. `mainnet.base.org` and `base-mainnet.public.blastapi.io`
-were both verified to fork a 48-day-old block under Anvil. Public endpoints are
-rate-limited, so a keyed Base archive endpoint in `RMPC_FORK_RPC_URL` is still the
-reliable choice (issue #1239). The script logs and records only the endpoint's
-origin, so a keyed URL never reaches a log or the committed manifest.
 
 ## Troubleshooting
 
-- **Port 8545 already in use.** Another devnet instance is running.
-  Stop it with `docker compose -f testing/ethereum-testnet/config/docker-compose.yaml down`.
-- **`forge` or `cast` not found.** Install Foundry:
-  `curl -L https://foundry.paradigm.xyz | bash && foundryup`.
-- **`anvil --load-state` parse error.** The fixture is stale or was
-  written by a different Anvil version. Regenerate with
-  `bun scripts/devnet/snapshot-fork.ts`.
+- **Port already in use.** Another Twin fork is running. Stop it with
+  `bun scripts/devnet/twin-fork.ts stop --port <port> --state-dir <dir>`, or run
+  `make teardown-zombies`.
+- **HTTP 429 from the upstream.** Anvil and the tool retry with backoff. Lower
+  `--compute-units-per-second`, retry later, or set `BASE_UPSTREAM_RPC` to a paid provider.
+- **`missing trie node` or a block too old.** The public endpoint is not an archive node. A pin
+  must be recent: start the fork soon after choosing the pin, or choose a new pin.
+- **`forge`, `cast`, `anvil` or `bun` not found.** Install Foundry
+  (`curl -L https://foundry.paradigm.xyz | bash && foundryup`) and Bun.
+- **`TWIN_RPC_URL reports chain id N`.** The URL is not a Twin fork. The harness refuses to run on
+  it (chain id 8453 is Base mainnet).
