@@ -153,7 +153,7 @@ jobs:
           pin_result="$(echo "$NEEDS" | jq -r '.pin.result')"
           echo "pin job: $pin_result (Twin pin block ${PIN_BLOCK:-none})" | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$pin_result" = "success" ] || bad=1
-          [ "$(ls "$RUNNER_TEMP/suite-results" | wc -l)" -ge 6 ] || { echo "::error::fewer than six suite results were recorded"; bad=1; }
+          [ "$(find "$RUNNER_TEMP/suite-results" -maxdepth 1 -name "suite-*.json" | wc -l)" -ge 6 ] || { echo "::error::fewer than six suite results were recorded"; bad=1; }
           exit "$bad"
 
       - name: Upload the suite results
