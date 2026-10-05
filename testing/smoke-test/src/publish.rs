@@ -341,6 +341,7 @@ fn run_cli(
 ) -> Result<String, HarnessError> {
     let signer = signer_spec(&p.keys);
     let mut args = publish_args(verb, &p.rpc_url, &p.sheet_path, &signer, &cfg.core_sha);
+    args.extend(run_dir_args(&p.manifest_dir));
     args.extend(extra.iter().cloned());
     let mut cmd = Command::new("bun");
     cmd.arg(cfg.cli())
@@ -359,6 +360,19 @@ fn run_cli(
         )));
     }
     Ok(stdout)
+}
+
+/// Where the CLI keeps the run's own state: its evidence (run manifest, reports) and the measured frozen counts. Both
+/// sit next to the manifests, in this run's work directory. The default would put them in the checkout, where the next
+/// boot on the same SHA would find the old run and the clean-tree check would see untracked files.
+pub fn run_dir_args(manifest_dir: &Path) -> Vec<String> {
+    let work = manifest_dir.parent().unwrap_or(manifest_dir);
+    vec![
+        "--evidence".into(),
+        work.join("evidence").display().to_string(),
+        "--counts-dir".into(),
+        work.join("counts").display().to_string(),
+    ]
 }
 
 /// The publish-contracts CLI refuses an unattended publish without `YES=1` (exit 17) and refuses `YES=1` on
@@ -665,6 +679,15 @@ mod tests {
         assert!(s.contains("export TIMELOCK_MIN_DELAY=60"));
         assert!(s.contains("export AGENT_MAX_PER_WINDOW=5"));
         assert!(render_sheet("", &id, &[("REHEARSAL", "1")]).is_err());
+    }
+
+    #[test]
+    fn run_state_lives_in_the_work_dir_not_the_checkout() {
+        let a = run_dir_args(Path::new("/w/manifests"));
+        assert_eq!(
+            a,
+            vec!["--evidence", "/w/evidence", "--counts-dir", "/w/counts"]
+        );
     }
 
     #[test]

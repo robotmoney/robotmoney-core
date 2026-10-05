@@ -422,7 +422,11 @@ export class Stack {
     }
     const args = await this.publishArgs(verb);
     this.log("publish contracts", { verb });
-    return this.deps.run([this.bun, cli, ...args, ...extra], { env: publishEnv(CHAIN_ID, mdir), stream });
+    // The run's own state (evidence, measured counts) sits next to the manifests, not in the checkout: a second run on
+    // the same SHA must not find an old run, and the CLI's clean-tree check must not see untracked files.
+    const work = dirname(mdir);
+    const state = ["--evidence", join(work, "evidence"), "--counts-dir", join(work, "counts")];
+    return this.deps.run([this.bun, cli, ...args, ...state, ...extra], { env: publishEnv(CHAIN_ID, mdir), stream });
   }
 
   /** Forward a child's output and turn a non-zero exit into the same exit code. */

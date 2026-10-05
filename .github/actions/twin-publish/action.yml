@@ -55,13 +55,13 @@ runs:
           --chain 918453 --rpc "$RPC_URL" --sheet "$rh/sheet.env" \
           --signer "keystore:$rh/keys/DEPLOYER:$rh/passphrase" \
           --environment stage --core-sha "$(git -C "$core" rev-parse HEAD)" \
-          --counts-dir "$rh/counts"
+          --counts-dir "$rh/counts" --evidence "$rh/evidence"
         if [ "$VERIFY_IN" = "true" ]; then
           PUBLISH_MANIFEST_DIR="$rh/manifests" YES=1 bun src/cli.ts verify \
             --chain 918453 --rpc "$RPC_URL" --sheet "$rh/sheet.env" \
             --signer "keystore:$rh/keys/DEPLOYER:$rh/passphrase" \
             --environment stage --core-sha "$(git -C "$core" rev-parse HEAD)" \
-            --counts-dir "$rh/counts" > "$rh/verify-labels.txt"
+            --counts-dir "$rh/counts" --evidence "$rh/evidence" > "$rh/verify-labels.txt"
           echo "TWIN_VERIFY_LABELS=$rh/verify-labels.txt" >> "$GITHUB_ENV"
         fi
         {

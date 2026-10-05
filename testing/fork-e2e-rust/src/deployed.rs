@@ -290,6 +290,8 @@ pub fn deploy_own_vault(fx: &ForkFixture) -> Result<DeployedVault, HarnessError>
         ])
         .arg("--counts-dir")
         .arg(&counts)
+        .arg("--evidence")
+        .arg(dir.path().join("evidence"))
         .env("PUBLISH_MANIFEST_DIR", &mdir)
         // The CLI refuses an unattended run without YES=1, and refuses YES=1 on 8453. This is the Twin chain only.
         .env("YES", "1")
