@@ -49,7 +49,7 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catc
 const readState = (): { pid: number; pin: any } | null => (existsSync(pidFile) ? JSON.parse(readFileSync(pidFile, "utf8")) : null);
 
 async function start() {
-  const upstream = v.upstream ?? process.env.BASE_UPSTREAM_RPC ?? DEFAULT_UPSTREAM;
+  const upstream = v.upstream || process.env.BASE_UPSTREAM_RPC || DEFAULT_UPSTREAM;
   const prev = readState();
   if (prev && alive(prev.pid)) throw new Error(`already running (pid ${prev.pid}); run stop first`);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
