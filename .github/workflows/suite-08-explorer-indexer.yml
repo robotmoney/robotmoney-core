@@ -7,11 +7,13 @@
 # non-idempotent migration will crash a rollback or a fresh staging environment.
 #
 # WHY THE JOB SPLITS INTO fast AND devnet
-# Reorg handling requires a real Geth+Lighthouse chain with genuine fork-choice events —
-# Anvil produces instant finality and cannot produce reorgs. The fast job covers
-# everything that can be tested with a Postgres testcontainer alone (no Docker Compose
-# stack needed), which cuts its wall time to ~5 min. The devnet job runs in parallel
-# because it uses an entirely different environment with no shared state.
+# The fast job covers everything that can be tested with a Postgres testcontainer alone (no
+# chain), which cuts its wall time to ~5 min. The devnet job runs in parallel because it uses an
+# entirely different environment with no shared state. It runs the indexer against the Twin
+# chain (id 918453), a pinned lazy fork of real Base state made with anvil (core 1498, 1496), with
+# a vault the test deploys itself through the deploy scripts. The reorg paths are covered by the
+# fast job's stub-RPC tests (cursor_header_reorg, reorg_cursor_vault_status): a stub can produce
+# the exact competing tips an instant-finality anvil chain cannot.
 #
 # WHY cargo test --no-run RUNS BEFORE THE INDIVIDUAL TEST STEPS
 # Compiling test binaries is the most expensive part of the fast job. Running it once
@@ -24,33 +26,30 @@
 #   confusing "connection refused" error, not a "Docker not found" error. The fast job
 #   deliberately omits a Docker availability check because it should not need compose;
 #   if you start seeing connection refused in migrations, verify the runner has Docker.
-# - fork_indexer requires Geth to produce at least two competing chain tips, which
-#   takes several seconds after boot. The test polls with a timeout; if Lighthouse is
-#   slow to start, the test may time out before a reorg occurs. If this flakes, check
-#   the Lighthouse boot logs first before suspecting the indexer logic.
+# - fork_indexer needs the Twin fork (TWIN_RPC_URL, started by .github/actions/twin-fork at the run
+#   pin) and the devops publish run (PUBLISH_CONTRACTS_DIR), because it deploys its own vault.
+#   A rate-limited upstream (HTTP 429) is retried by anvil and the twin-fork tool.
 
 name: explorer-indexer-migrations-reorg
 
 # CI taxonomy (issue #1105): every job here exercises integration/devnet/
-# testcontainer behaviour (migrations against a real Postgres, reorg handling on a
-# real Geth devnet, IC committee/regime endpoints against a Postgres testcontainer)
+# testcontainer behaviour (migrations against a real Postgres, reorg handling against
+# stub RPC chains, IC committee/regime endpoints against a Postgres testcontainer)
 # — that is the `system-correctness` class. system-correctness skips drafts and runs
 # from ready_for_review onward, and is bypassed on docs-only changes.
 env:
   CI_CLASS: system-correctness
 
 on:
-  # Nightly job (b), core issue 1496: reused by suite-NN-nightly-fresh-snapshot.yml
-  # with fresh_snapshot=true so this suite boots the Twin chain from a snapshot
-  # taken at the latest Base block instead of the checked-in pin. Steps are not
-  # copied: the nightly calls this very workflow.
+  # Called by suite-29-nightly-twin-chain.yml, which chooses ONE pin for the whole nightly run and
+  # hands it down as pin_block. Steps are not copied: the nightly calls this very workflow.
   workflow_call:
     inputs:
-      fresh_snapshot:
-        description: "Apply the nightly fresh snapshot overlay before booting a chain."
-        type: boolean
+      pin_block:
+        description: "Twin chain pin handed down by a parent run. Empty: this run chooses one."
+        type: string
         required: false
-        default: false
+        default: ""
   # system-correctness: defer until the PR is ready for review (no draft runs),
   # plus push to dev/dev-phase-* for merged-commit coverage. paths-ignore bypasses
   # docs-only PRs (no behavioural code to exercise).
@@ -67,7 +66,7 @@ on:
 # distinct concurrency lane per ref and never cancel, so merged-commit coverage
 # always completes. See docs/development/ci-suites.md (CI velocity tiers).
 concurrency:
-  # suite tag keeps called copies (nightly fresh snapshot, issue 1496) in separate lanes:
+  # suite tag keeps called copies (nightly Twin chain run) in separate lanes:
   # inside workflow_call github.workflow is the CALLER's name, shared by every suite.
   group: ${{ github.workflow }}-suite08-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -295,8 +294,25 @@ jobs:
             --test cors \
             --test canonical_schema -- --test-threads=1 --nocapture
 
+  # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
+  pin:
+    name: twin-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    outputs:
+      block: ${{ steps.pin.outputs.block }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        uses: ./.github/actions/twin-pin
+        with:
+          pin-block: ${{ inputs.pin_block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
   devnet:
     name: explorer-indexer-devnet
+    needs: pin
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 40
@@ -304,15 +320,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
-        uses: ./.github/actions/apply-fresh-snapshot
-        with:
-          enabled: ${{ inputs.fresh_snapshot == true }}
 
-      - name: Verify Docker is available
-        run: |
-          docker version
-          docker compose version
+      # fork_indexer deploys its own vault through the devops "publish contracts" runbook.
+      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
+        id: devops
+        uses: ./.github/actions/devops-publish-contracts
+        with:
+          token: ${{ secrets.DEVOPS_READ_TOKEN }}
+          ref: ${{ vars.DEVOPS_PUBLISH_REF }}
+
+      - name: Verify Docker is available (Postgres testcontainer)
+        run: docker version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -320,35 +338,15 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Boot Geth+Lighthouse devnet (with genesis alloc overlay)
-        working-directory: testing/ethereum-testnet/config
-        env:
-          SMOKE_GENESIS_ALLOC_FILE: ${{ github.workspace }}/testing/fixtures/fork-state/genesis-alloc.json
-        run: |
-          BOOT_START=$(date +%s)
-          docker compose -f docker-compose.yaml -f docker-compose.alloc.yaml up -d
-          echo "Waiting for Geth RPC to be ready..."
-          until curl -sf -X POST -H 'Content-Type: application/json' \
-            --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-            http://localhost:8545 2>/dev/null | grep -q '"result"'; do
-            sleep 2
-          done
-          BOOT_END=$(date +%s)
-          BOOT_SECS=$((BOOT_END - BOOT_START))
-          echo "devnet-boot-seconds=${BOOT_SECS}" >> "$GITHUB_STEP_SUMMARY" || true
-          echo "Devnet ready in ${BOOT_SECS}s"
-          if [ "${BOOT_SECS}" -gt 90 ]; then
-            echo "ERROR: devnet boot took ${BOOT_SECS}s > 90s limit (AC #6: median target 60s)" >&2
-            exit 1
-          fi
+      # Installs foundry and bun, restores anvil's RPC cache keyed by the pin block, starts the
+      # Twin fork and exports TWIN_RPC_URL.
+      - name: Start the Twin chain at the run pin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
-      - name: Fork indexer test (against shared devnet)
+      - name: Fork indexer test (own vault on the Twin chain)
+        if: steps.devops.outputs.available != 'false'
         working-directory: services/explorer-indexer
-        env:
-          RMPC_TESTNET_RPC_URL: http://localhost:8545
         run: cargo test --test fork_indexer -- --nocapture
-
-      - name: Devnet teardown (always)
-        if: always()
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans || true

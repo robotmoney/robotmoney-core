@@ -2,7 +2,7 @@ name: devops-publish-contracts
 description: >-
   Checks out robotmoney/devops into ./devops, installs the publish-contracts
   dependencies and exports PUBLISH_CONTRACTS_DIR (plus STAGE_SHEET and CORE_DIR)
-  for every job whose Rust harness boots the geth devnet through the devops
+  for every job whose Rust harness deploys to the Twin chain through the devops
   "publish contracts" runbook. The checkout needs the DEVOPS_READ_TOKEN secret,
   which a composite action cannot read, so the caller passes it in `token`.
   Missing token: the action fails with ONE message naming the secret. The one
@@ -42,11 +42,11 @@ runs:
       run: |
         if [ -z "$TOKEN" ]; then
           if [ "$IS_FORK_PR" = "true" ]; then
-            echo "::notice::DEVOPS_READ_TOKEN is not available to pull requests from forks: the devnet steps of this job are skipped."
+            echo "::notice::DEVOPS_READ_TOKEN is not available to pull requests from forks: the Twin chain steps of this job are skipped."
             echo "available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "::error::Secret DEVOPS_READ_TOKEN is missing (owner action: add it as a repository secret with read access to robotmoney/devops). Every job that boots the devnet needs it for the publish-contracts checkout."
+          echo "::error::Secret DEVOPS_READ_TOKEN is missing (owner action: add it as a repository secret with read access to robotmoney/devops). Every job that deploys to the Twin chain needs it for the publish-contracts checkout."
           exit 1
         fi
         ref="${INPUT_REF:-${ENV_REF:-$DEFAULT_REF}}"

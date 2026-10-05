@@ -1,7 +1,9 @@
 /**
  * Playwright globalSetup. Boots the smoke-test full-stack devnet
- * unconditionally — every dapp E2E spec runs against a real
- * Geth+Lighthouse chain with the gateway deployed and the dapp
+ * unconditionally — every dapp E2E spec runs against the Twin chain
+ * (id 918453, a pinned lazy fork of real Base state made with anvil; the CI
+ * job starts it and exports TWIN_RPC_URL, which the harness reuses) with the
+ * gateway deployed and the dapp
  * container built with the deployed runtime hash pinned. There is no
  * fast-path local dev-server mode; all specs see a prod-bit-identical
  * dapp bundle.
@@ -14,7 +16,8 @@
  *     stored in `DEVNET_ENDPOINTS_FILE`. Specs read that file via
  *     `helpers/devnet.ts`.
  *   - globalTeardown kills the child process; the binary's Drop runs
- *     `docker compose down` on both compose stacks.
+ *     `docker compose down` on the dapp stack and stops a Twin fork the
+ *     binary started (a fork reused through TWIN_RPC_URL stays up).
  *
  * Canonical: docs/development/smoke-test-design.md, issue #245.
  */

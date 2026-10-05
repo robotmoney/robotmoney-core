@@ -46,15 +46,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use alloy_primitives::{keccak256, Address};
 use tempfile::TempDir;
 
-// -- Genesis account constants ----------------------------------------
-
-/// Genesis-funded FUNDER (the constant keeps its historic name). It sends the
-/// boot-time ETH grants and nothing else. It holds no role on any contract:
-/// the real deployer is a fresh rehearsal keystore minted per boot, and after
-/// handover only the real Safe and the timelock hold admin.
-pub const DEPLOYER_PRIVATE_KEY_HEX: &str =
-    "0xbcdf20249abf0ed6d944c0288fad489e33f66b3960d9e6229c1cd214ed3bbe31";
-pub const DEPLOYER_ADDRESS_HEX: &str = "0x8943545177806ED17B9F23F0a21ee5948eCaa776";
+// -- Harness account constants ----------------------------------------
 
 /// Key paired with PAUSER_ROLE. The derived address (`0x6145…`) is
 /// the sheet's PAUSER_ADDRESS, granted PAUSER_ROLE by publish contracts, so [`Fixture::pause_gateway`] can
@@ -63,25 +55,20 @@ pub const PAUSER_PRIVATE_KEY_HEX: &str =
     "0x53321db7c1e331d93a11a41d16f004d7ff63972ec8ec7c25db329728ceeb1710";
 pub const PAUSER_ADDRESS_HEX: &str = "0x614561D2d143621E126e87831AEF287678B442b8";
 
-/// Genesis-funded EOA registered as the vault share receiver.
+/// EOA registered as the vault share receiver (funded with gas at boot).
 pub const SHARE_RECEIVER_ADDRESS_HEX: &str = "0x1CBd3b2770909D4e10f157cABC84C7264073C9Ec";
 
-/// Harness USDC holder — the clean-history EOA that receives a genesis-time
-/// USDC balance grant on the smoke-test devnet. See
+/// Harness USDC holder — the clean-history EOA that receives a USDC balance grant at boot
+/// (the Twin chain environment step "fund USDC", a write to the real FiatToken balance slot). See
 /// `docs/development/smoke-test-design.md` (USDC faucet section) and issue #255.
 ///
 /// This key MUST NOT be used on any real chain. It is test-only by
-/// construction. The genesis ingester writes
-/// `usdc.balances[HARNESS_USDC_HOLDER_ADDRESS_HEX] = grant_units` into the
-/// devnet's `genesis.json` alloc, and `Fixture::fund_usdc` signs a plain
-/// `transfer(address,uint256)` from this key against the canonical Base USDC
-/// proxy.
+/// construction. It is the dapp harness's admin EOA and the ETH faucet
+/// ([`Fixture::fund_eth_from_harness`]).
 pub const HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX: &str =
     "0xd2dffaf3c3c5e3e2f5cb5cef1a3a2e0e0a8b9d4ae2f6c1d3e8a5b7c9e0f1a2b3";
 /// Address derived from [`HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`]. Verified
-/// against `cast wallet address` at definition time. Used by the genesis
-/// ingester (for the USDC balance grant + ETH-for-gas alloc) and by
-/// `Fixture::fund_usdc` (as the transfer sender).
+/// against `cast wallet address` at definition time.
 pub const HARNESS_USDC_HOLDER_ADDRESS_HEX: &str = "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5";
 
 /// Fixed host+container port for the `receipt-fixtures` compose service
@@ -476,6 +463,7 @@ impl Fixture {
         const GAS_WEI: u128 = 1_000_000_000_000_000_000; // 1 ETH
         const DEPLOYER_GAS_WEI: u128 = 10_000_000_000_000_000_000; // 10 ETH
         const HOLDER_GAS_WEI: u128 = 1_000_000_000_000_000_000_000; // 1000 ETH, the faucet reserve
+        const HOLDER_USDC_GRANT: u128 = 1_000_000 * 1_000_000; // 1M USDC, 6dp, the faucet reserve
         let agent_hex = format!("{:#x}", agent_address());
         let deployer_hex = keys.address("ADMIN_ADDRESS")?.to_string();
         let fund = || -> Result<(), HarnessError> {
@@ -491,6 +479,7 @@ impl Fixture {
                 twin.fund_gas(&a, GAS_WEI)?;
             }
             twin.fund_gas(HARNESS_USDC_HOLDER_ADDRESS_HEX, HOLDER_GAS_WEI)?;
+            twin.set_usdc_balance(HARNESS_USDC_HOLDER_ADDRESS_HEX, HOLDER_USDC_GRANT)?;
             twin.fund_gas(SHARE_RECEIVER_ADDRESS_HEX, GAS_WEI)?;
             Ok(())
         };
