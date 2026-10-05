@@ -82,17 +82,12 @@ demo-seed-depositors: ## Seed demo depositors against an already-deployed devnet
 		$(if $(PER_USER_USDC),--per-user-usdc "$(PER_USER_USDC)",)
 
 landing-price-fork-test: ## Boot forked-Base devnet + run landing price-strip fork integration & Playwright fork tests (issue #482)
-	# 1. Fork integration: read each pool slot0 from the forked-Base devnet and
-	#    assert converted prices match the pinned expected-prices fixture. The
-	#    Rust harness boots Anvil from the checked-in fork-state fixture (or a
-	#    live archive RPC via RMPC_FORK_RPC_URL) at the pinned fork block.
+	# 1. Fork integration: read each pool slot0 from the Twin chain (a pinned lazy fork of
+	#    real Base, scripts/devnet/twin-fork.ts) and assert converted prices sit inside the
+	#    sanity band of testing/ethereum-testnet/config/price-strip-pairs.json.
 	cargo test -p rmpc-fork-e2e --test landing_price_strip_fork -- --nocapture
-	# 2. CI guard: fail if the fork block changed without the expected-prices
-	#    fixture being refreshed in the same commit.
-	cargo test -p smoke-test --lib fork_manifest::tests::fork_block_aligns_with_expected_prices
-	# 3. Playwright fork: dapp pointed at the forked-Base devnet (booted by the
-	#    Playwright globalSetup), no RPC mocks, asserts the strip against the
-	#    same expected-prices fixture.
+	# 2. Playwright fork: dapp pointed at the Twin chain (booted by the Playwright
+	#    globalSetup), no RPC mocks, asserts the strip against the same sanity bands.
 	cd clients/dapp && bunx playwright test landing-price-strip.spec.ts
 
 # Include per-machine overrides if present (gitignored).

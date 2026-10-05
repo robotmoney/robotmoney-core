@@ -4,7 +4,7 @@
  *
  * Usage:
  *   bun scripts/release/dependency-manifest-record.ts --chain-id 8453 --release v1.2.3
- *        [--repo-root DIR] [--rpc-url URL | --state-file anvil.state] [--out FILE]
+ *        [--repo-root DIR] [--rpc-url URL] [--twin] [--out FILE]
  *
  * Default output: deployments/dependency-manifests/<chainId>/<release>.json, committed
  * with the release deployment record. Addresses come from the deploy config files
@@ -13,20 +13,20 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { MANIFEST_DIR, argOpt, buildManifest, collectThirdPartyAddresses, makeReader } from "./dependency-manifest-lib.ts";
+import { MANIFEST_DIR, argOpt, buildManifest, chainIdMatches, collectThirdPartyAddresses, makeReader } from "./dependency-manifest-lib.ts";
 
 const args = process.argv.slice(2);
 const chainId = Number(argOpt(args, "--chain-id"));
 const release = argOpt(args, "--release");
 if (!Number.isInteger(chainId) || !release) {
-  console.error("usage: dependency-manifest-record.ts --chain-id N --release TAG [--repo-root DIR] [--rpc-url URL | --state-file F] [--out FILE]");
+  console.error("usage: dependency-manifest-record.ts --chain-id N --release TAG [--repo-root DIR] [--rpc-url URL] [--twin] [--out FILE]");
   process.exit(2);
 }
 const root = argOpt(args, "--repo-root") ?? process.cwd();
 const reader = makeReader(args);
 
 const live = await reader.chainId();
-if (live !== null && live !== chainId) {
+if (!chainIdMatches(live, chainId, args)) {
   console.error(`chain id mismatch: --chain-id ${chainId}, endpoint reports ${live}`);
   process.exit(1);
 }

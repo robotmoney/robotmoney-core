@@ -9,8 +9,7 @@
  * the result verbatim. That is NOT a safe limit, and the reason is not merely
  * "state might move": a bare estimate has zero *usable* margin by construction.
  *
- * Measured on the committed fork fixture (`testing/fixtures/fork-state/
- * CURRENT.anvil-state`, anvil, no network) for the 5 USDC `vault.deposit`
+ * Measured on a Twin chain fork (anvil, pinned lazy fork of real Base) for the 5 USDC `vault.deposit`
  * both `registry-receipt-rows.spec.ts` and `multi-vault-withdrawal.spec.ts`
  * sign — see issue #1388:
  *

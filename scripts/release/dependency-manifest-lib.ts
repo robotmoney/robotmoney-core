@@ -11,6 +11,7 @@
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { SAFE_SET } from "../devnet/safe-set.ts";
 
 // ---------------------------------------------------------------- keccak-256
 const MASK = (1n << 64n) - 1n;
@@ -105,7 +106,7 @@ export const JSON_ADDRESS_SOURCES: { file: string }[] = [
 /** Solidity deploy scripts: `address ... constant NAME = 0x...;` lines are third-party pins. */
 export const SOLIDITY_SCRIPT_DIR = "contracts/script";
 /** Safe factory, singletons, fallback handler and MultiSend: the pinned set the Safe checker already holds. */
-export const SAFE_SET_FILE = "scripts/devnet/check-fork-safe-set.sh";
+export const SAFE_SET_FILE = "scripts/devnet/safe-set.ts";
 
 function walk(node: unknown, path: string, out: { address: string; label: string }[], warn: string[], file: string): void {
   if (typeof node === "string") {
@@ -149,11 +150,7 @@ export function collectThirdPartyAddresses(repoRoot: string, _chainId?: number):
     }
   }
 
-  const safe = join(root, SAFE_SET_FILE);
-  if (existsSync(safe)) {
-    for (const m of readFileSync(safe, "utf8").matchAll(/"(0x[0-9a-fA-F]{40})\|([^|"]+)\|/g))
-      found.push({ address: m[1].toLowerCase(), label: m[2], source: SAFE_SET_FILE });
-  }
+  for (const c of SAFE_SET) found.push({ address: c.address.toLowerCase(), label: c.name, source: SAFE_SET_FILE });
 
   // De-duplicate by address; keep the first label and join further labels for readability.
   const byAddr = new Map<string, Dependency>();
@@ -207,29 +204,6 @@ export function rpcReader(url: string): ChainReader {
     blockNumber: async () => parseInt((await call("eth_blockNumber", [])) as string, 16),
     code: async (a, b) => (await call("eth_getCode", [a, tag(b)])) as string,
     storageAt: async (a, s, b) => (await call("eth_getStorageAt", [a, s, tag(b)])) as string,
-  };
-}
-
-/** Reads a saved anvil --dump-state snapshot (a real Base capture). Historic blocks are not available. */
-export function stateFileReader(path: string): ChainReader {
-  const state = JSON.parse(readFileSync(path, "utf8")) as {
-    block?: { number?: string };
-    accounts: Record<string, { code?: string; storage?: Record<string, string> }>;
-  };
-  const acct = (a: string) => state.accounts[a.toLowerCase()];
-  return {
-    describe: () => `state-file ${path}`,
-    chainId: async () => null,
-    blockNumber: async () => parseInt(state.block?.number ?? "0x0", 16),
-    code: async (a, b) => {
-      if (b !== undefined) throw new Error("state file has no history");
-      return acct(a)?.code || "0x";
-    },
-    storageAt: async (a, s, b) => {
-      if (b !== undefined) throw new Error("state file has no history");
-      const st = acct(a)?.storage ?? {};
-      return st[s.toLowerCase()] ?? "0x" + "0".repeat(64);
-    },
   };
 }
 
@@ -292,7 +266,7 @@ export async function buildManifest(
   const blockNumber = await reader.blockNumber();
   const entries: ManifestEntry[] = [];
   // Pin every read to one block so the manifest is one consistent view.
-  const pin = reader.describe().startsWith("state-file") ? undefined : blockNumber;
+  const pin = blockNumber;
   for (const d of deps) entries.push(await readEntry(reader, d, pin));
   return { schemaVersion: 1, chainId, release, blockNumber, recordedAt: now.toISOString(), entries };
 }
@@ -311,7 +285,7 @@ export interface Change {
 
 export async function diffManifest(old: Manifest, reader: ChainReader, locate = false): Promise<{ liveBlock: number; changes: Change[] }> {
   const liveBlock = await reader.blockNumber();
-  const pin = reader.describe().startsWith("state-file") ? undefined : liveBlock;
+  const pin = liveBlock;
   const changes: Change[] = [];
   for (const o of old.entries) {
     const now = await readEntry(reader, o, pin);
@@ -378,7 +352,11 @@ export function argOpt(args: string[], name: string): string | undefined {
 }
 
 export function makeReader(args: string[]): ChainReader {
-  const state = argOpt(args, "--state-file");
-  if (state) return stateFileReader(state);
   return rpcReader(argOpt(args, "--rpc-url") ?? process.env.BASE_RPC_URL ?? "https://mainnet.base.org");
+}
+
+/** The Twin chain (core 1498) is a fork of Base with its own chain id; `--twin` accepts it as the manifest's chain. */
+export const TWIN_CHAIN_ID = 918453;
+export function chainIdMatches(live: number | null, want: number, args: string[]): boolean {
+  return live === null || live === want || (args.includes("--twin") && live === TWIN_CHAIN_ID);
 }

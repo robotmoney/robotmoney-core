@@ -21,13 +21,6 @@ path = "src/lib.rs"
 name = "smoke-test"
 path = "src/bin/smoke-test.rs"
 
-# Fork-block manifest validator (issue #255 CI gate). Loads + validates
-# testing/ethereum-testnet/config/fork-block.json and exits with a distinct
-# code per failure class. Run from the CI guard step in `.github/workflows/`.
-[[bin]]
-name = "smoke-test-fork-manifest-validate"
-path = "src/bin/fork-manifest-validate.rs"
-
 [dependencies]
 test-utils = { path = "../test-utils" }
 alloy-primitives = { version = "0.8", features = ["k256"] }

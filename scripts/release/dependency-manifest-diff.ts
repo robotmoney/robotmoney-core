@@ -5,7 +5,7 @@
  *
  * Usage:
  *   bun scripts/release/dependency-manifest-diff.ts --chain-id 8453
- *        [--manifest FILE] [--repo-root DIR] [--rpc-url URL | --state-file F]
+ *        [--manifest FILE] [--repo-root DIR] [--rpc-url URL] [--twin]
  *        [--locate] [--json-out FILE]
  *
  * Without --manifest it reads the latest one under deployments/dependency-manifests/<chain>/.
@@ -14,7 +14,7 @@
  * Exit: 0 no change; 1 at least one change; 2 bad usage or no manifest.
  */
 import { writeFileSync } from "node:fs";
-import { argOpt, diffManifest, formatReport, latestManifestPath, loadManifest, makeReader } from "./dependency-manifest-lib.ts";
+import { argOpt, chainIdMatches, diffManifest, formatReport, latestManifestPath, loadManifest, makeReader } from "./dependency-manifest-lib.ts";
 
 const args = process.argv.slice(2);
 const root = argOpt(args, "--repo-root") ?? process.cwd();
@@ -22,7 +22,7 @@ let path = argOpt(args, "--manifest");
 if (!path) {
   const chainId = Number(argOpt(args, "--chain-id"));
   if (!Number.isInteger(chainId)) {
-    console.error("usage: dependency-manifest-diff.ts (--chain-id N | --manifest FILE) [--repo-root DIR] [--rpc-url URL | --state-file F] [--locate] [--json-out FILE]");
+    console.error("usage: dependency-manifest-diff.ts (--chain-id N | --manifest FILE) [--repo-root DIR] [--rpc-url URL] [--twin] [--locate] [--json-out FILE]");
     process.exit(2);
   }
   path = latestManifestPath(root, chainId) ?? undefined;
@@ -34,7 +34,7 @@ if (!path) {
 const manifest = loadManifest(path);
 const reader = makeReader(args);
 const live = await reader.chainId();
-if (live !== null && live !== manifest.chainId) {
+if (!chainIdMatches(live, manifest.chainId, args)) {
   console.error(`chain id mismatch: manifest ${manifest.chainId}, endpoint reports ${live}`);
   process.exit(2);
 }

@@ -1,6 +1,6 @@
 {
   "example": true,
-  "note": "EXAMPLE FIXTURE, not a release record. Generated from config and the checked-in Base snapshot. Used by the dependency manifest self-test. Real manifests live under <chain id>/<release>.json.",
+  "note": "EXAMPLE FIXTURE, not a release record. Generated from config. Used by the dependency manifest self-test. Real manifests live under <chain id>/<release>.json.",
   "schemaVersion": 1,
   "chainId": 8453,
   "release": "example-not-a-release",
@@ -19,7 +19,7 @@
     {
       "address": "0x38869bf66a61cf6bdb996a6ae40d5853fd43b526",
       "label": "MultiSend",
-      "source": "scripts/devnet/check-fork-safe-set.sh",
+      "source": "scripts/devnet/safe-set.ts",
       "codeHash": "0x0e4f7fc66550a322d1e7688e181b75e217e662a4f3f4d6a29b22bc61217c4b77",
       "implementation": null,
       "implementationSlot": null,
@@ -28,7 +28,7 @@
     {
       "address": "0x41675c099f32341bf84bfc5382af534df5c7461a",
       "label": "Safe singleton (L1)",
-      "source": "scripts/devnet/check-fork-safe-set.sh",
+      "source": "scripts/devnet/safe-set.ts",
       "codeHash": "0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4",
       "implementation": null,
       "implementationSlot": null,
@@ -37,7 +37,7 @@
     {
       "address": "0x4e1dcf7ad4e460cfd30791ccc4f9c8a4f820ec67",
       "label": "SafeProxyFactory",
-      "source": "scripts/devnet/check-fork-safe-set.sh",
+      "source": "scripts/devnet/safe-set.ts",
       "codeHash": "0x50c3cdc4074750a7a974204a716c999edd37482f907608d960b2b025ee0b3317",
       "implementation": null,
       "implementationSlot": null,

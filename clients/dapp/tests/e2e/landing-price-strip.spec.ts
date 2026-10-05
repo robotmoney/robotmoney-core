@@ -1,21 +1,14 @@
 /**
  * Playwright E2E — landing-page live DEX price strip (issue #482), run
- * against the smoke-test full-stack forked-Base devnet booted by
+ * against the Twin chain (a pinned lazy fork of real Base, core 1498) booted by
  * globalSetup. NO RPC mocks and NO useReadContract stubs: the dapp bundle
  * that ships is the bundle exercised here, reading pool slot0 over the real
  * devnet RPC (docs/prd.md#112-protocol-asset-vault).
  *
- * Expected prices are pinned in
- * `testing/ethereum-testnet/config/expected-prices.json`. When that fixture's
- * `captured` flag is false the magnitude assertions are skipped (the pools are
- * not yet archive-pinned) but the strip-renders / freshness-chip / per-cell
- * isolation assertions always run. When `captured` is true each cell's numeric
- * value is asserted to match the fixture within `tolerance_pct`.
- *
- * The Twin chain is pinned at the upstream head minus 2 at the start of each CI run, not at the
- * golden `fork_block`, so market prices have moved. At the golden block `tolerance_pct` applies.
- * At any other block each cell must be within a factor of MOVED_PIN_BAND_FACTOR of the golden
- * value, which still catches wrong decimals, inverted pairs and a missing pool.
+ * The pairs and their sanity bands are in
+ * `testing/ethereum-testnet/config/price-strip-pairs.json`. The pin moves every run, so there is
+ * no golden price: each cell must sit inside its [min_price, max_price] band, which still catches
+ * wrong decimals, inverted pairs and a missing pool.
  */
 import { test, expect } from "./helpers/fixtures";
 import type { Page } from "@playwright/test";
@@ -25,43 +18,29 @@ import { fileURLToPath } from "node:url";
 import { loadEndpoints } from "./helpers/devnet";
 import { openDapp } from "./helpers/wallet";
 
-interface ExpectedPair {
+interface PricePair {
   id: string;
   label: string;
-  expected_price: number | null;
+  min_price: number;
+  max_price: number;
 }
-interface ExpectedPrices {
-  fork_block: number;
-  tolerance_pct: number;
-  captured: boolean;
-  /** When true, the devnet is a real archive fork and block numbers are >= fork_block.
-   *  When false (stub-price devnet), block numbers start near zero — only assert > 0.
-   *  Defaults to captured for backwards compatibility (issue #531). */
-  pinned_on_archive_fork?: boolean;
-  pairs: ExpectedPair[];
+interface PriceStripPairs {
+  pairs: PricePair[];
 }
 
-function loadExpectedPrices(): ExpectedPrices {
+function loadPairs(): PriceStripPairs {
   // tests/e2e -> repo root is four levels up (clients/dapp/tests/e2e).
   // Use import.meta.url instead of __dirname (ESM context).
   const thisDir = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.resolve(thisDir, "../../../..");
-  const file = path.join(repoRoot, "testing/ethereum-testnet/config/expected-prices.json");
-  return JSON.parse(fs.readFileSync(file, "utf8")) as ExpectedPrices;
+  const file = path.join(repoRoot, "testing/ethereum-testnet/config/price-strip-pairs.json");
+  return JSON.parse(fs.readFileSync(file, "utf8")) as PriceStripPairs;
 }
 
-/** Allowed factor between a live price and the golden price when the chain is not at the golden block. */
-const MOVED_PIN_BAND_FACTOR = 5;
-
-/** Head block of the Twin chain, read straight from the devnet RPC. */
-async function headBlock(rpcUrl: string): Promise<number> {
-  const res = await fetch(rpcUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }),
-  });
-  const json = (await res.json()) as { result: string };
-  return parseInt(json.result, 16);
+/** The Twin chain pin, when the runner exports it (the twin-fork action does). The head is never below it. */
+function pinBlock(): number {
+  const n = Number(process.env.TWIN_PIN_BLOCK ?? "0");
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 const PAIR_IDS = ["eth-usd", "weth-usdc", "cbbtc-usdc"] as const;
@@ -80,47 +59,29 @@ function parseBlock(text: string | null): number | null {
   return m ? Number(m[1]) : null;
 }
 
-test("landing price strip matches Base mainnet at fork block", async ({ page }) => {
+test("landing price strip prices sit inside their sanity bands", async ({ page }) => {
   await gotoLanding(page);
-  const expected = loadExpectedPrices();
+  const { pairs } = loadPairs();
 
-  // All four cells render.
+  // All cells render.
   for (const id of PAIR_IDS) {
     await expect(page.getByTestId(`landing-price-cell-${id}`)).toBeVisible();
   }
 
-  if (!expected.captured) {
-    test.info().annotations.push({
-      type: "note",
-      description:
-        "expected-prices fixture not yet archive-pinned (captured=false); " +
-        "magnitude assertions skipped. Pin real values to enable.",
-    });
-    return;
-  }
-
-  const atGoldenBlock = (await headBlock(loadEndpoints().rpc_url)) === expected.fork_block;
-  for (const pair of expected.pairs) {
+  for (const pair of pairs) {
     const value = page.getByTestId(`landing-price-cell-${pair.id}-value`);
     await expect(value).not.toHaveText("unavailable");
-    const exp = pair.expected_price as number;
     // Poll the numeric read so a transient loading/blank cell does not fail
-    // the one-shot drift assertion (the price feed paints asynchronously).
-    // The polled predicate is the SAME correctness check: parseable, in-bound.
+    // the one-shot assertion (the price feed paints asynchronously).
     await expect
       .poll(
         async () => {
           const text = (await value.textContent()) ?? "";
           const numeric = Number(text.replace(/[$,\s]/g, ""));
-          if (!Number.isFinite(numeric)) return false;
-          if (!atGoldenBlock) return numeric >= exp / MOVED_PIN_BAND_FACTOR && numeric <= exp * MOVED_PIN_BAND_FACTOR;
-          const driftPct = (Math.abs(numeric - exp) / exp) * 100;
-          return driftPct <= expected.tolerance_pct;
+          return Number.isFinite(numeric) && numeric >= pair.min_price && numeric <= pair.max_price;
         },
         {
-          message: atGoldenBlock
-            ? `landing price cell ${pair.id} must render within ${expected.tolerance_pct}% of ${exp}`
-            : `landing price cell ${pair.id} must render within a factor of ${MOVED_PIN_BAND_FACTOR} of ${exp} (the chain is not at the golden block)`,
+          message: `landing price cell ${pair.id} must render inside [${pair.min_price}, ${pair.max_price}]`,
           timeout: 60_000,
           intervals: [2_000],
         },
@@ -131,25 +92,14 @@ test("landing price strip matches Base mainnet at fork block", async ({ page }) 
 
 test("landing price strip shows block-number freshness chip", async ({ page }) => {
   await gotoLanding(page);
-  const expected = loadExpectedPrices();
 
-  // The section-level freshness chip eventually reports a positive block
-  // number. When `pinned_on_archive_fork` is true (real archive fork), the
-  // block is also at or after the pinned fork block (the devnet keeps
-  // producing blocks past the fork). When false (stub-price fresh devnet,
-  // issue #531) only a positive block is guaranteed — the stub devnet starts
-  // from genesis block 0, never reaching fork_block. `pinned_on_archive_fork`
-  // defaults to `captured` for backwards compatibility.
-  const pinnedOnArchiveFork = expected.pinned_on_archive_fork ?? expected.captured;
+  // The section-level freshness chip eventually reports a block number at or after the Twin pin
+  // (the chain keeps producing blocks past the fork point). Without the pin in the env only a
+  // positive block is guaranteed.
+  const minBlock = pinBlock();
   const blockPredicate = async () =>
     parseBlock(await page.getByTestId("landing-price-strip-freshness").textContent());
-  if (pinnedOnArchiveFork) {
-    await expect
-      .poll(blockPredicate, { timeout: 60_000 })
-      .toBeGreaterThanOrEqual(expected.fork_block);
-  } else {
-    await expect.poll(blockPredicate, { timeout: 60_000 }).toBeGreaterThan(0);
-  }
+  await expect.poll(blockPredicate, { timeout: 60_000 }).toBeGreaterThan(Math.max(0, minBlock - 1));
 
   // Each cell carries its own block chip with the same property.
   for (const id of PAIR_IDS) {
@@ -157,11 +107,7 @@ test("landing price strip shows block-number freshness chip", async ({ page }) =
       await page.getByTestId(`landing-price-cell-${id}-block`).textContent(),
     );
     expect(block).not.toBeNull();
-    if (pinnedOnArchiveFork) {
-      expect(block as number).toBeGreaterThanOrEqual(expected.fork_block);
-    } else {
-      expect(block as number).toBeGreaterThan(0);
-    }
+    expect(block as number).toBeGreaterThan(Math.max(0, minBlock - 1));
   }
 });
 

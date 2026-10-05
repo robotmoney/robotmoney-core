@@ -2,30 +2,33 @@
 /**
  * Self-test for the dependency manifest tools (core 1497). Offline, no secret.
  *
- * The chain data is the saved Base snapshot in testing/fixtures/fork-state (real
- * Base code and storage, the same file the Twin chain boots from). Cases:
+ * The chain data is the Twin chain (core 1498): a pinned lazy fork of real Base state, real code and
+ * storage, started with scripts/devnet/twin-fork.ts. Pass its URL with --rpc-url or TWIN_RPC_URL. With
+ * neither, the selftest skips with a named reason (it reads a chain; it never builds one from a file).
+ * Cases:
  *   1. record a manifest from the snapshot, diff it against the same snapshot: no change, exit 0
  *   2. edit one code hash in the manifest: the report names exactly that address, exit 1
  *   3. edit one implementation code hash: the report names exactly that proxy
  *   4. every manifest address is in the deploy config (check script exits 0); an added stray address exits 1
  *   5. the workflow check passes the shipped workflow and fails one with a schedule or no dispatch
  *
- * Usage: bun scripts/release/dependency-manifest-selftest.ts [--state-file F]
- * Exit: 0 all cases hold; 1 a case failed.
+ * Usage: bun scripts/release/dependency-manifest-selftest.ts [--rpc-url URL]
+ * Exit: 0 all cases hold or the run skipped for want of a chain; 1 a case failed.
  */
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const here = import.meta.dir;
 const root = resolve(here, "../..");
 const args = process.argv.slice(2);
-const stateArg = args.indexOf("--state-file");
-const fixtures = join(root, "testing/fixtures/fork-state");
-const state =
-  stateArg >= 0
-    ? args[stateArg + 1]
-    : join(fixtures, readdirSync(fixtures).filter((f) => f.endsWith(".anvil-state")).sort().pop() as string);
+const rpcArg = args.indexOf("--rpc-url");
+const rpcUrl = rpcArg >= 0 ? args[rpcArg + 1] : process.env.TWIN_RPC_URL;
+if (!rpcUrl) {
+  console.log("SKIP: no chain. Start the Twin fork (bun scripts/devnet/twin-fork.ts start) and pass --rpc-url or set TWIN_RPC_URL.");
+  process.exit(0);
+}
+const TWIN = ["--twin", "--rpc-url", rpcUrl];
 
 const tmp = mkdtempSync(join(tmpdir(), "depmanifest-"));
 let failures = 0;
@@ -41,15 +44,15 @@ function run(script: string, a: string[]): { code: number; out: string } {
 
 try {
   const good = join(tmp, "good.json");
-  const rec = run("dependency-manifest-record.ts", ["--chain-id", "8453", "--release", "selftest", "--repo-root", root, "--state-file", state, "--out", good]);
-  ok(rec.code === 0, `record from ${state} exits 0`);
+  const rec = run("dependency-manifest-record.ts", ["--chain-id", "8453", "--release", "selftest", "--repo-root", root, ...TWIN, "--out", good]);
+  ok(rec.code === 0, `record from the Twin chain exits 0`);
   const m = JSON.parse(readFileSync(good, "utf8"));
   const withCode = m.entries.filter((e: any) => e.codeHash);
   ok(withCode.length >= 3, `manifest holds code hashes (${withCode.length} of ${m.entries.length} addresses have code)`);
   ok(m.entries.some((e: any) => e.implementation && e.implementationCodeHash), "at least one proxy has its implementation address and code hash (USDC)");
 
   // 1. accurate manifest: no change
-  const d1 = run("dependency-manifest-diff.ts", ["--manifest", good, "--state-file", state]);
+  const d1 = run("dependency-manifest-diff.ts", ["--manifest", good, ...TWIN]);
   ok(d1.code === 0 && /no change/.test(d1.out) && !/CHANGED/.test(d1.out), "accurate manifest: report lists no change, exit 0");
 
   // 2. one edited code hash
@@ -59,7 +62,7 @@ try {
   be.codeHash = "0x" + "ab".repeat(32);
   const badPath = join(tmp, "bad.json");
   writeFileSync(badPath, JSON.stringify(bad));
-  const d2 = run("dependency-manifest-diff.ts", ["--manifest", badPath, "--state-file", state]);
+  const d2 = run("dependency-manifest-diff.ts", ["--manifest", badPath, ...TWIN]);
   const named = [...d2.out.matchAll(/^CHANGED (0x[0-9a-f]{40})/gm)].map((x) => x[1]);
   ok(d2.code === 1 && named.length === 1 && named[0] === target.address, `edited code hash: report names exactly ${target.address}`);
   ok(d2.out.includes(be.codeHash) && d2.out.includes(target.codeHash), "report shows old and new hash");
@@ -70,7 +73,7 @@ try {
   bad3.entries.find((e: any) => e.address === proxy.address).implementationCodeHash = "0x" + "cd".repeat(32);
   const bad3Path = join(tmp, "bad3.json");
   writeFileSync(bad3Path, JSON.stringify(bad3));
-  const d3 = run("dependency-manifest-diff.ts", ["--manifest", bad3Path, "--state-file", state]);
+  const d3 = run("dependency-manifest-diff.ts", ["--manifest", bad3Path, ...TWIN]);
   const named3 = [...d3.out.matchAll(/^CHANGED (0x[0-9a-f]{40})/gm)].map((x) => x[1]);
   ok(d3.code === 1 && named3.length === 1 && named3[0] === proxy.address, `edited implementation hash: report names exactly ${proxy.address}`);
 
@@ -88,8 +91,6 @@ try {
   const exm = JSON.parse(readFileSync(ex, "utf8"));
   ok(exm.example === true && /EXAMPLE/.test(exm.note ?? ""), "example fixture is clearly marked as an example");
   ok(run("check-dependency-manifest-addresses.ts", ["--manifest", ex, "--repo-root", root]).code === 0, "example fixture addresses are all in the deploy config");
-  const d4 = run("dependency-manifest-diff.ts", ["--manifest", ex, "--state-file", state]);
-  ok(d4.code === 0 && /no change/.test(d4.out), "example fixture diffs clean against the checked-in snapshot");
   ok(run("record-release-dependencies.ts", ["--chain-id", "8453", "--release", "x", "--manifests-dir", join(tmp, "nope")]).code === 2, "release hook refuses a missing --manifests-dir");
 
   // 5. workflow check

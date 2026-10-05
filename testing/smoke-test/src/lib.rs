@@ -18,13 +18,10 @@
 //! - On-chain poke helpers: [`Fixture::pause_gateway`], [`Fixture::fund_usdc`], etc.
 //! - [`Fixture::warp`] / [`Fixture::fund_gas`] — the Twin chain environment steps.
 //! - [`prerequisites_available`] — check for anvil/bun/forge/cast on PATH.
-//! - [`fork_manifest::ForkManifest`] — typed view over
-//!   `testing/ethereum-testnet/config/fork-block.json` (issue #255).
 
 /// Dev-scout module for Base testnet fixture support (issue #842).
 /// Automated account funding seams for Base testnet e2e tests (issue #839).
 pub mod base_testnet;
-pub mod fork_manifest;
 pub mod logging;
 /// The one runbook, "publish contracts": the harness calls it, it deploys nothing itself.
 pub mod publish;

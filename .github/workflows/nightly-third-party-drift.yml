@@ -99,5 +99,10 @@ jobs:
             bun scripts/release/check-dependency-manifest-addresses.ts --manifest "$m"
           done
 
+      # The self-test reads real Base code and storage from the Twin chain (core 1498): a pinned lazy
+      # fork of Base made with anvil, no saved snapshot. The action exports TWIN_RPC_URL.
+      - name: Start the Twin fork
+        uses: ./.github/actions/twin-fork
+
       - name: Self-test (edited code hash is named, accurate manifest shows no change)
         run: bun scripts/release/dependency-manifest-selftest.ts

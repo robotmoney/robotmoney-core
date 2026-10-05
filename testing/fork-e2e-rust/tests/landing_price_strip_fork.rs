@@ -6,25 +6,11 @@
 //! price source) and converts `sqrtPriceX96` to a human mid price with the
 //! same decimals-aware math the dapp uses (clients/dapp/src/lib/uniswapV3.ts).
 //!
-//! The converted prices are compared against the pinned expected-prices
-//! fixture at `testing/ethereum-testnet/config/expected-prices.json` within
-//! the fixture's `tolerance_pct`. The fixture's `fork_block` is pinned to the
-//! fork-block manifest by the CI guard `fork_block_aligns_with_expected_prices`
-//! in `testing/smoke-test/src/fork_manifest.rs`.
-//!
-//! The Twin chain is pinned at the upstream head minus 2 at the start of each CI run, not at the
-//! golden `fork_block`, so market prices have moved since the fixture was captured. At the golden
-//! block the fixture's `tolerance_pct` applies. At any other block the test asserts the price is
-//! within a factor of [`MOVED_PIN_BAND_FACTOR`] of the golden value, which still catches wrong
-//! decimals (a factor of 10^12), inverted pairs (the reciprocal) and a missing pool.
-//!
-//! Posture while `captured == false`: the fixture has no archive-pinned
-//! magnitudes yet, so this test asserts every pool EXISTS at the fork block
-//! and returns a positive `sqrtPriceX96` (the cbBTC pool is the
-//! smaller pool most likely to be missing if the fork manifest drifts) and
-//! prints the live converted price for capture. Once real values are pinned
-//! (`captured == true`) it additionally asserts each price is within
-//! `tolerance_pct` of `expected_price`.
+//! The converted prices are checked against the sanity band of each pair in
+//! `testing/ethereum-testnet/config/price-strip-pairs.json`. The Twin chain is pinned at the
+//! upstream head minus 2 at the start of each CI run, so there is no golden price: the band is
+//! wide, and it still catches wrong decimals (a factor of 10^12), inverted pairs (the reciprocal)
+//! and a missing pool.
 
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::{sol, SolCall};
@@ -45,32 +31,28 @@ sol! {
     }
 }
 
-/// Allowed factor between a live price and the golden price when the chain is not at the golden block.
-const MOVED_PIN_BAND_FACTOR: f64 = 5.0;
-
-/// One expected-prices fixture entry.
+/// One price-strip pair.
 struct PairFixture {
     id: String,
     pool: Address,
     base_decimals: i32,
     quote_decimals: i32,
     base_is_token0: bool,
-    expected_price: Option<f64>,
+    min_price: f64,
+    max_price: f64,
 }
 
 struct Fixture {
-    fork_block: u64,
-    tolerance_pct: f64,
-    captured: bool,
     pairs: Vec<PairFixture>,
 }
 
 fn load_fixture() -> Fixture {
     let repo = test_utils::find_workspace_root().expect("locate repo root");
-    let raw =
-        std::fs::read_to_string(repo.join("testing/ethereum-testnet/config/expected-prices.json"))
-            .expect("expected-prices.json readable");
-    let v: serde_json::Value = serde_json::from_str(&raw).expect("expected-prices.json parses");
+    let raw = std::fs::read_to_string(
+        repo.join("testing/ethereum-testnet/config/price-strip-pairs.json"),
+    )
+    .expect("price-strip-pairs.json readable");
+    let v: serde_json::Value = serde_json::from_str(&raw).expect("price-strip-pairs.json parses");
 
     let pairs = v["pairs"]
         .as_array()
@@ -86,16 +68,12 @@ fn load_fixture() -> Fixture {
             base_decimals: p["base_decimals"].as_i64().expect("base_decimals") as i32,
             quote_decimals: p["quote_decimals"].as_i64().expect("quote_decimals") as i32,
             base_is_token0: p["base_is_token0"].as_bool().expect("base_is_token0"),
-            expected_price: p["expected_price"].as_f64(),
+            min_price: p["min_price"].as_f64().expect("min_price"),
+            max_price: p["max_price"].as_f64().expect("max_price"),
         })
         .collect();
 
-    Fixture {
-        fork_block: v["fork_block"].as_u64().expect("fork_block"),
-        tolerance_pct: v["tolerance_pct"].as_f64().expect("tolerance_pct"),
-        captured: v["captured"].as_bool().unwrap_or(false),
-        pairs,
-    }
+    Fixture { pairs }
 }
 
 /// Decimals-aware sqrtPriceX96 -> human price. Mirrors
@@ -129,20 +107,12 @@ fn u256_to_f64(v: U256) -> f64 {
 }
 
 #[test]
-fn landing_price_strip_matches_robotmoney_devnet_at_fork_block() {
+fn landing_price_strip_is_inside_the_sanity_band() {
     skip_if_no_devnet_fork!();
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[landing_price_strip_fork] {}", fx.summary_line());
 
     let fixture = load_fixture();
-
-    // The devnet must be at (or after) the pinned fork block.
-    let block = fx.rpc().block_number().expect("block number");
-    assert!(
-        block >= fixture.fork_block,
-        "devnet block {block} is before pinned fork block {}",
-        fixture.fork_block
-    );
 
     // Read-only caller address (no value transfer in eth_call).
     let caller: Address = "0x0000000000000000000000000000000000000001"
@@ -161,7 +131,7 @@ fn landing_price_strip_matches_robotmoney_devnet_at_fork_block() {
         let sqrt_price = U256::from(decoded.sqrtPriceX96);
         assert!(
             sqrt_price > U256::ZERO,
-            "pool {} ({}) returned zero sqrtPriceX96 — pool missing or uninitialized at fork block",
+            "pool {} ({}) returned zero sqrtPriceX96 — pool missing or uninitialized on the Twin chain",
             pair.id,
             pair.pool
         );
@@ -177,34 +147,19 @@ fn landing_price_strip_matches_robotmoney_devnet_at_fork_block() {
             pair.id, pair.pool
         );
 
-        if fixture.captured {
-            let expected = pair.expected_price.unwrap_or_else(|| {
-                panic!("captured fixture missing expected_price for {}", pair.id)
-            });
-            if block == fixture.fork_block {
-                let drift_pct = ((price - expected) / expected).abs() * 100.0;
-                assert!(
-                    drift_pct <= fixture.tolerance_pct,
-                    "{} price {price} drifted {drift_pct:.4}% from expected {expected} \
-                     (tolerance {}%)",
-                    pair.id,
-                    fixture.tolerance_pct
-                );
-            } else {
-                assert!(
-                    price >= expected / MOVED_PIN_BAND_FACTOR
-                        && price <= expected * MOVED_PIN_BAND_FACTOR,
-                    "{} price {price} is outside a factor of {MOVED_PIN_BAND_FACTOR} of the \
-                     golden {expected}: wrong decimals, an inverted pair or a missing pool",
-                    pair.id
-                );
-            }
-        }
+        assert!(
+            price >= pair.min_price && price <= pair.max_price,
+            "{} price {price} is outside the band [{}, {}]: wrong decimals, an inverted pair \
+             or a missing pool",
+            pair.id,
+            pair.min_price,
+            pair.max_price
+        );
     }
 }
 
 #[test]
-fn landing_price_strip_cbbtc_pool_exists_at_fork_block() {
+fn landing_price_strip_cbbtc_pool_exists() {
     skip_if_no_devnet_fork!();
     let fx = ForkFixture::new().expect("boot fork");
     let fixture = load_fixture();
@@ -212,7 +167,7 @@ fn landing_price_strip_cbbtc_pool_exists_at_fork_block() {
         .parse()
         .unwrap();
 
-    // cbBTC is the smaller pool, most likely to be absent if the fork manifest
+    // cbBTC is the smaller pool, most likely to be absent if the upstream state
     // drifts; assert it returns a positive sqrtPriceX96.
     let id = "cbbtc-usdc";
     let pair = fixture
@@ -229,7 +184,7 @@ fn landing_price_strip_cbbtc_pool_exists_at_fork_block() {
         .unwrap_or_else(|e| panic!("slot0 decode failed for {id}: {e}"));
     assert!(
         U256::from(decoded.sqrtPriceX96) > U256::ZERO,
-        "{id} pool {} has no liquidity at fork block — manifest drift?",
+        "{id} pool {} has no liquidity on the Twin chain — pool address drift?",
         pair.pool
     );
 }

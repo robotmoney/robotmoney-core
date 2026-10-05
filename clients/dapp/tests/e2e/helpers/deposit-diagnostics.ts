@@ -11,8 +11,7 @@
  * a complete success, and all six guards run before `super._deposit`. So the
  * revert is deep inside `_routeDeposit`, where the vault hands USDC to the
  * Aave V3 / Compound V3 / Morpho adapters, which on this devnet call REAL Base
- * mainnet protocol code and storage ingested into the genesis alloc
- * (`testing/ethereum-testnet/config/fork-block.json`).
+ * mainnet protocol code and storage served by the Twin chain, a pinned lazy fork of real Base.
  *
  * Two candidates survive that evidence and a receipt cannot separate them:
  * an adapter- or protocol-internal custom error, or an out-of-gas. This module
