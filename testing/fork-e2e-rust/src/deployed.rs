@@ -180,7 +180,9 @@ mod tests {
         assert!(is_transient_upstream_failure(
             "failed to get account for 0x86AB: HTTP error 502 with body: <title>502 Bad Gateway</title>"
         ));
-        assert!(!is_transient_upstream_failure("Error: revert: InsufficientGas(1, 2)"));
+        assert!(!is_transient_upstream_failure(
+            "Error: revert: InsufficientGas(1, 2)"
+        ));
     }
 
     #[test]
