@@ -175,7 +175,7 @@ function* walk(dir: string): Generator<string> {
   }
 }
 const SELF = "scripts/devnet/check-twin-chain-ci-selftest.ts";
-const ALSO_NAMES_RETIRED = new Set(["scripts/ci/check-nightly-dispatch-selftest.ts"]); // names the deleted files on purpose
+const ALSO_NAMES_RETIRED = new Set(["scripts/ci/check-nightly-dispatch-selftest.ts", "scripts/devnet/check-stale-snapshot-docs.ts", "scripts/devnet/check-stale-snapshot-docs.test.ts"]); // names the deleted files on purpose
 const hits: string[] = [];
 for (const root of [".github", "scripts", "testing", "clients/dapp/tests", "services"]) {
   if (!existsSync(root)) continue;
