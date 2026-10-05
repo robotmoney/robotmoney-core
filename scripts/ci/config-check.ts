@@ -20,7 +20,7 @@
 // refused too. Pin with --print-usdc-hashes against Base mainnet, then review the diff.
 //
 // CLI (devops calls this):
-//   bun scripts/ci/config-check.ts --rpc URL [--config-dir DIR] [--chain ID] [--out-dir DIR]
+//   bun scripts/ci/config-check.ts --rpc URL [--config-dir DIR] [--chain ID] [--out-dir DIR]   (env CONFIG_CHECK_RPC_URL replaces --rpc, so a keyed URL stays out of argv)
 //   bun scripts/ci/config-check.ts --offline [--config-dir DIR]        (static rules only)
 //   bun scripts/ci/config-check.ts --rpc URL --print-usdc-hashes       (prints the two hashes, exit 0)
 // --rpc        JSON-RPC URL of the target chain (required unless --offline)
@@ -458,7 +458,7 @@ export interface CliArgs {
 }
 
 /** Strict parser. Any unknown flag, missing value or missing --rpc (unless --offline) is a usage error. */
-export function parseCli(argv: string[]): CliArgs {
+export function parseCli(argv: string[], env: Record<string, string | undefined> = process.env): CliArgs {
   const a: CliArgs = { chain: BASE_CHAIN_ID, offline: false, printUsdcHashes: false };
   for (let i = 0; i < argv.length; i++) {
     const f = argv[i];
@@ -478,7 +478,9 @@ export function parseCli(argv: string[]): CliArgs {
     else if (f === "--print-usdc-hashes") a.printUsdcHashes = true;
     else throw new UsageError(`unknown argument ${f}`);
   }
-  if (!a.offline && !a.rpc) throw new UsageError("--rpc is required (or pass --offline)");
+  // An RPC URL may carry a key, so a caller that must keep it out of argv (devops publish contracts) hands it over in CONFIG_CHECK_RPC_URL.
+  if (!a.rpc && env.CONFIG_CHECK_RPC_URL) a.rpc = env.CONFIG_CHECK_RPC_URL;
+  if (!a.offline && !a.rpc) throw new UsageError("--rpc is required (or set CONFIG_CHECK_RPC_URL, or pass --offline)");
   if (a.offline && a.printUsdcHashes) throw new UsageError("--print-usdc-hashes needs --rpc, not --offline");
   return a;
 }

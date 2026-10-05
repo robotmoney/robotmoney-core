@@ -269,6 +269,10 @@ describe("cli arguments", () => {
   });
   test("chain defaults to 8453", () => {
     expect(parseCli(["--rpc", "http://x"]).chain).toBe(8453);
+    // the env variable replaces --rpc (a keyed URL stays out of argv); an explicit --rpc wins
+    expect(parseCli(["--chain", "918453"], { CONFIG_CHECK_RPC_URL: "http://env" })).toMatchObject({ rpc: "http://env", chain: 918453 });
+    expect(parseCli(["--rpc", "http://x"], { CONFIG_CHECK_RPC_URL: "http://env" }).rpc).toBe("http://x");
+    expect(() => parseCli([], {})).toThrow(UsageError);
   });
   for (const bad of [[], ["--rpc"], ["--rpc", "u", "--chain", "abc"], ["--rpc", "u", "--bogus"], ["--offline", "--print-usdc-hashes"]]) {
     test(`usage error for ${JSON.stringify(bad)}`, () => {
