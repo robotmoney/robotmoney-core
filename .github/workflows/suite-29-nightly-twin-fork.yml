@@ -1,4 +1,4 @@
-# Canonical: docs/development/ci-suites.md §29 (nightly Twin chain)
+# Canonical: docs/development/ci-suites.md §29 (nightly Twin fork)
 # Issue: robotmoney-core 1496 (nightly job (b)); siblings 1495 (a) and 1497 (c); owner decision 2026-10-05.
 #
 # WHY THIS WORKFLOW EXISTS
@@ -28,8 +28,10 @@
 # RESULT
 # The `results` job fails when the pin job or any suite did not succeed (failure, cancelled and
 # skipped all count as not passing). It uploads suite-results (one JSON per suite, with the pin).
+# The pin job uploads twin-pin (the pin file: block, run id and time, never the upstream URL).
+# No secret is required. BASE_UPSTREAM_RPC is optional and never printed.
 
-name: nightly-twin-chain
+name: nightly-twin-fork
 
 env:
   CI_CLASS: ignore
@@ -40,7 +42,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: nightly-twin-chain
+  group: nightly-twin-fork
   cancel-in-progress: false
 
 permissions:
@@ -59,6 +61,24 @@ jobs:
         uses: ./.github/actions/twin-pin
         with:
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+      - name: Write the pin file
+        env:
+          PIN_BLOCK: ${{ steps.pin.outputs.block }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/twin-pin"
+          jq -n --arg block "$PIN_BLOCK" --arg run "$GITHUB_RUN_ID" --arg at "$(date -u +%FT%TZ)" \
+            '{chain_id: 918453, pin_block: ($block | tonumber), pin_rule: "upstream head at run start minus 2", run_id: $run, chosen_at: $at}' \
+            > "$RUNNER_TEMP/twin-pin/twin-pin.json"
+          cat "$RUNNER_TEMP/twin-pin/twin-pin.json"
+
+      - name: Upload the pin file
+        uses: actions/upload-artifact@v4
+        with:
+          name: twin-pin
+          path: ${{ runner.temp }}/twin-pin
+          retention-days: 30
 
   suite-05:
     name: suite-05 fork integration

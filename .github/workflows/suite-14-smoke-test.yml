@@ -56,7 +56,7 @@
 name: smoke-test-devnet-boot-teardown
 
 on:
-  # Called by suite-29-nightly-twin-chain.yml, which chooses ONE pin for the whole nightly run and
+  # Called by suite-29-nightly-twin-fork.yml, which chooses ONE pin for the whole nightly run and
   # hands it down as pin_block. Steps are not copied: the nightly calls this very workflow.
   workflow_call:
     inputs:
@@ -128,14 +128,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # The committed-snapshot guards use `cast` (Safe set, snapshot contents), so Foundry is
-      # required even though this job never boots a chain.
+      # The harness unit tests call `cast` and bun helpers, so both are installed even though this
+      # job never boots a chain.
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
 
-      # check-fork-manifest.sh also runs scripts/devnet/check-fork-lockstep.ts (core 1498).
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
 
@@ -155,24 +154,6 @@ jobs:
       - name: cargo clippy -p smoke-test --all-targets (compiles tests/ binaries)
         run: cargo clippy -p smoke-test --all-targets -- -D warnings
 
-      # Issue #255 CI gate: validate fork-block.json against every rule in
-      # smoke_test::fork_manifest and check the committed fork-state fixture's digest, Safe set,
-      # pin age and block lockstep. Fast (<5s once binaries are built); a broken manifest is caught
-      # before any chain boot is attempted. (The genesis alloc ingester is gone: the Twin chain is a
-      # lazy fork of real Base, not a genesis built from a committed snapshot.)
-      - name: fork-block manifest guard
-        run: bash scripts/devnet/check-fork-manifest.sh
-
-      # Core 1498: the committed fixtures are one pin. CURRENT.json and
-      # fork-block.json must agree on block number and hash.
-      - name: fixture lockstep gate (--require-pinned)
-        run: bash scripts/devnet/check-fork-manifest.sh --require-pinned
-
-      # Core 1498: the committed snapshot holds SwapRouter02, the V3 factory,
-      # BNKR and the pool state, and no Robot Money code at genesis.
-      - name: committed snapshot contents (code, pool calls, no Robot Money)
-        run: bun scripts/devnet/check-fork-snapshot-contents.ts
-
       # Core 1488: the Twin chain publish run has a unit-test floor. cargo test
       # -p smoke-test --lib must execute a non-zero number of tests, and at
       # least SMOKE_TEST_LIB_TEST_FLOOR of them, so the deletions cannot
@@ -190,14 +171,6 @@ jobs:
             echo "::error::cargo test -p smoke-test ran ${n:-0} tests, floor is $SMOKE_TEST_LIB_TEST_FLOOR"
             exit 1
           fi
-
-      # Issue #558 CI gate: assert fork-block.json, expected-prices.json, and
-      # ingested_addresses stay in sync after a fork-block bump.  Runs as a
-      # hermetic lib-test (no Docker required).  Also exercises the simulated
-      # failure path that proves the guard detects an un-ingested pool.
-      - name: fork-block alignment guard (expected-prices + ingested pools)
-        working-directory: testing/smoke-test
-        run: cargo test -p smoke-test --lib fork_manifest::tests -- --nocapture
 
       # Hermetic unit tests for the boot harness internals: the zombie-reaper
       # stale-vs-current classification (run-id labels), the Twin fork arguments and the nonce

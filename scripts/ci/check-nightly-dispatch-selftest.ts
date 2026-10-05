@@ -7,7 +7,7 @@
  *   1. every suite workflow is in SUITES or the documented exclusion list
  *      (scripts/ci/check_nightly_dispatch_list.py), and removing one suite is detected, naming it;
  *   2. suite-21-nightly.yml passes actionlint (CI installs it and CI=true makes a missing one fatal; locally it is skipped with a loud warning);
- *   3. the fork-pin age step carries continue-on-error: true (yq), found by the script it runs;
+ *   3. the retired fork-pin age job and scripts are gone, and suite 29 is the Twin fork nightly;
  *   4. the live-base-fork-drift job, its script and its test are gone and nothing in .github, scripts or docs
  *      names them or the other deleted files;
  *   5. the nightly drift alarm text is absent from the docs and the three forge test headers.
@@ -66,16 +66,22 @@ if (run(["which", "actionlint"]).code === 0) {
   console.warn("WARNING ******************************************************************");
 }
 
-// 3. the fork-pin age step cannot fail the run: found by the script it runs, not by an exact string.
-if (!yqOk('.jobs."fork-pin-age-warning".steps[] | select(.run | test("check-fork-pin-age")) | .["continue-on-error"] == true', NIGHTLY))
-  bad("the fork-pin age step does not carry continue-on-error: true");
-ok("the fork-pin age step carries continue-on-error: true");
-// negative control: the same query rejects a step without the flag
-const noFlag = join(tmp, "no-flag.yml");
-writeFileSync(noFlag, "jobs:\n  fork-pin-age-warning:\n    steps:\n      - run: scripts/devnet/check-fork-pin-age.sh\n");
-if (yqOk('.jobs."fork-pin-age-warning".steps[] | select(.run | test("check-fork-pin-age")) | .["continue-on-error"] == true', noFlag))
-  bad("the continue-on-error query accepted a step without the flag");
-ok("the continue-on-error query rejects a step without the flag (negative control)");
+// 3. the 30-day fork pin age warning is gone with the saved snapshot (core 1496, 1498): no job, no script.
+if (yqOk('.jobs | has("fork-pin-age-warning")', NIGHTLY)) bad(`the fork-pin-age-warning job is still in ${NIGHTLY}`);
+ok("the fork-pin-age-warning job is gone from the nightly");
+for (const f of ["scripts/devnet/check-fork-pin-age.sh", "scripts/devnet/check-fork-pin-age-selftest.sh"])
+  if (existsSync(f)) bad(`${f} still exists`);
+ok("the fork pin age script and its selftest are deleted");
+// negative control: the query sees a job that is there
+const withJob = join(tmp, "with-job.yml");
+writeFileSync(withJob, "jobs:\n  fork-pin-age-warning:\n    steps:\n      - run: true\n");
+if (!yqOk('.jobs | has("fork-pin-age-warning")', withJob)) bad("the job-presence query missed a present job");
+ok("the job-presence query sees a present job (negative control)");
+// the Twin fork nightly carries its new name and the old one is gone
+if (!existsSync(".github/workflows/suite-29-nightly-twin-fork.yml")) bad("suite-29-nightly-twin-fork.yml is missing");
+if (existsSync(".github/workflows/suite-29-nightly-twin-chain.yml") || existsSync(".github/workflows/suite-29-nightly-fresh-snapshot.yml"))
+  bad("an old suite 29 nightly file still exists");
+ok("the suite 29 nightly is suite-29-nightly-twin-fork.yml and the old names are gone");
 
 // 4. deleted job, scripts and tests are gone and unreferenced.
 if (yqOk('.jobs | has("live-base-fork-drift")', NIGHTLY)) bad(`the live-base-fork-drift job is still in ${NIGHTLY}`);

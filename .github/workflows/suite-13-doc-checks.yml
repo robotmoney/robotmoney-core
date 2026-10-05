@@ -384,23 +384,24 @@ jobs:
           echo "$PWD" >> "$GITHUB_PATH"
 
       - name: actionlint on the three nightly workflows
-        run: ./actionlint .github/workflows/suite-21-nightly.yml .github/workflows/suite-29-nightly-twin-chain.yml .github/workflows/nightly-third-party-drift.yml
+        run: ./actionlint .github/workflows/suite-21-nightly.yml .github/workflows/suite-29-nightly-twin-fork.yml .github/workflows/nightly-third-party-drift.yml
 
       # Core 1495: dispatch list covers every suite (negative control inside), the
-      # fork-pin age step has continue-on-error (yq), the deleted drift job and
-      # script are gone and unreferenced, the drift alarm text is gone.
+      # retired fork-pin age job is gone, the deleted drift job and script are gone and
+      # unreferenced, the drift alarm text is gone.
       - name: Nightly dispatch list self-test (core 1495)
         run: bun scripts/ci/check-nightly-dispatch-selftest.ts
 
       # Core 1496, 1498: the Twin chain CI wiring. The nightly calls suites 5, 7, 8, 10, 11b and 14 with
       # ONE pin from its pin job. Each suite has a pin input, a pin job and takes the pin in every
-      # twin-fork step. Nothing still names the retired geth+lighthouse devnet, the genesis alloc or
-      # the fresh-snapshot overlay. Runs on every PR, so a change to a suite cannot skip it.
+      # twin-fork step. Nothing still names the retired geth+lighthouse devnet, the genesis alloc, the
+      # fresh-snapshot overlay or the saved fork-state snapshot. Runs on every PR, so a change to a
+      # suite cannot skip it.
       - name: Twin chain CI wiring self-test (core 1496, 1498)
         run: bun scripts/devnet/check-twin-chain-ci-selftest.ts
 
-      - name: Snapshot tooling self-test (HTTP 429 retry, no Deploy.s.sol; core 1498)
-        run: bun scripts/devnet/snapshot-fork-selftest.ts
+      - name: Twin chain tooling unit tests (core 1498)
+        run: bun test scripts/devnet --timeout 60000
 
       # Core 1497: the third-party drift workflow ships disabled.
       - name: yq asserts the drift workflow has no schedule and declares workflow_dispatch
@@ -410,19 +411,21 @@ jobs:
           yq -e '.on | has("workflow_dispatch")' "$f"
           bun scripts/release/check-nightly-third-party-workflow.ts
 
+      # The self-test reads real Base code and storage from the Twin chain (core 1498): a pinned lazy
+      # fork of Base made with anvil, no saved snapshot. The action exports TWIN_RPC_URL.
+      - name: Start the Twin fork
+        uses: ./.github/actions/twin-fork
+
       - name: Dependency manifest self-test (edited hash named, accurate manifest clean)
         run: bun scripts/release/dependency-manifest-selftest.ts
 
-      # The address-presence loop over committed manifests checks nothing until the
-      # first release commits one, so also record a manifest from the committed
-      # snapshot and check that. A manifest address missing from the deploy config
-      # fails this step.
+      # The address-presence loop over committed manifests checks nothing until the first release
+      # commits one. The self-test above records a manifest from the Twin chain and checks it, and
+      # this step checks the example fixture and every committed manifest.
       - name: Every manifest address is in the deploy config
         run: |
           set -euo pipefail
-          bun scripts/release/dependency-manifest-record.ts --chain-id 8453 --release ci-check \
-            --state-file testing/fixtures/fork-state/CURRENT.anvil-state --out "$RUNNER_TEMP/ci-check-manifest.json"
-          bun scripts/release/check-dependency-manifest-addresses.ts --manifest "$RUNNER_TEMP/ci-check-manifest.json"
+          bun scripts/release/check-dependency-manifest-addresses.ts --manifest deployments/dependency-manifests/example.json
           shopt -s nullglob
           for m in deployments/dependency-manifests/*/*.json; do
             bun scripts/release/check-dependency-manifest-addresses.ts --manifest "$m"

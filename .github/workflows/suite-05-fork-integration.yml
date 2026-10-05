@@ -43,7 +43,7 @@
 name: fork-protocol-adapter-integration
 
 on:
-  # Called by suite-29-nightly-twin-chain.yml, which chooses ONE pin for the whole nightly run and
+  # Called by suite-29-nightly-twin-fork.yml, which chooses ONE pin for the whole nightly run and
   # hands it down as pin_block. Steps are not copied: the nightly calls this very workflow.
   workflow_call:
     inputs:

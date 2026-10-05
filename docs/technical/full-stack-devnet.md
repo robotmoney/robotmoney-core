@@ -101,7 +101,7 @@ no longer a container: the indexer reaches the host-side Twin fork through the D
 ## CI
 
 Every chain suite (5, 7, 8, 10, 11b and 14) has a `pin` job and starts the Twin fork with
-`.github/actions/twin-fork` at that pin. The nightly (`suite-29-nightly-twin-chain.yml`) runs all
+`.github/actions/twin-fork` at that pin. The nightly (`suite-29-nightly-twin-fork.yml`) runs all
 of them in one run with one shared pin. Suite 26 targets the shared stage Twin fork. See
 `docs/development/ci-suites.md`.
 

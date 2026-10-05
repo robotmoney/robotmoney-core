@@ -26,7 +26,7 @@ EXCLUDED = {
     "release-tag-suite-dispatch.yml": "release workflow",
     "release-record.yml": "release workflow: requires a release tag input, dispatched by the release operator (issue 1497)",
     "nightly-third-party-drift.yml": "nightly job (c), shipped disabled: workflow_dispatch only, schedule commented out until the owner enables it (issue 1497)",
-    "suite-29-nightly-twin-chain.yml": "nightly (b) on its own schedule: it calls the chain suites itself with one shared Twin chain pin (issue 1496)",
+    "suite-29-nightly-twin-fork.yml": "nightly (b) on its own schedule: it calls the chain suites itself with one shared Twin chain pin (issue 1496)",
     # Add a workflow that must not be dispatched here with its reason, for example one that
     # has no workflow_dispatch trigger or needs required inputs.
 }

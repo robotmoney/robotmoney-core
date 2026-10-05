@@ -61,8 +61,8 @@ pub const COMPOUND_V3_COMET: Address = address!("b125e6687d4313864e53df431d54259
 ///
 /// Source: known Aave-V3 USDC reserve / lending pool address on
 /// Base. Picked over Coinbase / Circle treasury addresses because
-/// it has stable, predictable balance through fork-block refresh
-/// cadence (a lending pool's USDC sits there as protocol state,
+/// it has stable, predictable balance through pin
+/// changes (a lending pool's USDC sits there as protocol state,
 /// not user inflow/outflow). If a future pin makes this whale dry,
 /// the runbook in the README documents how to swap it.
 pub const USDC_WHALE: Address = address!("0b25c51637c43decd6cc1c1e3da4518d54ddb528");
@@ -79,7 +79,7 @@ pub const WETH9: Address = address!("4200000000000000000000000000000000000006");
 // -- Landing-page price-strip Uniswap V3 pools (issue #482) ------------
 // Pools the dapp landing strip reads slot0 from. These must agree with
 // `config/dex-pools.json` (the dapp's source) and with the per-pool
-// addresses recorded in `testing/ethereum-testnet/config/expected-prices.json`.
+// addresses in `testing/ethereum-testnet/config/price-strip-pairs.json`.
 // Canonical: docs/prd.md#112-protocol-asset-vault.
 
 /// Uniswap V3 wETH/USDC 0.05% pool on Base — also the source of the

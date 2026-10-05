@@ -1295,11 +1295,11 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |
 | 28 | `suite-28-core-stages.yml` | `core-stages-offline`, `core-stages-twin-chain` (dispatch) | `none` / Twin `918453` |
 | 28 | `suite-28-core-stack-selftest.yml` | `core-stack-selftest` | `none` |
-| 29 | `suite-29-nightly-twin-chain.yml` | `pin` → suites 5, 7, 8, 10, 11b, 14 (called with `pin_block`) → `record-results` | Twin chain `918453`, one shared pin |
+| 29 | `suite-29-nightly-twin-fork.yml` | `pin` → suites 5, 7, 8, 10, 11b, 14 (called with `pin_block`) → `record-results` | Twin chain `918453`, one shared pin |
 
 ### 29. Nightly Twin chain (nightly-twin-chain)
 
-**File:** `.github/workflows/suite-29-nightly-twin-chain.yml` (issue 1496, nightly job (b); replaces the nightly fresh snapshot).
+**File:** `.github/workflows/suite-29-nightly-twin-fork.yml` (issue 1496, nightly job (b); replaces the nightly fresh snapshot).
 **Tier / triggers:** nightly (05:30 UTC) and `workflow_dispatch`. Never a merge gate.
 
 Every Twin chain run already pins the upstream head minus 2, so there is no snapshot to take, no genesis to build and no overlay to apply. This nightly runs every chain suite in ONE workflow run with ONE shared pin: a `pin` job chooses the block (`.github/actions/twin-pin`) and each suite (5, 7, 8, 10, 11b, 14) is called with `workflow_call` and `pin_block: ${{ needs.pin.outputs.block }}` and `secrets: inherit`. Each suite's own pin job hands that block through unchanged, then its chain jobs start their own Twin fork at it. Anvil's RPC cache is persisted per pin block. `secrets: inherit` hands the suites what they already use alone: `DEVOPS_READ_TOKEN`, the optional `BASE_UPSTREAM_RPC` (a paid upstream, never printed) and the `BASE_TESTNET_*` secrets of suite 5; the workflow itself references none. The `results` job fails when the pin job or any suite did not succeed (failure, cancelled and skipped all count as not passing) and uploads `suite-results` (one JSON per suite, with the pin block).

@@ -150,25 +150,12 @@ fn run_rmpc(cfg: &Path, args: &[&str], chain_id: u64) -> Value {
     v
 }
 
-// Issue #249 repaired the Base USDC transparent-proxy admin slot in
-// the fork fixture, which was sufficient for every `rmpc_get_*`
-// command that reads through USDC. This test additionally asserts
-// `Vault.symbol()` / `Vault.name()` round-trip — those are storage
-// reads against the *vault* contract (a non-proxy ERC-4626 at
-// `addresses::VAULT`). The checked-in fork-state fixture warms the
-// vault's bytecode but NOT its constructor-initialised storage
-// (name/symbol are written by `ERC20("Robot Money USDC", "rmUSDC")`
-// in the constructor and the fixture was captured via
-// `anvil_setCode`-only warming — see `scripts/devnet/snapshot-fork.ts`
-// `WARM_ADDRESSES` and the storage-vs-bytecode caveat there).
-//
-// The fix for THAT (vault storage seed analogous to
-// `testing/fixtures/fork-state/usdc-storage-seed.json`) is a strict
-// superset of #249 and is tracked separately — re-marked `#[ignore]`
-// here so the rest of the suite stays green. Remove the marker once
-// the vault storage seed lands.
+// This test reads the live production v1 vault (`addresses::VAULT`) on the Twin chain. The clean
+// room rule (core 1498) says no test reads that vault: every test deploys its own vault through the
+// deploy scripts and reads its address from the manifests. It stays `#[ignore]`d until it is
+// rewritten that way (symbol, name and decimals of a vault the test deployed itself).
 #[test]
-#[ignore = "needs vault storage seed (separate from #249 admin-slot repair)"]
+#[ignore = "reads the live production v1 vault; rewrite to deploy its own vault (clean room rule, core 1498)"]
 fn rmpc_get_vault_fork_robotmoney_devnet() {
     skip_if_no_fork!();
     let fx = ForkFixture::new().expect("boot fork");

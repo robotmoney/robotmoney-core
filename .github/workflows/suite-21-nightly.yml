@@ -120,20 +120,3 @@ jobs:
             exit 1
           fi
           echo "All dispatches sent."
-
-  fork-pin-age-warning:
-    name: Fork pin age (warning only)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      CI_CLASS: ignore
-    steps:
-      - uses: actions/checkout@v4
-      # Never fails the run. check-fork-pin-age.sh without --max-age-days only
-      # reports the age and emits a ::warning:: past the refresh cadence.
-      # continue-on-error: true keeps an unexpected script error from reddening
-      # the nightly: this step is a maintenance signal, not a gate. The selftest
-      # (scripts/ci/check-nightly-dispatch-selftest.ts) asserts the flag by yq.
-      - name: Fork pin age warning
-        continue-on-error: true
-        run: scripts/devnet/check-fork-pin-age.sh

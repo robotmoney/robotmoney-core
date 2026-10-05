@@ -90,7 +90,7 @@ bun scripts/devnet/twin-fork.ts stop --port 8545 --state-dir <dir>   # or: make 
 | Suite 11b — OpenCode headless | `.github/workflows/suite-11b-opencode-headless.yml` |
 | Suite 12 — OpenClaw | `.github/workflows/suite-12-openclaw.yml` |
 | Suite 14 — smoke-test fixture | `.github/workflows/suite-14-smoke-test.yml` |
-| Suite 29 — nightly Twin chain (one shared pin) | `.github/workflows/suite-29-nightly-twin-chain.yml` |
+| Suite 29 — nightly Twin chain (one shared pin) | `.github/workflows/suite-29-nightly-twin-fork.yml` |
 
 ---
 
