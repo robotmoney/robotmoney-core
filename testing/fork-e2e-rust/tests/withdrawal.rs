@@ -354,10 +354,7 @@ fn agent_withdrawal_happy_path() {
 
     // Authorize agent: shareReceiver = agent.address (shares land with the agent),
     // assetRecipient = asset_recipient_addr (USDC on withdrawal goes there).
-    let now_secs: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
     let policy = IGateway::AgentPolicy {
         active: true,
         validUntil: now_secs + 3600,
@@ -527,10 +524,7 @@ fn agent_withdrawal_redirect_blocked() {
     let vault = deploy_mock_vault(&admin, usdc);
     let gateway = deploy_gateway(&admin, usdc, vault, admin.address, pauser.address);
 
-    let now_secs: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
     let policy = IGateway::AgentPolicy {
         active: true,
         validUntil: now_secs + 3600,
@@ -646,10 +640,7 @@ fn agent_withdrawal_window_cap() {
     let vault = deploy_mock_vault(&admin, usdc);
     let gateway = deploy_gateway(&admin, usdc, vault, admin.address, pauser.address);
 
-    let now_secs: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
 
     // Policy: shareReceiver = agent.address, maxWithdrawPerPayment = half, maxWithdrawPerWindow = half.
     let policy = IGateway::AgentPolicy {
@@ -928,10 +919,7 @@ fn router_withdrawal() {
     );
 
     // ── Authorize agent ──────────────────────────────────────────────────────
-    let now_secs: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
 
     // AZ-GW-3 fix: empty allowedSourceVaults now means pinned-vault-only
     // (vault_a, which is the gateway's vaultContract). Router withdrawal pulls

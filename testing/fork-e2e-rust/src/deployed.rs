@@ -88,7 +88,46 @@ pub fn resolve(fx: &ForkFixture) -> Result<DeployedVault, HarnessError> {
             return parse_manifest(&text, PathBuf::from(path));
         }
     }
-    deploy_own_vault(fx)
+    deploy_with_retry(fx)
+}
+
+/// True when a failed vault stage was caused by the public upstream behind the lazy fork (HTTP 5xx,
+/// rate limit, timeout) and not by our contracts. The Twin fork reads real Base state on demand,
+/// so a 502 from mainnet.base.org surfaces inside forge as an arbitrary revert.
+pub fn is_transient_upstream_failure(stderr: &str) -> bool {
+    [
+        "502 Bad Gateway",
+        "503 Service",
+        "504 Gateway",
+        "429",
+        "Too Many Requests",
+        "HTTP error 5",
+        "failed to get account for",
+        "failed to get storage",
+        "Failed to send/recv",
+        "operation timed out",
+    ]
+    .iter()
+    .any(|m| stderr.contains(m))
+}
+
+/// Deploy through the real stage, retrying (up to 3 attempts) only on a transient upstream failure.
+/// Any other failure, and the last transient one, is returned unchanged. Each attempt is a full
+/// stage run from a clean `forge script` (a failed simulation broadcasts nothing).
+fn deploy_with_retry(fx: &ForkFixture) -> Result<DeployedVault, HarnessError> {
+    let mut last = None;
+    for attempt in 1..=3u32 {
+        match deploy_own_vault(fx) {
+            Ok(v) => return Ok(v),
+            Err(HarnessError::Rpc(msg)) if is_transient_upstream_failure(&msg) => {
+                eprintln!("[deploy] vault stage hit a transient upstream failure (attempt {attempt}/3); retrying");
+                std::thread::sleep(std::time::Duration::from_secs(3 * u64::from(attempt)));
+                last = Some(HarnessError::Rpc(msg));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.expect("loop ran"))
 }
 
 /// Deploy this fixture's own vault through the real stage runner and read the manifest it wrote.
@@ -135,6 +174,14 @@ pub fn deploy_own_vault(fx: &ForkFixture) -> Result<DeployedVault, HarnessError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_upstream_failures_are_recognised() {
+        assert!(is_transient_upstream_failure(
+            "failed to get account for 0x86AB: HTTP error 502 with body: <title>502 Bad Gateway</title>"
+        ));
+        assert!(!is_transient_upstream_failure("Error: revert: InsufficientGas(1, 2)"));
+    }
 
     #[test]
     fn parse_manifest_reads_addresses() {

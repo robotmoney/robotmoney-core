@@ -295,7 +295,10 @@ fn exercise_vault_adapter_stack(fx: &ForkFixture, network: Network) -> Result<()
             receiver: user.address,
         },
         U256::ZERO,
-        1_500_000,
+        // The vault deposit fans out to every adapter and refuses to start an adapter call with
+        // less than ADAPTER_CALL_GAS_FLOOR (400k) left (InsufficientGas). The three-adapter stack
+        // used 1.14M, so 1.5M left only 361k for the last adapter.
+        3_000_000,
     )?;
     assert!(
         !receipt.logs.is_empty(),

@@ -615,6 +615,12 @@ impl ForkFixture {
             .map_err(|e| HarnessError::Rpc(e.clone()))
     }
 
+    /// The chain's own clock (latest block timestamp). Build every deadline and policy expiry from
+    /// this, never from the host wall clock: see [`Rpc::chain_now`].
+    pub fn chain_now(&self) -> Result<u64, HarnessError> {
+        self.rpc.chain_now()
+    }
+
     /// Address of this fixture's own vault. Panics with the deploy error when the stage fails.
     pub fn vault(&self) -> Address {
         self.deployed().expect("deploy own vault").vault
@@ -1170,6 +1176,22 @@ impl Rpc {
             }
             std::thread::sleep(Duration::from_millis(150));
         }
+    }
+
+    /// The chain's own clock: the latest block timestamp, in seconds. Every deadline and policy
+    /// expiry a test signs must be built from this, never from the host wall clock. The Twin fork
+    /// continues time from the pin block's timestamp, so it trails the wall clock by the minutes
+    /// between choosing the pin and starting the chain (more than the gateway's 600 s deadline
+    /// skew on a busy runner).
+    pub fn chain_now(&self) -> Result<u64, HarnessError> {
+        let block: serde_json::Value =
+            self.rpc("eth_getBlockByNumber", serde_json::json!(["latest", false]))?;
+        let ts = block
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| HarnessError::Rpc("latest block has no timestamp".into()))?;
+        u64::from_str_radix(ts.trim_start_matches("0x"), 16)
+            .map_err(|e| HarnessError::Rpc(format!("bad block timestamp {ts}: {e}")))
     }
 
     /// Advance the EVM clock by `seconds` seconds and produce a new block.
