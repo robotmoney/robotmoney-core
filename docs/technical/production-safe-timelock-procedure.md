@@ -19,8 +19,8 @@ comes from running these steps through the real Safe (devops runbook Q2).
 
 ## 0. What already exists and what this document adds
 
-State after the stacked deploy PR (1505), which deleted `deploy-contracts.yml` and
-`fusion-ceremony.sh`:
+State after the stacked deploy PR (1505), which removed the old deploy workflow and
+the stage ceremony shell:
 
 | Piece | Where it lives | Status |
 |---|---|---|
@@ -44,7 +44,7 @@ State after the stacked deploy PR (1505), which deleted `deploy-contracts.yml` a
 | Safe roles on the timelock | `PROPOSER_ROLE`, `EXECUTOR_ROLE`, and `CANCELLER_ROLE` (OZ v5 grants it to every proposer) |
 | Minimum delay | 172800 s (48 hours) at deploy on chain 8453 |
 | `ADMIN_ROLE` on the governed contracts | the timelock only |
-| Gateway `DEFAULT_ADMIN_ROLE` | the timelock only |
+| `DEFAULT_ADMIN_ROLE` on the gateway, `InvestmentCommitteePolicy` and `ConsensusRecommendationReceipt` | the timelock only |
 | Fast pause keys | gateway `PAUSER_ROLE` holder, vault `EMERGENCY_ROLE` holder (independent hot keys, not the Safe) |
 
 Role ids (keccak256 of the name):
@@ -199,7 +199,11 @@ Done on the device screen or an independent decoder, not on the proposer's machi
 4. The delay argument is at least `getMinDelay()` (172800 s on 8453).
 5. The nonce equals `Safe.nonce()` now.
 6. The digest the wallet shows equals the digest the signer computed independently
-   (`getTransactionHash` against an RPC the signer trusts).
+   (`getTransactionHash` against an RPC the signer trusts). A Ledger that cannot
+   clear-sign the SafeTx shows two hashes instead of the fields: the EIP-712 domain
+   hash (the Safe's `domainSeparator()`) and the message hash (the SafeTx struct
+   hash). The signer checks both against values computed independently. This display
+   must be checked on a real device before the first production use.
 
 ---
 
@@ -289,7 +293,10 @@ cast calldata 'cancel(bytes32)' "$ID"
 The Safe holds `CANCELLER_ROLE`, so a cancel needs the same quorum of owner
 signatures. After it mines, `isOperation(id)` is false and a later `execute` reverts.
 The repo's Solidity reference is `SafeIntegration.t.sol::test_sadPath_cancelledOperation_cannotExecute`.
-A cancelled id can be scheduled again with a new salt only.
+`cancel` deletes the operation's timestamp, so the id returns to the unset state.
+The same `target`, `value`, `data`, `predecessor` and `salt` can therefore be
+scheduled again and get the same id, with a fresh delay. Prefer a new salt anyway, so
+the record of the cancelled operation and the new one stay distinct.
 
 ---
 
@@ -301,14 +308,33 @@ Pause is fast and unilateral on purpose. Unpause is slow and goes through the ti
 | Contract | Pause (hot key, no timelock) | Unpause (`ADMIN_ROLE`, so Safe through timelock) | Read after |
 |---|---|---|---|
 | Gateway | `pause()` by the `PAUSER_ROLE` holder | `unpause()`, selector `0x3f4ba83a`, no arguments. Reverts `NotPaused` if not paused. | `paused()` is false |
-| `RobotMoneyVault` | `pause()` by the `EMERGENCY_ROLE` holder (halts deposits and withdrawals) | `unpause()`, selector `0x3f4ba83a`, no arguments | `paused()` is false |
-| `BasketVault` | `pause()` by the `EMERGENCY_ROLE` holder (deposits only) | `unpause()`, selector `0x3f4ba83a`, no arguments | `paused()` is false and `depositsPaused()` is false |
+| `RobotMoneyVault` | `pause()` by the `EMERGENCY_ROLE` holder (on this base it sets both `depositsPaused` and `withdrawalsPaused`) | `unpause()`, selector `0x3f4ba83a`, no arguments. Clears both flags and does not revert when already unpaused. | `depositsPaused()` and `withdrawalsPaused()` are both false. Do not rely on `paused()`: it returns `depositsPaused && withdrawalsPaused`, so it is false while only one flag is set. |
+| `BasketVault` | `pause()` by the `EMERGENCY_ROLE` holder (deposits only; sets `depositsPaused` and the OZ paused flag) | `unpause()`, selector `0x3f4ba83a`, no arguments. Reverts `ExpectedPause` when the OZ paused flag is not set. | `paused()` is false and `depositsPaused()` is false |
+
+> **Note: core 1494 changes pause.** The owner decided that pause stops new deposits
+> only, and users can always withdraw. Core issue 1494 changes the contracts to that
+> rule. This table describes the contracts on this document's base as they behave
+> today. Once 1494 merges, re-read the `RobotMoneyVault` row against the new source
+> before using it.
 
 Procedure for each unpause:
 
-1. `TARGET` is the contract. `INNER_DATA = cast calldata 'unpause()'` which is `0x3f4ba83a`.
-2. Schedule it (section 4.1), wait the delay, execute it (section 4.2).
-3. Read the pause state from the chain, not from the Safe interface.
+1. Before scheduling, read the current state of the target: `paused()` on the gateway
+   and `BasketVault`, and both `depositsPaused()` and `withdrawalsPaused()` on
+   `RobotMoneyVault`. Schedule an unpause only for a target whose call will succeed.
+   `BasketVault.emergencyUnwind()` and similar emergency paths set `depositsPaused`
+   without the OZ paused flag. In that state `paused()` is false and `unpause()`
+   reverts `ExpectedPause`. The gateway's `unpause()` reverts `NotPaused` the same way.
+2. `TARGET` is the contract. `INNER_DATA = cast calldata 'unpause()'` which is `0x3f4ba83a`.
+3. Schedule it (section 4.1), wait the delay, execute it (section 4.2).
+4. Read the pause state from the chain again, not from the Safe interface.
+
+**Batch warning.** A `scheduleBatch` operation executes atomically. One reverting call
+(an `unpause()` on a contract that is not in the paused state, for example) reverts
+the whole `executeBatch` after the 48 hour wait. The operation stays ready, but its
+calls cannot succeed while the state is unchanged, so the round is lost and must be
+cancelled and rescheduled, with another 48 hours. Check every call in a batch against
+current chain state before the schedule is signed, and again before the execute.
 
 Two limits to state to the signers:
 
@@ -377,9 +403,13 @@ cast calldata 'grantRole(bytes32,address)' "$ROLE_ID" "$ACCOUNT"
 
 Which authority administers which role:
 
-- On the vaults, registry, router, router governance, IC policy and receipt contract,
-  roles are administered by `ADMIN_ROLE`, held by the timelock. The inner call runs
-  with `msg.sender = timelock`.
+- On the vaults, registry, router and router governance, roles are administered by
+  `ADMIN_ROLE` (each sets `ADMIN_ROLE` as its own admin), held by the timelock. The
+  inner call runs with `msg.sender = timelock`.
+- On `InvestmentCommitteePolicy` and `ConsensusRecommendationReceipt`, `ADMIN_ROLE` is
+  administered by `DEFAULT_ADMIN_ROLE`, held by the timelock
+  (`DeployTimelock.s.sol` moves both roles to the timelock). On the IC policy,
+  `COMMITTEE_AGENT_ROLE` is administered by `ADMIN_ROLE`.
 - On the gateway, every role except `AGENT_ROLE` is administered by
   `DEFAULT_ADMIN_ROLE`, held by the timelock. `AGENT_ROLE` is administered by
   `ADMIN_ROLE`.
@@ -392,6 +422,12 @@ is the timelock, so the argument is the timelock address and the call gives up t
 timelock's own role. Do that only on purpose. A holder that is a hot key (pauser,
 emergency) renounces by sending the call itself, with no timelock.
 
+> **Signer warning: IC policy and receipt have no last-admin guard on this base.**
+> Never revoke or renounce the timelock's `DEFAULT_ADMIN_ROLE` on
+> `InvestmentCommitteePolicy` or `ConsensusRecommendationReceipt`. Nothing in those
+> contracts stops it, and once it is gone no one can grant `ADMIN_ROLE` there again.
+> PR 1507 adds a last-admin floor to both. It is not on this document's base.
+
 Safeguards in the contracts, which the signers should expect to see as reverts:
 
 - Gateway `LastAdminFloor`: revoking or renouncing the last holder of gateway
@@ -403,7 +439,10 @@ Safeguards in the contracts, which the signers should expect to see as reverts:
 
 Gateway agent ownership is also authority. To hand an agent to a new owner:
 `transferAgentOwnership(address agent, address newOwner)`, selector `0xc43de819`,
-as an operation on the gateway with the timelock as the current owner.
+as an operation on the gateway with the timelock as the current owner. The new owner
+must already hold gateway `ADMIN_ROLE`, or the call reverts `NewAgentOwnerNotAdmin`.
+So grant `ADMIN_ROLE` to the new owner first (respecting role separation), then
+transfer.
 
 Read after: `hasRole(role, account)` on the governed contract, and for the gateway
 agent, `agentOwner(agent)`.
@@ -488,11 +527,16 @@ confirmed with `hasRole`.
 
 - No step was run on chain 8453 or on any chain.
 - Selectors, role ids and the two EIP-712 type hashes were computed with `cast` from
-  the signature strings. The Safe v1.4.1 typed-data layout, signature `v` rules
-  (27/28, 31/32, 1, 0) and the `GS0xx` error codes are stated from the Safe contract
-  design and are not re-checked against the Safe source in this repository.
+  the signature strings. The type hashes, the signature `v` rules (27/28, 31/32, 1, 0)
+  and the `GS0xx` codes match the vendored Safe v1.4.1 source in this repository:
+  `contracts/test/vendor/safe-1.4.1/Safe.sol` (`DOMAIN_SEPARATOR_TYPEHASH`,
+  `SAFE_TX_TYPEHASH`, `checkNSignatures` with `GS020`, `GS024`, `GS025`, `GS026`, and
+  `GS013` in `execTransaction`) and `contracts/test/vendor/safe-1.4.1/base/OwnerManager.sol`
+  (`GS201`, `GS202`, `GS205`, `SENTINEL_OWNERS = address(0x1)`). The vendored copy was
+  not compared byte for byte with the deployed `SafeL2` on Base.
 - The exact `cast wallet sign` flags for a Ledger or Trezor (typed data versus raw
-  digest) were not tested. Confirm on the real device against `getTransactionHash`
+  digest) were not tested, and neither was the Ledger's domain-hash and message-hash
+  display. Confirm on the real device against `getTransactionHash`
   before the first production use.
 - The behaviour of `unpause` on the three contract families is read from the
   contract source on this branch (`RobotMoneyGateway.sol`, `RobotMoneyVault.sol`,
