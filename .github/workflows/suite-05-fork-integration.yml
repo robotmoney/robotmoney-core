@@ -179,6 +179,7 @@ jobs:
 
   base-testnet-adapters:
     name: base-testnet-adapters
+    needs: pin
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
@@ -205,6 +206,21 @@ jobs:
       - name: Base testnet account-funding assertion (smoke-test)
         run: cargo test -p smoke-test --release --test base_testnet_fixture -- --nocapture
 
+      # The live third-party service legs (Aave, Uniswap, Curve) run on the Twin fork, which also
+      # installs foundry (anvil) and bun. The BASE_TESTNET_* secrets drive the testnet leg.
+      - name: Start the Twin chain at the run pin
+        id: twin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
       - name: Base testnet multi-network adapter e2e (fork-e2e)
         working-directory: testing/fork-e2e-rust
+        env:
+          RMPC_TESTNET_RPC_URL: ${{ steps.twin.outputs.rpc-url }}
         run: cargo test --release --test multi_network_adapters -- --test-threads=1 --nocapture
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
