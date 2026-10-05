@@ -160,7 +160,7 @@ contract RobotMoneyVaultRedeemGasMechanismTest is Test {
     /// @notice Claim 1: the adapter is entered with at least floor*63/64 minus call overhead.
     function test_forwardedGas_respectsFloorTimes6364() public {
         // Reads cost 600k each (pessimistic): the per-adapter floor is the binding guard.
-        probe.configure(0, false, 600_000);
+        probe.configure(0, false, 450_000);
         uint256 shares = vault.balanceOf(alice) / 2;
         uint256 gc = _guardCrossing(shares);
         emit log_named_uint("guard crossing gas limit", gc);
@@ -232,10 +232,10 @@ contract RobotMoneyVaultRedeemGasMechanismTest is Test {
     function test_guardLimit_adapterNeedingMoreThanFloorFailsOpaque() public {
         uint256 shares = vault.balanceOf(alice) / 2;
 
-        probe.configure(100_000, false, 600_000);
+        probe.configure(100_000, false, 450_000);
         assertEq(_countOpaque(shares), 0, "cheap adapter must never fail opaque");
 
-        probe.configure(450_000, false, 600_000);
+        probe.configure(450_000, false, 450_000);
         uint256 opaqueBig = _countOpaque(shares);
         emit log_named_uint("opaque failures, adapter needing 450k", opaqueBig);
         assertGt(opaqueBig, 0, "expected an opaque window above the floor");

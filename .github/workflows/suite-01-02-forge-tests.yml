@@ -321,6 +321,9 @@ jobs:
           bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/GovernanceExecutePathAfterHandover.t.sol"
           echo "::endgroup::"
 
+      - name: forge test (redeem gas estimate then include and root cause — core 1482)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/{RobotMoneyVaultRedeemGas,RobotMoneyVaultRedeemGasRootCause}.t.sol" --match-contract "ForkTest|RootCauseTest"
+
       - name: forge test (rmRWA fork regression — core 1492)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
 

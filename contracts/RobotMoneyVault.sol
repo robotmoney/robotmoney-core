@@ -336,11 +336,15 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     uint256 internal constant ADAPTER_CALL_GAS_FLOOR = 400_000;
     /// @dev Gas that must remain after the last adapter call for burn, fee and payout transfers.
     uint256 internal constant TAIL_GAS_FLOOR = 150_000;
-    /// @dev Gas that must be available when the adapter-sourcing path starts (idle balance
-    ///      does not cover the withdrawal). The path reads every adapter's `totalAssets()`
-    ///      twice (MetaMorpho ~201k each), so it needs well over the per-call floor. Below
-    ///      this the call reverts `InsufficientGas` instead of running out of gas silently.
-    uint256 internal constant PULL_ENTRY_GAS_FLOOR = 1_200_000;
+    /// @dev Gas that must be available at the `redeem`/`withdraw` entrypoint. Below this the call
+    ///      reverts `InsufficientGas` instead of running out of gas. It must be the binding
+    ///      floor: eth_estimateGas returns the smallest passing limit in the estimate-time state,
+    ///      and a floor checked mid-path moves with that state. Measured on a Base fork, a redeem
+    ///      costs 1.011M when the protocols already accrued this block and 1.107M one block later
+    ///      (+96k), and the last adapter's floor check binds at about 1.41M in the later state.
+    ///      1.6M keeps the entry floor above both, so the estimate sits at this floor in every state.
+    ///      See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant PULL_ENTRY_GAS_FLOOR = 1_600_000;
 
     function _requireGas(uint256 floor) private view {
         uint256 g = gasleft();
@@ -832,7 +836,6 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             return assetsNeeded;
         }
 
-        _requireGas(PULL_ENTRY_GAS_FLOOR);
         uint256 totalInAdapters;
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {

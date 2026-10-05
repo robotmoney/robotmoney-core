@@ -216,10 +216,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     error InsufficientGas(uint256 available, uint256 required);
 
     /// @dev Gas that must remain before a redeem leg calls `vault.redeem`. The vault's
-    ///      own adapter-sourcing floor is 1_200_000 measured after the 63/64 forward,
-    ///      so the router needs about 1_219_000 to hand it that much. 1_250_000 adds margin.
+    ///      own adapter-sourcing floor is 1_600_000 measured after the 63/64 forward,
+    ///      so the router needs about 1_625_000 to hand it that much. 1_650_000 adds margin.
     ///      A tunable constant pending the fork measurement in docs/technical/redeem-gas-1482.md.
-    uint256 internal constant REDEEM_LEG_GAS_FLOOR = 1_250_000;
+    uint256 internal constant REDEEM_LEG_GAS_FLOOR = 1_650_000;
 
     /// @notice The explicit `vaults[]` array supplied to `redeemFor` does not
     ///         match the length of `sharesPerLeg` (or `minAssetsPerLeg`). Each
