@@ -12,3 +12,9 @@ test("a label only on one side is reported", () => {
   expect(d.onlyStage).toEqual(["b"]);
   expect(d.onlyMainnet).toEqual(["c"]);
 });
+
+test("parseLabels keeps only the [verify] section of a sectioned file (devops output and the committed mainnet file)", async () => {
+  const { parseLabels } = await import("../label-diff.ts");
+  expect(parseLabels("[verify]\na\nb\n[canary]\nc\n[acceptance]\nd")).toEqual(["a", "b"]);
+  expect(parseLabels("a\nb")).toEqual(["a", "b"]);
+});

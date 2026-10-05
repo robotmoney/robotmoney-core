@@ -59,3 +59,10 @@ test("labelRows reads plain and json rows", () => {
     { label: "z", ok: false },
   ]);
 });
+
+test("labelRows reads the devops format: [verify] then one bare label per line is a passing label; other sections are not labels", () => {
+  expect(labelRows("[verify]\nchain: id equals sheet\nsafe: has code\n[canary]\nreads: x")).toEqual([
+    { label: "chain: id equals sheet", ok: true },
+    { label: "safe: has code", ok: true },
+  ]);
+});

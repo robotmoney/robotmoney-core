@@ -57,10 +57,16 @@ export interface Inputs {
 /** Parse verifier output into pass/fail rows. A line that starts with FAIL is a failure. */
 export function labelRows(text: string): LabelRow[] {
   const rows: LabelRow[] = [];
+  // devops publish contracts prints `[verify]` and then one bare label per line, and signals a failure by its exit code (a run that reaches
+  // this report passed). So a bare line under [verify] is a passing label. A PASS or FAIL prefix or a JSON row still wins.
+  let section: string | null = null;
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (!line) continue;
+    const head = /^\[([a-z-]+)\]$/.exec(line);
+    if (head) { section = head[1]!; continue; }
     let ok: boolean | null = null;
+    if (section === "verify" && !/^(FAIL|PASS)\s/.test(line) && !line.startsWith("{") && !line.startsWith("RESULT:") && !line.startsWith("#")) { rows.push({ label: line, ok: true }); continue; }
     if (/^FAIL\s/.test(line)) ok = false;
     else if (/^PASS\s/.test(line)) ok = true;
     else if (line.startsWith("{")) {

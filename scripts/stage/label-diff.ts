@@ -7,9 +7,14 @@ import { readFileSync } from "node:fs";
 
 export function parseLabels(text: string): string[] {
   const out: string[] = [];
+  // devops prints `[verify]` and then one label per line; the committed mainnet file has [verify], [canary] and [acceptance]. A plain label counts
+  // only in the [verify] section (or when the text has no section header at all).
+  let section: string | null = null;
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (!line) continue;
+    const head = /^\[([a-z-]+)\]$/.exec(line);
+    if (head) { section = head[1]!; continue; }
     if (line.startsWith("{")) {
       try {
         const j = JSON.parse(line);
@@ -19,7 +24,7 @@ export function parseLabels(text: string): string[] {
       }
     } else if (/^(PASS|FAIL)\s+/.test(line)) {
       out.push(line.replace(/^(PASS|FAIL)\s+/, "").replace(/:.*$/, "").trim());
-    } else if (!line.startsWith("RESULT:") && !line.startsWith("#")) {
+    } else if (!line.startsWith("RESULT:") && !line.startsWith("#") && (section === null || section === "verify")) {
       out.push(line);
     }
   }
