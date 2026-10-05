@@ -341,10 +341,16 @@ parameterized_e2e!(
 
         // chain_id guard: the macro already verified for_network, but assert here
         // too so the body is self-documenting about which chain it ran on.
-        assert_eq!(
+        // The devnet network is a local fork of Base (8453) or the shared Twin fork (918453).
+        let expected: &[u64] = match network {
+            Network::RobotMoneyDevnet => &[8453, 918453],
+            Network::BaseTestnet => &[network.chain_id()],
+        };
+        assert!(
+            expected.contains(&fx.chain_id),
+            "connected RPC chain id {} must match the selected network (one of {:?})",
             fx.chain_id,
-            network.chain_id(),
-            "connected RPC chain id must match the selected network"
+            expected
         );
 
         exercise_uniswap(&fx, network).expect("Uniswap adapter");
