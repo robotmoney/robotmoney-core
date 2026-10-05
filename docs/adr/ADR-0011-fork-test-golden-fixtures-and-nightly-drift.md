@@ -1,6 +1,7 @@
 # ADR-0011: Fork tests run against checked-in golden fixtures on every merge
 
 - **Status:** Superseded by the nightly redesign (core issues 1495 and 1496). The live drift alarm (Decision 2) no longer exists: suite 29 (the nightly fresh snapshot) and the third-party drift workflow replace it, and the nightly dispatch fails when any dispatch fails. Decision 1 (merge-gating fork tests on checked-in golden fixtures) is how the repository still runs fork tests. Decisions 3 and 4 stand as written. Read Decision 2 and the references to a nightly drift alarm below as history.
+- **Update (2026-10-05, core 1498, 1496):** the chain suites no longer use the saved `.anvil-state` fixture or `genesis-alloc.json` (deleted). The Twin chain is a pinned lazy anvil fork of real Base state, one pin per CI run, and suite 5's anvil groups fork it (`RMPC_FORK_RPC_URL=$TWIN_RPC_URL`). Suite 29 is now the nightly Twin chain run with one shared pin. Only the forge golden fork tests of suites 1 and 2 still load the saved fixture. See `docs/technical/full-stack-devnet.md`.
 - **Date:** 2026-07-20
 - **Deciders:** Product owner
 - **Supersedes (in part):** `docs/technical/fork-e2e-decisions.md` —

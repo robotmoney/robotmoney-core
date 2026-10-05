@@ -424,7 +424,7 @@ impl Fixture {
         logging::info("smoke-test", format!("boot run-id={run_id}"));
         reap_stale_testnet_containers(&run_id);
 
-        let twin = twin_fork::TwinFork::boot(&repo_root, allocate_chain_rpc_port()?)?;
+        let twin = twin_fork::boot_twin_fork(&repo_root, allocate_chain_rpc_port()?)?;
         let rpc_port = twin.rpc_port();
         let rpc_url = twin.rpc_url().to_string();
         logging::info(

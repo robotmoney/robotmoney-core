@@ -122,6 +122,12 @@ pub fn start_args(
     a
 }
 
+/// Boot the Twin chain: reuse the fork named by `TWIN_RPC_URL`, or run `scripts/devnet/twin-fork.ts`
+/// on `preferred_port`, and return once it answers with chain id 918453. See [`TwinFork::boot`].
+pub fn boot_twin_fork(repo_root: &Path, preferred_port: u16) -> Result<TwinFork, HarnessError> {
+    TwinFork::boot(repo_root, preferred_port)
+}
+
 impl TwinFork {
     /// Reuse the fork named by `TWIN_RPC_URL`, or start one on `preferred_port`.
     pub fn boot(repo_root: &Path, preferred_port: u16) -> Result<Self, HarnessError> {
