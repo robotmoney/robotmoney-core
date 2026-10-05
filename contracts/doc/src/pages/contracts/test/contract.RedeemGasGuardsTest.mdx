@@ -4,7 +4,7 @@ title: "RedeemGasGuardsTest"
 
 # RedeemGasGuardsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RedeemGasGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/16fd0e09ff8c86e2a83df04fbe99e0d46acb8df7/contracts/test/RedeemGasGuards.t.sol)
 
 **Inherits:** Test
 
@@ -21,11 +21,42 @@ uint256 internal constant ONE = 1e6;
 <i>
 
 Stub cost of the vault fan-out. Well under every floor, so the floors are the binding guard.
+The `_includeLater` tests switch the stubs to a cost modelled on the fork instead.
 
 </i>
 
 ```solidity
 uint256 internal constant STUB_COST = 400_000;
+```
+
+### ROUTER_PER_LEG
+
+```solidity
+uint256 internal constant ROUTER_PER_LEG = 1_700_000;
+```
+
+### GATEWAY_WITHDRAW
+
+```solidity
+uint256 internal constant GATEWAY_WITHDRAW = 2_000_000;
+```
+
+### GATEWAY_ROUTER_BASE
+
+```solidity
+uint256 internal constant GATEWAY_ROUTER_BASE = 400_000;
+```
+
+### GATEWAY_ROUTER_PER_LEG
+
+```solidity
+uint256 internal constant GATEWAY_ROUTER_PER_LEG = 1_850_000;
+```
+
+### VAULT_FLOOR
+
+```solidity
+uint256 internal constant VAULT_FLOOR = 1_600_000;
 ```
 
 ## State Variables
@@ -40,6 +71,18 @@ TestERC20 internal usdc;
 
 ```solidity
 GasMeteredStubVault internal vault;
+```
+
+### vault2
+
+```solidity
+GasMeteredStubVault internal vault2;
+```
+
+### vault3
+
+```solidity
+GasMeteredStubVault internal vault3;
 ```
 
 ### registry
@@ -223,6 +266,14 @@ function _estimate(uint256 which) internal returns (uint256);
 function test_router_redeemFor_belowFloor_revertsInsufficientGas() public;
 ```
 
+<a id="test_router_redeemfor_floorscaleswithnonzerolegs"></a>
+
+### test_router_redeemFor_floorScalesWithNonZeroLegs
+
+```solidity
+function test_router_redeemFor_floorScalesWithNonZeroLegs() public;
+```
+
 <a id="test_router_redeemfor_atfullgas_pays"></a>
 
 ### test_router_redeemFor_atFullGas_pays
@@ -237,11 +288,118 @@ function test_router_redeemFor_atFullGas_pays() public;
 
 Estimate-then-execute with the gas-metered stub: the bisect estimate lands at the
 floor, executing at exactly that limit pays in full, and the vault is entered with at
-least its own 1_200_000 entry floor. Every limit below the estimate (past the router's
-own pre-guard work) reverts typed, never opaque.
+least its own 1_600_000 entry floor. Every limit below the estimate reverts typed.
 
 ```solidity
 function test_router_redeemFor_estimateThenExecute() public;
+```
+
+<a id="_realisticandaccrued"></a>
+
+### _realisticAndAccrued
+
+<i>
+
+Stubs modelled on the fork: a 1.6M typed entry floor, about 1.0M of real work and
+96k extra for the first redeem in a new timestamp. Each vault accrues now, so the
+estimate runs in the cheap state.
+
+</i>
+
+```solidity
+function _realisticAndAccrued() internal;
+```
+
+<a id="_estimatewith-uint256-uint256"></a>
+
+### _estimateWith
+
+```solidity
+function _estimateWith(uint256 which, uint256 k) internal returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| which | `uint256` |  |
+| k | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_includelater-uint256-uint256"></a>
+
+### _includeLater
+
+```solidity
+function _includeLater(uint256 which, uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| which | `uint256` |  |
+| k | `uint256` |  |
+
+<a id="test_router_estimatethenincludenextblock_1leg"></a>
+
+### test_router_estimateThenIncludeNextBlock_1leg
+
+```solidity
+function test_router_estimateThenIncludeNextBlock_1leg() public;
+```
+
+<a id="test_router_estimatethenincludenextblock_2legs"></a>
+
+### test_router_estimateThenIncludeNextBlock_2legs
+
+```solidity
+function test_router_estimateThenIncludeNextBlock_2legs() public;
+```
+
+<a id="test_router_estimatethenincludenextblock_3legs"></a>
+
+### test_router_estimateThenIncludeNextBlock_3legs
+
+```solidity
+function test_router_estimateThenIncludeNextBlock_3legs() public;
+```
+
+<a id="test_gateway_withdraw_estimatethenincludenextblock"></a>
+
+### test_gateway_withdraw_estimateThenIncludeNextBlock
+
+```solidity
+function test_gateway_withdraw_estimateThenIncludeNextBlock() public;
+```
+
+<a id="test_gateway_withdrawfromrouter_estimatethenincludenextblock_1leg"></a>
+
+### test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_1leg
+
+```solidity
+function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_1leg() public;
+```
+
+<a id="test_gateway_withdrawfromrouter_estimatethenincludenextblock_2legs"></a>
+
+### test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_2legs
+
+```solidity
+function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_2legs() public;
+```
+
+<a id="test_gateway_withdrawfromrouter_estimatethenincludenextblock_3legs"></a>
+
+### test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs
+
+```solidity
+function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs() public;
 ```
 
 <a id="test_gateway_withdraw_belowfloor_revertsinsufficientgas"></a>
@@ -275,6 +433,81 @@ function test_gateway_withdrawFromRouter_belowFloor_revertsInsufficientGas() pub
 ```solidity
 function test_gateway_withdrawFromRouter_estimateThenExecute() public;
 ```
+
+<a id="_legs-uint256-bool"></a>
+
+### _legs
+
+```solidity
+function _legs(uint256 k, bool zeroMiddle)
+        internal
+        view
+        returns (address[] memory vs, uint256[] memory sh);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `uint256` |  |
+| zeroMiddle | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vs | `address[]` |  |
+| sh | `uint256[]` |  |
+
+<a id="_routercalln-uint256-uint256-bool"></a>
+
+### _routerCallN
+
+```solidity
+function _routerCallN(uint256 gasLimit, uint256 k, bool zeroMiddle)
+        internal
+        returns (bool ok, bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gasLimit | `uint256` |  |
+| k | `uint256` |  |
+| zeroMiddle | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+
+<a id="_gatewayroutercalln-uint256-bytes32-uint256"></a>
+
+### _gatewayRouterCallN
+
+```solidity
+function _gatewayRouterCallN(uint256 gasLimit, bytes32 salt, uint256 k)
+        internal
+        returns (bool ok, bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gasLimit | `uint256` |  |
+| salt | `bytes32` |  |
+| k | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
 
 <a id="_slice-bytes"></a>
 

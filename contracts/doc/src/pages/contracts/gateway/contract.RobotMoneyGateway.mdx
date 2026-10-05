@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/16fd0e09ff8c86e2a83df04fbe99e0d46acb8df7/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
 
@@ -30,15 +30,38 @@ hash deliberately excludes `deadline`.
 
 <i>
 
-Gas that must remain before the gateway calls `vault.redeem` or `router.redeemFor`.
-The router's leg floor is 1_250_000 and the vault's is 1_200_000 (both measured
-after a 63/64 forward), so the gateway needs about 1_270_000 plus its own tail work.
-A tunable constant pending the fork measurement in docs/technical/redeem-gas-1482.md.
+Gas `withdraw` needs, checked at entry before any state-dependent work (core 1482).
+The vault's entry floor is 1_600_000 after the 63/64 forward (about 1_625_400 at the
+call), and the gateway spends its policy reads, window and payment-id writes and the
+share pull before the call. A floor checked after that work would move with the
+state, so eth_estimateGas could land on it and fail at inclusion.
+See docs/technical/redeem-gas-1482.md.
 
 </i>
 
 ```solidity
-uint256 internal constant WITHDRAW_GAS_FLOOR = 1_300_000;
+uint256 internal constant WITHDRAW_GAS_FLOOR = 2_000_000;
+```
+
+### ROUTER_WITHDRAW_BASE_GAS
+
+<i>
+
+`withdrawFromRouter` needs this fixed part plus `ROUTER_WITHDRAW_GAS_PER_LEG` per
+non-zero leg, checked at entry. Per leg the router needs 1_700_000 after the 63/64
+forward (about 1_727_000 at the call) plus the gateway's share pull, approvals and
+custody reads for that leg.
+
+</i>
+
+```solidity
+uint256 internal constant ROUTER_WITHDRAW_BASE_GAS = 400_000;
+```
+
+### ROUTER_WITHDRAW_GAS_PER_LEG
+
+```solidity
+uint256 internal constant ROUTER_WITHDRAW_GAS_PER_LEG = 1_850_000;
 ```
 
 ### WINDOW_SECONDS
