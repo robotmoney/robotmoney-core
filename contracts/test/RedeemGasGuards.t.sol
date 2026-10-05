@@ -21,9 +21,17 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 /// @dev ERC-4626-shaped stub whose `redeem` burns `redeemCost` gas (a stand-in for the adapter
 ///      fan-out) and records `gasleft()` at entry. 1:1 shares to assets.
 contract GasMeteredStubVault is ERC20 {
+    /// @dev Same signature as the real vault's error, so the selector matches.
+    error InsufficientGas(uint256 available, uint256 required);
+
     IERC20 public immutable assetToken;
     uint256 public redeemCost;
     uint256 public entryGas;
+    /// @dev Models the real vault: a typed entry floor, and an extra cost paid by the first
+    ///      redeem in a new timestamp (interest accrual, about 96k on the Base fork).
+    uint256 public entryFloor;
+    uint256 public accrualCost;
+    uint256 public lastAccrual;
 
     constructor(address asset_) ERC20("Gas Metered Shares", "GMS") {
         assetToken = IERC20(asset_);
@@ -45,6 +53,12 @@ contract GasMeteredStubVault is ERC20 {
         redeemCost = cost;
     }
 
+    function setRealistic(uint256 entryFloor_, uint256 cost, uint256 accrualCost_) external {
+        entryFloor = entryFloor_;
+        redeemCost = cost;
+        accrualCost = accrualCost_;
+    }
+
     function retire() external {}
 
     function unretire() external {}
@@ -54,8 +68,14 @@ contract GasMeteredStubVault is ERC20 {
         returns (uint256 assets)
     {
         entryGas = gasleft();
+        if (entryGas < entryFloor) revert InsufficientGas(entryGas, entryFloor);
+        uint256 cost = redeemCost;
+        if (lastAccrual != block.timestamp) {
+            lastAccrual = block.timestamp;
+            cost += accrualCost;
+        }
         uint256 start = gasleft();
-        while (start - gasleft() < redeemCost) {}
+        while (start - gasleft() < cost) {}
         if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
         _burn(owner, shares);
         assets = shares;
@@ -66,10 +86,13 @@ contract GasMeteredStubVault is ERC20 {
 contract RedeemGasGuardsTest is Test {
     uint256 internal constant ONE = 1e6;
     /// @dev Stub cost of the vault fan-out. Well under every floor, so the floors are the binding guard.
+    ///      The `_includeLater` tests switch the stubs to a cost modelled on the fork instead.
     uint256 internal constant STUB_COST = 400_000;
 
     TestERC20 internal usdc;
     GasMeteredStubVault internal vault;
+    GasMeteredStubVault internal vault2;
+    GasMeteredStubVault internal vault3;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
     RobotMoneyGateway internal gateway;
@@ -98,7 +121,27 @@ contract RedeemGasGuardsTest is Test {
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(router)
         );
 
-        address[] memory none = new address[](0);
+        vault2 = new GasMeteredStubVault(address(usdc));
+        vault3 = new GasMeteredStubVault(address(usdc));
+        vault2.setRedeemCost(STUB_COST);
+        vault3.setRedeemCost(STUB_COST);
+        usdc.mint(address(vault2), 1_000_000 * ONE);
+        usdc.mint(address(vault3), 1_000_000 * ONE);
+        vm.startPrank(admin);
+        registry.registerVault(
+            address(vault2),
+            VaultRegistry.VaultMetadata({name: "Stub2", asset: address(usdc), registeredAt: 0})
+        );
+        registry.registerVault(
+            address(vault3),
+            VaultRegistry.VaultMetadata({name: "Stub3", asset: address(usdc), registeredAt: 0})
+        );
+        vm.stopPrank();
+
+        address[] memory sources = new address[](3);
+        sources[0] = address(vault);
+        sources[1] = address(vault2);
+        sources[2] = address(vault3);
         address[] memory dest = new address[](1);
         dest[0] = address(router);
         vm.prank(admin);
@@ -114,7 +157,7 @@ contract RedeemGasGuardsTest is Test {
                 assetRecipient: assetRecipient,
                 maxWithdrawPerPayment: 1_000 * ONE,
                 maxWithdrawPerWindow: 5_000 * ONE,
-                allowedSourceVaults: none
+                allowedSourceVaults: sources
             })
         );
 
@@ -126,9 +169,17 @@ contract RedeemGasGuardsTest is Test {
         vm.prank(shareReceiver);
         vault.approve(address(gateway), type(uint256).max);
         address alice = makeAddr("alice");
-        vault.mint(alice, 100 * ONE);
-        vm.prank(alice);
-        vault.approve(address(router), type(uint256).max);
+        GasMeteredStubVault[3] memory all = [vault, vault2, vault3];
+        for (uint256 i = 0; i < 3; i++) {
+            all[i].mint(alice, 100 * ONE);
+            vm.prank(alice);
+            all[i].approve(address(router), type(uint256).max);
+            if (i > 0) {
+                all[i].mint(shareReceiver, 100 * ONE);
+                vm.prank(shareReceiver);
+                all[i].approve(address(gateway), type(uint256).max);
+            }
+        }
     }
 
     // --- call builders -----------------------------------------------------------------------
@@ -206,12 +257,31 @@ contract RedeemGasGuardsTest is Test {
 
     // --- router.redeemFor --------------------------------------------------------------------
 
+    uint256 internal constant ROUTER_PER_LEG = 1_700_000;
+    uint256 internal constant GATEWAY_WITHDRAW = 2_000_000;
+    uint256 internal constant GATEWAY_ROUTER_BASE = 400_000;
+    uint256 internal constant GATEWAY_ROUTER_PER_LEG = 1_850_000;
+    uint256 internal constant VAULT_FLOOR = 1_600_000;
+
     function test_router_redeemFor_belowFloor_revertsInsufficientGas() public {
         (bool ok, bytes memory ret) = _routerCall(900_000);
         assertFalse(ok);
         assertEq(_sel(ret), PortfolioRouter.InsufficientGas.selector, "expected InsufficientGas");
         (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-        assertEq(required, 1_650_000, "router leg floor");
+        assertEq(required, ROUTER_PER_LEG, "router floor for one leg");
+    }
+
+    function test_router_redeemFor_floorScalesWithNonZeroLegs() public {
+        for (uint256 k = 1; k <= 3; k++) {
+            (bool ok, bytes memory ret) = _routerCallN(900_000, k, false);
+            assertFalse(ok);
+            (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
+            assertEq(required, k * ROUTER_PER_LEG, "router floor is per non-zero leg");
+        }
+        // A zero-share leg does not count.
+        (, bytes memory ret0) = _routerCallN(900_000, 3, true);
+        (, uint256 req0) = abi.decode(_slice(ret0), (uint256, uint256));
+        assertEq(req0, 2 * ROUTER_PER_LEG, "zero-share leg counted");
     }
 
     function test_router_redeemFor_atFullGas_pays() public {
@@ -222,17 +292,16 @@ contract RedeemGasGuardsTest is Test {
 
     /// @notice Estimate-then-execute with the gas-metered stub: the bisect estimate lands at the
     ///         floor, executing at exactly that limit pays in full, and the vault is entered with at
-    ///         least its own 1_600_000 entry floor. Every limit below the estimate (past the router's
-    ///         own pre-guard work) reverts typed, never opaque.
+    ///         least its own 1_600_000 entry floor. Every limit below the estimate reverts typed.
     function test_router_redeemFor_estimateThenExecute() public {
         uint256 est = _estimate(0);
-        assertGe(est, 1_650_000, "estimate below the router floor");
-        assertLe(est, 1_700_000, "estimate far above the floor");
+        assertGe(est, ROUTER_PER_LEG, "estimate below the router floor");
+        assertLe(est, ROUTER_PER_LEG + 50_000, "estimate far above the floor");
         uint256 snap = vm.snapshotState();
         (bool ok,) = _routerCall(est);
         assertTrue(ok, "router redeem failed at the exact estimate");
         assertEq(usdc.balanceOf(makeAddr("alice")), 10 * ONE, "short payout at the estimate");
-        assertGe(vault.entryGas(), 1_600_000, "vault entered below its own floor");
+        assertGe(vault.entryGas(), VAULT_FLOOR, "vault entered below its own floor");
         vm.revertToState(snap);
         for (uint256 g = 400_000; g < est; g += 7_919) {
             (bool ok2, bytes memory ret) = _routerCall(g);
@@ -243,6 +312,81 @@ contract RedeemGasGuardsTest is Test {
         }
     }
 
+    // --- estimate in an accrued block, include one block later (the 1482 mechanism) ----------
+
+    /// @dev Stubs modelled on the fork: a 1.6M typed entry floor, about 1.0M of real work and
+    ///      96k extra for the first redeem in a new timestamp. Each vault accrues now, so the
+    ///      estimate runs in the cheap state.
+    function _realisticAndAccrued() internal {
+        address alice = makeAddr("alice");
+        GasMeteredStubVault[3] memory all = [vault, vault2, vault3];
+        for (uint256 i = 0; i < 3; i++) {
+            all[i].setRealistic(VAULT_FLOOR, 1_000_000, 96_000);
+            vm.prank(alice);
+            all[i].redeem(1, alice, alice);
+        }
+    }
+
+    function _estimateWith(uint256 which, uint256 k) internal returns (uint256) {
+        uint256 snap = vm.snapshotState();
+        uint256 lo = 21_000;
+        uint256 hi = 12_000_000;
+        while (lo + 1 < hi) {
+            uint256 mid = (lo + hi) / 2;
+            bool ok;
+            if (which == 0) (ok,) = _routerCallN(mid, k, false);
+            else if (which == 1) (ok,) = _gatewayWithdrawCall(mid, bytes32(uint256(1)));
+            else (ok,) = _gatewayRouterCallN(mid, bytes32(uint256(1)), k);
+            vm.revertToState(snap);
+            snap = vm.snapshotState();
+            if (ok) hi = mid;
+            else lo = mid;
+        }
+        return hi;
+    }
+
+    function _includeLater(uint256 which, uint256 k) internal {
+        _realisticAndAccrued();
+        uint256 est = _estimateWith(which, k);
+        vm.warp(block.timestamp + 2);
+        vm.roll(block.number + 1);
+        bool ok;
+        bytes memory ret;
+        if (which == 0) (ok, ret) = _routerCallN(est, k, false);
+        else if (which == 1) (ok, ret) = _gatewayWithdrawCall(est, bytes32(uint256(1)));
+        else (ok, ret) = _gatewayRouterCallN(est, bytes32(uint256(1)), k);
+        emit log_named_uint("estimate", est);
+        assertTrue(ok, "failed at the estimate one block later");
+    }
+
+    function test_router_estimateThenIncludeNextBlock_1leg() public {
+        _includeLater(0, 1);
+    }
+
+    function test_router_estimateThenIncludeNextBlock_2legs() public {
+        _includeLater(0, 2);
+    }
+
+    function test_router_estimateThenIncludeNextBlock_3legs() public {
+        _includeLater(0, 3);
+    }
+
+    function test_gateway_withdraw_estimateThenIncludeNextBlock() public {
+        _includeLater(1, 1);
+    }
+
+    function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_1leg() public {
+        _includeLater(2, 1);
+    }
+
+    function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_2legs() public {
+        _includeLater(2, 2);
+    }
+
+    function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs() public {
+        _includeLater(2, 3);
+    }
+
     // --- gateway.withdraw --------------------------------------------------------------------
 
     function test_gateway_withdraw_belowFloor_revertsInsufficientGas() public {
@@ -250,38 +394,89 @@ contract RedeemGasGuardsTest is Test {
         assertFalse(ok);
         assertEq(_sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas");
         (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-        assertEq(required, 1_700_000, "gateway withdraw floor");
+        assertEq(required, GATEWAY_WITHDRAW, "gateway withdraw floor");
     }
 
     function test_gateway_withdraw_estimateThenExecute() public {
         uint256 est = _estimate(1);
-        assertGe(est, 1_700_000, "estimate below the gateway floor");
-        // The floor is checked after the gateway's own cold writes (window, payment id, share pull),
-        // so the estimate is the floor plus that spend.
-        assertLe(est, 1_700_000 + 400_000, "estimate far above the floor");
+        // The floor is checked at entry, so the estimate is the floor plus the call prelude.
+        assertGe(est, GATEWAY_WITHDRAW, "estimate below the gateway floor");
+        assertLe(est, GATEWAY_WITHDRAW + 50_000, "estimate far above the floor");
         (bool ok,) = _gatewayWithdrawCall(est, bytes32(uint256(1)));
         assertTrue(ok, "gateway withdraw failed at the exact estimate");
         assertEq(usdc.balanceOf(assetRecipient), 10 * ONE, "short payout at the estimate");
+        assertGe(vault.entryGas(), VAULT_FLOOR, "vault entered below its own floor");
     }
 
     // --- gateway.withdrawFromRouter ----------------------------------------------------------
 
     function test_gateway_withdrawFromRouter_belowFloor_revertsInsufficientGas() public {
-        (bool ok, bytes memory ret) = _gatewayRouterCall(900_000, bytes32(uint256(9)));
-        assertFalse(ok);
-        assertEq(_sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas");
-        (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-        assertEq(required, 1_700_000, "gateway withdraw floor");
+        for (uint256 k = 1; k <= 3; k++) {
+            (bool ok, bytes memory ret) = _gatewayRouterCallN(900_000, bytes32(uint256(9)), k);
+            assertFalse(ok);
+            assertEq(
+                _sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas"
+            );
+            (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
+            assertEq(
+                required, GATEWAY_ROUTER_BASE + k * GATEWAY_ROUTER_PER_LEG, "gateway router floor"
+            );
+        }
     }
 
     function test_gateway_withdrawFromRouter_estimateThenExecute() public {
+        uint256 floor = GATEWAY_ROUTER_BASE + GATEWAY_ROUTER_PER_LEG;
         uint256 est = _estimate(2);
-        assertGe(est, 1_700_000, "estimate below the gateway floor");
-        assertLe(est, 1_700_000 + 400_000, "estimate far above the floor");
+        assertGe(est, floor, "estimate below the gateway floor");
+        assertLe(est, floor + 50_000, "estimate far above the floor");
         (bool ok,) = _gatewayRouterCall(est, bytes32(uint256(1)));
         assertTrue(ok, "router withdraw failed at the exact estimate");
         assertEq(usdc.balanceOf(assetRecipient), 10 * ONE, "short payout at the estimate");
-        assertGe(vault.entryGas(), 1_600_000, "vault entered below its own floor");
+        assertGe(vault.entryGas(), VAULT_FLOOR, "vault entered below its own floor");
+    }
+
+    // --- multi-leg call builders -------------------------------------------------------------
+
+    function _legs(uint256 k, bool zeroMiddle)
+        internal
+        view
+        returns (address[] memory vs, uint256[] memory sh)
+    {
+        GasMeteredStubVault[3] memory all = [vault, vault2, vault3];
+        vs = new address[](k);
+        sh = new uint256[](k);
+        for (uint256 i = 0; i < k; i++) {
+            vs[i] = address(all[i]);
+            sh[i] = (zeroMiddle && i == 1) ? 0 : 10 * ONE;
+        }
+    }
+
+    function _routerCallN(uint256 gasLimit, uint256 k, bool zeroMiddle)
+        internal
+        returns (bool ok, bytes memory ret)
+    {
+        address alice = makeAddr("alice");
+        (address[] memory vs, uint256[] memory sh) = _legs(k, zeroMiddle);
+        vm.prank(alice);
+        (ok, ret) = address(router).call{gas: gasLimit}(
+            abi.encodeCall(
+                router.redeemFor, (alice, alice, vs, sh, new uint256[](k), type(uint256).max)
+            )
+        );
+    }
+
+    function _gatewayRouterCallN(uint256 gasLimit, bytes32 salt, uint256 k)
+        internal
+        returns (bool ok, bytes memory ret)
+    {
+        (address[] memory vs, uint256[] memory sh) = _legs(k, false);
+        vm.prank(agent);
+        (ok, ret) = address(gateway).call{gas: gasLimit}(
+            abi.encodeCall(
+                gateway.withdrawFromRouter,
+                (salt, vs, sh, new uint256[](k), uint64(block.timestamp + 60), salt)
+            )
+        );
     }
 
     function _slice(bytes memory ret) internal pure returns (bytes memory out) {

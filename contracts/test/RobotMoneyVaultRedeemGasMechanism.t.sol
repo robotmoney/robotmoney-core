@@ -159,7 +159,8 @@ contract RobotMoneyVaultRedeemGasMechanismTest is Test {
 
     /// @notice Claim 1: the adapter is entered with at least floor*63/64 minus call overhead.
     function test_forwardedGas_respectsFloorTimes6364() public {
-        // Reads cost 600k each (pessimistic): the per-adapter floor is the binding guard.
+        // Reads cost 450k each (pessimistic): the read prefix is about 1.35M, so the 400k
+        // per-adapter floor binds, not the 1.6M entry floor.
         probe.configure(0, false, 450_000);
         uint256 shares = vault.balanceOf(alice) / 2;
         uint256 gc = _guardCrossing(shares);
