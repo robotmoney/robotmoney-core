@@ -215,11 +215,14 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param required  The floor that was not met.
     error InsufficientGas(uint256 available, uint256 required);
 
-    /// @dev Gas that must remain before a redeem leg calls `vault.redeem`. The vault's
-    ///      own adapter-sourcing floor is 1_600_000 measured after the 63/64 forward,
-    ///      so the router needs about 1_625_000 to hand it that much. 1_650_000 adds margin.
-    ///      A tunable constant pending the fork measurement in docs/technical/redeem-gas-1482.md.
-    uint256 internal constant REDEEM_LEG_GAS_FLOOR = 1_650_000;
+    /// @dev Gas `redeemFor` needs per non-zero leg, checked once at entry (core 1482). The floor
+    ///      is checked at entry, never per leg: a per-leg check runs after earlier legs spent
+    ///      gas that depends on interest-accrual state, so eth_estimateGas would land on a
+    ///      threshold that moves between estimate and inclusion. Each leg must hand its vault
+    ///      1_600_000 after the 63/64 forward (about 1_625_400) plus its registry and allowance
+    ///      reads; a leg's real cost is about 1.11M on a Base fork, so earlier legs leave slack
+    ///      for later ones. See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant REDEEM_GAS_PER_LEG = 1_700_000;
 
     /// @notice The explicit `vaults[]` array supplied to `redeemFor` does not
     ///         match the length of `sharesPerLeg` (or `minAssetsPerLeg`). Each
@@ -733,6 +736,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
         assetsPerLeg = new uint256[](n);
 
+        // Gas guard (core 1482): one floor at entry, scaled by the non-zero legs.
+        {
+            uint256 legs;
+            for (uint256 i = 0; i < n; i++) {
+                if (sharesPerLeg[i] != 0) legs++;
+            }
+            uint256 floor = legs * REDEEM_GAS_PER_LEG;
+            if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
+        }
+
         for (uint256 i = 0; i < n; i++) {
             uint256 shares = sharesPerLeg[i];
             if (shares == 0) continue;
@@ -784,12 +797,6 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         if (msg.sender != shareHolder && IERC20(vault).allowance(shareHolder, msg.sender) < shares)
         {
             revert UnauthorizedRedeemer(shareHolder, msg.sender);
-        }
-
-        // Gas guard (core 1482): revert typed when the limit is too low for the
-        // vault's adapter fan-out, never fail opaquely inside it.
-        if (gasleft() < REDEEM_LEG_GAS_FLOOR) {
-            revert InsufficientGas(gasleft(), REDEEM_LEG_GAS_FLOOR);
         }
 
         // Redeem: shareHolder must have approved msg.sender (the gateway) to
