@@ -1,33 +1,33 @@
-# scripts/devnet: the Twin chain Base snapshot (Bun flow)
+# scripts/devnet: the Twin chain tool and the saved Base fixture tools (Bun flow)
 
-The Twin chain (918453) boots from a saved snapshot of third-party Base state. No Robot Money contract exists in it. The rehearsal deploys the production contracts with the production scripts (one deployment scheme). Canonical docs: `docs/technical/full-stack-devnet.md`, `docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md`.
+**The Twin chain (918453) is a pinned lazy fork of real Base state** made with anvil (core 1498, 1496, owner decision 2026-10-05). `twin-fork.ts` starts it, funds gas and USDC, and warps time. See `README-twin-fork.md` and `docs/technical/full-stack-devnet.md`. The composite actions are `.github/actions/twin-pin` (one pin per run) and `.github/actions/twin-fork`. No Robot Money contract is deployed by the tool. The rehearsal deploys the production contracts with the production scripts (one deployment scheme).
 
-## Files it writes (all at one block)
+The rest of this file covers the **saved fork-state fixture**, a separate artifact that only the forge golden fork tests of suites 1 and 2 still load (ADR-0011). The Twin chain does not use it. There is no genesis alloc, no genesis ingester and no nightly fresh-snapshot overlay any more.
+
+## Files `snapshot-fork.ts` writes (all at one block)
 
 | File | Block fields |
 |---|---|
 | `testing/fixtures/fork-state/CURRENT.json` | `fork_block`, `fork_block_hash`, `state_sha256` |
 | `testing/fixtures/fork-state/CURRENT.anvil-state` | the anvil dump the digest binds |
-| `testing/fixtures/fork-state/genesis-alloc.json` | address map from the genesis ingester |
-| `testing/fixtures/fork-state/genesis-alloc.block.json` | `block_number`, `block_hash`, `alloc_sha256` (sidecar, since the alloc is an address map) |
 | `testing/ethereum-testnet/config/fork-block.json` | `block_number`, `block_hash` |
-| `testing/ethereum-testnet/config/expected-prices.json` | prices at that block |
+| `testing/ethereum-testnet/config/expected-prices.json` | prices at that block (the landing price strip compares within a factor of 5 at any other block) |
 
 ## Flow
 
 1. `bun scripts/devnet/snapshot-fork.ts` pins a block on a public Base endpoint (no key, no archive node, back-off on HTTP 429).
 2. It boots anvil forking that block in Docker and warms third-party code: V3 factory, SwapRouter02, QuoterV2, every pool in `config/dex-pools.json`, the lending stack and the Safe v1.4.1 set.
 3. It runs representative quotes and swaps so tick, bitmap and observation slots are in the dump.
-4. It dumps state, writes `CURRENT.json` with the block hash and the sha256 binding, then writes `fork-block.json`, runs the genesis ingester and writes the `genesis-alloc.block.json` sidecar.
+4. It dumps state, writes `CURRENT.json` with the block hash and the sha256 binding, then writes `fork-block.json`.
 5. It runs the contents check on the result.
-
-The nightly job (core 1496) uses `nightly-fresh-snapshot.ts` (`snapshot`, `realign`, `apply`) on a runner and commits nothing.
 
 ## Checks (CI)
 
 - `bun scripts/devnet/check-fork-snapshot-contents.ts` boots anvil from the snapshot with no fork URL. It asserts code at SwapRouter02, QuoterV2, the V3 factory, the infrastructure and the Safe set, live `slot0`, `liquidity` and `observe` on every configured pool, `factory.getPool` agreement, and no Robot Money code at genesis.
-- `bash scripts/devnet/check-fork-manifest.sh` verifies the digest, the Safe set and pin age, then `check-fork-lockstep.ts`, which asserts block number and hash are equal across `CURRENT.json`, `fork-block.json` and `genesis-alloc.json` (through its sidecar, bound to the alloc bytes by sha256).
+- `bash scripts/devnet/check-fork-manifest.sh` verifies the digest, the Safe set and pin age, then `check-fork-lockstep.ts`, which asserts block number and hash are equal across `CURRENT.json` and `fork-block.json`.
 - `bun scripts/devnet/snapshot-fork-selftest.ts` is the offline unit test. Its fixtures are in `scripts/devnet/fixtures/lockstep/`.
+- `bun scripts/devnet/check-twin-chain-ci-selftest.ts` checks the Twin chain CI wiring (one pin per run, no retired devnet references).
+- `bun test scripts/devnet/twin-fork-lib.test.ts` is the offline unit test of the Twin fork tool.
 
 ## Exclusions
 

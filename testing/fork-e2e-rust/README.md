@@ -2,7 +2,7 @@
 
 Runs the shipping `rmpc` client against the **real deployed Base contracts** in
 a local `anvil` fork, to catch ABI/address/RPC-shape drift that the
-empty-genesis PoS devnet cannot see. Each scenario is a plain `#[test]`; the
+fresh deployment on the Twin chain cannot see. Each scenario is a plain `#[test]`; the
 harness boots one anvil child per test (fork-restart-per-test isolation, no
 shared backend). The Phase 1 devnet `Fixture` (`../ethereum-testnet/e2e-rust/`)
 is deliberately **not** shared with this crate.
@@ -19,29 +19,26 @@ is deliberately **not** shared with this crate.
 
 ## Backend modes
 
-The `anvil` backend runs in two modes:
+- `RMPC_FORK_RPC_URL` — a fresh local `anvil --fork-url` of that upstream per test: a real archive
+  endpoint, or the Twin fork (core 1498, `RMPC_FORK_RPC_URL=$TWIN_RPC_URL`,
+  `RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK`), so a test can warp and rewind without touching the shared chain.
+- `RMPC_TESTNET_RPC_URL` — connect straight to a running Twin fork (no second anvil).
 
-- `anvil --load-state` — the checked-in golden fixture
-  (`testing/fixtures/fork-state/`); offline, no secret.
-- `anvil --fork-url` — a live Base fork via `RMPC_FORK_RPC_URL`.
+There is no saved `--load-state` fixture and no USDC storage seed in this crate. Accounts are funded
+with the anvil admin RPCs (fund gas, fund USDC on the real FiatToken slot).
 
-**Current reality vs. target.** ADR-0011's end-state is that every merge-gating
-fork test runs against the offline fixture (loud on a missing fixture, no CI
-secret), with live Base realism handled by a **non-blocking nightly** drift
-alarm on a free public RPC. That is the *target*, not yet reached: the
-checked-in fixture carries contract bytecode but not the full Base-contract
-storage, so the flagship scenarios (`vault_deposit_redeem_smoke`,
-`dex_route_smoke`, `abi_address_sanity`) still require a **live**
-`RMPC_FORK_RPC_URL` today and skip without it (`src/lib.rs:150-164`). See
-ADR-0011 for the migration.
+**Clean room gap.** The scenarios here still read the live production v1 addresses from
+`src/addresses.rs`. The clean room rule (a test deploys its own vault and reads manifests) is met by
+the smoke-test harness suites. These scenarios are to be rewritten onto it.
 
 ## Running
 
 ```sh
-# Offline fixture (no RPC).
-cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml
+# Against a running Twin fork (bun scripts/devnet/twin-fork.ts start ...).
+RMPC_FORK_RPC_URL=$TWIN_RPC_URL RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK \
+  cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml
 
-# Live Base fork (needed by the flagship scenarios today).
+# Or against a live Base archive fork.
 RMPC_FORK_RPC_URL=https://mainnet.base.org \
   cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml
 ```
@@ -59,7 +56,7 @@ RMPC_FORK_RPC_URL=https://mainnet.base.org \
 
 ## Why no shared `Fixture` trait with the devnet harness?
 
-Phase 1 deploys the gateway stack against a Geth+Lighthouse devnet and tests
+Phase 1 deploys the gateway stack against the Twin chain and tests
 `rmpc` end-to-end; this crate forks a Base block and tests the already-deployed
 Robot Money contracts. They share no fixture parameters — addresses, RPC URL
 semantics, signing keys, deploy step — so a common supertype would only push

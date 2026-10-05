@@ -13,10 +13,9 @@ and the environment key — see [docs/development/ci-suites.md](../docs/developm
 | # | Root | Owner domain | Environment | CI workflow |
 |---|------|-------------|-------------|-------------|
 | 1–2 | `contracts/test/` | Smart contracts | `anvil` | `suite-01-02-forge-tests.yml` |
-| 5 | `testing/fork-e2e-rust/` | Rust client × Base adapters | `fork` | `suite-05-fork-integration.yml` |
+| 5 | `testing/fork-e2e-rust/` | Rust client × Base adapters | `devnet` / `fork` | `suite-05-fork-integration.yml` |
 | 14 | `testing/smoke-test/` | Devnet fixture library | `devnet` | `suite-14-smoke-test.yml` |
 | 7 | `testing/ethereum-testnet/e2e-rust/` | Rust client × devnet | `devnet` | `suite-07-rmpc-integration.yml` |
-| — | `testing/ethereum-testnet/typescript-sdk/` | TypeScript SDK × devnet | `devnet` | `suite-07-rmpc-integration.yml` |
 | 15 | `testing/doctests/` | SDK doc-examples | `none` | `suite-04-rust-quality.yml` |
 | 10 | `clients/dapp/tests/` | dApp E2E (Playwright) | `devnet` | `suite-10-dapp-e2e.yml` |
 | 8 | `services/explorer-indexer/tests/` | Explorer indexer | `devnet` | `suite-08-explorer-indexer.yml` |
@@ -125,27 +124,6 @@ bash .github/scripts/stress_nonce_race.sh
 Full policy and failure scenarios for `rmpc` against a real devnet: deposit,
 withdrawal, per-agent cap, nonce management, and window-cap enforcement.
 Skill-doc parity and dApp TOML round-trip are also checked here.
-
----
-
-### `testing/ethereum-testnet/typescript-sdk/` — TypeScript SDK × devnet
-
-**Owner domain:** TypeScript SDK integration against a real Geth+Lighthouse devnet  
-**CI workflow:** [`.github/workflows/suite-07-rmpc-integration.yml`](../.github/workflows/suite-07-rmpc-integration.yml)  
-**Environment:** `devnet` — Geth + Lighthouse Docker Compose stack  
-**Required services/secrets:** Docker available on the runner  
-**docs/development/ci-suites.md reference:** [Suite 7](../docs/development/ci-suites.md#7-rust-client-integration-tests)
-
-**Run commands:**
-```bash
-# From testing/ethereum-testnet/typescript-sdk/
-bun install --frozen-lockfile
-bun test
-```
-
-**Product promise covered:**  
-TypeScript SDK calls (block production, minimal deployment, state proofs,
-validator connectivity) work correctly against a live devnet chain.
 
 ---
 
