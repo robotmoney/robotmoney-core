@@ -418,6 +418,10 @@ jobs:
         working-directory: testing/ethereum-testnet/e2e-rust
         run: cargo test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
 
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
+
   nonce-race-stress:
     name: rmpc-nonce-race-stress
     runs-on: ubuntu-latest

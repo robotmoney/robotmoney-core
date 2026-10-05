@@ -259,3 +259,34 @@ export function spawnAnvilDetached(argv: string[], env: Record<string, string>, 
   if (!child.pid) throw new Error("anvil failed to spawn");
   return child.pid;
 }
+
+// ---------------------------------------------------------------- stale pin
+/** True when text says the upstream no longer serves the state of the pinned block (non-archive node). */
+export function isStalePinText(text: string): boolean {
+  return /missing trie node|state (at block .* )?is not available|historical state .*not (available|supported)|header not found|block not found|pruned|old data not available|state already discarded|required historical state unavailable|distance to target block exceeds/i.test(text);
+}
+
+/** Probes whether the upstream still serves STATE (not only the header) at the block. Only a stale-state error counts as stale. */
+export async function pinStateServed(upstream: string, block: number, opts: RpcOpts = {}): Promise<boolean> {
+  try {
+    await rpc(upstream, "eth_getBalance", [USDC, "0x" + block.toString(16)], opts);
+    return true;
+  } catch (e: any) {
+    if (isStalePinText(String(e?.message ?? e))) return false;
+    throw e;
+  }
+}
+
+/**
+ * If the pinned block's state is no longer served, warn loudly and re-pin to head minus 2. Returns the
+ * (possibly new) pin. Without `enabled` a stale pin is an error.
+ */
+export async function repinIfStale(
+  upstream: string, pin: PinInfo, enabled: boolean, opts: RpcOpts & { warn?: (m: string) => void } = {},
+): Promise<{ pin: PinInfo; repinned: boolean }> {
+  if (await pinStateServed(upstream, pin.block, opts)) return { pin, repinned: false };
+  if (!enabled) throw new Error(`pin block ${pin.block}: ${urlHost(upstream)} no longer serves its state (non-archive upstream). Choose a newer pin or pass --repin-on-stale.`);
+  const fresh = await selectPin(upstream, "auto", opts);
+  (opts.warn ?? console.warn)(`WARN: STALE PIN. Pinned block ${pin.block} is no longer served by ${urlHost(upstream)} (state pruned). RE-PINNING to ${fresh.block} (head minus ${PIN_BACK_OFF_BLOCKS}). Jobs of this run that used the old pin ran on a different block.`);
+  return { pin: fresh, repinned: true };
+}

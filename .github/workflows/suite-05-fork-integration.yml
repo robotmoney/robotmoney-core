@@ -173,6 +173,10 @@ jobs:
           RMPC_FORK_BLOCK: ${{ matrix.mode == 'fork' && steps.twin.outputs.pin-block || '' }}
         run: cargo test --release ${{ matrix.cargo_tests }} -- --test-threads=1 --nocapture
 
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
+
   base-testnet-adapters:
     name: base-testnet-adapters
     runs-on: ubuntu-latest

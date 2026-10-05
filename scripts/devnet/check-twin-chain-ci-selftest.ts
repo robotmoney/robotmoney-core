@@ -14,6 +14,8 @@
  *      geth+lighthouse devnet, the genesis alloc, the fresh-snapshot overlay or the saved
  *      .anvil-state fixture for a chain boot;
  *   4. the retired files are gone.
+ *   5. every twin-fork use has a matching twin-fork-save-cache last step (if: always()), one pin per
+ *      workflow, the action output names, and github.action_path in all three actions.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -100,6 +102,55 @@ ok("the nightly uploads suite-results and twin-pin and needs no secret beyond th
   const runs = (job.steps ?? []).map((x: any) => String(x.run ?? "")).join("\n");
   if (!/forge-fork-tests\.ts/.test(runs)) bad(`${file}: fork-regressions must run the fork tests through scripts/devnet/forge-fork-tests.ts`);
   ok("suite 1-2 fork-regressions starts the Twin fork at the pin and runs the fork tests through the Bun runner");
+}
+
+// 2d. every twin-fork use has a matching save-cache step, one pin per workflow run, output names.
+{
+  const isFork = (x: any) => String(x.uses ?? "").endsWith("/twin-fork");
+  const isSave = (x: any) => String(x.uses ?? "").endsWith("/twin-fork-save-cache");
+  let forkJobs = 0;
+  for (const f of readdirSync(".github/workflows").filter((n) => /\.ya?ml$/.test(n))) {
+    const path = `.github/workflows/${f}`;
+    const wf = yaml(path);
+    const pins = new Set<string>();
+    const jobsWithFork: string[] = [];
+    for (const [name, j] of Object.entries<any>(wf.jobs ?? {})) {
+      const steps: any[] = j.steps ?? [];
+      const forks = steps.filter(isFork);
+      const saves = steps.filter(isSave);
+      if (forks.length === 0) { if (saves.length) bad(`${path} job ${name} saves a Twin cache but starts no fork`); continue; }
+      jobsWithFork.push(name);
+      forkJobs++;
+      if (saves.length !== forks.length) bad(`${path} job ${name}: ${forks.length} twin-fork use(s) but ${saves.length} twin-fork-save-cache step(s)`);
+      const last = steps[steps.length - 1];
+      if (!isSave(last)) bad(`${path} job ${name}: the LAST step must use twin-fork-save-cache`);
+      if (!/always\(\)/.test(String(last.if ?? ""))) bad(`${path} job ${name}: the twin-fork-save-cache step must have if: always()`);
+      if (steps.indexOf(last) < steps.indexOf(forks[forks.length - 1])) bad(`${path} job ${name}: save-cache must come after twin-fork`);
+      for (const fk of forks) pins.add(String(fk.with?.["pin-block"] ?? ""));
+    }
+    if (jobsWithFork.length === 0) continue;
+    // ONE pin per workflow run: every fork takes the same expression; an empty pin (auto) is only
+    // allowed when the workflow has a single job that starts a fork.
+    if (pins.size > 1) bad(`${path}: more than one pin-block expression across twin-fork steps: ${[...pins].join(" | ")}`);
+    if (pins.has("") && jobsWithFork.length > 1) bad(`${path}: twin-fork steps without pin-block in ${jobsWithFork.length} jobs would each choose their own pin`);
+  }
+  if (forkJobs === 0) bad("no workflow job uses twin-fork");
+  ok(`all ${forkJobs} twin-fork job(s) end with twin-fork-save-cache (if: always()), one pin per workflow`);
+
+  const fork = yaml(".github/actions/twin-fork/action.yml");
+  for (const o of ["rpc-url", "pin-block", "TWIN_RPC_URL", "PIN_BLOCK"]) if (!fork.outputs?.[o]) bad(`twin-fork action must output ${o}`);
+  const forkText = readFileSync(".github/actions/twin-fork/action.yml", "utf8");
+  if (/actions\/cache@/.test(forkText) || !/actions\/cache\/restore@/.test(forkText)) bad("the twin-fork action must only restore the cache (actions/cache/restore)");
+  if (!/inputs\.upstream-secret \|\| env\.BASE_UPSTREAM_RPC/.test(forkText)) bad("twin-fork must fall back to an already-set BASE_UPSTREAM_RPC env");
+  const saveText = readFileSync(".github/actions/twin-fork-save-cache/action.yml", "utf8");
+  if (!/actions\/cache\/save@/.test(saveText) || !/twin-fork\.ts"? stop/.test(saveText)) bad("twin-fork-save-cache must stop the fork and then actions/cache/save");
+  if (saveText.indexOf("twin-fork.ts") > saveText.indexOf("actions/cache/save@") && !/\$TWIN_TOOL"? stop/.test(saveText)) bad("save-cache must stop before saving");
+  for (const a of ["twin-fork", "twin-pin", "twin-fork-save-cache"]) {
+    const t = readFileSync(`.github/actions/${a}/action.yml`, "utf8");
+    if (/github\.workspace/.test(t) || /["' ]\.\/scripts\//.test(t)) bad(`the ${a} action must use github.action_path, not the workspace root`);
+    if (!/github\.action_path/.test(t)) bad(`the ${a} action must locate scripts with github.action_path`);
+  }
+  ok("twin-fork outputs both naming styles, only restores, passes BASE_UPSTREAM_RPC through, and all three actions use github.action_path");
 }
 
 // 3. nothing still boots the retired devnet.

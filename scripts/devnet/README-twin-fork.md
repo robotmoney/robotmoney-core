@@ -9,7 +9,7 @@ Environment steps that may differ from production: fund gas, fund USDC, warp tim
 ```
 bun scripts/devnet/twin-fork.ts start [--port 8545] [--host 127.0.0.1] [--block-time SECS] [--chain-id 918453] [--upstream URL]
     [--pin-block N|auto] [--cache-dir DIR] [--pin-file pin.json] [--state-dir DIR]
-    [--retries 10] [--fork-retry-backoff 1000] [--compute-units-per-second 50]
+    [--repin-on-stale | --no-repin-on-stale] [--stop-timeout 90000] [--retries 10] [--fork-retry-backoff 1000] [--compute-units-per-second 50]
 bun scripts/devnet/twin-fork.ts wait-ready [--pin-block N]
 bun scripts/devnet/twin-fork.ts status
 bun scripts/devnet/twin-fork.ts fund-gas  <address> <eth>
@@ -26,15 +26,19 @@ Use the same `--port` and `--state-dir` for every command of one instance. `fund
 
 `--pin-block auto` reads the upstream head with `eth_blockNumber` (with retry) and pins head minus 2 (reorg safety). `--pin-file` receives `{block, hash, timestamp, upstreamHost}`. The host is written, never the URL. Every job of one CI run must use the same pin.
 
+## Stale pin
+
+A non-archive upstream stops serving the state of an old block. `start` probes the pinned block (`eth_getBalance` at the pin). If the upstream answers "missing trie node" or similar, and also if anvil dies with that error, `start --repin-on-stale` prints a loud `WARN: STALE PIN` line, re-pins to head minus 2 and rewrites `--pin-file` with the new block. It is on by default when `CI` or `GITHUB_ACTIONS` is set and off locally (a stale pin is then an error). `--no-repin-on-stale` forces it off. A re-pin means jobs of the same run may not share a block, so treat the WARN as a signal to rerun the whole run.
+
 ## Caching
 
-Anvil keeps its fork RPC cache in `$HOME/.foundry/cache/rpc/<chain>/<block>/`. `--cache-dir DIR` runs anvil with `HOME=DIR`, so the cache lives in `DIR/.foundry/cache/rpc`. CI persists `DIR` with actions/cache keyed by the pin block. A cache hit means no upstream calls for state already read.
+Anvil keeps its fork RPC cache in `$HOME/.foundry/cache/rpc/<chain>/<block>/`. `--cache-dir DIR` runs anvil with `HOME=DIR`, so the cache lives in `DIR/.foundry/cache/rpc`. CI persists `DIR` with actions/cache keyed by the pin block. A cache hit means no upstream calls for state already read. Anvil writes the cache only when it exits, so `stop` sends SIGTERM and waits (`--stop-timeout`, default 90 s) before it would SIGKILL. The `twin-fork` action only restores the cache. The `twin-fork-save-cache` action stops the fork and then runs `actions/cache/save` keyed by the pin block.
 
 ## Rate limits and the upstream
 
 The default upstream is `https://mainnet.base.org` (no key, no archive node, rate limited). Anvil retries (`--retries`, `--fork-retry-backoff`, `--compute-units-per-second`) and the tool retries start up to `--start-attempts` times, with backoff on HTTP 429. Lower `--compute-units-per-second` if you still see 429.
 
-For a paid provider set the env `BASE_UPSTREAM_RPC` (a secret, set in the GitHub Environment or the credential doctor vault, see the devops credential doctor runbook). The tool logs only the host. Anvil takes the URL as a command-line argument, so on a shared host it is visible in `ps` to local users. Use a dedicated host or accept that exposure. The pinned block must still be recent enough for the provider (a non-archive node serves only recent blocks, so start soon after choosing a pin).
+For a paid provider set the env `BASE_UPSTREAM_RPC` (a secret; the actions use their `upstream-secret` input, or an already-set `BASE_UPSTREAM_RPC` env when the input is empty, and never print it; set in the GitHub Environment or the credential doctor vault, see the devops credential doctor runbook). The tool logs only the host. Anvil takes the URL as a command-line argument, so on a shared host it is visible in `ps` to local users. Use a dedicated host or accept that exposure. The pinned block must still be recent enough for the provider (a non-archive node serves only recent blocks, so start soon after choosing a pin).
 
 ## Stage hosts (service)
 
@@ -91,9 +95,45 @@ jobs:
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
           # host: "0.0.0.0" and block-time: "1" when a docker container (the indexer) must reach the fork
       - run: echo "Twin at $TWIN_RPC_URL pinned at ${{ steps.twin.outputs.pin-block }}"
+      # ... the job's real steps ...
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache      # LAST step of EVERY job that uses twin-fork
 ```
 
-The composite action installs foundry and bun, restores the cache keyed `twin-anvil-rpc-<pin>`, starts the tool, waits until `eth_chainId` is 918453 and `eth_blockNumber` is the pin (or later, for a fork that mines on a timer), then exports `TWIN_RPC_URL` and `TWIN_PIN_BLOCK` (env and outputs). Cache save happens in the post step of actions/cache.
+### Action interface
+
+`twin-fork` inputs: `pin-block`, `upstream-secret`, `port`, `host`, `block-time`. Outputs (both naming styles, same values):
+
+| Output | Alias | Value |
+| --- | --- | --- |
+| `rpc-url` | `TWIN_RPC_URL` | `http://127.0.0.1:<port>` |
+| `pin-block` | `PIN_BLOCK` | the block the fork serves (after any re-pin) |
+
+The action also exports env `TWIN_RPC_URL`, `TWIN_PIN_BLOCK` and `TWIN_CACHE_DIR` for later steps of its own job. `twin-pin` outputs `block`. `twin-fork-save-cache` takes no inputs and has no outputs, it reads the pin file the fork wrote.
+
+The upstream is the `upstream-secret` input, or the `BASE_UPSTREAM_RPC` env when the input is empty. It is never echoed.
+
+Enforced by `scripts/devnet/check-twin-chain-ci-selftest.ts`: every `twin-fork` use has a matching `twin-fork-save-cache` last step with `if: always()`, one pin expression per workflow, the output names above, and `github.action_path` in all three actions.
+
+### From another repo
+
+Check core out and use the actions from the checkout. The actions locate `scripts/devnet` through `github.action_path`, so core need not be the workspace root:
+
+```yaml
+      - uses: actions/checkout@v4
+        with: { repository: robotmoney/robotmoney-core, path: core }
+      - id: pin
+        uses: ./core/.github/actions/twin-pin
+      - id: twin
+        uses: ./core/.github/actions/twin-fork
+        with: { pin-block: "${{ steps.pin.outputs.block }}" }
+      - run: echo "$TWIN_RPC_URL ${{ steps.twin.outputs.PIN_BLOCK }}"
+      - if: always()
+        uses: ./core/.github/actions/twin-fork-save-cache
+```
+
+The composite action installs foundry and bun, restores the cache keyed `twin-anvil-rpc-<pin>`, starts the tool, waits until `eth_chainId` is 918453 and `eth_blockNumber` is the pin (or later, for a fork that mines on a timer).
 
 ## Rust harness
 

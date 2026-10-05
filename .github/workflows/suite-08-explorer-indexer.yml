@@ -350,3 +350,7 @@ jobs:
         if: steps.devops.outputs.available != 'false'
         working-directory: services/explorer-indexer
         run: cargo test --test fork_indexer -- --nocapture
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

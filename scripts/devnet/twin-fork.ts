@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { parseArgs } from "node:util";
 import {
   DEFAULT_UPSTREAM, TWIN_CHAIN_ID, buildAnvilArgv, fundGas, fundUsdc, redact, redactArgv, rpc,
-  selectPin, spawnAnvilDetached, urlHost, usdcBalanceOf, waitReady, warp,
+  isStalePinText, repinIfStale, selectPin, spawnAnvilDetached, urlHost, usdcBalanceOf, waitReady, warp,
 } from "./twin-fork-lib.ts";
 
 const opts = {
@@ -28,6 +28,10 @@ const opts = {
   host: { type: "string", default: "127.0.0.1" },
   "block-time": { type: "string" },
   "rpc-url": { type: "string" },
+  // Stale pin handling: default on in CI, off locally.
+  "repin-on-stale": { type: "boolean" },
+  "no-repin-on-stale": { type: "boolean" },
+  "stop-timeout": { type: "string", default: "90000" },
 } as const;
 
 const { values: v, positionals } = parseArgs({ args: Bun.argv.slice(2), options: opts, allowPositionals: true });
@@ -49,7 +53,12 @@ async function start() {
   const prev = readState();
   if (prev && alive(prev.pid)) throw new Error(`already running (pid ${prev.pid}); run stop first`);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  const pin = await selectPin(upstream, v["pin-block"] === "auto" ? "auto" : Number(v["pin-block"]), { secrets });
+  const repinOn = v["no-repin-on-stale"] ? false : (v["repin-on-stale"] ?? Boolean(process.env.CI || process.env.GITHUB_ACTIONS));
+  let pin = await selectPin(upstream, v["pin-block"] === "auto" ? "auto" : Number(v["pin-block"]), { secrets });
+  if (v["pin-block"] !== "auto") {
+    const r = await repinIfStale(upstream, pin, repinOn, { secrets, warn: (m) => console.warn(redact(m, secrets)) });
+    pin = r.pin;
+  }
   log(`pin block ${pin.block} hash ${pin.hash} ts ${pin.timestamp} upstream ${pin.upstreamHost}`);
   const argv = buildAnvilArgv({
     port, chainId: Number(v["chain-id"]), upstream, pinBlock: pin.block, host: v.host,
@@ -68,6 +77,7 @@ async function start() {
   }
   const attempts = Number(v["start-attempts"]);
   let lastErr = "";
+  let repinned = false;
   for (let a = 1; a <= attempts; a++) {
     const pid = spawnAnvilDetached(argv, env, join(stateDir, "anvil.log"));
     writeFileSync(pidFile, JSON.stringify({ pid, pin, port }), { mode: 0o600 });
@@ -83,6 +93,20 @@ async function start() {
       lastErr = String(e?.message ?? e);
       try { process.kill(pid); } catch {}
       log(`start attempt ${a}/${attempts} failed: ${lastErr}`);
+      // anvil may die on a stale pin only after the probe passed: read its log for the same error.
+      const logText = existsSync(join(stateDir, "anvil.log")) ? readFileSync(join(stateDir, "anvil.log"), "utf8").slice(-8000) : "";
+      if (repinOn && !repinned && v["pin-block"] !== "auto" && isStalePinText(logText + lastErr)) {
+        repinned = true;
+        const fresh = await selectPin(upstream, "auto", { secrets });
+        console.warn(`WARN: STALE PIN. anvil could not serve pinned block ${pin.block} (state pruned). RE-PINNING to ${fresh.block}. Jobs of this run that used the old pin ran on a different block.`);
+        pin = fresh;
+        argv.splice(0, argv.length, ...buildAnvilArgv({
+          port, chainId: Number(v["chain-id"]), upstream, pinBlock: pin.block, host: v.host,
+          retries: Number(v.retries), forkRetryBackoffMs: Number(v["fork-retry-backoff"]),
+          computeUnitsPerSecond: Number(v["compute-units-per-second"]), timeoutMs: Number(v.timeout),
+          blockTimeSec: v["block-time"] ? Number(v["block-time"]) : undefined,
+        }));
+      }
       await sleep(2000 * a);
     }
   }
@@ -92,9 +116,11 @@ async function start() {
 async function stop() {
   const st = readState();
   if (!st || !alive(st.pid)) { log("not running"); rmSync(pidFile, { force: true }); return; }
+  // anvil writes its RPC cache only on a graceful exit, so wait for it (SIGKILL loses the cache).
   process.kill(st.pid, "SIGTERM");
-  for (let i = 0; i < 40 && alive(st.pid); i++) await sleep(250);
-  if (alive(st.pid)) process.kill(st.pid, "SIGKILL");
+  const deadline = Date.now() + Number(v["stop-timeout"]);
+  while (alive(st.pid) && Date.now() < deadline) await sleep(250);
+  if (alive(st.pid)) { log("WARN: anvil did not exit in time, killing it (its RPC cache is lost)"); process.kill(st.pid, "SIGKILL"); }
   rmSync(pidFile, { force: true });
   log(`stopped pid ${st.pid}`);
 }

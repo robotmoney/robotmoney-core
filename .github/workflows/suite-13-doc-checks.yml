@@ -430,3 +430,7 @@ jobs:
           for m in deployments/dependency-manifests/*/*.json; do
             bun scripts/release/check-dependency-manifest-addresses.ts --manifest "$m"
           done
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

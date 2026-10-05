@@ -330,6 +330,10 @@ jobs:
       - name: forge test (gateway router split stages on the fork)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "GatewayRouterSplitStagesForkTest"
 
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
+
   coverage:
     name: forge-coverage-gate
     runs-on: ubuntu-latest

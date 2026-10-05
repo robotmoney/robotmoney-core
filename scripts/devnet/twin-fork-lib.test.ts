@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildAnvilArgv, ethToWei, keccak256, redact, redactArgv, rpc, selectPin, urlHost,
-  usdcBalanceSlot, usdcBalanceWord, warp, hexToBytes,
+  usdcBalanceSlot, usdcBalanceWord, warp, hexToBytes, isStalePinText, pinStateServed, repinIfStale,
 } from "./twin-fork-lib.ts";
 
 /** Stub JSON-RPC fetcher. */
@@ -98,6 +98,43 @@ describe("pin selection", () => {
   });
 });
 
+describe("stale pin", () => {
+  const stale = () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: "missing trie node abc (path ) state is not available" } }));
+  const handlers = (served: (block: string) => boolean) => ({
+    eth_getBalance: (p: any[]) => (served(p[1]) ? "0x0" : stale()),
+    eth_blockNumber: () => "0x3e8",
+    eth_getBlockByNumber: (p: any[]) => ({ hash: "0xdef", timestamp: "0x64", number: p[0] }),
+  });
+  const old = { block: 500, hash: "0xabc", timestamp: 1, upstreamHost: "u.example" };
+  test("recognises stale-state text", () => {
+    expect(isStalePinText("missing trie node 0x12")).toBe(true);
+    expect(isStalePinText("rate limited")).toBe(false);
+  });
+  test("a served pin is kept", async () => {
+    const r = await repinIfStale("https://u.example/KEY", old, true, { fetcher: stub(handlers(() => true)) });
+    expect(r).toEqual({ pin: old, repinned: false });
+  });
+  test("a stale pin is re-pinned to head minus 2 with a loud WARN and no URL", async () => {
+    const warns: string[] = [];
+    const r = await repinIfStale("https://u.example/KEY123", old, true, {
+      fetcher: stub(handlers((b) => b !== "0x1f4")), warn: (m) => warns.push(m),
+    });
+    expect(r.repinned).toBe(true);
+    expect(r.pin.block).toBe(998);
+    expect(warns[0]).toMatch(/^WARN: STALE PIN/);
+    expect(warns[0]).toContain("500");
+    expect(warns[0]).toContain("998");
+    expect(warns.join("")).not.toContain("KEY123");
+  });
+  test("with repin off a stale pin is an error", async () => {
+    await expect(repinIfStale("https://u.example", old, false, { fetcher: stub(handlers(() => false)) })).rejects.toThrow(/no longer serves/);
+  });
+  test("other RPC errors are not treated as stale", async () => {
+    const f = stub({ eth_getBalance: () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: "boom" } })) });
+    await expect(pinStateServed("https://u.example", 5, { fetcher: f })).rejects.toThrow(/boom/);
+  });
+});
+
 describe("warp", () => {
   test("refuses on chain id 8453 and never advances time", async () => {
     const calls: string[] = [];
@@ -130,6 +167,42 @@ describe("redaction and units", () => {
     expect(ethToWei("0.5")).toBe(5n * 10n ** 17n);
     expect(() => ethToWei("1e3")).toThrow();
   });
+});
+
+describe("twin-fork.ts start --repin-on-stale (stub upstream, fake anvil)", () => {
+  test("warns, re-pins to head minus 2 and hands anvil the new block", async () => {
+    const fs = await import("node:fs");
+    const dir = fs.mkdtempSync((await import("node:os")).tmpdir() + "/twin-repin-");
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const { method, params } = await req.json() as any;
+        const ok = (result: any) => Response.json({ jsonrpc: "2.0", id: 1, result });
+        if (method === "eth_getBalance") return Response.json({ jsonrpc: "2.0", id: 1, error: { message: params[1] === "0x1f4" ? "missing trie node" : "x" } });
+        if (method === "eth_blockNumber") return ok("0x3e8");
+        return ok({ hash: "0xdef", timestamp: "0x64" });
+      },
+    });
+    try {
+      fs.mkdirSync(dir + "/bin");
+      fs.writeFileSync(dir + "/bin/anvil", `#!/bin/sh\necho "$@" > ${dir}/argv\nexit 1\n`, { mode: 0o755 });
+      const run = async (...extra: string[]) => { const pr = Bun.spawn(["bun", import.meta.dir + "/twin-fork.ts", "start", "--upstream", `http://127.0.0.1:${server.port}/KEY123`,
+        "--pin-block", "500", "--state-dir", dir + "/s", "--ready-timeout", "1500", "--start-attempts", "1", "--port", "18599", ...extra],
+        { stdout: "pipe", stderr: "pipe", env: { ...process.env, PATH: `${dir}/bin:${process.env.PATH}`, CI: "", GITHUB_ACTIONS: "" } });
+        const [o, e] = await Promise.all([new Response(pr.stdout).text(), new Response(pr.stderr).text()]);
+        return { exitCode: await pr.exited, out: o + e }; };
+      const off = await run();
+      expect(off.exitCode).toBe(1);
+      expect(off.out).toMatch(/no longer serves/);
+      const on = await run("--repin-on-stale");
+      const out = on.out;
+      expect(out).toMatch(/WARN: STALE PIN.*500.*998/);
+      expect(out).not.toContain("KEY123");
+      expect(fs.readFileSync(dir + "/argv", "utf8")).toContain("--fork-block-number 998");
+    } finally {
+      server.stop(true);
+    }
+  }, 60000);
 });
 
 describe.skipIf(process.env.TWIN_FORK_SMOKE !== "1")("smoke (needs anvil and the public Base endpoint; TWIN_FORK_SMOKE=1)", () => {

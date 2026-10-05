@@ -347,6 +347,10 @@ jobs:
         if: always()
         run: docker ps -aq --filter "label=com.robotmoney.testnet" | xargs -r docker rm -f || true
 
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
+
   # Which paths changed. twin_publish runs on a pull_request only when a path that affects the deploy
   # changed. push, workflow_dispatch and workflow_call (the nightly) always run it. The diff is read
   # from git: no third-party action, no token.
@@ -475,3 +479,7 @@ jobs:
         with:
           name: smoke-test-logs-twin_publish
           path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

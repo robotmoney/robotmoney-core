@@ -514,6 +514,10 @@ jobs:
           name: headless-deposit-transcript
           path: ${{ runner.temp }}/robotmoney-opencode/headless-deposit.json
 
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
+
   read:
     name: opencode-headless-read-replay
     runs-on: ubuntu-latest
@@ -675,3 +679,7 @@ jobs:
         with:
           name: headless-read-transcript
           path: ${{ runner.temp }}/robotmoney-opencode/headless-read.json
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

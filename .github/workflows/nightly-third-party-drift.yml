@@ -106,3 +106,7 @@ jobs:
 
       - name: Self-test (edited code hash is named, accurate manifest shows no change)
         run: bun scripts/release/dependency-manifest-selftest.ts
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

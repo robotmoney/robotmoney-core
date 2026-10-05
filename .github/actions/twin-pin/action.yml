@@ -5,7 +5,9 @@ description: >-
   the block, and pass the block to every job that uses .github/actions/twin-fork. A caller that
   already has a pin (a reusable workflow called by a parent run) passes it in and gets it back
   unchanged, so a whole run, nested workflows included, shares one pin. The optional upstream
-  secret is passed through the BASE_UPSTREAM_RPC env and is never printed.
+  secret (or an already-set
+  BASE_UPSTREAM_RPC env) is never printed. Paths use github.action_path, so another repo can check core
+  out into ./core and use ./core/.github/actions/twin-pin.
 inputs:
   pin-block:
     description: "Pin handed down by a parent workflow. Empty means choose one now."
@@ -26,7 +28,8 @@ runs:
     - id: pin
       shell: bash
       env:
-        BASE_UPSTREAM_RPC: ${{ inputs.upstream-secret }}
+        BASE_UPSTREAM_RPC: ${{ inputs.upstream-secret || env.BASE_UPSTREAM_RPC }}
+        TWIN_LIB: ${{ github.action_path }}/../../../scripts/devnet/twin-fork-lib.ts
         GIVEN_PIN: ${{ inputs.pin-block }}
       run: |
         set -euo pipefail
@@ -37,7 +40,7 @@ runs:
           exit 0
         fi
         out="$(bun -e '
-          import {selectPin, DEFAULT_UPSTREAM} from "./scripts/devnet/twin-fork-lib.ts";
+          const {selectPin, DEFAULT_UPSTREAM} = await import(process.env.TWIN_LIB!);
           const up = process.env.BASE_UPSTREAM_RPC || DEFAULT_UPSTREAM;
           const p = await selectPin(up, "auto", {secrets: process.env.BASE_UPSTREAM_RPC ? [process.env.BASE_UPSTREAM_RPC] : []});
           console.log("block=" + p.block);

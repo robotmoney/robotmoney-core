@@ -149,3 +149,7 @@ jobs:
         with:
           name: smoke-test-logs
           path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-suite-10.log*
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
