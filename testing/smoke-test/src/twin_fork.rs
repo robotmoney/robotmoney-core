@@ -48,11 +48,6 @@ pub const TWIN_CACHE_DIR_ENV: &str = "TWIN_CACHE_DIR";
 /// Env override for the address containers use to reach the host-side fork.
 pub const TWIN_HOST_ADDR_ENV: &str = "SMOKE_TEST_ANVIL_HOST_ADDR";
 
-/// External Docker network the dapp compose stack attaches the indexer to
-/// (`docker-compose.dapp.yaml::networks.chain-net`). There is no chain compose stack any more, so
-/// the fixture creates the bare network and removes it on teardown.
-pub const CHAIN_NET_NAME: &str = "ethereum-testnet_default";
-
 /// ETH has 18 decimals.
 const WEI_PER_ETH: u128 = 1_000_000_000_000_000_000;
 
@@ -63,8 +58,6 @@ pub struct TwinFork {
     script: PathBuf,
     /// Some(dir) when this fixture started the fork and so owns stopping it.
     owned_state_dir: Option<PathBuf>,
-    /// True iff this fixture created [`CHAIN_NET_NAME`] and so owns removing it.
-    created_chain_net: bool,
 }
 
 /// Port of an `http://host:port` URL. None when there is no explicit port.
@@ -142,7 +135,6 @@ impl TwinFork {
                 script.display()
             )));
         }
-        let created_chain_net = ensure_chain_net()?;
         let reused = std::env::var(TWIN_RPC_URL_ENV)
             .ok()
             .map(|u| u.trim().trim_end_matches('/').to_string())
@@ -160,7 +152,6 @@ impl TwinFork {
                     rpc_url: url,
                     script,
                     owned_state_dir: None,
-                    created_chain_net,
                 }
             }
             None => {
@@ -195,7 +186,6 @@ impl TwinFork {
                     rpc_url: crate::localhost_url(preferred_port),
                     script: script.clone(),
                     owned_state_dir: Some(state_dir),
-                    created_chain_net,
                 };
                 let out = Command::new("bun")
                     .args(&args)
@@ -360,13 +350,6 @@ impl Drop for TwinFork {
                 .status();
             let _ = std::fs::remove_dir_all(&dir);
         }
-        if self.created_chain_net {
-            let _ = Command::new("docker")
-                .args(["network", "rm", CHAIN_NET_NAME])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
     }
 }
 
@@ -379,35 +362,6 @@ fn port_has_listener(port: u16) -> bool {
         Duration::from_millis(250),
     )
     .is_ok()
-}
-
-/// Create [`CHAIN_NET_NAME`] when it is absent. Returns true iff this call created it (and so owns
-/// removing it). A host without docker has no containers to attach, so that is not an error here.
-fn ensure_chain_net() -> Result<bool, HarnessError> {
-    if which::which("docker").is_err() {
-        return Ok(false);
-    }
-    let existing = Command::new("docker")
-        .args(["network", "inspect", CHAIN_NET_NAME])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    if matches!(existing, Ok(status) if status.success()) {
-        return Ok(false);
-    }
-    let created = Command::new("docker")
-        .args(["network", "create", CHAIN_NET_NAME])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(HarnessError::from)?;
-    if !created.success() {
-        return Err(HarnessError::Docker(format!(
-            "could not create the `{CHAIN_NET_NAME}` bridge network the dapp compose stack attaches the indexer to"
-        )));
-    }
-    logging::info("twin", format!("created docker network {CHAIN_NET_NAME}"));
-    Ok(true)
 }
 
 /// Address a container uses to reach the host. Prefers the Docker bridge gateway (routable from

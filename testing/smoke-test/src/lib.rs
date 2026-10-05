@@ -194,8 +194,6 @@ struct ComposeContainerStatus {
 /// exit 0, so the health probe must not read their `exited` state as a stack
 /// failure.
 ///
-/// - `setup` — the chain stack's genesis/keystore bootstrap
-///   (`testing/ethereum-testnet/config/docker-compose.yaml`).
 /// - `explorer-migrate` — the dapp stack's schema migration step
 ///   (`docker-compose.dapp.yaml`, issue #1359). The explorer schema used to be
 ///   migrated as a side effect of the indexer's boot; it is now its own
@@ -205,7 +203,7 @@ struct ComposeContainerStatus {
 /// Only a ZERO exit is exempted (see [`is_completed_one_shot`]). A failing
 /// migration still trips the probe — that is the point of making migration an
 /// explicit step.
-const ONE_SHOT_COMPOSE_SERVICES: [&str; 2] = ["setup", "explorer-migrate"];
+const ONE_SHOT_COMPOSE_SERVICES: [&str; 1] = ["explorer-migrate"];
 
 /// True when this container is a [`ONE_SHOT_COMPOSE_SERVICES`] member that has
 /// finished successfully, and so must be excluded from the unhealthy set.
@@ -1715,7 +1713,7 @@ fn wait_for_block_height_with_probe(
 }
 
 /// Environment variables the compose files read to stamp run-identity labels
-/// onto every container (see docker-compose.yaml / docker-compose.dapp.yaml).
+/// onto every container (see docker-compose.dapp.yaml).
 const RUN_ID_ENV: &str = "SMOKE_RUN_ID";
 const RUN_CREATED_ENV: &str = "SMOKE_RUN_CREATED";
 
@@ -1726,13 +1724,13 @@ const RUN_ID_LABEL: &str = "com.robotmoney.testnet.run-id";
 
 /// Compose projects whose containers belong to a devnet boot. The reaper scans
 /// only these so it never touches unrelated containers on the host.
-const TESTNET_COMPOSE_PROJECTS: [&str; 2] = ["ethereum-testnet", "robotmoney-dapp"];
+const TESTNET_COMPOSE_PROJECTS: [&str; 1] = ["robotmoney-dapp"];
 
 /// Mint (once per process) a unique run-id and creation timestamp and export
 /// them so child `docker compose` invocations stamp them as container labels.
 /// Idempotent: a run-id already set earlier in the same process is reused, so
-/// the chain stack and the dapp overlay share one identity and are reaped
-/// together. Mirrors the existing SMOKE_GENESIS_ALLOC_FILE env-passing pattern.
+/// the fixture boot and the dapp overlay share one identity and are reaped
+/// together.
 fn ensure_run_identity() -> (String, String) {
     if let (Ok(id), Ok(created)) = (std::env::var(RUN_ID_ENV), std::env::var(RUN_CREATED_ENV)) {
         if !id.is_empty() {
@@ -2534,8 +2532,7 @@ impl DappStack {
         let local_dapp_url = ports.dapp_url();
         let local_explorer_api_url = ports.explorer_api_url();
         let local_rpc_url = fixture.rpc_url().to_string();
-        // Task F10: `geth:8545` over the chain network in Geth mode, the
-        // Docker-bridge host address in Anvil mode (no `geth` service exists).
+        // The Docker-bridge host address and the Twin fork port (the fork runs on the host).
         let indexer_rpc_url = fixture.indexer_rpc_url();
         let dapp_compose_files = vec!["-f".to_string(), "docker-compose.dapp.yaml".to_string()];
         let dapp_log_env = vec![
@@ -2581,9 +2578,8 @@ impl DappStack {
             // Issue #1294: fixed port for the receipt-fixtures compose service
             // (see RECEIPT_FIXTURES_PORT).
             ("RECEIPT_FIXTURES_PORT", RECEIPT_FIXTURES_PORT.to_string()),
-            // Issue #775: indexer reaches Geth via the chain Docker network
-            // (ethereum-testnet_default) using the service name, not via
-            // host.docker.internal which is unreachable on some Docker configs.
+            // The indexer reaches the host-side Twin fork over the Docker bridge (gateway address
+            // and fork port), see Fixture::indexer_rpc_url.
             ("INDEXER_RPC_URL", indexer_rpc_url.clone()),
             ("VITE_DEVNET_RPC_URL", "".to_string()),
             ("VITE_EXPLORER_API_URL", "".to_string()),
@@ -2744,10 +2740,8 @@ impl DappStack {
             .env("INDEXER_CONSENSUS_RECEIPT", fixture.consensus_receipt_hex())
             // Issue #1294: fixed port for the receipt-fixtures compose service.
             .env("RECEIPT_FIXTURES_PORT", RECEIPT_FIXTURES_PORT.to_string())
-            // Issue #775: indexer reaches Geth via the chain Docker network
-            // (ethereum-testnet_default) using the `geth` service name — no
-            // host port needed. The dapp compose connects to that network via
-            // the chain-net external network reference in docker-compose.dapp.yaml.
+            // The indexer reaches the host-side Twin fork over the Docker bridge (gateway address
+            // and fork port). The fork listens on every interface.
             .env("INDEXER_RPC_URL", &indexer_rpc_url)
             // VITE_FORK_RPC_URL intentionally NOT set: the dapp routes all
             // chain reads through the user's wallet RPC (see

@@ -12,8 +12,9 @@
 //! index, aToken supply, Comet base tracking, and Morpho market+position slots
 //! into the fork cache and dirties every slot the round-trip writes, so
 //! `--dump-state` captures the working set. The committed
-//! `testing/fixtures/fork-state/genesis-alloc.json` now carries real protocol
-//! storage for all three adapters.
+//! the committed fork-state fixture (`testing/fixtures/fork-state/CURRENT.anvil-state`) now carries
+//! real protocol storage for all three adapters. The Twin chain (core 1498) needs none of it: it is a
+//! lazy fork of real Base state.
 //!
 //! `DeployVault.s.sol` deploys the three real adapters unconditionally — the
 //! test-only no-yield deploy hatch was removed in issue #912, so every devnet

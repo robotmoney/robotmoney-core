@@ -11,9 +11,9 @@
  * `UnroutedDeposit` (`contracts/RobotMoneyVault.sol:454-505`). The revert the
  * flake produces must therefore come from `_allocateTo` (:511-518), whose only
  * external move is `adpt.deploy(amount)` — and on this devnet that lands in
- * REAL Base protocol code: the geth genesis alloc ingests Aave V3, Compound V3
- * Comet and the Moonwell Flagship USDC (Morpho) MetaMorpho vault at a pinned Base
- * block (`testing/ethereum-testnet/config/fork-block.json`, addresses wired in
+ * REAL Base protocol code: the Twin chain is a pinned lazy fork of real Base
+ * state, so Aave V3, Compound V3 Comet and the Moonwell Flagship USDC (Morpho)
+ * MetaMorpho vault are the real contracts (addresses wired in
  * `contracts/script/DeployVault.s.sol`).
  *
  * A custom error raised inside a nested protocol call bubbles up as a bare

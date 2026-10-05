@@ -1,5 +1,5 @@
 /**
- * Playwright E2E — full-stack Geth+Lighthouse devnet smoke.
+ * Playwright E2E — full-stack Twin chain smoke.
  *
  * devnet-global-setup.ts has already booted `cargo run -p smoke-test --
  * --full-stack` and written the endpoint summary (URLs, contract
@@ -81,7 +81,7 @@ async function waitForRole(
   );
 }
 
-test.describe("devnet E2E — full-stack Geth+Lighthouse", () => {
+test.describe("devnet E2E — full-stack Twin chain", () => {
   let endpoints: DevnetEndpoints;
 
   test.beforeAll(() => {

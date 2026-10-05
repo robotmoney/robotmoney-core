@@ -27,8 +27,10 @@
  *   5. Dumps state, writes CURRENT.json / CURRENT.anvil-state with the sha256
  *      binding, asserts the Safe set and runs the contents check on the result.
  *   6. When writing the committed fixture dir (the default), also updates
- *      fork-block.json, genesis-alloc.json (via the genesis ingester) and
- *      expected-prices.json to the same block.
+ *      fork-block.json and expected-prices.json to the same block.
+ *
+ * This tool refreshes the saved fork-state fixture that the forge golden fork tests still load. The
+ * Twin chain (core 1498) is a lazy fork of real Base and does not use it.
  *
  * Env: RMPC_FORK_RPC_URL (default: first public endpoint), FORK_PIN_LAG (100),
  *      FORK_CHAIN_ID (8453), ANVIL_PORT (18545), FOUNDRY_IMAGE,
@@ -37,7 +39,7 @@
  *      SNAPSHOT_TICK_WORDS (6), SNAPSHOT_MAX_OBSERVATIONS (4096),
  *      SNAPSHOT_UPDATE_CONFIG (1|0 overrides the auto choice),
  *      SNAPSHOT_RESUME_CONFIG (1: skip the capture, move the config files to CURRENT.json's block).
- * Needs on PATH: docker, cast, jq (digest helper), bun; cargo for the ingester.
+ * Needs on PATH: docker, cast, jq (digest helper), bun.
  * No secret is read, written or logged: transactions are sent from anvil's
  * unlocked dev account 0.
  */
@@ -253,7 +255,7 @@ async function cleanup(): Promise<void> {
 
 /**
  * SNAPSHOT_RESUME_CONFIG=1: the capture already produced CURRENT.anvil-state (a later step failed, or the
- * config step needs a rerun). Skip the capture and move fork-block.json, genesis-alloc.json and
+ * config step needs a rerun). Skip the capture and move fork-block.json and
  * expected-prices.json to the block CURRENT.json names. The contents check runs first.
  */
 async function resumeConfig(): Promise<void> {
@@ -399,7 +401,7 @@ async function main(): Promise<void> {
     if (shares === 0n) throw new Error("Morpho deposit minted zero shares");
     await send(MORPHO_VAULT, await calldata("redeem(uint256,address,address)", (shares / 2n).toString(), EOA, EOA), "Morpho redeem");
 
-    // Harness USDC holder grant (ingester also patches it; keep the balance in the fixture too).
+    // Harness USDC holder grant, kept in the fixture for the forge golden fork tests.
     const holder = "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5";
     await setSlot(USDC, await mappingSlot(pad32(BigInt(holder)), 9n), "0x" + pad32(1_000_000_000_000n));
     await a("anvil_setBalance", [holder, "0x3635c9adc5dea00000"]);
@@ -452,7 +454,7 @@ async function main(): Promise<void> {
     await sh(["bun", join(REPO, "scripts/devnet/check-fork-snapshot-contents.ts"), "--state", currentState], {}, true);
 
     if (UPDATE_CONFIG) await updateConfig(state, pinBlock, pinBlk.hash, currentState, slot0ByPool);
-    else log("FIXTURE_DIR is not the committed dir: fork-block.json, genesis-alloc.json and expected-prices.json left alone");
+    else log("FIXTURE_DIR is not the committed dir: fork-block.json and expected-prices.json left alone");
 
     log("done.");
     log(`  fixture    : ${fixtureFile}`);
@@ -463,7 +465,7 @@ async function main(): Promise<void> {
   }
 }
 
-/** fork-block.json, genesis-alloc.json and expected-prices.json move to the same block as CURRENT.json. */
+/** fork-block.json and expected-prices.json move to the same block as CURRENT.json. */
 async function updateConfig(state: any, block: number, hash: string, currentState: string, slot0ByPool: Map<string, bigint>): Promise<void> {
   const cfgDir = join(REPO, "testing/ethereum-testnet/config");
   const sha = createHash("sha256").update(readFileSync(currentState)).digest("hex");
@@ -483,28 +485,12 @@ async function updateConfig(state: any, block: number, hash: string, currentStat
   const fb = JSON.parse(readFileSync(fbPath, "utf8"));
   fb.block_number = block;
   fb.block_hash = hash;
-  fb.snapshot_uri = "file://testing/fixtures/fork-state/genesis-alloc.json";
+  fb.snapshot_uri = "file://testing/fixtures/fork-state/CURRENT.anvil-state";
   fb.ingested_addresses = [...addrs].sort();
   fb.pinned = true;
   fb.snapshot_sha256 = "0x" + sha;
   writeFileSync(fbPath, JSON.stringify(fb, null, 2) + "\n");
   log(`fork-block.json -> block ${block}, ${addrs.size} ingested addresses`);
-
-  await sh(
-    [
-      "cargo", "run", "--quiet", "--release", "--manifest-path", "testing/smoke-test/Cargo.toml", "--bin", "smoke-test-genesis-ingester", "--",
-      "--manifest", fbPath, "--snapshot", currentState, "--output", join(FIXTURE_DIR, "genesis-alloc.json"), "--require-pinned",
-    ],
-    {}, true,
-  );
-  // Block lockstep sidecar: genesis-alloc.json is an address map, so the block it was built at is recorded
-  // next to it. check-fork-lockstep.ts asserts CURRENT.json, fork-block.json and this file agree.
-  writeFileSync(
-    join(FIXTURE_DIR, "genesis-alloc.block.json"),
-    JSON.stringify(
-      { block_number: block, block_hash: hash, alloc_sha256: createHash("sha256").update(readFileSync(join(FIXTURE_DIR, "genesis-alloc.json"))).digest("hex") }, null, 2,
-    ) + "\n",
-  );
 
   const epPath = join(cfgDir, "expected-prices.json");
   const ep = JSON.parse(readFileSync(epPath, "utf8"));

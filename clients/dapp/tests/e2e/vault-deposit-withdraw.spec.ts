@@ -1,6 +1,6 @@
 /**
  * Playwright E2E — Deposit/Withdraw tab end-to-end against the
- * smoke-test full-stack Geth+Lighthouse devnet (issue #257).
+ * smoke-test full-stack Twin chain (issue #257).
  *
  * Flow:
  *   1. Boot devnet via globalSetup.

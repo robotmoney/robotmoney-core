@@ -23,7 +23,7 @@
 //! On-chain hash verification (asserting that `block_hash` matches the actual
 //! Base block at `block_number`) is deliberately out of scope here: it requires
 //! a live archive RPC and is gated behind the `pinned` flag. The validator
-//! surfaces `pinned` so callers (CI, the genesis ingester) can decide whether
+//! surfaces `pinned` so callers (CI, the fixture guards) can decide whether
 //! to require pin verification.
 //!
 //! ── DEV-SCOUT SEAM (off-chain scan remediation — residual; issue #1027) ──────
@@ -40,13 +40,13 @@
 //!   `block_hash` ↔ archive-RPC check but says nothing about the contents
 //!   fetched from `snapshot_uri`. Seam for #1026: add a content digest field
 //!   (e.g. `snapshot_sha256`) to `ForkManifest` + a validation rule, and have
-//!   the genesis ingester (`src/bin/genesis-ingester.rs`) verify the downloaded
+//!   the fixture guards (`scripts/devnet/check-fork-*`) verify the downloaded
 //!   snapshot hashes to it before constructing genesis `alloc`. The struct +
-//!   `validate()` here are the seam; the ingester is the enforcement point.
+//!   `validate()` here are the seam; the fixture guards are the enforcement point.
 //!
 //! HARN-2 (Med — most-real): the devnet faucet private key is exposed in the
 //!   public Vite bundle / cloudflared tunnel and printed. Lives in the faucet
-//!   wiring, NOT this file (`src/genesis_alloc.rs`, `src/base_testnet.rs`,
+//!   wiring, NOT this file (`src/base_testnet.rs`,
 //!   `src/bin/smoke-test.rs`, and the dapp/Vite env). Seam for #1026: stop
 //!   embedding the key in any client-reachable surface; serve faucet grants
 //!   from a harness-side signer instead. Disjoint from the manifest struct.
@@ -83,18 +83,18 @@ pub struct ForkManifest {
     pub harness_usdc_holder: Address,
     pub harness_usdc_grant_units: u128,
     /// When `false`, the manifest is structurally valid but `block_hash` has
-    /// not been verified against an archive RPC. The genesis ingester is
+    /// not been verified against an archive RPC. The fixture loader is
     /// expected to refuse final devnet construction unless `pinned == true`.
     pub pinned: bool,
     /// HARN-5 (off-chain scan remediation, issue #1026): SHA-256 content digest
-    /// of the snapshot bytes the genesis ingester will ingest, as a 0x-prefixed
+    /// of the snapshot bytes the fixture loader will ingest, as a 0x-prefixed
     /// 32-byte (64-hex) string. `pinned` authenticates `block_hash` against an
     /// archive RPC but says nothing about the BYTES fetched from
-    /// `snapshot_uri`; this field closes that gap. When present, the ingester
+    /// `snapshot_uri`; this field closes that gap. When present, the loader
     /// MUST verify the snapshot hashes to it before constructing genesis
     /// `alloc` (see [`ForkManifest::verify_snapshot_digest`]). `None` preserves
     /// backward compatibility with manifests captured before this field
-    /// existed, but the ingester refuses to ingest an unauthenticated snapshot
+    /// existed, but the loader refuses to ingest an unauthenticated snapshot
     /// under `--require-pinned`.
     pub snapshot_sha256: Option<String>,
 }
@@ -205,7 +205,7 @@ impl ForkManifest {
             .map_err(|e| ManifestError::Invalid(format!("harness_usdc_holder invalid: {e}")))?;
 
         // Clean-history invariant: the harness EOA must not appear in the
-        // ingested set. If it did, the genesis ingester would copy whatever
+        // ingested set. If it did, the fixture loader would copy whatever
         // Base state (allowances, blacklist, inbound transfers) is attached
         // to that address — defeating the entire point of using a fresh EOA.
         if ingested.contains(&harness_usdc_holder) {
@@ -233,7 +233,7 @@ impl ForkManifest {
 
         // HARN-5: the snapshot content digest, when present, must be a
         // well-formed 0x-prefixed 32-byte sha256 hex string. A malformed
-        // digest is rejected here so the ingester never silently treats an
+        // digest is rejected here so the loader never silently treats an
         // unparseable digest as "no digest" and skips verification.
         let snapshot_sha256 = match raw.snapshot_sha256 {
             Some(s) => {
@@ -267,10 +267,10 @@ impl ForkManifest {
     ///   match (the snapshot was substituted or corrupted — reject before
     ///   ingest),
     /// - `Ok(false)` when no digest is present (unauthenticated; the caller
-    ///   decides whether that is acceptable — the ingester refuses it under
+    ///   decides whether that is acceptable — the loader refuses it under
     ///   `--require-pinned`).
     ///
-    /// The genesis ingester calls this on the raw snapshot file bytes before
+    /// The fixture guards call this on the raw snapshot file bytes before
     /// constructing genesis `alloc`, so substituted/corrupted snapshot bytes
     /// are rejected rather than trusted.
     pub fn verify_snapshot_digest(&self, snapshot_bytes: &[u8]) -> Result<bool, ManifestError> {
@@ -509,7 +509,7 @@ mod tests {
 
     /// AC: a fork manifest whose snapshot bytes do NOT match the manifest
     /// digest is rejected before ingest. `verify_snapshot_digest` returns
-    /// `Err` on mismatch — the genesis ingester treats that as a hard refusal.
+    /// `Err` on mismatch — the fixture loader treats that as a hard refusal.
     #[test]
     fn rejects_snapshot_bytes_that_mismatch_digest() {
         let (json, bytes) = manifest_with_digest_for(b"the authentic snapshot bytes");
@@ -603,7 +603,7 @@ mod tests {
 
     /// HARN-5 CI guard (issue #1026): the committed manifest MUST carry a
     /// `snapshot_sha256`, and it MUST match the sha256 of the committed
-    /// `CURRENT.anvil-state` snapshot the genesis ingester ingests. This fails
+    /// `CURRENT.anvil-state` snapshot the fixture loader ingests. This fails
     /// the build if a fixture refresh bumps the snapshot bytes without
     /// recomputing the digest (or vice-versa), so the devnet can never ingest
     /// an unauthenticated/stale snapshot.
@@ -757,7 +757,7 @@ mod tests {
             "chain": "base",
             "block_number": 99999999,
             "block_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "snapshot_uri": "file://testing/fixtures/fork-state/genesis-alloc.json",
+            "snapshot_uri": "file://testing/fixtures/fork-state/CURRENT.anvil-state",
             "ingested_addresses": [
                 "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
             ],

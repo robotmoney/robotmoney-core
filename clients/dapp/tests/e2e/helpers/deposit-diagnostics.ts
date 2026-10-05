@@ -378,8 +378,7 @@ interface CallFrame {
  * out-of-gas only; the trace is what distinguishes the nested case, which
  * would otherwise be reported as a custom error and mislead the reader.
  *
- * The devnet enables the `debug` namespace
- * (`testing/ethereum-testnet/config/docker-compose.yaml`), but a node without
+ * The Twin chain (anvil) serves `debug_traceCall`, but a node without
  * it simply reports the tracer as unavailable.
  */
 async function traceInnermostRevert(

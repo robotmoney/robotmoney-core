@@ -9,17 +9,23 @@
 # human next runs `make testnet` locally.
 #
 # The smoke-test crate is the shared devnet fixture used by suites 7, 8, 10, 11, and 12.
-# If Fixture::new() is broken — because a Docker image changed, the genesis script
-# regressed, or a port mapping shifted — every one of those suites will fail at boot
-# time with a confusing "connection refused" error, not a "fixture broken" error. Validating
-# the fixture in isolation, on every change to the devnet config, means a broken fixture
-# is caught and diagnosed here, in ~5 min, rather than discovered as mysterious failures
-# across five other suites.
+# If Fixture::new() is broken — because the Twin fork tool changed, the publish run regressed, or a
+# port mapping shifted — every one of those suites will fail at boot time with a confusing
+# "connection refused" error, not a "fixture broken" error. Validating the fixture in isolation, on
+# every change to the devnet config, means a broken fixture is caught and diagnosed here, rather
+# than discovered as mysterious failures across five other suites.
+#
+# THE CHAIN IS THE TWIN FORK (core 1498, 1496)
+# Every chain job starts the Twin chain (id 918453) with .github/actions/twin-fork: anvil
+# --fork-url <upstream> --fork-block-number <pin> --chain-id 918453, a pinned lazy fork of real
+# Base state. There is no geth, no lighthouse, no genesis alloc and no saved state. ONE pin per
+# workflow run: the `pin` job chooses it (upstream head minus 2) and every chain job takes it as
+# input. The Rust harness reuses the running fork through TWIN_RPC_URL, funds keys with fund-gas
+# and fund-usdc, and warps time (evm_increaseTime) instead of waiting.
 #
 # WHY --test-threads=1
-# The smoke-test crate boots Geth+Lighthouse on a fixed port (8545). If multiple tests
-# run in parallel within the binary, they race to bind the same port and fail with
-# "address already in use". This is the same constraint as suite 7; the fix is the same.
+# Each test binary shares one Fixture in a OnceLock and one Twin fork. Parallel tests would race
+# on nonces and block time. Matrix rows run on separate runners, each with its own fork.
 #
 # WHY cargo build RUNS BEFORE cargo test
 # The smoke-test crate includes a CLI binary (`cargo run smoke-test`). Building it
@@ -34,34 +40,31 @@
 # to interpret than mixing it into the shared fixture suite.
 #
 # WHY THE SAFETY-NET TEARDOWN USES || true
-# The teardown runs with if: always(), including when the job is cancelled by GitHub
-# Actions (e.g. timeout). In that case, docker compose down may fail because the
-# container was never started. The || true prevents the teardown step from overwriting
-# the real failure exit code with a docker error exit code in the job summary.
+# The teardown runs with if: always(), including when the job is cancelled by GitHub Actions
+# (e.g. timeout). It removes dapp containers by label. The || true prevents the teardown step
+# from overwriting the real failure exit code with a docker error exit code in the job summary.
+# The Twin fork needs no teardown: it dies with the runner.
 #
 # GOTCHAS
 # - The Cargo cache path is testing/smoke-test/target, not the workspace root target.
 #   This crate is not part of the main workspace Cargo.toml (by design — it has its own
 #   version pin for devnet tooling). If you add it to the workspace, move the cache path
 #   to target/ and add smoke-test/Cargo.toml to all other cache keys.
-# - The safety-net teardown runs docker compose down from testing/ethereum-testnet/config.
-#   This is the directory that contains the docker-compose.yml used by the fixture. If
-#   the fixture is ever moved or the compose file is renamed, update this path.
+# - A rate-limited upstream (HTTP 429) is retried by anvil and the twin-fork tool. If a job still
+#   fails to start the fork, set the optional secret BASE_UPSTREAM_RPC to a paid provider.
 
 name: smoke-test-devnet-boot-teardown
 
 on:
-  # Nightly job (b), core issue 1496: reused by suite-NN-nightly-fresh-snapshot.yml
-  # with fresh_snapshot=true so this suite boots the Twin chain from a snapshot
-  # taken at the latest Base block instead of the checked-in pin. Steps are not
-  # copied: the nightly calls this very workflow.
+  # Called by suite-29-nightly-twin-chain.yml, which chooses ONE pin for the whole nightly run and
+  # hands it down as pin_block. Steps are not copied: the nightly calls this very workflow.
   workflow_call:
     inputs:
-      fresh_snapshot:
-        description: "Apply the nightly fresh snapshot overlay before booting a chain."
-        type: boolean
+      pin_block:
+        description: "Twin chain pin handed down by a parent run. Empty: this run chooses one."
+        type: string
         required: false
-        default: false
+        default: ""
       production_fixtures_dir:
         description: "Directory with the devops production fixtures (verifier-labels.txt, production-sheet.env), relative to the workspace."
         type: string
@@ -98,15 +101,15 @@ on:
 # distinct concurrency lane per ref and never cancel, so merged-commit coverage
 # always completes. See docs/development/ci-suites.md (CI velocity tiers).
 concurrency:
-  # suite tag keeps called copies (nightly fresh snapshot, issue 1496) in separate lanes:
+  # suite tag keeps called copies (nightly Twin chain run) in separate lanes:
   # inside workflow_call github.workflow is the CALLER's name, shared by every suite.
   group: ${{ github.workflow }}-suite14-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Hermetic guards that need the binary/lib but NO Docker. Kept as their own fast
+  # Hermetic guards that need the binary/lib but NO chain and NO Docker. Kept as their own fast
   # job so a manifest/alignment regression fails in seconds, before paying for any
-  # container boot in the devnet matrix below.
+  # chain boot in the devnet matrix below.
   guards:
     name: smoke-test-guards
     runs-on: ubuntu-latest
@@ -122,17 +125,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
-        uses: ./.github/actions/apply-fresh-snapshot
-        with:
-          enabled: ${{ inputs.fresh_snapshot == true }}
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # check-fork-manifest.sh uses `cast index` to validate the harness USDC
-      # balance slot in the produced genesis alloc, so Foundry is required even
-      # though this job never boots a devnet.
+      # The committed-snapshot guards use `cast` (Safe set, snapshot contents), so Foundry is
+      # required even though this job never boots a chain.
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
@@ -159,16 +156,15 @@ jobs:
         run: cargo clippy -p smoke-test --all-targets -- -D warnings
 
       # Issue #255 CI gate: validate fork-block.json against every rule in
-      # smoke_test::fork_manifest, and run the genesis-alloc ingester against
-      # the committed Anvil fixture to assert the canonical Base USDC ends up
-      # in the produced alloc with non-empty bytecode and the harness USDC
-      # balance + totalSupply slots. Fast (<5s once binaries are built); a
-      # broken manifest is caught before any container boot is attempted.
-      - name: fork-block manifest + alloc-ingester guard
+      # smoke_test::fork_manifest and check the committed fork-state fixture's digest, Safe set,
+      # pin age and block lockstep. Fast (<5s once binaries are built); a broken manifest is caught
+      # before any chain boot is attempted. (The genesis alloc ingester is gone: the Twin chain is a
+      # lazy fork of real Base, not a genesis built from a committed snapshot.)
+      - name: fork-block manifest guard
         run: bash scripts/devnet/check-fork-manifest.sh
 
-      # Core 1498: the committed fixtures are one pin. CURRENT.json,
-      # fork-block.json and genesis-alloc.json must agree on block number and hash.
+      # Core 1498: the committed fixtures are one pin. CURRENT.json and
+      # fork-block.json must agree on block number and hash.
       - name: fixture lockstep gate (--require-pinned)
         run: bash scripts/devnet/check-fork-manifest.sh --require-pinned
 
@@ -204,47 +200,46 @@ jobs:
         run: cargo test -p smoke-test --lib fork_manifest::tests -- --nocapture
 
       # Hermetic unit tests for the boot harness internals: the zombie-reaper
-      # stale-vs-current classification (run-id labels) and the compose collision
-      # guard. No Docker required — exercises the pure decision logic so a reaper
-      # regression is caught here in seconds rather than as a mysterious zombie
-      # collision in the devnet matrix below.
-      - name: harness unit tests (reaper + compose guard, hermetic)
+      # stale-vs-current classification (run-id labels), the Twin fork arguments and the nonce
+      # tracker. No chain and no Docker required, so a regression is caught here in seconds rather
+      # than as a mysterious failure in the devnet matrix below.
+      - name: harness unit tests (reaper, Twin fork args, nonce tracker, hermetic)
         working-directory: testing/smoke-test
         run: "cargo test -p smoke-test --lib tests:: -- --nocapture"
 
-  # PARALLEL DEVNET MATRIX (issue #600): each devnet-booting binary used to run as a
-  # SERIAL step in one job, each booting Geth+Lighthouse on port 8545 (suite ~38m).
-  # Splitting them into a matrix gives one runner per binary, each booting + tearing
-  # down its OWN stack with `if: always()`, removing the shared-port-8545 contention
-  # (suite ~38m -> ~18m). fail-fast: false keeps every binary's signal independent.
+  # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once. Every chain job
+  # below takes it as input.
+  pin:
+    name: twin-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      block: ${{ steps.pin.outputs.block }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        uses: ./.github/actions/twin-pin
+        with:
+          pin-block: ${{ inputs.pin_block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+  # PARALLEL TWIN MATRIX (issue #600): one runner per devnet-booting binary, each with its OWN
+  # Twin fork at the run pin (no shared port or chain). fail-fast: false keeps every binary's
+  # signal independent.
   #   - cli_meta:            boots `smoke-test --full-stack`, asserts summary + Ctrl-C teardown
-  #   - fixture_meta:        boots devnet, deploys contracts, asserts RPC + block production
+  #   - fixture_meta:        deploys contracts, asserts RPC + the four-vault manifests
   #   (demo_seeding, full_stack_demo_tvl, faucet_eth and faucet_rm were deleted in core 1488 with demo seeding
   #   and the dapp faucet funding: the one deployment scheme has no demo-only code.)
-  #   - fund_usdc:           real-signed-transfer assertions incl. the Geth-not-Anvil check (issue #255 step 7)
+  #   - fund_usdc:           the Twin environment steps: fund USDC (real FiatToken slot), fund gas, warp
   #   - twin_publish:        its own job below (not a matrix row): path-gated on pull_request
   #   - governance:          the deployer holds no voting power or admin; the timelock is admin (core 1488)
   #
-  # faucet_eth/faucet_rm/fund_usdc/governance were folded in by issue #1311: each
-  # only adds a Fixture boot (already paid by every other row) plus a handful of
-  # RPC round-trips on top, so each row's wall-clock is expected to land near
-  # fixture_meta's measured CI cost (~18 min) rather than full_stack_demo_tvl's
-  # ~46 min. Because the matrix runs in parallel, the suite's total wall-clock
-  # stays bounded by the slowest row (full_stack_demo_tvl); these four rows add
-  # runner-minutes, not suite latency. See docs/development/ci-suites.md §14
-  # ("Resolution of the five smoke-test devnet targets") for the measured
-  # figures and the cost tradeoff this was weighed against. `vault_deposit_redeem`
-  # was deleted instead of wired: both of its assertions were already made by a
-  # suite that runs -- vault_on_chain_state -> fixture_meta's
-  # vault_has_zero_exit_fee_and_one_active_adapter; the deposit/redeem round
-  # trip -> rmpc-fork-e2e::vault_deposit_redeem_smoke (suite-05 anvil-goldens,
-  # confirmed genuinely executing, not skipped). rmpc-fork-e2e's
-  # devnet_adapter_round_trip is NOT counted as coverage here despite suite-05
-  # naming it: it unconditionally self-skips in CI (RMPC_FORK_RPC_URL is never
-  # set there -- issue #1239), so citing it would repeat the exact false-green
-  # pattern this file exists to prevent.
+  # The 70-minute budget covers the dapp image builds of cli_meta (the indexer compiles with cargo
+  # --release, issue #880) plus the publish run. The Twin fork itself is ready in about a minute
+  # once the upstream answers.
   devnet:
     name: smoke-test-devnet-${{ matrix.binary }}
+    needs: pin
     runs-on: ubuntu-latest
     # 70 min (was 45): full_stack_demo_tvl boots the entire compose stack and,
     # since the rust-services images are built from source, recompiles the
@@ -286,11 +281,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
-        uses: ./.github/actions/apply-fresh-snapshot
-        with:
-          enabled: ${{ inputs.fresh_snapshot == true }}
-
       # The harness calls the one runbook, "publish contracts" (devops, Bun TypeScript).
       # Same devops SHA as every other run; the Twin chain arguments are the only difference.
       - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
@@ -300,6 +290,7 @@ jobs:
           token: ${{ secrets.DEVOPS_READ_TOKEN }}
           ref: ${{ vars.DEVOPS_PUBLISH_REF }}
 
+      # cli_meta boots the dapp compose stack, so Docker must be available.
       - name: Verify Docker is available
         run: |
           docker version
@@ -308,31 +299,20 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
-
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      # Pre-pull the chain images (geth + lighthouse) BEFORE the boot clock
-      # starts (issue #988). Without this, `Fixture::new()`'s
-      # `docker compose up --build` pulls ethereum/client-go + sigp/lighthouse
-      # inline on a cold runner — on a slow runner this image pull alone was
-      # ~13 min, eating into the test's BOOT_TIMEOUT budget and timing out
-      # cli_meta right as seeding finished (the boot completed; the budget was
-      # the limiter). Pulling here moves that runner-variant pull off the boot
-      # critical path, the same way suite-07 already does for the e2e devnet.
-      # `--ignore-pull-failures` skips the build-only `setup` service (no
-      # `image:`), and `|| true` keeps a transient registry hiccup from failing
-      # the job before the test even runs. Only docker-compose.yaml is pulled:
-      # docker-compose.dapp.yaml requires deploy-time env (gateway/vault
-      # addresses) that does not exist this early, and its only pullable image
-      # (postgres:16-alpine) is small and not on the slow critical path.
-      - name: Pre-pull Docker images
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose -f docker-compose.yaml pull --ignore-pull-failures || true
+      # The Twin chain: installs foundry (anvil, forge, cast) and bun, restores anvil's RPC cache
+      # keyed by the pin block, starts the fork and exports TWIN_RPC_URL for the harness to reuse.
+      # It listens on every interface and mines a block per second: the explorer-indexer container
+      # (cli_meta) reaches it over the Docker bridge and its safe head is tip minus 5.
+      - name: Start the Twin chain at the run pin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+          host: "0.0.0.0"
+          block-time: "1"
 
       - name: cargo build (includes CLI binary)
         working-directory: testing/smoke-test
@@ -380,10 +360,11 @@ jobs:
           name: smoke-test-logs-${{ matrix.binary }}
           path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
 
+      # Dapp containers carry the run-identity labels; remove any a cancelled run left behind.
+      # The Twin fork needs no teardown: it dies with the runner.
       - name: Safety-net teardown (always)
         if: always()
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans || true
+        run: docker ps -aq --filter "label=com.robotmoney.testnet" | xargs -r docker rm -f || true
 
   # Which paths changed. twin_publish runs on a pull_request only when a path that affects the deploy
   # changed. push, workflow_dispatch and workflow_call (the nightly) always run it. The diff is read
@@ -416,15 +397,15 @@ jobs:
             echo "deploy=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # THE TWIN CHAIN PUBLISH JOB (core 1488, 1486, 1485). Boots the Twin chain (918453) from the committed
-  # snapshot, runs publish contracts (the devops CLI, directory given by the input publish_contracts_dir)
+  # THE TWIN CHAIN PUBLISH JOB (core 1488, 1486, 1485). Starts the Twin chain (918453), a pinned lazy
+  # fork of real Base state, runs publish contracts (the devops CLI, directory given by the input publish_contracts_dir)
   # through the harness test twin_publish: all four vaults, the real Safe, the timelock handover, the
   # one verifier and the govern matrix. While the chain is up the same test runs the assertion scripts
   # scripts/deploy/assert-core-router.ts, assert-basket-vaults.ts and assert-timelock-roles.ts, then
-  # scripts/stage/twin-run-report.ts. This job needs Docker and runs only in CI.
+  # scripts/stage/twin-run-report.ts. This job needs no Docker and runs only in CI.
   twin_publish:
     name: smoke-test-twin-publish
-    needs: changes
+    needs: [changes, pin]
     if: ${{ needs.changes.outputs.deploy == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 70
@@ -434,11 +415,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
-        uses: ./.github/actions/apply-fresh-snapshot
-        with:
-          enabled: ${{ inputs.fresh_snapshot == true }}
-
       - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
         id: devops
         uses: ./.github/actions/devops-publish-contracts
@@ -454,25 +430,17 @@ jobs:
           test -f "$PUBLISH_DIR/src/cli.ts" || { echo "::error::$PUBLISH_DIR/src/cli.ts not found"; exit 1; }
           cd "$PUBLISH_DIR" && bun install --frozen-lockfile
 
-      - name: Verify Docker is available
-        run: |
-          docker version
-          docker compose version
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Pre-pull Docker images
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose -f docker-compose.yaml pull --ignore-pull-failures || true
+      - name: Start the Twin chain at the run pin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
       - name: cargo build (includes CLI binary)
         working-directory: testing/smoke-test
@@ -526,8 +494,3 @@ jobs:
         with:
           name: smoke-test-logs-twin_publish
           path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
-
-      - name: Safety-net teardown (always)
-        if: always()
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans || true

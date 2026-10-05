@@ -1,6 +1,6 @@
 //! Canonical: Plan tracking issue #109 §5 — End-to-end scenarios
 //!
-//! End-to-end scenario tests for `rmpc` against the Geth+Lighthouse
+//! End-to-end scenario tests for `rmpc` against the Twin chain
 //! devnet (issues #18, #19, #37).
 //!
 //! Issue #37 consolidated the previous Anvil-flavor scenarios into
@@ -119,14 +119,14 @@ fn shared_fixture() -> &'static Mutex<Option<Fixture>> {
     CELL.get_or_init(|| Mutex::new(None))
 }
 
-/// Lazily boot the geth fixture on first call. Subsequent calls reuse
+/// Lazily boot the Twin chain fixture on first call. Subsequent calls reuse
 /// the live deployment. The lock is held for the duration of each
 /// test, which is fine because tests run with `--test-threads=1`.
 fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
     let cell = shared_fixture();
     let mut guard = cell.lock().expect("shared fixture mutex poisoned");
     if guard.is_none() {
-        let fx = Fixture::new().expect("boot geth devnet + deploy");
+        let fx = Fixture::new().expect("boot the Twin chain + deploy");
         *guard = Some(fx);
     }
     f(guard.as_ref().expect("fixture present"))
@@ -137,7 +137,7 @@ fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
 /// `--slow`/finality stutters that happen in early devnet life.
 const RECEIPT_TIMEOUT_SECS: &str = "180";
 
-/// Common deposit args for the geth flavor.
+/// Common deposit args for the Twin chain.
 fn deposit_args(amount: u128, oid: &str) -> [String; 6] {
     [
         "--amount".into(),

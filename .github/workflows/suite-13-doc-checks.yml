@@ -367,7 +367,7 @@ jobs:
 
   # Nightly and release-record checks (core 1495, 1496, 1497, 1498). No paths
   # filter on this file, so these run on every pull request: the nightly dispatch
-  # list, the fresh-snapshot workflow and the dependency-manifest tools cannot
+  # list, the nightly Twin chain workflow and the dependency-manifest tools cannot
   # drift while their own files are untouched. Offline and fast.
   nightly-and-release-checks:
     name: nightly-and-release-checks
@@ -384,7 +384,7 @@ jobs:
           echo "$PWD" >> "$GITHUB_PATH"
 
       - name: actionlint on the three nightly workflows
-        run: ./actionlint .github/workflows/suite-21-nightly.yml .github/workflows/suite-29-nightly-fresh-snapshot.yml .github/workflows/nightly-third-party-drift.yml
+        run: ./actionlint .github/workflows/suite-21-nightly.yml .github/workflows/suite-29-nightly-twin-chain.yml .github/workflows/nightly-third-party-drift.yml
 
       # Core 1495: dispatch list covers every suite (negative control inside), the
       # fork-pin age step has continue-on-error (yq), the deleted drift job and
@@ -392,12 +392,12 @@ jobs:
       - name: Nightly dispatch list self-test (core 1495)
         run: bun scripts/ci/check-nightly-dispatch-selftest.ts
 
-      # Core 1496: suites 5, 7, 8, 10, 11b and 14 present, no secret or keyed
-      # RPC, manifest fields and freshness, stubbed failing suite, final
-      # git diff gate, HTTP 429 retry. Runs on every PR, so a change to suite-29
-      # or scripts/devnet cannot skip it.
-      - name: Nightly fresh snapshot self-test (core 1496)
-        run: bun scripts/devnet/check-nightly-fresh-snapshot-selftest.ts
+      # Core 1496, 1498: the Twin chain CI wiring. The nightly calls suites 5, 7, 8, 10, 11b and 14 with
+      # ONE pin from its pin job. Each suite has a pin input, a pin job and takes the pin in every
+      # twin-fork step. Nothing still names the retired geth+lighthouse devnet, the genesis alloc or
+      # the fresh-snapshot overlay. Runs on every PR, so a change to a suite cannot skip it.
+      - name: Twin chain CI wiring self-test (core 1496, 1498)
+        run: bun scripts/devnet/check-twin-chain-ci-selftest.ts
 
       - name: Snapshot tooling self-test (HTTP 429 retry, no Deploy.s.sol; core 1498)
         run: bun scripts/devnet/snapshot-fork-selftest.ts

@@ -17,6 +17,15 @@
 # turn the PR gate red, and a green harness self-test must never be mistaken for
 # a green devnet run.
 #
+# THE CHAIN IS THE STAGE TWIN FORK (core 1498, 1496)
+# This suite boots no chain. It runs against the shared stage devnet (FUSION_RPC_URL), which is the
+# Twin chain (id 918453): a pinned lazy fork of real Base state made with anvil and kept alive as a
+# service on the stage host (scripts/devnet/README-twin-fork.md, "Stage hosts"). No geth, no
+# lighthouse, no snapshot genesis. The 48h governance waits on that chain run through the Twin
+# warp step (scripts/devnet/twin-fork.ts warp), not real time. The per-run fork the other chain
+# suites start with .github/actions/twin-fork is not used here: this suite must hit the one stage
+# chain the dapp and the indexer are pointed at.
+#
 # CREDENTIALS — WHERE THEY COME FROM AND WHY NONE ARE IN THIS REPO
 # ----------------------------------------------------------------
 # Every value below is read from repository variables (non-secret endpoints and
@@ -61,17 +70,6 @@
 name: fusion-devnet-acceptance
 
 on:
-  # Nightly job (b), core issue 1496: reused by suite-NN-nightly-fresh-snapshot.yml
-  # with fresh_snapshot=true so this suite boots the Twin chain from a snapshot
-  # taken at the latest Base block instead of the checked-in pin. Steps are not
-  # copied: the nightly calls this very workflow.
-  workflow_call:
-    inputs:
-      fresh_snapshot:
-        description: "Apply the nightly fresh snapshot overlay before booting a chain."
-        type: boolean
-        required: false
-        default: false
   workflow_dispatch:
     inputs:
       stages:
@@ -123,7 +121,6 @@ jobs:
         id: gate
         env:
           HAVE_RMPC_CONFIG: ${{ secrets.FUSION_RMPC_CONFIG != '' }}
-          FRESH_SNAPSHOT_RUN: ${{ inputs.fresh_snapshot == true }}
         run: |
           set -euo pipefail
           missing=()
@@ -149,13 +146,6 @@ jobs:
               echo "**Nothing was executed. This is not a passing acceptance run.**"
             } | tee -a "$GITHUB_STEP_SUMMARY"
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            # The nightly fresh-snapshot run (core issue 1496) calls this suite
-            # with fresh_snapshot=true. A skipped suite is not a pass there:
-            # fail the run so the missing configuration is red, not green.
-            if [[ "$FRESH_SNAPSHOT_RUN" == "true" ]]; then
-              echo "::error::suite 26 was required by the nightly fresh-snapshot run but is not configured; a skip is not a pass"
-              exit 1
-            fi
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi

@@ -23,6 +23,14 @@
 # option A (provision OPENCODE_API_KEY) — see
 # docs/technical/opencode-headless-invocation.md §12.6.
 #
+# THE CHAIN IS THE TWIN FORK (core 1498, 1496)
+# The live jobs run on the Twin chain (id 918453): anvil --fork-url <upstream> --fork-block-number
+# <pin> --chain-id 918453, a pinned lazy fork of real Base state, started by
+# .github/actions/twin-fork. ONE pin per workflow run (the `pin` job chooses it, upstream head
+# minus 2). There is no saved .anvil-state fixture. The jobs deploy their own contracts and fund
+# the deployer and the agent through the Twin environment steps (scripts/devnet/twin-fork.ts
+# fund-gas and fund-usdc).
+#
 # GOTCHAS
 # - assert_headless_deposit_transcript.py validates tool-call ORDER, not just presence.
 #   The replay script runs get-vault, get-agent, get-balance, get-allowance, self-check,
@@ -37,17 +45,15 @@
 name: opencode-headless-deposit-read
 
 on:
-  # Nightly job (b), core issue 1496: reused by suite-NN-nightly-fresh-snapshot.yml
-  # with fresh_snapshot=true so this suite boots the Twin chain from a snapshot
-  # taken at the latest Base block instead of the checked-in pin. Steps are not
-  # copied: the nightly calls this very workflow.
+  # Called by suite-29-nightly-twin-chain.yml, which chooses ONE pin for the whole nightly run and
+  # hands it down as pin_block. Steps are not copied: the nightly calls this very workflow.
   workflow_call:
     inputs:
-      fresh_snapshot:
-        description: "Apply the nightly fresh snapshot overlay before booting a chain."
-        type: boolean
+      pin_block:
+        description: "Twin chain pin handed down by a parent run. Empty: this run chooses one."
+        type: string
         required: false
-        default: false
+        default: ""
   schedule:
     - cron: "17 3 * * *"  # nightly
   workflow_dispatch:
@@ -71,6 +77,22 @@ on:
       - "clients/rust-payment-client/Cargo.toml"
 
 jobs:
+  # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
+  pin:
+    name: twin-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ github.event_name != 'pull_request' }}
+    outputs:
+      block: ${{ steps.pin.outputs.block }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        uses: ./.github/actions/twin-pin
+        with:
+          pin-block: ${{ inputs.pin_block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
   # Offline, keyless unit tests for the transcript asserters and the issue #1151
   # live-fail guard. Runs on every trigger (including pull_request) so the guard
   # and asserter logic are executed-in-CI, not just at nightly time against a
@@ -130,11 +152,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
-        uses: ./.github/actions/apply-fresh-snapshot
-        with:
-          enabled: ${{ inputs.fresh_snapshot == true }}
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -155,7 +172,7 @@ jobs:
     timeout-minutes: 30
     env:
       CI_CLASS: feature-correctness
-    needs: refusal
+    needs: [refusal, pin]
     # Replay coverage (issue #1210 option C; closes tracker #1233). No model
     # credential is needed — see the workflow header.
     if: ${{ github.event_name != 'pull_request' }}
@@ -163,11 +180,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
-        uses: ./.github/actions/apply-fresh-snapshot
-        with:
-          enabled: ${{ inputs.fresh_snapshot == true }}
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -192,19 +204,23 @@ jobs:
       - name: Put rmpc on PATH
         run: echo "$PWD/target/release" >> "$GITHUB_PATH"
 
-      # Boot Anvil from the warmed Base fork-state fixture so the three REAL
-      # Aave V3 / Compound V3 / Morpho adapters have live protocol storage to
-      # call (issue #912 — this replaced the bare non-forked anvil that forced
-      # the now-deleted test-only no-yield deploy hatch). The helper loads
-      # testing/fixtures/fork-state/CURRENT.anvil-state, replays the canonical
-      # Base USDC proxy storage seed + impl bytecode, advances the next-block
-      # timestamp, and funds ADMIN with USDC (the agent is funded later, after
-      # its key is generated). It prints the canonical Base USDC address.
-      - name: Start Anvil devnet from fork-state fixture
+      # The Twin chain: a pinned lazy fork of real Base state, so the three REAL Aave V3 / Compound
+      # V3 / Morpho adapters have live protocol storage to call. The action restores anvil's RPC
+      # cache keyed by the pin block and exports TWIN_RPC_URL. The USDC is the real Base USDC.
+      - name: Start the Twin chain at the run pin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+      # Twin environment step "fund USDC": the deployer needs USDC for the seed deposit (the agent
+      # is funded later, after its key is generated).
+      - name: Fund the deployer with USDC (Twin chain environment step)
         run: |
           set -euo pipefail
           ADMIN=$(cast wallet address --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
-          USDC_ADDR=$(scripts/devnet/boot-fork-state-anvil.sh http://127.0.0.1:8545 "$ADMIN")
+          bun scripts/devnet/twin-fork.ts fund-usdc "$ADMIN" 2000000000
+          USDC_ADDR=$(bun -e 'import {USDC} from "./scripts/devnet/twin-fork-lib.ts"; console.log(USDC)')
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
 
       # Issue #469: derive ADMIN/PAUSER/SHARE_RECEIVER from Anvil's funded
@@ -283,20 +299,12 @@ jobs:
           echo "AGENT_ADDRESS=$AGENT_ADDR_FROM_KEYSTORE" >> $GITHUB_ENV
           echo "AGENT_KEYSTORE_PATH=$KEYSTORE" >> $GITHUB_ENV
           echo "RMPC_KEYSTORE_PASSPHRASE=$RMPC_KEYSTORE_PASSPHRASE" >> $GITHUB_ENV
-          # Fund the freshly-generated agent EOA so it can pay gas for the
-          # deposit. anvil_setBalance is the standard Anvil-only fast path.
-          cast rpc anvil_setBalance "$AGENT_ADDR_FROM_KEYSTORE" "0xDE0B6B3A7640000" \
-            --rpc-url http://127.0.0.1:8545
-          # Fund the agent with USDC too: the gateway deposit pulls
-          # `transferFrom(agent, gateway, amount)`, so the headless "deposit 1 USDC"
-          # run reverts with ERC20InsufficientBalance unless the generated key
-          # actually holds USDC. The fork-state USDC is the canonical Base
-          # FiatToken (no permissionless mint), so write the agent's balance
-          # slot directly — the same hermetic technique scripts/devnet/snapshot-fork.ts
-          # uses for the deployer. FiatToken balances mapping lives at slot 9.
-          AGENT_BAL_SLOT=$(cast index address "$AGENT_ADDR_FROM_KEYSTORE" 9)
-          cast rpc anvil_setStorageAt "$USDC_ADDRESS" "$AGENT_BAL_SLOT" \
-            "$(cast to-uint256 1000000000)" --rpc-url http://127.0.0.1:8545
+          # Fund the freshly-generated agent EOA with gas and USDC (Twin chain environment steps).
+          # The gateway deposit pulls `transferFrom(agent, gateway, amount)`, so the headless
+          # "deposit 1 USDC" run reverts with ERC20InsufficientBalance unless the generated key
+          # holds USDC. fund-usdc writes the real FiatToken balance slot (mapping at slot 9).
+          bun scripts/devnet/twin-fork.ts fund-gas "$AGENT_ADDR_FROM_KEYSTORE" 1
+          bun scripts/devnet/twin-fork.ts fund-usdc "$AGENT_ADDR_FROM_KEYSTORE" 1000000000
           # Persist the agent privkey (masked) so a post-deploy step can sign
           # the USDC approval from the agent itself once the gateway address is
           # known. rmpc has no approve command (approvals flow through the human
@@ -307,8 +315,8 @@ jobs:
 
       - name: Deploy contracts on devnet (authorizes generated agent)
         # Deploys the three real Aave/Compound/Morpho adapters against the
-        # warmed Base fork-state fixture (real protocol storage is present, so
-        # the seed-deposit totalAssets() succeeds — no passthrough hatch needed).
+        # Twin chain (real protocol storage is present, so the seed-deposit
+        # totalAssets() succeeds — no passthrough hatch needed).
         run: |
           mkdir -p deployments
           # Core S3: the stage runner deploys libs, vault, registry, router, gateway in that
@@ -510,7 +518,7 @@ jobs:
     timeout-minutes: 30
     env:
       CI_CLASS: feature-correctness
-    needs: refusal
+    needs: [refusal, pin]
     # Replay coverage (issue #1210 option C; closes tracker #1233). No model
     # credential is needed — see the workflow header.
     if: ${{ github.event_name != 'pull_request' }}
@@ -518,11 +526,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Apply the nightly fresh Base snapshot (no-op unless called by the nightly)
-        uses: ./.github/actions/apply-fresh-snapshot
-        with:
-          enabled: ${{ inputs.fresh_snapshot == true }}
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -547,16 +550,22 @@ jobs:
       - name: Put rmpc on PATH
         run: echo "$PWD/target/release" >> "$GITHUB_PATH"
 
-      # Boot Anvil from the warmed Base fork-state fixture (issue #912) so the
-      # three real adapters have live protocol storage; fund ADMIN (deployer)
-      # and the read-only AGENT account with USDC. See the deposit job for the
-      # rationale and the helper's seed/funding steps.
-      - name: Start Anvil devnet from fork-state fixture
+      # The Twin chain (see the deposit job): a pinned lazy fork of real Base state.
+      - name: Start the Twin chain at the run pin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+      # Twin environment step "fund USDC": the deployer (seed deposit) and the read-only agent.
+      - name: Fund the deployer and the agent with USDC (Twin chain environment step)
         run: |
           set -euo pipefail
           ADMIN=$(cast wallet address --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
           AGENT=$(cast wallet address --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 2)
-          USDC_ADDR=$(scripts/devnet/boot-fork-state-anvil.sh http://127.0.0.1:8545 "$ADMIN" "$AGENT")
+          bun scripts/devnet/twin-fork.ts fund-usdc "$ADMIN" 2000000000
+          bun scripts/devnet/twin-fork.ts fund-usdc "$AGENT" 2000000000
+          USDC_ADDR=$(bun -e 'import {USDC} from "./scripts/devnet/twin-fork-lib.ts"; console.log(USDC)')
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
 
       - name: Derive deploy addresses from Anvil accounts
@@ -572,8 +581,8 @@ jobs:
 
       - name: Deploy contracts + fund agent on devnet
         # Deploys the three real Aave/Compound/Morpho adapters against the
-        # warmed Base fork-state fixture (real protocol storage is present, so
-        # the seed-deposit totalAssets() succeeds — no passthrough hatch needed).
+        # Twin chain (real protocol storage is present, so the seed-deposit
+        # totalAssets() succeeds — no passthrough hatch needed).
         run: |
           mkdir -p deployments
           export FEE_RECIPIENT="$SHARE_RECEIVER_ADDRESS"

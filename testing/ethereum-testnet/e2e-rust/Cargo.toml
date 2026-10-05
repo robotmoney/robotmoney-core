@@ -11,7 +11,7 @@ name = "rmpc_e2e"
 path = "src/lib.rs"
 
 [dependencies]
-# Devnet fixture — boots Geth+Lighthouse and deploys contracts.
+# Devnet fixture — boots (or reuses) the Twin chain and deploys contracts.
 smoke-test = { path = "../../smoke-test" }
 
 # rmpc library for keystore creation and the PASSPHRASE_ENV_VAR constant.

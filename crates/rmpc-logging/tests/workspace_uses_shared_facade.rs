@@ -47,7 +47,6 @@ const EXEMPT: &[&str] = &[
     // One-shot CLIs that wrap test-harness fixtures; their stderr is
     // already the user-facing channel.
     "testing/smoke-test/src/bin/smoke-test.rs",
-    "testing/smoke-test/src/bin/genesis-ingester.rs",
     "testing/smoke-test/src/bin/fork-manifest-validate.rs",
 ];
 

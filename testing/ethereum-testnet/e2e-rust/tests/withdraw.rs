@@ -1,7 +1,7 @@
 //! Canonical: Plan tracking issue #109 §5 — End-to-end scenarios
 //! (See also: docs/technical/rmpc-read-output-contract.md)
 //!
-//! Suite-07 withdraw scenarios for `rmpc withdraw` against the Geth+Lighthouse
+//! Suite-07 withdraw scenarios for `rmpc withdraw` against the Twin chain
 //! devnet (issue #312).
 //!
 //! These tests exercise preflight refusal paths that do not require
@@ -61,7 +61,7 @@ fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
     let cell = shared_fixture();
     let mut guard = cell.lock().expect("shared fixture mutex poisoned");
     if guard.is_none() {
-        let fx = Fixture::new().expect("boot geth devnet + deploy");
+        let fx = Fixture::new().expect("boot the Twin chain + deploy");
         *guard = Some(fx);
     }
     f(guard.as_ref().expect("fixture present"))
