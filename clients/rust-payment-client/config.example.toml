@@ -60,6 +60,9 @@ gateway_runtime_hash = "0xYOUR_GATEWAY_RUNTIME_HASH"
 
 # TimelockController — required for `rmpc get-timelock`.
 # timelock_address = "0xYOUR_TIMELOCK_ADDRESS"
+# First block of the log scan (the timelock deployment block). Set it when the RPC provider caps
+# the eth_getLogs range. Absent: the scan starts at `earliest`.
+# timelock_from_block = 0
 
 # ── Gas / fee caps ─────────────────────────────────────────────────────────────
 

@@ -116,7 +116,12 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         cfg.chain_id
     );
 
-    let env = match rt.block_on(read_timelock(&rpc, timelock_addr)) {
+    // Scan start for the log reads: the configured deployment block, else `earliest`.
+    let from_tag = cfg
+        .timelock_from_block
+        .map_or_else(|| "earliest".to_string(), |b| format!("0x{b:x}"));
+
+    let env = match rt.block_on(read_timelock(&rpc, timelock_addr, &from_tag)) {
         Ok(e) => e,
         Err(e) => {
             log::error!("rmpc get-timelock: pre-read setup failed: {e}");
@@ -130,6 +135,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
 async fn read_timelock(
     rpc: &FailoverRpcClient,
     timelock: Address,
+    from_tag: &str,
 ) -> crate::errors::Result<Envelope<TimelockData>> {
     let chain_id = rpc.chain_id().await?;
     let block_number = rpc.block_number().await?;
@@ -179,6 +185,7 @@ async fn read_timelock(
             pr,
             granted_topic0,
             revoked_topic0,
+            from_tag,
             &block_tag,
         )
         .await
@@ -197,6 +204,7 @@ async fn read_timelock(
             er,
             granted_topic0,
             revoked_topic0,
+            from_tag,
             &block_tag,
         )
         .await
@@ -211,7 +219,7 @@ async fn read_timelock(
     // Pending operations via CallScheduled log scan.
     let scheduled_topic0 =
         keccak256(b"CallScheduled(bytes32,uint256,address,uint256,bytes,bytes32,uint256)");
-    match fetch_pending_ops(rpc, timelock, scheduled_topic0, &block_tag).await {
+    match fetch_pending_ops(rpc, timelock, scheduled_topic0, from_tag, &block_tag).await {
         Ok(ops) => b.data_mut().pending_ops = ops,
         Err(e) => b.record_err("pending_ops".to_string(), e),
     }
@@ -298,12 +306,13 @@ async fn fetch_role_members(
     role: B256,
     granted_topic0: B256,
     revoked_topic0: B256,
+    from_tag: &str,
     block_tag: &str,
 ) -> std::result::Result<Vec<Address>, String> {
     // Granted logs: topic[1] == role.
     let granted_filter = json!({
         "address": timelock,
-        "fromBlock": "earliest",
+        "fromBlock": from_tag,
         "toBlock": block_tag,
         "topics": [granted_topic0, role],
     });
@@ -315,7 +324,7 @@ async fn fetch_role_members(
     // Revoked logs: topic[1] == role.
     let revoked_filter = json!({
         "address": timelock,
-        "fromBlock": "earliest",
+        "fromBlock": from_tag,
         "toBlock": block_tag,
         "topics": [revoked_topic0, role],
     });
@@ -398,11 +407,12 @@ async fn fetch_pending_ops(
     rpc: &FailoverRpcClient,
     timelock: Address,
     scheduled_topic0: B256,
+    from_tag: &str,
     block_tag: &str,
 ) -> std::result::Result<Vec<PendingOp>, String> {
     let filter = json!({
         "address": timelock,
-        "fromBlock": "earliest",
+        "fromBlock": from_tag,
         "toBlock": block_tag,
         "topics": [scheduled_topic0],
     });

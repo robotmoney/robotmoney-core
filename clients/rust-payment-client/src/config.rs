@@ -103,6 +103,12 @@ pub struct Config {
     /// `EXIT_STARTUP_FAIL`.
     #[serde(default)]
     pub timelock_address: Option<String>,
+    /// First block `rmpc get-timelock` scans for `RoleGranted`, `RoleRevoked` and `CallScheduled`
+    /// logs (the timelock deployment block). Optional. When absent the scan starts at `earliest`,
+    /// which RPC providers that cap the `eth_getLogs` range (for example 500 blocks) reject on a
+    /// long chain. Set it to the block the timelock was deployed in.
+    #[serde(default)]
+    pub timelock_from_block: Option<u64>,
     /// `InvestmentCommitteePolicy` contract address (0x-prefixed hex). Optional —
     /// only required for `rmpc committee register` and `rmpc committee vote-submit`.
     /// When absent those subcommands exit with `EXIT_STARTUP_FAIL`.
