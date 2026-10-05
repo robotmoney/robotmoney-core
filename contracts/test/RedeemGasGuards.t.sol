@@ -211,7 +211,7 @@ contract RedeemGasGuardsTest is Test {
         assertFalse(ok);
         assertEq(_sel(ret), PortfolioRouter.InsufficientGas.selector, "expected InsufficientGas");
         (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-        assertEq(required, 1_250_000, "router leg floor");
+        assertEq(required, 1_650_000, "router leg floor");
     }
 
     function test_router_redeemFor_atFullGas_pays() public {
@@ -222,17 +222,17 @@ contract RedeemGasGuardsTest is Test {
 
     /// @notice Estimate-then-execute with the gas-metered stub: the bisect estimate lands at the
     ///         floor, executing at exactly that limit pays in full, and the vault is entered with at
-    ///         least its own 1_200_000 entry floor. Every limit below the estimate (past the router's
+    ///         least its own 1_600_000 entry floor. Every limit below the estimate (past the router's
     ///         own pre-guard work) reverts typed, never opaque.
     function test_router_redeemFor_estimateThenExecute() public {
         uint256 est = _estimate(0);
-        assertGe(est, 1_250_000, "estimate below the router floor");
-        assertLe(est, 1_300_000, "estimate far above the floor");
+        assertGe(est, 1_650_000, "estimate below the router floor");
+        assertLe(est, 1_700_000, "estimate far above the floor");
         uint256 snap = vm.snapshotState();
         (bool ok,) = _routerCall(est);
         assertTrue(ok, "router redeem failed at the exact estimate");
         assertEq(usdc.balanceOf(makeAddr("alice")), 10 * ONE, "short payout at the estimate");
-        assertGe(vault.entryGas(), 1_200_000, "vault entered below its own floor");
+        assertGe(vault.entryGas(), 1_600_000, "vault entered below its own floor");
         vm.revertToState(snap);
         for (uint256 g = 400_000; g < est; g += 7_919) {
             (bool ok2, bytes memory ret) = _routerCall(g);
@@ -250,15 +250,15 @@ contract RedeemGasGuardsTest is Test {
         assertFalse(ok);
         assertEq(_sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas");
         (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-        assertEq(required, 1_300_000, "gateway withdraw floor");
+        assertEq(required, 1_700_000, "gateway withdraw floor");
     }
 
     function test_gateway_withdraw_estimateThenExecute() public {
         uint256 est = _estimate(1);
-        assertGe(est, 1_300_000, "estimate below the gateway floor");
+        assertGe(est, 1_700_000, "estimate below the gateway floor");
         // The floor is checked after the gateway's own cold writes (window, payment id, share pull),
         // so the estimate is the floor plus that spend.
-        assertLe(est, 1_300_000 + 400_000, "estimate far above the floor");
+        assertLe(est, 1_700_000 + 400_000, "estimate far above the floor");
         (bool ok,) = _gatewayWithdrawCall(est, bytes32(uint256(1)));
         assertTrue(ok, "gateway withdraw failed at the exact estimate");
         assertEq(usdc.balanceOf(assetRecipient), 10 * ONE, "short payout at the estimate");
@@ -271,17 +271,17 @@ contract RedeemGasGuardsTest is Test {
         assertFalse(ok);
         assertEq(_sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas");
         (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-        assertEq(required, 1_300_000, "gateway withdraw floor");
+        assertEq(required, 1_700_000, "gateway withdraw floor");
     }
 
     function test_gateway_withdrawFromRouter_estimateThenExecute() public {
         uint256 est = _estimate(2);
-        assertGe(est, 1_300_000, "estimate below the gateway floor");
-        assertLe(est, 1_300_000 + 400_000, "estimate far above the floor");
+        assertGe(est, 1_700_000, "estimate below the gateway floor");
+        assertLe(est, 1_700_000 + 400_000, "estimate far above the floor");
         (bool ok,) = _gatewayRouterCall(est, bytes32(uint256(1)));
         assertTrue(ok, "router withdraw failed at the exact estimate");
         assertEq(usdc.balanceOf(assetRecipient), 10 * ONE, "short payout at the estimate");
-        assertGe(vault.entryGas(), 1_200_000, "vault entered below its own floor");
+        assertGe(vault.entryGas(), 1_600_000, "vault entered below its own floor");
     }
 
     function _slice(bytes memory ret) internal pure returns (bytes memory out) {

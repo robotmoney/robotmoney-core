@@ -37,10 +37,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     error InsufficientGas(uint256 available, uint256 required);
 
     /// @dev Gas that must remain before the gateway calls `vault.redeem` or `router.redeemFor`.
-    ///      The router's leg floor is 1_250_000 and the vault's is 1_200_000 (both measured
-    ///      after a 63/64 forward), so the gateway needs about 1_270_000 plus its own tail work.
+    ///      The router's leg floor is 1_650_000 and the vault's is 1_600_000 (both measured
+    ///      after a 63/64 forward), so the gateway needs about 1_670_000 plus its own tail work.
     ///      A tunable constant pending the fork measurement in docs/technical/redeem-gas-1482.md.
-    uint256 internal constant WITHDRAW_GAS_FLOOR = 1_300_000;
+    uint256 internal constant WITHDRAW_GAS_FLOOR = 1_700_000;
 
     /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();
