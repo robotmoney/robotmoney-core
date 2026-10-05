@@ -188,7 +188,7 @@ impl Fixture {
             .reauthorize_agent(max_per_payment, max_per_window)
     }
 
-    pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<String, HarnessError> {
+    pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<u128, HarnessError> {
         self.devnet.fund_usdc(recipient, amount)
     }
 

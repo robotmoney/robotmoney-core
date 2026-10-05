@@ -4,7 +4,9 @@
 //!
 //! Boot the Twin chain (918453), fund keys and call the one runbook "publish
 //! contracts" by constructing [`Fixture`]. The harness deploys nothing itself.
-//! Drop tears the Docker Compose stack down unconditionally.
+//! The chain is the Twin fork ([`twin_fork::TwinFork`]): started by
+//! `scripts/devnet/twin-fork.ts`, or reused when `TWIN_RPC_URL` is set. Drop stops a fork the
+//! fixture started.
 //!
 //! This crate is chain-level only — no knowledge of any client binary
 //! (rmpc, dapp, explorer). Callers that need client helpers import this
@@ -14,25 +16,23 @@
 //! - [`Fixture::new`] / [`Fixture::with_deploy_env`] — boot the Twin chain, fund keys, call publish contracts.
 //! - Address accessors: [`Fixture::rpc_url`], [`Fixture::gateway`], etc.
 //! - On-chain poke helpers: [`Fixture::pause_gateway`], [`Fixture::fund_usdc`], etc.
-//! - [`prerequisites_available`] — check for docker/forge/cast on PATH.
+//! - [`Fixture::warp`] / [`Fixture::fund_gas`] — the Twin chain environment steps.
+//! - [`prerequisites_available`] — check for anvil/bun/forge/cast on PATH.
 //! - [`fork_manifest::ForkManifest`] — typed view over
 //!   `testing/ethereum-testnet/config/fork-block.json` (issue #255).
 
-/// Anvil chain backend (task F10). Booted instead of the Geth+Lighthouse
-/// compose stack when [`ChainBackend::Anvil`] is selected, so a run can jump
-/// `block.timestamp` past a governance timelock delay.
-pub mod anvil_fixture;
 /// Dev-scout module for Base testnet fixture support (issue #842).
 /// Automated account funding seams for Base testnet e2e tests (issue #839).
 pub mod base_testnet;
 pub mod fork_manifest;
-pub mod genesis_alloc;
 pub mod logging;
 /// The one runbook, "publish contracts": the harness calls it, it deploys nothing itself.
 pub mod publish;
 /// Dev-scout map for the real-adapter state injection boundary (issue #739).
 pub mod real_adapter_state;
 pub mod stage_table;
+/// The Twin chain: a pinned lazy fork of real Base state (core 1498, 1496). Fund gas, fund USDC, warp.
+pub mod twin_fork;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
@@ -44,7 +44,6 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alloy_primitives::{keccak256, Address};
-use serde::Deserialize;
 use tempfile::TempDir;
 
 // -- Genesis account constants ----------------------------------------
@@ -157,67 +156,17 @@ impl HarnessError {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ComposePsEntry {
-    #[serde(rename = "Name")]
-    name: String,
-    #[serde(rename = "State")]
-    state: String,
-}
-
 // -- Fixture ----------------------------------------------------------
 
-/// Which chain the fixture boots under the contracts (task F10).
-///
-/// [`ChainBackend::Geth`] is the default and is byte-identical to the
-/// historical behaviour: the Geth+Lighthouse Docker devnet, real
-/// proof-of-stake, `block.timestamp` pinned to wall clock.
-///
-/// [`ChainBackend::Anvil`] boots [`anvil_fixture::AnvilFixture`] instead and
-/// brings up NO chain compose stack. Pick it when the run has to move
-/// `block.timestamp` — a governance timelock delay, for instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ChainBackend {
-    #[default]
-    Geth,
-    Anvil,
-}
-
-impl ChainBackend {
-    /// True iff no `ethereum-testnet` compose stack backs this chain.
-    fn is_anvil(self) -> bool {
-        matches!(self, ChainBackend::Anvil)
-    }
-}
-
-impl std::str::FromStr for ChainBackend {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "geth" => Ok(ChainBackend::Geth),
-            "anvil" => Ok(ChainBackend::Anvil),
-            other => Err(format!("unknown chain backend `{other}` (want geth|anvil)")),
-        }
-    }
-}
-
 /// A fully-wired devnet fixture. Boot by calling [`Fixture::new`];
-/// Drop tears down the Docker Compose stack.
+/// Drop stops the Twin fork when the fixture started it.
 pub struct Fixture {
-    compose_dir: PathBuf,
-    /// Which chain backend this fixture booted. Gates every compose action
-    /// against the `ethereum-testnet` project, including teardown.
-    backend: ChainBackend,
-    /// The Anvil chain, when `backend` is [`ChainBackend::Anvil`]. Held here
-    /// so it dies with the fixture, exactly as the compose stack does.
-    anvil: Option<anvil_fixture::AnvilFixture>,
+    /// The Twin chain (918453): a pinned lazy fork of real Base state.
+    twin: twin_fork::TwinFork,
     /// Tempdir for harness artifacts (deployment JSON, etc.).
     /// Exposed via [`Fixture::tempdir`] so callers can write
     /// additional files (keystores, configs) into the same directory.
     tmp: TempDir,
-    compose_log_followers: Vec<MonitoredChild>,
-    chain_ports: ChainPorts,
     rpc_port: u16,
     rpc_url: String,
     chain_id: u64,
@@ -234,14 +183,6 @@ pub struct Fixture {
     /// boot funding, deploy funding and every later [`Fixture::cast_send`]
     /// share one nonce sequence per sender. See [`NonceTracker`].
     nonce_tracker: NonceTracker,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ChainPorts {
-    rpc_port: u16,
-    ws_port: u16,
-    authrpc_port: u16,
-    beacon_port: u16,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -425,31 +366,15 @@ fn browser_url(port: u16) -> String {
     format!("http://localhost:{port}")
 }
 
-impl ChainPorts {
-    /// Allocate chain ports. The Geth RPC port may be pinned via the
-    /// `SMOKE_TEST_GETH_RPC_PORT` env var so an external reverse proxy
-    /// (e.g. a named cloudflared tunnel with a stable hostname) can
-    /// target a deterministic local port. WS / authrpc / beacon stay
-    /// randomized since nothing outside the host attaches to them.
-    fn allocate() -> Result<Self, HarnessError> {
-        let mut used = HashSet::new();
-        let rpc_port = match std::env::var("SMOKE_TEST_GETH_RPC_PORT")
-            .ok()
-            .and_then(|v| v.parse::<u16>().ok())
-        {
-            Some(p) => reserve_port(&mut used, p, "geth_rpc")?,
-            None => allocate_unique_port(&mut used)?,
-        };
-        Ok(Self {
-            rpc_port,
-            ws_port: allocate_unique_port(&mut used)?,
-            authrpc_port: allocate_unique_port(&mut used)?,
-            beacon_port: allocate_unique_port(&mut used)?,
-        })
-    }
-
-    fn rpc_url(&self) -> String {
-        localhost_url(self.rpc_port)
+/// Host port of the Twin fork. `SMOKE_TEST_RPC_PORT` pins it so an external reverse proxy (a named
+/// cloudflared tunnel with a stable hostname) can target a deterministic local port.
+fn allocate_chain_rpc_port() -> Result<u16, HarnessError> {
+    match std::env::var("SMOKE_TEST_RPC_PORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+    {
+        Some(p) => Ok(p),
+        None => Ok(test_utils::pick_free_port()?),
     }
 }
 
@@ -487,13 +412,12 @@ impl DappPorts {
 }
 
 impl Fixture {
-    /// Boot the Docker Geth+Lighthouse devnet, run the gateway deploy
-    /// script, and fund the test EOAs.
+    /// Boot the Twin chain, fund keys, run the "publish contracts" runbook.
     ///
-    /// The Geth devnet boots from a genesis snapshot that carries real Aave V3,
-    /// Compound V3, and Morpho storage (produced by `scripts/devnet/snapshot-fork.ts`
-    /// with the adapter warming step from issue #685).  The core stage scripts deploy the
-    /// three real protocol adapters by default.
+    /// The Twin chain (918453) is a pinned lazy fork of real Base state: real Aave V3, Compound V3,
+    /// Morpho, Uniswap and USDC. [`twin_fork::TwinFork::boot`] starts it with
+    /// `scripts/devnet/twin-fork.ts`, or reuses the fork named by `TWIN_RPC_URL`. The harness
+    /// deploys its own vault through the runbook and reads every address from the manifests.
     pub fn new() -> Result<Self, HarnessError> {
         Self::with_deploy_env(&[])
     }
@@ -501,308 +425,41 @@ impl Fixture {
     /// Like [`Self::new`] but passes allow-listed sheet parameter overrides to publish contracts.
     /// Used to override deploy-time parameters (e.g. `AGENT_MAX_PER_WINDOW`).
     pub fn with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
-        Self::with_backend(ChainBackend::Geth, extra_deploy_env)
-    }
-
-    /// Like [`Self::with_deploy_env`] but picks the chain backend (task F10).
-    ///
-    /// With [`ChainBackend::Geth`] this is exactly [`Self::with_deploy_env`].
-    /// With [`ChainBackend::Anvil`] the `ethereum-testnet` compose stack is
-    /// never brought up: [`anvil_fixture::AnvilFixture`] supplies the chain and
-    /// everything downstream — funding, publish contracts, the dapp
-    /// stack — runs unchanged against its RPC.
-    pub fn with_backend(
-        backend: ChainBackend,
-        extra_deploy_env: &[(&str, &str)],
-    ) -> Result<Self, HarnessError> {
-        let anvil_mode = backend.is_anvil();
-        if which::which("docker").is_err() {
-            return Err(HarnessError::FoundryMissing("docker"));
-        }
-        if which::which("forge").is_err() {
-            return Err(HarnessError::FoundryMissing("forge"));
-        }
-        if which::which("cast").is_err() {
-            return Err(HarnessError::FoundryMissing("cast"));
+        for tool in ["anvil", "forge", "cast", "bun"] {
+            if which::which(tool).is_err() {
+                return Err(HarnessError::FoundryMissing(tool));
+            }
         }
 
         let repo_root = locate_repo_root()?;
         let tmp = TempDir::new()?;
-        let compose_dir = repo_root.join("testing/ethereum-testnet/config");
-        let chain_ports = ChainPorts::allocate()?;
-        let rpc_url = chain_ports.rpc_url();
-        // One nonce source of truth for this devnet's whole lifetime (issue
-        // #1374). Created here, before the first funding send, and moved into
-        // the `Fixture` below — so the boot-time deployer/holder funding sends
-        // and every later `Fixture::cast_send` from those same keys draw from
-        // a single monotonic sequence instead of two independent ones.
-        let nonce_tracker = NonceTracker::new(rpc_url.clone());
-
-        // Issue #255: render the genesis alloc overlay before booting compose
-        // so the `setup` container can bind-mount + merge it into the EL
-        // genesis.json. If rendering fails (missing fixture, malformed
-        // manifest), fall back to the legacy clean-room genesis path —
-        // verbose-logging the reason so the operator can fix it offline.
-        // The alloc overlay is a Geth-genesis concern: Anvil gets the same
-        // Base state from `--load-state` instead.
-        let alloc_overlay_path = if anvil_mode {
-            None
-        } else {
-            match render_genesis_alloc_overlay(&repo_root, tmp.path()) {
-                Ok(Some(p)) => Some(p),
-                Ok(None) => {
-                    eprintln!(
-                        "smoke-test: skipping genesis alloc overlay (fixture or manifest absent); \
-                     booting with clean-room genesis (legacy behaviour)"
-                    );
-                    None
-                }
-                Err(e) => {
-                    eprintln!(
-                        "smoke-test: genesis alloc overlay rendering failed: {e}; \
-                     falling back to clean-room genesis"
-                    );
-                    None
-                }
-            }
-        };
-
-        let compose_files: Vec<&str> = if alloc_overlay_path.is_some() {
-            vec![
-                "-f",
-                "docker-compose.yaml",
-                "-f",
-                "docker-compose.alloc.yaml",
-            ]
-        } else {
-            vec!["-f", "docker-compose.yaml"]
-        };
-        let compose_files_owned: Vec<String> =
-            compose_files.iter().map(|s| s.to_string()).collect();
-        let mut compose_log_env = vec![
-            ("GETH_RPC_PORT", chain_ports.rpc_port.to_string()),
-            ("GETH_WS_PORT", chain_ports.ws_port.to_string()),
-            ("GETH_AUTHRPC_PORT", chain_ports.authrpc_port.to_string()),
-            ("BEACON_PORT", chain_ports.beacon_port.to_string()),
-        ];
-        if let Some(ref p) = alloc_overlay_path {
-            compose_log_env.push(("SMOKE_GENESIS_ALLOC_FILE", p.to_string_lossy().to_string()));
-            std::env::set_var("SMOKE_GENESIS_ALLOC_FILE", p);
-        }
-        let compose_project = "ethereum-testnet";
-        let genesis_timestamp =
-            std::env::var("GENESIS_TIMESTAMP").unwrap_or_else(|_| "unset".to_string());
-        let overlay_mode = if alloc_overlay_path.is_some() {
-            "alloc-overlay"
-        } else {
-            "clean-room"
-        };
-        logging::info(
-            "smoke-test",
-            format!(
-                "chain startup config: project={compose_project} mode={overlay_mode} genesis_timestamp={genesis_timestamp} rpc_port={} ws_port={} authrpc_port={} beacon_port={} compose_files={}",
-                chain_ports.rpc_port,
-                chain_ports.ws_port,
-                chain_ports.authrpc_port,
-                chain_ports.beacon_port,
-                compose_files_owned.join(" "),
-            ),
-        );
-        // Stamp this boot with a unique run-id (exported for the compose label
-        // interpolation) and reap any containers stranded by a previous run
-        // before asserting the project is idle. Replaces the old "error out and
-        // make the operator clean up by hand" behaviour on a zombie collision.
+        // Stamp this boot with a unique run-id (exported for the compose label interpolation) and
+        // reap any dapp containers stranded by a previous run.
         let (run_id, _run_created) = ensure_run_identity();
         logging::info("smoke-test", format!("boot run-id={run_id}"));
         reap_stale_testnet_containers(&run_id);
-        if !anvil_mode {
-            ensure_compose_project_idle(&compose_dir, &compose_files_owned)?;
-        }
-        let cleanup_compose_files = compose_files_owned.clone();
-        let cleanup_compose_dir = compose_dir.clone();
-        let cleanup_alloc_overlay_path = alloc_overlay_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string());
-        let cleanup = move || {
-            // Nothing to tear down in Anvil mode — the chain compose project
-            // was never brought up, and `AnvilFixture`'s own Drop kills anvil.
-            if anvil_mode {
-                return;
-            }
-            let mut c = Command::new("docker");
-            c.arg("compose");
-            for f in &cleanup_compose_files {
-                c.arg(f);
-            }
-            c.args(["down", "-v", "--remove-orphans"]);
-            if let Some(ref p) = cleanup_alloc_overlay_path {
-                c.env("SMOKE_GENESIS_ALLOC_FILE", p);
-            }
-            c.current_dir(&cleanup_compose_dir);
-            let _ = c.status();
-        };
 
-        // Anvil mode brings up NO chain compose stack (task F10): the chain is
-        // a host-side `anvil --load-state`, already ready by the time
-        // `AnvilFixture::boot` returns, so the compose up / log-follower /
-        // block-production gates below have nothing to gate.
-        let mut compose_log_followers = Vec::new();
-        let mut anvil: Option<anvil_fixture::AnvilFixture> = None;
-        if anvil_mode {
-            let chain = anvil_fixture::AnvilFixture::boot(&repo_root, chain_ports.rpc_port)?;
-            logging::info(
-                "smoke-test",
-                format!("anvil chain ready at {}", chain.rpc_url()),
-            );
-            anvil = Some(chain);
-        } else {
-            let mut up_cmd = Command::new("docker");
-            up_cmd.arg("compose");
-            for f in &compose_files_owned {
-                up_cmd.arg(f);
-            }
-            up_cmd
-                .arg("up")
-                .arg("-d")
-                .arg("--build")
-                .env("GETH_RPC_PORT", chain_ports.rpc_port.to_string())
-                .env("GETH_WS_PORT", chain_ports.ws_port.to_string())
-                .env("GETH_AUTHRPC_PORT", chain_ports.authrpc_port.to_string())
-                .env("BEACON_PORT", chain_ports.beacon_port.to_string())
-                .current_dir(&compose_dir);
-            if let Some(ref p) = alloc_overlay_path {
-                up_cmd.env("SMOKE_GENESIS_ALLOC_FILE", p);
-            }
-            logging::info("smoke-test", "bringing up chain compose stack");
-            let up_out = up_cmd.output().map_err(HarnessError::from)?;
-            logging::log_command_output("compose", &up_out);
-            if !up_out.status.success() {
-                log_compose_state(
-                    &compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "compose up failed",
-                    200,
-                );
-                cleanup();
-                return Err(HarnessError::Docker(format!(
-                    "compose up devnet failed: {:?}",
-                    up_out.status
-                )));
-            }
-
-            let chain_log_follower = start_compose_log_follower(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-            )
-            .inspect_err(|err| {
-                logging::error(
-                    "smoke-test",
-                    format!("chain compose log follower failed: {err}"),
-                );
-                log_compose_state(
-                    &compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "log follower startup failure",
-                    200,
-                );
-                cleanup();
-            })?;
-            compose_log_followers.push(chain_log_follower);
-
-            eprintln!("smoke-test: waiting for chain containers to become ready...");
-            logging::info("smoke-test", "waiting for chain containers to become ready");
-            let chain_probe_dir = compose_dir.clone();
-            let mut chain_health_probe = compose_health_probe(
-                &chain_probe_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-            );
-            wait_for_rpc_with_probe(
-                &rpc_url,
-                Duration::from_secs(180),
-                Some(&mut chain_health_probe),
-            )
-            .inspect_err(|err| {
-                logging::error("smoke-test", format!("chain RPC readiness failed: {err}"));
-                log_compose_state(
-                    &compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "RPC readiness timeout",
-                    200,
-                );
-                cleanup();
-            })?;
-            logging::info(
-                "smoke-test",
-                "chain RPC ready; waiting for EL/CL block production",
-            );
-
-            // Wait for real block production: RPC up != consensus up.
-            wait_for_block_height_with_probe(
-                &rpc_url,
-                1,
-                Duration::from_secs(240),
-                Some(&mut chain_health_probe),
-            )
-            .inspect_err(|err| {
-                logging::error(
-                    "smoke-test",
-                    format!("chain block-production readiness failed: {err}"),
-                );
-                log_compose_state(
-                    &compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "block-production timeout",
-                    200,
-                );
-                cleanup();
-            })?;
-            logging::info("smoke-test", "chain EL/CL stack ready");
-            wait_for_rpc_with_probe(
-                &rpc_url,
-                Duration::from_secs(60),
-                Some(&mut chain_health_probe),
-            )
-            .inspect_err(|err| {
-                logging::error(
-                    "smoke-test",
-                    format!("post-readiness RPC stability check failed: {err}"),
-                );
-                log_compose_state(
-                    &compose_dir,
-                    &compose_files_owned,
-                    &compose_log_env,
-                    "chain-compose",
-                    "post-readiness RPC stability failure",
-                    200,
-                );
-                cleanup();
-            })?;
-        }
+        let twin = twin_fork::TwinFork::boot(&repo_root, allocate_chain_rpc_port()?)?;
+        let rpc_port = twin.rpc_port();
+        let rpc_url = twin.rpc_url().to_string();
         logging::info(
             "smoke-test",
-            "post-readiness chain RPC stable; starting deployment",
+            format!(
+                "Twin chain ready: rpc={rpc_url} owned={} pin_block_env={}",
+                twin.is_owned(),
+                std::env::var(twin_fork::TWIN_PIN_BLOCK_ENV).unwrap_or_else(|_| "auto".into())
+            ),
         );
+        // One nonce source of truth for this chain's whole lifetime (issue #1374). Every send the
+        // harness makes from a key draws from it.
+        let nonce_tracker = NonceTracker::new(rpc_url.clone());
 
-        // The harness deploys nothing itself. It funds keys, then calls the one
-        // runbook, "publish contracts", with the Twin chain arguments: all four
-        // vaults, the real Safe, the timelock handover and the verifier. A fresh
-        // rehearsal keystore set is minted for every boot, so a redeploy from a
-        // new SHA never reuses a deployer.
+        // The harness deploys nothing itself. It funds keys, then calls the one runbook, "publish
+        // contracts", with the Twin chain arguments: all four vaults, the real Safe, the timelock
+        // handover and the verifier. A fresh rehearsal keystore set is minted for every boot, so a
+        // redeploy from a new SHA never reuses a deployer.
         let publish_cfg = publish::PublishConfig::from_env(&repo_root).inspect_err(|err| {
             logging::error("smoke-test", format!("publish contracts config: {err}"));
-            cleanup();
         })?;
         let key_parent = if Path::new("/dev/shm").is_dir() {
             PathBuf::from("/dev/shm")
@@ -811,18 +468,19 @@ impl Fixture {
         };
         let keys = publish::make_keys(&publish_cfg, &key_parent).inspect_err(|err| {
             logging::error("smoke-test", format!("rehearsal key helper failed: {err}"));
-            cleanup();
         })?;
 
+        // Environment steps that may differ from production: fund gas and fund USDC (core 1498).
         // The deployer seeds rmUSDC with real USDC, so it needs USDC before the run.
         const DEPLOYER_USDC_GRANT: u128 = 10_000 * 1_000_000; // 10k USDC, 6dp
-        const ONE_ETH_WEI: &str = "1000000000000000000";
-        const DEPLOYER_ETH_WEI: &str = "10000000000000000000";
+        const GAS_WEI: u128 = 1_000_000_000_000_000_000; // 1 ETH
+        const DEPLOYER_GAS_WEI: u128 = 10_000_000_000_000_000_000; // 10 ETH
+        const HOLDER_GAS_WEI: u128 = 1_000_000_000_000_000_000_000; // 1000 ETH, the faucet reserve
         let agent_hex = format!("{:#x}", agent_address());
         let deployer_hex = keys.address("ADMIN_ADDRESS")?.to_string();
         let fund = || -> Result<(), HarnessError> {
-            fund_usdc_to(&nonce_tracker, &deployer_hex, DEPLOYER_USDC_GRANT)?;
-            fund_eth_from_deployer(&nonce_tracker, &deployer_hex, DEPLOYER_ETH_WEI)?;
+            twin.fund_gas(&deployer_hex, DEPLOYER_GAS_WEI)?;
+            twin.set_usdc_balance(&deployer_hex, DEPLOYER_USDC_GRANT)?;
             let mut gas_only: Vec<String> = Vec::new();
             gas_only.extend(keys.address_list("SAFE_OWNERS"));
             gas_only.extend(keys.address_list("VOTER_ADDRESSES"));
@@ -830,21 +488,14 @@ impl Fixture {
             gas_only.push(agent_hex.clone());
             gas_only.push(PAUSER_ADDRESS_HEX.to_string());
             for a in gas_only {
-                fund_eth_from_deployer(&nonce_tracker, &a, ONE_ETH_WEI)?;
+                twin.fund_gas(&a, GAS_WEI)?;
             }
+            twin.fund_gas(HARNESS_USDC_HOLDER_ADDRESS_HEX, HOLDER_GAS_WEI)?;
+            twin.fund_gas(SHARE_RECEIVER_ADDRESS_HEX, GAS_WEI)?;
             Ok(())
         };
         fund().inspect_err(|err| {
             logging::error("smoke-test", format!("funding keys failed: {err}"));
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "key funding failure",
-                200,
-            );
-            cleanup();
         })?;
 
         // Identity lines are addresses only. The agent and the pauser are the
@@ -867,31 +518,17 @@ impl Fixture {
         )
         .inspect_err(|err| {
             logging::error("smoke-test", format!("publish contracts failed: {err}"));
-            log_compose_state(
-                &compose_dir,
-                &compose_files_owned,
-                &compose_log_env,
-                "chain-compose",
-                "publish contracts failure",
-                200,
-            );
-            cleanup();
         })?;
         let topology = publish::load_topology(&published.manifest_dir).inspect_err(|err| {
             logging::error("smoke-test", format!("manifest read failed: {err}"));
-            cleanup();
         })?;
         let gateway_runtime_hash = runtime_code_hash(&rpc_url, &topology.gateway)?;
         let chain_id = publish::TWIN_CHAIN_ID;
 
         let fx = Fixture {
-            compose_dir,
-            backend,
-            anvil,
+            twin,
             tmp,
-            compose_log_followers,
-            chain_ports,
-            rpc_port: chain_ports.rpc_port,
+            rpc_port,
             rpc_url,
             chain_id,
             topology,
@@ -901,15 +538,12 @@ impl Fixture {
             nonce_tracker,
         };
 
-        // Fund the agent's USDC balance. USDC is real Base USDC from the Twin
-        // chain snapshot, so the harness funds via a real ERC-20 transfer from
-        // HARNESS_USDC_HOLDER. Generous amount: the largest scenario deposit is
-        // OVER_PAYMENT_CAP_DEPOSIT = 20_000 USDC.
+        // Fund the agent's USDC balance on the real token. Generous amount: the largest scenario
+        // deposit is OVER_PAYMENT_CAP_DEPOSIT = 20_000 USDC.
         const AGENT_USDC_GRANT: u128 = 500_000 * 1_000_000; // 500k USDC, 6dp
         fx.fund_usdc(fx.agent(), AGENT_USDC_GRANT)
             .inspect_err(|err| {
                 logging::error("smoke-test", format!("funding USDC failed: {err}"));
-                cleanup();
             })?;
 
         Ok(fx)
@@ -923,28 +557,27 @@ impl Fixture {
     pub fn rpc_port(&self) -> u16 {
         self.rpc_port
     }
-    /// Which chain this fixture booted (task F10).
-    pub fn backend(&self) -> ChainBackend {
-        self.backend
-    }
-    /// RPC endpoint the explorer-indexer container must dial.
-    ///
-    /// Geth mode: the `geth` compose service over the shared chain network
-    /// (issue #775). Anvil mode: there is no `geth` service, so the indexer
-    /// crosses the Docker bridge to the host-side anvil instead.
+    /// RPC endpoint the explorer-indexer container must dial: the host-side Twin fork over the
+    /// Docker bridge (the fork listens on every interface).
     pub fn indexer_rpc_url(&self) -> String {
-        match self.anvil.as_ref() {
-            Some(anvil) => anvil.container_rpc_url(),
-            None => "http://geth:8545".to_string(),
-        }
+        self.twin.container_rpc_url()
     }
-    fn occupied_ports(&self) -> [u16; 4] {
-        [
-            self.chain_ports.rpc_port,
-            self.chain_ports.ws_port,
-            self.chain_ports.authrpc_port,
-            self.chain_ports.beacon_port,
-        ]
+    /// Host ports the fixture already holds, so the dapp stack never reuses one.
+    fn occupied_ports(&self) -> [u16; 1] {
+        [self.rpc_port]
+    }
+    /// The Twin chain this fixture runs on.
+    pub fn twin(&self) -> &twin_fork::TwinFork {
+        &self.twin
+    }
+    /// Move chain time forward by `seconds` and mine a block. This is how the 48h governance waits
+    /// run on the Twin chain: no real waiting.
+    pub fn warp(&self, seconds: u64) -> Result<(), HarnessError> {
+        self.twin.warp(seconds)
+    }
+    /// Set the native balance of `address` to `wei` (an environment step).
+    pub fn fund_gas(&self, address: Address, wei: u128) -> Result<(), HarnessError> {
+        self.twin.fund_gas(&format!("{address:#x}"), wei)
     }
     pub fn chain_id(&self) -> u64 {
         self.chain_id
@@ -1745,33 +1378,30 @@ impl Fixture {
         )
     }
 
-    /// Fund `recipient` with `amount` USDC by signing a real
-    /// `transfer(address,uint256)` from [`HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`].
+    /// Grant `amount` USDC base units (6 decimals) to `recipient` on the real Base USDC token.
     ///
-    /// This is the canonical USDC faucet for the smoke-test devnet. The
-    /// holder EOA receives its USDC balance at genesis (the alloc builder
-    /// patches `balances[holder] += grant` and `totalSupply += grant`), so
-    /// `fund_usdc` is a vanilla ERC-20 transfer signed by the holder's key
-    /// — no `cast send` from the deployer, no Anvil cheats, no whale
-    /// impersonation. The signature is recoverable, the Transfer event
-    /// fires, and behaviour matches prod.
-    pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<String, HarnessError> {
-        self.cast_send(
-            HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
-            self.usdc(),
-            "transfer(address,uint256)",
-            &[&format!("{recipient:#x}"), &amount.to_string()],
-        )
+    /// This is the Twin chain environment step "fund USDC": it writes the real FiatToken
+    /// `balanceAndBlacklistStates[recipient]` storage slot with
+    /// `scripts/devnet/twin-fork.ts fund-usdc` (anvil_setStorageAt), so the real token's own code
+    /// reads and spends the balance. Total supply is not changed. The write is absolute on the
+    /// slot, so this reads the current balance first and sets balance + amount: a grant, never an
+    /// overwrite. Returns the recipient's new balance.
+    pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<u128, HarnessError> {
+        let who = format!("{recipient:#x}");
+        let before = self.twin.usdc_balance(&who)?;
+        let after = before
+            .checked_add(amount)
+            .ok_or_else(|| HarnessError::other("USDC grant overflows u128"))?;
+        self.twin.set_usdc_balance(&who, after)?;
+        Ok(after)
     }
 
     /// Fund `recipient` with `value_wei` native ETH by signing a plain value
     /// transfer from [`HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`] (issue #466).
     ///
-    /// Mirrors the dapp's `dripEth` faucet client: the holder EOA receives
-    /// 1000 ETH at genesis via `genesis_alloc::DEFAULT_HARNESS_ETH_WEI`, so
-    /// a vanilla value transfer signed by the holder's key matches the
-    /// production faucet code path exactly — no Anvil cheats, no deployer
-    /// impersonation. Returns the transaction hash.
+    /// The holder EOA is funded with 1000 ETH at boot (fund gas), so a
+    /// vanilla value transfer signed by the holder's key needs no cheat
+    /// and no impersonation. Returns the transaction hash.
     pub fn fund_eth_from_harness(
         &self,
         recipient: Address,
@@ -1795,76 +1425,18 @@ impl Fixture {
     }
 }
 
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        // Anvil mode never brought the chain compose project up, so there is
-        // nothing to compose-down here; the `AnvilFixture` in `self.anvil`
-        // kills the chain when it drops right after this body returns.
-        if self.backend.is_anvil() {
-            logging::info("anvil", "chain fixture dropping; anvil teardown follows");
-            return;
-        }
-        logging::info("chain-compose", "tearing down chain compose stack");
-        for child in &mut self.compose_log_followers {
-            child.terminate();
-        }
-        let _ = Command::new("docker")
-            .args([
-                "compose",
-                "-f",
-                "docker-compose.yaml",
-                "down",
-                "-v",
-                "--remove-orphans",
-            ])
-            .current_dir(&self.compose_dir)
-            .status();
-        logging::info("chain-compose", "chain compose teardown complete");
-    }
-}
-
 // -- Public helpers ---------------------------------------------------
 
-/// Returns `true` iff `docker`, `forge`, and `cast` are all on PATH.
+/// Returns `true` iff `anvil`, `bun`, `forge`, and `cast` are all on PATH: the Twin fork
+/// (anvil, started by the bun tool) and the publish run (forge, cast, bun) need them. The dapp
+/// stack additionally needs docker, which [`DappStack::boot`] checks itself.
 pub fn prerequisites_available() -> bool {
-    which::which("docker").is_ok() && which::which("forge").is_ok() && which::which("cast").is_ok()
+    ["anvil", "bun", "forge", "cast"]
+        .iter()
+        .all(|t| which::which(t).is_ok())
 }
 
 // -- Internal helpers -------------------------------------------------
-
-/// Issue #255 / #607: copy the pre-built genesis alloc overlay JSON into
-/// `out_dir` and return its absolute path. Returns `Ok(None)` when the
-/// committed `genesis-alloc.json` fixture is absent — the caller falls back
-/// to the legacy clean-room genesis path.
-///
-/// The pre-built JSON is produced by `smoke-test-genesis-ingester` from
-/// Committed at `testing/fixtures/fork-state/genesis-alloc.json`. Regenerate
-/// whenever the fork block is bumped:
-///
-///     cargo run --bin smoke-test-genesis-ingester --release -- \
-///         --manifest testing/ethereum-testnet/config/fork-block.json \
-///         --snapshot testing/fixtures/fork-state/<BLOCK>.anvil-state \
-///         --output   testing/fixtures/fork-state/genesis-alloc.json
-fn render_genesis_alloc_overlay(
-    repo_root: &Path,
-    out_dir: &Path,
-) -> Result<Option<PathBuf>, HarnessError> {
-    let src = repo_root.join("testing/fixtures/fork-state/genesis-alloc.json");
-    if !src.exists() {
-        return Ok(None);
-    }
-
-    let out_path = out_dir.join("genesis-alloc.json");
-    std::fs::copy(&src, &out_path)?;
-    // docker requires an absolute path for bind-mount source; the tempdir
-    // path already is absolute, but be defensive.
-    let absolute = std::fs::canonicalize(&out_path)?;
-    eprintln!(
-        "smoke-test: using pre-built genesis alloc overlay -> {}",
-        absolute.display()
-    );
-    Ok(Some(absolute))
-}
 
 /// Parse a `0x`-prefixed (or bare) 32-byte hex private key into raw bytes.
 /// Used to recover the sender address for gas estimation in [`Fixture::cast_send`].
@@ -2356,98 +1928,6 @@ fn purge_stale_dapp_compose_state(
     }
 }
 
-fn ensure_compose_project_idle(
-    compose_dir: &Path,
-    compose_files: &[String],
-) -> Result<(), HarnessError> {
-    let running = compose_running_container_names(compose_dir, compose_files)?;
-    if running.is_empty() {
-        return Ok(());
-    }
-
-    Err(HarnessError::Docker(format!(
-        "ethereum-testnet compose project already running containers: {}; \
-         stop the existing smoke-test instance before starting another",
-        running.join(", ")
-    )))
-}
-
-fn compose_running_container_names(
-    compose_dir: &Path,
-    compose_files: &[String],
-) -> Result<Vec<String>, HarnessError> {
-    let mut cmd = Command::new("docker");
-    cmd.arg("compose");
-    for file in compose_files {
-        cmd.arg(file);
-    }
-    let output = cmd
-        .arg("ps")
-        .arg("--format")
-        .arg("json")
-        .current_dir(compose_dir)
-        .output()
-        .map_err(HarnessError::from)?;
-
-    if !output.status.success() {
-        return Err(HarnessError::Docker(format!(
-            "docker compose ps failed: stdout={} stderr={}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    parse_compose_ps_stdout(&output.stdout)
-}
-
-fn parse_compose_ps_stdout(stdout: &[u8]) -> Result<Vec<String>, HarnessError> {
-    let mut running = Vec::new();
-    for line in String::from_utf8_lossy(stdout).lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let entry: ComposePsEntry = serde_json::from_str(line).map_err(|e| {
-            HarnessError::Docker(format!("docker compose ps parse error: {e}; line={line}"))
-        })?;
-        if entry.state.eq_ignore_ascii_case("running") {
-            running.push(entry.name);
-        }
-    }
-    Ok(running)
-}
-
-/// Fund `recipient_hex` with USDC from HARNESS_USDC_HOLDER (a real ERC-20
-/// transfer of the genesis grant). Used at boot, before a `Fixture` exists.
-fn fund_usdc_to(
-    tracker: &NonceTracker,
-    recipient_hex: &str,
-    amount_units: u128,
-) -> Result<String, HarnessError> {
-    logging::debug(
-        "rpc",
-        format!(
-            "eth_sendRawTransaction via cast send usdc transfer {amount_units} -> {recipient_hex}"
-        ),
-    );
-    let amount_s = amount_units.to_string();
-    let v = pinned_cast_send(
-        tracker,
-        "fund usdc",
-        HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
-        &[
-            genesis_alloc::BASE_USDC_ADDR,
-            "transfer(address,uint256)",
-            recipient_hex,
-            &amount_s,
-        ],
-    )?;
-    Ok(v.get("transactionHash")
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string())
-}
-
 /// keccak256 of the runtime code at `addr`, read with `cast code`.
 fn runtime_code_hash(rpc_url: &str, addr: &str) -> Result<String, HarnessError> {
     let out = Command::new("cast")
@@ -2466,27 +1946,6 @@ fn runtime_code_hash(rpc_url: &str, addr: &str) -> Result<String, HarnessError> 
         return Err(HarnessError::other(format!("{addr} has no code")));
     }
     Ok(format!("0x{}", hex::encode(keccak256(&bytes).0)))
-}
-
-fn fund_eth_from_deployer(
-    tracker: &NonceTracker,
-    recipient_hex: &str,
-    value_wei: &str,
-) -> Result<String, HarnessError> {
-    logging::debug(
-        "rpc",
-        format!("eth_sendRawTransaction via cast send value={value_wei} -> {recipient_hex}"),
-    );
-    let v = pinned_cast_send(
-        tracker,
-        "fund eth",
-        DEPLOYER_PRIVATE_KEY_HEX,
-        &["--value", value_wei, recipient_hex],
-    )?;
-    Ok(v.get("transactionHash")
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string())
 }
 
 /// Delays before the 2nd, 3rd and 4th attempt of a
@@ -3703,24 +3162,6 @@ mod tests {
         let indexer = exited_status("explorer-indexer", 0);
         assert!(!is_completed_one_shot(&indexer));
         assert!(indexer.is_unhealthy());
-    }
-
-    #[test]
-    fn compose_collision_guard_filters_running_containers() {
-        let stdout = br#"{"Name":"eth-execution","State":"running"}
-{"Name":"eth-beacon","State":"running"}
-{"Name":"eth-validator-1","State":"exited"}
-{"Name":"eth-validator-2","State":"paused"}
-"#;
-
-        let names = parse_compose_ps_stdout(stdout).expect("parse compose ps output");
-        assert_eq!(names, vec!["eth-execution", "eth-beacon"]);
-    }
-
-    #[test]
-    fn parse_compose_ps_stdout_ignores_empty_output() {
-        let names = parse_compose_ps_stdout(b"\n\n").expect("parse empty output");
-        assert!(names.is_empty());
     }
 
     #[test]

@@ -21,13 +21,6 @@ path = "src/lib.rs"
 name = "smoke-test"
 path = "src/bin/smoke-test.rs"
 
-# Genesis alloc ingester for the Geth+Lighthouse devnet (issue #255). Reads
-# the fork-block manifest + Anvil state snapshot, writes a geth-genesis alloc
-# JSON to disk. Used by Fixture::new (and CI guards) before docker-compose up.
-[[bin]]
-name = "smoke-test-genesis-ingester"
-path = "src/bin/genesis-ingester.rs"
-
 # Fork-block manifest validator (issue #255 CI gate). Loads + validates
 # testing/ethereum-testnet/config/fork-block.json and exits with a distinct
 # code per failure class. Run from the CI guard step in `.github/workflows/`.

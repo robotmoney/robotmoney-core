@@ -13,7 +13,7 @@ use smoke_test::{prerequisites_available, Fixture};
 
 fn skip_if_no_prereqs(name: &str) -> bool {
     if !prerequisites_available() {
-        eprintln!("[{name}] docker/forge/cast not on PATH; skipping.");
+        eprintln!("[{name}] anvil/bun/forge/cast not on PATH; skipping.");
         return true;
     }
     false

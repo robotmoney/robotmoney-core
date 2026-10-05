@@ -45,7 +45,9 @@ fn sheet_value(sheet: &Path, name: &str) -> String {
 #[test]
 fn twin_chain_publish_verify_and_govern_matrix() {
     if !prerequisites_available() {
-        panic!("docker/forge/cast not on PATH: the Twin chain publish run cannot be skipped in CI");
+        panic!(
+            "anvil/bun/forge/cast not on PATH: the Twin chain publish run cannot be skipped in CI"
+        );
     }
     let fx = Fixture::new().expect("smoke-test fixture boot failed");
     let dir = fx.manifest_dir();

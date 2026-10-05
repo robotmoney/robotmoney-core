@@ -15,14 +15,14 @@ use smoke_test::{prerequisites_available, Fixture};
 
 fn skip_if_no_prereqs(name: &str) -> bool {
     if !prerequisites_available() {
-        eprintln!("[{name}] docker/forge/cast not on PATH; skipping.");
+        eprintln!("[{name}] anvil/bun/forge/cast not on PATH; skipping.");
         return true;
     }
     false
 }
 
-/// One shared fixture for the whole suite — booting Geth+Lighthouse
-/// costs 60-120 s; paying that per test would make the suite unusable.
+/// One shared fixture for the whole suite — booting the Twin fork and
+/// publishing four vaults is slow; paying that per test would make the suite unusable.
 /// Tests run with `--test-threads=1` so this static is safe.
 fn fixture() -> &'static Fixture {
     use std::sync::OnceLock;
@@ -45,7 +45,7 @@ fn rpc_is_reachable() {
     assert_eq!(got, fx.chain_id(), "chain_id mismatch");
 }
 
-/// Blocks are being produced — network is past genesis.
+/// The Twin fork has a head block. The fork is real Base state, so the head is a real Base block.
 #[test]
 fn blocks_are_being_produced() {
     if skip_if_no_prereqs("blocks_are_being_produced") {
@@ -55,6 +55,11 @@ fn blocks_are_being_produced() {
     let hex = rpc_call::<String>(fx.rpc_url(), "eth_blockNumber", serde_json::json!([]));
     let n = u64::from_str_radix(hex.trim_start_matches("0x"), 16).expect("eth_blockNumber is hex");
     assert!(n >= 1, "expected block_number >= 1, got {n}");
+    // The pin is an upstream head minus 2, a real Base block number in the tens of millions.
+    assert!(
+        n > 1_000_000,
+        "the Twin head {n} is not a forked Base block"
+    );
 }
 
 // -- Deployed address sanity ------------------------------------------
@@ -287,9 +292,7 @@ fn deployer_holds_no_admin_after_handover() {
 #[test]
 fn fixture_teardown_documented() {
     // Drop is called when the OnceLock static is cleaned up at process
-    // exit. The CI workflow's `docker compose down` safety step catches
-    // any leak if the process exits uncleanly.
-    // Drop is called at process exit; the CI safety-net step catches any leak.
+    // exit. A fork this process did not start (TWIN_RPC_URL) is never stopped by it.
     // No assertion needed — test existence is the marker.
 }
 
