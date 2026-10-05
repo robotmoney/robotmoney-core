@@ -56,15 +56,30 @@ its own go/no-go cycle through §4.
 
 ## 3. Version tags and rehearsal candidates
 
+This section covers two different tags. Do not confuse them.
+
+- The **release tag** (`release/<version>`, annotated) names the release SHA
+  *before* the final Twin rehearsal. It is the contracts-freeze gate: tag the
+  release SHA, run the final Twin rehearsal at that SHA, then commit its
+  frozen per-stage transaction counts to
+  `deployments/frozen-counts/<sha>.json`. The mainnet plan job refuses any
+  `DEPLOY_SHA` that is not a release-tagged SHA with committed frozen counts.
+  Any later commit that changes `contracts/` has a new SHA with no tag and no
+  counts, so it needs a new rehearsal and tag. This is the decided flow (not
+  yet implemented: core #1524).
+- The **version tag** (`vA.B.C[-network]`) is the post-deploy record
+  described in the rest of this section.
+
 A version tag is **never** cut before **both** a completed preflight and a
 completed postflight on the target network. The version tag records what has
 been *proven deployed*, not what is *intended for deployment*. Everything
-before that point is a rehearsal candidate, referenced by commit SHA, not a
-tag.
+before that point is a rehearsal candidate, referenced by commit SHA (and,
+for mainnet, by its release tag), not a version tag.
 
 The cycle:
 
-1. Pick the `dev` commit SHA you intend to deploy.
+1. Pick the `dev` commit SHA you intend to deploy. For mainnet this is the
+   release-tagged SHA with committed frozen counts (see above).
 2. Run preflight against that SHA (§4.1-4.2). **Preflight fails** → fix on
    `dev`, pick the new tip, return to step 2.
 3. **Preflight passes** → run the deploy ceremony against the target network.
@@ -158,12 +173,43 @@ failures and no silently-skipped check.
 
 ### 4.3. Cutover — the deploy ceremony
 
-Run the ordered deploy-script sequence the deploy scripts themselves define (the
-canonical step order and postcondition set — this policy does not restate it,
-since the deploy scripts and their order are the same regardless of target
-network): core stack (vault, adapters, gateway, seed deposit) → vault
-registry → portfolio router → router governance → IC policy + consensus
-receipt → timelock + role handover → record.
+One driver runs the ceremony: the `publish-contracts` Bun CLI in this repo
+(`publish-contracts/`). It reads `scripts/deploy/stage-table.json` and runs
+the same scripts in the same order on every chain. Stage, rehearsal and
+production differ only by parameters (the frozen sheet and the CLI
+arguments), never by source. Core never depends on the devops repo. Devops
+owns operations only: the credential engine, fusion-qa product acceptance
+and the mainnet canary, stage hosts, the operator runbook
+(`docs/runbooks/publish-contracts.md` in devops), and the mainnet workflows
+that check out core. `--dry-run` is the preflight: it simulates every
+deployer stage on a local anvil and broadcasts nothing. A Twin-chain
+rehearsal of publish, verify and govern runs on every push to `dev` (not
+yet implemented: core #1523).
+
+The stage sequence. The stage table holds the forge stages 1 to 11; the CLI
+adds `safe`, `verify` and `govern`:
+
+| Stage | What it does |
+| --- | --- |
+| 0 `safe` | Create a canonical SafeL2 1.4.1 through the canonical factory from the sheet's owners and threshold (threshold ≥ 2), then read it back. |
+| 1 `libs` | Deploy TickMath. The basket stages link it. |
+| 2 `vault` | rmUSDC and its lending adapters. Seed 1 USDC to `SEED_SHARE_RECEIVER`; the deployer holds no shares. |
+| 3 `registry` | Register rmUSDC. |
+| 4 `router` | Portfolio Router, `registry.setRouter`. |
+| 5 `gateway` | Gateway with the router as an immutable. No agent is authorized (not yet implemented: `DeployGateway` still authorizes `AGENT_ADDRESS`; tracked in the mainnet plan). |
+| 6 `governance` | RouterGovernance from the sheet. |
+| 7 `ic-policy` | IC policy and consensus receipt, bound to the gateway. |
+| 8 `proto` | rmPROTO, paused, wETH and cbBTC, registered. |
+| 9 `agent` | rmAGENT, paused, RM (`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`) on its venue, registered. The venue is open: a funded V3 RM/USDC pool or a restored V4 swap adapter. The script wires only venue `UniswapV3` today (`contracts/script/BasketVaultDeployBase.sol`; RM not yet in config: core #1491). |
+| 10 `rwa` | rmRWA, paused, a plain basket row: deSPXA on its Uniswap V3 fee 500 pool, no oracle. |
+| — config | Before stage 11 the deployer sets the deploy-time configuration: setters, router eligibility, voting power, and router default weights rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps (not yet implemented: core #1520). |
+| 11 `timelock` | TimelockController: proposer and canceller the Safe, executor open `address(0)` (not yet implemented: core #1521), delay from the sheet with a 172800 s floor on 8453. Every role on every vault, the gateway, registry, router, governance, IC policy and receipt goes to the timelock (vault EMERGENCY_ROLE to the emergency key), and the deployer is revoked. `AGENT_ADDRESSES=none`. |
+| 12 `verify` | One verifier reads the chain and checks every postcondition, including the Safe owners and threshold, the delay floor, that the deployer holds no role, and the deployer nonce against the frozen per-stage counts for the release SHA (counts not yet committed: core #1524). |
+| 13 `govern` | Only `unpauseDeposits()` on each basket vault (rmPROTO, rmAGENT, rmRWA). Each is its own timelock operation, scheduled the same day through the real Safe and executed after one 48-hour delay. None is skipped on any deploy. On 8453 the CLI exits `GOVERN_PENDING` with the resume command; on the Twin chain the wait runs by time warp (not yet implemented: core #1520; `govern.ts` still runs the older per-step matrix). |
+
+Every privileged action after stage 11 is Safe → `TimelockController` →
+target. `updateDelay`, a batch and a cancel run only as Twin-chain tests of
+the Safe tool, never on 8453.
 
 Every destructive or irreversible step (anything past the seed deposit, since
 the vault is then open to real deposits) must be explicitly marked in the
@@ -175,8 +221,8 @@ After the ceremony completes, the release's manual QA is what actually proves
 the deployment is usable, not just that the transactions didn't revert. At
 minimum:
 
-1. **Role wiring.** Re-run every `cast call ... hasRole(...)` postcondition
-   named in each deploy script's per-step postconditions — do not trust that broadcast success implies correct role
+1. **Role wiring.** Run the stage 12 verifier (§4.3), which re-reads every
+   role postcondition from the chain — do not trust that broadcast success implies correct role
    state.
 2. **Functional smoke test.** Execute one real deposit and one real
    withdrawal against the deployed vault (through the gateway, using a
@@ -280,5 +326,5 @@ no release branch to backport from, since every deployment runs the same
 
 | Network | Chain id | Default per ADR-0013 | Notes |
 | --- | --- | --- | --- |
-| Robot Money Devnet | `918453` | **Yes — the default verification target.** | Local `docker compose` stack, genesis forked from real Base-mainnet state (`docs/technical/full-stack-devnet.md`). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record; a version tag against the Devnet documents a verification pass, not a persistent deployment. |
+| Robot Money Devnet | `918453` | **Yes — the default verification target.** | The Twin chain: a pinned lazy anvil fork of real Base at the upstream head minus 2 per CI run (`scripts/devnet/twin-fork.ts`, `docs/technical/full-stack-devnet.md`). Tests deploy their own vault (clean room). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record; a version tag against the Devnet documents a verification pass, not a persistent deployment. |
 | Base mainnet | `8453` | The eventual real target — a separate, deliberately-costed decision (D9). | Requires an audit pass, Safe/hardware-wallet signers, and a funded submitter key. |

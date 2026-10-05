@@ -1,7 +1,7 @@
 # ADR-0001: MVP agent-token shortlist is hand-picked, not quant-filtered
 
-- **Status:** Accepted (amended 2026-06-15 — see [Amendment](#amendment--2026-06-15-real-four-vault-demo-shortlist))
-- **Date:** 2026-05-27 (amended 2026-06-15)
+- **Status:** Accepted (amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-mainnet-launch-shortlist-is-rm-only); earlier [Amendment — 2026-06-15](#amendment--2026-06-15-real-four-vault-demo-shortlist))
+- **Date:** 2026-05-27 (amended 2026-06-15, 2026-10-05)
 - **Deciders:** Product owner (recorded reply 2026-05-27)
 - **Related:** `docs/development/open-questions.md` §1.3, §1.4, §3.1; `docs/prd.md` §11.3; [ADR-0004](ADR-0004-agent-token-shortlist-governance.md); [ADR-0005](ADR-0005-basketvault-multi-dex-routing.md); `config/agent-token-shortlist.json`
 
@@ -99,6 +99,53 @@ The hand-picked-not-quant-filtered method, the equal-weight allocation,
 and the admin-curation governance path are unchanged by this amendment.
 DEUS and PEAQ remain excluded for the reasons recorded in the original
 decision (no active Base presence; not Base-native, respectively).
+
+## Amendment — 2026-10-05: Mainnet launch shortlist is RM only
+
+Owner decisions of 2026-10-05 (mainnet plan §2.2, §2.6, §3.1, §3.5)
+replace the 2026-06-15 three-token shortlist for the Base mainnet launch:
+
+- **Launch shortlist: RM only.** rmAGENT holds RM from day 2. BNKR and
+  JUNO have no usable token/USDC pool today; they are added later
+  through the timelock path of
+  [ADR-0004](ADR-0004-agent-token-shortlist-governance.md) (core 1491).
+- **RM is the live Base token.** RM is ROBOTMONEY at
+  `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (on-chain name
+  "Robot Money", symbol `ROBOTMONEY`, 18 decimals). Nothing deploys RM
+  in production. No test deploys an RM mock: the Twin fork of Base
+  carries the live token. The address is config, pinned by code hash
+  like USDC. This voids the 2026-06-15 statements that the demo seeds RM
+  as a stand-in `DemoBasketToken` and that the live address is a `TODO`.
+- **Branch state when this amendment was written** (`impl/core-contracts`,
+  core PR 1505): `config/agent-token-shortlist.json` still carries an
+  empty `shortlist`, so the RM entry is not yet added (core 1491).
+  `contracts/script/DeployRmToken.s.sol` is already deleted and is listed
+  as forbidden in `scripts/ci/check-no-test-only-code.ts`.
+  `contracts/RmToken.sol` **still exists** on this branch (it is also
+  named in `contracts/test/CustodyInvariantGuard.t.sol` and the
+  generated contract docs); its deletion is tracked by core 1489.
+- **RM's deepest liquidity is no longer on Aerodrome.** Read on Base on
+  2026-10-05 (block 52222597):
+
+  | RM pool | Approx. value | Note |
+  |---|---|---|
+  | Uniswap V4 RM/WETH | ~$170k | Deepest RM pool. Not usable: `addAsset` accepts only a token/USDC pool on every venue (see the [ADR-0005](ADR-0005-basketvault-multi-dex-routing.md) amendment). |
+  | Uniswap V4 RM/USDC, fee 2.91% | ~$809 | Deepest RM/USDC pool. Needs the restored V4 adapter. |
+  | Uniswap V3 RM/USDC, fee 10000, `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` | — | In-range liquidity 0, observation cardinality 1. `addAsset` refuses it today (`MIN_POOL_CARDINALITY` 2, `MIN_POOL_LIQUIDITY` 1e6). |
+  | Aerodrome Slipstream RM/USDC, `0x0992af1070f7fe4654a033fec8f153a6991465a8` | ~$8 | No deploy script registers the Aerodrome adapter. |
+
+- **RM's venue is open** (owner decision pending, mainnet plan §2.6
+  item 2). Option A: fund the existing V3 RM/USDC pool above and raise its
+  observation cardinality; no code change. Option B: restore the
+  Uniswap V4 swap adapter as a supported venue and use a V4 RM/USDC pool
+  (see the ADR-0005 amendment for what the restore must first prove).
+  Neither option routes through WETH. The mainnet run waits on this
+  choice and on who funds the pool, sized to rmAGENT's 3% default
+  slippage.
+
+Unchanged by this amendment: the hand-picked-not-quant-filtered method,
+the equal-weight allocation, the admin-curation path (now as amended in
+ADR-0004), and the absence of any RM-specific guard in code.
 
 ## Consequences
 

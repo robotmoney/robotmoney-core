@@ -1,7 +1,7 @@
 # ADR-0004: Agent-token shortlist governance mechanism (production, router-eligible)
 
-- **Status:** Accepted
-- **Date:** 2026-06-03
+- **Status:** Accepted (amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-canceller-executor-and-what-the-delay-split-enforces))
+- **Date:** 2026-06-03 (amended 2026-10-05)
 - **Deciders:** Product owner
 - **Related:**
   - `docs/technical/basket-vault-gap-report.md` §Eligibility-requirement-9, Appendix C
@@ -167,6 +167,44 @@ invalid `addAsset` proposals to consume Safe gas and operator attention.
   evaluate it. Spam proposals would rapidly erode Safe signer credibility.
 - **Conclusion:** griefing via proposals is not economically motivated;
   it harms the attacker's reputation without meaningfully harming the protocol.
+
+## Amendment — 2026-10-05: Canceller, executor, and what the delay split enforces
+
+Owner decisions of 2026-10-05 (mainnet plan §2.2, §3.1, §3.3) and
+`docs/technical/security-model.md` §4 override two rows of the
+*Timelock parameters* table and veto step 3:
+
+- **Canceller: the Safe only.** A cancel needs the Safe acting at its
+  threshold (≥ 2 signatures). The "Any Safe signer (unilaterally)" row
+  and veto-path step 3 ("Unilateral Safe cancellation") are overridden;
+  no single signer can cancel. In code, `DeployTimelock` passes
+  `proposers = [safe]`, and OpenZeppelin's `TimelockController`
+  constructor grants `CANCELLER_ROLE` to each proposer, so the Safe is
+  the sole canceller.
+- **Executor: open (`address(0)`).** Anyone may execute a ready
+  operation after the delay. This overrides the "Safe (≥2-of-3)"
+  executor row. The Safe stays the only proposer. Code state on
+  `impl/core-contracts` (core PR 1505): `DeployTimelock._deployAndWire`
+  still sets `executors = [safe]`; the change to an open executor, with
+  a verifier check, is core 1521.
+- **The 48-hour add / 24-hour remove split is not enforced on chain.**
+  `AgentTokenVault.SHORTLIST_ADD_DELAY` (48 h) and
+  `SHORTLIST_REMOVE_DELAY` (24 h) are public constants that no contract
+  logic reads; their NatSpec says "Enforced off-chain by the Safe
+  signers". The only on-chain delay is the `TimelockController`'s single
+  `getMinDelay()`, which applies to every operation alike. On Base
+  (chain 8453) `DeployTimelock` refuses a min delay under 172800 s, so on
+  mainnet both `addAsset` and `removeAsset` wait at least 48 hours. A
+  24-hour removal is not possible there. Nothing on chain stops the Safe
+  from scheduling an `addAsset` at exactly the min delay.
+
+Consequences of this amendment for the text above: the veto path is no
+longer "cheap (single Safe signer can cancel)"; it needs the Safe
+threshold. The "rapid response" `removeAsset` path takes at least
+48 hours on mainnet; the vault's slippage-cap revert remains the
+depositor protection during that window. The first checklist item (min
+delay ≥ 48 hours) is now enforced by the `DeployTimelock` floor on
+chain 8453.
 
 ## Consequences
 

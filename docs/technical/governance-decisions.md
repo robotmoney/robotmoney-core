@@ -245,6 +245,14 @@ After step 3, `routerGovernance` is the sole `ADMIN_ROLE` holder and the only
 address that can call `setWeights`. No off-chain relay, multisig, or keeper is
 in the weight-update path.
 
+> **Status (mainnet plan, 2026-10-05).** The shipped wiring differs from steps
+> 2 and 3. `DeployRouterGovernance.s.sol` grants RouterGovernance the router
+> `ADMIN_ROLE`, and stage 11 (`DeployTimelock.s.sol`) also grants it to the
+> TimelockController before revoking the deployer. Both can reach `setWeights`.
+> Decided design: the timelock may set `defaultWeights` only
+> (`setDefaultWeights`), and active weights come only from RouterGovernance
+> votes. (Not yet implemented: core #1522.)
+
 **Constraint.** `RouterGovernance.sol` must call `setWeights` only from its
 `execute(proposalId)` function. No other function on the governance contract may
 call `setWeights`.

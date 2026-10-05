@@ -99,6 +99,11 @@ Access expectations:
   permissions, and revoke those permissions.
 - Autonomous depositors can act only within permissions set by the
   depositor who authorized them.
+- There is no protocol agent key. An agent belongs to a depositor, runs
+  `rmpc` with that depositor's key, and is authorized by that depositor
+  through commit and reveal. The protocol deploy authorizes no agent
+  (deploy-time agent removal not yet implemented: tracked in the mainnet
+  plan).
 - Addresses with admin-assigned voting power can participate in
   allocation-weight governance and view governance history. (Current
   governance is admin-weighted MVP; token-holder voting is a future
@@ -458,9 +463,19 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Per-deposit cap | Configurable |
 | Status | Deployed on Base mainnet |
 
-The stable-yield product is the launch product. All products are eligible
-for Portfolio Router allocation — four initially, extensible to more —
-weighted by recommendation, once each passes its readiness review. The
+All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) open deposits on day 2
+of the mainnet launch. The three basket vaults are deployed paused and are
+unpaused only by Safe → Timelock governance, one timelock operation per
+vault, executed after the timelock delay (not yet implemented: core #1520).
+The timelock's proposer and canceller is the Safe (2-of-3), any address may
+execute a ready operation after the delay, and the delay floor on Base is
+48 hours (open executor not yet implemented: core #1521). All products are
+eligible for Portfolio Router allocation — four initially, extensible to
+more — weighted by recommendation, once each passes its readiness review.
+The router default weights at
+launch are rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps; later changes
+come from RouterGovernance votes (not yet implemented: core #1520, core
+#1522). The
 stable-yield product's single-transaction redemption is met through
 proportional withdrawal across all active strategies in one transaction.
 If any strategy cannot fulfil its proportional share, the product covers
@@ -474,7 +489,7 @@ the shortfall from the remaining strategies before reverting.
 | Receipt token | rmPROTO |
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | VOLATILE |
-| Exposure | Basket of protocol assets (wETH, cbBTC, wSOL) via Uniswap V3 swaps |
+| Exposure | Basket of protocol assets via Uniswap V3 swaps: wETH and cbBTC at launch; wSOL is added later through the timelock |
 | Allocation model | Equal-weight target across basket assets at deposit time; not actively rebalanced |
 | Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
@@ -523,19 +538,23 @@ Router allocation.
 | Receipt token | rmAGENT |
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |
-| Exposure | Admin-curated basket of agent-economy tokens via per-asset DEX routing (Uniswap V3, Uniswap V4, Aerodrome) — see [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md) |
-| MVP shortlist | BNKR, JUNO, RM (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
+| Exposure | Admin-curated basket of agent-economy tokens via per-asset DEX routing (one venue per asset) — see [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md) |
+| MVP shortlist | BNKR, JUNO, RM (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); RM at launch, BNKR and JUNO added later through the timelock; current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
 | Allocation model | Equal-weight target across shortlisted tokens at deposit time; not actively rebalanced |
 | Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
 | Status | Router-eligible after readiness review (see below) |
 
-Shortlist curation is admin-controlled for the MVP, with a fixed
-three-token equal-weighted basket: BNKR, JUNO, RM (Base-chain
-only). Each token routes through the DEX venue holding its deepest
-liquidity — BNKR via Uniswap V3, JUNO via Uniswap V4, and RM
-via Aerodrome — under the per-asset venue abstraction in
-[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md); current
+Shortlist curation is admin-controlled for the MVP, with an
+equal-weighted target basket drawn from BNKR, JUNO, RM (Base-chain
+only). rmAGENT launches holding RM only: the existing ROBOTMONEY token on
+Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (not yet implemented:
+core #1491). BNKR and JUNO are added later through the timelock. Each token
+routes through one venue under the per-asset venue abstraction in
+[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue is
+open: option A is a funded Uniswap V3 RM/USDC pool; option B is a restored
+Uniswap V4 swap adapter on a V4 RM/USDC pool (V4 restore not yet
+implemented: tracked in the mainnet plan). Current
 membership, venues, and pool parameters live in
 `config/agent-token-shortlist.json`. Changes flow through the Safe →
 Timelock → `ADMIN_ROLE` path with a mandatory timelock delay and public
@@ -583,26 +602,25 @@ Router allocation.
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |
 | Underlying asset | Centrifuge deSPXA — tokenized S&P 500 exposure via Janus Henderson / Anemoy, issued on Centrifuge V3 and bridged to Base |
-| Oracle | Chronicle on-chain NAV oracle for deSPXA (Base), providing a signed, push-updated price feed |
-| Entry / exit | Aerodrome secondary-market swap only; ERC-7540 primary NAV redeem (Centrifuge V3) is never used by this vault |
-| Status | Active — real asset, seeded, Router-eligible |
+| Oracle | None: a plain basket row priced from the TWAP of deSPXA's Uniswap V3 USDC pool (fee 500) |
+| Entry / exit | Swaps in deSPXA's Uniswap V3 USDC pool (fee 500) only; ERC-7540 primary NAV redeem (Centrifuge V3) is never used by this vault |
+| Status | Router-eligible after readiness review (see below) |
 
 The RWA/Thematic vault holds deSPXA (Centrifuge V3, Base deployment).
 deSPXA is a tokenized representation of S&P 500 exposure, issued by
 Janus Henderson / Anemoy through the Centrifuge V3 protocol. The vault
-enters and exits positions exclusively via Aerodrome secondary-market
-swaps; it does not invoke ERC-7540 primary redemption against the
-Centrifuge issuer, avoiding the primary NAV redemption queue entirely.
+enters and exits positions exclusively via swaps in deSPXA's Uniswap V3
+USDC pool (fee 500); it does not invoke ERC-7540 primary redemption
+against the Centrifuge issuer, avoiding the primary NAV redemption queue
+entirely. Coinbase tokenized stocks are phase two (core #1500).
 
-NAV pricing is supplied by the Chronicle on-chain NAV oracle for
-deSPXA on Base. The oracle is a signed, push-updated feed; the vault
-reads the latest signed price and reverts if the feed is stale beyond
-the configured heartbeat.
+The vault has no oracle. deSPXA is a plain basket row priced from the
+TWAP of that Uniswap V3 pool, the same way rmPROTO prices its assets.
 
 **Issuer freeze-control risk disclosure:** deSPXA is subject to
 Centrifuge and Janus Henderson issuer controls. The issuer may freeze
 or restrict transfers of the underlying token at any time, which would
-block vault entry and exit independently of Aerodrome liquidity. This
+block vault entry and exit independently of pool liquidity. This
 risk is disclosed to depositors in the dapp vault detail page and is a
 known, accepted product risk for this vault category.
 

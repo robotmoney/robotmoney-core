@@ -9,6 +9,15 @@
 > ADR-0010 (unified vault) is Rejected and its code is deleted. The
 > `BasketVault` subclass family this report audits is the shipped design, and the
 > eligibility gates below apply to it directly.
+>
+> Mainnet plan (2026-10-05): launch assets are wETH and cbBTC in rmPROTO, RM in
+> rmAGENT, and deSPXA in rmRWA. RM is the live ROBOTMONEY token
+> `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`; nothing deploys an RM mock. RM's
+> venue is open: a funded Uniswap V3 RM/USDC pool or a restored V4 swap adapter
+> (not yet implemented: core #1491). deSPXA is a plain basket row priced from its
+> Uniswap V3 pool, with no Chronicle oracle. BNKR and JUNO are added later through
+> the timelock. There is no protocol agent key, so Appendix C option D has no
+> holder: agents belong to depositors, who authorize them.
 
 ---
 

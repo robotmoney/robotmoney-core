@@ -160,7 +160,7 @@ Three boundary properties are load-bearing and are enforced architecturally:
 | Email / notifications | Unspecified | No canonical doc selects an email or notification provider. | Open decision |
 | Payment processing | On-chain USDC only | Fiat on/off ramps are out of scope. | `docs/prd.md` §8 |
 | Observability | On-chain events, direct JSON-RPC reads, explorer indexer/API, structured `rmpc` JSON | Every state change must be observable; safety-critical reads stay live-chain. | `docs/prd.md` §2, §5, §7; `docs/technical/explorer-schema-decisions.md` §3.5 |
-| Infrastructure / hosting | Base, JSON-RPC providers, Docker devnet, CI-managed services | Production hosting is not fully specified; tests use Base forks and local Geth/Lighthouse devnet. | `docs/development/testing-strategy-ethereum.md`; `docs/development/smoke-test-design.md` |
+| Infrastructure / hosting | Base, JSON-RPC providers, Docker devnet, CI-managed services | Production hosting is not fully specified; tests use Base forks and the Twin chain (918453), a pinned lazy anvil fork of real Base. | `docs/development/testing-strategy-ethereum.md`; `docs/development/smoke-test-design.md` |
 | CI/CD | GitHub Actions quality gates for contracts, Rust, dapp, fork tests, docs validators | Test suites are documented as separate CI gates. | `docs/development/ci-suites.md` |
 
 ## 4. On-Chain Architecture
@@ -196,6 +196,14 @@ rebalancing model (`docs/development/open-questions.md` §3.15). The
 same contracts ship into test, demo, and mainnet — only the registry
 flag's value differs across environments. See
 `docs/development/single-production-codebase.md` for the principle.
+
+At launch rmAGENT (`AgentTokenVault`) holds RM, the existing Base token at
+`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`. Nothing deploys RM in
+production. RM's venue is open: a funded Uniswap V3 RM/USDC pool, or a
+restored Uniswap V4 swap adapter on a V4 RM/USDC pool. The deploy script
+today wires only venue `UniswapV3` (`contracts/script/BasketVaultDeployBase.sol`),
+and `config/agent-token-shortlist.json` does not list RM yet (not yet
+implemented: core #1491).
 
 The source tree also contains `RwaBasketVault`, the rmRWA vault. rmRWA is
 a plain basket row: it holds deSPXA (Centrifuge / Janus Henderson / Anemoy
@@ -334,15 +342,21 @@ deregistration, pause-role grants, governance parameter changes, and
 `ADMIN_ROLE` membership changes.
 
 On-chain enforcement requirement: `ADMIN_ROLE` on all five contracts
-must be held by a deployed `TimelockController`. The existing Safe
-multisig (`0x88bA…75A0`) holds `PROPOSER_ROLE` and CANCELLER_ROLE on
-the controller. EXECUTOR_ROLE should be open (`address(0)`) so any
-address can execute an already-authorized operation after the delay; if
-execution is restricted, the executor must also be a Safe with threshold
-≥ 2 and the liveness tradeoff must be documented. No EOA may hold
+must be held by a deployed `TimelockController`. Every privileged action
+is Safe → `TimelockController` → target. The Safe is a canonical SafeL2
+1.4.1 proxy from the canonical factory with threshold ≥ 2, created by the
+deploy's stage 0 (`safe`). It holds `PROPOSER_ROLE` and CANCELLER_ROLE on
+the controller. EXECUTOR_ROLE is open (`address(0)`) so any address can
+execute an already-authorized operation after the delay (not yet
+implemented: core #1521; `DeployTimelock` still sets the Safe as
+executor). `rmpc` is not a governance signer. No EOA may hold
 `ADMIN_ROLE` directly in production. All high-risk admin operations must
-pass through the schedule → delay → execute flow. The minimum delay is
-configurable per operation class.
+pass through the schedule → delay → execute flow. The minimum delay has a
+48-hour (172800 s) floor on Base (chain id 8453), enforced by
+`DeployTimelock`. Deploy stage 11 (`timelock`) hands every role on every
+vault, the gateway, registry, router, governance, IC policy and receipt
+to the timelock and revokes the deployer. The stage sequence is in
+`docs/operations/contract-release-runbooks.md` §4.3.
 
 The `TimelockController` address, proposer set, executor policy, min
 delay, canceller set, and pending operation hashes must be observable
@@ -847,13 +861,17 @@ Agent ownership and policy rules (issue #1476):
   caller-dependent rule does not bind an `ADMIN_ROLE` holder, so the
   destination rule is the whole rule for a transfer. Governance can be
   given an agent; it cannot take one;
-- at deployment handover `DeployTimelock` transfers every agent listed in
+- the deploy authorizes no agent. Agents belong to depositors, who
+  authorize them through `commitAuthorization` + `revealAuthorization`.
+  At deployment handover `DeployTimelock` transfers every agent listed in
   `AGENT_ADDRESSES` to the `TimelockController`, so after handover
   `setPolicy` and `revokeAgent` on those agents go Safe -> Timelock ->
   gateway. The list is a required input (a comma-separated list, or
-  `none`); the stage ceremony derives it from the gateway logs, and a
-  direct run must list every deployer-owned agent (invariants `ACL-8`,
-  `GW-7` in `docs/technical/smart-contract-invariants.md`).
+  `none`); the deploy passes `none`, and a direct run must list every
+  deployer-owned agent (invariants `ACL-8`, `GW-7` in
+  `docs/technical/smart-contract-invariants.md`). Not yet implemented:
+  the gateway stage still authorizes a deployer-chosen `AGENT_ADDRESS`
+  (tracked in the mainnet plan).
 
 The current gateway implementation gates agent deposits into a vault. The
 product architecture uses the same safety boundary for agent deposits and
@@ -996,16 +1014,21 @@ A testnet/devnet-only Faucet tab lets operators provision fresh accounts
 end-to-end without backend cheats. It drips canonical USDC, RM governance
 tokens, and native Base ETH for gas. Each drip is a real signed transfer
 from the smoke-test harness holder EOA — the same EOA that receives the
-USDC, RM initial supply, and 1000 ETH at genesis — broadcast through the
+USDC and 1000 ETH at genesis — broadcast through the
 user's injected EIP-1193 provider. No anvil cheats, no impersonation.
 The tab is hidden on mainnet (chain-ID classifier) and additionally
-fails closed when the build-time harness key is absent. The deployed
-RmToken address is threaded into the dapp build via
-`VITE_RM_TOKEN_ADDRESS` at every smoke-test env-injection site (issue
-#466) so the RM balance read and RM drip point at the real contract
-instead of the compose `0x0` fallback. After a single faucet flow
-(Get Base ETH → Get RM tokens), a fresh account can immediately submit
-a governance vote.
+fails closed when the build-time harness key is absent. The RM balance
+read and RM drip use the token address in `VITE_RM_TOKEN_ADDRESS`. RM is
+the live ROBOTMONEY token on Base
+(`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`). Nothing deploys an RM
+token in tests or production. The Twin fork carries the live token, and
+`RmToken.sol` is to be deleted (core 1489). No smoke-test env-injection
+site sets `VITE_RM_TOKEN_ADDRESS` today, and the Twin fork funds the
+harness holder with gas and USDC only. The RM drip therefore has no
+source of RM on the Twin fork and stays inert at the `0x0` default
+(tracked in the mainnet plan). The faucet flow (Get Base ETH → Get RM
+tokens) that lets a fresh account submit a governance vote depends on
+that RM source.
 
 ### 5.4 Explorer Indexer and API
 
@@ -1245,11 +1268,12 @@ custody an outer share position under the current product definition.
 Protocol authority is limited to contract upgrade where applicable,
 configuration of protocol-level controls, pause, and permanent shutdown.
 Depositor-owned agent policies are controlled by the depositor. Agent
-keys must not hold admin or pause authority. Every agent listed in
+keys must not hold admin or pause authority. The deploy authorizes no
+agent; each depositor authorizes its own. Every agent listed in
 `DeployTimelock`'s required `AGENT_ADDRESSES` input is owned by the
-`TimelockController` after handover, not by the deployer EOA; the stage
-ceremony lists every agent the gateway logs give the deployer (§5.2,
-invariant `ACL-8`).
+`TimelockController` after handover, not by the deployer EOA; the deploy
+passes `none` (§5.2, invariant `ACL-8`; not yet implemented, tracked in
+the mainnet plan).
 
 ## 7. Interface and Execution Contracts
 
@@ -1344,6 +1368,17 @@ on-vault `isPrototype()` flag, no `prototypeOverride`, no
 `nonPrototypeAttested`, and no hardened test subclass; the single
 registry flag replaces all of them (issue #475). The same contract
 ships into every environment; only the registry flag's value differs.
+
+There is one deploy driver: the `publish-contracts` Bun CLI in this repo,
+which reads `scripts/deploy/stage-table.json`. Stage, rehearsal and
+production run the same scripts in the same order and differ only by
+parameters. Core never depends on the devops repo. Devops owns operations
+only: the credential engine, fusion-qa acceptance and the mainnet canary,
+stage hosts, the operator runbook, and the mainnet workflows that check
+out core. Rehearsals run on the Twin chain (918453), a pinned lazy anvil
+fork of real Base at the upstream head minus 2, pinned once per CI run.
+Tests deploy their own vault every time (clean room). The stage sequence
+is in `docs/operations/contract-release-runbooks.md` §4.3.
 
 The `rmpc` rule (one client, no env-specific behavior, never spoof
 users) is the same principle applied to the daemon. The detailed
@@ -1473,7 +1508,7 @@ this architecture:
 | Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC at launch; wSOL has no usable pool) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
-| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure existing Safe as proposer and canceller; prefer open execution unless a restricted Safe executor is explicitly justified. See §4.5 and issue #414. |
+| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure the stage 0 SafeL2 (threshold ≥ 2) as proposer and canceller; executor open (`address(0)`; not yet implemented: core #1521). See §4.5 and issue #414. |
 | Production JSON-RPC provider | Resolved: automatic failover shipped in issue #667 through the ordered `rpc_urls` array in `clients/rust-payment-client/src/config.rs` and endpoint rotation in `clients/rust-payment-client/src/rpc/mod.rs`. Safety-critical reads depend on provider correctness and availability; cross-provider consensus checking remains a separate, deferred decision. | Configure the ordered `rpc_urls` list so `rmpc` rotates to the next endpoint on transport failure. Multi-RPC consensus comparison for high-value reads stays deferred until a specific risk justifies it. |
 | Production signer vendor | Architecture requires a production-grade HSM/KMS/device-bound signer for Base mainnet writes, but no vendor is chosen. | Keep signer backend trait stable; refuse software-keystore signing on Base mainnet until a production operator picks HSM/KMS. |
 | Dapp hosting and CSP | Resolved: strict CSP shipped in PR #735 via `clients/dapp/src/lib/csp.ts` Vite plugin and `clients/dapp/scripts/check-csp.sh` CI check. | Maintain strict CSP policy; enforce via CI `check-csp.sh`; require static hosting with pinned dependencies and release provenance before public mainnet use. |

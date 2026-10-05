@@ -1,6 +1,8 @@
 # Real Four-Vault Demo — Seam Map
 
 > **Historical.** A scout report from before the one-deployment-scheme work. The demo contracts, stubs and scripts it names are deleted. It does not describe shipped code.
+>
+> **Demo path retired.** `DemoBasketToken`, `DeployRmToken` and `DeployDemoExtraVaults` are deleted. Contracts are deployed only by the publish-contracts CLI (`publish-contracts/`).
 
 **Scout issue:** #541
 **Date:** 2026-06-02

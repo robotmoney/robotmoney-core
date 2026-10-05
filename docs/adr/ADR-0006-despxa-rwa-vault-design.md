@@ -1,7 +1,7 @@
 # ADR-0006: deSPXA RWA vault — asset, Chronicle oracle, Aerodrome swap-only entry/exit, freeze risk
 
-- **Status:** Superseded in part (2026-10-02, product owner). The asset choice and the freeze-risk analysis stand. The Chronicle oracle and the Aerodrome-only entry and exit are replaced: rmRWA ships as a plain `RwaBasketVault` basket row, priced from the deSPXA Uniswap V3 fee 500 pool through the existing `UniswapV3SwapAdapter`, with no oracle. The older custom vault, the Chronicle adapter and the unified-vault proposal ([ADR-0010](ADR-0010-unified-vault-architecture.md), Rejected) are deleted code.
-- **Date:** 2026-06-03
+- **Status:** Superseded in part (2026-10-02, product owner). The asset choice and the freeze-risk analysis stand. The Chronicle oracle and the Aerodrome-only entry and exit are replaced: rmRWA ships as a plain `RwaBasketVault` basket row, priced from the deSPXA Uniswap V3 fee 500 pool through the existing `UniswapV3SwapAdapter`, with no oracle. The older custom vault, the Chronicle adapter and the unified-vault proposal ([ADR-0010](ADR-0010-unified-vault-architecture.md), Rejected) are deleted code. Amended 2026-10-05: see [Amendment — 2026-10-05](#amendment--2026-10-05-rmrwa-verified-as-a-plain-basket-row-launch-weight-0-bps).
+- **Date:** 2026-06-03 (amended 2026-10-05)
 - **Deciders:** Product owner
 - **Related:**
   - `docs/prd.md` §11.4 (RWA / Thematic Vault)
@@ -148,6 +148,39 @@ The implementation issue must verify these addresses against live Base mainnet
 state (e.g., Basescan, Aerodrome Factory, Chronicle feed registry) before
 pinning. A mismatched address renders the vault non-functional in a way that
 tests on a forked devnet would not catch.
+
+## Amendment — 2026-10-05: rmRWA verified as a plain basket row; launch weight 0 bps
+
+The 2026-10-02 partial supersession (core 1492) was checked against
+`impl/core-contracts` (core PR 1505) and holds:
+
+- `contracts/vaults/RwaBasketVault.sol` is a thin `BasketVault` subclass
+  with no oracle, no staleness halt and no custom adapter.
+- `config/rwa-assets.json` lists one asset: deSPXA
+  `0x9c5C365e764829876243d0b289733B9D2b729685` on its Uniswap V3 USDC
+  pool `0xD08f1fb797BfaCdeD23323178672557034c64CfA`, fee 500, venue
+  `UniswapV3`.
+- `DeployRwaBasketVault.s.sol` registers it through
+  `BasketVaultDeployBase` with a `UniswapV3SwapAdapter` and
+  `Venue.V3`. NAV comes from that pool's TWAP, like every other basket
+  asset.
+- `ChronicleOracleAdapter.sol`, `IChronicleOracle.sol`,
+  `DeSpxaAssetPositionAdapter.sol` and the old `RwaVault.sol` were
+  deleted in commit `11c9bfcd`. No Chronicle or Aerodrome code path
+  remains for rmRWA.
+
+§2 (Chronicle oracle), §3 (Aerodrome pool and NAV-anchored slippage), the
+Chronicle and Aerodrome rows of §5, and the matching checklist items are
+therefore superseded.
+
+**Launch router weight.** The 2026-06-05 amendment in §1 (rmRWA
+router-eligible at 500 bps in the demo seed) does not carry to mainnet.
+The launch default weights are rmUSDC 9500, rmPROTO 500, rmAGENT 0,
+rmRWA 0 bps (see the
+[ADR-0002](ADR-0002-router-default-weights-on-chain.md) amendment).
+
+The asset choice, the secondary-market-only entry and exit, the
+permanent ERC-7540 non-goal and the issuer freeze-risk analysis stand.
 
 ## Consequences
 

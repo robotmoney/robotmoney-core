@@ -86,7 +86,7 @@ go through explicit approval.
 | Attack | Required control |
 |---|---|
 | Single-EOA admin compromise | No EOA may hold `ADMIN_ROLE` directly on any contract. `ADMIN_ROLE` must be held exclusively by the `TimelockController`. Agent and keeper roles must be separated from `ADMIN_ROLE`. |
-| PROPOSER_ROLE held by a plain EOA | The `TimelockController` PROPOSER_ROLE and CANCELLER_ROLE must be held by a Safe multisig with a minimum threshold of 2-of-N signers. EXECUTOR_ROLE should be open (`address(0)`) so any address can execute an already-delayed, already-authorized operation after the delay; if a restricted executor is used, it must be a Safe with threshold ≥ 2 and the liveness tradeoff must be documented. `DeployTimelock.s.sol` must verify at deploy time that every Safe address has deployed code and `getThreshold() >= 2`. The Safe address, threshold, executor policy, and canceller policy must be recorded in this document at deploy time. |
+| PROPOSER_ROLE held by a plain EOA | The `TimelockController` PROPOSER_ROLE and CANCELLER_ROLE must be held by a Safe multisig with a minimum threshold of 2-of-N signers. EXECUTOR_ROLE should be open (`address(0)`) so any address can execute an already-delayed, already-authorized operation after the delay; if a restricted executor is used, it must be a Safe with threshold ≥ 2 and the liveness tradeoff must be documented. `DeployTimelock.s.sol` must verify at deploy time that every Safe address has deployed code and `getThreshold() >= 2`. The Safe address, threshold, executor policy, and canceller policy must be recorded in this document at deploy time (§4.1). **Decided policy (owner, 2026-10-05):** proposer and canceller are the Safe (threshold ≥ 2); executor is open (`address(0)`); the timelock has no admin (`admin = address(0)`). (Not yet implemented: core #1521. `DeployTimelock.s.sol` on this branch still sets `executors = [safe]`.) |
 | `ADMIN_ROLE` self-grant escalation | `ADMIN_ROLE` is its own admin by design. All role changes must route through the `TimelockController`. The Safe multisig must enforce quorum independently. |
 | Timelock bypass | A `TimelockController` must hold `ADMIN_ROLE` on all governed contracts. The production delay for high-risk operations must be ≥ 48 hours; any lower-delay operation class must be explicitly enumerated with its rationale, maximum authority, and affected functions. Admin operations must route through `schedule → delay → execute`; direct `ADMIN_ROLE` calls from any address must revert with `AccessControlUnauthorizedAccount`. The deployed timelock address, min delay, proposers, executors, cancellers, pending operations, and operation salts must be verifiable via `rmpc get-timelock` and the dapp timelock panel. |
 | Pause-key abuse (denial of deposit) | The pause role must be separable from `ADMIN_ROLE`. Pause must halt deposits but must not be able to move funds. The pause role should be held by a lower-quorum guardian to allow fast response; the unpause role must require `ADMIN_ROLE` through the timelock. |
@@ -97,6 +97,21 @@ go through explicit approval.
 | Multisig social engineering (Drift-class) | A signer playbook must be published and followed. Signers must independently simulate the operation before approving, review the calldata diff against the expected effect, and meet a minimum deliberation time. No signer may approve on the same device as the proposer. |
 | Signer-device compromise | All Safe signers must use hardware wallets. Software key signing is prohibited for any `ADMIN_ROLE` or `PROPOSER_ROLE` operation. |
 | Role separation drift | At deploy and at every admin operation, an off-chain assertion must confirm that admin, pause, emergency, agent, proposer, canceller, and executor authorities satisfy their documented separation rules. No account may hold more than one of gateway `ADMIN_ROLE`, `PAUSER_ROLE`, or `AGENT_ROLE`. |
+
+### 4.1 Deploy-time governance record
+
+Fill this table at the mainnet deploy from the stage 11 manifest and the stage 12 verifier output. Until then every value is a placeholder.
+
+| Item | Decided policy | Deployed value (Base 8453) |
+|---|---|---|
+| Safe address (SafeL2 v1.4.1, canonical factory) | Holds `PROPOSER_ROLE` and `CANCELLER_ROLE` | _TBD at deploy_ |
+| Safe owners and threshold | Three independent owner keys, threshold 2 | _TBD at deploy_ |
+| Timelock address and `getMinDelay()` | At least 172800 s on 8453 | _TBD at deploy_ |
+| Executor policy | Open (`address(0)`) (not yet implemented: core #1521) | _TBD at deploy_ |
+| Canceller policy | The Safe only | _TBD at deploy_ |
+| Gateway agents authorized by the deploy | None (`AGENT_ADDRESSES=none`, see §13) | _TBD at deploy_ |
+
+Deploy-time configuration (voting power, quorum, setters, eligibility, router default weights, at launch rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps) is set by the deployer before stage 11. Stage 13 holds only the basket vault deposit unpause operations, one timelock operation per vault (not yet implemented: core #1520; `publish-contracts/src/govern.ts` still lists the older 13-row set).
 
 ---
 
@@ -181,6 +196,7 @@ source. The manipulation-resistance posture is:
 | Treasury drain via malicious proposal | Treasury operations must be gated by the multisig-backed timelock. A treasury-drain proposal must be detectable and cancellable within the timelock delay window. |
 | Admin-weighted MVP vote capture | The current RouterGovernance module uses admin-assigned voting power. Until token-holder voting ships, voting-power assignment, quorum changes, voting-period changes, execution-delay changes, and proposal creation must be treated as privileged configuration and routed through the admin timelock. Ordinary vote casting and post-vote execution follow RouterGovernance's own voting period and execution delay; they must not grant authority over vault internals, fees, adapters, or agent policies. |
 | Router-weight governance parameter whiplash | Quorum threshold, voting period, execution delay, and fallback behavior must be bounded by immutable or timelocked minimums before mainnet scale. The dapp and `rmpc get-governance` must surface the active parameters before any vote or weight execution. |
+| Timelock overriding voted router weights | The timelock may set router `defaultWeights` only (`setDefaultWeights`). Active weights come only from RouterGovernance votes through `setWeights`. (Not yet implemented: core #1522. `setWeights` is gated by router `ADMIN_ROLE`, which the timelock also holds after stage 11.) |
 | MEV sandwich on rebalance | `rebalance()` must enforce a throttle (minimum interval, maximum bps per call). Large rebalances must use private orderflow or commit-reveal to prevent sandwich extraction. The acceptable sandwich loss threshold must be documented. |
 | MEV sandwich on user deposit/withdraw | Vault deposits and withdrawals must move USDC ↔ shares at internally computed ratios with no DEX slippage surface. Any future bucket-B/C leg that touches DEX liquidity must specify and enforce a slippage bound. |
 | JIT liquidity / inspection-and-front-run | The share-price computation must not expose a profitable front-run surface. This must be verified in the economic-model audit before bucket-B/C ships. |
@@ -272,6 +288,7 @@ This section maps onto `docs/architecture.md` §15.
 | Attack | Required control |
 |---|---|
 | Deploy-key compromise pushes a malicious contract | Deploy artifacts must match a tagged, reviewed commit. BaseScan verification must complete within one hour of deploy. At least one second reviewer must sign off on the deploy before execution. Deployment goes through the publish-contracts workflow in the devops repo, which uses a GitHub Environment with required reviewers (sign-off before execution), and its verifier checks source verification. |
+| Deploy-time protocol agent | The deploy authorizes no gateway agent, and `AGENT_ADDRESSES=none` at the stage 11 handover. An agent belongs to a depositor: the depositor authorizes it through `commitAuthorization` and `revealAuthorization` and owns its policy. Agent keys hold no admin or pause authority. (Not yet implemented: `DeployGateway.s.sol` still reads `AGENT_ADDRESS` and calls `authorizeAgent` at stage 5; core issue to be filed.) |
 | Verified-source / deployed-bytecode mismatch | All contracts must be verified on BaseScan. The CI deploy pipeline must assert verification before closing the deploy job. **CI gate implemented** (issue #662): `scripts/assert-basescan-verified.sh` polls the BaseScan `getsourcecode` API for each deployed address and exits non-zero if any contract is unverified when the timeout is reached. |
 | Secret leak via repo | `.gitignore` must exclude all `.env`, keystore, and credential files. CI must run a secrets-scanning step on every PR. |
 | CI runner compromise injecting deploy artifact | Deploy jobs must run on pinned, hardened runners. Production deploys must require explicit human approval in the CI pipeline. |
