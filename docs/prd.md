@@ -292,7 +292,8 @@ Common edge cases:
 - **Fee schedule.** Proposed -> published -> active -> superseded.
 - **Incident control.** Normal -> paused -> normal; normal or paused ->
   shutdown. New deposits can be halted for incident response while
-  existing holders can always redeem — withdrawals are never blocked.
+  existing holders can always redeem — withdrawals are never blocked, by
+  anyone.
 
 ## 7. Integration Needs
 

@@ -89,7 +89,7 @@ go through explicit approval.
 | PROPOSER_ROLE held by a plain EOA | The `TimelockController` PROPOSER_ROLE and CANCELLER_ROLE must be held by a Safe multisig with a minimum threshold of 2-of-N signers. EXECUTOR_ROLE should be open (`address(0)`) so any address can execute an already-delayed, already-authorized operation after the delay; if a restricted executor is used, it must be a Safe with threshold ≥ 2 and the liveness tradeoff must be documented. `DeployTimelock.s.sol` must verify at deploy time that every Safe address has deployed code and `getThreshold() >= 2`. The Safe address, threshold, executor policy, and canceller policy must be recorded in this document at deploy time. |
 | `ADMIN_ROLE` self-grant escalation | `ADMIN_ROLE` is its own admin by design. All role changes must route through the `TimelockController`. The Safe multisig must enforce quorum independently. |
 | Timelock bypass | A `TimelockController` must hold `ADMIN_ROLE` on all governed contracts. The production delay for high-risk operations must be ≥ 48 hours; any lower-delay operation class must be explicitly enumerated with its rationale, maximum authority, and affected functions. Admin operations must route through `schedule → delay → execute`; direct `ADMIN_ROLE` calls from any address must revert with `AccessControlUnauthorizedAccount`. The deployed timelock address, min delay, proposers, executors, cancellers, pending operations, and operation salts must be verifiable via `rmpc get-timelock` and the dapp timelock panel. |
-| Pause-key abuse (denial of deposit) | The pause role must be separable from `ADMIN_ROLE`. Pause must halt new deposits only: withdrawals and redeems stay open on every vault, the gateway and the router (core 1494). Pause must not be able to move funds. The pause role should be held by a lower-quorum guardian to allow fast response; the unpause role must require `ADMIN_ROLE` through the timelock. |
+| Pause-key abuse (denial of deposit) | The pause role must be separable from `ADMIN_ROLE`. Pause must halt new deposits only. Withdrawals are never frozen, by anyone: no role, flag or function on any vault, the gateway or the router can block a redeem (core 1494). Pause must not be able to move funds. The pause role should be held by a lower-quorum guardian to allow fast response; the unpause role must require `ADMIN_ROLE` through the timelock. |
 | Emergency-role abuse to drain | `EMERGENCY_ROLE` must return funds to the vault only, never to an attacker-chosen address. `emergencyWithdraw` must use `try/catch` per adapter to prevent a single bad adapter from blocking recovery. |
 | Fee parameter manipulation above ceiling | `MAX_EXIT_FEE_BPS` must be `immutable`. `setExitFeeBps` must revert above this ceiling. |
 | Rebalance-throttle removal | Rebalance interval floor and bps ceiling must be `immutable` constants. Admin must not be able to remove these constraints. |
@@ -136,7 +136,7 @@ source. The manipulation-resistance posture is:
   fails NAV and emergency-unwind reads closed — preferred to silently
   reading a manipulable short window.
 - **Circuit breaker.** `pause()` (EMERGENCY_ROLE) suspends new deposits
-  only; `redeem` stays open, so holders can always exit (core 1494).
+  only. Withdrawals are never frozen, by anyone (core 1494).
   `shutdownVault()` zeroes the TVL cap. Both remain available
   if a TWAP-derived NAV starts looking anomalous.
 - **Single-source disclosure.** BasketVault currently relies on a single

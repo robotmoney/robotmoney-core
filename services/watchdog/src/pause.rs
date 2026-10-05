@@ -6,6 +6,11 @@
 //! includes `"pause"`, [`trigger_pause`] constructs and submits an EVM transaction
 //! that calls `gateway.pause()` from the configured PAUSER_ROLE account.
 //!
+//! The gateway pause stops new deposits (`deposit`, `depositTo`) only. Gateway
+//! withdrawals stay open while paused: withdrawals are never frozen, by anyone
+//! (owner decision 2026-10-05, core 1494). On a burn-rate breach the pause stops
+//! new inflow, not exits.
+//!
 //! # Transaction construction
 //!
 //! The `pause()` selector is the first 4 bytes of `keccak256("pause()")`.

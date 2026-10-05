@@ -196,7 +196,7 @@ Dust from integer division is swept from `lastActiveIdx`. If total adapter balan
 
 | Function | Role | Effect |
 |---|---|---|
-| `pause()` | EMERGENCY | Sets `depositsPaused`: blocks `deposit` and `mint` only. `withdraw` and `redeem` stay open, so users can always exit (core 1494). `paused()` reads true. |
+| `pause()` | EMERGENCY | Sets `depositsPaused`: blocks `deposit` and `mint` only. Withdrawals are never frozen, by anyone; the vault has no withdrawal-pause flag (core 1494). `paused()` reads true. |
 | `unpause()` | ADMIN (timelock) | Clears `depositsPaused`, reopening deposits. Also clears the deposit halt the three functions below set. |
 | `emergencyWithdraw()` | EMERGENCY | Pauses deposits, then tries `withdraw(balance)` on every active adapter with a `try/catch` — failures are logged but do not revert |
 | `emergencyWithdrawAdapter(i)` | EMERGENCY | Same for a single adapter index |

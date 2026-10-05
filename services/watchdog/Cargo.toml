@@ -2,7 +2,7 @@
 name = "watchdog"
 version = "0.1.0"
 edition = "2021"
-description = "Robot Money mint/burn rate watchdog — monitors per-block and per-hour deposit/withdrawal volume against thresholds and triggers automated gateway pause or on-call alert on breach (security model §9)."
+description = "Robot Money mint/burn rate watchdog — monitors per-block and per-hour deposit/withdrawal volume against thresholds and triggers an automated gateway deposit pause (withdrawals are never frozen) or on-call alert on breach (security model §9)."
 license = "MIT"
 publish = false
 

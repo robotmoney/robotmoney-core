@@ -17,9 +17,11 @@ retired by setting `VaultRegistry.VaultStatus.Retired`, which:
   `PortfolioRouter` (`VaultNotActive` / not-router-eligible); and
 - leaves **redemption open indefinitely** — both direct ERC-4626 `redeem` and
   `PortfolioRouter.redeemFor` honor a `Retired` vault. The router redeems from
-  every registry status, `Paused` included (core 1494). The deployed v1
-  bytecode predates core 1494: its own `pause()` still sets
-  `withdrawalsPaused` and blocks `redeem`, so never call `pause()` on v1.
+  every registry status, `Paused` included (core 1494). The current contracts
+  never freeze withdrawals, by anyone. The deployed v1 vault is the one
+  exception: its bytecode predates core 1494 and still has the old freeze
+  code. Its `pause()` still sets `withdrawalsPaused` and blocks `redeem`.
+  Never call `pause()` on v1.
 
 There is **no assisted migration** (ADR-0009): the only path out of a retired v1
 vault is a depositor's own signed `redeem`. A depositor may take that step at any

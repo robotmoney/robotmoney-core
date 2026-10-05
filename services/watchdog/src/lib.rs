@@ -13,7 +13,8 @@
 //! - [`config`] — TOML configuration loader and threshold validation.
 //! - [`volume`] — rolling mint/burn aggregation queries against the indexer DB.
 //! - [`alert`] — structured JSON webhook/PagerDuty alert dispatcher.
-//! - [`pause`] — `gateway.pause()` transaction construction and submission.
+//! - [`pause`] — `gateway.pause()` transaction construction and submission. The
+//!   pause stops new gateway deposits only; withdrawals are never frozen (core 1494).
 //! - [`watchdog`] — core polling loop and breach detection logic.
 //! - [`receipt_liveness`] — consensus-receipt anchoring-gap monitor (issue
 //!   #1247 task 4.13). Alert-only; it never pauses the gateway.

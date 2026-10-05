@@ -409,7 +409,7 @@ in `contracts/VaultRegistry.sol`); the `shut-down` overlay is the
 | State / transition | Layer | Mechanism (at HEAD) | Trigger role | Effect |
 |---|---|---|---|---|
 | **Active** | registry | `VaultStatus.Active` | — | Router routes new deposits (if also router-eligible); direct deposits open. |
-| **Paused** | registry / vault | `VaultStatus.Paused`; vault `pause()` | `setVaultStatus`: governance · `pause()`: emergency (hot key) | Reversible deposit halt. Router stops routing new deposits; vault `pause()` halts new deposits only. Withdrawals and redeems stay open, and the router still redeems from a `Paused` vault (core 1494). `unpause()` is governance. |
+| **Paused** | registry / vault | `VaultStatus.Paused`; vault `pause()` | `setVaultStatus`: governance · `pause()`: emergency (hot key) | Reversible deposit halt. Router stops routing new deposits; vault `pause()` halts new deposits only. Withdrawals are never frozen, by anyone: no flag, role or function can block a redeem, and the router still redeems from a `Paused` vault (core 1494). `unpause()` is governance. |
 | **Active → Retired** (unified) | registry + vault | `VaultRegistry.retire(vault)` | governance (`ADMIN_ROLE` = timelock) | Atomic in one call: sets registry status `Retired` **and** halts **direct** vault deposits (`IRetirableVault.retire()`, sets the vault `retired` flag → `VaultRetired()`). Withdraw-only thereafter; existing depositors keep unconditional `redeem`. Emits `VaultStatusChanged` + `Retired`. The two enforcement layers can no longer drift. **Precondition (#1173):** reverts `RetireWhileRouterEligible` if the vault is still router-eligible — drop it from `routerEligibleCount` first (see the retire strand invariant below). |
 | **shut-down** (overlay) | vault | `shutdownVault()` (sets `shutdown = true`, zeroes `tvlCap`) | emergency (`EMERGENCY_ROLE`, hot key) | Hard-stops **direct** vault deposits (`VaultShutdown()`); withdrawals continue. Vault-level only — makes no lifecycle/registry decision. Emits `Shutdown`. |
 | **shut-down → reopened** | vault | `restoreVault(newTvlCap)` | governance (`ADMIN_ROLE`) | Clears `shutdown`, sets a fresh `tvlCap`, re-opens deposits. Emits `VaultRestored`. Deliberately asymmetric with the fast emergency shutdown. |
@@ -1146,9 +1146,10 @@ or the `action.pauser_private_key_hex` literal (local dev). Whichever source
 supplies it, the daemon consumes the raw key exactly once at startup, derives
 the signing key, and drops the hex — the poll loop signs from that derived
 state and no code path re-reads a raw pauser secret from the config. A gateway pause
-stops new gateway deposits (`deposit`, `depositTo`) only. Gateway
-withdrawals stay open while paused (core 1494), so on a burn-rate breach the
-pause stops new inflow, not exits. The
+stops new gateway deposits (`deposit`, `depositTo`) only. Withdrawals are
+never frozen, by anyone (owner decision 2026-10-05, core 1494). On a
+burn-rate breach the watchdog pause therefore stops new inflow, not exits.
+This is the accepted design. The
 pauser is distinct from `ADMIN_ROLE`:
 it can pause but cannot unpause, matching the guardian/quorum separation in
 security-model.md §9. Unpause still requires `ADMIN_ROLE` through the

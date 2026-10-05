@@ -116,16 +116,13 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     ///         `ADMIN_ROLE` over the vault.
     address public registry;
 
-    // ─── Split pause semantics ─────────────────────────────────────────
-    // A pause stops new deposits only. `pause()`, `emergencyWithdraw()` and the
-    // other emergency levers set `depositsPaused`; none of them blocks an exit
-    // (owner decision 2026-10-05, core 1494).
+    // ─── Pause ────────────────────────────────────────────────────────
+    // Withdrawals are never frozen, by anyone (owner decision 2026-10-05, core
+    // 1494). `pause()`, `emergencyWithdraw()` and the other emergency levers set
+    // `depositsPaused` only. No flag, role or function can block a redeem.
 
-    /// @notice When true, new deposits and mints are blocked.
+    /// @notice When true, new deposits and mints are blocked. Withdrawals are never blocked.
     bool public depositsPaused;
-    /// @notice When true, withdrawals and redeems are blocked. No function in this
-    ///         contract sets it to true, so exits are always open (core 1494).
-    bool public withdrawalsPaused;
 
     // ─── Rebalance throttling ──
 
@@ -237,9 +234,6 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @notice Emitted when deposit pause state changes.
     /// @param paused True when deposits are blocked, false when unblocked.
     event DepositsPausedChanged(bool paused);
-    /// @notice Emitted when withdrawal pause state changes.
-    /// @param paused True when withdrawals are blocked, false when unblocked.
-    event WithdrawalsPausedChanged(bool paused);
     /// @notice Emitted when a deposit cannot be fully routed into adapters (e.g. all caps are full).
     /// @param amount USDC that remains idle in the vault after both routing passes.
     event UnroutedDeposit(uint256 amount);
@@ -292,8 +286,6 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     error UnauthorizedRebalancer();
     /// @notice Deposit attempted while deposits are paused.
     error DepositsPaused();
-    /// @notice Withdrawal attempted while withdrawals are paused.
-    error WithdrawalsPaused();
     /// @notice Adapter address has not been approved by vault governance.
     /// @param adapter Adapter address that failed the address allowlist check.
     error AdapterNotAllowed(address adapter);
@@ -636,23 +628,12 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     ///         Uses floor rounding on the gross→net conversion so that
     ///         `_netToGross(maxWithdraw(owner))` never exceeds `_convertToAssets(balanceOf(owner), Floor)`,
     ///         guaranteeing `previewWithdraw(maxWithdraw(owner)) <= balanceOf(owner)` even when `exitFeeBps > 0`.
-    ///         Returns 0 while withdrawals are paused, mirroring the deposit-side views
-    ///         (ERC-4626: withdraw(maxWithdraw(owner)) MUST NOT revert; audit 2026-06-09, L-1).
+    ///         Never 0 because of a pause: withdrawals are never frozen (core 1494).
     /// @param owner The address whose share balance determines the withdrawal cap.
     function maxWithdraw(address owner) public view override returns (uint256) {
-        if (withdrawalsPaused) return 0;
         uint256 shares = balanceOf(owner);
         uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
         return grossAssets.mulDiv(MAX_BPS - exitFeeBps, MAX_BPS, Math.Rounding.Floor);
-    }
-
-    /// @notice Maximum shares a user can redeem in a single call.
-    ///         Returns 0 while withdrawals are paused so that `redeem(maxRedeem(owner))`
-    ///         never reverts, per ERC-4626 (audit 2026-06-09, L-1).
-    /// @param owner The address whose share balance determines the redemption cap.
-    function maxRedeem(address owner) public view override returns (uint256) {
-        if (withdrawalsPaused) return 0;
-        return balanceOf(owner);
     }
 
     /// @notice Maximum assets that can be deposited for `receiver` given current vault state.
@@ -726,7 +707,6 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         uint256 assets,
         uint256 shares
     ) internal override nonReentrant {
-        if (withdrawalsPaused) revert WithdrawalsPaused();
         if (caller != owner) {
             _spendAllowance(owner, caller, shares);
         }
@@ -1282,14 +1262,6 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         }
     }
 
-    /// @dev Set `withdrawalsPaused` and emit an event if the state changes.
-    function _setWithdrawalsPaused(bool paused_) internal {
-        if (withdrawalsPaused != paused_) {
-            withdrawalsPaused = paused_;
-            emit WithdrawalsPausedChanged(paused_);
-        }
-    }
-
     /// @dev Non-reverting twin of `_requireAdapterEligible`, used by `_routeDeposit`
     ///      to skip (rather than revert on) adapters whose eligibility was revoked
     ///      while still active in the registry (audit 2026-06-09, L-4).
@@ -1411,11 +1383,11 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
 
     // ─── Views ────────────────────────────────────────────────────────
 
-    /// @notice Returns true when the vault is paused. A pause stops new deposits only;
-    ///         withdrawals and redeems stay open while this returns true (core 1494).
+    /// @notice Returns true when new deposits are paused. Withdrawals and redeems are
+    ///         never frozen, so they work whatever this returns (core 1494).
     ///         Provided for compatibility with tooling that queries `paused()`.
     function paused() external view returns (bool) {
-        return depositsPaused || withdrawalsPaused;
+        return depositsPaused;
     }
 
     /// @notice Total number of adapters in the registry (active and inactive).

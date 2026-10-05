@@ -4410,19 +4410,6 @@ export const robotMoneyVaultAbiGenerated = [
     stateMutability: "nonpayable",
   },
   {
-    type: "function",
-    name: "withdrawalsPaused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
     type: "event",
     name: "AdapterAdded",
     inputs: [
@@ -5119,19 +5106,6 @@ export const robotMoneyVaultAbiGenerated = [
     anonymous: false,
   },
   {
-    type: "event",
-    name: "WithdrawalsPausedChanged",
-    inputs: [
-      {
-        name: "paused",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
-      },
-    ],
-    anonymous: false,
-  },
-  {
     type: "error",
     name: "AccessControlBadConfirmation",
     inputs: [],
@@ -5586,11 +5560,6 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "VaultShutdown",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "WithdrawalsPaused",
     inputs: [],
   },
   {

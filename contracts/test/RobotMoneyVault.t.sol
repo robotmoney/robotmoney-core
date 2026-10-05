@@ -1087,12 +1087,6 @@ contract RobotMoneyVaultTest is Test {
 
         // After emergencyWithdraw, deposits must be blocked.
         assertEq(vault.depositsPaused(), true, "deposits must be paused after emergencyWithdraw");
-        // Withdrawals must NOT be blocked.
-        assertEq(
-            vault.withdrawalsPaused(),
-            false,
-            "withdrawals must not be paused after emergencyWithdraw"
-        );
         // paused() reports the deposit pause (core 1494): true, while exits stay open.
         assertTrue(vault.paused(), "paused() must report the deposit halt after emergencyWithdraw");
 
@@ -1123,7 +1117,6 @@ contract RobotMoneyVaultTest is Test {
         vault.pause();
 
         assertTrue(vault.depositsPaused(), "deposits must be paused");
-        assertFalse(vault.withdrawalsPaused(), "pause must not pause withdrawals");
         assertTrue(vault.paused(), "paused() must be true");
 
         // Deposit and mint blocked. maxDeposit() returns 0 when paused, so
@@ -1187,14 +1180,12 @@ contract RobotMoneyVaultTest is Test {
         vault.emergencyWithdraw();
 
         assertEq(vault.depositsPaused(), true, "deposits paused after emergencyWithdraw");
-        assertEq(vault.withdrawalsPaused(), false, "withdrawals open after emergencyWithdraw");
 
         // Admin unpauses fully.
         vm.prank(admin);
         vault.unpause();
 
         assertEq(vault.depositsPaused(), false, "deposits unpaused after unpause");
-        assertEq(vault.withdrawalsPaused(), false, "withdrawals unpaused after unpause");
 
         // Bob can now deposit again.
         vm.prank(bob);
