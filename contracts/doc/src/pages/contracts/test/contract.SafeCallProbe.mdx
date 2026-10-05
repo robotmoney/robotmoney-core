@@ -1,0 +1,51 @@
+---
+title: "SafeCallProbe"
+---
+
+# SafeCallProbe
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/27d830142d078467e90832fa6324b56a606fa5d8/contracts/test/RealSafeGovernedSetters.t.sol)
+
+<i>
+
+A call probe the real Safe delegatecalls (the pattern of Safe's own SimulateTxAccessor).
+It runs in the Safe's context, so the target sees `msg.sender == safe`. It swallows the
+target's revert and emits its raw revert data, because `execTransaction` alone reports any
+inner revert as the bare `GS013`. Used only to read the exact inner reason of a negative
+control. The Safe still checks two owner signatures before it runs.
+
+</i>
+
+## Functions
+
+<a id="probe-address-bytes"></a>
+
+### probe
+
+```solidity
+function probe(address target, bytes calldata data) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+
+## Events
+
+### Probe
+
+```solidity
+event Probe(address indexed target, bool ok, bytes ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+

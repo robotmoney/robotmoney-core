@@ -1,0 +1,775 @@
+---
+title: "RealSafeGovernedSettersTest"
+description: "One deployment handed over by the production ceremony itself, then governed by a real TimelockController driven by a factory-made canonical SafeL2 proxy (2-of-3). Every governed setter is scheduled and executed by two distinct owner signatures through `execTransaction` at the timelock delay. Negative controls assert exact revert reasons."
+---
+
+# RealSafeGovernedSettersTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/27d830142d078467e90832fa6324b56a606fa5d8/contracts/test/RealSafeGovernedSetters.t.sol)
+
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
+
+**Title:** RealSafeGovernedSetters
+
+One deployment handed over by the production ceremony itself, then governed by a real
+TimelockController driven by a factory-made canonical SafeL2 proxy (2-of-3). Every
+governed setter is scheduled and executed by two distinct owner signatures through
+`execTransaction` at the timelock delay. Negative controls assert exact revert reasons.
+
+<i>
+
+The handover is `DeployTimelock._runFrom`, the body of the broadcast `run()`, reached through
+the test-side `ManifestHarness` and `RunEntrypointRelay` of DeployTimelock.t.sol. It reads
+every input from env vars under a prefix only this file sets, broadcasts from the deployer and
+performs the committee handover (IC policy and consensus receipt) exactly as production does.
+No in-process shortcut entry point and no hand-copied grant or revoke is used.
+In process: SafeFixture installs the vendored SafeL2 at the canonical address, builds the
+proxy through a SafeProxyFactory and etches the canonical SafeProxy runtime. No fork, so this
+file never skips for want of FORK_RPC_URL. DeployTimelock accepts the Safe by the same checks
+it runs on a real chain. Known fixture gap: the vendored singleton is compiled with this
+repo's solc settings, so its codehash is not compared with Base's deployed SafeL2.
+
+</i>
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### DEFAULT_ADMIN_ROLE
+
+```solidity
+bytes32 internal constant DEFAULT_ADMIN_ROLE = 0x00;
+```
+
+### AGENT_ROLE
+
+```solidity
+bytes32 internal constant AGENT_ROLE = keccak256("AGENT_ROLE");
+```
+
+### PROPOSER_ROLE
+
+```solidity
+bytes32 internal constant PROPOSER_ROLE = keccak256("PROPOSER_ROLE");
+```
+
+### EXECUTOR_ROLE
+
+```solidity
+bytes32 internal constant EXECUTOR_ROLE = keccak256("EXECUTOR_ROLE");
+```
+
+### CANCELLER_ROLE
+
+```solidity
+bytes32 internal constant CANCELLER_ROLE = keccak256("CANCELLER_ROLE");
+```
+
+### MIN_DELAY
+
+```solidity
+uint256 internal constant MIN_DELAY = 2 days;
+```
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+### PREFIX
+
+<i>
+
+Env vars are process-wide and forge runs tests in parallel: this prefix is ours alone.
+
+</i>
+
+```solidity
+string internal constant PREFIX = "RM_1447E_REAL_SAFE_";
+```
+
+### MANIFEST_OUT
+
+<i>
+
+Every test's setUp writes identical content here (the deployment is deterministic).
+
+</i>
+
+```solidity
+string internal constant MANIFEST_OUT = "/tmp/rm-1447e-real-safe-governed-manifest.json";
+```
+
+### RECEIPT_ID
+
+```solidity
+bytes32 internal constant RECEIPT_ID = keccak256("receipt-1");
+```
+
+## State Variables
+
+### harness
+
+```solidity
+ManifestHarness internal harness;
+```
+
+### deployer
+
+<i>
+
+The broadcaster and the script's msg.sender, as in a real `forge script` run: the
+default broadcaster is tx.origin, and a relay etched there calls run()'s body.
+
+</i>
+
+```solidity
+address internal deployer;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### swapRouter
+
+```solidity
+RecordingSwapRouter internal swapRouter;
+```
+
+### rmVault
+
+```solidity
+RobotMoneyVault internal rmVault;
+```
+
+### agentVault
+
+```solidity
+AgentTokenVault internal agentVault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
+
+### icPolicy
+
+```solidity
+InvestmentCommitteePolicy internal icPolicy;
+```
+
+### receipt
+
+```solidity
+ConsensusRecommendationReceipt internal receipt;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### probe
+
+```solidity
+SafeCallProbe internal probe;
+```
+
+### safe
+
+```solidity
+ISafe internal safe;
+```
+
+### ownerPks
+
+```solidity
+uint256[3] internal ownerPks;
+```
+
+### seededToken
+
+```solidity
+TestERC20 internal seededToken;
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### committeeAgent
+
+```solidity
+address internal committeeAgent = makeAddr("committee-agent");
+```
+
+### governed
+
+```solidity
+address[8] internal governed;
+```
+
+### adminHolders
+
+```solidity
+mapping(address => address[]) internal adminHolders;
+```
+
+### rootHolders
+
+```solidity
+mapping(address => address[]) internal rootHolders;
+```
+
+### timelockRoleHolders
+
+```solidity
+mapping(bytes32 => address[]) internal timelockRoleHolders;
+```
+
+## Functions
+
+<a id="_set-string-string"></a>
+
+### _set
+
+```solidity
+function _set(string memory name, string memory value) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+| value | `string` |  |
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_setfeerecipient_andexitfee_throughrealsafe"></a>
+
+### test_setFeeRecipient_andExitFee_throughRealSafe
+
+```solidity
+function test_setFeeRecipient_andExitFee_throughRealSafe() public;
+```
+
+<a id="test_retire_throughrealsafe"></a>
+
+### test_retire_throughRealSafe
+
+```solidity
+function test_retire_throughRealSafe() public;
+```
+
+<a id="test_setquarantineaddress_throughrealsafe"></a>
+
+### test_setQuarantineAddress_throughRealSafe
+
+```solidity
+function test_setQuarantineAddress_throughRealSafe() public;
+```
+
+<a id="test_authorizeagent_throughrealsafe"></a>
+
+### test_authorizeAgent_throughRealSafe
+
+```solidity
+function test_authorizeAgent_throughRealSafe() public;
+```
+
+<a id="test_gatewayagentrolegrant_throughrealsafe"></a>
+
+### test_gatewayAgentRoleGrant_throughRealSafe
+
+```solidity
+function test_gatewayAgentRoleGrant_throughRealSafe() public;
+```
+
+<a id="test_addasset_andremoveasset_throughrealsafe"></a>
+
+### test_addAsset_andRemoveAsset_throughRealSafe
+
+```solidity
+function test_addAsset_andRemoveAsset_throughRealSafe() public;
+```
+
+<a id="test_cancel_throughrealsafe_blocksexecution"></a>
+
+### test_cancel_throughRealSafe_blocksExecution
+
+```solidity
+function test_cancel_throughRealSafe_blocksExecution() public;
+```
+
+<a id="test_releasereceipt_throughrealsafe"></a>
+
+### test_releaseReceipt_throughRealSafe
+
+```solidity
+function test_releaseReceipt_throughRealSafe() public;
+```
+
+<a id="test_negative_oneownersignature_gs020"></a>
+
+### test_negative_oneOwnerSignature_GS020
+
+One owner's signature is below the threshold: Safe's GS020. The same SafeTx then
+succeeds with a second distinct owner, so the revert is quorum and nothing else.
+
+```solidity
+function test_negative_oneOwnerSignature_GS020() public;
+```
+
+<a id="test_negative_sameownertwice_gs026"></a>
+
+### test_negative_sameOwnerTwice_GS026
+
+One owner signing twice has the byte length of a quorum and one owner's authority:
+Safe's GS026.
+
+```solidity
+function test_negative_sameOwnerTwice_GS026() public;
+```
+
+<a id="test_negative_nonownersigners_gs026"></a>
+
+### test_negative_nonOwnerSigners_GS026
+
+Two signatures from keys that are not Safe owners: Safe's GS026.
+
+```solidity
+function test_negative_nonOwnerSigners_GS026() public;
+```
+
+<a id="test_negative_executebeforedelay_gs013_andexactreason"></a>
+
+### test_negative_executeBeforeDelay_GS013_andExactReason
+
+Executing before the delay: the Safe reports GS013, and the exact inner reason is
+TimelockUnexpectedOperationState(id, Ready), read through the Safe's own context.
+
+```solidity
+function test_negative_executeBeforeDelay_GS013_andExactReason() public;
+```
+
+<a id="test_negative_replayafterexecution_exactreason"></a>
+
+### test_negative_replayAfterExecution_exactReason
+
+Replaying an executed operation reverts with the same exact state error (now Done).
+
+```solidity
+function test_negative_replayAfterExecution_exactReason() public;
+```
+
+<a id="test_negative_schedulebelowmindelay_exactreason"></a>
+
+### test_negative_scheduleBelowMinDelay_exactReason
+
+Scheduling below the minimum delay is refused by the timelock, exactly.
+
+```solidity
+function test_negative_scheduleBelowMinDelay_exactReason() public;
+```
+
+<a id="test_negative_executeonesecondbeforeready"></a>
+
+### test_negative_executeOneSecondBeforeReady
+
+Boundary: one second before the ready time the execute fails (exact reason and
+GS013). At the ready time the very same execute succeeds.
+
+```solidity
+function test_negative_executeOneSecondBeforeReady() public;
+```
+
+<a id="test_negative_directcallsrefused"></a>
+
+### test_negative_directCallsRefused
+
+No key bypasses the timelock: the deployer, a Safe owner and a stranger are each
+refused with the exact AccessControl error on every governed target.
+
+```solidity
+function test_negative_directCallsRefused() public;
+```
+
+<a id="test_nonontimelockaddressholdsadminafterhandover"></a>
+
+### test_noNonTimelockAddressHoldsAdminAfterHandover
+
+Replays every RoleGranted/RoleRevoked log since before construction (the contracts
+are not enumerable). ADMIN_ROLE: the timelock is the only holder of each governed
+contract, except that the router also lists RouterGovernance, which acts through
+router.setWeights by design (R7). DEFAULT_ADMIN_ROLE: the timelock is the only
+holder wherever the role exists.
+
+```solidity
+function test_noNonTimelockAddressHoldsAdminAfterHandover() public view;
+```
+
+<a id="test_timelockrolesandsafeshape"></a>
+
+### test_timelockRolesAndSafeShape
+
+The Safe is the timelock's sole proposer, executor and canceller, the timelock is
+its own sole admin, and the Safe is exactly 2-of-3.
+
+```solidity
+function test_timelockRolesAndSafeShape() public view;
+```
+
+<a id="_govern-address-bytes-bytes32"></a>
+
+### _govern
+
+<i>
+
+Schedule through the Safe, check Waiting, wait the full delay, execute through the Safe.
+
+</i>
+
+```solidity
+function _govern(address target, bytes memory data, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+
+<a id="_expectgs013-address-bytes"></a>
+
+### _expectGS013
+
+<i>
+
+The normal Safe call (operation 0, two owner signatures) reverts with GS013.
+
+</i>
+
+```solidity
+function _expectGS013(address to, bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
+
+<a id="_policy"></a>
+
+### _policy
+
+```solidity
+function _policy() internal returns (IGateway.AgentPolicy memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IGateway.AgentPolicy` |  |
+
+<a id="_schedule-address-bytes-bytes32-uint256"></a>
+
+### _schedule
+
+```solidity
+function _schedule(address target, bytes memory data, bytes32 salt, uint256 delay)
+        internal
+        pure
+        returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+| delay | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_state-timelockcontroller-operationstate"></a>
+
+### _state
+
+```solidity
+function _state(TimelockController.OperationState s) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `TimelockController.OperationState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_notready-bytes32"></a>
+
+### _notReady
+
+<i>
+
+TimelockUnexpectedOperationState(id, Ready): what execute raises on a non-Ready op.
+
+</i>
+
+```solidity
+function _notReady(bytes32 id) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_unauthorized-address-bytes32"></a>
+
+### _unauthorized
+
+```solidity
+function _unauthorized(address account, bytes32 role) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| role | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_sortedpks"></a>
+
+### _sortedPks
+
+```solidity
+function _sortedPks() internal view returns (uint256[3] memory pks);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pks | `uint256[3]` |  |
+
+<a id="_safetxhash-address-bytes"></a>
+
+### _safeTxHash
+
+```solidity
+function _safeTxHash(address to, bytes memory data) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_safetxhashop-address-bytes-uint8"></a>
+
+### _safeTxHashOp
+
+```solidity
+function _safeTxHashOp(address to, bytes memory data, uint8 op)
+        internal
+        view
+        returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
+| op | `uint8` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_sign-uint256-bytes32"></a>
+
+### _sign
+
+```solidity
+function _sign(uint256 pk, bytes32 txHash) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pk | `uint256` |  |
+| txHash | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_twosigs-address-bytes"></a>
+
+### _twoSigs
+
+<i>
+
+Two distinct owners' signatures (the two lowest addresses), ascending as Safe requires.
+
+</i>
+
+```solidity
+function _twoSigs(address to, bytes memory data) internal view returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_safeexec-address-bytes"></a>
+
+### _safeExec
+
+```solidity
+function _safeExec(address to, bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
+
+<a id="_probesafe-address-bytes"></a>
+
+### _probeSafe
+
+<i>
+
+Runs `target.call(data)` in the Safe's context (delegatecall to the probe) under two
+owner signatures, and returns the call's success flag and raw revert data.
+
+</i>
+
+```solidity
+function _probeSafe(address target, bytes memory data)
+        internal
+        returns (bool ok, bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+

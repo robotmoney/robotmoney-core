@@ -30,6 +30,7 @@ import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {SafeFixture} from "./helpers/SafeFixture.sol";
 import {ISafe} from "./SafeIntegration.t.sol";
 import {MockPool, RecordingSwapRouter} from "./AgentTokenVault.t.sol";
+import {ManifestHarness, RunEntrypointRelay} from "./DeployTimelock.t.sol";
 
 /// @dev A call probe the real Safe delegatecalls (the pattern of Safe's own SimulateTxAccessor).
 ///      It runs in the Safe's context, so the target sees `msg.sender == safe`. It swallows the
@@ -46,26 +47,39 @@ contract SafeCallProbe {
 }
 
 /// @title RealSafeGovernedSetters
-/// @notice One deployment, built the way the deploy scripts build it, then handed to a real
+/// @notice One deployment handed over by the production ceremony itself, then governed by a real
 ///         TimelockController driven by a factory-made canonical SafeL2 proxy (2-of-3). Every
 ///         governed setter is scheduled and executed by two distinct owner signatures through
 ///         `execTransaction` at the timelock delay. Negative controls assert exact revert reasons.
-/// @dev In process: SafeFixture installs the vendored SafeL2 at the canonical address, builds the
-///      proxy through a SafeProxyFactory and etches the canonical SafeProxy runtime. No fork, so
-///      this file never skips for want of FORK_RPC_URL. DeployTimelock accepts the Safe by the same
-///      checks it runs on a real chain.
+/// @dev The handover is `DeployTimelock._runFrom`, the body of the broadcast `run()`, reached through
+///      the test-side `ManifestHarness` and `RunEntrypointRelay` of DeployTimelock.t.sol. It reads
+///      every input from env vars under a prefix only this file sets, broadcasts from the deployer and
+///      performs the committee handover (IC policy and consensus receipt) exactly as production does.
+///      No in-process shortcut entry point and no hand-copied grant or revoke is used.
+///      In process: SafeFixture installs the vendored SafeL2 at the canonical address, builds the
+///      proxy through a SafeProxyFactory and etches the canonical SafeProxy runtime. No fork, so this
+///      file never skips for want of FORK_RPC_URL. DeployTimelock accepts the Safe by the same checks
+///      it runs on a real chain. Known fixture gap: the vendored singleton is compiled with this
+///      repo's solc settings, so its codehash is not compared with Base's deployed SafeL2.
 contract RealSafeGovernedSettersTest is SafeFixture {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant DEFAULT_ADMIN_ROLE = 0x00;
     bytes32 internal constant AGENT_ROLE = keccak256("AGENT_ROLE");
+    bytes32 internal constant PROPOSER_ROLE = keccak256("PROPOSER_ROLE");
+    bytes32 internal constant EXECUTOR_ROLE = keccak256("EXECUTOR_ROLE");
+    bytes32 internal constant CANCELLER_ROLE = keccak256("CANCELLER_ROLE");
     uint256 internal constant MIN_DELAY = 2 days;
     uint256 internal constant ONE_USDC = 1e6;
+    /// @dev Env vars are process-wide and forge runs tests in parallel: this prefix is ours alone.
+    string internal constant PREFIX = "RM_1447E_REAL_SAFE_";
+    /// @dev Every test's setUp writes identical content here (the deployment is deterministic).
+    string internal constant MANIFEST_OUT = "/tmp/rm-1447e-real-safe-governed-manifest.json";
 
     // ─── Topology ────────────────────────────────────────────────────────────
 
-    DeployTimelock internal script;
-    /// @dev Inside the script's internal calls the EVM records msg.sender as the script, so the
-    ///      script address is the deployer EOA of this fixture (see DeployTimelock.t.sol).
+    ManifestHarness internal harness;
+    /// @dev The broadcaster and the script's msg.sender, as in a real `forge script` run: the
+    ///      default broadcaster is tx.origin, and a relay etched there calls run()'s body.
     address internal deployer;
 
     TestERC20 internal usdc;
@@ -91,15 +105,22 @@ contract RealSafeGovernedSettersTest is SafeFixture {
     address internal committeeAgent = makeAddr("committee-agent");
     bytes32 internal constant RECEIPT_ID = keccak256("receipt-1");
 
-    address[7] internal governed;
+    address[8] internal governed;
     mapping(address => address[]) internal adminHolders;
+    mapping(address => address[]) internal rootHolders;
+    mapping(bytes32 => address[]) internal timelockRoleHolders;
+
+    function _set(string memory name, string memory value) internal {
+        vm.setEnv(string.concat(PREFIX, name), value);
+    }
 
     function setUp() public {
         vm.recordLogs();
+        harness = new ManifestHarness();
+        deployer = tx.origin;
+        vm.etch(deployer, address(new RunEntrypointRelay()).code);
         usdc = new TestERC20();
         swapRouter = new RecordingSwapRouter();
-        script = new DeployTimelock();
-        deployer = address(script);
         probe = new SafeCallProbe();
 
         // A real Safe proxy from the factory: 2-of-3, three distinct owner keys.
@@ -151,38 +172,44 @@ contract RealSafeGovernedSettersTest is SafeFixture {
             address(agentVault),
             VaultRegistry.VaultMetadata({name: "rmAGENT", asset: address(usdc), registeredAt: 0})
         );
+        // The committee submitter: a gateway agent (no deployer ownership) and a committee member.
+        gateway.setConsensusReceipt(address(receipt));
+        gateway.grantRole(AGENT_ROLE, committeeAgent);
         icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), committeeAgent);
         vm.stopPrank();
-        // The gateway is the only caller of recordReceipt. Seed one receipt to release later.
-        vm.prank(address(gateway));
-        receipt.recordReceipt(committeeAgent, RECEIPT_ID, keccak256("digest"), "ipfs://receipt-1");
+        // One receipt to release later, recorded through the real gateway path.
+        vm.prank(committeeAgent);
+        gateway.consensusRecordReceipt(RECEIPT_ID, keccak256("digest"), "ipfs://receipt-1");
 
-        // The handover ceremony: both vaults, gateway, registry, router, governance.
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(rmVault);
-        vaults[1] = address(agentVault);
-        vm.prank(deployer);
-        DeployTimelock.Deployed memory d = script.runInProcessVaults(
-            vaults,
-            address(gateway),
-            address(registry),
-            address(router),
-            address(gov),
-            address(safe),
-            emergency,
-            MIN_DELAY,
-            DeployTimelock.SafeSpec({owners: owners, threshold: FIXTURE_THRESHOLD})
+        // The production ceremony inputs: every one `run()` requires.
+        _set("AGENT_ADDRESSES", "none");
+        _set(
+            "VAULT_ADDRESSES",
+            string.concat(vm.toString(address(rmVault)), ",", vm.toString(address(agentVault)))
         );
-        timelock = d.timelock;
+        _set("GATEWAY_ADDRESS", vm.toString(address(gateway)));
+        _set("REGISTRY_ADDRESS", vm.toString(address(registry)));
+        _set("ROUTER_ADDRESS", vm.toString(address(router)));
+        _set("GOVERNANCE_ADDRESS", vm.toString(address(gov)));
+        _set("SAFE_ADDRESS", vm.toString(address(safe)));
+        _set(
+            "SAFE_OWNERS",
+            string.concat(
+                vm.toString(owners[0]), ",", vm.toString(owners[1]), ",", vm.toString(owners[2])
+            )
+        );
+        _set("SAFE_THRESHOLD", vm.toString(FIXTURE_THRESHOLD));
+        _set("EMERGENCY_ADDRESS", vm.toString(emergency));
+        _set("TIMELOCK_MIN_DELAY", vm.toString(MIN_DELAY));
+        _set("IC_POLICY_ADDRESS", vm.toString(address(icPolicy)));
+        _set("CONSENSUS_RECEIPT_ADDRESS", vm.toString(address(receipt)));
+        _set("RECEIPT_ADMIN_ADDRESS", vm.toString(deployer));
+        _set("DEPLOYMENT_OUT", MANIFEST_OUT);
 
-        // The receipt is not on the script's vault path. Hand it over the way the script's
-        // committee path does: grant the timelock, revoke the deployer.
-        vm.startPrank(deployer);
-        receipt.grantRole(ADMIN_ROLE, address(timelock));
-        receipt.grantRole(DEFAULT_ADMIN_ROLE, address(timelock));
-        receipt.revokeRole(ADMIN_ROLE, deployer);
-        receipt.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
-        vm.stopPrank();
+        DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, PREFIX);
+        timelock = d.timelock;
+        require(d.icPolicy == address(icPolicy), "committee handover skipped the IC policy");
+        require(d.consensusReceipt == address(receipt), "committee handover skipped the receipt");
 
         governed = [
             address(rmVault),
@@ -191,11 +218,19 @@ contract RealSafeGovernedSettersTest is SafeFixture {
             address(registry),
             address(router),
             address(gov),
-            address(receipt)
+            address(receipt),
+            address(icPolicy)
         ];
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < governed.length; i++) {
             adminHolders[governed[i]] = RoleHolders.holders(logs, governed[i], ADMIN_ROLE);
+            rootHolders[governed[i]] = RoleHolders.holders(logs, governed[i], DEFAULT_ADMIN_ROLE);
+        }
+        bytes32[4] memory tlRoles =
+            [PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, DEFAULT_ADMIN_ROLE];
+        for (uint256 i = 0; i < tlRoles.length; i++) {
+            timelockRoleHolders[tlRoles[i]] =
+                RoleHolders.holders(logs, address(timelock), tlRoles[i]);
         }
     }
 
@@ -254,19 +289,7 @@ contract RealSafeGovernedSettersTest is SafeFixture {
 
     function test_authorizeAgent_throughRealSafe() public {
         address agent = makeAddr("authorized-agent");
-        address[] memory none = new address[](0);
-        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
-            active: true,
-            validUntil: uint64(block.timestamp + 365 days),
-            maxPerPayment: ONE_USDC,
-            maxPerWindow: 10 * ONE_USDC,
-            shareReceiver: makeAddr("share-receiver"),
-            allowedDestinations: none,
-            assetRecipient: address(0),
-            maxWithdrawPerPayment: 0,
-            maxWithdrawPerWindow: 0,
-            allowedSourceVaults: none
-        });
+        IGateway.AgentPolicy memory p = _policy();
         _govern(
             address(gateway),
             abi.encodeCall(IGateway.authorizeAgent, (agent, p)),
@@ -350,6 +373,13 @@ contract RealSafeGovernedSettersTest is SafeFixture {
         );
         assertFalse(ok, "a cancelled operation executed");
         assertEq(ret, _notReady(id), "wrong revert reason for a cancelled operation");
+        // The normal Safe call of the same execute reverts GS013.
+        _expectGS013(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.execute, (address(agentVault), 0, data, bytes32(0), salt)
+            )
+        );
 
         (address[] memory tokens,,,,) = agentVault.shortlist();
         assertEq(tokens.length, 1, "cancelled addAsset must not land");
@@ -487,6 +517,12 @@ contract RealSafeGovernedSettersTest is SafeFixture {
         );
         assertFalse(ok, "a Done operation executed twice");
         assertEq(ret, _notReady(id), "wrong reason for a replay");
+        _expectGS013(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.execute, (address(agentVault), 0, data, bytes32(0), salt)
+            )
+        );
     }
 
     /// @notice Scheduling below the minimum delay is refused by the timelock, exactly.
@@ -504,6 +540,35 @@ contract RealSafeGovernedSettersTest is SafeFixture {
             ),
             "wrong reason for a short delay"
         );
+        _expectGS013(
+            address(timelock),
+            _schedule(address(agentVault), data, keccak256("short"), MIN_DELAY - 1)
+        );
+    }
+
+    /// @notice Boundary: one second before the ready time the execute fails (exact reason and
+    ///         GS013). At the ready time the very same execute succeeds.
+    function test_negative_executeOneSecondBeforeReady() public {
+        bytes memory data = abi.encodeCall(BasketVault.setExitFeeBps, (35));
+        bytes32 salt = keccak256("boundary");
+        bytes32 id = timelock.hashOperation(address(agentVault), 0, data, bytes32(0), salt);
+        _safeExec(address(timelock), _schedule(address(agentVault), data, salt, MIN_DELAY));
+        uint256 readyAt = timelock.getTimestamp(id);
+        assertEq(readyAt, block.timestamp + MIN_DELAY, "ready time is not schedule time + delay");
+        bytes memory exec = abi.encodeCall(
+            TimelockController.execute, (address(agentVault), 0, data, bytes32(0), salt)
+        );
+
+        vm.warp(readyAt - 1);
+        (bool ok, bytes memory ret) = _probeSafe(address(timelock), exec);
+        assertFalse(ok, "executed one second before the ready time");
+        assertEq(ret, _notReady(id), "wrong reason one second before ready");
+        _expectGS013(address(timelock), exec);
+        assertEq(agentVault.exitFeeBps(), 0, "setter landed before the ready time");
+
+        vm.warp(readyAt);
+        _safeExec(address(timelock), exec);
+        assertEq(agentVault.exitFeeBps(), 35, "setter did not land at the ready time");
     }
 
     /// @notice No key bypasses the timelock: the deployer, a Safe owner and a stranger are each
@@ -511,6 +576,9 @@ contract RealSafeGovernedSettersTest is SafeFixture {
     function test_negative_directCallsRefused() public {
         address owner0 = vm.addr(ownerPks[0]);
         address[3] memory callers = [deployer, owner0, stranger];
+        TestERC20 token = new TestERC20();
+        MockPool pool = new MockPool(address(token), address(usdc), 3000);
+        IGateway.AgentPolicy memory p = _policy();
         for (uint256 i = 0; i < callers.length; i++) {
             vm.startPrank(callers[i]);
             vm.expectRevert(_unauthorized(callers[i], ADMIN_ROLE));
@@ -525,6 +593,14 @@ contract RealSafeGovernedSettersTest is SafeFixture {
             registry.retire(address(agentVault));
             vm.expectRevert(_unauthorized(callers[i], ADMIN_ROLE));
             receipt.releaseReceipt(RECEIPT_ID);
+            vm.expectRevert(_unauthorized(callers[i], ADMIN_ROLE));
+            router.setQuarantineAddress(callers[i]);
+            vm.expectRevert(_unauthorized(callers[i], ADMIN_ROLE));
+            agentVault.addAsset(
+                address(token), address(pool), 3000, address(0), BasketVault.Venue.V3
+            );
+            vm.expectRevert(_unauthorized(callers[i], ADMIN_ROLE));
+            gateway.authorizeAgent(makeAddr("direct-agent"), p);
             vm.stopPrank();
         }
         // The Safe itself holds no role on any target: it can only reach them through the timelock.
@@ -539,11 +615,11 @@ contract RealSafeGovernedSettersTest is SafeFixture {
     // ─── Handover: only the timelock holds ADMIN ─────────────────────────────
 
     /// @notice Replays every RoleGranted/RoleRevoked log since before construction (the contracts
-    ///         are not enumerable) and requires the timelock to be the ADMIN holder of each
-    ///         governed contract. The router also lists RouterGovernance: the approving body acts
-    ///         through router.setWeights by design (R7), and nothing else.
+    ///         are not enumerable). ADMIN_ROLE: the timelock is the only holder of each governed
+    ///         contract, except that the router also lists RouterGovernance, which acts through
+    ///         router.setWeights by design (R7). DEFAULT_ADMIN_ROLE: the timelock is the only
+    ///         holder wherever the role exists.
     function test_noNonTimelockAddressHoldsAdminAfterHandover() public view {
-        assertGe(safe.getThreshold(), 2, "threshold must be at least 2");
         for (uint256 i = 0; i < governed.length; i++) {
             address target = governed[i];
             address[] storage holders = adminHolders[target];
@@ -556,10 +632,37 @@ contract RealSafeGovernedSettersTest is SafeFixture {
             }
             assertTrue(IAccessControl(target).hasRole(ADMIN_ROLE, address(timelock)));
             assertFalse(IAccessControl(target).hasRole(ADMIN_ROLE, deployer));
+
+            address[] storage roots = rootHolders[target];
+            bool hasRoot = target == address(gateway) || target == address(icPolicy)
+                || target == address(receipt);
+            assertEq(roots.length, hasRoot ? 1 : 0, "unexpected DEFAULT_ADMIN holder count");
+            for (uint256 j = 0; j < roots.length; j++) {
+                assertEq(roots[j], address(timelock), "a non-timelock address holds DEFAULT_ADMIN");
+            }
+            assertFalse(IAccessControl(target).hasRole(DEFAULT_ADMIN_ROLE, deployer));
         }
-        // The gateway root is the timelock's too.
-        assertTrue(gateway.hasRole(DEFAULT_ADMIN_ROLE, address(timelock)));
-        assertFalse(gateway.hasRole(DEFAULT_ADMIN_ROLE, deployer));
+    }
+
+    /// @notice The Safe is the timelock's sole proposer, executor and canceller, the timelock is
+    ///         its own sole admin, and the Safe is exactly 2-of-3.
+    function test_timelockRolesAndSafeShape() public view {
+        bytes32[3] memory safeRoles = [PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE];
+        for (uint256 i = 0; i < safeRoles.length; i++) {
+            address[] storage h = timelockRoleHolders[safeRoles[i]];
+            assertEq(h.length, 1, "timelock role must have exactly one holder");
+            assertEq(h[0], address(safe), "the Safe must be the sole holder");
+        }
+        address[] storage admins = timelockRoleHolders[DEFAULT_ADMIN_ROLE];
+        assertEq(admins.length, 1, "timelock DEFAULT_ADMIN must have exactly one holder");
+        assertEq(admins[0], address(timelock), "the timelock must administer itself");
+
+        assertEq(safe.getThreshold(), 2, "threshold must be exactly 2");
+        address[] memory owners = safe.getOwners();
+        assertEq(owners.length, 3, "the Safe must have exactly 3 owners");
+        for (uint256 i = 0; i < 3; i++) {
+            assertTrue(safe.isOwner(vm.addr(ownerPks[i])), "owner key is not a Safe owner");
+        }
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -583,6 +686,29 @@ contract RealSafeGovernedSettersTest is SafeFixture {
         assertEq(
             uint256(timelock.getOperationState(id)), _state(TimelockController.OperationState.Done)
         );
+    }
+
+    /// @dev The normal Safe call (operation 0, two owner signatures) reverts with GS013.
+    function _expectGS013(address to, bytes memory data) internal {
+        bytes memory sigs = _twoSigs(to, data);
+        vm.expectRevert(bytes("GS013"));
+        safe.execTransaction(to, 0, data, 0, 0, 0, 0, address(0), payable(address(0)), sigs);
+    }
+
+    function _policy() internal returns (IGateway.AgentPolicy memory) {
+        address[] memory none = new address[](0);
+        return IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: ONE_USDC,
+            maxPerWindow: 10 * ONE_USDC,
+            shareReceiver: makeAddr("share-receiver"),
+            allowedDestinations: none,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: none
+        });
     }
 
     function _schedule(address target, bytes memory data, bytes32 salt, uint256 delay)
