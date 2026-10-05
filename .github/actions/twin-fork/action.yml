@@ -1,0 +1,66 @@
+name: twin-fork
+description: >-
+  Core issues 1498, 1496. Starts the Twin chain (id 918453), a pinned lazy anvil fork of real Base
+  state, with scripts/devnet/twin-fork.ts. Restores and saves anvil's RPC cache keyed by pin block.
+  Every job of one workflow run must pass the same pin-block (choose it once in a setup job, see
+  scripts/devnet/README-twin-fork.md). The optional upstream secret is passed through the
+  BASE_UPSTREAM_RPC env and is never printed.
+inputs:
+  pin-block:
+    description: "Pinned Base block. Empty means upstream head minus 2 (use only in the setup job)."
+    required: false
+    default: ""
+  upstream-secret:
+    description: "Optional paid upstream RPC URL (a secret). Empty uses https://mainnet.base.org."
+    required: false
+    default: ""
+  port:
+    description: Local port.
+    required: false
+    default: "8545"
+outputs:
+  rpc-url:
+    description: Twin chain RPC URL.
+    value: ${{ steps.start.outputs.rpc-url }}
+  pin-block:
+    description: The pinned block this fork serves.
+    value: ${{ steps.start.outputs.pin-block }}
+runs:
+  using: composite
+  steps:
+    - uses: foundry-rs/foundry-toolchain@v1
+    - uses: oven-sh/setup-bun@v2
+    - id: pin
+      shell: bash
+      env:
+        BASE_UPSTREAM_RPC: ${{ inputs.upstream-secret }}
+      run: |
+        set -euo pipefail
+        if [ -z "${{ inputs.pin-block }}" ]; then
+          echo "block=auto" >> "$GITHUB_OUTPUT"
+        else
+          echo "block=${{ inputs.pin-block }}" >> "$GITHUB_OUTPUT"
+        fi
+    # The cache is only keyed when the pin is known up front. A pin chosen here (auto) cannot be a key.
+    - if: ${{ inputs.pin-block != '' }}
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/twin-cache
+        key: twin-anvil-rpc-${{ inputs.pin-block }}
+        restore-keys: twin-anvil-rpc-
+    - id: start
+      shell: bash
+      env:
+        BASE_UPSTREAM_RPC: ${{ inputs.upstream-secret }}
+      run: |
+        set -euo pipefail
+        args=(--port "${{ inputs.port }}" --pin-block "${{ steps.pin.outputs.block }}"
+              --cache-dir "$RUNNER_TEMP/twin-cache" --state-dir "$RUNNER_TEMP/twin-state"
+              --pin-file "$RUNNER_TEMP/twin-pin.json")
+        bun "${{ github.workspace }}/scripts/devnet/twin-fork.ts" start "${args[@]}"
+        bun "${{ github.workspace }}/scripts/devnet/twin-fork.ts" wait-ready "${args[@]}"
+        pin="$(bun -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).block)' "$RUNNER_TEMP/twin-pin.json")"
+        echo "rpc-url=http://127.0.0.1:${{ inputs.port }}" >> "$GITHUB_OUTPUT"
+        echo "pin-block=$pin" >> "$GITHUB_OUTPUT"
+        echo "TWIN_RPC_URL=http://127.0.0.1:${{ inputs.port }}" >> "$GITHUB_ENV"
+        echo "TWIN_PIN_BLOCK=$pin" >> "$GITHUB_ENV"
