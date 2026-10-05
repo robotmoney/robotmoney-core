@@ -4,7 +4,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeFunctionData, keccak256, parseAbiItem, toHex, pad, type Hex as VHex } from "viem";
+import { decodeFunctionData, keccak256, toFunctionSelector, parseAbiItem, toHex, pad, type Hex as VHex } from "viem";
 import {
   ADMIN_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
   SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32,
@@ -51,6 +51,7 @@ const ASSETS: Record<string, { token: Address; pool: Address; swapFee: number; a
 };
 
 type Handler = (args: any[]) => unknown;
+const SET_REGISTRY_SELECTOR = toFunctionSelector("function setRegistry(address)");
 
 export class FakeChain implements ChainReader {
   chain = 8453;
@@ -93,7 +94,11 @@ export class FakeChain implements ChainReader {
     return h(args);
   }
 
+  /** When true the one-shot setRegistry no longer reverts: a negative fixture for the "a second setRegistry reverts" label. */
+  setRegistryOpen = false;
+
   async callRaw(to: Address, data: Hex, from?: Address): Promise<RawCallResult> {
+    if (data.startsWith(SET_REGISTRY_SELECTOR)) return this.setRegistryOpen ? { ok: true, data: "0x" } : { ok: false, data: "0x", reason: "already set" };
     const d = decodeFunctionData({ abi: [parseAbiItem("function checkSignatures(bytes32 dataHash, bytes data, bytes signatures)")], data });
     const sigs = d.args[2] as string;
     const bytes = (sigs.length - 2) / 2;
@@ -190,6 +195,8 @@ export function buildWorld(chainId = 8453): World {
   for (const r of [PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE]) ch.grant(TIMELOCK, r, SAFE);
   ch.set(TIMELOCK, "getMinDelay", BigInt(delay));
   ch.set(GATEWAY, "paused", false);
+  ch.set(GATEWAY, "router", ROUTER);
+  ch.set(REGISTRY, "router", ROUTER);
   ch.set(GATEWAY, "agentOwner", () => TIMELOCK);
   ch.set(REGISTRY, "listVaults", Object.values(VAULTS).map((v) => v.address));
   ch.set(REGISTRY, "vaultCount", 4n);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: robotmoney/devops issue 53 / core issue 1499, core S10 (issue 1489).
+// Canonical: core issue 1499, core S10 (issue 1489).
 //
 // CI gate: the build contains no test-only code. Production contracts are the tested contracts.
 // Usage: bun scripts/ci/check-no-test-only-code.ts [--root DIR] [--list-allowlist]
@@ -20,7 +20,7 @@ import { join, relative, resolve } from "node:path";
 
 // ---------------------------------------------------------------------------------------------
 // block.chainid allowlist. A use is allowed only when its file name and its line both match one
-// rule. Principle 5 of robotmoney/devops issue 53 / core issue 1499: guards only, never different logic per chain.
+// rule. Principle 5 of core issue 1499: guards only, never different logic per chain.
 // ---------------------------------------------------------------------------------------------
 export interface ChainIdRule {
   file: RegExp;
@@ -169,7 +169,7 @@ const NAME_CHECK_EXEMPT = [
   "docs/technical/smart-contract-invariants.md",
   "docs/technical/security-model.md",
 ];
-// Transitional debt. Each prefix is owned by another lane of robotmoney/devops issue 53 / core issue 1499 and
+// Transitional debt. Each prefix is owned by another lane of core issue 1499 and
 // is deleted or rewritten there. A hit under a prefix is printed as a WARNING and does not fail
 // the gate. Remove the prefix when its lane lands, so the gate then fails on any regression.
 //   testing/smoke-test: S9 stage driver replaces the Rust demo harness (the Arachnid CREATE2

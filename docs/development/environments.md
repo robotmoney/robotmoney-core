@@ -140,7 +140,7 @@ See `docs/development/opencode-readonly-fork.md` for the full walkthrough.
 
 ### Contract address source
 
-The fork-e2e harness (`testing/fork-e2e-rust`) names no Robot Money address. Each fixture deploys its own vault on first use through the real vault stage (`bun scripts/deploy/core-stages.ts --stages vault`, the deployer is an unlocked anvil dev account) and reads the vault and adapter addresses from the manifest the stage wrote (`ForkFixture::vault`, `crate::deployed`). When `RMPC_DEPLOY_MANIFEST` names a merged manifest from the publish contracts flow, the fixture reads that instead and deploys nothing. This is the clean room rule (core 1498): no test reads the live production v1 vault, its adapters or the old admin Safe.
+The fork-e2e harness (`testing/fork-e2e-rust`) names no Robot Money address. Each fixture deploys its own vault on first use through the one deploy driver (`bun publish-contracts/src/cli.ts --stage vault`, the deployer is a throwaway encrypted keystore made by the rehearsal key helper, Twin chain 918453 only) and reads the vault and adapter addresses from the manifest the stage wrote (`ForkFixture::vault`, `crate::deployed`). When `RMPC_DEPLOY_MANIFEST` names a merged manifest from the publish contracts flow, the fixture reads that instead and deploys nothing. This is the clean room rule (core 1498): no test reads the live production v1 vault, its adapters or the old admin Safe.
 
 `testing/fork-e2e-rust/src/addresses.rs` holds third-party addresses only (USDC, venues, DEX router, pools, tokens). The same set is listed in `scripts/deploy/third-party-addresses.json`. `scripts/ci/check-no-production-addresses.ts` fails CI when a test or harness file hard-codes a Robot Money production address.
 

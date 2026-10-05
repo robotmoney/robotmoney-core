@@ -117,19 +117,14 @@ jobs:
         run: cargo build -p smoke-test
         working-directory: ${{ github.workspace }}
 
-      # The full-stack devnet publishes contracts through the devops "publish contracts" runbook.
-      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
-        id: devops
-        uses: ./.github/actions/devops-publish-contracts
-        with:
-          token: ${{ secrets.DEVOPS_READ_TOKEN }}
-          ref: ${{ vars.DEVOPS_PUBLISH_REF }}
+      # The full-stack devnet publishes contracts through the "publish contracts" runbook (publish-contracts/ in this repo).
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
 
       - name: Install Playwright browsers
         run: bunx playwright install --with-deps chromium
 
       - name: Run Playwright (globalSetup boots smoke-test full-stack on the Twin chain)
-        if: steps.devops.outputs.available != 'false'
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-suite-10.log
           PLAYWRIGHT_HTML_REPORT: ${{ runner.temp }}/robotmoney-playwright/report

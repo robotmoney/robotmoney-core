@@ -1,4 +1,4 @@
-// Canonical: robotmoney/devops issue 53 / core issue 1499, core S9 (issue 1488).
+// Canonical: core issue 1499, core S9 (issue 1488).
 // Process-level tests of the stage parity tools: the exit code is the contract each acceptance
 // criterion states ("exits non-zero on any difference", "every govern row has a tx hash and receipt
 // status 1", "a manifest for each of the four vaults").
@@ -7,7 +7,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { loadStageTable, stagesFromTable } from "../../deploy/core-stages.ts";
+import { loadStageTable } from "../stage-table.ts";
 
 const root = resolve(import.meta.dir, "..", "..", "..");
 const tool = (n: string) => join(root, "scripts/stage", n);
@@ -107,17 +107,16 @@ describe("govern-rows CLI reads the govern run stdout", () => {
 describe("twin-run-report CLI: a manifest for each of the four vaults", () => {
   const table = loadStageTable();
   const A = (n: number) => "0x" + n.toString(16).padStart(40, "0");
-  /** Writes one manifest per table stage with exactly the keys that stage writes. */
+  /** Writes one manifest per table stage (a vault stage holds its vault address). */
   function manifestDir(skipFile?: string): string {
     const d = tmp();
     const made: Record<string, Record<string, unknown>> = {};
     let n = 1;
-    for (const st of stagesFromTable(table)) {
-      const m: Record<string, unknown> = {};
-      for (const k of st.writes) m[k] = A(n++);
-      if (st.name === "gateway") m.gateway_router = made["router.json"].router;
-      made[st.manifestFile] = m;
-      if (st.manifestFile !== skipFile) writeFileSync(join(d, st.manifestFile), JSON.stringify(m));
+    for (const st of table.stages) {
+      const file = st.manifest.split("/").pop()!;
+      const m: Record<string, unknown> = st.vault ? { vault: A(n++) } : { chain_id: 918453 };
+      made[file] = m;
+      if (file !== skipFile) writeFileSync(join(d, file), JSON.stringify(m));
     }
     return d;
   }
@@ -136,7 +135,7 @@ describe("twin-run-report CLI: a manifest for each of the four vaults", () => {
     expect(j.vaults.every((v: { address: string | null }) => v.address)).toBe(true);
   });
   test("a missing stage manifest exits non-zero and says MISSING", () => {
-    const missing = stagesFromTable(table).find((s) => s.writes.length > 0 && s.name !== "router")!.manifestFile;
+    const missing = table.stages.find((s) => s.name === "rwa")!.manifest.split("/").pop()!;
     const r = run([tool("twin-run-report.ts"), "--manifest-dir", manifestDir(missing)]);
     expect(r.code).toBe(1);
     expect(r.out).toContain("MISSING");

@@ -1,6 +1,6 @@
 # Core stage table
 
-`stage-table.json` is the one source of truth for the core deploy. Core's runner (`core-stages.ts`) and devops publish-contracts both read it. Devops reads it from the core checkout at `DEPLOY_SHA` and keeps no script, env, artifact or manifest names of its own.
+`stage-table.json` is the one source of truth for the core deploy. It is DATA. The one deploy driver, the publish-contracts CLI (`bun publish-contracts/src/cli.ts`, in this repo), reads it from the repo root and keeps no script, env, artifact or manifest names of its own. Devops checks core out and runs the same CLI. There is no other runner.
 
 `stage-table.test.ts` (bun test) checks the table against the real scripts: every script file and contract exists, every `requiredEnv` name is read by its script, every manifest name is written by it, and no deploy script lacks a stage.
 
@@ -19,13 +19,13 @@
 - `libraries[]`: `{ name, artifact, manifestKey, path }`. `manifestKey` is the key the libs manifest holds the address under. `path` is the source file for `--libraries path:artifact:address`.
 - `artifacts`: forge contract names for `gateway`, `router`, `registry`, `governance`, `timelock`, `icPolicy`, `receipt`.
 
-Run order, manifest keys and per-stage wiring between stages live in `core-stages.ts` (the runner), not in the table.
+Run order is the table order. The per-stage wiring (which manifest key feeds which env name) lives in `publish-contracts/src/core-wiring.ts`, not in the table. The post-stage proofs (router wiring, basket vault config, timelock roles) are labels of the one verifier (`publish-contracts/src/verify`).
 
 ## Required env (no defaults)
 
 Every name in `requiredEnv` is read with no fallback. An unset or malformed value reverts the stage. The table lists them per stage. Names that used to default and are now required:
 
-- `DEPLOYMENT_OUT` for every stage. The core runner sets it. A devops caller that runs a script directly must set it too. There is no `deployments/<vault>-<chainid>.json` default.
+- `DEPLOYMENT_OUT` for every stage. The publish-contracts CLI sets it. Anyone who runs a script directly must set it too. There is no `deployments/<vault>-<chainid>.json` default.
 - `vault`: `SEED_DEPOSIT_USDC` (non-zero, 6-decimal units) and `EXIT_FEE_BPS`.
 - `governance`: `QUORUM_THRESHOLD` (greater than 1), `VOTING_PERIOD` and `EXECUTION_DELAY` (seconds, at least the contract minimum).
 - `registry`: `VAULT_NAME` (the registered name comes from the sheet; there is no default).

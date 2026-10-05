@@ -1,9 +1,10 @@
-// Canonical: robotmoney/devops issue 53 / core issue 1499, core stage table.
+// Canonical: core issue 1499, core stage table.
 // Offline test: stage-table.json agrees with the real scripts. Run: bun test scripts/deploy/stage-table.test.ts
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { loadStageTable, STAGES } from "./core-stages";
+import { loadStageTable } from "../stage/stage-table";
+import { loadStageTable as cliLoadStageTable } from "../../publish-contracts/src/stage-table";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const table = loadStageTable();
@@ -107,8 +108,9 @@ describe("stage-table.json", () => {
     expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "registry", "router", "timelock"]);
   });
 
-  test("the runner reads the same table", () => {
-    expect(STAGES.map((s) => s.name)).toEqual(EXPECTED);
-    expect(STAGES.map((s) => s.target)).toEqual(table.stages.map((s) => s.script));
+  test("the one driver (publish-contracts CLI) reads the same table from the repo root", () => {
+    const cli = cliLoadStageTable(ROOT);
+    expect(cli.stages.map((s) => s.name)).toEqual(EXPECTED);
+    expect(cli.stages.map((s) => s.script)).toEqual(table.stages.map((s) => s.script));
   });
 });

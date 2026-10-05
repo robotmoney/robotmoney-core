@@ -5,10 +5,10 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "./fixtures.ts";
-import { CORE_DIR } from "./core-dir.ts";
+import { REPO_ROOT } from "./repo-root.ts";
 
 const TWIN = process.env.TWIN_RPC_URL;
-const CORE = CORE_DIR;
+const CORE = REPO_ROOT;
 const SHA = process.env.DEPLOY_SHA;
 const ready = Boolean(TWIN && CORE && SHA);
 const needs = "needs a Twin chain: TWIN_RPC_URL=<twin rpc> DEPLOY_SHA=<sha> bun test tests/twin-chain.test.ts --timeout 600000";

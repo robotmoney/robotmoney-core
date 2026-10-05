@@ -279,7 +279,7 @@ the false-green shape #1199/#1203 were filed about (issue #1231).
 
 **Steps — `devnet-e2e` job (per matrix row):**
 1. Checkout repository
-2. Check out devops and export `PUBLISH_CONTRACTS_DIR` (publish contracts)
+2. Install the publish-contracts dependencies (`.github/actions/publish-contracts-setup`; the one deploy driver lives in this repo)
 3. Install Rust toolchain, Cargo cache
 4. Start the Twin chain at the run pin (`.github/actions/twin-fork`, exports `TWIN_RPC_URL`; the harness reuses it)
 5. `cargo test --release --test <binary> -- --test-threads=1 --nocapture` in `testing/ethereum-testnet/e2e-rust`. Each binary deploys its own vault through publish contracts. Time-dependent flows warp.
@@ -515,7 +515,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 
 **Steps (`devnet` matrix row):**
 1. Checkout repository
-2. Check out devops and export `PUBLISH_CONTRACTS_DIR` (publish contracts)
+2. Install the publish-contracts dependencies (`.github/actions/publish-contracts-setup`; the one deploy driver lives in this repo)
 3. Verify Docker is available (the dapp compose stack of `cli_meta`)
 4. Install Rust toolchain, Cargo cache
 5. Start the Twin chain at the run pin (`.github/actions/twin-fork`, `host: 0.0.0.0`, `block-time: 1`; exports `TWIN_RPC_URL`)
@@ -527,7 +527,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 11. `cargo test -p smoke-test --release --test twin_fork_env -- --test-threads=1 --nocapture` — the same three environment steps straight through `TwinFork` on the real Base USDC, with no publish run: fund USDC sets the real balance slot, fund gas, warp, and the fork is the anvil Twin fork on a real Base head.
 12. `cargo test -p smoke-test --release --test governance -- --test-threads=1 --nocapture` — after the publish-contracts run, the deployer holds no voting power and no `ADMIN_ROLE` on `RouterGovernance`, and the timelock holds `ADMIN_ROLE` (core 1488). Voting power is set only by govern rows through the real Safe and the timelock.
     Each is wrapped in `cargo_test_require_executed.sh` so a run that silently collects zero tests fails red rather than green (issue #1311 AC). All write `smoke-test-<binary>.log`.
-    The `demo_seeding`, `full_stack_demo_tvl`, `faucet_eth` and `faucet_rm` binaries were deleted in core 1488 with demo depositor seeding and the dapp faucet funding. Every devnet row now starts or reuses the Twin chain, funds fresh rehearsal keystores and calls publish contracts (checkout of the devops repo, `PUBLISH_CONTRACTS_DIR`, `STAGE_SHEET`).
+    The `demo_seeding`, `full_stack_demo_tvl`, `faucet_eth` and `faucet_rm` binaries were deleted in core 1488 with demo depositor seeding and the dapp faucet funding. Every devnet row now starts or reuses the Twin chain, funds fresh rehearsal keystores and calls publish contracts (`bun publish-contracts/src/cli.ts`, installed by `.github/actions/publish-contracts-setup`; the stage sheet is the committed `deployments/twin-918453/stage-sheet.env`, `STAGE_SHEET` overrides it).
 13. Upload smoke-test logs from `$RUNNER_TEMP/robotmoney-smoke-test/` as a CI artifact, then remove any dapp containers by label as the safety-net teardown. The Twin fork needs none: it dies with the runner.
 
 > **Note:** Step 9 exercises `Fixture::new()` end-to-end — the same code
@@ -536,7 +536,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 >
 > **One deployment scheme (core 1488):** the harness deploys nothing itself.
 > `Fixture::new()` starts or reuses the Twin chain (918453), funds fresh rehearsal
-> keystores (fund gas, fund USDC) and calls the one runbook, "publish contracts" (devops, Bun
+> keystores (fund gas, fund USDC) and calls the one runbook, "publish contracts" (`publish-contracts/` in this repo, Bun
 > TypeScript), with `--chain 918453 --rpc <twin rpc> --sheet <stage sheet>
 > --signer keystore --environment stage --core-sha <sha>`. It then reads the
 > manifests. All four vaults ship (rmUSDC, rmPROTO, rmAGENT, rmRWA). The
@@ -846,23 +846,22 @@ invariant it restores.
 **Trigger:** `pull_request` (no path filter); `push` to `releases-*`; tags
 `v*.*.*`; `workflow_dispatch`.
 
-Replaces the retired shell stack. The offline job runs `bun test scripts/deploy
+There is one deploy driver: the publish-contracts CLI (`bun publish-contracts/src/cli.ts`). The offline job runs `bun test scripts/deploy
 scripts/ci`: the stage table (libs, vault, registry, router, gateway, governance,
-ic, three basket vaults, timelock), the manifest rules, and the proof rules of
-`assert-core-router.ts`, `assert-basket-vaults.ts` and `assert-timelock-roles.ts`
-against fake readers. It is red when zero tests pass. The Twin chain job runs only
-on `workflow_dispatch` with a Twin chain RPC URL: `scripts/deploy/core-stages.ts`
-deploys every stage, then the two assertion scripts read roles, registry
-membership and asset config back from the chain. It takes no key.
+ic, three basket vaults, timelock, read by the CLI from the repo root) and the manifest rules. It is red when zero tests
+pass. The `publish-contracts-tests` job typechecks and unit-tests the CLI package (stub forge and cast, no chain). The Twin chain job runs only
+on `workflow_dispatch` with a Twin chain RPC URL: the `twin-publish` action makes throwaway keystores,
+merges the committed stage sheet (`deployments/twin-918453/stage-sheet.env`), funds the deployer and runs `publish`, then `verify`.
+The router, basket vault and timelock role proofs are labels of the one verifier. No key is passed in an argument.
 
 ---
 
 ### 28b. Core stack selftest, deleted-path gate and stage tooling tests
 **File:** `.github/workflows/suite-28-core-stack-selftest.yml`
 
-`scripts/stage/core-stack.ts` (Bun TypeScript, called directly; the old `core-stack.sh` shim is deleted) is the boot, health, record and parity tool. It deploys and governs by calling publish contracts (devops, Bun TypeScript) with the Twin chain argument list. Jobs:
+`scripts/stage/core-stack.ts` (Bun TypeScript, called directly; the old `core-stack.sh` shim is deleted) is the boot, health, record and parity tool. It deploys and governs by calling publish contracts (`publish-contracts/` in this repo, Bun TypeScript) with the Twin chain argument list. Jobs:
 - `core-stack-selftest` — `bun test scripts/stage/tests/core-stack.test.ts` against a fake runner standing in for publish contracts: the exact argument list with the `keystore:PATH:PASSFILE` signer, a fresh keystore set per boot, exit-code passthrough, the four-manifest count, the govern row gate (tx hash and receipt status 1 on every row), the usage errors and the record contract with its schema drift guard. Executed-test floor held in the workflow.
-- `deleted-stage-gate` — `bun scripts/stage/check-deleted-stage-scripts.ts .` exits 0 only when the stage ceremony shell, the stage deploy script, the deploy workflow and the Rust harness deployment (forge script calls, demo seeding, faucet funding) and the `core-stack.sh` shim are absent and `core-stack.ts` holds no deploy or ceremony logic.
+- `deleted-stage-gate` — `bun scripts/stage/check-deleted-stage-scripts.ts .` exits 0 only when the stage ceremony shell, the stage deploy script, the old core runner (`core-stages.ts`) and its assert scripts, the devops checkout action, the deploy workflow and the Rust harness deployment (forge script calls, demo seeding, faucet funding) and the `core-stack.sh` shim are absent and `core-stack.ts` holds no deploy or ceremony logic.
 - `stage-tooling-tests` — `bun test scripts/stage/tests`: the govern row parser, the sheet-diff allow-list (stage versus production sheet differ only in parameter lines), the label-diff (verifier labels on stage equal the mainnet set) and the gate.
 
 ---
@@ -1271,7 +1270,7 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 25 | `suite-25-fusion-harness-selftests.yml` | `fusion-harness-selftests` | `none` |
 | 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | the shared stage Twin fork `918453` (a service on the stage host, not started per run) |
 | 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |
-| 28 | `suite-28-core-stages.yml` | `core-stages-offline`, `core-stages-twin-chain` (dispatch) | `none` / Twin `918453` |
+| 28 | `suite-28-core-stages.yml` | `core-stages-offline`, `publish-contracts-tests`, `core-stages-twin-chain` (dispatch) | `none` / Twin `918453` |
 | 28 | `suite-28-core-stack-selftest.yml` | `core-stack-selftest` | `none` |
 | 29 | `suite-29-nightly-twin-fork.yml` | `pin` (uploads `twin-pin`) → suites 5, 7, 8, 10, 11b, 14 (called with `pin_block`) → `record-results` | Twin chain `918453`, one shared pin |
 
@@ -1293,7 +1292,7 @@ The `nightly-and-release-checks` job in `suite-13-doc-checks.yml` runs on every 
 - `scripts/devnet/check-twin-chain-ci-selftest.ts` (cores 1496, 1498, Bun, run in suite 13, needs `yq`): the nightly calls suites 5, 7, 8, 10, 11b and 14 with `pin_block` from its own pin job and `secrets: inherit`; each of those suites declares the `pin_block` input, has a `pin` job using `.github/actions/twin-pin`, and every `twin-fork` step takes `pin-block` from that job and sits in a job that needs it; the nightly uploads `suite-results` and `twin-pin`; suite 1-2's `fork-regressions` starts the Twin fork at the pin and runs through the Bun runner; nothing in `.github`, `scripts`, `testing`, the dapp e2e tests or `services` still names the retired geth devnet, the genesis alloc, the fresh-snapshot overlay or the saved fork-state snapshot machinery; the retired files are gone.
 - The nightly third-party drift workflow check, the dependency manifest self-test and the manifest address check (core 1497). The self-test records a manifest from a Twin fork (real Base code and storage) and checks it, so the address check covers something before the first release commits a manifest. It skips with a named reason when no chain is given.
 
-Suite 14's `smoke-test-guards` job runs the smoke-test lib unit tests with a floor on the `cargo test -p smoke-test --lib` test count. The fork-block manifest guards, the snapshot contents check and the fixture lockstep gate are retired with the saved snapshot (core 1498). Suite 14's `twin_publish` job (its own job, not a matrix row) runs the real Twin chain publish through the devops CLI (directory given by the `publish_contracts_dir` input), the one verifier and the stage 13 govern matrix. While the chain is up it runs `scripts/deploy/assert-core-router.ts` (read-only mode: the share receiver is keyless on the Twin chain, so the signed round trip is not run here), `assert-basket-vaults.ts` and `assert-timelock-roles.ts`, then `scripts/stage/twin-run-report.ts` (stages, tx counts, vault set, labels), then `parity.ts` (label-diff and sheet-diff against the mainnet verifier labels and production sheet). It uploads the manifests, proofs and report. On `pull_request` it runs only when `contracts/script/`, `scripts/deploy/`, `scripts/stage/`, `config/` or `testing/smoke-test/` changed (a `changes` job reads the git diff); push, `workflow_dispatch` and the nightly `workflow_call` always run it. A non-zero test count floor applies through `cargo_test_require_executed.sh` (`CARGO_TEST_MIN_EXECUTED=1`) plus the `--lib` floor in the guards job. The job needs no Docker and runs only in CI.
+Suite 14's `smoke-test-guards` job runs the smoke-test lib unit tests with a floor on the `cargo test -p smoke-test --lib` test count. The fork-block manifest guards, the snapshot contents check and the fixture lockstep gate are retired with the saved snapshot (core 1498). Suite 14's `twin_publish` job (its own job, not a matrix row) runs the real Twin chain publish through the one deploy driver (`bun publish-contracts/src/cli.ts`), the one verifier (its labels hold the router, basket and timelock role proofs) and the stage 13 govern matrix. While the chain is up it runs `scripts/stage/twin-run-report.ts` (stages, tx counts, vault set, labels), then `parity.ts` (label-diff and sheet-diff against the production fixtures when the input `production_fixtures_dir` names them, else against the fixtures committed in `publish-contracts/tests/fixtures`). It uploads the manifests, labels and report. On `pull_request` it runs only when `contracts/script/`, `scripts/deploy/`, `scripts/stage/`, `publish-contracts/`, `deployments/twin-918453/`, `config/` or `testing/smoke-test/` changed (a `changes` job reads the git diff); push, `workflow_dispatch` and the nightly `workflow_call` always run it. A non-zero test count floor applies through `cargo_test_require_executed.sh` (`CARGO_TEST_MIN_EXECUTED=1`) plus the `--lib` floor in the guards job. The job needs no Docker and runs only in CI.
 
 ## check-sha-green (core 1502)
 

@@ -1,0 +1,71 @@
+name: twin-publish
+description: >-
+  Runs the one deploy driver (bun publish-contracts/src/cli.ts publish) against the Twin chain (918453), for a
+  job that needs a deployed core stack: throwaway encrypted keystores, the committed stage sheet merged with
+  their addresses, gas and USDC for the deployer (Twin environment steps), then the publish run (libs through
+  the timelock handover and the real Safe). Exports TWIN_MANIFEST_DIR (the stage manifests),
+  TWIN_DEPLOYER_ADDRESS and, with verify, TWIN_VERIFY_LABELS. No secret reaches a file in the repo, an argument or a log: the passphrase is a random
+  0600 file in RUNNER_TEMP. Never use this against Base mainnet.
+inputs:
+  rpc-url:
+    description: "The Twin chain RPC."
+    required: false
+    default: "http://127.0.0.1:8545"
+  agent-address:
+    description: "Optional: the deploy agent (AGENT_ADDRESS in the sheet). Empty: the throwaway AGENT keystore address."
+    required: false
+    default: ""
+  share-receiver-address:
+    description: "Optional: the rmUSDC seed share receiver (SHARE_RECEIVER_ADDRESS in the sheet). Empty: the sheet's value."
+    required: false
+    default: ""
+  verify:
+    description: "'true' also runs the one verifier (the verify verb) afterwards and saves its labels."
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/publish-contracts-setup
+    - shell: bash
+      env:
+        RPC_URL: ${{ inputs.rpc-url }}
+        AGENT_ADDRESS_IN: ${{ inputs.agent-address }}
+        SHARE_RECEIVER_IN: ${{ inputs.share-receiver-address }}
+        VERIFY_IN: ${{ inputs.verify }}
+      run: |
+        set -euo pipefail
+        core="$GITHUB_WORKSPACE"
+        rh="$RUNNER_TEMP/twin-publish"
+        rm -rf "$rh"
+        mkdir -m 700 "$rh"
+        mkdir "$rh/manifests" "$rh/counts"
+        # A random passphrase in a 0600 file. It is never an argument or an exported variable.
+        (umask 077; head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$rh/passphrase")
+        cd "$core/publish-contracts"
+        bun src/rehearsal/cli.ts keys --dir "$rh/keys" --password-file "$rh/passphrase" --chain-id 918453 > "$rh/fragment.env"
+        # Later lines win in merge-sheet.
+        [ -z "$AGENT_ADDRESS_IN" ] || echo "AGENT_ADDRESS=$AGENT_ADDRESS_IN" >> "$rh/fragment.env"
+        [ -z "$SHARE_RECEIVER_IN" ] || echo "SHARE_RECEIVER_ADDRESS=$SHARE_RECEIVER_IN" >> "$rh/fragment.env"
+        bun src/ci/merge-sheet.ts --template "$core/deployments/twin-918453/stage-sheet.env" --fragment "$rh/fragment.env" --out "$rh/sheet.env"
+        # Twin environment steps: gas for every key, USDC for the seed deposit.
+        bun src/rehearsal/cli.ts fund-gas --rpc "$RPC_URL" --sheet "$rh/sheet.env"
+        bun src/rehearsal/cli.ts fund-usdc --rpc "$RPC_URL" --sheet "$rh/sheet.env" --usdc-units 2000000000
+        # The unattended Twin chain run needs YES=1 (the CLI refuses it on 8453).
+        PUBLISH_MANIFEST_DIR="$rh/manifests" YES=1 bun src/cli.ts publish \
+          --chain 918453 --rpc "$RPC_URL" --sheet "$rh/sheet.env" \
+          --signer "keystore:$rh/keys/DEPLOYER:$rh/passphrase" \
+          --environment stage --core-sha "$(git -C "$core" rev-parse HEAD)" \
+          --counts-dir "$rh/counts"
+        if [ "$VERIFY_IN" = "true" ]; then
+          PUBLISH_MANIFEST_DIR="$rh/manifests" YES=1 bun src/cli.ts verify \
+            --chain 918453 --rpc "$RPC_URL" --sheet "$rh/sheet.env" \
+            --signer "keystore:$rh/keys/DEPLOYER:$rh/passphrase" \
+            --environment stage --core-sha "$(git -C "$core" rev-parse HEAD)" \
+            --counts-dir "$rh/counts" > "$rh/verify-labels.txt"
+          echo "TWIN_VERIFY_LABELS=$rh/verify-labels.txt" >> "$GITHUB_ENV"
+        fi
+        {
+          echo "TWIN_MANIFEST_DIR=$rh/manifests"
+          echo "TWIN_DEPLOYER_ADDRESS=$(sed -n 's/^ADMIN_ADDRESS=//p' "$rh/fragment.env")"
+        } >> "$GITHUB_ENV"

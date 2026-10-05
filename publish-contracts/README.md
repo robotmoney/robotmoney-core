@@ -1,6 +1,6 @@
 # publish contracts
 
-One Bun TypeScript CLI runs every contract deploy (devops issues 61, 55 and 58). It runs on the Twin chain (918453) and on Base mainnet (8453). A rehearsal and production differ only in the arguments. The Twin chain is a pinned lazy fork of real Base state (see the Twin chain section below). There is no mock Safe, no scripted Safe and no shell orchestrator. The operator runbook is `docs/runbooks/publish-contracts.md`. This file documents the tool and lists the remaining gaps.
+This CLI is the ONLY deploy driver (core's old runner `scripts/deploy/core-stages.ts` and the post-stage assert scripts are deleted; their checks are labels of the one verifier). One Bun TypeScript CLI runs every contract deploy (devops issues 61, 55 and 58). It runs on the Twin chain (918453) and on Base mainnet (8453). A rehearsal and production differ only in the arguments. The Twin chain is a pinned lazy fork of real Base state (see the Twin chain section below). There is no mock Safe, no scripted Safe and no shell orchestrator. The operator runbook is `docs/runbooks/publish-contracts.md`. This file documents the tool and lists the remaining gaps.
 
 ## Run it
 
@@ -35,7 +35,7 @@ Caller environment only: `YES=1` (refused on 8453) and `CONFIRM=typed|environmen
 
 ## Core harness contract (positional verbs, `--row`, stdout rows, `PUBLISH_MANIFEST_DIR`)
 
-Core's Twin harness is the consumer of this CLI (core `testing/smoke-test/src/publish.rs` and `scripts/stage/core-stack.ts`). The CLI adapts to it. `tests/core-harness-contract.test.ts` spawns the CLI as a child process with exactly the argument vector and environment core builds, and asserts what core reads back.
+Core's Twin harness is the consumer of this CLI (`testing/smoke-test/src/publish.rs`, `testing/fork-e2e-rust/src/deployed.rs` and `scripts/stage/core-stack.ts`, all in this repo). The CLI adapts to it. `tests/core-harness-contract.test.ts` spawns the CLI as a child process with exactly the argument vector and environment core builds, and asserts what core reads back.
 
 What core sends:
 
@@ -118,7 +118,7 @@ usage 2, sheet 3, floor 4, chain 5, signer 6, counts missing 7, simulation 8, br
 
 ## CI workflows
 
-Workflows that call this CLI are being rewired. They run it from this directory in core (`bun install` here, then `bun src/cli.ts`). They never check devops out. Core is public, and the dependency direction is devops to core only.
+Core's workflows run this CLI from this directory (`bun install --frozen-lockfile` here, through `.github/actions/publish-contracts-setup`, then `bun src/cli.ts`). The `twin-publish` action (`.github/actions/twin-publish`) runs `publish` and `verify` on the Twin chain with throwaway keystores and the committed stage sheet (`deployments/twin-918453/stage-sheet.env`). They never check devops out and use no token. Core is public, and the dependency direction is devops to core only. `suite-28-core-stages.yml` runs this package's typecheck and unit tests (`publish-contracts-tests`).
 
 ## Rehearsal helpers (`src/rehearsal`, devops issue 56)
 One Bun TypeScript CLI that runs every contract deploy (devops issue 61). This file documents `src/rehearsal/`, the rehearsal helpers (S7, devops issue 56). A rehearsal is the same runbook as production with different arguments, run on the Twin chain (918453). No mock Safe, no scripted Safe.

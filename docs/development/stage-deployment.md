@@ -1,14 +1,14 @@
 # Stage deployment: the one deployment scheme
 
-Canonical plan: robotmoney/devops issue 53 / core issue 1499. Core issue 1488 (S9).
+Canonical plan: core issue 1499. Core issue 1488 (S9).
 
-Stage is the same deployment as mainnet. Only parameters differ. There is one runbook, "publish contracts" (devops, Bun TypeScript). It runs on the Twin chain (918453) and on Base mainnet (8453). A rehearsal and production differ only in the arguments given to it.
+Stage is the same deployment as mainnet. Only parameters differ. There is one runbook, "publish contracts" (the Bun TypeScript CLI in `publish-contracts/` in this repo, run as `bun publish-contracts/src/cli.ts`). It is the only deploy driver. Devops checks core out and runs the same CLI: core never depends on devops. It runs on the Twin chain (918453) and on Base mainnet (8453). A rehearsal and production differ only in the arguments given to it.
 
 ## What runs on stage
 
 1. `bun scripts/stage/core-stack.ts chain up` rebuilds `rmpc` from this checkout and boots the smoke harness (`cargo run -p smoke-test -- --full-stack`).
 2. The harness boots the Twin chain. It does not use a fork and does not use a lazy anvil.
-3. The harness mints a **fresh keystore set** with the devops rehearsal key helper. Every boot gets new keys, so a redeploy from a new SHA never reuses a deployer. The keystores are encrypted. The passphrase is random, lives in a 0600 file, and is never an argument or an exported variable.
+3. The harness mints a **fresh keystore set** with the rehearsal key helper (`publish-contracts/src/rehearsal`). Every boot gets new keys, so a redeploy from a new SHA never reuses a deployer. The keystores are encrypted. The passphrase is random, lives in a 0600 file, and is never an argument or an exported variable.
 4. The harness funds the keys, then calls publish contracts:
 
    ```
@@ -25,8 +25,7 @@ Stage is the same deployment as mainnet. Only parameters differ. There is one ru
 
 | Variable | Meaning |
 | --- | --- |
-| `PUBLISH_CONTRACTS_DIR` | The devops `publish-contracts` directory (holds `src/cli.ts`). |
-| `STAGE_SHEET` | The stage sheet. Parameter lines only. Selected by input, never edited between runs. |
+| `STAGE_SHEET` | Optional. An alternative stage sheet. Parameter lines only. Default: the committed `deployments/twin-918453/stage-sheet.env`. |
 
 ## Vaults
 
@@ -85,11 +84,11 @@ Every line above is required. No script has a default for it (`scripts/deploy/RE
 | Four vault manifests after a publish run | `core-stack publish run` (exit 66 on a short count) |
 | Verifier labels on stage equal the mainnet label set | `scripts/stage/parity.ts` runs `label-diff.ts` on the verifier output the Twin chain smoke job saved (`SMOKE_TEST_VERIFY_OUT`) |
 | Stage sheet versus production sheet differ only in parameter lines | `scripts/stage/parity.ts` runs `sheet-diff.ts` on the run sheet the smoke job saved (`SMOKE_TEST_SHEET_OUT`) |
-| Router, basket vault and timelock role proofs | `scripts/deploy/core-stages.ts` runs `assert-core-router.ts` after the gateway stage, `assert-basket-vaults.ts` after the rwa stage and `assert-timelock-roles.ts` after the timelock stage |
+| Router, basket vault and timelock role proofs | Labels of the one verifier (`publish-contracts/src/verify`): `gateway: router() equals the deployed router`, `registry: router() equals the deployed router`, `vault[KEY]: a second setRegistry reverts`, the role matrix, the asset config and `vault[rmAGENT]: ships with no assets` |
 | Every govern row has a tx hash and receipt status 1 | `scripts/stage/govern-rows.ts` |
 | Deleted paths stay deleted | `scripts/stage/check-deleted-stage-scripts.ts` |
 
-Parity compares against the devops production fixtures directory (`verifier-labels.txt`, `production-sheet.env`). Suite 14 takes its path as the input `production_fixtures_dir` (default `devops/deployments/base-8453`). A missing or empty file fails the step and names the path.
+Parity compares against production fixtures (`verifier-labels.txt`, `production-sheet.env`). Suite 14 takes the directory as the optional input `production_fixtures_dir`, for a caller that has the production files. Without it the step uses the label and sheet fixtures committed in `publish-contracts/tests/fixtures`. A missing or empty file fails the step and names the path.
 
 Run the tooling tests with `cd scripts/stage && bun test tests`.
 

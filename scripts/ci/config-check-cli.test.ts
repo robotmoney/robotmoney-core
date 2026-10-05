@@ -1,4 +1,4 @@
-// Canonical: robotmoney/devops issue 53 / core issue 1499, core S2 (issue 1484).
+// Canonical: core issue 1499, core S2 (issue 1484).
 // Process-level test of scripts/ci/config-check.ts against a local fake JSON-RPC server.
 // It proves the CLI contract the issue states: exit 0 when live facts match for wETH, cbBTC and
 // deSPXA, non-zero when a pool address or fee is altered, and an output file named with the block.

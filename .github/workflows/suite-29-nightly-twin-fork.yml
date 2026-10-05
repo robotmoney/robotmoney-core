@@ -17,7 +17,7 @@
 #
 # SECRETS
 # `secrets: inherit` hands the called suites what they already use when they run on their own
-# triggers: DEVOPS_READ_TOKEN (the publish-contracts checkout), the optional BASE_UPSTREAM_RPC (a
+# triggers: the optional BASE_UPSTREAM_RPC (a
 # paid upstream, never printed) and the base-testnet secrets of suite 5. The workflow itself
 # references none of them.
 #

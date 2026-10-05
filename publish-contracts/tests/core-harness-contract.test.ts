@@ -15,7 +15,7 @@ import { EXIT_CODES } from "../src/errors.ts";
 import { GOVERN_ROWS } from "../src/govern.ts";
 import { getStageTable } from "../src/stages.ts";
 import { manifestFile } from "../src/stage-table.ts";
-import { CORE_DIR } from "./core-dir.ts";
+import { REPO_ROOT } from "./repo-root.ts";
 import { SHA, tmp } from "./fixtures.ts";
 import { world } from "./harness.ts";
 import { writeGovernManifests } from "./govern-world.ts";
@@ -151,8 +151,8 @@ describe("core harness contract: the argument vector and environment core builds
   });
 });
 
-// Drift guard: when core's publish.rs is on disk (CORE_DIR), its argument vector and env name must be the ones this test builds.
-const RUST = join(CORE_DIR, "testing", "smoke-test", "src", "publish.rs");
+// Drift guard: when core's publish.rs is on disk (REPO_ROOT), its argument vector and env name must be the ones this test builds.
+const RUST = join(REPO_ROOT, "testing", "smoke-test", "src", "publish.rs");
 describe("core harness contract: drift guard against publish.rs", () => {
   test.skipIf(!existsSync(RUST))("publish_args and MANIFEST_DIR_ENV in core's publish.rs match the vector this test spawns", () => {
     const text = readFileSync(RUST, "utf8");

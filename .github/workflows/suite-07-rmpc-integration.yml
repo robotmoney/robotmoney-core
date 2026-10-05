@@ -4,7 +4,7 @@
 # rmpc must work end-to-end against real Base state, not against a hand-built chain. The Twin
 # chain (id 918453) is a pinned lazy fork of real Base made with anvil (core 1498, 1496): real
 # Aave V3, Compound V3, Morpho, Uniswap and USDC. The e2e binaries deploy their OWN vault through
-# the devops "publish contracts" runbook and read the addresses from the manifests. They never
+# the "publish contracts" runbook (publish-contracts/ in this repo) and read the addresses from the manifests. They never
 # read the live production v1 contracts (clean room rule).
 #
 # THE TWIN CHAIN, ONE PIN PER RUN
@@ -391,13 +391,9 @@ jobs:
         with:
           submodules: recursive
 
-      # The Rust harness deploys through the devops "publish contracts" runbook.
-      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
-        id: devops
-        uses: ./.github/actions/devops-publish-contracts
-        with:
-          token: ${{ secrets.DEVOPS_READ_TOKEN }}
-          ref: ${{ vars.DEVOPS_PUBLISH_REF }}
+      # The Rust harness deploys through the "publish contracts" runbook (publish-contracts/ in this repo).
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -414,7 +410,6 @@ jobs:
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
       - name: e2e ${{ matrix.binary }}
-        if: steps.devops.outputs.available != 'false'
         working-directory: testing/ethereum-testnet/e2e-rust
         run: cargo test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
 

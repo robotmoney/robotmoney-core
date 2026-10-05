@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486, 1491).
+# Canonical: core issue 1499, core S4 (issue 1486, 1491).
 #
 # CI gate for the deploy scripts under contracts/script. Exit 1 on any of:
 #   - a DEVNET_ variable

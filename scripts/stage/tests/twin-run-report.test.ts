@@ -1,20 +1,15 @@
 import { expect, test } from "bun:test";
-import { loadStageTable, stagesFromTable } from "../../deploy/core-stages.ts";
+import { loadStageTable } from "../stage-table.ts";
 import { buildReport, labelRows, render } from "../twin-run-report.ts";
 
 const table = loadStageTable();
 const A = (n: number) => "0x" + n.toString(16).padStart(40, "0");
 
-/** A manifest per table stage, holding exactly the keys the runner says that stage writes. */
+/** A manifest per table stage. A vault stage holds its vault address. */
 function fullManifests(): Record<string, Record<string, unknown>> {
   const out: Record<string, Record<string, unknown>> = {};
   let n = 1;
-  for (const st of stagesFromTable(table)) {
-    const m: Record<string, unknown> = {};
-    for (const k of st.writes) m[k] = A(n++);
-    if (st.name === "gateway") m.gateway_router = out["router.json"].router;
-    out[st.manifestFile] = m;
-  }
+  for (const st of table.stages) out[st.manifest.split("/").pop()!] = st.vault ? { vault: A(n++) } : { chain_id: 918453 };
   return out;
 }
 const runManifest = () => ({ stages: Object.fromEntries(table.stages.map((s, i) => [s.name, { count: i + 1 }])) });
@@ -30,11 +25,6 @@ test("a complete run reports every stage, the four vaults and the transaction to
   const text = render(r);
   expect(text).toContain("Vault set");
   expect(text).toContain("does not prove the real timelock delay");
-});
-
-test("the merged manifest carries the namespaced basket keys the assertion scripts read", () => {
-  const r = buildReport({ table, manifests: fullManifests(), runManifest: null, labelsText: null });
-  for (const k of ["vault", "protocol_vault", "agent_vault", "rwa_vault", "registry", "router", "gateway"]) expect(r.merged[k]).toBeDefined();
 });
 
 test("a missing stage manifest is a problem and names the file", () => {

@@ -1,7 +1,7 @@
-//! The govern stdout contract between the devops publish-contracts CLI (producer) and this harness (consumer).
+//! The govern stdout contract between the publish-contracts CLI (`publish-contracts/` in this repo) (producer) and this harness (consumer).
 //!
 //! `tests/fixtures/govern-stdout.jsonl` is a recorded sample of what `publish-contracts govern` prints on stdout:
-//! one JSON line per row, `{"row":..,"txHash":..,"status":..}`. The same file lives in the devops repo at
+//! one JSON line per row, `{"row":..,"txHash":..,"status":..}`. The same file lives at
 //! `publish-contracts/tests/fixtures/govern-stdout.jsonl`, where a contract test asserts the CLI prints exactly it.
 //! This test feeds it to `parse_govern_output` and `check_govern_rows`. No docker, no chain, no network.
 

@@ -1,17 +1,17 @@
 //! Glue between the smoke harness and the one runbook, "publish contracts".
 //!
 //! The harness boots the Twin chain (918453), funds keys, and then calls the
-//! publish-contracts CLI (Bun TypeScript, devops repo) with the Twin chain
+//! publish-contracts CLI (Bun TypeScript, `publish-contracts/` in this repo) with the Twin chain
 //! arguments. It deploys nothing itself: no `forge script`, no deployer
 //! fixups, no demo seeding. Production contracts only; stage differs from
 //! mainnet by sheet parameters.
 //!
-//! Plan: robotmoney/devops issue 53 / core issue 1499 (S9, core 1488).
+//! Plan: core issue 1499 (S9, core 1488).
 //!
 //! Secrets: this module never holds a private key. The deployer, Safe owners,
-//! emergency and voters are encrypted Foundry keystores minted by the devops
-//! rehearsal key helper in a fresh 0700 directory per run (a redeploy gets a
-//! fresh keystore from the new SHA). The keystore passphrase is random, lives
+//! emergency and voters are encrypted Foundry keystores minted by the
+//! rehearsal key helper (`publish-contracts/src/rehearsal`) in a fresh 0700 directory per run (a
+//! redeploy gets a fresh keystore from the new SHA). The keystore passphrase is random, lives
 //! in a 0600 file next to the keystores, and is never an argument or an
 //! exported variable.
 
@@ -31,13 +31,16 @@ pub const TWIN_CHAIN_ID: u64 = 918453;
 /// The GitHub Environment name the publish call receives for stage.
 pub const STAGE_ENVIRONMENT: &str = "stage";
 
-/// Env var: the devops `publish-contracts` directory (holds `src/cli.ts`).
-pub const PUBLISH_DIR_ENV: &str = "PUBLISH_CONTRACTS_DIR";
-/// Env var: the stage sheet (parameter lines only). Selected by input, never edited between runs.
+/// The in-repo `publish-contracts` directory (holds `src/cli.ts`), relative to the repo root.
+/// There is one deploy driver and it lives in core: no environment variable points elsewhere.
+pub const PUBLISH_DIR_REL: &str = "publish-contracts";
+/// The Twin chain stage sheet committed in this repo (parameter lines only), relative to the repo root.
+pub const STAGE_SHEET_REL: &str = "deployments/twin-918453/stage-sheet.env";
+/// Env var: an alternative stage sheet (parameter lines only). Selected by input, never edited between runs.
 pub const STAGE_SHEET_ENV: &str = "STAGE_SHEET";
 /// Env var: where the driver writes its manifests (one JSON per stage in stage-table.json).
 pub const MANIFEST_DIR_ENV: &str = "PUBLISH_MANIFEST_DIR";
-/// File name of the deployer keystore inside the key directory (the devops key helper names it).
+/// File name of the deployer keystore inside the key directory (the rehearsal key helper names it).
 pub const DEPLOYER_KEY_NAME: &str = "DEPLOYER";
 
 /// Sheet keys the harness may add to the stage sheet from its caller (for
@@ -57,7 +60,7 @@ pub const OVERRIDABLE_SHEET_KEYS: &[&str] = &[
 
 #[derive(Debug, Clone)]
 pub struct PublishConfig {
-    /// devops `publish-contracts` directory.
+    /// The in-repo `publish-contracts` directory.
     pub publish_dir: PathBuf,
     /// Stage sheet, parameter lines only.
     pub stage_sheet: PathBuf,
@@ -67,27 +70,21 @@ pub struct PublishConfig {
 
 impl PublishConfig {
     pub fn from_env(repo_root: &Path) -> Result<Self, HarnessError> {
-        let publish_dir = std::env::var(PUBLISH_DIR_ENV).map_err(|_| {
-            HarnessError::other(format!(
-                "{PUBLISH_DIR_ENV} is not set: point it at the devops publish-contracts directory"
-            ))
-        })?;
-        let publish_dir = PathBuf::from(publish_dir);
+        let publish_dir = repo_root.join(PUBLISH_DIR_REL);
         if !publish_dir.join("src/cli.ts").is_file() {
             return Err(HarnessError::other(format!(
-                "{}/src/cli.ts not found: {PUBLISH_DIR_ENV} must name the devops publish-contracts directory",
+                "{}/src/cli.ts not found: run from a core checkout that holds {PUBLISH_DIR_REL}/",
                 publish_dir.display()
             )));
         }
-        let stage_sheet = std::env::var(STAGE_SHEET_ENV).map_err(|_| {
-            HarnessError::other(format!(
-                "{STAGE_SHEET_ENV} is not set: name the stage sheet (parameter lines only)"
-            ))
-        })?;
+        let stage_sheet = match std::env::var(STAGE_SHEET_ENV) {
+            Ok(v) if !v.is_empty() => PathBuf::from(v),
+            _ => repo_root.join(STAGE_SHEET_REL),
+        };
         let core_sha = git_head(repo_root)?;
         Ok(Self {
             publish_dir,
-            stage_sheet: PathBuf::from(stage_sheet),
+            stage_sheet,
             core_sha,
         })
     }
@@ -364,7 +361,7 @@ fn run_cli(
     Ok(stdout)
 }
 
-/// The devops CLI refuses an unattended publish without `YES=1` (exit 17) and refuses `YES=1` on
+/// The publish-contracts CLI refuses an unattended publish without `YES=1` (exit 17) and refuses `YES=1` on
 /// chain 8453. So `YES=1` and no `CONFIRM` go to the Twin chain (918453) only. Any other chain gets
 /// no `YES`, inherited values included.
 pub fn apply_publish_env(cmd: &mut Command, chain_id: u64) {

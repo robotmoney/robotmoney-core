@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "./fixtures.ts";
-import { CORE_DIR } from "./core-dir.ts";
+import { REPO_ROOT } from "./repo-root.ts";
 
 const E2E = join(import.meta.dir, "..", "src", "safe", "e2e.test.ts");
 const e2eText = readFileSync(E2E, "utf8");
@@ -49,7 +49,7 @@ describe.skipIf(!safeReady)("devops 57: live Safe criteria (reason: needs a Twin
 // devops 60: criteria that read chain 8453 itself. They need the recorded mainnet run, which exists only after the owner runs it.
 const INPUTS = join(REPO, "deployments", "8453", "verify-inputs.json");
 const MAIN_RPC = process.env.MAINNET_RPC_URL;
-const CORE = CORE_DIR;
+const CORE = REPO_ROOT;
 const mainReady = existsSync(INPUTS) && Boolean(MAIN_RPC);
 const VERIFY_CMD = "MAINNET_RPC_URL=<base rpc> bun test tests/chain-dependent-s8-s13.test.ts";
 

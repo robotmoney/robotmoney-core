@@ -190,7 +190,7 @@ jobs:
         with:
           version: stable
 
-      - name: Install Bun (core stage runner)
+      - name: Install Bun (publish-contracts, the one deploy driver)
         uses: oven-sh/setup-bun@v2
 
       - name: Cargo cache
@@ -215,35 +215,25 @@ jobs:
           pin-block: ${{ needs.pin.outputs.block }}
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
-      # Twin environment step "fund USDC": the deployer needs USDC for the seed deposit (the agent
-      # is funded later, after its key is generated).
-      - name: Fund the deployer with USDC (Twin chain environment step)
+      # The deployer is a throwaway keystore made by the twin-publish action below, which also funds it
+      # (Twin environment steps). The agent is funded later, after its key is generated.
+      - name: Export the USDC address
         run: |
           set -euo pipefail
-          ADMIN=$(cast wallet address --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
-          bun scripts/devnet/twin-fork.ts fund-usdc "$ADMIN" 2000000000
           USDC_ADDR=$(bun -e 'import {USDC} from "./scripts/devnet/twin-fork-lib.ts"; console.log(USDC)')
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
 
-      # Issue #469: derive ADMIN/PAUSER/SHARE_RECEIVER from Anvil's funded
-      # accounts, but DO NOT pre-bake AGENT_ADDRESS from an Anvil account.
+      # Issue #469: derive the SHARE_RECEIVER from Anvil's funded accounts (the deployer and the other roles
+      # are throwaway keystores made by the twin-publish action), but DO NOT pre-bake AGENT_ADDRESS from an Anvil account.
       # The agent EOA is generated fresh in a later step and that generated
       # address is what the gateway stage authorizes — this is the proof that the
       # entire onboarding path (key generation -> authorizeAgent -> deposit)
       # works against a single identity.
-      - name: Derive deploy addresses from Anvil accounts
+      - name: Derive the share receiver from Anvil accounts
         run: |
           set -euo pipefail
           ACCOUNTS=$(cast rpc eth_accounts --rpc-url http://127.0.0.1:8545)
-          echo "ADMIN_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[0]')" >> $GITHUB_ENV
-          echo "PAUSER_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[1]')" >> $GITHUB_ENV
           echo "SHARE_RECEIVER_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[3]')" >> $GITHUB_ENV
-          PRIVKEY=$(cast wallet private-key --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
-          echo "ANVIL_PRIVKEY=$PRIVKEY" >> $GITHUB_ENV
-          # ADMIN_ADDRESS is the deployer EOA; remember it as the parent
-          # (msg.sender at authorizeAgent) for the later authorization assert.
-          ADMIN=$(echo "$ACCOUNTS" | jq -r '.[0]')
-          echo "PARENT_ADDRESS=$ADMIN" >> $GITHUB_ENV
 
       # Issue #469: this step replaces the broken keystore-import
       # invocation that previously lived in this workflow (it passed the
@@ -315,28 +305,15 @@ jobs:
           echo "::add-mask::$AGENT_PRIVKEY"
           echo "AGENT_PRIVKEY=$AGENT_PRIVKEY" >> $GITHUB_ENV
 
-      - name: Deploy contracts on devnet (authorizes generated agent)
-        # Deploys the three real Aave/Compound/Morpho adapters against the
-        # Twin chain (real protocol storage is present, so the seed-deposit
-        # totalAssets() succeeds — no passthrough hatch needed).
-        run: |
-          mkdir -p deployments
-          # Core S3: the stage runner deploys libs, vault, registry, router, gateway in that
-          # order. The gateway stage reads AGENT_ADDRESS from env and calls
-          # gateway.authorizeAgent(AGENT_ADDRESS, policy) under msg.sender =
-          # broadcaster (= ADMIN_ADDRESS = PARENT_ADDRESS). After this step
-          # the generated key is the AGENT_ROLE holder for the gateway.
-          # The local anvil node unlocks the admin account: no key goes in an argument.
-          export FEE_RECIPIENT="$SHARE_RECEIVER_ADDRESS"
-          export SEED_SHARE_RECEIVER="$SHARE_RECEIVER_ADDRESS"
-          export TVL_CAP=10000000000000 PER_DEPOSIT_CAP=1000000000000
-          export AGENT_VALID_UNTIL=4102444800
-          export AGENT_MAX_PER_PAYMENT=10000000000 AGENT_MAX_PER_WINDOW=100000000000
-          export AGENT_MAX_WITHDRAW_PER_PAYMENT=10000000000 AGENT_MAX_WITHDRAW_PER_WINDOW=100000000000
-          CHAIN_ID=$(cast chain-id --rpc-url http://127.0.0.1:8545)
-          bun scripts/deploy/core-stages.ts --rpc-url http://127.0.0.1:8545 \
-            --out "deployments/${CHAIN_ID}.json" \
-            --forge-arg --unlocked --forge-arg --sender --forge-arg "$ADMIN_ADDRESS"
+      - name: Deploy contracts on the Twin chain (authorizes generated agent)
+        # The one deploy driver (bun publish-contracts/src/cli.ts publish): libs through the timelock handover
+        # and the real Safe, with the three real Aave/Compound/Morpho adapters against the Twin chain (real
+        # protocol storage is present). The sheet's AGENT_ADDRESS is the generated key, so the gateway stage
+        # authorizes it. After the timelock stage the timelock owns the agent.
+        uses: ./.github/actions/twin-publish
+        with:
+          agent-address: ${{ env.AGENT_ADDRESS }}
+          share-receiver-address: ${{ env.SHARE_RECEIVER_ADDRESS }}
 
       # Issue #469 acceptance criterion: assert ON-CHAIN that
       # gateway.authorizeAgent has actually been called for the
@@ -347,19 +324,21 @@ jobs:
       - name: Assert generated agent is authorized on-chain
         run: |
           set -euo pipefail
-          DEPLOYMENT_JSON="deployments/$(cast chain-id --rpc-url http://127.0.0.1:8545).json"
-          if [ ! -f "$DEPLOYMENT_JSON" ]; then
-            echo "FAIL: deployment JSON not found at $DEPLOYMENT_JSON" >&2
-            exit 1
-          fi
-          GATEWAY=$(jq -r '.gateway' "$DEPLOYMENT_JSON")
+          for f in gateway vault timelock; do
+            if [ ! -f "$TWIN_MANIFEST_DIR/$f.json" ]; then
+              echo "FAIL: stage manifest $f.json not found in $TWIN_MANIFEST_DIR" >&2
+              exit 1
+            fi
+          done
+          GATEWAY=$(jq -r '.gateway' "$TWIN_MANIFEST_DIR/gateway.json")
           echo "GATEWAY_ADDRESS=$GATEWAY" >> $GITHUB_ENV
-          VAULT=$(jq -r '.vault' "$DEPLOYMENT_JSON")
+          VAULT=$(jq -r '.vault' "$TWIN_MANIFEST_DIR/vault.json")
           echo "VAULT_ADDRESS=$VAULT" >> $GITHUB_ENV
-          GATEWAY_RUNTIME_HASH=$(jq -r '.gateway_runtime_hash' "$DEPLOYMENT_JSON")
+          GATEWAY_RUNTIME_HASH=$(jq -r '.gateway_runtime_hash' "$TWIN_MANIFEST_DIR/gateway.json")
           echo "GATEWAY_RUNTIME_HASH=$GATEWAY_RUNTIME_HASH" >> $GITHUB_ENV
+          PARENT_ADDRESS=$(jq -r '.timelock' "$TWIN_MANIFEST_DIR/timelock.json")
 
-          # 1. agentOwner(generatedKey) must equal the authorizing parent EOA.
+          # 1. agentOwner(generatedKey) must equal the timelock: the deployer authorized it, then the timelock stage handed it over.
           OWNER_RAW=$(cast call "$GATEWAY" "agentOwner(address)(address)" "$AGENT_ADDRESS" \
             --rpc-url http://127.0.0.1:8545)
           OWNER="${OWNER_RAW,,}"
@@ -379,7 +358,7 @@ jobs:
             echo "FAIL: hasRole(AGENT_ROLE, $AGENT_ADDRESS) = $HAS_ROLE" >&2
             exit 1
           fi
-          echo "OK: generated agent $AGENT_ADDRESS is owned by $PARENT_ADDRESS and holds AGENT_ROLE"
+          echo "OK: generated agent $AGENT_ADDRESS is owned by the timelock $PARENT_ADDRESS and holds AGENT_ROLE"
 
       # Approve the gateway to pull the agent's USDC, signed by the generated
       # agent key. rmpc's deposit preflight (§4.4) hard-refuses when
@@ -540,7 +519,7 @@ jobs:
         with:
           version: stable
 
-      - name: Install Bun (core stage runner)
+      - name: Install Bun (publish-contracts, the one deploy driver)
         uses: oven-sh/setup-bun@v2
 
       - name: Cargo cache
@@ -563,44 +542,30 @@ jobs:
           pin-block: ${{ needs.pin.outputs.block }}
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
-      # Twin environment step "fund USDC": the deployer (seed deposit) and the read-only agent.
-      - name: Fund the deployer and the agent with USDC (Twin chain environment step)
+      # Twin environment step "fund USDC" for the read-only agent. The deployer is a throwaway keystore that
+      # the twin-publish action below funds (gas and the seed USDC).
+      - name: Fund the agent with USDC (Twin chain environment step)
         run: |
           set -euo pipefail
-          ADMIN=$(cast wallet address --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
           AGENT=$(cast wallet address --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 2)
-          bun scripts/devnet/twin-fork.ts fund-usdc "$ADMIN" 2000000000
           bun scripts/devnet/twin-fork.ts fund-usdc "$AGENT" 2000000000
           USDC_ADDR=$(bun -e 'import {USDC} from "./scripts/devnet/twin-fork-lib.ts"; console.log(USDC)')
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
 
-      - name: Derive deploy addresses from Anvil accounts
+      - name: Derive the agent and share receiver from Anvil accounts
         run: |
           set -euo pipefail
           ACCOUNTS=$(cast rpc eth_accounts --rpc-url http://127.0.0.1:8545)
-          echo "ADMIN_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[0]')" >> $GITHUB_ENV
-          echo "PAUSER_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[1]')" >> $GITHUB_ENV
           echo "AGENT_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[2]')" >> $GITHUB_ENV
           echo "SHARE_RECEIVER_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[3]')" >> $GITHUB_ENV
-          PRIVKEY=$(cast wallet private-key --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
-          echo "ANVIL_PRIVKEY=$PRIVKEY" >> $GITHUB_ENV
 
-      - name: Deploy contracts + fund agent on devnet
-        # Deploys the three real Aave/Compound/Morpho adapters against the
-        # Twin chain (real protocol storage is present, so the seed-deposit
-        # totalAssets() succeeds — no passthrough hatch needed).
-        run: |
-          mkdir -p deployments
-          export FEE_RECIPIENT="$SHARE_RECEIVER_ADDRESS"
-          export SEED_SHARE_RECEIVER="$SHARE_RECEIVER_ADDRESS"
-          export TVL_CAP=10000000000000 PER_DEPOSIT_CAP=1000000000000
-          export AGENT_VALID_UNTIL=4102444800
-          export AGENT_MAX_PER_PAYMENT=10000000000 AGENT_MAX_PER_WINDOW=100000000000
-          export AGENT_MAX_WITHDRAW_PER_PAYMENT=10000000000 AGENT_MAX_WITHDRAW_PER_WINDOW=100000000000
-          CHAIN_ID=$(cast chain-id --rpc-url http://127.0.0.1:8545)
-          bun scripts/deploy/core-stages.ts --rpc-url http://127.0.0.1:8545 \
-            --out "deployments/${CHAIN_ID}.json" \
-            --forge-arg --unlocked --forge-arg --sender --forge-arg "$ADMIN_ADDRESS"
+      - name: Deploy contracts on the Twin chain
+        # The one deploy driver (bun publish-contracts/src/cli.ts publish), with the three real
+        # Aave/Compound/Morpho adapters against the Twin chain (real protocol storage is present).
+        uses: ./.github/actions/twin-publish
+        with:
+          agent-address: ${{ env.AGENT_ADDRESS }}
+          share-receiver-address: ${{ env.SHARE_RECEIVER_ADDRESS }}
 
       - name: Read-only isolation assertions
         run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_read_only -- --nocapture
@@ -618,10 +583,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
-          DEPLOYMENT_JSON="deployments/$(cast chain-id --rpc-url http://127.0.0.1:8545).json"
-          GATEWAY=$(jq -r '.gateway' "$DEPLOYMENT_JSON")
-          VAULT=$(jq -r '.vault' "$DEPLOYMENT_JSON")
-          GATEWAY_RUNTIME_HASH=$(jq -r '.gateway_runtime_hash' "$DEPLOYMENT_JSON")
+          GATEWAY=$(jq -r '.gateway' "$TWIN_MANIFEST_DIR/gateway.json")
+          VAULT=$(jq -r '.vault' "$TWIN_MANIFEST_DIR/vault.json")
+          GATEWAY_RUNTIME_HASH=$(jq -r '.gateway_runtime_hash' "$TWIN_MANIFEST_DIR/gateway.json")
           echo "GATEWAY_ADDRESS=$GATEWAY" >> $GITHUB_ENV
           CONFIG="${RUNNER_TEMP}/robotmoney-opencode/config.toml"
           CHAIN_ID=$(cast chain-id --rpc-url http://127.0.0.1:8545)

@@ -1,4 +1,4 @@
-// Canonical: robotmoney/devops issue 53 / core issue 1499, core S10 (issue 1489).
+// Canonical: core issue 1499, core S10 (issue 1489).
 // The gate exits 0 on the tree and non-zero, naming the file, on a planted Demo contract, a stub,
 // a mock Safe, a bad block.chainid use, a restored deleted path and a deleted name in a script.
 // Run: bun test scripts/ci/check-no-test-only-code.test.ts

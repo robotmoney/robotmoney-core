@@ -1,6 +1,6 @@
 //! Full-stack integration test: boot Postgres in a container, deploy a vault of OUR OWN to the Twin
-//! chain through the deploy scripts (the smoke-test harness, which calls the devops "publish
-//! contracts" runbook), point the indexer at the Twin chain and at the manifest addresses, run a
+//! chain through the deploy scripts (the smoke-test harness, which calls the "publish
+//! contracts" runbook, `publish-contracts/` in this repo), point the indexer at the Twin chain and at the manifest addresses, run a
 //! bounded range, and assert the contract of issue #57:
 //!
 //! - `indexer_runs` records a successful run.
@@ -12,7 +12,7 @@
 //!
 //! The Twin chain (id 918453) is a pinned lazy fork of real Base state made with anvil (core 1498,
 //! 1496). Set `TWIN_RPC_URL` to a running fork (CI does, through .github/actions/twin-fork), and
-//! `PUBLISH_CONTRACTS_DIR` and `STAGE_SHEET` for the publish run. Clean room rule: this test never
+//! optionally `STAGE_SHEET` for the publish run (default: the committed `deployments/twin-918453/stage-sheet.env`). Clean room rule: this test never
 //! reads the live production v1 vault or any hard-coded Robot Money address. Every address comes
 //! from the manifests the publish run wrote.
 
@@ -29,8 +29,7 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
     if !has_twin {
         panic!(
             "[explorer-indexer-tests] TWIN_RPC_URL REQUIRED here but unset. Start the Twin fork \
-             (bun scripts/devnet/twin-fork.ts start) and export TWIN_RPC_URL, \
-             PUBLISH_CONTRACTS_DIR and STAGE_SHEET."
+             (bun scripts/devnet/twin-fork.ts start) and export TWIN_RPC_URL."
         );
     }
     let fx = pg_fixture().await;

@@ -101,7 +101,7 @@ jobs:
         run: bun scripts/ci/check-manifest-keys.ts
 
       - name: Manifest-key gate and core stage table tests
-        run: bun test scripts/ci/check-manifest-keys.test.ts scripts/deploy/core-stages.test.ts
+        run: bun test scripts/ci/check-manifest-keys.test.ts scripts/deploy/stage-table.test.ts
 
       # Core S2 (issue 1484): config rules and the offline config-check test.
       - name: Config-check offline test

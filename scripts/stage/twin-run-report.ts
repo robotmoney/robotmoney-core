@@ -6,18 +6,18 @@
 // Nothing is hard-coded here.
 //
 // Prints: stages (manifest present or missing, tx count), the vault set (key, artifact, address),
-// the verifier labels (PASS and FAIL), and the merged manifest the assertion scripts read.
+// and the verifier labels (PASS and FAIL).
 // Exit 0 when every stage manifest and every vault address is present and no label failed. Exit 1 otherwise.
 // Exit 64 on usage.
 //
 // Usage:
 //   bun scripts/stage/twin-run-report.ts --manifest-dir DIR [--run-manifest FILE] [--labels FILE]
-//        [--table FILE] [--merged-out FILE] [--json-out FILE]
-// Canonical: robotmoney/devops issue 53 / core issue 1499 (S9; core 1488, 1485, 1486).
+//        [--table FILE] [--json-out FILE]
+// Canonical: core issue 1499 (S9; core 1488, 1485, 1486).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { keyOf, loadStageTable, mergeManifests, stagesFromTable, type StageTable } from "../deploy/core-stages.ts";
+import { loadStageTable, type StageTable } from "./stage-table.ts";
 import { parseLabels } from "./label-diff.ts";
 
 export interface StageRow {
@@ -40,7 +40,6 @@ export interface Report {
   totalTx: number;
   vaults: VaultRow[];
   labels: LabelRow[];
-  merged: Record<string, unknown>;
   problems: string[];
 }
 
@@ -88,9 +87,7 @@ export function labelRows(text: string): LabelRow[] {
 export function buildReport(inp: Inputs): Report {
   const problems: string[] = [];
   const stages: StageRow[] = [];
-  const parts: Record<string, unknown>[] = [];
   const runStages = inp.runManifest?.stages ?? {};
-  const runnerStages = stagesFromTable(inp.table);
 
   for (const row of inp.table.stages) {
     const file = row.manifest.split("/").pop()!;
@@ -98,20 +95,7 @@ export function buildReport(inp: Inputs): Report {
     const rec = runStages[row.name];
     const txCount = rec ? (rec.count ?? rec.broadcastCount ?? null) : null;
     stages.push({ stage: row.name, manifest: file, present: !!m, txCount });
-    if (!m) {
-      problems.push(`stage ${row.name}: manifest ${file} is missing`);
-      continue;
-    }
-    const rs = runnerStages.find((s) => s.name === row.name)!;
-    const namespaced: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(m)) namespaced[keyOf(rs, k)] = v;
-    parts.push(namespaced);
-  }
-  let merged: Record<string, unknown> = {};
-  try {
-    merged = mergeManifests(parts);
-  } catch (e) {
-    problems.push(String((e as Error).message));
+    if (!m) problems.push(`stage ${row.name}: manifest ${file} is missing`);
   }
   if (inp.runManifest) {
     const counted = stages.filter((s) => s.txCount !== null);
@@ -131,7 +115,7 @@ export function buildReport(inp: Inputs): Report {
     for (const l of labels) if (!l.ok) problems.push(`verifier label failed: ${l.label}`);
   }
   const totalTx = stages.reduce((n, s) => n + (s.txCount ?? 0), 0);
-  return { stages, totalTx, vaults, labels, merged, problems };
+  return { stages, totalTx, vaults, labels, problems };
 }
 
 export function render(r: Report): string {
@@ -185,12 +169,11 @@ function main(): number {
         "run-manifest": { type: "string" },
         labels: { type: "string" },
         table: { type: "string" },
-        "merged-out": { type: "string" },
         "json-out": { type: "string" },
       },
     }));
   } catch (e) {
-    console.error(`${(e as Error).message}\nusage: bun scripts/stage/twin-run-report.ts --manifest-dir DIR [--run-manifest F] [--labels F] [--merged-out F] [--json-out F]`);
+    console.error(`${(e as Error).message}\nusage: bun scripts/stage/twin-run-report.ts --manifest-dir DIR [--run-manifest F] [--labels F] [--json-out F]`);
     return 64;
   }
   if (!v["manifest-dir"]) {
@@ -212,7 +195,6 @@ function main(): number {
     runManifest: v["run-manifest"] ? (readJson(v["run-manifest"] as string) as Inputs["runManifest"]) : null,
     labelsText,
   });
-  if (v["merged-out"]) writeFileSync(v["merged-out"] as string, JSON.stringify({ ...report.merged, stages: report.stages.map((s) => ({ stage: s.stage, tx_count: s.txCount ?? 0 })) }, null, 2) + "\n");
   if (v["json-out"]) writeFileSync(v["json-out"] as string, JSON.stringify(report, null, 2) + "\n");
   process.stdout.write(render(report));
   return report.problems.length === 0 ? 0 : 1;

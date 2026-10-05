@@ -66,15 +66,10 @@ on:
         required: false
         default: ""
       production_fixtures_dir:
-        description: "Directory with the devops production fixtures (verifier-labels.txt, production-sheet.env), relative to the workspace."
+        description: "Optional: a directory with production fixtures (verifier-labels.txt, production-sheet.env), relative to the workspace, for a caller that has them. Empty: the parity step uses the label and sheet fixtures committed in publish-contracts/tests/fixtures."
         type: string
         required: false
-        default: "devops/deployments/base-8453"
-      publish_contracts_dir:
-        description: "The devops publish-contracts directory (holds src/cli.ts), relative to the workspace. Default: the devops checkout this workflow makes."
-        type: string
-        required: false
-        default: "devops/publish-contracts"
+        default: ""
   # HEAVY tier: this devnet boot/teardown suite is a merge gate for `dev` — it
   # runs on every pull_request targeting dev (no path filter, so the gate always
   # reports for any branch merging to dev) and on push to dev for merged-commit
@@ -86,15 +81,10 @@ on:
   workflow_dispatch:
     inputs:
       production_fixtures_dir:
-        description: "Directory with the devops production fixtures (verifier-labels.txt, production-sheet.env), relative to the workspace."
+        description: "Optional: a directory with production fixtures (verifier-labels.txt, production-sheet.env), relative to the workspace, for a caller that has them. Empty: the parity step uses the label and sheet fixtures committed in publish-contracts/tests/fixtures."
         type: string
         required: false
-        default: "devops/deployments/base-8453"
-      publish_contracts_dir:
-        description: "The devops publish-contracts directory (holds src/cli.ts), relative to the workspace. Default: the devops checkout this workflow makes."
-        type: string
-        required: false
-        default: "devops/publish-contracts"
+        default: ""
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
 # not pile up duplicate suites. push:main/dev runs are exempt — they keep a
@@ -262,14 +252,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      # The harness calls the one runbook, "publish contracts" (devops, Bun TypeScript).
-      # Same devops SHA as every other run; the Twin chain arguments are the only difference.
-      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
-        id: devops
-        uses: ./.github/actions/devops-publish-contracts
-        with:
-          token: ${{ secrets.DEVOPS_READ_TOKEN }}
-          ref: ${{ vars.DEVOPS_PUBLISH_REF }}
+      # The harness calls the one runbook, "publish contracts" (publish-contracts/ in this repo, Bun TypeScript).
+      # The Twin chain arguments are the only difference from a mainnet run.
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
 
       # cli_meta boots the dapp compose stack, so Docker must be available.
       - name: Verify Docker is available
@@ -319,12 +305,9 @@ jobs:
       # nothing) fails loudly instead of reporting a false green — the same
       # guard suites 4/6/7/8/20 already use.
       - name: cargo test (${{ matrix.binary }} — boots + tears down its own devnet)
-        if: steps.devops.outputs.available != 'false'
         working-directory: testing/smoke-test
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-${{ matrix.binary }}.log
-          PUBLISH_CONTRACTS_DIR: ${{ github.workspace }}/devops/publish-contracts
-          STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
           # Core 1488: a Twin chain matrix binary that executes zero tests is a silent skip. Every
           # binary in this matrix holds at least one test, so the floor is one (non-zero count).
           CARGO_TEST_MIN_EXECUTED: "1"
@@ -376,18 +359,17 @@ jobs:
             echo "deploy=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if git diff --name-only "$BASE_SHA"...HEAD | grep -Eq '^(contracts/script/|scripts/deploy/|scripts/stage/|config/|testing/smoke-test/|\.github/workflows/suite-14-smoke-test\.yml)'; then
+          if git diff --name-only "$BASE_SHA"...HEAD | grep -Eq '^(contracts/script/|scripts/deploy/|scripts/stage/|publish-contracts/|deployments/twin-918453/|config/|testing/smoke-test/|\.github/workflows/suite-14-smoke-test\.yml)'; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           else
             echo "deploy=false" >> "$GITHUB_OUTPUT"
           fi
 
   # THE TWIN CHAIN PUBLISH JOB (core 1488, 1486, 1485). Starts the Twin chain (918453), a pinned lazy
-  # fork of real Base state, runs publish contracts (the devops CLI, directory given by the input publish_contracts_dir)
+  # fork of real Base state, runs publish contracts (bun publish-contracts/src/cli.ts, the one deploy driver)
   # through the harness test twin_publish: all four vaults, the real Safe, the timelock handover, the
-  # one verifier and the govern matrix. While the chain is up the same test runs the assertion scripts
-  # scripts/deploy/assert-core-router.ts, assert-basket-vaults.ts and assert-timelock-roles.ts, then
-  # scripts/stage/twin-run-report.ts. This job needs no Docker and runs only in CI.
+  # one verifier (its labels include the router, basket and timelock role proofs) and the govern matrix.
+  # While the chain is up the same test runs scripts/stage/twin-run-report.ts. This job needs no Docker and runs only in CI.
   twin_publish:
     name: smoke-test-twin-publish
     needs: [changes, pin]
@@ -400,20 +382,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
-        id: devops
-        uses: ./.github/actions/devops-publish-contracts
-        with:
-          token: ${{ secrets.DEVOPS_READ_TOKEN }}
-          ref: ${{ vars.DEVOPS_PUBLISH_REF }}
-
-      - name: Install publish-contracts dependencies
-        env:
-          PUBLISH_DIR: ${{ github.workspace }}/${{ inputs.publish_contracts_dir || 'devops/publish-contracts' }}
-        working-directory: ${{ github.workspace }}
-        run: |
-          test -f "$PUBLISH_DIR/src/cli.ts" || { echo "::error::$PUBLISH_DIR/src/cli.ts not found"; exit 1; }
-          cd "$PUBLISH_DIR" && bun install --frozen-lockfile
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -433,13 +403,10 @@ jobs:
 
       # Non-zero test count floor (core 1488): cargo_test_require_executed.sh fails a run that executes
       # fewer than CARGO_TEST_MIN_EXECUTED tests, so a filter that matches nothing is a failure, not a green.
-      - name: Twin chain publish, verify, assertion scripts and govern matrix
-        if: steps.devops.outputs.available != 'false'
+      - name: Twin chain publish, verify and govern matrix
         working-directory: testing/smoke-test
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-twin_publish.log
-          PUBLISH_CONTRACTS_DIR: ${{ github.workspace }}/${{ inputs.publish_contracts_dir || 'devops/publish-contracts' }}
-          STAGE_SHEET: ${{ github.workspace }}/devops/deployments/twin-918453/stage-sheet.env
           CARGO_TEST_MIN_EXECUTED: "1"
           SMOKE_TEST_VERIFY_OUT: ${{ runner.temp }}/stage-verify-labels.txt
           SMOKE_TEST_SHEET_OUT: ${{ runner.temp }}/stage-run-sheet.env
@@ -450,17 +417,20 @@ jobs:
 
       # Core 1488: the REAL stage outputs go through label-diff and sheet-diff. The Twin chain test
       # (twin_publish.rs) writes the verifier label file (SMOKE_TEST_VERIFY_OUT) and the run sheet
-      # (SMOKE_TEST_SHEET_OUT). The mainnet side is the devops production fixtures directory, given as
-      # the input production_fixtures_dir. A missing or empty file fails this step and names the path.
+      # (SMOKE_TEST_SHEET_OUT). The other side is the input production_fixtures_dir when a caller gives
+      # one, else the label and sheet fixtures committed in publish-contracts/tests/fixtures. A missing or
+      # empty file fails this step and names the path.
       - name: Stage vs mainnet parity (label-diff, sheet-diff on real output)
-        if: steps.devops.outputs.available != 'false'
         env:
-          FIXTURES_DIR: ${{ github.workspace }}/${{ inputs.production_fixtures_dir || 'devops/deployments/base-8453' }}
-        run: >-
-          bun scripts/stage/parity.ts
-          --stage-labels "$RUNNER_TEMP/stage-verify-labels.txt"
-          --stage-sheet "$RUNNER_TEMP/stage-run-sheet.env"
-          --fixtures-dir "$FIXTURES_DIR"
+          FIXTURES_DIR: ${{ inputs.production_fixtures_dir }}
+        run: |
+          args=(--stage-labels "$RUNNER_TEMP/stage-verify-labels.txt" --stage-sheet "$RUNNER_TEMP/stage-run-sheet.env")
+          if [ -n "$FIXTURES_DIR" ]; then
+            args+=(--fixtures-dir "$GITHUB_WORKSPACE/$FIXTURES_DIR")
+          else
+            args+=(--mainnet-labels publish-contracts/tests/fixtures/verifier-labels.txt --production-sheet publish-contracts/tests/fixtures/frozen-sheet.env.example)
+          fi
+          bun scripts/stage/parity.ts "${args[@]}"
 
       - name: Upload manifests, proofs and the run report
         if: always()

@@ -6,7 +6,7 @@ import { configCheck, loadConfiguredAssets, loadVaultConfiguredAssets, maxDeviat
 import { PublishError } from "../src/errors.ts";
 import { loadStageTable } from "../src/stage-table.ts";
 import type { Address, ChainReader, Hex } from "../src/verify/types.ts";
-import { CORE_DIR, coreAvailable } from "./core-dir.ts";
+import { REPO_ROOT, coreAvailable } from "./repo-root.ts";
 import { CONFIG_ASSET, NOW_TS, tmp, writeCoreAssetConfig } from "./fixtures.ts";
 
 const addr = (n: number): Address => `0x${n.toString(16).padStart(40, "0")}` as Address;
@@ -118,10 +118,10 @@ describe("core's asset config files", () => {
   });
 });
 
-// Core parity (devops 64, issue 4): the real config files in CORE_DIR load, with the shape the verifier and the config-check read.
-describe.skipIf(!coreAvailable())(`core parity: the real core config files in ${CORE_DIR}`, () => {
+// Core parity (devops 64, issue 4): the real config files in REPO_ROOT load, with the shape the verifier and the config-check read.
+describe.skipIf(!coreAvailable())(`core parity: the real core config files in ${REPO_ROOT}`, () => {
   test("every configured asset loads with a token, a pool, a positive swapFee and the V3 venue", () => {
-    const all = loadConfiguredAssets(CORE_DIR);
+    const all = loadConfiguredAssets(REPO_ROOT);
     expect(all.length).toBeGreaterThan(0);
     for (const a of all) {
       expect(a.token).toMatch(/^0x[0-9a-fA-F]{40}$/);
@@ -131,12 +131,12 @@ describe.skipIf(!coreAvailable())(`core parity: the real core config files in ${
     }
   });
   test("rmPROTO lists wETH and cbBTC, rmRWA lists deSPXA only, rmAGENT ships empty", () => {
-    expect(loadVaultConfiguredAssets(CORE_DIR, "PROTO").map((a) => a.symbol)).toEqual(["wETH", "cbBTC"]);
-    expect(loadVaultConfiguredAssets(CORE_DIR, "RWA").map((a) => a.symbol)).toEqual(["deSPXA"]);
-    expect(loadVaultConfiguredAssets(CORE_DIR, "AGENT")).toEqual([]);
+    expect(loadVaultConfiguredAssets(REPO_ROOT, "PROTO").map((a) => a.symbol)).toEqual(["wETH", "cbBTC"]);
+    expect(loadVaultConfiguredAssets(REPO_ROOT, "RWA").map((a) => a.symbol)).toEqual(["deSPXA"]);
+    expect(loadVaultConfiguredAssets(REPO_ROOT, "AGENT")).toEqual([]);
   });
   test("every basket and agent vault of the stage table has a config file mapping", () => {
-    const table = loadStageTable(CORE_DIR);
-    for (const v of table.vaults) if (v.key !== "USDC") expect(() => loadVaultConfiguredAssets(CORE_DIR, v.key)).not.toThrow();
+    const table = loadStageTable(REPO_ROOT);
+    for (const v of table.vaults) if (v.key !== "USDC") expect(() => loadVaultConfiguredAssets(REPO_ROOT, v.key)).not.toThrow();
   });
 });

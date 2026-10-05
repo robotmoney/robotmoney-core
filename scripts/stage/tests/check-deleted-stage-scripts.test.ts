@@ -44,6 +44,19 @@ test("each deleted file fails when it comes back", () => {
   }
 });
 
+test("the old core runner and its assert scripts fail when they come back", () => {
+  for (const f of ["scripts/deploy/core-stages.ts", "scripts/deploy/assert-core-router.ts", "scripts/deploy/assert-basket-vaults.ts", "scripts/deploy/assert-timelock-roles.ts", ".github/actions/devops-publish-contracts/action.yml"]) {
+    expect(check(tree({ [f]: "x" })).join("\n")).toContain(f);
+  }
+});
+
+test("a caller of the old runner, PUBLISH_CONTRACTS_DIR, DEVOPS_READ_TOKEN or a devops checkout fails", () => {
+  for (const text of ["bun scripts/deploy/core-stages.ts --rpc-url x", "PUBLISH_CONTRACTS_DIR: /x", "token: ${{ secrets.DEVOPS_READ_TOKEN }}", "uses: ./.github/actions/devops-publish-contracts", "repository: robotmoney/devops"]) {
+    const root = tree({ ".github/workflows/x.yml": `${text}\n` });
+    expect(check(root).length).toBeGreaterThan(0);
+  }
+});
+
 test("a Rust forge deployment in the harness fails", () => {
   const root = tree({ "testing/smoke-test/src/lib.rs": "fn run_forge_deploy_registry() {}\n" });
   expect(check(root).join("\n")).toContain("run_forge_deploy");

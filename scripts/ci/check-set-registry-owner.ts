@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Canonical: robotmoney/devops issue 53 / core issue 1499, core S5 (issue 1487).
+// Canonical: core issue 1499, core S5 (issue 1487).
 //
 // CI gate: setRegistry is called nowhere under contracts/script or scripts except
 // DeployTimelock.s.sol. Vault deploy scripts must never link the registry.
@@ -15,14 +15,13 @@ export const SET_REGISTRY_ALLOWLIST: { file: string; reason: string }[] = [
   { file: "scripts/ci/check-set-registry-owner.ts", reason: "this gate names the call it bans" },
   { file: "scripts/ci/check-set-registry-owner.test.ts", reason: "this gate's self-test plants the call to prove the gate fails" },
   {
-    file: "scripts/deploy/assert-timelock-roles.ts",
-    reason: "post-deploy verifier: an eth_call probe that a second setRegistry reverts; it never sends the call",
+    file: "publish-contracts/src/verify/index.ts",
+    reason: "the one verifier: an eth_call probe that a second setRegistry reverts; it never sends the call",
   },
-  {
-    file: "scripts/deploy/twin-chain-proofs.test.ts",
-    reason: "names the verifier probe in a skipIf test title; the test only runs assert-timelock-roles.ts",
-  },
-  { file: "scripts/deploy/core-stages.test.ts", reason: "unit test of that verifier, with an injected reader" },
+  { file: "publish-contracts/tests/verify/world.ts", reason: "the verifier's unit-test chain: answers that probe" },
+  { file: "publish-contracts/tests/verify/negative-fixtures.test.ts", reason: "plants the fault that label catches" },
+  { file: "publish-contracts/tests/verify/fixtures/expected-labels.json", reason: "the committed label list names the check" },
+  { file: "publish-contracts/tests/fixtures/verifier-labels.txt", reason: "the committed label list names the check" },
 ];
 
 const SKIP_DIRS = new Set(["node_modules", "out", "cache", ".git", "lib", "target", "broadcast"]);

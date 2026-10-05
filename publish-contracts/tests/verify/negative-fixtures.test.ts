@@ -66,6 +66,8 @@ const RULES: Rule[] = [
   [/^gateway: PAUSER_ROLE held by pauser$/, (w) => w.chain.revoke(GATEWAY, PAUSER_ROLE, PAUSER)],
   [/^gateway: PAUSER_ROLE not held by deployer$/, (w) => w.chain.grant(GATEWAY, PAUSER_ROLE, DEPLOYER)],
   [/^gateway: not paused$/, (w) => w.chain.set(GATEWAY, "paused", true)],
+  [/^gateway: router\(\) equals the deployed router$/, (w) => w.chain.set(GATEWAY, "router", OTHER)],
+  [/^registry: router\(\) equals the deployed router$/, (w) => w.chain.set(REGISTRY, "router", OTHER)],
   [/^(.+): ADMIN_ROLE held by timelock$/, (w, m) => w.chain.revoke(subject(m[1]), ADMIN_ROLE, TIMELOCK)],
   [/^(.+): DEFAULT_ADMIN held by timelock$/, (w, m) => w.chain.revoke(subject(m[1]), Z32, TIMELOCK)],
   [/^(.+): DEFAULT_ADMIN not held by deployer$/, (w, m) => w.chain.grant(subject(m[1]), Z32, DEPLOYER)],
@@ -74,6 +76,8 @@ const RULES: Rule[] = [
   [/^(.+): EMERGENCY_ROLE not held by deployer$/, (w, m) => w.chain.grant(subject(m[1]), EMERGENCY_ROLE, DEPLOYER)],
   // vault facts
   [/^(vault\[\w+\]): registry link$/, (w, m) => w.chain.set(subject(m[1]), "registry", OTHER)],
+  [/^(vault\[\w+\]): a second setRegistry reverts$/, (w) => { w.chain.setRegistryOpen = true; }],
+  [/^vault\[rmAGENT\]: ships with no assets$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): tvlCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "tvlCap", 1n)],
   [/^(vault\[\w+\]): perDepositCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "perDepositCap", 1n)],
   [/^(vault\[\w+\]): exitFeeBps equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "exitFeeBps", 999n)],

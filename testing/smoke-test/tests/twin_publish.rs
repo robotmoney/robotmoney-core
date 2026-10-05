@@ -2,7 +2,7 @@
 //!
 //! One test boots the Twin chain (918453) through the harness. The harness has already called
 //! `publish` (deploy all four vaults, real Safe handover). This test then asserts the four
-//! manifests, runs the one verifier, and runs the stage 13 govern matrix through the real Safe.
+//! manifests, runs the one verifier (which holds the router, basket and timelock role proofs), and runs the stage 13 govern matrix through the real Safe.
 //! The verifier output (SMOKE_TEST_VERIFY_OUT) and the run sheet (SMOKE_TEST_SHEET_OUT) are saved for the
 //! parity step in suite 14. Every govern row must carry a tx hash and receipt status 1 (checked by `govern_matrix`).
 //!
@@ -31,15 +31,6 @@ fn run_bun(repo_root: &Path, args: &[String]) {
         args.join(" "),
         out.status.code()
     );
-}
-
-/// The value of `export NAME=VALUE` in the run sheet. The sheet is read as data, never sourced.
-fn sheet_value(sheet: &Path, name: &str) -> String {
-    let text = std::fs::read_to_string(sheet).expect("read the run sheet");
-    let prefix = format!("export {name}=");
-    text.lines()
-        .find_map(|l| l.trim().strip_prefix(&prefix).map(|v| v.trim().to_string()))
-        .unwrap_or_else(|| panic!("the run sheet has no {name}"))
 }
 
 #[test]
@@ -73,9 +64,10 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         std::fs::copy(&fx.published().sheet_path, &path).expect("copy the run sheet");
     }
 
-    // Core 1488: the three assertion scripts run against the live Twin chain while it is up, then the
-    // run report prints stages, tx counts, the vault set and the verifier labels. Proofs and the report
-    // are written to SMOKE_TEST_PROOF_DIR (uploaded by the suite 14 twin_publish job).
+    // Core 1488: the run report prints stages, tx counts, the vault set and the verifier labels. The router,
+    // basket and timelock role proofs are labels of the one verifier above (gateway and registry router(), vault
+    // registry link and one-shot setRegistry, asset config, roles). The report is written to SMOKE_TEST_PROOF_DIR
+    // (uploaded by the suite 14 twin_publish job).
     let proof_dir: PathBuf = std::env::var("SMOKE_TEST_PROOF_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| fx.tempdir().join("proofs"));
@@ -95,66 +87,10 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             dir.join("publish-run.json").display().to_string(),
             s("--labels"),
             verify_labels.display().to_string(),
-            s("--merged-out"),
-            p("merged-manifest.json"),
             s("--json-out"),
             p("twin-run-report.json"),
         ],
     );
-    let rpc = fx.rpc_url().to_string();
-    let keys = &fx.published().keys;
-    run_bun(
-        &root,
-        &[
-            s("scripts/deploy/assert-core-router.ts"),
-            s("--rpc-url"),
-            rpc.clone(),
-            s("--manifest"),
-            p("merged-manifest.json"),
-            s("--out"),
-            p("proof-router.json"),
-            // The share receiver on the Twin chain is a keyless address, so the signed deposit and
-            // withdraw round trip runs where both signers exist. The two router() reads run here.
-            s("--read-only"),
-        ],
-    );
-    run_bun(
-        &root,
-        &[
-            s("scripts/deploy/assert-basket-vaults.ts"),
-            s("--rpc-url"),
-            rpc.clone(),
-            s("--manifest"),
-            p("merged-manifest.json"),
-            s("--out"),
-            p("proof-basket.json"),
-        ],
-    );
-    run_bun(
-        &root,
-        &[
-            s("scripts/deploy/assert-timelock-roles.ts"),
-            s("--rpc-url"),
-            rpc,
-            s("--manifest"),
-            p("merged-manifest.json"),
-            s("--deployer"),
-            keys.address("ADMIN_ADDRESS")
-                .expect("ADMIN_ADDRESS")
-                .to_string(),
-            s("--safe"),
-            format!("{:#x}", fx.safe()),
-            s("--emergency"),
-            keys.address("EMERGENCY_ADDRESS")
-                .expect("EMERGENCY_ADDRESS")
-                .to_string(),
-            s("--min-delay"),
-            sheet_value(&fx.published().sheet_path, "TIMELOCK_MIN_DELAY"),
-            s("--out"),
-            p("proof-timelock-roles.json"),
-        ],
-    );
-
     let rows = fx
         .published()
         .govern_matrix()

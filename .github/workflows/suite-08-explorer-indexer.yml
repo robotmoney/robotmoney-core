@@ -27,7 +27,7 @@
 #   deliberately omits a Docker availability check because it should not need compose;
 #   if you start seeing connection refused in migrations, verify the runner has Docker.
 # - fork_indexer needs the Twin fork (TWIN_RPC_URL, started by .github/actions/twin-fork at the run
-#   pin) and the devops publish run (PUBLISH_CONTRACTS_DIR), because it deploys its own vault.
+#   pin) and the publish-contracts run (the one deploy driver in this repo), because it deploys its own vault.
 #   A rate-limited upstream (HTTP 429) is retried by anvil and the twin-fork tool.
 
 name: explorer-indexer-migrations-reorg
@@ -321,13 +321,9 @@ jobs:
         with:
           submodules: recursive
 
-      # fork_indexer deploys its own vault through the devops "publish contracts" runbook.
-      - name: Check out devops and export PUBLISH_CONTRACTS_DIR (publish contracts)
-        id: devops
-        uses: ./.github/actions/devops-publish-contracts
-        with:
-          token: ${{ secrets.DEVOPS_READ_TOKEN }}
-          ref: ${{ vars.DEVOPS_PUBLISH_REF }}
+      # fork_indexer deploys its own vault through the "publish contracts" runbook (publish-contracts/ in this repo).
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
 
       - name: Verify Docker is available (Postgres testcontainer)
         run: docker version
@@ -347,7 +343,6 @@ jobs:
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
       - name: Fork indexer test (own vault on the Twin chain)
-        if: steps.devops.outputs.available != 'false'
         working-directory: services/explorer-indexer
         run: cargo test --test fork_indexer -- --nocapture
 

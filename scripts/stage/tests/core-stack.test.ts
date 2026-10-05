@@ -1,5 +1,5 @@
 // Offline test for scripts/stage/core-stack.ts (ported from the old shell selftest).
-// core-stack deploys and governs by calling publish contracts (devops, Bun TypeScript). Here the
+// core-stack deploys and governs by calling publish contracts (publish-contracts/ in this repo, Bun TypeScript). Here the
 // publish contracts call is a fake runner that records argv. Checked: the exact argument list, the
 // keystore signer string, exit-code passthrough, the govern row gate, the usage errors, the record
 // contract with its schema drift guard, parity, and that a redeploy from a new SHA mints a fresh
@@ -23,9 +23,6 @@ const a = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
 
 const REPO = join(WORK, "repo");
 const OUT = join(WORK, "out");
-const PC = join(WORK, "pc");
-mkdirSync(join(PC, "src"), { recursive: true });
-writeFileSync(join(PC, "src/cli.ts"), "");
 const git = (...args: string[]) =>
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: REPO, encoding: "utf8" }).trim();
 mkdirSync(REPO, { recursive: true });
@@ -104,7 +101,9 @@ beforeEach(() => {
   writeFileSync(join(OUT, "core-smoke.log"), summary());
   calls = { cmds: [] };
   nextResult = { code: 0, stdout: "", stderr: "" };
-  env = { PUBLISH_CONTRACTS_DIR: PC, BUN: "bun-fake" };
+  mkdirSync(join(REPO, "publish-contracts/src"), { recursive: true });
+  writeFileSync(join(REPO, "publish-contracts/src/cli.ts"), "");
+  env = { BUN: "bun-fake" };
 });
 
 describe("usage", () => {

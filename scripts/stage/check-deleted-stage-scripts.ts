@@ -1,10 +1,10 @@
 // CI grep gate: exits 0 only when the second deployment path is gone.
-// Absent: the stage ceremony shell, deploy-core-stack.sh, the deploy workflow, the
+// Absent: the old core runner (core-stages.ts) and its assert scripts, the devops checkout, the stage ceremony shell, deploy-core-stack.sh, the deploy workflow, the
 // Rust harness deployment (forge script calls, demo seeding, faucet funding).
 // The stage verbs are Bun TypeScript (scripts/stage/core-stack.ts), called directly. The core-stack.sh shim
 // is deleted (core 1488): it must stay absent, and core-stack.ts may not hold deploy or ceremony logic.
 // Usage: bun scripts/stage/check-deleted-stage-scripts.ts [repo-root]
-// Canonical: robotmoney/devops issue 53 / core issue 1499 (S9, core 1488).
+// Canonical: core issue 1499 (S9, core 1488).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -20,6 +20,15 @@ export const MUST_BE_ABSENT = [
   "testing/smoke-test/tests/faucet_rm.rs",
   "deployments/timelock-918453.json",
   "scripts/stage/core-stack.sh",
+  // One driver (owner decision 2026-10-05): the publish-contracts CLI is the only deploy driver. The old core runner,
+  // its post-stage assert scripts and the devops checkout action are gone.
+  "scripts/deploy/core-stages.ts",
+  "scripts/deploy/core-stages.test.ts",
+  "scripts/deploy/assert-core-router.ts",
+  "scripts/deploy/assert-basket-vaults.ts",
+  "scripts/deploy/assert-timelock-roles.ts",
+  "scripts/deploy/twin-chain-proofs.test.ts",
+  ".github/actions/devops-publish-contracts/action.yml",
 ];
 
 /** Patterns that must not appear in the harness, clients, scripts or workflows. */
@@ -29,8 +38,14 @@ export const FORBIDDEN_PATTERNS: { re: RegExp; why: string }[] = [
   { re: /dapp_faucet_key|fund_rm_token/, why: "dapp faucet funding" },
   { re: /fusion-ceremony\.sh|deploy-core-stack\.sh/, why: "a deleted stage script" },
   { re: /core-stack\.sh/, why: "the deleted core-stack.sh shim (call scripts/stage/core-stack.ts directly)" },
-  { re: /deploy-contracts\.yml/, why: "the deleted deploy workflow (deployment is publish contracts in devops)" },
+  { re: /deploy-contracts\.yml/, why: "the deleted deploy workflow (deployment is publish contracts: publish-contracts/ in this repo)" },
   { re: /timelock-918453/, why: "the stale timelock record fallback" },
+  { re: /core-stages\.ts/, why: "the deleted core runner (run `bun publish-contracts/src/cli.ts`, the one deploy driver)" },
+  { re: /assert-(core-router|basket-vaults|timelock-roles)/, why: "a deleted post-stage assert script (its checks are labels of the one verifier)" },
+  { re: /PUBLISH_CONTRACTS_DIR/, why: "PUBLISH_CONTRACTS_DIR (the driver is in this repo: publish-contracts/src/cli.ts)" },
+  { re: /DEVOPS_READ_TOKEN/, why: "DEVOPS_READ_TOKEN (core never depends on devops)" },
+  { re: /devops-publish-contracts/, why: "the deleted devops checkout action" },
+  { re: /repository:\s*robotmoney\/devops/, why: "a devops checkout (the dependency direction is devops to core only)" },
 ];
 
 /** core-stack wraps boot, health, the record and parity only. These strings mean deploy or ceremony logic crept back. */
@@ -105,5 +120,5 @@ if (import.meta.main) {
   const v = check(root);
   for (const m of v) console.error(`deleted-stage-gate: ${m}`);
   if (v.length) process.exit(1);
-  console.log("deleted-stage-gate: the stage ceremony, deploy-core-stack and the Rust harness deployment are gone");
+  console.log("deleted-stage-gate: the stage ceremony, deploy-core-stack, the core runner and the Rust harness deployment are gone");
 }

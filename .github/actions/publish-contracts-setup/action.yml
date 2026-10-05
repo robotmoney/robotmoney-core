@@ -1,0 +1,12 @@
+name: publish-contracts-setup
+description: >-
+  Installs bun and the dependencies of publish-contracts/, the one deploy driver
+  (bun publish-contracts/src/cli.ts). It lives in this repo: no other checkout,
+  no token. The Rust harnesses deploy to the Twin chain through it.
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+    - shell: bash
+      working-directory: publish-contracts
+      run: bun install --frozen-lockfile

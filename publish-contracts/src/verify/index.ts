@@ -1,7 +1,7 @@
 // The one verifier (stage 12). Same code, same labels on the Twin chain (918453) and Base mainnet (8453).
 // Replaces the three superseded verifier shell scripts and the stage verifier.
 // Read-only: it sends nothing.
-import { keccak256, toHex } from "viem";
+import { encodeFunctionData, keccak256, parseAbiItem, toHex } from "viem";
 import { Collector } from "./collector.ts";
 import { compareCode, loadArtifact } from "./codehash.ts";
 import {
@@ -108,6 +108,9 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await c.runEq("gateway: PAUSER_ROLE not held by deployer", () => hasRole(chain, gateway, PAUSER_ROLE, D), false);
   await c.runEq("router: ADMIN_ROLE held by governance", () => hasRole(chain, router, ADMIN_ROLE, byName.governance), true);
   await c.runEq("gateway: not paused", () => chain.read(gateway, "function paused() view returns (bool)"), false);
+  // The router-first split (core 1493): the gateway and the registry both name the router the router stage deployed.
+  await c.runEq("gateway: router() equals the deployed router", async () => lc((await chain.read(gateway, "function router() view returns (address)")) as string), lc(router));
+  await c.runEq("registry: router() equals the deployed router", async () => lc((await chain.read(registry, "function router() view returns (address)")) as string), lc(router));
 
   // ---- vaults
   for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet });
@@ -197,6 +200,11 @@ async function vaultChecks(
   await c.runEq(`${p}: EMERGENCY_ROLE held by emergency key`, () => hasRole(chain, a, EMERGENCY_ROLE, sheet.emergency), true);
   await c.runEq(`${p}: EMERGENCY_ROLE not held by deployer`, () => hasRole(chain, a, EMERGENCY_ROLE, D), false);
   await c.runEq(`${p}: registry link`, () => chain.read(a, "function registry() view returns (address)"), registry);
+  // setRegistry is one-shot: a second call from the deployer must revert (core 1483).
+  await c.run(`${p}: a second setRegistry reverts`, async () => {
+    const r = await chain.callRaw(a, encodeFunctionData({ abi: [parseAbiItem("function setRegistry(address registry)")], functionName: "setRegistry", args: [registry] }), D);
+    return { ok: !r.ok, detail: r.ok ? "the call succeeded" : `reverted: ${r.reason ?? "no reason"}` };
+  });
   if (!vs) {
     for (const l of ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
     if (v.kind !== "usdc") c.fail(`${p}: asset config equals sheet`, "no sheet entry for this vault");
@@ -221,6 +229,7 @@ async function vaultChecks(
     await seedShareChecks(c, chain, v, D, vs.seedShareReceiver);
   } else {
     await c.run(`${p}: asset config equals sheet`, async () => assetReadBack(chain, a, vs.assets));
+    if (v.kind === "agent") await c.run(`${p}: ships with no assets`, async () => ({ ok: vs.assets.length === 0, detail: `sheet lists ${vs.assets.length} assets` }));
   }
 }
 

@@ -18,7 +18,7 @@ export const SUITES: Record<string, string[]> = {
   safe: ["src/safe/unit.test.ts", "src/safe/repo-guard.test.ts"],
   verify: ["tests/verify/units.test.ts", "tests/verify/verify.test.ts", "tests/verify/artifacts.test.ts", "tests/verify/guard.test.ts", "tests/verify-stage.test.ts"],
   evidence: ["tests/evidence-check.test.ts", "tests/evidence-secret-scan.test.ts"],
-  // reads core's stage table from CORE_DIR (core checked out at the pinned DEPLOY_SHA): every row, env name, manifest and artifact exists in core
+  // reads core's stage table from REPO_ROOT (core checked out at the pinned DEPLOY_SHA): every row, env name, manifest and artifact exists in core
   parity: ["tests/core-parity.test.ts"],
   // the workflow gates: plan gate (core check-sha-green wiring), workflow inputs and pins, config-check, sheet merge
   gates: ["tests/plan-gate.test.ts", "tests/config-check.test.ts"],

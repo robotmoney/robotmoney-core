@@ -2,8 +2,8 @@
 // One verb per stage job for the core stack on the Twin chain (918453). Bun TypeScript.
 //
 // This tool wraps BOOT, HEALTH, the record and the parity checks. It deploys nothing and governs
-// nothing itself. Stage runs the same runbook as mainnet, "publish contracts" (devops, Bun
-// TypeScript), with the Twin chain arguments:
+// nothing itself. Stage runs the same runbook as mainnet, "publish contracts" (publish-contracts/ in this repo, Bun
+// TypeScript, run as `bun publish-contracts/src/cli.ts`), with the Twin chain arguments:
 //
 //   --chain 918453 --rpc <twin rpc> --sheet <stage sheet> \
 //   --signer keystore:<key dir>/DEPLOYER:<passphrase file> --environment stage --core-sha <sha>
@@ -64,6 +64,12 @@ export const DEFAULT_RPC_URL = "http://127.0.0.1:18545";
 export const DAPP_PROJECT = "robotmoney-dapp";
 export const TESTNET_LABEL = "com.robotmoney.testnet=1";
 export const SUMMARY_END = "--- end endpoint summary ---";
+/** The one deploy driver, relative to the repo root. */
+const PUBLISH_CLI_REL = "publish-contracts/src/cli.ts";
+/** The Twin chain stage sheet committed in this repo (parameter lines only). STAGE_SHEET overrides it. */
+const STAGE_SHEET_REL = "deployments/twin-918453/stage-sheet.env";
+const stageSheetPath = (s: { deps: Deps }): string => s.deps.env.STAGE_SHEET || join(s.deps.repoRoot, STAGE_SHEET_REL);
+
 /** Canonical Safe v1.4.1 on the Twin chain: publish contracts needs all three. */
 export const SAFE_SET: [string, string][] = [
   ["SafeL2 singleton", "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"],
@@ -405,8 +411,7 @@ export class Stack {
 
   async publishContracts(verb: string, extra: string[] = [], stream = false): Promise<RunResult> {
     this.need(this.bun);
-    const dir = this.needEnv("PUBLISH_CONTRACTS_DIR", "point it at the devops publish-contracts directory");
-    const cli = join(dir, "src/cli.ts");
+    const cli = join(this.deps.repoRoot, PUBLISH_CLI_REL);
     if (!existsSync(cli)) throw fail(`${cli} not found`, EXIT.INPUT);
     const sheet = this.sv("sheet_path");
     const keyDir = this.sv("key_dir");
@@ -575,8 +580,10 @@ function tailLog(s: Stack, n = 150): void {
 
 async function chainUp(s: Stack): Promise<void> {
   s.need("docker");
-  s.needEnv("PUBLISH_CONTRACTS_DIR", "the harness calls publish contracts: point it at the devops publish-contracts directory");
-  s.needEnv("STAGE_SHEET", "the harness needs the stage sheet (parameter lines only)");
+  const cli = join(s.deps.repoRoot, PUBLISH_CLI_REL);
+  if (!existsSync(cli)) throw fail(`${cli} not found: run from a core checkout that holds publish-contracts/`, EXIT.INPUT);
+  const sheetIn = stageSheetPath(s);
+  if (!isFile(sheetIn)) throw fail(`the stage sheet ${sheetIn} does not exist (STAGE_SHEET overrides the committed ${STAGE_SHEET_REL})`, EXIT.INPUT);
   const want = await s.candidateCommit();
   if (!want) throw fail(`--ref '${s.opts.ref || "HEAD"}' is not a branch, tag or commit in this checkout`, EXIT.INPUT);
   const headR = await s.deps.run(["git", "rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);

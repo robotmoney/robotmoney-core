@@ -4,6 +4,6 @@ setDefaultTimeout(60_000);
 // Loads the stage table from the repo root (scripts/deploy/stage-table.json) before any test module reads the stage list.
 import { loadStageTable } from "../src/stage-table.ts";
 import { useStageTable } from "../src/stages.ts";
-import { CORE_DIR } from "./core-dir.ts";
+import { REPO_ROOT } from "./repo-root.ts";
 
-useStageTable(loadStageTable(CORE_DIR));
+useStageTable(loadStageTable(REPO_ROOT));
