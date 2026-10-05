@@ -12,7 +12,6 @@
  *
  * No network beyond a localhost stub, no Docker, no anvil.
  */
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DESPXA_POOL, REPO, SWAP_ROUTER02, V3_FACTORY, INFRA_ADDRESSES, loadConfiguredPools, rpc } from "./fork-snapshot-lib.ts";
@@ -80,16 +79,12 @@ check(/robotMoneyAddresses/.test(contents) && /fail\(`Robot Money contract has c
 {
   const { lockstepErrors } = await import("./check-fork-lockstep.ts");
   const H = "0x" + "ab".repeat(32);
-  const alloc = Buffer.from("{}");
-  const sha = createHash("sha256").update(alloc).digest("hex");
   const cur = { fork_block: 10, fork_block_hash: H };
   const fb = { block_number: 10, block_hash: H };
-  const side = { block_number: 10, block_hash: H, alloc_sha256: sha };
-  check(lockstepErrors(cur, fb, side, alloc).length === 0, "lockstep: matching number and hash pass");
-  check(lockstepErrors(cur, { ...fb, block_hash: "0x" + "cd".repeat(32) }, side, alloc).length > 0, "lockstep: a differing hash fails");
-  check(lockstepErrors({ ...cur, fork_block: 11 }, fb, side, alloc).length > 0, "lockstep: a differing number fails");
-  check(lockstepErrors(cur, fb, side, Buffer.from("{\"x\":1}")).length > 0, "lockstep: edited alloc bytes fail");
-  check(lockstepErrors({ fork_block: 10 }, fb, side, alloc).length > 0, "lockstep: missing CURRENT.json hash fails");
+  check(lockstepErrors(cur, fb).length === 0, "lockstep: matching number and hash pass");
+  check(lockstepErrors(cur, { ...fb, block_hash: "0x" + "cd".repeat(32) }).length > 0, "lockstep: a differing hash fails");
+  check(lockstepErrors({ ...cur, fork_block: 11 }, fb).length > 0, "lockstep: a differing number fails");
+  check(lockstepErrors({ fork_block: 10 }, fb).length > 0, "lockstep: missing CURRENT.json hash fails");
 }
 
 // ── lockstep CLI against committed fixtures ────────────────────────────────
@@ -99,7 +94,7 @@ check(/robotMoneyAddresses/.test(contents) && /fail\(`Robot Money contract has c
     return Bun.spawnSync(["bun", join(REPO, "scripts/devnet/check-fork-lockstep.ts"), "--fork-state", join(d, "state"), "--config", join(d, "config")], { stdout: "pipe", stderr: "pipe" });
   };
   check(run("good").exitCode === 0, "lockstep fixture good: exits 0");
-  for (const bad of ["hash-mismatch", "number-mismatch", "alloc-hash-mismatch"]) {
+  for (const bad of ["hash-mismatch", "number-mismatch"]) {
     const r = run(bad);
     check(r.exitCode === 1 && /FAIL/.test(r.stderr.toString()), `lockstep fixture ${bad}: exits non-zero naming the disagreement`);
   }
