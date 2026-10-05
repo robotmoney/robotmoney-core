@@ -6,6 +6,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
@@ -1092,8 +1093,8 @@ contract RobotMoneyVaultTest is Test {
             false,
             "withdrawals must not be paused after emergencyWithdraw"
         );
-        // paused() (= both flags) must be false.
-        assertFalse(vault.paused(), "full paused() must be false after emergencyWithdraw");
+        // paused() reports the deposit pause (core 1494): true, while exits stay open.
+        assertTrue(vault.paused(), "paused() must report the deposit halt after emergencyWithdraw");
 
         // Alice can redeem — assets are now in idle USDC in the vault.
         vm.prank(alice);
@@ -1108,35 +1109,70 @@ contract RobotMoneyVaultTest is Test {
         vault.deposit(bobDeposit, bob);
     }
 
-    /// @notice full pause() blocks both deposits and withdrawals.
-    function test_fullPause_blocksDepositsAndWithdrawals() public {
-        // Alice deposits.
+    /// @notice pause() stops deposits and mints only. Redeem and withdraw stay open and
+    ///         pay the correct assets, and maxRedeem / maxWithdraw stay consistent
+    ///         with that (owner decision 2026-10-05, core 1494).
+    function test_pause_blocksDepositsOnly_redeemAndWithdrawStayOpen() public {
         uint256 depositAmount = 5_000 * ONE_USDC;
         vm.prank(alice);
         uint256 aliceShares = vault.deposit(depositAmount, alice);
+        vm.prank(bob);
+        vault.deposit(depositAmount, bob);
 
-        // Admin full-pauses the vault.
         vm.prank(admin);
         vault.pause();
 
         assertTrue(vault.depositsPaused(), "deposits must be paused");
-        assertTrue(vault.withdrawalsPaused(), "withdrawals must be paused");
+        assertFalse(vault.withdrawalsPaused(), "pause must not pause withdrawals");
         assertTrue(vault.paused(), "paused() must be true");
 
-        // Deposit blocked. maxDeposit() returns 0 when paused, so ERC4626ExceededMaxDeposit
-        // fires before the internal DepositsPaused guard.
+        // Deposit and mint blocked. maxDeposit() returns 0 when paused, so
+        // ERC4626ExceededMaxDeposit fires before the internal DepositsPaused guard.
+        assertEq(vault.maxDeposit(bob), 0, "maxDeposit must be 0 while paused");
+        assertEq(vault.maxMint(bob), 0, "maxMint must be 0 while paused");
         vm.prank(bob);
-        vm.expectRevert(); // ERC4626ExceededMaxDeposit(receiver, assets, 0)
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ERC4626.ERC4626ExceededMaxDeposit.selector, bob, 1_000 * ONE_USDC, 0
+            )
+        );
         vault.deposit(1_000 * ONE_USDC, bob);
+        vm.prank(bob);
+        vm.expectRevert();
+        vault.mint(1e24, bob);
 
-        // Redeem blocked. maxRedeem() returns 0 while withdrawals are paused
-        // (audit 2026-06-09, L-1), so ERC4626ExceededMaxRedeem fires before the
-        // internal WithdrawalsPaused guard.
-        assertEq(vault.maxRedeem(alice), 0, "maxRedeem must be 0 while paused");
-        assertEq(vault.maxWithdraw(alice), 0, "maxWithdraw must be 0 while paused");
+        // Redeem open: maxRedeem is the full balance and redeem pays the deposit back.
+        assertEq(vault.maxRedeem(alice), aliceShares, "maxRedeem must be the full balance");
+        assertApproxEqAbs(
+            vault.maxWithdraw(alice), depositAmount, 1, "maxWithdraw must be the full position"
+        );
+        uint256 aliceUsdcBefore = usdc.balanceOf(alice);
         vm.prank(alice);
-        vm.expectRevert(); // ERC4626ExceededMaxRedeem(owner, shares, 0)
-        vault.redeem(aliceShares, alice, alice);
+        uint256 assetsOut = vault.redeem(aliceShares, alice, alice);
+        assertApproxEqAbs(assetsOut, depositAmount, 1, "redeem pays the deposit while paused");
+        assertEq(usdc.balanceOf(alice) - aliceUsdcBefore, assetsOut, "alice receives the assets");
+        assertEq(vault.balanceOf(alice), 0, "alice shares burned");
+
+        // Withdraw open too.
+        uint256 bobUsdcBefore = usdc.balanceOf(bob);
+        uint256 bobMax = vault.maxWithdraw(bob);
+        vm.prank(bob);
+        vault.withdraw(bobMax, bob, bob);
+        assertEq(usdc.balanceOf(bob) - bobUsdcBefore, bobMax, "withdraw pays while paused");
+    }
+
+    /// @notice unpause() restores deposits after a pause.
+    function test_unpause_restoresDeposits() public {
+        vm.prank(admin);
+        vault.pause();
+        vm.prank(admin);
+        vault.unpause();
+
+        assertFalse(vault.depositsPaused(), "deposits open after unpause");
+        assertFalse(vault.paused(), "paused() false after unpause");
+        vm.prank(bob);
+        uint256 shares = vault.deposit(1_000 * ONE_USDC, bob);
+        assertGt(shares, 0, "deposit works after unpause");
     }
 
     /// @notice After emergencyWithdraw, split-pause state is correctly set; full unpause restores both.

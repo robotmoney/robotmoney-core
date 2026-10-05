@@ -5,7 +5,7 @@ description: "Role constants and AccessControl wiring for the RobotMoney gateway
 
 # AccessRoles
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/gateway/AccessRoles.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a36830c259d61a1e110157e28f971cb6c99efb9/contracts/gateway/AccessRoles.sol)
 
 **Inherits:** AccessControl
 
@@ -18,9 +18,9 @@ Role constants and AccessControl wiring for the RobotMoney gateway.
 Three roles, all distinct keys (see `Plan tracking issue #109` §2.1):
 - `ADMIN_ROLE`  — grants/revokes other roles, sets policy, unpauses.
 - `PAUSER_ROLE` — `pause()` only. Asymmetric with unpause by design:
-pausing is a stop-the-world tool that must be fast and unilateral
-(one compromised PAUSER can only DoS, not steal); unpause is
-deliberate and restricted to ADMIN.
+pausing stops new deposits and must be fast and unilateral
+(one compromised PAUSER can only DoS deposits, never block exits or
+steal; core 1494); unpause is deliberate and restricted to ADMIN.
 - `AGENT_ROLE`  — only role allowed to call `deposit()`.
 
 </i>

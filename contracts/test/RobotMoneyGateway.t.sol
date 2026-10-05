@@ -2094,25 +2094,28 @@ contract GatewayWithdrawTest is Test {
     }
 
     // -------------------------------------------------------------------
-    // Reverts: paused
+    // Paused: withdrawals stay open (core 1494)
     // -------------------------------------------------------------------
 
-    function test_withdraw_revertsWhenPaused() public {
+    /// @notice A gateway pause stops deposits only. A withdraw while paused
+    ///         burns the shares and pays the full assets to `assetRecipient`.
+    function test_withdraw_succeedsWhenPaused() public {
         _authorize(_defaultPolicy());
-        _mintSharesAndApprove(100 * ONE_USDC);
+        uint256 shares = 100 * ONE_USDC;
+        _mintSharesAndApprove(shares);
 
         vm.prank(pauser);
         gateway.pause();
+        assertTrue(gateway.paused(), "gateway paused");
 
         vm.prank(agent);
-        vm.expectRevert(RobotMoneyGateway.PausedError.selector);
-        gateway.withdraw(
-            keccak256("o"),
-            100 * ONE_USDC,
-            address(vault),
-            uint64(block.timestamp + 60),
-            keccak256("i")
+        (, uint256 assetsOut) = gateway.withdraw(
+            keccak256("o"), shares, address(vault), uint64(block.timestamp + 60), keccak256("i")
         );
+
+        assertEq(assetsOut, shares, "assetsOut 1:1 while paused");
+        assertEq(vault.balanceOf(agent), 0, "agent shares burned while paused");
+        assertEq(usdc.balanceOf(assetRecipient), shares, "USDC to assetRecipient while paused");
     }
 
     // -------------------------------------------------------------------

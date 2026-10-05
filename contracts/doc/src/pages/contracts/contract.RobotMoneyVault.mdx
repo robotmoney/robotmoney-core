@@ -5,7 +5,7 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a36830c259d61a1e110157e28f971cb6c99efb9/contracts/RobotMoneyVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -36,9 +36,9 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
 ### EMERGENCY_ROLE
 
-Role that can pause and perform emergency withdrawals.
+Role that can pause deposits and perform emergency withdrawals.
 Asymmetric with unpause by design: a compromised emergency key can
-only halt the vault (DoS), not restart it. Unpause is restricted to
+only halt new deposits (DoS), not restart them and never block exits. Unpause is restricted to
 `ADMIN_ROLE` so that resuming operations is deliberate and requires
 the higher-trust role — mirroring the gateway's `PAUSER_ROLE` /
 `ADMIN_ROLE` asymmetry documented in `AccessRoles.sol`.
@@ -256,7 +256,8 @@ bool public depositsPaused;
 
 ### withdrawalsPaused
 
-When true, withdrawals and redeems are blocked.
+When true, withdrawals and redeems are blocked. No function in this
+contract sets it to true, so exits are always open (core 1494).
 
 ```solidity
 bool public withdrawalsPaused;
@@ -1002,7 +1003,9 @@ function setMinRebalanceInterval(uint256 newInterval) external onlyRole(ADMIN_RO
 
 ### pause
 
-Pause all deposits and withdrawals. Restricted to `EMERGENCY_ROLE`.
+Pause new deposits and mints. Restricted to `EMERGENCY_ROLE`.
+Withdrawals and redeems stay open: a pause never stops a holder from
+exiting (owner decision 2026-10-05, core 1494; docs/prd.md §11.1).
 
 ```solidity
 function pause() external onlyRole(EMERGENCY_ROLE);
@@ -1012,9 +1015,11 @@ function pause() external onlyRole(EMERGENCY_ROLE);
 
 ### unpause
 
-Resume deposits and withdrawals. Restricted to `ADMIN_ROLE`.
+Resume deposits and mints. Restricted to `ADMIN_ROLE`.
 Intentionally asymmetric: pausing is fast and unilateral (`EMERGENCY_ROLE`);
 unpausing is deliberate and requires the higher-trust admin role.
+Also clears the deposit halt set by `emergencyWithdraw`,
+`emergencyWithdrawAdapter` and `forceRemoveAdapter`.
 
 ```solidity
 function unpause() external onlyRole(ADMIN_ROLE);
@@ -1491,7 +1496,8 @@ function _activeAdapterCount() internal view returns (uint256);
 
 ### paused
 
-Returns true when both deposits and withdrawals are blocked (full pause).
+Returns true when the vault is paused. A pause stops new deposits only;
+withdrawals and redeems stay open while this returns true (core 1494).
 Provided for compatibility with tooling that queries `paused()`.
 
 ```solidity

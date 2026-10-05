@@ -24,8 +24,8 @@ interface IPortfolioRouter {
     ///         `assetRecipient`. Legs are driven by the `vaults[]` argument, not
     ///         the live weight vector (issue #967, F-03), so a reweighted-out or
     ///         Retired position stays redeemable; `sharesPerLeg[i]` is identity-
-    ///         bound to `vaults[i]` (NC-5). Redemption permits Active OR Retired
-    ///         status; only Paused blocks a leg (F-02).
+    ///         bound to `vaults[i]` (NC-5). Redemption works for every registry
+    ///         status (Active, Paused, Retired): a pause stops deposits only (core 1494).
     /// @param shareHolder       Address whose vault shares are redeemed (must have
     ///                          approved the router to spend shares per vault).
     /// @param assetRecipient    Address that receives the redeemed USDC per leg.

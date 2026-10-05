@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a36830c259d61a1e110157e28f971cb6c99efb9/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
 
@@ -218,7 +218,7 @@ mapping(bytes32 => bool) public usedPaymentIds;
 
 ### _paused
 
-Stop-the-world flag.
+Deposit pause flag. Blocks `deposit` and `depositTo` only (core 1494).
 
 ```solidity
 bool private _paused;
@@ -889,7 +889,9 @@ function _validatePolicy(address caller, AgentPolicy calldata p) internal view;
 
 ### pause
 
-Stop-the-world pause. Restricted to `PAUSER_ROLE`.
+Pause new deposits (`deposit`, `depositTo`). Restricted to `PAUSER_ROLE`.
+Withdrawals (`withdraw`, `withdrawFromRouter`) stay open while paused
+(owner decision 2026-10-05, core 1494).
 
 ```solidity
 function pause() external onlyRole(PAUSER_ROLE);
@@ -899,7 +901,7 @@ function pause() external onlyRole(PAUSER_ROLE);
 
 ### unpause
 
-Resume operations. Restricted to `ADMIN_ROLE` (asymmetric).
+Resume deposits. Restricted to `ADMIN_ROLE` (asymmetric).
 `ADMIN_ROLE` is retained as a protocol-wide kill-switch
 counterweight to `pause`; it has no authority over the
 lifecycle of an agent it does not own.
@@ -1156,8 +1158,9 @@ function withdraw(
 
 Redeem vault shares proportionally across all Portfolio Router
 legs. Enforces the same policy checks (valid-until, per-payment
-cap, window cap, allowed-source-vaults, pause, idempotency,
-recipient) as single-vault `withdraw`. Each leg's vault must
+cap, window cap, allowed-source-vaults, idempotency,
+recipient) as single-vault `withdraw`. Works while the gateway is
+paused: a pause stops deposits only (core 1494). Each leg's vault must
 appear in `policy.allowedSourceVaults` (when non-empty). USDC
 is forwarded exclusively to the policy-configured `assetRecipient`.
 
@@ -1501,7 +1504,8 @@ error AssetMismatch();
 
 ### PausedError
 
-Operation rejected because the gateway is paused (also re-thrown by `pause()` if already paused).
+Deposit rejected because the gateway is paused (also re-thrown by `pause()` if already paused).
+Withdrawals never raise it: a pause stops deposits only (core 1494).
 
 ```solidity
 error PausedError();

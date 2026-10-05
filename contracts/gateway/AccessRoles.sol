@@ -10,9 +10,9 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 /// @dev Three roles, all distinct keys (see `Plan tracking issue #109` §2.1):
 ///      - `ADMIN_ROLE`  — grants/revokes other roles, sets policy, unpauses.
 ///      - `PAUSER_ROLE` — `pause()` only. Asymmetric with unpause by design:
-///        pausing is a stop-the-world tool that must be fast and unilateral
-///        (one compromised PAUSER can only DoS, not steal); unpause is
-///        deliberate and restricted to ADMIN.
+///        pausing stops new deposits and must be fast and unilateral
+///        (one compromised PAUSER can only DoS deposits, never block exits or
+///        steal; core 1494); unpause is deliberate and restricted to ADMIN.
 ///      - `AGENT_ROLE`  — only role allowed to call `deposit()`.
 ///
 /// Invariant. The three privileged roles `ADMIN_ROLE`, `PAUSER_ROLE`,

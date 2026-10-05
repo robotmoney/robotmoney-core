@@ -5,7 +5,7 @@ description: "Tests for gateway.depositTo routing through the PortfolioRouter. C
 
 # GatewayRouterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a36830c259d61a1e110157e28f971cb6c99efb9/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:** Test
 
@@ -1008,18 +1008,18 @@ parallel-length guard (0 == 0) and trips the empty-vault-set check.
 function test_withdrawFromRouter_revertsOnEmptyVaults() public;
 ```
 
-<a id="test_withdrawfromrouter_revertswhenpaused"></a>
+<a id="test_withdrawfromrouter_succeedswhenpaused"></a>
 
-### test_withdrawFromRouter_revertsWhenPaused
+### test_withdrawFromRouter_succeedsWhenPaused
 
 <i>
 
-router: paused gateway reverts.
+router: a paused gateway still redeems. A pause stops deposits only (core 1494).
 
 </i>
 
 ```solidity
-function test_withdrawFromRouter_revertsWhenPaused() public;
+function test_withdrawFromRouter_succeedsWhenPaused() public;
 ```
 
 <a id="test_withdrawfromrouter_revertsonzerototalshares"></a>

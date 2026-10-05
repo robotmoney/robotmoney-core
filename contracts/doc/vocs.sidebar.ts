@@ -302,6 +302,7 @@ export const sidebar = [
             { text: "NaiveAgentGateway", link: "/contracts/test/contract.NaiveAgentGateway" },
             { text: "NoYieldTestAdapterTest", link: "/contracts/test/contract.NoYieldTestAdapterTest" },
             { text: "PartialAcceptVault", link: "/contracts/test/contract.PartialAcceptVault" },
+            { text: "PauseDepositsOnlyGovernanceTest", link: "/contracts/test/contract.PauseDepositsOnlyGovernanceTest" },
             { text: "PortfolioRouterRuntimeEligibilityTest", link: "/contracts/test/contract.PortfolioRouterRuntimeEligibilityTest" },
             { text: "PortfolioRouterTest", link: "/contracts/test/contract.PortfolioRouterTest" },
             { text: "PosConfAavePool", link: "/contracts/test/contract.PosConfAavePool" },

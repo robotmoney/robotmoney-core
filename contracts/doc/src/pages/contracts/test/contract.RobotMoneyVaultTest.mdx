@@ -4,7 +4,7 @@ title: "RobotMoneyVaultTest"
 
 # RobotMoneyVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a36830c259d61a1e110157e28f971cb6c99efb9/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:** Test
 
@@ -546,14 +546,26 @@ New deposits must be blocked.
 function test_emergencyWithdraw_userCanRedeem_newDepositBlocked() public;
 ```
 
-<a id="test_fullpause_blocksdepositsandwithdrawals"></a>
+<a id="test_pause_blocksdepositsonly_redeemandwithdrawstayopen"></a>
 
-### test_fullPause_blocksDepositsAndWithdrawals
+### test_pause_blocksDepositsOnly_redeemAndWithdrawStayOpen
 
-full pause() blocks both deposits and withdrawals.
+pause() stops deposits and mints only. Redeem and withdraw stay open and
+pay the correct assets, and maxRedeem / maxWithdraw stay consistent
+with that (owner decision 2026-10-05, core 1494).
 
 ```solidity
-function test_fullPause_blocksDepositsAndWithdrawals() public;
+function test_pause_blocksDepositsOnly_redeemAndWithdrawStayOpen() public;
+```
+
+<a id="test_unpause_restoresdeposits"></a>
+
+### test_unpause_restoresDeposits
+
+unpause() restores deposits after a pause.
+
+```solidity
+function test_unpause_restoresDeposits() public;
 ```
 
 <a id="test_emergencywithdraw_thenunpause_restoresfullfunctionality"></a>

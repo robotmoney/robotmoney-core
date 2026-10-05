@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a36830c259d61a1e110157e28f971cb6c99efb9/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -596,9 +596,10 @@ the router never silently skips or reorders a named vault.
 targets exactly the address the caller named, so a reweight
 between sign and execution can never redirect a leg to a vault
 the caller did not name (NC-5).
-- Redemption succeeds when a leg's registry status is Active OR
-Retired; only Paused blocks the exit (F-02). Retired vaults are
-withdraw-only, never deposit targets — see ADR-0009.
+- Redemption succeeds whatever a leg's registry status is (Active,
+Paused or Retired). A pause stops deposits only, never an exit
+(core 1494). Retired vaults are withdraw-only, never deposit
+targets — see ADR-0009.
 
 SECURITY: users must NEVER grant a share-token approval directly to
 this router. The router calls `vault.redeem` with itself as the
@@ -1242,22 +1243,6 @@ error VaultNotActive(address vault, VaultRegistry.VaultStatus status);
 | ---- | ---- | ----------- |
 | vault | `address` | The vault address that is not Active. |
 | status | `VaultRegistry.VaultStatus` | The current non-Active status of the vault. |
-
-### VaultPausedForRedeem
-
-A redeem leg targets a Paused vault. Redemption permits Active OR
-Retired status (withdraw-only after retirement, F-02); only Paused
-blocks the exit path.
-
-```solidity
-error VaultPausedForRedeem(address vault);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| vault | `address` | The vault address whose status is Paused. |
 
 ### InsufficientGas
 

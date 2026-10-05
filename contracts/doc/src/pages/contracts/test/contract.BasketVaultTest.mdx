@@ -4,7 +4,7 @@ title: "BasketVaultTest"
 
 # BasketVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a36830c259d61a1e110157e28f971cb6c99efb9/contracts/test/BasketVault.t.sol)
 
 **Inherits:** Test
 
@@ -190,6 +190,48 @@ a holder can still redeem while the vault is paused.
 
 ```solidity
 function test_pause_doesNotFreezeWithdrawals() public;
+```
+
+<a id="test_unpause_afterpause_restoresdeposits"></a>
+
+### test_unpause_afterPause_restoresDeposits
+
+core 1494: unpause() after pause() restores deposits.
+
+```solidity
+function test_unpause_afterPause_restoresDeposits() public;
+```
+
+<a id="test_unpause_afteremergencyunwind_reopensdeposits"></a>
+
+### test_unpause_afterEmergencyUnwind_reopensDeposits
+
+core 1494: emergencyUnwind sets only `depositsPaused` (no OZ pause).
+unpause() must clear it without reverting `ExpectedPause`.
+
+```solidity
+function test_unpause_afterEmergencyUnwind_reopensDeposits() public;
+```
+
+<a id="test_unpause_whennotpaused_isnoop"></a>
+
+### test_unpause_whenNotPaused_isNoOp
+
+core 1494: unpause() on a vault that is not paused is a no-op, as on
+RobotMoneyVault.
+
+```solidity
+function test_unpause_whenNotPaused_isNoOp() public;
+```
+
+<a id="test_unpause_revertsforemergencyrole"></a>
+
+### test_unpause_revertsForEmergencyRole
+
+Only ADMIN_ROLE can unpause; the EMERGENCY holder cannot.
+
+```solidity
+function test_unpause_revertsForEmergencyRole() public;
 ```
 
 <a id="test_sweepforeigntoken_revertsforactivebasketasset"></a>

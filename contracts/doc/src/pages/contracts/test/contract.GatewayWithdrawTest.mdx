@@ -4,7 +4,7 @@ title: "GatewayWithdrawTest"
 
 # GatewayWithdrawTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a36830c259d61a1e110157e28f971cb6c99efb9/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:** Test
 
@@ -265,12 +265,15 @@ function test_withdraw_revertsWhenSourceVaultNotPinnedVault() public;
 function test_withdraw_revertsWhenSourceVaultNotInAllowedList() public;
 ```
 
-<a id="test_withdraw_revertswhenpaused"></a>
+<a id="test_withdraw_succeedswhenpaused"></a>
 
-### test_withdraw_revertsWhenPaused
+### test_withdraw_succeedsWhenPaused
+
+A gateway pause stops deposits only. A withdraw while paused
+burns the shares and pays the full assets to `assetRecipient`.
 
 ```solidity
-function test_withdraw_revertsWhenPaused() public;
+function test_withdraw_succeedsWhenPaused() public;
 ```
 
 <a id="test_withdraw_revertswheninsufficientshareallowance"></a>

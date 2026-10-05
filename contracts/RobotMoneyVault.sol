@@ -36,9 +36,9 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     ///         (including this role's own grant path) can never be
     ///         permanently bricked.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    /// @notice Role that can pause and perform emergency withdrawals.
+    /// @notice Role that can pause deposits and perform emergency withdrawals.
     ///         Asymmetric with unpause by design: a compromised emergency key can
-    ///         only halt the vault (DoS), not restart it. Unpause is restricted to
+    ///         only halt new deposits (DoS), not restart them and never block exits. Unpause is restricted to
     ///         `ADMIN_ROLE` so that resuming operations is deliberate and requires
     ///         the higher-trust role — mirroring the gateway's `PAUSER_ROLE` /
     ///         `ADMIN_ROLE` asymmetry documented in `AccessRoles.sol`.
@@ -117,12 +117,14 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     address public registry;
 
     // ─── Split pause semantics ─────────────────────────────────────────
-    // Deposits and withdrawals are gated independently so that emergencyWithdraw()
-    // can block new capital inflows while preserving user exit rights.
+    // A pause stops new deposits only. `pause()`, `emergencyWithdraw()` and the
+    // other emergency levers set `depositsPaused`; none of them blocks an exit
+    // (owner decision 2026-10-05, core 1494).
 
     /// @notice When true, new deposits and mints are blocked.
     bool public depositsPaused;
-    /// @notice When true, withdrawals and redeems are blocked.
+    /// @notice When true, withdrawals and redeems are blocked. No function in this
+    ///         contract sets it to true, so exits are always open (core 1494).
     bool public withdrawalsPaused;
 
     // ─── Rebalance throttling ──
@@ -1025,18 +1027,20 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
 
     // ─── Emergency ────────────────────────────────────────────────────
 
-    /// @notice Pause all deposits and withdrawals. Restricted to `EMERGENCY_ROLE`.
+    /// @notice Pause new deposits and mints. Restricted to `EMERGENCY_ROLE`.
+    ///         Withdrawals and redeems stay open: a pause never stops a holder from
+    ///         exiting (owner decision 2026-10-05, core 1494; docs/prd.md §11.1).
     function pause() external onlyRole(EMERGENCY_ROLE) {
         _setDepositsPaused(true);
-        _setWithdrawalsPaused(true);
     }
 
-    /// @notice Resume deposits and withdrawals. Restricted to `ADMIN_ROLE`.
+    /// @notice Resume deposits and mints. Restricted to `ADMIN_ROLE`.
     ///         Intentionally asymmetric: pausing is fast and unilateral (`EMERGENCY_ROLE`);
     ///         unpausing is deliberate and requires the higher-trust admin role.
+    ///         Also clears the deposit halt set by `emergencyWithdraw`,
+    ///         `emergencyWithdrawAdapter` and `forceRemoveAdapter`.
     function unpause() external onlyRole(ADMIN_ROLE) {
         _setDepositsPaused(false);
-        _setWithdrawalsPaused(false);
     }
 
     /// @notice Pause the vault and attempt to withdraw all assets from every active adapter.
@@ -1407,10 +1411,11 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
 
     // ─── Views ────────────────────────────────────────────────────────
 
-    /// @notice Returns true when both deposits and withdrawals are blocked (full pause).
+    /// @notice Returns true when the vault is paused. A pause stops new deposits only;
+    ///         withdrawals and redeems stay open while this returns true (core 1494).
     ///         Provided for compatibility with tooling that queries `paused()`.
     function paused() external view returns (bool) {
-        return depositsPaused && withdrawalsPaused;
+        return depositsPaused || withdrawalsPaused;
     }
 
     /// @notice Total number of adapters in the registry (active and inactive).

@@ -7501,17 +7501,6 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
-    name: "VaultPausedForRedeem",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
     name: "ZeroAddress",
     inputs: [],
   },

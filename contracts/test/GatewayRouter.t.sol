@@ -2035,16 +2035,26 @@ contract GatewayRouterTest is Test {
         );
     }
 
-    /// @dev router: paused gateway reverts.
-    function test_withdrawFromRouter_revertsWhenPaused() public {
+    /// @dev router: a paused gateway still redeems. A pause stops deposits only (core 1494).
+    function test_withdrawFromRouter_succeedsWhenPaused() public {
         _authorize(agent, _policyWithRouterWithdrawal());
+        address assetRecipient = makeAddr("routerWithdrawRecipient");
+        uint256 amount = 100 * ONE_USDC;
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, amount);
+
         vm.prank(pauser);
         gateway.pause();
 
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
         uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
         vm.prank(agent);
-        vm.expectRevert(RobotMoneyGateway.PausedError.selector);
-        gateway.withdrawFromRouter(
+        (, uint256[] memory assetsPerLeg) = gateway.withdrawFromRouter(
             keccak256("o"),
             _routerVaults(),
             sharesPerLeg,
@@ -2052,6 +2062,12 @@ contract GatewayRouterTest is Test {
             uint64(block.timestamp + 60),
             keccak256("i")
         );
+
+        assertEq(assetsPerLeg[0], sharesA, "leg 0 assets while paused");
+        assertEq(assetsPerLeg[1], sharesB, "leg 1 assets while paused");
+        assertEq(usdc.balanceOf(assetRecipient), amount, "USDC to assetRecipient while paused");
+        assertEq(vaultA.balanceOf(shareReceiver), 0, "shareReceiver vaultA zero");
+        assertEq(vaultB.balanceOf(shareReceiver), 0, "shareReceiver vaultB zero");
     }
 
     /// @dev router: zero totalShares reverts.

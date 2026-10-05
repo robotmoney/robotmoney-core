@@ -46,7 +46,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     error ZeroAddress();
     /// @notice Constructor-time check: vault.asset() does not match the configured USDC token.
     error AssetMismatch();
-    /// @notice Operation rejected because the gateway is paused (also re-thrown by `pause()` if already paused).
+    /// @notice Deposit rejected because the gateway is paused (also re-thrown by `pause()` if already paused).
+    ///         Withdrawals never raise it: a pause stops deposits only (core 1494).
     error PausedError();
     /// @notice `unpause()` called while the gateway was not paused.
     error NotPaused();
@@ -300,7 +301,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice Replay protection. `paymentId => used`.
     mapping(bytes32 => bool) public usedPaymentIds;
 
-    /// @notice Stop-the-world flag.
+    /// @notice Deposit pause flag. Blocks `deposit` and `depositTo` only (core 1494).
     bool private _paused;
 
     /// @notice Investment Committee Policy contract. When set, `committeeRegister`
@@ -1112,8 +1113,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         uint64 deadline,
         bytes32 idempotencyKey
     ) external nonReentrant onlyRole(AGENT_ROLE) returns (bytes32 paymentId, uint256 assetsOut) {
-        if (_paused) revert PausedError();
-
+        // core 1494: a pause stops deposits only. Withdrawals stay open while paused.
         AgentPolicy memory p = agents[msg.sender];
 
         // 1. Withdrawal must be enabled for this agent.
@@ -1271,8 +1271,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         onlyRole(AGENT_ROLE)
         returns (bytes32 paymentId, uint256[] memory assetsPerLeg)
     {
-        if (_paused) revert PausedError();
-
+        // core 1494: a pause stops deposits only. Withdrawals stay open while paused.
         // 1. Router must be configured.
         if (address(routerContract) == address(0)) revert RouterNotConfigured();
 

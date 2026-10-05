@@ -5,7 +5,7 @@ description: "Minimal interface stub for the RobotMoney deposit gateway."
 
 # IGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a36830c259d61a1e110157e28f971cb6c99efb9/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:** IGateway
 
@@ -131,8 +131,9 @@ funds. The gateway pulls shares from `msg.sender` via
 
 <i>
 
-Restricted to `AGENT_ROLE`. Reverts when paused. Enforces all the
-same deadline, idempotency, and policy checks as `deposit`. The
+Restricted to `AGENT_ROLE`. Works while the gateway is paused: a pause
+stops deposits only (core 1494). Enforces the same deadline,
+idempotency, and policy checks as `deposit`. The
 agent must approve the gateway to spend its vault shares before
 calling this function.
 
@@ -171,8 +172,9 @@ function withdraw(
 
 Redeem vault shares proportionally across all Portfolio Router
 legs. Enforces the same policy checks (valid-until, per-payment
-cap, window cap, allowed-source-vaults, pause, idempotency,
-recipient) as single-vault `withdraw`. Each leg's vault must
+cap, window cap, allowed-source-vaults, idempotency,
+recipient) as single-vault `withdraw`. Works while the gateway is
+paused: a pause stops deposits only (core 1494). Each leg's vault must
 appear in `policy.allowedSourceVaults` (when non-empty). USDC
 is forwarded exclusively to the policy-configured `assetRecipient`.
 
@@ -184,7 +186,7 @@ minted and no intermediate custody persists beyond the call.
 
 <i>
 
-Restricted to `AGENT_ROLE`. Reverts when paused. `totalShares` is
+Restricted to `AGENT_ROLE`. Does not check the pause. `totalShares` is
 the sum of `sharesPerLeg` and is checked against
 `maxWithdrawPerPayment` and the rolling window cap.
 
@@ -377,7 +379,9 @@ function revokeAgent(address agent) external;
 
 ### pause
 
-Stop-the-world pause. Restricted to `PAUSER_ROLE`.
+Pause new deposits (`deposit`, `depositTo`). Restricted to `PAUSER_ROLE`.
+Withdrawals (`withdraw`, `withdrawFromRouter`) stay open while paused
+(owner decision 2026-10-05, core 1494).
 
 ```solidity
 function pause() external;
@@ -387,7 +391,7 @@ function pause() external;
 
 ### unpause
 
-Resume operations. Restricted to `ADMIN_ROLE` (asymmetric).
+Resume deposits. Restricted to `ADMIN_ROLE` (asymmetric).
 `ADMIN_ROLE` is retained as a protocol-wide kill-switch
 counterweight to `pause`; it has no authority over the
 lifecycle of an agent it does not own.

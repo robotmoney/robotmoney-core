@@ -257,7 +257,7 @@ contract BasketVaultTest is Test {
         assertEq(basketToken.balanceOf(address(vault)), 0, "basket asset unwound");
         assertEq(usdc.balanceOf(address(vault)), amountOut, "guarded USDC received");
         assertTrue(vault.depositsPaused(), "emergency unwind pauses deposits");
-        assertFalse(vault.paused(), "emergency unwind keeps redemption available");
+        assertFalse(vault.paused(), "emergency unwind does not set the OZ pause flag");
     }
 
     function test_emergencyUnwindWithOverride_emitsHighRiskEvent() public {
@@ -394,15 +394,98 @@ contract BasketVaultTest is Test {
         vm.prank(emergencyResponder);
         vault.pause();
         assertTrue(vault.paused(), "vault paused");
+        assertTrue(vault.depositsPaused(), "deposits paused");
+
+        // Deposit and mint blocked (core 1494).
+        assertEq(vault.maxDeposit(stranger), 0, "maxDeposit 0 while paused");
+        assertEq(vault.maxMint(stranger), 0, "maxMint 0 while paused");
+        usdc.mint(stranger, 100 * ONE_USDC);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), 100 * ONE_USDC);
+        vm.expectRevert();
+        vault.deposit(100 * ONE_USDC, stranger);
+        vm.expectRevert();
+        vault.mint(1, stranger);
+        vm.stopPrank();
 
         // Redeem must still succeed under pause (withdrawals are never frozen). The
         // redeem swaps basketToken→USDC, so the router now yields USDC. Output must
         // clear the TWAP slippage floor (1:1 TWAP, 1% slippage → ~990 USDC).
+        assertEq(vault.maxRedeem(stranger), shares, "maxRedeem is the full balance while paused");
         usdc.mint(address(router), 995 * ONE_USDC);
         router.setAmountOut(995 * ONE_USDC);
+        uint256 usdcBefore = usdc.balanceOf(stranger);
         vm.prank(stranger);
         uint256 out = vault.redeem(shares, stranger, stranger);
-        assertGt(out, 0, "redeem succeeds while paused");
+        uint256 expectedOut = 995 * ONE_USDC - (995 * ONE_USDC * vault.exitFeeBps()) / 10_000;
+        assertEq(out, expectedOut, "redeem pays the swap proceeds net of exit fee while paused");
+        assertEq(usdc.balanceOf(stranger) - usdcBefore, out, "holder receives the assets");
+        assertEq(vault.balanceOf(stranger), 0, "shares burned");
+    }
+
+    /// @notice core 1494: unpause() after pause() restores deposits.
+    function test_unpause_afterPause_restoresDeposits() public {
+        vm.prank(emergencyResponder);
+        vault.pause();
+        vm.prank(admin);
+        vault.unpause();
+        assertFalse(vault.paused(), "OZ pause cleared");
+        assertFalse(vault.depositsPaused(), "deposits reopened");
+
+        usdc.mint(stranger, 1_000 * ONE_USDC);
+        basketToken.mint(address(router), 1_000 * ONE_USDC);
+        router.setAmountOut(1_000 * ONE_USDC);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), 1_000 * ONE_USDC);
+        uint256 shares = vault.deposit(1_000 * ONE_USDC, stranger);
+        vm.stopPrank();
+        assertGt(shares, 0, "deposit works after unpause");
+    }
+
+    /// @notice core 1494: emergencyUnwind sets only `depositsPaused` (no OZ pause).
+    ///         unpause() must clear it without reverting `ExpectedPause`.
+    function test_unpause_afterEmergencyUnwind_reopensDeposits() public {
+        basketToken.mint(address(vault), 500 * ONE_USDC);
+        usdc.mint(address(router), 497 * ONE_USDC);
+        router.setAmountOut(497 * ONE_USDC);
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), 400 * ONE_USDC, false, 0);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+        assertTrue(vault.depositsPaused(), "deposits halted by emergencyUnwind");
+        assertFalse(vault.paused(), "emergencyUnwind does not set the OZ pause");
+
+        vm.prank(admin);
+        vault.unpause();
+        assertFalse(vault.depositsPaused(), "unpause clears the emergencyUnwind halt");
+        assertGt(vault.maxDeposit(stranger), 0, "deposits reopened");
+    }
+
+    /// @notice core 1494: unpause() on a vault that is not paused is a no-op, as on
+    ///         RobotMoneyVault.
+    function test_unpause_whenNotPaused_isNoOp() public {
+        vm.prank(admin);
+        vault.unpause();
+        assertFalse(vault.paused(), "still not paused");
+        assertFalse(vault.depositsPaused(), "deposits still open");
+    }
+
+    /// @notice Only ADMIN_ROLE can unpause; the EMERGENCY holder cannot.
+    function test_unpause_revertsForEmergencyRole() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(emergencyResponder);
+        vault.pause();
+        vm.prank(emergencyResponder);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                emergencyResponder,
+                adminRole
+            )
+        );
+        vault.unpause();
+        assertTrue(vault.paused(), "still paused");
     }
 
     /// @notice INV-1: an ACTIVE basket asset may never be swept to quarantine —
@@ -1335,7 +1418,7 @@ contract BasketVaultTest is Test {
         vault.emergencyUnwind();
 
         assertTrue(vault.depositsPaused(), "deposits are paused after emergencyUnwind");
-        assertFalse(vault.paused(), "redemption remains available");
+        assertFalse(vault.paused(), "emergencyUnwind does not set the OZ pause flag");
         assertEq(basketToken.balanceOf(address(vault)), 0, "assets unwound");
     }
 
@@ -1360,7 +1443,7 @@ contract BasketVaultTest is Test {
         vault.emergencyUnwindWithOverride(tokens);
 
         assertTrue(vault.depositsPaused(), "deposits are paused after override unwind");
-        assertFalse(vault.paused(), "redemption remains available");
+        assertFalse(vault.paused(), "override unwind does not set the OZ pause flag");
         assertEq(basketToken.balanceOf(address(vault)), 0, "assets unwound with override");
     }
 

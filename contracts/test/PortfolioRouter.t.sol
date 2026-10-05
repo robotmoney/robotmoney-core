@@ -1707,9 +1707,9 @@ contract PortfolioRouterTest is Test {
         assertEq(assetsOut[1], sharesToRedeem[1], "Active vaultB redeemable");
     }
 
-    /// @notice redeemFor reverts VaultPausedForRedeem when a named leg is Paused
-    ///         (F-02): only Paused blocks the exit path.
-    function test_redeemFor_revertsWhenLegPaused() public {
+    /// @notice redeemFor redeems from a Paused leg: a pause stops deposits only,
+    ///         so the exit path stays open (core 1494).
+    function test_redeemFor_redeemsFromPausedVault() public {
         uint256 amount = 1000 * ONE_USDC;
         uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
 
@@ -1717,10 +1717,7 @@ contract PortfolioRouterTest is Test {
         registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
 
         vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.VaultPausedForRedeem.selector, address(vaultA))
-        );
-        router.redeemFor(
+        uint256[] memory assetsOut = router.redeemFor(
             depositor,
             depositor,
             _redeemVaults(),
@@ -1728,6 +1725,9 @@ contract PortfolioRouterTest is Test {
             new uint256[](2),
             type(uint256).max
         );
+        assertEq(assetsOut[0], sharesToRedeem[0], "Paused vaultA still redeemable");
+        assertEq(assetsOut[1], sharesToRedeem[1], "Active vaultB redeemable");
+        assertEq(vaultA.balanceOf(depositor), 0, "vaultA position fully exited while Paused");
     }
 
     /// @notice redeemFor reverts RedeemVaultNotRegistered when a named vault is

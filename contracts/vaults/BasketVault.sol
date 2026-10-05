@@ -791,7 +791,7 @@ abstract contract BasketVault is
     ///      already-deposited funds — and, combined with last-ADMIN renounce, freeze
     ///      them forever (LIFE-4). The last-admin floor (AdminFloorAccessControl)
     ///      and the deposits-only pause together keep withdrawals always reachable,
-    ///      matching RobotMoneyVault's separate `withdrawalsPaused` model.
+    ///      matching RobotMoneyVault, whose `pause()` is also deposits-only (core 1494).
     function _withdraw(
         address caller,
         address receiver,
@@ -1216,14 +1216,19 @@ abstract contract BasketVault is
 
     // ─── Emergency ────────────────────────────────────────────────────
 
+    /// @notice Pause new deposits and mints. Restricted to `EMERGENCY_ROLE`.
+    ///         Redeems stay open while paused (core 1494; see `_withdraw`).
     function pause() external onlyRole(EMERGENCY_ROLE) {
         _setDepositsPaused(true);
         _pause();
     }
 
+    /// @notice Resume deposits. Restricted to `ADMIN_ROLE`. Also clears the
+    ///         deposit halt set by `emergencyUnwind`, which sets `depositsPaused`
+    ///         without the OZ pause, so it never reverts `ExpectedPause` (core 1494).
     function unpause() external onlyRole(ADMIN_ROLE) {
         _setDepositsPaused(false);
-        _unpause();
+        if (paused()) _unpause();
     }
 
     function _setDepositsPaused(bool paused_) internal {
