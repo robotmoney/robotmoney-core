@@ -6,6 +6,14 @@ import { spawn } from "node:child_process";
 export const TWIN_CHAIN_ID = 918453;
 export const BASE_CHAIN_ID = 8453;
 export const DEFAULT_UPSTREAM = "https://mainnet.base.org";
+/**
+ * The upstream RPC: an explicit value, else env BASE_UPSTREAM_RPC, else the public default. Empty and
+ * whitespace-only values count as unset (a composite action exports the env even with no secret).
+ */
+export function resolveUpstream(explicit?: string | null, envValue: string | undefined = process.env.BASE_UPSTREAM_RPC): string {
+  for (const c of [explicit, envValue]) if (typeof c === "string" && c.trim() !== "") return c.trim();
+  return DEFAULT_UPSTREAM;
+}
 export const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 /** FiatTokenV2 `balanceAndBlacklistStates` mapping(address => uint256) lives at storage slot 9. */
 export const USDC_BALANCE_SLOT = 9n;

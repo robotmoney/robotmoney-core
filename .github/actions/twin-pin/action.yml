@@ -40,9 +40,9 @@ runs:
           exit 0
         fi
         out="$(bun -e '
-          const {selectPin, DEFAULT_UPSTREAM} = await import(process.env.TWIN_LIB!);
-          const up = process.env.BASE_UPSTREAM_RPC || DEFAULT_UPSTREAM;
-          const p = await selectPin(up, "auto", {secrets: process.env.BASE_UPSTREAM_RPC ? [process.env.BASE_UPSTREAM_RPC] : []});
+          const {selectPin, resolveUpstream} = await import(process.env.TWIN_LIB!);
+          const up = resolveUpstream();
+          const p = await selectPin(up, "auto", {secrets: up === process.env.BASE_UPSTREAM_RPC?.trim() ? [up] : []});
           console.log("block=" + p.block);
         ')"
         echo "$out" >> "$GITHUB_OUTPUT"

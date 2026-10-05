@@ -7,7 +7,7 @@ import { join, dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { parseArgs } from "node:util";
 import {
-  DEFAULT_UPSTREAM, TWIN_CHAIN_ID, buildAnvilArgv, fundGas, fundUsdc, redact, redactArgv, rpc,
+  DEFAULT_UPSTREAM, resolveUpstream, TWIN_CHAIN_ID, buildAnvilArgv, fundGas, fundUsdc, redact, redactArgv, rpc,
   isStalePinText, repinIfStale, selectPin, spawnAnvilDetached, urlHost, usdcBalanceOf, waitReady, warp,
 } from "./twin-fork-lib.ts";
 
@@ -43,13 +43,13 @@ const rpcUrl = v["rpc-url"] ?? process.env.TWIN_RPC_URL ?? `http://127.0.0.1:${p
 const stateDir = resolve(v["state-dir"] ?? join(process.env.TMPDIR ?? tmpdir(), `twin-fork-${port}`));
 const pidFile = join(stateDir, "anvil.json");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const secrets = process.env.BASE_UPSTREAM_RPC ? [process.env.BASE_UPSTREAM_RPC] : [];
+const secrets = (process.env.BASE_UPSTREAM_RPC ?? "").trim() ? [process.env.BASE_UPSTREAM_RPC!.trim()] : [];
 const log = (m: string) => console.log(redact(m, secrets));
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const readState = (): { pid: number; pin: any } | null => (existsSync(pidFile) ? JSON.parse(readFileSync(pidFile, "utf8")) : null);
 
 async function start() {
-  const upstream = v.upstream || process.env.BASE_UPSTREAM_RPC || DEFAULT_UPSTREAM;
+  const upstream = resolveUpstream(v.upstream);
   const prev = readState();
   if (prev && alive(prev.pid)) throw new Error(`already running (pid ${prev.pid}); run stop first`);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });

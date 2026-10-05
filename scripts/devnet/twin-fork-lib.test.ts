@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildAnvilArgv, ethToWei, keccak256, redact, redactArgv, rpc, selectPin, urlHost,
-  usdcBalanceSlot, usdcBalanceWord, warp, hexToBytes, isStalePinText, pinStateServed, repinIfStale,
+  usdcBalanceSlot, usdcBalanceWord, resolveUpstream, DEFAULT_UPSTREAM, warp, hexToBytes, isStalePinText, pinStateServed, repinIfStale,
 } from "./twin-fork-lib.ts";
 
 /** Stub JSON-RPC fetcher. */
@@ -225,4 +225,22 @@ describe.skipIf(process.env.TWIN_FORK_SMOKE !== "1")("smoke (needs anvil and the
       run("stop");
     }
   }, 240000);
+});
+
+describe("resolveUpstream", () => {
+  test("empty, whitespace and unset all give the public default", () => {
+    expect(resolveUpstream(undefined, "")).toBe(DEFAULT_UPSTREAM);
+    expect(resolveUpstream("", "   ")).toBe(DEFAULT_UPSTREAM);
+    expect(resolveUpstream(undefined, undefined)).toBe(DEFAULT_UPSTREAM);
+    expect(resolveUpstream(null, "\n\t")).toBe(DEFAULT_UPSTREAM);
+  });
+  test("a set value is used (explicit first, then env) and trimmed", () => {
+    expect(resolveUpstream(undefined, " https://up.example/key123 ")).toBe("https://up.example/key123");
+    expect(resolveUpstream("https://a.example/x", "https://b.example/y")).toBe("https://a.example/x");
+  });
+  test("a set value is never logged, only its host", () => {
+    const secret = "https://rpc.example/very-secret-key";
+    expect(redact(`failed at ${secret}`, [secret])).not.toContain("very-secret-key");
+    expect(urlHost(secret)).toBe("rpc.example");
+  });
 });
