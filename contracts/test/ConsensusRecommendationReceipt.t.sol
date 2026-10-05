@@ -10,6 +10,7 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {
@@ -535,5 +536,43 @@ contract ConsensusRecommendationReceiptTest is Test {
             keccak256(_goldenBytes(VALID_CANONICAL)) != keccak256(_goldenBytes(ESCAPING_CANONICAL)),
             "the two goldens must not share a digest"
         );
+    }
+
+    // ─── Last-admin floor (#1447, workstream L) ──────────────────────────────
+
+    function test_receipt_lastAdminFloor_revokeAndRenounceRevert() public {
+        bytes32 adminRole = receipts.ADMIN_ROLE();
+        bytes32 defaultAdmin = receipts.DEFAULT_ADMIN_ROLE();
+        vm.startPrank(address(timelock));
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        receipts.revokeRole(adminRole, address(timelock));
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        receipts.renounceRole(adminRole, address(timelock));
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        receipts.revokeRole(defaultAdmin, address(timelock));
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        receipts.renounceRole(defaultAdmin, address(timelock));
+        vm.stopPrank();
+        assertTrue(receipts.hasRole(adminRole, address(timelock)));
+        assertTrue(receipts.hasRole(defaultAdmin, address(timelock)));
+    }
+
+    function test_receipt_lastAdminFloor_handoverSucceeds() public {
+        address next = address(0xBEEF);
+        bytes32 adminRole = receipts.ADMIN_ROLE();
+        bytes32 defaultAdmin = receipts.DEFAULT_ADMIN_ROLE();
+        vm.startPrank(address(timelock));
+        receipts.grantRole(adminRole, next);
+        receipts.grantRole(defaultAdmin, next);
+        receipts.renounceRole(adminRole, address(timelock));
+        receipts.renounceRole(defaultAdmin, address(timelock));
+        vm.stopPrank();
+        assertFalse(receipts.hasRole(adminRole, address(timelock)));
+        assertFalse(receipts.hasRole(defaultAdmin, address(timelock)));
+        // The new holder is now the last admin and is floored in turn.
+        vm.startPrank(next);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        receipts.renounceRole(defaultAdmin, next);
+        vm.stopPrank();
     }
 }
