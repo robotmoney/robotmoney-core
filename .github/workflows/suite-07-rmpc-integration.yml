@@ -18,12 +18,11 @@
 # WHY skill_docs_parity, dapp_toml_roundtrip, committee, receipt,
 # cli_committee_identity AND cli_version RUN HERE BEFORE THE DOCKER TESTS
 # These tests require the rmpc binary but no chain. Running them first means that if
-# the plugin manifest, TOML config, or committee register/vote-submit calldata path
+# the plugin manifest, TOML config, or committee vote-submit calldata path
 # drifts, CI fails fast (< 1 min) before paying for the Docker boot. They are in this
 # suite rather than suite 6 because they depend on the release binary being built.
 # The committee test (clients/rust-payment-client/tests/committee.rs, issue #1105) mocks
-# the JSON-RPC server with mockito and drives the real `rmpc committee register` /
-# `vote-submit` binary via assert_cmd — no live chain, so it belongs in the binary-only
+# the JSON-RPC server with mockito and drives the real `rmpc committee vote-submit` binary via assert_cmd — no live chain, so it belongs in the binary-only
 # parity job, not the devnet matrix. The receipt test
 # (clients/rust-payment-client/tests/receipt.rs, issue #1247) is the same shape and is
 # the only executor of the consensus-receipt canonicalization goldens and of the
@@ -235,10 +234,10 @@ jobs:
         working-directory: clients/rust-payment-client
         run: cargo test --test dapp_toml_roundtrip -- --nocapture
 
-      # Investment-Committee register / vote-submit integration test (issue #1105).
+      # Investment-Committee vote-submit integration test (issue #1105).
       # mockito-backed, drives the release rmpc binary via assert_cmd. Wrapped in the
       # executed-count guard so a zero-tests-collected run fails RED, never silent-green.
-      - name: rmpc committee register / vote-submit
+      - name: rmpc committee vote-submit
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             --release \

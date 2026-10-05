@@ -6,12 +6,13 @@ description: >
   (get-vault, get-gateway, get-agent, get-roles, get-balance, get-allowance,
   get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
   write commands (deposit, withdraw, status, self-check), governance write
-  commands (propose, vote), Investment Committee commands (committee
-  register, committee vote-submit), consensus recommendation receipt commands
+  commands (vote), Investment Committee commands (committee
+  vote-submit), consensus recommendation receipt commands
   (receipt verify, receipt submit), and the Investment Swarm signing
   identity commands (committee-identity create, show-public-key, sign).
   Covers all flags, output shapes, preflight rules, and the get-governance
-  → propose → vote example trace.
+  → vote example trace. rmpc is not a governance signer: it has no propose or
+  committee register command.
 ---
 
 # robotmoney-cli (`rmpc`)
@@ -35,7 +36,7 @@ Exit code 0 means success; non-zero means a named, structured error. Add
   `get-vault`,
   `get-vaults`, `get-router`, `get-governance`, `get-timelock`, `get-gateway`,
   `get-agent`, `get-roles`, `get-balance`, `get-allowance`, `get-deposit`,
-  `get-tx`, `propose`, `vote`, `committee`, `receipt`, `committee-identity`.
+  `get-tx`, `vote`, `committee`, `receipt`, `committee-identity`.
 
 ## Command surface
 
@@ -59,55 +60,19 @@ rmpc get-balance     Read an ERC-20 token balance for an address (USDC by defaul
 rmpc get-allowance   Read an ERC-20 allowance(owner, spender) on the configured USDC
 rmpc get-deposit     Look up a gateway deposit by its on-chain id
 rmpc get-tx          Look up a transaction's receipt status by hash
-rmpc propose         Submit a new weight-reallocation proposal to RouterGovernance
 rmpc vote            Cast a vote on an active RouterGovernance proposal
-rmpc committee       Investment Committee: register agents and submit signed allocation votes
+rmpc committee       Investment Committee: submit signed allocation votes
 rmpc receipt         Consensus recommendation receipt: verify a receipt off-chain and anchor its digest on chain
 rmpc committee-identity  Investment Swarm signing identity: local Ed25519 identity, public-key export, and canonical-payload signing
 ```
 
 ## Governance write commands
 
-### propose
-
-Submit a new weight-reallocation proposal to `RouterGovernance.propose()`.
-
-```bash
-rmpc propose --config <CONFIG> \
-  --vaults <ADDR1>,<ADDR2> \
-  --weights-bps <BPS1>,<BPS2> \
-  [--gas-limit <GAS>] \
-  [--fee-cap <WEI>] \
-  [--receipt-timeout-secs <SECS>] \
-  [--pretty]
-```
-
-Flags:
-- `--config` / `-c` — path to operator config TOML (required)
-- `--vaults` — comma-separated vault addresses, 0x-prefixed hex (required)
-- `--weights-bps` — comma-separated weight bps values summing to 10 000 (required)
-- `--gas-limit` — gas limit for the propose tx (default 500 000)
-- `--fee-cap` — override `max_fee_per_gas_cap` in wei
-- `--receipt-timeout-secs` — seconds to wait for the receipt (default 60)
-- `--pretty` — indented JSON output
-
-Output on success (`exit 0`):
-```json
-{
-  "ok": true,
-  "result": {
-    "proposal_id": "1",
-    "tx_hash": "0x...",
-    "block_number": 12345
-  }
-}
-```
-
-Exit codes:
-- `0` — proposal submitted and mined.
-- `2` — preflight refusal or broadcast failure.
-- `3` — startup failure: missing `governance_address` in config, uninitialized
-  signer, or runtime error.
+rmpc is not a governance signer. It has no `propose` command and no
+`committee register` command: both are `onlyRole(ADMIN_ROLE)` or governance
+calls that belong to the Safe and timelock after handover. Use
+`rmpc governance draft-proposal` for unsigned calldata, and sign through the
+Safe with a wallet.
 
 ### vote
 
@@ -167,25 +132,19 @@ Exit codes:
 - `2` — `ErrVoteAlreadyCast` (different direction after an on-chain yes).
 - `3` — startup failure: missing `governance_address`, uninitialized signer, etc.
 
-## Example trace: get-governance → propose → vote
+## Example trace: get-governance → vote
 
 ```bash
 # 1. Read current governance state
 rmpc get-governance --config rmpc.toml --pretty
 
-# 2. Submit a weight-reallocation proposal
-rmpc propose --config rmpc.toml \
-  --vaults 0xVaultA...,0xVaultB... \
-  --weights-bps 6000,4000 \
-  --pretty
-
-# 3. Vote in favour of the proposal
+# 2. Vote in favour of the proposal
 rmpc vote --config rmpc.toml \
   --proposal-id 1 \
   --choice yes \
   --pretty
 
-# 4. Confirm the vote was recorded
+# 3. Confirm the vote was recorded
 rmpc get-governance --config rmpc.toml --pretty
 ```
 
@@ -194,18 +153,6 @@ The `get-governance` output includes the active proposal's `proposal_id`,
 `votes_against`, and `votes_abstain`.
 
 ## Investment Committee commands
-
-### committee register
-
-Register a committee agent in the `InvestmentCommitteePolicy` contract
-(requires `ADMIN_ROLE`). Routes through `RobotMoneyGateway`.
-
-```bash
-rmpc committee --config <CONFIG> register ...
-```
-
-See `rmpc committee register --help` for the full flag list (agent address,
-agent-id, gas-limit, fee-cap, receipt-timeout-secs, pretty).
 
 ### committee vote-submit
 

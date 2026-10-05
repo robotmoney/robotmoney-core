@@ -2,9 +2,8 @@
 //! Implements: issue #1044 AC-3 (Test plan item 2)
 //!
 //! Tests:
-//! - `test_committee_register_happy_path`: ADMIN_ROLE registers an agent via
-//!   `rmpc committee register`. Asserts the tx is broadcast and a JSON
-//!   receipt is printed on stdout.
+//! - `test_rmpc_has_no_governance_signing_commands`: `committee register` and
+//!   `propose` are gone (rmpc is not a governance signer, issue #1447 K).
 //! - `test_committee_vote_submit_happy_path`: An allowlisted committee agent
 //!   submits a signed allocation vote via `rmpc committee vote-submit`.
 //!   Asserts the tx is broadcast and a JSON receipt is printed on stdout.
@@ -12,7 +11,7 @@
 //!   agent attempts to call vote-submit; the JSON-RPC returns a revert and
 //!   the command exits non-zero.
 //!
-//! All three tests mock the JSON-RPC server with mockito. No live chain is
+//! The write tests mock the JSON-RPC server with mockito. No live chain is
 //! required.
 
 mod common;
@@ -33,9 +32,6 @@ const CHAIN_ID: u64 = 31337;
 
 /// Fake IC policy contract address for tests.
 const IC_POLICY: Address = address!("0000000000000000000000000000000000000e00");
-
-/// Fake committee agent address.
-const COMMITTEE_AGENT: Address = address!("0000000000000000000000000000000000000f00");
 
 const TX_HASH: B256 = b256!("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
 
@@ -143,106 +139,6 @@ fn simple_receipt_body() -> String {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn test_committee_register_happy_path() {
-    let mut server = mockito::Server::new_async().await;
-    let fix = CommitteeFixture::build(&server.url());
-
-    // eth_chainId
-    server
-        .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
-        .with_status(200)
-        .with_body(jrpc_result(&format!("0x{CHAIN_ID:x}")))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-
-    // eth_feeHistory
-    server
-        .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_feeHistory"})))
-        .with_status(200)
-        .with_body(jrpc_result_raw(&fee_history_body()))
-        .expect(1)
-        .create_async()
-        .await;
-
-    // eth_getTransactionCount
-    server
-        .mock("POST", "/")
-        .match_body(Matcher::PartialJson(
-            json!({"method": "eth_getTransactionCount"}),
-        ))
-        .with_status(200)
-        .with_body(jrpc_result("0x0"))
-        .expect(1)
-        .create_async()
-        .await;
-
-    // eth_sendRawTransaction
-    server
-        .mock("POST", "/")
-        .match_body(Matcher::PartialJson(
-            json!({"method": "eth_sendRawTransaction"}),
-        ))
-        .with_status(200)
-        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
-        .expect(1)
-        .create_async()
-        .await;
-
-    // eth_getTransactionReceipt
-    server
-        .mock("POST", "/")
-        .match_body(Matcher::PartialJson(
-            json!({"method": "eth_getTransactionReceipt"}),
-        ))
-        .with_status(200)
-        .with_body(jrpc_result_raw(&simple_receipt_body()))
-        .expect_at_least(1)
-        .create_async()
-        .await;
-
-    let output = rmpc()
-        .env(
-            PASSPHRASE_ENV_VAR,
-            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
-        )
-        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
-        .args([
-            "committee",
-            "--config",
-            fix.config_path.to_str().unwrap(),
-            "register",
-            "--agent",
-            &format!("{COMMITTEE_AGENT:#x}"),
-            "--agent-id",
-            "athena-v1",
-            "--order-id",
-            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ])
-        .output()
-        .expect("rmpc ran");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    eprintln!("STDOUT: {stdout}");
-    eprintln!("STDERR: {stderr}");
-
-    assert!(
-        output.status.success(),
-        "expected exit 0, got {:?}",
-        output.status
-    );
-
-    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
-    assert_eq!(v["ok"], true, "ok field");
-    assert_eq!(v["action"], "register", "action field");
-    assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"), "tx_hash field");
-    assert_eq!(v["block_number"], 42, "block_number field");
-}
 
 #[tokio::test]
 async fn test_committee_vote_submit_happy_path() {
@@ -529,7 +425,7 @@ keystore_path           = "{ks}"
     );
     std::fs::write(&config_path, toml).expect("write config");
 
-    // Try `committee register` — must fail before any network call.
+    // Try `committee vote-submit` — must fail before any network call.
     let output = rmpc()
         .env(
             PASSPHRASE_ENV_VAR,
@@ -540,11 +436,27 @@ keystore_path           = "{ks}"
             "committee",
             "--config",
             config_path.to_str().unwrap(),
-            "register",
-            "--agent",
-            &format!("{COMMITTEE_AGENT:#x}"),
-            "--agent-id",
-            "athena-v1",
+            "vote-submit",
+            "--vault",
+            "0x1111111111111111111111111111111111111111",
+            "--stance",
+            "overweight",
+            "--weight-bps",
+            "6000",
+            "--confidence",
+            "85",
+            "--rationale-uri",
+            "https://gist.github.com/robotmoney/test123",
+            "--vote-json-hash",
+            &format!("{VOTE_JSON_HASH:#x}"),
+            "--prompt-hash",
+            &format!("{PROMPT_HASH:#x}"),
+            "--inputs-digest",
+            &format!("{INPUTS_DIGEST:#x}"),
+            "--schema-version",
+            "1.0",
+            "--timestamp",
+            "1750000000",
             "--order-id",
             "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ])
@@ -576,14 +488,14 @@ keystore_path           = "{ks}"
 // ─── T23 · a mined transaction is not a successful one ────────────────────────
 //
 // §E.4 recorded `committee.rs` as the symptom and the five hand-rolled copies of
-// the status check as the cause. `rmpc committee register` and
-// `rmpc committee vote-submit` were the two of the seven write paths that had NO
+// the status check as the cause. `rmpc committee vote-submit` (and the since
+// removed `register`) were two of the seven write paths that had NO
 // copy at all: both printed `{"ok":true, tx_hash, block_number}` and exited 0
 // for a transaction the node mined and the EVM reverted — the false success
 // AC-CORE-09 forbids, and the same one commit `1854fe6e` had just spent a commit
 // removing from the anchoring path by adding a SIXTH copy rather than moving it.
 //
-// `consensusVoteSubmit` and the register call are both role-gated, so this is
+// `consensusVoteSubmit` is role-gated, so this is
 // not a hypothetical: an agent without `COMMITTEE_AGENT_ROLE` produces exactly
 // this receipt, and the operator was told the vote was recorded.
 
@@ -648,36 +560,6 @@ fn assert_refused_as_reverted(output: &std::process::Output, action: &str) {
 }
 
 #[tokio::test]
-async fn test_committee_register_refuses_a_reverted_transaction() {
-    let mut server = mockito::Server::new_async().await;
-    install_committee_mocks(&mut server, &reverted_receipt_body()).await;
-    let fix = CommitteeFixture::build(&server.url());
-
-    let output = rmpc()
-        .env(
-            PASSPHRASE_ENV_VAR,
-            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
-        )
-        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
-        .args([
-            "committee",
-            "--config",
-            fix.config_path.to_str().unwrap(),
-            "register",
-            "--agent",
-            &format!("{COMMITTEE_AGENT:#x}"),
-            "--agent-id",
-            "athena-v1",
-            "--order-id",
-            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ])
-        .output()
-        .expect("rmpc ran");
-
-    assert_refused_as_reverted(&output, "register");
-}
-
-#[tokio::test]
 async fn test_committee_vote_submit_refuses_a_reverted_transaction() {
     let mut server = mockito::Server::new_async().await;
     install_committee_mocks(&mut server, &reverted_receipt_body()).await;
@@ -725,4 +607,31 @@ async fn test_committee_vote_submit_refuses_a_reverted_transaction() {
         .expect("rmpc ran");
 
     assert_refused_as_reverted(&output, "vote-submit");
+}
+
+// ─── rmpc is not a governance signer (issue #1447, workstream K) ──────────────
+
+/// `committee register` and `propose` signed as an EOA against
+/// `onlyRole(ADMIN_ROLE)` / governance entry points that belong to the Safe
+/// after handover. They must not exist, so no operator reaches for them.
+#[test]
+fn test_rmpc_has_no_governance_signing_commands() {
+    for argv in [
+        vec!["committee", "--config", "x.toml", "register"],
+        vec!["propose", "--config", "x.toml"],
+    ] {
+        let output = rmpc().args(&argv).output().expect("rmpc ran");
+        assert!(
+            !output.status.success(),
+            "`rmpc {}` must be rejected, got {:?}",
+            argv.join(" "),
+            output.status
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unrecognized subcommand"),
+            "`rmpc {}` must be an unknown subcommand, stderr: {stderr}",
+            argv.join(" ")
+        );
+    }
 }

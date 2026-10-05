@@ -247,35 +247,6 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
-    /// Submit a new weight-reallocation proposal to RouterGovernance.propose()
-    /// (issue #632). Requires `governance_address` in the operator config and
-    /// a production-grade (or software-fallback) signer. Returns
-    /// `{ok:true,result:{proposal_id,tx_hash,block_number}}` on success.
-    Propose {
-        /// Path to the operator config TOML.
-        #[arg(long, short = 'c')]
-        config: PathBuf,
-        /// Comma-separated vault addresses, 0x-prefixed hex.
-        /// Example: `--vaults 0xAAA...,0xBBB...`
-        #[arg(long, value_delimiter = ',')]
-        vaults: Vec<String>,
-        /// Comma-separated weight bps values (must sum to 10 000).
-        /// Example: `--weights-bps 6000,4000`
-        #[arg(long = "weights-bps", value_delimiter = ',')]
-        weights_bps: Vec<u64>,
-        /// Gas limit for the propose tx envelope. Default 500 000.
-        #[arg(long = "gas-limit", default_value_t = 500_000)]
-        gas_limit: u64,
-        /// Optional override for `max_fee_per_gas_cap` in wei.
-        #[arg(long = "fee-cap")]
-        fee_cap: Option<u64>,
-        /// Maximum seconds to wait for the receipt. Default 60.
-        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
-        receipt_timeout_secs: u64,
-        /// Pretty-print the JSON output.
-        #[arg(long)]
-        pretty: bool,
-    },
     /// Cast a vote on an active RouterGovernance proposal (issue #632).
     /// Uses `RouterGovernance.vote(proposalId)` for `--choice yes`;
     /// `no` and `abstain` are client-side no-ops (contract supports FOR only).
@@ -414,12 +385,10 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
-    /// Investment Committee v0 — register an agent or submit a signed
-    /// allocation vote through the InvestmentCommitteePolicy contract,
-    /// routed via RobotMoneyGateway.
-    ///
-    /// Both subcommands write through the gateway (same signer + policy
-    /// enforced as for deposits). Implements: issue #1044.
+    /// Investment Committee v0 — submit a signed allocation vote through the
+    /// InvestmentCommitteePolicy contract. Registering agents is an
+    /// ADMIN_ROLE (Safe) action and is not an rmpc command.
+    /// Implements: issue #1044.
     Committee {
         /// Path to the operator config TOML. Requires `ic_policy_address`.
         #[arg(long, short = 'c')]
@@ -625,34 +594,6 @@ pub enum CommitteeIdentitySubcommand {
 /// Subcommands for `rmpc committee`.
 #[derive(Debug, Subcommand)]
 pub enum CommitteeSubcommand {
-    /// Register a committee agent address in the InvestmentCommitteePolicy
-    /// contract. Caller must hold ADMIN_ROLE on the IC policy contract.
-    ///
-    /// Routes through RobotMoneyGateway with `--order-id` as the
-    /// idempotency key.
-    Register {
-        /// Committee agent address to allowlist (0x-prefixed hex).
-        #[arg(long)]
-        agent: String,
-        /// Human-readable agent identifier (e.g. "athena-v1", "robot-money").
-        #[arg(long = "agent-id")]
-        agent_id: String,
-        /// 32-byte order id / idempotency key, 0x-prefixed hex.
-        #[arg(long = "order-id")]
-        order_id: String,
-        /// Deadline horizon in seconds from now. Default 300.
-        #[arg(long = "deadline-secs", default_value_t = 300)]
-        deadline_secs: u64,
-        /// Maximum seconds to wait for the receipt. Default 60.
-        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
-        receipt_timeout_secs: u64,
-        /// Gas limit for the register tx. Default 300_000.
-        #[arg(long = "gas-limit", default_value_t = 300_000)]
-        gas_limit: u64,
-        /// Optional override for `max_fee_per_gas_cap` in wei.
-        #[arg(long = "fee-cap")]
-        fee_cap: Option<u64>,
-    },
     /// Submit a signed allocation vote for a vault through the
     /// InvestmentCommitteePolicy contract. Caller must hold
     /// COMMITTEE_AGENT_ROLE on the IC policy contract.

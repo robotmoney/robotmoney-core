@@ -131,7 +131,7 @@ pub enum RmpcError {
     ErrNotAllowlisted,
 
     /// The operator config is missing the `ic_policy_address` field.
-    /// Both `committee register` and `committee vote-submit` fail-closed
+    /// `committee vote-submit` fails closed
     /// before any on-chain write when this field is absent.
     #[error(
         "ErrIcContractNotConfigured: ic_policy_address is not set in the operator config; \
