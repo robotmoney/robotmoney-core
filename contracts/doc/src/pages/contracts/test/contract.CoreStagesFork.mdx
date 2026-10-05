@@ -1,19 +1,19 @@
 ---
 title: "CoreStagesFork"
-description: "Fork regression: the stack the split stages build takes a router deposit and a router withdraw through the gateway against the real Base venues and real USDC. It is the in-process twin of scripts/deploy/assert-core-router.ts. Run through scripts/devnet/run-golden-forge-forks.sh (pinned fixture) or with FORK_RPC_URL set to an archive node. `setUp` reverts when no fork resolves, so it never silent-skips."
+description: "Fork regression: the stack the split stages build takes a router deposit and a router withdraw through the gateway against the real Base venues and real USDC. It is the in-process twin of scripts/deploy/assert-core-router.ts. It runs on the Twin chain (a pinned lazy anvil fork of real Base state): start it with scripts/devnet/twin-fork.ts and set FORK_RPC_URL to its URL. With FORK_RPC_URL unset the test skips with a named reason."
 ---
 
 # CoreStagesFork
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/CoreStagesFork.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/47813c6ce325a410eae924f85ab4c0cc53db31a1/contracts/test/CoreStagesFork.t.sol)
 
 **Inherits:** Test
 
 Fork regression: the stack the split stages build takes a router deposit and a router
 withdraw through the gateway against the real Base venues and real USDC. It is the
-in-process twin of scripts/deploy/assert-core-router.ts. Run through
-scripts/devnet/run-golden-forge-forks.sh (pinned fixture) or with FORK_RPC_URL set to
-an archive node. `setUp` reverts when no fork resolves, so it never silent-skips.
+in-process twin of scripts/deploy/assert-core-router.ts. It runs on the Twin chain
+(a pinned lazy anvil fork of real Base state): start it with scripts/devnet/twin-fork.ts
+and set FORK_RPC_URL to its URL. With FORK_RPC_URL unset the test skips with a named reason.
 
 ## Constants
 
@@ -21,12 +21,6 @@ an archive node. `setUp` reverts when no fork resolves, so it never silent-skips
 
 ```solidity
 address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-```
-
-### FORK_BLOCK
-
-```solidity
-uint256 internal constant FORK_BLOCK = 52082423;
 ```
 
 ## State Variables

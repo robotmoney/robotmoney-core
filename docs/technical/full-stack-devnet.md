@@ -105,40 +105,15 @@ Every chain suite (5, 7, 8, 10, 11b and 14) has a `pin` job and starts the Twin 
 of them in one run with one shared pin. Suite 26 targets the shared stage Twin fork. See
 `docs/development/ci-suites.md`.
 
-## Saved fork-state fixture (forge golden fork tests only)
+## No saved state (retired snapshot machinery)
 
-The Twin chain uses no saved state. A checked-in Anvil fork-state fixture
-(`testing/fixtures/fork-state/CURRENT.anvil-state`) is still loaded by the forge golden fork tests
-of suites 1 and 2 (`scripts/devnet/run-golden-forge-forks.sh`). For its purpose, the
-`RMPC_FORK_RPC_URL` regeneration variable and the refresh command
-(`scripts/devnet/snapshot-fork.ts`), see `docs/development/environments.md` §2 and ADR-0011.
-The `anvil-goldens` and `anvil-governance` groups of suite 5 do not use it: they point
-`RMPC_FORK_RPC_URL` at the Twin fork.
-
-### Pin age (issue #1386)
-
-The Aave V3 / Compound V3 / Morpho state the saved fixture holds is frozen at its pinned Base
-block. Those protocols accrue interest as a function of `block.timestamp - lastUpdateTimestamp`,
-so the simulated interval grows by one day per day the fixture is not refreshed.
-`scripts/devnet/check-fork-pin-age.sh` makes the age visible: `check-fork-manifest.sh` calls it on
-every run and annotates a `::warning::` past the 21-day cadence. It never fails there. Measured
-from `CURRENT.json`'s `captured_at`, because `snapshot-fork.ts` advances the fork clock to
-wall-clock now before warming the adapters. The Twin chain has no such age: its pin is the
-upstream head minus 2 at the start of every run.
-
-### Refreshing the saved fixture
-
-```bash
-bun scripts/devnet/snapshot-fork.ts
-```
-
-The script uses public Base endpoints only (with back-off on HTTP 429) and needs no key or
-archive node. It deploys nothing: the snapshot holds third-party Base state and no Robot Money
-contract. Into the committed fixture dir it also realigns `fork-block.json` and recaptures
-`expected-prices.json`, at the same block as `CURRENT.json`. A refreshed fixture is judged by
-`bun scripts/devnet/check-fork-snapshot-contents.ts` and
-`scripts/devnet/check-fork-manifest.sh --require-pinned`.
-`bun scripts/devnet/snapshot-fork-selftest.ts` is the offline selftest.
+The Twin chain uses no saved state, and neither does any suite. The fork-state fixture
+(`testing/fixtures/fork-state/`), `snapshot-fork.ts`, the golden fork runner, the state digest, the
+pin-age warning, `fork-block.json` and `expected-prices.json` are deleted (core 1498, 1496). The
+forge fork tests of suites 1 and 2 read `FORK_RPC_URL` (the Twin fork) and run through
+`bun scripts/devnet/forge-fork-tests.ts`. The pin is the upstream head at the start of a run minus 2,
+so no state is ever older than a run. The landing price strip is checked against a sanity band per
+pair (`testing/ethereum-testnet/config/price-strip-pairs.json`), not a golden price.
 
 ## Troubleshooting
 

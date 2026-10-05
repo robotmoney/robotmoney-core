@@ -1,39 +1,35 @@
-# scripts/devnet: the Twin chain tool and the saved Base fixture tools (Bun flow)
+# scripts/devnet: the Twin chain tools (Bun flow)
 
-**The Twin chain (918453) is a pinned lazy fork of real Base state** made with anvil (core 1498, 1496, owner decision 2026-10-05). `twin-fork.ts` starts it, funds gas and USDC, and warps time. See `README-twin-fork.md` and `docs/technical/full-stack-devnet.md`. The composite actions are `.github/actions/twin-pin` (one pin per run) and `.github/actions/twin-fork`. No Robot Money contract is deployed by the tool. The rehearsal deploys the production contracts with the production scripts (one deployment scheme).
+**The Twin chain (918453) is a pinned lazy fork of real Base state** made with anvil (core 1498, 1496, owner decision 2026-10-05). `twin-fork.ts` starts it, funds gas and USDC, and warps time. See `README-twin-fork.md` and `docs/technical/full-stack-devnet.md`. The composite actions are `.github/actions/twin-pin` (one pin per run) and `.github/actions/twin-fork`. No Robot Money contract is deployed by the tool. Every test deploys its own vault through the production scripts and reads addresses from the manifests (clean room rule).
 
-The rest of this file covers the **saved fork-state fixture**, a separate artifact that only the forge golden fork tests of suites 1 and 2 still load (ADR-0011). The Twin chain does not use it. There is no genesis alloc, no genesis ingester and no nightly fresh-snapshot overlay any more.
+There is no saved state. The snapshot machinery is retired: no `snapshot-fork.ts`, no `.anvil-state` fixture, no genesis alloc, no state digest, no pin-age warning and no `fork-block.json` or `expected-prices.json`. The state is real Base, read lazily from the upstream at the pinned block.
 
-## Files `snapshot-fork.ts` writes (all at one block)
+## Files
 
-| File | Block fields |
+| File | Purpose |
 |---|---|
-| `testing/fixtures/fork-state/CURRENT.json` | `fork_block`, `fork_block_hash`, `state_sha256` |
-| `testing/fixtures/fork-state/CURRENT.anvil-state` | the anvil dump the digest binds |
-| `testing/ethereum-testnet/config/fork-block.json` | `block_number`, `block_hash` |
-| `testing/ethereum-testnet/config/expected-prices.json` | prices at that block (the landing price strip compares within a factor of 5 at any other block) |
+| `twin-fork.ts`, `twin-fork-lib.ts` | start, wait-ready, status, fund-gas, fund-usdc, warp, stop. The library holds the pin choice, the argv, the retrying JSON-RPC helper (HTTP 429 and 5xx back-off) and the keccak256 used for the USDC balance slot. |
+| `safe-set.ts` | Reads the canonical Safe v1.4.1 contracts from a chain over RPC. Checks each code hash and the singleton lock (slot 4 equals 1). Exit 0 ok, 2 unreadable, 14 not canonical. The pinned hashes are the data the dependency manifest tools also read. |
+| `forge-fork-tests.ts` | Runs `forge test` with `FORK_RPC_URL` set to the Twin chain. Fails a run in which no test executed (skips do not count). |
+| `check-twin-chain-ci-selftest.ts` | Checks the CI wiring: one pin per run, every `twin-fork` step takes it, nothing names a retired file. |
 
-## Flow
+## Tests (offline, no anvil, no network)
 
-1. `bun scripts/devnet/snapshot-fork.ts` pins a block on a public Base endpoint (no key, no archive node, back-off on HTTP 429).
-2. It boots anvil forking that block in Docker and warms third-party code: V3 factory, SwapRouter02, QuoterV2, every pool in `config/dex-pools.json`, the lending stack and the Safe v1.4.1 set.
-3. It runs representative quotes and swaps so tick, bitmap and observation slots are in the dump.
-4. It dumps state, writes `CURRENT.json` with the block hash and the sha256 binding, then writes `fork-block.json`.
-5. It runs the contents check on the result.
+```
+bun test scripts/devnet --timeout 60000
+bun scripts/devnet/check-twin-chain-ci-selftest.ts     # needs yq
+```
 
-## Checks (CI)
+The fork tests of the contracts (`VaultForkRegressions`, `DeploySeedDeposit`, `SafeIntegration`, `GovernanceExecutePathAfterHandover`, `RwaBasketVaultFork`, `CoreStagesFork`, `GatewayRouterSplitStagesForkTest`) read `FORK_RPC_URL`. Unset, each skips with a named reason. Set, an unreachable endpoint fails the test.
 
-- `bun scripts/devnet/check-fork-snapshot-contents.ts` boots anvil from the snapshot with no fork URL. It asserts code at SwapRouter02, QuoterV2, the V3 factory, the infrastructure and the Safe set, live `slot0`, `liquidity` and `observe` on every configured pool, `factory.getPool` agreement, and no Robot Money code at genesis.
-- `bash scripts/devnet/check-fork-manifest.sh` verifies the digest, the Safe set and pin age, then `check-fork-lockstep.ts`, which asserts block number and hash are equal across `CURRENT.json` and `fork-block.json`.
-- `bun scripts/devnet/snapshot-fork-selftest.ts` is the offline unit test. Its fixtures are in `scripts/devnet/fixtures/lockstep/`.
-- `bun scripts/devnet/check-twin-chain-ci-selftest.ts` checks the Twin chain CI wiring (one pin per run, no retired devnet references).
-- `bun test scripts/devnet/twin-fork-lib.test.ts` is the offline unit test of the Twin fork tool.
-
-## Exclusions
-
-- wSOL is excluded from the checked basket list explicitly (`EXCLUDED_BASKET_SYMBOLS` in `fork-snapshot-lib.ts`). The contents check fails if any config row names it.
-- BNKR has no address in config (rmAGENT ships empty), so it is not warmed or asserted. If an address is added to `config/agent-token-shortlist.json`, the warm list and the check pick it up.
+```
+bun scripts/devnet/twin-fork.ts start
+export TWIN_RPC_URL=http://127.0.0.1:8545
+bun scripts/devnet/safe-set.ts
+bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/VaultForkRegressions.t.sol"
+bun scripts/devnet/twin-fork.ts stop
+```
 
 ## Env
 
-`RMPC_FORK_RPC_URL`, `FORK_PIN_LAG`, `FORK_CHAIN_ID`, `ANVIL_PORT`, `FOUNDRY_IMAGE`, `FIXTURE_DIR`, `SNAPSHOT_SWAP_USDC`, `SNAPSHOT_TICK_WORDS`, `SNAPSHOT_MAX_OBSERVATIONS`. See the header of `snapshot-fork.ts`. No secret is read.
+`BASE_UPSTREAM_RPC` (optional secret, a paid upstream, never printed), `TWIN_RPC_URL` (the URL the actions export), `FORK_RPC_URL` (read by the forge fork tests). No secret is required: the default upstream is the public `https://mainnet.base.org`.

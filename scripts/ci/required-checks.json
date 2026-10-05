@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "comment": "Required checks gate a DEPLOY_SHA. Derived from the workflow job names that run unconditionally on push to dev (jobs with a draft or event skip, a path filter, a matrix or a schedule-only trigger are excluded). A required entry needs a check-run with that exact name (or a name starting with prefix) and every run of that name must have concluded success. smoke-test-twin-publish (suite 14 twin_publish) is class required-on-deploy-paths: the job runs on every push to dev, so a DEPLOY_SHA always carries it, and on a pull request it runs only when a path in its paths list changed (GitHub reports the skipped job as passing for branch protection, so the owner marks it required in branch protection). config-check-live-base is required: its workflow runs on every PR and push and skips the heavy steps when no config path changed, so it always reports. Optional entries are reported and never change the exit code.",
+  "comment": "Required checks gate a DEPLOY_SHA. Derived from the workflow job names that run unconditionally on push to dev (jobs with a draft or event skip, a path filter, a matrix or a schedule-only trigger are excluded). A required entry needs a check-run with that exact name (or a name starting with prefix) and every run of that name must have concluded success. smoke-test-twin-publish (suite 14 twin_publish) is class required-on-deploy-paths: the job runs on every push to dev, so a DEPLOY_SHA always carries it, and on a pull request it runs only when a path in its paths list changed (GitHub reports the skipped job as passing for branch protection, so the owner marks it required in branch protection). config-check-live-base is required: its workflow runs on every PR and push and skips the heavy steps when no config path changed, so it always reports. Optional entries are reported and never change the exit code. forge-fork-vault-regressions is optional: it runs on the Twin chain, a pinned lazy fork of real Base state served by a public upstream that can rate limit (core 1498), so a provider outage must not block a deploy sha.",
   "required": [
     { "name": "forge-unit-tests", "source": "suite-01-02-forge-tests.yml" },
     { "name": "forge-coverage-gate", "source": "suite-01-02-forge-tests.yml" },
@@ -34,6 +34,7 @@
   "optional": [
     { "name": "cross-repo-fixture-drift", "source": "fusion-cross-repo-drift.yml" },
     { "name": "solidity-slither", "source": "suite-03-solidity-quality.yml" },
+    { "name": "forge-fork-vault-regressions", "source": "suite-01-02-forge-tests.yml" },
     { "name": "opencode-headless-deposit-replay", "source": "suite-11b-opencode-headless.yml" },
     { "prefix": "fork-integration-", "source": "suite-05-fork-integration.yml" }
   ]

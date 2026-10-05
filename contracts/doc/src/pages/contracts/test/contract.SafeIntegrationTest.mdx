@@ -5,7 +5,7 @@ description: "Fork-based integration tests proving that a 2-of-3 Safe proxy depl
 
 # SafeIntegrationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/47813c6ce325a410eae924f85ab4c0cc53db31a1/contracts/test/SafeIntegration.t.sol)
 
 **Inherits:** Test
 
@@ -17,13 +17,13 @@ governed Robot Money contracts.
 
 <i>
 
-CI starts Anvil from the checked-in Base fixture at localhost:8545. A
-live fork remains available locally through `FORK_RPC_URL`.
+CI runs this on the Twin chain (a pinned lazy anvil fork of real Base state).
+Locally, start it and point FORK_RPC_URL at it. Unset, the test skips with a named reason.
 
 </i>
 
 To run locally:
-FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/&lt;key> \
+bun scripts/devnet/twin-fork.ts start && FORK_RPC_URL=http://127.0.0.1:8545 \
 forge test --match-contract SafeIntegration -vvv
 
 <i>
@@ -33,8 +33,7 @@ We call `SafeProxyFactory.createProxyWithNonce` against the canonical Base-mainn
 factory (0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67) with the canonical
 `SafeL2` singleton (0x29fcB43b46531BcA003ddC8FCB67FFE91900C762). Base is an L2,
 so `SafeL2` is the singleton production uses (governance-isomorphism.md §2.2, R4).
-The golden fixture carries it because snapshot-fork.ts warms the whole Safe set
-and check-fork-safe-set.sh refuses a fixture without it (R2, R3).
+The Twin chain carries it because it is real Base state (R2, R3).
 This proves the quorum is enforced by actual Safe contract code, not vm.prank.
 
 </i>
@@ -291,7 +290,7 @@ address[] internal loggedAgents;
 
 <i>
 
-Select an override URL or the offline golden-fixture RPC.
+Select the Twin chain named by FORK_RPC_URL, or skip.
 
 </i>
 

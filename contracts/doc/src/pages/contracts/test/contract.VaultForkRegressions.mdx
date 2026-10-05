@@ -5,7 +5,7 @@ description: "Fork-level regression suite for vault accounting attack paths."
 
 # VaultForkRegressions
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/VaultForkRegressions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/47813c6ce325a410eae924f85ab4c0cc53db31a1/contracts/test/VaultForkRegressions.t.sol)
 
 **Inherits:** Test
 
@@ -15,16 +15,16 @@ Fork-level regression suite for vault accounting attack paths.
 
 <i>
 
-CI boots the checked-in Base golden fixture at localhost:8545. A local
-live fork remains possible by overriding `FORK_RPC_URL`.
+CI runs this on the Twin chain (a pinned lazy anvil fork of real Base state) named by
+`FORK_RPC_URL`. Unset, the tests skip with a named reason.
 
 </i>
 
 To run locally:
-FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/&lt;key> \
+bun scripts/devnet/twin-fork.ts start && FORK_RPC_URL=http://127.0.0.1:8545 \
 forge test --match-path "contracts/test/VaultForkRegressions.t.sol" -vvv
 
-CI uses `CURRENT.anvil-state`; no live RPC secret is involved.
+No secret is needed: the upstream is the public Base endpoint unless BASE_UPSTREAM_RPC is set.
 
 Attack paths covered (per issue #209 acceptance criteria):
 AC1  Aave adapter donation cannot make a victim deposit mint zero/unfair shares.
@@ -172,7 +172,7 @@ address internal attacker;
 
 <i>
 
-Use an explicit local override, otherwise the offline fixture RPC.
+Use the Twin chain named by FORK_RPC_URL, or skip.
 
 </i>
 
@@ -192,7 +192,7 @@ function _forkRpcUrl() internal view returns (string memory url);
 
 <i>
 
-Select the already-running offline golden-fixture RPC.
+Select the Twin chain.
 
 </i>
 

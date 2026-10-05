@@ -56,8 +56,8 @@ A branch-coverage gate on `RobotMoneyGateway` is enforced by `check_gateway_cove
 
 **Owner domain:** Rust client (`rmpc`) against already-deployed Base contracts  
 **CI workflow:** [`.github/workflows/suite-05-fork-integration.yml`](../.github/workflows/suite-05-fork-integration.yml)  
-**Environment:** `fork` — Anvil fork of Base (checked-in `--load-state` fixture, or a live `--fork-url` fork)  
-**Required services/secrets:** No CI secret — the merge gate runs offline against the checked-in `testing/fixtures/fork-state/` fixture. `RMPC_FORK_RPC_URL` is optional and non-secret; the flagship scenarios still need a live fork today (current reality → [ADR-0011](../docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md) target).  
+**Environment:** `fork` — the Twin chain, an Anvil pinned lazy fork of real Base (no saved state)  
+**Required services/secrets:** No CI secret is required. The suite starts the Twin fork from the public upstream at one pin per run (`BASE_UPSTREAM_RPC` is an optional paid upstream, never printed). `RMPC_FORK_RPC_URL` names the Twin fork each test forks again (see [ADR-0011](../docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md) update note).  
 **docs/development/ci-suites.md reference:** [Suite 5](../docs/development/ci-suites.md#5-fork-integration-tests-protocol-adapters)
 
 **Run commands:** see [testing/fork-e2e-rust/README.md](fork-e2e-rust/README.md) and [environments.md](../docs/development/environments.md) §2.

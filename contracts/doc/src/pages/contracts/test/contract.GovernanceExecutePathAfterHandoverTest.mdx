@@ -5,7 +5,7 @@ description: "R7's two halves, proved on one topology built the way the deploy s
 
 # GovernanceExecutePathAfterHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/47813c6ce325a410eae924f85ab4c0cc53db31a1/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
 
 **Inherits:** Test
 
@@ -32,9 +32,9 @@ Fork test. The Safe that drives the timelock is the one stage now
 runs (issue #1447): a SafeProxy created through the canonical
 SafeProxyFactory on the canonical SafeL2 singleton, 2-of-3, driven
 by `execTransaction` with two owner signatures. Those contracts
-exist only on a Base fork, so CI runs this file through
-scripts/devnet/run-golden-forge-forks.sh against the golden
-fixture, like SafeIntegration.t.sol.
+exist only on a Base fork, so CI runs this file with
+FORK_RPC_URL set to the Twin chain (a pinned lazy fork of real Base), like
+SafeIntegration.t.sol. Unset, it skips with a named reason.
 
 </i>
 

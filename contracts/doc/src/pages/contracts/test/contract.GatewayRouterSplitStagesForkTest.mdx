@@ -1,11 +1,11 @@
 ---
 title: "GatewayRouterSplitStagesForkTest"
-description: "Runs the production stage scripts (libs, vault, registry, router, gateway) against real Base state, then routes a deposit and a withdraw through the gateway that the gateway stage built. Before core S3 the gateway held a zero router, so both calls reverted (`InvalidDestination`, `RouterNotConfigured`). Real USDC and the real Aave, Compound and Moonwell venues are needed, so this test runs on the Base golden fixture the other fork tests use. `FORK_RPC_URL` overrides the fixture RPC."
+description: "Runs the production stage scripts (libs, vault, registry, router, gateway) against real Base state, then routes a deposit and a withdraw through the gateway that the gateway stage built. Before core S3 the gateway held a zero router, so both calls reverted (`InvalidDestination`, `RouterNotConfigured`). Real USDC and the real Aave, Compound and Moonwell venues are needed, so this test runs on the Twin chain (pinned lazy fork of real Base) the other fork tests use. `FORK_RPC_URL` names it; unset, the test skips with a named reason."
 ---
 
 # GatewayRouterSplitStagesForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/47813c6ce325a410eae924f85ab4c0cc53db31a1/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:** Test
 
@@ -13,8 +13,9 @@ Runs the production stage scripts (libs, vault, registry, router, gateway) again
 real Base state, then routes a deposit and a withdraw through the gateway that the
 gateway stage built. Before core S3 the gateway held a zero router, so both calls
 reverted (`InvalidDestination`, `RouterNotConfigured`). Real USDC and the real
-Aave, Compound and Moonwell venues are needed, so this test runs on the Base
-golden fixture the other fork tests use. `FORK_RPC_URL` overrides the fixture RPC.
+Aave, Compound and Moonwell venues are needed, so this test runs on the Twin
+chain (pinned lazy fork of real Base) the other fork tests use. `FORK_RPC_URL` names it;
+unset, the test skips with a named reason.
 
 ## Constants
 

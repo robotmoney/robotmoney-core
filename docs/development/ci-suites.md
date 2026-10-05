@@ -113,39 +113,19 @@ compare (it names the mismatch rather than reporting stale docs).
 > it, not rediscover the cliff as an unfixable "flake". Raising the ceiling is a
 > deliberate act (`COVERAGE_MEM_CEILING_PCT`), not a default.
 
-#### Live-RPC fork steps (issue #1239)
+#### Fork tests on the Twin chain (core 1498, 1496; replaces the live-RPC steps of issue #1239)
 
-Three `fork-regressions` steps — the Uniswap V3 and Aerodrome fork tests — cannot use the offline golden fixture,
-because it never touched those pools. They fork live Base, so they run through
-`scripts/devnet/run-live-rpc-forge-fork.sh` instead of a bare `forge test`:
+The `fork-regressions` job (`forge-fork-vault-regressions`) runs the forge fork tests (`VaultForkRegressions`, `DeploySeedDeposit`, `SafeIntegration`, `GovernanceExecutePathAfterHandover`, `RwaBasketVaultFork`, `CoreStagesFork`, `GatewayRouterSplitStagesForkTest`) on the Twin chain: a pinned lazy anvil fork of real Base state. There is no saved state file, no golden fixture and no live-RPC runner any more.
 
-- **Endpoint.** The `RMPC_FORK_RPC_URL` Actions secret when it is set. It must
-  be a secret, not a variable: this repo is public and GitHub does not mask
-  `vars.*` values anywhere they appear, including a step's `env:` block in
-  the log, so a keyed URL stored as a variable would leak into every public
-  run. When it is unset (the case today), the public endpoints listed in
-  `scripts/devnet/fork-rpc-lib.sh`, one per attempt in rotation. That file is
-  the only copy of the fallback list; `check-adr0011-ci.sh` fails if a
-  workflow reintroduces a `secrets.RMPC_FORK_RPC_URL || '<url>'` expression,
-  or reads the value from `vars.*` instead of `secrets.*`.
-- **Attribution.** A red step carries an `::error` whose title says which kind
-  of failure it is. *Provider failure* means every failing test failed on an
-  RPC transport or provider error (429, "Archive requests require a personal
-  token", "could not instantiate forked environment", connection errors). Only
-  that kind is retried (three attempts by default). *Test failure* means at
-  least one test failed for any other reason. It is never retried, so a real
-  regression cannot be retried into a green. A recovered flake passes with a
-  `::warning` that names it.
-- **No zero-test green.** A run that executed no tests is red.
-- **Redaction.** forge prints the request URL on a transport error, and a keyed
-  provider URL carries its API key, so the runner redacts the endpoint from
-  forge's output and masks a configured value for the rest of the job.
+- **One pin.** The `twin-pin` job chooses the upstream head at the start of the run minus 2 (`.github/actions/twin-pin`). `fork-regressions` needs it and starts the fork with `.github/actions/twin-fork` at that block. Anvil's RPC cache is persisted per pin block.
+- **Endpoint.** The upstream is the public `https://mainnet.base.org` (no key, no archive node). The optional secret `BASE_UPSTREAM_RPC` names a paid upstream. It is a secret, not a variable (this repo is public and GitHub does not mask `vars.*`), and the tools never print it. HTTP 429 is retried by anvil (`--retries`, `--fork-retry-backoff`, `--compute-units-per-second`) and by the tool at start up.
+- **FORK_RPC_URL.** Every fork test reads it. Unset, the test skips with a named reason (`contracts/test/helpers/ForkSelect.sol`), so the plain unit run stays green on a machine with no chain. Set, an unreachable endpoint fails the test.
+- **Runner.** `bun scripts/devnet/forge-fork-tests.ts -- <forge args>` sets `FORK_RPC_URL` to `$TWIN_RPC_URL` and fails a run in which no test executed (skips do not count).
+- **Safe set.** `bun scripts/devnet/safe-set.ts` reads the canonical Safe v1.4.1 contracts from the chain and checks each code hash and the singleton lock (core 1447).
+- **Clean room.** Each test deploys its own contracts through the production deploy scripts. None reads the live production v1 vault.
+- **Required check.** `forge-fork-vault-regressions` is an optional entry in `scripts/ci/required-checks.json`: it depends on a public upstream that can rate limit, so a provider outage must not block a deploy sha.
 
-`bash .github/scripts/tests/test_run_live_rpc_forge_fork.sh` (offline, stubbed
-forge) proves each of those behaviours in the same job before the live steps
-run. The fix that removes the pressure entirely is still external: a repo admin
-must set `RMPC_FORK_RPC_URL` to a keyed Base archive RPC as a repository or
-organization Actions **secret**.
+The offline unit tests (`bun test scripts/devnet`) run in the `unit` job: the Twin fork tool, the Safe set check against a stub chain and the runner's executed-test counter.
 
 ---
 
@@ -232,7 +212,7 @@ A `pin` job chooses ONE pinned Base block per workflow run (upstream head minus 
 | `anvil-goldens` | `abi_address_sanity`, `dex_route_smoke`, `vault_deposit_redeem_smoke` | each test forks the Twin (`RMPC_FORK_RPC_URL=$TWIN_RPC_URL`, `RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK`) |
 | `anvil-governance` | `governance` | each test forks the Twin; governance scenarios warp (`evm_increaseTime`) instead of waiting |
 
-Coverage is **loud** per the repo test-coverage policy: zero executed fork tests fails CI, never silent-skips. Live-Base drift is covered by the nightly Twin chain run (suite 29): every run pins the current head. The landing price strip golden (`expected-prices.json`) is compared within `tolerance_pct` only at its golden block. At any other block (the Twin pin) the price must be within a factor of 5, which still catches wrong decimals, inverted pairs and a missing pool.
+Coverage is **loud** per the repo test-coverage policy: zero executed fork tests fails CI, never silent-skips. Live-Base drift is covered by the nightly Twin fork run (suite 29): every run pins the current head. The landing price strip has no golden price (the pin moves every run): `testing/ethereum-testnet/config/price-strip-pairs.json` holds a sanity band per pair, which still catches wrong decimals, inverted pairs and a missing pool.
 
 Known gap: the `fork-e2e-rust` scenarios and several tests still read the live production v1 addresses from `testing/fork-e2e-rust/src/addresses.rs`. The clean room rule (each test deploys its own vault and reads manifests) is met by suites 7, 8, 10, 14 and the explorer-indexer `fork_indexer` test, not yet by these.
 
@@ -461,7 +441,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 1. Checkout repository
 2. Install Rust + Foundry toolchain
 3. Cargo cache
-4. `cargo test --test read_only_walkthrough` — rmpc envelope contract against devnet (current reality: skip-cleans without a live RPC; ADR-0011 target is the offline golden fixture — no secret, loud on missing)
+4. `cargo test --test read_only_walkthrough` — rmpc envelope contract against devnet (current reality: skip-cleans without a live RPC; the Twin chain is the target: a pinned lazy fork of real Base, no secret, loud on missing)
 
 **Jobs — `opencode-headless.yml`:**
 - `asserter-tests` — offline, keyless pytest of the transcript asserters, live-fail guard, and replay harness, plus the G12 keystore-generate negative control (`negative_control_keystore_generate_flag.sh`, issue #1235); runs on **every** trigger, including `pull_request`. pytest exits non-zero if it collects zero tests, so a mis-pathed suite reds the job.
@@ -479,7 +459,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 **Steps — `deposit` job (replay coverage):**
 1. Checkout repository
 2. Install Rust + Foundry
-3. Deploy the real Aave V3 / Compound V3 / Morpho adapter stack via the core stage scripts on the warmed Base fork-state devnet
+3. Deploy the real Aave V3 / Compound V3 / Morpho adapter stack via the core stage scripts on the Twin chain
 4. Generate fresh agent EOA; write keystore via `rmpc-keystore-import`; assert on-chain authorization
 5. Fund agent ETH balance via `anvil_setBalance`; set USDC approval signed by the generated agent key
 6. `replay_headless_transcript.py` executes get-vault → get-agent → get-balance → get-allowance → self-check → deposit in that fixed order against the live devnet, then `assert_headless_live_transcript.py` — loud-fail guard that reds this step on an empty / zero-rmpc transcript
@@ -502,7 +482,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 
 **Jobs:**
 - `safety` — shellcheck, mainnet gate, secret handling; runs immediately; no chain required
-- `walkthrough` — **needs `safety`**; long-running deposit walkthrough against devnet (current reality: skip-cleans without a live RPC; ADR-0011 target is the offline golden fixture — no secret, loud on missing)
+- `walkthrough` — **needs `safety`**; long-running deposit walkthrough against devnet (current reality: skip-cleans without a live RPC; the Twin chain is the target: a pinned lazy fork of real Base, no secret, loud on missing)
 
 **Steps — `safety` job:**
 1. Checkout repository
@@ -802,8 +782,6 @@ signal regardless of whether that day's commits touch each suite's path filters.
 **Jobs:**
 - `dispatch-all-suites` — single job; iterates over all suite workflow files and
   calls `gh api` (workflow dispatches) against `dev`; any failed dispatch fails the job
-- `fork-pin-age-warning` — runs `scripts/devnet/check-fork-pin-age.sh` and
-  only warns; it never fails the run.
 - Self-test: `scripts/ci/check_nightly_dispatch_list.py` (run in suite 13)
   fails when a suite workflow is missing from the dispatch list.
 
@@ -1143,7 +1121,7 @@ binaries do not compile.
 |---|---|---|---|---|
 | `rmpc-unit` (suite 6) | `cargo test --lib` in `clients/rust-payment-client` | `rust-payment-client` | yes (23 files) | **added #1295** — `cargo clippy -p rust-payment-client --all-targets` |
 | `explorer-indexer-fast` (suite 8) | `cargo test --lib -- abi::tests::abi_drift_gate` | `explorer-indexer` | yes (13 files) | already — `cargo test --no-run` in `services/explorer-indexer` |
-| `smoke-test-guards` (suite 14) | `cargo test -p smoke-test --lib fork_manifest::tests`, `… --lib tests::` | `smoke-test` | yes (9 files) | **added #1295** — `cargo clippy -p smoke-test --all-targets` |
+| `smoke-test-guards` (suite 14) | `cargo test -p smoke-test --lib`, `… --lib tests::` | `smoke-test` | yes (9 files) | **added #1295** — `cargo clippy -p smoke-test --all-targets` |
 | `watchdog-unit` (suite 20) | `cargo test -p watchdog --lib` | `watchdog` | yes (3 files) | **added #1295** — `cargo clippy -p watchdog --all-targets` (was `cargo clippy -p watchdog`) |
 
 ### Enumeration: every crate with a `tests/` directory
@@ -1295,14 +1273,14 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |
 | 28 | `suite-28-core-stages.yml` | `core-stages-offline`, `core-stages-twin-chain` (dispatch) | `none` / Twin `918453` |
 | 28 | `suite-28-core-stack-selftest.yml` | `core-stack-selftest` | `none` |
-| 29 | `suite-29-nightly-twin-fork.yml` | `pin` → suites 5, 7, 8, 10, 11b, 14 (called with `pin_block`) → `record-results` | Twin chain `918453`, one shared pin |
+| 29 | `suite-29-nightly-twin-fork.yml` | `pin` (uploads `twin-pin`) → suites 5, 7, 8, 10, 11b, 14 (called with `pin_block`) → `record-results` | Twin chain `918453`, one shared pin |
 
-### 29. Nightly Twin chain (nightly-twin-chain)
+### 29. Nightly Twin fork (nightly-twin-fork)
 
-**File:** `.github/workflows/suite-29-nightly-twin-fork.yml` (issue 1496, nightly job (b); replaces the nightly fresh snapshot).
+**File:** `.github/workflows/suite-29-nightly-twin-fork.yml` (issue 1496, nightly job (b); replaces the nightly fresh snapshot, `suite-29-nightly-fresh-snapshot.yml`).
 **Tier / triggers:** nightly (05:30 UTC) and `workflow_dispatch`. Never a merge gate.
 
-Every Twin chain run already pins the upstream head minus 2, so there is no snapshot to take, no genesis to build and no overlay to apply. This nightly runs every chain suite in ONE workflow run with ONE shared pin: a `pin` job chooses the block (`.github/actions/twin-pin`) and each suite (5, 7, 8, 10, 11b, 14) is called with `workflow_call` and `pin_block: ${{ needs.pin.outputs.block }}` and `secrets: inherit`. Each suite's own pin job hands that block through unchanged, then its chain jobs start their own Twin fork at it. Anvil's RPC cache is persisted per pin block. `secrets: inherit` hands the suites what they already use alone: `DEVOPS_READ_TOKEN`, the optional `BASE_UPSTREAM_RPC` (a paid upstream, never printed) and the `BASE_TESTNET_*` secrets of suite 5; the workflow itself references none. The `results` job fails when the pin job or any suite did not succeed (failure, cancelled and skipped all count as not passing) and uploads `suite-results` (one JSON per suite, with the pin block).
+Every Twin chain run already pins the upstream head minus 2, so there is no snapshot to take, no genesis to build and no overlay to apply. This nightly runs every chain suite in ONE workflow run with ONE shared pin: a `pin` job chooses the block (`.github/actions/twin-pin`) and each suite (5, 7, 8, 10, 11b, 14) is called with `workflow_call` and `pin_block: ${{ needs.pin.outputs.block }}` and `secrets: inherit`. Each suite's own pin job hands that block through unchanged, then its chain jobs start their own Twin fork at it. Anvil's RPC cache is persisted per pin block. `secrets: inherit` hands the suites what they already use alone: `DEVOPS_READ_TOKEN`, the optional `BASE_UPSTREAM_RPC` (a paid upstream, never printed) and the `BASE_TESTNET_*` secrets of suite 5; the workflow itself references none, and no secret is required (`BASE_UPSTREAM_RPC` is optional). The `pin` job uploads `twin-pin` (the pin file: block, run id and time, never the upstream URL). The `results` job fails when the pin job or any suite did not succeed (failure, cancelled and skipped all count as not passing) and uploads `suite-results` (one JSON per suite, with the pin block).
 
 Suite 26 is not in this run: it targets the shared stage Twin fork (a service on the stage host) and needs `secrets.FUSION_RMPC_CONFIG`; it starts no fork per run.
 
@@ -1311,11 +1289,11 @@ Suite 26 is not in this run: it targets the shared stage Twin fork (a service on
 
 The `nightly-and-release-checks` job in `suite-13-doc-checks.yml` runs on every pull request. It runs, offline:
 
-- `scripts/ci/check-nightly-dispatch-selftest.ts` (core 1495, Bun): the nightly dispatch list covers every suite workflow, a removed suite is detected, the fork-pin age step has `continue-on-error: true`, and the deleted drift job, script and alarm text are gone. The list check itself is `scripts/ci/check_nightly_dispatch_list.py`; config-check, suite 28 core-stages and suite 30 are in the SUITES list, and the release workflows, the nightly itself, the third-party drift workflow and suite 29 are on the exclusion list with reasons.
-- `scripts/devnet/check-twin-chain-ci-selftest.ts` (cores 1496, 1498, Bun, run in suite 13, needs `yq`): the nightly calls suites 5, 7, 8, 10, 11b and 14 with `pin_block` from its own pin job and `secrets: inherit`; each of those suites declares the `pin_block` input, has a `pin` job using `.github/actions/twin-pin`, and every `twin-fork` step takes `pin-block` from that job and sits in a job that needs it; nothing in `.github`, `scripts`, `testing`, the dapp e2e tests or `services` still names the retired geth devnet, the genesis alloc or the fresh-snapshot overlay; the retired files are gone.
-- The nightly third-party drift workflow check, the dependency manifest self-test and the manifest address check (core 1497). The address check runs on a manifest recorded from the committed snapshot, so it checks something before the first release commits one.
+- `scripts/ci/check-nightly-dispatch-selftest.ts` (core 1495, Bun): the nightly dispatch list covers every suite workflow, a removed suite is detected, the retired fork-pin age job and scripts are gone, suite 29 is the Twin fork nightly, and the deleted drift job, script and alarm text are gone. The list check itself is `scripts/ci/check_nightly_dispatch_list.py`; config-check, suite 28 core-stages and suite 30 are in the SUITES list, and the release workflows, the nightly itself, the third-party drift workflow and suite 29 are on the exclusion list with reasons.
+- `scripts/devnet/check-twin-chain-ci-selftest.ts` (cores 1496, 1498, Bun, run in suite 13, needs `yq`): the nightly calls suites 5, 7, 8, 10, 11b and 14 with `pin_block` from its own pin job and `secrets: inherit`; each of those suites declares the `pin_block` input, has a `pin` job using `.github/actions/twin-pin`, and every `twin-fork` step takes `pin-block` from that job and sits in a job that needs it; the nightly uploads `suite-results` and `twin-pin`; suite 1-2's `fork-regressions` starts the Twin fork at the pin and runs through the Bun runner; nothing in `.github`, `scripts`, `testing`, the dapp e2e tests or `services` still names the retired geth devnet, the genesis alloc, the fresh-snapshot overlay or the saved fork-state snapshot machinery; the retired files are gone.
+- The nightly third-party drift workflow check, the dependency manifest self-test and the manifest address check (core 1497). The self-test records a manifest from a Twin fork (real Base code and storage) and checks it, so the address check covers something before the first release commits a manifest. It skips with a named reason when no chain is given.
 
-The committed snapshot contents check is a Bun TypeScript script, `scripts/devnet/check-fork-snapshot-contents.ts` (core 1498; the issue says `.sh`, orchestration is TypeScript). It also asserts a non-zero QuoterV2 `quoteExactInputSingle` quote (10 USDC to token, through `cast call`) for each basket pool in config (wETH, cbBTC, deSPXA); `scripts/devnet/snapshot-fork-selftest.ts` tests that assertion with a stub runner. Suite 14's `smoke-test-guards` job runs it, plus `check-fork-manifest.sh --require-pinned` (fixture lockstep) and a floor on the `cargo test -p smoke-test --lib` test count. Suite 14's `twin_publish` job (its own job, not a matrix row) runs the real Twin chain publish through the devops CLI (directory given by the `publish_contracts_dir` input), the one verifier and the stage 13 govern matrix. While the chain is up it runs `scripts/deploy/assert-core-router.ts` (read-only mode: the share receiver is keyless on the Twin chain, so the signed round trip is not run here), `assert-basket-vaults.ts` and `assert-timelock-roles.ts`, then `scripts/stage/twin-run-report.ts` (stages, tx counts, vault set, labels), then `parity.ts` (label-diff and sheet-diff against the mainnet verifier labels and production sheet). It uploads the manifests, proofs and report. On `pull_request` it runs only when `contracts/script/`, `scripts/deploy/`, `scripts/stage/`, `config/` or `testing/smoke-test/` changed (a `changes` job reads the git diff); push, `workflow_dispatch` and the nightly `workflow_call` always run it. A non-zero test count floor applies through `cargo_test_require_executed.sh` (`CARGO_TEST_MIN_EXECUTED=1`) plus the `--lib` floor in the guards job. The job needs no Docker and runs only in CI.
+Suite 14's `smoke-test-guards` job runs the smoke-test lib unit tests with a floor on the `cargo test -p smoke-test --lib` test count. The fork-block manifest guards, the snapshot contents check and the fixture lockstep gate are retired with the saved snapshot (core 1498). Suite 14's `twin_publish` job (its own job, not a matrix row) runs the real Twin chain publish through the devops CLI (directory given by the `publish_contracts_dir` input), the one verifier and the stage 13 govern matrix. While the chain is up it runs `scripts/deploy/assert-core-router.ts` (read-only mode: the share receiver is keyless on the Twin chain, so the signed round trip is not run here), `assert-basket-vaults.ts` and `assert-timelock-roles.ts`, then `scripts/stage/twin-run-report.ts` (stages, tx counts, vault set, labels), then `parity.ts` (label-diff and sheet-diff against the mainnet verifier labels and production sheet). It uploads the manifests, proofs and report. On `pull_request` it runs only when `contracts/script/`, `scripts/deploy/`, `scripts/stage/`, `config/` or `testing/smoke-test/` changed (a `changes` job reads the git diff); push, `workflow_dispatch` and the nightly `workflow_call` always run it. A non-zero test count floor applies through `cargo_test_require_executed.sh` (`CARGO_TEST_MIN_EXECUTED=1`) plus the `--lib` floor in the guards job. The job needs no Docker and runs only in CI.
 
 ## check-sha-green (core 1502)
 

@@ -1,16 +1,18 @@
 ---
 title: "ForkSelect"
-description: "Fork selection for tests that need real Base state. The golden-fork runner serves the pinned fixture on 127.0.0.1:8545 and sets FORK_REQUIRED=1: an unreachable endpoint then fails the test. Without FORK_REQUIRED an unreachable endpoint skips the test, so the plain unit run stays green on a machine with no chain."
+description: "Fork selection for tests that need real Base state. The state comes from the Twin chain (chain id 918453), a pinned lazy anvil fork of real Base, whose RPC URL the caller puts in FORK_RPC_URL (scripts/devnet/twin-fork.ts, .github/actions/twin-fork). With FORK_RPC_URL unset the test skips with a named reason, so the plain unit run stays green on a machine with no chain. With it set, an unreachable endpoint fails the test: a configured fork that cannot be reached is never a silent skip."
 ---
 
 # ForkSelect
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/helpers/ForkSelect.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/47813c6ce325a410eae924f85ab4c0cc53db31a1/contracts/test/helpers/ForkSelect.sol)
 
-Fork selection for tests that need real Base state. The golden-fork runner serves the
-pinned fixture on 127.0.0.1:8545 and sets FORK_REQUIRED=1: an unreachable endpoint then
-fails the test. Without FORK_REQUIRED an unreachable endpoint skips the test, so the plain
-unit run stays green on a machine with no chain.
+Fork selection for tests that need real Base state. The state comes from the Twin chain
+(chain id 918453), a pinned lazy anvil fork of real Base, whose RPC URL the caller puts in
+FORK_RPC_URL (scripts/devnet/twin-fork.ts, .github/actions/twin-fork). With FORK_RPC_URL
+unset the test skips with a named reason, so the plain unit run stays green on a machine
+with no chain. With it set, an unreachable endpoint fails the test: a configured fork that
+cannot be reached is never a silent skip.
 
 ## Constants
 
@@ -18,6 +20,13 @@ unit run stays green on a machine with no chain.
 
 ```solidity
 Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+```
+
+### SKIP_REASON
+
+```solidity
+string internal constant SKIP_REASON =
+        "FORK_RPC_URL unset: start the Twin fork (bun scripts/devnet/twin-fork.ts start) and export its URL";
 ```
 
 ## Functions

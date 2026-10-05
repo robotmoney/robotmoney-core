@@ -19,6 +19,6 @@ File names follow `ADR-NNNN-short-kebab-title.md`.
 | 0008 | [AgentTokenVault trading authority and strategy — deferred indefinitely (non-goal)](ADR-0008-agent-token-vault-trading-authority.md) | Accepted |
 | 0009 | [Vault retirement — no on-chain migration; withdraw-only is the production behavior](ADR-0009-vault-retirement-no-assisted-migration.md) | Accepted |
 | 0010 | [Unified Vault architecture — one Vault class, position adapters for every theme](ADR-0010-unified-vault-architecture.md) | Rejected (code deleted) |
-| 0011 | [Fork tests run against checked-in golden fixtures on every merge](ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md) | Superseded by the nightly redesign (core 1495, 1496) |
+| 0011 | [Fork tests run against checked-in golden fixtures on every merge](ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md) | Superseded by the Twin chain, a pinned lazy fork (core 1495, 1496, 1498) |
 | 0012 | [Ed25519 is the default identity algorithm; secp256k1 is confined to the EVM boundary; one keystore primitive serves both curves](ADR-0012-dual-curve-identity-policy.md) | Accepted |
 | 0013 | [Verify deploy tooling and dapp integration against the Robot Money Devnet ("Twin"), not public Base Sepolia](ADR-0013-twin-devnet-over-base-sepolia-for-testnet-verification.md) | Accepted |

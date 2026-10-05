@@ -18,7 +18,7 @@ The original scout body (context, the six §3 decisions with their
 open follow-ups) has been removed as duplicative. Its still-valid substance now
 lives in three homes:
 
-- **Goldens-vs-live CI model + nightly fresh-snapshot job** →
+- **CI model (the Twin chain, a pinned lazy fork; the golden fixtures and the nightly fresh snapshot are retired)** →
   [ADR-0011](../adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md).
 - **Harness design** — chain (Base mainnet, 8453), the Rust crate driver
   (`testing/fork-e2e-rust/`), the anvil fork backend, fork-restart-per-test

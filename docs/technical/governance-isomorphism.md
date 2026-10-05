@@ -114,7 +114,7 @@ it works, but the event stream production tooling expects is absent.
 
 | Requirement | Where it is enforced |
 |---|---|
-| R1 to R3 | The fork fixture carries all five contracts of section 2.2 with their canonical code, and both singletons carry the lock their constructor writes (threshold 1 in storage slot 4, so `setup()` on a singleton reverts `GS200`, as on Base). `scripts/devnet/snapshot-fork.ts` warms the five and aborts on a missing one. `scripts/devnet/check-fork-safe-set.sh` fails naming any contract that is absent, whose code does not hash to its pinned keccak256 (table below), or (singletons) whose slot 4 is not 1. |
+| R1 to R3 | The Twin chain (a pinned lazy fork of real Base state, core 1498) carries all five contracts of section 2.2 with their canonical code, and both singletons carry the lock their constructor writes (threshold 1 in storage slot 4, so `setup()` on a singleton reverts `GS200`, as on Base). `scripts/devnet/safe-set.ts` reads the five from the chain over RPC and fails naming any contract that is absent, whose code does not hash to its pinned keccak256 (table below), or (singletons) whose slot 4 is not 1. |
 | R4 | `SafeIntegration.t.sol` and the stage deploy both use `SafeL2` (`0x29fcB43b...`). The verifier checks the proxy's `masterCopy` slot. |
 | R5 to R8 | The devops publish-contracts runbook creates the `SafeProxy` through `@safe-global/protocol-kit` (`SafeProxyFactory.createProxyWithNonce` on `SafeL2`, canonical fallback handler, threshold 2). It refuses a chain without the Safe set. There is no fallback. |
 | R9 to R11 | Every Safe operation goes through `execTransaction` with two owner signatures over the Safe's own `getTransactionHash`, packed ascending by owner. Keystore passphrases are never on a command line. |
@@ -122,24 +122,24 @@ it works, but the event stream production tooling expects is absent.
 | R12 to R14 | The verifier reads everything from the Safe: runtime code hash equal to the canonical SafeProxy's, threshold 2, owner set equal to the sheet's signers, `SafeL2` as singleton, no module, no guard, the canonical fallback handler. Quorum is proved enforced by eth_calls of one harmless SafeTx: one owner signature must revert `GS020`, the same owner twice and two non-owners must each revert `GS026`, and threshold signatures must return `true`. The devops driver grades these as `AC-ID-06#safe-quorum`. |
 | Timelock delay | `DeployTimelock.s.sol` enforces the 172800 s floor and the Safe floors only when `block.chainid == 8453`. Off that chain the delay is a parameter. |
 
-Pinned code hashes (keccak256 of runtime code), derived from the committed fixture
-and cross-checked with `cast codehash` on anvil loaded from it:
+Pinned code hashes (keccak256 of runtime code), read from Base and
+checked against the Twin chain with `bun scripts/devnet/safe-set.ts`:
 
 | Contract | Code hash | Pinned in |
 |---|---|---|
 | `SafeProxy` v1.4.1 (every proxy the factory creates) | `0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c` | the devops publish-contracts verifier (`verify`) |
-| `Safe` singleton (L1) | `0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4` | `scripts/devnet/check-fork-safe-set.sh` |
-| `SafeL2` singleton | `0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff` | `scripts/devnet/check-fork-safe-set.sh` |
-| `SafeProxyFactory` | `0x50c3cdc4074750a7a974204a716c999edd37482f907608d960b2b025ee0b3317` | `scripts/devnet/check-fork-safe-set.sh` |
-| `CompatibilityFallbackHandler` | `0x7c6007a5d711cea8dfd5d91f5940ec29c7f200fe511eb1fc1397b367af3c42f9` | `scripts/devnet/check-fork-safe-set.sh` |
-| `MultiSend` | `0x0e4f7fc66550a322d1e7688e181b75e217e662a4f3f4d6a29b22bc61217c4b77` | `scripts/devnet/check-fork-safe-set.sh` |
+| `Safe` singleton (L1) | `0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4` | `scripts/devnet/safe-set.ts` |
+| `SafeL2` singleton | `0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff` | `scripts/devnet/safe-set.ts` |
+| `SafeProxyFactory` | `0x50c3cdc4074750a7a974204a716c999edd37482f907608d960b2b025ee0b3317` | `scripts/devnet/safe-set.ts` |
+| `CompatibilityFallbackHandler` | `0x7c6007a5d711cea8dfd5d91f5940ec29c7f200fe511eb1fc1397b367af3c42f9` | `scripts/devnet/safe-set.ts` |
+| `MultiSend` | `0x0e4f7fc66550a322d1e7688e181b75e217e662a4f3f4d6a29b22bc61217c4b77` | `scripts/devnet/safe-set.ts` |
 
 The SafeProxy hash was measured on a proxy created by the canonical factory on
-anvil loaded from the committed fixture; SafeProxy has no immutables, so every
+the Twin chain; SafeProxy has no immutables, so every
 proxy carries the same runtime code.
 
 The SafeProxy hash was measured on a proxy created by the canonical factory on
-anvil loaded from the committed fixture. SafeProxy has no immutables, so every
+the Twin chain. SafeProxy has no immutables, so every
 proxy carries the same runtime code.
 
 The Twin chain Safe's owners are three dedicated throwaway keys, distinct from the
@@ -159,11 +159,12 @@ Normative. "Must" is binding; a violation is a release blocker.
 - **R1.** Every environment must obtain Safe contracts from the canonical
   addresses in §2.2. No environment may deploy its own Safe implementation,
   factory, handler, or any substitute for one.
-- **R2.** Chains derived from a Base fork fixture must carry the complete Safe
-  set from §2.2. The fixture build must explicitly warm those addresses so their
-  presence is deterministic rather than incidental.
-- **R3.** The fixture manifest check must fail when any address in §2.2 is
-  absent. A fixture that silently lost Safe must not reach CI or stage.
+- **R2.** Chains derived from a Base fork (the Twin chain, a pinned lazy fork of
+  real Base state) must carry the complete Safe set from §2.2. The state is real
+  Base, so the contracts are there by construction. Nothing is warmed or patched.
+- **R3.** The check (`scripts/devnet/safe-set.ts`) must fail when any address in
+  §2.2 is absent, not canonical or unlocked. A chain that lacks Safe must not
+  reach CI or stage.
 - **R4.** On Base and other L2s, `SafeL2` is the singleton. Selecting the L1
   `Safe` singleton requires a recorded, reviewed exception.
 
@@ -230,7 +231,4 @@ Normative. "Must" is binding; a violation is a release blocker.
 2. **Scope of R9.** This document covers the Safe to TimelockController path. It does
    not yet say anything about the `RouterGovernance` voter set, which is a separate
    governing body with its own quorum.
-3. **Fixture re-pin.** The next re-pin needs `snapshot-fork.ts` to warm EIP-1967
-   implementation contracts (the Aave V3 Pool and aUSDC implementations, Compound and
-   Morpho implementations), or a pinned foundry image. A dump that omits them breaks
-   every offline suite that reads `aUSDC.totalSupply()`.
+3. **No saved fixture.** The Twin chain is a lazy fork of real Base, so there is no snapshot to re-pin and no implementation contract to warm. (This item was about the retired `snapshot-fork.ts`.)

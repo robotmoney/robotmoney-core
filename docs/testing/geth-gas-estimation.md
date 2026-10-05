@@ -122,8 +122,8 @@ frames below. So the estimator's answer is, by construction, the value at which
 the *deepest* frame has exactly zero left over, no matter how much apparent
 headroom the outer limit shows.
 
-Measured against the committed fork fixture
-(`testing/fixtures/fork-state/CURRENT.anvil-state`, anvil, no network) for the
+Measured against a Twin chain fork (anvil, a pinned lazy fork of real Base state, since retired fixture
+`CURRENT.anvil-state`) for the
 5 USDC `RobotMoneyVault.deposit` that `registry-receipt-rows.spec.ts` and
 `multi-vault-withdrawal.spec.ts` sign:
 

@@ -214,7 +214,7 @@ fixture (loud on a missing fixture); a live public RPC like this
 belongs to the non-blocking nightly check and to local runs. See
 [`environments.md` §2](environments.md) for the canonical env-var home.
 
-Behaviour matrix (current reality; ADR-0011 target is offline goldens),
+Behaviour matrix (current reality; the Twin chain is the target),
 enforced by `.github/workflows/openclaw-config.yml`:
 
 | `RMPC_FORK_RPC_URL` | Workflow step result | Artifact `outcome=` | Job exit |

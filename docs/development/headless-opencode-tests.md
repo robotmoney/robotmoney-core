@@ -102,8 +102,8 @@ The nightly job:
 - Asserts no explorer/dapp HTTP references in the transcript.
 - Skip-cleans when `ANTHROPIC_API_KEY` (model key) or `RMPC_FORK_RPC_URL`
   is absent — current reality; the fork-RPC dependency is not the endorsed
-  coverage model. ADR-0011 moves fork coverage to an offline golden fixture
-  (no secret, loud on missing).
+  coverage model. the Twin chain (a pinned lazy fork of real Base, core 1498)
+  is the endorsed coverage model (no secret, loud on missing).
 
 ---
 
@@ -155,8 +155,8 @@ The nightly job:
 - Asserts no explorer/dapp HTTP references in the transcript.
 - Skip-cleans when `ANTHROPIC_API_KEY` (model key) or `RMPC_FORK_RPC_URL`
   is absent — current reality; the fork-RPC dependency is not the endorsed
-  coverage model. ADR-0011 moves fork coverage to an offline golden fixture
-  (no secret, loud on missing).
+  coverage model. the Twin chain (a pinned lazy fork of real Base, core 1498)
+  is the endorsed coverage model (no secret, loud on missing).
 
 ---
 
@@ -214,8 +214,8 @@ For each case, the job:
 - Asserts no explorer/dapp HTTP references in the transcript.
 - Skip-cleans when `ANTHROPIC_API_KEY` (model key) or `RMPC_FORK_RPC_URL`
   is absent — current reality; the fork-RPC dependency is not the endorsed
-  coverage model. ADR-0011 moves fork coverage to an offline golden fixture
-  (no secret, loud on missing).
+  coverage model. the Twin chain (a pinned lazy fork of real Base, core 1498)
+  is the endorsed coverage model (no secret, loud on missing).
 
 ---
 

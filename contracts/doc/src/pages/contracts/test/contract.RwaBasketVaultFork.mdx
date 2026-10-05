@@ -1,22 +1,22 @@
 ---
 title: "RwaBasketVaultFork"
-description: "Fork regression for rmRWA. The real `DeployRwaBasketVault` script runs against the real deSPXA fee 500 pool, real SwapRouter02 and real USDC at Base block 52082423. A deposit buys real deSPXA. NAV (`totalAssets`) must equal the idle USDC plus the pool TWAP value of the held deSPXA, and must sit within the vault slippage bound of the deposit."
+description: "Fork regression for rmRWA. The real `DeployRwaBasketVault` script runs against the real deSPXA fee 500 pool, real SwapRouter02 and real USDC on the Twin chain pin. A deposit buys real deSPXA. NAV (`totalAssets`) must equal the idle USDC plus the pool TWAP value of the held deSPXA, and must sit within the vault slippage bound of the deposit."
 ---
 
 # RwaBasketVaultFork
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RwaBasketVaultFork.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/47813c6ce325a410eae924f85ab4c0cc53db31a1/contracts/test/RwaBasketVaultFork.t.sol)
 
 **Inherits:** Test
 
 Fork regression for rmRWA. The real `DeployRwaBasketVault` script runs against the real
-deSPXA fee 500 pool, real SwapRouter02 and real USDC at Base block 52082423. A deposit
+deSPXA fee 500 pool, real SwapRouter02 and real USDC on the Twin chain pin. A deposit
 buys real deSPXA. NAV (`totalAssets`) must equal the idle USDC plus the pool TWAP value
 of the held deSPXA, and must sit within the vault slippage bound of the deposit.
 
-Run through scripts/devnet/run-golden-forge-forks.sh (pinned fixture) or with
-FORK_RPC_URL pointing at an archive node. It never silent-skips: `setUp` reverts
-when no fork resolves.
+Runs on the Twin chain (a pinned lazy anvil fork of real Base state): start it
+with scripts/devnet/twin-fork.ts and set FORK_RPC_URL to its URL. With FORK_RPC_URL
+unset the test skips with a named reason.
 
 ## Constants
 
@@ -24,12 +24,6 @@ when no fork resolves.
 
 ```solidity
 address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-```
-
-### FORK_BLOCK
-
-```solidity
-uint256 internal constant FORK_BLOCK = 52082423;
 ```
 
 ### DEPOSIT
