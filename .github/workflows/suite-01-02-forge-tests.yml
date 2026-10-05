@@ -100,9 +100,10 @@ jobs:
       - name: Config-check offline test
         run: bun test scripts/ci/config-check.test.ts
 
-      - name: Snapshot tooling self-test (core issue 1498)
-        # Offline: 429 retry and no Deploy.s.sol in the snapshot capture.
-        run: bun scripts/devnet/snapshot-fork-selftest.ts
+      - name: Twin chain tooling unit tests (core issues 1498, 1447)
+        # Offline, no anvil, no network: the Twin fork tool, the Safe set check against a stub
+        # chain and the forge fork test runner's executed-test counter.
+        run: bun test scripts/devnet --timeout 60000
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -234,56 +235,53 @@ jobs:
       - name: forge test (invariant / fuzz)
         run: forge test --match-path "test/invariant/**" -vvv
 
-  fork-regressions:
-    name: forge-fork-vault-regressions
+  # ONE pin per workflow run (core 1498, 1496): the upstream head at the start of the run minus 2.
+  # The fork tests run on the Twin chain, a pinned lazy anvil fork of real Base state. There is no
+  # saved state file, no golden fixture and no secret (BASE_UPSTREAM_RPC is optional).
+  twin-pin:
+    name: twin-pin
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     env:
       CI_CLASS: system-correctness
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
-    # The fork gate is deterministic and offline: every target loads the checked-in
-    # Base state and fails loudly if the fixture or executed test count is missing.
+    outputs:
+      block: ${{ steps.pin.outputs.block }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        uses: ./.github/actions/twin-pin
+        with:
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+  fork-regressions:
+    name: forge-fork-vault-regressions
+    needs: twin-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    # Every test deploys its OWN contracts through the production deploy scripts and reads the
+    # addresses from what it deployed. None reads the live production v1 vault. FORK_RPC_URL names
+    # the Twin chain; with it unset a fork test skips with a named reason, and the runner below
+    # fails a run in which nothing executed.
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Fork-state digest helper round-trip self-test (issue #1152)
-        # Offline, no network/Docker: exercises scripts/devnet/fork-state-digest.sh
-        # write+verify against a throwaway temp blob before anything below relies
-        # on it against the real fixture.
-        run: scripts/devnet/check-fork-state-digest-selftest.sh
-
-      - name: Fork pin-age gate behaviour self-test (issue #1386)
-        # Offline, no network/Docker: drives scripts/devnet/check-fork-pin-age.sh
-        # against synthetic manifests so every branch of the gate (fresh, past
-        # the warn cadence, past --max-age-days, malformed input) is proven to
-        # behave before the real fixture is judged by it. A staleness gate that
-        # is never exercised is the same silence that let the pin reach 48 days.
-        run: scripts/devnet/check-fork-pin-age-selftest.sh
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      # Installs foundry and bun, restores anvil's RPC cache keyed by the pin block, starts the
+      # Twin chain and exports TWIN_RPC_URL.
+      - name: Start the Twin fork
+        id: twin
+        uses: ./.github/actions/twin-fork
         with:
-          # CURRENT.anvil-state uses the Anvil 1.6 serializer; anvil v1.7.1 loads it
-          # (verified locally against testing/fixtures/fork-state/CURRENT.anvil-state),
-          # so this site no longer needs the floating `nightly` channel.
-          version: stable
+          pin-block: ${{ needs.twin-pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
-      - name: Install Bun
-        # check-fork-manifest.sh runs scripts/devnet/check-fork-lockstep.ts (core 1498),
-        # so every job that calls run-golden-forge-forks.sh needs bun on PATH.
-        uses: oven-sh/setup-bun@v2
-
-      - name: Fork Safe-set gate behaviour self-test (issue #1447)
-        # Offline, no network/Docker: drives scripts/devnet/check-fork-safe-set.sh
-        # against state files built from the committed fixture's five Safe
-        # accounts, so a fixture missing a canonical Safe contract, carrying
-        # other code than the canonical one, or with an unlocked singleton is
-        # proven to fail (governance-isomorphism.md R3) before
-        # check-fork-manifest.sh judges the real fixture with it. After Install
-        # Foundry: the gate hashes code with `cast keccak`.
-        run: scripts/devnet/check-fork-safe-set-selftest.sh
+      - name: Canonical Safe v1.4.1 set is on the Twin chain (issue 1447)
+        run: bun scripts/devnet/safe-set.ts
 
       - name: Cache Foundry build artifacts
         uses: actions/cache@v4
@@ -299,99 +297,31 @@ jobs:
         run: forge build
 
       - name: forge test (fork vault regressions)
-        run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/VaultForkRegressions.t.sol"
 
       - name: forge test (deploy seed deposit precondition — issue #656)
-        run: scripts/devnet/run-golden-forge-forks.sh --match-contract "DeploySeedDeposit"
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "DeploySeedDeposit"
 
       - name: forge test (Safe multisig integration — issue 422)
-        run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/SafeIntegration.t.sol"
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/SafeIntegration.t.sol"
 
       - name: forge test (governance execute path through a real 2-of-3 Safe — issue 1447)
         # A Fusion named evidence file (AC-GOV-03). It drives the timelock through
-        # a canonical SafeL2 proxy, which exists only on the Base fork, so it moved
-        # here from the unit job's evidence loop; the group markers keep the
+        # a canonical SafeL2 proxy, which exists only on a Base fork; the group markers keep the
         # per-file boundary the external evidence reader looks for.
         run: |
           echo "::group::contracts/test/GovernanceExecutePathAfterHandover.t.sol:"
-          scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/GovernanceExecutePathAfterHandover.t.sol"
+          bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/GovernanceExecutePathAfterHandover.t.sol"
           echo "::endgroup::"
 
       - name: forge test (rmRWA fork regression — core 1492)
-        run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/RwaBasketVaultFork.t.sol"
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
 
       - name: forge test (split-stage router deposit and withdraw on the fork — core 1485)
-        run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/CoreStagesFork.t.sol"
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/CoreStagesFork.t.sol"
 
-      - name: Assert missing fixture is red
-        run: |
-          mv testing/fixtures/fork-state/CURRENT.anvil-state /tmp/CURRENT.anvil-state
-          if scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"; then
-            echo "missing fixture unexpectedly passed" >&2
-            exit 1
-          fi
-          mv /tmp/CURRENT.anvil-state testing/fixtures/fork-state/CURRENT.anvil-state
-
-      - name: Assert tampered fixture is red
-        # ADR-0011 addendum (issue #1152): a byte-flipped blob must fail the
-        # sha256 integrity check in check-fork-manifest.sh, not silently load.
-        run: |
-          cp testing/fixtures/fork-state/CURRENT.anvil-state /tmp/CURRENT.anvil-state.bak
-          python3 - <<'PY'
-          import pathlib
-          p = pathlib.Path("testing/fixtures/fork-state/CURRENT.anvil-state")
-          data = bytearray(p.read_bytes())
-          data[0] ^= 0xFF
-          p.write_bytes(data)
-          PY
-          if scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"; then
-            echo "tampered fixture unexpectedly passed" >&2
-            mv /tmp/CURRENT.anvil-state.bak testing/fixtures/fork-state/CURRENT.anvil-state
-            exit 1
-          fi
-          mv /tmp/CURRENT.anvil-state.bak testing/fixtures/fork-state/CURRENT.anvil-state
-
-      - name: Assert missing digest is red
-        # ADR-0011 addendum (issue #1152): a manifest lacking state_sha256 must
-        # fail loudly, not warn-and-continue.
-        run: |
-          cp testing/fixtures/fork-state/CURRENT.json /tmp/CURRENT.json.bak
-          jq 'del(.state_sha256)' /tmp/CURRENT.json.bak > testing/fixtures/fork-state/CURRENT.json
-          if scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"; then
-            echo "missing digest unexpectedly passed" >&2
-            mv /tmp/CURRENT.json.bak testing/fixtures/fork-state/CURRENT.json
-            exit 1
-          fi
-          mv /tmp/CURRENT.json.bak testing/fixtures/fork-state/CURRENT.json
-
-      - name: Verify ADR-0011 workflow structure
-        run: scripts/devnet/check-adr0011-ci.sh
-
-      - name: Fork RPC configuration self-test (issue #1239)
-        # Offline: proves check-fork-rpc-configured.sh reports a missing
-        # RMPC_FORK_RPC_URL by name and never echoes a configured value,
-        # before the real check below relies on it.
-        run: bash .github/scripts/tests/test_check_fork_rpc_configured.sh
-
-      - name: Live-RPC fork runner self-test (issue #1239)
-        # Offline, stubbed forge: proves run-live-rpc-forge-fork.sh calls a real
-        # assertion failure a test failure without retrying it, retries only
-        # provider failures (rotating public endpoints), fails a zero-test run,
-        # and never prints a configured endpoint, before the three live-RPC
-        # steps below rely on it.
-        run: bash .github/scripts/tests/test_run_live_rpc_forge_fork.sh
-
-      - name: Check fork RPC configuration (issue #1239)
-        # Makes the public-RPC fallback below loud: if the repo/org Actions
-        # secret is unset, name it explicitly via a `::warning::` annotation
-        # in the run summary instead of only showing up later as an
-        # unexplained Cloudflare 429 on the public fallback endpoint. This
-        # must be a secret, not a variable: this repo is public, and GitHub
-        # does not mask `vars.*` values, so an Actions variable would leak
-        # the keyed URL into this step's `env:` block in the public log.
-        env:
-          RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
-        run: scripts/devnet/check-fork-rpc-configured.sh "$RMPC_FORK_RPC_URL_RAW"
+      - name: forge test (gateway router split stages on the fork)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "GatewayRouterSplitStagesForkTest"
 
   coverage:
     name: forge-coverage-gate

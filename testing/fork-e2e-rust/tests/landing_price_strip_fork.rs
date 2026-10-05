@@ -136,10 +136,17 @@ fn landing_price_strip_is_inside_the_sanity_band() {
             pair.pool
         );
 
+        // The conversion wants token0 and token1 decimals. The base token is token0 only when
+        // base_is_token0, so the decimals swap with the order (a cbBTC/USDC pool has USDC as token0).
+        let (token0_decimals, token1_decimals) = if pair.base_is_token0 {
+            (pair.base_decimals, pair.quote_decimals)
+        } else {
+            (pair.quote_decimals, pair.base_decimals)
+        };
         let price = sqrt_price_x96_to_price(
             sqrt_price,
-            pair.base_decimals,
-            pair.quote_decimals,
+            token0_decimals,
+            token1_decimals,
             pair.base_is_token0,
         );
         eprintln!(
