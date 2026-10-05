@@ -89,7 +89,7 @@ jobs:
       - name: No production Robot Money addresses in tests or harnesses
         run: |
           bun scripts/ci/check-no-production-addresses.ts
-          bun test scripts/ci/check-no-production-addresses.test.ts
+          bun test scripts/ci/check-no-production-addresses.test.ts scripts/deploy/third-party-addresses.test.ts
 
       - name: Audit ledger covers every shipped contract
         run: |
