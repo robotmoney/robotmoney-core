@@ -74,7 +74,8 @@ const SELECTOR_MAP: Record<string, ProductReasonCode> = {
  * happened without reading on-chain data.
  */
 const PRODUCT_REASON_DISPLAY: Record<ProductReasonCode, string> = {
-  paused: "Gateway or vault is paused. Writes are disabled until it is unpaused.",
+  paused:
+    "Gateway or vault is paused. Deposits are disabled until it is unpaused; withdrawals stay open.",
   vault_disabled: "The target vault is disabled or not registered with the gateway.",
   cap_exceeded:
     "A per-payment or per-window cap has been exceeded. Wait for the window to reset or reduce the amount.",

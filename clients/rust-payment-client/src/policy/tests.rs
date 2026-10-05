@@ -764,8 +764,8 @@ fn parse_b256_hex_rejects_wrong_length() {
 // as two near-identical copies, because the rule itself lived in a command
 // module rather than in the policy layer.
 
-/// Install the three vault reads the withdraw preflight makes. `paused()`
-/// shares its selector with `gateway.paused()`, and the share
+/// Install the vault reads around the withdraw preflight. `paused()` is
+/// mocked so a test can prove a paused vault is not refused; the share
 /// allowance/balance reads are plain ERC-20 calls against the vault.
 async fn install_vault_mocks(
     server: &mut mockito::ServerGuard,
@@ -805,8 +805,10 @@ async fn install_vault_mocks(
         .await;
 }
 
+/// A paused vault still passes the withdraw preflight: a vault pause stops
+/// deposits only and redeems stay open (core 1494).
 #[tokio::test]
-async fn withdraw_vault_paused_refuses() {
+async fn withdraw_vault_paused_still_passes() {
     let mut server = mockito::Server::new_async().await;
     install_vault_mocks(
         &mut server,
@@ -817,11 +819,10 @@ async fn withdraw_vault_paused_refuses() {
     .await;
     let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let cfg = config();
-    let err = Preflight::new(&rpc, &cfg)
+    let result = Preflight::new(&rpc, &cfg)
         .run_withdraw_vault(VAULT, GATEWAY, SIGNER, U256::from(100u64))
-        .await
-        .unwrap_err();
-    assert!(matches!(err, RmpcError::ErrVaultPaused), "got {err:?}");
+        .await;
+    assert!(result.is_ok(), "expected ok, got {result:?}");
 }
 
 /// RPC-7: the withdraw and router-withdraw paths must REFUSE when the

@@ -10,8 +10,10 @@
 //! in this file will be enabled once that lands.
 //!
 //! Scenarios:
-//! 1. `withdraw_vault_paused_refuses` — vault paused, preflight refuses
-//!    with `ErrVaultPaused`.
+//! 1. `withdraw_non_vault_source_refuses` — the source "vault" is not an
+//!    ERC-4626 share token, so the share preflight read fails and rmpc
+//!    refuses. A paused vault is never a refusal: a pause stops deposits
+//!    only (core 1494).
 //! 2. `withdraw_allowance_insufficient_refuses` — share allowance(agent, gateway)
 //!    is zero, preflight refuses with `ErrShareAllowanceInsufficient`.
 //! 3. `withdraw_balance_insufficient_refuses` — agent holds no shares,
@@ -86,42 +88,35 @@ fn withdraw_args(shares: u128, vault_hex: &str, oid: &str) -> Vec<String> {
 
 // ------------------------------------------------------------- scenario 1
 
-/// When the vault is paused, `rmpc withdraw` must refuse with
-/// `ErrVaultPaused` before signing anything.
+/// When `--source-vault` is not a share token, `rmpc withdraw` must refuse
+/// before signing anything.
 ///
-/// NOTE: the vault's `pause()` function requires `EMERGENCY_ROLE`. We
-/// simulate a paused vault by pointing `--source-vault` at the gateway
-/// address itself, which does not implement `paused()` and will revert
-/// the eth_call — causing the preflight to surface an `ErrRpcServer`
-/// or `ErrRpcDecode` refusal.
-///
-/// A proper test against a paused RobotMoneyVault requires the vault to
-/// have `EMERGENCY_ROLE` set up in the devnet deploy; this scenario
-/// exercises the non-zero exit contract and will be expanded when the
-/// full vault-pause fixture is added.
+/// We point `--source-vault` at the gateway address itself, which does not
+/// implement the ERC-20 share reads, so the eth_call reverts and the
+/// preflight surfaces an `ErrRpcServer` or `ErrRpcDecode` refusal.
 #[test]
-fn withdraw_vault_paused_refuses() {
-    if skip_if_no_prereqs("withdraw_vault_paused_refuses") {
+fn withdraw_non_vault_source_refuses() {
+    if skip_if_no_prereqs("withdraw_non_vault_source_refuses") {
         return;
     }
     with_fixture(|fx| {
-        // The gateway does not implement vault.paused(); calling it will
-        // cause the vault preflight to fail (RPC error or decode error),
+        // The gateway does not implement the share reads; calling them
+        // causes the vault preflight to fail (RPC error or decode error),
         // which is a hard refusal. We accept any non-zero exit here as
         // proof the preflight gate fires before signing.
         let gateway_hex = format!("{:#x}", fx.gateway());
-        let oid = order_id("vault_paused_refuses");
+        let oid = order_id("non_vault_source_refuses");
         let args = withdraw_args(ONE_SHARE, &gateway_hex, &oid);
         let run = fx.run_rmpc_withdraw(args).expect("spawn rmpc withdraw");
 
         assert!(
             !run.status.success(),
-            "rmpc withdraw must refuse when vault does not implement paused(); \
+            "rmpc withdraw must refuse when the source is not a share token; \
              got exit 0.\nstdout={}\nstderr={}",
             run.stdout,
             run.stderr
         );
-        let v = parse_json(&run.stdout, "withdraw_vault_paused_refuses");
+        let v = parse_json(&run.stdout, "withdraw_non_vault_source_refuses");
         assert_eq!(
             v.get("status").and_then(|s| s.as_str()),
             Some("refused"),

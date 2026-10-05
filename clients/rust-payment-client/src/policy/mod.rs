@@ -112,7 +112,7 @@ impl<'a> Preflight<'a> {
     }
 
     /// Withdraw-specific gateway preflight. Runs checks 1–6 (chain id, code
-    /// hash, paused, usdc/vault addresses, agent active+expiry) then checks
+    /// hash, usdc/vault addresses, agent active+expiry) then checks
     /// 7–8 using the withdrawal-specific caps:
     ///   7w. `shares <= agents(self).maxWithdrawPerPayment`
     ///   8w. `agentWithdrawWindowGross(self, window) + shares <=
@@ -120,6 +120,9 @@ impl<'a> Preflight<'a> {
     ///
     /// USDC allowance/balance checks are skipped (N/A for withdrawals).
     /// Vault-level share checks run separately in `withdraw_vault_preflight`.
+    ///
+    /// `gateway.paused()` is read and reported but never refuses: a pause
+    /// stops deposits only and the gateway keeps withdrawals open (core 1494).
     ///
     /// Addresses issue #371: the old `run_gateway_only` path checked the
     /// deposit caps (`maxPerPayment`, `maxPerWindow`) instead of the
@@ -152,11 +155,9 @@ impl<'a> Preflight<'a> {
             return Err(RmpcError::ErrCodeHashMismatch);
         }
 
-        // 3. paused()
+        // 3. paused() — reported, never a refusal: the gateway keeps
+        //    withdrawals open while paused (core 1494).
         let paused = self.call_view_paused(gateway_addr).await?;
-        if paused {
-            return Err(RmpcError::ErrGatewayPaused);
-        }
 
         // 4-5. usdc()/vault() addresses pinned in config
         let usdc_addr_on_chain = self.call_view_usdc(gateway_addr).await?;
@@ -213,7 +214,7 @@ impl<'a> Preflight<'a> {
         Ok(PreflightReport {
             chain_id,
             gateway_runtime_hash_ok: true,
-            paused: false,
+            paused,
             agent_active: agent.active,
             agent_valid_until: agent.validUntil,
             max_per_payment: agent.maxWithdrawPerPayment,
@@ -343,9 +344,11 @@ impl<'a> Preflight<'a> {
 
     /// Vault-side preflight for a redemption leg (issue #312, #1285):
     ///
-    /// 1. `vault.paused() == false`
-    /// 2. `vault.allowance(agent, gateway) >= shares`
-    /// 3. `vault.balanceOf(agent) >= shares`
+    /// 1. `vault.allowance(agent, gateway) >= shares`
+    /// 2. `vault.balanceOf(agent) >= shares`
+    ///
+    /// `vault.paused()` is not a refusal: a vault pause stops deposits only and
+    /// redeems stay open while paused (core 1494).
     ///
     /// The redeem burns the agent's *vault shares*, which the gateway
     /// pulls from the source vault, so these are the share-side mirror of
@@ -364,9 +367,6 @@ impl<'a> Preflight<'a> {
         agent: Address,
         shares: U256,
     ) -> Result<()> {
-        if self.call_view_paused(vault).await? {
-            return Err(RmpcError::ErrVaultPaused);
-        }
         if self.call_view_allowance(vault, agent, gateway).await? < shares {
             return Err(RmpcError::ErrShareAllowanceInsufficient);
         }

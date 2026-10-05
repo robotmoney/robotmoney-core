@@ -68,10 +68,6 @@ pub enum RmpcError {
     #[error("ErrAgentDepositLogMissing: receipt has no AgentDeposit log (tx_hash={tx_hash})")]
     ErrAgentDepositLogMissing { tx_hash: String },
 
-    /// The vault being redeemed from is paused — hard refusal before signing.
-    #[error("ErrVaultPaused: source vault reports paused() == true")]
-    ErrVaultPaused,
-
     /// Shares to withdraw exceed the agent's `maxWithdrawPerPayment` policy cap.
     #[error("ErrWithdrawCapExceeded: shares exceed agent maxWithdrawPerPayment policy cap")]
     ErrWithdrawCapExceeded,
@@ -193,7 +189,6 @@ impl RmpcError {
             RmpcError::ErrOrderIdAlreadySubmitted { .. } => "ErrOrderIdAlreadySubmitted",
             RmpcError::ErrTxReverted { .. } => "ErrTxReverted",
             RmpcError::ErrAgentDepositLogMissing { .. } => "ErrAgentDepositLogMissing",
-            RmpcError::ErrVaultPaused => "ErrVaultPaused",
             RmpcError::ErrWithdrawCapExceeded => "ErrWithdrawCapExceeded",
             RmpcError::ErrShareBalanceInsufficient => "ErrShareBalanceInsufficient",
             RmpcError::ErrShareAllowanceInsufficient => "ErrShareAllowanceInsufficient",
@@ -249,7 +244,6 @@ mod tests {
             RmpcError::ErrAgentDepositLogMissing {
                 tx_hash: "0x00".into(),
             },
-            RmpcError::ErrVaultPaused,
             RmpcError::ErrWithdrawCapExceeded,
             RmpcError::ErrShareBalanceInsufficient,
             RmpcError::ErrShareAllowanceInsufficient,

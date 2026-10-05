@@ -333,9 +333,10 @@ async fn withdraw_chain_id_mismatch_refuses_with_named_error() {
     assert_eq!(v["checks"]["chain_id_match"], false);
 }
 
-/// Refusal path: the gateway's pause switch.
+/// A paused gateway still withdraws: a pause stops deposits only, so the
+/// preflight reports `gateway_paused` but never refuses on it (core 1494).
 #[tokio::test]
-async fn withdraw_paused_gateway_refuses_with_named_error() {
+async fn withdraw_paused_gateway_still_withdraws() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
     server
@@ -353,14 +354,15 @@ async fn withdraw_paused_gateway_refuses_with_named_error() {
     let state_dir = unique_state_dir();
 
     let out = withdraw_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .args(["--receipt-timeout-secs", "5"])
         .assert()
-        .failure()
+        .success()
         .get_output()
         .clone();
-    assert_eq!(out.status.code(), Some(2));
     let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
-    assert_eq!(v["error"], "ErrGatewayPaused");
-    assert_eq!(v["checks"]["gateway_paused"], true);
+    assert_eq!(v["status"], "success");
+    assert_eq!(v["assets_out"], ASSETS_OUT.to_string());
+    assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"));
 }
 
 /// Refusal path: the withdrawal-specific policy cap. Issue #371 —
