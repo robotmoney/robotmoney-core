@@ -455,7 +455,7 @@ impl Published {
 
 // -- govern output ----------------------------------------------------
 
-/// One line of the govern run: `{"row":"...","txHash":"0x..","status":1}`.
+/// One line of the govern run: `{"row":"...","phase":"scheduled","txHash":"0x..","status":1,"readyAt":1700000000}`. Extra fields are ignored here.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct GovernRow {
     pub row: String,

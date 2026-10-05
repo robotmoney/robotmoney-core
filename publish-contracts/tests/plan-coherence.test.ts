@@ -99,7 +99,7 @@ describe("the deployer nonce check and govern", () => {
   test("govern started or done means the final nonce check is skipped and the verifier uses the recorded nonce", () => {
     expect(governHasRun(m({}))).toBe(false);
     expect(governHasRun(m({ govern: { status: "done" } }))).toBe(true);
-    expect(governHasRun(m({}, { round1: {} }))).toBe(true);
+    expect(governHasRun(m({}, { "voting-power-quorum": {} }))).toBe(true);
     expect(deployEndNonce(m({ timelock: { endNonce: 56 } }))).toBeUndefined();
     expect(deployEndNonce(m({ timelock: { endNonce: 56 }, govern: { status: "done" } }))).toBe(56);
   });

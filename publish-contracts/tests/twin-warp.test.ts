@@ -167,8 +167,10 @@ describe("govern warps the timelock waits on a Twin fork only", () => {
     const manifest = newManifest(ctx, addr(0xa001));
     await runGovern(ctx, stageByName("govern"), manifest, base(sheet, tl, { warp: async (s: bigint) => { warps.push(s); tl.s.clock += s; } }) as never);
     expect(manifest.stages.govern!.status).toBe("done");
-    expect(warps.length).toBe(2);                 // round 1 and the updateDelay
-    for (const w of warps) expect(w).toBe(172_801n);
+    expect(warps.length).toBe(9);                 // one wait per round that executes: 13 rows, minus 3 the default sheet skips, minus the cancel round
+    // the first eight waits are the real 172800 s delay; the batch round runs after update-delay, at the new delay (the sheet's GOVERN_NEW_DELAY)
+    expect(warps.slice(0, 8)).toEqual(Array(8).fill(172_801n));
+    expect(warps[8]).toBe(sheet.govern.newDelay + 1n);
   });
 
   test("the default warp talks to the RPC only when it is a Twin fork: a stub anvil sees evm_increaseTime", async () => {
@@ -191,7 +193,7 @@ describe("govern warps the timelock waits on a Twin fork only", () => {
     const manifest = newManifest(ctx, addr(0xa001));
     await runGovern(ctx, stageByName("govern"), manifest, base(sheet, tl) as never);
     expect(manifest.stages.govern!.status).toBe("done");
-    expect(c.s.calls.filter((x) => x === "evm_increaseTime").length).toBe(2);
+    expect(c.s.calls.filter((x) => x === "evm_increaseTime").length).toBe(9);
   });
 
   test("an RPC that answers chain id 8453 never warps, even if it answers anvil_nodeInfo: a long delay exits GOVERN_PENDING", async () => {
@@ -264,8 +266,10 @@ describe("govern warp guards", () => {
     const allowed = new Set(["eth_chainId", "anvil_nodeInfo", "evm_increaseTime", "evm_mine", "eth_getBlockByNumber"]);
     expect(r.calls.filter((m) => !allowed.has(m))).toEqual([]);   // no anvil_setStorageAt, anvil_setCode, setBalance
     const warped = lines.map((l) => JSON.parse(l)).filter((e) => e.event === "govern.warped" || e.msg === "govern.warped");
-    expect(warped.length).toBe(2);
-    for (const w of warped) expect(w.seconds ?? w.data?.seconds).toBe(172_801);
+    expect(warped.length).toBe(9);
+    const secs = warped.map((w) => w.seconds ?? w.data?.seconds);
+    expect(secs.slice(0, 8)).toEqual(Array(8).fill(172_801));
+    expect(secs[8]).toBe(Number(sheet.govern.newDelay) + 1);
   });
 });
 

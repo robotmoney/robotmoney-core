@@ -5,9 +5,12 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertOwnerExceptions } from "../src/plan.ts";
+import { GOVERN_ROWS } from "../src/govern.ts";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
 const a = (n: number) => "0x" + n.toString(16).padStart(40, "0");
+/** One round per step: step i is scheduled ROUND seconds after step i-1 was (each round is a 172800 s delay plus some slack). */
+const ROUND = 200000;
 const good = () => ({
   chain_id: 8453, core_sha: "ab".repeat(20), plan_approved_at: "2026-10-05T10:00:00Z",
   owner_exceptions: [{ text: "signer C is a Ledger on a shared laptop", recorded_at: "2026-10-04T10:00:00Z" }],
@@ -18,8 +21,8 @@ const good = () => ({
   verifier: { exit_code: 0, registry_list_vaults_equals_manifests: true },
   deployer: a(20), deployer_nonce_final: 2, registry: { address: a(21) },
   govern: GOVERN_STEPS.map((step, i) => step === "cancel"
-    ? { step, schedule_tx: h(100 + i * 3), cancel_tx: h(101 + i * 3), schedule_status: 1, cancel_status: 1 }
-    : { step, schedule_tx: h(100 + i * 3), schedule_block_timestamp: 1000, execute_tx: h(101 + i * 3), execute_block_timestamp: 1000 + 172800, schedule_status: 1, execute_status: 1 }),
+    ? { step, schedule_tx: h(100 + i * 3), schedule_block_timestamp: ROUND * i + 1000, cancel_tx: h(101 + i * 3), schedule_status: 1, cancel_status: 1 }
+    : { step, schedule_tx: h(100 + i * 3), schedule_block_timestamp: ROUND * i + 1000, execute_tx: h(101 + i * 3), execute_block_timestamp: ROUND * i + 1000 + 172800, schedule_status: 1, execute_status: 1 }),
   sources: { blockscout_all_verified: true, sourcify_all_exact: true },
 });
 const mut = (f: (e: any) => void) => { const e = good(); f(e); return checkEvidence(e).join("\n"); };
@@ -31,7 +34,7 @@ describe("evidence check", () => {
   test("a missing tx hash is rejected", () => expect(mut((e) => { e.stages[0].tx_hashes[1] = ""; })).toContain("tx hash 1"));
   test("a failed receipt is rejected", () => expect(mut((e) => { e.stages[0].receipts_status[0] = 0; })).toContain("status is 0"));
   test("a delay under 172800 s is rejected", () => expect(mut((e) => { e.timelock.min_delay = 60; })).toContain("min_delay"));
-  test("a govern gap under 172800 s is rejected", () => expect(mut((e) => { e.govern[1].execute_block_timestamp = 1000 + 172799; })).toContain("gap"));
+  test("a govern gap under 172800 s is rejected", () => expect(mut((e) => { e.govern[1].execute_block_timestamp = ROUND + 1000 + 172799; })).toContain("gap"));
   test("a failed govern execute is rejected", () => expect(mut((e) => { e.govern[1].execute_status = 0; })).toContain("execute receipt"));
   test("chain 918453 is rejected", () => expect(mut((e) => { e.chain_id = 918453; })).toContain("chain_id"));
   test("an owner exception recorded after approval is rejected", () => expect(mut((e) => { e.owner_exceptions[0].recorded_at = "2026-10-06T00:00:00Z"; })).toContain("not before"));
@@ -41,6 +44,14 @@ describe("evidence check, more negatives", () => {
   test("a missing govern schedule tx is rejected", () => expect(mut((e) => { delete e.govern[0].schedule_tx; })).toContain("schedule_tx is missing"));
   test("a missing matrix step is rejected", () => expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== "router-weights"); })).toContain("'router-weights'"));
   test("every matrix step is required", () => { for (const step of GOVERN_STEPS) expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== step); })).toContain(`'${step}'`); });
+  test("the matrix has 13 steps, one round each, and a step outside it is rejected", () => {
+    expect(GOVERN_STEPS.length).toBe(13);
+    expect(mut((e) => { e.govern.push({ ...e.govern[0], step: "round1" }); })).toContain("'round1' is not a step");
+  });
+  test("two steps sharing a schedule transaction (a shared round) are rejected", () => expect(mut((e) => { e.govern[1].schedule_tx = e.govern[0].schedule_tx; })).toContain("one round per step"));
+  test("two steps sharing an execute transaction are rejected", () => expect(mut((e) => { e.govern[1].execute_tx = e.govern[0].execute_tx; })).toContain("execute_tx is also"));
+  test("a step listed twice is rejected", () => expect(mut((e) => { e.govern.push({ ...e.govern[2] }); })).toContain("more than one evidence entry"));
+  test("a step scheduled before the previous step executed is rejected", () => expect(mut((e) => { e.govern[1].schedule_block_timestamp = 1000 + 100; e.govern[1].execute_block_timestamp = 1000 + 100 + 172800; })).toContain("rounds run one at a time"));
   test("a nonce that differs from the frozen sum is rejected", () => expect(checkEvidence(good(), { safe: 2, vault: 1 }).join()).toContain("deployer_nonce_final"));
 });
 
@@ -58,16 +69,18 @@ const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: numbe
     : eventName === "CallExecuted" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [a(1) as Hex, 0n, "0x"]) : "0x";
   return { address: tl, topics: topics as Hex[], data: data as Hex };
 };
-interface Opts { paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
+interface Opts { sharedId?: boolean; reorder?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
 function stub(ev: any, o: Opts = {}): ChainReader {
   const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
   const add = (hash: string, logs: any[], ts: number) => { receipts.set(hash, { status: o.failed === hash ? "reverted" : "success", blockNumber: bn, logs }); blocks.set(bn++, ts); };
   for (const s of ev.stages) for (const x of s.tx_hashes) add(x, [], 1);
   add(ev.safe.creation_tx, [], 1);
   ev.govern.forEach((g: any, i: number) => {
-    add(g.schedule_tx, [log("CallScheduled", i + 1, o.delay)], 1000);
-    if (g.step === "cancel") add(g.cancel_tx, [log("Cancelled", i + 1)], 1500);
-    else add(g.execute_tx, [log("CallExecuted", i + 1)], 1000 + (o.gap ?? 172800));
+    const id = o.sharedId && i === 1 ? 1 : i + 1;
+    const t0 = ROUND * i + 1000 - (o.reorder && i === 2 ? 2 * ROUND : 0);
+    add(g.schedule_tx, [log("CallScheduled", id, o.delay)], t0);
+    if (g.step === "cancel") add(g.cancel_tx, [log("Cancelled", id)], t0 + 500);
+    else add(g.execute_tx, [log("CallExecuted", id)], t0 + (o.gap ?? 172800));
   });
   return {
     getChainId: async () => o.chainId ?? 8453,
@@ -88,6 +101,8 @@ describe("evidence check reading the chain (stub RPC)", () => {
   test("an on-chain gap under 172800 s is rejected even if the JSON says otherwise", async () => expect((await online({ gap: 172799 })).join()).toContain("on-chain schedule-to-execute gap"));
   test("a CallScheduled delay under 172800 s is rejected", async () => expect((await online({ delay: 60n })).join()).toContain("CallScheduled delay"));
   test("a tx hash the chain does not know is rejected", async () => expect((await online({}, (e) => { e.stages[0].tx_hashes[0] = h(999); })).join()).toContain("not readable"));
+  test("two steps on one timelock operation id are rejected on chain", async () => expect((await online({ sharedId: true })).join()).toContain("also the operation of step"));
+  test("a step scheduled on chain before the previous step executed is rejected", async () => expect((await online({ reorder: true })).join()).toContain("rounds run one at a time"));
   test("another chain id is rejected", async () => expect((await online({ chainId: 918453 })).join()).toContain("RPC reports chain"));
 });
 
@@ -167,5 +182,20 @@ describe("recorded chain fixture (offline mode of the same chain checks)", () =>
     expect(cli(["--chain-fixture", join(run, "chain-fixture.json")]).exitCode).toBe(2);
     expect(cli(["--frozen", frozenFile, "--chain-fixture", join(run, "chain-fixture.json")]).exitCode).toBe(2);
     expect(cli(["--frozen", frozenFile, "--deploy-sha", "f".repeat(40), "--chain-fixture", join(run, "chain-fixture.json")]).exitCode).toBe(1); // frozen file is for another sha
+  });
+});
+
+describe("the evidence template", () => {
+  const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
+  test("it lists one govern entry per Stage 13 step, in the CLI's row order", () => {
+    expect(tpl.govern.map((g: any) => g.step)).toEqual([...GOVERN_STEPS]);
+    expect([...GOVERN_STEPS]).toEqual([...GOVERN_ROWS]);
+  });
+  test("each step has its own schedule and execute fields (cancel has a cancel field), and the template is not mistaken for evidence", () => {
+    for (const g of tpl.govern) {
+      expect(g.schedule_tx).toBeDefined();
+      expect(g.step === "cancel" ? g.cancel_tx : g.execute_tx).toBeDefined();
+    }
+    expect(checkEvidence(tpl).length).toBeGreaterThan(0);
   });
 });

@@ -26,16 +26,18 @@ export function loadExpectedAssets(ctx: Pick<RunContext, "coreDir" | "chainId" |
 }
 
 /**
- * The vaults the govern unpause rows have unpaused: the sheet's GOVERN_UNPAUSE_VAULTS once the run manifest records the govern row
- * `round1.execute` (the Safe transaction that executes the unpause calls through the timelock). Before that row, none.
+ * The vaults the govern unpause rows have unpaused: a vault is listed once the run manifest records the executed phase of its own row
+ * `unpause-<VAULT>` (one round per vault). Before that phase, none. A vault whose row was skipped (not in GOVERN_UNPAUSE_VAULTS) stays paused.
  */
 export function unpausedByGovern(manifest: Pick<RunManifest, "govern">, sheet: RunContext["sheet"]): VaultKey[] {
-  return (manifest.govern as Record<string, unknown> | undefined)?.["round1.execute"] ? sheet.govern.unpauseVaults : [];
+  const g = manifest.govern as Record<string, { executed?: unknown } | undefined> | undefined;
+  return sheet.govern.unpauseVaults.filter((k) => !!g?.[`unpause-${k}`]?.executed);
 }
 
-/** The timelock delay the chain should read: GOVERN_NEW_DELAY once the govern row `round2.updateDelay.execute` ran, else TIMELOCK_MIN_DELAY. */
+/** The timelock delay the chain should read: GOVERN_NEW_DELAY once the executed phase of the govern row `update-delay` ran, else TIMELOCK_MIN_DELAY. */
 export function expectedTimelockDelay(manifest: Pick<RunManifest, "govern">, sheet: RunContext["sheet"]): number {
-  return (manifest.govern as Record<string, unknown> | undefined)?.["round2.updateDelay.execute"] ? Number(sheet.govern.newDelay) : Number(sheet.timelockMinDelay);
+  const g = manifest.govern as Record<string, { executed?: unknown } | undefined> | undefined;
+  return g?.["update-delay"]?.executed ? Number(sheet.govern.newDelay) : Number(sheet.timelockMinDelay);
 }
 
 /**

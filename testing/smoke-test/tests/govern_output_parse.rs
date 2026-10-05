@@ -1,7 +1,7 @@
 //! The govern stdout contract between the publish-contracts CLI (`publish-contracts/` in this repo) (producer) and this harness (consumer).
 //!
 //! `tests/fixtures/govern-stdout.jsonl` is a recorded sample of what `publish-contracts govern` prints on stdout:
-//! one JSON line per row, `{"row":..,"txHash":..,"status":..}`. The same file lives at
+//! one JSON line per round event, `{"row":..,"phase":..,"txHash":..,"status":..,"readyAt":..}`. The same file lives at
 //! `publish-contracts/tests/fixtures/govern-stdout.jsonl`, where a contract test asserts the CLI prints exactly it.
 //! This test feeds it to `parse_govern_output` and `check_govern_rows`. No docker, no chain, no network.
 
@@ -9,13 +9,28 @@ use smoke_test::publish::{check_govern_rows, parse_govern_output};
 
 const SAMPLE: &str = include_str!("fixtures/govern-stdout.jsonl");
 
-const ROWS: [&str; 6] = [
-    "round1.schedule",
-    "round1.execute",
-    "round2.cancel.schedule",
-    "round2.cancel.cancel",
-    "round2.updateDelay.schedule",
-    "round2.updateDelay.execute",
+// One entry per round event: a round's `scheduled` line, then its `executed` (or `cancelled`) line.
+const ROWS: [&str; 20] = [
+    "voting-power-quorum",
+    "voting-power-quorum",
+    "other-setters",
+    "other-setters",
+    "migrate-eligibility-PROTO",
+    "migrate-eligibility-PROTO",
+    "migrate-eligibility-RWA",
+    "migrate-eligibility-RWA",
+    "router-weights",
+    "router-weights",
+    "unpause-PROTO",
+    "unpause-PROTO",
+    "unpause-RWA",
+    "unpause-RWA",
+    "update-delay",
+    "update-delay",
+    "batch",
+    "batch",
+    "cancel",
+    "cancel",
 ];
 
 #[test]
@@ -47,7 +62,7 @@ fn a_reverted_row_fails_the_check_and_names_the_row() {
     let bad = SAMPLE.replacen("\"status\":1", "\"status\":0", 1);
     let rows = parse_govern_output(&bad).unwrap();
     let err = check_govern_rows(&rows).unwrap_err().to_string();
-    assert!(err.contains("round1.schedule"), "{err}");
+    assert!(err.contains("voting-power-quorum"), "{err}");
     assert!(err.contains("status is 0"), "{err}");
 }
 

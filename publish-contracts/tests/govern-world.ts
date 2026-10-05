@@ -27,18 +27,27 @@ export function writeGovernManifests(dir: string): void {
   for (const v of t.vaults) w(manifestBase(v.manifest), { vault: A.vaults[v.key] });
 }
 
-export function setup(sheetOver: Record<string, string | null> = {}) {
+export function setup(sheetOver: Record<string, string | null> = {}, chainId = 918453) {
   const coreDir = tmp("pc-govern-");
-  writeGovernManifests(join(coreDir, "deployments", "918453"));
+  writeGovernManifests(join(coreDir, "deployments", String(chainId)));
   const sheet = parseSheet(sheetText(sheetOver));
   const lines: string[] = [];
-  const ctx = { coreDir, chainId: 918453, sheet, coreSha: SHA, rpc: "http://x", evidenceDir: join(coreDir, "evidence"), log: publishLogger((l) => lines.push(l)) } as unknown as RunContext;
+  const ctx = { coreDir, chainId, sheet, coreSha: SHA, rpc: "http://x", evidenceDir: join(coreDir, "evidence"), log: publishLogger((l) => lines.push(l)) } as unknown as RunContext;
   return { ctx, sheet, lines };
 }
 
 export type Op = { exists: boolean; pending: boolean; done: boolean; readyAt: bigint };
 export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay = 60n) {
-  const s = { clock: 1000n, minDelay: startMinDelay, ops: new Map<string, Op>(), log: [] as string[], signed: [] as string[], nonce: 0 };
+  const s = {
+    clock: 1000n, minDelay: startMinDelay, ops: new Map<string, Op>(), log: [] as string[], signed: [] as string[], nonce: 0,
+    /** `kind:row` per timelock bundle built, in order: the row is the first word of the description. */
+    events: [] as string[],
+    /** The scheduled calls per row. */
+    scheduled: new Map<string, { form: string; calls: { target: string; data: string }[] }>(),
+    /** Overrides for a read: `functionName` to the value the chain returns. */
+    reads: {} as Record<string, unknown>,
+  };
+  const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
   const idOf = (p: { calls: { target: string; data: string }[]; salt: string; form?: string }): Hex => keccak256(toBytes(JSON.stringify([p.calls.map((c) => [c.target, c.data]), p.salt, p.form ?? "batch"])));
   const handle: any = {
     address: A.safe, owners: sheet.safeOwners, threshold: sheet.safeThreshold, chain: { rpcUrl: "x", chainId: 918453 },
@@ -46,6 +55,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       getBlock: async () => ({ timestamp: s.clock }),
       readContract: async ({ address, functionName }: { address: Address; functionName: string }) => {
         const key = Object.entries(A.vaults).find(([, v]) => v === address)?.[0] as "USDC" | undefined;
+        if (functionName in s.reads) return s.reads[functionName];
         switch (functionName) {
           case "votingPower": return sheet.voterPower;
           case "quorumThreshold": return sheet.quorum;
@@ -54,6 +64,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "exitFeeBps": return sheet.vaults[key!].exitFeeBps;
           case "isRouterEligible": return true;
           case "paused": return false;
+          case "votingPeriod": return sheet.votingPeriod;
+          case "executionDelay": return sheet.executionDelay;
+          case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;
+          case "agents": return [true, 0n];
+          case "defaultWeightsLength": return BigInt(1 + sheet.govern.eligibleVaults.length);
         }
         throw new Error(`fake: ${functionName}`);
       },
@@ -66,11 +81,19 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     timelockMinDelay: (async () => s.minDelay) as never,
     operationId: (async (_h: unknown, p: never) => idOf(p)) as never,
     operationState: (async (_h: unknown, _t: unknown, id: string) => { const o = s.ops.get(id); return o ? { exists: true, pending: o.pending, done: o.done, ready: o.pending && s.clock >= o.readyAt, readyAt: o.readyAt } : { exists: false, pending: false, done: false, ready: false, readyAt: 0n }; }) as never,
-    scheduleOnTimelock: (async (_h: unknown, p: never) => { const id = idOf(p); s.log.push((p as { form?: string }).form === "single" ? "schedule" : "scheduleBatch"); return bundle("schedule", id); }) as never,
-    executeOnTimelock: (async (_h: unknown, p: never) => { s.log.push("executeBatch"); return bundle("execute", idOf(p)); }) as never,
-    cancelOnTimelock: (async (_h: unknown, p: { id: Hex }) => { s.log.push("cancel"); return bundle("cancel", p.id); }) as never,
+    scheduleOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; calls: { target: string; data: string }[] }) => {
+      const id = idOf(p as never); const k = p.form === "single" ? "schedule" : "scheduleBatch";
+      s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`); s.scheduled.set(rowOf(p.description), { form: p.form ?? "batch", calls: p.calls });
+      return bundle("schedule", id);
+    }) as never,
+    executeOnTimelock: (async (_h: unknown, p: { form?: string; description?: string }) => {
+      const k = p.form === "single" ? "execute" : "executeBatch";
+      s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`);
+      return bundle("execute", idOf(p as never));
+    }) as never,
+    cancelOnTimelock: (async (_h: unknown, p: { id: Hex; description?: string }) => { s.log.push("cancel"); s.events.push(`cancel:${rowOf(p.description)}`); return bundle("cancel", p.id); }) as never,
     updateTimelockDelay: (async (_h: unknown, p: { newDelay: bigint; phase: string; salt: Hex }) => {
-      s.log.push(`updateDelay.${p.phase}`);
+      s.log.push(`updateDelay.${p.phase}`); s.events.push(`updateDelay.${p.phase}:update-delay`);
       const id = idOf({ calls: [{ target: A.timelock, data: decodeKey(p.newDelay) }], salt: p.salt, form: "single" });
       return { ...bundle(`updateDelay.${p.phase}`, id), newDelay: p.newDelay };
     }) as never,

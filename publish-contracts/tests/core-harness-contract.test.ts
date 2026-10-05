@@ -99,14 +99,17 @@ describe("core harness contract: the argument vector and environment core builds
     expect(r.stdout.split("\n").filter(Boolean)).toEqual(["[verify]", "chain: id equals sheet", "manifest: vault.json present", "deployer: holds no role on any contract (log scan)"]);
   });
 
-  test("govern: exit 0, one {row, txHash, status:1} stdout line per row, equal to the recorded sample core parses", async () => {
+  test("govern: exit 0, one {row, phase, txHash, status:1, readyAt} stdout line per round event, equal to the recorded sample core parses", async () => {
     const c = boot();
     writeGovernManifests(c.manifestDir);
     const r = await runCli(c, "govern");
     if (r.code !== 0) console.error(r.stderr.split("\n").slice(-8).join("\n"));
     expect(r.code).toBe(0);
     const rows = parseGovernOutput(r.stdout);
-    expect(rows.map((x) => x.row)).toEqual([...GOVERN_ROWS]);
+    // the default sheet skips agents, migrate-eligibility-AGENT and unpause-AGENT: ten rounds run, two events each except cancel (scheduled, cancelled)
+    const ran = GOVERN_ROWS.filter((r) => !["agents", "migrate-eligibility-AGENT", "unpause-AGENT"].includes(r));
+    expect(rows.map((x) => x.row)).toEqual(ran.flatMap((r) => [r, r]));
+    expect(r.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l).phase)).toEqual(ran.flatMap((r) => (r === "cancel" ? ["scheduled", "cancelled"] : ["scheduled", "executed"])));
     for (const x of rows) { expect(x.txHash).toMatch(/^0x[0-9a-f]{64}$/); expect(x.status).toBe(1); }
     // stdout holds nothing but row lines; the structured log is on stderr
     for (const line of r.stdout.split("\n").filter(Boolean)) expect(JSON.parse(line).row).toBeDefined();
@@ -116,14 +119,14 @@ describe("core harness contract: the argument vector and environment core builds
     expect(r.stdout).toBe(readFileSync(FIXTURE, "utf8"));
   });
 
-  test("govern --row by name and by number runs one row and prints one line", async () => {
-    for (const row of ["round1.schedule", "1"]) {
+  test("govern --row by name and by number runs one round and prints its two lines", async () => {
+    for (const row of ["voting-power-quorum", "1"]) {
       const c = boot();
       writeGovernManifests(c.manifestDir);
       const r = await runCli(c, "govern", ["--row", row]);
       expect(r.code).toBe(0);
-      expect(parseGovernOutput(r.stdout).map((x) => x.row)).toEqual(["round1.schedule"]);
-      expect(r.stdout.split("\n").filter(Boolean).length).toBe(1);
+      expect(parseGovernOutput(r.stdout).map((x) => x.row)).toEqual(["voting-power-quorum", "voting-power-quorum"]);
+      expect(r.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l).phase)).toEqual(["scheduled", "executed"]);
     }
   });
 
@@ -147,7 +150,7 @@ describe("core harness contract: the argument vector and environment core builds
     expect((await runCli(c, "publish", ["--stage", "libs"])).code).toBe(EXIT_CODES.USAGE);
     expect((await runCli(c, "publish", ["--row", "1"])).code).toBe(EXIT_CODES.USAGE);
     expect((await runCli(c, "govern", ["--row", "nope"])).code).toBe(EXIT_CODES.USAGE);
-    expect((await runCli(c, "govern", ["--row", "7"])).code).toBe(EXIT_CODES.USAGE);
+    expect((await runCli(c, "govern", ["--row", "14"])).code).toBe(EXIT_CODES.USAGE);
   });
 });
 

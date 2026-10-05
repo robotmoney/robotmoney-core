@@ -95,16 +95,16 @@ describe("stage 12 after govern: the unpause rows are linked to the paused reads
     const { ctx, sheet } = setup();
     const m = newManifest(ctx, "0xa");
     expect(unpausedByGovern(m, sheet)).toEqual([]);
-    m.govern = { "round1.schedule": { at: "t", tx_hash: "0x1" } };
+    m.govern = { "unpause-PROTO": { scheduled: { at: "t", tx_hash: "0x1" } } };
     expect(unpausedByGovern(m, sheet)).toEqual([]);
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe", unpausedByGovern(m, sheet));
     for (const k of ["rmPROTO", "rmAGENT", "rmRWA"]) expect(v.vaults[k]!.expectPaused).toBe(true);
   });
 
-  test("once round1.execute is recorded, the vaults the unpause rows named are expected paused=false and no others", () => {
+  test("once an unpause row's executed phase is recorded, that vault (and no other) is expected paused=false", () => {
     const { ctx, sheet } = setup();
     const m = newManifest(ctx, "0xa");
-    m.govern = { "round1.execute": { at: "t", tx_hash: "0x2" } };
+    m.govern = Object.fromEntries(sheet.govern.unpauseVaults.map((k) => [`unpause-${k}`, { scheduled: { at: "t", tx_hash: "0x1" }, executed: { at: "t", tx_hash: "0x2" } }]));
     const unpaused = unpausedByGovern(m, sheet);
     expect(unpaused).toEqual(sheet.govern.unpauseVaults);
     expect(unpaused.length).toBeGreaterThan(0);
@@ -115,20 +115,20 @@ describe("stage 12 after govern: the unpause rows are linked to the paused reads
     expect(v.vaults.rmAGENT!.expectPaused).toBe(!sheet.govern.unpauseVaults.includes("AGENT"));
   });
 
-  test("the expected timelock delay is TIMELOCK_MIN_DELAY until round2.updateDelay.execute, then GOVERN_NEW_DELAY (verify after govern failed on 60 vs 3600)", () => {
+  test("the expected timelock delay is TIMELOCK_MIN_DELAY until the update-delay row executes, then GOVERN_NEW_DELAY (verify after govern failed on 60 vs 3600)", () => {
     const { ctx, sheet } = setup();
     const m = newManifest(ctx, "0xa");
     expect(expectedTimelockDelay(m, sheet)).toBe(Number(sheet.timelockMinDelay));
-    m.govern = { "round2.updateDelay.schedule": { at: "t", tx_hash: "0x3" } };
+    m.govern = { "update-delay": { scheduled: { at: "t", tx_hash: "0x3" } } };
     expect(expectedTimelockDelay(m, sheet)).toBe(Number(sheet.timelockMinDelay));
-    m.govern = { "round2.updateDelay.execute": { at: "t", tx_hash: "0x4" } };
+    m.govern = { "update-delay": { scheduled: { at: "t", tx_hash: "0x3" }, executed: { at: "t", tx_hash: "0x4" } } };
     expect(expectedTimelockDelay(m, sheet)).toBe(Number(sheet.govern.newDelay));
     expect(buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe", [], expectedTimelockDelay(m, sheet)).timelockDelay).toBe(Number(sheet.govern.newDelay));
   });
 
   test("runVerifyStage hands the verifier the post-govern expectation", async () => {
     const { ctx, sheet } = setup();
-    const manifest = { ...newManifest(ctx, "0xa"), firstBlock: 5, govern: { "round1.execute": { at: "t", tx_hash: "0x2" } } };
+    const manifest = { ...newManifest(ctx, "0xa"), firstBlock: 5, govern: Object.fromEntries(sheet.govern.unpauseVaults.map((k) => [`unpause-${k}`, { executed: { at: "t", tx_hash: "0x2" } }])) };
     let seen: any;
     const deps = { verifyDeployment: async (o: any) => { seen = o; return { ok: true, checks: [] }; }, verifySources: async () => ({ ok: true, checks: [] }), emit: () => {} };
     await runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest as never, deps as never);

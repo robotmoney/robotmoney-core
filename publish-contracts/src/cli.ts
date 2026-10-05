@@ -46,8 +46,10 @@ export const USAGE = `publish contracts
                      address:0xADMIN is accepted with --dry-run only (no secret: the sender of a simulation).
   --environment NAME the GitHub Environment (or 'local' on a rehearsal)
   --core-sha SHA     the core DEPLOY_SHA (40 hex). The core checkout HEAD must equal it.
-  --row R            govern only: run one govern row, by 1-based number or by name. Rows: round1.schedule, round1.execute, round2.cancel.schedule,
-                     round2.cancel.cancel, round2.updateDelay.schedule, round2.updateDelay.execute. Without it, every row.
+  --row R            govern only: run one govern row (one round: schedule, wait for the real delay, execute, read back), by 1-based number or by name.
+                     Rows: voting-power-quorum, agents, other-setters, migrate-eligibility-PROTO, migrate-eligibility-AGENT, migrate-eligibility-RWA,
+                     router-weights, unpause-PROTO, unpause-AGENT, unpause-RWA, update-delay, batch, cancel. Without it, every row in order.
+                     On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) with the ready time and the command to run again with the same --row.
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
   --resume           continue a run: adopt the existing Safe, skip finished stages
@@ -64,7 +66,7 @@ export const USAGE = `publish contracts
   --max-wait SECONDS govern: longest timelock wait this process accepts (default 3600)
 Aliases: --chain-id for --chain, --deploy-sha for --core-sha.
 Environment: PUBLISH_MANIFEST_DIR names the manifest directory (stage manifests are written and read there, not in the core checkout).
-Govern prints one JSON line per row on stdout: {"row":"...","txHash":"0x...","status":1}. Logs are JSON on stderr.`;
+Govern prints one JSON line per round event on stdout: {"row":"...","phase":"scheduled|executed|cancelled","txHash":"0x...","status":1,"readyAt":1700000000}. Logs are JSON on stderr.`;
 
 export interface CliDeps {
   run?: ProcessRunner;
