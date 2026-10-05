@@ -1,22 +1,28 @@
 //! Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §3
 //! Implements: issue #1044 — Investment Committee v0
 //!
-//! `rmpc committee` — submit a signed allocation vote through the
+//! `rmpc committee` — submit a signed allocation vote through
+//! `RobotMoneyGateway.committeeVoteSubmit`, which forwards it to the
 //! `InvestmentCommitteePolicy` contract.
 //!
 //! Subcommand:
-//! - `vote-submit` — COMMITTEE_AGENT_ROLE: submit a signed allocation vote.
+//! - `vote-submit` — submit a signed allocation vote. The caller needs
+//!   `AGENT_ROLE` on the gateway and `COMMITTEE_AGENT_ROLE` on the IC policy.
 //!
-//! rmpc is not a governance signer. Registering a committee agent is an
-//! `onlyRole(ADMIN_ROLE)` call, and ADMIN_ROLE belongs to the Safe/timelock
-//! after handover, so rmpc has no `register` command. Build that call as a
-//! Safe transaction and sign it with a wallet (hardware wallet through the
-//! Safe), per the deployment runbook.
+//! rmpc is not a governance signer. Registering a committee agent
+//! (`gateway.committeeRegister`) is an `onlyRole(ADMIN_ROLE)` call, and
+//! ADMIN_ROLE belongs to the Safe and timelock after handover, so rmpc has no
+//! `register` command. Register agents through the Safe and the timelock's
+//! schedule → delay → execute path, as described in
+//! `docs/technical/consensus-receipt-submitter-runbook.md` §3.
 //!
-//! `vote-submit` encodes its calldata against the IC policy ABI and
-//! broadcasts the transaction directly to the IC policy contract. The
-//! transaction sender is the allowlisted committee agent; the agent role is
-//! an operating role, not a governance role.
+//! `vote-submit` encodes `committeeVoteSubmit(VoteParams)` against the gateway
+//! ABI and sends it to `cfg.gateway_address`. It never calls the policy
+//! directly: the policy's `submitVote` is `onlyGateway` and reverts with
+//! `CallerNotGateway` for any other sender (issue #1511). The transaction
+//! sender is the allowlisted committee agent; the agent role is an operating
+//! role, not a governance role. `ic_policy_address` is still required so the
+//! command fails closed before signing when the committee is not configured.
 //!
 //! Exit codes:
 //! - 0 — success.
@@ -34,7 +40,7 @@ use serde::Serialize;
 use crate::config::Config;
 use crate::errors::RmpcError;
 use crate::fees::{compute_fees, FeeBid};
-use crate::gateway::InvestmentCommitteePolicy;
+use crate::gateway::{GatewayVoteParams, RobotMoneyGateway};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
@@ -156,6 +162,15 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         Ok(a) => a,
         Err(code) => return code,
     };
+    // The vote goes to the GATEWAY (issue #1511): the policy is onlyGateway.
+    let gateway_addr = match parse_address(
+        &cfg.gateway_address,
+        "rmpc committee vote-submit",
+        "gateway_address",
+    ) {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
 
     let vault_addr = match parse_address(&args.vault, "rmpc committee vote-submit", "--vault") {
         Ok(a) => a,
@@ -197,7 +212,7 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
 
     let network_env = NetworkEnv::from_chain_id(cfg.chain_id);
     log::info!(
-        "rmpc committee vote-submit: caller={caller:#x} ic={ic_addr:#x} vault={vault_addr:#x} stance={} chain_id={} env={}",
+        "rmpc committee vote-submit: caller={caller:#x} gateway={gateway_addr:#x} ic={ic_addr:#x} vault={vault_addr:#x} stance={} chain_id={} env={}",
         args.stance.as_str(),
         cfg.chain_id,
         network_env.as_str()
@@ -266,7 +281,7 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         };
 
     // Build VoteParams struct. The `stance` field is ABI-encoded as uint8.
-    let params = InvestmentCommitteePolicy::VoteParams {
+    let params = GatewayVoteParams {
         agent: caller,
         vault: vault_addr,
         stance: args.stance.to_abi_u8(),
@@ -280,12 +295,12 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         timestamp: args.timestamp,
     };
 
-    let calldata = InvestmentCommitteePolicy::submitVoteCall { p: params }.abi_encode();
+    let calldata = RobotMoneyGateway::committeeVoteSubmitCall { p: params }.abi_encode();
 
     let tx = build_eip1559(Eip1559Inputs {
         chain_id: cfg.chain_id,
         nonce,
-        to: ic_addr,
+        to: gateway_addr,
         gas_limit: args.gas_limit,
         fees,
         value: U256::ZERO,

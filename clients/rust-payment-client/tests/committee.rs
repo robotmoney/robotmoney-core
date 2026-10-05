@@ -17,12 +17,18 @@
 mod common;
 
 use crate::common::{jrpc_result, jrpc_result_raw, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE};
+use alloy_consensus::TxEip1559;
+use alloy_primitives::TxKind;
 use alloy_primitives::{address, b256, hex as ahex, Address, B256};
+use alloy_sol_types::SolCall;
 use assert_cmd::Command;
 use mockito::Matcher;
+use rust_payment_client::gateway::RobotMoneyGateway;
 use rust_payment_client::signer::software::PASSPHRASE_ENV_VAR;
 use serde_json::json;
 use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 // ─── Test constants ───────────────────────────────────────────────────────────
@@ -124,7 +130,7 @@ fn simple_receipt_body() -> String {
             "blockHash":"0x0000000000000000000000000000000000000000000000000000000000000001",
             "blockNumber":"0x2a",
             "from":"{SIGNER_ADDRESS:#x}",
-            "to":"{IC_POLICY:#x}",
+            "to":"{GATEWAY:#x}",
             "cumulativeGasUsed":"0x5208",
             "gasUsed":"0x5208",
             "contractAddress":null,
@@ -177,14 +183,24 @@ async fn test_committee_vote_submit_happy_path() {
         .create_async()
         .await;
 
-    // eth_sendRawTransaction
+    // eth_sendRawTransaction — capture the raw envelope so the test can
+    // assert WHERE the vote was sent, not just that something was sent.
+    let raw_tx: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let raw_tx_sink = Arc::clone(&raw_tx);
+    let tx_hash_body = jrpc_result(&format!("{TX_HASH:#x}"));
     server
         .mock("POST", "/")
         .match_body(Matcher::PartialJson(
             json!({"method": "eth_sendRawTransaction"}),
         ))
         .with_status(200)
-        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .with_body_from_request(move |req| {
+            let body: serde_json::Value =
+                serde_json::from_slice(req.body().expect("request body")).expect("JSON-RPC body");
+            let raw = body["params"][0].as_str().expect("raw tx hex").to_string();
+            *raw_tx_sink.lock().unwrap() = Some(raw);
+            tx_hash_body.clone().into_bytes()
+        })
         .expect(1)
         .create_async()
         .await;
@@ -259,6 +275,39 @@ async fn test_committee_vote_submit_happy_path() {
     assert_eq!(v["action"], "vote-submit", "action field");
     assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"), "tx_hash field");
     assert_eq!(v["block_number"], 42, "block_number field");
+
+    // Issue #1511: the IC policy's `submitVote` is `onlyGateway`, so a vote sent
+    // straight to the policy reverts with `CallerNotGateway` on any real chain.
+    // The envelope must target the GATEWAY and carry `committeeVoteSubmit`.
+    let raw_hex = raw_tx
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("a raw tx was broadcast");
+    let raw = ahex::decode(raw_hex.trim_start_matches("0x")).expect("raw tx hex");
+    assert_eq!(raw[0], 0x02, "EIP-1559 envelope");
+    let signed = TxEip1559::decode_signed_fields(&mut &raw[1..]).expect("decode EIP-1559 tx");
+    let tx = signed.tx();
+    assert_eq!(
+        tx.to,
+        TxKind::Call(GATEWAY),
+        "the vote must be sent to the gateway, never to the IC policy ({IC_POLICY:#x})"
+    );
+    assert_eq!(
+        &tx.input[..4],
+        RobotMoneyGateway::committeeVoteSubmitCall::SELECTOR.as_slice(),
+        "the calldata must be gateway.committeeVoteSubmit, not policy.submitVote"
+    );
+    let call = RobotMoneyGateway::committeeVoteSubmitCall::abi_decode(&tx.input, true)
+        .expect("decode committeeVoteSubmit calldata");
+    assert_eq!(call.p.agent, SIGNER_ADDRESS, "agent is the signer");
+    assert_eq!(
+        call.p.vault,
+        Address::from_str(vault_addr).unwrap(),
+        "vault field"
+    );
+    assert_eq!(call.p.targetWeightBps, 6000, "weight field");
+    assert_eq!(call.p.voteJsonHash, VOTE_JSON_HASH, "vote json hash field");
 }
 
 #[tokio::test]

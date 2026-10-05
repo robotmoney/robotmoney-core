@@ -83,6 +83,13 @@ sol_binding!(
 /// (T01), and the generated struct otherwise lives in a private module.
 pub use consensus_recommendation_receipt::IConsensusRecommendationReceipt::Receipt as AnchoredReceipt;
 
+/// The `IInvestmentCommitteePolicy.VoteParams` tuple
+/// `RobotMoneyGateway.committeeVoteSubmit` takes. Re-exported by name because
+/// `rmpc committee vote-submit` must encode the GATEWAY call (the policy's
+/// `submitVote` is `onlyGateway`, issue #1511), and the generated struct
+/// otherwise lives in a private module.
+pub use robot_money_gateway::IInvestmentCommitteePolicy::VoteParams as GatewayVoteParams;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +99,16 @@ mod tests {
     /// The `deposit` selector must match `keccak256("deposit(bytes32,uint256,uint64,bytes32)")[..4]`.
     /// This is the load-bearing cross-check that the generated bindings line
     /// up with the Solidity ABI committed in `contracts/gateway/`.
+    /// `committee vote-submit` sends this call to the gateway (issue #1511).
+    /// The tuple layout must match `IInvestmentCommitteePolicy.VoteParams`.
+    #[test]
+    fn committee_vote_submit_selector_matches_canonical_signature() {
+        let canonical = "committeeVoteSubmit((address,address,uint8,uint16,uint8,string,bytes32,bytes32,bytes32,string,uint64))";
+        let expected = &keccak256(canonical.as_bytes())[..4];
+        let actual = RobotMoneyGateway::committeeVoteSubmitCall::SELECTOR;
+        assert_eq!(&actual, expected, "committeeVoteSubmit selector drift");
+    }
+
     #[test]
     fn deposit_selector_matches_canonical_signature() {
         let canonical = "deposit(bytes32,uint256,uint64,bytes32)";
