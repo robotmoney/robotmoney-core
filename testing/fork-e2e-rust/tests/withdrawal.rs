@@ -408,9 +408,9 @@ fn agent_withdrawal_happy_path() {
     );
     approve_vault_shares(&agent, vault, gateway, shares_held);
 
-    // Pre-withdrawal: assetRecipient has zero USDC.
+    // Pre-withdrawal balance of assetRecipient. The Twin fork carries real Base state, where this
+    // low address may already hold USDC, so the test checks the DELTA, not an absolute zero.
     let pre_bal = usdc_balance_of(&agent, usdc, asset_recipient_addr);
-    assert_eq!(pre_bal, U256::ZERO, "assetRecipient must start with 0 USDC");
 
     // Agent calls gateway.withdraw(orderId, shares_held, vault, deadline, idempotencyKey).
     // The gateway pulls shares from the agent (transferFrom(agent → gateway)) and
@@ -427,7 +427,7 @@ fn agent_withdrawal_happy_path() {
                 idempotencyKey: alloy_primitives::B256::from([11u8; 32]),
             },
             U256::ZERO,
-            800_000,
+            2_000_000,
         )
         .expect("gateway.withdraw");
     assert_eq!(withdraw_receipt.status, 1, "withdraw must succeed");
@@ -439,7 +439,8 @@ fn agent_withdrawal_happy_path() {
     // Assert USDC landed in assetRecipient (MockVault is 1:1, so assetsOut == shares_held).
     let post_bal = usdc_balance_of(&agent, usdc, asset_recipient_addr);
     assert_eq!(
-        post_bal, shares_held,
+        post_bal - pre_bal,
+        shares_held,
         "assetRecipient must receive USDC equal to redeemed shares (1:1 MockVault)"
     );
 
@@ -520,6 +521,8 @@ fn agent_withdrawal_redirect_blocked() {
     let asset_recipient_addr: Address = "0x000000000000000000000000000000000000BEEF"
         .parse()
         .unwrap();
+    // Real Base state: the attacker address may already hold USDC, so the check is on the delta.
+    let attacker_bal_before = usdc_balance_of(&admin, usdc, attacker_addr);
 
     let vault = deploy_mock_vault(&admin, usdc);
     let gateway = deploy_gateway(&admin, usdc, vault, admin.address, pauser.address);
@@ -598,11 +601,10 @@ fn agent_withdrawal_redirect_blocked() {
         e => panic!("expected Reverted, got {e:?}"),
     }
 
-    // Sanity: attacker address still has 0 USDC.
+    // Sanity: the attacker address received no USDC.
     let attacker_bal = usdc_balance_of(&admin, usdc, attacker_addr);
     assert_eq!(
-        attacker_bal,
-        U256::ZERO,
+        attacker_bal, attacker_bal_before,
         "attacker address must receive 0 USDC"
     );
 
@@ -709,7 +711,7 @@ fn agent_withdrawal_window_cap() {
                 idempotencyKey: alloy_primitives::B256::from([21u8; 32]),
             },
             U256::ZERO,
-            800_000,
+            2_000_000,
         )
         .expect("first withdrawal must succeed");
     assert_eq!(w1.status, 1, "first withdrawal must succeed");
@@ -730,7 +732,7 @@ fn agent_withdrawal_window_cap() {
             idempotencyKey: alloy_primitives::B256::from([23u8; 32]),
         },
         U256::ZERO,
-        800_000,
+        2_000_000,
     );
     assert!(
         result.is_err(),
@@ -1031,7 +1033,7 @@ fn router_withdrawal() {
                 idempotencyKey: alloy_primitives::B256::from([61u8; 32]),
             },
             U256::ZERO,
-            1_500_000,
+            3_000_000,
         )
         .expect("gateway.withdrawFromRouter");
     assert_eq!(
