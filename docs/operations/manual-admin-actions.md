@@ -91,7 +91,7 @@ A non-empty result confirms the gate is in place.
 
 **What.** Deploy `PortfolioRouter`, `RouterGovernance`, and `TimelockController`
 to **Base mainnet (chain `8453`)**, record their addresses in
-`deployments/full-stack.json`, then transfer `ADMIN_ROLE` to the
+the run's deploy manifests (`deployments/<chain>/`), then transfer `ADMIN_ROLE` to the
 `TimelockController` across **all five protocol contracts**: Gateway, Vault,
 VaultRegistry, PortfolioRouter, and RouterGovernance.
 
@@ -139,7 +139,7 @@ contract-enforced rather than operational convention.
    left to you is the list itself: `roles.gateway_agents_listed_count` in the
    manifest must equal the number of agents found above.
 3. Record the resulting `portfolio_router`, `router_governance`, and
-   `timelock_controller` addresses in `deployments/full-stack.json`.
+   `timelock_controller` addresses in the run's deploy manifests (`deployments/<chain>/`).
 
 **Verify.** For each of the five contracts, confirm the timelock holds
 `ADMIN_ROLE` and no EOA does:
@@ -150,11 +150,11 @@ cast call "$CONTRACT" "hasRole(bytes32,address)(bool)" \
   --rpc-url "$BASE_RPC"   # expect: true
 ```
 
-Also confirm `deployments/full-stack.json` carries the three new addresses:
+Also confirm the run's merged deploy manifest carries the three new addresses:
 
 ```bash
 jq 'has("portfolio_router") and has("router_governance") and has("timelock_controller")' \
-  deployments/full-stack.json   # expect: true
+  deployments/<chain>/<merged manifest>.json   # expect: true
 ```
 
 ---

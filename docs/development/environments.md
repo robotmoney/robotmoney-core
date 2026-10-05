@@ -140,15 +140,9 @@ See `docs/development/opencode-readonly-fork.md` for the full walkthrough.
 
 ### Contract address source
 
-Real Base mainnet deployed addresses (hardcoded in `testing/fork-e2e-rust/src/addresses.rs`). The clean room rule says a test deploys its own vault and reads the manifests. These fork-e2e scenarios predate it and still read the production v1 addresses. They are to be rewritten onto the harness fixture:
+The fork-e2e harness (`testing/fork-e2e-rust`) names no Robot Money address. Each fixture deploys its own vault on first use through the real vault stage (`bun scripts/deploy/core-stages.ts --stages vault`, the deployer is an unlocked anvil dev account) and reads the vault and adapter addresses from the manifest the stage wrote (`ForkFixture::vault`, `crate::deployed`). When `RMPC_DEPLOY_MANIFEST` names a merged manifest from the publish contracts flow, the fixture reads that instead and deploys nothing. This is the clean room rule (core 1498): no test reads the live production v1 vault, its adapters or the old admin Safe.
 
-| Contract | Address |
-|----------|---------|
-| RobotMoneyVault | `0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd` |
-| MorphoAdapter | `0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9` |
-| AaveV3Adapter | `0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea` |
-| CompoundV3Adapter | `0x8247da22a59fce074c102431048d0ce7294c2652` |
-| USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+`testing/fork-e2e-rust/src/addresses.rs` holds third-party addresses only (USDC, venues, DEX router, pools, tokens). The same set is listed in `scripts/deploy/third-party-addresses.json`. `scripts/ci/check-no-production-addresses.ts` fails CI when a test or harness file hard-codes a Robot Money production address.
 
 For the read-only walkthrough the gateway address is a placeholder
 (`0x000000000000000000000000000000000000dEaD`) — reads return a partial
@@ -359,7 +353,7 @@ chain_id             = 8453
 rpc_url              = "https://mainnet.base.org"   # replace with your archive endpoint
 gateway_address      = "0x0000000000000000000000000000000000000000"  # not deployed; reads return partial envelope
 usdc_address         = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-vault_address        = "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd"
+vault_address        = "<your vault address, from the deploy manifest>"
 state_dir            = "./rmpc-state"
 
 [signer]

@@ -84,6 +84,13 @@ jobs:
           bun scripts/ci/check-no-test-only-code.ts
           bun test scripts/ci/check-no-test-only-code.test.ts
 
+      # Core 1490 (clean room rule, core 1498): no test or harness file hard-codes a Robot Money
+      # production address. Tests deploy their own vault and read the manifests.
+      - name: No production Robot Money addresses in tests or harnesses
+        run: |
+          bun scripts/ci/check-no-production-addresses.ts
+          bun test scripts/ci/check-no-production-addresses.test.ts
+
       - name: Audit ledger covers every shipped contract
         run: |
           bash scripts/check-audit-ledger.sh

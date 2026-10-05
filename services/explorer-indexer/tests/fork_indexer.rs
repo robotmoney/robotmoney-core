@@ -6,8 +6,8 @@
 //! - `indexer_runs` records a successful run.
 //! - All 9 minimum tables are reachable by COUNT(*) (i.e. every
 //!   migration applied cleanly under load).
-//! - At least one `vault_snapshots` row is produced (heartbeat or
-//!   event-driven; our vault always has totalAssets readable, so the snapshot succeeds).
+//! - A `vault_snapshots` row exists for the NEW vault (heartbeat or event-driven; our vault
+//!   always has totalAssets readable). The test waits for it and fails when it never lands.
 //! - Re-running the same range produces 0 net inserts (idempotency).
 //!
 //! The Twin chain (id 918453) is a pinned lazy fork of real Base state made with anvil (core 1498,
@@ -44,13 +44,14 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
     let rpc_url = twin.rpc_url().to_string();
 
     let rpc = JsonRpc::new(&rpc_url);
-    let head = rpc.block_number().await.expect("Twin head block");
-    let cfg = IndexerConfig {
+    let new_vault = twin.vault();
+    let new_vault_bytes: Vec<u8> = new_vault.as_slice().to_vec();
+    let cfg_for = |head: u64| IndexerConfig {
         chain_id: twin.chain_id() as i64,
         chain_name: "twin".into(),
         rpc_label: "twin-fork".into(),
         gateway: twin.gateway(),
-        vault: twin.vault(),
+        vault: new_vault,
         registry: None,
         router_governance: None,
         portfolio_router: None,
@@ -62,12 +63,48 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
         feature_flags: 0,
     };
 
-    // First run.
-    let o1 = run_once(&fx.db, &rpc, &cfg).await.expect("run_once 1");
-    assert!(o1.error.is_none(), "first run clean: {:?}", o1.error);
+    // Wait for the indexer to index the freshly deployed vault: run, and when no vault_snapshots
+    // row for the NEW vault exists yet, mine a block (an allowed Twin chain environment step, so
+    // the safe head moves past the deploy block) and run again. Bounded: 30 attempts.
+    let snapshots_for_new_vault = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM vault_snapshots WHERE chain_id = $1 AND contract = $2",
+        )
+        .bind(twin.chain_id() as i64)
+        .bind(&new_vault_bytes[..])
+        .fetch_one(fx.db.pool())
+        .await
+        .expect("count vault_snapshots for the new vault")
+    };
+    let http = reqwest::Client::new();
+    let mut cfg = cfg_for(rpc.block_number().await.expect("Twin head block"));
+    let mut o1 = None;
+    for attempt in 0..30 {
+        let head = rpc.block_number().await.expect("Twin head block");
+        cfg = cfg_for(head);
+        let o = run_once(&fx.db, &rpc, &cfg).await.expect("run_once");
+        assert!(o.error.is_none(), "run {attempt} clean: {:?}", o.error);
+        o1.get_or_insert(o);
+        if snapshots_for_new_vault().await >= 1 {
+            break;
+        }
+        let _ = http
+            .post(&rpc_url)
+            .json(
+                &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"anvil_mine","params":["0x6"]}),
+            )
+            .send()
+            .await;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let o1 = o1.expect("at least one run");
     assert!(
         o1.last_indexed_block.is_some(),
         "first run advances last_indexed_block"
+    );
+    assert!(
+        snapshots_for_new_vault().await >= 1,
+        "no vault_snapshots row for the freshly deployed vault {new_vault:#x}"
     );
 
     // All nine tables addressable.
@@ -84,11 +121,7 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
     ] {
         let _ = fx.db.count(t).await.unwrap_or_else(|e| panic!("{e}"));
     }
-    // Heartbeat snapshot must have landed at least once.
-    assert!(
-        fx.db.count(CountTable::VaultSnapshots).await.unwrap() >= 1,
-        "at least one vault_snapshots row from heartbeat"
-    );
+    // Heartbeat snapshot for the NEW vault landed (asserted above).
     // Bookkeeping rows present.
     assert_eq!(fx.db.count(CountTable::Chains).await.unwrap(), 1);
     assert_eq!(fx.db.count(CountTable::Contracts).await.unwrap(), 2);
