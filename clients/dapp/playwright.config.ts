@@ -1,7 +1,7 @@
 /**
  * Single-mode Playwright config. Every spec runs against the
  * smoke-test full-stack devnet booted by `devnet-global-setup.ts`:
- * real Geth + Lighthouse, real deployed contracts, dapp container
+ * the Twin chain (a pinned lazy anvil fork of real Base), real deployed contracts, dapp container
  * built with the gateway runtime code hash pinned at build time.
  *
  * There is no local dev-server fast path. Tests must exercise a

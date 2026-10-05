@@ -400,6 +400,9 @@ jobs:
       - name: Twin chain CI wiring self-test (core 1496, 1498)
         run: bun scripts/devnet/check-twin-chain-ci-selftest.ts
 
+      - name: Stale snapshot docs gate (core 1498, 1496)
+        run: bun scripts/devnet/check-stale-snapshot-docs.ts
+
       - name: Twin chain tooling unit tests (core 1498)
         run: bun test scripts/devnet --timeout 60000
 

@@ -196,7 +196,7 @@ pub struct IndexerOutcome {
 /// 300 ticks is one hour of catching up, which is a long but recoverable cold
 /// start. Anything beyond it is not a slow start, it is a broken derivation —
 /// the live case that produced this constant was a `from_block` of 0 against an
-/// `anvil --load-state` head of ~48.9M, i.e. ~49_000 ticks (about seven days)
+/// the Twin fork (an anvil lazy fork) head of ~48.9M, i.e. ~49_000 ticks (about seven days)
 /// of ticks that could never have succeeded anyway, because that chain holds no
 /// history below its fork point. Expressing the threshold in ticks also makes
 /// it scale with `max_blocks_per_tick`: raising the per-tick cap raises the gap
@@ -206,7 +206,7 @@ pub const CONVERGENCE_TICK_BUDGET: u64 = 300;
 /// One `eth_getCode` probe, classified.
 ///
 /// The point of this enum is that an ERROR is information. Below the earliest
-/// block an `anvil --load-state` chain can serve, `eth_getCode` does not answer
+/// block an the Twin fork (an anvil lazy fork) chain can serve, `eth_getCode` does not answer
 /// "no code here" — it fails with `BlockOutOfRangeError`, and a search that
 /// read that as a failure would give up on exactly the chain that needs the
 /// search most.
@@ -241,7 +241,7 @@ pub enum CodeProbe {
 /// code, so the match is on the message. The markers, in the order they were
 /// measured:
 ///
-///  * `BlockOutOfRangeError` — `anvil --load-state` below the fork point,
+///  * `BlockOutOfRangeError` — the Twin fork (an anvil lazy fork) below the fork point,
 ///    reported under JSON-RPC code `-32602`.
 ///  * `not found` — Geth's `header not found`, and Anvil's `block 0x3e8 not
 ///    found` for a height inside the hole below its restored range.
@@ -341,7 +341,7 @@ pub enum DeployBlock {
 ///
 /// A boundary is a property of the chain, so it is still there a moment later.
 /// Noise is not. Asking the same height twice separates them for the price of
-/// one extra round trip on exactly the probes that move `lo` on a fork-state
+/// one extra round trip on exactly the probes that move `lo` on a Twin fork
 /// chain. A second answer that DISAGREES is not a boundary and not a reading
 /// either — it is proof the first reply was noise — so it aborts detection via
 /// [`CodeProbe::Unusable`] rather than picking a winner, and the tick degrades
@@ -410,7 +410,7 @@ pub fn fold_deploy_floor(found: &[u64], undetermined: usize) -> Option<u64> {
 /// is keyed by `(chain_id, address)` — which is not a chain identity. Both
 /// backends on the stage host run as chain id 918453 at the same deterministic
 /// addresses, so a value detected against the Geth devnet reads as perfectly
-/// valid to the `anvil --load-state` chain that replaced it. That is the same
+/// valid to the the Twin fork (an anvil lazy fork) chain that replaced it. That is the same
 /// shape as the stale cursor this floor was built to override, one level down,
 /// and it is worse: the cursor is re-derived every tick, whereas the floor was
 /// trusted for ever.
@@ -424,7 +424,7 @@ pub enum FloorCheck {
     /// Clear it and re-detect.
     Stale,
     /// The chain could not serve the block at all. Measured on the live
-    /// `anvil --load-state` devnet: it retains a rolling window of roughly
+    /// the Twin fork (an anvil lazy fork) devnet: it retains a rolling window of roughly
     /// 3,600 blocks, so a correctly detected floor drops out of history a few
     /// blocks later through nothing but time passing. Treating that as
     /// [`FloorCheck::Stale`] made every tick clear all five contracts,
@@ -475,7 +475,7 @@ pub fn classify_floor_check(probe: CodeProbe) -> FloorCheck {
 /// answered is not the chain the values were recorded against. Without it the
 /// bug this whole derivation fixes comes back one level down and permanently:
 /// the Geth devnet persists `deployed_block = 4`, the backend is swapped for
-/// `anvil --load-state` on the same Postgres, and every later tick takes floor
+/// the Twin fork (an anvil lazy fork) on the same Postgres, and every later tick takes floor
 /// 4, keeps the dead cursor of 5999 because `6000 >= 4`, and fails on
 /// `eth_getLogs` for ever with no line in the log saying why.
 ///
@@ -956,7 +956,7 @@ async fn run_inner(
             "indexer starts too far behind the safe head to converge; deploy-block \
              detection did not give this run a usable floor (a deploy_floor of 0 \
              means it degraded — the warning naming the contract says why), and on \
-             a fork-state chain the blocks below the fork point do not exist, so \
+             a Twin fork chain the blocks below the fork point do not exist, so \
              every historical read of them fails"
         );
     }
@@ -1184,7 +1184,7 @@ async fn run_inner(
 ///
 /// The walk STOPS at `deploy_floor`, the same floor `first_block` applies two
 /// lines below the call. That bound is not an optimisation, it is what keeps
-/// the descent finite in the case this floor exists for: on a fork-state chain
+/// the descent finite in the case this floor exists for: on a Twin fork chain
 /// the cursor sits at ~48.9M, so a single hash mismatch — anvil re-mining its
 /// tip after a restart, or a regenerated state fixture — sent this loop one
 /// height at a time towards genesis, roughly 48.9 million `SELECT hash FROM
@@ -2556,7 +2556,7 @@ fn risk_label_from_vault_name(name: &str) -> &'static str {
 /// classification and the cursor reconciliation are the parts that have to be
 /// right on THREE different chain shapes, and none of those shapes is
 /// reproducible from a single live backend. The end-to-end behaviour against a
-/// simulated `anvil --load-state` chain is in
+/// simulated the Twin fork (an anvil lazy fork) chain is in
 /// `tests/deploy_block_detection.rs`.
 #[cfg(test)]
 mod tests {
@@ -2586,7 +2586,7 @@ mod tests {
 
     #[test]
     fn out_of_range_errors_classify_as_below_history() {
-        // Verbatim from the live stage host's `anvil --load-state` chain.
+        // Verbatim from the live stage host's the Twin fork (an anvil lazy fork) chain.
         assert_eq!(
             classify_code_probe(&server_error(
                 "{\"code\":-32602,\"message\":\"BlockOutOfRangeError: block height is \
@@ -2666,7 +2666,7 @@ mod tests {
         );
     }
 
-    /// `anvil --load-state`: the head is Base mainnet's, and the chain serves
+    /// the Twin fork (an anvil lazy fork): the head is Base mainnet's, and the chain serves
     /// NOTHING between genesis and the fork point. The contract predates the
     /// fork, so the honest answer is the earliest block at which this chain can
     /// show it — not a "deploy block" it cannot see.
@@ -2805,7 +2805,7 @@ mod tests {
         // being deterministic means it was deployed somewhere else.
         assert_eq!(classify_floor_check(CodeProbe::Empty), FloorCheck::Stale);
         // `BelowHistory` proves nothing about which chain is answering. The
-        // live `anvil --load-state` devnet retains ~3,600 blocks, so a floor
+        // live the Twin fork (an anvil lazy fork) devnet retains ~3,600 blocks, so a floor
         // this code detected correctly ages out of history within a minute
         // through nothing but time passing. Calling that "the chain is gone"
         // cleared all five contracts and re-searched on EVERY tick, and the

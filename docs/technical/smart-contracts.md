@@ -68,6 +68,8 @@
 
 ## 2. Deployed addresses (Base mainnet, chain id 8453)
 
+> **Retired v1, tests never read it.** The addresses in this section document the retired v1 production deployment for history only. No test, script or CI job reads the live v1 vault. Every test deploys its own vault from our scripts onto the Twin chain (a pinned lazy fork of real Base state, core 1498, 1496).
+
 ### 2.1 Core allocation and governance contracts
 
 | Contract | Address | Source file |

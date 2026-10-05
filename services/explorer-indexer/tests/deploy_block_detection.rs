@@ -1,7 +1,7 @@
 //! Canonical: docs/architecture.md §5.4 — Explorer Indexer and API.
 //!
 //! End-to-end coverage for the derived start block, against a simulated
-//! `anvil --load-state` chain: a Base-mainnet head with NO block history below
+//! the Twin fork (an anvil lazy fork) chain: a Base-mainnet head with NO block history below
 //! the fork point. On that chain the old `last_indexed.map(|x| x + 1)
 //! .unwrap_or(0)` started at block 0 and needed ~49_000 ticks (about seven
 //! days) of `eth_call`s that could never succeed.
@@ -40,7 +40,7 @@ use tokio::net::TcpListener;
 
 /// Measured on the live stage host.
 const HEAD: u64 = 48_898_552;
-/// Lowest block the fork-state chain can serve. Everything between block 0 and
+/// Lowest block the Twin fork chain can serve. Everything between block 0 and
 /// this is a hole: `eth_getCode` there ERRORS, it does not answer "no code".
 const LOWEST_SERVABLE: u64 = 48_896_512;
 
@@ -256,7 +256,7 @@ fn cfg() -> IndexerConfig {
     IndexerConfig {
         chain_id: CHAIN_ID,
         chain_name: "devnet".into(),
-        rpc_label: "fork-state-stub".into(),
+        rpc_label: "twin-fork-stub".into(),
         gateway: gateway_addr(),
         vault: vault_addr(),
         registry: None,
@@ -342,7 +342,7 @@ async fn a_deploy_block_from_a_destroyed_chain_is_re_detected_not_trusted() {
 
     // Exactly what the Geth devnet leaves behind: the contracts deployed at
     // block 4, persisted under chain id 918453 at deterministic addresses. The
-    // `anvil --load-state` backend that replaces it reuses both, so nothing
+    // the Twin fork (an anvil lazy fork) backend that replaces it reuses both, so nothing
     // about these rows looks wrong — and block 4 is 48.9M blocks below anything
     // this chain can serve.
     fx.db

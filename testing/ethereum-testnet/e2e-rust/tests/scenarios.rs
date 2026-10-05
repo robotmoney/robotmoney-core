@@ -38,8 +38,8 @@
 //!
 //! ## Boot model
 //!
-//! All scenarios share a single Geth devnet boot. Bringing up the
-//! Geth + Lighthouse + 4-validator stack costs ~60-90s, so paying
+//! All scenarios share a single Twin chain boot. Bringing up the
+//! Twin chain (anvil lazy fork) costs a few seconds, so paying
 //! that nine times is a CI budget killer. We serialize via
 //! `--test-threads=1` (the only safe mode for Docker tests anyway —
 //! port 8545 is a global resource) and share one [`Fixture`] across

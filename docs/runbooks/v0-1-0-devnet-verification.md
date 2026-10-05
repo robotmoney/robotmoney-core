@@ -60,7 +60,7 @@ artifacts (network-agnostic despite the directory name).
 cargo run -p smoke-test -- --full-stack
 ```
 
-**What this does.** Boots `docker compose` (Geth + Lighthouse), waits for
+**What this does.** Starts the Twin chain (a pinned lazy anvil fork of real Base), waits for
 chain RPC readiness and real block production, then runs the standard
 `forge script` stage sequence (`DeployLibs.s.sol` → `DeployVault.s.sol` → `DeployVaultRegistry.s.sol` →
 `DeployPortfolioRouter.s.sol` → `DeployRouterGovernance.s.sol` →

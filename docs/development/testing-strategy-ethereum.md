@@ -50,8 +50,8 @@ the run/refresh commands live in
   (`testing/ethereum-testnet/e2e-rust/`); the two deliberately do not share a
   `Fixture` type.
 - **Backend:** `anvil` as the fork backend — `anvil --fork-url` of a live
-  archive endpoint or of the Twin fork (core 1498). The saved `--load-state`
-  fixture is no longer used by this crate. Chosen because anvil is the single tool
+  archive endpoint or of the Twin fork (core 1498). The retired saved
+  snapshot fixture is no longer used by this crate. Chosen because anvil is the single tool
   that offers `eth_impersonate` (whale funding), fork-block pinning, and a
   one-binary backend with no consensus layer to run.
 - **Per-test isolation:** fork-restart-per-test — each test boots its own anvil
@@ -65,7 +65,7 @@ the run/refresh commands live in
 
 ### Fixture storage (retired for this crate)
 
-The saved `--load-state` fixture carried contract **bytecode but not the full storage** of the Base
+The retired saved snapshot fixture carried contract **bytecode but not the full storage** of the Base
 contracts, so the flagship Rust scenarios needed a live fork anyway. Since core 1498 the harness
 forks a real upstream, and in CI that upstream is the Twin fork (a lazy fork of real Base at the run
 pin), so the full storage is read on demand. There is no saved fixture to enrich. The forge golden

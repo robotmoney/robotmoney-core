@@ -6,7 +6,7 @@ This repository hosts the in-development pieces that let agents transact against
 
 - **`contracts/gateway/`** — `RobotMoneyGateway.sol` (deposit + per-agent policy + pause), `AccessRoles.sol`, mocks, and the deploy script. On-chain enforcement of per-agent caps, windowed limits, role separation, and idempotent payment IDs.
 - **`clients/rust-payment-client/`** — `rmpc`, the Rust signing client. One-shot CLI with `deposit`, `self-check`, and `status` subcommands. Encrypted-keystore software signer, structured + audit logging, preflight checks pinned to a deployed gateway code-hash.
-- **`testing/ethereum-testnet/`** — Geth + Lighthouse devnet harness, deploy overlay, and an end-to-end Rust test crate (`e2e-rust/`) that drives `rmpc` against a live devnet.
+- **`testing/ethereum-testnet/`** — Twin chain test assets (a pinned lazy anvil fork of real Base) and an end-to-end Rust test crate (`e2e-rust/`) that drives `rmpc` against a Twin chain.
 - **`docs/`** — architecture proposal, MVP implementation plan, project roadmap, and on-chain reference docs.
 
 ## Onboarding an agent
@@ -41,7 +41,7 @@ cargo run -p smoke-test -- --full-stack
 # Drop tears the stack down automatically.
 ```
 
-`smoke-test` starts the Geth + Lighthouse compose stack from `testing/ethereum-testnet/`, deploys contracts, and funds test EOAs. See `docs/development/smoke-test-design.md` for details.
+`smoke-test` starts the Twin chain (a pinned lazy anvil fork of real Base, see `scripts/devnet/twin-fork.ts`), deploys contracts from our scripts, and funds test EOAs. See `docs/development/smoke-test-design.md` for details.
 
 ## Status
 

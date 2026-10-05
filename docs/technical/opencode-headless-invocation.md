@@ -399,7 +399,7 @@ provider (DeepSeek) rejected opencode 1.14.29's tool-schema serialization
 (`Upstream request failed`). The `opencode run` transcript was then a **single
 `{"type":"error", ...}` APIError event with zero tool calls** — the agent died
 before issuing any `rmpc` command. Everything upstream of the agent (rmpc build,
-fork-state Anvil, deploy, on-chain authorization asserts) still passed.
+Twin fork anvil, deploy, on-chain authorization asserts) still passed.
 
 **Loud-fail guard.** `opencode run` **exits 0** even on that dead session, and the
 error-only transcript is non-empty, so the previous `test -s <transcript>` guard

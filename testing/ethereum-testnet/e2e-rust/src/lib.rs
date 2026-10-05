@@ -96,8 +96,8 @@ pub struct Fixture {
 impl Fixture {
     /// Boot the devnet, build rmpc, write a keystore and config.
     ///
-    /// Deploys the three real Aave/Compound/Morpho adapters against the warmed
-    /// fork-state snapshot the devnet boots from (real protocol storage is
+    /// Deploys the three real Aave/Compound/Morpho adapters against the Twin chain,
+    /// a lazy fork of real Base (real protocol storage is
     /// present, so no test passthrough hatch is needed).
     pub fn new() -> Result<Self, HarnessError> {
         Self::with_deploy_env(&[])

@@ -354,7 +354,7 @@ impl JsonRpc {
     /// ([`crate::indexer::detect_deploy_block`]), which reads the ERROR as
     /// information rather than as a failure: below the earliest block a chain
     /// can serve, this call does not answer "no code", it fails
-    /// (`BlockOutOfRangeError` on `anvil --load-state`, `header not found` on
+    /// (`BlockOutOfRangeError` on the Twin fork, `header not found` on
     /// Geth). A pruned-state failure (`missing trie node`) looks similar and
     /// means something else entirely, and telling those apart is the caller's
     /// job. The error therefore has to reach the caller intact, so nothing here
