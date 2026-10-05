@@ -439,7 +439,7 @@ pub enum Command {
     /// Manage the local Investment Swarm signing identity — the
     /// production signing path for every swarm member. Ed25519 keypair,
     /// encrypted at rest — distinct from the on-chain EVM signer used by
-    /// `rmpc committee register` / `vote-submit`. Exports a base64 public
+    /// `rmpc committee vote-submit`. Exports a base64 public
     /// key for `POST /api/swarm/apply` and signs the exact canonical
     /// payload returned by `POST /api/swarm/signing-payload`, producing
     /// the signature `POST /api/swarm/submit` requires, so a prospective
@@ -594,12 +594,14 @@ pub enum CommitteeIdentitySubcommand {
 /// Subcommands for `rmpc committee`.
 #[derive(Debug, Subcommand)]
 pub enum CommitteeSubcommand {
-    /// Submit a signed allocation vote for a vault through the
-    /// InvestmentCommitteePolicy contract. Caller must hold
-    /// COMMITTEE_AGENT_ROLE on the IC policy contract.
+    /// Submit a signed allocation vote for a vault. Sent to
+    /// `RobotMoneyGateway.committeeVoteSubmit`, which forwards it to the
+    /// InvestmentCommitteePolicy contract (the policy is `onlyGateway`).
+    /// Caller must hold AGENT_ROLE on the gateway and COMMITTEE_AGENT_ROLE
+    /// on the IC policy contract.
     ///
-    /// Routes through RobotMoneyGateway with `--order-id` as the
-    /// idempotency key.
+    /// `--order-id` and `--deadline-secs` are accepted but not sent:
+    /// `committeeVoteSubmit` takes no idempotency key or deadline.
     VoteSubmit {
         /// Target vault address (0x-prefixed hex).
         #[arg(long)]

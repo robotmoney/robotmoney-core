@@ -83,7 +83,7 @@
 name: rust-client-devnet-integration
 
 # CI taxonomy (issue #1105): this suite proves rmpc end-to-end against a real
-# devnet plus binary-level integration tests (parity, committee register/vote-submit)
+# devnet plus binary-level integration tests (parity, committee vote-submit)
 # — the `system-correctness` class. It defers past drafts to ready_for_review and is
 # bypassed on docs-only changes.
 env:

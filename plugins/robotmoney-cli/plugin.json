@@ -1,6 +1,6 @@
 {
   "name": "robotmoney-cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Complete rmpc CLI reference covering all subcommands: read, write (deposit/withdraw), and governance (vote).",
   "author": "Robot Money",
   "homepage": "https://robotmoney.net",
