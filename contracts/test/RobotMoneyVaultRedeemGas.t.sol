@@ -17,6 +17,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
+import {DeployVault} from "../script/DeployVault.s.sol";
+import {VaultTestParams} from "./helpers/VaultTestParams.sol";
 
 contract GasUSDC is ERC20 {
     constructor() ERC20("USD Coin", "USDC") {}
@@ -194,18 +196,28 @@ contract RobotMoneyVaultRedeemGasUnitTest is Test {
 }
 
 /// @dev Fork suite. Skipped without FORK_RPC_URL. Not part of the fast unit run.
+///      Clean room: the test deploys its OWN vault through the real DeployVault stage script
+///      (real adapters, real seed) on the Twin chain and never reads a production v1 vault.
 contract RobotMoneyVaultRedeemGasForkTest is Test {
-    address internal constant RM_USDC = 0x4f835c9F54BcF17daf9040F60Cb72951Ccbb49dD;
     address internal constant USDC_BASE = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
 
     RobotMoneyVault internal vault;
     address internal user = makeAddr("gasUser");
+    address internal admin = makeAddr("gasAdmin");
+    address internal seedReceiver = makeAddr("gasSeedReceiver");
 
     function setUp() public {
         string memory rpc = vm.envOr("FORK_RPC_URL", string(""));
         if (bytes(rpc).length == 0) vm.skip(true);
         vm.createSelectFork(rpc);
-        vault = RobotMoneyVault(RM_USDC);
+        deal(USDC_BASE, admin, VaultTestParams.SEED_DEPOSIT_AMOUNT);
+        DeployVault.Deployed memory d = new DeployVault()
+            .runInProcessWithSeed(
+                VaultTestParams.params(admin, USDC_BASE),
+                seedReceiver,
+                VaultTestParams.SEED_DEPOSIT_AMOUNT
+            );
+        vault = d.vault;
         deal(USDC_BASE, user, 10_000 * 1e6);
         vm.startPrank(user);
         IERC20(USDC_BASE).approve(address(vault), type(uint256).max);
