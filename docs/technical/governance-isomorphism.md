@@ -9,6 +9,10 @@ and the verification that proves it. Companion to
 [security-model.md](./security-model.md) section 4 (Access control and admin), which
 states the production requirement.
 
+The production signing and operating steps (schedule, execute, cancel, unpause, and
+Safe and timelock self-administration) are in
+[production-safe-timelock-procedure.md](./production-safe-timelock-procedure.md).
+
 **Paths in this document are relative to this repository unless prefixed
 `devops/`.** The governance topology lives here (the Safe, `DeployTimelock`, the
 stage table in `scripts/deploy/stage-table.json`). The runbook that deploys it,
