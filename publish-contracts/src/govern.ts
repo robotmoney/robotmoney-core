@@ -491,10 +491,14 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const { label, target, data } = o.call;
     if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label)) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
     const name = `call-${label}`;
+    const p = { timelock: a.timelock, calls: [{ target, data }], salt: salt(name), form: "single" as const };
+    const id = await api.operationId(handle, p);
+    // The label is the salt, so one label is one operation. A second, different call under a used label would adopt the first call's record (and its spent or reverted operation): refuse it.
+    const prior = state[name]?.scheduled?.operation_id;
+    if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `call label '${label}' was already used for a different call (operation ${prior}, this call is ${id}): use a unique label per call`, { label, prior, id });
     if (!rowComplete(state[name])) {
-      const p = { timelock: a.timelock, calls: [{ target, data }], salt: salt(name), form: "single" as const };
       await round(name, {
-        id: await api.operationId(handle, p), description: `generic call ${label} to ${target}`,
+        id, description: `generic call ${label} to ${target}`,
         schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${name}: ${label}` }),
         execute: () => api.executeOnTimelock(handle, { ...p, description: `${name} execute` }),
         readBack: async () => [],

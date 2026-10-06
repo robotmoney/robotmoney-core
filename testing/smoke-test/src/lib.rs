@@ -35,7 +35,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1329,7 +1329,9 @@ impl Fixture {
     }
 
     /// Send `sig(args)` to `target` as a Safe -> Timelock call through the real SafeL2 (the CLI's Twin-only
-    /// generic call). The calldata is built with `cast calldata`. `label` must be unique per call in one fixture.
+    /// generic call). The calldata is built with `cast calldata`. `label` names the kind of call: a process-wide
+    /// counter is appended so every call is its own timelock operation (the label is the salt, and a repeated
+    /// label would reuse the earlier call's spent or reverted operation).
     fn timelock_call(
         &self,
         label: &str,
@@ -1349,9 +1351,11 @@ impl Fixture {
             )));
         }
         let data = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        static CALL_SEQ: AtomicU64 = AtomicU64::new(0);
+        let unique = format!("{label}-{}", CALL_SEQ.fetch_add(1, Ordering::SeqCst));
         let rows = self
             .published
-            .govern_call(label, &format!("{target:#x}"), &data)?;
+            .govern_call(&unique, &format!("{target:#x}"), &data)?;
         Ok(rows.first().map(|r| r.tx_hash.clone()).unwrap_or_default())
     }
 

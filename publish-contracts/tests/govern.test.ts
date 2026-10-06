@@ -410,6 +410,16 @@ describe("generic Safe -> Timelock call (Twin-only test verb, not a govern row)"
     expect(tl.s.events.length).toBe(2);
   });
 
+  test("a used label with different calldata is refused, not adopted as the earlier call", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl), call }));
+    const events = tl.s.events.length;
+    await expect(runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl), call: { ...call, data: "0x5678" as `0x${string}` } }))).rejects.toThrow("already used for a different call");
+    expect(tl.s.events.length).toBe(events);
+  });
+
   test("refused on 8453 before anything is sent", async () => {
     const { ctx, sheet } = setup(ALL, 8453);
     const tl = fakeTimelock(sheet, DELAY);
