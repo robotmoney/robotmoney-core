@@ -250,8 +250,9 @@ Router requirements:
 - destinations are vaults, not adapters or raw DeFi venues;
 - deposits expose a preview with destination vaults, weights, estimated
   receipts, fees, and unavailable legs;
-- a deposit with any unavailable leg reverts in full; the preview
-  surfaces unavailable legs before signing so the user can decide
+- a leg that is not eligible for routing at deposit time is skipped and
+  its share is renormalised across the remaining legs (§4.2.1); the
+  preview surfaces the skipped legs before signing so the user can decide
   whether to proceed or wait;
 - receipt tokens remain visible as underlying vault receipts;
 - router caps and vault caps both apply;
@@ -272,6 +273,52 @@ the same contracts ship into every environment with no per-environment
 code variant. The router is not yet on the production mainnet
 deployment manifest; the contract surface is in place, audit and
 mainnet onboarding remain planned work on the Plan tracking issue (#109).
+
+#### 4.2.1 What "eligible for routing" means
+
+A vault is eligible for routing only when three things hold at once:
+
+1. its `VaultRegistry` status is `Active`;
+2. its registry router-eligible flag is set (`VaultRegistry.isRouterEligible(vault)`);
+3. its ERC-4626 `asset()` is the router's USDC.
+
+`PortfolioRouter.isRouterEligibleAndActive` reads all three.
+`PortfolioRouter._requireActiveAndEligible` reverts unless all three hold.
+
+**Weight vectors.** `setWeights` and `_setDefaultWeights` (behind
+`setDefaultWeights` and `applyMigrationDefaultWeights`) call
+`_requireActiveAndEligible` for every listed vault, whatever its bps, 0
+included. A vault that is not Active or not router-eligible cannot be listed
+in a weight vector at all, so it receives 0. `_setDefaultWeights` also
+requires the vector length to equal `VaultRegistry.routerEligibleCount()`.
+Readers that compare against the live vector treat a missing vault as 0 bps
+(the consensus receipt "applied" rule, §4.9.3).
+
+**Deposit time.** `_depositTo` runs `_availabilityAndAmounts`, whose
+`_isDepositable` requires registry status `Active` and `isRouterEligible`.
+A leg that fails it is skipped. The full amount is split pro rata across the
+remaining legs, by each leg's share of the available bps, and the rounding
+remainder goes to the last available leg. No USDC is left with the router
+and none is returned to the user (`_executeLegs` checks the router's USDC
+balance against its pre-deposit snapshot). `previewDeposit` runs the same
+pass, so preview and execute agree on which legs are skipped (RTR-5).
+
+**No depositable leg.** When every leg is skipped, `_depositTo` reverts
+`NoWeightsSet`. The revert undoes the USDC pull, so the caller keeps all of
+it.
+
+**Caps do not renormalise.** A per-vault cap is not an availability signal.
+`_executeLeg` reverts `VaultCapExceeded` when a leg's renormalised amount is
+over its cap, and the whole deposit reverts.
+
+**Known gap: a vault's own deposit pause is not read.** `_isDepositable`
+checks registry status and router eligibility only. It does not read the
+vault's own deposit pause: `BasketVault.depositsPaused`, the `EMERGENCY_ROLE`
+`pause()`, `shutdown`, or `maxDeposit(...) == 0` (`RobotMoneyVault` has the
+same kind of flags). A registry-Active, router-eligible vault with deposits
+paused therefore stays in the available set. Its `vault.deposit` reverts
+inside `_executeLeg`, and the whole routed deposit reverts
+`UsdcLegTransferFailed(vault)`. This is not fixed yet.
 
 ### 4.3 Vault Adapters
 
@@ -668,6 +715,13 @@ it. The timelock therefore calls `releaseReceipt` directly, and
 `ADMIN_ROLE` on the receipt contract has exactly one holder.
 `testAdminRoleHeldByTimelock` and
 `testReleaseRevertsUnlessRoutedThroughTimelock` assert both halves.
+Operators release a receipt with the publish-contracts govern row
+`release-receipt` (`bun publish-contracts/src/cli.ts govern --row
+release-receipt --receipt-id 0x<bytes32> ...`, wrapped by `bun
+scripts/stage/core-stack.ts governance release --receipt-id ID`): the real Safe
+schedules `releaseReceipt` on the timelock, the delay passes, and the Safe
+executes it. That is the same path on the Twin chain and on Base mainnet. No
+EOA can release a receipt after handover.
 
 **Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,
 no ERC-20 surface, no call into any vault, `PortfolioRouter`, or
@@ -688,6 +742,31 @@ authority over the public record. Its custody, rotation, and compromise
 runbook are in
 `docs/technical/consensus-receipt-submitter-runbook.md`, which must be
 satisfied before any production submission.
+
+#### 4.9.3 Applied vs not applied
+
+"Applied" is a read-side claim the dapp makes
+(`clients/dapp/src/lib/consensusReceiptApi.ts` `computeAppliedState`). It
+compares the receipt's recommended bps per bucket with the live router weight
+vector the explorer API serves. Each bucket maps to one vault symbol
+(`tests/fixtures/consensus-receipt.bucket-vault-map.json`), and the
+per-deployment symbol-to-address map resolves that symbol to a vault address.
+
+**A vault missing from the live vector counts as 0 bps** (owner decision,
+2026-10-06). The router cannot list a vault that is not Active and
+router-eligible, even at 0 bps (§4.2.1), so "not in the vector" means "routes
+nothing". A receipt that recommends 0 for that bucket matches. A receipt that
+recommends more than 0 for it does not.
+
+- **Applied:** every bucket's recommended bps equals the live bps of its vault,
+  with a missing vault read as 0.
+- **Not applied:** at least one bucket differs.
+- **Cannot determine** (`unknown`): the payload or its `weights` is missing, no
+  live router weights are available at all, a bucket is not one schema 1.0
+  knows, or the deployment map cannot resolve the bucket's vault address.
+
+Applied is never inferred from release. Release is signalling-only, and a
+released receipt can be not applied.
 
 ## 5. Off-Chain Architecture
 

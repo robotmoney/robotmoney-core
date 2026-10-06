@@ -442,23 +442,33 @@ Access model: `ADMIN_ROLE` is self-administered (its own role-admin). The deploy
 
 **Deposit mechanics**: A user calls `deposit(uint256 amount, uint256[] minSharesPerLeg[])`. The router:
 1. Reads the active weight vector (voted weights if active; otherwise default weights).
-2. Checks VaultRegistry for vault status and router eligibility.
-3. Computes USDC leg amounts: `legAmount[i] = amount × weight[i] / 10000`.
-4. Calls `vault.deposit(legAmount[i], depositor)` for each leg.
-5. Emits `RouterDeposit` per leg and returns arrays of vault addresses and shares minted.
+2. Marks each leg available or skipped (`_availabilityAndAmounts` / `_isDepositable`): a leg is available only when its registry status is `Active` and it is router-eligible.
+3. Splits the full amount across the available legs only, pro rata by bps: `legAmount[i] = amount × weight[i] / availableBps`, where `availableBps` is the sum of the available legs' bps. The rounding remainder goes to the last available leg. Skipped legs get 0.
+4. Calls `vault.deposit(legAmount[i], depositor)` for each available leg (`_executeLeg`).
+5. Emits `RouterDeposit` per deposited leg and returns the shares minted per leg (0 for a skipped leg).
 
-All legs execute atomically; if any leg reverts, the entire deposit reverts (all-or-revert).
+The legs that run execute atomically: if any of them reverts, the entire deposit reverts. No USDC is left with the router and none is returned to the user. If no leg is available, the deposit reverts `NoWeightsSet` and the revert undoes the USDC pull. See "Routing eligibility" below and `docs/architecture.md` §4.2.1.
 
 ### 9.1.2 Weight vectors and governance integration
 
 The router maintains two weight vectors:
 
 - **Voted weights**: Set by `RouterGovernance` on proposal execution via `setWeights(vaults, bps)`. Only one governance proposal active at a time. If the voted vector is active, it is the source of truth.
-- **Default weights**: Admin-set fallback via `setDefaultWeights(vaults, bps)`. Used when no voted proposal is active (`votedWeightsActive = false`). Survives proposal execution unchanged, providing a below-quorum safety fallback (ADR-0002). The deployer sets the launch default weights before stage 11: rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps.
+- **Default weights**: Admin-set fallback via `setDefaultWeights(vaults, bps)`. Used when no voted proposal is active (`votedWeightsActive = false`). Survives proposal execution unchanged, providing a below-quorum safety fallback (ADR-0002). Its length must equal `VaultRegistry.routerEligibleCount()`.
+
+At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the launch vector with `setWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. Because it is written with `setWeights`, `votedWeightsActive` is true from deploy. rmPROTO, rmAGENT and rmRWA are not in that vector, so each routes 0.
 
 The timelock may set default weights only. Active weights come only from RouterGovernance votes. (Not yet implemented: core #1522. `setWeights` is gated by router `ADMIN_ROLE`, which the timelock also holds after stage 11.)
 
-The router never deposits into an ineligible vault: before each leg, it checks `VaultRegistry.isRouterEligible(vault)`.
+#### Routing eligibility
+
+A vault is **eligible for routing** only when its `VaultRegistry` status is `Active`, its registry router-eligible flag is set (`VaultRegistry.isRouterEligible`), and its `asset()` is the router's USDC (`PortfolioRouter.isRouterEligibleAndActive`).
+
+- `setWeights`, `setDefaultWeights` and `applyMigrationDefaultWeights` call `_requireActiveAndEligible` for every listed vault, at any bps, 0 included. An ineligible or non-Active vault cannot be listed even at 0 bps, so it receives 0.
+- At deposit time `_availabilityAndAmounts` skips each non-depositable leg and renormalises the full amount pro rata across the remaining legs. Nothing is left with the router or returned to the user. If no leg is depositable, `_depositTo` reverts `NoWeightsSet` and no USDC moves.
+- Per-vault caps do not renormalise: `_executeLeg` reverts `VaultCapExceeded` for an over-cap leg, and the whole deposit reverts.
+- `_executeLeg` re-checks registry status (`VaultNotActive`) and router eligibility (`_requireRouterEligible`) before each deposited leg, as defence in depth.
+- **Known gap:** `_isDepositable` does not read a vault's own deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pause()`, `shutdown`, or `maxDeposit == 0`). A registry-Active, router-eligible vault with deposits paused stays in the available set, its `vault.deposit` reverts, and the whole routed deposit reverts `UsdcLegTransferFailed(vault)`. Not fixed yet.
 
 ### 9.1.3 Caps and guards
 
@@ -468,7 +478,7 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 | Per-vault cap | `setVaultCap(address vault, uint256)` | Per-leg ceiling for a single vault. 0 = uncapped. |
 | Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any leg returns fewer shares than specified. |
 | Asset verification | `VaultAssetMismatch` error | Revert if a vault's `asset()` is not the router's USDC. |
-| Vault status check | `VaultNotActive` error | Revert if any leg is not `Active` in the registry. |
+| Vault status check | `_isDepositable`; `VaultNotActive` error | A leg that is not `Active` in the registry (or not router-eligible) is skipped and its share renormalised. `_executeLeg` reverts `VaultNotActive` only if the status changed between the availability pass and the leg. |
 | Per-leg transfer failure | `UsdcLegTransferFailed(address vault)` error | Wrap a reverting `vault.deposit()` (e.g. a USDC blacklist hit or fee-on-transfer failure) in a named per-leg error so callers can distinguish it from the generic custody check. |
 | Donation-DoS snapshot | `usdcBalanceBefore` balance snapshot | Snapshot the router's USDC balance before pulling the caller's deposit so pre-existing donated USDC cannot trigger a false custody-invariant revert. |
 
@@ -476,7 +486,7 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 
 | Function | Role | Effect |
 |---|---|---|
-| `deposit(uint256 amount, uint256[] minSharesPerLeg)` | anyone | Split amount by active weights, call vault.deposit per leg, return shares per leg. All-or-revert. |
+| `deposit(uint256 amount, uint256[] minSharesPerLeg)` | anyone | Skip non-depositable legs, split the full amount pro rata across the rest, call vault.deposit per leg, return shares per leg. All-or-revert across the legs that run; reverts `NoWeightsSet` when no leg is depositable. |
 | `setWeights(address[] vaults, uint256[] bps)` | RouterGovernance only (not yet implemented: core #1522; today router `ADMIN_ROLE`) | Set voted weight vector. Overwrites current voted weights and sets `votedWeightsActive = true`. |
 | `clearVotedWeights()` | ADMIN | Deactivate the voted vector; revert to default weights. |
 | `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN | Update fallback weight vector. |
@@ -489,7 +499,7 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 - **Weight normalization**: Both voted and default vectors must sum exactly to `BPS_DENOMINATOR` (10000). `setWeights` and `setDefaultWeights` revert if not.
 - **All-or-revert / custody invariant**: No USDC is permanently stranded in the router. The router snapshots its USDC balance into `usdcBalanceBefore` before pulling the caller's deposit, then after all legs run requires the balance to return to that snapshot — reverting `UsdcCustodyInvariantViolated` if any leg accepted less than its allocated `legAmount`. Because the snapshot is taken before the caller's funds are pulled, any pre-existing donated USDC appears in both the before and after snapshots and cannot trigger a false revert (donation-DoS hardening).
 - **Per-leg transfer failure**: When a single `vault.deposit()` reverts (e.g. a USDC blacklist hit or a fee-on-transfer failure), the router surfaces the named error `UsdcLegTransferFailed(address vault)` rather than the opaque `UsdcCustodyInvariantViolated` custody check, so off-chain handlers and auditors can decode the specific failing leg.
-- **Vault asset consistency**: All weighted vaults must have `asset() == USDC` (the router's configured USDC address). Checked before each deposit.
+- **Vault asset consistency**: All weighted vaults must have `asset() == USDC` (the router's configured USDC address). Checked when a vector is written and again before each deposited leg.
 - **No implicit fees**: The router charges no fees; all fees (exit fees on vaults, protocol fees) are handled at the vault layer.
 
 ---

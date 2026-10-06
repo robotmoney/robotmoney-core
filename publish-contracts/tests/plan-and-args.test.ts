@@ -60,6 +60,17 @@ describe("rehearsal and production differ only in the arguments", () => {
     expect(() => parseCli(["govern", ...base, "--call-label", "x", "--call-target", `0x${"1".repeat(40)}`, "--call-data", "abcd"])).toThrow("hex");
   });
 
+  test("--receipt-id goes with govern --row release-receipt only, and must be a bytes32", () => {
+    const base = ["--chain", "918453", "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
+    const id = `0x${"AB".repeat(32)}`;
+    expect(parseCli(["govern", ...base, "--row", "release-receipt", "--receipt-id", id])).toMatchObject({ row: "release-receipt", receiptId: id.toLowerCase() });
+    expect(() => parseCli(["govern", ...base, "--row", "release-receipt"])).toThrow("needs --receipt-id");
+    expect(() => parseCli(["govern", ...base, "--row", "agents", "--receipt-id", id])).toThrow("--row release-receipt only");
+    expect(() => parseCli(["govern", ...base, "--receipt-id", id])).toThrow("--row release-receipt only");
+    expect(() => parseCli(["govern", ...base, "--row", "release-receipt", "--receipt-id", "0x12"])).toThrow("bytes32");
+    expect(() => parseCli(["publish", ...base, "--row", "release-receipt", "--receipt-id", id])).toThrow("govern verb");
+  });
+
   test("the argument parser takes the documented flags and the aliases", () => {
     const base = ["--rpc", "http://x", "--sheet", "s", "--signer", "ledger", "--environment", "e"];
     const a = parseCli(["--chain", "8453", "--core-sha", SHA, ...base, "--resume", "--dry-run", "--stage", "libs"]);

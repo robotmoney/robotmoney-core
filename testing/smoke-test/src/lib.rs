@@ -89,6 +89,62 @@ pub fn receipt_fixtures_enabled() -> bool {
     std::env::var_os(NO_RECEIPT_FIXTURES_ENV).is_none()
 }
 
+/// The fixture payload directory served by the `receipt-fixtures` compose service, relative to the repo root.
+pub const RECEIPT_FIXTURES_DIR_REL: &str =
+    "testing/ethereum-testnet/config/consensus-receipt-fixtures";
+
+/// The committee member id the harness agent is registered under before it records the fixture receipts.
+pub const RECEIPT_AGENT_ID: &str = "smoke-test-receipt-agent";
+
+/// The on-chain digest receipt-b is recorded with. Deliberately NOT the keccak256 of `receipt-b.json`, so the
+/// indexer's re-fetch never verifies it.
+pub const RECEIPT_B_WRONG_DIGEST_PREIMAGE: &[u8] = b"smoke-test-wrong-digest-marker-for-1294";
+
+/// `keccak256(abi.encodePacked("robotmoney:consensus-receipt-id:v1\n", sessionId, "\n", subjectId))`, mirroring
+/// `ConsensusRecommendationReceipt.computeReceiptId` exactly (contracts/gateway/ConsensusRecommendationReceipt.sol).
+/// `abi.encodePacked` on `string` params is a plain byte concatenation, so this needs no RPC round trip.
+pub fn compute_receipt_id(session_id: &str, subject_id: &str) -> [u8; 32] {
+    const RECEIPT_ID_DOMAIN: &str = "robotmoney:consensus-receipt-id:v1\n";
+    let mut buf =
+        Vec::with_capacity(RECEIPT_ID_DOMAIN.len() + session_id.len() + 1 + subject_id.len());
+    buf.extend_from_slice(RECEIPT_ID_DOMAIN.as_bytes());
+    buf.extend_from_slice(session_id.as_bytes());
+    buf.push(b'\n');
+    buf.extend_from_slice(subject_id.as_bytes());
+    keccak256(&buf).0
+}
+
+/// One seeded fixture receipt: its served bytes, the receipt id derived from the payload's own
+/// `session_id`/`subject_id`, and the public `payload_uri` it is recorded under.
+#[derive(Debug, Clone)]
+pub struct FixtureReceipt {
+    pub bytes: Vec<u8>,
+    pub receipt_id: [u8; 32],
+    pub payload_uri: String,
+}
+
+/// Read a fixture payload from [`RECEIPT_FIXTURES_DIR_REL`] and derive its receipt id from the payload itself, so
+/// the id and the served bytes can never drift apart.
+pub fn load_fixture_receipt(repo_root: &Path, file: &str) -> Result<FixtureReceipt, HarnessError> {
+    let path = repo_root.join(RECEIPT_FIXTURES_DIR_REL).join(file);
+    let bytes = std::fs::read(&path)
+        .map_err(|e| HarnessError::other(format!("read {}: {e}", path.display())))?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| HarnessError::other(format!("parse {}: {e}", path.display())))?;
+    let field = |k: &str| -> Result<String, HarnessError> {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| HarnessError::other(format!("{}: no string `{k}`", path.display())))
+    };
+    let receipt_id = compute_receipt_id(&field("session_id")?, &field("subject_id")?);
+    Ok(FixtureReceipt {
+        bytes,
+        receipt_id,
+        payload_uri: format!("http://receipt-fixtures:{RECEIPT_FIXTURES_PORT}/{file}"),
+    })
+}
+
 /// `COMPOSE_PROFILES` value for bringing the dapp stack up.
 fn dapp_compose_profiles_for_up() -> &'static str {
     if receipt_fixtures_enabled() {
@@ -1412,6 +1468,68 @@ impl Fixture {
         )
     }
 
+    /// Seed the two fixture consensus receipts the dapp e2e spec `consensus-receipts-seeded.spec.ts` asserts on
+    /// (issue #1294). Runs on `--full-stack` boots unless `--no-receipt-fixtures` is set (see [`DappStack::boot`]).
+    ///
+    /// - `receipt-a.json`: recorded with its OWN correct digest and released. Its weights equal the live router
+    ///   vector under the missing-vault = 0 bps rule (rmUSDC 10000, the other three buckets 0), so it renders
+    ///   "Verified", "Released" and "Applied".
+    /// - `receipt-b.json`: recorded with a deliberately WRONG digest and never released. Its weights differ from
+    ///   the live vector, so it renders "Unverified", "Recorded, not released" and "Not applied".
+    ///
+    /// Authorities are the mainnet ones (docs/architecture.md §4.9.2). No test-only admin grant exists:
+    /// - `committeeRegister` needs the gateway's ADMIN_ROLE, held by the timelock after handover: a Safe -> Timelock
+    ///   generic call ([`Self::timelock_call`]).
+    /// - `consensusRecordReceipt` needs AGENT_ROLE plus COMMITTEE_AGENT_ROLE: the harness agent key signs it.
+    /// - `releaseReceipt` needs the receipt contract's ADMIN_ROLE, held by the timelock: the publish-contracts govern
+    ///   row `release-receipt` (the same row `core-stack governance release` and the Fusion acceptance scripts run).
+    ///
+    /// Both payloads are served by the `receipt-fixtures` compose service at [`RECEIPT_FIXTURES_PORT`] under the
+    /// hostname `receipt-fixtures`: the indexer reaches it over the compose network, and the Playwright browser maps
+    /// the same hostname to 127.0.0.1 (`clients/dapp/playwright.config.ts`). The bytes only need to exist by the
+    /// indexer's first fetch, after the compose stack is up, so seeding before that service starts is safe.
+    pub fn seed_consensus_receipts(&self) -> Result<(), HarnessError> {
+        let a = load_fixture_receipt(&self.repo_root, "receipt-a.json")?;
+        let b = load_fixture_receipt(&self.repo_root, "receipt-b.json")?;
+        let agent_hex = format!("{:#x}", self.agent());
+        self.timelock_call(
+            "gateway-committee-register",
+            self.gateway(),
+            "committeeRegister(address,string)",
+            &[&agent_hex, RECEIPT_AGENT_ID],
+        )?;
+
+        let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
+        let id_a = format!("0x{}", hex::encode(a.receipt_id));
+        let digest_a = format!("0x{}", hex::encode(keccak256(&a.bytes).0));
+        self.cast_send(
+            &agent_pk_hex,
+            self.gateway(),
+            "consensusRecordReceipt(bytes32,bytes32,string)",
+            &[&id_a, &digest_a, &a.payload_uri],
+        )?;
+        let id_b = format!("0x{}", hex::encode(b.receipt_id));
+        let digest_b = format!(
+            "0x{}",
+            hex::encode(keccak256(RECEIPT_B_WRONG_DIGEST_PREIMAGE).0)
+        );
+        self.cast_send(
+            &agent_pk_hex,
+            self.gateway(),
+            "consensusRecordReceipt(bytes32,bytes32,string)",
+            &[&id_b, &digest_b, &b.payload_uri],
+        )?;
+
+        // Release receipt A only: a signalling-only act (no funds move, no router weight changes). Receipt B stays
+        // recorded, not released.
+        self.govern("release-receipt", &["--receipt-id", &id_a])?;
+        logging::info(
+            "smoke-test",
+            format!("seeded consensus receipts: a={id_a} (released) b={id_b} (recorded only)"),
+        );
+        Ok(())
+    }
+
     /// Grant `amount` USDC base units (6 decimals) to `recipient` on the real Base USDC token.
     ///
     /// This is the Twin chain environment step "fund USDC": it writes the real FiatToken
@@ -2523,6 +2641,17 @@ impl DappStack {
         // without first booting the chain fixture.
         ensure_run_identity();
 
+        // The fixture receipts and the `receipt-fixtures` service that serves them are one switch
+        // (`--no-receipt-fixtures` turns both off), so they are decided here, together.
+        if receipt_fixtures_enabled() {
+            fixture.seed_consensus_receipts().inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("consensus receipt fixture seeding failed: {err}"),
+                );
+            })?;
+        }
+
         let compose_dir = fixture.repo_root().join("testing/ethereum-testnet/config");
 
         // Proactively purge any stale dapp compose state (containers, networks,
@@ -3148,6 +3277,61 @@ fn wait_for_http_ok_with_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const RECEIPT_A_ID_VECTOR: &str =
+        "0x379e538a5b294305dbd33d7781ef89aafee97b59e2a0ede478cd87c1895fc17a";
+
+    /// `compute_receipt_id` must equal `ConsensusRecommendationReceipt.computeReceiptId`. The vector is
+    /// `cast keccak` of the packed preimage `"robotmoney:consensus-receipt-id:v1\n" + session + "\n" + subject`.
+    #[test]
+    fn compute_receipt_id_matches_the_contract_preimage() {
+        let id = compute_receipt_id(
+            "12940000-0000-4000-8000-00000000000a",
+            "treasury-allocation",
+        );
+        assert_eq!(format!("0x{}", hex::encode(id)), RECEIPT_A_ID_VECTOR);
+    }
+
+    /// The seeded fixtures load, derive distinct ids from their own payload fields, and are served under the
+    /// `receipt-fixtures` hostname. receipt-a matches the live router vector under the missing-vault = 0 bps rule
+    /// (rmUSDC 10000, the other three buckets 0), and receipt-b differs from it.
+    #[test]
+    fn fixture_receipts_load_and_carry_the_expected_weights() {
+        let root = locate_repo_root().expect("repo root");
+        let a = load_fixture_receipt(&root, "receipt-a.json").expect("receipt-a");
+        let b = load_fixture_receipt(&root, "receipt-b.json").expect("receipt-b");
+        assert_ne!(a.receipt_id, b.receipt_id);
+        assert_eq!(
+            a.payload_uri,
+            format!("http://receipt-fixtures:{RECEIPT_FIXTURES_PORT}/receipt-a.json")
+        );
+        let weights = |bytes: &[u8]| -> Vec<(String, u64)> {
+            let v: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            v["weights"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|w| {
+                    (
+                        w["bucket"].as_str().unwrap().to_string(),
+                        w["weight_bps"].as_u64().unwrap(),
+                    )
+                })
+                .collect()
+        };
+        let live = vec![
+            ("agent_tokens".to_string(), 0),
+            ("conservative_defi_yield".to_string(), 10_000),
+            ("protocol_tokens".to_string(), 0),
+            ("real_world_assets".to_string(), 0),
+        ];
+        assert_eq!(weights(&a.bytes), live);
+        assert_ne!(weights(&b.bytes), live);
+        assert_ne!(
+            keccak256(&b.bytes).0,
+            keccak256(RECEIPT_B_WRONG_DIGEST_PREIMAGE).0
+        );
+    }
 
     fn exited_status(service: &str, exit_code: i64) -> ComposeContainerStatus {
         ComposeContainerStatus {

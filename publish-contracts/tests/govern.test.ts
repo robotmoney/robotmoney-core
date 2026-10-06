@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { decodeFunctionData } from "viem";
 import { PublishError } from "../src/errors.ts";
-import { GATEWAY_ABI, GOV_ABI, GOVERN_ROWS, REGISTRY_ABI, ROUTER_ABI, VAULT_ABI, buildStepCalls, governSalt, loadGovernAddrs, migrationVector, resolveGovernRow, runGovern, type GovernRowName } from "../src/govern.ts";
+import { GATEWAY_ABI, GOV_ABI, GOVERN_ROWS, RECEIPT_ABI, RECEIPT_ROW, REGISTRY_ABI, ROUTER_ABI, VAULT_ABI, buildReleaseCall, buildStepCalls, governSalt, loadGovernAddrs, migrationVector, releaseRecordKey, resolveGovernRow, runGovern, type GovernRowName } from "../src/govern.ts";
 import { newManifest } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
@@ -432,5 +432,102 @@ describe("generic Safe -> Timelock call (Twin-only test verb, not a govern row)"
     const tl = fakeTimelock(sheet, DELAY);
     await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { call, row: "agents" }))).rejects.toThrow("mutually exclusive");
     await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { call: { ...call, label: "agents" } }))).rejects.toThrow("not a govern row name");
+  });
+});
+
+describe("release-receipt: the on-demand row, one Safe -> Timelock round per receipt", () => {
+  const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
+  const OTHER = `0x${"cd".repeat(32)}` as `0x${string}`;
+  const rel = (receiptId: string, extra: object = {}) => ({ row: RECEIPT_ROW, receiptId, ...extra });
+
+  test("calldata: one releaseReceipt(receiptId) on the deployed receipt contract", () => {
+    const c = buildReleaseCall(A.receipt, RID);
+    expect(c.target).toBe(A.receipt);
+    const d = decodeFunctionData({ abi: RECEIPT_ABI, data: c.data });
+    expect(d.functionName).toBe("releaseReceipt");
+    expect(d.args).toEqual([RID]);
+  });
+
+  test("one schedule and one execute through the timelock, lines carry row release-receipt, the receipt reads released, the matrix is untouched", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    tl.s.recorded.add(RID);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const out: string[] = [];
+    const res = await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, rel(RID, { warp: warpTo(tl), emit: (l: string) => out.push(l) })));
+    expect(res.rows).toEqual([releaseRecordKey(RID)]);
+    expect(tl.s.events).toEqual(["schedule:release-receipt", "execute:release-receipt"]);
+    const s = tl.s.scheduled.get("release-receipt")!;
+    expect(s.form).toBe("single");
+    expect(s.calls).toEqual([{ target: A.receipt, data: buildReleaseCall(A.receipt, RID).data }]);
+    const lines = out.map((l) => JSON.parse(l));
+    expect(lines.map((l) => l.phase)).toEqual(["scheduled", "executed"]);
+    expect(lines.every((l) => l.row === "release-receipt" && l.status === 1 && /^0x[0-9a-f]{64}$/.test(l.txHash))).toBe(true);
+    expect(tl.s.released.has(RID)).toBe(true);
+    // the record key is per receipt, the salt is that key's, and the ordered matrix neither ran nor completed
+    const rec = (manifest.govern as Record<string, { executed?: { operation_id?: string } }>)[releaseRecordKey(RID)]!;
+    expect(rec.executed?.operation_id).toBeDefined();
+    expect(Object.keys(manifest.govern!)).toEqual([releaseRecordKey(RID)]);
+    expect(manifest.stages.govern).toBeUndefined();
+    expect(GOVERN_ROWS as readonly string[]).not.toContain(RECEIPT_ROW);
+    expect(governSalt(SHA, 918453, releaseRecordKey(RID))).not.toBe(governSalt(SHA, 918453, releaseRecordKey(OTHER)));
+  });
+
+  test("a rerun for the same receipt sends nothing and reprints its lines; a second receipt is its own round", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    tl.s.recorded.add(RID); tl.s.recorded.add(OTHER);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, rel(RID, { warp: warpTo(tl) })));
+    const out: string[] = [];
+    await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, rel(RID, { warp: warpTo(tl), emit: (l: string) => out.push(l) })));
+    expect(tl.s.events.length).toBe(2);
+    expect(out.map((l) => JSON.parse(l).phase)).toEqual(["scheduled", "executed"]);
+    await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, rel(OTHER, { warp: warpTo(tl) })));
+    expect(tl.s.events.length).toBe(4);
+    expect(tl.s.released.has(OTHER)).toBe(true);
+  });
+
+  test("a record under the receipt's key for a different operation is refused, not adopted", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    tl.s.recorded.add(RID);
+    const manifest = newManifest(ctx, addr(0xa001));
+    manifest.govern = { [releaseRecordKey(RID)]: { scheduled: { at: "x", operation_id: `0x${"99".repeat(32)}` } } };
+    await expect(runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, rel(RID, { warp: warpTo(tl) })))).rejects.toThrow("already used for a different call");
+    expect(tl.s.events.length).toBe(0);
+  });
+
+  test("an unrecorded or already released receipt is refused before the Safe schedules anything", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, rel(RID)))).rejects.toThrow("is not recorded");
+    tl.s.recorded.add(RID); tl.s.released.add(RID);
+    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, rel(RID)))).rejects.toThrow("already released");
+    expect(tl.s.events.length).toBe(0);
+  });
+
+  test("on 8453 it is allowed (a real admin action), schedules, and exits GOVERN_PENDING with a resume command that names the receipt", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    tl.s.recorded.add(RID);
+    let err: unknown;
+    try { await runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, rel(RID, { warp: async () => { throw new Error("no warp on 8453"); } }))); } catch (e) { err = e; }
+    const e = err as PublishError;
+    expect(e.kind).toBe("GOVERN_PENDING");
+    expect(String(e.details.next_command)).toContain(`--row release-receipt --receipt-id ${RID}`);
+    expect(tl.s.events).toEqual(["schedule:release-receipt"]);
+  });
+
+  test("usage: --receipt-id needs --row release-receipt, the row needs a bytes32 id, and it is not a generic call label or a matrix row", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const m = () => newManifest(ctx, addr(0xa001));
+    await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, { row: "agents", receiptId: RID }))).rejects.toThrow("--row release-receipt only");
+    await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, { row: RECEIPT_ROW }))).rejects.toThrow("needs --receipt-id");
+    await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, rel("0x1234")))).rejects.toThrow("bytes32");
+    await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, { call: { label: RECEIPT_ROW, target: A.gateway, data: "0x12" } }))).rejects.toThrow("not a govern row name");
+    expect(() => resolveGovernRow(RECEIPT_ROW)).toThrow("needs --receipt-id");
+    expect(tl.s.events.length).toBe(0);
   });
 });

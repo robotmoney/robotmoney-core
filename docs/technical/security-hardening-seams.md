@@ -115,7 +115,9 @@ PortfolioRouter.usdc()` when the router sets weights or deposits.
 weighted vault whose registry eligibility is not `Eligible`. `previewDeposit`
 should mark non-eligible legs unavailable with a machine-readable reason, but
 live deposits should revert all-or-nothing as required by `docs/architecture.md`
-§4.2.
+§4.2. (Superseded by the shipped router: `_depositTo` skips a non-depositable
+leg and renormalises its share across the remaining legs, RTR-5. See
+`docs/architecture.md` §4.2.1.)
 
 #427 should mark `BasketVault`, `ProtocolAssetVault`, and `AgentTokenVault`
 production deployments as `PrototypeOnly` until TWAP/liquidity hardening is

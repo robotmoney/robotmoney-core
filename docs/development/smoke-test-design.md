@@ -297,7 +297,24 @@ Two mechanisms keep that from recurring.
 
 | Spec | Subject | May skip? |
 | --- | --- | --- |
+| `consensus-receipts-seeded.spec.ts` | the two receipts the `--full-stack` harness seeds (`Fixture::seed_consensus_receipts`, run by `DappStack::boot` unless `--no-receipt-fixtures`); it is in `REQUIRED_SPECS` | No |
 | `consensus-receipts.spec.ts` | the receipt a Fusion QA run really anchored, named by `FUSION_RECEIPT_ID` / `FUSION_RECEIPT_URL` | Yes |
+
+The seeding uses the mainnet authorities, with no test-only admin grant and no
+mock Safe. `committeeRegister(agent, "smoke-test-receipt-agent")` needs the
+gateway's `ADMIN_ROLE`, held by the timelock after handover, so it is a Safe ->
+Timelock call (`Fixture::timelock_call`). The harness agent key (`AGENT_ROLE`
+plus the `COMMITTEE_AGENT_ROLE` that registration grants) records `receipt-a`
+with the keccak256 of its served bytes and `receipt-b` with a deliberately
+wrong digest. `receipt-a` is then released through the publish-contracts govern
+row `release-receipt` (the real Safe -> Timelock round). `receipt-b` stays
+recorded, not released. Each receipt id is derived from the payload's own
+`session_id` and `subject_id`. Both payloads in
+`testing/ethereum-testnet/config/consensus-receipt-fixtures/` validate against
+`tests/fixtures/consensus-receipt.schema.json`. `receipt-a`'s weights equal the
+live Twin router vector under the missing-vault = 0 bps rule (rmUSDC 10000,
+the other three buckets 0), so it renders Applied; `receipt-b`'s weights differ,
+so it renders Not applied.
 
 The seeded pair is core's own fixture bytes — enough to prove the four rendered
 state dimensions and the required explanatory language are wired, never enough to

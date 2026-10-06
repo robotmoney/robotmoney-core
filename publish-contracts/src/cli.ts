@@ -22,7 +22,7 @@ import { callerInputs, parseSheet } from "./sheet.ts";
 import { loadCorrelatedOwners } from "./correlated-owners.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
-import { resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
+import { RECEIPT_ROW, assertReceiptId, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
 import { startAnvil, type ChainStarter } from "./preflight.ts";
 import { USDC_ADDRESS, assertUsdcCode } from "./usdc.ts";
@@ -50,6 +50,9 @@ export const USAGE = `publish contracts
                      Rows: voting-power-quorum, agents, other-setters, migrate-eligibility-PROTO, migrate-eligibility-AGENT, migrate-eligibility-RWA,
                      router-weights, unpause-PROTO, unpause-AGENT, unpause-RWA, update-delay, batch, cancel. Without it, every row in order.
                      On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) with the ready time and the command to run again with the same --row.
+                     On demand, outside the ordered rows: --row release-receipt --receipt-id 0x<bytes32> releases one recorded consensus receipt
+                     (ConsensusRecommendationReceipt.releaseReceipt) as its own Safe -> Timelock round, on 918453 and 8453 alike.
+  --receipt-id ID    govern with --row release-receipt only: the bytes32 receipt id to release.
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
   --resume           continue a run: adopt the existing Safe, skip finished stages
@@ -97,6 +100,8 @@ export interface CliDeps {
 export interface Parsed {
   chain: number; rpc: string; sheet: string; signer?: string; environment: string; coreSha: string; stage?: string; resume: boolean; dryRun: boolean;
   verb?: Verb; row?: string; coreDir?: string; correlatedOwnersFile?: string; evidence?: string; countsDir?: string; measure: boolean; ownerSigners: string[]; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
+  /** With --row release-receipt only: the receipt to release. */
+  receiptId?: string;
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -109,7 +114,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, "correlated-owners-file": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -129,7 +134,14 @@ export function parseCli(argv: string[]): Parsed {
   if (row !== undefined) {
     const stageNames = verb === undefined ? stage : undefined;
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
-    resolveGovernRow(row); // an unknown row fails here, before any work
+    if (row !== RECEIPT_ROW) resolveGovernRow(row); // an unknown row fails here, before any work
+  }
+  const receiptIdRaw = v["receipt-id"] as string | undefined;
+  let receiptId: string | undefined;
+  if (row === RECEIPT_ROW && receiptIdRaw === undefined) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} needs --receipt-id 0x<bytes32>\n${USAGE}`);
+  if (receiptIdRaw !== undefined) {
+    if (row !== RECEIPT_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only\n${USAGE}`);
+    receiptId = assertReceiptId(receiptIdRaw);
   }
   let call: Parsed["call"];
   if (v["call-label"] !== undefined || v["call-target"] !== undefined || v["call-data"] !== undefined) {
@@ -147,7 +159,7 @@ export function parseCli(argv: string[]): Parsed {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, correlatedOwnersFile: v["correlated-owners-file"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call,
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId,
   };
 }
 
@@ -266,7 +278,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         // no --owner-signer on the Twin chain: the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts)
         const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
         const owners = await Promise.all(specs.map((s) => mk(s)));
-        await runGovern(c, row, m, { ownerSigners: owners, sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+        await runGovern(c, row, m, { ownerSigners: owners, sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
       },
     });
     await finalNonceCheck(ctx, result.manifest, result.ran);

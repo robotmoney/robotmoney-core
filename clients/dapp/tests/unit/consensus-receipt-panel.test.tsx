@@ -117,6 +117,40 @@ describe("computeAppliedState", () => {
     expect(computeAppliedState(PAYLOAD, drifted, VAULTS)).toBe("not_applied");
   });
 
+  // Owner decision (2026-10-06): a vault missing from the live router weight
+  // vector receives 0 bps. The live Twin/devnet vector is rmUSDC 10000 only,
+  // because the router refuses to list a non-eligible vault even at 0 bps.
+  const LIVE_USDC_ONLY = [{ vault: VAULTS.rmUSDC, bps: 10000 }];
+  const USDC_ONLY_PAYLOAD: ReceiptPayload = {
+    ...PAYLOAD,
+    weights: [
+      { bucket: "agent_tokens", weight_bps: 0 },
+      { bucket: "conservative_defi_yield", weight_bps: 10000 },
+      { bucket: "protocol_tokens", weight_bps: 0 },
+      { bucket: "real_world_assets", weight_bps: 0 },
+    ],
+  };
+
+  it("treats a vault missing from the live vector as 0 bps: 0 in the receipt is applied", () => {
+    expect(computeAppliedState(USDC_ONLY_PAYLOAD, LIVE_USDC_ONLY, VAULTS)).toBe("applied");
+  });
+
+  it("treats a vault missing from the live vector as 0 bps: non-zero in the receipt is not_applied", () => {
+    // The live-vector-shaped payload: rmUSDC matches, but the receipt asks for
+    // weight on vaults the router does not list at all.
+    expect(computeAppliedState(PAYLOAD, LIVE_USDC_ONLY, VAULTS)).toBe("not_applied");
+    const oneMissingNonZero: ReceiptPayload = {
+      ...USDC_ONLY_PAYLOAD,
+      weights: [
+        { bucket: "agent_tokens", weight_bps: 0 },
+        { bucket: "conservative_defi_yield", weight_bps: 9000 },
+        { bucket: "protocol_tokens", weight_bps: 0 },
+        { bucket: "real_world_assets", weight_bps: 1000 },
+      ],
+    };
+    expect(computeAppliedState(oneMissingNonZero, LIVE_USDC_ONLY, VAULTS)).toBe("not_applied");
+  });
+
   it("reports unknown rather than not_applied when it cannot tell", () => {
     // No payload at all.
     expect(computeAppliedState(null, MATCHING_ROUTER_WEIGHTS, VAULTS)).toBe("unknown");
@@ -128,10 +162,20 @@ describe("computeAppliedState", () => {
     expect(computeAppliedState(PAYLOAD, null, VAULTS)).toBe("unknown");
     // Deployment vault map unavailable — never substitute a zero address.
     expect(computeAppliedState(PAYLOAD, MATCHING_ROUTER_WEIGHTS, null)).toBe("unknown");
-    // A vault symbol missing from the deployment map.
+    // Router weights present but empty — no live vector to compare against.
+    expect(computeAppliedState(PAYLOAD, [], VAULTS)).toBe("unknown");
+    // A vault symbol missing from the deployment map (address unresolvable).
     expect(computeAppliedState(PAYLOAD, MATCHING_ROUTER_WEIGHTS, { rmAGENT: VAULTS.rmAGENT })).toBe(
       "unknown",
     );
+    // A bucket this schema does not know.
+    expect(
+      computeAppliedState(
+        { ...PAYLOAD, weights: [...(PAYLOAD.weights ?? []), { bucket: "mystery", weight_bps: 0 }] },
+        MATCHING_ROUTER_WEIGHTS,
+        VAULTS,
+      ),
+    ).toBe("unknown");
   });
 });
 

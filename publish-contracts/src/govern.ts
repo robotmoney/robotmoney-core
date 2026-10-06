@@ -9,6 +9,10 @@
 //   5 router-weights             router.setDefaultWeights
 //   6 unpause-<B>                unpause of one basket vault
 //   7 update-delay, batch, cancel   updateDelay; one scheduleBatch round that proves batch scheduling; a schedule then a cancel
+// On demand, outside the ordered matrix (it never blocks or completes the govern stage):
+//   release-receipt              ConsensusRecommendationReceipt.releaseReceipt(receiptId), one round per receipt id (--receipt-id)
+// The receipt contract's ADMIN_ROLE is held by the TimelockController after the timelock stage (INV-3), so the release is the same Safe ->
+// Timelock round as every other row, on the Twin chain and on 8453 alike. Its run-manifest key and salt are `release-receipt-<receiptId>`.
 // A step the sheet does not ask for (no agents, a basket that is not eligible, a vault that stays paused) is recorded as skipped.
 // Whether a vault is unpaused, and which baskets become eligible, is sheet data (GOVERN_UNPAUSE_VAULTS, GOVERN_ELIGIBLE_VAULTS).
 // This module decides nothing about pause semantics.
@@ -60,6 +64,11 @@ export const ROUTER_ABI = parseAbi([
   "function setDefaultWeights(address[] vaults, uint256[] bps)",
   "function defaultWeightsLength() view returns (uint256)",
 ]);
+export const RECEIPT_ABI = parseAbi([
+  "function releaseReceipt(bytes32 receiptId)",
+  "function isRecorded(bytes32 receiptId) view returns (bool)",
+  "function isReleased(bytes32 receiptId) view returns (bool)",
+]);
 const TL_ABI = parseAbi(["function updateDelay(uint256 newDelay)"]);
 
 export interface GovernAddrs {
@@ -90,8 +99,33 @@ export const GOVERN_ROWS = [
 export type GovernRowName = (typeof GOVERN_ROWS)[number];
 export const governRowNames = (): readonly string[] => GOVERN_ROWS;
 
+/**
+ * The on-demand row: release one consensus receipt. Not in GOVERN_ROWS (the ordered matrix): it needs a receipt id, runs any number of times
+ * (once per receipt), and neither waits for nor completes the matrix. It is still one round through the real Safe and the real timelock.
+ */
+export const RECEIPT_ROW = "release-receipt";
+const RECEIPT_ID = /^0x[0-9a-fA-F]{64}$/;
+
+/** `--receipt-id` value check: a 0x-prefixed bytes32. */
+export function assertReceiptId(id: string): Hex {
+  if (!RECEIPT_ID.test(id)) throw new PublishError("USAGE", `--receipt-id must be a 0x-prefixed bytes32 (64 hex), got '${id}'`);
+  return id.toLowerCase() as Hex;
+}
+
+/** The run-manifest key, salt input and description prefix of one receipt's release round. One receipt id is one operation. */
+export const releaseRecordKey = (receiptId: Hex): string => `${RECEIPT_ROW}-${receiptId.toLowerCase()}`;
+
+/** The one call of a release round: releaseReceipt(receiptId) on the deployed ConsensusRecommendationReceipt. */
+export function buildReleaseCall(receipt: Address, receiptId: Hex): LabelledCall {
+  return { label: `receipt.releaseReceipt(${receiptId})`, target: receipt, data: encodeFunctionData({ abi: RECEIPT_ABI, functionName: "releaseReceipt", args: [receiptId] }) };
+}
+
+/** The deployed ConsensusRecommendationReceipt, from the ic-policy stage manifest (field consensus_receipt). */
+export const loadReceiptAddr = (ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): Address => readManifestField(ctx, manifestRef("ic-policy", "consensus_receipt")) as Address;
+
 /** `--row` value to a row name: a 1-based number or a name. Anything else is a usage error. */
 export function resolveGovernRow(row: string): GovernRowName {
+  if (row === RECEIPT_ROW) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} is the on-demand receipt release: it needs --receipt-id 0x<bytes32>`);
   if (/^[0-9]+$/.test(row)) {
     const n = Number(row);
     const name = GOVERN_ROWS[n - 1];
@@ -99,7 +133,7 @@ export function resolveGovernRow(row: string): GovernRowName {
     return name;
   }
   if ((GOVERN_ROWS as readonly string[]).includes(row)) return row as GovernRowName;
-  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length})`);
+  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${RECEIPT_ROW} --receipt-id 0x<bytes32>)`);
 }
 
 /** The baskets the sheet makes eligible, in migration order (PROTO, AGENT, RWA). The default-weight vector grows in this order. */
@@ -211,8 +245,10 @@ export interface GovernOpts {
    * `false` turns the warp off (tests with a stub chain).
    */
   warp?: ((seconds: bigint) => Promise<void>) | false;
-  /** Run one row (one round) only, by number or name. Earlier rows must be done first. */
+  /** Run one row (one round) only, by number or name. Earlier rows must be done first. `release-receipt` (with `receiptId`) is on demand. */
   row?: string;
+  /** With row `release-receipt` only: the bytes32 receipt id to release. */
+  receiptId?: string;
   /** Where a row line goes. Default: stdout (console.log). */
   emit?: (line: string) => void;
   /**
@@ -267,6 +303,7 @@ const detected = new WeakMap<object, boolean>();
 
 /** The exact command that resumes a pending round. Arguments that carry no secret are spelled out, the rest are the same as this run's. */
 export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row: string): string {
+  if (row.startsWith(`${RECEIPT_ROW}-`)) row = `${RECEIPT_ROW} --receipt-id ${row.slice(RECEIPT_ROW.length + 1)}`;
   return `bun publish-contracts/src/cli.ts govern --row ${row} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same --rpc, --sheet, --signer, --environment and --owner-signer arguments as this run)`;
 }
 
@@ -365,7 +402,10 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const state = (manifest.govern ??= {}) as GovernState;
   if (o.call && ctx.chainId === BASE_CHAIN_ID) throw new PublishError("USAGE", "a generic timelock call is a Twin-chain test verb: it is refused on chain 8453");
   if (o.call && o.row !== undefined) throw new PublishError("USAGE", "a generic timelock call and --row are mutually exclusive");
-  const selected: GovernRowName | undefined = o.row === undefined ? undefined : resolveGovernRow(o.row);
+  if (o.receiptId !== undefined && o.row !== RECEIPT_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only`);
+  if (o.call && o.receiptId !== undefined) throw new PublishError("USAGE", "a generic timelock call and --receipt-id are mutually exclusive");
+  const releasing = o.row === RECEIPT_ROW;
+  const selected: GovernRowName | undefined = o.row === undefined || releasing ? undefined : resolveGovernRow(o.row);
   const salt = (name: string) => governSalt(ctx.coreSha, ctx.chainId, name);
   const note = (b: SafeTxBundle) => ({ tx_hash: b.executed?.tx_hash, safe_tx_hash: b.safe_tx_hash, status: b.executed?.status });
   const save = () => saveRunManifest(ctx.evidenceDir, manifest);
@@ -431,13 +471,14 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     return orderedPlan(calls, name, () => readBackStep(handle, sheet, a, name), `${calls.length} call(s)`);
   }
 
-  async function round(name: string, p: RoundPlan): Promise<void> {
+  /** `emitAs` is the `row` of the printed lines (default: the record key). The release round prints `release-receipt` for every receipt. */
+  async function round(name: string, p: RoundPlan, emitAs: string = name): Promise<void> {
     opIds[name] = p.id;
     const rec: RowRecord = state[name] ?? {};
     // phase 1: schedule (or, for a row whose operation is already on the timelock, adopt it)
     if (rec.scheduled) {
       ctx.log.log("info", "govern.phase_skipped", { row: name, phase: "scheduled" });
-      emitPhase(o, name, "scheduled", rec.scheduled);
+      emitPhase(o, emitAs, "scheduled", rec.scheduled);
     } else {
       const st = await api.operationState(handle, a.timelock, p.id);
       let sched: PhaseRecord;
@@ -451,11 +492,11 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       state[name] = rec;
       save();
       ctx.log.log("info", "govern.phase_done", { row: name, phase: "scheduled" });
-      emitPhase(o, name, "scheduled", sched);
+      emitPhase(o, emitAs, "scheduled", sched);
     }
     // phase 2: cancel (cancel row), or wait for the real delay and execute
     if (p.cancel) {
-      if (rec.cancelled) { emitPhase(o, name, "cancelled", rec.cancelled); return; }
+      if (rec.cancelled) { emitPhase(o, emitAs, "cancelled", rec.cancelled); return; }
       let cancelled: PhaseRecord;
       if (!(await api.operationState(handle, a.timelock, p.id)).exists) cancelled = { at: new Date().toISOString(), operation_id: p.id, ready_at: rec.scheduled.ready_at, note: "already cancelled by an earlier run" };
       else cancelled = { at: new Date().toISOString(), operation_id: p.id, ready_at: rec.scheduled.ready_at, ...note(await signAndExecute(ctx, o, api, handle, await p.cancel())) };
@@ -463,10 +504,10 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       if (bad.length) throw new PublishError("GOVERN", `govern row ${name} read-back failed: ${bad.join(", ")}`, { bad });
       rec.cancelled = cancelled;
       save();
-      emitPhase(o, name, "cancelled", rec.cancelled);
+      emitPhase(o, emitAs, "cancelled", rec.cancelled);
       return;
     }
-    if (rec.executed) { emitPhase(o, name, "executed", rec.executed); return; }
+    if (rec.executed) { emitPhase(o, emitAs, "executed", rec.executed); return; }
     await waitReady(ctx, o, api, handle, a.timelock, p.id, name);
     let ex: PhaseRecord;
     if ((await api.operationState(handle, a.timelock, p.id)).done) {
@@ -484,12 +525,47 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     rec.executed = ex;
     save();
     ctx.log.log("info", "govern.phase_done", { row: name, phase: "executed" });
-    emitPhase(o, name, "executed", ex);
+    emitPhase(o, emitAs, "executed", ex);
+  }
+
+  if (releasing) {
+    if (o.receiptId === undefined) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} needs --receipt-id 0x<bytes32>`);
+    const receiptId = assertReceiptId(o.receiptId);
+    const receipt = loadReceiptAddr(ctx);
+    const name = releaseRecordKey(receiptId);
+    const c = buildReleaseCall(receipt, receiptId);
+    const p = { timelock: a.timelock, calls: [{ target: c.target, data: c.data }], salt: salt(name), form: "single" as const };
+    const id = await api.operationId(handle, p);
+    // The receipt id is the salt input, so one receipt is one operation. A record under this key for a different operation (another receipt
+    // contract, say) would adopt the wrong round: refuse it, as the generic call refuses a reused label with different calldata.
+    const prior = state[name]?.scheduled?.operation_id;
+    if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: RECEIPT_ROW, receipt_id: receiptId, prior, id });
+    const rd = reader(handle);
+    const readBack = async () => ((await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId])) ? [] : [`receipt.isReleased(${receiptId}) is false`]);
+    if (!rowComplete(state[name])) {
+      if (state[name]?.scheduled === undefined && !(await api.operationState(handle, a.timelock, id)).exists) {
+        // Nothing of this round exists yet. Refuse a round whose execute can only revert, before the Safe schedules it and the delay is spent.
+        if (!(await rd<boolean>(receipt, RECEIPT_ABI, "isRecorded", [receiptId]))) throw new PublishError("GOVERN", `receipt ${receiptId} is not recorded on ${receipt}: nothing to release`, { receipt_id: receiptId });
+        if (await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId])) throw new PublishError("GOVERN", `receipt ${receiptId} is already released on ${receipt}, not by this row's operation: nothing to schedule`, { receipt_id: receiptId });
+      }
+      await round(name, {
+        id, description: `release receipt ${receiptId}`, readBack,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${RECEIPT_ROW}: ${c.label}` }),
+        execute: () => api.executeOnTimelock(handle, { ...p, description: `${RECEIPT_ROW} execute` }),
+      }, RECEIPT_ROW);
+    } else {
+      const r = state[name]!;
+      if (r.scheduled) emitPhase(o, RECEIPT_ROW, "scheduled", r.scheduled);
+      if (r.executed) emitPhase(o, RECEIPT_ROW, "executed", r.executed);
+    }
+    save();
+    ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: RECEIPT_ROW, receipt_id: receiptId });
+    return { rows: [name], skipped: [], opIds };
   }
 
   if (o.call) {
     const { label, target, data } = o.call;
-    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label)) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
+    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
     const name = `call-${label}`;
     const p = { timelock: a.timelock, calls: [{ target, data }], salt: salt(name), form: "single" as const };
     const id = await api.operationId(handle, p);
