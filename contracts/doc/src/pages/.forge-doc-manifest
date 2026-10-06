@@ -115,6 +115,7 @@ contracts/test/contract.DeployTimelockAgentHandoverTest.mdx
 contracts/test/contract.DeployTimelockAgentListInputTest.mdx
 contracts/test/contract.DeployTimelockChainFloorTest.mdx
 contracts/test/contract.DeployTimelockCommitteeTest.mdx
+contracts/test/contract.DeployTimelockDelayBoundaryTest.mdx
 contracts/test/contract.DeployTimelockDelayFloorTest.mdx
 contracts/test/contract.DeployTimelockExpectedChainTest.mdx
 contracts/test/contract.DeployTimelockFourVaultsTest.mdx

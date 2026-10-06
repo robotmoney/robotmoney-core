@@ -229,6 +229,7 @@ export const sidebar = [
             { text: "DeployTimelockAgentListInputTest", link: "/contracts/test/contract.DeployTimelockAgentListInputTest" },
             { text: "DeployTimelockChainFloorTest", link: "/contracts/test/contract.DeployTimelockChainFloorTest" },
             { text: "DeployTimelockCommitteeTest", link: "/contracts/test/contract.DeployTimelockCommitteeTest" },
+            { text: "DeployTimelockDelayBoundaryTest", link: "/contracts/test/contract.DeployTimelockDelayBoundaryTest" },
             { text: "DeployTimelockDelayFloorTest", link: "/contracts/test/contract.DeployTimelockDelayFloorTest" },
             { text: "DeployTimelockExpectedChainTest", link: "/contracts/test/contract.DeployTimelockExpectedChainTest" },
             { text: "DeployTimelockFourVaultsTest", link: "/contracts/test/contract.DeployTimelockFourVaultsTest" },

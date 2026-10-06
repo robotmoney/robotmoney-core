@@ -149,7 +149,8 @@ contract DeployGateway is ExpectedChainGuard {
         p.shareReceiver = _envAddressRequired(string.concat(prefix, "SHARE_RECEIVER_ADDRESS"));
         p.vault = _envAddressRequired(string.concat(prefix, "VAULT_ADDRESS"));
         p.router = _envAddressRequired(string.concat(prefix, "ROUTER_ADDRESS"));
-        p.validUntil = uint64(_envUintRequired(string.concat(prefix, "AGENT_VALID_UNTIL")));
+        // Reverts above the uint64 range instead of truncating (S1, as dev #1541 reads it).
+        p.validUntil = _envUint64Required(string.concat(prefix, "AGENT_VALID_UNTIL"));
         p.maxPerPayment = _envUintRequired(string.concat(prefix, "AGENT_MAX_PER_PAYMENT"));
         p.maxPerWindow = _envUintRequired(string.concat(prefix, "AGENT_MAX_PER_WINDOW"));
         p.maxWithdrawPerPayment =

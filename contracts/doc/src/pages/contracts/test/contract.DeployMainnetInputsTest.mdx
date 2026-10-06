@@ -325,6 +325,60 @@ function test_envUint64Required_revertsAboveRange() public;
 function test_malformedExitFee_reverts() public;
 ```
 
+<a id="test_malformedinputs_revert"></a>
+
+### test_malformedInputs_revert
+
+Every integer input reverts when malformed, never falls back (ported from dev #1541
+`test_malformedInputs_revert`, adapted to the split vault and gateway stages).
+
+```solidity
+function test_malformedInputs_revert() public;
+```
+
+<a id="test_agentvaliduntilaboveuint64_reverts"></a>
+
+### test_agentValidUntilAboveUint64_reverts
+
+AGENT_VALID_UNTIL above the uint64 range reverts instead of truncating to a
+different expiry (ported from dev #1541, which reads it with `_envUint64Required`).
+
+```solidity
+function test_agentValidUntilAboveUint64_reverts() public;
+```
+
+<a id="test_missinginputs_revertoneverychain"></a>
+
+### test_missingInputs_revertOnEveryChain
+
+Every required input reverts when unset, on anvil (31337) and on the Twin chain
+(918453) alike (ported from dev #1541 `test_missingInputs_revertOnEveryChain`).
+
+```solidity
+function test_missingInputs_revertOnEveryChain() public;
+```
+
+<a id="_readstage-string-string"></a>
+
+### _readStage
+
+<i>
+
+Reads the stage that owns `key`: the vault stage, the gateway stage or the seed.
+
+</i>
+
+```solidity
+function _readStage(string memory p, string memory key) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `string` |  |
+| key | `string` |  |
+
 <a id="test_seedsharereceiver_isread"></a>
 
 ### test_seedShareReceiver_isRead

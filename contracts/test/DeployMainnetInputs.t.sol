@@ -284,6 +284,89 @@ contract DeployMainnetInputsTest is Test {
         h.readParams(p);
     }
 
+    /// @notice Every integer input reverts when malformed, never falls back (ported from dev #1541
+    ///         `test_malformedInputs_revert`, adapted to the split vault and gateway stages).
+    function test_malformedInputs_revert() public {
+        string[9] memory names = [
+            "TVL_CAP",
+            "PER_DEPOSIT_CAP",
+            "EXIT_FEE_BPS",
+            "AGENT_VALID_UNTIL",
+            "AGENT_MAX_PER_PAYMENT",
+            "AGENT_MAX_PER_WINDOW",
+            "AGENT_MAX_WITHDRAW_PER_PAYMENT",
+            "AGENT_MAX_WITHDRAW_PER_WINDOW",
+            "SEED_DEPOSIT_USDC"
+        ];
+        for (uint256 i = 0; i < names.length; i++) {
+            string memory p = string.concat("RM_INPUTS_BADALL_", vm.toString(i), "_");
+            _base(p);
+            _set(p, names[i], "twelve");
+            vm.expectRevert(
+                bytes(string.concat(p, names[i], " is malformed: expected an unsigned integer"))
+            );
+            _readStage(p, names[i]);
+        }
+    }
+
+    /// @notice AGENT_VALID_UNTIL above the uint64 range reverts instead of truncating to a
+    ///         different expiry (ported from dev #1541, which reads it with `_envUint64Required`).
+    function test_agentValidUntilAboveUint64_reverts() public {
+        string memory p = "RM_INPUTS_AVU_BIG_";
+        _base(p);
+        _set(p, "AGENT_VALID_UNTIL", "18446744073709551616");
+        vm.expectRevert(bytes(string.concat(p, "AGENT_VALID_UNTIL exceeds uint64")));
+        g.readParams(p);
+    }
+
+    /// @notice Every required input reverts when unset, on anvil (31337) and on the Twin chain
+    ///         (918453) alike (ported from dev #1541 `test_missingInputs_revertOnEveryChain`).
+    function test_missingInputs_revertOnEveryChain() public {
+        string[16] memory names = [
+            "ADMIN_ADDRESS",
+            "FEE_RECIPIENT",
+            "TVL_CAP",
+            "PER_DEPOSIT_CAP",
+            "EXIT_FEE_BPS",
+            "PAUSER_ADDRESS",
+            "AGENT_ADDRESS",
+            "SHARE_RECEIVER_ADDRESS",
+            "VAULT_ADDRESS",
+            "ROUTER_ADDRESS",
+            "AGENT_VALID_UNTIL",
+            "AGENT_MAX_PER_PAYMENT",
+            "AGENT_MAX_PER_WINDOW",
+            "AGENT_MAX_WITHDRAW_PER_PAYMENT",
+            "AGENT_MAX_WITHDRAW_PER_WINDOW",
+            "SEED_DEPOSIT_USDC"
+        ];
+        uint256[2] memory chains = [uint256(31337), uint256(918453)];
+        for (uint256 c = 0; c < chains.length; c++) {
+            vm.chainId(chains[c]);
+            for (uint256 i = 0; i < names.length; i++) {
+                string memory p =
+                    string.concat("RM_INPUTS_REQ_", vm.toString(c), "_", vm.toString(i), "_");
+                _base(p);
+                // A prefix under which every input is set except names[i].
+                string memory q = string.concat(p, "MISSING_");
+                _copyAllExcept(p, q, names[i]);
+                if (keccak256(bytes(names[i])) != keccak256("EXIT_FEE_BPS")) {
+                    _set(q, "EXIT_FEE_BPS", "0");
+                }
+                vm.expectRevert(bytes(string.concat(q, names[i], " must be set")));
+                _readStage(q, names[i]);
+            }
+        }
+    }
+
+    /// @dev Reads the stage that owns `key`: the vault stage, the gateway stage or the seed.
+    function _readStage(string memory p, string memory key) internal {
+        bytes32 k = keccak256(bytes(key));
+        if (k == keccak256("SEED_DEPOSIT_USDC")) h.seed(p);
+        else if (_isVaultKey(key) || k == keccak256("EXIT_FEE_BPS")) h.readParams(p);
+        else g.readParams(p);
+    }
+
     // --- refusals ------------------------------------------------------------------------
 
     function test_seedShareReceiver_isRead() public {

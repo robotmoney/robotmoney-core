@@ -1938,6 +1938,25 @@ contract DeployTimelockDelayFloorTest is DeployTimelockRunEntrypointBase {
     }
 }
 
+/// @dev Ported from dev #1541: the floor is exact on the broadcast path, 172799 reverts and
+///      172800 passes through `run()` on chain id 8453.
+contract DeployTimelockDelayBoundaryTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_FLOOR_BOUNDARY_";
+    }
+
+    function test_run_floorBoundaryOnBase() public {
+        vm.chainId(8453);
+        _set("EXPECTED_CHAIN_ID", "8453");
+        _set("TIMELOCK_MIN_DELAY", "172799");
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        _set("TIMELOCK_MIN_DELAY", "172800");
+        DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        assertEq(d.timelock.getMinDelay(), 172_800, "floor delay not applied");
+    }
+}
+
 contract DeployTimelockTwinChainDelayTest is DeployTimelockRunEntrypointBase {
     function _prefix() internal pure override returns (string memory) {
         return "RM_REVIEW_R04_TWIN_";
