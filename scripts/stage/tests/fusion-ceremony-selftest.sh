@@ -720,6 +720,8 @@ proposer="$(lower "$("$REAL_CAST" keccak PROPOSER_ROLE)")"
 executor="$(lower "$("$REAL_CAST" keccak EXECUTOR_ROLE)")"
 root=0x0000000000000000000000000000000000000000000000000000000000000000
 safe="$(lower "$SAFE_ADDRESS")"
+# VAULT_ADDRESSES (issue #1487): the ceremony lists one vault here.
+VAULT_ADDRESS="${VAULT_ADDRESSES%%,*}"
 set_state "codehash:$tl" "$hash"
 set_state delay "$TIMELOCK_MIN_DELAY"
 set_state "role:$tl:$proposer:$safe" true

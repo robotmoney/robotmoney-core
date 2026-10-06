@@ -134,6 +134,16 @@ jobs:
         # either name still appears under contracts/ or scripts/.
         run: scripts/ci/check-removed-flags.sh
 
+      - name: Timelock hands over every vault (issue 1487)
+        # DeployTimelock links and hands over each vault in VAULT_ADDRESSES and is the
+        # only script that calls the set-once registry link. The shell check fails on
+        # any other caller (its self-test plants one first). The forge run fails when
+        # no test matches, so the four-vault cases cannot silently stop executing.
+        run: |
+          scripts/ci/check-set-registry-owner.sh --selftest
+          scripts/ci/check-set-registry-owner.sh
+          forge test -vvv --match-contract "DeployTimelockFourVaultTest"
+
       - name: Gateway agent-policy gas report (issue 1476)
         # Measurement, not a budget: prints the RobotMoneyGateway rows for
         # authorizeAgent, revealAuthorization, setPolicy and

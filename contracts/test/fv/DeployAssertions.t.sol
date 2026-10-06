@@ -28,6 +28,7 @@
 //     where the dynamic decimals() read would be asserted.
 pragma solidity ^0.8.24;
 
+import {_one} from "../helpers/VaultList.sol";
 import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -159,7 +160,7 @@ contract _FvDeployerHarness {
         uint256 minDelay_
     ) external returns (DeployTimelock.Deployed memory) {
         return script_.runInProcess(
-            vault_, gateway_, registry_, router_, governance_, safe_, emergency_, minDelay_
+            _one(vault_), gateway_, registry_, router_, governance_, safe_, emergency_, minDelay_
         );
     }
 }

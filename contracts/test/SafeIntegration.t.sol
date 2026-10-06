@@ -3,6 +3,7 @@
 // Implements: issue #422 — Safe multisig integration test suite
 pragma solidity ^0.8.24;
 
+import {_one} from "./helpers/VaultList.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -327,7 +328,7 @@ contract SafeIntegrationTest is Test {
         agents[0] = deployAgent;
         vm.prank(deployer);
         d = script.runInProcessWithAgents(
-            address(vault),
+            _one(address(vault)),
             address(gateway),
             address(registry),
             address(router),

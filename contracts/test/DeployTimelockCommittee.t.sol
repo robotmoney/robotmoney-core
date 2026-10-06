@@ -6,6 +6,7 @@
 //             the one-ceremony rule of issue #1247 AC10 to these two contracts).
 pragma solidity ^0.8.24;
 
+import {_one} from "./helpers/VaultList.sol";
 import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
@@ -132,7 +133,7 @@ contract DeployTimelockCommitteeTest is Test {
             receipts.grantRole(DEFAULT_ADMIN_ROLE, address(script));
         }
         d = script.runInProcessWithCommittee(
-            address(vault),
+            _one(address(vault)),
             address(gateway),
             address(registry),
             address(router),
@@ -231,7 +232,7 @@ contract DeployTimelockCommitteeTest is Test {
 
     function test_zeroCommitteeAddresses_skipsHandover_fiveCoreStillWorks() public {
         d = script.runInProcessWithCommittee(
-            address(vault),
+            _one(address(vault)),
             address(gateway),
             address(registry),
             address(router),
@@ -276,7 +277,7 @@ contract DeployTimelockCommitteeTest is Test {
             )
         );
         script.runInProcessWithCommittee(
-            address(vault),
+            _one(address(vault)),
             address(gateway),
             address(registry),
             address(router),

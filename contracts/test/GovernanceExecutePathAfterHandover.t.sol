@@ -8,6 +8,7 @@
 //             while the deployer EOA must not be able to call setWeights at all.
 pragma solidity ^0.8.24;
 
+import {_one} from "./helpers/VaultList.sol";
 import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
@@ -177,7 +178,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         // pass vacuously.)
         vm.prank(deployer);
         DeployTimelock.Deployed memory t = timelockScript.runInProcess(
-            address(vault),
+            _one(address(vault)),
             address(gateway),
             address(registry),
             address(router),
