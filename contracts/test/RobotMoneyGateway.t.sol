@@ -1491,6 +1491,43 @@ contract GatewayRollingDepositWindowTest is Test {
     }
 
     // -------------------------------------------------------------------
+    // Early-chain clock: block.timestamp <= WINDOW_SECONDS (issue #1531).
+    //
+    // `_pruneWindow` and `_effectiveWindowTotal` compute the cutoff as
+    // `block.timestamp > WINDOW_SECONDS ? block.timestamp - WINDOW_SECONDS : 0`.
+    // Every other test runs at a ~1.7e9 timestamp, so the `: 0` arm was never
+    // taken and forge-coverage-gate went red. Here the clock is below one
+    // window, so the cutoff clamps to 0 and nothing can have expired yet.
+    // -------------------------------------------------------------------
+
+    function test_rollingWindow_cutoffClampsToZeroBeforeFirstWindowElapses() public {
+        vm.warp(1_000); // well below WINDOW_SECONDS: `>` is false, cutoff == 0
+        _authorize(_defaultPolicy());
+
+        uint256 leg = MAX_PER_WINDOW / 2;
+        _fundAndApprove(MAX_PER_WINDOW);
+        // First deposit runs _pruneWindow on an empty window at the early clock.
+        _deposit(keccak256("e-1"), leg, keccak256("e-1-i"));
+        // Later in the same early window, _pruneWindow sees a live entry that the
+        // zero cutoff must NOT evict (entry timestamp > 0).
+        vm.warp(block.timestamp + 100);
+        _deposit(keccak256("e-2"), leg, keccak256("e-2-i"));
+
+        // View path (_effectiveWindowTotal) at the same early clock.
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            MAX_PER_WINDOW,
+            "nothing expires while the chain clock is within the first window"
+        );
+
+        // The cap is still enforced: the window is full.
+        _fundAndApprove(1);
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.WindowCapExceeded.selector);
+        gateway.deposit(keccak256("e-3"), 1, uint64(block.timestamp + 60), keccak256("e-3-i"));
+    }
+
+    // -------------------------------------------------------------------
     // The rolling-window ring buffer is bounded by MAX_WINDOW_ENTRIES, and
     // _oldestTimestamp returns 0 on an empty window (#970, NC-7).
     //
