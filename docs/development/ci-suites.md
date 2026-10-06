@@ -162,7 +162,7 @@ The offline unit tests (`bun test scripts/devnet`) run in the `unit` job: the Tw
 **Trigger paths:** `clients/rust-payment-client/**`, `testing/ethereum-testnet/e2e-rust/**`, `services/explorer-indexer/**`
 
 **Jobs:**
-- `lint` — fmt and clippy across all crates, plus the workspace logging-facade guard; runs immediately
+- `lint` — fmt and clippy across all crates, plus the workspace logging-facade guard, the indexer embedded-migration parity guard and its rebuild-trigger test; runs immediately
 - `audit` — dependency vulnerability scan; runs in parallel with `lint` (independent of build cache)
 - `doc-coverage` — build and rustdoc threshold check; **needs `lint`** (avoids running a full build on code that fails style checks)
 - `test-target-coverage` — every cargo integration-test target is executed by a workflow or allowlisted with a reason (issue #1282); pure Python, no toolchain, so it answers even when the Rust build is broken. See [Integration-test target coverage](#integration-test-target-coverage).
@@ -174,6 +174,8 @@ The offline unit tests (`bun test scripts/devnet`) run in the `unit` job: the Tw
 4. `cargo fmt --check` — formatting across all crates
 5. `cargo clippy --all-targets --all-features -- -D warnings` — zero warnings enforced. `--all-targets` is what type-checks every crate's `tests/` integration binaries; the root manifest is a virtual manifest with no `default-members`, so this one command covers every workspace member. **Do not drop `--all-targets`** — see [Rust `tests/` compile coverage](#rust-tests-compile-coverage) (issue #1295), which fails red if it is removed.
 6. `cargo_test_require_executed.sh -p rmpc-logging --test workspace_uses_shared_facade` — every binary and service entrypoint initialises logging through `rmpc_logging::init_service` and not `tracing_subscriber::fmt()` (issue #247). Source-text walk, no chain, no Docker. It was executed by no workflow until issue #1282, so the regression it exists to make load-bearing was not.
+7. `cargo_test_require_executed.sh -p explorer-indexer --test migration_set_parity` — the compile-time embedded migration set (`explorer_indexer::db::MIGRATOR`, produced by `sqlx::migrate!("./migrations")`) matches the on-disk `services/explorer-indexer/migrations/` directory: versions, descriptions and SQL text (issue #1416). On stable Rust that macro registers no `rerun-if-changed` for the directory it read — sqlx calls `proc_macro::tracked_path::path()` only under `sqlx_macros_unstable`. It expands each migration it found to `include_str!`, so rustc tracks edits and deletions, but a newly **added** `.sql` file is in no dep-info: before #1416 adding a migration did not force a rebuild, and with `Swatinem/rust-cache` restoring `target/` a PR that only added a migration could go green with that migration never compiled in. `services/explorer-indexer/build.rs` supplies the missing dependency. Filesystem walk plus an iteration over an embedded static, no Postgres, no Docker, no network. It lives in this LIGHT suite rather than [suite 8](#8-explorer-indexer-tests) precisely because suite 8 is `system-correctness` and skips draft PRs — a stale `target/` bites hardest during draft iteration.
+8. `.github/scripts/tests/test_indexer_migration_rebuild_trigger.sh` — the behavioural half of step 7 (issue #1416). On a cold build the parity target passes with or without `build.rs`, so it cannot see the trigger go missing. With `target/` warm from step 7, this script adds, edits, reverts and deletes a migration with no `.rs` change and asserts after each that explorer-indexer's own build script re-ran (its `output` file under `target/debug/build/` was rewritten), the crate recompiled, and the parity target passed. Controls: an unchanged tree does **not** re-run the build script, the `indexer` binary recompiles too, and a missing `migrations/` fails the build naming #1416. It mutates the checkout and restores it on exit; each step recompiles only explorer-indexer.
 
 **Steps — `test-target-coverage` job:**
 1. Checkout repository
@@ -520,7 +522,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 4. Install Rust toolchain, Cargo cache
 5. Start the Twin chain at the run pin (`.github/actions/twin-fork`, `host: 0.0.0.0`, `block-time: 1`; exports `TWIN_RPC_URL`)
 6. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
-7. `cargo clippy -p smoke-test --all-targets -- -D warnings` — type-checks the crate's `tests/` integration binaries in the hermetic `smoke-test-guards` job (issue #1295); `cargo build` alone never compiles them
+7. `cargo clippy -p smoke-test --all-targets -- -D warnings` — type-checks the crate's `tests/` integration binaries in the hermetic `smoke-test-guards` job (issue #1295); `cargo build` alone never compiles them. The same job also runs `bash .github/scripts/tests/test_cargo_test_require_executed.sh`, the self-test proving the executed-test guard's `REQUIRE_EXECUTED_MARKERS` gate goes red on a skipped or truncated devnet test (issue #1371)
 8. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
 9. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — deploys contracts, asserts a healthy RPC on a real Base head, the four-vault manifests and the handover
 10. `cargo test -p smoke-test --release --test fund_usdc -- --test-threads=1 --nocapture` — the Twin environment steps: fund USDC (a grant of the exact amount on the real FiatToken slot, spendable through the real token's `transfer`), fund gas (exact balance), the chain is the anvil Twin fork (id 918453), and warp moves block time 48h without real waiting.
@@ -746,6 +748,7 @@ Catches CSP weakening by dependency upgrades before deployment.
 **Suggested file:** `.github/workflows/suite-19-erc4626-demo-tvl-matrix.yml`
 **Environment:** `anvil`
 **Trigger paths:** `contracts/test/ERC4626PreconditionChecks.t.sol` and the workflow file itself
+**CI_CLASS:** `feature-correctness` (declared at workflow level in issue #1371)
 
 **Tier:** HEAVY — the `dev` merge gate. Runs on every `pull_request` targeting `dev` (no `paths:` filter) and on `push` to `dev`.
 
@@ -1016,7 +1019,9 @@ above and with `cli_meta`'s own header, which already documents ~13-minute
 CI chain-container readiness (issue #988) rather than the 60-120s the boot
 log message claims. Because the devnet matrix runs in parallel (one runner
 per binary), adding four more rows does not change suite 14's total
-wall-clock — it stays bounded by `full_stack_demo_tvl`'s ~46 min — but it
+wall-clock — it stayed bounded by `full_stack_demo_tvl`'s ~46 min (issue #1371
+has since halved that row to a single devnet bring-up, 24m39s, making
+`cli_meta` at ~25 min the new bound) — but it
 does add roughly four more `fixture_meta`-sized runners (~17-18 min each) to
 every PR against `dev`, since suite 14 is a HEAVY-tier gate with no path
 filter (unlike suite 5, which skips drafts). That runner-minute cost is the
@@ -1213,7 +1218,7 @@ Every workflow's `name:` and its tier.
 | `natspec-coverage` | quick | |
 | `secrets-scan` | quick | gitleaks secrets scan on every PR (security-model.md §13); pinned binary + `.gitleaks.toml` |
 | `security-gates` | quick | cargo-audit (Rust), bun-audit (JS/TS), CSP strict-mode gate; allow-list for pre-existing sub-critical advisories with dated expiry (issues #804, #813, #835) |
-| `erc4626-demo-tvl-matrix` | heavy | ERC-4626 precondition matrix (anvil, shard by exit-fee tier) + full-stack demo-TVL test (devnet, 25–35 min); gates PRs into `dev` (issue #804/#814) |
+| `erc4626-demo-tvl-matrix` | heavy | ERC-4626 precondition matrix (anvil, shard by exit-fee tier); gates PRs into `dev` (issue #814). Its `demo-tvl` devnet job and the `full_stack_demo_tvl` test were removed in core 1488 |
 | `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9); `watchdog-integration` also runs `cursor_and_volume` — the cursor-staleness and deposit-volume-anomaly suite, dark until issue #1282. Issue #1378 added `watchdog-integration`'s `liveness` target (the `watchdog_cursor.updated_at` heartbeat, driven through the real daemon and checker binaries) and `watchdog-unit`'s `scripts/stage/test-fusion-watchdog-supervisor.sh` step (the stage supervisor pages a crash-looping, hung, or startup-failed watchdog). **CI taxonomy (issue #1384):** `watchdog-unit` is `feature-correctness` and runs on draft PRs; `watchdog-integration` is `system-correctness` and is `if:`-gated to `draft == false`, so it first reports at `ready_for_review` (the `pull_request` trigger carries `ready_for_review`). Both jobs carry `paths-ignore: ['**.md','**.txt']`, so a docs-only PR gets neither check |
 | `opencode-headless-deposit-read` | nightly | `deposit`/`read` replay coverage (issue #1210 option C, closes #1233): a scripted replay of the fixed rmpc command sequence runs against a live devnet in place of a live model; keyless `asserter-tests` runs on PRs too and validates the asserter/guard/replay code |
 | `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |

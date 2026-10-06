@@ -1,14 +1,13 @@
 # Canonical: docs/development/ci-suites.md §19
 #
 # WHY THIS SUITE EXISTS
-# Two complementary test-matrix expansion concerns live here:
+# ERC-4626 PRECONDITION TESTS (activated — issue #814)
+# contracts/test/ERC4626PreconditionChecks.t.sol asserts asset()/decimals()
+# and empty-vault share-price invariants across the exitFeeBps × adapter matrix.
+# The matrix shards by exit-fee tier via the EXIT_FEE_BPS env var. Anvil only —
+# no Docker, no devnet.
 #
-# 1. ERC-4626 PRECONDITION TESTS (activated — issue #814)
-#    contracts/test/ERC4626PreconditionChecks.t.sol asserts asset()/decimals()
-#    and empty-vault share-price invariants across the exitFeeBps × adapter matrix.
-#    The matrix shards by exit-fee tier via the EXIT_FEE_BPS env var.
-#
-# 2. DEMO-TVL MATRIX (removed — core 1488)
+# DEMO-TVL MATRIX (removed — core 1488)
 #    The full_stack_demo_tvl smoke test depended on demo depositor seeding, which the
 #    one deployment scheme deletes. Vault TVL on stage comes from the real seed and
 #    the govern matrix, not from seeded depositors.
@@ -34,6 +33,16 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The suite is now a single forge-on-anvil job with no draft-exclusion `if:`, so
+# it runs on every PR to dev including drafts — the feature-correctness trigger
+# shape. Declared here (issue #1371) rather than left `undeclared`: removing the
+# `demo-tvl` job meant touching this file, and `ci lint` requires errors: 0 on a
+# touched workflow. The remaining `docs-only-should-skip` /
+# `sweep-missing-nightly` warnings belong to the repo-wide CI_CLASS backfill and
+# are explicitly out of scope for #1371.
+env:
+  CI_CLASS: feature-correctness
 
 jobs:
   # ── ERC-4626 precondition checks ───────────────────────────────────────────

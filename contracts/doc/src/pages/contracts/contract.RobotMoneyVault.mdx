@@ -467,21 +467,53 @@ function _isAdapterCounted(uint256 i) internal view returns (bool);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
 
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+ERC-4626 deposit, overridden ONLY to read NAV once (issue #1397).
+
+<i>
+
+The inherited flow reads whole-vault `totalAssets()` in `maxDeposit`,
+`previewDeposit`, `_deposit`'s TVL-cap guard and `_routeDeposit`'s
+snapshot: four identical sweeps, since nothing between them moves an
+adapter balance. This reads it once and threads it through. External
+`maxDeposit` / `previewDeposit` / `totalAssets` are unchanged.
+
+</i>
+
+```solidity
+function deposit(uint256 assets, address receiver) public override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` | Amount of USDC to deposit. |
+| receiver | `address` | Address that receives the minted shares. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | Shares minted to `receiver`. |
+
 <a id="_deposit-address-address-uint256-uint256"></a>
 
 ### _deposit
 
 <i>
 
-Deposit/mint common workflow.
+Reached by `mint()`, which has no cached NAV to offer.
 
 </i>
 
 ```solidity
 function _deposit(address caller, address receiver, uint256 assets, uint256 shares)
         internal
-        override
-        nonReentrant;
+        override;
 ```
 
 **Parameters**
@@ -492,6 +524,30 @@ function _deposit(address caller, address receiver, uint256 assets, uint256 shar
 | receiver | `address` |  |
 | assets | `uint256` |  |
 | shares | `uint256` |  |
+
+<a id="_depositat-address-address-uint256-uint256-uint256"></a>
+
+### _depositAt
+
+```solidity
+function _depositAt(
+        address caller,
+        address receiver,
+        uint256 assets,
+        uint256 shares,
+        uint256 nav
+    ) internal nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| receiver | `address` |  |
+| assets | `uint256` |  |
+| shares | `uint256` |  |
+| nav | `uint256` | `totalAssets()` as read BEFORE `assets` moves into the vault. |
 
 <a id="_routedeposit-uint256"></a>
 
@@ -506,6 +562,21 @@ function _routeDeposit(uint256 amount) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | amount | `uint256` |  |
+
+<a id="_routedepositat-uint256-uint256"></a>
+
+### _routeDepositAt
+
+```solidity
+function _routeDepositAt(uint256 amount, uint256 totalAfter) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+| totalAfter | `uint256` | NAV including `amount`, which already sits idle in the vault. |
 
 <a id="_allocateto-uint256-uint256"></a>
 
@@ -635,6 +706,60 @@ function maxDeposit(address) public view override returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_depositsclosed"></a>
+
+### _depositsClosed
+
+```solidity
+function _depositsClosed() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_capsunbounded"></a>
+
+### _capsUnbounded
+
+```solidity
+function _capsUnbounded() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_maxdepositat-uint256"></a>
+
+### _maxDepositAt
+
+<i>
+
+`maxDeposit` evaluated against an already-read NAV.
+
+</i>
+
+```solidity
+function _maxDepositAt(uint256 nav) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| nav | `uint256` |  |
 
 **Returns**
 

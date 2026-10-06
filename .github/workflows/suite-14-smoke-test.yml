@@ -173,6 +173,14 @@ jobs:
         working-directory: testing/smoke-test
         run: "cargo test -p smoke-test --lib tests:: -- --nocapture"
 
+      # Self-test for the executed-test guard's REQUIRE_EXECUTED_MARKERS gate
+      # (issue #1371): replays canned libtest transcripts through a stub cargo
+      # and proves the guard goes RED when hermetic tests keep the pass count
+      # non-zero but the devnet test skipped or lost an assertion. Runs here,
+      # in seconds, so a broken gate is caught before the devnet matrix trusts it.
+      - name: executed-test guard self-test (required markers, hermetic)
+        run: bash .github/scripts/tests/test_cargo_test_require_executed.sh
+
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once. Every chain job
   # below takes it as input.
   pin:
@@ -303,7 +311,8 @@ jobs:
       # Routed through cargo_test_require_executed.sh (issue #1311 AC) so a run
       # that collects zero tests (e.g. a --test filter that silently matched
       # nothing) fails loudly instead of reporting a false green — the same
-      # guard suites 4/6/7/8/20 already use.
+      # guard suites 4/6/7/8/20 already use. REQUIRE_EXECUTED_MARKERS (set per
+      # row via `matrix.include` above) additionally pins named assertions.
       - name: cargo test (${{ matrix.binary }} — boots + tears down its own devnet)
         working-directory: testing/smoke-test
         env:
@@ -313,6 +322,7 @@ jobs:
           CARGO_TEST_MIN_EXECUTED: "1"
           SMOKE_TEST_VERIFY_OUT: ${{ runner.temp }}/stage-verify-labels.txt
           SMOKE_TEST_SHEET_OUT: ${{ runner.temp }}/stage-run-sheet.env
+          REQUIRE_EXECUTED_MARKERS: ${{ matrix.required_markers }}
         run: >-
           bash ../../.github/scripts/cargo_test_require_executed.sh
           -p smoke-test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture

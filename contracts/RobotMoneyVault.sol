@@ -463,32 +463,68 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
 
     // ─── Deposit (atomic deposit-to-yield) ────────────────────────────
 
+    /// @notice ERC-4626 deposit, overridden ONLY to read NAV once (issue #1397).
+    /// @dev The inherited flow reads whole-vault `totalAssets()` in `maxDeposit`,
+    ///      `previewDeposit`, `_deposit`'s TVL-cap guard and `_routeDeposit`'s
+    ///      snapshot: four identical sweeps, since nothing between them moves an
+    ///      adapter balance. This reads it once and threads it through. External
+    ///      `maxDeposit` / `previewDeposit` / `totalAssets` are unchanged.
+    /// @param assets Amount of USDC to deposit.
+    /// @param receiver Address that receives the minted shares.
+    /// @return Shares minted to `receiver`.
+    function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        uint256 nav = totalAssets();
+        uint256 maxAssets = _maxDepositAt(nav);
+        if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
+        // Same formula as `previewDeposit` -> `_convertToShares(assets, Floor)`.
+        uint256 shares =
+            assets.mulDiv(totalSupply() + 10 ** _decimalsOffset(), nav + 1, Math.Rounding.Floor);
+        _depositAt(_msgSender(), receiver, assets, shares, nav);
+        return shares;
+    }
+
+    /// @dev Reached by `mint()`, which has no cached NAV to offer.
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares)
         internal
         override
-        nonReentrant
     {
+        _depositAt(caller, receiver, assets, shares, totalAssets());
+    }
+
+    /// @param nav `totalAssets()` as read BEFORE `assets` moves into the vault.
+    function _depositAt(
+        address caller,
+        address receiver,
+        uint256 assets,
+        uint256 shares,
+        uint256 nav
+    ) internal nonReentrant {
         if (depositsPaused) revert DepositsPaused();
         if (shutdown) revert VaultShutdown();
         if (retired) revert VaultRetired();
         if (assets > perDepositCap) revert PerDepositCapExceeded();
-        if (totalAssets() + assets > tvlCap) revert TVLCapExceeded();
+        if (nav + assets > tvlCap) revert TVLCapExceeded();
         if (_activeAdapterCount() == 0) revert NoActiveAdapters();
 
-        super._deposit(caller, receiver, assets, shares);
-        _routeDeposit(assets);
+        ERC4626._deposit(caller, receiver, assets, shares);
+        // The only state change since `nav` was read is `assets` of USDC landing
+        // idle in the vault (adapters are untouched and the call is nonReentrant),
+        // so post-transfer NAV is exactly `nav + assets`. Holds for USDC, which
+        // credits the full amount; a fee-on-transfer asset would break it.
+        _routeDepositAt(assets, nav + assets);
     }
 
     function _routeDeposit(uint256 amount) internal {
+        _routeDepositAt(amount, totalAssets());
+    }
+
+    /// @param totalAfter NAV including `amount`, which already sits idle in the vault.
+    function _routeDepositAt(uint256 amount, uint256 totalAfter) internal {
         // slither-disable-next-line incorrect-equality
         // Justification: `amount == 0` is a safe early-return guard, not a
         // balance-sensitive strict equality that reentrancy could manipulate.
         if (amount == 0) return;
 
-        // `totalAssets()` now includes the idle vault balance (the deposited USDC already sits
-        // in the vault at this point), so it already accounts for `amount`. Do NOT add `amount`
-        // again — that would double-count it.
-        uint256 totalAfter = totalAssets();
         uint256 activeCount = _activeAdapterCount();
         uint256 remaining = amount;
         uint256 len = adapters.length;
@@ -657,14 +693,25 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     ///         Returns 0 when deposits are paused, the vault is shutdown, retired,
     ///         no adapters are active, or the TVL cap has been reached.
     function maxDeposit(address) public view override returns (uint256) {
-        if (depositsPaused || shutdown || retired) return 0;
-        if (_activeAdapterCount() == 0) return 0;
-        if (tvlCap == type(uint256).max && perDepositCap == type(uint256).max) {
-            return type(uint256).max;
-        }
-        uint256 current = totalAssets();
-        if (current >= tvlCap) return 0;
-        uint256 headroom = tvlCap - current;
+        if (_depositsClosed()) return 0;
+        if (_capsUnbounded()) return type(uint256).max;
+        return _maxDepositAt(totalAssets());
+    }
+
+    function _depositsClosed() internal view returns (bool) {
+        return depositsPaused || shutdown || retired || _activeAdapterCount() == 0;
+    }
+
+    function _capsUnbounded() internal view returns (bool) {
+        return tvlCap == type(uint256).max && perDepositCap == type(uint256).max;
+    }
+
+    /// @dev `maxDeposit` evaluated against an already-read NAV.
+    function _maxDepositAt(uint256 nav) internal view returns (uint256) {
+        if (_depositsClosed()) return 0;
+        if (_capsUnbounded()) return type(uint256).max;
+        if (nav >= tvlCap) return 0;
+        uint256 headroom = tvlCap - nav;
         return perDepositCap < headroom ? perDepositCap : headroom;
     }
 

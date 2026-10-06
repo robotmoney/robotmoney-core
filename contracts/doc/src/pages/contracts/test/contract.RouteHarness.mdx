@@ -62,3 +62,35 @@ function exposed_routeDeposit(uint256 amount) external;
 | ---- | ---- | ----------- |
 | amount | `uint256` |  |
 
+<a id="exposed_depositat-address-address-uint256-uint256-uint256"></a>
+
+### exposed_depositAt
+
+<i>
+
+Reaches `_depositAt`'s own guards directly. Through `deposit()` the
+`maxDeposit` pre-check (issue #1397) rejects first, so these guards are
+defence in depth that only a direct call can execute.
+
+</i>
+
+```solidity
+function exposed_depositAt(
+        address caller,
+        address receiver,
+        uint256 assets,
+        uint256 shares,
+        uint256 nav
+    ) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| receiver | `address` |  |
+| assets | `uint256` |  |
+| shares | `uint256` |  |
+| nav | `uint256` |  |
+
