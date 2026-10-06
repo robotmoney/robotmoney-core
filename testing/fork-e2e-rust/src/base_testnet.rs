@@ -23,7 +23,7 @@
 //! - `parameterized_e2e!()` — macro for @network.each style test templates
 //! - Contract address registry for deployed Base testnet adapters
 //!
-//! See docs/scout/base-testnet-guide.md for the test environment setup,
+//! See docs/testing/base-testnet-guide.md for the test environment setup,
 //! known Base divergences, and the issue #839 integration roadmap.
 
 use std::env;

@@ -28,7 +28,7 @@
 //! - `assert_account_funded()` — CI validation helper (eth_getBalance)
 //! - Parameterized test macro with @network decorator
 //!
-//! See docs/scout/base-testnet-guide.md for the test environment setup,
+//! See docs/testing/base-testnet-guide.md for the test environment setup,
 //! known Robot Money Devnet divergences, and the issue #839 integration roadmap.
 
 use std::env;
