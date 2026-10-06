@@ -47,6 +47,8 @@ fail_on_revert = false
 [fmt]
 line_length = 100
 tab_width = 4
+# Vendored upstream Safe sources stay byte-identical (see VENDORED.md)
+ignore = ["contracts/test/vendor/**"]
 
 # Generated Solidity reference docs live alongside the contracts
 # (contracts/doc), not in the top-level docs/ tree, which is reserved for

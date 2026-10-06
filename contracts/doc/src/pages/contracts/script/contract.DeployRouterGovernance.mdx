@@ -5,7 +5,7 @@ description: "Foundry deploy script for the RouterGovernance contract. Deploys R
 
 # DeployRouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/script/DeployRouterGovernance.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -33,19 +33,16 @@ Required env vars:
 ADMIN_ADDRESS      — receives ADMIN_ROLE on the governance contract
 ROUTER_ADDRESS     — deployed PortfolioRouter address
 
-Optional env vars:
-VOTING_PERIOD      — voting period in seconds (default: 3600 — 1 hour)
+Required on every chain (no default, a missing or malformed value reverts):
+VOTING_PERIOD      — voting period in seconds
 EXECUTION_DELAY    — delay from voting end to execution in seconds
-(default: 3600 — 1 hour, the contract's MIN_EXECUTION_DELAY)
+(at least the contract's MIN_EXECUTION_DELAY, 1 hour)
 QUORUM_THRESHOLD   — minimum FOR voting power for quorum
-(default: 2; must be greater than 1)
+(must be greater than 1)
+
+Optional env vars:
 DEPLOYMENT_OUT     — path for the output JSON
 (default: "deployments/governance-&lt;chain_id>.json")
-SKIP_ROUTER_ADMIN_GRANT — set to true ONLY when the router's
-ADMIN_ROLE has already moved to the timelock
-and the grant will be scheduled through it.
-The script then refuses to pretend the wiring
-is complete and says so loudly.
 
 ## Constants
 

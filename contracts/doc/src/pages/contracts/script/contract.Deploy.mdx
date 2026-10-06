@@ -5,7 +5,7 @@ description: "Foundry deploy script for the Robot Money gateway stack. Deploys R
 
 # Deploy
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/script/Deploy.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -43,22 +43,25 @@ crate). Forge unit tests deploy a
 `TestERC20` helper and pass its address
 via `runInProcessWithUsdc`.
 
-Optional env vars (with safe defaults):
-AGENT_VALID_UNTIL               — uint64, default = block.timestamp + 30 days
-AGENT_MAX_PER_PAYMENT           — uint256, default = 10_000 * 1e6 (USDC, 6dp)
-AGENT_MAX_PER_WINDOW            — uint256, default = 100_000 * 1e6
-AGENT_MAX_WITHDRAW_PER_PAYMENT  — uint256, default = 10_000 * 1e6 (shares, 6dp)
-AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256, default = 100_000 * 1e6
+Required on every chain (no default; a missing or malformed value reverts):
+AGENT_VALID_UNTIL               — uint64 unix time
+AGENT_MAX_PER_PAYMENT           — uint256 (USDC, 6dp)
+AGENT_MAX_PER_WINDOW            — uint256
+AGENT_MAX_WITHDRAW_PER_PAYMENT  — uint256 (shares, 6dp)
+AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256
+FEE_RECIPIENT_ADDRESS  — vault fee recipient (the treasury, never the deployer)
+VAULT_TVL_CAP          — uint256 (USDC, 6dp)
+VAULT_PER_DEPOSIT_CAP  — uint256 (USDC, 6dp)
+SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units, non-zero
+
+On chain id 8453, EXPECTED_CHAIN_ID must be set to 8453 and USDC_ADDRESS must be
+the canonical Base USDC.
+
+Optional env vars:
 DEPLOYMENT_OUT         — output JSON path,
 default = "deployments/&lt;chain_id>.json"
-EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches (8453 on Base)
-FEE_RECIPIENT_ADDRESS  — vault fee recipient, default ADMIN_ADDRESS (devnet only:
-a mainnet ceremony must name the treasury, never the deployer)
-VAULT_TVL_CAP          — default 10M USDC (devnet)
-VAULT_PER_DEPOSIT_CAP  — default 1M USDC (devnet)
+EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches (mandatory on 8453)
 VAULT_EXIT_FEE_BPS     — default 0
-SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC. A mainnet ceremony
-sets it explicitly (devops runbook frozen sheet)
 
 ## Constants
 
@@ -296,7 +299,7 @@ function runInProcessWithSeed(
 <i>
 
 The seed this broadcast run deposits: `&lt;prefix>SEED_DEPOSIT_USDC` (6-decimal
-units), default SEED_DEPOSIT_AMOUNT. Must be non-zero.
+units), required on every chain. Must be non-zero.
 
 </i>
 
@@ -493,6 +496,13 @@ function _authorizeDeployAgent(Deployed memory d, Params memory p) internal;
 <a id="_envordefault-string-uint256"></a>
 
 ### _envOrDefault
+
+<i>
+
+An optional uint: `fallbackValue` when the variable is unset, the parsed value
+when set. A set but malformed value reverts and never falls back.
+
+</i>
 
 ```solidity
 function _envOrDefault(string memory key, uint256 fallbackValue)

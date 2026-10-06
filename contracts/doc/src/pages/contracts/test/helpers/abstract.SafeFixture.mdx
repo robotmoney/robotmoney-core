@@ -1,0 +1,211 @@
+---
+title: "SafeFixture"
+description: "Builds REAL Safe 1.4.1 proxies in-process from the vendored Safe sources (contracts/test/vendor/safe-1.4.1). Replaces every hand-written Safe stand-in."
+---
+
+# SafeFixture
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/helpers/SafeFixture.sol)
+
+**Inherits:** Test
+
+**Title:** SafeFixture
+
+Builds REAL Safe 1.4.1 proxies in-process from the vendored Safe sources
+(contracts/test/vendor/safe-1.4.1). Replaces every hand-written Safe
+stand-in.
+
+<i>
+
+The vendored sources compile with this repo's solc settings, so their runtime
+bytecode differs from the canonical on-chain deployments. The fixture therefore
+installs the vendored SafeL2 and CompatibilityFallbackHandler at the canonical
+Base addresses, deploys the proxy through a vendored SafeProxyFactory, and then
+etches the canonical SafeProxy 1.4.1 runtime (read from a live Base Safe proxy,
+codehash 0xd7d408eb...) onto it. Storage (singleton, owners, threshold, handler)
+is the factory's and `setup()`'s own. DeployTimelock accepts or rejects the
+result by the same checks it runs on a real chain.
+
+</i>
+
+## Constants
+
+### FIXTURE_SAFE_L2_SINGLETON
+
+<i>
+
+Canonical Safe 1.4.1 addresses on Base (the Twin chain carries the same ones).
+
+</i>
+
+```solidity
+address internal constant FIXTURE_SAFE_L2_SINGLETON =
+        0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+```
+
+### FIXTURE_FALLBACK_HANDLER
+
+```solidity
+address internal constant FIXTURE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+```
+
+### CANONICAL_SAFE_PROXY_RUNTIME
+
+<i>
+
+Runtime of the SafeProxy 1.4.1 deployed by the canonical factory.
+
+</i>
+
+```solidity
+bytes internal constant CANONICAL_SAFE_PROXY_RUNTIME =
+        hex"608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea264697066735822122003d1488ee65e08fa41e58e888a9865554c535f2c77126a82cb4c0f917f31441364736f6c63430007060033";
+```
+
+### FIXTURE_THRESHOLD
+
+```solidity
+uint256 internal constant FIXTURE_THRESHOLD = 2;
+```
+
+## State Variables
+
+### safeFactory
+
+```solidity
+SafeProxyFactory internal safeFactory;
+```
+
+### safeSaltNonce
+
+```solidity
+uint256 internal safeSaltNonce;
+```
+
+## Functions
+
+<a id="_installsafeset"></a>
+
+### _installSafeSet
+
+<i>
+
+Installs the Safe contract set and the proxy factory. Call once in setUp.
+
+</i>
+
+```solidity
+function _installSafeSet() internal;
+```
+
+<a id="_fixtureowners"></a>
+
+### _fixtureOwners
+
+<i>
+
+The default 3 owners every fixture Safe uses.
+
+</i>
+
+```solidity
+function _fixtureOwners() internal returns (address[] memory owners);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owners | `address[]` |  |
+
+<a id="_fixturespec"></a>
+
+### _fixtureSpec
+
+<i>
+
+The SAFE_OWNERS / SAFE_THRESHOLD spec matching `_newDefaultSafe()`.
+
+</i>
+
+```solidity
+function _fixtureSpec() internal returns (DeployTimelock.SafeSpec memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `DeployTimelock.SafeSpec` |  |
+
+<a id="_newsafe-address-uint256"></a>
+
+### _newSafe
+
+<i>
+
+A real Safe proxy with the canonical fallback handler, `threshold`-of-N.
+
+</i>
+
+```solidity
+function _newSafe(address[] memory owners, uint256 threshold) internal returns (address proxy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owners | `address[]` |  |
+| threshold | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+<a id="_newsafewith-address-uint256-address"></a>
+
+### _newSafeWith
+
+```solidity
+function _newSafeWith(address[] memory owners, uint256 threshold, address handler)
+        internal
+        returns (address proxy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owners | `address[]` |  |
+| threshold | `uint256` |  |
+| handler | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+<a id="_newdefaultsafe"></a>
+
+### _newDefaultSafe
+
+<i>
+
+The default 2-of-3 Safe.
+
+</i>
+
+```solidity
+function _newDefaultSafe() internal returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

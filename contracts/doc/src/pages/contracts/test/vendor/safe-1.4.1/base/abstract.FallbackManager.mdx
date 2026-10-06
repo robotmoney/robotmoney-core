@@ -1,0 +1,86 @@
+---
+title: "FallbackManager"
+---
+
+# FallbackManager
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/vendor/safe-1.4.1/base/FallbackManager.sol)
+
+**Inherits:** [SelfAuthorized](/contracts/test/vendor/safe-1.4.1/common/abstract.SelfAuthorized)
+
+**Title:** Fallback Manager - A contract managing fallback calls made to this contract
+
+**Author:** Richard Meissner - @rmeissner
+
+## Constants
+
+### FALLBACK_HANDLER_STORAGE_SLOT
+
+```solidity
+bytes32 internal constant FALLBACK_HANDLER_STORAGE_SLOT = 0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
+```
+
+## Functions
+
+<a id="internalsetfallbackhandler-address"></a>
+
+### internalSetFallbackHandler
+
+Internal function to set the fallback handler.
+
+```solidity
+function internalSetFallbackHandler(address handler) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| handler | `address` | contract to handle fallback calls. |
+
+<a id="setfallbackhandler-address"></a>
+
+### setFallbackHandler
+
+Set Fallback Handler to `handler` for the Safe.
+
+<i>
+
+Only fallback calls without value and with data will be forwarded.
+     This can only be done via a Safe transaction.
+     Cannot be set to the Safe itself.
+
+</i>
+
+```solidity
+function setFallbackHandler(address handler) public authorized;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| handler | `address` | contract to handle fallback calls. |
+
+<a id="fallback"></a>
+
+### fallback
+
+```solidity
+fallback() external;
+```
+
+## Events
+
+### ChangedFallbackHandler
+
+```solidity
+event ChangedFallbackHandler(address indexed handler);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| handler | `address` |  |
+

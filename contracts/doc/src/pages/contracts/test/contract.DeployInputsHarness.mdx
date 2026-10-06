@@ -4,7 +4,7 @@ title: "DeployInputsHarness"
 
 # DeployInputsHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/test/DeployMainnetInputs.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/DeployMainnetInputs.t.sol)
 
 **Inherits:** [Deploy](/contracts/script/contract.Deploy)
 
@@ -51,6 +51,30 @@ function seed(string memory prefix) external view returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="envordefault-string-uint256"></a>
+
+### envOrDefault
+
+```solidity
+function envOrDefault(string memory key, uint256 fallbackValue)
+        external
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+| fallbackValue | `uint256` |  |
 
 **Returns**
 

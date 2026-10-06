@@ -5,9 +5,9 @@ description: "Parameterized per-theme deployer for the unified `Vault` (ADR-0010
 
 # DeployVaultThemes
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployVaultThemes.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/script/DeployVaultThemes.s.sol)
 
-**Inherits:** Script
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
 **Title:** DeployVaultThemes
 
@@ -270,8 +270,9 @@ governed follow-up (their own scripts, then `wireThemeBroadcast`);
 the registry/router eligibility interlock is Phase-6 (ADR-0010 §8).
 
 Required env: THEME, USDC_ADDRESS, ADMIN_ADDRESS,
-EMERGENCY_RESPONDER_ADDRESS. Optional: TVL_CAP, PER_DEPOSIT_CAP,
-EXIT_FEE_BPS, MAX_NAV_GROWTH_RATE_BPS, FEE_RECIPIENT.
+EMERGENCY_RESPONDER_ADDRESS, TVL_CAP, PER_DEPOSIT_CAP, EXIT_FEE_BPS,
+MAX_NAV_GROWTH_RATE_BPS, FEE_RECIPIENT (no defaults on any chain). On chain id
+8453, EXPECTED_CHAIN_ID must be 8453 and USDC_ADDRESS the canonical Base USDC.
 
 ```solidity
 function run() external returns (address vault);
@@ -296,54 +297,6 @@ function _themeFromEnv() internal view returns (Theme);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `Theme` |  |
-
-<a id="_envaddressordefault-string-address"></a>
-
-### _envAddressOrDefault
-
-```solidity
-function _envAddressOrDefault(string memory key, address fallback_)
-        internal
-        view
-        returns (address);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| key | `string` |  |
-| fallback_ | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `address` |  |
-
-<a id="_envuintordefault-string-uint256"></a>
-
-### _envUintOrDefault
-
-```solidity
-function _envUintOrDefault(string memory key, uint256 fallback_)
-        internal
-        view
-        returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| key | `string` |  |
-| fallback_ | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
 
 ## Errors
 

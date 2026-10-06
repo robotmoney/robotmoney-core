@@ -129,6 +129,11 @@ jobs:
           scripts/ci/check-gateway-storage-layout.sh --selftest
           scripts/ci/check-gateway-storage-layout.sh
 
+      - name: Removed deploy flags are gone (issue 1483)
+        # The two escape hatches are deleted, not disabled: the gate exits 1 when
+        # either name still appears under contracts/ or scripts/.
+        run: scripts/ci/check-removed-flags.sh
+
       - name: Gateway agent-policy gas report (issue 1476)
         # Measurement, not a budget: prints the RobotMoneyGateway rows for
         # authorizeAgent, revealAuthorization, setPolicy and

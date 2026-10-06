@@ -20,6 +20,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
+import {SafeFixture} from "./helpers/SafeFixture.sol";
 
 /// @dev Fork-style unit tests for DeployTimelock.s.sol (issue #414).
 ///
@@ -996,6 +997,11 @@ contract ManifestHarness is DeployTimelock {
         return _readAgentList(name);
     }
 
+    /// @dev The full input check, so a test can drive it with any Safe and any spec.
+    function exposedValidate(Deployed memory d, SafeSpec memory spec) external view {
+        _validate(d, spec);
+    }
+
     /// @dev The body of `run()`, reading every env var under `prefix`.
     function exposedRunFrom(string memory prefix) external returns (Deployed memory) {
         return _runFrom(prefix);
@@ -1596,7 +1602,7 @@ contract DeployTimelockAgentListInputTest is Test {
 ///         the broadcast path against a Deploy.s.sol stack. Every env var it
 ///         reads carries a prefix only this test sets, because env vars are
 ///         process-wide and forge runs tests in parallel.
-abstract contract DeployTimelockRunEntrypointBase is Test {
+abstract contract DeployTimelockRunEntrypointBase is SafeFixture {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -1672,7 +1678,16 @@ abstract contract DeployTimelockRunEntrypointBase is Test {
         _set("REGISTRY_ADDRESS", vm.toString(address(registry)));
         _set("ROUTER_ADDRESS", vm.toString(address(router)));
         _set("GOVERNANCE_ADDRESS", vm.toString(address(governance)));
-        _set("SAFE_ADDRESS", vm.toString(address(new MockHighThresholdSafe())));
+        _installSafeSet();
+        address[] memory owners = _fixtureOwners();
+        _set("SAFE_ADDRESS", vm.toString(_newSafe(owners, FIXTURE_THRESHOLD)));
+        _set(
+            "SAFE_OWNERS",
+            string.concat(
+                vm.toString(owners[0]), ",", vm.toString(owners[1]), ",", vm.toString(owners[2])
+            )
+        );
+        _set("SAFE_THRESHOLD", vm.toString(FIXTURE_THRESHOLD));
         _set("EMERGENCY_ADDRESS", vm.toString(makeAddr("run-emergency")));
         _set("TIMELOCK_MIN_DELAY", "172800");
         _set("DEPLOYMENT_OUT", OUT_PATH);
@@ -1720,37 +1735,182 @@ contract RunEntrypointRelay {
     }
 }
 
-/// @dev devops review 2026-09-30: inputs the ceremony used to accept silently.
+/// @dev One deployment scheme: the delay floor is keyed to chain id 8453.
 ///      One contract per test: each mutates env vars the base setUp also sets,
-///      and forge runs tests in parallel over a process-wide environment.
+///      and forge runs the tests of a contract in parallel over a process-wide environment.
 contract DeployTimelockDelayFloorTest is DeployTimelockRunEntrypointBase {
     function _prefix() internal pure override returns (string memory) {
-        return "RM_REVIEW_R04_FLOOR_";
+        return "RM_S1_FLOOR_8453_";
     }
 
-    /// @notice R-04: a delay under 48 hours is refused on the broadcast path
-    ///         unless the devnet override is set explicitly.
-    function test_run_revertsBelowDelayFloor() public {
+    /// @notice On chain id 8453 a delay under 48 hours is refused.
+    function test_run_revertsBelowDelayFloorOnBase() public {
+        vm.chainId(8453);
+        _set("EXPECTED_CHAIN_ID", "8453");
         _set("TIMELOCK_MIN_DELAY", "60");
-        vm.expectRevert(
-            bytes(
-                "TIMELOCK_MIN_DELAY below 172800 (48h): set ALLOW_SHORT_TIMELOCK_DELAY=true only on a devnet"
-            )
-        );
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
     }
 }
 
-contract DeployTimelockDelayOverrideTest is DeployTimelockRunEntrypointBase {
+contract DeployTimelockDelayBoundaryTest is DeployTimelockRunEntrypointBase {
     function _prefix() internal pure override returns (string memory) {
-        return "RM_REVIEW_R04_OVERRIDE_";
+        return "RM_S1_FLOOR_BOUNDARY_";
     }
 
-    function test_run_shortDelayAllowedWithExplicitOverride() public {
-        _set("TIMELOCK_MIN_DELAY", "60");
-        _set("ALLOW_SHORT_TIMELOCK_DELAY", "true");
+    /// @notice The floor is exact: 172799 reverts, 172800 passes.
+    function test_run_floorBoundaryOnBase() public {
+        vm.chainId(8453);
+        _set("EXPECTED_CHAIN_ID", "8453");
+        _set("TIMELOCK_MIN_DELAY", "172799");
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        _set("TIMELOCK_MIN_DELAY", "172800");
         DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
-        assertEq(d.timelock.getMinDelay(), 60, "override not honoured");
+        assertEq(d.timelock.getMinDelay(), 172_800, "floor delay not applied");
+    }
+}
+
+contract DeployTimelockBaseUnsetChainTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_BASE_UNSET_";
+    }
+
+    /// @notice On chain id 8453 an unset EXPECTED_CHAIN_ID reverts.
+    function test_run_revertsWithoutExpectedChainOnBase() public {
+        vm.chainId(8453);
+        vm.expectRevert(bytes("EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+}
+
+contract DeployTimelockBaseWrongChainTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_BASE_WRONG_";
+    }
+
+    /// @notice On chain id 8453 an EXPECTED_CHAIN_ID that is not 8453 reverts.
+    function test_run_revertsWithWrongExpectedChainOnBase() public {
+        vm.chainId(8453);
+        _set("EXPECTED_CHAIN_ID", "918453");
+        vm.expectRevert(bytes("EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+}
+
+contract DeployTimelockTwinDelayTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_FLOOR_TWIN_";
+    }
+
+    /// @notice On the Twin chain (918453) a short delay is an allowed parameter.
+    function test_run_shortDelayAllowedOnTwinChain() public {
+        vm.chainId(918453);
+        _set("TIMELOCK_MIN_DELAY", "60");
+        DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        assertEq(d.timelock.getMinDelay(), 60, "short delay not accepted on the Twin chain");
+    }
+}
+
+/// @notice The full Safe check of `_validate` (issue #1483): only a real SafeL2 1.4.1 proxy with
+///         the expected owners and threshold is accepted.
+contract DeployTimelockSafeChecksTest is SafeFixture {
+    ManifestHarness internal harness;
+    DeployTimelock.Deployed internal d;
+    address internal deployer = makeAddr("safe-check-deployer");
+
+    function setUp() public {
+        harness = new ManifestHarness();
+        _installSafeSet();
+        d.vault = makeAddr("v");
+        d.gateway = makeAddr("g");
+        d.registry = makeAddr("r");
+        d.router = makeAddr("ro");
+        d.governance = makeAddr("go");
+        d.emergency = makeAddr("e");
+        d.minDelay = 172_800;
+    }
+
+    function _validate(address safe, DeployTimelock.SafeSpec memory spec) internal {
+        d.safe = safe;
+        vm.prank(deployer);
+        harness.exposedValidate(d, spec);
+    }
+
+    function test_realSafe_accepted() public {
+        address safe = _newDefaultSafe();
+        _validate(safe, _fixtureSpec());
+    }
+
+    function test_tenByteStub_rejected() public {
+        address stub = makeAddr("stub");
+        vm.etch(stub, hex"60016000526001601ff3");
+        assertEq(stub.code.length, 10);
+        vm.expectRevert();
+        _validate(stub, _fixtureSpec());
+    }
+
+    function test_mockSafe_rejected() public {
+        address mock = address(new MockHighThresholdSafe());
+        vm.expectRevert(bytes("SAFE_ADDRESS is not a SafeProxy 1.4.1: codehash mismatch"));
+        _validate(mock, _fixtureSpec());
+    }
+
+    function test_eoa_rejected() public {
+        vm.expectRevert(bytes("SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first"));
+        _validate(makeAddr("an-eoa"), _fixtureSpec());
+    }
+
+    function test_wrongOwners_rejected() public {
+        address safe = _newDefaultSafe();
+        DeployTimelock.SafeSpec memory spec = _fixtureSpec();
+        spec.owners[2] = makeAddr("not-an-owner");
+        vm.expectRevert(bytes("SAFE_OWNERS entry is not a Safe owner"));
+        _validate(safe, spec);
+    }
+
+    function test_ownerCountMismatch_rejected() public {
+        address safe = _newDefaultSafe();
+        DeployTimelock.SafeSpec memory spec = _fixtureSpec();
+        address[] memory two = new address[](2);
+        two[0] = spec.owners[0];
+        two[1] = spec.owners[1];
+        spec.owners = two;
+        vm.expectRevert(bytes("Safe owner count != SAFE_OWNERS"));
+        _validate(safe, spec);
+    }
+
+    function test_wrongThreshold_rejected() public {
+        address safe = _newDefaultSafe();
+        DeployTimelock.SafeSpec memory spec = _fixtureSpec();
+        spec.threshold = 3;
+        vm.expectRevert(bytes("Safe threshold != SAFE_THRESHOLD"));
+        _validate(safe, spec);
+    }
+
+    function test_safeWithThresholdOne_rejected() public {
+        address safe = _newSafe(_fixtureOwners(), 1);
+        DeployTimelock.SafeSpec memory spec = _fixtureSpec();
+        spec.threshold = 1;
+        vm.expectRevert(bytes("SAFE_ADDRESS threshold < 2: configure at least 2-of-N quorum"));
+        _validate(safe, spec);
+    }
+
+    function test_nonCanonicalFallbackHandler_rejected() public {
+        address safe = _newSafeWith(_fixtureOwners(), 2, makeAddr("other-handler"));
+        vm.expectRevert(
+            bytes("Safe fallback handler is not the canonical CompatibilityFallbackHandler")
+        );
+        _validate(safe, _fixtureSpec());
+    }
+
+    function test_proxyOnNonCanonicalSingleton_rejected() public {
+        address safe = _newDefaultSafe();
+        address other = makeAddr("other-singleton");
+        vm.etch(other, FIXTURE_SAFE_L2_SINGLETON.code);
+        vm.store(safe, bytes32(0), bytes32(uint256(uint160(other))));
+        vm.expectRevert(bytes("SAFE_ADDRESS does not delegate to the canonical SafeL2 singleton"));
+        _validate(safe, _fixtureSpec());
     }
 }
 

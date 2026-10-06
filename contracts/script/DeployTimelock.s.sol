@@ -16,10 +16,16 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
-/// @dev Minimal Safe interface — only `getThreshold()` is required for the
-///      deploy-time guard that rejects EOA or low-threshold Safe addresses.
-interface ISafeMinimal {
+/// @dev Safe 1.4.1 read surface used by the full deploy-time Safe checks.
+interface ISafeFull {
     function getThreshold() external view returns (uint256);
+    function getOwners() external view returns (address[] memory);
+    function isOwner(address owner) external view returns (bool);
+    function VERSION() external view returns (string memory);
+    function getModulesPaginated(address start, uint256 pageSize)
+        external
+        view
+        returns (address[] memory array, address next);
 }
 
 /// @dev Minimal vault interface used to link the registry into the vault so the
@@ -88,14 +94,18 @@ interface IRouterGovernanceQuorum {
 ///           EMERGENCY_ADDRESS      — independent hot key that receives the vault
 ///                                    EMERGENCY_ROLE (must differ from the deployer
 ///                                    EOA; ACL-1 / F-01)
-///           TIMELOCK_MIN_DELAY     — minimum delay in seconds. Must be >= 172800
-///                                    (48 hours, security-model.md §4) unless
-///                                    ALLOW_SHORT_TIMELOCK_DELAY=true (devnets only).
+///           TIMELOCK_MIN_DELAY     — minimum delay in seconds. On chain id 8453 it
+///                                    must be >= 172800 (48 hours, security-model.md
+///                                    §4). On any other chain (the Twin chain 918453)
+///                                    any non-zero delay is accepted.
+///           SAFE_OWNERS            — comma-separated owners the Safe must have
+///           SAFE_THRESHOLD         — threshold the Safe must have (>= 2)
+///
+///         On chain id 8453, EXPECTED_CHAIN_ID must be set to 8453.
 ///
 ///         Optional env vars:
 ///           EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches
-///                                    (set 8453 for Base mainnet)
-///           ALLOW_SHORT_TIMELOCK_DELAY — `true` lifts the 48-hour floor. Devnets only.
+///                                    (mandatory on 8453)
 ///           DEPLOYMENT_OUT         — output JSON path; default deployments/timelock-<chain_id>.json
 ///           IC_POLICY_ADDRESS      — InvestmentCommitteePolicy (issue #1319, one-
 ///                                    ceremony rule #1247 AC10 / INV-3). When set,
@@ -146,6 +156,28 @@ contract DeployTimelock is ExpectedChainGuard {
     /// @dev security-model.md §4: production timelock delay floor, 48 hours.
     uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
 
+    /// @dev Safe 1.4.1 canonical deployments (identical on Base and on the Twin chain,
+    ///      whose state is a Base snapshot).
+    address public constant SAFE_L2_SINGLETON = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+    address public constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+    /// @dev Runtime codehash of the SafeProxy 1.4.1 the canonical factory deploys
+    ///      (the same value scripts/stage/fusion-ceremony.sh checks). A stub, a mock or
+    ///      any other proxy differs.
+    bytes32 public constant SAFE_PROXY_1_4_1_CODEHASH =
+        0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c;
+    /// @dev Safe storage slots: keccak256("guard_manager.guard.address") and
+    ///      keccak256("fallback_manager.handler.address").
+    bytes32 public constant SAFE_GUARD_SLOT =
+        0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8;
+    bytes32 public constant SAFE_FALLBACK_HANDLER_SLOT =
+        0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
+
+    /// @notice SAFE_OWNERS and SAFE_THRESHOLD: what the Safe at SAFE_ADDRESS must look like.
+    struct SafeSpec {
+        address[] owners;
+        uint256 threshold;
+    }
+
     struct Deployed {
         TimelockController timelock;
         address vault;
@@ -186,25 +218,20 @@ contract DeployTimelock is ExpectedChainGuard {
         d.governance = vm.envAddress(string.concat(prefix, "GOVERNANCE_ADDRESS"));
         d.safe = vm.envAddress(string.concat(prefix, "SAFE_ADDRESS"));
         d.emergency = vm.envAddress(string.concat(prefix, "EMERGENCY_ADDRESS"));
-        d.minDelay = vm.envUint(string.concat(prefix, "TIMELOCK_MIN_DELAY"));
+        d.minDelay = _envUintRequired(string.concat(prefix, "TIMELOCK_MIN_DELAY"));
+        SafeSpec memory spec = SafeSpec({
+            owners: _readAddressList(string.concat(prefix, "SAFE_OWNERS")),
+            threshold: _envUintRequired(string.concat(prefix, "SAFE_THRESHOLD"))
+        });
         d.icPolicy = vm.envOr(string.concat(prefix, "IC_POLICY_ADDRESS"), address(0));
         d.consensusReceipt =
             vm.envOr(string.concat(prefix, "CONSENSUS_RECEIPT_ADDRESS"), address(0));
         d.receiptAdmin = vm.envOr(string.concat(prefix, "RECEIPT_ADMIN_ADDRESS"), address(0));
 
+        // Strict on 8453: an unset EXPECTED_CHAIN_ID no longer disables the check.
         _requireExpectedChain(prefix);
-        // security-model.md §4: the production delay for high-risk operations is
-        // >= 48 hours. The contract accepts any non-zero delay, and nothing else
-        // in the ceremony checks it (devops review 2026-09-30, R-04: a 60-second
-        // delay landed on a mainnet fork with no error). Devnets opt out
-        // explicitly; a broadcast run never gets a short delay by accident.
-        require(
-            d.minDelay >= MIN_PRODUCTION_DELAY
-                || vm.envOr(string.concat(prefix, "ALLOW_SHORT_TIMELOCK_DELAY"), false),
-            "TIMELOCK_MIN_DELAY below 172800 (48h): set ALLOW_SHORT_TIMELOCK_DELAY=true only on a devnet"
-        );
 
-        _validate(d);
+        _validate(d, spec);
 
         vm.startBroadcast();
         d.timelock = _deployAndWire(d);
@@ -238,7 +265,7 @@ contract DeployTimelock is ExpectedChainGuard {
         d.emergency = emergency_;
         d.minDelay = minDelay_;
 
-        _validate(d);
+        _validateBasic(d);
         d.timelock = _deployAndWire(d);
     }
 
@@ -275,7 +302,7 @@ contract DeployTimelock is ExpectedChainGuard {
         d.consensusReceipt = consensusReceipt_;
         d.receiptAdmin = receiptAdmin_;
 
-        _validate(d);
+        _validateBasic(d);
         d.timelock = _deployAndWire(d);
     }
 
@@ -305,7 +332,7 @@ contract DeployTimelock is ExpectedChainGuard {
         d.minDelay = minDelay_;
         d.agents = agents_;
 
-        _validate(d);
+        _validateBasic(d);
         d.timelock = _deployAndWire(d);
     }
 
@@ -328,7 +355,22 @@ contract DeployTimelock is ExpectedChainGuard {
         return vm.envAddress(name, ",");
     }
 
-    function _validate(Deployed memory d) internal view {
+    /// @dev A required comma-separated address list from env var `name`.
+    function _readAddressList(string memory name) internal view returns (address[] memory) {
+        require(vm.envExists(name), string.concat(name, " must be set"));
+        require(bytes(vm.envString(name)).length != 0, string.concat(name, " is empty"));
+        return vm.envAddress(name, ",");
+    }
+
+    /// @dev The full input check of `run()`: the basic checks plus the real-Safe check.
+    /// @param spec SAFE_OWNERS and SAFE_THRESHOLD: the owners and threshold the Safe must have.
+    function _validate(Deployed memory d, SafeSpec memory spec) internal view {
+        _validateBasic(d);
+        _requireRealSafe(d.safe, spec.owners, spec.threshold);
+    }
+
+    /// @dev The checks every entry point runs, including the in-process test entry points.
+    function _validateBasic(Deployed memory d) internal view {
         require(d.vault != address(0), "VAULT_ADDRESS=0");
         require(d.gateway != address(0), "GATEWAY_ADDRESS=0");
         require(d.registry != address(0), "REGISTRY_ADDRESS=0");
@@ -337,6 +379,15 @@ contract DeployTimelock is ExpectedChainGuard {
         require(d.safe != address(0), "SAFE_ADDRESS=0");
         require(d.emergency != address(0), "EMERGENCY_ADDRESS=0");
         require(d.minDelay > 0, "TIMELOCK_MIN_DELAY=0");
+        // Delay floor, keyed to the chain id (security-model.md §4). A require, never a
+        // different code path: 8453 refuses anything under 48 hours, every other chain
+        // (the Twin chain 918453, anvil) accepts any non-zero delay.
+        if (block.chainid == BASE_MAINNET_CHAIN_ID) {
+            require(
+                d.minDelay >= MIN_PRODUCTION_DELAY,
+                "TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"
+            );
+        }
 
         // ACL-1 / F-01: the emergency hot key must be independent of the deployer
         // EOA. After handover the deployer holds NO privileged role; routing the
@@ -353,8 +404,63 @@ contract DeployTimelock is ExpectedChainGuard {
 
         // AC: The Safe at SAFE_ADDRESS must have threshold >= 2.
         // A 1-of-N threshold provides no meaningful quorum protection.
-        uint256 threshold = ISafeMinimal(d.safe).getThreshold();
+        uint256 threshold = ISafeFull(d.safe).getThreshold();
         require(threshold >= 2, "SAFE_ADDRESS threshold < 2: configure at least 2-of-N quorum");
+    }
+
+    /// @dev The full Safe check. The address must be a SafeProxy 1.4.1 (code and
+    ///      codehash) that delegates to the canonical SafeL2 singleton (slot 0), with
+    ///      exactly the expected owners and threshold, no modules, no guard and the
+    ///      canonical CompatibilityFallbackHandler. A stub, a mock or an EOA fails.
+    function _requireRealSafe(address safe, address[] memory owners, uint256 threshold)
+        internal
+        view
+    {
+        require(
+            safe.code.length > 0, "SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first"
+        );
+        require(
+            safe.codehash == SAFE_PROXY_1_4_1_CODEHASH,
+            "SAFE_ADDRESS is not a SafeProxy 1.4.1: codehash mismatch"
+        );
+        // SafeProxy keeps its singleton in storage slot 0: it must be the L2 singleton.
+        require(
+            address(uint160(uint256(vm.load(safe, bytes32(0))))) == SAFE_L2_SINGLETON,
+            "SAFE_ADDRESS does not delegate to the canonical SafeL2 singleton"
+        );
+        require(SAFE_L2_SINGLETON.code.length > 0, "SafeL2 singleton has no code on this chain");
+
+        require(owners.length >= 2, "SAFE_OWNERS must list at least 2 owners");
+        require(threshold >= 2, "SAFE_THRESHOLD < 2: configure at least 2-of-N quorum");
+        require(threshold <= owners.length, "SAFE_THRESHOLD exceeds SAFE_OWNERS");
+
+        ISafeFull s = ISafeFull(safe);
+        require(
+            keccak256(bytes(s.VERSION())) == keccak256("1.4.1"), "SAFE_ADDRESS VERSION is not 1.4.1"
+        );
+        require(s.getThreshold() == threshold, "Safe threshold != SAFE_THRESHOLD");
+
+        address[] memory actual = s.getOwners();
+        require(actual.length == owners.length, "Safe owner count != SAFE_OWNERS");
+        for (uint256 i = 0; i < owners.length; i++) {
+            require(owners[i] != address(0), "SAFE_OWNERS contains the zero address");
+            for (uint256 j = 0; j < i; j++) {
+                require(owners[i] != owners[j], "SAFE_OWNERS contains a duplicate");
+            }
+            require(s.isOwner(owners[i]), "SAFE_OWNERS entry is not a Safe owner");
+        }
+
+        // No module may bypass the owner quorum.
+        (address[] memory modules,) = s.getModulesPaginated(address(0x1), 10);
+        require(modules.length == 0, "Safe has an enabled module");
+        // No transaction guard: a guard can veto or rewrite every Safe transaction.
+        require(vm.load(safe, SAFE_GUARD_SLOT) == bytes32(0), "Safe has a transaction guard set");
+        // The canonical fallback handler, stored by setup().
+        require(
+            address(uint160(uint256(vm.load(safe, SAFE_FALLBACK_HANDLER_SLOT))))
+                == SAFE_FALLBACK_HANDLER,
+            "Safe fallback handler is not the canonical CompatibilityFallbackHandler"
+        );
     }
 
     function _deployAndWire(Deployed memory d) internal returns (TimelockController timelock) {

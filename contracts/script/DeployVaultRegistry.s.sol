@@ -56,6 +56,7 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address vault = vm.envAddress("VAULT_ADDRESS");
         address asset = vm.envAddress("USDC_ADDRESS");
+        _requireCanonicalUsdc(asset);
         string memory vaultName = _envStringOrDefault("VAULT_NAME", DEFAULT_VAULT_NAME);
         // The registry stores these two addresses without reading them; a wrong-chain
         // or mistyped address would register a vault with no code behind it.
