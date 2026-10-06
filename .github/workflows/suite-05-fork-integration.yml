@@ -156,6 +156,10 @@ jobs:
           pin-block: ${{ needs.pin.outputs.block }}
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
+      # The fixture deploys through the one deploy driver and the rehearsal key helper (publish-contracts/, Bun).
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
+
       - name: Build Solidity contracts (required by registry fork-e2e)
         run: forge build
 
@@ -214,6 +218,10 @@ jobs:
         with:
           pin-block: ${{ needs.pin.outputs.block }}
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+      # The fixture deploys through the one deploy driver and the rehearsal key helper (publish-contracts/, Bun).
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
 
       - name: Base testnet multi-network adapter e2e (fork-e2e)
         working-directory: testing/fork-e2e-rust

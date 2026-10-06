@@ -315,7 +315,7 @@ pub struct ForkFixture {
     pub rpc_label: String,
     pub pin: ForkPin,
     /// Actual chain_id returned by the connected backend. For anvil forks this
-    /// equals BASE_CHAIN_ID (8453); for the shared Geth devnet it is 918453.
+    /// is the Twin chain id (918453), for the child fork and the shared Twin fork alike.
     /// All transactions signed against this fixture MUST use this chain_id.
     pub chain_id: u64,
     rpc: Rpc,
@@ -334,7 +334,8 @@ impl ForkFixture {
     /// 1. `RMPC_TESTNET_RPC_URL` — connect directly to the shared Twin fork (anvil on real Base
     ///    state, chain id 918453). No second anvil. Accounts are funded with the anvil admin RPCs.
     /// 2. `RMPC_FORK_RPC_URL` — a fresh local `anvil --fork-url` of that upstream (a real archive
-    ///    endpoint, or the Twin fork itself) at a pinned block, chain id 8453.
+    ///    endpoint, or the Twin fork itself) at a pinned block, chain id 918453 (the Twin chain id: the
+    ///    clean-room vault deploy refuses 8453, so the child fork always carries the Twin id).
     ///
     /// Returns [`HarnessError::SkipNoRpc`] when neither is set. There is no saved state fixture.
     pub fn new() -> Result<Self, HarnessError> {
@@ -366,7 +367,7 @@ impl ForkFixture {
             .arg("--fork-block-number")
             .arg(pin.block.to_string())
             .arg("--chain-id")
-            .arg(BASE_CHAIN_ID.to_string())
+            .arg(deployed::TWIN_CHAIN_ID.to_string())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         let rpc_label = sanitize_rpc_label(&url);
@@ -386,12 +387,13 @@ impl ForkFixture {
         }
 
         let cid: u64 = rpc.chain_id()?;
-        if cid != BASE_CHAIN_ID {
+        if cid != deployed::TWIN_CHAIN_ID {
             if let Some(mut c) = backend.take() {
                 let _ = c.kill();
             }
             return Err(HarnessError::Rpc(format!(
-                "fork chain id {cid} != BASE_CHAIN_ID {BASE_CHAIN_ID}"
+                "fork chain id {cid} != Twin chain id {}",
+                deployed::TWIN_CHAIN_ID
             )));
         }
 
@@ -400,7 +402,7 @@ impl ForkFixture {
             rpc_url,
             rpc_label,
             pin,
-            chain_id: BASE_CHAIN_ID,
+            chain_id: deployed::TWIN_CHAIN_ID,
             rpc,
             tx_hashes: Mutex::new(Vec::new()),
             deployed: std::sync::OnceLock::new(),
