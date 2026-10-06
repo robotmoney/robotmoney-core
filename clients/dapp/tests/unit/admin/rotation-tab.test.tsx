@@ -19,13 +19,16 @@ import type { PreviewContext } from "../../../src/lib/preview";
 
 // Per-test wagmi state. Default: not connected, no reads, no simulate data
 // → buttons stay disabled.
-const wagmiState = vi.hoisted(() => ({
-  account: { isConnected: false } as { isConnected: boolean; address?: `0x${string}` },
-  hasAdmin: undefined as boolean | undefined,
-  agentOwner: undefined as string | undefined,
-  simData: undefined as unknown,
-  writeContract: undefined as unknown as (...args: unknown[]) => void,
-}));
+const wagmiState = vi.hoisted(() => {
+  const account: { isConnected: boolean; address?: `0x${string}` } = { isConnected: false };
+  return {
+    account,
+    hasAdmin: undefined as boolean | undefined,
+    agentOwner: undefined as string | undefined,
+    simData: undefined as unknown,
+    writeContract: undefined as unknown as (...args: unknown[]) => void,
+  };
+});
 
 vi.mock("wagmi", () => ({
   useAccount: () => wagmiState.account,

@@ -13,11 +13,14 @@ import type { PreviewContext } from "../../../src/lib/preview";
 import type { RoleName } from "../../../src/lib/abi";
 
 // Per-test wagmi state. Default: not connected, no role read, no simulate data.
-const wagmiState = vi.hoisted(() => ({
-  account: { isConnected: false } as { isConnected: boolean; address?: `0x${string}` },
-  hasRoleAdmin: undefined as boolean | undefined,
-  simData: undefined as unknown,
-}));
+const wagmiState = vi.hoisted(() => {
+  const account: { isConnected: boolean; address?: `0x${string}` } = { isConnected: false };
+  return {
+    account,
+    hasRoleAdmin: undefined as boolean | undefined,
+    simData: undefined as unknown,
+  };
+});
 
 vi.mock("wagmi", () => ({
   useAccount: () => wagmiState.account,
