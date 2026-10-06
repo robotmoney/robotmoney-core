@@ -61,7 +61,12 @@ jobs:
     # 25 (was 20): the logging-facade guard added by issue #1282 is the first
     # `cargo test` in this job, so on a cold cache it codegens rmpc-logging and
     # its (small) dependency tree that clippy had only ever type-checked.
-    timeout-minutes: 25
+    # 35 (was 25): the embedded-migration parity guard added by issue #1416 is
+    # an explorer-indexer test target, so on a cold cache it additionally
+    # codegens that package's dev-dependency graph (testcontainers, bollard,
+    # rmpc-fork-e2e) which clippy had only type-checked. The rebuild-trigger
+    # test after it recompiles only explorer-indexer itself (~1-2 min total).
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,6 +101,50 @@ jobs:
           bash .github/scripts/cargo_test_require_executed.sh \
             -p rmpc-logging \
             --test workspace_uses_shared_facade -- --nocapture
+
+      # EMBEDDED-MIGRATION PARITY GUARD (issue #1416)
+      # services/explorer-indexer/src/db.rs embeds the migration set at COMPILE
+      # time with `sqlx::migrate!("./migrations")`. On stable Rust that macro
+      # registers no `rerun-if-changed` for the directory it read (sqlx calls
+      # `proc_macro::tracked_path::path()` only under `sqlx_macros_unstable`).
+      # It expands each file it found to `include_str!`, so rustc tracks edits
+      # and deletions, but a newly ADDED `.sql` file is in no dep-info: before
+      # #1416 adding a migration did not make cargo rebuild the crate. Because
+      # Swatinem/rust-cache restores `target/` across runs, a PR that only
+      # added a migration could go GREEN with that migration never compiled
+      # in, and `indexer --migrate-only` built from that cache would not apply
+      # it. `services/explorer-indexer/build.rs` now supplies the missing
+      # dependency.
+      #
+      # migration_set_parity.rs compares the compile-time embedded set against
+      # the run-time contents of `migrations/` (versions, descriptions, SQL).
+      #
+      # It belongs in this LIGHT suite rather than suite 8
+      # (explorer-indexer-fast) for two reasons: it needs no Postgres, no Docker
+      # and no network — it is a filesystem walk plus an iteration over an
+      # embedded static — and its subject is the BUILD, so it must run on every
+      # Rust change including drafts. Suite 8 is `system-correctness` and skips
+      # draft PRs entirely, which is exactly when a stale `target/` bites.
+      # Wrapped in the executed-count guard so a zero-tests-collected run fails
+      # RED, never silent-green.
+      - name: Indexer embedded-migration parity guard
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer \
+            --test migration_set_parity -- --nocapture
+
+      # MIGRATION REBUILD-TRIGGER BEHAVIOURAL TEST (issue #1416)
+      # On a cold build the parity target above passes with or without
+      # build.rs, so it cannot see the trigger go missing. This script can:
+      # with target/ warm from the step above, it adds, edits, reverts and
+      # deletes a migration with no .rs change and asserts after each that
+      # explorer-indexer's build script re-ran, the crate recompiled and the
+      # parity target passed; it also checks an unchanged tree does NOT re-run
+      # the build script, that the `indexer` binary recompiles, and that a
+      # missing migrations/ fails the build loudly. It mutates the checkout
+      # and restores it on exit. Each step recompiles only explorer-indexer.
+      - name: Indexer migration rebuild-trigger test
+        run: bash .github/scripts/tests/test_indexer_migration_rebuild_trigger.sh
 
   audit:
     name: rust-audit
