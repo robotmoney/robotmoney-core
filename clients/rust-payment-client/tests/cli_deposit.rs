@@ -175,7 +175,9 @@ fn unique_state_dir() -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("rmpc-test-{stamp}-{}", std::process::id()))
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("rmpc-test-{stamp}-{}-{seq}", std::process::id()))
 }
 
 #[tokio::test]
