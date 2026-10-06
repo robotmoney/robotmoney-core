@@ -90,11 +90,6 @@ During the timelock delay window:
    `TimelockController.cancel(id)` at any time before execution, stopping the
    change without requiring a full quorum. This is the cheapest veto path.
 
-4. **Future upgrade path:** if the protocol adopts `$RM` token voting (Option B),
-   the `TimelockController` `CANCELLER_ROLE` can be extended to a token-vote
-   veto module without redeploying the vault. This upgrade path is reserved but
-   not implemented now.
-
 ### `addAsset` gate additions
 
 Before proposing a new token via `TimelockController.schedule()`, the Safe must
@@ -206,6 +201,8 @@ depositor protection during that window. The first checklist item (min
 delay ≥ 48 hours) is now enforced by the `DeployTimelock` floor on
 chain 8453.
 
+2026-10-06: no token-based governance is foreseen; considered alternatives that mention token voting are historical only.
+
 ## Consequences
 
 **Positive.**
@@ -216,8 +213,6 @@ chain 8453.
   the transparent-performance requirement (`docs/prd.md` §2).
 - The veto path is cheap (single Safe signer can cancel) and accessible
   (any observer can raise a challenge).
-- The upgrade path to token-vote veto (Option B) is preserved without
-  commitment.
 - Resolves gap-report Appendix C blocking item. AgentTokenVault (rmAGENT)
   may proceed to router-eligibility once the TWAP oracle, rebalancing model,
   and liquidity proof gaps are also resolved.
@@ -230,9 +225,8 @@ chain 8453.
 - The 48-hour delay for `addAsset` slows legitimate shortlist updates.
   A token that gains rapid community support still waits 48 hours from
   proposal to inclusion.
-- The governance model is still trust-centralized relative to a full
-  token-vote model (Option B). This is accepted for the Real-four-vault demo
-  phase; the upgrade path is documented.
+- The governance model is trust-centralized in the Safe signers. This is
+  accepted; there is no token-based governance.
 
 **Out of scope of this decision.**
 

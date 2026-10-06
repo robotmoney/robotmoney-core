@@ -20,10 +20,9 @@ The whitepaper argues the inclusion attack is self-punishing because attackers'
 `$RM` loses value if their token underperforms, but the magnitude is not
 modeled: how much `$RM` must an attacker hold to swing allocation, vs. the vault
 buy pressure produced, vs. expected `$RM` loss from underperformance? Without
-numbers, "self-punishing" is an assertion, not a proof. Requires economic
-modeling; applicable once RM governance controls agent-token inclusion or
-per-vault asset selection (see `docs/development/open-questions.md` §1.3).
-**Research open.**
+numbers, "self-punishing" is an assertion, not a proof. It does not apply:
+there is no token-based governance (owner decision 2026-10-06), so holding
+`$RM` never swings allocation or agent-token inclusion. **Closed.**
 
 ## Protocol-agent resilience and failure modes (§3.10)
 
@@ -35,4 +34,4 @@ allocation, posts the public narrative) as a single point of failure: offline,
 compromise, hallucinated allocation, or operator departure. The likely
 requirement is a standing research project with **periodic audits** of agent
 behavior and operator key custody, rather than a contract feature. Out of scope
-while the only on-chain vote is RM-token router weights. **Research open.**
+while the only on-chain vote is admin-assigned router-weight governance. **Research open.**

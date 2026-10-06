@@ -20,9 +20,8 @@ authority for signing and execution, while indexed data is used only for
 display, history, and public observability.
 
 Current governance uses admin-assigned voting power: `ADMIN_ROLE` assigns
-each voter's power and controls proposal creation. Token-holder voting
-(RM-balance-weighted) is a future goal and is not active in the current
-deployment. See §2.3 and `docs/prd.md` §"Allocation Governance".
+each voter's power and controls proposal creation. There is no
+token-based governance. See §2.3 and `docs/prd.md` §"Allocation Governance".
 
 A fourth surface, the agentic **Investment Committee**, sits upstream of
 governance: admin-allowlisted agents register an on-chain identity and
@@ -98,13 +97,10 @@ onboarding, vault retirement, per-vault asset selection, per-vault
 strategy internals, adapter selection, adapter caps, fees, or agent
 permissions.
 
-**Future goal:** Token-holder voting weighted by RM-balance snapshot
-(ERC-20 Votes / EIP-5805) replaces admin assignment once the RM token's
-historical-balance interface is confirmed and a real token distribution
-exists. The quorum, cadence, execution-delay, and setWeights call-path
-decisions are recorded in
-`docs/technical/governance-decisions.md`. Until that phase ships,
-admin-assigned voting power remains the only active governance model.
+There is no token-based governance, and none is planned. The quorum,
+cadence, execution-delay, and setWeights call-path decisions are recorded
+in `docs/technical/governance-decisions.md`. Admin-assigned voting power
+is the only governance model.
 
 The governance read surface must expose proposal state, vote tallies,
 cadence metadata, execution state, and the resulting router weights. Those
@@ -1505,7 +1501,7 @@ this architecture:
 | --- | --- | --- |
 | Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The router is not yet on the production mainnet deployment manifest; mainnet onboarding remains planned work on the Plan tracking issue (#109). | — |
 | Vault registry contract | Resolved: `contracts/VaultRegistry.sol` is shipped with stable read methods and event history, indexed by the explorer. Router eligibility is expressed as `setRouterEligible(vault, eligible)` on the registry. | — |
-| Router-weight governance implementation | Resolved (MVP shipped): `contracts/RouterGovernance.sol` is deployed with admin-assigned voting power. `ADMIN_ROLE` assigns voter weights and creates proposals. Quorum, voting period, and execution delay are `ADMIN_ROLE`-configurable storage variables, not fixed in the contract: `setQuorumThreshold`, `setVotingPeriod`, and `setExecutionDelay` adjust them, bounded only by the constant floors `MIN_QUORUM_THRESHOLD` (2), `MIN_VOTING_PERIOD` (1 hour), and `MIN_EXECUTION_DELAY` (1 hour). There is no `cadenceWindow` variable and quorum is an absolute voting-power threshold, not a 5 %-of-`RM.totalSupply()` denominator. `contracts/script/DeployRouterGovernance.s.sol` defaults to a 1-hour voting period, 1-hour execution delay, and quorum 2, and also grants the deployed `RouterGovernance` `ADMIN_ROLE` on the `PortfolioRouter` so `execute()` can reach `setWeights` — without that grant the approving body can approve and cannot act. The quorum floor of 2 is enforced by the contract at both write sites (constructor and `setQuorumThreshold`), so a configured deployment cannot be walked back to a single-voter quorum; it is a bytecode constant, so raising it requires a redeploy rather than an upgrade. The 5 %/7-day/5-day/48 h figures are deferred token-holder-governance targets, not shipped contract constants. Token-holder voting (RM-balance snapshot via ERC-20 Votes) is a future goal; the snapshot-mechanism risk is documented in `docs/technical/governance-decisions.md` §6.1. | Current admin-assigned MVP is the active model; do not build RM-snapshot voting until `docs/technical/governance-decisions.md` §6.1 is resolved and a real token distribution exists. |
+| Router-weight governance implementation | Resolved (MVP shipped): `contracts/RouterGovernance.sol` is deployed with admin-assigned voting power. `ADMIN_ROLE` assigns voter weights and creates proposals. Quorum, voting period, and execution delay are `ADMIN_ROLE`-configurable storage variables, not fixed in the contract: `setQuorumThreshold`, `setVotingPeriod`, and `setExecutionDelay` adjust them, bounded only by the constant floors `MIN_QUORUM_THRESHOLD` (2), `MIN_VOTING_PERIOD` (1 hour), and `MIN_EXECUTION_DELAY` (1 hour). There is no `cadenceWindow` variable and quorum is an absolute voting-power threshold, not a 5 %-of-`RM.totalSupply()` denominator. `contracts/script/DeployRouterGovernance.s.sol` defaults to a 1-hour voting period, 1-hour execution delay, and quorum 2, and also grants the deployed `RouterGovernance` `ADMIN_ROLE` on the `PortfolioRouter` so `execute()` can reach `setWeights` — without that grant the approving body can approve and cannot act. The quorum floor of 2 is enforced by the contract at both write sites (constructor and `setQuorumThreshold`), so a configured deployment cannot be walked back to a single-voter quorum; it is a bytecode constant, so raising it requires a redeploy rather than an upgrade. The 5 %/7-day/5-day/48 h figures were early recommendations, not shipped contract constants. `vote()` reads admin-assigned power at the proposal's snapshot block (`docs/technical/governance-decisions.md` §6.1). There is no token-based governance. | Admin-assigned voting power is the only governance model. |
 | Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC at launch; wSOL has no usable pool) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |

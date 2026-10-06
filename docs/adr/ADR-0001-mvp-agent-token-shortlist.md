@@ -49,7 +49,7 @@ admin path: a Safe (≥2-of-N) proposes/executes against the
 `TimelockController` that holds `ADMIN_ROLE` on the vault, now subject to
 the mandatory timelock delay and public veto window specified in
 [ADR-0004](ADR-0004-agent-token-shortlist-governance.md). There is no
-separate token-holder vote over membership in the MVP.
+separate token-holder vote over membership.
 
 ## Amendment — 2026-06-15: Real four-vault demo shortlist
 
@@ -147,6 +147,8 @@ Unchanged by this amendment: the hand-picked-not-quant-filtered method,
 the equal-weight allocation, the admin-curation path (now as amended in
 ADR-0004), and the absence of any RM-specific guard in code.
 
+2026-10-06: no token-based governance is foreseen; considered alternatives that mention token voting are historical only.
+
 ## Consequences
 
 **Positive.**
@@ -175,8 +177,8 @@ ADR-0004), and the absence of any RM-specific guard in code.
 **Out of scope of this decision.**
 
 - The long-term ownership model (admin-curated vs. RM-inclusion vote
-  vs. bribery flow) is **deferred**, not decided. This ADR commits the
-  MVP only.
+  vs. bribery flow) was **deferred** here. ADR-0004 decides it: admin
+  curation behind the timelock. This ADR commits the MVP only.
 - Trading authority and strategy inside the vault (open-questions §3.2)
   is not resolved; the MVP vault holds the basket and rebalances per
   §3.15 only.

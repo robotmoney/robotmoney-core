@@ -10,8 +10,8 @@
  * and hands it to the wallet.
  *
  * NOTE: Current governance is admin-weighted (MVP mock). Voting power is
- * assigned by ADMIN_ROLE, not derived from token holdings. Token-holder
- * voting is a future goal.
+ * assigned by ADMIN_ROLE, not derived from token holdings. There is no
+ * token-based governance.
  *
  * Data flow:
  *   - Proposal list and tally: fetched from GET /v1/governance/proposals

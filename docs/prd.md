@@ -36,8 +36,8 @@ organizations a way to contribute visible allocation signals.
 - Autonomous depositors can authorize agent activity with user-defined
   limits, destinations, recipients, and expiration.
 - Addresses with admin-assigned voting power can vote on target weights
-  for the Portfolio Router allocation. (Current governance is an
-  admin-weighted MVP mock; token-holder voting is a future goal.)
+  for the Portfolio Router allocation. (Governance is admin-weighted;
+  there is no token-based governance.)
 - Any user can inspect vault availability, allocation weights,
   performance, fees, governance state, and execution results.
 - Product failures are explicit: users receive a product-level reason
@@ -74,9 +74,8 @@ Success is measured by:
   positions.
 - **Governance voter.** An address with admin-assigned voting power
   (current MVP) who votes on target weights for the Portfolio Router
-  allocation and observes protocol value capture. Token-holder voting
-  is a future goal once a real token snapshot or voting-power source
-  is integrated.
+  allocation and observes protocol value capture. There is no
+  token-based governance.
 - **Committee agent.** An admin-allowlisted AI agent, operated by a
   participating organization, that holds a registered on-chain identity
   and submits signed per-vault allocation-tilt votes over the vaults. It
@@ -105,9 +104,8 @@ Access expectations:
   (deploy-time agent removal not yet implemented: tracked in the mainnet
   plan).
 - Addresses with admin-assigned voting power can participate in
-  allocation-weight governance and view governance history. (Current
-  governance is admin-weighted MVP; token-holder voting is a future
-  goal.)
+  allocation-weight governance and view governance history. (Governance
+  is admin-weighted; there is no token-based governance.)
 - Integrators can read public product state and submit user-authorized
   actions.
 - Committee agents can register an identity and submit signed votes only
@@ -134,8 +132,8 @@ Access expectations:
   product — so that funds are available when needed.
 - As an address with admin-assigned voting power, I want to vote on
   Portfolio Router target weights so that I can influence how the
-  composite treasury exposure is balanced. (Token-holder voting is a
-  future goal; current governance is admin-weighted MVP.)
+  composite treasury exposure is balanced. (Governance is
+  admin-weighted; there is no token-based governance.)
 - As a committee agent operated by a participating organization, I want to
   register a signed on-chain identity and submit a fixed-shape per-vault
   allocation-tilt vote referencing a public rationale memo, so that my
@@ -191,7 +189,7 @@ Access expectations:
 
 NOTE: Current governance is admin-weighted MVP (RouterGovernance.sol).
 Voting power is assigned by ADMIN_ROLE; proposal creation is
-ADMIN_ROLE-only. Token-holder voting is a future goal. Governance is
+ADMIN_ROLE-only. There is no token-based governance. Governance is
 flat in the MVP — there is no tier system (Observer / Participant /
 Analyst / Strategist) and no activity gate. Tiering is deferred past
 MVP and is not on the build list.
@@ -337,8 +335,9 @@ Common edge cases:
 - Agent-created vaults or agent-created assets. Committee agents produce
   signalling-only allocation tilts; no agent has direct control over
   governance changes, router weights, or funds.
-- Token-holder governance over vault internals, per-vault asset
-  selection, strategy selection, fees, or individual agent permissions.
+- Token-based governance of any kind. Governance never covers vault
+  internals, per-vault asset selection, strategy selection, fees, or
+  individual agent permissions.
 - Hosted custody or hosted signing services.
 - Vault categories whose legal, liquidity, valuation, and disclosure
   requirements are not specified.
@@ -560,9 +559,8 @@ membership, venues, and pool parameters live in
 Timelock → `ADMIN_ROLE` path with a mandatory timelock delay and public
 veto window (see
 [ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md)); there is
-no token-holder vote over shortlist membership in the MVP. The
-production model (bribery-based or RM-token inclusion vote) is deferred
-past MVP. Basket products are valued using a manipulation-resistant
+no token-holder vote over shortlist membership, and no token-based
+governance is foreseen. Basket products are valued using a manipulation-resistant
 on-chain price for each asset held.
 
 This product has no in-product agent trading authority or strategy: it is

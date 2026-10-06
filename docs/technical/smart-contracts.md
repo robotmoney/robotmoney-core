@@ -58,7 +58,7 @@
         │              • Weight execution to PortfolioRouter            │
         │              • Admin-assigned voting power (MVP)              │
         │                                                               │
-        │              ADMIN_ROLE (MVP → token-holder voting future)   │
+        │              ADMIN_ROLE (no token-based governance)          │
         └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -498,7 +498,7 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 
 ### 9.2.1 Purpose and MVP scope
 
-`RouterGovernance` is the MVP governance module that controls `PortfolioRouter` weight changes. It creates weight proposals, accepts votes from ADMIN_ROLE-assigned voting power (not token holders; token-holder voting is a future goal), and executes once the voting period ends and quorum is reached after a configured execution delay.
+`RouterGovernance` is the MVP governance module that controls `PortfolioRouter` weight changes. It creates weight proposals, accepts votes from ADMIN_ROLE-assigned voting power (not token holders; there is no token-based governance), and executes once the voting period ends and quorum is reached after a configured execution delay.
 
 **Design constraints** (docs/architecture.md §2.3):
 - Controls router weights only; cannot govern vault internals, agent permissions, or protocol admin operations.

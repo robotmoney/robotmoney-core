@@ -7,9 +7,9 @@
  *       governance API: title/description, weight vector, vote tally
  *       (votes_for / votes_against), quorum deadline block, and
  *       freshness metadata are all visible in the DOM.
- *   (B) A connected RM-token holder sees the "Vote" button for an open
- *       proposal. After clicking, the write is handed to the injected
- *       wallet (no real on-chain vote needed — the wallet's
+ *   (B) A connected account with admin-assigned voting power sees the
+ *       "Vote" button for an open proposal. After clicking, the write is
+ *       handed to the injected wallet (no real on-chain vote needed — the wallet's
  *       eth_sendTransaction is intercepted by helpers/wallet.ts which
  *       signs and broadcasts with the admin private key).
  *   (C) When the explorer API returns an empty proposal list the panel
@@ -181,15 +181,15 @@ test.describe("suite-10: GovernancePanel E2E", () => {
       });
     });
 
-    // eth_call for RM balanceOf — return a non-zero balance so the
-    // connected wallet is eligible to vote.
+    // eth_call for votingPower / getPastVotes — return a non-zero
+    // admin-assigned power so the connected wallet is eligible to vote.
     await page.route(endpoints.rpc_url, async (route, request) => {
       const body = JSON.parse(request.postData() ?? "{}") as {
         method?: string;
         params?: unknown[];
       };
       if (body.method === "eth_call") {
-        // Return 1000 RM tokens (1000 * 10^18 ≈ 0x3635c9adc5dea00000).
+        // Return 1000e18 voting power (0x3635c9adc5dea00000).
         await route.fulfill({
           status: 200,
           contentType: "application/json",
