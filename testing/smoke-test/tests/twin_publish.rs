@@ -110,21 +110,43 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     let amount: u128 = 100_000_000; // 100 USDC
     fx.fund_gas(user, 10_000_000_000_000_000_000)
         .expect("fund gas for the depositor");
-    fx.fund_usdc(user, amount).expect("fund USDC for the depositor");
+    fx.fund_usdc(user, amount)
+        .expect("fund USDC for the depositor");
     let router = fx.router();
     let (router_s, amount_s) = (format!("{router:#x}"), amount.to_string());
     let usdc_before = fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance");
-    fx.cast_send(&pk, fx.usdc(), "approve(address,uint256)", &[&router_s, &amount_s])
-        .expect("approve the router");
-    fx.cast_send(&pk, router, "deposit(uint256,uint256[])", &[&amount_s, "[]"])
-        .expect("the router deposit must succeed on the Twin chain");
+    fx.cast_send(
+        &pk,
+        fx.usdc(),
+        "approve(address,uint256)",
+        &[&router_s, &amount_s],
+    )
+    .expect("approve the router");
+    fx.cast_send(
+        &pk,
+        router,
+        "deposit(uint256,uint256[])",
+        &[&amount_s, "[]"],
+    )
+    .expect("the router deposit must succeed on the Twin chain");
     let usdc_after_deposit = fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance");
-    assert_eq!(usdc_after_deposit, usdc_before - amount, "the deposit must pull exactly the amount");
-    let shares = fx.erc20_balance_of(fx.vault(), user).expect("rmUSDC share balance");
+    assert_eq!(
+        usdc_after_deposit,
+        usdc_before - amount,
+        "the deposit must pull exactly the amount"
+    );
+    let shares = fx
+        .erc20_balance_of(fx.vault(), user)
+        .expect("rmUSDC share balance");
     assert!(shares > 0, "the router deposit minted no rmUSDC shares");
     let (vault_s, shares_s) = (format!("{:#x}", fx.vault()), shares.to_string());
-    fx.cast_send(&pk, fx.vault(), "approve(address,uint256)", &[&router_s, &shares_s])
-        .expect("approve the router to redeem the shares");
+    fx.cast_send(
+        &pk,
+        fx.vault(),
+        "approve(address,uint256)",
+        &[&router_s, &shares_s],
+    )
+    .expect("approve the router to redeem the shares");
     fx.cast_send(
         &pk,
         router,
@@ -139,7 +161,14 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         ],
     )
     .expect("the router withdraw must succeed on the Twin chain");
-    assert_eq!(fx.erc20_balance_of(fx.vault(), user).expect("shares"), 0, "the withdraw left shares behind");
+    assert_eq!(
+        fx.erc20_balance_of(fx.vault(), user).expect("shares"),
+        0,
+        "the withdraw left shares behind"
+    );
     let usdc_after_withdraw = fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance");
-    assert!(usdc_after_withdraw > usdc_after_deposit, "the withdraw returned no USDC");
+    assert!(
+        usdc_after_withdraw > usdc_after_deposit,
+        "the withdraw returned no USDC"
+    );
 }
