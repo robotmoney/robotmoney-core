@@ -26,13 +26,14 @@
     "wagmi": "^2.12.0"
   },
   "overrides": {
-    "axios": "^1.18.0",
-    "brace-expansion": "^1.1.18",
+    "axios": "^1.20.0",
+    "brace-expansion": "^1.1.20",
     "browserslist": "^4.28.8",
     "js-yaml": "^4.3.1",
     "nanoid": "^3.3.18",
     "postcss": "^8.5.18",
-    "socket.io-parser": "^4.2.7"
+    "socket.io-parser": "^4.2.7",
+    "source-map-js": "^1.2.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
