@@ -215,7 +215,15 @@ export interface GovernOpts {
   row?: string;
   /** Where a row line goes. Default: stdout (console.log). */
   emit?: (line: string) => void;
+  /**
+   * Twin chain only: one generic Safe -> Timelock call (schedule, real delay by warp, execute) instead of a govern row. Test fixtures use it for
+   * actions that are not mainnet govern rows (gateway unpause, agent revoke or authorize). Refused on chain 8453. Not combined with `row`.
+   */
+  call?: TwinCall;
 }
+
+/** One generic timelock call, named by `label` (the manifest key, the salt input and the `row` of the output lines). */
+export interface TwinCall { label: string; target: Address; data: Hex }
 
 interface PhaseRecord { tx_hash?: string; safe_tx_hash?: string; status?: number; at: string; operation_id?: string; ready_at?: string; note?: string; [k: string]: unknown }
 /** What the run manifest keeps per row. A row is complete when it is skipped, executed or (for cancel) cancelled. */
@@ -355,6 +363,8 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   if (handle.owners.map((x) => x.toLowerCase()).sort().join() !== sheet.safeOwners.map((x) => x.toLowerCase()).sort().join()) throw new PublishError("GOVERN", "the Safe's owners on chain differ from the sheet", {});
   ctx.log.log("info", "stage.start", { stage: row.name, safe: a.safe, timelock: a.timelock });
   const state = (manifest.govern ??= {}) as GovernState;
+  if (o.call && ctx.chainId === BASE_CHAIN_ID) throw new PublishError("USAGE", "a generic timelock call is a Twin-chain test verb: it is refused on chain 8453");
+  if (o.call && o.row !== undefined) throw new PublishError("USAGE", "a generic timelock call and --row are mutually exclusive");
   const selected: GovernRowName | undefined = o.row === undefined ? undefined : resolveGovernRow(o.row);
   const salt = (name: string) => governSalt(ctx.coreSha, ctx.chainId, name);
   const note = (b: SafeTxBundle) => ({ tx_hash: b.executed?.tx_hash, safe_tx_hash: b.safe_tx_hash, status: b.executed?.status });
@@ -421,7 +431,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     return orderedPlan(calls, name, () => readBackStep(handle, sheet, a, name), `${calls.length} call(s)`);
   }
 
-  async function round(name: GovernRowName, p: RoundPlan): Promise<void> {
+  async function round(name: string, p: RoundPlan): Promise<void> {
     opIds[name] = p.id;
     const rec: RowRecord = state[name] ?? {};
     // phase 1: schedule (or, for a row whose operation is already on the timelock, adopt it)
@@ -475,6 +485,27 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     save();
     ctx.log.log("info", "govern.phase_done", { row: name, phase: "executed" });
     emitPhase(o, name, "executed", ex);
+  }
+
+  if (o.call) {
+    const { label, target, data } = o.call;
+    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label)) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
+    const name = `call-${label}`;
+    if (!rowComplete(state[name])) {
+      const p = { timelock: a.timelock, calls: [{ target, data }], salt: salt(name), form: "single" as const };
+      await round(name, {
+        id: await api.operationId(handle, p), description: `generic call ${label} to ${target}`,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${name}: ${label}` }),
+        execute: () => api.executeOnTimelock(handle, { ...p, description: `${name} execute` }),
+        readBack: async () => [],
+      });
+    } else {
+      const r = state[name]!;
+      if (r.scheduled) emitPhase(o, name, "scheduled", r.scheduled);
+      if (r.executed) emitPhase(o, name, "executed", r.executed);
+    }
+    save();
+    return { rows: [name], skipped: [], opIds };
   }
 
   for (const name of GOVERN_ROWS) {

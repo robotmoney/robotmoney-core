@@ -314,6 +314,11 @@ fn write_keystore_and_config(
     let state_dir = tmp.join("state");
     std::fs::create_dir_all(&state_dir)?;
 
+    // The Twin chain forwards pre-fork block ranges to the upstream, which caps eth_getLogs at 500
+    // blocks, so `rmpc status` cannot scan from `earliest`. The vault and gateway are already
+    // deployed, so the current block precedes every event the tests will look up.
+    let from_block = current_block_number(devnet.rpc_url())?;
+
     let config_path = tmp.join("rmpc.toml");
     let toml = format!(
         r#"chain_id              = {chain_id}
@@ -323,12 +328,14 @@ usdc_address          = "{usdc}"
 vault_address         = "{vault}"
 gateway_runtime_hash  = "{hash}"
 max_fee_per_gas_cap   = 100000000000
+gateway_from_block    = {from_block}
 
 [signer]
 allow_software_fallback = true
 keystore_path           = "{keystore}"
 "#,
         chain_id = devnet.chain_id(),
+        from_block = from_block,
         rpc_url = devnet.rpc_url(),
         gateway = devnet.gateway_hex(),
         usdc = devnet.usdc_hex(),
@@ -339,4 +346,21 @@ keystore_path           = "{keystore}"
     std::fs::write(&config_path, toml)?;
 
     Ok((keystore_path, config_path, state_dir))
+}
+
+/// `eth_blockNumber` through `cast rpc` (the same tool the smoke-test fixture uses).
+fn current_block_number(rpc_url: &str) -> Result<u64, HarnessError> {
+    let out = Command::new("cast")
+        .args(["rpc", "--rpc-url", rpc_url, "eth_blockNumber"])
+        .output()?;
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "eth_blockNumber failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let hex = text.trim().trim_matches('"').trim_start_matches("0x");
+    u64::from_str_radix(hex, 16)
+        .map_err(|e| HarnessError::other(format!("eth_blockNumber parse {text:?}: {e}")))
 }

@@ -42,6 +42,7 @@ fn config() -> Config {
         governance_address: None,
         timelock_address: None,
         timelock_from_block: None,
+        gateway_from_block: None,
         ic_policy_address: None,
         receipt_address: None,
         vault_addresses: None,

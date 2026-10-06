@@ -124,7 +124,7 @@ fn shared_fixture() -> &'static Mutex<Option<Fixture>> {
 /// test, which is fine because tests run with `--test-threads=1`.
 fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
     let cell = shared_fixture();
-    let mut guard = cell.lock().expect("shared fixture mutex poisoned");
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         let fx = Fixture::new().expect("boot the Twin chain + deploy");
         *guard = Some(fx);

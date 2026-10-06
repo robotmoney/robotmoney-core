@@ -438,6 +438,32 @@ impl Published {
         Ok(rows)
     }
 
+    /// Run one generic Safe -> Timelock call (schedule, real delay by warp, execute) through the real Safe.
+    /// A Twin-only test verb of the CLI (refused on 8453) for actions that are not mainnet govern rows.
+    /// `label` names the call in the run manifest. Returns the first tx hash.
+    pub fn govern_call(
+        &self,
+        label: &str,
+        target: &str,
+        calldata: &str,
+    ) -> Result<Vec<GovernRow>, HarnessError> {
+        let extra: Vec<String> = [
+            "--call-label",
+            label,
+            "--call-target",
+            target,
+            "--call-data",
+            calldata,
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let out = run_cli(&self.cfg, self, "govern", &extra)?;
+        let rows = parse_govern_output(&out)?;
+        check_govern_rows(&rows)?;
+        Ok(rows)
+    }
+
     /// Run the one verifier. Exits non-zero (an Err here) unless every label passes.
     /// Returns the verifier's output so a caller can diff its labels against mainnet's.
     pub fn verify(&self) -> Result<String, HarnessError> {

@@ -63,6 +63,8 @@ export const USAGE = `publish contracts
   --owner-signer S   govern: a Safe owner signer spec (repeat for each owner needed). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
                      beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453.
   --compare-sheet F  a second sheet for the sheet diff in the isomorphism report
+  --call-label L --call-target ADDR --call-data 0x..   govern, Twin chain 918453 only (refused on 8453): one generic Safe -> Timelock call (schedule, wait by warp, execute),
+                     for test fixtures whose action is not a mainnet govern row. Not combined with --row.
   --max-wait SECONDS govern: longest timelock wait this process accepts (default 3600)
 Aliases: --chain-id for --chain, --deploy-sha for --core-sha.
 Environment: PUBLISH_MANIFEST_DIR names the manifest directory (stage manifests are written and read there, not in the core checkout).
@@ -94,7 +96,7 @@ export interface CliDeps {
 
 export interface Parsed {
   chain: number; rpc: string; sheet: string; signer?: string; environment: string; coreSha: string; stage?: string; resume: boolean; dryRun: boolean;
-  verb?: Verb; row?: string; coreDir?: string; correlatedOwnersFile?: string; evidence?: string; countsDir?: string; measure: boolean; ownerSigners: string[]; compareSheet?: string; maxWait?: number;
+  verb?: Verb; row?: string; coreDir?: string; correlatedOwnersFile?: string; evidence?: string; countsDir?: string; measure: boolean; ownerSigners: string[]; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -107,7 +109,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, "correlated-owners-file": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -129,13 +131,23 @@ export function parseCli(argv: string[]): Parsed {
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
     resolveGovernRow(row); // an unknown row fails here, before any work
   }
+  let call: Parsed["call"];
+  if (v["call-label"] !== undefined || v["call-target"] !== undefined || v["call-data"] !== undefined) {
+    if (!(verb === "govern" || stage === "govern")) throw new PublishError("USAGE", `--call-label, --call-target and --call-data apply to the govern verb only\n${USAGE}`);
+    if (row !== undefined) throw new PublishError("USAGE", `--row and the --call-* options are mutually exclusive\n${USAGE}`);
+    const label = v["call-label"] as string | undefined, target = v["call-target"] as string | undefined, data = v["call-data"] as string | undefined;
+    if (!label || !target || !data) throw new PublishError("USAGE", `--call-label, --call-target and --call-data go together\n${USAGE}`);
+    if (!/^0x[0-9a-fA-F]{40}$/.test(target)) throw new PublishError("USAGE", `--call-target must be an address, got '${target}'`);
+    if (!/^0x([0-9a-fA-F]{2})+$/.test(data)) throw new PublishError("USAGE", "--call-data must be 0x-prefixed hex calldata");
+    call = { label, target, data };
+  }
   if (stage !== "plan") need("signer", v.signer);
   if (!/^https?:\/\//.test(v.rpc as string)) throw new PublishError("USAGE", "--rpc must be an http(s) URL");
   return {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, correlatedOwnersFile: v["correlated-owners-file"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined,
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call,
   };
 }
 
@@ -254,7 +266,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         // no --owner-signer on the Twin chain: the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts)
         const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
         const owners = await Promise.all(specs.map((s) => mk(s)));
-        await runGovern(c, row, m, { ownerSigners: owners, sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, ...(deps.govern ?? {}) });
+        await runGovern(c, row, m, { ownerSigners: owners, sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
       },
     });
     await finalNonceCheck(ctx, result.manifest, result.ran);

@@ -49,6 +49,17 @@ describe("rehearsal and production differ only in the arguments", () => {
     expect((await planOf(w)).code).toBe(EXIT_CODES.CHAIN);
   });
 
+  test("the --call-* options need the govern verb, all three together, no --row, an address and hex calldata", () => {
+    const base = ["--chain", "918453", "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
+    const c = ["--call-label", "x", "--call-target", `0x${"1".repeat(40)}`, "--call-data", "0xabcd"];
+    expect(parseCli(["govern", ...base, ...c]).call).toEqual({ label: "x", target: `0x${"1".repeat(40)}`, data: "0xabcd" });
+    expect(() => parseCli(["publish", ...base, ...c])).toThrow("govern verb only");
+    expect(() => parseCli(["govern", ...base, ...c, "--row", "agents"])).toThrow("mutually exclusive");
+    expect(() => parseCli(["govern", ...base, "--call-label", "x"])).toThrow("go together");
+    expect(() => parseCli(["govern", ...base, "--call-label", "x", "--call-target", "0x12", "--call-data", "0xab"])).toThrow("address");
+    expect(() => parseCli(["govern", ...base, "--call-label", "x", "--call-target", `0x${"1".repeat(40)}`, "--call-data", "abcd"])).toThrow("hex");
+  });
+
   test("the argument parser takes the documented flags and the aliases", () => {
     const base = ["--rpc", "http://x", "--sheet", "s", "--signer", "ledger", "--environment", "e"];
     const a = parseCli(["--chain", "8453", "--core-sha", SHA, ...base, "--resume", "--dry-run", "--stage", "libs"]);

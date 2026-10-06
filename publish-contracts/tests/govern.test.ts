@@ -379,3 +379,48 @@ describe("guards", () => {
     await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), { ownerSigners: signers(sheet), sender, api: tl.api })).rejects.toThrow("owners");
   });
 });
+
+describe("generic Safe -> Timelock call (Twin-only test verb, not a govern row)", () => {
+  const call = { label: "gateway-unpause", target: A.gateway, data: "0x1234" as `0x${string}` };
+
+  test("one call is one schedule and one execute through the timelock, recorded under its own key, GOVERN_ROWS untouched", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const out: string[] = [];
+    const res = await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl), call, emit: (l: string) => out.push(l) }));
+    expect(res.rows).toEqual(["call-gateway-unpause"]);
+    const lines = out.map((l) => JSON.parse(l));
+    expect(lines.map((l) => l.phase)).toEqual(["scheduled", "executed"]);
+    expect(lines.every((l) => l.row === "call-gateway-unpause" && l.status === 1)).toBe(true);
+    const s = tl.s.scheduled.get("call-gateway-unpause")!;
+    expect(s.form).toBe("single");
+    expect(s.calls).toEqual([{ target: A.gateway, data: "0x1234" }]);
+    expect(tl.s.events.length).toBe(2);
+    expect(manifest.stages.govern).toBeUndefined();
+    expect(GOVERN_ROWS as readonly string[]).not.toContain("call-gateway-unpause");
+  });
+
+  test("a second run of the same label does not schedule again", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl), call }));
+    await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl), call }));
+    expect(tl.s.events.length).toBe(2);
+  });
+
+  test("refused on 8453 before anything is sent", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { call }))).rejects.toThrow("refused on chain 8453");
+    expect(tl.s.events.length).toBe(0);
+  });
+
+  test("not combined with --row, and the label may not be a govern row name", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { call, row: "agents" }))).rejects.toThrow("mutually exclusive");
+    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { call: { ...call, label: "agents" } }))).rejects.toThrow("not a govern row name");
+  });
+});

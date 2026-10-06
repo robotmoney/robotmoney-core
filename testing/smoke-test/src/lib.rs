@@ -1328,19 +1328,53 @@ impl Fixture {
         self.cast_send(PAUSER_PRIVATE_KEY_HEX, self.gateway(), "pause()", &[])
     }
 
-    /// Unpause the gateway through the real Safe and the timelock (govern row `unpause-gateway`).
-    pub fn unpause_gateway(&self) -> Result<String, HarnessError> {
-        self.govern("unpause-gateway", &[])
+    /// Send `sig(args)` to `target` as a Safe -> Timelock call through the real SafeL2 (the CLI's Twin-only
+    /// generic call). The calldata is built with `cast calldata`. `label` must be unique per call in one fixture.
+    fn timelock_call(
+        &self,
+        label: &str,
+        target: Address,
+        sig: &str,
+        args: &[&str],
+    ) -> Result<String, HarnessError> {
+        let out = Command::new("cast")
+            .arg("calldata")
+            .arg(sig)
+            .args(args)
+            .output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast calldata {sig} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let data = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let rows = self
+            .published
+            .govern_call(label, &format!("{target:#x}"), &data)?;
+        Ok(rows.first().map(|r| r.tx_hash.clone()).unwrap_or_default())
     }
 
-    /// Revoke the agent's `AGENT_ROLE` through the real Safe and the timelock (govern row `revoke-agent`).
+    /// Unpause the gateway through the real Safe and the timelock (a generic timelock call: `unpause()` is
+    /// ADMIN_ROLE, held by the timelock after handover; it is not a mainnet govern row).
+    pub fn unpause_gateway(&self) -> Result<String, HarnessError> {
+        self.timelock_call("gateway-unpause", self.gateway(), "unpause()", &[])
+    }
+
+    /// Revoke the agent through the real Safe and the timelock (a generic timelock call: the timelock is the
+    /// agent's recorded owner after handover, and `revokeAgent` requires the owner).
     pub fn revoke_agent(&self) -> Result<String, HarnessError> {
         let agent = format!("{:#x}", self.agent());
-        self.govern("revoke-agent", &["--agent", &agent])
+        self.timelock_call(
+            "gateway-revoke-agent",
+            self.gateway(),
+            "revokeAgent(address)",
+            &[&agent],
+        )
     }
 
-    /// Re-grant the agent's `AGENT_ROLE` with the given policy caps through the
-    /// real Safe and the timelock (govern row `authorize-agent`).
+    /// Re-grant the agent with the given policy caps through the real Safe and the timelock (a generic
+    /// timelock call of `authorizeAgent`, ADMIN_ROLE). The timelock becomes the agent's owner again.
     pub fn reauthorize_agent(
         &self,
         max_per_payment: u128,
@@ -1348,18 +1382,17 @@ impl Fixture {
     ) -> Result<String, HarnessError> {
         let agent = format!("{:#x}", self.agent());
         let share_receiver = format!("{:#x}", self.share_receiver());
-        self.govern(
-            "authorize-agent",
-            &[
-                "--agent",
-                &agent,
-                "--max-per-payment",
-                &max_per_payment.to_string(),
-                "--max-per-window",
-                &max_per_window.to_string(),
-                "--share-receiver",
-                &share_receiver,
-            ],
+        // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
+        //  assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow, allowedSourceVaults)
+        // validUntil is the year 2100: the Twin chain time warps forward through every timelock delay.
+        let policy = format!(
+            "(true,4102444800,{max_per_payment},{max_per_window},{share_receiver},[],{share_receiver},{max_per_payment},{max_per_window},[])"
+        );
+        self.timelock_call(
+            "gateway-reauthorize-agent",
+            self.gateway(),
+            "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
+            &[&agent, &policy],
         )
     }
 

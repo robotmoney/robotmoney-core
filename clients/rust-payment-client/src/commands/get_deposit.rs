@@ -106,6 +106,10 @@ pub fn run(config_path: &Path, deposit_id_hex: &str, pretty: bool) -> i32 {
     };
 
     let topic0 = RobotMoneyGateway::AgentDeposit::SIGNATURE_HASH;
+    // Scan start: the configured gateway deployment block, else `earliest`.
+    let from_tag = cfg
+        .gateway_from_block
+        .map_or_else(|| "earliest".to_string(), |b| format!("0x{b:x}"));
 
     type Outcome = Result<Option<Envelope<DepositData>>, String>;
     let outcome: Outcome = rt.block_on(async {
@@ -121,9 +125,10 @@ pub fn run(config_path: &Path, deposit_id_hex: &str, pretty: bool) -> i32 {
         // could pick up a log mined after the `block_number` we report, so the
         // envelope tag and the returned data would disagree.
         let block_tag = format!("0x{block_number:x}");
+        let from_tag = from_tag.clone();
         let filter = json!({
             "address": gateway_addr,
-            "fromBlock": "earliest",
+            "fromBlock": from_tag,
             "toBlock": block_tag,
             "topics": [topic0, deposit_id],
         });
