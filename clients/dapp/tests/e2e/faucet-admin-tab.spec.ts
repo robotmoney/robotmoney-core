@@ -7,10 +7,14 @@
  *        button with a wallet selected mines a transaction that
  *        increases that wallet's USDC.balanceOf by exactly 100 USDC."
  *
- * Boots devnet via the existing globalSetup, opens the dapp as the
- * admin role, navigates to the Faucet tab, drips into the connected
- * EOA, and polls `USDC.balanceOf(admin)` until it has increased by
- * exactly `FAUCET_DRIP_AMOUNT_USDC`.
+ * Boots devnet via the existing globalSetup, opens the dapp with a fresh
+ * wallet, navigates to the Faucet tab, drips into the connected EOA, and
+ * polls `USDC.balanceOf(wallet)` until it has increased by exactly
+ * `FAUCET_DRIP_AMOUNT_USDC`.
+ *
+ * The connected wallet must NOT be the harness USDC holder: the holder is
+ * the faucet's own funding key, so a drip into it is a self-transfer with a
+ * zero balance delta. A fresh random EOA makes the delta real.
  *
  * Canonical: issue #261, docs/development/smoke-test-design.md.
  */
@@ -19,6 +23,7 @@ import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
+import { freshAccount } from "./helpers/depositor";
 
 const FAUCET_DRIP_AMOUNT_USDC = 100_000_000n;
 const POLL_INTERVAL_MS = 3_000;
@@ -78,20 +83,18 @@ test.describe("admin Faucet tab — testnet/devnet drip", () => {
   });
 
   test("Faucet tab drips exactly 100 USDC into the selected wallet", async ({ page }) => {
-    await openDapp(page, endpoints, { role: "admin" });
+    const wallet = freshAccount();
+    expect(wallet.address.toLowerCase()).not.toBe(endpoints.harness_usdc_holder_addr.toLowerCase());
+    await openDapp(page, endpoints, { privateKey: wallet.privateKey });
     await openTab(page, "faucet");
 
     // Wallet dropdown is populated; default selection is the connected EOA.
     const select = page.getByTestId("faucet-wallet-select");
     await expect(select).toBeVisible();
     const selectedValue = await select.inputValue();
-    expect(selectedValue.toLowerCase()).toBe(endpoints.admin_addr.toLowerCase());
+    expect(selectedValue.toLowerCase()).toBe(wallet.address.toLowerCase());
 
-    const baseline = await usdcBalanceOf(
-      endpoints.rpc_url,
-      endpoints.usdc_addr,
-      endpoints.admin_addr,
-    );
+    const baseline = await usdcBalanceOf(endpoints.rpc_url, endpoints.usdc_addr, wallet.address);
 
     // Drip button enables once the harness `balanceOf` preflight returns.
     const drip = page.getByTestId("faucet-drip-submit");
@@ -101,7 +104,7 @@ test.describe("admin Faucet tab — testnet/devnet drip", () => {
     const after = await waitForBalanceDelta(
       endpoints.rpc_url,
       endpoints.usdc_addr,
-      endpoints.admin_addr,
+      wallet.address,
       baseline,
       FAUCET_DRIP_AMOUNT_USDC,
     );

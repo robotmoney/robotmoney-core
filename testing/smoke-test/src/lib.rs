@@ -2629,7 +2629,13 @@ impl DappStack {
             ("VITE_DEVNET_RPC_URL", "".to_string()),
             ("VITE_EXPLORER_API_URL", "".to_string()),
             ("VITE_DAPP_URL", "".to_string()),
-            ("VITE_FAUCET_HARNESS_PRIVATE_KEY", String::new()),
+            // The dapp faucet (Faucet tab and onboarding seed) signs with the harness USDC holder,
+            // the Twin chain's funded faucet reserve. Test-only key; a mainnet build refuses any
+            // faucet key (clients/dapp/src/lib/buildEnvValidation.ts).
+            (
+                "VITE_FAUCET_HARNESS_PRIVATE_KEY",
+                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX.to_string(),
+            ),
             ("INDEXER_CHAIN_ID", "918453".to_string()),
             ("INDEXER_CHAIN_NAME", "devnet".to_string()),
             ("EXPLORER_API_CHAIN_ID", "918453".to_string()),
@@ -2736,7 +2742,10 @@ impl DappStack {
                 vite_explorer_api_url.clone(),
             ),
             ("VITE_DAPP_URL".into(), vite_dapp_url.clone()),
-            ("VITE_FAUCET_HARNESS_PRIVATE_KEY".into(), String::new()),
+            (
+                "VITE_FAUCET_HARNESS_PRIVATE_KEY".into(),
+                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX.to_string(),
+            ),
             ("INDEXER_CHAIN_ID".into(), "918453".into()),
             ("INDEXER_CHAIN_NAME".into(), "devnet".into()),
             ("EXPLORER_API_CHAIN_ID".into(), "918453".into()),
@@ -2794,8 +2803,12 @@ impl DappStack {
             .env("VITE_DEVNET_RPC_URL", &vite_rpc_url)
             .env("VITE_EXPLORER_API_URL", &vite_explorer_api_url)
             .env("VITE_DAPP_URL", &vite_dapp_url)
-            // The dapp faucet is not part of the one deployment scheme: no faucet key is baked in.
-            .env("VITE_FAUCET_HARNESS_PRIVATE_KEY", "")
+            // The faucet is a Twin chain environment step (fund USDC from the harness holder), not
+            // a deployment step, so the publish run never sees this key. The dapp build gets it.
+            .env(
+                "VITE_FAUCET_HARNESS_PRIVATE_KEY",
+                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
+            )
             .env("INDEXER_CHAIN_ID", "918453")
             .env("INDEXER_CHAIN_NAME", "devnet")
             .env("EXPLORER_API_CHAIN_ID", "918453")

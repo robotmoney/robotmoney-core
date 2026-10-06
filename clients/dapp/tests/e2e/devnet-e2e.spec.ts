@@ -10,16 +10,21 @@
  *       renders the gateway address in the DOM once the admin wallet
  *       connects. Verifies that the prod-bit-identical bundle reaches
  *       the verified state against a real chain.
- *   (B) Calling authorizeAgent through the dapp's prod injected()
- *       connector mines on real Geth and sets AGENT_ROLE on-chain.
+ *   (B) A depositor authorizing its own agent through the dapp's prod
+ *       injected() connector (commitAuthorization + revealAuthorization,
+ *       no ADMIN_ROLE) mines on the Twin chain, sets AGENT_ROLE on-chain
+ *       and records the depositor as agentOwner. After the timelock
+ *       handover no EOA holds ADMIN_ROLE on any chain, so this is the
+ *       production registration path (docs/architecture.md §6).
  *
  * Canonical: docs/development/smoke-test-design.md, issue #245.
  */
 
 import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
+import { agentOwnerOf, freshDepositor } from "./helpers/depositor";
 import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";
 
 // keccak256("AGENT_ROLE") — matches contracts/gateway/AccessRoles.sol.
@@ -114,8 +119,12 @@ test.describe("devnet E2E — full-stack Twin chain", () => {
   test("(B) authorizeAgent mines on Geth and AGENT_ROLE is confirmed on-chain", async ({
     page,
   }) => {
+    // A fresh depositor wallet (gas funded through the Twin "fund gas" step,
+    // no role) authorizes its own agent. The gateway requires a caller
+    // without ADMIN_ROLE to name itself as shareReceiver, so it does.
+    const depositor = await freshDepositor(endpoints);
     await injectWallet(page, {
-      privateKey: endpoints.admin_private_key as Hex,
+      privateKey: depositor.privateKey,
       rpcUrl: endpoints.rpc_url,
       chainId: endpoints.chain_id,
     });
@@ -123,14 +132,13 @@ test.describe("devnet E2E — full-stack Twin chain", () => {
     await connectInjectedWallet(page);
     await dismissOnboardingIfPresent(page);
 
-    // Per issue #269, `authorizeAgent` reverts with `AgentAlreadyOwned` if
-    // called twice for the same agent address. The smoke-test devnet's
-    // Deploy.s.sol already authorized `endpoints.agent_addr` at deploy time.
-    // Use a fresh, deterministic-but-unused address instead so the reveal
-    // transaction does not revert.
-    const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000BB01";
+    // Per issue #269, authorization reverts with `AgentAlreadyOwned` if the
+    // agent address already has an owner. The publish run authorized
+    // `endpoints.agent_addr` at deploy time. Use a fresh, deterministic-but-
+    // unused address instead so the reveal transaction does not revert.
+    const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000BB01" as Address;
     await page.getByTestId("agent-input").fill(FRESH_AGENT_ADDR);
-    await page.getByTestId("shareReceiver-input").fill(endpoints.share_receiver_addr);
+    await page.getByTestId("shareReceiver-input").fill(depositor.address);
 
     const authorizePreview = page.locator('[data-testid="tx-preview"][data-ok="true"]').first();
     await expect(authorizePreview).toBeVisible({ timeout: 30_000 });
@@ -138,14 +146,14 @@ test.describe("devnet E2E — full-stack Twin chain", () => {
     // Step 1 of 2: commit — signs commitAuthorization(keccak256(agent,caller,salt)).
     await page.getByTestId("authorize-submit").click();
 
-    // Step 2 of 2: reveal — enabled once currentBlock > commitBlockNumber (~12s on Geth).
+    // Step 2 of 2: reveal — enabled once currentBlock > commitBlockNumber.
     const revealSubmit = page.getByTestId("authorize-reveal-submit");
     await expect(revealSubmit).toBeEnabled({ timeout: 60_000 });
     await revealSubmit.click();
 
     console.log(
       `devnet-e2e: polling for AGENT_ROLE on ${endpoints.rpc_url}, ` +
-        `gateway=${endpoints.gateway_addr}, agent=${FRESH_AGENT_ADDR}`,
+        `gateway=${endpoints.gateway_addr}, agent=${FRESH_AGENT_ADDR}, depositor=${depositor.address}`,
     );
     await waitForRole(
       endpoints.rpc_url,
@@ -154,7 +162,12 @@ test.describe("devnet E2E — full-stack Twin chain", () => {
       FRESH_AGENT_ADDR,
       true,
     );
-    console.log("devnet-e2e: AGENT_ROLE confirmed on-chain.");
+    // The depositor, not any admin, is the recorded owner: only it can
+    // setPolicy / revokeAgent this agent from now on.
+    expect((await agentOwnerOf(endpoints, FRESH_AGENT_ADDR)).toLowerCase()).toBe(
+      depositor.address.toLowerCase(),
+    );
+    console.log("devnet-e2e: AGENT_ROLE confirmed on-chain, agentOwner is the depositor.");
   });
 
   // Issue #463 — the main-page balances panel must be visible after wallet

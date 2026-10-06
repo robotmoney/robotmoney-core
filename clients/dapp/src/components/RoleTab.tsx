@@ -1,9 +1,20 @@
 // Canonical: docs/architecture.md §6.2 — Custody (see also §6.3 Role Separation)
+// Canonical: docs/technical/dapp-credential-decisions.md §3.2 (2026-10-06 amendment)
 
+/**
+ * RoleTab — ADMIN_ROLE / PAUSER_ROLE grant + revoke preview.
+ *
+ * Both roles are administered by DEFAULT_ADMIN_ROLE. After the timelock
+ * handover only the TimelockController holds it, on every chain, so a
+ * browser wallet cannot sign these calls: the gateway would revert. The tab
+ * still renders the full structured preview, keeps the submit buttons
+ * disabled, and states why (`${slug}-role-wallet-refusal`). The real change
+ * goes through the Safe -> Timelock.
+ */
 import { useState, type FormEvent } from "react";
-import { useAccount, useSimulateContract, useWriteContract } from "wagmi";
+import { useAccount, useReadContract, useSimulateContract, useWriteContract } from "wagmi";
 import { isAddress, type Address } from "viem";
-import { gatewayAbi, ROLE_HASH, type RoleName } from "../lib/abi";
+import { DEFAULT_ADMIN_ROLE_HASH, gatewayAbi, ROLE_HASH, type RoleName } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
 import { TxPreview } from "./TxPreview";
 
@@ -21,7 +32,7 @@ const SLUG: Record<RoleName, string> = {
 };
 
 export function RoleTab(props: Props) {
-  const { isConnected } = useAccount();
+  const { address, isConnected } = useAccount();
   const { writeContract, isPending } = useWriteContract();
   const [account, setAccount] = useState("");
 
@@ -36,6 +47,18 @@ export function RoleTab(props: Props) {
   const revokeAction: AdminAction | null = valid
     ? { kind: "revokeRole", role: props.role, account: account as Address }
     : null;
+
+  // DEFAULT_ADMIN_ROLE is the admin role of both ADMIN_ROLE and PAUSER_ROLE
+  // on the gateway. Only a settled `false` shows the refusal, so a pending
+  // read never flashes it.
+  const { data: hasRoleAdmin } = useReadContract({
+    address: props.gatewayAddress,
+    abi: gatewayAbi,
+    functionName: "hasRole",
+    args: address ? [DEFAULT_ADMIN_ROLE_HASH, address] : undefined,
+    query: { enabled: isConnected && Boolean(address) },
+  });
+  const walletLacksRoleAdmin = isConnected && hasRoleAdmin === false;
 
   const grantPreview = grantAction ? buildPreview(grantAction, props.ctx) : null;
   const revokePreview = revokeAction ? buildPreview(revokeAction, props.ctx) : null;
@@ -68,6 +91,13 @@ export function RoleTab(props: Props) {
           placeholder="0x..."
         />
       </label>
+      {walletLacksRoleAdmin && (
+        <p data-testid={`${slug}-role-wallet-refusal`} className="error">
+          Connected wallet lacks DEFAULT_ADMIN_ROLE, the admin of {props.role}, so the gateway would
+          revert this call. After the timelock handover admin actions go through the Safe
+          {" -> "}Timelock, not a browser wallet.
+        </p>
+      )}
       <form
         onSubmit={(e: FormEvent<HTMLFormElement>) => {
           e.preventDefault();
@@ -82,7 +112,7 @@ export function RoleTab(props: Props) {
         <button
           type="submit"
           data-testid={`grant-${slug}-submit`}
-          disabled={!isConnected || !grantSim || isPending}
+          disabled={!isConnected || walletLacksRoleAdmin || !grantSim || isPending}
         >
           Sign grantRole({props.role}) with wallet
         </button>
@@ -101,7 +131,7 @@ export function RoleTab(props: Props) {
         <button
           type="submit"
           data-testid={`revoke-${slug}-submit`}
-          disabled={!isConnected || !revokeSim || isPending}
+          disabled={!isConnected || walletLacksRoleAdmin || !revokeSim || isPending}
         >
           Sign revokeRole({props.role}) with wallet
         </button>

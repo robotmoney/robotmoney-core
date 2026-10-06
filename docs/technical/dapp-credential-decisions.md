@@ -54,6 +54,11 @@ Binding constraints:
 - **Rejected alternatives.**
   - *Dapp-managed encrypted keystore in IndexedDB.* Re-creates a wallet inside the dapp; doubles the audit surface and blurs the role-separation boundary on which `rmpc`'s self-check relies.
   - *Per-session derived key encrypted with a wallet-signed message.* Cleverness for its own sake; the user already has a wallet, and the agent already has a signer backend. Adding a third custody surface that lives in the dapp is not justified.
+- **Amendment (2026-10-06) — admin writes after the timelock handover.** The decision above still holds. It assumed a human admin key in a browser wallet. That assumption no longer holds:
+  - After the timelock handover the TimelockController holds `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on every contract, and no EOA does (`docs/technical/security-model.md` §4). This is true on every chain: the only allowed test/mainnet differences are key custody, owner membership, chain and delay value (`docs/technical/governance-isomorphism.md`). So an admin or policy write signed by a browser wallet reverts on every chain.
+  - The dapp's admin tabs therefore preview and refuse for a wallet without the needed role. They render the full §3.3 preview, keep the sign button disabled, and state the reason in the page (the Admin Role and Pauser Role tabs: `<slug>-role-wallet-refusal`; Pause/Unpause: the role status line). No test chain grants an admin role to an EOA to make these buttons live.
+  - A Safe-signable admin payload (the dapp emitting a Safe -> Timelock proposal instead of a direct wallet call) is a tracked follow-up (core #1544). Until it lands, admin actions go through the governance runbook, not the dapp.
+  - Agent registration and rotation are depositor actions, not admin actions. A depositor authorizes its own agent with `commitAuthorization` + `revealAuthorization` (no role; the caller must name itself as `shareReceiver`) and becomes `agentOwner`. Only that owner can `setPolicy` or `revokeAgent` it (`docs/architecture.md` §6). The Rotation tab takes this commit/reveal path when the wallet lacks `ADMIN_ROLE` and keeps `authorizeAgent` for an `ADMIN_ROLE` holder.
 
 ### 3.3 Calldata preview UX — **every admin/policy signing prompt decodes target, function, args, role/policy effect, and risk class before the wallet is invoked**
 

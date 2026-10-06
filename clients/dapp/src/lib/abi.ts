@@ -211,6 +211,13 @@ export const ROLE_HASH: Record<RoleName, `0x${string}`> = {
 
 export const ADMIN_ROLE_HASH = ROLE_HASH.ADMIN_ROLE;
 export const PAUSER_ROLE_HASH = ROLE_HASH.PAUSER_ROLE;
+/**
+ * OpenZeppelin AccessControl `DEFAULT_ADMIN_ROLE` (bytes32 zero). It is the
+ * admin role of ADMIN_ROLE and PAUSER_ROLE on the gateway, so it is what a
+ * wallet needs to grant or revoke either.
+ */
+export const DEFAULT_ADMIN_ROLE_HASH =
+  "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
 
 /**
  * Minimal ERC-20 ABI fragment used by the testnet/devnet faucet (issue
