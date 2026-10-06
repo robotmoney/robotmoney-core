@@ -188,6 +188,17 @@ impl Fixture {
             .reauthorize_agent(max_per_payment, max_per_window)
     }
 
+    /// `authorizeAgent(agent, policy)` through the real Safe and the timelock (see the smoke-test fixture).
+    pub fn authorize_agent_for(
+        &self,
+        agent: Address,
+        max_per_payment: u128,
+        max_per_window: u128,
+    ) -> Result<String, HarnessError> {
+        self.devnet
+            .authorize_agent_for(agent, max_per_payment, max_per_window)
+    }
+
     pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<u128, HarnessError> {
         self.devnet.fund_usdc(recipient, amount)
     }

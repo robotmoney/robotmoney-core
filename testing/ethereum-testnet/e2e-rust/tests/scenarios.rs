@@ -564,12 +564,13 @@ fn role_separation_invariant() {
     }
     with_fixture(|fx| {
         // The admin is the timelock after handover. Authorizing an admin-holding
-        // address as an agent goes through the real Safe and the timelock (govern
-        // row `authorize-agent`); the inner `_grantRole` override in `AccessRoles`
-        // reverts with `RoleSeparationViolated()` at execution, so the govern run
-        // must fail. No deployer key is involved.
-        let admin = format!("{:#x}", fx.timelock());
-        let result = fx.govern("authorize-agent", &["--agent", &admin]);
+        // address as an agent goes through the real Safe and the timelock (a
+        // generic Safe -> Timelock call of `authorizeAgent`); the inner
+        // `_grantRole` override in `AccessRoles` reverts with
+        // `RoleSeparationViolated()` at execution, so the run must fail. No
+        // deployer key is involved.
+        let one_usdc = 1_000_000u128;
+        let result = fx.authorize_agent_for(fx.timelock(), 10_000 * one_usdc, 100_000 * one_usdc);
         let err = result.expect_err("authorizeAgent(admin) must revert; the govern run succeeded");
         let combined = err.to_string();
         assert!(

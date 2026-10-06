@@ -1380,7 +1380,19 @@ impl Fixture {
         max_per_payment: u128,
         max_per_window: u128,
     ) -> Result<String, HarnessError> {
-        let agent = format!("{:#x}", self.agent());
+        self.authorize_agent_for(self.agent(), max_per_payment, max_per_window)
+    }
+
+    /// `authorizeAgent(agent, policy)` through the real Safe and the timelock (a generic timelock call,
+    /// ADMIN_ROLE). Used to re-grant the fixture agent and to prove the role-separation invariant: an
+    /// address that already holds admin cannot be authorized as an agent, so the execute step reverts.
+    pub fn authorize_agent_for(
+        &self,
+        agent: Address,
+        max_per_payment: u128,
+        max_per_window: u128,
+    ) -> Result<String, HarnessError> {
+        let agent = format!("{agent:#x}");
         let share_receiver = format!("{:#x}", self.share_receiver());
         // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
         //  assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow, allowedSourceVaults)
