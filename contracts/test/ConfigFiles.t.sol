@@ -35,14 +35,11 @@ contract ConfigFilesTest is Test {
         assertEq(j.readAddress(".uniswapV3Factory"), V3_FACTORY);
     }
 
-    function test_Config_agentShortlistIsRmOnly() public view {
+    function test_Config_agentShortlistIsEmpty() public view {
         string memory j = vm.readFile("config/agent-token-shortlist.json");
-        assertEq(j.readString(".shortlist[0].symbol"), "RM");
-        assertFalse(vm.keyExistsJson(j, ".shortlist[1]"), "RM only");
-        assertEq(j.readAddress(".shortlist[0].token"), 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3);
-        assertEq(j.readAddress(".shortlist[0].pool"), 0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882);
-        assertEq(j.readUint(".shortlist[0].poolFee"), 10000);
-        assertEq(j.readString(".shortlist[0].venue"), "UniswapV3");
+        bytes memory raw = j.parseRaw(".shortlist");
+        // An empty JSON array ABI-decodes to a zero-length dynamic array.
+        assertEq(abi.decode(raw, (address[])).length, 0);
     }
 
     function test_Config_agentShortlistCarriesSwapRouter02() public view {

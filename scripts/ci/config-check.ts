@@ -6,10 +6,9 @@
 // Static rules (always run, no network):
 //   - every 0x string in config/ is exactly 40 hex digits (catches the 39-digit addresses)
 //   - deSPXA is listed with Uniswap V3 fee 500 and nothing else in rwa-assets.json
-//   - wSOL, BNKR and JUNO are absent; RM appears only in agent-token-shortlist.json
+//   - wSOL, BNKR, JUNO and RM are absent (no usable pool at launch)
 //   - no Chronicle, V4, Aerodrome, mainnet or devnet key anywhere in config/
-//   - agent-token-shortlist.json launch list is exactly RM (live ROBOTMONEY token, code-hash pinned,
-//     owner-funded V3 pool, fee 10000) and records swapRouter02 (the script parser needs it)
+//   - agent-token-shortlist.json launch list is empty and records swapRouter02 (the script parser needs it)
 // Live rules (per asset, pinned to one block): token, pool, factory and router have code,
 //   pool fee() equals config, factory.getPool equals config, observationCardinality >= 2,
 //   liquidity() > 0, USD TVL (USDC reserve plus other side at slot0 price) >= the file's
@@ -40,13 +39,7 @@ export const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
  * mainnet: this slot holds 0x2Ce6311ddAE708829bc0784C967b7d77D19FD779, equal to implementation().
  */
 export const USDC_IMPL_SLOT = "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3";
-export const FORBIDDEN_SYMBOLS = ["wsol", "bnkr", "juno"];
-const AGENT_FILE = "agent-token-shortlist.json";
-export const RM = {
-  token: "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
-  pool: "0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882",
-  fee: 10000,
-};
+export const FORBIDDEN_SYMBOLS = ["wsol", "bnkr", "juno", "rm"];
 const FORBIDDEN_KEY = /chronicle|v4|aerodrome|slipstream|^mainnet$|^devnet$|^wsol|^bnkr|^juno/i;
 const HASH_RE = /^0x[0-9a-f]{64}$/;
 const META_KEYS = new Set(["description", "$schema"]);
@@ -59,9 +52,6 @@ export interface Asset {
   pool: string;
   poolFee: number;
 }
-export interface AgentEntry extends Asset {
-  tokenCodeHash: string;
-}
 export interface AssetFile {
   usdc: string;
   uniswapV3Factory: string;
@@ -72,7 +62,7 @@ export interface AssetFile {
 export interface Configs {
   protocol: AssetFile;
   rwa: AssetFile;
-  agent: { usdc: string; uniswapV3Factory: string; swapRouter02: string; shortlist: AgentEntry[] };
+  agent: { shortlist: unknown[]; swapRouter02?: string };
   dexPools: Record<string, unknown>;
   /** Pinned USDC code hashes (config/usdc-hashes.json). null means not pinned yet: refused. */
   usdcHashes: UsdcHashes;
@@ -102,7 +92,7 @@ export function loadConfigs(dir: string): Configs {
   return {
     protocol: need("protocol-assets.json") as AssetFile,
     rwa: need("rwa-assets.json") as AssetFile,
-    agent: need(AGENT_FILE) as Configs["agent"],
+    agent: need("agent-token-shortlist.json") as { shortlist: unknown[]; swapRouter02?: string },
     dexPools: need("dex-pools.json") as Record<string, unknown>,
     usdcHashes: need("usdc-hashes.json") as UsdcHashes,
     raw,
@@ -133,12 +123,12 @@ export function staticFindings(c: Configs): Finding[] {
         const isHashKey = key !== null && /CodeHash$/.test(key);
         if (!isHashKey && /^0x[0-9a-fA-F]*$/.test(val) && val.length > 2 && val.length !== 42) badAddr.push(`${path}=${val} (${val.length - 2} digits)`);
         const lower = val.toLowerCase();
-        if (FORBIDDEN_SYMBOLS.includes(lower) || (lower === "rm" && file !== AGENT_FILE) || /wsol/.test(lower) || /chronicle|aerodrome|slipstream/.test(lower)) badSym.push(`${path}=${val}`);
+        if (FORBIDDEN_SYMBOLS.includes(lower) || /wsol/.test(lower) || /chronicle|aerodrome|slipstream/.test(lower)) badSym.push(`${path}=${val}`);
       }
     });
     add(file, "address-format", badAddr.length === 0, badAddr.join("; ") || "all 0x values are 40 hex digits");
     add(file, "forbidden-key", badKey.length === 0, badKey.join("; ") || "no Chronicle, V4, Aerodrome, mainnet or devnet key");
-    add(file, "forbidden-symbol", badSym.length === 0, badSym.join("; ") || "no wSOL, BNKR, JUNO, RM (outside the agent shortlist) or Chronicle/Aerodrome value");
+    add(file, "forbidden-symbol", badSym.length === 0, badSym.join("; ") || "no wSOL, BNKR, JUNO, RM or Chronicle/Aerodrome value");
   }
 
   for (const k of ["proxyCodeHash", "implementationCodeHash"] as const) {
@@ -153,13 +143,8 @@ export function staticFindings(c: Configs): Finding[] {
   add("rwa-assets.json", "despxa-venue", d?.venue === "UniswapV3", `venue=${d?.venue}`);
   const protoSyms = (c.protocol.assets ?? []).map((a) => a.symbol).sort();
   add("protocol-assets.json", "weth-cbbtc-only", JSON.stringify(protoSyms) === JSON.stringify(["cbBTC", "wETH"]), `symbols=${protoSyms.join(",")}`);
-  const sl = c.agent.shortlist ?? [];
-  const rm = sl[0];
-  add(AGENT_FILE, "launch-list-is-rm-only",
-    sl.length === 1 && rm.symbol === "RM" && rm.token?.toLowerCase() === RM.token.toLowerCase() &&
-      rm.pool?.toLowerCase() === RM.pool.toLowerCase() && rm.poolFee === RM.fee && rm.venue === "UniswapV3" &&
-      HASH_RE.test(rm.tokenCodeHash ?? ""),
-    `entries=${sl.length} ${rm ? `${rm.symbol} fee=${rm.poolFee} venue=${rm.venue}` : ""}`);
+  add("agent-token-shortlist.json", "launch-list-empty", Array.isArray(c.agent.shortlist) && c.agent.shortlist.length === 0, `entries=${c.agent.shortlist?.length}`);
+  // The rmAGENT script reads swapRouter02 from this file even while the list is empty.
   add("agent-token-shortlist.json", "swap-router-recorded",
     c.agent.swapRouter02?.toLowerCase() === "0x2626664c2603336e57b271c5c0b26f421741e481", `router=${c.agent.swapRouter02}`);
   for (const [name, f] of [["protocol-assets.json", c.protocol], ["rwa-assets.json", c.rwa]] as const) {
@@ -292,7 +277,7 @@ export interface PoolFacts {
   factoryPool: string;
 }
 
-export async function readPool(rpc: Rpc, tag: string, a: Asset, f: Pick<AssetFile, "usdc" | "uniswapV3Factory">): Promise<PoolFacts> {
+export async function readPool(rpc: Rpc, tag: string, a: Asset, f: AssetFile): Promise<PoolFacts> {
   const call = (to: string, data: string) => rpc("eth_call", [{ to, data }, tag]);
   const [feeW, t0, t1, slot0, liqW] = await Promise.all([
     call(a.pool, "0xddca3f43"), call(a.pool, "0x0dfe1681"), call(a.pool, "0xd21220a7"),
@@ -338,20 +323,13 @@ export async function liveFindings(rpc: Rpc, tag: string, c: Configs): Promise<{
   } catch (e) {
     add("usdc-hashes.json", "usdc-hash-read", false, String(e));
   }
-  for (const [name, f] of [["protocol-assets.json", c.protocol], ["rwa-assets.json", c.rwa], [AGENT_FILE, c.agent]] as const) {
+  for (const [name, f] of [["protocol-assets.json", c.protocol], ["rwa-assets.json", c.rwa]] as const) {
     add(name, "code:usdc", await hasCode(f.usdc), f.usdc);
     add(name, "code:factory", await hasCode(f.uniswapV3Factory), f.uniswapV3Factory);
     add(name, "code:swapRouter02", await hasCode(f.swapRouter02), f.swapRouter02);
-    const isAgent = name === AGENT_FILE;
-    const assets: Asset[] = isAgent ? c.agent.shortlist : (f as AssetFile).assets;
-    for (const a of assets) {
+    for (const a of f.assets) {
       const s = `${name}:${a.symbol}`;
       add(s, "code:token", await hasCode(a.token), a.token);
-      if (isAgent) {
-        const want = (a as AgentEntry).tokenCodeHash.toLowerCase();
-        const got = keccakHex(await rpc("eth_getCode", [a.token, tag])).toLowerCase();
-        add(s, "token-code-hash-pinned", got === want, `live=${got} config=${want}`);
-      }
       const poolCode = await hasCode(a.pool);
       add(s, "code:pool", poolCode, a.pool);
       if (!poolCode) continue;
@@ -365,13 +343,9 @@ export async function liveFindings(rpc: Rpc, tag: string, c: Configs): Promise<{
         add(s, "pool-fee-equals-config", p.fee === a.poolFee, `live=${p.fee} config=${a.poolFee}`);
         add(s, "pool-is-token-usdc", [p.token0, p.token1].sort().join() === [a.token.toLowerCase(), f.usdc.toLowerCase()].sort().join(), `${p.token0},${p.token1}`);
         add(s, "factory-getPool-equals-config", p.factoryPool.toLowerCase() === a.pool.toLowerCase(), `factory=${p.factoryPool} config=${a.pool}`);
-        // The RM pool is owner-funded after deploy: it has no liquidity or observations yet.
-        if (!isAgent) {
-          const floor = (f as AssetFile).minTvlUsd;
-          add(s, "observation-cardinality>=2", p.cardinality >= 2, `cardinality=${p.cardinality}`);
-          add(s, "liquidity>0", p.liquidity > 0n, `liquidity=${p.liquidity}`);
-          add(s, `tvl-usd>=${floor}`, p.tvlUsd >= floor, `tvlUsd=${p.tvlUsd.toFixed(0)}`);
-        }
+        add(s, "observation-cardinality>=2", p.cardinality >= 2, `cardinality=${p.cardinality}`);
+        add(s, "liquidity>0", p.liquidity > 0n, `liquidity=${p.liquidity}`);
+        add(s, `tvl-usd>=${f.minTvlUsd}`, p.tvlUsd >= f.minTvlUsd, `tvlUsd=${p.tvlUsd.toFixed(0)}`);
       } catch (e) {
         add(s, "pool-read", false, String(e));
       }

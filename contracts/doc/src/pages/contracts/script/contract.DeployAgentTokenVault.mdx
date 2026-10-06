@@ -5,7 +5,7 @@ description: "Production deploy script for `AgentTokenVault` (rmAGENT). One path
 
 # DeployAgentTokenVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0aa406a589f187fd2a778e9ce49155599b343413/contracts/script/DeployAgentTokenVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployAgentTokenVault.s.sol)
 
 **Inherits:** [BasketVaultDeployBase](/contracts/script/abstract.BasketVaultDeployBase)
 
@@ -24,7 +24,7 @@ DEPLOYMENT_OUT    output manifest path (required, no default)
 EXPECTED_CHAIN_ID mandatory and equal to 8453 on Base mainnet
 EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
 
-Assets come from `agent-token-shortlist.json` (RM only at launch; more tokens are added through the timelock). The vault is deployed paused.
+Assets come from `agent-token-shortlist.json` (empty at launch; tokens are added through the timelock). The vault is deployed paused.
 
 ## Constants
 
