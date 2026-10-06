@@ -358,11 +358,13 @@ fn router_refuses_mismatched_vault_and_leg_lengths() {
 }
 
 #[test]
-fn router_base_mainnet_refuses_software_signer_before_signing() {
+fn router_base_mainnet_allows_software_signer_and_warns_first() {
+    let logs = tempfile::TempDir::new().unwrap();
     let fix = Fixture::build("http://127.0.0.1:1", 8453);
     let state_dir = unique_state_dir();
 
     let out = router_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .env("RMPC_LOG_DIR", logs.path())
         .env_remove(PASSPHRASE_ENV_VAR)
         .args(["--confirm"])
         .assert()
@@ -370,11 +372,11 @@ fn router_base_mainnet_refuses_software_signer_before_signing() {
         .get_output()
         .clone();
 
-    assert_eq!(out.status.code(), Some(2));
-    let v = stdout_json(&out);
-    assert_eq!(v["status"], "refused");
-    assert_eq!(v["error"], "ErrProductionSignerRequired");
-    assert_eq!(v["order_id"], format!("{ORDER_ID:#x}"));
+    assert_eq!(out.status.code(), Some(3));
+    assert!(!String::from_utf8(out.stdout.clone())
+        .unwrap()
+        .contains("ErrProductionSignerRequired"));
+    common::assert_mainnet_warning_precedes_keystore_load(logs.path());
 }
 
 #[tokio::test]

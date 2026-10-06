@@ -406,6 +406,7 @@ fn main() {
             }
         },
     };
+    logging::flush();
     std::process::exit(exit_code);
 }
 

@@ -102,8 +102,11 @@ pub const fn backend_is_production_grade(kind: SignerBackendKind) -> bool {
     matches!(kind, SignerBackendKind::Hsm | SignerBackendKind::Kms)
 }
 
-/// Refuse non-production signers before write commands decrypt a software
-/// keystore or build a transaction for production Base.
+/// Refuse non-production signers before the committee-operator commands
+/// (`committee`, `propose`, `receipt`, `vote`) decrypt a software keystore
+/// or build a transaction for production Base. Depositor writes (`deposit`,
+/// `withdraw`, `withdraw-router`) do NOT call this: a depositor may sign with
+/// the software keystore on Base mainnet (owner decision 2026-10-06).
 pub fn require_production_grade_for_write(
     chain_id: u64,
     backend: SignerBackendKind,
@@ -132,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn production_base_refuses_software_signer_for_writes() {
+    fn production_base_refuses_software_signer_for_operator_writes() {
         let err = require_production_grade_for_write(8453, SignerBackendKind::Software)
             .expect_err("software signer must be refused on Base mainnet");
         assert!(matches!(err, RmpcError::ErrProductionSignerRequired));

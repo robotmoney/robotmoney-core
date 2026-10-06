@@ -831,7 +831,8 @@ protocol reads from a read-only deployment without any key material.
 follow the same write-command path as `deposit`,
 `propose`, and `vote` (issue #632): load config → enforce the
 production-signer gate (software keystores rejected on Base mainnet;
-HSM/KMS required) → build known calldata for the configured IC contract →
+HSM/KMS required for committee operators; depositor writes `deposit`,
+`withdraw` and `withdraw-router` are exempt, see issue #1545) → build known calldata for the configured IC contract →
 sign the EIP-1559 envelope through the `AgentSigner` backend → route the
 call through `RobotMoneyGateway` → broadcast → decode the event → emit a
 stable JSON envelope.
@@ -1534,7 +1535,7 @@ this architecture:
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
 | On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure existing Safe as proposer and canceller; prefer open execution unless a restricted Safe executor is explicitly justified. See §4.5 and issue #414. |
 | Production JSON-RPC provider | Resolved: automatic failover shipped in issue #667 through the ordered `rpc_urls` array in `clients/rust-payment-client/src/config.rs` and endpoint rotation in `clients/rust-payment-client/src/rpc/mod.rs`. Safety-critical reads depend on provider correctness and availability; cross-provider consensus checking remains a separate, deferred decision. | Configure the ordered `rpc_urls` list so `rmpc` rotates to the next endpoint on transport failure. Multi-RPC consensus comparison for high-value reads stays deferred until a specific risk justifies it. |
-| Production signer vendor | Architecture requires a production-grade HSM/KMS/device-bound signer for Base mainnet writes, but no vendor is chosen. | Keep signer backend trait stable; refuse software-keystore signing on Base mainnet until a production operator picks HSM/KMS. |
+| Production signer vendor | Architecture requires a production-grade HSM/KMS/device-bound signer for Base mainnet committee-operator writes, but no vendor is chosen. | Keep signer backend trait stable. Depositor writes (`deposit`, `withdraw`, `withdraw-router`) may sign with the software keystore on Base mainnet and print the production warning first (owner decision 2026-10-06, issue #1545); HSM/KMS stays optional for them. `committee`, `propose`, `receipt` and `vote` keep refusing software-keystore signing on Base mainnet until a production operator picks HSM/KMS. |
 | Dapp hosting and CSP | Resolved: strict CSP shipped in PR #735 via `clients/dapp/src/lib/csp.ts` Vite plugin and `clients/dapp/scripts/check-csp.sh` CI check. | Maintain strict CSP policy; enforce via CI `check-csp.sh`; require static hosting with pinned dependencies and release provenance before public mainnet use. |
 | Email/notification provider | No product or technical doc selects one. | Leave out until a concrete notification workflow is specified. |
 

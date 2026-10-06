@@ -281,26 +281,27 @@ async fn withdraw_happy_path_emits_payment_id_and_exits_zero() {
     assert!(v["effective_gas_price"].is_string());
 }
 
-/// Refusal path: Base mainnet writes require a production-grade signer, so
-/// the software keystore is refused before anything is decrypted or read.
+/// Owner decision 2026-10-06: the software keystore is allowed on Base
+/// mainnet; the production warning prints before the keystore is loaded.
 #[test]
-fn withdraw_base_mainnet_refuses_software_signer_before_signing() {
+fn withdraw_base_mainnet_allows_software_signer_and_warns_first() {
+    let logs = tempfile::TempDir::new().unwrap();
     let fix = Fixture::build("http://127.0.0.1:1", 8453);
     let state_dir = unique_state_dir();
 
     let out = withdraw_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .env("RMPC_LOG_DIR", logs.path())
         .env_remove(PASSPHRASE_ENV_VAR)
         .assert()
         .failure()
         .get_output()
         .clone();
 
-    assert_eq!(out.status.code(), Some(2));
-    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
-    assert_eq!(v["status"], "refused");
-    assert_eq!(v["error"], "ErrProductionSignerRequired");
-    assert!(v["message"].as_str().unwrap().contains("HSM/KMS"));
-    assert_eq!(v["order_id"], format!("{ORDER_ID:#x}"));
+    assert_eq!(out.status.code(), Some(3));
+    assert!(!String::from_utf8(out.stdout.clone())
+        .unwrap()
+        .contains("ErrProductionSignerRequired"));
+    common::assert_mainnet_warning_precedes_keystore_load(logs.path());
 }
 
 /// Refusal path: the preflight's chain-id pin. The `checks` snapshot must
@@ -633,17 +634,29 @@ async fn withdraw_duplicate_retry_refused_before_broadcast() {
 /// withdraw-router must be identical — one shape owned by `write_path`,
 /// not three structs that happen to agree (issue #1285).
 ///
-/// Compared on the Base-mainnet production-signer refusal, because it is
+/// Compared on the `ErrSoftwareSignerDisallowed` refusal, because it is
 /// the one refusal all three reach with no chain reads at all, so the
 /// three documents are directly comparable.
 #[test]
 fn refusal_field_set_is_identical_across_the_three_write_commands() {
-    let fix = Fixture::build("http://127.0.0.1:1", 8453);
+    let fix = Fixture::build("http://127.0.0.1:1", 31337);
+    let cfg_text = std::fs::read_to_string(&fix.config_path).unwrap();
+    std::fs::write(
+        &fix.config_path,
+        cfg_text.replace(
+            "allow_software_fallback = true",
+            "allow_software_fallback = false",
+        ),
+    )
+    .unwrap();
     let config = fix.config_path.to_str().unwrap().to_string();
 
     let run = |extra: &[&str]| -> Vec<String> {
         let out = rmpc()
-            .env_remove(PASSPHRASE_ENV_VAR)
+            .env(
+                PASSPHRASE_ENV_VAR,
+                std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+            )
             .env("RMPC_STATE_DIR", unique_state_dir())
             .args(extra)
             .assert()
@@ -653,7 +666,7 @@ fn refusal_field_set_is_identical_across_the_three_write_commands() {
         assert_eq!(out.status.code(), Some(2));
         let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim())
             .expect("stdout is JSON");
-        assert_eq!(v["error"], "ErrProductionSignerRequired");
+        assert_eq!(v["error"], "ErrSoftwareSignerDisallowed");
         let mut keys: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
         keys.sort();
         keys

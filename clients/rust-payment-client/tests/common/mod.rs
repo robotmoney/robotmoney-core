@@ -379,3 +379,25 @@ pub async fn install_withdraw_preflight_mocks(
         .create_async()
         .await;
 }
+
+/// Assert the Base mainnet production warning reached the diagnostic log
+/// before the keystore load was attempted (owner decision 2026-10-06: the
+/// software keystore is allowed, the warning is not optional).
+#[allow(dead_code)]
+pub fn assert_mainnet_warning_precedes_keystore_load(log_dir: &std::path::Path) {
+    let log_file = std::fs::read_dir(log_dir)
+        .expect("log dir readable")
+        .map(|e| e.expect("dir entry").path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("rmpc") && n.contains("log") && !n.contains("audit"))
+        })
+        .expect("diagnostic log file written");
+    let log = std::fs::read_to_string(log_file).expect("diagnostic log readable");
+    let warn = log
+        .find("production Base mainnet")
+        .unwrap_or_else(|| panic!("warning logged; log was: {log:?}"));
+    let unset = log.find("is unset").expect("keystore load reached");
+    assert!(warn < unset, "warning must precede keystore load");
+}

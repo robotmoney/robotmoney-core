@@ -76,9 +76,12 @@ was ever material you could copy, it is a devnet key.
 For devnet, the submitter is an ordinary `rmpc` software keystore, loaded the
 same way every other `rmpc` write command loads one: the passphrase comes
 strictly from `$RMPC_KEYSTORE_PASSPHRASE`, never from stdin and never from a
-CLI flag. `rmpc` refuses a software signer for production-grade chain ids
-(`require_production_grade_for_write`), which is the mechanical guard keeping
-the devnet arrangement devnet-only.
+CLI flag. `rmpc receipt` (like `committee`, `propose` and `vote`) refuses a software
+signer for production-grade chain ids (`require_production_grade_for_write`),
+which is the mechanical guard keeping the devnet arrangement devnet-only.
+Only depositor writes (`deposit`, `withdraw`, `withdraw-router`) may use a
+software keystore on Base mainnet (owner decision 2026-10-06, issue #1545);
+the submitter is not a depositor, so the guard stays for it.
 
 ---
 
