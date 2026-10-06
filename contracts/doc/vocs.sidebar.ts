@@ -10,7 +10,6 @@ export const sidebar = [
           collapsed: true,
           items: [
             { text: "PortfolioRouter", link: "/contracts/contract.PortfolioRouter" },
-            { text: "RmToken", link: "/contracts/contract.RmToken" },
             { text: "RobotMoneyVault", link: "/contracts/contract.RobotMoneyVault" },
             { text: "RouterGovernance", link: "/contracts/contract.RouterGovernance" },
             { text: "VaultRegistry", link: "/contracts/contract.VaultRegistry" },

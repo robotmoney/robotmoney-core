@@ -1011,24 +1011,22 @@ chain reads for current state):
 **Faucet UX (testnet/devnet only)**
 
 A testnet/devnet-only Faucet tab lets operators provision fresh accounts
-end-to-end without backend cheats. It drips canonical USDC, RM governance
-tokens, and native Base ETH for gas. Each drip is a real signed transfer
+end-to-end without backend cheats. It drips canonical USDC and native
+Base ETH for gas. Each drip is a real signed transfer
 from the smoke-test harness holder EOA — the same EOA that receives the
 USDC and 1000 ETH at genesis — broadcast through the
 user's injected EIP-1193 provider. No anvil cheats, no impersonation.
 The tab is hidden on mainnet (chain-ID classifier) and additionally
-fails closed when the build-time harness key is absent. The RM balance
-read and RM drip use the token address in `VITE_RM_TOKEN_ADDRESS`. RM is
-the live ROBOTMONEY token on Base
+fails closed when the build-time harness key is absent. The faucet does
+not drip RM. RM is the live ROBOTMONEY token on Base
 (`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`). Nothing deploys an RM
-token in tests or production. The Twin fork carries the live token, and
-`RmToken.sol` is to be deleted (core 1489). No smoke-test env-injection
-site sets `VITE_RM_TOKEN_ADDRESS` today, and the Twin fork funds the
-harness holder with gas and USDC only. The RM drip therefore has no
-source of RM on the Twin fork and stays inert at the `0x0` default
-(tracked in the mainnet plan). The faucet flow (Get Base ETH → Get RM
-tokens) that lets a fresh account submit a governance vote depends on
-that RM source.
+token in tests or production, and the RM test token contract is deleted
+(core 1489). The Twin fork carries the live token, and its funding steps
+are gas, USDC and time warp only, so the harness holds no RM to drip.
+The main-page balances panel reads the RM balance at
+`VITE_RM_TOKEN_ADDRESS`, which every smoke-test env-injection site sets
+to the live address. A fresh account that needs RM voting power must
+obtain live RM; the faucet does not provide it.
 
 ### 5.4 Explorer Indexer and API
 

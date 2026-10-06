@@ -88,8 +88,8 @@ Sub-invariants that decompose the above and are individually worth proving:
 > **`SUP-5` — A redeem never reverts solely because the vault is paused/retired/shut down when the underlying is already idle USDC (no liveness trap on already-safe funds).**
 > ✅ HOLDS (fixed #966, NC-1) · the priced-asset `AssetPositionAdapter.totalAssets` (deSPXA Chronicle composition) short-circuits its freshness check on a zero adapter balance, so a unified `Vault` holding only idle USDC still redeems under a stale feed while priced reads fail closed (ORA-2) · stateful-invariant (StaleOracleRedemption.t.sol::test_SUP5_* re-pointed to the Chronicle-adapter composition per spec §6; RwaVault.t.sol::test_staleFeed_idleUsdcRedeemSurvives).
 
-> **`SUP-6` — `RmToken` total supply is fixed after deploy (no post-deploy mint).**
-> 🟢 HOLDS · dev/testnet only · static-guard. *(Not a mainnet surface; documented for completeness.)* RM on mainnet is the live ROBOTMONEY token `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`, which nothing deploys. `contracts/RmToken.sol` is a test mock still on this branch (deletion: core #1489).
+> **`SUP-6` — ~~The RM test token's total supply is fixed after deploy (no post-deploy mint).~~ Retired 2026-10-05, see core 1489.**
+> Tombstone · no surface. The RM test token contract is deleted (core 1489). RM is the live ROBOTMONEY token `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` on Base, which nothing in this repo deploys, so no repo contract carries this invariant. The ID stays because IDs are append-only; its `InvariantRegistry` entry stays in step with the spec.
 
 ---
 

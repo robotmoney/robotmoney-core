@@ -18,6 +18,8 @@ export const MUST_BE_ABSENT = [
   "testing/smoke-test/tests/full_stack_demo_tvl.rs",
   "testing/smoke-test/tests/faucet_eth.rs",
   "testing/smoke-test/tests/faucet_rm.rs",
+  // RM is the live ROBOTMONEY token on Base: nothing deploys an RM token (core 1489).
+  "contracts/RmToken.sol",
   "deployments/timelock-918453.json",
   "scripts/stage/core-stack.sh",
   // One driver (owner decision 2026-10-05): the publish-contracts CLI is the only deploy driver. The old core runner,

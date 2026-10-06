@@ -111,8 +111,9 @@ pub fn agent_address() -> Address {
     derive_address(&AGENT_PRIVATE_KEY)
 }
 
-/// Zero address, the dapp build arg for contracts this scheme does not deploy (no RM token).
-const ZERO_ADDRESS_HEX: &str = "0x0000000000000000000000000000000000000000";
+/// The live ROBOTMONEY (RM) token on Base, 18 decimals. Nothing deploys an RM token: the Twin
+/// fork (918453) is a fork of real Base, so the live token exists there at this address (core 1489).
+pub const RM_TOKEN_ADDRESS_HEX: &str = "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3";
 
 // -- Error type -------------------------------------------------------
 
@@ -2552,11 +2553,9 @@ impl DappStack {
                 "VITE_GOVERNANCE_ADDRESS",
                 fixture.governance_hex().to_string(),
             ),
-            // Issues #463/#466: surface the deployed RmToken address so the
-            // main-page balances panel renders the RM row and the Faucet tab's
-            // RM drip + balance reads point at the real ERC-20 contract
-            // instead of falling back to the compose 0x0 default.
-            ("VITE_RM_TOKEN_ADDRESS", ZERO_ADDRESS_HEX.to_string()),
+            // Issues #463/#466: the live RM token address so the main-page
+            // balances panel renders the RM row (core 1489: nothing deploys RM).
+            ("VITE_RM_TOKEN_ADDRESS", RM_TOKEN_ADDRESS_HEX.to_string()),
             // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
             // compute applied vs not-applied against live router weights.
             ("VITE_VAULT_ADDRESSES", fixture.vault_address_map_json()),
@@ -2649,11 +2648,9 @@ impl DappStack {
                 "VITE_GOVERNANCE_ADDRESS".into(),
                 fixture.governance_hex().to_string(),
             ),
-            // Issues #463/#466: surface the deployed RmToken address so the
-            // main-page balances panel renders the RM row and the Faucet tab's
-            // RM drip + balance reads point at the real ERC-20 contract
-            // instead of falling back to the compose 0x0 default.
-            ("VITE_RM_TOKEN_ADDRESS".into(), ZERO_ADDRESS_HEX.into()),
+            // Issues #463/#466: the live RM token address so the main-page
+            // balances panel renders the RM row (core 1489: nothing deploys RM).
+            ("VITE_RM_TOKEN_ADDRESS".into(), RM_TOKEN_ADDRESS_HEX.into()),
             // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
             // compute applied vs not-applied against live router weights.
             (
@@ -2719,11 +2716,9 @@ impl DappStack {
             .env("VITE_ROUTER_ADDRESS", fixture.router_hex())
             // Issue #364: thread governance address into the dapp build.
             .env("VITE_GOVERNANCE_ADDRESS", fixture.governance_hex())
-            // Issues #463/#466: thread RmToken address into the dapp build
-            // so the main-page balances panel renders the RM row and the RM
-            // drip points at the real ERC-20 contract instead of the compose
-            // 0x0 default.
-            .env("VITE_RM_TOKEN_ADDRESS", ZERO_ADDRESS_HEX)
+            // Issues #463/#466: thread the live RM token address into the dapp
+            // build so the main-page balances panel renders the RM row.
+            .env("VITE_RM_TOKEN_ADDRESS", RM_TOKEN_ADDRESS_HEX)
             // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
             // compute applied vs not-applied against live router weights.
             .env("VITE_VAULT_ADDRESSES", fixture.vault_address_map_json())

@@ -89,7 +89,6 @@ exists. Test-only contracts live under `contracts/test/` and are not shipped to 
 | Contract | Audit report(s) | Status | Exception (if any) |
 |---|---|---|---|
 | `RobotMoneyVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | — |
-| `RmToken.sol` | VA-0609, HR-0618 | Audited | — |
 | `PortfolioRouter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
 | `RouterGovernance.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
 | `VaultRegistry.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
@@ -119,6 +118,10 @@ exists. Test-only contracts live under `contracts/test/` and are not shipped to 
 > The Chronicle-priced RWA vault, its Chronicle adapter, the deSPXA position adapter and the
 > Uniswap V4 adapters are deleted (core 1492, plan decisions 8 and 9). Findings that named them stay
 > in the register below as history.
+>
+> The RM test token contract (formerly audited under VA-0609 and HR-0618) was retired on 2026-10-05
+> and deleted under core 1489. RM is the live ROBOTMONEY token on Base
+> (`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`), which this repo never deploys, so it has no row.
 >
 > No production contract ships without coverage above. The recorded exceptions
 > (FeatureFlags pre-mainnet re-audit, the bucket-B/C basket-vault economic-audit
@@ -339,7 +342,7 @@ the Passthrough natspec drift (L3-D2) by **#922**.
 | HR-I-1 | VA-0609/HR-0618 | Info | accepted-with-rationale | RobotMoneyVault | — | Adapter array never compacted; bounded by MAX_ADAPTERS active cap |
 | HR-I-2 | VA-0609/HR-0618 | Info | accepted-with-rationale | RobotMoneyVault | — | Exit-fee dust floors to zero; accepted by design |
 | HR-I-3 | VA-0609/HR-0618 | Info | accepted-with-rationale | MorphoAdapter | — | `max` sentinel ignored; out-of-trust-model, vault never passes max |
-| HR-I-4 | VA-0609/HR-0618 | Info | accepted-with-rationale | RmToken | — | approve race / infinite allowance; devnet token, not mainnet-ready |
+| HR-I-4 | VA-0609/HR-0618 | Info | accepted-with-rationale | retired RM test token | — | approve race / infinite allowance; devnet token, not mainnet-ready. Retired 2026-10-05: contract deleted (core 1489) |
 | HR-I-5 | VA-0609/HR-0618 | Info | accepted-with-rationale | UniswapV3PoolSlot0Stub | — | No chain-id guard; demo-only, fail-closed at vault |
 | HR-I-6 | VA-0609/HR-0618 | Info | accepted-with-rationale | retired V4 adapter | — | No fee-on-transfer delta check; admin-curated input, out of trust model |
 | HR-I-7 | VA-0609/HR-0618 | Info | accepted-with-rationale | VaultRegistry | — | Stores `asset` without 4626 cross-check; admin-only, router re-derives |

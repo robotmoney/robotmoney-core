@@ -37,11 +37,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { erc20Abi } from "./abi";
-import {
-  FAUCET_DRIP_AMOUNT_ETH,
-  FAUCET_DRIP_AMOUNT_RM,
-  FAUCET_DRIP_AMOUNT_USDC,
-} from "./chainClassifier";
+import { FAUCET_DRIP_AMOUNT_ETH, FAUCET_DRIP_AMOUNT_USDC } from "./chainClassifier";
 
 /**
  * Minimal EIP-1193 surface viem's `custom()` actually consumes. We avoid
@@ -117,55 +113,6 @@ export function encodeDripCalldata(recipient: Address): Hex {
   });
 }
 
-export interface DripRmTokenArgs {
-  /** Address of the deployed RM token contract on this chain. */
-  readonly rmTokenAddress: Address;
-  /** Recipient EOA. */
-  readonly recipient: Address;
-  /** The user's injected EIP-1193 provider — used only as a broadcast transport. */
-  readonly provider: Eip1193Like;
-  /** Build-time-inlined harness private key. Must come from `readHarnessPrivateKey`. */
-  readonly harnessPrivateKey: Hex;
-  /** Smoke-test devnet chain ID, e.g. 918453. */
-  readonly chainId: number;
-}
-
-/**
- * Sign and broadcast an RM token `transfer(recipient, FAUCET_DRIP_AMOUNT_RM)`
- * from the harness holder EOA. Mirrors `dripUsdc` but targets the RM token
- * contract (issue #365). Returns the transaction hash. Throws viem's native
- * error verbatim on failure.
- */
-export async function dripRmToken(args: DripRmTokenArgs): Promise<Hex> {
-  const account = privateKeyToAccount(args.harnessPrivateKey);
-  const client = createWalletClient({
-    account,
-    transport: custom(args.provider),
-  });
-  return client.sendTransaction({
-    chain: null,
-    to: args.rmTokenAddress,
-    data: encodeFunctionData({
-      abi: erc20Abi,
-      functionName: "transfer",
-      args: [args.recipient, FAUCET_DRIP_AMOUNT_RM],
-    }),
-  });
-}
-
-/**
- * Pure encoder for the RM drip calldata — used by Vitest assertions covering
- * the calldata shape. Keeping this pure means tests don't need a viem wallet
- * client or a chain at all.
- */
-export function encodeDripRmCalldata(recipient: Address): Hex {
-  return encodeFunctionData({
-    abi: erc20Abi,
-    functionName: "transfer",
-    args: [recipient, FAUCET_DRIP_AMOUNT_RM],
-  });
-}
-
 export interface DripEthArgs {
   /** Recipient EOA — the new account in onboarding or the wallet selected in the Faucet tab. */
   readonly recipient: Address;
@@ -185,7 +132,7 @@ export interface DripEthArgs {
  * viem's native error verbatim on failure — the FaucetTab surfaces
  * `shortMessage` directly per react-guide §Errors & async.
  *
- * Same architectural pattern as `dripUsdc` / `dripRmToken`: signs with the
+ * Same architectural pattern as `dripUsdc`: signs with the
  * in-bundle harness key (devnet/testnet builds only), broadcasts through
  * the user's injected EIP-1193 provider. No `anvil_*` cheats, no
  * impersonation — matches `Fixture::fund_eth_from_harness` on the Rust

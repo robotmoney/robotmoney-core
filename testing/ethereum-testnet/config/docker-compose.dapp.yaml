@@ -268,10 +268,9 @@ services:
         # Default to zero address so the governance panel shows the
         # config-missing placeholder in standalone builds.
         VITE_GOVERNANCE_ADDRESS: ${VITE_GOVERNANCE_ADDRESS:-0x0000000000000000000000000000000000000000}
-        # Issue #365: RM token address for the Faucet tab 'Get RM tokens' button.
-        # Default to zero address so the RM drip button is hidden in standalone
-        # builds without the smoke-test harness deploying the governance+RM stack.
-        VITE_RM_TOKEN_ADDRESS: ${VITE_RM_TOKEN_ADDRESS:-0x0000000000000000000000000000000000000000}
+        # Issue #463: RM token address for the balances panel RM row. Defaults to
+        # the live ROBOTMONEY token on Base; nothing deploys RM (core 1489).
+        VITE_RM_TOKEN_ADDRESS: ${VITE_RM_TOKEN_ADDRESS:-0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3}
         # Issue #1294: bucket->vault-symbol->address JSON map (rmUSDC, rmPROTO,
         # rmAGENT, rmRWA — tests/fixtures/consensus-receipt.bucket-vault-map.json)
         # so ConsensusReceiptPanel can compute the applied/not-applied state

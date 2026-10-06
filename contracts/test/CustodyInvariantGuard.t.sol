@@ -23,23 +23,22 @@ contract CustodyInvariantGuardTest is Test {
     ///      contracts/doc). Kept as an explicit list so the guard is
     ///      deterministic and a newly-added contract is a deliberate edit here.
     function _productionSources() internal pure returns (string[] memory paths) {
-        paths = new string[](16);
+        paths = new string[](15);
         paths[0] = "contracts/PortfolioRouter.sol";
         paths[1] = "contracts/RobotMoneyVault.sol";
         paths[2] = "contracts/VaultRegistry.sol";
         paths[3] = "contracts/RouterGovernance.sol";
-        paths[4] = "contracts/RmToken.sol";
-        paths[5] = "contracts/FeatureFlags.sol";
-        paths[6] = "contracts/vaults/BasketVault.sol";
-        paths[7] = "contracts/vaults/AgentTokenVault.sol";
-        paths[8] = "contracts/vaults/ProtocolAssetVault.sol";
-        paths[9] = "contracts/vaults/RwaBasketVault.sol";
-        paths[10] = "contracts/adapters/AaveV3Adapter.sol";
-        paths[11] = "contracts/adapters/CompoundV3Adapter.sol";
-        paths[12] = "contracts/adapters/MorphoAdapter.sol";
-        paths[13] = "contracts/adapters/AerodromeSwapAdapter.sol";
-        paths[14] = "contracts/adapters/UniswapV3SwapAdapter.sol";
-        paths[15] = "contracts/interfaces/IStrategyAdapter.sol";
+        paths[4] = "contracts/FeatureFlags.sol";
+        paths[5] = "contracts/vaults/BasketVault.sol";
+        paths[6] = "contracts/vaults/AgentTokenVault.sol";
+        paths[7] = "contracts/vaults/ProtocolAssetVault.sol";
+        paths[8] = "contracts/vaults/RwaBasketVault.sol";
+        paths[9] = "contracts/adapters/AaveV3Adapter.sol";
+        paths[10] = "contracts/adapters/CompoundV3Adapter.sol";
+        paths[11] = "contracts/adapters/MorphoAdapter.sol";
+        paths[12] = "contracts/adapters/AerodromeSwapAdapter.sol";
+        paths[13] = "contracts/adapters/UniswapV3SwapAdapter.sol";
+        paths[14] = "contracts/interfaces/IStrategyAdapter.sol";
     }
 
     /// @dev True if `haystack` contains `needle` (naive substring scan).

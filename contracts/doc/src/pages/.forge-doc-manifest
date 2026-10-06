@@ -4,7 +4,6 @@ contracts/adapters/contract.CompoundV3Adapter.mdx
 contracts/adapters/contract.MorphoAdapter.mdx
 contracts/adapters/contract.UniswapV3SwapAdapter.mdx
 contracts/contract.PortfolioRouter.mdx
-contracts/contract.RmToken.mdx
 contracts/contract.RobotMoneyVault.mdx
 contracts/contract.RouterGovernance.mdx
 contracts/contract.VaultRegistry.mdx

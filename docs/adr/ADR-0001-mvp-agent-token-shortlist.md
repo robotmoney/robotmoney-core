@@ -121,9 +121,9 @@ replace the 2026-06-15 three-token shortlist for the Base mainnet launch:
   empty `shortlist`, so the RM entry is not yet added (core 1491).
   `contracts/script/DeployRmToken.s.sol` is already deleted and is listed
   as forbidden in `scripts/ci/check-no-test-only-code.ts`.
-  `contracts/RmToken.sol` **still exists** on this branch (it is also
-  named in `contracts/test/CustodyInvariantGuard.t.sol` and the
-  generated contract docs); its deletion is tracked by core 1489.
+  `contracts/RmToken.sol` is also deleted (core 1489, 2026-10-05) and is
+  listed as a deleted path in the same gate. The dapp reads the live RM
+  address for its balance row; the faucet no longer drips RM.
 - **RM's deepest liquidity is no longer on Aerodrome.** Read on Base on
   2026-10-05 (block 52222597):
 

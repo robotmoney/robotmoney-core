@@ -48,12 +48,6 @@ export type BuildAdminTabsArgs = Readonly<{
    */
   explorerApiUrl?: string;
   /**
-   * RM token contract address (issue #365). When provided, the Faucet tab
-   * renders a 'Drip RM tokens' button so testnet users can self-serve
-   * governance voting power.
-   */
-  rmTokenAddress?: Address;
-  /**
    * keccak256(eth_getCode(gateway)) pinned at deploy time. Passed through to
    * ConfigExportPanel so the exported TOML carries the verified hash.
    * Defaults to an empty string when not yet verified.
@@ -225,7 +219,6 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           chainId={a.chainId}
           walletAddresses={a.faucetWalletAddresses}
           harnessPrivateKey={readHarnessPrivateKey(a.flagEnv)}
-          rmTokenAddress={a.rmTokenAddress}
         />
       ),
     });

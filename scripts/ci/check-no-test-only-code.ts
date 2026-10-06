@@ -87,6 +87,7 @@ export const DELETED_PATHS = [
   "contracts/script/DeployVaultThemes.s.sol",
   "contracts/script/DeployDemoExtraVaults.s.sol",
   "contracts/script/DeployDemoUniswapV3Stubs.s.sol",
+  "contracts/RmToken.sol",
   "contracts/script/DeployRmToken.s.sol",
   "contracts/script/DeployRehearsalSafe.s.sol",
   "scripts/stage/deploy-core-stack.sh",
