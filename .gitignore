@@ -21,6 +21,7 @@ coverage/
 *.key
 !*.pub.key
 keystore/
+!publish-contracts/src/keystore/
 *.keystore
 *.keyfile
 secrets.json
