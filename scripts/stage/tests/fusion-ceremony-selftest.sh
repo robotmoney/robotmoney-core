@@ -916,7 +916,7 @@ expect_fail "a Safe that reverts every call without a GS code (non-owners)" "two
 baseline; set_state "threshold:$(lc "$SAFE")" 1; set_state "owners:$(lc "$SAFE")" "$(lc "$APPROVER_B") $(lc "$APPROVER")"
 expect_fail "a one-signature control answered by the owner check, not the threshold" "one owner signature cannot drive the safe"
 baseline; rm -f "$WORK/vkeys/approver-b"
-expect_fail "signer keystores gone: quorum enforcement unproven, not assumed" "one owner signature cannot drive the safe"
+expect_fail "signer keystores gone: verify refuses up front, keys discarded (#1478)" "ceremony keys present: approver-b keystores"
 baseline; set_state "owners:$(lc "$SAFE")" ""
 expect_fail "a Safe with no readable owner set" "safe owners are exactly the record's signers"
 baseline; jq --arg d "$DEPLOYER" '.ephemeral.safe_signers[2].address = $d' "$WORK/record.json" >"$WORK/r2" && mv "$WORK/r2" "$WORK/record.json"
@@ -939,7 +939,7 @@ expect_fail "a Safe that counts one owner's signature twice" "one owner's signat
 baseline; set_state safe_accepts_non_owners true
 expect_fail "a Safe that counts non-owner signatures" "two non-owner signatures cannot drive the safe"
 baseline; rm -f "$WORK/vkeys/voter-a.pw"
-expect_fail "non-owner keystores gone: the non-owner control is unproven, not assumed" "two non-owner signatures cannot drive the safe"
+expect_fail "non-owner keystores gone: verify refuses up front, keys discarded (#1478)" "ceremony keys present: voter-a keystores"
 # Item 2 of the #1447 review: an unreadable Safe is a list of FAIL lines and the
 # summary, never a silent abort half way through verify.
 baseline; set_state "unreadable:$(lc "$SAFE")" true
