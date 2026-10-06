@@ -270,6 +270,58 @@ contract RobotMoneyVaultRouteDepositTest is Test {
         assertEq(usdc.balanceOf(address(vault)), 0, "routing left idle USDC");
     }
 
+    /// @notice One `deposit()` performs ONE whole-vault `totalAssets()` sweep
+    ///         (issue #1397): 1 NAV read + 1 pass-1 read per adapter = 6 total,
+    ///         down from 15 when `maxDeposit`, `previewDeposit`, the TVL-cap
+    ///         guard and `_routeDeposit` each re-swept.
+    function test_deposit_balancedVault_sweepsNavOnce() public {
+        _bootstrapBalancedVault(3_000 * ONE_USDC);
+
+        vm.prank(alice);
+        vm.record();
+        vault.deposit(5 * ONE_USDC, alice);
+
+        uint256 reads;
+        for (uint256 i = 0; i < 3; i++) {
+            assertEq(_reads(address(adapters[i])), 2, "more than NAV + pass-1 read");
+            reads += _reads(address(adapters[i]));
+        }
+        assertEq(reads, 6, "deposit swept NAV more than once");
+    }
+
+    /// @notice The cached NAV is the value each replaced call site would read:
+    ///         shares equal the standalone `previewDeposit`, the TVL-cap
+    ///         headroom equals `maxDeposit`, and post-transfer NAV (what
+    ///         `_routeDeposit` used to re-read) equals `nav + assets`.
+    function testFuzz_deposit_cachedNavEqualsEveryReplacedRead(uint256 seed, uint256 amount)
+        public
+    {
+        seed = bound(seed, 3_000 * ONE_USDC, 50_000 * ONE_USDC);
+        amount = bound(amount, 1, 50_000 * ONE_USDC);
+        vm.prank(alice);
+        vault.deposit(seed, alice); // rounding dust may stay idle; irrelevant here
+
+        uint256 navBefore = vault.totalAssets();
+        uint256 expectedShares = vault.previewDeposit(amount);
+        assertGe(vault.maxDeposit(alice), amount, "maxDeposit below amount");
+        assertEq(vault.maxDeposit(alice), _min(PER_DEPOSIT_CAP, TVL_CAP - navBefore));
+
+        // Post-transfer NAV, exactly what `_routeDeposit` used to re-read.
+        vm.prank(alice);
+        usdc.transfer(address(vault), amount);
+        assertEq(vault.totalAssets(), navBefore + amount, "nav + assets != post-transfer NAV");
+        vm.prank(address(vault));
+        usdc.transfer(alice, amount);
+
+        vm.prank(alice);
+        uint256 shares = vault.deposit(amount, alice);
+        assertEq(shares, expectedShares, "share accounting changed");
+    }
+
+    function _min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
+    }
+
     /// @notice Pass 1 alone absorbs the entire deposit into a balanced vault: no
     ///         adapter is allocated to twice and nothing is left unrouted.
     /// @dev RED before #1391 — pass 2 allocated the 9999-vs-10000 shortfall,
