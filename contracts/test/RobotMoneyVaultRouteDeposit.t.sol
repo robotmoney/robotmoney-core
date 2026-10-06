@@ -133,6 +133,19 @@ contract RouteHarness is RobotMoneyVault {
     function exposed_routeDeposit(uint256 amount) external {
         _routeDeposit(amount);
     }
+
+    /// @dev Reaches `_depositAt`'s own guards directly. Through `deposit()` the
+    ///      `maxDeposit` pre-check (issue #1397) rejects first, so these guards are
+    ///      defence in depth that only a direct call can execute.
+    function exposed_depositAt(
+        address caller,
+        address receiver,
+        uint256 assets,
+        uint256 shares,
+        uint256 nav
+    ) external {
+        _depositAt(caller, receiver, assets, shares, nav);
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -316,6 +329,107 @@ contract RobotMoneyVaultRouteDepositTest is Test {
         vm.prank(alice);
         uint256 shares = vault.deposit(amount, alice);
         assertEq(shares, expectedShares, "share accounting changed");
+    }
+
+    // ─── deposit() guard coverage (issue #1397) ──────────────────────────────
+
+    function _expectExceeded(uint256 assets, uint256 max) internal {
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "ERC4626ExceededMaxDeposit(address,uint256,uint256)", alice, assets, max
+            )
+        );
+    }
+
+    function test_deposit_whenPaused_revertsWithZeroMax() public {
+        vm.prank(admin);
+        vault.pause();
+        _expectExceeded(ONE_USDC, 0);
+        vm.prank(alice);
+        vault.deposit(ONE_USDC, alice);
+    }
+
+    function test_deposit_aboveHeadroom_revertsWithHeadroomMax() public {
+        vm.startPrank(admin);
+        vault.setPerDepositCap(100 * ONE_USDC);
+        vault.setTvlCap(1_000 * ONE_USDC);
+        vm.stopPrank();
+        vm.startPrank(alice);
+        for (uint256 i = 0; i < 9; i++) {
+            vault.deposit(100 * ONE_USDC, alice);
+        }
+        vault.deposit(50 * ONE_USDC, alice);
+        // 50 USDC of TVL headroom, below the 100 USDC per-deposit cap.
+        _expectExceeded(51 * ONE_USDC, 50 * ONE_USDC);
+        vault.deposit(51 * ONE_USDC, alice);
+        vm.stopPrank();
+    }
+
+    function test_deposit_atTvlCap_revertsWithZeroMax() public {
+        vm.startPrank(admin);
+        vault.setPerDepositCap(100 * ONE_USDC);
+        vault.setTvlCap(1_000 * ONE_USDC);
+        vm.stopPrank();
+        vm.startPrank(alice);
+        for (uint256 i = 0; i < 10; i++) {
+            vault.deposit(100 * ONE_USDC, alice);
+        }
+        assertEq(vault.maxDeposit(alice), 0, "headroom left at the cap");
+        _expectExceeded(1, 0);
+        vault.deposit(1, alice);
+        vm.stopPrank();
+    }
+
+    function test_mint_routesThroughSharedDepositPath() public {
+        vm.prank(alice);
+        uint256 assets = vault.mint(5 * ONE_USDC, alice);
+        assertEq(vault.balanceOf(alice), 5 * ONE_USDC, "shares not minted");
+        assertEq(vault.totalAssets(), assets, "mint assets not counted in NAV");
+        assertLe(usdc.balanceOf(address(vault)), 3, "mint left more than rounding dust idle");
+    }
+
+    function test_depositAt_whenDepositsPaused_reverts() public {
+        vm.prank(admin);
+        vault.pause();
+        vm.expectRevert(RobotMoneyVault.DepositsPaused.selector);
+        vault.exposed_depositAt(alice, alice, ONE_USDC, ONE_USDC, 0);
+    }
+
+    function test_depositAt_whenShutdown_reverts() public {
+        vm.prank(admin);
+        vault.shutdownVault();
+        vm.expectRevert(RobotMoneyVault.VaultShutdown.selector);
+        vault.exposed_depositAt(alice, alice, ONE_USDC, ONE_USDC, 0);
+    }
+
+    function test_depositAt_whenRetired_reverts() public {
+        address registry = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(registry);
+        vm.prank(registry);
+        vault.retire();
+        vm.expectRevert(RobotMoneyVault.VaultRetired.selector);
+        vault.exposed_depositAt(alice, alice, ONE_USDC, ONE_USDC, 0);
+    }
+
+    function test_depositAt_abovePerDepositCap_reverts() public {
+        vm.expectRevert(RobotMoneyVault.PerDepositCapExceeded.selector);
+        vault.exposed_depositAt(alice, alice, PER_DEPOSIT_CAP + 1, 1, 0);
+    }
+
+    function test_depositAt_pushingNavPastTvlCap_reverts() public {
+        vm.expectRevert(RobotMoneyVault.TVLCapExceeded.selector);
+        vault.exposed_depositAt(alice, alice, ONE_USDC, ONE_USDC, TVL_CAP);
+    }
+
+    function test_depositAt_withNoActiveAdapters_reverts() public {
+        vm.startPrank(admin);
+        for (uint256 i = 0; i < 3; i++) {
+            vault.removeAdapter(i);
+        }
+        vm.stopPrank();
+        vm.expectRevert(RobotMoneyVault.NoActiveAdapters.selector);
+        vault.exposed_depositAt(alice, alice, ONE_USDC, ONE_USDC, 0);
     }
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {

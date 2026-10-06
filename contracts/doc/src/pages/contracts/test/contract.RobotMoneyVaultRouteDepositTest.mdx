@@ -4,7 +4,7 @@ title: "RobotMoneyVaultRouteDepositTest"
 
 # RobotMoneyVaultRouteDepositTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/bc45d15d9b60824c9fb575df196f7c638a354620/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a0833555fd49401eb9d448beca36219e5dbb1cb/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
 
 **Inherits:** Test
 
@@ -256,6 +256,156 @@ walked all three adapters a second time — 3 reads each, not 2.
 ```solidity
 function test_routeDeposit_balancedVault_readsEachAdapterOnce() public;
 ```
+
+<a id="test_deposit_balancedvault_sweepsnavonce"></a>
+
+### test_deposit_balancedVault_sweepsNavOnce
+
+One `deposit()` performs ONE whole-vault `totalAssets()` sweep
+(issue #1397): 1 NAV read + 1 pass-1 read per adapter = 6 total,
+down from 15 when `maxDeposit`, `previewDeposit`, the TVL-cap
+guard and `_routeDeposit` each re-swept.
+
+```solidity
+function test_deposit_balancedVault_sweepsNavOnce() public;
+```
+
+<a id="testfuzz_deposit_cachednavequalseveryreplacedread-uint256-uint256"></a>
+
+### testFuzz_deposit_cachedNavEqualsEveryReplacedRead
+
+The cached NAV is the value each replaced call site would read:
+shares equal the standalone `previewDeposit`, the TVL-cap
+headroom equals `maxDeposit`, and post-transfer NAV (what
+`_routeDeposit` used to re-read) equals `nav + assets`.
+
+```solidity
+function testFuzz_deposit_cachedNavEqualsEveryReplacedRead(uint256 seed, uint256 amount)
+        public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seed | `uint256` |  |
+| amount | `uint256` |  |
+
+<a id="_expectexceeded-uint256-uint256"></a>
+
+### _expectExceeded
+
+```solidity
+function _expectExceeded(uint256 assets, uint256 max) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+| max | `uint256` |  |
+
+<a id="test_deposit_whenpaused_revertswithzeromax"></a>
+
+### test_deposit_whenPaused_revertsWithZeroMax
+
+```solidity
+function test_deposit_whenPaused_revertsWithZeroMax() public;
+```
+
+<a id="test_deposit_aboveheadroom_revertswithheadroommax"></a>
+
+### test_deposit_aboveHeadroom_revertsWithHeadroomMax
+
+```solidity
+function test_deposit_aboveHeadroom_revertsWithHeadroomMax() public;
+```
+
+<a id="test_deposit_attvlcap_revertswithzeromax"></a>
+
+### test_deposit_atTvlCap_revertsWithZeroMax
+
+```solidity
+function test_deposit_atTvlCap_revertsWithZeroMax() public;
+```
+
+<a id="test_mint_routesthroughshareddepositpath"></a>
+
+### test_mint_routesThroughSharedDepositPath
+
+```solidity
+function test_mint_routesThroughSharedDepositPath() public;
+```
+
+<a id="test_depositat_whendepositspaused_reverts"></a>
+
+### test_depositAt_whenDepositsPaused_reverts
+
+```solidity
+function test_depositAt_whenDepositsPaused_reverts() public;
+```
+
+<a id="test_depositat_whenshutdown_reverts"></a>
+
+### test_depositAt_whenShutdown_reverts
+
+```solidity
+function test_depositAt_whenShutdown_reverts() public;
+```
+
+<a id="test_depositat_whenretired_reverts"></a>
+
+### test_depositAt_whenRetired_reverts
+
+```solidity
+function test_depositAt_whenRetired_reverts() public;
+```
+
+<a id="test_depositat_aboveperdepositcap_reverts"></a>
+
+### test_depositAt_abovePerDepositCap_reverts
+
+```solidity
+function test_depositAt_abovePerDepositCap_reverts() public;
+```
+
+<a id="test_depositat_pushingnavpasttvlcap_reverts"></a>
+
+### test_depositAt_pushingNavPastTvlCap_reverts
+
+```solidity
+function test_depositAt_pushingNavPastTvlCap_reverts() public;
+```
+
+<a id="test_depositat_withnoactiveadapters_reverts"></a>
+
+### test_depositAt_withNoActiveAdapters_reverts
+
+```solidity
+function test_depositAt_withNoActiveAdapters_reverts() public;
+```
+
+<a id="_min-uint256-uint256"></a>
+
+### _min
+
+```solidity
+function _min(uint256 a, uint256 b) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="test_routedeposit_balancedvault_passonecompletesthefill"></a>
 
