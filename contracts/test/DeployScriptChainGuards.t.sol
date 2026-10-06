@@ -11,6 +11,7 @@ import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
 import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitteePolicy.s.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
+import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
 import {DeployVaultThemes} from "../script/DeployVaultThemes.s.sol";
 import {DeployRmToken} from "../script/DeployRmToken.s.sol";
 import {ActivateBasketVaultEligibility} from "../script/ActivateBasketVaultEligibility.s.sol";
@@ -75,6 +76,12 @@ contract DeployScriptChainGuardsTest is Test {
         s.run();
     }
 
+    function test_rwaBasketVault_run_requiresExpectedChainOnBase() public {
+        DeployRwaBasketVault s = new DeployRwaBasketVault();
+        vm.expectRevert(bytes(MSG));
+        s.run();
+    }
+
     function test_vaultThemes_run_requiresExpectedChainOnBase() public {
         DeployVaultThemes s = new DeployVaultThemes();
         vm.expectRevert(bytes(MSG));
@@ -96,6 +103,7 @@ contract DeployScriptChainGuardsTest is Test {
 
 contract ProtocolVaultInputsHarness is DeployProtocolAssetVault {
     function readPrefixed(string memory prefix) external view returns (Params memory) {
+        _requireExpectedChain(prefix);
         return _readParamsFrom(prefix);
     }
 }
@@ -112,9 +120,8 @@ contract ProtocolVaultInputsTest is Test {
 
     function _sheet(string memory p, string memory skip) internal {
         _set(p, skip, "ADMIN_ADDRESS", vm.toString(makeAddr("pv-admin")));
-        _set(p, skip, "EMERGENCY_RESPONDER_ADDRESS", vm.toString(makeAddr("pv-emergency")));
         _set(p, skip, "SWAP_ROUTER", vm.toString(makeAddr("pv-router")));
-        _set(p, skip, "USDC_ADDRESS", vm.toString(makeAddr("pv-usdc")));
+        _set(p, skip, "REGISTRY_ADDRESS", vm.toString(makeAddr("pv-registry")));
         _set(p, skip, "TVL_CAP", "50000000000");
         _set(p, skip, "PER_DEPOSIT_CAP", "5000000000");
         _set(p, skip, "EXIT_FEE_BPS", "0");

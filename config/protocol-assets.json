@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "rmPROTO (ProtocolAssetVault) launch assets: wETH and cbBTC, each with a Uniswap V3 USDC pool, as checked at Base block 52082423. Assets without a usable pool are added later through the timelock. One map for every chain.",
+  "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+  "swapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481",
+  "minTvlUsd": 1000000,
+  "assets": [
+    {
+      "symbol": "wETH",
+      "token": "0x4200000000000000000000000000000000000006",
+      "tokenDecimals": 18,
+      "venue": "UniswapV3",
+      "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+      "poolFee": 500
+    },
+    {
+      "symbol": "cbBTC",
+      "token": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "tokenDecimals": 8,
+      "venue": "UniswapV3",
+      "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
+      "poolFee": 500
+    }
+  ]
+}
