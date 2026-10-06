@@ -5,7 +5,7 @@ description: "rmAGENT script: empty, paused and registered at launch. The same s
 
 # DeployAgentTokenVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployAgentTokenVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0aa406a589f187fd2a778e9ce49155599b343413/contracts/test/DeployAgentTokenVault.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -44,14 +44,34 @@ function _launchConfig() internal view returns (string memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
+<a id="_emptyconfig"></a>
+
+### _emptyConfig
+
+<i>
+
+The shipped file's router with no assets. The shipped RM pool has no code on the
+in-process chain, so the paused-and-empty deploy path runs on this body instead.
+
+</i>
+
+```solidity
+function _emptyConfig() internal view returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
 <a id="_runlaunch"></a>
 
 ### _runLaunch
 
 <i>
 
-Runs the SHIPPED config file through the script's parser, with no substitute body.
-The test points SWAP_ROUTER at the file's own swapRouter02 value.
+Runs the empty-list body through the script. SWAP_ROUTER is the file's swapRouter02.
 
 </i>
 
@@ -69,19 +89,19 @@ function _runLaunch() internal returns (BasketVaultDeployBase.Deployed memory);
 
 ### test_shippedConfig_parsesThroughTheScriptParser
 
-The shipped rmAGENT config carries swapRouter02 and an empty shortlist, so the
+The shipped rmAGENT config carries swapRouter02 and the RM entry, so the
 script's parser accepts it (review defect: it used to revert on a missing key).
 
 ```solidity
 function test_shippedConfig_parsesThroughTheScriptParser() public;
 ```
 
-<a id="test_launchconfigshortlistisempty"></a>
+<a id="test_launchconfigshortlistisrmonly"></a>
 
-### test_launchConfigShortlistIsEmpty
+### test_launchConfigShortlistIsRmOnly
 
 ```solidity
-function test_launchConfigShortlistIsEmpty() public view;
+function test_launchConfigShortlistIsRmOnly() public view;
 ```
 
 <a id="test_deploy_isregisteredpausedandempty"></a>
