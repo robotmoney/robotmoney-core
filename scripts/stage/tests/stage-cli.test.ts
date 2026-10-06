@@ -140,6 +140,16 @@ describe("twin-run-report CLI: a manifest for each of the four vaults", () => {
     expect(r.code).toBe(1);
     expect(r.out).toContain("MISSING");
   });
+  test("a --run-manifest path that does not exist exits non-zero", () => {
+    const r = run([tool("twin-run-report.ts"), "--manifest-dir", manifestDir(), "--run-manifest", join(tmp(), "nope.json")]);
+    expect(r.code).toBe(1);
+  });
+  test("a run manifest with no per-stage counts exits non-zero", () => {
+    const d = manifestDir();
+    const rm = file(d, "run.json", JSON.stringify({ version: 1, stages: {} }));
+    const r = run([tool("twin-run-report.ts"), "--manifest-dir", d, "--run-manifest", rm]);
+    expect(r.code).toBe(1);
+  });
   test("a failing verifier label exits non-zero", () => {
     const d = manifestDir();
     const labels = file(d, "labels.txt", "PASS safe.threshold\nFAIL vault.rmUSDC.paused: wrong\n");

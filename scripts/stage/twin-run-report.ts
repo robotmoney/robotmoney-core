@@ -189,6 +189,10 @@ function main(): number {
     }
     labelsText = readFileSync(v.labels as string, "utf8");
   }
+  if (v["run-manifest"] && !existsSync(v["run-manifest"] as string)) {
+    console.error(`run manifest ${v["run-manifest"]} does not exist`);
+    return 1;
+  }
   const report = buildReport({
     table,
     manifests: loadManifests(table, v["manifest-dir"] as string),
