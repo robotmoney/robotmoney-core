@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { PublishError, EXIT_CODES } from "../src/errors.ts";
-import { childEnv, forgeFailureTail, spawnTool } from "../src/runner.ts";
+import { childEnv, forgeFailureTail, outputSecrets, scrubToolOutput, spawnTool } from "../src/runner.ts";
 import { SCRIPT, world } from "./harness.ts";
 
 describe("what the CLI spawns and what it logs", () => {
@@ -88,5 +88,32 @@ describe("what the CLI spawns and what it logs", () => {
     expect(out[0]).not.toContain("0xabc");
     expect(out[0]).not.toContain("words");
     expect(out[0]).toContain("fine");
+  });
+});
+
+describe("tool output is scrubbed before it reaches an error or a log (core 1505)", () => {
+  test("known secrets, non-loopback URLs, password pairs and bare 32-byte hex are cut; a tx hash and a loopback node stay", () => {
+    const hash = `0x${"ab".repeat(32)}`;
+    const raw = `url (https://KEY123.quiknode.pro/abcdef/?k=1) wss://x.example/v3/zz at http://127.0.0.1:8545/path?x=1 passphrase=letmein1 ${"cd".repeat(32)} tx ${hash} rpc https://my.rpc/secretpath`;
+    const s = scrubToolOutput(raw, ["https://my.rpc/secretpath"]);
+    for (const gone of ["KEY123", "quiknode", "abcdef", "x.example", "letmein1", "cd".repeat(32), "secretpath", "my.rpc"]) expect(s).not.toContain(gone);
+    expect(s).toContain("https://[redacted]");
+    expect(s).toContain("http://127.0.0.1:8545");
+    expect(s).not.toContain("/path?x=1");
+    expect(s).toContain(hash);
+  });
+
+  test("the secrets are the RPC and every secret-named env value, never a short or harmless one", () => {
+    const got = outputSecrets({ rpc: "https://rpc.example/k", baseEnv: { BASE_UPSTREAM_RPC: "https://up.example/key", GITHUB_TOKEN: "ghp_xxxxxxxxxxxx", PATH: "/usr/bin:/bin", CI: "true", API_KEY: "short" } });
+    expect(got.sort()).toEqual(["ghp_xxxxxxxxxxxx", "https://rpc.example/k", "https://up.example/key"].sort());
+  });
+
+  test("forge's missing-dependencies warning does not hide the trace behind a bare EVM error", () => {
+    const tail = forgeFailureTail("Traces:\n  [1] DeployVault::run()\n    └─ ← [Revert] vm.writeJson: the path /x is not allowed\nWarning: Your project has missing dependencies that could not be installed.\nError: EVM error", "");
+    expect(tail).toContain("vm.writeJson: the path /x is not allowed");
+  });
+
+  test("forgeFailureTail scrubs what it returns", () => {
+    expect(forgeFailureTail("", "Error: error sending request for url (https://base.example/v2/KEY999)", [])).toBe("Error: error sending request for url (https://[redacted])");
   });
 });

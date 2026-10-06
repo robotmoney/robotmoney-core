@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { encodeErrorResult, encodeFunctionData, parseAbi } from "viem";
 import { basename, join } from "node:path";
 import { EXIT_CODES } from "../src/errors.ts";
 import { STAGE_NAMES, getStageTable } from "../src/stages.ts";
@@ -260,5 +261,73 @@ describe("the stage runner on stub forge and cast", () => {
     expect(Object.keys(r.codehashes).length).toBeGreaterThan(5);
     expect(r.notes.join(" ")).toContain("does not prove the real delay");
     expect(existsSync(join(w.evidence, "publish-run.json"))).toBe(true);
+  });
+});
+
+describe("a failed broadcast says why (core 1505)", () => {
+  // The CI failure this covers: the vault stage's last transaction, the seed deposit, was mined and reverted
+  // InsufficientGas(370589, 400000), and the run log said only "did not complete (exit 1)".
+  const HASH = `0x${"3a".repeat(32)}`;
+  const FROM = "0x4b082405ed655ca4a2b5ceb99b56146ce6a9416e";
+  const VAULT = "0xd98d369a9be55c5a47dabc599a0873c1b6696ce5";
+  const INPUT = encodeFunctionData({ abi: parseAbi(["function deposit(uint256,address) returns (uint256)"]), functionName: "deposit", args: [1_000_000n, "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"] });
+  const ERR_ABI = parseAbi(["error InsufficientGas(uint256 available, uint256 required)"]);
+  const REVERT = encodeErrorResult({ abi: ERR_ABI, errorName: "InsufficientGas", args: [370_589n, 400_000n] });
+  const PROVIDER_KEY = "k3yK3yK3yProviderSecret";
+  const UPSTREAM = `https://base-mainnet.g.alchemy.com/v2/${PROVIDER_KEY}`;
+
+  function failingVault() {
+    const w = world({ startNonce: 0 });
+    w.cfg.failBroadcast = SCRIPT.vault;
+    w.cfg.failBroadcastOutput = {
+      stdout: "Transactions saved to: broadcast/DeployVault.s.sol/918453/run-latest.json\n",
+      stderr: `Warning: unused\nerror sending request for url (${UPSTREAM}) at http://rpc.test:8545\npassword: hunter2hunter2\nError: Transaction Failure: ${HASH}\n`,
+    };
+    w.cfg.castReplies = {
+      receipt: { stdout: JSON.stringify({ status: "0x0", gasUsed: "0xe3a9b", blockNumber: "0x10" }) },
+      call: { code: 1, stderr: `Error: server returned an error response: error code 3: execution reverted: custom error 0x${REVERT.slice(2, 10)}, data: "${REVERT}" (${UPSTREAM})\n` },
+    };
+    // what forge leaves after a failed --slow broadcast: the broadcast file with the failed transaction in it, and the build
+    const bdir = join(w.coreDir, "broadcast", SCRIPT.vault!, "918453");
+    mkdirSync(bdir, { recursive: true });
+    writeFileSync(join(bdir, "run-latest.json"), JSON.stringify({ transactions: [{ hash: HASH, contractName: "RobotMoneyVault", function: "deposit(uint256,address)", isFixedGasLimit: false, transaction: { from: FROM, to: VAULT, gas: "0x13d7ee", value: "0x0", input: INPUT } }] }));
+    mkdirSync(join(w.coreDir, "out", "RobotMoneyVault.sol"), { recursive: true });
+    writeFileSync(join(w.coreDir, "out", "RobotMoneyVault.sol", "RobotMoneyVault.json"), JSON.stringify({ abi: ERR_ABI }));
+    return w;
+  }
+
+  test("the error and the log carry forge's failure line, the gas limit, the receipt and the decoded revert", async () => {
+    const w = failingVault();
+    expect(await w.run(["--stage", "deploy"], { env: { BASE_UPSTREAM_RPC: UPSTREAM } })).toBe(EXIT_CODES.BROADCAST);
+    const msg: string = lastError(w).message;
+    expect(msg).toContain(`Error: Transaction Failure: ${HASH}`);
+    expect(msg).toContain("RobotMoneyVault.deposit(uint256,address), gas limit 1300462 (forge's estimate)");
+    expect(msg).toContain("mined in block 16 with status 0, gas used 932507");
+    expect(msg).toContain("reverts InsufficientGas(370589, 400000)");
+    expect(msg).toContain("NOT resent by --resume");
+    const logged = w.logs().find((l) => l.event === "stage.broadcast_failed");
+    expect(logged.stage).toBe("vault");
+    expect(logged.forge).toContain(HASH);
+    expect(logged.failed_tx).toContain("InsufficientGas(370589, 400000)");
+    // the replay is the same call with the same gas limit on the parent block, through cast and the RPC env, never an argv URL
+    const call = w.state().calls.find((c: any) => c.tool === "cast" && c.args[0] === "call");
+    expect(call.args).toEqual(["call", "--from", FROM, "--gas-limit", "1300462", "--value", "0", "--block", "15", VAULT, INPUT]);
+  });
+
+  test("no secret reaches the error or the log: provider URL and key, the RPC, a password", async () => {
+    const w = failingVault();
+    await w.run(["--stage", "deploy"], { env: { BASE_UPSTREAM_RPC: UPSTREAM } });
+    const all = w.lines.join("\n");
+    for (const secret of [PROVIDER_KEY, "alchemy.com", "rpc.test", "hunter2hunter2"]) expect(all).not.toContain(secret);
+    expect(lastError(w).message).toContain("error sending request for url ([redacted])");
+  });
+
+  test("a broadcast that names no failed transaction still reports forge's words and reads nothing more", async () => {
+    const w = world({ startNonce: 0 });
+    w.cfg.failBroadcast = SCRIPT.vault;
+    expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.BROADCAST);
+    expect(lastError(w).message).toContain("forge: Error: RPC connection dropped");
+    expect(lastError(w).message).not.toContain("NOT resent");
+    expect(w.state().calls.some((c: any) => c.tool === "cast" && (c.args[0] === "receipt" || c.args[0] === "call"))).toBe(false);
   });
 });

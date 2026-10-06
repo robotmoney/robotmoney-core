@@ -142,6 +142,39 @@ contract DeploySeedDeposit is Test {
         assertEq(d.vault.balanceOf(shareReceiver), d.vault.totalSupply(), "receiver holds all");
     }
 
+    /// @notice The seed deposit is called with the script's fixed gas, never a forge estimate
+    ///         (core 1505). forge broadcasts a call that names its gas with exactly that gas
+    ///         limit (`isFixedGasLimit` in the broadcast file), so this pins the gas limit of the
+    ///         broadcast seed transaction. It also shows the fixed gas clears every adapter gas
+    ///         floor at the fork's venue state.
+    function test_fork_deploySeed_depositUsesFixedGas() public {
+        _setUp();
+
+        // The vault is the first contract the script creates.
+        address vaultAt = vm.computeCreateAddress(address(script), vm.getNonce(address(script)));
+        vm.expectCall(
+            vaultAt,
+            0,
+            uint64(script.SEED_DEPOSIT_GAS()),
+            abi.encodeWithSignature(
+                "deposit(uint256,address)", VaultTestParams.SEED_DEPOSIT_AMOUNT, shareReceiver
+            )
+        );
+
+        DeployVault.Deployed memory d = _runDeploy();
+
+        assertEq(address(d.vault), vaultAt, "the vault is the script's first creation");
+        assertGt(d.vault.totalSupply(), 0, "the seed deposit landed with the fixed gas");
+    }
+
+    /// @notice The fixed seed gas keeps at least 2x the largest `cast estimate` measured for the
+    ///         seed deposit (1 329 873 on the Twin chain at Base block 52256191, core 1505). Runs
+    ///         without a fork, so lowering the constant fails the plain unit run.
+    function test_seedDepositGas_keepsHeadroomOverMeasuredEstimate() public {
+        DeployVault s = new DeployVault();
+        assertGe(s.SEED_DEPOSIT_GAS(), 2 * 1_329_873, "seed gas below 2x the measured estimate");
+    }
+
     // The seed step refuses an unset (zero) or deployer receiver before it deploys anything,
     // so these three need no fork state.
 

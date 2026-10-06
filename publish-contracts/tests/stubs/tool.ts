@@ -8,6 +8,8 @@ interface Cfg {
   counts: Record<string, number>;          // script file -> tx count of simulation and broadcast
   sent?: Record<string, number>;           // script file -> tx count the broadcast really sends (a mismatch)
   failBroadcast?: string;                  // script file whose first broadcast dies halfway
+  failBroadcastOutput?: { stdout?: string; stderr?: string }; // what that failing broadcast prints (default: a dropped RPC on stdout)
+  castReplies?: Record<string, { stdout?: string; stderr?: string; code?: number }>; // cast subcommand -> its canned reply (receipt, call)
   simFails?: string;                       // script file whose simulation fails
   chainId: number;
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
@@ -36,6 +38,8 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
 
   if (tool === "cast") {
     const [cmd, a0] = args;
+    const reply = cfg.castReplies?.[cmd!];
+    if (reply) { process.stderr.write(reply.stderr ?? ""); out(reply.stdout ?? "", reply.code ?? 0); }
     if (cmd === "chain-id") out(String(cfg.chainId));
     if (cmd === "nonce") out(String(st.nonces[a0!.toLowerCase()] ?? 0));
     if (cmd === "balance") out("10000000000000000000");
@@ -83,6 +87,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   if (cfg.failBroadcast === file && !resume && !(st.resumed ?? []).includes(file)) {
     st.broadcastStart = { ...(st.broadcastStart ?? {}), [file]: st.nonces[sender] ?? 0 };
     st.nonces[sender] = (st.nonces[sender] ?? 0) + Math.max(1, Math.floor(count / 2));
+    if (cfg.failBroadcastOutput) { process.stderr.write(cfg.failBroadcastOutput.stderr ?? ""); out(cfg.failBroadcastOutput.stdout ?? "", 1); }
     out("Error: RPC connection dropped", 1);
   }
   if (resume) st.resumed.push(file);

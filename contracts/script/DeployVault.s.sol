@@ -74,6 +74,28 @@ contract DeployVault is ExpectedChainGuard {
     /// @notice Third venue adapter cap in basis points.
     uint16 public constant THIRD_VENUE_BPS = 3_333;
 
+    /// @notice Explicit gas for the broadcast seed `deposit` (core 1505). forge sends a call that
+    ///         names its gas with exactly that gas limit, so the seed transaction is never sized by
+    ///         forge's own estimate.
+    /// @dev Why the estimate is not enough: `deposit` routes the seed through every adapter, and
+    ///      before each `adapter.deploy` the vault checks `gasleft() >= ADAPTER_CALL_GAS_FLOOR`
+    ///      (400 000, `RobotMoneyVault._allocateTo`). forge 1.8.x sets a broadcast gas limit of
+    ///      about 1.38x to 1.46x the gas the call used with unlimited gas (G). A deposit needs
+    ///      about 1.40x G, because the floor is checked but not spent. On the Twin chain at
+    ///      Base block 52256191 forge sent 1 300 462 gas, the third (Moonwell) floor saw 370 589
+    ///      and the seed reverted `InsufficientGas(370589, 400000)` after the vault and adapters
+    ///      were already mined. `cast estimate` needed about 1.32M to 1.33M there.
+    ///
+    ///      How 3 000 000 is chosen: the floor is a check, not a cost, so the worst case is every
+    ///      gas unit the deposit spends (G, about 1.1M on the Twin pins: three adapter
+    ///      `totalAssets` reads, a second read pass, three `deploy` calls with the Moonwell
+    ///      MetaMorpho deposit the largest) plus one 400 000 floor plus 1/64 call forwarding and
+    ///      the intrinsic cost: about 1.55M. 3M covers that about 1.9x over, so venue state can
+    ///      roughly double G (a longer MetaMorpho queue, a new Aave or Comet code path) before
+    ///      the limit binds. Unused gas is refunded, so the only cost is the up-front balance
+    ///      check (3M x the max fee) that the runner's fee guard already covers.
+    uint256 public constant SEED_DEPOSIT_GAS = 3_000_000;
+
     struct Params {
         address admin;
         address feeRecipient;
@@ -157,7 +179,9 @@ contract DeployVault is ExpectedChainGuard {
     {
         _requireSeedReceiver(receiver, d.admin);
         IERC20(d.usdc).approve(address(d.vault), seed);
-        shares = d.vault.deposit(seed, receiver);
+        // Fixed gas, never forge's estimate: the deposit passes a gas floor check per adapter.
+        // See SEED_DEPOSIT_GAS.
+        shares = d.vault.deposit{gas: SEED_DEPOSIT_GAS}(seed, receiver);
         require(d.vault.balanceOf(d.admin) == 0, "deployer must hold no seed shares");
         _requireSeeded(d, seed);
     }

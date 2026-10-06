@@ -19,7 +19,10 @@ export const SCRIPT: Record<string, string> = scriptFiles();
 
 export interface World {
   dir: string; coreDir: string; sheetPath: string; countsDir: string; evidence: string; statePath: string; cfgPath: string; lines: string[];
-  cfg: { counts: Record<string, number>; sent?: Record<string, number>; failBroadcast?: string; simFails?: string; chainId: number; gitDirty?: string[] };
+  cfg: {
+    counts: Record<string, number>; sent?: Record<string, number>; failBroadcast?: string; simFails?: string; chainId: number; gitDirty?: string[];
+    failBroadcastOutput?: { stdout?: string; stderr?: string }; castReplies?: Record<string, { stdout?: string; stderr?: string; code?: number }>;
+  };
   state(): any;
   setNonce(n: number): void;
   run(extraArgs?: string[], over?: Partial<CliDeps> & { chain?: number; env?: Record<string, string | undefined>; signer?: string }): Promise<number>;

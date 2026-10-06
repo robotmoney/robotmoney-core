@@ -5,6 +5,7 @@
 // A count mismatch after a broadcast is a hard failure. Plan: "One deploy sequence" (Resume), principle 17.
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { decodeErrorResult, type Abi, type Hex } from "viem";
 import { PublishError, isPublishError } from "./errors.ts";
 import { PLAINTEXT_ENV, isMainnet } from "./floors.ts";
 import { countFor, sumCounts, checkNonce, type FrozenCounts } from "./counts.ts";
@@ -168,13 +169,112 @@ export function childEnv(ctx: Pick<RunContext, "baseEnv" | "rpc" | "chainId">, e
   return { ...out, ...extra };
 }
 
-/** The lines of a failed forge run that say why: Error/revert lines first, else the last three lines. Compiler warning lists are noise. */
-export function forgeFailureTail(stdout: string, stderr: string): string {
+/** Env names whose values are treated as secrets in tool output: an RPC URL can carry a provider key, the rest are credentials. */
+const SECRET_ENV_NAME = /RPC|URL|KEY|SECRET|PASS|TOKEN|MNEMONIC|PRIVATE|KEYSTORE|CREDENTIAL/i;
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/** The values tool output must never show: the RPC and every secret-named value in the process environment (8 characters or more). */
+export function outputSecrets(ctx: Pick<RunContext, "rpc" | "baseEnv">): string[] {
+  const out = new Set<string>();
+  if (ctx.rpc) out.add(ctx.rpc);
+  for (const [k, v] of Object.entries(ctx.baseEnv)) if (v && v.length >= 8 && SECRET_ENV_NAME.test(k)) out.add(v);
+  return [...out];
+}
+
+/**
+ * Tool output made safe to log and to put in an error: every known secret value is cut out, every non-loopback URL loses all but its
+ * scheme (a provider key can sit in the host, the path or the query), `password: x` style pairs lose their value, and a bare 32-byte hex
+ * word (a raw key has no 0x; a transaction hash keeps its 0x and stays) is cut. Loopback URLs keep host and port: they name a local node.
+ */
+export function scrubToolOutput(text: string, secrets: readonly string[] = []): string {
+  let s = text;
+  for (const x of [...secrets].filter((v) => v.length >= 8).sort((a, b) => b.length - a.length)) s = s.split(x).join("[redacted]");
+  s = s.replace(/\b(?:https?|wss?):\/\/[^\s"'<>()[\]{}]+/gi, (u) => {
+    try { const p = new URL(u); return LOOPBACK_HOSTS.has(p.hostname) ? `${p.protocol}//${p.host}` : `${p.protocol}//[redacted]`; } catch { return "[redacted-url]"; }
+  });
+  s = s.replace(/\b(pass(?:word|phrase)?|mnemonic|private[_ -]?key|secret)(\s*[:=]\s*)\S+/gi, "$1$2[redacted]");
+  s = s.replace(/(?<![0-9a-fA-Fx])[0-9a-fA-F]{64}(?![0-9a-fA-F])/g, "[redacted-hex]");
+  return s;
+}
+
+/**
+ * The lines of a failed forge run that say why: Error/revert lines first, else the last three lines. Compiler warning lists are noise.
+ * The result is scrubbed (scrubToolOutput) of `secrets` and of anything that looks like one, so it can go into an error and a log line.
+ */
+export function forgeFailureTail(stdout: string, stderr: string, secrets: readonly string[] = []): string {
   const lines = `${stdout}\n${stderr}`.split("\n").map((l) => l.trim()).filter(Boolean);
   const why = lines.filter((l) => /^Error[: ]|\[Revert\]|^Warning: Your project has missing|If you wish to simulate on-chain/i.test(l));
-  // a bare "Error: EVM error" says nothing: the trace lines before it (the failing call and its revert) are kept as well
-  const bare = why.length > 0 && why.every((l) => /^Error: EVM error\s*$/i.test(l));
-  return (why.length && !bare ? why.slice(0, 4) : bare ? [...why.slice(0, 1), ...lines.filter((l) => !/^Error: EVM error\s*$/i.test(l)).slice(-12)] : lines.slice(-3)).join(" ");
+  // a bare "Error: EVM error" says nothing: the trace lines before it (the failing call and its revert) are kept as well.
+  // forge's missing-dependencies warning and simulate hint are not a reason, so they do not hide a bare error.
+  const errs = why.filter((l) => !/^Warning: Your project has missing|If you wish to simulate on-chain/i.test(l));
+  const bare = errs.length > 0 && errs.every((l) => /^Error: EVM error\s*$/i.test(l));
+  const tail = (why.length && !bare ? why.slice(0, 4) : bare ? [...why.slice(0, 1), ...lines.filter((l) => !/^Error: EVM error\s*$/i.test(l)).slice(-12)] : lines.slice(-3)).join(" ");
+  return scrubToolOutput(tail, secrets);
+}
+
+const hexToNumber = (v: unknown): number | undefined => {
+  if (typeof v === "number") return v;
+  if (typeof v !== "string" || v === "") return undefined;
+  try { return Number(BigInt(v)); } catch { return undefined; }
+};
+
+/** Decodes revert data with the ABI of `contractName` from forge's out/ directory. Undefined when the artifact or the error is unknown. */
+export function decodeRevert(coreDir: string, contractName: string | undefined, data: string): string | undefined {
+  if (!contractName || !/^0x[0-9a-fA-F]{8}/.test(data)) return undefined;
+  const out = join(coreDir, "out");
+  if (!existsSync(out)) return undefined;
+  const dir = [`${contractName}.sol`, ...readdirSync(out)].find((d) => existsSync(join(out, d, `${contractName}.json`)));
+  if (!dir) return undefined;
+  try {
+    const abi = JSON.parse(readFileSync(join(out, dir, `${contractName}.json`), "utf8")).abi as Abi;
+    const r = decodeErrorResult({ abi, data: data as Hex });
+    return `${r.errorName}(${(r.args ?? []).map((a) => String(a)).join(", ")})`;
+  } catch { return undefined; }
+}
+
+/**
+ * After a failed broadcast: what forge itself does not print about the transaction it names as failed (`Transaction Failure: 0x..`).
+ * From the broadcast file: the contract, the function and the gas limit (fixed by the script, or forge's estimate). From the chain:
+ * the block, the status and the gas used, and the revert reason from an `eth_call` replay of the same call with the same gas limit on
+ * the parent block (exact on an auto-mining node, a close replay on a shared one). Best effort: a read that fails is left out, and
+ * the result is scrubbed of secrets. Empty when forge named no failed transaction.
+ */
+export async function failedBroadcastDetail(ctx: RunContext, script: string, stdout: string, stderr: string): Promise<string> {
+  const m = /Transaction Failure:\s*(0x[0-9a-fA-F]{64})/.exec(`${stdout}\n${stderr}`);
+  if (!m) return "";
+  const hash = m[1]!;
+  const parts: string[] = [`failed transaction ${hash}`];
+  type BTx = { hash?: string; contractName?: string; function?: string; isFixedGasLimit?: boolean; transaction?: { from?: string; to?: string; gas?: string; value?: string; input?: string } };
+  let tx: BTx | undefined;
+  try {
+    const j = JSON.parse(readFileSync(broadcastFile(ctx, script, false), "utf8"));
+    tx = (Array.isArray(j.transactions) ? (j.transactions as BTx[]) : []).find((t) => t.hash?.toLowerCase() === hash.toLowerCase());
+  } catch { /* no broadcast file: the chain reads below still say something */ }
+  const gasLimit = hexToNumber(tx?.transaction?.gas);
+  if (tx) parts.push(`${tx.contractName ?? "?"}.${tx.function ?? "?"}, gas limit ${gasLimit ?? "?"} (${tx.isFixedGasLimit ? "fixed by the script" : "forge's estimate"})`);
+  let block: number | undefined;
+  try {
+    const r = await ctx.run("cast", ["receipt", hash, "--json"], { env: childEnv(ctx) });
+    if (r.code === 0) {
+      const rc = JSON.parse(r.stdout);
+      block = hexToNumber(rc.blockNumber);
+      parts.push(`mined in block ${block ?? "?"} with status ${hexToNumber(rc.status) ?? "?"}, gas used ${hexToNumber(rc.gasUsed) ?? "?"}`);
+    }
+  } catch { /* best effort */ }
+  const t = tx?.transaction;
+  if (t?.from && t.to && t.input && gasLimit !== undefined && block !== undefined && block > 0) {
+    try {
+      const r = await ctx.run("cast", ["call", "--from", t.from, "--gas-limit", String(gasLimit), "--value", String(hexToNumber(t.value) ?? 0), "--block", String(block - 1), t.to, t.input], { env: childEnv(ctx) });
+      if (r.code !== 0) {
+        const msg = `${r.stderr}\n${r.stdout}`.split("\n").map((l) => l.trim()).filter(Boolean);
+        const reason = msg.find((l) => /revert/i.test(l)) ?? msg.slice(-1)[0] ?? "";
+        const data = /data:\s*"?(0x[0-9a-fA-F]{8,})/.exec(msg.join(" "))?.[1] ?? /(0x[0-9a-fA-F]{8,})/.exec(reason)?.[1];
+        const decoded = data ? decodeRevert(ctx.coreDir, tx?.contractName, data) : undefined;
+        parts.push(`replay on block ${block - 1} reverts${decoded ? ` ${decoded}` : ""}: ${reason.slice(0, 400)}`);
+      } else parts.push(`replay on block ${block - 1} does not revert (the block's earlier transactions changed the state)`);
+    } catch { /* best effort */ }
+  }
+  return scrubToolOutput(parts.join("; "), outputSecrets(ctx));
 }
 
 export async function castOut(ctx: RunContext, args: string[]): Promise<string> {
@@ -328,7 +428,7 @@ async function applyToSimulationChain(ctx: RunContext, row: StageRow, base: stri
   ctx.dryFiles?.touch(live);
   const run = await ctx.run("forge", [...base, "--broadcast", "--unlocked", "--rpc-url", ctx.simRpc], { env: fenv, cwd: ctx.coreDir, interactive: true });
   if (run.code !== 0 || !run.stdout.includes("ONCHAIN EXECUTION COMPLETE")) {
-    throw new PublishError("SIMULATION", `stage ${row.name} simulated but could not be applied to the local preflight chain, so the later stages cannot be simulated (exit ${run.code}). Nothing reached the target. ${forgeFailureTail(run.stdout, run.stderr)}`, { stage: row.name });
+    throw new PublishError("SIMULATION", `stage ${row.name} simulated but could not be applied to the local preflight chain, so the later stages cannot be simulated (exit ${run.code}). Nothing reached the target. ${forgeFailureTail(run.stdout, run.stderr, outputSecrets(ctx))}`, { stage: row.name });
   }
   const sent = readTxCount(live);
   ctx.log.log("info", "stage.sim_applied", { stage: row.name, sent: sent?.count, simulated: simCount, local_only: true });
@@ -376,7 +476,7 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   rmSync(dirname(broadcastFile(ctx, script, true)), { recursive: true, force: true });
   const sim = await ctx.run("forge", base, { env: fenv, cwd: ctx.coreDir, interactive: true });
   if (sim.code !== 0 || !sim.stdout.includes("SIMULATION COMPLETE")) {
-    throw new PublishError("SIMULATION", `simulation of ${row.name} failed (exit ${sim.code}). Nothing was sent. ${forgeFailureTail(sim.stdout, sim.stderr)}`, { stage: row.name });
+    throw new PublishError("SIMULATION", `simulation of ${row.name} failed (exit ${sim.code}). Nothing was sent. ${forgeFailureTail(sim.stdout, sim.stderr, outputSecrets(ctx))}`, { stage: row.name });
   }
   const dry = readTxCount(broadcastFile(ctx, script, true));
   if (!dry) throw new PublishError("SIMULATION", `the simulation of ${row.name} wrote no dry-run file`, { stage: row.name });
@@ -410,7 +510,12 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   const run = await ctx.run("forge", [...base, "--broadcast", ...(resuming ? ["--resume"] : [])], { env: fenv, cwd: ctx.coreDir, interactive: true });
   const nonce1 = await deployerNonce(ctx, deployer);
   if (run.code !== 0 || !run.stdout.includes("ONCHAIN EXECUTION COMPLETE")) {
-    throw new PublishError("BROADCAST", `the broadcast of ${row.name} did not complete (exit ${run.code}). Do NOT rerun fresh. Continue with --resume and the same arguments. Deployer nonce is now ${nonce1}.`, { stage: row.name, nonce: nonce1 });
+    // forge's own words (scrubbed of the RPC and any secret), then what the chain says about the transaction forge names as failed
+    const forgeSaid = forgeFailureTail(run.stdout, run.stderr, outputSecrets(ctx));
+    const failedTx = await failedBroadcastDetail(ctx, script, run.stdout, run.stderr);
+    ctx.log.log("error", "stage.broadcast_failed", { stage: row.name, exit: run.code, forge: forgeSaid, failed_tx: failedTx || undefined });
+    const mined = failedTx ? " A transaction that was mined and reverted is NOT resent by --resume: read the failed transaction below before you continue." : "";
+    throw new PublishError("BROADCAST", `the broadcast of ${row.name} did not complete (exit ${run.code}). Do NOT rerun fresh. Continue with --resume and the same arguments. Deployer nonce is now ${nonce1}.${mined} forge: ${forgeSaid}${failedTx ? ` | ${failedTx}` : ""}`, { stage: row.name, nonce: nonce1, forge: forgeSaid, failedTx: failedTx || undefined });
   }
   const sent = readTxCount(broadcastFile(ctx, script, false));
   if (!sent) throw new PublishError("MANIFEST", `forge wrote no broadcast file for ${row.name}`, { stage: row.name });
