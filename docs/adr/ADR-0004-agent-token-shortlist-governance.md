@@ -191,7 +191,9 @@ Owner decisions of 2026-10-05 (mainnet plan §2.2, §3.1, §3.3) and
   (chain 8453) `DeployTimelock` refuses a min delay under 172800 s, so on
   mainnet both `addAsset` and `removeAsset` wait at least 48 hours. A
   24-hour removal is not possible there. Nothing on chain stops the Safe
-  from scheduling an `addAsset` at exactly the min delay.
+  from scheduling an `addAsset` at exactly the min delay. Decided by the
+  owner on 2026-10-06: every shortlist change waits this single 48-hour
+  delay, and the 24-hour removal split is not built.
 
 Consequences of this amendment for the text above: the veto path is no
 longer "cheap (single Safe signer can cancel)"; it needs the Safe
@@ -202,6 +204,8 @@ delay ≥ 48 hours) is now enforced by the `DeployTimelock` floor on
 chain 8453.
 
 2026-10-06: no token-based governance is foreseen; considered alternatives that mention token voting are historical only.
+
+2026-10-06: the owner decided that every shortlist change, add or remove, waits the single 48-hour timelock delay. The 24-hour removal split above is not built.
 
 ## Consequences
 

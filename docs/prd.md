@@ -551,9 +551,12 @@ Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (not yet implemented:
 core #1491). BNKR and JUNO are added later through the timelock. Each token
 routes through one venue under the per-asset venue abstraction in
 [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue is
-open: option A is a funded Uniswap V3 RM/USDC pool; option B is a restored
-Uniswap V4 swap adapter on a V4 RM/USDC pool (V4 restore not yet
-implemented: tracked in the mainnet plan). Current
+decided (owner, 2026-10-06): the existing Uniswap V3 RM/USDC pool
+`0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), the only venue the
+deploy script wires. The owner funds it with in-range liquidity at market
+price before the mainnet run, sized to rmAGENT's first-period cap, and
+raises its observation cardinality. Restoring the Uniswap V4 swap adapter
+is a later option, not a launch blocker. Current
 membership, venues, and pool parameters live in
 `config/agent-token-shortlist.json`. Changes flow through the Safe →
 Timelock → `ADMIN_ROLE` path with a mandatory timelock delay and public

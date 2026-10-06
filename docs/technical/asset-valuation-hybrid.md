@@ -1,6 +1,6 @@
 # Hybrid NAV Design — System Guards + User Asset Clarity
 
-> **Status (2026-10-06): this doc disagrees with the code. Where it does, the code governs until the owner decides otherwise.**
+> **Status (2026-10-06): this doc disagrees with the code. Where it does, the code governs. The owner confirmed on 2026-10-06 that TWAP-valued NAV setting share minting (`BasketVault._deposit`) is the intended design.**
 >
 > What `contracts/vaults/BasketVault.sol` does today:
 >

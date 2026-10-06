@@ -255,12 +255,15 @@ following facts replace the venue and oracle claims above:
   no deploy script registers it.
 - **The §6 venue table is superseded for RM and JUNO.** RM's deepest
   pool is now Uniswap V4 RM/WETH, which `addAsset` refuses; RM's venue is
-  open between a funded V3 RM/USDC pool and the restored V4 adapter (see
-  the [ADR-0001](ADR-0001-mvp-agent-token-shortlist.md) amendment). JUNO
-  is not in the launch shortlist; a V4 venue for it depends on the
-  restore.
+  decided (owner, 2026-10-06): the existing V3 RM/USDC pool
+  `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), funded by the
+  owner before the mainnet run (see the
+  [ADR-0001](ADR-0001-mvp-agent-token-shortlist.md) amendment). The V4
+  adapter restore is a later option, not a launch blocker. JUNO is not in
+  the launch shortlist; a V4 venue for it depends on the restore.
 
-**Open verification item for the V4 restore (not a decided fact).** The
+**Open verification item for the later V4 restore (not a decided fact;
+not a launch blocker since 2026-10-06).** The
 §3 claim that V4 pools expose `observe()` like V3 ("EIP-7680
 compatibility") is unverified. Uniswap V4 core keeps
 pool state inside the singleton `PoolManager` and records no observation

@@ -195,11 +195,14 @@ flag's value differs across environments. See
 
 At launch rmAGENT (`AgentTokenVault`) holds RM, the existing Base token at
 `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`. Nothing deploys RM in
-production. RM's venue is open: a funded Uniswap V3 RM/USDC pool, or a
-restored Uniswap V4 swap adapter on a V4 RM/USDC pool. The deploy script
-today wires only venue `UniswapV3` (`contracts/script/BasketVaultDeployBase.sol`),
-and `config/agent-token-shortlist.json` does not list RM yet (not yet
-implemented: core #1491).
+production. RM's venue is decided (owner, 2026-10-06): the existing
+Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000).
+It is the only venue the deploy script wires (`contracts/script/BasketVaultDeployBase.sol`).
+The owner funds it with in-range liquidity at market price before the
+mainnet run, sized to rmAGENT's first-period cap, and raises its
+observation cardinality. Restoring the Uniswap V4 swap adapter is a later
+option, not a launch blocker. `config/agent-token-shortlist.json` does
+not list RM yet (not yet implemented: core #1491).
 
 The source tree also contains `RwaBasketVault`, the rmRWA vault. rmRWA is
 a plain basket row: it holds deSPXA (Centrifuge / Janus Henderson / Anemoy
@@ -1025,7 +1028,7 @@ to the live address. No test needs to hold RM. `RouterGovernance` voting
 power is assigned by `ADMIN_ROLE` through `setVotingPower`
 (`contracts/RouterGovernance.sol`), not read from an RM balance. rmAGENT
 ships empty and paused with an empty `config/agent-token-shortlist.json`,
-so no deposit buys RM yet (the RM venue is core 1491).
+so no deposit buys RM yet (RM is not yet in config: core 1491).
 
 ### 5.4 Explorer Indexer and API
 

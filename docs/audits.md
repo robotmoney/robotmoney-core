@@ -95,17 +95,17 @@ exists. Test-only contracts live under `contracts/test/` and are not shipped to 
 | `FeatureFlags.sol` | VA-0609 | Audited | Pre-mainnet re-audit pending under the bucket-B/C economic-audit gate (security-model.md §14) |
 | `gateway/RobotMoneyGateway.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | — |
 | `gateway/AccessRoles.sol` | VA-0609, HR-0618, MC-0619, CD-0602 | Audited | — |
-| `gateway/ConsensusRecommendationReceipt.sol` | none | Not separately audited | Investment-committee receipt contract; no snapshot in docs/code-review/ covers it. Audit exception pending owner |
-| `gateway/InvestmentCommitteePolicy.sol` | none | Not separately audited | Investment-committee policy contract; no snapshot in docs/code-review/ covers it. Audit exception pending owner |
-| `vaults/BasketVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | Bucket-B/C economic-model audit required before router-eligible production use (security-model.md §14; gap BASKET-001/ECONOMIC-AUDIT-001) |
-| `vaults/RwaBasketVault.sol` | none (thin subclass of `BasketVault`: name, symbol, asset cap) | Not separately audited | Same bucket-B/C economic-audit gate as BasketVault. Replaces the retired Chronicle-priced RWA vault (core 1492). Audit exception pending owner (plan decision 5) |
-| `vaults/AgentTokenVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate |
-| `vaults/ProtocolAssetVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate |
+| `gateway/ConsensusRecommendationReceipt.sol` | none | Not separately audited | Investment-committee receipt contract; no snapshot in docs/code-review/ covers it. Launch exception B2 granted 2026-10-06 by the owner |
+| `gateway/InvestmentCommitteePolicy.sol` | none | Not separately audited | Investment-committee policy contract; no snapshot in docs/code-review/ covers it. Launch exception B2 granted 2026-10-06 by the owner |
+| `vaults/BasketVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | Bucket-B/C economic-model audit required before router-eligible production use (security-model.md §14; gap BASKET-001/ECONOMIC-AUDIT-001). Launch exception B2 granted 2026-10-06 by the owner: rmPROTO, rmAGENT and rmRWA may launch before the economic audit closes |
+| `vaults/RwaBasketVault.sol` | none (thin subclass of `BasketVault`: name, symbol, asset cap) | Not separately audited | Same bucket-B/C economic-audit gate as BasketVault. Replaces the retired Chronicle-priced RWA vault (core 1492). Launch exception B2 granted 2026-10-06 by the owner: rmRWA may launch before its economic audit closes (plan decision 5) |
+| `vaults/AgentTokenVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate; launch exception B2 granted 2026-10-06 by the owner |
+| `vaults/ProtocolAssetVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate; launch exception B2 granted 2026-10-06 by the owner |
 | `adapters/AaveV3Adapter.sol` | VA-0609, HR-0618, SR-0612 | Audited | — |
 | `adapters/CompoundV3Adapter.sol` | VA-0609, HR-0618, FS-0619, SR-0612 | Audited | — |
 | `adapters/MorphoAdapter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612 | Audited | — |
 | `adapters/AerodromeSwapAdapter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612 | Audited | — |
-| `adapters/UniswapV3SwapAdapter.sol` | none | Not separately audited | Used by rmRWA and by any later basket asset that routes through an adapter. Audit exception pending owner (plan decision 5) |
+| `adapters/UniswapV3SwapAdapter.sol` | none | Not separately audited | Used by rmAGENT (RM on the V3 RM/USDC pool), rmRWA, and any later basket asset that routes through an adapter. Launch exception B2 granted 2026-10-06 by the owner (plan decision 5) |
 | `lib/TickMath.sol` | HR-0618 | Audited | Externalized library (HR-0618 L3-D1); `pure` math, byte-identical, mis-link operational risk noted |
 | `lib/TwapTickMath.sol` | HR-0618 (via BasketVault TWAP path) | Audited | TWAP helper exercised through BasketVault NAV review |
 | `lib/AdminFloorAccessControl.sol` | MC-0619 (via F-06 admin-floor remediation) | Audited | Admin-floor mixin introduced by the F-06 remediation |
@@ -126,7 +126,10 @@ exists. Test-only contracts live under `contracts/test/` and are not shipped to 
 > No production contract ships without coverage above. The recorded exceptions
 > (FeatureFlags pre-mainnet re-audit, the bucket-B/C basket-vault economic-audit
 > gate, and the not-separately-audited gateway and swap-adapter rows) are
-> the documented, team-approved carve-outs required by §14.
+> the documented, team-approved carve-outs required by §14. The owner granted
+> launch exception B2 on 2026-10-06: rmPROTO, rmAGENT and rmRWA, the IC policy,
+> the consensus receipt and `UniswapV3SwapAdapter` may launch before their
+> economic audit closes.
 
 ## Finding register
 

@@ -134,20 +134,23 @@ replace the 2026-06-15 three-token shortlist for the Base mainnet launch:
   | Uniswap V3 RM/USDC, fee 10000, `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` | — | In-range liquidity 0, observation cardinality 1. `addAsset` refuses it today (`MIN_POOL_CARDINALITY` 2, `MIN_POOL_LIQUIDITY` 1e6). |
   | Aerodrome Slipstream RM/USDC, `0x0992af1070f7fe4654a033fec8f153a6991465a8` | ~$8 | No deploy script registers the Aerodrome adapter. |
 
-- **RM's venue is open** (owner decision pending, mainnet plan §2.6
-  item 2). Option A: fund the existing V3 RM/USDC pool above and raise its
-  observation cardinality; no code change. Option B: restore the
-  Uniswap V4 swap adapter as a supported venue and use a V4 RM/USDC pool
-  (see the ADR-0005 amendment for what the restore must first prove).
-  Neither option routes through WETH. The mainnet run waits on this
-  choice and on who funds the pool, sized to rmAGENT's 3% default
-  slippage.
+- **RM's venue is decided (owner, 2026-10-06; mainnet plan §2.6
+  item 2).** rmAGENT launches on the existing Uniswap V3 RM/USDC pool
+  above (`0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882`, fee 10000), the
+  only venue the deploy script wires; no code change. The owner funds it
+  with in-range liquidity at market price before the mainnet run, sized
+  to rmAGENT's first-period cap, and raises its observation cardinality.
+  Restoring the Uniswap V4 swap adapter is a later option, not a launch
+  blocker (see the ADR-0005 amendment for what the restore must first
+  prove). No route goes through WETH.
 
 Unchanged by this amendment: the hand-picked-not-quant-filtered method,
 the equal-weight allocation, the admin-curation path (now as amended in
 ADR-0004), and the absence of any RM-specific guard in code.
 
 2026-10-06: no token-based governance is foreseen; considered alternatives that mention token voting are historical only.
+
+2026-10-06: the owner decided RM's venue: the existing Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), funded by the owner before the mainnet run. The V4 adapter restore is a later option, not a launch blocker.
 
 ## Consequences
 

@@ -30,7 +30,7 @@ Decision: admin-settable on-chain default-weights vector that the Router falls b
 
 **AgentTokenVault shortlist governance (§1.3, §1.4).** **Resolved** — see [ADR-0004](../adr/ADR-0004-agent-token-shortlist-governance.md) (2026-06-03).
 
-Decision: admin multisig (Safe ≥2-of-3) + mandatory `TimelockController` delay (48 h for `addAsset`, 24 h for `removeAsset`) + public veto window. Any Safe signer may cancel a queued change unilaterally. `addAsset` gate requires market-cap ≥ $10M, listing age ≥ 90 days, daily volume ≥ $100K, holder count ≥ 500, oracle availability, and liquidity depth ≥ $50K within 2% of mid-price. Maximum shortlist size: 15 tokens. No token-based governance is foreseen. Resolves the blocking gap-report Appendix C item and enables rmAGENT router-eligibility (pending TWAP oracle, rebalancing model, and liquidity proof gaps).
+Decision: admin multisig (Safe ≥2-of-3) + mandatory `TimelockController` delay (48 h for `addAsset`, 24 h for `removeAsset`) + public veto window. Amended 2026-10-06: every shortlist change waits the single 48 h delay; the 24 h removal split is not built. ~~Any Safe signer may cancel a queued change unilaterally.~~ Resolved 2026-10-05: the canceller is the Safe only, acting at its threshold (ADR-0004 amendment). `addAsset` gate requires market-cap ≥ $10M, listing age ≥ 90 days, daily volume ≥ $100K, holder count ≥ 500, oracle availability, and liquidity depth ≥ $50K within 2% of mid-price. Maximum shortlist size: 15 tokens. No token-based governance is foreseen. Resolves the blocking gap-report Appendix C item and enables rmAGENT router-eligibility (pending TWAP oracle, rebalancing model, and liquidity proof gaps).
 
 ### 1.B Agent-token vault internals
 
