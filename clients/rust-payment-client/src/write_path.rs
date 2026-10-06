@@ -59,7 +59,7 @@ use crate::policy::ChecksOutput;
 use crate::replay_cache::ReplayCache;
 use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
-use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
+use crate::signer::{AgentSigner, SignerBackendKind};
 use crate::tx::{
     broadcast, build_eip1559, encode_signed, signing_hash, wait_for_successful_receipt,
     Eip1559Inputs,
@@ -218,7 +218,7 @@ pub struct WriteSession {
 
 /// Run the prologue every write command shares.
 ///
-/// In order: production-signer policy, keystore decrypt, audit skeleton,
+/// In order: production warning, keystore decrypt, audit skeleton,
 /// state dir, single-flight lock, replay-cache open, replay lookup, tokio
 /// runtime, RPC client. Refusals are rendered here so the field set is
 /// identical for all three commands; startup failures log and exit 3.
@@ -226,14 +226,10 @@ pub fn open_session(cfg: &Config, request: WriteRequest) -> Result<WriteSession,
     let cmd = request.command;
     let order_id = request.order_id;
 
-    if let Err(err) = require_production_grade_for_write(cfg.chain_id, SignerBackendKind::Software)
-    {
-        log::error!("rmpc {cmd}: {err}");
-        return Err(WriteAbort::refused(
-            WriteFailure::new(err.name())
-                .message(format!("{err}"))
-                .order_id(order_id),
-        ));
+    // Depositor writes sign with the software keystore on every network
+    // (owner decision 2026-10-06). Base mainnet only adds the warning.
+    if let Some(warn) = NetworkEnv::from_chain_id(cfg.chain_id).production_warning() {
+        log::warn!("{cmd}: {warn}");
     }
 
     let signer = load_signer(cfg, cmd, order_id)?;
@@ -271,9 +267,6 @@ pub fn open_session(cfg: &Config, request: WriteRequest) -> Result<WriteSession,
         network_env.as_str()
     );
     log::info!("{cmd}: network environment: {}", network_env.human_label());
-    if let Some(warn) = network_env.production_warning() {
-        log::warn!("{cmd}: {warn}");
-    }
 
     // State dir for the per-agent lock + replay cache. Resolved via
     // `Config::resolve_state_dir`: env (`RMPC_STATE_DIR`) → TOML
