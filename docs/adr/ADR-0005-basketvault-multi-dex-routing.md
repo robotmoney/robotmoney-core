@@ -1,7 +1,7 @@
 # ADR-0005: BasketVault multi-DEX routing — per-asset venue abstraction for Aerodrome and Uniswap V4
 
-- **Status:** Accepted
-- **Date:** 2026-06-03
+- **Status:** Accepted (amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-venue-state-at-launch-and-the-uniswap-v4-restore))
+- **Date:** 2026-06-03 (amended 2026-10-05)
 - **Deciders:** Engineering lead, Product owner
 - **Related:**
   - `docs/technical/basket-vault-gap-report.md` §1, §2, Appendix A
@@ -225,6 +225,55 @@ This ADR governs the interface decision. The following are **out of scope**:
 - Any change to `config/dex-pools.json` (will be updated in Phase B/C as
   real pool addresses are confirmed).
 - Any Solidity change in this issue.
+
+## Amendment — 2026-10-05: Venue state at launch and the Uniswap V4 restore
+
+Recorded against `impl/core-contracts` (core PR 1505) and the owner
+decisions of 2026-10-05 (mainnet plan §2.2, §3.1, §3.5). The per-asset
+venue abstraction and the uniform slippage-floor formula stand. The
+following facts replace the venue and oracle claims above:
+
+- **As built, the enum is `BasketVault.Venue { V3, V4, Aerodrome }`** and
+  `addAsset(token, pool, swapFee, adapter, venue)` takes the adapter
+  address directly.
+- **The Uniswap V4 adapter was deleted** on PR 1505 in commit
+  `11c9bfcd` (S4), together with `IUniswapV4Pool.sol` and
+  `IUniswapV4SwapRouter.sol`. `Venue.V4` is kept only as a reserved
+  ordinal. The owner decided on 2026-10-05 to **restore the V4 swap
+  adapter as a supported venue option**, reversing the earlier "no V4
+  adapter" ruling. The restore issue is not yet filed.
+- **Every venue accepts only a token/USDC pool.** `addAsset` calls
+  `BasketAssetConfigGuard.requirePoolUsable`, which reverts
+  `PoolTokenMismatch` unless the pool pairs the token with USDC, then
+  requires cardinality ≥ 2, a successful `observe()` over the 1800 s
+  default window, and in-range liquidity ≥ 1e6. A token/WETH pool is
+  refused on any venue. No WETH or multi-hop route exists.
+- **Production deploy wiring is Uniswap V3 only.**
+  `BasketVaultDeployBase._addAssets` registers every asset with
+  `Venue.V3`, through a `UniswapV3SwapAdapter` (rmAGENT, rmRWA) or the
+  built-in router path (rmPROTO). `AerodromeSwapAdapter.sol` exists, but
+  no deploy script registers it.
+- **The §6 venue table is superseded for RM and JUNO.** RM's deepest
+  pool is now Uniswap V4 RM/WETH, which `addAsset` refuses; RM's venue is
+  decided (owner, 2026-10-06): the existing V3 RM/USDC pool
+  `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), funded by the
+  owner before the mainnet run (see the
+  [ADR-0001](ADR-0001-mvp-agent-token-shortlist.md) amendment). The V4
+  adapter restore is a later option, not a launch blocker. JUNO is not in
+  the launch shortlist; a V4 venue for it depends on the restore.
+
+**Open verification item for the later V4 restore (not a decided fact;
+not a launch blocker since 2026-10-06).** The
+§3 claim that V4 pools expose `observe()` like V3 ("EIP-7680
+compatibility") is unverified. Uniswap V4 core keeps
+pool state inside the singleton `PoolManager` and records no observation
+history, so a V4 TWAP needs a hook that records observations. The
+deleted adapter built its `PoolKey` with `hooks: address(0)`, so it could
+reach only hookless pools, which have no such history. The restore must
+first prove, on a fork, a TWAP source for the chosen V4 RM/USDC pool. It
+must also show how `requirePoolUsable`, which reads `token0`, `slot0`,
+`observe` and `liquidity` from a pool address, applies to a V4 pool. It
+needs a deploy-script change and an audit item.
 
 ## Consequences
 

@@ -32,7 +32,7 @@ fn rmpc_get_tx_against_fork() {
         .send(
             addresses::USDC,
             &IERC20::approveCall {
-                spender: addresses::VAULT,
+                spender: Address::repeat_byte(0x11),
                 amount: U256::ZERO,
             },
             U256::ZERO,

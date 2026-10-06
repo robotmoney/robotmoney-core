@@ -26,17 +26,17 @@ and `docs/prd.md` §"Allocation Governance"; `docs/development/open-questions.md
 > `setVotingPeriod` / `setExecutionDelay` setters, bounded only by the constant
 > floors `MIN_QUORUM_THRESHOLD = 2`, `MIN_VOTING_PERIOD = 1 hour`, and
 > `MIN_EXECUTION_DELAY = 1 hour`, with `DeployRouterGovernance.s.sol` defaulting
-> to 1 h / 1 h / quorum 2. The original 5 %-of-`RM.totalSupply()` quorum, 7-day
-> cadence, 5-day voting period, and 48 h execution delay were **ADR-recommended
-> targets that were never hard-coded**; they remain deferred token-holder-
-> governance goals. §4 onward describes that deferred RM-token-snapshot design,
-> not shipped contract behaviour.
+> to 1 h / 1 h / quorum 2. The original 5 %-of-supply quorum, 7-day cadence,
+> 5-day voting period, and 48 h execution delay were **early recommendations
+> that were never hard-coded**. Voting power is admin-assigned, and there is no
+> token-based governance (owner decision 2026-10-06), so no part of this record
+> describes an RM-token voting design.
 
 ---
 
 ## 2. Context
 
-`docs/architecture.md` §2.3 fixes the governance boundary: `$RM`
+`docs/architecture.md` §2.3 fixes the governance boundary: router-weight
 governance controls Portfolio Router target weights across active vaults and
 nothing else. It cannot govern vault onboarding, vault retirement, per-vault
 asset selection, per-vault strategy internals, adapter selection, adapter caps,
@@ -48,7 +48,8 @@ enforcement, quorum, delay, or execution path."
 
 `docs/prd.md` §"Allocation Governance" fixes the product surface:
 
-- Token holders review active allocation-weight proposals and cast votes.
+- Voters with admin-assigned voting power review active allocation-weight
+  proposals and cast votes.
 - The product publishes vote outcome, execution state, and resulting weights.
 - The governance proposal lifecycle is: Draft → Open for voting → Approved or
   Rejected → Executed or Expired.
@@ -64,8 +65,8 @@ the current admin. After granting, the current admin should revoke its own
 Five questions must be resolved before any `RouterGovernance.sol` implementation
 issue begins:
 
-1. **Quorum threshold.** What fraction of RM token supply must vote for a
-   proposal to be executable?
+1. **Quorum threshold.** How much voting power must vote for a proposal to
+   be executable?
 2. **Voting cadence.** How frequently can a proposal be submitted?
 3. **Voting power model.** How is each voter's weight calculated?
 4. **Execution delay.** How long after quorum is reached before weights are
@@ -108,12 +109,11 @@ deployed before the change keeps the old floor; the fix is a **redeploy** of
 `RouterGovernance` (and a re-grant of router `ADMIN_ROLE` to the new instance),
 not an upgrade. See `docs/technical/router-governance-handoff-runbook.md` §1.1.
 
-**Deferred target (not shipped).** The whitepaper's "5 % quorum" parameter
-(`docs/development/open-questions.md` §3.9) is a future *token-holder*-governance
-target — a participation floor expressed as 5 % of `RM.totalSupply()` at a
-snapshot block — that is **not** hard-coded in the current contract and only
-becomes relevant once RM-balance snapshot voting (§3.3, §6.1) lands. The cliff
-problem (`docs/development/open-questions.md` §3.9) is noted in §5 below.
+**Not adopted.** The whitepaper's "5 % quorum" parameter
+(`docs/development/open-questions.md` §3.9) was a share of RM supply. There is
+no token-based governance, so quorum is always an absolute amount of
+admin-assigned voting power. The cliff problem
+(`docs/development/open-questions.md` §3.9) is noted in §6.2 below.
 
 **Fallback.** If no proposal reaches quorum and the current weights become stale,
 the protocol admin retains `ADMIN_ROLE` as an emergency override for the first
@@ -132,10 +132,11 @@ Cancelled). The deployed `contracts/RouterGovernance.sol` has **no**
 creation timestamps; the only cadence constraint is the single-active-proposal
 rule.
 
-**Deferred target (not shipped).** The "weekly allocation" /
+**Not a contract constant.** The "weekly allocation" /
 "monthly votes" references (`docs/development/open-questions.md` §1.4) describe a
-minimum inter-proposal cadence — e.g. a 7-day window — that is a future
-token-holder-governance target, not a current contract constant.
+minimum inter-proposal cadence — e.g. a 7-day window — that the contract does
+not enforce. Any such cadence is an operating policy of the `ADMIN_ROLE`
+proposer.
 
 **Voting period.** Each proposal's voting window is the `votingPeriod` storage
 variable, **not** an immutable. `ADMIN_ROLE` adjusts it via
@@ -143,32 +144,23 @@ variable, **not** an immutable. `ADMIN_ROLE` adjusts it via
 for any value below the constant floor `MIN_VOTING_PERIOD = 1 hour`.
 `contracts/script/DeployRouterGovernance.s.sol` deploys with a 1-hour voting
 period (`DEFAULT_VOTING_PERIOD = 3600` seconds). A 5-day (432 000-second) voting
-period is a deferred token-holder-governance target, not the shipped default.
+period was an early recommendation, not the shipped default.
 When the period elapses the proposal transitions to `Queued` (quorum reached) or
 `Defeated`.
 
 ### 3.3 Voting power model
 
-**Decision: linear by RM balance at proposal snapshot block.**
+**Shipped: admin-assigned voting power, read at the proposal snapshot block.**
 
-Each voter's power equals their `RM.balanceOf(voter)` at the snapshot block
-captured at proposal creation. Votes are additive; no tier system, no activity
+`ADMIN_ROLE` sets each voter's power with `setVotingPower(voter, power)`. Every
+change is checkpointed by block number. `propose()` records
+`voteSnapshot = block.number`, and `vote()` reads the voter's power at that
+block via `_getPastVotes`, so a power change after proposal creation does not
+change an in-flight tally. Votes are additive; no tier system, no activity
 gate, no delegation mechanism is specified for this phase.
 
-**RM token interface assumptions:**
-
-- `RM.balanceOf(address)` — ERC-20 standard; must return the balance at the
-  current block when called inside the `vote()` function.
-
-  > **Risk:** ERC-20 does not natively support historical balance reads.
-  > `RouterGovernance.sol` must snapshot balances at proposal creation or use
-  > an on-chain snapshot mechanism. See §5.1 for the snapshot integration risk.
-
-- `RM.totalSupply()` — ERC-20 standard; would return the total supply at the
-  snapshot block to calculate a percentage-of-supply quorum denominator. This is
-  only relevant to the deferred token-holder-governance target (§3.1); the
-  shipped MVP uses an absolute `quorumThreshold` and admin-assigned voting power,
-  so it does not read `RM.totalSupply()`.
+There is no token-based governance. Voting power is never derived from RM
+balances, and `RouterGovernance` reads no RM-token interface.
 
 **No tiers.** `docs/development/open-questions.md` §1.5 records the open status of
 Observer/Participant/Analyst/Strategist tiers. No tier system or CFO Feed
@@ -191,12 +183,12 @@ The delay is the `executionDelay` storage variable, **not** an immutable.
 (`ExecutionDelayBelowMinimum`) for any value below the constant floor
 `MIN_EXECUTION_DELAY = 1 hour`. `contracts/script/DeployRouterGovernance.s.sol`
 deploys with a 1-hour execution delay (`DEFAULT_EXECUTION_DELAY = 3600`
-seconds). A 48-hour (172 800-second) execution delay is a deferred
-token-holder-governance target, not the shipped default.
+seconds). A 48-hour (172 800-second) execution delay was an early
+recommendation, not the shipped default.
 
 **Rationale.** Enforcing a non-zero minimum delay (1 hour) prevents a proposal
-from being executed in the same block its voting deadline passes, giving token
-holders, auditors, or the protocol admin time to react to a malicious weight
+from being executed in the same block its voting deadline passes, giving
+voters, auditors, or the protocol admin time to react to a malicious weight
 vector before it takes effect. The exact production value is an admin policy
 choice within `[MIN_EXECUTION_DELAY, ∞)`, not a contract constant.
 
@@ -221,7 +213,7 @@ Draft → Open → Passed → Executed
 
 - `ProposalCreated(uint256 proposalId, address proposer, address[] vaults, uint256[] bps, uint256 snapshotBlock)`
 - `VoteCast(uint256 proposalId, address voter, bool support, uint256 power)`
-- `ProposalPassed(uint256 proposalId, uint256 yesVotes, uint256 noVotes, uint256 totalSupplyAtSnapshot)`
+- `ProposalPassed(uint256 proposalId, uint256 yesVotes, uint256 noVotes, uint256 quorumAtSnapshot)`
 - `ProposalRejected(uint256 proposalId, uint256 yesVotes, uint256 noVotes)`
 - `ProposalExecuted(uint256 proposalId, address[] vaults, uint256[] bps)`
 - `ProposalExpired(uint256 proposalId)`
@@ -245,6 +237,14 @@ After step 3, `routerGovernance` is the sole `ADMIN_ROLE` holder and the only
 address that can call `setWeights`. No off-chain relay, multisig, or keeper is
 in the weight-update path.
 
+> **Status (mainnet plan, 2026-10-05).** The shipped wiring differs from steps
+> 2 and 3. `DeployRouterGovernance.s.sol` grants RouterGovernance the router
+> `ADMIN_ROLE`, and stage 11 (`DeployTimelock.s.sol`) also grants it to the
+> TimelockController before revoking the deployer. Both can reach `setWeights`.
+> Decided design: the timelock may set `defaultWeights` only
+> (`setDefaultWeights`), and active weights come only from RouterGovernance
+> votes. (Not yet implemented: core #1522.)
+
 **Constraint.** `RouterGovernance.sol` must call `setWeights` only from its
 `execute(proposalId)` function. No other function on the governance contract may
 call `setWeights`.
@@ -258,44 +258,11 @@ specified before the fork e2e.
 
 ---
 
-## 4. RM-token contract interface assumptions
+## 4. Voting-power source
 
-The following interface is assumed by `RouterGovernance.sol`. The RM-token
-contract must satisfy these before the governance contract is deployed.
-
-```solidity
-/// Minimum interface required of the RM token by RouterGovernance.
-interface IRM {
-    /// ERC-20: current balance. Used during vote() to record voter power.
-    function balanceOf(address account) external view returns (uint256);
-
-    /// ERC-20: total supply. Used at proposal creation to fix the quorum
-    /// denominator (5% of totalSupply at snapshotBlock).
-    function totalSupply() external view returns (uint256);
-}
-```
-
-**Snapshot risk.** Standard ERC-20 does not support historical balance reads.
-The implementation must choose one of:
-
-1. **Block-level snapshot at creation.** `RouterGovernance` calls
-   `RM.totalSupply()` at `createProposal()` and stores it as
-   `proposal.snapshotSupply`. Voter balances are read at `vote()` time (current
-   block, not snapshot block). This is simpler but allows voters to transfer RM
-   between proposal creation and their vote to double-count voting power. This
-   is acceptable for a minimal first governance contract if the voting period is
-   short (5 days) and there is no liquid RM trading market yet.
-
-2. **ERC-20 Votes / EIP-5805 snapshot.** The RM token implements
-   `getPastTotalSupply(blockNumber)` and `getPastVotes(account, blockNumber)`.
-   `RouterGovernance` captures `snapshotBlock = block.number` at proposal
-   creation and reads historical balances at vote time. This is the correct
-   long-term design.
-
-**Decision:** The implementation issue must confirm which snapshot mechanism the
-RM token supports before writing `vote()`. If ERC-20 Votes is available, use
-option 2. If not, use option 1 with a documented upgrade path. This is a
-**blocker** for the `RouterGovernance.sol` implementation issue; see §5.1.
+`RouterGovernance.sol` requires no token interface. Voting power is
+admin-assigned through `setVotingPower` and checkpointed in the contract
+(§3.3). There is no token-based governance (owner decision 2026-10-06).
 
 ---
 
@@ -306,7 +273,7 @@ governance".
 
 | Issue | Unblocked by this ADR? | Must serialize after |
 |---|---|---|
-| `RouterGovernance.sol` — proposal creation, voting, quorum, execution | Yes — all parameters fixed | This ADR + RM-token snapshot clarification |
+| `RouterGovernance.sol` — proposal creation, voting, quorum, execution | Yes — all parameters fixed | This ADR |
 | `RouterGovernance.sol` read surface (`activeProposal`, `voteTallies`, etc.) | Yes — proposal lifecycle states fixed | This ADR |
 | Explorer: `governance_proposals` and `governance_votes` tables | Yes — events are specified | `RouterGovernance.sol` deployed |
 | Explorer API: governance endpoints | Yes | Explorer tables |
@@ -336,27 +303,23 @@ The following risks were discovered during scouting. They are not blockers for
 implementation issues to begin (except where noted), but each assigned
 implementer must address them.
 
-### 6.1 RM-token snapshot mechanism (blocker for vote() implementation)
+### 6.1 Voting-power snapshot (resolved)
 
-**Risk.** `RouterGovernance.sol` cannot implement safe historical-balance voting
-without knowing whether the RM token implements ERC-20 Votes (EIP-5805). If it
-does not, voter balances are live at `vote()` time, enabling flash-loan or
-transfer-then-vote manipulation.
-
-**Action.** Before writing `vote()`, confirm the RM token's snapshot interface.
-If ERC-20 Votes is not available, the implementation must document the
-limitation explicitly and plan an upgrade. This is a blocker for `vote()`
-correctness, not for `createProposal()` or the proposal state machine.
+**Resolution.** `vote()` reads admin-assigned power at the proposal's
+`voteSnapshot` block from the contract's own checkpoints (§3.3). A
+`setVotingPower` call after `propose()` cannot change an in-flight tally. No
+token snapshot is needed because there is no token-based governance.
 
 ### 6.2 Quorum cliff / governance whiplash (design risk)
 
-**Risk.** `docs/development/open-questions.md` §3.9 flags that a hard 5 % quorum cliff causes
-governance whiplash: just-below-5 % participation falls back to the existing
-weights, just-above-5 % applies the voted weights, with no smooth transition.
+**Risk.** `docs/development/open-questions.md` §3.9 flags that a hard quorum cliff causes
+governance whiplash: participation just below quorum falls back to the existing
+weights, participation just above quorum applies the voted weights, with no
+smooth transition.
 
 **Action.** The `RouterGovernance.sol` implementation issue must decide whether
 to add a blend or accept the cliff. The cliff is acceptable for a first
-deployment if the community is small; a blend requires more complex contract
+deployment if the voter set is small; a blend requires more complex contract
 logic. The implementation issue owner decides.
 
 ### 6.3 Weight validation in proposals
@@ -384,13 +347,12 @@ per-caller instead of global, a second proposer could bypass the cadence window.
 
 **Risk.** §3.6 specifies that the admin renounces `ADMIN_ROLE` after wiring the
 governance contract. If the governance contract has a bug (e.g., unable to reach
-quorum due to low RM distribution), there is no path to update weights until the
+quorum because too little voting power is assigned), there is no path to update weights until the
 governance contract is upgraded or redeployed.
 
-**Action.** Before renouncing the admin role, confirm that the RM token has
-sufficient distribution for the 5 % quorum to be reachable in practice. The
-deploy script should include a pre-flight check: `RM.totalSupply() * 0.05 <=
-sum(balancesOf known_voters)`. Document the emergency recovery path (redeploy
+**Action.** Before renouncing the admin role, confirm that the assigned voting
+power can reach `quorumThreshold` in practice. The deploy script should include
+a pre-flight check: `quorumThreshold <= totalVotingPower`. Document the emergency recovery path (redeploy
 governance, re-grant ADMIN_ROLE) in the deploy runbook.
 
 ### 6.6 No outer share token constraint propagation
@@ -419,7 +381,7 @@ function activeProposal() external view returns (uint256 proposalId);
 /// @notice Return vote tallies for a proposal.
 function voteTallies(uint256 proposalId)
     external view
-    returns (uint256 yesVotes, uint256 noVotes, uint256 snapshotSupply);
+    returns (uint256 yesVotes, uint256 noVotes, uint256 snapshotQuorum);
 
 /// @notice Return the weight vector most recently applied to the router
 ///         (the weights currently active on PortfolioRouter).

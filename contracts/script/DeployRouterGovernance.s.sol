@@ -37,30 +37,20 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///           ADMIN_ADDRESS      — receives ADMIN_ROLE on the governance contract
 ///           ROUTER_ADDRESS     — deployed PortfolioRouter address
 ///
-///         Required on every chain (no default, a missing or malformed value reverts):
+///         Also required (unset or malformed reverts, there is no default):
 ///           VOTING_PERIOD      — voting period in seconds
 ///           EXECUTION_DELAY    — delay from voting end to execution in seconds
-///                                (at least the contract's MIN_EXECUTION_DELAY, 1 hour)
-///           QUORUM_THRESHOLD   — minimum FOR voting power for quorum
-///                                (must be greater than 1)
+///                                (at least the contract's MIN_EXECUTION_DELAY)
+///           QUORUM_THRESHOLD   — minimum FOR voting power for quorum (greater than 1)
+///           EXPECTED_CHAIN_ID  — mandatory and equal to 8453 on Base mainnet
+///           DEPLOYMENT_OUT     — path for the output JSON (required, no default)
 ///
-///         Optional env vars:
-///           DEPLOYMENT_OUT     — path for the output JSON
-///                                (default: "deployments/governance-<chain_id>.json")
+///         The router ADMIN_ROLE grant always runs: no flag skips it.
 contract DeployRouterGovernance is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "governance.json";
+
     using stdJson for string;
-
-    /// @notice Default voting period: 1 hour in seconds.
-    uint64 public constant DEFAULT_VOTING_PERIOD = 3600;
-
-    /// @notice Default execution delay: 1 hour in seconds. Must be >=
-    ///         RouterGovernance.MIN_EXECUTION_DELAY (1 hour), or the
-    ///         constructor reverts with ExecutionDelayBelowMinimum().
-    uint64 public constant DEFAULT_EXECUTION_DELAY = 3600;
-
-    /// @notice Default quorum threshold requires more than one unit of voting
-    ///         power, preserving Fusion's separate approving-body control.
-    uint256 public constant DEFAULT_QUORUM_THRESHOLD = 2;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
@@ -88,8 +78,8 @@ contract DeployRouterGovernance is ExpectedChainGuard {
         uint256 quorumThreshold = _envUintRequired("QUORUM_THRESHOLD");
         require(quorumThreshold > 1, "QUORUM_THRESHOLD must be greater than 1");
 
-        address admin = vm.envAddress("ADMIN_ADDRESS");
-        address router = vm.envAddress("ROUTER_ADDRESS");
+        address admin = _envAddressRequired("ADMIN_ADDRESS");
+        address router = _envAddressRequired("ROUTER_ADDRESS");
         require(router.code.length > 0, "ROUTER_ADDRESS has no code on this chain");
 
         uint64 votingPeriod = _envUint64Required("VOTING_PERIOD");
@@ -171,7 +161,7 @@ contract DeployRouterGovernance is ExpectedChainGuard {
 
         require(
             IAccessControl(address(d.router)).hasRole(routerAdminRole, granter_),
-            "caller lacks router ADMIN_ROLE: cannot wire governance"
+            "caller lacks router ADMIN_ROLE: cannot wire governance (run this script before DeployTimelock hands the router ADMIN_ROLE away)"
         );
 
         IAccessControl(address(d.router)).grantRole(routerAdminRole, governance);
@@ -192,12 +182,7 @@ contract DeployRouterGovernance is ExpectedChainGuard {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
-            outPath = s;
-        } catch {
-            outPath = string.concat("deployments/governance-", vm.toString(block.chainid), ".json");
-        }
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
 
         string memory obj = "governance_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);

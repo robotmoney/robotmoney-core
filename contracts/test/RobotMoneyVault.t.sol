@@ -244,7 +244,7 @@ contract RobotMoneyVaultTest is Test {
     // ─── Last-admin floor (ACL-3 / F-06, issue #1284) ─────────────────────────
     //
     // RobotMoneyVault previously had no protection against the final ADMIN_ROLE
-    // holder renouncing/being revoked, unlike Vault.sol and BasketVault.sol
+    // holder renouncing/being revoked, unlike BasketVault.sol
     // (which each had their own hand-rolled counter). These three tests were
     // red before this fix — `renounceRole`/`revokeRole` succeeded silently,
     // stripping the vault's ADMIN_ROLE membership to zero and permanently

@@ -14,10 +14,8 @@ no persisted `deployments/devnet.json` the way there is for Base Sepolia or
 mainnet.
 
 **Executed at commit:** `755e9b28` on `feat/testnet-verification-tool`
-(carries the `SEED_DEPOSIT_AMOUNT` -> 1 USDC change from
-[`docs/future/review-usdc-seed.md`](../future/review-usdc-seed.md) — every
-address and balance below reflects that temporary value, not the production
-1,000 USDC).
+(`SEED_DEPOSIT_AMOUNT` is 1 USDC, the default for every network; a mainnet
+ceremony sets `SEED_DEPOSIT_USDC` explicitly on its frozen sheet).
 
 This runbook follows [`docs/operations/contract-release-runbooks.md`](../operations/contract-release-runbooks.md).
 Read that first for what each gate below is actually proving.
@@ -43,7 +41,7 @@ forge build                 # expect: success (contracts/)
 
 The Devnet's own boot sequence *is* the preflight for this runbook: its
 genesis is seeded from a pinned Base-mainnet state snapshot, so the
-canonical Base mainnet addresses `Deploy.s.sol` hardcodes
+canonical Base mainnet addresses the deploy scripts and `config/` hardcode
 (`AAVE_V3_POOL`, `COMPOUND_V3_COMET`, `MORPHO_GAUNTLET_USDC_PRIME`,
 `AAVE_V3_A_TOKEN`) already have real, correct bytecode at chain id `918453`
 — there is no separate address-validity check to run before boot the way
@@ -62,9 +60,9 @@ artifacts (network-agnostic despite the directory name).
 cargo run -p smoke-test -- --full-stack
 ```
 
-**What this does.** Boots `docker compose` (Geth + Lighthouse), waits for
+**What this does.** Starts the Twin chain (a pinned lazy anvil fork of real Base), waits for
 chain RPC readiness and real block production, then runs the standard
-`forge script` deploy ceremony (`Deploy.s.sol` → `DeployVaultRegistry.s.sol` →
+`forge script` stage sequence (`DeployLibs.s.sol` → `DeployVault.s.sol` → `DeployVaultRegistry.s.sol` →
 `DeployPortfolioRouter.s.sol` → `DeployRouterGovernance.s.sol` →
 `DeployInvestmentCommitteePolicy.s.sol`), seeds four demo depositors, then
 boots the dapp, explorer-api, explorer-indexer, and Postgres containers.

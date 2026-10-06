@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/operations/contract-release-runbooks.md §4.2 item 4 — Network identity
-// Implements: issue #1483 (S1, one deployment scheme): floors keyed to chain id 8453
+// Implements: robotmoney-core S1 (one deployment scheme): floors keyed to chain id 8453
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
@@ -17,18 +17,10 @@ abstract contract ExpectedChainGuard is Script {
     /// @dev Base mainnet chain id. Every floor in the scripts keys off this value.
     uint256 internal constant BASE_MAINNET_CHAIN_ID = 8453;
 
-    /// @dev Canonical Base USDC (FiatTokenProxy).
+    /// @dev Canonical Base USDC (FiatTokenProxy). A constant on every chain: the Twin
+    ///      chain carries real USDC from its Base snapshot, and a mock token fails the
+    ///      code-hash check. No script reads a USDC address from the environment.
     address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-
-    /// @dev On chain id 8453 the USDC a script is given must be the canonical Base USDC.
-    ///      Other chains (the Twin chain, anvil, forge tests) accept the address they are given.
-    function _requireCanonicalUsdc(address usdc) internal view {
-        if (block.chainid == BASE_MAINNET_CHAIN_ID) {
-            require(
-                usdc == BASE_USDC, "USDC_ADDRESS is not the canonical Base USDC on Base mainnet"
-            );
-        }
-    }
 
     /// @dev Reverts unless `<prefix>EXPECTED_CHAIN_ID` matches `block.chainid`.
     ///      On chain id 8453 the variable is mandatory and must equal 8453.

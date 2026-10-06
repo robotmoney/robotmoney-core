@@ -15,7 +15,8 @@ import {IObservablePool} from "../interfaces/IObservablePool.sol";
 ///      single deployed library instead of being inlined into every vault in the
 ///      already-EIP-170-tight basket family.
 library BasketAssetConfigGuard {
-    /// @dev Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals).
+    /// @dev Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is a reserved ordinal that no
+    ///      adapter implements; it stays so Aerodrome keeps ordinal 2 (see `BasketVault.Venue`).
     enum Venue {
         V3,
         V4,
@@ -129,7 +130,8 @@ library BasketAssetConfigGuard {
     /// @notice Assert the execution pool resolved from `swapFee` is the SAME pool
     ///         the NAV TWAP reads from (ORA-3 / F-09): fee tier for V3/V4, tick
     ///         spacing for Aerodrome. `swapFee == 0` is the pool-independent-pricing
-    ///         sentinel (e.g. the Chronicle NAV adapter) and is exempt.
+    ///         sentinel and is exempt. No shipped asset uses it: the basket deploy
+    ///         script requires a non-zero `poolFee` (`contracts/script/BasketVaultDeployBase.sol`).
     function requireExecutionPoolMatchesTwap(address pool, uint24 swapFee, Venue venue)
         public
         view

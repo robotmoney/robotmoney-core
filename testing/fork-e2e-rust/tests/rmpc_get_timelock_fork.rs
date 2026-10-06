@@ -174,7 +174,13 @@ fn pad_addr(a: Address) -> [u8; 32] {
 /// `timelock_address = <timelock>`. All other fields use placeholder
 /// values — read commands only consume the fields relevant to the
 /// command being tested.
-fn write_config(dir: &Path, rpc_url: &str, chain_id: u64, timelock: Address) -> PathBuf {
+fn write_config(
+    dir: &Path,
+    rpc_url: &str,
+    chain_id: u64,
+    timelock: Address,
+    from_block: u64,
+) -> PathBuf {
     let keystore = dir.join("keystore.json");
     let cfg_path = dir.join("rmpc.toml");
     let toml = format!(
@@ -184,6 +190,7 @@ gateway_address       = "0x000000000000000000000000000000000000dEaD"
 usdc_address          = "0x{usdc_zeros}"
 vault_address         = "0x{vault_zeros}"
 timelock_address      = "{timelock:#x}"
+timelock_from_block   = {from_block}
 gateway_runtime_hash  = "0x{zeros}"
 max_fee_per_gas_cap   = 100000000000
 
@@ -198,6 +205,7 @@ keystore_path           = "{ks}"
         zeros = "0".repeat(64),
         ks = keystore.display(),
         timelock = timelock,
+        from_block = from_block,
     );
     std::fs::write(&cfg_path, toml).expect("write rmpc.toml");
     cfg_path
@@ -263,7 +271,9 @@ fn get_timelock_integration() {
 
     // Write rmpc config pointing at the freshly deployed timelock.
     let tmp = tempfile::TempDir::new().expect("tempdir");
-    let cfg = write_config(tmp.path(), &fx.rpc_url, fx.chain_id, timelock_addr);
+    let cfg = // The fixture block precedes the timelock deployment. The log scan starts there, because a
+    // forked chain forwards older ranges to the upstream, which caps eth_getLogs at 500 blocks.
+    write_config(tmp.path(), &fx.rpc_url, fx.chain_id, timelock_addr, fx.pin.block);
 
     // Run rmpc get-timelock.
     let out = Command::new(rmpc_bin())

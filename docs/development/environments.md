@@ -3,7 +3,7 @@
 This document is the single operator reference for every environment mode used
 in development, testing, and production. It covers:
 
-- [1. Local devnet (Geth + Lighthouse)](#1-local-devnet-geth--lighthouse)
+- [1. Local devnet (the Twin chain)](#1-local-devnet-the-twin-chain)
 - [2. Fork e2e (Anvil fork of Base mainnet)](#2-fork-e2e-anvil-fork-of-base-mainnet)
 - [3. Full-stack staging (devnet + dapp + indexer)](#3-full-stack-staging-devnet--dapp--indexer)
 - [4. Mainnet read-only (Base mainnet)](#4-mainnet-read-only-base-mainnet)
@@ -13,96 +13,84 @@ data persistence behaviour, and teardown command.
 
 Canonical: Plan tracking issue #109 (formerly `Plan tracking issue #109`). Related design docs:
 `docs/technical/full-stack-devnet.md`, `docs/development/smoke-test-design.md`,
-`docs/development/testing-strategy-ethereum.md` (both test stacks — PoS devnet
+`docs/development/testing-strategy-ethereum.md` (both test stacks — the Twin chain
 and the forked Base harness). The principle these modes embody —
 one production codebase, environments differing only by configuration and
 seeded data — is `docs/development/single-production-codebase.md`.
 
 ---
 
-## 1. Local devnet (Geth + Lighthouse)
+## 1. Local devnet (the Twin chain)
 
-A full Proof-of-Stake chain running locally in Docker. Chain id **918453**.
-The genesis is seeded from a pinned Base mainnet state snapshot so canonical
-Base contracts (USDC at `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`) are
-present from block 0. Robot Money contracts are deployed fresh each time the
-devnet boots.
+The **Twin chain**, chain id **918453**: a pinned lazy fork of real Base state made
+with anvil (`anvil --fork-url <upstream> --fork-block-number <pin> --chain-id 918453`),
+started by `scripts/devnet/twin-fork.ts`. Canonical Base contracts (USDC at
+`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`) are real Base state. The harness
+deploys its own Robot Money contracts fresh each time through the deploy scripts and
+reads the addresses from the manifests. No geth, no lighthouse, no genesis snapshot.
+The chain runs on the host, not in a container. Details: `docs/technical/full-stack-devnet.md`
+and `scripts/devnet/README-twin-fork.md`.
 
 ### Services
 
-| Service | Role |
-|---------|------|
-| `geth` | Execution layer — HTTP RPC on port 8545, WS on 8546 |
-| `lighthouse` | Consensus layer — 12-second block time |
-| `setup` | One-shot genesis builder and contract deployer |
-
-Compose file: `testing/ethereum-testnet/config/docker-compose.yaml`
+Anvil only (a host process). The dapp stack (§3) runs in Docker and reaches the fork over
+the Docker bridge.
 
 ### Required env vars
 
-None are required for a basic devnet boot. The following vars override defaults:
+None are required for a basic devnet boot: the harness starts its own fork on a free
+port. The following vars override defaults:
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `GETH_RPC_PORT` | `8545` | Host port for Geth HTTP RPC |
-| `GETH_WS_PORT` | `8546` | Host port for Geth WebSocket |
-| `GETH_AUTHRPC_PORT` | `8551` | Host port for Geth Engine API |
-| `GENESIS_TIMESTAMP` | _(auto)_ | Override genesis block timestamp |
-| `SMOKE_GENESIS_ALLOC_FILE` | _(unset)_ | Absolute host path to the genesis alloc JSON produced by `smoke-test-genesis-ingester`; required only when including `docker-compose.alloc.yaml` |
+| `TWIN_RPC_URL` | _(unset)_ | A running Twin fork to reuse. The harness never stops a fork it did not start |
+| `TWIN_PIN_BLOCK` | _(auto)_ | Pinned Base block for a fork the harness starts. Auto is the upstream head minus 2 |
+| `TWIN_CACHE_DIR` | _(unset)_ | Directory that persists anvil's RPC cache between runs |
+| `BASE_UPSTREAM_RPC` | `https://mainnet.base.org` | Optional paid upstream. A secret: never printed, never in a file |
+| `SMOKE_TEST_RPC_PORT` | _(free port)_ | Host port of a fork the harness starts |
 
 ### Startup command
 
 ```bash
-# Boot chain and deploy contracts — stays running until Ctrl-C.
+# Start (or reuse) the Twin chain, deploy contracts — stays running until Ctrl-C.
 cargo run -p smoke-test
 ```
 
-Alternatively, bring up just the compose stack:
+Or start the fork on its own and point tests at it:
 
 ```bash
-cd testing/ethereum-testnet/config
-docker compose up -d
-```
-
-Then deploy contracts via the smoke-test binary:
-
-```bash
-cargo run -p smoke-test
+bun scripts/devnet/twin-fork.ts start --port 8545 --host 0.0.0.0 --block-time 1
+export TWIN_RPC_URL=http://127.0.0.1:8545
 ```
 
 ### Contract address source
 
-`deployments/devnet.json` — written by `Deploy.s.sol` at deploy time.
-Read the addresses out with:
-
-```bash
-python3 -c "import json; d=json.load(open('deployments/devnet.json')); print(d['gateway'], d['vault'])"
-```
+The manifests the publish run wrote (`PUBLISH_MANIFEST_DIR`, one JSON per stage). The harness
+reads them (`Fixture::gateway()`, `Fixture::vault()`, ...). No address is hard-coded.
 
 ### Data persistence
 
-Chain state is stored in a Docker named volume (`testnet-data`). The volume
-persists across `docker compose stop` / `docker compose start` cycles.
-Contract addresses change on every fresh boot because `testnet-data` is
-wiped by `docker compose down -v`.
+The fork keeps state in memory. Nothing persists past `twin-fork.ts stop`. Anvil's RPC cache
+(state fetched from the upstream) persists under `TWIN_CACHE_DIR` and is keyed by pin block in CI.
 
 ### Teardown command
 
 ```bash
-cd testing/ethereum-testnet/config
-docker compose down -v   # -v removes the named volume (clean slate)
+bun scripts/devnet/twin-fork.ts stop --port 8545 --state-dir <dir>   # or: make teardown-zombies
 ```
 
 ### CI suites that exercise this environment
 
 | Suite | Workflow file |
 |-------|---------------|
-| Suite 7 — rmpc integration (Geth + Lighthouse) | `.github/workflows/suite-07-rmpc-integration.yml` |
+| Suite 5 — fork integration | `.github/workflows/suite-05-fork-integration.yml` |
+| Suite 7 — rmpc integration | `.github/workflows/suite-07-rmpc-integration.yml` |
 | Suite 8 — explorer indexer | `.github/workflows/suite-08-explorer-indexer.yml` |
 | Suite 10 — dapp E2E (Playwright) | `.github/workflows/suite-10-dapp-e2e.yml` |
 | Suite 11b — OpenCode headless | `.github/workflows/suite-11b-opencode-headless.yml` |
 | Suite 12 — OpenClaw | `.github/workflows/suite-12-openclaw.yml` |
 | Suite 14 — smoke-test fixture | `.github/workflows/suite-14-smoke-test.yml` |
+| Suite 29 — nightly Twin fork (one shared pin) | `.github/workflows/suite-29-nightly-twin-fork.yml` |
 
 ---
 
@@ -116,27 +104,28 @@ test runtime.
 
 ### Services
 
-Anvil only — no Docker required. The fork-state fixture
-(`testing/fixtures/fork-state/CURRENT.anvil-state`) is loaded via
-`anvil --load-state` so no upstream RPC is contacted during tests.
+Anvil only — no Docker required. Each test boots its own `anvil --fork-url $RMPC_FORK_RPC_URL`
+child. In CI, `RMPC_FORK_RPC_URL` is the Twin fork (§1), so each test forks the Twin chain at the
+run pin and can warp and rewind without touching the shared chain. There is no saved fork-state
+fixture any more. The forge fork tests of suites 1 and 2 read `FORK_RPC_URL` (the Twin fork) and skip
+with a named reason when it is unset.
 
 ### Required env vars
 
-The fork-state fixture (used in CI) needs no env vars. The optional
-live-RPC path and manual fixture refresh use:
-
 | Var | Required | Meaning |
 |-----|----------|---------|
-| `RMPC_FORK_RPC_URL` | No | Base mainnet endpoint. Used locally, and in CI for (a) the nightly live-drift alarm and (b) the three live-RPC `fork-regressions` steps; it gates no merge (ADR-0011) — merge-gating CI forks the checked-in fixture offline. When it is unset, those CI steps fall back to the free public endpoints in `scripts/devnet/fork-rpc-lib.sh` (issue #1239). In CI it must be set as a repository or organization Actions **secret**, not a variable: this repo is public, and GitHub does not mask `vars.*` values anywhere they appear (including a step's `env:` block in the log), so a keyed URL stored as a variable would leak into every public run. Scripts never print its value, and a secret is masked wherever GitHub does print it. |
-| `RMPC_FORK_BLOCK` | No | Decimal block number pin. CI sets this in the workflow file. Unset → `eth_blockNumber - 50` against the upstream RPC. |
+| `RMPC_FORK_RPC_URL` | Yes | Upstream for each test's fork: the Twin fork URL (`$TWIN_RPC_URL`) or a Base mainnet archive endpoint. In CI the suite-05 fork slots set it to the Twin fork. The forge fork tests read `FORK_RPC_URL` instead (the Twin fork URL). In CI a keyed upstream (`BASE_UPSTREAM_RPC`) must be a repository or organization Actions **secret**, not a variable: this repo is public, and GitHub does not mask `vars.*` values anywhere they appear. Scripts never print its value. |
+| `RMPC_FORK_BLOCK` | No | Decimal block number pin. The suite-05 fork slots set it to the Twin pin (`TWIN_PIN_BLOCK`). Unset → `eth_blockNumber - 50` against the upstream RPC. |
+| `RMPC_TESTNET_RPC_URL` | No | Connect straight to a running Twin fork (no second anvil), as the suite-05 `twin-*` slots do. |
 
 ### Startup command
 
 ```bash
-# Run fork e2e tests against the checked-in fixture (no RPC needed).
-cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml
+# Run fork e2e tests against a running Twin fork (see §1).
+RMPC_FORK_RPC_URL=$TWIN_RPC_URL RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK \
+  cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml
 
-# Run against a live Base mainnet fork (requires an archive RPC).
+# Or against a live Base mainnet fork (requires an archive RPC).
 RMPC_FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<key> \
   cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml
 ```
@@ -151,15 +140,9 @@ See `docs/development/opencode-readonly-fork.md` for the full walkthrough.
 
 ### Contract address source
 
-Real Base mainnet deployed addresses (hardcoded in `testing/fork-e2e-rust/src/addresses.rs`):
+The fork-e2e harness (`testing/fork-e2e-rust`) names no Robot Money address. Each fixture deploys its own vault on first use through the one deploy driver (`bun publish-contracts/src/cli.ts --stage vault`, the deployer is a throwaway encrypted keystore made by the rehearsal key helper, Twin chain 918453 only) and reads the vault and adapter addresses from the manifest the stage wrote (`ForkFixture::vault`, `crate::deployed`). When `RMPC_DEPLOY_MANIFEST` names a merged manifest from the publish contracts flow, the fixture reads that instead and deploys nothing. This is the clean room rule (core 1498): no test reads the live production v1 vault, its adapters or the old admin Safe.
 
-| Contract | Address |
-|----------|---------|
-| RobotMoneyVault | `0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd` |
-| MorphoAdapter | `0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9` |
-| AaveV3Adapter | `0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea` |
-| CompoundV3Adapter | `0x8247da22a59fce074c102431048d0ce7294c2652` |
-| USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+`testing/fork-e2e-rust/src/addresses.rs` holds third-party addresses only (USDC, venues, DEX router, pools, tokens). The same set is listed in `scripts/deploy/third-party-addresses.json`. `scripts/ci/check-no-production-addresses.ts` fails CI when a test or harness file hard-codes a Robot Money production address.
 
 For the read-only walkthrough the gateway address is a placeholder
 (`0x000000000000000000000000000000000000dEaD`) — reads return a partial
@@ -180,30 +163,16 @@ Anvil:
 pkill -f 'anvil --fork-url'
 ```
 
-### Refreshing the fork-state fixture
+### The Twin fork pin (replaces refreshing a saved fixture)
 
-Refresh is **developer-owned on change**, not scheduled (ADR-0011): whoever
-adds an adapter, wires a new pool, or changes an integration regenerates the
-fixture in the **same PR**, and a developer refreshes in response to a nightly
-drift-alarm issue. There is no monthly cadence.
+There is nothing to refresh. The Twin chain pins the upstream head at the start of each run minus 2, so every run is as fresh as the upstream allows. A change that adds an adapter or wires a new pool needs no fixture commit. The nightly (suite 29) runs the chain suites at one shared pin and uploads the pin file.
 
 ```bash
-# Requires RMPC_FORK_RPC_URL (archive depth for the pinned block).
-# Run when an integration change requires a new fixture, or in response to a
-# nightly drift-alarm issue — not on a schedule (ADR-0011).
-bash scripts/devnet/snapshot-fork.sh
-# Or via the convenience wrapper:
-bash scripts/devnet/refresh-fork-fixture.sh
-```
-
-Validates the fixture manifest before use — including the sha256 integrity
-check (`state_sha256` in `CURRENT.json`, ADR-0011 addendum, issue #1152):
-`snapshot-fork.sh` writes the digest, so a legitimate refresh always updates
-it; a hand-edited blob with a stale or missing digest fails loudly here
-instead of loading silently:
-
-```bash
-bash scripts/devnet/check-fork-manifest.sh
+# Run the forge fork tests on a Twin fork of your own.
+bun scripts/devnet/twin-fork.ts start
+export TWIN_RPC_URL=http://127.0.0.1:8545
+bun scripts/devnet/safe-set.ts
+bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/VaultForkRegressions.t.sol"
 ```
 
 ### CI suites that exercise this environment
@@ -223,7 +192,7 @@ end-to-end.
 
 ### Services
 
-Everything in §1 plus:
+The Twin chain (§1) plus:
 
 | Service | Role |
 |---------|------|
@@ -233,9 +202,7 @@ Everything in §1 plus:
 | `explorer-api` | REST API serving indexed data |
 | `dapp` | Built Vite bundle served by nginx |
 
-Compose files:
-- `testing/ethereum-testnet/config/docker-compose.yaml` (chain)
-- `testing/ethereum-testnet/config/docker-compose.dapp.yaml` (dapp overlay)
+Compose file: `testing/ethereum-testnet/config/docker-compose.dapp.yaml` (the dapp stack). The chain is the Twin fork on the host.
 
 ### Required env vars
 
@@ -248,7 +215,7 @@ Dapp overlay (`docker-compose.dapp.yaml`) requires:
 | `INDEXER_GATEWAY` | _(none — required)_ | Same as `VITE_GATEWAY_ADDRESS` |
 | `INDEXER_VAULT` | _(none — required)_ | Same as `VITE_VAULT_ADDRESS` |
 | `VITE_EXPLORER_API_URL` | `http://localhost:8080` | Explorer API base URL |
-| `INDEXER_RPC_URL` | `http://host.docker.internal:8545` | Geth RPC URL for indexer |
+| `INDEXER_RPC_URL` | `http://host.docker.internal:8545` | Twin chain RPC URL for the indexer, as seen from the container |
 | `INDEXER_CHAIN_ID` | `918453` | Chain id |
 | `INDEXER_CHAIN_NAME` | `devnet` | Chain name label |
 | `EXPLORER_API_CHAIN_ID` | `918453` | Chain id for the explorer API |
@@ -260,7 +227,7 @@ Dapp overlay (`docker-compose.dapp.yaml`) requires:
 | `POSTGRES_DB` | `explorer` | Postgres database name |
 | `VITE_ENV_CLASS` | `fork` | One of: `fork` \| `devnet` \| `testnet` \| `mainnet`. Set to `devnet` for this mode. |
 | `VITE_GATEWAY_EXPECTED_CODE_HASH` | _(empty)_ | Keccak-256 of deployed gateway bytecode. The dapp refuses admin writes until this matches. Set from `deployments/devnet.json` field `gateway_runtime_hash`. |
-| `VITE_RM_TOKEN_ADDRESS` | `0x0000000000000000000000000000000000000000` | Deployed RmToken ERC-20 address (issue #466). The smoke-test threads `Fixture::rm_token_hex()` here so the FaucetTab's RM balance read and RM drip point at the real token. Mainnet builds leave this at the zero-address default to keep the RM drip surface inert. |
+| `VITE_RM_TOKEN_ADDRESS` | `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` | RM token address for the balances panel RM row (issue #466). RM is the live ROBOTMONEY token on Base; nothing deploys an RM token (core 1489), and the Twin fork carries the live token at the same address. The smoke-test threads `RM_TOKEN_ADDRESS_HEX` here. The faucet does not drip RM. |
 | `VITE_FAUCET_DRIP_ETH_WEI` | `10000000000000000` (0.01 ETH) | Native Base ETH gas drip amount for the Faucet tab's "Get Base ETH" button (issue #466). Documented for parity with `FAUCET_DRIP_AMOUNT_ETH` in `clients/dapp/src/lib/chainClassifier.ts`. |
 
 Additional optional dapp vars are documented in `clients/dapp/.env.example`.
@@ -282,7 +249,7 @@ export INDEXER_GATEWAY=$VITE_GATEWAY_ADDRESS
 export INDEXER_VAULT=$VITE_VAULT_ADDRESS
 
 cd testing/ethereum-testnet/config
-docker compose -f docker-compose.yaml -f docker-compose.dapp.yaml up --build
+docker compose -f docker-compose.dapp.yaml up --build
 ```
 
 ### Per-service restart and rebuild
@@ -290,8 +257,7 @@ docker compose -f docker-compose.yaml -f docker-compose.dapp.yaml up --build
 `explorer-indexer` and `explorer-api` are built as two **separate images**
 from two targets of `docker/rust-services.Dockerfile` (issue #1354), so either
 can be rebuilt or restarted on its own. Iterating on one explorer service does
-not require rebuilding the chain, re-running the genesis build, or
-re-deploying contracts, and Postgres keeps its data.
+not require restarting the Twin fork or re-deploying contracts, and Postgres keeps its data.
 
 The explorer services live in the dapp overlay's own compose project
 (`robotmoney-dapp`); the chain is a separate project (`ethereum-testnet`) and
@@ -333,23 +299,22 @@ gate; `restart` will not run the migrator for you.
 
 ### Contract address source
 
-Same as §1: `deployments/devnet.json`. The smoke-test binary reads this file
+Same as §1: the publish manifests. The smoke-test binary reads them
 and passes the addresses as Docker build args automatically.
 
 ### Data persistence
 
-Same as §1: Docker named volume (`testnet-data`) for chain state; Postgres
-data in a second named volume. Both are wiped by `docker compose down -v`.
+Postgres data lives in a Docker named volume, wiped by `docker compose down -v`. The Twin fork keeps state in memory (§1).
 
 ### Teardown command
 
 ```bash
 cd testing/ethereum-testnet/config
-docker compose -f docker-compose.yaml -f docker-compose.dapp.yaml down -v
+docker compose -f docker-compose.dapp.yaml down -v
 ```
 
 When started via `cargo run -p smoke-test -- --full-stack`, send SIGINT
-(Ctrl-C) — the binary's SIGINT handler runs `docker compose down`.
+(Ctrl-C) — the binary's SIGINT handler runs `docker compose down` and stops the Twin fork it started.
 
 ### CI suites that exercise this environment
 
@@ -388,7 +353,7 @@ chain_id             = 8453
 rpc_url              = "https://mainnet.base.org"   # replace with your archive endpoint
 gateway_address      = "0x0000000000000000000000000000000000000000"  # not deployed; reads return partial envelope
 usdc_address         = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-vault_address        = "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd"
+vault_address        = "<your vault address, from the deploy manifest>"
 state_dir            = "./rmpc-state"
 
 [signer]

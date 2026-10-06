@@ -1,0 +1,64 @@
+---
+title: "DeployBasketVaultRwaTest"
+description: "rmRWA script: a plain BasketVault row for deSPXA through the existing `UniswapV3SwapAdapter` on the fee 500 pool, priced from the pool TWAP. No oracle."
+---
+
+# DeployBasketVaultRwaTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployBasketVaultRwa.t.sol)
+
+**Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
+
+rmRWA script: a plain BasketVault row for deSPXA through the existing
+`UniswapV3SwapAdapter` on the fee 500 pool, priced from the pool TWAP. No oracle.
+
+## State Variables
+
+### script
+
+```solidity
+DeployRwaBasketVault internal script;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_deploy_isbasketvaultrowfordespxawithv3adapterfee500"></a>
+
+### test_deploy_isBasketVaultRowForDespxaWithV3AdapterFee500
+
+```solidity
+function test_deploy_isBasketVaultRowForDespxaWithV3AdapterFee500() public;
+```
+
+<a id="test_deploy_registersasbasketvault"></a>
+
+### test_deploy_registersAsBasketVault
+
+```solidity
+function test_deploy_registersAsBasketVault() public;
+```
+
+<a id="test_reverts_whenpoolfeeisnot500"></a>
+
+### test_reverts_whenPoolFeeIsNot500
+
+```solidity
+function test_reverts_whenPoolFeeIsNot500() public;
+```
+
+<a id="test_norwavaultorchronicleartifactsremain"></a>
+
+### test_noRwaVaultOrChronicleArtifactsRemain
+
+```solidity
+function test_noRwaVaultOrChronicleArtifactsRemain() public view;
+```
+

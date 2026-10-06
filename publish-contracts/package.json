@@ -1,0 +1,26 @@
+{
+  "name": "@robotmoney/publish-contracts",
+  "private": true,
+  "type": "module",
+  "description": "publish contracts: one Bun TypeScript CLI for every contract deploy (src/cli.ts), plus the Safe tool (src/safe), the verifier (src/verify) and the rehearsal helpers (src/rehearsal).",
+  "scripts": {
+    "publish-contracts": "bun src/cli.ts",
+    "rehearsal": "bun src/rehearsal/cli.ts",
+    "verify": "bun src/verify/cli.ts",
+    "ops": "bun src/ops/cli.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "config-check": "bun src/ci/config-check-cli.ts",
+    "merge-sheet": "bun src/ci/merge-sheet.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.6.0",
+    "@noble/hashes": "^1.5.0",
+    "@safe-global/protocol-kit": "^5.2.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,8 +1,8 @@
-//! Canonical: Plan tracking issue #109 §5 — Geth+Lighthouse smoke test
+//! Canonical: Plan tracking issue #109 §5 — Twin chain smoke test
 //!
 //! Smoke test for the e2e harness scaffold. Boots the Docker
-//! Geth+Lighthouse devnet via [`Fixture::new`], runs `forge script
-//! Deploy` from the host, decrypts the harness keystore, and invokes
+//! Twin chain via [`Fixture::new`] (no contract deployment:
+//! the harness never runs `forge script`), decrypts the harness keystore, and invokes
 //! `rmpc self-check`. Expects `ok: true` in the JSON output.
 //!
 //! Issue #37 dropped the prior Anvil flavor; the e2e crate now has a
@@ -23,7 +23,7 @@ fn self_check_ok() {
         return;
     }
 
-    let fx = Fixture::new().expect("boot geth devnet + deploy");
+    let fx = Fixture::new().expect("boot the Twin chain + deploy");
     assert_ne!(fx.gateway(), alloy_primitives::Address::ZERO);
 
     let out = fx.run_rmpc_self_check().expect("rmpc self-check");

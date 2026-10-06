@@ -21,7 +21,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {DeployDemoExtraVaults} from "../script/DeployDemoExtraVaults.s.sol";
+import {SafeFixture} from "./helpers/SafeFixture.sol";
 
 /// @dev Uniswap V3 pool mock: token0/token1 reads for addAsset validation plus
 ///      a flat 1:1 TWAP via observe() (arithmetic-mean tick = 0). One unit of
@@ -226,93 +226,6 @@ contract AgentTokenVaultTest is Test {
             vault.SHORTLIST_REMOVE_DELAY(), 24 hours, "removeAsset delay must be 24h per ADR-0004"
         );
     }
-
-    // ─── Demo-seed integration (issues #481, #560 test plan) ─────────────────
-
-    /// @notice Exercises the real demo seed chain: DeployDemoExtraVaults.run()
-    ///         deploys + seeds AgentTokenVault with the three real-asset demo
-    ///         tokens (BNKR/V3, JUNO/V4, RM/Aerodrome), registers it in
-    ///         VaultRegistry, and makes it router-eligible (issue #560).
-    ///         The vault is reachable via the same registry path the dapp uses.
-    function test_demo_seed_registers_agent_token_vault_with_shortlist() public {
-        // Drive the demo seed through `runInProcess(Params)` rather than the
-        // env-driven `run()`. `vm.setEnv` mutates process-global state, so two
-        // env-driven script tests running in parallel test files (this one and
-        // Deploy.t.sol::test_deploy_envDriven_runInProcessSucceeds) raced on
-        // ADMIN_ADDRESS and intermittently deployed with the wrong admin,
-        // reverting with AccessControlUnauthorizedAccount. The in-process path
-        // takes a fully-formed Params struct (no env reads) and is the same
-        // deterministic seam every DeployDemoExtraVaults.t.sol test uses.
-        address deployer = address(this);
-        TestERC20 seedUsdc = new TestERC20();
-
-        VaultRegistry registry = new VaultRegistry(deployer);
-        PortfolioRouter portfolioRouter =
-            new PortfolioRouter(address(seedUsdc), address(registry), deployer);
-
-        // Primary vault must be registered + router-eligible for setWeights.
-        RobotMoneyVault primary = new RobotMoneyVault(
-            IERC20(address(seedUsdc)),
-            10_000_000 * ONE_USDC,
-            1_000_000 * ONE_USDC,
-            0,
-            deployer,
-            deployer,
-            deployer
-        );
-        registry.registerVault(
-            address(primary),
-            VaultRegistry.VaultMetadata({
-                name: "Primary", asset: address(seedUsdc), registeredAt: 0
-            })
-        );
-        registry.setRouterEligible(address(primary), true);
-
-        // The script makes the registry/router calls in-process, so it must
-        // hold ADMIN_ROLE on both (mirrors the production broadcast key).
-        DeployDemoExtraVaults script = new DeployDemoExtraVaults();
-        registry.grantRole(registry.ADMIN_ROLE(), address(script));
-        portfolioRouter.grantRole(portfolioRouter.ADMIN_ROLE(), address(script));
-
-        DeployDemoExtraVaults.Deployed memory d = script.runInProcess(
-            DeployDemoExtraVaults.Params({
-                admin: address(script),
-                emergencyResponder: address(script),
-                registry: address(registry),
-                router: address(portfolioRouter),
-                primaryVault: address(primary),
-                usdc: address(seedUsdc),
-                swapRouter: 0x2626664c2603336E57B271c5C0b26F421741e481,
-                rwaName: "Robot Money RWA / Thematic"
-            })
-        );
-
-        // 1. AgentTokenVault deployed and seeded with three real-asset demo tokens
-        //    (BNKR, JUNO, RM — issue #560 three-token basket).
-        assertTrue(d.agentTokenVault != address(0), "agent token vault deployed");
-        assertEq(d.agentTokens.length, 3, "three real-asset demo tokens seeded");
-
-        AgentTokenVault agentVault = AgentTokenVault(d.agentTokenVault);
-        (address[] memory t,,,,) = agentVault.shortlist();
-        assertEq(t.length, 3, "shortlist() returns three tokens after demo seed");
-
-        // 2. Reachable via the registry path the dapp uses. getVault reverts if
-        //    the vault is not registered, so a successful read proves presence.
-        (VaultRegistry.VaultMetadata memory meta,) = registry.getVault(d.agentTokenVault);
-        assertEq(meta.name, "Robot Money Agent Tokens", "registered under canonical name");
-        assertEq(meta.asset, address(seedUsdc), "registered against USDC");
-
-        // 3. Router-eligible (issue #560): demo adapters wire working multi-DEX
-        //    swap paths (DemoV4SwapRouter + DemoAerodromeRouter), so a routed
-        //    deposit to rmAGENT succeeds on devnet. This overrides the prior
-        //    "basket-vault gap blocks live deposits" constraint from the
-        //    prototype deploy: the real multi-DEX adapters resolve that gap for
-        //    the demo environment.
-        assertTrue(
-            registry.isRouterEligible(d.agentTokenVault),
-            "rmAGENT must be router-eligible after real four-vault demo seed (issue #560)"
-        );
-    }
 }
 
 // ─── Governance tests (issue #552 / ADR-0004) ─────────────────────────────────
@@ -331,7 +244,7 @@ contract AgentTokenVaultTest is Test {
 //   - Veto: any canceller may cancel a queued shortlist change before execution
 //   - Unauthorized rejection: non-admin direct calls revert with AccessControl error
 
-contract AgentTokenVaultGovernanceTest is Test {
+contract AgentTokenVaultGovernanceTest is SafeFixture {
     uint256 internal constant ONE_USDC = 1e6;
 
     // Governance timing per ADR-0004.
@@ -345,7 +258,7 @@ contract AgentTokenVaultGovernanceTest is Test {
     // TimelockController holds ADMIN_ROLE on vault (production model).
     TimelockController internal timelock;
 
-    // MockHighThresholdSafe acts as the Safe multisig (proposer + executor + canceller).
+    // A real SafeL2 1.4.1 proxy (SafeFixture) acts as the Safe multisig (proposer + executor + canceller).
     address internal safe;
     // A separate canceller (any Safe signer may cancel unilaterally per ADR-0004).
     address internal signer = makeAddr("signer");
@@ -386,7 +299,8 @@ contract AgentTokenVaultGovernanceTest is Test {
         // signer also gets PROPOSER_ROLE (OpenZeppelin 5.x TimelockController grants
         // CANCELLER_ROLE to every proposer automatically). This models the ADR-0004
         // pattern where any Safe signer may cancel a queued change unilaterally.
-        safe = address(new MockHighThresholdSafeGov());
+        _installSafeSet();
+        safe = _newDefaultSafe();
         address[] memory proposers = new address[](2);
         proposers[0] = safe;
         proposers[1] = signer; // signer is also a proposer so it gets CANCELLER_ROLE
@@ -676,12 +590,5 @@ contract AgentTokenVaultGovernanceTest is Test {
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
         vm.prank(safe);
         timelock.execute(address(vault), 0, callData, bytes32(0), salt);
-    }
-}
-
-/// @dev Minimal Safe stub with threshold=2 for TimelockController proposer/executor/canceller role.
-contract MockHighThresholdSafeGov {
-    function getThreshold() external pure returns (uint256) {
-        return 2;
     }
 }

@@ -3,8 +3,7 @@
 /**
  * FaucetTab — testnet/devnet-only admin tab that drips a fixed
  * `FAUCET_DRIP_AMOUNT_USDC` (100 USDC) into the wallet selected from a
- * dropdown of the user's wallets. Optionally also drips RM tokens when
- * `rmTokenAddress` is provided (issue #365). The tab is *only* present in
+ * dropdown of the user's wallets. The tab is *only* present in
  * the rendered AdminFlow when `classifyChain(chainId) === "testnet"` (see
  * buildAdminTabs.tsx); this component additionally early-returns
  * "unavailable" if the build-time harness key is missing, so even a
@@ -27,14 +26,7 @@ import { type Address, type Hex, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useFaucetBalances } from "../lib/useFaucetBalances";
-import {
-  dripEth,
-  dripUsdc,
-  dripRmToken,
-  type DripEthArgs,
-  type DripUsdcArgs,
-  type DripRmTokenArgs,
-} from "../lib/faucetClient";
+import { dripEth, dripUsdc, type DripEthArgs, type DripUsdcArgs } from "../lib/faucetClient";
 import { FaucetTabView } from "./FaucetTabView";
 
 type Props = Readonly<{
@@ -52,16 +44,6 @@ type Props = Readonly<{
    * its own forwarder.
    */
   drip?: (args: DripUsdcArgs) => Promise<Hex>;
-  /**
-   * RM token contract address. When provided and env is not mainnet, the
-   * FaucetTabView renders a 'Drip RM tokens' button (issue #365).
-   */
-  rmTokenAddress?: Address;
-  /**
-   * Injected RM drip handler. Production calls `dripRmToken` from
-   * `lib/faucetClient.ts`; the e2e harness substitutes its own forwarder.
-   */
-  dripRm?: (args: DripRmTokenArgs) => Promise<Hex>;
   /**
    * Injected Base ETH drip handler (issue #466). Production calls `dripEth`
    * from `lib/faucetClient.ts`; the e2e harness substitutes its own
@@ -92,7 +74,6 @@ export function FaucetTab(props: Props) {
       props.walletAddresses[0] && isAddress(props.walletAddresses[0])
         ? props.walletAddresses[0]
         : null,
-    rmTokenAddress: props.rmTokenAddress,
   });
 
   return (
@@ -107,9 +88,6 @@ export function FaucetTab(props: Props) {
       recipientBalance={balances.recipient.data}
       refetchRecipientBalance={balances.recipient.refetch}
       drip={props.drip ?? dripUsdc}
-      rmTokenAddress={props.rmTokenAddress}
-      harnessRmBalance={balances.harnessRm.data}
-      dripRm={props.dripRm ?? dripRmToken}
       harnessEthBalance={balances.harnessEth.data}
       dripEth={props.dripEth ?? dripEth}
       onDripSuccess={onDripSuccess}

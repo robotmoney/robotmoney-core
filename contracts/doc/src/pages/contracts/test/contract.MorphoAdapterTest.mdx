@@ -4,7 +4,7 @@ title: "MorphoAdapterTest"
 
 # MorphoAdapterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/MorphoAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/MorphoAdapter.t.sol)
 
 **Inherits:** Test
 
@@ -242,7 +242,7 @@ function test_deploy_revertsWhenCumulative_exceedsCap() public;
 ### test_harvestRewards_isPermissionlessNoopForMorpho
 
 AC5: harvestRewards() is a permissionless no-op for MorphoAdapter.
-Morpho Gauntlet USDC Prime yield accrues automatically in the
+Moonwell Flagship USDC (Morpho) yield accrues automatically in the
 ERC-4626 share price — there are no discrete claimable rewards.
 Anyone may call; it must not revert and the vault asset is
 never moved (no value leakage through harvest).

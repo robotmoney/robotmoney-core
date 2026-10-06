@@ -21,6 +21,7 @@ coverage/
 *.key
 !*.pub.key
 keystore/
+!publish-contracts/src/keystore/
 *.keystore
 *.keyfile
 secrets.json
@@ -58,3 +59,4 @@ docs/papers/*.docx
 # Phase 7 demo run artifacts (per-run dirs under artifacts/demo/<timestamp>/).
 # Captured by testing/demo/demo.sh; uploaded by .github/workflows/demo.yml.
 artifacts/
+config-check-output/

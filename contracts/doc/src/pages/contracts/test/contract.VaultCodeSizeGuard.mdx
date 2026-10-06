@@ -5,7 +5,7 @@ description: "Asserts every deployable vault's runtime bytecode stays under the 
 
 # VaultCodeSizeGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/VaultCodeSizeGuard.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/VaultCodeSizeGuard.t.sol)
 
 **Inherits:** Test
 
@@ -18,7 +18,7 @@ Why this exists: Foundry's test/script EVM raises the contract-size
 limit, so an oversize vault passes every unit/invariant/fork test and
 even the deploy *simulation*, yet reverts when actually broadcast to a
 real EIP-170 chain (Base mainnet, or the Geth smoke-test devnet). That
-is exactly how RwaVault (24834) and AgentTokenVault (25241) became
+is exactly how the retired RwaBasketVault predecessor (24834) and AgentTokenVault (25241) became
 undeployable without any test catching it (issue #865). This guard
 reads the compiled artifact size directly so the limit is enforced
 regardless of the test EVM's relaxed limit.
@@ -69,12 +69,12 @@ function test_RobotMoneyVault_underEip170() public;
 function test_ProtocolAssetVault_underEip170() public;
 ```
 
-<a id="test_rwavault_undereip170"></a>
+<a id="test_rwabasketvault_undereip170"></a>
 
-### test_RwaVault_underEip170
+### test_RwaBasketVault_underEip170
 
 ```solidity
-function test_RwaVault_underEip170() public;
+function test_RwaBasketVault_underEip170() public;
 ```
 
 <a id="test_agenttokenvault_undereip170"></a>
@@ -97,14 +97,6 @@ retirement-flag addition.
 
 ```solidity
 function test_bytecodeSize_vaultFamilyUnderEip170() public;
-```
-
-<a id="test_unifiedvault_undereip170"></a>
-
-### test_UnifiedVault_underEip170
-
-```solidity
-function test_UnifiedVault_underEip170() public;
 ```
 
 <a id="test_aavev3adapter_undereip170"></a>
@@ -131,38 +123,6 @@ function test_CompoundV3Adapter_underEip170() public;
 function test_MorphoAdapter_underEip170() public;
 ```
 
-<a id="test_uniswapv3assetpositionadapter_undereip170"></a>
-
-### test_UniswapV3AssetPositionAdapter_underEip170
-
-```solidity
-function test_UniswapV3AssetPositionAdapter_underEip170() public;
-```
-
-<a id="test_uniswapv4assetpositionadapter_undereip170"></a>
-
-### test_UniswapV4AssetPositionAdapter_underEip170
-
-```solidity
-function test_UniswapV4AssetPositionAdapter_underEip170() public;
-```
-
-<a id="test_aerodromeassetpositionadapter_undereip170"></a>
-
-### test_AerodromeAssetPositionAdapter_underEip170
-
-```solidity
-function test_AerodromeAssetPositionAdapter_underEip170() public;
-```
-
-<a id="test_despxaassetpositionadapter_undereip170"></a>
-
-### test_DeSpxaAssetPositionAdapter_underEip170
-
-```solidity
-function test_DeSpxaAssetPositionAdapter_underEip170() public;
-```
-
 <a id="test_uniswapv3swapadapter_undereip170"></a>
 
 ### test_UniswapV3SwapAdapter_underEip170
@@ -171,27 +131,11 @@ function test_DeSpxaAssetPositionAdapter_underEip170() public;
 function test_UniswapV3SwapAdapter_underEip170() public;
 ```
 
-<a id="test_uniswapv4swapadapter_undereip170"></a>
-
-### test_UniswapV4SwapAdapter_underEip170
-
-```solidity
-function test_UniswapV4SwapAdapter_underEip170() public;
-```
-
 <a id="test_aerodromeswapadapter_undereip170"></a>
 
 ### test_AerodromeSwapAdapter_underEip170
 
 ```solidity
 function test_AerodromeSwapAdapter_underEip170() public;
-```
-
-<a id="test_chronicleoracleadapter_undereip170"></a>
-
-### test_ChronicleOracleAdapter_underEip170
-
-```solidity
-function test_ChronicleOracleAdapter_underEip170() public;
 ```
 

@@ -3,12 +3,12 @@
 End-to-end harness for the Rust payment daemon (`rmpc`). Implements
 the scaffold called for in issue #17 / the retired `Plan tracking issue #109` (git history)
 §4 and the scenario coverage from #18 / #19, consolidated onto a
-single Geth+Lighthouse backend per #37.
+single backend per #37, now the Twin chain (a pinned lazy anvil fork of real Base, core 1498).
 
 ## Layout
 
-- `src/lib.rs` — `Fixture` + helpers. Single backend: Docker
-  Geth+Lighthouse devnet + host-side `forge script` deploy.
+- `src/lib.rs` — `Fixture` + helpers. Single backend: the Twin chain (reused through `TWIN_RPC_URL`, or started by the harness)
+  and the publish contracts deploy.
 - `tests/smoke.rs` — proves the harness boots end-to-end and that
   `rmpc self-check` returns `ok: true`.
 - `tests/scenarios.rs` — nine scenario tests sharing one fixture
@@ -18,13 +18,13 @@ single Geth+Lighthouse backend per #37.
 
 ## Running
 
-Requires Docker, Foundry (`forge`, `cast`) on PATH. Tests auto-skip
+Requires Foundry (`forge`, `cast`, `anvil`) and Bun on PATH. Tests auto-skip
 with a printed warning when prerequisites are missing — install Docker
 and Foundry (`curl -L https://foundry.paradigm.xyz | bash; foundryup`)
 to run them locally.
 
 CI runs the three test binaries sequentially because each one boots
-its own Geth devnet on port 8545; running them in parallel would race
+its own Twin fork; running them in parallel on one fork would race
 on the port.
 
 ```bash
@@ -35,7 +35,7 @@ cargo test --release --test window_cap -- --test-threads=1 --nocapture
 ```
 
 The full suite takes ~5-10 minutes wall-clock — the project trades
-fast feedback for realism (#37). Each test binary pays one ~90s Geth
+fast feedback for realism (#37). Each test binary pays one publish run on the Twin
 boot; within a binary the fixture is shared via `OnceLock<Mutex<…>>`
 so the Docker stack lives only as long as the binary's process.
 
@@ -69,18 +69,16 @@ binary path is cached in a static `Mutex`.
 
 ## Environment
 
-- `docker`, `forge`, `cast` on PATH.
+- `anvil`, `forge`, `cast` and `bun` on PATH. `TWIN_RPC_URL` names a running Twin fork to reuse.
 - The fixture sets `RMPC_KEYSTORE_PASSPHRASE` and `RMPC_STATE_DIR`
   for the spawned `rmpc` process automatically; tests should not
   unset them.
 
-## Why no Anvil?
+## Why Anvil now?
 
-The crate originally shipped two backends: Anvil (sub-second blocks,
-fast) and Geth+Lighthouse (12-second blocks, real). Issue #37 dropped
-the Anvil flavor — the project is not optimizing for fast feedback,
-and parallel coverage was net cost. The single backend lets the
-harness drop impersonation RPCs, snapshot/revert helpers,
-and `anvil_setNextBlockBaseFeePerGas`, replacing them with real-key
-signing and unit-test coverage in `clients/rust-payment-client/src/fees`
-for the fee-cap math.
+Issue #37 consolidated the crate onto a single real-consensus backend (Geth+Lighthouse) and dropped
+the impersonation and snapshot/revert helpers. Core 1498 (owner decision 2026-10-05) replaced that
+backend with the Twin chain: a pinned lazy anvil fork of real Base state. The harness still avoids
+impersonation RPCs, snapshot/revert helpers and `anvil_setNextBlockBaseFeePerGas`. The only anvil
+specific steps are the three environment steps (fund gas, fund USDC, warp). Fee-cap math is
+covered by unit tests in `clients/rust-payment-client/src/fees`.

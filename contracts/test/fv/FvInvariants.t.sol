@@ -15,7 +15,7 @@
 //     suites (CustodyInvariant.t.sol, CustodyInvariantGuard.t.sol,
 //     AccessRoles.t.sol, DeployTimelock.t.sol, AdapterDelegatecallGuard.t.sol,
 //     PortfolioRouter.t.sol, GatewayRouter.t.sol, …) and in the new FV harnesses
-//     (CustodyMultiVault, StaleOracleRedemption, TwapManipulation,
+//     (CustodyMultiVault, TwapManipulation,
 //     DeployAssertions).
 //
 //   - RED invariants: a named `test_<ID>_expectedFail_*` function that calls
@@ -195,10 +195,9 @@ contract FvInvariantsTest is Test {
     // ── #966 (NC-1, NC-2, F-06, F-08, F-09): high-sev vault & oracle hardening ─
 
     /// @notice SUP-5 (FLIPPED GREEN by #966) — redeem never reverts on a stale feed
-    ///         when the underlying is idle USDC. Fix: `RwaVault.totalAssets`
-    ///         short-circuits `_checkOracleFreshness` when no priced RWA is held.
-    ///         Behavioural proof: RwaVault.t.sol::test_staleFeed_idleUsdcRedeemSurvives;
-    ///         deep harness: StaleOracleRedemption.t.sol::test_SUP5_*.
+    ///         when the underlying is idle USDC. Moot after core 1492: the Chronicle
+    ///         oracle and its staleness halt are deleted. No vault has a feed that
+    ///         can go stale, and rmRWA prices from its pool TWAP like every basket.
     function test_SUP5_expectedFail_idleUsdcRedeemSurvivesStaleFeed() public pure {
         _assertHolds("SUP-5");
     }
@@ -213,7 +212,7 @@ contract FvInvariantsTest is Test {
     }
 
     /// @notice ACL-3 (FLIPPED GREEN by #966) — ADMIN_ROLE on a fund-holding contract
-    ///         never reaches zero. Fix: BasketVault (→ RwaVault) and the Gateway (via
+    ///         never reaches zero. Fix: BasketVault (→ RwaBasketVault) and the Gateway (via
     ///         AccessRoles) now inherit `AdminFloorAccessControl`; the gateway also
     ///         floors `DEFAULT_ADMIN_ROLE` (F-06).
     function test_ACL3_expectedFail_vaultsAndGatewayHaveAdminFloor() public pure {
@@ -222,9 +221,9 @@ contract FvInvariantsTest is Test {
 
     /// @notice ACL-5 (FLIPPED GREEN by #966) — the stale-override setter sits at a
     ///         higher tier than the unwind executor. Fix:
-    ///         `RwaVault.setEmergencyUnwindStaleOverride` is ADMIN_ROLE while
-    ///         `emergencyUnwind` stays EMERGENCY_ROLE (F-08). Behavioural proof:
-    ///         RwaVault.t.sol::test_emergencyUnwindStaleOverride_requiresAdminNotEmergency.
+    ///         the unwind override setters are ADMIN_ROLE while `emergencyUnwind` stays
+    ///         EMERGENCY_ROLE (F-08). The retired Chronicle vault's stale-override setter is deleted
+    ///         with the Chronicle oracle (core 1492).
     function test_ACL5_expectedFail_emergencyOverrideIsHigherTier() public pure {
         _assertHolds("ACL-5");
     }

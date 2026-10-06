@@ -1,0 +1,181 @@
+# publish contracts
+
+This CLI is the ONLY deploy driver (core's old runner `scripts/deploy/core-stages.ts` and the post-stage assert scripts are deleted; their checks are labels of the one verifier). One Bun TypeScript CLI runs every contract deploy (devops issues 61, 55 and 58). It runs on the Twin chain (918453) and on Base mainnet (8453). A rehearsal and production differ only in the arguments. The Twin chain is a pinned lazy fork of real Base state (see the Twin chain section below). There is no mock Safe, no scripted Safe and no shell orchestrator. The operator runbook is `docs/runbooks/publish-contracts.md`. This file documents the tool and lists the remaining gaps.
+
+## Run it
+
+Operator helpers that replaced shell scripts: `bun run ops derive-agents`, `bun run ops fee-estimate` and `bun run ops sourcify-submit` (`src/ops`).
+
+```
+cd publish-contracts && bun install
+bun src/cli.ts --chain 918453 --rpc $RPC --sheet evidence/<run>/frozen-sheet.env \
+  --signer keystore:/dev/shm/rh/keys/DEPLOYER --environment local --core-sha <40-hex DEPLOYER SHA> \
+  [--stage plan|deploy|all|a,b] [--resume] [--dry-run]
+```
+
+| Argument | Meaning |
+|---|---|
+| `--chain` (alias `--chain-id`) | Target chain id. Must equal `cast chain-id` of the RPC. Only 8453 and 918453 run. |
+| `--rpc` | RPC URL. It reaches forge and cast through `ETH_RPC_URL`, never as an argument. |
+| `--sheet` | The frozen sheet. Parsed as data. Never sourced. |
+| `--signer` | `keystore:PATH`, `env:signer` (the caller's credential tool sets CHAIN_SIGNER_KEYSTORE and CHAIN_SIGNER_PASSWORD), `ledger` or `trezor`. Never a key. A keystore passphrase file is refused on 8453. |
+| `--environment` | GitHub Environment name, or `local`. |
+| `--core-sha` (alias `--deploy-sha`) | Core DEPLOY_SHA, 40 hex. The core checkout HEAD must equal it. |
+| `--stage` | `plan` (checks only, no signer), `deploy` (through timelock), `all` (adds verify and govern), or a comma list. Default: through verify. |
+| `--resume` | Continue a run: adopt the existing Safe, skip finished stages, continue a dead broadcast with `forge --resume`. |
+| `--dry-run` | The preflight: every check, then a forge simulation of EVERY deployer stage in order (the four vault scripts included) on a blank local anvil the CLI starts itself (no fork). Earlier simulations make the inputs of later ones. Nothing is broadcast, nothing is sent to `--rpc`, and the checkout is left as found. `--signer address:0xADMIN` is accepted here only (no secret). |
+| `--measure` | Rehearsal only. Learn the per-stage counts and write `deployments/frozen-counts/<sha>.json`. Without the flag a missing counts file means: `--dry-run` warns (`dry_run.counts_missing`) and prints `dry_run.counts_measured`, writes nothing; a broadcast on the Twin chain measures and writes the file (`counts.measuring`); a broadcast on 8453 fails `COUNTS_MISSING`. `--stage plan` always needs the file. |
+| `VERB` | Optional first word: `publish`, `verify` or `govern`. See Core harness contract. |
+| `--row` | Govern only: one row, by number or name. |
+| `--owner-signer` | Govern: a Safe owner signer spec, repeated until the threshold is met. |
+| `--correlated-owners-file` (or env `CORRELATED_OWNERS_FILE`) | Chain 8453 only, REQUIRED: a file of addresses that share one root of trust. Two or more of them in `SAFE_OWNERS` is refused. The caller (devops) writes the file from its credential tool. |
+| `--core-dir`, `--evidence`, `--counts-dir`, `--compare-sheet`, `--max-wait` | Paths, the sheet to diff in the isomorphism report, and the longest govern wait. |
+
+Caller environment only: `YES=1` (refused on 8453) and `CONFIRM=typed|environment` (`environment` only in GitHub Actions behind an Environment with reviewers). They are never sheet lines.
+
+## Core harness contract (positional verbs, `--row`, stdout rows, `PUBLISH_MANIFEST_DIR`)
+
+Core's Twin harness is the consumer of this CLI (`testing/smoke-test/src/publish.rs`, `testing/fork-e2e-rust/src/deployed.rs` and `scripts/stage/core-stack.ts`, all in this repo). The CLI adapts to it. `tests/core-harness-contract.test.ts` spawns the CLI as a child process with exactly the argument vector and environment core builds, and asserts what core reads back.
+
+What core sends:
+
+```
+bun src/cli.ts VERB --chain 918453 --rpc RPC --sheet SHEET --signer keystore:KEYDIR/DEPLOYER:PASSFILE \
+  --environment stage --core-sha SHA [--row ROW]          (env: PUBLISH_MANIFEST_DIR=<work dir>/manifests, stdin: null)
+```
+
+| Verb | Same as | Notes |
+|---|---|---|
+| `publish` | `--stage deploy`: safe, then every table stage through timelock | Refuses a stage whose manifest already exists, like `--stage deploy`. |
+| `verify` | `--stage verify` | A follow-on verb: it implies `--resume`, so it reads the run manifest of `publish`. |
+| `govern` | `--stage govern` | A follow-on verb: it implies `--resume`. |
+
+A verb and `--stage` are not combined (usage error, exit 2). `--stage` still works alone. `--row N` or `--row NAME` runs one govern row, which is one round (govern only). The rows, in order: `voting-power-quorum`, `agents`, `other-setters`, `migrate-eligibility-PROTO`, `migrate-eligibility-AGENT`, `migrate-eligibility-RWA`, `router-weights`, `unpause-PROTO`, `unpause-AGENT`, `unpause-RWA`, `update-delay`, `batch`, `cancel`. A row starts only when every earlier row is complete. A phase already recorded in the run manifest is not sent again, and its line is printed again. An unknown row or number is a usage error. A single-row run does not mark the govern stage done (the last row to complete does). `--row release-receipt --receipt-id 0x<bytes32>` is the one on-demand row, outside that order: it releases one recorded consensus receipt (`ConsensusRecommendationReceipt.releaseReceipt`, whose `ADMIN_ROLE` the timelock holds after the timelock stage) as its own Safe -> Timelock round, on 918453 and 8453 alike. It neither waits for nor completes the ordered rows. Its run-manifest key and salt are `release-receipt-<receiptId>`, so one receipt is one operation, a rerun reprints its lines with no new transaction, and a record under that key for a different operation is refused. It refuses, before the Safe schedules anything, a receipt that is not recorded or is already released by some other operation. Its lines carry `"row":"release-receipt"`. `--receipt-id` without that row is a usage error.
+
+What core reads back:
+
+- **Exit code.** 0 on success. A failure has its own code (the table under Exit codes). Core passes it through.
+- **Govern stdout.** One JSON line per round event that sent a Safe transaction: `{"row":"voting-power-quorum","phase":"scheduled","txHash":"0x...","status":1,"readyAt":1700172800}`. `phase` is `scheduled`, `executed` or `cancelled` (the cancel row ends in `cancelled`, every other row in `executed`). `status` is the receipt status of the Safe transaction (1 success, 0 reverted). A revert also stops the run with exit 14, so a printed line has status 1. `readyAt` is the unix time the timelock operation becomes executable (schedule time plus the real delay). A row the sheet does not ask for (no agents, a basket that is not eligible, a vault that stays paused) is skipped and prints no line. Nothing else is printed on stdout by govern. The structured log (`govern.safe_tx` and every other event) stays on stderr, one JSON object per line. Core's `parse_govern_output` keeps the lines that start with `{` and carry a `row`. The recorded sample both repos test against is `tests/fixtures/govern-stdout.jsonl` (the same file sits in core at `testing/smoke-test/tests/fixtures/`). To re-record it: `RECORD_GOVERN_FIXTURE=1 bun test tests/core-harness-contract.test.ts`, then copy it to core.
+- **Verify stdout.** The verifier labels: a `[verify]` line, then one label per line (the format of `deployments/base-8453/verifier-labels.txt`). Pass or fail is the exit code, and each check is a `verify.check` log line on stderr. Core diffs the labels against mainnet's.
+- **Manifest directory.** `PUBLISH_MANIFEST_DIR` names where the stage manifests go (`safe.json` and every file core's stage table names). forge gets it as an absolute `DEPLOYMENT_OUT`, and govern, verify and later stages read from it. Unset, the CLI uses `deployments/<chain>/` in the core checkout. The directory must be one forge may write: core's `foundry.toml` `fs_permissions` allow `./deployments` and `/tmp`.
+
+Defaults that keep core's vector working without extra flags:
+
+- No `--core-dir`: the repo root (the nearest parent of the working directory, else of this package, with `scripts/deploy/stage-table.json`). `--core-dir` is only for a checkout elsewhere.
+- No `--counts-dir`: `deployments/frozen-counts` in the working directory if it exists, else this repo's.
+- No `--owner-signer` on chain 918453: the rehearsal's own `SAFE_OWNER_A`, `SAFE_OWNER_B` and `SAFE_OWNER_C` keystores beside the `DEPLOYER` keystore, under the same passphrase file (the layout `src/rehearsal/keys.ts` writes). Never on 8453, where the owners are `--owner-signer` hardware wallets.
+- An unattended run (stdin null) needs `YES=1` in the inherited environment. Without it the CLI refuses with exit 17 and sends nothing. `YES=1` is refused on 8453.
+
+The test doubles in that test (stub forge and cast, a fake Safe API and timelock) stand in for tools and the chain. They check the CLI surface. They are no evidence for the Safe, its signers or governance: that is proven on the real deployment (devops `CLAUDE.md`, item b).
+
+## Stages (data from core's stage table)
+
+The stage table is DATA: `scripts/deploy/stage-table.json` (version 1) at the repo root (see `scripts/deploy/README.md`). `src/stage-table.ts` reads it from the repo root at the start of every run (`--core-dir` only names a checkout elsewhere, such as the one devops makes). This package keeps no forge script path, required env name, artifact name, library name or manifest name of its own. There is no second runner: core's old runner is deleted.
+
+Order: safe (the real Safe, from `src/safe`), then the table's stages in table order (libs, vault, registry, router, gateway, governance, ic-policy, proto, agent, rwa, timelock), then verify and govern. `src/stages.ts` builds the rows from the table and adds only those three orchestration rows. A vault is a row, so one loop registers, hands over and verifies all four.
+
+What the table does not carry lives in ONE mapping module, `src/core-wiring.ts`: which sheet name feeds which env name (core's env name `TVL_CAP` is fed by the sheet name `VAULT_<KEY>_TVL_CAP`, with the vault key in it, and there is no unprefixed `VAULT_TVL_CAP`; `FEE_RECIPIENT` is `FEE_RECIPIENT_ADDRESS`, `SEED_SHARE_RECEIVER` is `SHARE_RECEIVER_ADDRESS`, `SWAP_ROUTER` is its own sheet name), which earlier manifest field feeds which env name (`REGISTRY_ADDRESS` is the registry stage manifest's `registry`, `VAULT_ADDRESSES` is the `vault` field of every table vault), and which manifest fields the verifier reads. Basket stages (rmPROTO, rmAGENT, rmRWA) get `--libraries <path>:<artifact>:<address>` for every library the table lists, the address read from the libs stage manifest under the table's `manifestKey`. The verifier checks each vault against the table's `vaults[].artifact` (rmRWA is `RwaBasketVault`, rmAGENT is `AgentTokenVault`), each library against `libraries[].artifact` and each core contract against `artifacts`.
+
+Core parity (`src/ci/core-parity.ts`, `tests/core-parity.test.ts`): reads the repo root and fails, naming the row, when a stage's script or contract is missing, a required env name is not read by that script, a manifest file is not written by it, a manifest field the tool reads is not serialized, or an artifact does not exist. It runs with every other test in `bun test` (the repo root is found by walking up, there is no `CORE_DIR` variable). The CI job `publish-contracts-tests` (`.github/workflows/suite-28-core-stages.yml`) runs `bun install --frozen-lockfile`, `bun x tsc --noEmit` and `bun test --timeout 60000` in this directory and fails when the pass count is zero. All tests load the same table through `tests/preload.ts` (`bunfig.toml`).
+
+Per stage: inputs, start nonce (must equal the summed frozen counts of earlier stages), simulate, dry-run count equals frozen count, confirmation, broadcast, broadcast count and nonce delta equal the frozen count (hard failure otherwise), manifest written. The run manifest `evidence/.../publish-run.json` keeps each stage's start nonce and count.
+
+## Sheet, floors and counts
+
+- `src/sheet.ts`: whitelist parser. `SWAP_ROUTER` is the Uniswap V3 SwapRouter02 the basket scripts read. Per-vault names `VAULT_<USDC|PROTO|AGENT|RWA>_TVL_CAP`, `_PER_DEPOSIT_CAP`, `_EXIT_FEE_BPS`. Everything is required. Values that stages produce (`REGISTRY_ADDRESS` and so on) are refused. The example is `docs/runbooks/frozen-sheet.env.example`, and a test runs it through the real parser.
+- `src/sheet.ts` floors on every chain: a zero TVL cap is refused, the per-deposit cap is never above the TVL cap, `exitFeeBps` is at most the vault maximum read from core's `MAX_EXIT_FEE_BPS` (100 today) at the DEPLOY_SHA, `FEE_RECIPIENT_ADDRESS` is never zero or `ADMIN_ADDRESS` (the deployer) and may be `@safe`. `USDC_ADDRESS` is a constant (`src/usdc.ts`), not a sheet value: the example sheet has no line for it and a sheet that carries one must name the constant.
+- `src/floors.ts`: keyed to the chain id read from the RPC. Delay floor 172800 on 8453, at least 1 elsewhere. `EXPECTED_CHAIN_ID` and `CHAIN_ID` must equal the RPC chain id. `YES` and plaintext signing are refused on 8453. No flag lifts a floor.
+- `src/counts.ts`: `deployments/frozen-counts/<sha>.json`. A missing SHA fails with `COUNTS_MISSING` and the message starts `FROZEN_COUNTS_MISSING`. No counts file is committed here until a Twin chain rehearsal has measured one.
+  - `publish contracts --measure` (`bun src/cli.ts --measure ...`, Twin chain 918453 only, refused on 8453 by the floors) runs the deployer stages without frozen counts, learns each stage's transaction count from the broadcast, and writes `deployments/frozen-counts/<sha>.json` once every deployer stage is done. A reviewer reads the file, then commits it. A frozen file is never rewritten with different counts. Every later run, the plan job and the nonce check read that file and nothing else.
+- `src/isomorphism.ts`: the report written next to the run manifest: sheet diff, SHAs, config hashes, forge version and profile, node facts, libraries, codehashes. A short-delay run says it proves the scripts execute and not the real delay.
+
+## Verify and govern
+
+- verify (`src/verify-stage.ts`) calls the verifier in `src/verify`. Expected assets come from core's `config/protocol-assets.json`, `config/rwa-assets.json` and `config/agent-token-shortlist.json` (`poolFee` is the swap fee, the adapter comes from the vault manifest). It also checks the rmUSDC seed shares (the deployer holds none, the seed share receiver holds them) and that the token at the USDC constant has the pinned FiatTokenProxy code hash. On 8453 it also checks Blockscout and Sourcify.
+- core's config-check (`src/core-config-check.ts`): `bun scripts/ci/config-check.ts` from the core checkout, read-only against live Base (on 8453 it reads the run's RPC, on the Twin chain it reads `BASE_RPC_URL` from the caller environment or core's own default, always through the child's environment, never an argument). It runs in the plan job (`--stage plan`) and right before every vault stage in the runner. A failing check stops the stage. A missing script is `INPUT_MISSING` naming it. There is no skip flag. The devops oracle checks (`src/ci/config-check.ts`) run as well before the basket vault stages.
+- the deployer nonce check (`finalNonceCheck`) is a stage 12 check: it runs only when every deployer stage is done and the run executed at least one of them. A partial run, a dry run and a run after govern started do not run it (the verifier compares its recorded end-of-deploy nonce after govern).
+- govern (`src/govern.ts`) uses the Safe tool in `src/safe`. **One round per step** (owner decision, 2026-10-05): each step is its own schedule (a Safe transaction to the timelock), its own wait for the timelock's real delay, its own execute (a Safe transaction) and its own on-chain read-back. Steps are never batched into shared rounds. The steps, in order: `voting-power-quorum` (voting power per voter, quorum, voting period, execution delay), `agents` (`authorizeAgent` per sheet agent), `other-setters` (the vault setters: per-deposit cap, TVL cap, exit fee, fee recipient), `migrate-eligibility-PROTO`, `-AGENT` and `-RWA` (one atomic `registry.migrateEligibility` call per basket), `router-weights` (`setDefaultWeights`), `unpause-PROTO`, `-AGENT` and `-RWA` (one `unpause` per vault), `update-delay`, `batch` (one `scheduleBatch` round that proves batch scheduling and changes nothing) and `cancel` (a schedule, then a cancel). Which baskets become eligible, which vaults unpause, the agents and the weights are sheet data (`GOVERN_*`, `ROUTER_WEIGHTS`); a step the sheet does not ask for is recorded as skipped. The run manifest keeps `scheduled`, `executed` or `cancelled` per row, so a half-done step resumes at its next phase (an operation already on the timelock is adopted, never scheduled twice). On 8453 each wait is the real 48 hours and there is no warp: after the schedule the run exits 15 (`GOVERN_PENDING`) with the ready time and the exact next command, and the same `--row` (or no `--row`) resumes it. The wait never blocks for more than an hour on 8453. On a Twin fork (eth_chainId is not 8453 and the RPC answers `anvil_nodeInfo`) the wait is warped instead: `evm_increaseTime` plus `evm_mine` (`src/rehearsal/twin.ts`), so the real 48 hour delay passes in seconds. The warp never runs on an RPC that answers 8453. Each warp moves the clock to one second past the operation's ready time, no further, and logs the structured event `govern.warped` with `seconds`. The timelock's delay is never shortened: the fork enforces its real delay, and the warp only passes it. On a non-anvil RPC the run keeps waiting up to `--max-wait`, then exits `GOVERN_PENDING`. Pause semantics are not decided here: `unpause-*` rows send the sheet's unpause calls and read `paused()` back.
+
+## Devops-owned files
+
+This package lives in core and imports nothing from devops. Core has no checkout of devops, no devops read token and no path variable that points at a devops checkout (`scripts/ci/check-no-devops-dependency.ts` fails on each). The sheet templates, the verifier-label fixture, the CI workflows that call this CLI and the credential tooling stay in devops, which checks core out. Devops supplies the `--correlated-owners-file` from its credential tool. The tests here use copies of the example sheet and the verifier labels under `tests/fixtures/`.
+
+## CLI contract
+
+```
+bun publish-contracts/src/cli.ts [VERB] --chain N --rpc URL --sheet FILE --signer SPEC --environment NAME --core-sha SHA [flags]
+```
+
+**Verbs** (the optional first word; a verb and `--stage` are never combined, usage error 2):
+
+| Verb | Runs | Resume |
+|---|---|---|
+| `publish` | the Safe, then every table stage through the timelock handover | no (refuses a stage whose manifest exists) |
+| `verify` | the one verifier (labels) | implied |
+| `govern` | stage 13: one 48-hour round per step | implied |
+| none | `--stage` decides (default: everything through verify) | `--resume` |
+
+**Flags.** The full list with meanings is in the table under Run it. Required on every run: `--chain` (8453 or 918453, equal to `cast chain-id` of the RPC), `--rpc`, `--sheet`, `--core-sha` (alias `--deploy-sha`), `--signer` (never a key: `keystore:PATH[:PASSFILE]`, `env:signer`, `ledger`, `trezor`; `address:0xADMIN` with `--dry-run` only), `--environment`. Optional: `--stage`, `--row`, `--resume`, `--dry-run`, `--measure`, `--owner-signer` (repeat), `--correlated-owners-file` (required on 8453), `--core-dir`, `--evidence`, `--counts-dir`, `--compare-sheet`, `--max-wait`. Aliases: `--chain-id`, `--deploy-sha`. `--help` prints the usage and exits 2 (usage).
+
+**Environment.** `PUBLISH_MANIFEST_DIR` (where the stage manifests go), `CORRELATED_OWNERS_FILE`, `YES=1` (unattended, refused on 8453), `CONFIRM=typed|environment`. `BASE_UPSTREAM_RPC` is an optional override read by the Twin fork tooling. No secret is ever an argument or a file in the repo.
+
+**Outputs.**
+- stdout: `govern` prints one JSON line per Safe transaction (`{"row","phase","txHash","status","readyAt"}`). `verify` prints `[verify]` then one label per line. `publish` prints nothing on stdout.
+- stderr: the structured log, one JSON object per line, secret-looking field names redacted.
+- files: the stage manifests in `PUBLISH_MANIFEST_DIR` (default `deployments/<chain>/`), the run manifest `publish-run.json`, the isomorphism report and `--measure` counts (`deployments/frozen-counts/<sha>.json`) under `--evidence` and `--counts-dir`.
+
+**Exit codes.** 0 success. A failure exits with its kind: usage 2, sheet 3, floor 4, chain 5, signer 6, counts missing 7, simulation 8, broadcast 9, count mismatch 10, nonce 11, manifest 12, verify 13, govern 14, govern pending 15 (a wait is not over: run the same command again), resume 16, refused 17, tool 18, safe 19, input missing 20. Any other failure exits 1.
+
+## Exit codes
+
+usage 2, sheet 3, floor 4, chain 5, signer 6, counts missing 7, simulation 8, broadcast 9, count mismatch 10, nonce 11, manifest 12, verify 13, govern 14, govern pending 15, resume 16, refused 17, tool 18, safe 19, input missing 20. Every log line is JSON on stderr. Secret-looking field names are redacted.
+
+## Gaps for the owner and operators
+
+- [ ] A core DEPLOY_SHA that carries `scripts/deploy/stage-table.json` (a run without it fails with `INPUT_MISSING` naming the file).
+- [ ] Core `config/protocol-assets.json`, `config/rwa-assets.json` and `config/agent-token-shortlist.json` (expected pools per vault).
+- [ ] First `--measure` rehearsal on the Twin chain, then review and commit the frozen counts file.
+- [x] The clean-tree check: the CLI refuses a core checkout with uncommitted changes, through a read-only `git -C DIR status --porcelain` on the injectable runner. The CLI spawns forge, cast, that git read and core's own config-check (`bun scripts/ci/config-check.ts`, see Verify and govern) and nothing else.
+- [ ] Pause semantics (core 1494) are an open owner decision. This CLI follows the sheet.
+
+## Tests
+
+`bun test` (reads the stage table from the repo root; the runner tests spawn stub forge and cast from `tests/stubs`, about 30 s, CI passes `--timeout 60000`), `bun x tsc --noEmit` (or `bun run typecheck`). Verifier standalone: `bun src/verify/cli.ts ... --core-dir <core checkout>`.
+
+## CI workflows
+
+Core's workflows run this CLI from this directory (`bun install --frozen-lockfile` here, through `.github/actions/publish-contracts-setup`, then `bun src/cli.ts`). The `twin-publish` action (`.github/actions/twin-publish`) runs `publish` and `verify` on the Twin chain with throwaway keystores and the committed stage sheet (`deployments/twin-918453/stage-sheet.env`). They never check devops out and use no token. Core is public, and the dependency direction is devops to core only. `suite-28-core-stages.yml` runs this package's typecheck and unit tests (`publish-contracts-tests`).
+
+## Rehearsal helpers (`src/rehearsal`, devops issue 56)
+One Bun TypeScript CLI that runs every contract deploy (devops issue 61). This file documents `src/rehearsal/`, the rehearsal helpers (S7, devops issue 56). A rehearsal is the same runbook as production with different arguments, run on the Twin chain (918453). No mock Safe, no scripted Safe.
+
+```
+cd publish-contracts && bun install
+bun run rehearsal keys --dir /dev/shm/rh/keys --password-file /dev/shm/rh/pw --chain-id 918453   # or omit --password-file for a hidden prompt
+bun run rehearsal args --rpc http://127.0.0.1:8545 --deploy-sha <core sha>                              # the publish-contracts argument set
+bun run rehearsal fund-gas  --rpc http://127.0.0.1:8545 --sheet rehearsal/sheet.env                  # Twin fork: anvil_setBalance
+bun run rehearsal fund-usdc --rpc http://127.0.0.1:8545 --sheet rehearsal/sheet.env --usdc-units 1000000   # Twin fork: the real FiatToken balance slot
+bun run rehearsal warp --rpc http://127.0.0.1:8545 --seconds 172801                                  # Twin fork: move time forward
+bun run rehearsal run --rpc http://127.0.0.1:8545 --dir /dev/shm/rh/keys --password-file /dev/shm/rh/pw --sheet rehearsal/sheet.env
+```
+
+- **keys** wraps `src/keystore/keygen.ts` (a Foundry keystore v3 writer in this package). It writes ENCRYPTED Foundry keystores (DEPLOYER, PAUSER, EMERGENCY, AGENT, VOTER1..N, SAFE_OWNER_A/B/C) to a 0700 directory, each 0600, under one passphrase of 16+ characters. The passphrase comes from a 0600 file or a hidden prompt, never an argument. It prints a sheet fragment (`ADMIN_ADDRESS`, `PAUSER_ADDRESS`, `EMERGENCY_ADDRESS`, `AGENT_ADDRESS`, `VOTER_ADDRESSES`, `SAFE_OWNERS`, `SAFE_THRESHOLD`) of addresses and numbers only. It validates every name before it writes any key. Use a memory-backed directory.
+- **fund-gas**, **fund-usdc** and **warp** (`src/rehearsal/twin.ts`) are the environment steps that may differ from production on a Twin fork. Each refuses unless the RPC is not chain 8453 and answers `anvil_nodeInfo`. `fund-gas` sets the balance of the deployer, pauser, emergency key and Safe owners of the sheet (`anvil_setBalance`). `fund-usdc` sets the deployer's real FiatToken balance by writing its balance storage slot (slot 9, `balanceAndBlacklistStates`), after it checks the token code hash against the pinned FiatTokenProxy, and reads the balance back. `warp` moves chain time (`evm_increaseTime`, `evm_mine`). Nothing else about the forked state is patched. Requests retry with backoff on HTTP 429. No secret is involved.
+- **fund** is the funder-persona path for a real chain (no Twin run uses it). It replaces the old shell funding script. The funder keystore arrives from the caller's credential tool in CHAIN_FUNDER_KEYSTORE and CHAIN_FUNDER_PASSWORD, is staged in a 0700 memory-backed directory and shredded on every exit. It refuses a wrong chain id, a duplicate recipient, the funder as a recipient, a contract recipient, a funder balance below total plus gas reserve, and plaintext signing env against a non-loopback RPC. Idempotent: a re-run sends only what is missing.
+- **sweep** returns leftover ETH (and optional USDC) from every throwaway key to the funder. `run` calls it in a `finally` and on SIGINT, SIGTERM and SIGHUP, so it runs on every exit path.
+- **run** reads the chain id from the RPC, refuses anything but 918453, refuses a sheet whose `CHAIN_ID` differs, calls the publish-contracts CLI with `rehearsalArgs`, then sweeps. On a Twin fork there is no funder (anvil funded the keys), so the sweep is skipped.
+- **rehearsalArgs(chainId, rpc, opts)** returns `--chain-id --rpc --sheet --signer --environment --deploy-sha`. `publishArgs` builds production's set through the same function, so the two differ only in values (tested by `differingFlags`).
+
+### Twin chain (918453)
+
+The Twin chain is a pinned lazy fork of real Base state, made with anvil by core's twin-fork tool (`scripts/devnet/twin-fork.ts` and the composite action `.github/actions/twin-fork` in robotmoney-core, checked out with core). The upstream is the public `https://mainnet.base.org` (no key, no archive node) unless the environment variable `BASE_UPSTREAM_RPC` (an optional secret for a paid provider) is set. The URL is never printed. The pinned block is the upstream head at the start of the run minus 2, and every job of one CI run forks at the same pin: the `pin` job of `publish-contracts.yml` outputs it and the other jobs receive it as the input `pin-block`. anvil's RPC cache is persisted by the action, keyed by the pin block. The fork carries the real production v1 contracts because it is real Base state. Every run deploys its own contracts through the deploy scripts and reads their addresses from the manifests. No test reads a production address. `TWIN_RPC_URL` is the output of the action (or of a local run of the tool), not a repository variable.
+
+Tests: `bun test` (key generation takes about 1.5 s per key, the suite about 40 s). Typecheck: `bun run typecheck`.
+
+## Evidence check
+
+`bun src/evidence-check.ts --evidence evidence/<run>/evidence.json --frozen deployments/frozen-counts/<sha>.json --deploy-sha <sha> [--rpc URL]`. Without `--rpc` it checks the recorded shape only. With `--rpc` (chain 8453) it reads the chain: deployer nonce equals the summed frozen counts, every receipt has status 1, `registry.listVaults()` equals the recorded manifests, and each govern step shows CallScheduled and CallExecuted (or Cancelled) on the timelock with a block gap of at least 172800 s. The matrix has one entry per Stage 13 step (`GOVERN_STEPS`: the 13 govern rows). One round per step is enforced: no two steps may share a schedule or an execute transaction or a timelock operation id, each step's schedule-to-execute gap is at least 172800 s, and a step is scheduled only after the previous step executed. The template is `evidence.example.json`.
+
+Recorded-fixture mode: `--chain-fixture FILE` (with `--frozen` and `--deploy-sha`, and no `--rpc`) runs the same chain checks over a fixture of what the chain returned. Record the fixture once, at the end of the run: `... --rpc URL --record-chain-fixture evidence/<run>/chain-fixture.json` (written only when every check passed). The `evidence` job in `ci.yml` checks every `evidence/*/evidence.json` this way, so acceptance criteria 2 (nonce and per-stage counts) and 3 (receipts and the 172800 s gap) run offline in CI. A run with no frozen file or no `chain-fixture.json` fails that job. A read the fixture lacks is an error. The check also links the unpause govern rows to the `paused()` reads: a basket vault reads `paused() == false` exactly when its `unpause-<VAULT>` step has an executed receipt. After govern, the verify stage applies the same link: a vault the unpause row unpaused is expected `paused=false`, every other basket and agent vault is expected `paused=true` (`unpausedByGovern` in `src/verify-stage.ts`).
+
+The read-only `verify-mainnet-readonly` job reads `deployments/8453/verify-inputs.json`. The template is `deployments/8453/verify-inputs.example.json` (`sheet_json`, `frozen`, `deploy_sha`, `from_block`, `artifacts`). `tests/ci-evidence-wiring.test.ts` keeps the template and the job in step.

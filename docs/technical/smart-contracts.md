@@ -4,9 +4,9 @@
 > pieces fit). For the generated per-contract / per-symbol NatSpec reference,
 > see `contracts/doc/` (produced by `forge doc`).
 
-> Scope: verified source code for all Robot Money smart contracts deployed on Base mainnet. The main production vaults are RobotMoneyVault and the basket-vault family (BasketVault base class with ProtocolAssetVault, AgentTokenVault, and RwaVault subclasses). Allocation and governance infrastructure includes VaultRegistry, PortfolioRouter, and RouterGovernance. All contracts are verified on BaseScan. Source files are in `contracts/` at the repo root. Compiler: `v0.8.24+commit.e11b9ed9`, optimization 200 runs, EVM Cancun. The previous version of this document was a reverse-engineering exercise from ABIs; this version is authoritative from source.
+> Scope: verified source code for all Robot Money smart contracts deployed on Base mainnet. The main production vaults are RobotMoneyVault and the basket-vault family (BasketVault base class with ProtocolAssetVault, AgentTokenVault, and RwaBasketVault subclasses). Allocation and governance infrastructure includes VaultRegistry, PortfolioRouter, and RouterGovernance. All contracts are verified on BaseScan. Source files are in `contracts/` at the repo root. Compiler: `v0.8.24+commit.e11b9ed9`, optimization 200 runs, EVM Cancun. The previous version of this document was a reverse-engineering exercise from ABIs; this version is authoritative from source.
 
-> Planned evolution: `docs/adr/ADR-0010-unified-vault-architecture.md` (Proposed) unifies the two vault families into a single `Vault` + `IPositionAdapter` for v2 (spec: `docs/technical/unified-vault-spec.md`). The v1 contracts documented here stay deployed and untouched; migration is v2-deploy + router-weight shift + retire v1 per ADR-0009.
+> `docs/adr/ADR-0010-unified-vault-architecture.md` is Rejected and dead. The shipped design keeps `RobotMoneyVault` and the plain `BasketVault` family: rmRWA is a plain basket row (`RwaBasketVault`), with no oracle and no position adapter.
 
 ---
 
@@ -34,7 +34,7 @@
         │ • Morpho Adapter  │ │   Vault          │ │ • Reads weights│
         │ • Aave Adapter    │ │ • AgentToken     │ │   from Registry│
         │ • Compound Adapter│ │   Vault          │ │ • Reads votes  │
-        │                   │ │ • RwaVault       │ │   from Router- │
+        │                   │ │ • RwaBasketVault │ │   from Router- │
         │ ERC-4626 shares   │ │                  │ │   Governance   │
         │ (rmUSDC)          │ │ ERC-4626 shares  │ │                │
         │                   │ │ (rmPROTO / rmAGT │ │ USDC → Vaults  │
@@ -58,7 +58,7 @@
         │              • Weight execution to PortfolioRouter            │
         │              • Admin-assigned voting power (MVP)              │
         │                                                               │
-        │              ADMIN_ROLE (MVP → token-holder voting future)   │
+        │              ADMIN_ROLE (no token-based governance)          │
         └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -67,6 +67,8 @@
 ---
 
 ## 2. Deployed addresses (Base mainnet, chain id 8453)
+
+> **Retired v1, tests never read it.** The addresses in this section document the retired v1 production deployment for history only. No test, script or CI job reads the live v1 vault. Every test deploys its own vault from our scripts onto the Twin chain (a pinned lazy fork of real Base state, core 1498, 1496).
 
 ### 2.1 Core allocation and governance contracts
 
@@ -89,10 +91,10 @@
 
 | Contract | Role | Source file | Mainnet address |
 |---|---|---|---|
-| BasketVault (base) | Abstract ERC-4626 USDC → basket asset mix. Subclassed by ProtocolAssetVault, AgentTokenVault, RwaVault. | `contracts/vaults/BasketVault.sol` | N/A (abstract) |
-| ProtocolAssetVault | USDC → wETH, cbBTC, wSOL, etc. (volatile protocol assets) | `contracts/vaults/ProtocolAssetVault.sol` | (devnet in demo) |
-| AgentTokenVault | USDC → RM governance and agent-earned tokens | `contracts/vaults/AgentTokenVault.sol` | (devnet in demo) |
-| RwaVault | USDC → real-world asset tokens | `contracts/vaults/RwaVault.sol` | (devnet in demo) |
+| BasketVault (base) | Abstract ERC-4626 USDC → basket asset mix. Subclassed by ProtocolAssetVault, AgentTokenVault, RwaBasketVault. | `contracts/vaults/BasketVault.sol` | N/A (abstract) |
+| ProtocolAssetVault | USDC → wETH, cbBTC (volatile protocol assets; assets with no usable pool are added later through the timelock) | `contracts/vaults/ProtocolAssetVault.sol` | set at the mainnet deploy |
+| AgentTokenVault | USDC → RM, the live ROBOTMONEY token `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (nothing deploys an RM mock). RM's venue is decided (owner, 2026-10-06): the existing Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), funded by the owner with in-range liquidity sized to rmAGENT's first-period cap and with raised observation cardinality before the mainnet run. A restored V4 swap adapter is a later option, not a launch blocker. RM is not yet in config (not yet implemented: core #1491; `config/agent-token-shortlist.json` is still empty) | `contracts/vaults/AgentTokenVault.sol` | set at the mainnet deploy |
+| RwaBasketVault | USDC → deSPXA, a plain basket row priced from its fee 500 pool TWAP | `contracts/vaults/RwaBasketVault.sol` | set at the mainnet deploy |
 
 ### 2.4 Admin and fee recipient
 
@@ -102,7 +104,7 @@
 
 **Notes:**
 - RobotMoneyVault and its adapters are direct (non-proxy) deployments on mainnet. CompoundV3Adapter was compiled with `viaIR: true`; the others were not.
-- VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are currently deployed on devnet with demo seeded state; mainnet deployment is planned per docs/prd.md §11 ("Four-vault demo initiative").
+- VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are deployed to Base mainnet by the publish-contracts CLI (`publish-contracts/`). The demo deploy path is retired.
 - Basket vault mainnet addresses are intentionally excluded here (out of scope); they will be added once they reach production status and mainnet deployment.
 
 ---
@@ -185,7 +187,7 @@ Dust from integer division is swept from `lastActiveIdx`. If total adapter balan
 
 ### 3.7 Exit fee
 
-- Charged on every `withdraw` and `redeem`.
+- Charged on every `withdraw` and `redeem`. The live rmUSDC vault charges 25 bps (0.25%); the ceiling is `MAX_EXIT_FEE_BPS` = 100 (1%).
 - `previewRedeem(shares)` → `gross × (1 − exitFeeBps/10000)` — returns **net** USDC.
 - `previewWithdraw(assets)` → shares required for `assets` **net** — converts net to gross first (`assets × 10000 / (10000 − exitFeeBps)`), then shares.
 - Fee is `safeTransfer`-ed to `feeRecipient` before the net amount goes to the receiver.
@@ -379,23 +381,25 @@ The vault's share token reports `decimals() == 6` (matching USDC). The internal 
 
 Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply == 0` and `totalAssets == 0` has a share price backed only by virtual shares. The seed deposit ensures that real capital anchors the price before any public depositor arrives.
 
-**Minimum seed amount:** 1,000 USDC (1,000 × 10^6 = `1_000_000_000`).
+**Seed amount:** the stage sheet's `SEED_DEPOSIT_USDC` (6-decimal units, must be above 0). The decided production seed is 1 USDC (`1_000_000`), rmUSDC only (runbook D3, 2026-10-01).
+
+**Seed share receiver:** the sheet's `SHARE_RECEIVER_ADDRESS`, passed to the script as `SEED_SHARE_RECEIVER`. It is never zero and never the deployer or admin (the sheet's `ADMIN_ADDRESS` is the deployer, which holds admin until the timelock handover). The deployer holds no seed shares (core 1503, fixed on PR 1505).
 
 **Steps:**
 
 1. Deploy `RobotMoneyVault` (and adapter contracts).
 2. Register at least one active adapter via `addAdapter`.
-3. Approve the vault to spend USDC from the admin/deployer address:
+3. Approve the vault to spend the seed from the deployer address:
    ```solidity
-   USDC.approve(address(vault), 1_000_000_000);
+   USDC.approve(address(vault), 1_000_000);
    ```
-4. Call `vault.deposit(1_000_000_000, adminAddress)` from the admin/deployer account.
-5. Verify `vault.totalAssets() >= 1_000_000_000` and `vault.totalSupply() > 0`.
-6. Only after steps 1–5 are confirmed: open the vault to the public (e.g. increase `tvlCap`, publish the vault address, authorize agents).
+4. Call `vault.deposit(1_000_000, seedShareReceiver)` from the deployer account, so the shares are minted to `SEED_SHARE_RECEIVER`.
+5. Verify `vault.totalAssets() >= 1_000_000 * 9_999 / 10_000`, `vault.totalSupply() > 0`, and `vault.balanceOf(deployer) == 0`.
+6. Only after steps 1–5 are confirmed: open the vault to the public (e.g. increase `tvlCap`, publish the vault address). The deploy authorizes no agent: each depositor authorizes its own.
 
-The seed deposit is not recoverable through normal channels (it is locked as vault shares). Consider it a permanent operational cost of the deployment. The seeding admin receives rmUSDC shares proportional to the seed and can participate in future withdrawals.
+The seed deposit is not recoverable through normal channels (it is locked as vault shares). Consider it a permanent operational cost of the deployment. The seed share receiver holds the rmUSDC shares minted for the seed and can participate in future withdrawals.
 
-**CI enforcement:** `contracts/script/Deploy.s.sol` encodes this runbook step as code: the `run()` (broadcast) entrypoint performs the seed deposit inline after adapter registration, and the new `runInProcessWithSeed()` variant does the same for fork tests. `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) is the fork-level CI gate — it asserts `vault.totalAssets() >= 1_000_000_000` and `vault.totalSupply() > 0` before any public deposit and is wired into the `forge-fork-vault-regressions` job in `.github/workflows/suite-01-02-forge-tests.yml`. (This is the current live-fork gate; ADR-0011 is the target model — merge-time fork tests run against a checked-in golden fixture with a non-blocking nightly live-drift alarm.)
+**CI enforcement:** `contracts/script/DeployVault.s.sol` (the vault stage) encodes this runbook step as code: the `run()` (broadcast) entrypoint performs the seed deposit inline after adapter registration, and the new `runInProcessWithSeed()` variant does the same for fork tests. `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) is the fork-level CI gate — it asserts `vault.totalAssets()` keeps at least 99.99% of the seed, `vault.totalSupply() > 0`, that the receiver holds the seed shares and the deployer holds none, before any public deposit and is wired into the `forge-fork-vault-regressions` job in `.github/workflows/suite-01-02-forge-tests.yml`. (This is the fork gate: the job runs on the Twin chain, a pinned lazy fork of real Base state; ADR-0011 is superseded by the Twin chain, core 1498.)
 
 ---
 
@@ -438,21 +442,33 @@ Access model: `ADMIN_ROLE` is self-administered (its own role-admin). The deploy
 
 **Deposit mechanics**: A user calls `deposit(uint256 amount, uint256[] minSharesPerLeg[])`. The router:
 1. Reads the active weight vector (voted weights if active; otherwise default weights).
-2. Checks VaultRegistry for vault status and router eligibility.
-3. Computes USDC leg amounts: `legAmount[i] = amount × weight[i] / 10000`.
-4. Calls `vault.deposit(legAmount[i], depositor)` for each leg.
-5. Emits `RouterDeposit` per leg and returns arrays of vault addresses and shares minted.
+2. Marks each leg available or skipped (`_availabilityAndAmounts` / `_isDepositable`): a leg is available only when its registry status is `Active` and it is router-eligible.
+3. Splits the full amount across the available legs only, pro rata by bps: `legAmount[i] = amount × weight[i] / availableBps`, where `availableBps` is the sum of the available legs' bps. The rounding remainder goes to the last available leg. Skipped legs get 0.
+4. Calls `vault.deposit(legAmount[i], depositor)` for each available leg (`_executeLeg`).
+5. Emits `RouterDeposit` per deposited leg and returns the shares minted per leg (0 for a skipped leg).
 
-All legs execute atomically; if any leg reverts, the entire deposit reverts (all-or-revert).
+The legs that run execute atomically: if any of them reverts, the entire deposit reverts. No USDC is left with the router and none is returned to the user. If no leg is available, the deposit reverts `NoWeightsSet` and the revert undoes the USDC pull. See "Routing eligibility" below and `docs/architecture.md` §4.2.1.
 
 ### 9.1.2 Weight vectors and governance integration
 
 The router maintains two weight vectors:
 
 - **Voted weights**: Set by `RouterGovernance` on proposal execution via `setWeights(vaults, bps)`. Only one governance proposal active at a time. If the voted vector is active, it is the source of truth.
-- **Default weights**: Admin-set fallback via `setDefaultWeights(vaults, bps)`. Used when no voted proposal is active (`votedWeightsActive = false`). Survives proposal execution unchanged, providing a below-quorum safety fallback (ADR-0002).
+- **Default weights**: Admin-set fallback via `setDefaultWeights(vaults, bps)`. Used when no voted proposal is active (`votedWeightsActive = false`). Survives proposal execution unchanged, providing a below-quorum safety fallback (ADR-0002). Its length must equal `VaultRegistry.routerEligibleCount()`.
 
-The router never deposits into an ineligible vault: before each leg, it checks `VaultRegistry.isRouterEligible(vault)`.
+At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the launch vector with `setWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. Because it is written with `setWeights`, `votedWeightsActive` is true from deploy. rmPROTO, rmAGENT and rmRWA are not in that vector, so each routes 0.
+
+The timelock may set default weights only. Active weights come only from RouterGovernance votes. (Not yet implemented: core #1522. `setWeights` is gated by router `ADMIN_ROLE`, which the timelock also holds after stage 11.)
+
+#### Routing eligibility
+
+A vault is **eligible for routing** only when its `VaultRegistry` status is `Active`, its registry router-eligible flag is set (`VaultRegistry.isRouterEligible`), and its `asset()` is the router's USDC (`PortfolioRouter.isRouterEligibleAndActive`).
+
+- `setWeights`, `setDefaultWeights` and `applyMigrationDefaultWeights` call `_requireActiveAndEligible` for every listed vault, at any bps, 0 included. An ineligible or non-Active vault cannot be listed even at 0 bps, so it receives 0.
+- At deposit time `_availabilityAndAmounts` skips each non-depositable leg and renormalises the full amount pro rata across the remaining legs. Nothing is left with the router or returned to the user. If no leg is depositable, `_depositTo` reverts `NoWeightsSet` and no USDC moves.
+- Per-vault caps do not renormalise: `_executeLeg` reverts `VaultCapExceeded` for an over-cap leg, and the whole deposit reverts.
+- `_executeLeg` re-checks registry status (`VaultNotActive`) and router eligibility (`_requireRouterEligible`) before each deposited leg, as defence in depth.
+- **Known gap:** `_isDepositable` does not read a vault's own deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pause()`, `shutdown`, or `maxDeposit == 0`). A registry-Active, router-eligible vault with deposits paused stays in the available set, its `vault.deposit` reverts, and the whole routed deposit reverts `UsdcLegTransferFailed(vault)`. Not fixed yet.
 
 ### 9.1.3 Caps and guards
 
@@ -462,7 +478,7 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 | Per-vault cap | `setVaultCap(address vault, uint256)` | Per-leg ceiling for a single vault. 0 = uncapped. |
 | Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any leg returns fewer shares than specified. |
 | Asset verification | `VaultAssetMismatch` error | Revert if a vault's `asset()` is not the router's USDC. |
-| Vault status check | `VaultNotActive` error | Revert if any leg is not `Active` in the registry. |
+| Vault status check | `_isDepositable`; `VaultNotActive` error | A leg that is not `Active` in the registry (or not router-eligible) is skipped and its share renormalised. `_executeLeg` reverts `VaultNotActive` only if the status changed between the availability pass and the leg. |
 | Per-leg transfer failure | `UsdcLegTransferFailed(address vault)` error | Wrap a reverting `vault.deposit()` (e.g. a USDC blacklist hit or fee-on-transfer failure) in a named per-leg error so callers can distinguish it from the generic custody check. |
 | Donation-DoS snapshot | `usdcBalanceBefore` balance snapshot | Snapshot the router's USDC balance before pulling the caller's deposit so pre-existing donated USDC cannot trigger a false custody-invariant revert. |
 
@@ -470,8 +486,8 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 
 | Function | Role | Effect |
 |---|---|---|
-| `deposit(uint256 amount, uint256[] minSharesPerLeg)` | anyone | Split amount by active weights, call vault.deposit per leg, return shares per leg. All-or-revert. |
-| `setWeights(address[] vaults, uint256[] bps)` | called by RouterGovernance only | Set voted weight vector. Overwrites current voted weights and sets `votedWeightsActive = true`. |
+| `deposit(uint256 amount, uint256[] minSharesPerLeg)` | anyone | Skip non-depositable legs, split the full amount pro rata across the rest, call vault.deposit per leg, return shares per leg. All-or-revert across the legs that run; reverts `NoWeightsSet` when no leg is depositable. |
+| `setWeights(address[] vaults, uint256[] bps)` | RouterGovernance only (not yet implemented: core #1522; today router `ADMIN_ROLE`) | Set voted weight vector. Overwrites current voted weights and sets `votedWeightsActive = true`. |
 | `clearVotedWeights()` | ADMIN | Deactivate the voted vector; revert to default weights. |
 | `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN | Update fallback weight vector. |
 | `setRouterCap(uint256)` | ADMIN | Set global deposit cap. |
@@ -483,7 +499,7 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 - **Weight normalization**: Both voted and default vectors must sum exactly to `BPS_DENOMINATOR` (10000). `setWeights` and `setDefaultWeights` revert if not.
 - **All-or-revert / custody invariant**: No USDC is permanently stranded in the router. The router snapshots its USDC balance into `usdcBalanceBefore` before pulling the caller's deposit, then after all legs run requires the balance to return to that snapshot — reverting `UsdcCustodyInvariantViolated` if any leg accepted less than its allocated `legAmount`. Because the snapshot is taken before the caller's funds are pulled, any pre-existing donated USDC appears in both the before and after snapshots and cannot trigger a false revert (donation-DoS hardening).
 - **Per-leg transfer failure**: When a single `vault.deposit()` reverts (e.g. a USDC blacklist hit or a fee-on-transfer failure), the router surfaces the named error `UsdcLegTransferFailed(address vault)` rather than the opaque `UsdcCustodyInvariantViolated` custody check, so off-chain handlers and auditors can decode the specific failing leg.
-- **Vault asset consistency**: All weighted vaults must have `asset() == USDC` (the router's configured USDC address). Checked before each deposit.
+- **Vault asset consistency**: All weighted vaults must have `asset() == USDC` (the router's configured USDC address). Checked when a vector is written and again before each deposited leg.
 - **No implicit fees**: The router charges no fees; all fees (exit fees on vaults, protocol fees) are handled at the vault layer.
 
 ---
@@ -492,7 +508,7 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 
 ### 9.2.1 Purpose and MVP scope
 
-`RouterGovernance` is the MVP governance module that controls `PortfolioRouter` weight changes. It creates weight proposals, accepts votes from ADMIN_ROLE-assigned voting power (not token holders; token-holder voting is a future goal), and executes once the voting period ends and quorum is reached after a configured execution delay.
+`RouterGovernance` is the MVP governance module that controls `PortfolioRouter` weight changes. It creates weight proposals, accepts votes from ADMIN_ROLE-assigned voting power (not token holders; there is no token-based governance), and executes once the voting period ends and quorum is reached after a configured execution delay.
 
 **Design constraints** (docs/architecture.md §2.3):
 - Controls router weights only; cannot govern vault internals, agent permissions, or protocol admin operations.
@@ -559,10 +575,10 @@ BasketVault maintains an ordered list of active basket assets. Each asset has:
 - **pool**: DEX pool pairing the asset with USDC (venue-specific).
 - **swapFee**: Fee parameter (e.g. Uniswap V3 fee tier 0.01%, 0.05%, 0.30%, 1%).
 - **adapter**: Optional swap-and-TWAP adapter. `address(0)` falls back to built-in Uniswap V3 routing via `SWAP_ROUTER` (for backward compatibility).
-- **venue**: Human-readable enum (V3, V4, Aerodrome) so governance and monitoring can inspect the DEX choice without decoding the adapter address.
+- **venue**: Human-readable enum (V3, V4 reserved and unused, Aerodrome) so governance and monitoring can inspect the DEX choice without decoding the adapter address.
 - **active**: Flag toggled by ADMIN_ROLE.
 
-**Swap adapters** (per docs/technical/real-four-vault-demo-seams.md §3, issue #553): Subclasses or ADMIN_ROLE can register custom swap adapters to route swaps through alternative DEXes (Uniswap V4, Aerodrome CL, etc.). All adapters implement `IBasketSwapAdapter`, exposing `swap(inputAmount, minOutputAmount)` and `twapPrice(secondsAgo)` for pricing and swap execution.
+**Swap adapters** (per docs/technical/real-four-vault-demo-seams.md §3, issue #553): Subclasses or ADMIN_ROLE can register custom swap adapters to route swaps through alternative DEXes. All adapters implement `IBasketSwapAdapter`, exposing `swap(inputAmount, minOutputAmount)` and `twapPrice(secondsAgo)` for pricing and swap execution. Two ship: `UniswapV3SwapAdapter` and `AerodromeSwapAdapter`. The deploy scripts (`BasketVaultDeployBase`) wire only venue `UniswapV3`; no deploy script registers `AerodromeSwapAdapter`. The Uniswap V4 adapters were deleted on core PR 1505. Restoring a V4 swap adapter is a decided option for RM's venue (not yet implemented; core issue to be filed).
 
 ### 9.3.3 TWAP oracle configuration
 
@@ -593,13 +609,13 @@ Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or low
 | ADMIN_ROLE | Add/remove/activate assets, set TWAP windows, adjust TVL and per-deposit caps, set exit fee (max 1%), set fee recipient, set max slippage, pause deposits, trigger emergency-unwind. |
 | EMERGENCY_ROLE | `emergencyUnwind()` to liquidate the basket in a lossy, fast path (no slippage limit) if normal withdrawal is blocked (oracle failure, liquidity crash). Override allowed only if loss is within `maxLossBps` of the oracle-derived floor. |
 
-### 9.3.6 Subclasses: ProtocolAssetVault, AgentTokenVault, RwaVault
+### 9.3.6 Subclasses: ProtocolAssetVault, AgentTokenVault, RwaBasketVault
 
 | Subclass | Share symbol | Basket composition | Status | Use case |
 |---|---|---|---|---|
-| **ProtocolAssetVault** | rmPROTO | Volatile protocol assets (wETH, cbBTC, wSOL on Base). | Prototype (not audited) | Exposure to Base protocol ecosystem assets. |
-| **AgentTokenVault** | rmAGT | RM governance token and agent-earned tokens. | Prototype (not audited) | Agent incentive and governance participation. |
-| **RwaVault** | rmRWA | Real-world asset tokens. | Prototype (not audited) | Diversification into real-world collateral. |
+| **ProtocolAssetVault** | rmPROTO | Volatile protocol assets (wETH, cbBTC on Base). | Prototype (not audited) | Exposure to Base protocol ecosystem assets. |
+| **AgentTokenVault** | rmAGENT | RM, the live ROBOTMONEY token. Other agent tokens (BNKR, JUNO) are added later through the timelock. | Prototype (not audited) | Agent incentive and governance participation. |
+| **RwaBasketVault** | rmRWA | deSPXA, one plain basket row. | Prototype (not audited) | Diversification into real-world collateral. |
 
 All three subclasses inherit BasketVault behavior and are configured with:
 - Vault name and share symbol.

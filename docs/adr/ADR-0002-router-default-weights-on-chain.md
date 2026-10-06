@@ -1,7 +1,7 @@
 # ADR-0002: Router default weights live on-chain, not derived from the front-end
 
-- **Status:** Accepted
-- **Date:** 2026-05-27
+- **Status:** Accepted (amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-launch-default-weights-and-who-sets-active-weights))
+- **Date:** 2026-05-27 (amended 2026-10-05)
 - **Deciders:** Product owner (recorded reply 2026-05-27)
 - **Related:** `docs/development/open-questions.md` §3.9; `contracts/RouterGovernance.sol`, `contracts/PortfolioRouter.sol`; public allocation surface at `robotmoney.net/allocation`
 
@@ -41,6 +41,40 @@ post-vote fallback.
 Updates to `defaultWeights` flow through the same Safe → Timelock →
 `ADMIN_ROLE` path used elsewhere in the protocol; there is no
 governance vote over the default itself in the MVP.
+
+## Amendment — 2026-10-05: Launch default weights and who sets active weights
+
+Owner decisions of 2026-10-05 (mainnet plan §2.2, §3.1, §3.5):
+
+- **Launch `defaultWeights`** are rmUSDC 9500, rmPROTO 500, rmAGENT 0,
+  rmRWA 0 bps. This records the values the original decision left out of
+  scope ("an ops decision and not recorded here").
+- **The deployer sets them before handover.** They are deploy-time
+  configuration, set before the timelock stage (stage 11), not a
+  governance step.
+- **After handover the timelock sets `defaultWeights` only.** Active
+  weights come only from `RouterGovernance` votes
+  (`docs/technical/governance-isomorphism.md`).
+
+Code state when this amendment was written (`impl/core-contracts`, core
+PR 1505):
+
+- `PortfolioRouter.setWeights` and `setDefaultWeights` are both gated on
+  the same `ADMIN_ROLE`. `DeployTimelock` grants router `ADMIN_ROLE` to
+  the timelock, and `DeployRouterGovernance` grants it to
+  `RouterGovernance`. The timelock can therefore still call `setWeights`
+  directly. The separate weight-setter role that limits the timelock to
+  `defaultWeights` is core 1522 and is **not yet implemented**.
+- `_setDefaultWeights` requires one entry per router-eligible vault, each
+  registered Active and eligible, summing to 10 000 bps. It does not
+  refuse a 0 bps entry. Whether rmAGENT and rmRWA are marked eligible at
+  0 bps or left ineligible is a sheet choice (devops 70, core 1520).
+- The Twin stage sheet on this branch (`deployments/twin-918453/stage-sheet.env`)
+  still carries `ROUTER_WEIGHTS=USDC:6000,PROTO:2500,RWA:1500`; the
+  9500/500/0/0 vector is pending devops 70 and core 1520.
+
+The on-chain source of truth, the fallback rule and the Safe → Timelock
+path for `defaultWeights` are unchanged.
 
 ## Consequences
 

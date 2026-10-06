@@ -13,10 +13,9 @@ and the environment key — see [docs/development/ci-suites.md](../docs/developm
 | # | Root | Owner domain | Environment | CI workflow |
 |---|------|-------------|-------------|-------------|
 | 1–2 | `contracts/test/` | Smart contracts | `anvil` | `suite-01-02-forge-tests.yml` |
-| 5 | `testing/fork-e2e-rust/` | Rust client × Base adapters | `fork` | `suite-05-fork-integration.yml` |
+| 5 | `testing/fork-e2e-rust/` | Rust client × Base adapters | `devnet` / `fork` | `suite-05-fork-integration.yml` |
 | 14 | `testing/smoke-test/` | Devnet fixture library | `devnet` | `suite-14-smoke-test.yml` |
 | 7 | `testing/ethereum-testnet/e2e-rust/` | Rust client × devnet | `devnet` | `suite-07-rmpc-integration.yml` |
-| — | `testing/ethereum-testnet/typescript-sdk/` | TypeScript SDK × devnet | `devnet` | `suite-07-rmpc-integration.yml` |
 | 15 | `testing/doctests/` | SDK doc-examples | `none` | `suite-04-rust-quality.yml` |
 | 10 | `clients/dapp/tests/` | dApp E2E (Playwright) | `devnet` | `suite-10-dapp-e2e.yml` |
 | 8 | `services/explorer-indexer/tests/` | Explorer indexer | `devnet` | `suite-08-explorer-indexer.yml` |
@@ -57,8 +56,8 @@ A branch-coverage gate on `RobotMoneyGateway` is enforced by `check_gateway_cove
 
 **Owner domain:** Rust client (`rmpc`) against already-deployed Base contracts  
 **CI workflow:** [`.github/workflows/suite-05-fork-integration.yml`](../.github/workflows/suite-05-fork-integration.yml)  
-**Environment:** `fork` — Anvil fork of Base (checked-in `--load-state` fixture, or a live `--fork-url` fork)  
-**Required services/secrets:** No CI secret — the merge gate runs offline against the checked-in `testing/fixtures/fork-state/` fixture. `RMPC_FORK_RPC_URL` is optional and non-secret; the flagship scenarios still need a live fork today (current reality → [ADR-0011](../docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md) target).  
+**Environment:** `fork` — the Twin chain, an Anvil pinned lazy fork of real Base (no saved state)  
+**Required services/secrets:** No CI secret is required. The suite starts the Twin fork from the public upstream at one pin per run (`BASE_UPSTREAM_RPC` is an optional paid upstream, never printed). `RMPC_FORK_RPC_URL` names the Twin fork each test forks again (see [ADR-0011](../docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md) update note).  
 **docs/development/ci-suites.md reference:** [Suite 5](../docs/development/ci-suites.md#5-fork-integration-tests-protocol-adapters)
 
 **Run commands:** see [testing/fork-e2e-rust/README.md](fork-e2e-rust/README.md) and [environments.md](../docs/development/environments.md) §2.
@@ -78,7 +77,7 @@ surfaces against real deployed state (not fresh devnet contracts).
 
 **Owner domain:** `smoke-test` crate — the canonical devnet fixture used by suites 7, 8, 10, 11, 12  
 **CI workflow:** [`.github/workflows/suite-14-smoke-test.yml`](../.github/workflows/suite-14-smoke-test.yml)  
-**Environment:** `devnet` — real Geth + Lighthouse Docker Compose stack  
+**Environment:** `devnet` — the Twin chain (pinned lazy anvil fork of real Base)  
 **Required services/secrets:** Docker available on the runner  
 **docs/development/ci-suites.md reference:** [Suite 14](../docs/development/ci-suites.md#14-smoke-test-library)
 
@@ -106,7 +105,7 @@ suites before they pay their own boot cost.
 
 **Owner domain:** `rmpc` binary against a real Geth+Lighthouse devnet  
 **CI workflow:** [`.github/workflows/suite-07-rmpc-integration.yml`](../.github/workflows/suite-07-rmpc-integration.yml)  
-**Environment:** `devnet` — Geth + Lighthouse Docker Compose stack; also an in-process nonce-race stress test (no chain)  
+**Environment:** `devnet` — the Twin chain (pinned lazy anvil fork of real Base); also an in-process nonce-race stress test (no chain)  
 **Required services/secrets:** Docker available on the runner  
 **docs/development/ci-suites.md reference:** [Suite 7](../docs/development/ci-suites.md#7-rust-client-integration-tests)
 
@@ -125,27 +124,6 @@ bash .github/scripts/stress_nonce_race.sh
 Full policy and failure scenarios for `rmpc` against a real devnet: deposit,
 withdrawal, per-agent cap, nonce management, and window-cap enforcement.
 Skill-doc parity and dApp TOML round-trip are also checked here.
-
----
-
-### `testing/ethereum-testnet/typescript-sdk/` — TypeScript SDK × devnet
-
-**Owner domain:** TypeScript SDK integration against a real Geth+Lighthouse devnet  
-**CI workflow:** [`.github/workflows/suite-07-rmpc-integration.yml`](../.github/workflows/suite-07-rmpc-integration.yml)  
-**Environment:** `devnet` — Geth + Lighthouse Docker Compose stack  
-**Required services/secrets:** Docker available on the runner  
-**docs/development/ci-suites.md reference:** [Suite 7](../docs/development/ci-suites.md#7-rust-client-integration-tests)
-
-**Run commands:**
-```bash
-# From testing/ethereum-testnet/typescript-sdk/
-bun install --frozen-lockfile
-bun test
-```
-
-**Product promise covered:**  
-TypeScript SDK calls (block production, minimal deployment, state proofs,
-validator connectivity) work correctly against a live devnet chain.
 
 ---
 
@@ -216,7 +194,7 @@ cargo test --test migrations   # migration idempotency
 cargo test --test idempotency  # block ingestion double-count guard
 cargo test --test rpc_failure  # RPC failure recovery
 
-# Devnet tests (real Geth + Lighthouse required)
+# Devnet tests (Twin chain required)
 cargo test --test fork_indexer  # reorg handling, finality-gated indexing
 
 # Multi-vault and vault registry tests
@@ -236,9 +214,9 @@ removed) against real Geth+Lighthouse fork-choice.
 
 | Symbol | Meaning |
 |--------|---------|
-| `devnet` | Geth + Lighthouse Docker Compose stack (`testing/ethereum-testnet/config/`). Lifecycle owned by the test code. |
+| `devnet` | The Twin chain: a pinned lazy anvil fork of real Base (`scripts/devnet/twin-fork.ts`). Lifecycle owned by the test code. |
 | `anvil` | In-process Anvil EVM. No Docker. |
-| `fork` | Anvil fork of Base — checked-in `--load-state` fixture (offline, no secret) for the CI merge gate, or a live `--fork-url` fork via optional `RMPC_FORK_RPC_URL`. See [ADR-0011](../docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md). |
+| `fork` | The Twin chain (id 918453): a pinned lazy anvil fork of real Base (`anvil --fork-url <upstream> --fork-block-number <pin> --chain-id 918453`), started by `scripts/devnet/twin-fork.ts` (CI: `.github/actions/twin-fork`). Upstream defaults to `https://mainnet.base.org`; `BASE_UPSTREAM_RPC` optionally overrides it. No saved state. History: [ADR-0011](../docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md). |
 | `none` | No chain. Static analysis, pure unit tests, doc checks. |
 
 See [docs/development/ci-suites.md](../docs/development/ci-suites.md) for the full

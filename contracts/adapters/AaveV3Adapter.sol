@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.3 — Vault Adapters (Aave V3 venue)
-//            docs/technical/unified-vault-spec.md §2 (`IPositionAdapter`), §3 (lending retrofit)
 // (See also: docs/prd.md §11.1 — Stable Yield Vault)
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
-import {IPositionAdapter} from "../interfaces/IPositionAdapter.sol";
 import {IAavePool} from "../interfaces/IAavePool.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
@@ -18,18 +16,17 @@ import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 ///      Deployed: 0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea (Base mainnet)
 ///      Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun
 ///
-///      ADR-0010 retrofit: implements BOTH the v1 `IStrategyAdapter` (still
-///      called by the deployed RobotMoneyVault) and the unified-vault
-///      `IPositionAdapter`. The v2 `deploy`/`withdraw` add min-out slippage
+///      Implements the `IStrategyAdapter` called by RobotMoneyVault. The
+///      two-argument `deploy`/`withdraw` overloads add min-out slippage
 ///      floors and a realized-value return; Aave USDC supply/redemption is
 ///      exact (1:1), so the floors are trivially satisfied but still enforced
 ///      (revert `SlippageExceeded` below the floor). `isExact()` returns true.
-contract AaveV3Adapter is IStrategyAdapter, IPositionAdapter {
+contract AaveV3Adapter is IStrategyAdapter {
     using SafeERC20 for IERC20;
 
     /// @notice USDC token address used for deposits and withdrawals.
     /// @dev Stored as `address` so the auto-generated getter satisfies the
-    ///      `IPositionAdapter.USDC()` identity view (returns `address`).
+    ///      `USDC()` identity view (returns `address`).
     address public immutable USDC;
     /// @notice aBasUSDC rebasing token; `balanceOf(this)` returns live underlying USDC.
     IERC20 public immutable A_TOKEN;
@@ -38,6 +35,10 @@ contract AaveV3Adapter is IStrategyAdapter, IPositionAdapter {
     /// @notice Address of the RobotMoneyVault that owns this adapter.
     address public immutable VAULT;
 
+    /// @notice The caller of a mutating function is not the bound `VAULT`.
+    error OnlyVault();
+    /// @notice A min-out slippage floor was breached.
+    error SlippageExceeded();
     /// @notice Constructor passed `address(0)` for one of the immutable addresses.
     error ZeroAddress();
     /// @notice `Pool.withdraw` returned fewer USDC than requested.
@@ -79,7 +80,10 @@ contract AaveV3Adapter is IStrategyAdapter, IPositionAdapter {
         _supply(amount);
     }
 
-    /// @inheritdoc IPositionAdapter
+    /// @notice Min-out variant of `deploy`: reverts `SlippageExceeded` below `minValueOut`.
+    /// @param usdcIn Amount of USDC (6-decimal units) to deploy into the venue.
+    /// @param minValueOut Minimum value the venue position must gain, else revert.
+    /// @return valueAdded Value added to the position, in USDC units.
     function deploy(uint256 usdcIn, uint256 minValueOut)
         external
         onlyVault
@@ -101,7 +105,10 @@ contract AaveV3Adapter is IStrategyAdapter, IPositionAdapter {
         return actual;
     }
 
-    /// @inheritdoc IPositionAdapter
+    /// @notice Min-out variant of `withdraw`: reverts `SlippageExceeded` below `minUsdcOut`.
+    /// @param usdcWanted USDC to withdraw; `type(uint256).max` withdraws everything.
+    /// @param minUsdcOut Minimum USDC that must reach the vault, else revert.
+    /// @return usdcOut USDC actually sent to the vault.
     function withdraw(uint256 usdcWanted, uint256 minUsdcOut)
         external
         onlyVault
@@ -126,37 +133,29 @@ contract AaveV3Adapter is IStrategyAdapter, IPositionAdapter {
         if (usdcOut < minUsdcOut) revert SlippageExceeded();
     }
 
-    /// @inheritdoc IPositionAdapter
-    function totalAssets()
-        external
-        view
-        override(IStrategyAdapter, IPositionAdapter)
-        returns (uint256)
-    {
+    /// @inheritdoc IStrategyAdapter
+    function totalAssets() external view override returns (uint256) {
         return A_TOKEN.balanceOf(address(this));
     }
 
-    /// @inheritdoc IPositionAdapter
+    /// @notice Bytecode-level exactness declaration (monitoring only).
     /// @dev Aave USDC supply/redemption is 1:1 exact. Registration cross-check +
     ///      monitoring only — never a per-call gate.
     function isExact() external pure returns (bool) {
         return true;
     }
 
-    /// @inheritdoc IPositionAdapter
-    function sweepForeignToken(address token)
-        external
-        override(IStrategyAdapter, IPositionAdapter)
-    {
+    /// @inheritdoc IStrategyAdapter
+    function sweepForeignToken(address token) external override {
         if (token == USDC || token == address(A_TOKEN)) {
             revert ForeignTokenQuarantine.TokenIsProtected(token);
         }
         ForeignTokenQuarantine.sweep(token, msg.sender);
     }
 
-    /// @inheritdoc IPositionAdapter
+    /// @inheritdoc IStrategyAdapter
     /// @dev Aave V3 interest accrues continuously in the rebasing aToken balance —
     ///      there are no discrete claimable reward tokens on the USDC supply venue.
     ///      This function is a no-op and always succeeds.
-    function harvestRewards() external override(IStrategyAdapter, IPositionAdapter) {}
+    function harvestRewards() external override {}
 }

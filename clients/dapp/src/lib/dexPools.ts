@@ -4,9 +4,8 @@
  * Typed accessor for the canonical Uniswap V3 pool registry at
  * `config/dex-pools.json` (issue #482). Pool addresses are NEVER hardcoded in
  * TypeScript — this module is the single seam that pulls them from the shared
- * config file and exposes a chain-aware lookup. When the dapp targets the
- * forked-Base devnet (chain id 918453) the `devnet` override map is honored;
- * every other chain id falls back to the `mainnet` map.
+ * config file and exposes a lookup. The config is one map for every chain
+ * (Base mainnet and the Twin chain): there is no per-chain branch.
  *
  * The JSON is imported at build time (resolveJsonModule). Keeping the import in
  * this one module means the rest of the dapp depends only on the typed
@@ -35,35 +34,17 @@ export interface PairMeta {
   readonly quoteDecimals: number;
 }
 
-interface ChainPools {
-  readonly chainId: number;
-  readonly pools: Record<string, PoolConfig>;
-}
-
 interface DexPoolsFile {
   readonly pairs: readonly PairMeta[];
-  readonly mainnet: ChainPools;
-  readonly devnet: ChainPools;
+  readonly pools: Record<string, PoolConfig>;
 }
 
 const pools = rawPools as unknown as DexPoolsFile;
 
-/** Ordered list of the four price-strip pairs (display order). */
+/** Ordered list of the price-strip pairs (display order). */
 export const PRICE_STRIP_PAIRS: readonly PairMeta[] = pools.pairs;
 
-/** Chain id of the forked-Base devnet — selects the devnet override map. */
-export const DEVNET_CHAIN_ID = pools.devnet.chainId;
-
-/**
- * Resolve the pool config for `pairId` on `chainId`. The devnet override map
- * is used only for the devnet chain id; all other chains (mainnet, fork via
- * mainnet fork, etc.) use the mainnet map. Returns `undefined` if the pair is
- * unknown.
- */
-export function resolvePoolConfig(
-  pairId: string,
-  chainId: number | undefined,
-): PoolConfig | undefined {
-  const map = chainId === DEVNET_CHAIN_ID ? pools.devnet.pools : pools.mainnet.pools;
-  return map[pairId];
+/** Resolve the pool config for `pairId`. Returns `undefined` if the pair is unknown. */
+export function resolvePoolConfig(pairId: string): PoolConfig | undefined {
+  return pools.pools[pairId];
 }

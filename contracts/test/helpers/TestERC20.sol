@@ -9,7 +9,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 /// @dev Public, permissionless `mint`/`burn` — TEST FIXTURE ONLY. This contract
 ///      lives under `contracts/test/` and is never deployed by production
 ///      scripts. Production deploys bind the gateway to canonical Base USDC
-///      via the `USDC_ADDRESS` env var (see `script/Deploy.s.sol`).
+///      as a constant (see `script/DeployVault.s.sol`).
 contract TestERC20 is ERC20 {
     constructor() ERC20("Test USDC", "tUSDC") {}
 

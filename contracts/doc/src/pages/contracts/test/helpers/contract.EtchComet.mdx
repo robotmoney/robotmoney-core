@@ -1,0 +1,70 @@
+---
+title: "EtchComet"
+---
+
+# EtchComet
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/helpers/VenueMocks.sol)
+
+## Constants
+
+### usdc
+
+```solidity
+IERC20 public immutable usdc;
+```
+
+## State Variables
+
+### balanceOf
+
+```solidity
+mapping(address => uint256) public balanceOf;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+
+<a id="supply-address-uint256"></a>
+
+### supply
+
+```solidity
+function supply(address asset, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+
+<a id="withdraw-address-uint256"></a>
+
+### withdraw
+
+```solidity
+function withdraw(address asset, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+

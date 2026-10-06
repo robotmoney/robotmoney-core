@@ -1,0 +1,93 @@
+# Canonical: core issue 1499, core S3 (1485), S5 (1487), 1493.
+#
+# There is ONE deploy driver: the publish-contracts CLI (bun publish-contracts/src/cli.ts). This workflow
+# runs the offline checks of the data it reads (scripts/deploy/stage-table.json, the manifest rules and the
+# stage tools) on every pull request. The Twin chain job runs the CLI (publish, then verify) against a Twin
+# chain RPC (918453) on demand. The router, basket and timelock role proofs are labels of the one verifier.
+name: core-stages
+
+on:
+  pull_request: {}
+  push:
+    branches: ["releases-*"]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      twin_rpc_url:
+        description: "Twin chain (918453) RPC URL. Leave empty to run the offline job only."
+        required: false
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  core-stages-offline:
+    name: core-stages-offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Stage table, manifest rules and config-check fixtures
+        run: |
+          set -euo pipefail
+          bun test scripts/deploy scripts/ci 2>&1 | tee core-stages.log
+          grep -Eq '^ *[1-9][0-9]* pass' core-stages.log || { echo "zero tests passed" >&2; exit 1; }
+
+  publish-contracts-tests:
+    name: publish-contracts-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/publish-contracts-setup
+      - name: Typecheck
+        working-directory: publish-contracts
+        run: bun x tsc --noEmit
+      - name: Unit tests (stub forge and cast, no chain)
+        working-directory: publish-contracts
+        run: |
+          set -euo pipefail
+          bun test --timeout 60000 2>&1 | tee ../publish-contracts-tests.log
+          grep -Eq '^ *[1-9][0-9]* pass' ../publish-contracts-tests.log || { echo "zero tests passed" >&2; exit 1; }
+
+  core-stages-twin:
+    name: core-stages-twin-chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.twin_rpc_url != '' }}
+    env:
+      CI_CLASS: system-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      # Throwaway keystores, the committed stage sheet, gas and USDC for the deployer, then
+      # `publish` (libs through the timelock handover and the real Safe) and `verify`.
+      - name: Publish and verify on the Twin chain with the one driver
+        uses: ./.github/actions/twin-publish
+        with:
+          rpc-url: ${{ inputs.twin_rpc_url }}
+          verify: "true"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-stages-run
+          path: |
+            ${{ env.TWIN_MANIFEST_DIR }}
+            ${{ env.TWIN_VERIFY_LABELS }}

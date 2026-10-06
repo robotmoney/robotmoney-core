@@ -4,9 +4,9 @@ title: "DeployAssertionsTest"
 
 # DeployAssertionsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2228138a23f013f052bacc1c16a4fcaa10145d37/contracts/test/fv/DeployAssertions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/fv/DeployAssertions.t.sol)
 
-**Inherits:** Test
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
 
 ## Constants
 
@@ -209,21 +209,5 @@ when they match. Pins the equality check the fix added.
 
 ```solidity
 function test_ORA3_addAssetRevertsOnPoolMismatch() public;
-```
-
-<a id="test_ora6_chronicleadapterdecimalsassumptionisdocumented"></a>
-
-### test_ORA6_chronicleAdapterDecimalsAssumptionIsDocumented
-
-ORA-6 (HOLDS — 🟡 TRUSTED, F-17): documents the current decimals
-trust assumption. The ChronicleOracleAdapter hardcodes the
-1e12 = 10^(18-6) scale, correct only while the priced asset is
-18-dec and USDC is 6-dec. This passing static-guard pins that the
-hardcoded constant is still present (so a silent decimals change is
-caught) and marks the seam where #966 would add the dynamic
-`decimals()==18 && usdc.decimals()==6` constructor assertion.
-
-```solidity
-function test_ORA6_chronicleAdapterDecimalsAssumptionIsDocumented() public view;
 ```
 

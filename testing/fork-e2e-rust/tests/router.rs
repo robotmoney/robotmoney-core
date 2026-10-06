@@ -883,10 +883,7 @@ fn agent_gateway_router_deposit() {
     // Policy: active=true, validUntil = now + 3600, maxPerPayment = deposit_amount,
     // maxPerWindow = deposit_amount, shareReceiver = owner.address,
     // allowedDestinations = [router].
-    let now_secs: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
     let policy = IGateway::AgentPolicy {
         active: true,
         validUntil: now_secs + 3600,

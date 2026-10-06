@@ -1,7 +1,9 @@
 /**
  * Playwright globalSetup. Boots the smoke-test full-stack devnet
- * unconditionally — every dapp E2E spec runs against a real
- * Geth+Lighthouse chain with the gateway deployed and the dapp
+ * unconditionally — every dapp E2E spec runs against the Twin chain
+ * (id 918453, a pinned lazy fork of real Base state made with anvil; the CI
+ * job starts it and exports TWIN_RPC_URL, which the harness reuses) with the
+ * gateway deployed and the dapp
  * container built with the deployed runtime hash pinned. There is no
  * fast-path local dev-server mode; all specs see a prod-bit-identical
  * dapp bundle.
@@ -14,7 +16,8 @@
  *     stored in `DEVNET_ENDPOINTS_FILE`. Specs read that file via
  *     `helpers/devnet.ts`.
  *   - globalTeardown kills the child process; the binary's Drop runs
- *     `docker compose down` on both compose stacks.
+ *     `docker compose down` on the dapp stack and stops a Twin fork the
+ *     binary started (a fork reused through TWIN_RPC_URL stays up).
  *
  * Canonical: docs/development/smoke-test-design.md, issue #245.
  */
@@ -36,10 +39,8 @@ const REQUIRED_KEYS = [
   "vault_addr",
   "usdc_addr",
   "agent_addr",
-  "admin_addr",
   "pauser_addr",
   "share_receiver_addr",
-  "admin_private_key",
   "pauser_private_key",
   "agent_private_key",
   "gateway_runtime_hash",
@@ -50,7 +51,6 @@ const REQUIRED_KEYS = [
   "router_addr",
   // Issue #477: governance fresh-account E2E.
   "governance_addr",
-  "rm_token_addr",
   // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
   "ic_policy_addr",
   "consensus_receipt_addr",
@@ -172,7 +172,7 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     throw err;
   }
 
-  const endpoints: Record<RequiredKey, string | number> = {
+  const endpoints: Record<RequiredKey | "admin_addr" | "admin_private_key", string | number> = {
     rpc_url: raw.rpc_url,
     dapp_url: raw.dapp_url,
     explorer_api_url: raw.explorer_api_url,
@@ -181,10 +181,13 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     vault_addr: raw.vault_addr,
     usdc_addr: raw.usdc_addr,
     agent_addr: raw.agent_addr,
-    admin_addr: raw.admin_addr,
+    // One deployment scheme (core 1488): the deployer holds no role after handover.
+    // `admin_*` is now a plain funded EOA (the harness USDC holder) that specs use as a
+    // depositor. Specs that need a real admin must drive govern rows through the Safe.
+    admin_addr: raw.harness_usdc_holder_addr,
+    admin_private_key: raw.harness_usdc_holder_private_key,
     pauser_addr: raw.pauser_addr,
     share_receiver_addr: raw.share_receiver_addr,
-    admin_private_key: raw.admin_private_key,
     pauser_private_key: raw.pauser_private_key,
     agent_private_key: raw.agent_private_key,
     gateway_runtime_hash: raw.gateway_runtime_hash,
@@ -195,7 +198,6 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     router_addr: raw.router_addr,
     // Issue #477: governance fresh-account E2E.
     governance_addr: raw.governance_addr,
-    rm_token_addr: raw.rm_token_addr,
     // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
     ic_policy_addr: raw.ic_policy_addr,
     consensus_receipt_addr: raw.consensus_receipt_addr,

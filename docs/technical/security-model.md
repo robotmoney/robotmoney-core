@@ -60,7 +60,7 @@ go through explicit approval.
 | Storage collision via upgradeable proxies | All contracts must be direct non-proxy deployments. Upgradeable proxy patterns are prohibited. |
 | Self-destruct / `SELFDESTRUCT` ejection | No `selfdestruct` or `CREATE2`-replace pattern may be present in any contract. Post-Cancun semantics reduce this risk but the prohibition stands. |
 | Delegatecall to attacker-controlled target | `delegatecall` is prohibited in vault and adapter contracts. Any future use must be reviewed explicitly and justified in the PR. |
-| Adapter codehash allowlist bypass via delegatecall proxy | Approved RobotMoneyVault strategy adapters must be direct (non-proxy) deployments whose runtime bytecode contains no `DELEGATECALL` opcode (`0xF4`). This is enforced at deploy time by `AdapterBytecodeGuard.requireNoDelegatecall` in `contracts/script/Deploy.s.sol::_approveAdapter` and regression-tested in `contracts/test/AdapterDelegatecallGuard.t.sol` against every currently approved adapter (Aave V3, Compound V3, Morpho, Passthrough). Any future proxy-pattern adapter must instead pin both proxy and implementation codehashes in the allowlist, and the policy update must ship in the same PR. |
+| Adapter codehash allowlist bypass via delegatecall proxy | Approved RobotMoneyVault strategy adapters must be direct (non-proxy) deployments whose runtime bytecode contains no `DELEGATECALL` opcode (`0xF4`). This is enforced at deploy time by `AdapterBytecodeGuard.requireNoDelegatecall` in `contracts/script/DeployVault.s.sol::_approveAdapter` and regression-tested in `contracts/test/AdapterDelegatecallGuard.t.sol` against every currently approved adapter (Aave V3, Compound V3, Morpho, Passthrough). Any future proxy-pattern adapter must instead pin both proxy and implementation codehashes in the allowlist, and the policy update must ship in the same PR. |
 | Uninitialized storage / proxy initializer | Contracts must use constructors only. Initializer patterns are prohibited. |
 | Recursive self-liquidation (Euler-class) | No lending or liquidation logic may be present in the vault. This constraint must be re-evaluated if the product shape changes. |
 
@@ -70,7 +70,7 @@ go through explicit approval.
 
 | Attack | Required control |
 |---|---|
-| ERC-4626 inflation / first-depositor share-price attack | `RobotMoneyVault._decimalsOffset()` must return `18`, configuring OZ virtual shares to `10^18`. The deploy runbook must require a seed deposit of ≥ 1,000 USDC before the vault is opened to the public. This must be verified in CI fork tests. **CI coverage:** `Deploy.s.sol` includes a mandatory seed deposit step (`SEED_DEPOSIT_AMOUNT = 1_000_000_000`) in `run()` and `runInProcessWithSeed()`; `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) asserts `vault.totalAssets() >= 1_000_000_000` and `vault.totalSupply() > 0` before any public deposit; this test is wired into the `forge-fork-vault-regressions` CI job in `suite-01-02-forge-tests.yml`. |
+| ERC-4626 inflation / first-depositor share-price attack | `RobotMoneyVault._decimalsOffset()` must return `18`, configuring OZ virtual shares to `10^18`. The deploy runbook must require a seed deposit of ≥ 1,000 USDC before the vault is opened to the public. This must be verified in CI fork tests. **CI coverage:** `DeployVault.s.sol` (the vault stage) includes a mandatory seed deposit step (`SEED_DEPOSIT_AMOUNT`) in `run()` and `runInProcessWithSeed()`; `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) asserts `vault.totalAssets() >= 1_000_000_000` and `vault.totalSupply() > 0` before any public deposit; this test is wired into the `forge-fork-vault-regressions` CI job in `suite-01-02-forge-tests.yml`. |
 | Donation-to-reserves bypass (Euler/Venus class) | `totalAssets()` must be defined and documented to prevent direct ERC-20 transfer manipulation. The accounting model must be published and verified via fork tests that show a large direct USDC donation does not materially advantage a subsequent depositor. |
 | Supply-cap bypass via direct transfer | `tvlCap` must be enforced on the deposit path. `totalAssets()` accounting must be shown to not allow a direct-transfer-inflated cap bypass. |
 | Per-deposit-cap bypass via splitting | `perDepositCap` is per-call by design for rate-shaping, not anti-Sybil. This is an accepted limitation; it must be documented in the public risk disclosure. |
@@ -86,7 +86,7 @@ go through explicit approval.
 | Attack | Required control |
 |---|---|
 | Single-EOA admin compromise | No EOA may hold `ADMIN_ROLE` directly on any contract. `ADMIN_ROLE` must be held exclusively by the `TimelockController`. Agent and keeper roles must be separated from `ADMIN_ROLE`. |
-| PROPOSER_ROLE held by a plain EOA | The `TimelockController` PROPOSER_ROLE and CANCELLER_ROLE must be held by a Safe multisig with a minimum threshold of 2-of-N signers. EXECUTOR_ROLE should be open (`address(0)`) so any address can execute an already-delayed, already-authorized operation after the delay; if a restricted executor is used, it must be a Safe with threshold ≥ 2 and the liveness tradeoff must be documented. `DeployTimelock.s.sol` must verify at deploy time that every Safe address has deployed code and `getThreshold() >= 2`. The Safe address, threshold, executor policy, and canceller policy must be recorded in this document at deploy time. |
+| PROPOSER_ROLE held by a plain EOA | The `TimelockController` PROPOSER_ROLE and CANCELLER_ROLE must be held by a Safe multisig with a minimum threshold of 2-of-N signers. EXECUTOR_ROLE should be open (`address(0)`) so any address can execute an already-delayed, already-authorized operation after the delay; if a restricted executor is used, it must be a Safe with threshold ≥ 2 and the liveness tradeoff must be documented. `DeployTimelock.s.sol` must verify at deploy time that every Safe address has deployed code and `getThreshold() >= 2`. The Safe address, threshold, executor policy, and canceller policy must be recorded in this document at deploy time (§4.1). **Decided policy (owner, 2026-10-05):** proposer and canceller are the Safe (threshold ≥ 2); executor is open (`address(0)`); the timelock has no admin (`admin = address(0)`). (Not yet implemented: core #1521. `DeployTimelock.s.sol` on this branch still sets `executors = [safe]`.) |
 | `ADMIN_ROLE` self-grant escalation | `ADMIN_ROLE` is its own admin by design. All role changes must route through the `TimelockController`. The Safe multisig must enforce quorum independently. |
 | Timelock bypass | A `TimelockController` must hold `ADMIN_ROLE` on all governed contracts. The production delay for high-risk operations must be ≥ 48 hours; any lower-delay operation class must be explicitly enumerated with its rationale, maximum authority, and affected functions. Admin operations must route through `schedule → delay → execute`; direct `ADMIN_ROLE` calls from any address must revert with `AccessControlUnauthorizedAccount`. The deployed timelock address, min delay, proposers, executors, cancellers, pending operations, and operation salts must be verifiable via `rmpc get-timelock` and the dapp timelock panel. |
 | Pause-key abuse (denial of deposit) | The pause role must be separable from `ADMIN_ROLE`. Pause must halt deposits but must not be able to move funds. The pause role should be held by a lower-quorum guardian to allow fast response; the unpause role must require `ADMIN_ROLE` through the timelock. |
@@ -97,6 +97,21 @@ go through explicit approval.
 | Multisig social engineering (Drift-class) | A signer playbook must be published and followed. Signers must independently simulate the operation before approving, review the calldata diff against the expected effect, and meet a minimum deliberation time. No signer may approve on the same device as the proposer. |
 | Signer-device compromise | All Safe signers must use hardware wallets. Software key signing is prohibited for any `ADMIN_ROLE` or `PROPOSER_ROLE` operation. |
 | Role separation drift | At deploy and at every admin operation, an off-chain assertion must confirm that admin, pause, emergency, agent, proposer, canceller, and executor authorities satisfy their documented separation rules. No account may hold more than one of gateway `ADMIN_ROLE`, `PAUSER_ROLE`, or `AGENT_ROLE`. |
+
+### 4.1 Deploy-time governance record
+
+Fill this table at the mainnet deploy from the stage 11 manifest and the stage 12 verifier output. Until then every value is a placeholder.
+
+| Item | Decided policy | Deployed value (Base 8453) |
+|---|---|---|
+| Safe address (SafeL2 v1.4.1, canonical factory) | Holds `PROPOSER_ROLE` and `CANCELLER_ROLE` | _TBD at deploy_ |
+| Safe owners and threshold | Three independent owner keys, threshold 2 | _TBD at deploy_ |
+| Timelock address and `getMinDelay()` | At least 172800 s on 8453 | _TBD at deploy_ |
+| Executor policy | Open (`address(0)`) (not yet implemented: core #1521) | _TBD at deploy_ |
+| Canceller policy | The Safe only | _TBD at deploy_ |
+| Gateway agents authorized by the deploy | None (`AGENT_ADDRESSES=none`, see §13) | _TBD at deploy_ |
+
+Deploy-time configuration (voting power, quorum, setters, eligibility, router default weights, at launch rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps) is set by the deployer before stage 11. Stage 13 holds only the basket vault deposit unpause operations, one timelock operation per vault (not yet implemented: core #1520; `publish-contracts/src/govern.ts` still lists the older 13-row set).
 
 ---
 
@@ -114,10 +129,7 @@ go through explicit approval.
 ### 5.1 BasketVault TWAP configuration (issue #451)
 
 `BasketVault` is the first contract in the codebase to consume a DEX price
-source. (Planned evolution: under `docs/adr/ADR-0010-unified-vault-architecture.md`
-(Proposed), TWAP/Chronicle pricing moves from the vault into per-asset
-`AssetPositionAdapter` contracts; the controls below carry over as adapter
-requirements.) The manipulation-resistance posture is:
+source. The manipulation-resistance posture is:
 
 - **Price source.** Uniswap V3 `IUniswapV3Pool.observe()` returning the
   cumulative tick over the configured per-asset window. The arithmetic-mean
@@ -178,12 +190,13 @@ requirements.) The manipulation-resistance posture is:
 
 | Attack | Required control |
 |---|---|
-| Flash-loan voting takeover (Beanstalk-class) | When `$RM` / `veRM` governance ships, vote weight must be determined by a snapshotted or vote-escrowed balance, not a spot balance. Flash-loan acquisition of voting power must be provably ineffective. |
-| Same-block propose-and-execute | All governance execution must include a mandatory delay between proposal and execution. This applies to both the `TimelockController` and any future token-governance module. |
-| Bribery / vote-buying markets | Acknowledged risk class. The governance design must document its stance on vote markets before the governance token ships. |
+| Flash-loan voting takeover (Beanstalk-class) | There is no token-based governance. Voting power is admin-assigned and read at the proposal snapshot block, so no token balance, spot or borrowed, can buy voting power. |
+| Same-block propose-and-execute | All governance execution must include a mandatory delay between proposal and execution. This applies to both the `TimelockController` and `RouterGovernance`. |
+| Bribery / vote-buying markets | There is no governance token, so voting power cannot be bought on a market. The residual risk is a voter with admin-assigned power being paid off-chain; `ADMIN_ROLE` can set that voter's power to 0 through the timelock. |
 | Treasury drain via malicious proposal | Treasury operations must be gated by the multisig-backed timelock. A treasury-drain proposal must be detectable and cancellable within the timelock delay window. |
-| Admin-weighted MVP vote capture | The current RouterGovernance module uses admin-assigned voting power. Until token-holder voting ships, voting-power assignment, quorum changes, voting-period changes, execution-delay changes, and proposal creation must be treated as privileged configuration and routed through the admin timelock. Ordinary vote casting and post-vote execution follow RouterGovernance's own voting period and execution delay; they must not grant authority over vault internals, fees, adapters, or agent policies. |
+| Admin-weighted MVP vote capture | The RouterGovernance module uses admin-assigned voting power, and there is no token-based governance. Voting-power assignment, quorum changes, voting-period changes, execution-delay changes, and proposal creation must be treated as privileged configuration and routed through the admin timelock. Ordinary vote casting and post-vote execution follow RouterGovernance's own voting period and execution delay; they must not grant authority over vault internals, fees, adapters, or agent policies. |
 | Router-weight governance parameter whiplash | Quorum threshold, voting period, execution delay, and fallback behavior must be bounded by immutable or timelocked minimums before mainnet scale. The dapp and `rmpc get-governance` must surface the active parameters before any vote or weight execution. |
+| Timelock overriding voted router weights | The timelock may set router `defaultWeights` only (`setDefaultWeights`). Active weights come only from RouterGovernance votes through `setWeights`. (Not yet implemented: core #1522. `setWeights` is gated by router `ADMIN_ROLE`, which the timelock also holds after stage 11.) |
 | MEV sandwich on rebalance | `rebalance()` must enforce a throttle (minimum interval, maximum bps per call). Large rebalances must use private orderflow or commit-reveal to prevent sandwich extraction. The acceptable sandwich loss threshold must be documented. |
 | MEV sandwich on user deposit/withdraw | Vault deposits and withdrawals must move USDC ↔ shares at internally computed ratios with no DEX slippage surface. Any future bucket-B/C leg that touches DEX liquidity must specify and enforce a slippage bound. |
 | JIT liquidity / inspection-and-front-run | The share-price computation must not expose a profitable front-run surface. This must be verified in the economic-model audit before bucket-B/C ships. |
@@ -195,7 +208,7 @@ requirements.) The manipulation-resistance posture is:
 | Attack | Required control |
 |---|---|
 | Pre-0.8 integer overflow inheritance | All contracts must use Solidity ≥0.8. OZ dependency versions must be pinned in `foundry.toml` / `package.json`. Any dependency upgrade requires a PR with an explicit compatibility review. |
-| Unverified bytecode | All production contracts must be verified on BaseScan within one hour of deployment. The verified source must match the tagged commit in this repository. **CI gate implemented** (issue #662): `.github/workflows/deploy-contracts.yml` runs `forge script --broadcast --verify` and then calls `scripts/assert-basescan-verified.sh` for every deployed address, blocking the deploy job until all contracts are source-verified or the 3600 s timeout expires. |
+| Unverified bytecode | All production contracts must be verified on BaseScan within one hour of deployment. The verified source must match the tagged commit in this repository. Deployment goes through the publish-contracts workflow in the devops repo (the only deploy path), and its verifier checks source verification for every deployed address before the run is accepted. |
 | Compromised npm/cargo dependency | `cargo audit`, npm/Bun dependency audit, and lockfile-integrity checks must run in CI and block on high-severity findings. Solidity, Rust, JS, and GitHub Actions dependencies must be pinned to exact versions or immutable SHAs. Any dependency update requires an explicit review comment in the PR. |
 | Compiler-bug exposure | Before each production deployment, the Solidity known-bug list for the compiler version in use must be reviewed and any applicable bugs documented and addressed. |
 | Adapter target contract upgrade | Compound v3 and Aave v3 are upgradeable by their own governance. This is an accepted upstream-trust assumption. A monitoring process must alert on upstream governance proposals that affect our adapter interfaces. Implemented by the governance-proposal monitor — see [docs/technical/upstream-monitoring-runbook.md](./upstream-monitoring-runbook.md#governance-proposal). |
@@ -274,7 +287,8 @@ This section maps onto `docs/architecture.md` §15.
 
 | Attack | Required control |
 |---|---|
-| Deploy-key compromise pushes a malicious contract | Deploy artifacts must match a tagged, reviewed commit. BaseScan verification must complete within one hour of deploy. At least one second reviewer must sign off on the deploy before execution. **CI gate implemented** (issue #662): `.github/workflows/deploy-contracts.yml` uses a GitHub Actions `environment` requiring sign-off before execution, and asserts BaseScan verification within 3600 s. |
+| Deploy-key compromise pushes a malicious contract | Deploy artifacts must match a tagged, reviewed commit. BaseScan verification must complete within one hour of deploy. At least one second reviewer must sign off on the deploy before execution. Deployment goes through the publish-contracts workflow in the devops repo, which uses a GitHub Environment with required reviewers (sign-off before execution), and its verifier checks source verification. |
+| Deploy-time protocol agent | The deploy authorizes no gateway agent, and `AGENT_ADDRESSES=none` at the stage 11 handover. An agent belongs to a depositor: the depositor authorizes it through `commitAuthorization` and `revealAuthorization` and owns its policy. Agent keys hold no admin or pause authority. (Not yet implemented: `DeployGateway.s.sol` still reads `AGENT_ADDRESS` and calls `authorizeAgent` at stage 5; core issue to be filed.) |
 | Verified-source / deployed-bytecode mismatch | All contracts must be verified on BaseScan. The CI deploy pipeline must assert verification before closing the deploy job. **CI gate implemented** (issue #662): `scripts/assert-basescan-verified.sh` polls the BaseScan `getsourcecode` API for each deployed address and exits non-zero if any contract is unverified when the timeout is reached. |
 | Secret leak via repo | `.gitignore` must exclude all `.env`, keystore, and credential files. CI must run a secrets-scanning step on every PR. |
 | CI runner compromise injecting deploy artifact | Deploy jobs must run on pinned, hardened runners. Production deploys must require explicit human approval in the CI pipeline. |

@@ -7,38 +7,15 @@
 # The matrix shards by exit-fee tier via the EXIT_FEE_BPS env var. Anvil only —
 # no Docker, no devnet.
 #
-# WHERE THE demo-tvl JOB WENT (issue #1371)
-# This suite used to carry a second job, `demo-tvl-full-stack`, whose only step
-# was `cargo test -p smoke-test --release --test full_stack_demo_tvl --
-# --test-threads=1 --nocapture`. That is the *identical* cargo invocation on the
-# *identical* test binary already run by the `full_stack_demo_tvl` row of
-# suite-14's devnet matrix (.github/workflows/suite-14-smoke-test.yml), under
-# identical triggers (`pull_request: branches: [dev]` + `push: [dev]`), so every
-# PR into dev paid for the same devnet bring-up twice. Measured on dev commit
-# 44299b40: demo-tvl-full-stack 45m51s (job 103087822627) alongside
-# smoke-test-devnet-full_stack_demo_tvl 46m56s (job 103087891903), both green,
-# both logging `test result: ok. 2 passed`.
-#
-# The suite-14 row is the one kept because it strictly dominates: it routes
-# through .github/scripts/cargo_test_require_executed.sh (so a zero-collected
-# run fails loudly instead of reporting a false green), pre-pulls the chain
-# images off the boot critical path, and uploads the smoke-test log artifact.
-# The job removed here had none of those. Host bun is NOT needed — the dapp
-# bundle is built inside docker-compose.dapp.yaml, which is why the suite-14 row
-# has always passed without oven-sh/setup-bun.
-#
-# The file name and workflow name keep the `demo-tvl` token on purpose: suite
-# numbering is referenced by path from .github/workflows/suite-21-nightly.yml's
-# dispatch list, docs/development/ci-suites.md §19, and
-# docs/technical/testcode-removal-seams.md §2.5. Renaming is churn with no
-# signal value; this comment and ci-suites.md §19 carry the truth instead.
-#
+# DEMO-TVL MATRIX (removed — core 1488)
+#    The full_stack_demo_tvl smoke test depended on demo depositor seeding, which the
+#    one deployment scheme deletes. Vault TVL on stage comes from the real seed and
+#    the govern matrix, not from seeded depositors.
+
 # ACTIVATION HISTORY
 # - erc4626-precondition: activated in issue #814 — ERC4626PreconditionChecks.t.sol
 #   created and `if: false` removed.
-# - demo-tvl: activated in issue #804 — full_stack_demo_tvl.rs exists; bun runner
-#   dep resolved via oven-sh/setup-bun@v2. Removed in issue #1371 as an exact
-#   duplicate of suite-14's `full_stack_demo_tvl` matrix row (see above).
+# - demo-tvl: removed in core 1488 with demo seeding.
 
 name: erc4626-demo-tvl-matrix
 

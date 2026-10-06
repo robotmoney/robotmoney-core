@@ -5,7 +5,7 @@ description: "Shared chain-identity check and strict env readers for every deplo
 
 # ExpectedChainGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/script/ExpectedChainGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/ExpectedChainGuard.sol)
 
 **Inherits:** Script
 
@@ -42,7 +42,9 @@ uint256 internal constant BASE_MAINNET_CHAIN_ID = 8453;
 
 <i>
 
-Canonical Base USDC (FiatTokenProxy).
+Canonical Base USDC (FiatTokenProxy). A constant on every chain: the Twin
+chain carries real USDC from its Base snapshot, and a mock token fails the
+code-hash check. No script reads a USDC address from the environment.
 
 </i>
 
@@ -51,27 +53,6 @@ address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 ```
 
 ## Functions
-
-<a id="_requirecanonicalusdc-address"></a>
-
-### _requireCanonicalUsdc
-
-<i>
-
-On chain id 8453 the USDC a script is given must be the canonical Base USDC.
-Other chains (the Twin chain, anvil, forge tests) accept the address they are given.
-
-</i>
-
-```solidity
-function _requireCanonicalUsdc(address usdc) internal view;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| usdc | `address` |  |
 
 <a id="_requireexpectedchain-string"></a>
 

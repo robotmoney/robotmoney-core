@@ -5,7 +5,7 @@
 //! - `--full-stack`
 //! - `--dapp-port`
 //! - endpoint summary output
-//! - Ctrl-C teardown of both compose stacks
+//! - Ctrl-C teardown of the dapp compose stack and the Twin fork the CLI started
 //!
 //! The existing `fixture_meta` suite covers the chain fixture itself. This
 //! file covers the CLI entrypoint around it.
@@ -21,19 +21,16 @@ use std::time::{Duration, Instant};
 use smoke_test::{locate_repo_root, prerequisites_available};
 use test_utils::pick_free_port;
 
-// CI devnet chain-container readiness is reproducibly ~13 min (vs the 60–120s the
-// boot message claims). Adding the dapp stack build (~3.5 min) and 4-depositor
-// seeding (~3 min) pushes total boot to ~19.5–20 min, which made the old 20-min
-// budget too tight right as seeding finished — the boot completes, the budget was
-// the limiter. 30 min matches the larger budgets the sibling full-stack jobs
-// already use. The deeper "why is chain readiness so slow" fix is tracked in #988.
+// The Twin fork is ready in about a minute once the upstream answers. The dapp stack image build
+// (about 3.5 minutes) and the four-vault publish run dominate. 30 minutes matches the budgets the
+// sibling full-stack jobs use, so a slow runner or a rate-limited upstream does not flake this test.
 const BOOT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[test]
 fn full_stack_cli_boots_and_tears_down() {
     if !prerequisites_available() {
-        eprintln!("[cli_meta] docker/forge/cast not on PATH; skipping.");
+        eprintln!("[cli_meta] anvil/bun/forge/cast not on PATH; skipping.");
         return;
     }
 
@@ -88,15 +85,12 @@ fn full_stack_cli_boots_and_tears_down() {
         &log_path,
         &[
             "CLI starting",
-            "chain startup config:",
-            "chain RPC ready; waiting for EL/CL block production",
-            "chain EL/CL stack ready",
+            "Twin chain ready:",
             "dapp startup config:",
             "full stack ready",
             "shutdown reason=ctrl-c tearing down stacks",
         ],
     );
-    assert_no_containers_with_prefix("eth-");
     assert_no_containers_with_prefix("dapp-");
 }
 

@@ -1,5 +1,9 @@
 # ADR — Demo seeding seam map (seed-script, dapp-balance, RM-token, faucet)
 
+> **Historical.** A scout report from before the one-deployment-scheme work. The demo contracts, stubs and scripts it names are deleted. It does not describe shipped code.
+>
+> **Demo path retired.** `DemoBasketToken`, `DeployRmToken` and `DeployDemoExtraVaults` are deleted. The RM test token contract is deleted too (core 1489): RM is the live ROBOTMONEY token on Base (`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`), and the faucet no longer drips RM. Contracts are deployed only by the publish-contracts CLI (`publish-contracts/`).
+
 > Scope: dev-scout report for issue #472, covering the **Demo seeding** phase
 > of the implementation plan. This document is documentation only: no seed
 > script, dapp balance, RM-token, or faucet behaviour is introduced or

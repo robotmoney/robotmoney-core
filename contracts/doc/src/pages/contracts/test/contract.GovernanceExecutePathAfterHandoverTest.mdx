@@ -5,7 +5,7 @@ description: "R7's two halves, proved on one topology built the way the deploy s
 
 # GovernanceExecutePathAfterHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9754a452dda1133d32f6202ee22479b307098a20/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/47813c6ce325a410eae924f85ab4c0cc53db31a1/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
 
 **Inherits:** Test
 
@@ -32,9 +32,9 @@ Fork test. The Safe that drives the timelock is the one stage now
 runs (issue #1447): a SafeProxy created through the canonical
 SafeProxyFactory on the canonical SafeL2 singleton, 2-of-3, driven
 by `execTransaction` with two owner signatures. Those contracts
-exist only on a Base fork, so CI runs this file through
-scripts/devnet/run-golden-forge-forks.sh against the golden
-fixture, like SafeIntegration.t.sol.
+exist only on a Base fork, so CI runs this file with
+FORK_RPC_URL set to the Twin chain (a pinned lazy fork of real Base), like
+SafeIntegration.t.sol. Unset, it skips with a named reason.
 
 </i>
 
@@ -399,7 +399,7 @@ function _proposeViaTimelock(address[] memory vaults, uint256[] memory bps)
 <i>
 
 A 2-of-3 SafeProxy on SafeL2 through the canonical factory — the
-same call stage's ceremony makes (fusion-ceremony.sh create_safe).
+same call the stage deploy makes through the Safe SDK.
 
 </i>
 
@@ -412,6 +412,26 @@ function _createSafe() internal returns (ISafe created);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | created | `ISafe` |  |
+
+<a id="_ownersofsafe"></a>
+
+### _ownersOfSafe
+
+<i>
+
+The owners `_createSafe` set up, for DeployTimelock's SAFE_OWNERS check.
+
+</i>
+
+```solidity
+function _ownersOfSafe() internal view returns (address[] memory owners);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owners | `address[]` |  |
 
 <a id="_sortedownerpks"></a>
 

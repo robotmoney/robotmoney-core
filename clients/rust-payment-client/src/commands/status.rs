@@ -118,6 +118,10 @@ pub fn run(config_path: &Path, payment_id_hex: &str, pretty: bool) -> i32 {
     };
 
     let topic0 = RobotMoneyGateway::AgentDeposit::SIGNATURE_HASH;
+    // Scan start: the configured gateway deployment block, else `earliest`.
+    let from_tag = cfg
+        .gateway_from_block
+        .map_or_else(|| "earliest".to_string(), |b| format!("0x{b:x}"));
 
     let pid_hex = format!("{payment_id:#x}");
 
@@ -140,9 +144,10 @@ pub fn run(config_path: &Path, payment_id_hex: &str, pretty: bool) -> i32 {
         // is resolved against the same block `block_number` advertises, not a
         // later "latest" tip.
         let block_tag = format!("0x{block_number:x}");
+        let from_tag = from_tag.clone();
         let filter = json!({
             "address": gateway_addr,
-            "fromBlock": "earliest",
+            "fromBlock": from_tag,
             "toBlock": block_tag,
             "topics": [topic0, payment_id],
         });

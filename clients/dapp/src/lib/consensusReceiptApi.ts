@@ -231,8 +231,19 @@ export type AppliedState = "applied" | "not_applied" | "unknown";
  * Compare a receipt's recommended bps vector with the live router weights.
  *
  * `routerWeights` is keyed by vault address, so the caller supplies the
- * symbol→address mapping for the deployment. Returns `"unknown"` whenever the
- * payload, its weights, or the mapping is missing — never a guess.
+ * symbol→address mapping for the deployment.
+ *
+ * A vault that resolves to an address but is absent from the live router
+ * weight vector receives 0 bps (owner decision, 2026-10-06): the router's
+ * `setWeights` cannot list a vault that is not registry-Active and
+ * router-eligible, even at 0 bps, so "not in the vector" means "routed
+ * nothing". A receipt that recommends 0 for that bucket is applied; a non-zero
+ * recommendation is not applied.
+ *
+ * Returns `"unknown"` — never a guess — when the payload or its weights are
+ * missing, when no router weights are available at all, when a bucket is not
+ * one this schema knows, or when the deployment map cannot resolve the
+ * bucket's vault address.
  */
 export function computeAppliedState(
   payload: ReceiptPayload | null,
@@ -251,8 +262,8 @@ export function computeAppliedState(
     if (!symbol) return "unknown";
     const address = vaultAddressBySymbol[symbol];
     if (!address) return "unknown";
-    const liveBps = live.get(address.toLowerCase());
-    if (liveBps === undefined) return "unknown";
+    // Absent from the live vector = routed 0 bps (see doc comment above).
+    const liveBps = live.get(address.toLowerCase()) ?? 0;
     if (liveBps !== w.weight_bps) return "not_applied";
   }
   return "applied";

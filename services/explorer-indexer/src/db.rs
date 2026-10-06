@@ -815,7 +815,7 @@ impl Db {
     /// events. But that made a WRONG value permanent: the column is keyed by
     /// `(chain_id, address)`, and a chain id plus a deterministic address is
     /// not a chain identity, so a block detected against the Geth devnet
-    /// survives the swap to `anvil --load-state` on the same Postgres and
+    /// survives the swap to the Twin fork (an anvil lazy fork) on the same Postgres and
     /// wedges the indexer below the new chain's servable range with no way out
     /// but manual SQL.
     ///

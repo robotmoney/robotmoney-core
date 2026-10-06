@@ -70,7 +70,7 @@ fn devnet_adapter_round_trip() {
 
     // Verify the vault asset is USDC (sanity guard).
     let vault_asset_bytes = user
-        .call(addresses::VAULT, &IRobotMoneyVault::assetCall {})
+        .call(fx.vault(), &IRobotMoneyVault::assetCall {})
         .expect("vault.asset");
     assert_eq!(
         vault_asset_bytes.len(),
@@ -81,8 +81,8 @@ fn devnet_adapter_round_trip() {
     assert_eq!(asset_addr, addresses::USDC, "vault.asset must be USDC");
 
     // Approve vault, deposit, assert shares.
-    scenarios::approve_usdc(&user, addresses::VAULT, deposit).expect("approve");
-    scenarios::vault_deposit(&user, deposit, user.address).expect("deposit");
+    scenarios::approve_usdc(&user, fx.vault(), deposit).expect("approve");
+    scenarios::vault_deposit_at(&user, fx.vault(), deposit, user.address).expect("deposit");
 
     let shares = scenarios::vault_read_u256(
         &fx,
@@ -112,7 +112,8 @@ fn devnet_adapter_round_trip() {
     } else {
         shares
     };
-    scenarios::vault_redeem(&user, to_redeem, user.address, user.address).expect("redeem");
+    scenarios::vault_redeem_at(&user, fx.vault(), to_redeem, user.address, user.address)
+        .expect("redeem");
 
     let usdc_after = scenarios::usdc_read_u256(
         &fx,

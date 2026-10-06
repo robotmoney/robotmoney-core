@@ -7,9 +7,9 @@
  *
  *   1. Price strip — all four cells show a numeric price (not 'unavailable',
  *      not a loading ellipsis '…').
- *   2. Vault TVL — at least one Active vault card shows a non-zero total_assets
- *      value (requires DappStack::boot auto-seeding from issue #532 and stub
- *      pools from issue #531).
+ *   2. Vault TVL — exactly one Active vault card (rmUSDC, the 1 USDC seed) shows a non-zero
+ *      total_assets; the three empty basket vaults show none (core 1488: no demo seeding,
+ *      baskets deploy empty and paused).
  *   3. Console hygiene — zero JavaScript errors recorded during the landing-page
  *      session (inherits the _consoleGuard fixture from helpers/fixtures.ts).
  *
@@ -25,7 +25,7 @@ import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints } from "./helpers/devnet";
 import { openDapp } from "./helpers/wallet";
 
-const PAIR_IDS = ["eth-usd", "weth-usdc", "cbbtc-usdc", "wsol-usdc"] as const;
+const PAIR_IDS = ["eth-usd", "weth-usdc", "cbbtc-usdc"] as const;
 
 test.describe("demo user stories: first-visitor landing-page session", () => {
   test("demo user stories price strip: all four price cells show a numeric value", async ({
@@ -75,7 +75,7 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     }
   });
 
-  test("demo user stories vault TVL: all four vault cards show non-zero total_assets", async ({
+  test("demo user stories vault TVL: rmUSDC shows its seed, the empty basket vaults show none", async ({
     page,
   }) => {
     const endpoints = loadEndpoints();
@@ -85,41 +85,38 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     const vaultCards = page.getByTestId("landing-vault-cards");
     await expect(vaultCards).toBeVisible({ timeout: 30_000 });
 
-    // Wait for Active vault cards to appear (DappStack::boot auto-seeding
-    // should have produced four Active vaults — all four are Active after
-    // issue #562 which registers the RWA vault Active, no Paused placeholder).
+    // Clean-room deploy (core 1488): all four vaults are registered Active. There is no demo
+    // seeding. Only rmUSDC holds the deployer's 1 USDC seed. The basket vaults (rmPROTO, rmAGENT,
+    // rmRWA) deploy empty and paused until governance unpauses them.
     const activeCards = page.locator(
       '[data-testid="landing-vault-card"][data-vault-active="true"]',
     );
     await expect(activeCards).toHaveCount(4, { timeout: 30_000 });
 
-    // All four Active vault cards must show a non-zero TVL. The
-    // explorer-indexer processes Deposit events asynchronously so we poll
-    // until it catches up — VaultCards re-fetches every 15 s, so we will
-    // see the update in the DOM without a page reload.
     const tvlCells = page.getByTestId("landing-vault-card-tvl");
     await expect(tvlCells.first()).toBeVisible({ timeout: 30_000 });
+    await expect(tvlCells).toHaveCount(4, { timeout: 30_000 });
 
+    // VaultCards re-fetches every 15 s and the indexer lags the chain, so poll until the
+    // rmUSDC seed shows: exactly one card with a non-empty TVL, the other three empty.
+    const isEmpty = (t: string) => t === "" || t === "—" || Number(t.replace(/[$,\s]/g, "")) === 0;
     await expect
       .poll(
         async () => {
-          const count = await tvlCells.count();
-          for (let i = 0; i < count; i++) {
-            const text = (await tvlCells.nth(i).textContent()) ?? "";
-            const trimmed = text.trim();
-            // "0", "—", or blank all mean no TVL yet.
-            if (trimmed === "" || trimmed === "—" || trimmed === "0") return false;
+          const texts: string[] = [];
+          for (let i = 0; i < 4; i++) {
+            texts.push(((await tvlCells.nth(i).textContent()) ?? "").trim());
           }
-          return true;
+          return texts.filter((t) => !isEmpty(t)).length;
         },
         {
           message:
-            "all 4 Active vault cards must show a non-zero TVL after DappStack::boot auto-seeding (issue #593)",
+            "exactly one vault card (rmUSDC, the 1 USDC seed) must show a non-zero TVL; the three empty basket vaults must show none",
           timeout: 120_000,
           intervals: [5_000],
         },
       )
-      .toBe(true);
+      .toBe(1);
   });
 
   test("demo user stories console: zero JavaScript errors on the landing page", async ({

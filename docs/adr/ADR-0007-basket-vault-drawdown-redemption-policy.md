@@ -108,6 +108,8 @@ that the cap remain conservative for any router-eligible basket vault.
 - `previewRedeem` gives the depositor a worst-case quote before they sign,
   giving full visibility into the exit price even in a drawdown.
 
+2026-10-06: the owner reconfirmed that a redeem may revert when spot falls more than the slippage bound below the TWAP; this is accepted behavior.
+
 ## Alternatives considered
 
 - **Forced sale (Option A)** — rejected: crystallizes fire-sale losses across

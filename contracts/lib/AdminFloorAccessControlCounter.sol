@@ -19,7 +19,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 ///         counter instead of `AccessControlEnumerable`.
 ///
 ///         Single owner for the last-admin floor across the vault family
-///         (`Vault`, `BasketVault` and its `RwaVault`/`AgentTokenVault`/
+///         (`BasketVault` and its `RwaBasketVault`/`AgentTokenVault`/
 ///         `ProtocolAssetVault` subclasses, and `RobotMoneyVault`), replacing
 ///         what were previously three independent hand-rolled counters (two
 ///         of them near-identical, one — RobotMoneyVault — missing the floor

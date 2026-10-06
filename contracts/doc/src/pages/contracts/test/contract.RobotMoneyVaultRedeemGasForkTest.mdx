@@ -1,0 +1,130 @@
+---
+title: "RobotMoneyVaultRedeemGasForkTest"
+---
+
+# RobotMoneyVaultRedeemGasForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ff779339cf5b6e69f5be1d75f08dd6c9d091c8e0/contracts/test/RobotMoneyVaultRedeemGas.t.sol)
+
+**Inherits:** Test
+
+<i>
+
+Fork suite. Skipped without FORK_RPC_URL. Not part of the fast unit run.
+Clean room: the test deploys its OWN vault through the real DeployVault stage script
+(real adapters, real seed) on the Twin chain and never reads a production v1 vault.
+
+</i>
+
+## Constants
+
+### USDC_BASE
+
+```solidity
+address internal constant USDC_BASE = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+## State Variables
+
+### vault
+
+```solidity
+RobotMoneyVault internal vault;
+```
+
+### user
+
+```solidity
+address internal user = makeAddr("gasUser");
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("gasAdmin");
+```
+
+### seedReceiver
+
+```solidity
+address internal seedReceiver = makeAddr("gasSeedReceiver");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_try-bytes-uint256"></a>
+
+### _try
+
+```solidity
+function _try(bytes memory data, uint256 gasLimit) internal returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| gasLimit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="_estimate-bytes"></a>
+
+### _estimate
+
+```solidity
+function _estimate(bytes memory data) internal returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="test_fork_redeem_executesatexactestimate_manystates"></a>
+
+### test_fork_redeem_executesAtExactEstimate_manyStates
+
+Over many adapter states (time and block shifts change accrued interest and
+cold/warm state), the estimate must execute at exactly that limit.
+
+```solidity
+function test_fork_redeem_executesAtExactEstimate_manyStates() public;
+```
+
+<a id="test_fork_withdraw_executesatexactestimate"></a>
+
+### test_fork_withdraw_executesAtExactEstimate
+
+```solidity
+function test_fork_withdraw_executesAtExactEstimate() public;
+```
+
+<a id="test_fork_deposit_executesatexactestimate"></a>
+
+### test_fork_deposit_executesAtExactEstimate
+
+```solidity
+function test_fork_deposit_executesAtExactEstimate() public;
+```
+

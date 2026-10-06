@@ -1,0 +1,192 @@
+---
+title: "DeployRwaBasketVault"
+description: "Production deploy script for `RwaBasketVault` (rmRWA). One path on every chain."
+---
+
+# DeployRwaBasketVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployRwaBasketVault.s.sol)
+
+**Inherits:** [BasketVaultDeployBase](/contracts/script/abstract.BasketVaultDeployBase)
+
+**Title:** DeployRwaBasketVault
+
+Production deploy script for `RwaBasketVault` (rmRWA). One path on every chain.
+
+Required env vars (no defaults):
+ADMIN_ADDRESS     the broadcaster. Holds ADMIN_ROLE and EMERGENCY_ROLE on the new
+vault and ADMIN_ROLE on the registry until the timelock stage.
+SWAP_ROUTER       must equal `swapRouter02` in rwa-assets.json (Uniswap V3 SwapRouter02)
+REGISTRY_ADDRESS  the vault is registered here as "Robot Money RWA"
+TVL_CAP, PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
+FEE_RECIPIENT   recipient for exit fees (not the deployer, not the admin)
+DEPLOYMENT_OUT    output manifest path (required, no default)
+EXPECTED_CHAIN_ID mandatory and equal to 8453 on Base mainnet
+EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
+
+Assets come from `rwa-assets.json` (deSPXA only at launch). The vault is deployed paused.
+
+## Constants
+
+### VAULT_NAME
+
+```solidity
+string public constant VAULT_NAME = "Robot Money RWA";
+```
+
+### CONFIG_FILE
+
+```solidity
+string public constant CONFIG_FILE = "config/rwa-assets.json";
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="runinprocess-params-string"></a>
+
+### runInProcess
+
+In-process variant for forge tests and the stage driver's simulation. No
+broadcast and no manifest. Every call runs as `p.admin` under a prank, so
+`p.admin` becomes the vault's ADMIN and EMERGENCY holder as in a broadcast.
+
+```solidity
+function runInProcess(Params memory p, string memory json)
+        external
+        returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` | Sheet inputs. |
+| json | `string` | Body of the config file (the test passes a fixture, the driver passes the file). |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_newvault-params-address"></a>
+
+### _newVault
+
+<i>
+
+Construct the concrete vault. `emergencyResponder` is the deployer for this run.
+
+</i>
+
+```solidity
+function _newVault(Params memory p, address emergencyResponder)
+        internal
+        override
+        returns (BasketVault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| emergencyResponder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVault` |  |
+
+<a id="_registryname"></a>
+
+### _registryName
+
+<i>
+
+Name stored in the registry.
+
+</i>
+
+```solidity
+function _registryName() internal pure override returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_label"></a>
+
+### _label
+
+<i>
+
+Manifest object key and log label.
+
+</i>
+
+```solidity
+function _label() internal pure override returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_usesadapter"></a>
+
+### _usesAdapter
+
+<i>
+
+True when assets route through a deployed `UniswapV3SwapAdapter`. False uses the
+built-in SwapRouter02 path (adapter address 0).
+
+</i>
+
+```solidity
+function _usesAdapter() internal pure override returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="console2log-address"></a>
+
+### console2Log
+
+```solidity
+function console2Log(address vault) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
+

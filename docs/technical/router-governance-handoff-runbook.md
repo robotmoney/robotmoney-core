@@ -113,7 +113,12 @@ the voter body must vote FOR. Document the chosen value and the voter roster
 
 A receipt is recorded and then **released** by an admin through the timelock
 (`ConsensusRecommendationReceipt.releaseReceipt`, `onlyRole(ADMIN_ROLE)` — INV-3; the
-receipt contract's `ADMIN_ROLE` is held by the timelock). Release is signalling-
+receipt contract's `ADMIN_ROLE` is held by the timelock). The operator runs the
+publish-contracts govern row `release-receipt` (`bun publish-contracts/src/cli.ts
+govern --row release-receipt --receipt-id 0x<64hex>` plus the usual chain, RPC,
+sheet and signer arguments; on the Twin chain `bun scripts/stage/core-stack.ts
+governance release --receipt-id 0x<64hex>` wraps it). The real Safe schedules and
+executes `releaseReceipt` through the timelock. No EOA can release. Release is signalling-
 only (D5, `docs/product/20260623-product-proposal-investment-committee-v0.md` §2.1): it publishes the receipt and emits
 `ReceiptReleased`, moving no funds and calling no `setWeights`. Most receipts
 are published, not applied — that is the intended design.

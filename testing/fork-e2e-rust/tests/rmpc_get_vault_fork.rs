@@ -76,11 +76,16 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Write a minimal rmpc.toml that points at `rpc_url`, with `chain_id`
-/// = Base, vault = the deployed Robot Money vault, and a
+/// = Base, vault = the vault this test deployed itself, and a
 /// throwaway gateway address (the gateway is not deployed on Base; the
 /// gateway-side sub-reads are expected to fail and be recorded as
 /// per-field errors in the `partial`/`errors` envelope).
-fn write_config(tmp: &tempfile::TempDir, rpc_url: &str, chain_id: u64) -> PathBuf {
+fn write_config(
+    tmp: &tempfile::TempDir,
+    rpc_url: &str,
+    chain_id: u64,
+    vault: alloy_primitives::Address,
+) -> PathBuf {
     // The read commands don't load the signer, but Config::from_path
     // requires a parseable [signer] block. The keystore file is
     // referenced but never read, so we just point at a non-existent
@@ -102,7 +107,7 @@ keystore_path           = "{ks}"
 "#,
         chain_id = chain_id,
         usdc = addresses::USDC,
-        vault = addresses::VAULT,
+        vault = vault,
         zeros = "0".repeat(64),
         ks = keystore.display(),
     );
@@ -150,25 +155,9 @@ fn run_rmpc(cfg: &Path, args: &[&str], chain_id: u64) -> Value {
     v
 }
 
-// Issue #249 repaired the Base USDC transparent-proxy admin slot in
-// the fork fixture, which was sufficient for every `rmpc_get_*`
-// command that reads through USDC. This test additionally asserts
-// `Vault.symbol()` / `Vault.name()` round-trip — those are storage
-// reads against the *vault* contract (a non-proxy ERC-4626 at
-// `addresses::VAULT`). The checked-in fork-state fixture warms the
-// vault's bytecode but NOT its constructor-initialised storage
-// (name/symbol are written by `ERC20("Robot Money USDC", "rmUSDC")`
-// in the constructor and the fixture was captured via
-// `anvil_setCode`-only warming — see `scripts/devnet/snapshot-fork.sh`
-// `WARM_ADDRESSES` and the storage-vs-bytecode caveat there).
-//
-// The fix for THAT (vault storage seed analogous to
-// `testing/fixtures/fork-state/usdc-storage-seed.json`) is a strict
-// superset of #249 and is tracked separately — re-marked `#[ignore]`
-// here so the rest of the suite stays green. Remove the marker once
-// the vault storage seed lands.
+// Clean room rule (core 1498): this test deploys its own vault through the vault stage script
+// (`fx.vault()`) and reads symbol, asset and decimals of that vault.
 #[test]
-#[ignore = "needs vault storage seed (separate from #249 admin-slot repair)"]
 fn rmpc_get_vault_fork_robotmoney_devnet() {
     skip_if_no_fork!();
     let fx = ForkFixture::new().expect("boot fork");
@@ -178,7 +167,7 @@ fn rmpc_get_vault_fork_robotmoney_devnet() {
     );
 
     let tmp = tempfile::TempDir::new().expect("tempdir");
-    let cfg = write_config(&tmp, &fx.rpc_url, fx.chain_id);
+    let cfg = write_config(&tmp, &fx.rpc_url, fx.chain_id, fx.vault());
 
     // ---- get-vault: happy path against the real Base vault. -------
     let v = run_rmpc(&cfg, &["get-vault"], fx.chain_id);
@@ -197,7 +186,7 @@ fn rmpc_get_vault_fork_robotmoney_devnet() {
     let d = &v["data"];
     assert_eq!(
         d["address"].as_str().unwrap().to_lowercase(),
-        format!("{:#x}", addresses::VAULT)
+        format!("{:#x}", fx.vault())
     );
     assert_eq!(
         d["asset"].as_str().unwrap().to_lowercase(),

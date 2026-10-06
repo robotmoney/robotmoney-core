@@ -10,6 +10,10 @@
       policy carried into inexact compositions;
       docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md — v1 retirement path.) -->
 
+> **Historical.** This document records the rejected unified-vault proposal (ADR-0010) and the deleted code it described. It does not describe shipped code.
+>
+> **Not implemented.** Its companion ADR-0010 is Rejected (2026-09-18). This spec is kept for history only.
+
 # Unified Vault — Engineering Specification
 
 > Scope: the buildable specification for collapsing the two production vault

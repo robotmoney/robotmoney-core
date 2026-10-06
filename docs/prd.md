@@ -36,8 +36,8 @@ organizations a way to contribute visible allocation signals.
 - Autonomous depositors can authorize agent activity with user-defined
   limits, destinations, recipients, and expiration.
 - Addresses with admin-assigned voting power can vote on target weights
-  for the Portfolio Router allocation. (Current governance is an
-  admin-weighted MVP mock; token-holder voting is a future goal.)
+  for the Portfolio Router allocation. (Governance is admin-weighted;
+  there is no token-based governance.)
 - Any user can inspect vault availability, allocation weights,
   performance, fees, governance state, and execution results.
 - Product failures are explicit: users receive a product-level reason
@@ -74,9 +74,8 @@ Success is measured by:
   positions.
 - **Governance voter.** An address with admin-assigned voting power
   (current MVP) who votes on target weights for the Portfolio Router
-  allocation and observes protocol value capture. Token-holder voting
-  is a future goal once a real token snapshot or voting-power source
-  is integrated.
+  allocation and observes protocol value capture. There is no
+  token-based governance.
 - **Committee agent.** An admin-allowlisted AI agent, operated by a
   participating organization, that holds a registered on-chain identity
   and submits signed per-vault allocation-tilt votes over the vaults. It
@@ -99,10 +98,14 @@ Access expectations:
   permissions, and revoke those permissions.
 - Autonomous depositors can act only within permissions set by the
   depositor who authorized them.
+- There is no protocol agent key. An agent belongs to a depositor, runs
+  `rmpc` with that depositor's key, and is authorized by that depositor
+  through commit and reveal. The protocol deploy authorizes no agent
+  (deploy-time agent removal not yet implemented: tracked in the mainnet
+  plan).
 - Addresses with admin-assigned voting power can participate in
-  allocation-weight governance and view governance history. (Current
-  governance is admin-weighted MVP; token-holder voting is a future
-  goal.)
+  allocation-weight governance and view governance history. (Governance
+  is admin-weighted; there is no token-based governance.)
 - Integrators can read public product state and submit user-authorized
   actions.
 - Committee agents can register an identity and submit signed votes only
@@ -129,8 +132,8 @@ Access expectations:
   product — so that funds are available when needed.
 - As an address with admin-assigned voting power, I want to vote on
   Portfolio Router target weights so that I can influence how the
-  composite treasury exposure is balanced. (Token-holder voting is a
-  future goal; current governance is admin-weighted MVP.)
+  composite treasury exposure is balanced. (Governance is
+  admin-weighted; there is no token-based governance.)
 - As a committee agent operated by a participating organization, I want to
   register a signed on-chain identity and submit a fixed-shape per-vault
   allocation-tilt vote referencing a public rationale memo, so that my
@@ -186,7 +189,7 @@ Access expectations:
 
 NOTE: Current governance is admin-weighted MVP (RouterGovernance.sol).
 Voting power is assigned by ADMIN_ROLE; proposal creation is
-ADMIN_ROLE-only. Token-holder voting is a future goal. Governance is
+ADMIN_ROLE-only. There is no token-based governance. Governance is
 flat in the MVP — there is no tier system (Observer / Participant /
 Analyst / Strategist) and no activity gate. Tiering is deferred past
 MVP and is not on the build list.
@@ -332,8 +335,9 @@ Common edge cases:
 - Agent-created vaults or agent-created assets. Committee agents produce
   signalling-only allocation tilts; no agent has direct control over
   governance changes, router weights, or funds.
-- Token-holder governance over vault internals, per-vault asset
-  selection, strategy selection, fees, or individual agent permissions.
+- Token-based governance of any kind. Governance never covers vault
+  internals, per-vault asset selection, strategy selection, fees, or
+  individual agent permissions.
 - Hosted custody or hosted signing services.
 - Vault categories whose legal, liquidity, valuation, and disclosure
   requirements are not specified.
@@ -365,7 +369,7 @@ Common edge cases:
 - Vault and Portfolio Router fee structures are limited to three
   classes: management fee, swap-fee share, and exit fee. Each fee
   class, its rate, and its recipient must be disclosed before user
-  approval. In the current phase only exit fees are implemented;
+  approval. In the current phase only exit fees are implemented (the live rmUSDC vault charges 25 bps);
   management fee and swap-fee share are deferred to a future phase.
 - Vaults must disclose risk labels, fees, caps, availability, and
   retirement or pause state.
@@ -422,16 +426,16 @@ to support either model: swapping a custom adapter for a Giza- or
 Zyfai-managed allocation requires only deploying a new IStrategyAdapter
 wrapper, not changing the vault contract.
 
-### Morpho Gauntlet USDC Prime
+### Moonwell Flagship USDC
 
-A curated ERC-4626 vault on Base, managed by Gauntlet, that optimally
-allocates USDC across Morpho Blue lending pools. It is itself a vault —
-the MorphoAdapter holds Morpho Gauntlet shares, not raw Morpho Blue
-positions — which means depositors benefit from Gauntlet's active
-allocation without the stable-yield vault needing to manage Morpho Blue
-directly. This two-layer structure (Robot Money vault → Morpho Gauntlet
-vault → Morpho Blue pools) is a practical example of the multi-vault
-nesting the Portfolio Router generalises.
+A curated ERC-4626 vault on Base (mwUSDC) that allocates USDC across Morpho Blue
+lending pools. It is itself a vault: the MorphoAdapter holds Moonwell Flagship
+shares, not raw Morpho Blue positions, so depositors benefit from the curator's
+active allocation without the stable-yield vault managing Morpho Blue directly.
+This two-layer structure (Robot Money vault, Moonwell Flagship vault, Morpho Blue
+pools) is a practical example of the multi-vault nesting the Portfolio Router
+generalises. The owner chose Moonwell Flagship as the third venue (2026-10-02,
+core 1485): it is the address in the deploy script and the name the manifest records.
 
 ## 11. Vault Catalog
 
@@ -448,9 +452,9 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Receipt token | rmUSDC |
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | STABLE_YIELD |
-| Exposure | USDC yield across Morpho Gauntlet USDC Prime, Aave V3, Compound V3 on Base |
+| Exposure | USDC yield across Moonwell Flagship USDC, Aave V3, Compound V3 on Base |
 | Allocation model | Equal-weight target across strategies; the mix is kept near target through ordinary deposit and withdrawal activity |
-| Exit fee | Configurable 0–1%; 0.1% at launch |
+| Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
 | Management fee | Not implemented in current phase |
 | Swap-fee share | Not implemented in current phase |
 | Withdrawal | Synchronous; single transaction |
@@ -458,9 +462,19 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Per-deposit cap | Configurable |
 | Status | Deployed on Base mainnet |
 
-The stable-yield product is the launch product. All products are eligible
-for Portfolio Router allocation — four initially, extensible to more —
-weighted by recommendation, once each passes its readiness review. The
+All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) open deposits on day 2
+of the mainnet launch. The three basket vaults are deployed paused and are
+unpaused only by Safe → Timelock governance, one timelock operation per
+vault, executed after the timelock delay (not yet implemented: core #1520).
+The timelock's proposer and canceller is the Safe (2-of-3), any address may
+execute a ready operation after the delay, and the delay floor on Base is
+48 hours (open executor not yet implemented: core #1521). All products are
+eligible for Portfolio Router allocation — four initially, extensible to
+more — weighted by recommendation, once each passes its readiness review.
+The router default weights at
+launch are rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps; later changes
+come from RouterGovernance votes (not yet implemented: core #1520, core
+#1522). The
 stable-yield product's single-transaction redemption is met through
 proportional withdrawal across all active strategies in one transaction.
 If any strategy cannot fulfil its proportional share, the product covers
@@ -474,9 +488,9 @@ the shortfall from the remaining strategies before reverting.
 | Receipt token | rmPROTO |
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | VOLATILE |
-| Exposure | Basket of protocol assets (wETH, cbBTC, wSOL) via Uniswap V3 swaps |
+| Exposure | Basket of protocol assets via Uniswap V3 swaps: wETH and cbBTC at launch; wSOL is added later through the timelock |
 | Allocation model | Equal-weight target across basket assets at deposit time; not actively rebalanced |
-| Exit fee | Configurable 0–1% |
+| Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
 | Status | Router-eligible after readiness review (see below) |
 
@@ -523,27 +537,33 @@ Router allocation.
 | Receipt token | rmAGENT |
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |
-| Exposure | Admin-curated basket of agent-economy tokens via per-asset DEX routing (Uniswap V3, Uniswap V4, Aerodrome) — see [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md) |
-| MVP shortlist | BNKR, JUNO, RM (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
+| Exposure | Admin-curated basket of agent-economy tokens via per-asset DEX routing (one venue per asset) — see [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md) |
+| MVP shortlist | BNKR, JUNO, RM (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); RM at launch, BNKR and JUNO added later through the timelock; current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
 | Allocation model | Equal-weight target across shortlisted tokens at deposit time; not actively rebalanced |
-| Exit fee | Configurable 0–1% |
+| Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
 | Status | Router-eligible after readiness review (see below) |
 
-Shortlist curation is admin-controlled for the MVP, with a fixed
-three-token equal-weighted basket: BNKR, JUNO, RM (Base-chain
-only). Each token routes through the DEX venue holding its deepest
-liquidity — BNKR via Uniswap V3, JUNO via Uniswap V4, and RM
-via Aerodrome — under the per-asset venue abstraction in
-[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md); current
+Shortlist curation is admin-controlled for the MVP, with an
+equal-weighted target basket drawn from BNKR, JUNO, RM (Base-chain
+only). rmAGENT launches holding RM only: the existing ROBOTMONEY token on
+Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (not yet implemented:
+core #1491). BNKR and JUNO are added later through the timelock. Each token
+routes through one venue under the per-asset venue abstraction in
+[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue is
+decided (owner, 2026-10-06): the existing Uniswap V3 RM/USDC pool
+`0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), the only venue the
+deploy script wires. The owner funds it with in-range liquidity at market
+price before the mainnet run, sized to rmAGENT's first-period cap, and
+raises its observation cardinality. Restoring the Uniswap V4 swap adapter
+is a later option, not a launch blocker. Current
 membership, venues, and pool parameters live in
 `config/agent-token-shortlist.json`. Changes flow through the Safe →
 Timelock → `ADMIN_ROLE` path with a mandatory timelock delay and public
 veto window (see
 [ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md)); there is
-no token-holder vote over shortlist membership in the MVP. The
-production model (bribery-based or RM-token inclusion vote) is deferred
-past MVP. Basket products are valued using a manipulation-resistant
+no token-holder vote over shortlist membership, and no token-based
+governance is foreseen. Basket products are valued using a manipulation-resistant
 on-chain price for each asset held.
 
 This product has no in-product agent trading authority or strategy: it is
@@ -583,26 +603,25 @@ Router allocation.
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |
 | Underlying asset | Centrifuge deSPXA — tokenized S&P 500 exposure via Janus Henderson / Anemoy, issued on Centrifuge V3 and bridged to Base |
-| Oracle | Chronicle on-chain NAV oracle for deSPXA (Base), providing a signed, push-updated price feed |
-| Entry / exit | Aerodrome secondary-market swap only; ERC-7540 primary NAV redeem (Centrifuge V3) is never used by this vault |
-| Status | Active — real asset, seeded, Router-eligible |
+| Oracle | None: a plain basket row priced from the TWAP of deSPXA's Uniswap V3 USDC pool (fee 500) |
+| Entry / exit | Swaps in deSPXA's Uniswap V3 USDC pool (fee 500) only; ERC-7540 primary NAV redeem (Centrifuge V3) is never used by this vault |
+| Status | Router-eligible after readiness review (see below) |
 
 The RWA/Thematic vault holds deSPXA (Centrifuge V3, Base deployment).
 deSPXA is a tokenized representation of S&P 500 exposure, issued by
 Janus Henderson / Anemoy through the Centrifuge V3 protocol. The vault
-enters and exits positions exclusively via Aerodrome secondary-market
-swaps; it does not invoke ERC-7540 primary redemption against the
-Centrifuge issuer, avoiding the primary NAV redemption queue entirely.
+enters and exits positions exclusively via swaps in deSPXA's Uniswap V3
+USDC pool (fee 500); it does not invoke ERC-7540 primary redemption
+against the Centrifuge issuer, avoiding the primary NAV redemption queue
+entirely. Coinbase tokenized stocks are phase two (core #1500).
 
-NAV pricing is supplied by the Chronicle on-chain NAV oracle for
-deSPXA on Base. The oracle is a signed, push-updated feed; the vault
-reads the latest signed price and reverts if the feed is stale beyond
-the configured heartbeat.
+The vault has no oracle. deSPXA is a plain basket row priced from the
+TWAP of that Uniswap V3 pool, the same way rmPROTO prices its assets.
 
 **Issuer freeze-control risk disclosure:** deSPXA is subject to
 Centrifuge and Janus Henderson issuer controls. The issuer may freeze
 or restrict transfers of the underlying token at any time, which would
-block vault entry and exit independently of Aerodrome liquidity. This
+block vault entry and exit independently of pool liquidity. This
 risk is disclosed to depositors in the dapp vault detail page and is a
 known, accepted product risk for this vault category.
 

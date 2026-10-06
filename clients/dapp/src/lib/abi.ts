@@ -211,6 +211,13 @@ export const ROLE_HASH: Record<RoleName, `0x${string}`> = {
 
 export const ADMIN_ROLE_HASH = ROLE_HASH.ADMIN_ROLE;
 export const PAUSER_ROLE_HASH = ROLE_HASH.PAUSER_ROLE;
+/**
+ * OpenZeppelin AccessControl `DEFAULT_ADMIN_ROLE` (bytes32 zero). It is the
+ * admin role of ADMIN_ROLE and PAUSER_ROLE on the gateway, so it is what a
+ * wallet needs to grant or revoke either.
+ */
+export const DEFAULT_ADMIN_ROLE_HASH =
+  "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
 
 /**
  * Minimal ERC-20 ABI fragment used by the testnet/devnet faucet (issue
@@ -421,7 +428,7 @@ export type VaultStatusValue = (typeof VaultStatus)[keyof typeof VaultStatus];
  *     contracts today; dropped. (A UI risk/mandate taxonomy, if wanted, is
  *     product scope for a future issue, not a mechanical field restore.)
  *   - `receiptToken`: redundant with `vault` — every vault contract
- *     (`RobotMoneyVault`, `BasketVault`, `RwaVault`, ...) is itself the
+ *     (`RobotMoneyVault`, `BasketVault`, `RwaBasketVault`, ...) is itself the
  *     ERC-4626 share token, so `receiptToken` always equals `vault`.
  *     Consumers that read the receipt token now use `.vault` directly.
  *   - `depositCap` / `exitFeeBps`: real per-vault getters (`tvlCap`/

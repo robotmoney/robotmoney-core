@@ -7,7 +7,7 @@
 # upstream-trust assumptions; without an offline alert an adapter could silently
 # return stale or zero balances.
 #
-# CONTRACT ADDRESSES (Base mainnet, fork pin: testing/fixtures/CURRENT.json)
+# CONTRACT ADDRESSES (Base mainnet)
 #   Compound V3 Comet: 0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf
 #   Aave V3 Pool:      0xA238Dd80C259a72e81d7e4664a9801593F98d1c5
 #   USDC:              0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913

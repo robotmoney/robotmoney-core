@@ -1,4 +1,5 @@
 // Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
+// Canonical: docs/technical/dapp-credential-decisions.md §3.2 (2026-10-06 amendment)
 
 import type { FormEvent } from "react";
 import { useAccount } from "wagmi";
@@ -18,8 +19,11 @@ export function RotationTab(props: Props) {
   const { isConnected } = useAccount();
   const r = useRotationState(props.gatewayAddress, props.ctx, props.now);
 
+  const depositor = r.authorizePath === "depositor";
   const disableRevoke = !isConnected || !r.previewsOk || r.step !== "idle" || r.isPending;
-  const disableAuthorize = !isConnected || !r.previewsOk || r.step !== "revoke-sent" || r.isPending;
+  const disableAuthorize =
+    !isConnected || !r.authorizeOk || r.step !== "revoke-sent" || r.isPending;
+  const disableReveal = !isConnected || !r.revealReady || r.isPending;
 
   return (
     <section data-testid="rotation-form">
@@ -37,6 +41,18 @@ export function RotationTab(props: Props) {
       {r.combinedError && (
         <p data-testid="rotation-preview-error" className="error">
           {r.combinedError}
+        </p>
+      )}
+      {depositor && (
+        <p data-testid="rotation-depositor-path">
+          This wallet does not hold ADMIN_ROLE, so the new agent is authorized with
+          commitAuthorization then revealAuthorization. No role is needed and this wallet becomes
+          the new agent&apos;s owner.
+        </p>
+      )}
+      {r.depositorError && (
+        <p data-testid="rotation-depositor-error" className="error">
+          {r.depositorError}
         </p>
       )}
 
@@ -94,9 +110,27 @@ export function RotationTab(props: Props) {
         <h3>Step 2: authorize new agent</h3>
         {r.authorizePreview && <TxPreview preview={r.authorizePreview} />}
         <button type="submit" data-testid="rotation-authorize-submit" disabled={disableAuthorize}>
-          Step 2 — Sign authorizeAgent(new) with wallet
+          {depositor
+            ? "Step 2 — Sign commitAuthorization(new) with wallet"
+            : "Step 2 — Sign authorizeAgent(new) with wallet"}
         </button>
       </form>
+
+      {depositor && (
+        <form
+          data-testid="rotation-step3"
+          onSubmit={(e: FormEvent<HTMLFormElement>) => {
+            e.preventDefault();
+            r.onReveal();
+          }}
+        >
+          <h3>Step 3: reveal new agent</h3>
+          <p>Enabled one block after the commit transaction mines.</p>
+          <button type="submit" data-testid="rotation-reveal-submit" disabled={disableReveal}>
+            Step 3 — Sign revealAuthorization(new) with wallet
+          </button>
+        </form>
+      )}
 
       {r.step === "done" && (
         <p data-testid="rotation-complete">Rotation complete. Verify on-chain state.</p>

@@ -1,6 +1,6 @@
 //! Canonical: Plan tracking issue #109 §5 — Window-cap scenario
 //!
-//! Per-agent `maxPerWindow` enforcement on the Geth+Lighthouse devnet.
+//! Per-agent `maxPerWindow` enforcement on the Twin chain.
 //! This scenario lives in its own test binary because it requires a
 //! deploy-time `AGENT_MAX_PER_WINDOW` override that disagrees with the
 //! defaults the rest of the e2e suite assumes — co-residing it in
@@ -69,7 +69,7 @@ fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
             ("AGENT_MAX_PER_PAYMENT", AGENT_MAX_PER_PAYMENT_E2E),
             ("AGENT_MAX_PER_WINDOW", AGENT_MAX_PER_WINDOW_E2E),
         ])
-        .expect("boot geth devnet + low-cap deploy");
+        .expect("boot the Twin chain + low-cap deploy");
         *guard = Some(fx);
     }
     f(guard.as_ref().expect("fixture present"))

@@ -91,7 +91,7 @@ A non-empty result confirms the gate is in place.
 
 **What.** Deploy `PortfolioRouter`, `RouterGovernance`, and `TimelockController`
 to **Base mainnet (chain `8453`)**, record their addresses in
-`deployments/full-stack.json`, then transfer `ADMIN_ROLE` to the
+the run's deploy manifests (`deployments/<chain>/`), then transfer `ADMIN_ROLE` to the
 `TimelockController` across **all five protocol contracts**: Gateway, Vault,
 VaultRegistry, PortfolioRouter, and RouterGovernance.
 
@@ -118,8 +118,8 @@ contract-enforced rather than operational convention.
    log whose second topic is the deployer, plus every
    `AgentOwnershipTransferred` log whose third topic is the deployer, keeping
    only the agents whose `agentOwner(agent)` is still the deployer (the
-   `deployer_owned_agents` helper in `scripts/stage/fusion-ceremony.sh` does
-   exactly this). Deploy.s.sol's deploy agent is among them unless it was
+   `deployer_owned_agents` helper in the devops publish-contracts CLI does
+   exactly this). The gateway stage's deploy agent is among them unless it was
    already revoked or handed over.
 
    ```bash
@@ -139,7 +139,7 @@ contract-enforced rather than operational convention.
    left to you is the list itself: `roles.gateway_agents_listed_count` in the
    manifest must equal the number of agents found above.
 3. Record the resulting `portfolio_router`, `router_governance`, and
-   `timelock_controller` addresses in `deployments/full-stack.json`.
+   `timelock_controller` addresses in the run's deploy manifests (`deployments/<chain>/`).
 
 **Verify.** For each of the five contracts, confirm the timelock holds
 `ADMIN_ROLE` and no EOA does:
@@ -150,11 +150,11 @@ cast call "$CONTRACT" "hasRole(bytes32,address)(bool)" \
   --rpc-url "$BASE_RPC"   # expect: true
 ```
 
-Also confirm `deployments/full-stack.json` carries the three new addresses:
+Also confirm the run's merged deploy manifest carries the three new addresses:
 
 ```bash
 jq 'has("portfolio_router") and has("router_governance") and has("timelock_controller")' \
-  deployments/full-stack.json   # expect: true
+  deployments/<chain>/<merged manifest>.json   # expect: true
 ```
 
 ---
@@ -209,8 +209,8 @@ roster, and that each signer has acknowledged the playbook.
 
 ## 5. Retired v1 vault — indefinite feed + pool-liquidity maintenance
 
-**What.** After a v1 vault is retired during the unified-Vault (ADR-0010)
-migration, keep every dependency its redemptions need — the Chronicle deSPXA feed
+**What.** After a v1 vault is retired when the v2 core stack replaces it
+(ADR-0010, the unified-Vault proposal, is Rejected), keep every dependency its redemptions need — the Chronicle deSPXA feed
 and the Aerodrome/execution-pool liquidity — funded and live until that vault's
 `totalSupply()` reaches zero.
 

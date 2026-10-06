@@ -12,23 +12,28 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployPortfolioRouter
 /// @notice Foundry deploy script for the PortfolioRouter contract.
+///         Stage 4 of the core deploy (libs, vault, registry, router, gateway).
 ///         Deploys PortfolioRouter, sets initial weights (10 000 bps to
-///         RobotMoneyVault — the sole active vault), and writes the router
-///         address to a deployment JSON alongside the registry address.
+///         RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`,
+///         and writes the router address to a deployment JSON alongside the registry
+///         address. The router comes BEFORE the gateway: the gateway stores the router as
+///         an immutable (core 1493).
 ///
-///         The smoke-test devnet startup sequence runs this script so that
-///         `rmpc get-router` and the dapp router view return real data in CI.
+///         The stage driver runs this script on every chain so that
+///         `rmpc get-router` and the dapp router view return real data.
 ///
 ///         Required env vars:
 ///           ADMIN_ADDRESS      — receives ADMIN_ROLE on the router
 ///           REGISTRY_ADDRESS   — deployed VaultRegistry address
 ///           VAULT_ADDRESS      — RobotMoneyVault (sole active vault, 10 000 bps)
-///           USDC_ADDRESS       — ERC-20 asset the router accepts
 ///
-///         Optional env vars:
-///           DEPLOYMENT_OUT     — path for the output JSON
-///                                (default: "deployments/router-<chain_id>.json")
+///         USDC is the canonical Base USDC constant on every chain.
+///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
+///         (mandatory and equal to 8453 on Base mainnet).
 contract DeployPortfolioRouter is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "router.json";
+
     using stdJson for string;
 
     /// @notice BPS weight assigned to RobotMoneyVault as the sole active vault.
@@ -46,17 +51,16 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys the router,
     ///         sets initial weights, and writes a deployment JSON.
     ///
-    ///         In broadcast mode the broadcaster IS admin (the smoke-test devnet
-    ///         runs the script with the admin private key), so msg.sender on
+    ///         In broadcast mode the broadcaster IS admin (the deployer signs
+    ///         the broadcast), so msg.sender on
     ///         setWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
     /// @return d Struct containing the deployed router and key parameters.
     function run() external returns (Deployed memory d) {
         _requireExpectedChain("");
-        address admin = vm.envAddress("ADMIN_ADDRESS");
-        address registry = vm.envAddress("REGISTRY_ADDRESS");
-        address vault = vm.envAddress("VAULT_ADDRESS");
-        address usdc = vm.envAddress("USDC_ADDRESS");
-        _requireCanonicalUsdc(usdc);
+        address admin = _envAddressRequired("ADMIN_ADDRESS");
+        address registry = _envAddressRequired("REGISTRY_ADDRESS");
+        address vault = _envAddressRequired("VAULT_ADDRESS");
+        address usdc = BASE_USDC;
         require(registry.code.length > 0, "REGISTRY_ADDRESS has no code on this chain");
         require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
         require(usdc.code.length > 0, "USDC_ADDRESS has no code on this chain");
@@ -120,6 +124,14 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
         uint256[] memory bps = new uint256[](1);
         bps[0] = INITIAL_VAULT_WEIGHT_BPS;
         d.router.setWeights(vaults, bps);
+
+        // Link the router into the registry at the router stage (core S3). This is the one
+        // and only `registry.setRouter` call of the deploy: the gateway stage that follows
+        // takes this router as its immutable, and the timelock stage hands the registry over
+        // with the link already in place. Eligibility was set above, before the link, so the
+        // registry's stale-default-length guard is inactive.
+        d.registry.setRouter(address(d.router));
+        require(address(d.registry.router()) == address(d.router), "registry.router != router");
     }
 
     function _logResult(Deployed memory d) internal view {
@@ -132,12 +144,7 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
-            outPath = s;
-        } catch {
-            outPath = string.concat("deployments/router-", vm.toString(block.chainid), ".json");
-        }
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
 
         string memory obj = "router_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);

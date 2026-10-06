@@ -11,8 +11,7 @@
  * a complete success, and all six guards run before `super._deposit`. So the
  * revert is deep inside `_routeDeposit`, where the vault hands USDC to the
  * Aave V3 / Compound V3 / Morpho adapters, which on this devnet call REAL Base
- * mainnet protocol code and storage ingested into the genesis alloc
- * (`testing/ethereum-testnet/config/fork-block.json`).
+ * mainnet protocol code and storage served by the Twin chain, a pinned lazy fork of real Base.
  *
  * Two candidates survive that evidence and a receipt cannot separate them:
  * an adapter- or protocol-internal custom error, or an out-of-gas. This module
@@ -96,9 +95,9 @@ import { aaveV3ErrorCodes, cometErrorAbi, metaMorphoErrorAbi } from "./protocol-
 
 /**
  * Error fragments for the three strategy adapters the primary vault routes
- * through (`contracts/script/Deploy.s.sol:_approveAndRegisterAdapters` adds
+ * through (`contracts/script/DeployVault.s.sol:_approveAndRegisterAdapters` adds
  * exactly AaveV3Adapter, CompoundV3Adapter and MorphoAdapter, at 3334/3333/3333
- * capBps), plus the two shared `IPositionAdapter` errors they inherit.
+ * capBps), plus the two errors (`OnlyVault`, `SlippageExceeded`) each declares.
  *
  * Hand-maintained rather than generated: `.github/scripts/generate_abi_bindings.sh`
  * emits no adapter binding, and this is a test-only decode table, not a call
@@ -115,7 +114,7 @@ import { aaveV3ErrorCodes, cometErrorAbi, metaMorphoErrorAbi } from "./protocol-
  * swallowed.
  */
 export const strategyAdapterErrorAbi = [
-  // contracts/interfaces/IPositionAdapter.sol
+  // declared on each lending adapter
   { type: "error", name: "OnlyVault", inputs: [] },
   { type: "error", name: "SlippageExceeded", inputs: [] },
   // contracts/adapters/AaveV3Adapter.sol, CompoundV3Adapter.sol, MorphoAdapter.sol
@@ -378,8 +377,7 @@ interface CallFrame {
  * out-of-gas only; the trace is what distinguishes the nested case, which
  * would otherwise be reported as a custom error and mislead the reader.
  *
- * The devnet enables the `debug` namespace
- * (`testing/ethereum-testnet/config/docker-compose.yaml`), but a node without
+ * The Twin chain (anvil) serves `debug_traceCall`, but a node without
  * it simply reports the tracer as unavailable.
  */
 async function traceInnermostRevert(

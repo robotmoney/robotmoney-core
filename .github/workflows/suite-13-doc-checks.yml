@@ -65,6 +65,27 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Self-test nightly dispatch list (core 1495)
+        # Fails when a suite workflow is missing from suite-21-nightly.yml's
+        # SUITES list (release and deploy workflows are excluded explicitly).
+        run: python3 scripts/ci/check_nightly_dispatch_list.py --self-test
+
+      - name: Nightly dispatch list covers every suite
+        run: python3 scripts/ci/check_nightly_dispatch_list.py
+
+      - name: Audit ledger self-test (core 1492)
+        # Plants a deleted contract name in a ledger row and in a source comment and
+        # expects the check to fail, so a silent regression cannot let one ship.
+        run: |
+          shellcheck scripts/check-audit-ledger.sh scripts/check-audit-ledger.test.sh
+          bash scripts/check-audit-ledger.test.sh
+
+      - name: Audit ledger has no deleted contract names (core 1492)
+        # Every shipped .sol has a ledger row, no row names a deleted contract
+        # (RwaVault, ChronicleOracleAdapter, DeSpxaAssetPositionAdapter, V4 adapters)
+        # and no shipped source comment names one.
+        run: bash scripts/check-audit-ledger.sh
+
       - name: Browser keygen ADR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -343,3 +364,83 @@ jobs:
         # and services/explorer-indexer/src/feature_flags.rs.
         # Implements: issue #389
         run: python3 .github/scripts/check_feature_flag_consistency.py
+
+  # Nightly and release-record checks (core 1495, 1496, 1497, 1498). No paths
+  # filter on this file, so these run on every pull request: the nightly dispatch
+  # list, the nightly Twin chain workflow and the dependency-manifest tools cannot
+  # drift while their own files are untouched. Offline and fast.
+  nightly-and-release-checks:
+    name: nightly-and-release-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      - name: actionlint on the three nightly workflows
+        run: ./actionlint .github/workflows/suite-21-nightly.yml .github/workflows/suite-29-nightly-twin-fork.yml .github/workflows/nightly-third-party-drift.yml
+
+      # Core 1495: dispatch list covers every suite (negative control inside), the
+      # retired fork-pin age job is gone, the deleted drift job and script are gone and
+      # unreferenced, the drift alarm text is gone.
+      - name: Nightly dispatch list self-test (core 1495)
+        run: bun scripts/ci/check-nightly-dispatch-selftest.ts
+
+      # Owner decision 2026-10-05: core never depends on devops (no devops checkout, no devops read token, no
+      # driver-directory variable, no import path into a devops checkout). The unit test plants each violation first.
+      - name: Core has no dependency on devops (self-test, then the gate)
+        run: |
+          bun test scripts/ci/check-no-devops-dependency.test.ts --timeout 60000
+          bun scripts/ci/check-no-devops-dependency.ts
+
+      # Core 1496, 1498: the Twin chain CI wiring. The nightly calls suites 5, 7, 8, 10, 11b and 14 with
+      # ONE pin from its pin job. Each suite has a pin input, a pin job and takes the pin in every
+      # twin-fork step. Nothing still names the retired geth+lighthouse devnet, the genesis alloc, the
+      # fresh-snapshot overlay or the saved fork-state snapshot. Runs on every PR, so a change to a
+      # suite cannot skip it.
+      - name: Twin chain CI wiring self-test (core 1496, 1498)
+        run: bun scripts/devnet/check-twin-chain-ci-selftest.ts
+
+      - name: Stale snapshot docs gate (core 1498, 1496)
+        run: bun scripts/devnet/check-stale-snapshot-docs.ts
+
+      - name: Twin chain tooling unit tests (core 1498)
+        run: bun test scripts/devnet --timeout 60000
+
+      # Core 1497: the third-party drift workflow ships disabled.
+      - name: yq asserts the drift workflow has no schedule and declares workflow_dispatch
+        run: |
+          f=.github/workflows/nightly-third-party-drift.yml
+          yq -e '.on | has("schedule") | not' "$f"
+          yq -e '.on | has("workflow_dispatch")' "$f"
+          bun scripts/release/check-nightly-third-party-workflow.ts
+
+      # The self-test reads real Base code and storage from the Twin chain (core 1498): a pinned lazy
+      # fork of Base made with anvil, no saved snapshot. The action exports TWIN_RPC_URL.
+      - name: Start the Twin fork
+        uses: ./.github/actions/twin-fork
+
+      - name: Dependency manifest self-test (edited hash named, accurate manifest clean)
+        run: bun scripts/release/dependency-manifest-selftest.ts
+
+      # The address-presence loop over committed manifests checks nothing until the first release
+      # commits one. The self-test above records a manifest from the Twin chain and checks it, and
+      # this step checks the example fixture and every committed manifest.
+      - name: Every manifest address is in the deploy config
+        run: |
+          set -euo pipefail
+          bun scripts/release/check-dependency-manifest-addresses.ts --manifest deployments/dependency-manifests/example.json
+          shopt -s nullglob
+          for m in deployments/dependency-manifests/*/*.json; do
+            bun scripts/release/check-dependency-manifest-addresses.ts --manifest "$m"
+          done
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

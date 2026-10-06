@@ -13,7 +13,7 @@ import {Test} from "forge-std/Test.sol";
 ///         limit, so an oversize vault passes every unit/invariant/fork test and
 ///         even the deploy *simulation*, yet reverts when actually broadcast to a
 ///         real EIP-170 chain (Base mainnet, or the Geth smoke-test devnet). That
-///         is exactly how RwaVault (24834) and AgentTokenVault (25241) became
+///         is exactly how the retired RwaBasketVault predecessor (24834) and AgentTokenVault (25241) became
 ///         undeployable without any test catching it (issue #865). This guard
 ///         reads the compiled artifact size directly so the limit is enforced
 ///         regardless of the test EVM's relaxed limit.
@@ -41,8 +41,8 @@ contract VaultCodeSizeGuard is Test {
         _assertUnderLimit("ProtocolAssetVault.sol:ProtocolAssetVault");
     }
 
-    function test_RwaVault_underEip170() public {
-        _assertUnderLimit("RwaVault.sol:RwaVault");
+    function test_RwaBasketVault_underEip170() public {
+        _assertUnderLimit("RwaBasketVault.sol:RwaBasketVault");
     }
 
     function test_AgentTokenVault_underEip170() public {
@@ -56,30 +56,18 @@ contract VaultCodeSizeGuard is Test {
     ///         retirement-flag addition.
     function test_bytecodeSize_vaultFamilyUnderEip170() public {
         _assertUnderLimit("RobotMoneyVault.sol:RobotMoneyVault");
-        _assertUnderLimit("Vault.sol:Vault");
-        _assertUnderLimit("RwaVault.sol:RwaVault");
+        _assertUnderLimit("RwaBasketVault.sol:RwaBasketVault");
         _assertUnderLimit("AgentTokenVault.sol:AgentTokenVault");
         _assertUnderLimit("ProtocolAssetVault.sol:ProtocolAssetVault");
     }
 
-    // ─── Unified Vault + adapter set (ADR-0010, issue #1127, M-A2) ─────────
+    // ─── Adapter set ───────────────────────────────────────────────────────
     //
-    // The unified `Vault` is the single non-abstract ERC-4626 allocator every
-    // theme (rmUSDC/rmPROTO/rmAGENT/rmRWA) deploys composed with a set of
-    // `IPositionAdapter`s (spec §5). Its natspec promises it "stays a thin
-    // allocator well within the EIP-170 runtime-size limit" — that fit MUST be
-    // proven per M-A2, not assumed. Every adapter below is a direct on-chain
-    // deployment (lending retrofit, asset-position, and the swap/oracle venue
-    // seams they compose), so each must independently fit EIP-170 or it is
-    // undeployable on Base mainnet exactly like RwaVault/AgentTokenVault were
-    // (issue #865). Stacking the phase features (#1120–#1123) onto the core
-    // (#1119) pushed the deployed `Vault` bytecode over the limit with no gate
-    // watching; this guard is that gate. It runs in the required `forge-unit-tests`
-    // job (suite-01-02-forge-tests.yml) with a non-zero executed count.
-
-    function test_UnifiedVault_underEip170() public {
-        _assertUnderLimit("Vault.sol:Vault");
-    }
+    // Every adapter below is a direct on-chain deployment (lending adapters and
+    // the swap venue seams), so each must independently fit EIP-170 or it is
+    // undeployable on Base mainnet (issue #865). It runs in the required
+    // `forge-unit-tests` job (suite-01-02-forge-tests.yml) with a non-zero
+    // executed count.
 
     function test_AaveV3Adapter_underEip170() public {
         _assertUnderLimit("AaveV3Adapter.sol:AaveV3Adapter");
@@ -93,35 +81,11 @@ contract VaultCodeSizeGuard is Test {
         _assertUnderLimit("MorphoAdapter.sol:MorphoAdapter");
     }
 
-    function test_UniswapV3AssetPositionAdapter_underEip170() public {
-        _assertUnderLimit("UniswapV3AssetPositionAdapter.sol:UniswapV3AssetPositionAdapter");
-    }
-
-    function test_UniswapV4AssetPositionAdapter_underEip170() public {
-        _assertUnderLimit("UniswapV4AssetPositionAdapter.sol:UniswapV4AssetPositionAdapter");
-    }
-
-    function test_AerodromeAssetPositionAdapter_underEip170() public {
-        _assertUnderLimit("AerodromeAssetPositionAdapter.sol:AerodromeAssetPositionAdapter");
-    }
-
-    function test_DeSpxaAssetPositionAdapter_underEip170() public {
-        _assertUnderLimit("DeSpxaAssetPositionAdapter.sol:DeSpxaAssetPositionAdapter");
-    }
-
     function test_UniswapV3SwapAdapter_underEip170() public {
         _assertUnderLimit("UniswapV3SwapAdapter.sol:UniswapV3SwapAdapter");
     }
 
-    function test_UniswapV4SwapAdapter_underEip170() public {
-        _assertUnderLimit("UniswapV4SwapAdapter.sol:UniswapV4SwapAdapter");
-    }
-
     function test_AerodromeSwapAdapter_underEip170() public {
         _assertUnderLimit("AerodromeSwapAdapter.sol:AerodromeSwapAdapter");
-    }
-
-    function test_ChronicleOracleAdapter_underEip170() public {
-        _assertUnderLimit("ChronicleOracleAdapter.sol:ChronicleOracleAdapter");
     }
 }

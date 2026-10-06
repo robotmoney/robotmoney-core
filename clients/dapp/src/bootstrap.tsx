@@ -125,8 +125,8 @@ export function deriveDappConfig(env: RuntimeConfig): DappConfig {
     governance: env.VITE_GOVERNANCE_ADDRESS ? (env.VITE_GOVERNANCE_ADDRESS as Address) : undefined,
     // Issue #647: TimelockController address for the Timelock admin tab (architecture §4.5).
     timelock: env.VITE_TIMELOCK_ADDRESS ? (env.VITE_TIMELOCK_ADDRESS as Address) : undefined,
-    // Issue #365: RM token address for the Faucet tab drip button. Absent means
-    // the button is hidden in standalone deployments without the smoke-test harness.
+    // Issue #463: RM token address for the balances panel RM row (the live
+    // ROBOTMONEY token on Base; nothing deploys RM, core 1489).
     rmToken: env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Address) : undefined,
     expectedCodeHash: env.VITE_GATEWAY_EXPECTED_CODE_HASH,
     envClass: (env.VITE_ENV_CLASS as DappConfig["envClass"]) ?? "fork",
@@ -229,7 +229,6 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                   now={Date.now()}
                   registryAddress={cfg.registry}
                   routerAddress={cfg.router}
-                  rmTokenAddress={cfg.rmToken}
                   timelockAddress={cfg.timelock}
                 />
               ),

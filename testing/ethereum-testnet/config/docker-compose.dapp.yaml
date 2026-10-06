@@ -5,10 +5,10 @@
 #
 # Brings up Postgres, a one-shot explorer-migrate schema migration,
 # explorer-indexer, explorer-api, and the dapp
-# against an already-running Geth+Lighthouse chain. The smoke-test
-# binary starts the chain via docker-compose.yaml first, deploys
-# contracts, then starts this stack passing deployed addresses as
-# build args.
+# against an already-running Twin chain (id 918453, a pinned lazy anvil fork of real Base
+# state, scripts/devnet/twin-fork.ts). The smoke-test binary starts or reuses the Twin fork,
+# deploys contracts, then starts this stack passing deployed addresses as build args. The fork
+# must listen on every interface (--host 0.0.0.0) so the indexer container can reach it.
 #
 # Standalone usage (without the smoke-test binary):
 #
@@ -20,7 +20,7 @@
 #   #
 #   # Optional (defaults shown):
 #   #   VITE_EXPLORER_API_URL=http://localhost:8080
-#   #   INDEXER_RPC_URL=http://host.docker.internal:8545
+#   #   INDEXER_RPC_URL=http://host.docker.internal:8545  (the Twin chain as seen from the container)
 #   #   INDEXER_CHAIN_ID=918453
 #   #   INDEXER_CHAIN_NAME=devnet
 #   #   EXPLORER_API_CHAIN_ID=918453
@@ -41,8 +41,7 @@
 
 name: robotmoney-dapp
 
-# Run-identity labels (testnet boot hardening) — see docker-compose.yaml for the
-# rationale. The harness injects SMOKE_RUN_ID / SMOKE_RUN_CREATED so a later boot
+# Run-identity labels (testnet boot hardening). The harness injects SMOKE_RUN_ID / SMOKE_RUN_CREATED so a later boot
 # can reap dapp containers stranded by a previous run instead of colliding on the
 # fixed container names. Defaults keep standalone `docker compose` usage working.
 x-testnet-labels: &testnet-labels
@@ -144,16 +143,14 @@ services:
       receipt-fixtures:
         condition: service_healthy
         required: false
-    # Issue #775: join the ethereum-testnet_default network so the indexer
-    # can reach Geth directly via the `geth` service hostname (port 8545
-    # inside the chain network) instead of relying on host.docker.internal,
-    # which is not reachable on all Docker host configurations.
-    networks:
-      - default
-      - chain-net
+    # The indexer reaches the Twin chain, which runs on the host (anvil), through the Docker bridge.
+    # The harness passes INDEXER_RPC_URL explicitly (the bridge gateway address and the fork port).
+    # host-gateway makes host.docker.internal resolve for standalone use on Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-robotmoney}:${POSTGRES_PASSWORD:-robotmoney}@postgres:5432/${POSTGRES_DB:-explorer}
-      INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://geth:8545}
+      INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://host.docker.internal:8545}
       INDEXER_CHAIN_ID: ${INDEXER_CHAIN_ID:-918453}
       INDEXER_CHAIN_NAME: ${INDEXER_CHAIN_NAME:-devnet}
       INDEXER_RPC_LABEL: ${INDEXER_CHAIN_NAME:-devnet}
@@ -271,10 +268,9 @@ services:
         # Default to zero address so the governance panel shows the
         # config-missing placeholder in standalone builds.
         VITE_GOVERNANCE_ADDRESS: ${VITE_GOVERNANCE_ADDRESS:-0x0000000000000000000000000000000000000000}
-        # Issue #365: RM token address for the Faucet tab 'Get RM tokens' button.
-        # Default to zero address so the RM drip button is hidden in standalone
-        # builds without the smoke-test harness deploying the governance+RM stack.
-        VITE_RM_TOKEN_ADDRESS: ${VITE_RM_TOKEN_ADDRESS:-0x0000000000000000000000000000000000000000}
+        # Issue #463: RM token address for the balances panel RM row. Defaults to
+        # the live ROBOTMONEY token on Base; nothing deploys RM (core 1489).
+        VITE_RM_TOKEN_ADDRESS: ${VITE_RM_TOKEN_ADDRESS:-0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3}
         # Issue #1294: bucket->vault-symbol->address JSON map (rmUSDC, rmPROTO,
         # rmAGENT, rmRWA — tests/fixtures/consensus-receipt.bucket-vault-map.json)
         # so ConsensusReceiptPanel can compute the applied/not-applied state
@@ -307,8 +303,7 @@ services:
   # literal URL for both consumers of an on-chain `payload_uri`:
   #   - explorer-indexer (digest verification) reaches this container by its
   #     Docker service name over the shared `default` compose network — the
-  #     same mechanism explorer-indexer already uses to reach `geth` and
-  #     `postgres`.
+  #     same mechanism explorer-indexer already uses to reach `postgres`.
   #   - the Playwright browser reaches the SAME hostname via a
   #     `--host-resolver-rules` mapping straight to 127.0.0.1
   #     (clients/dapp/playwright.config.ts), which lands on this service's
@@ -340,14 +335,3 @@ services:
       timeout: 5s
       retries: 15
       start_period: 2s
-
-# Issue #775: chain-net joins the ethereum-testnet_default Docker network
-# created by docker-compose.yaml (the chain compose stack) so that
-# explorer-indexer can reach Geth via the `geth` service name rather than
-# host.docker.internal.  The ethereum-testnet stack must be running before
-# this overlay is brought up (the README and standalone usage instructions
-# already require this).
-networks:
-  chain-net:
-    external: true
-    name: ethereum-testnet_default

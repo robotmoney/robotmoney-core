@@ -30,7 +30,7 @@ pragma solidity ^0.8.24;
 ///         `TwapTickMath.deviationBps` can read cardinality/spot-tick through a
 ///         single venue-agnostic call site instead of branching per venue.
 ///         `liquidity()` and the other members of `IAerodromePool` /
-///         `IUniswapV4Pool` remain on the venue-specific interfaces and are
+///         `IUniswapV3Pool` remain on the venue-specific interfaces and are
 ///         unrelated to mean-tick pricing.
 interface IObservablePool {
     /// @notice Returns the address of token0 in the pool.

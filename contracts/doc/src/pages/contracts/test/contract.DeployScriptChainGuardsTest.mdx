@@ -1,25 +1,24 @@
 ---
 title: "DeployScriptChainGuardsTest"
-description: "On chain id 8453 every script's `run()` refuses to start when EXPECTED_CHAIN_ID is unset. Nothing else is set: the guard is the first statement of each `run()` (the vault scripts included), so a script that skipped it would fail later with a different message or not at all."
+description: "On chain id 8453, every script's `run()` refuses to start when EXPECTED_CHAIN_ID is unset. Nothing else is set: the guard is the first statement of each `run()`, so a script that skipped it would fail later with a different message."
 ---
 
 # DeployScriptChainGuardsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/DeployScriptChainGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployScriptChainGuards.t.sol)
 
 **Inherits:** Test
 
-On chain id 8453 every script's `run()` refuses to start when EXPECTED_CHAIN_ID is
-unset. Nothing else is set: the guard is the first statement of each `run()` (the
-vault scripts included), so a script that skipped it would fail later with a
-different message or not at all.
+On chain id 8453, every script's `run()` refuses to start when EXPECTED_CHAIN_ID is
+unset. Nothing else is set: the guard is the first statement of each `run()`, so a
+script that skipped it would fail later with a different message.
 
 <i>
 
-No test here sets EXPECTED_CHAIN_ID: `run()` reads the unprefixed name, env vars are
-process-wide and forge runs test contracts in parallel. A mismatching value is
-covered through the prefixed readers in DeployMainnetInputs.t.sol,
-DeployTimelock.t.sol and the vault harness below.
+No test here sets EXPECTED_CHAIN_ID: the name is read unprefixed by `run()`, env vars
+are process-wide and forge runs test contracts in parallel. A mismatching or non-8453
+value is covered through the prefixed readers in DeployMainnetInputs.t.sol and
+DeployTimelock.t.sol.
 
 </i>
 
@@ -41,12 +40,36 @@ string internal constant MSG = "EXPECTED_CHAIN_ID must be set to 8453 on Base ma
 function setUp() public;
 ```
 
-<a id="test_deploy_run_requiresexpectedchainonbase"></a>
+<a id="test_libs_run_requiresexpectedchainonbase"></a>
 
-### test_deploy_run_requiresExpectedChainOnBase
+### test_libs_run_requiresExpectedChainOnBase
 
 ```solidity
-function test_deploy_run_requiresExpectedChainOnBase() public;
+function test_libs_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_vault_run_requiresexpectedchainonbase"></a>
+
+### test_vault_run_requiresExpectedChainOnBase
+
+```solidity
+function test_vault_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_gateway_run_requiresexpectedchainonbase"></a>
+
+### test_gateway_run_requiresExpectedChainOnBase
+
+```solidity
+function test_gateway_run_requiresExpectedChainOnBase() public;
+```
+
+<a id="test_deploytimelock_run_requiresexpectedchainonbase"></a>
+
+### test_deployTimelock_run_requiresExpectedChainOnBase
+
+```solidity
+function test_deployTimelock_run_requiresExpectedChainOnBase() public;
 ```
 
 <a id="test_portfoliorouter_run_requiresexpectedchainonbase"></a>
@@ -97,20 +120,12 @@ function test_protocolAssetVault_run_requiresExpectedChainOnBase() public;
 function test_agentTokenVault_run_requiresExpectedChainOnBase() public;
 ```
 
-<a id="test_vaultthemes_run_requiresexpectedchainonbase"></a>
+<a id="test_rwabasketvault_run_requiresexpectedchainonbase"></a>
 
-### test_vaultThemes_run_requiresExpectedChainOnBase
-
-```solidity
-function test_vaultThemes_run_requiresExpectedChainOnBase() public;
-```
-
-<a id="test_rmtoken_run_requiresexpectedchainonbase"></a>
-
-### test_rmToken_run_requiresExpectedChainOnBase
+### test_rwaBasketVault_run_requiresExpectedChainOnBase
 
 ```solidity
-function test_rmToken_run_requiresExpectedChainOnBase() public;
+function test_rwaBasketVault_run_requiresExpectedChainOnBase() public;
 ```
 
 <a id="test_activateeligibility_run_requiresexpectedchainonbase"></a>

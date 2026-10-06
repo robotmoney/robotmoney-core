@@ -38,10 +38,8 @@ security design. Veda (BoringVault) was evaluated as an off-the-shelf
 provider for the Portfolio Router layer; the team chose to build in-house,
 diverging from Veda primarily by not issuing an outer share token.
 
-Planned evolution: `docs/adr/ADR-0010-unified-vault-architecture.md`
-(Proposed) extends this vault-plus-adapter pattern to every vault — basket
-vaults become a single unified `Vault` holding per-asset position adapters
-instead of `BasketVault` subclasses.
+ADR-0010 proposed extending this vault-plus-adapter pattern to every vault. It
+is Rejected and its code is deleted: basket vaults stay `BasketVault` subclasses.
 
 **Enzyme Finance** uses a two-contract model per fund: `VaultProxy` (persistent
 asset holder, ERC-20 shares) and `ComptrollerProxy` (accounting, fee accrual,
@@ -180,7 +178,7 @@ collects the exact fee. No depositor governance exists.
 ### 2.4 Fee Architecture
 
 **Robot Money** currently ships exit fees only. The fee amount is bounded and
-disclosed before signing. Management fees and performance fees are explicitly
+disclosed before signing (the live rmUSDC vault charges 25 bps, 0.25%). Management fees and performance fees are explicitly
 deferred to a future phase and require a separate ADR before implementation.
 Fee recipient changes are admin-timelock operations. This is the most
 conservative fee model in the comparison.
@@ -244,10 +242,10 @@ path.
 **Robot Money** governance controls Portfolio Router target weights across active
 vaults. The current deployed `RouterGovernance.sol` is an admin-weighted MVP
 mock: voting power is assigned by `ADMIN_ROLE`; proposal creation is
-`ADMIN_ROLE`-only. Token-holder voting against `$RM` balances is
-explicitly a future goal. The governance surface is intentionally narrow — it
-covers only router weight updates and does not control vault internals,
-per-vault asset selection, fees, or individual agent policies.
+`ADMIN_ROLE`-only. There is no token-based governance. The governance
+surface is intentionally narrow — it covers only router weight updates and
+does not control vault internals, per-vault asset selection, fees, or
+individual agent policies.
 
 **Enzyme Finance** governance (Enzyme Council / Avantgarde Core) controls
 protocol-level releases and integrations. Individual fund managers control their
@@ -366,8 +364,8 @@ current architecture supports either path by replacing a custom adapter with an
 | Multi-asset basket vaults | Planned (protocol-asset, agent-token); not yet Router-eligible — pending TWAP oracle and rebalancing model | Enzyme (multi-asset), Alvara (basket) |
 | TWAP oracle for basket vaults | Required before Router eligibility; current prototype uses manipulable `slot0` pricing | Enzyme (Chainlink), Alvara (1inch DEX aggregator) |
 | Intra-vault rebalancing for baskets | TBD — trigger, target weights, and cost/slippage model are unresolved (`docs/development/open-questions.md` §3.15) | Alvara (single-tx atomic rebalance), Enzyme (manager-triggered) |
-| Agent-token shortlist governance | TBD — bribery model vs. RM-token inclusion vote unresolved (`docs/development/open-questions.md` §1.3) | Alvara (veALVA incentive vote), Enzyme (Asset Manager role) |
-| Router weight governance | Deployed as admin-weighted MVP mock; token-holder voting is a future goal | Alvara (veALVA epoch vote), Enzyme (Enzyme Council) |
+| Agent-token shortlist governance | Admin curation behind the timelock (ADR-0004); no token-based governance | Alvara (veALVA incentive vote), Enzyme (Asset Manager role) |
+| Router weight governance | Deployed as admin-weighted MVP mock; there is no token-based governance | Alvara (veALVA epoch vote), Enzyme (Enzyme Council) |
 | Performance/management fees | Deferred to future phase requiring separate ADR | Enzyme (full fee suite), Alvara (mgmt fee built-in) |
 | DEX-tradeable LP shares | Not a design goal; per-vault receipts only | Alvara (DEX LP), some Enzyme funds |
 | Off-chain NAV computation | Not used; on-chain `totalAssets()` only | Veda (off-chain exchange rate + safety bounds) |

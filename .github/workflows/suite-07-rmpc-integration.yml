@@ -1,25 +1,23 @@
 # Canonical: docs/development/ci-suites.md §7
 #
 # WHY THIS SUITE EXISTS
-# rmpc must work end-to-end against a real consensus layer (Geth + Lighthouse), not just
-# Anvil. The devnet runs a full PoS chain with real slot timing, which surfaces bugs in
-# confirmation logic, block-number handling, and receipt polling that Anvil's instant
-# finality hides. This is the suite that catches "works on anvil, breaks on mainnet"
-# regressions.
+# rmpc must work end-to-end against real Base state, not against a hand-built chain. The Twin
+# chain (id 918453) is a pinned lazy fork of real Base made with anvil (core 1498, 1496): real
+# Aave V3, Compound V3, Morpho, Uniswap and USDC. The e2e binaries deploy their OWN vault through
+# the "publish contracts" runbook (publish-contracts/ in this repo) and read the addresses from the manifests. They never
+# read the live production v1 contracts (clean room rule).
 #
-# WHY EACH TEST BINARY RUNS SEPARATELY WITH docker compose down -v BETWEEN THEM
-# Each test binary boots its own devnet on port 8545 using a shared Fixture in a
-# OnceLock. Rust does not destruct statics on process exit, so Drop on the Fixture is
-# not guaranteed to run — the compose stack is left running after the binary exits.
-# If the next binary runs compose up against an already-running stack, the genesis
-# setup container re-runs against a populated volume and exits 1, hanging the test.
-# The explicit teardown between binaries is load-bearing; do not remove it.
+# THE TWIN CHAIN, ONE PIN PER RUN
+# The `pin` job chooses the pinned block once (upstream head minus 2). Each matrix row starts its
+# own Twin fork with .github/actions/twin-fork at that pin, so rows never share a port or a chain,
+# and the Rust harness reuses it through TWIN_RPC_URL. Anvil's RPC cache is persisted per pin block.
+# Time-dependent flows warp (evm_increaseTime) instead of waiting. There is no docker chain.
 #
 # WHY skill_docs_parity, dapp_toml_roundtrip, committee, receipt,
 # cli_committee_identity AND cli_version RUN HERE BEFORE THE DOCKER TESTS
 # These tests require the rmpc binary but no chain. Running them first means that if
 # the plugin manifest, TOML config, or committee register/vote-submit calldata path
-# drifts, CI fails fast (< 1 min) before paying for the Docker boot. They are in this
+# drifts, CI fails fast (< 1 min) before paying for the Twin chain boot. They are in this
 # suite rather than suite 6 because they depend on the release binary being built.
 # The committee test (clients/rust-payment-client/tests/committee.rs, issue #1105) mocks
 # the JSON-RPC server with mockito and drives the real `rmpc committee register` /
@@ -68,18 +66,14 @@
 #
 # WHY nonce-race-stress IS A SEPARATE JOB (NOT A STEP)
 # The race test runs 100 iterations of concurrent nonce acquisition and is sensitive to
-# runner load. Mixing it into geth-tests would make timing-dependent failures ambiguous
+# runner load. Mixing it into the e2e matrix would make timing-dependent failures ambiguous
 # (is it the race or the chain interaction?). A separate job isolates the failure signal.
 #
 # GOTCHAS
-# - docker compose pull --ignore-pull-failures caches images before the tests start.
-#   If this step is removed, each compose up pulls images inline, adding 2–5 min and
-#   making the run non-hermetic (image tags can change between pulls).
-# - --test-threads=1 is required for all devnet test binaries. Parallel tests in the
-#   same binary would race on port 8545. Do not remove this flag.
-# - The "Tear down docker (always)" step uses if: always() so it fires even when an
-#   earlier step panics. Without it, a panicking test can leave the stack running and
-#   corrupt the next job on the same runner (self-hosted runners only, but worth noting).
+# - --test-threads=1 is required for all e2e test binaries. Parallel tests in the same binary
+#   would share one Twin fork and race on block time and nonces. Do not remove this flag.
+# - A rate-limited upstream (HTTP 429) is retried by anvil and the twin-fork tool. If a row still
+#   fails to start, set the optional secret BASE_UPSTREAM_RPC to a paid provider.
 
 name: rust-client-devnet-integration
 
@@ -91,9 +85,18 @@ env:
   CI_CLASS: system-correctness
 
 on:
+  # Called by suite-29-nightly-twin-fork.yml, which chooses ONE pin for the whole nightly run and
+  # hands it down as pin_block. Steps are not copied: the nightly calls this very workflow.
+  workflow_call:
+    inputs:
+      pin_block:
+        description: "Twin chain pin handed down by a parent run. Empty: this run chooses one."
+        type: string
+        required: false
+        default: ""
   # system-correctness: this devnet integration suite is a merge gate for `dev`. It
   # defers past draft PRs (ready_for_review onward) so drafts are not charged for the
-  # Docker boot, and runs on push to dev for merged-commit coverage. paths-ignore
+  # Twin chain boot, and runs on push to dev for merged-commit coverage. paths-ignore
   # bypasses docs-only PRs. See docs/development/ci-suites.md (CI velocity tiers).
   push:
     branches: [dev]
@@ -109,13 +112,31 @@ on:
 # distinct concurrency lane per ref and never cancel, so merged-commit coverage
 # always completes. See docs/development/ci-suites.md (CI velocity tiers).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # suite tag keeps called copies (nightly Twin chain run) in separate lanes:
+  # inside workflow_call github.workflow is the CALLER's name, shared by every suite.
+  group: ${{ github.workflow }}-suite07-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
+  pin:
+    name: twin-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    outputs:
+      block: ${{ steps.pin.outputs.block }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        uses: ./.github/actions/twin-pin
+        with:
+          pin-block: ${{ inputs.pin_block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
   # Non-devnet rmpc tests that need the release binary but no chain. Kept in this
   # suite (rather than suite 6) because they depend on the release build; split into
-  # their own fast job so a manifest/TOML drift fails in <1 min without booting Docker.
+  # their own fast job so a manifest/TOML drift fails in <1 min without booting the Twin chain.
   parity:
     name: rmpc-parity
     runs-on: ubuntu-latest
@@ -352,15 +373,12 @@ jobs:
             --test cli_get_vault \
             --test cli_get_vaults -- --nocapture
 
-  # PARALLEL DEVNET MATRIX (issue #600): each e2e binary booted its own Geth+Lighthouse
-  # devnet on port 8545, so they were forced to run SERIALLY in one job with a
-  # `docker compose down -v` between each (suite wall-clock ~45m). Splitting them into a
-  # matrix gives one runner per binary, each booting + tearing down its OWN stack with
-  # `if: always()`, removing the shared-port-8545 contention (suite ~45m -> ~13m).
-  # fail-fast: false so one failing binary does not cancel the others, and the
-  # per-binary green/red signal stays independent.
+  # PARALLEL TWIN MATRIX (issue #600): one runner per e2e binary, each with its OWN Twin fork at the
+  # run pin (no shared port or chain). fail-fast: false so one failing binary does not cancel the
+  # others, and the per-binary green/red signal stays independent.
   devnet-e2e:
     name: rmpc-e2e-${{ matrix.binary }}
+    needs: pin
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 30
@@ -373,36 +391,31 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Verify Docker is available
-        run: |
-          docker version
-          docker compose version
+      # The Rust harness deploys through the "publish contracts" runbook (publish-contracts/ in this repo).
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Pre-pull Docker images
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose pull --ignore-pull-failures || true
+      # Installs foundry (anvil, forge, cast) and bun, restores anvil's RPC cache keyed by the pin
+      # block, starts the Twin fork and exports TWIN_RPC_URL for the harness to reuse.
+      - name: Start the Twin chain at the run pin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
       - name: e2e ${{ matrix.binary }}
         working-directory: testing/ethereum-testnet/e2e-rust
         run: cargo test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
 
-      - name: Tear down docker (always)
+      - name: Stop the Twin fork and save its RPC cache
         if: always()
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans || true
+        uses: ./.github/actions/twin-fork-save-cache
 
   nonce-race-stress:
     name: rmpc-nonce-race-stress
@@ -411,7 +424,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 

@@ -1,5 +1,7 @@
 # Unified vault — resolution of open questions
 
+> **Historical.** ADR-0010 (the unified vault) is Rejected and its code is deleted. This whole document describes a proposal that was not built.
+
 > **Superseded (rebalancing model) — see
 > `docs/adr/ADR-0010-unified-vault-architecture.md`.** The isomorphic
 > flow-based rebalancing decision this document records — question **D1**

@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7e7d4997a6e03af61ea2ee0f6218ea9e88f622ae/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -51,22 +51,17 @@ SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + EXECUTOR)
 EMERGENCY_ADDRESS      — independent hot key that receives the vault
 EMERGENCY_ROLE (must differ from the deployer
 EOA; ACL-1 / F-01)
-TIMELOCK_MIN_DELAY     — minimum delay in seconds. On chain id 8453 it
-must be >= 172800 (48 hours, security-model.md
-§4). On any other chain (the Twin chain 918453)
-any non-zero delay is accepted.
 SAFE_OWNERS            — comma-separated owners the Safe must have
 SAFE_THRESHOLD         — threshold the Safe must have (>= 2)
-
-On chain id 8453, EXPECTED_CHAIN_ID must be set to 8453.
-
-Optional env vars:
-EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches
-(mandatory on 8453)
-DEPLOYMENT_OUT         — output JSON path; default deployments/timelock-&lt;chain_id>.json
+TIMELOCK_MIN_DELAY     — minimum delay in seconds. On chain id 8453 it must
+be >= 172800 (48 hours, security-model.md §4).
+On any other chain (the Twin chain 918453) it must
+be >= 1. No flag lifts the 8453 floor.
+EXPECTED_CHAIN_ID      — mandatory and equal to 8453 on Base mainnet
+DEPLOYMENT_OUT         — output JSON path (no default)
 IC_POLICY_ADDRESS      — InvestmentCommitteePolicy (issue #1319, one-
-ceremony rule #1247 AC10 / INV-3). When set,
-the same grant→verify→revoke handover runs on
+ceremony rule #1247 AC10 / INV-3). The
+same grant→verify→revoke handover runs on
 it: ADMIN_ROLE + DEFAULT_ADMIN_ROLE move to the
 timelock and are revoked from the deployer EOA
 (the ADMIN_ADDRESS DeployInvestmentCommitteePolicy
@@ -74,11 +69,11 @@ granted them to). The gateway's ADMIN_ROLE on the
 IC policy — granted separately so it can forward
 committeeRegister calls — is untouched.
 CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
-same rule). When set, ADMIN_ROLE +
+same rule). ADMIN_ROLE +
 DEFAULT_ADMIN_ROLE move to the timelock.
 AGENT_ADDRESSES        — comma-separated gateway agents the deployer
-owns (issue #1476): the deploy agent from
-Deploy.s.sol, the stage ceremony's submitter.
+owns (issue #1476): the deploy agent the
+gateway stage authorizes (DeployGateway.s.sol).
 Each is handed to the timelock with
 transferAgentOwnership while the timelock
 already holds gateway ADMIN_ROLE and before
@@ -95,10 +90,9 @@ RECEIPT_ADMIN_ADDRESS  — the address that currently holds ADMIN_ROLE /
 DEFAULT_ADMIN_ROLE on the receipt contract (the
 RECEIPT_ADMIN_ADDRESS DeployInvestmentCommittee-
 Policy granted them to — not necessarily the
-deployer EOA). Only meaningful when
-CONSENSUS_RECEIPT_ADDRESS is set; revoked from
-here instead of msg.sender. Defaults to
-msg.sender when unset.
+deployer EOA). Required on every chain together
+with CONSENSUS_RECEIPT_ADDRESS; revoked from
+here instead of msg.sender. No default.
 
 <i>
 
@@ -109,6 +103,18 @@ cast call &lt;vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") &lt;
 </i>
 
 ## Constants
+
+### MANIFEST_FILE
+
+<i>
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+</i>
+
+```solidity
+string public constant MANIFEST_FILE = "timelock.json";
+```
 
 ### ADMIN_ROLE
 
@@ -150,7 +156,8 @@ bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
 <i>
 
-security-model.md §4: production timelock delay floor, 48 hours.
+security-model.md §4: production timelock delay floor, 48 hours. Enforced
+by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin.
 
 </i>
 
@@ -182,8 +189,7 @@ address public constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10
 <i>
 
 Runtime codehash of the SafeProxy 1.4.1 the canonical factory deploys
-(the same value scripts/stage/fusion-ceremony.sh checks). A stub, a mock or
-any other proxy differs.
+(read from a live Base Safe proxy). A stub, a mock or any other proxy differs.
 
 </i>
 
@@ -262,7 +268,7 @@ function _runFrom(string memory prefix) internal returns (Deployed memory d);
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="runinprocess-address-address-address-address-address-address-address-uint256"></a>
+<a id="runinprocess-address-address-address-address-address-address-address-uint256-safespec"></a>
 
 ### runInProcess
 
@@ -281,7 +287,8 @@ function runInProcess(
         address governance_,
         address safe_,
         address emergency_,
-        uint256 minDelay_
+        uint256 minDelay_,
+        SafeSpec memory safeSpec_
     ) external returns (Deployed memory d);
 ```
 
@@ -297,6 +304,7 @@ function runInProcess(
 | safe_ | `address` |  |
 | emergency_ | `address` |  |
 | minDelay_ | `uint256` |  |
+| safeSpec_ | `SafeSpec` |  |
 
 **Returns**
 
@@ -304,7 +312,75 @@ function runInProcess(
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="runinprocesswithcommittee-address-address-address-address-address-address-address-uint256-address-address-address"></a>
+<a id="runinprocessvaults-address-address-address-address-address-address-address-uint256-safespec"></a>
+
+### runInProcessVaults
+
+In-process variant for the one deployment scheme: hands over every
+vault in `vaults_` (the in-process form of VAULT_ADDRESSES). Caller
+sets up prank context. No JSON is written; no env vars are read.
+
+```solidity
+function runInProcessVaults(
+        address[] memory vaults_,
+        address gateway_,
+        address registry_,
+        address router_,
+        address governance_,
+        address safe_,
+        address emergency_,
+        uint256 minDelay_,
+        SafeSpec memory safeSpec_
+    ) external returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults_ | `address[]` |  |
+| gateway_ | `address` |  |
+| registry_ | `address` |  |
+| router_ | `address` |  |
+| governance_ | `address` |  |
+| safe_ | `address` |  |
+| emergency_ | `address` |  |
+| minDelay_ | `uint256` |  |
+| safeSpec_ | `SafeSpec` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_single-address"></a>
+
+### _single
+
+<i>
+
+One-element vault list for the single-vault in-process entry points.
+
+</i>
+
+```solidity
+function _single(address v) internal pure returns (address[] memory a);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address[]` |  |
+
+<a id="runinprocesswithcommittee-address-address-address-address-address-address-address-uint256-committee-safespec"></a>
 
 ### runInProcessWithCommittee
 
@@ -322,9 +398,8 @@ function runInProcessWithCommittee(
         address safe_,
         address emergency_,
         uint256 minDelay_,
-        address icPolicy_,
-        address consensusReceipt_,
-        address receiptAdmin_
+        Committee memory committee_,
+        SafeSpec memory safeSpec_
     ) external returns (Deployed memory d);
 ```
 
@@ -340,9 +415,8 @@ function runInProcessWithCommittee(
 | safe_ | `address` |  |
 | emergency_ | `address` |  |
 | minDelay_ | `uint256` |  |
-| icPolicy_ | `address` | InvestmentCommitteePolicy address, or address(0) to skip. |
-| consensusReceipt_ | `address` | ConsensusRecommendationReceipt address, or address(0) to skip. |
-| receiptAdmin_ | `address` | Current holder of ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the<br/>receipt contract (RECEIPT_ADMIN_ADDRESS at its<br/>construction); address(0) defaults to msg.sender. |
+| committee_ | `Committee` | `icPolicy`: InvestmentCommitteePolicy address, or address(0)<br/>to skip. `consensusReceipt`: ConsensusRecommendationReceipt address, or<br/>address(0) to skip. `receiptAdmin`: current holder of<br/>ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the receipt contract<br/>(RECEIPT_ADMIN_ADDRESS at its construction); address(0) defaults to<br/>msg.sender. |
+| safeSpec_ | `SafeSpec` |  |
 
 **Returns**
 
@@ -350,7 +424,7 @@ function runInProcessWithCommittee(
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="runinprocesswithagents-address-address-address-address-address-address-address-uint256-address"></a>
+<a id="runinprocesswithagents-address-address-address-address-address-address-address-uint256-address-safespec"></a>
 
 ### runInProcessWithAgents
 
@@ -369,7 +443,8 @@ function runInProcessWithAgents(
         address safe_,
         address emergency_,
         uint256 minDelay_,
-        address[] calldata agents_
+        address[] calldata agents_,
+        SafeSpec memory safeSpec_
     ) external returns (Deployed memory d);
 ```
 
@@ -386,6 +461,7 @@ function runInProcessWithAgents(
 | emergency_ | `address` |  |
 | minDelay_ | `uint256` |  |
 | agents_ | `address[]` | Gateway agents the deployer (the caller) owns. |
+| safeSpec_ | `SafeSpec` |  |
 
 **Returns**
 
@@ -409,6 +485,32 @@ run never treats a missing list as an empty one.
 
 ```solidity
 function _readAgentList(string memory name) internal view returns (address[] memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
+
+<a id="_readvaultlist-string"></a>
+
+### _readVaultList
+
+<i>
+
+VAULT_ADDRESSES: required, no default, comma-separated, at least one vault.
+
+</i>
+
+```solidity
+function _readVaultList(string memory name) internal view returns (address[] memory);
 ```
 
 **Parameters**
@@ -453,12 +555,6 @@ function _readAddressList(string memory name) internal view returns (address[] m
 
 ### _validate
 
-<i>
-
-The full input check of `run()`: the basic checks plus the real-Safe check.
-
-</i>
-
 ```solidity
 function _validate(Deployed memory d, SafeSpec memory spec) internal view;
 ```
@@ -469,26 +565,6 @@ function _validate(Deployed memory d, SafeSpec memory spec) internal view;
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 | spec | `SafeSpec` | SAFE_OWNERS and SAFE_THRESHOLD: the owners and threshold the Safe must have. |
-
-<a id="_validatebasic-deployed"></a>
-
-### _validateBasic
-
-<i>
-
-The checks every entry point runs, including the in-process test entry points.
-
-</i>
-
-```solidity
-function _validateBasic(Deployed memory d) internal view;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| d | `Deployed` |  |
 
 <a id="_requirerealsafe-address-address-uint256"></a>
 
@@ -637,6 +713,143 @@ function _writeJsonTo(Deployed memory d, string memory outPath) internal;
 | d | `Deployed` |  |
 | outPath | `string` |  |
 
+<a id="_serializeaddresssection-deployed"></a>
+
+### _serializeAddressSection
+
+<i>
+
+The `addresses` section of the manifest. Split out of `_writeJsonTo`
+to keep that function inside the non-viaIR stack limit (`forge coverage`).
+
+</i>
+
+```solidity
+function _serializeAddressSection(Deployed memory d) internal returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_serializecodehashsection-deployed"></a>
+
+### _serializeCodeHashSection
+
+<i>
+
+The `code_hashes` section of the manifest, read from the chain.
+
+</i>
+
+```solidity
+function _serializeCodeHashSection(Deployed memory d) internal returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_serializevaulthandovers-deployed"></a>
+
+### _serializeVaultHandovers
+
+<i>
+
+The per-vault handover record: one object per vault in VAULT_ADDRESSES,
+keyed `vault_&lt;index>`. Every field is a live read from the chain.
+
+</i>
+
+```solidity
+function _serializeVaultHandovers(Deployed memory d) internal returns (string memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `string` |  |
+
+<a id="_vaultroleaggregates-deployed"></a>
+
+### _vaultRoleAggregates
+
+<i>
+
+Folds the per-vault role reads into three booleans for the manifest.
+
+</i>
+
+```solidity
+function _vaultRoleAggregates(Deployed memory d)
+        internal
+        view
+        returns (bool allTimelockAdmin, bool allEmergencyKey, bool deployerHoldsVaultRole);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| allTimelockAdmin | `bool` |  |
+| allEmergencyKey | `bool` |  |
+| deployerHoldsVaultRole | `bool` |  |
+
+<a id="_deployerownslistedagent-deployed"></a>
+
+### _deployerOwnsListedAgent
+
+<i>
+
+True when the deployer still owns any gateway agent in `d.agents`.
+
+</i>
+
+```solidity
+function _deployerOwnsListedAgent(Deployed memory d) internal view returns (bool owns);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owns | `bool` |  |
+
 <a id="_serializeroles-deployed"></a>
 
 ### _serializeRoles
@@ -685,12 +898,39 @@ struct SafeSpec {
 | owners | `address[]` |  |
 | threshold | `uint256` |  |
 
+### Committee
+
+<i>
+
+The optional committee handover inputs, grouped so
+`runInProcessWithCommittee` stays inside the non-viaIR stack limit
+(`forge coverage` compiles without the optimizer or viaIR).
+
+</i>
+
+```solidity
+struct Committee {
+        address icPolicy;
+        address consensusReceipt;
+        address receiptAdmin;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| icPolicy | `address` |  |
+| consensusReceipt | `address` |  |
+| receiptAdmin | `address` |  |
+
 ### Deployed
 
 ```solidity
 struct Deployed {
         TimelockController timelock;
-        address vault;
+        /// Every vault handed over (VAULT_ADDRESSES), all treated the same way.
+        address[] vaults;
         address gateway;
         address registry;
         address router;
@@ -711,7 +951,7 @@ struct Deployed {
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | timelock | `TimelockController` |  |
-| vault | `address` |  |
+| vaults | `address[]` |  |
 | gateway | `address` |  |
 | registry | `address` |  |
 | router | `address` |  |

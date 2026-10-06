@@ -12,12 +12,12 @@
 //! without re-reading the test (acceptance criterion: "actionable
 //! errors").
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::U256;
 use rmpc_fork_e2e::{addresses, scenarios, ForkFixture, IRobotMoneyVault, IERC20};
 
 #[test]
 fn abi_address_sanity() {
-    // The golden contains the production contract storage read below.
+    // The golden deploys its own vault through the vault stage script (clean room rule, core 1498).
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[abi_address_sanity] {}", fx.summary_line());
 
@@ -35,7 +35,7 @@ fn abi_address_sanity() {
     let acct = fx
         .ephemeral(U256::from(10u64).pow(U256::from(17u64)), U256::ZERO)
         .expect("ephemeral funded with ETH");
-    let vault = fixture_vault();
+    let vault = fx.vault();
 
     // USDC.decimals() == 6, USDC.symbol() == "USDC".
     let bytes = acct
@@ -83,22 +83,6 @@ fn abi_address_sanity() {
     let _ = acct
         .call(vault, &IRobotMoneyVault::pausedCall {})
         .expect("Vault.paused()");
-}
-
-fn fixture_vault() -> Address {
-    if let Ok(value) = std::env::var("RMPC_FIXTURE_VAULT") {
-        return value.parse().expect("RMPC_FIXTURE_VAULT address");
-    }
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deployments/full-stack.json");
-    let value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(path).expect("read full-stack deployment"))
-            .expect("parse full-stack deployment");
-    value["vault"]
-        .as_str()
-        .expect("deployment vault")
-        .parse()
-        .expect("deployment vault address")
 }
 
 /// Minimal ABI string decoder — bytes32 offset, bytes32 length,

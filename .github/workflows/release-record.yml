@@ -1,0 +1,76 @@
+# Canonical: scripts/release/README.md (release dependency recording)
+# Issue: robotmoney-core 1497.
+#
+# Records the third-party dependency manifest for a release deploy. Dispatched by
+# a human, or by the devops publish-contracts run through `gh workflow run`.
+# It COMMITS NOTHING. The manifest is printed to the job summary and uploaded as an
+# artifact. The operator commits it with the release deployment record.
+#
+# NO SECRET: the RPC URL is the repository variable BASE_RPC_URL or the public
+# Base endpoint. No secrets.* is referenced.
+
+name: release-record
+
+env:
+  CI_CLASS: ignore
+
+on:
+  workflow_dispatch:
+    inputs:
+      chain_id:
+        description: "Chain id of the deploy"
+        required: true
+        default: "8453"
+      release:
+        description: "Release tag the manifest is recorded for (letters, digits, . _ -)"
+        required: true
+      manifests_dir:
+        description: "Deployed manifests directory in this checkout (for example deployments/full-stack). Optional."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-record-${{ inputs.chain_id }}-${{ inputs.release }}
+  cancel-in-progress: false
+
+jobs:
+  record:
+    name: record-dependency-manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Record and check the manifest
+        env:
+          CHAIN_ID: ${{ inputs.chain_id }}
+          RELEASE: ${{ inputs.release }}
+          MANIFESTS_DIR: ${{ inputs.manifests_dir }}
+          DEPENDENCY_MANIFEST_RPC_URL: ${{ vars.BASE_RPC_URL || 'https://mainnet.base.org' }}
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ -n "$MANIFESTS_DIR" ]; then extra=(--manifests-dir "$MANIFESTS_DIR"); fi
+          bun scripts/release/record-release-dependencies.ts \
+            --chain-id "$CHAIN_ID" --release "$RELEASE" "${extra[@]}" | tee "$RUNNER_TEMP/record.log"
+          path="$(tail -n 1 "$RUNNER_TEMP/record.log")"
+          {
+            echo "### Dependency manifest: $path"
+            echo '```json'
+            cat "$path"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$path"
+          echo "MANIFEST_PATH=$path" >> "$GITHUB_ENV"
+
+      - name: Upload the manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-manifest-${{ inputs.chain_id }}-${{ inputs.release }}
+          path: ${{ env.MANIFEST_PATH }}
+          retention-days: 90

@@ -4,18 +4,21 @@
 The Geth devnet smoke-test harness has a recurring failure class -- a confirmed
 write receipt does not imply readable state, so a dependent read can observe
 pre-write state. It is fixed by polling the dependent read until it settles, in
-three helpers in ``testing/smoke-test/src/lib.rs``:
+the helpers in ``testing/smoke-test/src/lib.rs``:
 
   - ``erc20_allowance``        (the read half of the allowance poll)
-  - ``approve_and_confirm``    (approve, then poll allowance until visible)
-  - ``wait_for_vault_registered`` (poll listVaults() until the vault appears)
+  - ``cast_send``              (every send pins its nonce; see the nonce section)
+
+``approve_and_confirm`` and ``wait_for_vault_registered`` were removed with the
+Rust deployment and demo seeding (core 1488: the stage deploys through publish
+contracts), so they are no longer required here.
 
 This guard enforces two invariants so the class cannot silently lose its
 documentation again:
 
   (A) The canonical doc ``docs/testing/geth-state-lag.md`` exists and carries a
       read-after-write / state-lag section heading.
-  (B) Each of the three helpers carries, inside its own ``///`` doc-comment
+  (B) Each listed helper carries, inside its own ``///`` doc-comment
       block, a back-link to the canonical doc path ``docs/testing/...``.
 
 This is a doc-symbol / back-link guard, not a source reconciler: it fails red if
@@ -46,7 +49,7 @@ HEADING_RE = re.compile(
 
 # Helpers that must each carry a back-link to the canonical doc path in their
 # own doc-comment block.
-HELPERS = ("erc20_allowance", "approve_and_confirm", "wait_for_vault_registered")
+HELPERS = ("erc20_allowance", "cast_send")
 
 # The back-link substring the helper doc-comments must contain.
 BACKLINK = "docs/testing/geth-state-lag.md"
@@ -115,13 +118,11 @@ def self_test() -> int:
             "/// no back-link\n"
             "pub fn erc20_allowance() {}\n"
             "/// no back-link\n"
-            "fn approve_and_confirm() {}\n"
-            "/// no back-link\n"
-            "fn wait_for_vault_registered() {}\n",
+            "fn cast_send() {}\n",
             "utf-8",
         )
         failures = check(root)
-        # Expect: 1 heading failure + 3 missing back-links = 4.
+        # Expect: 1 heading failure + one missing back-link per helper.
         if len(failures) != 1 + len(HELPERS):
             print(
                 "SELF-TEST FAIL: guard did not flag every seeded defect; "
@@ -139,8 +140,7 @@ def self_test() -> int:
         )
         (root / SMOKE).write_text(
             f"/// link: {BACKLINK}\npub fn erc20_allowance() {{}}\n"
-            f"/// link: {BACKLINK}\nfn approve_and_confirm() {{}}\n"
-            f"/// link: {BACKLINK}\nfn wait_for_vault_registered() {{}}\n",
+            f"/// link: {BACKLINK}\nfn cast_send() {{}}\n",
             "utf-8",
         )
         ok = check(root)

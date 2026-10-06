@@ -28,10 +28,9 @@ fn rmpc_get_allowance_against_fork() {
 
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
     let owner = fx.ephemeral(one_eth, U256::ZERO).expect("fund ETH");
-    // Use the canonical vault address as the spender (any address
-    // works — what matters is that allowance round-trips through
-    // rmpc).
-    let spender = addresses::VAULT;
+    // Any address works as the spender: what matters is that the allowance round-trips through
+    // rmpc. No Robot Money address is read (clean room rule, core 1498).
+    let spender = Address::repeat_byte(0x11);
 
     let amount = U256::from(APPROVAL_AMOUNT);
     owner

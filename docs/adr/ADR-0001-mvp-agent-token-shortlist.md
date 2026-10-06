@@ -1,7 +1,7 @@
 # ADR-0001: MVP agent-token shortlist is hand-picked, not quant-filtered
 
-- **Status:** Accepted (amended 2026-06-15 — see [Amendment](#amendment--2026-06-15-real-four-vault-demo-shortlist))
-- **Date:** 2026-05-27 (amended 2026-06-15)
+- **Status:** Accepted (amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-mainnet-launch-shortlist-is-rm-only); earlier [Amendment — 2026-06-15](#amendment--2026-06-15-real-four-vault-demo-shortlist))
+- **Date:** 2026-05-27 (amended 2026-06-15, 2026-10-05)
 - **Deciders:** Product owner (recorded reply 2026-05-27)
 - **Related:** `docs/development/open-questions.md` §1.3, §1.4, §3.1; `docs/prd.md` §11.3; [ADR-0004](ADR-0004-agent-token-shortlist-governance.md); [ADR-0005](ADR-0005-basketvault-multi-dex-routing.md); `config/agent-token-shortlist.json`
 
@@ -49,7 +49,7 @@ admin path: a Safe (≥2-of-N) proposes/executes against the
 `TimelockController` that holds `ADMIN_ROLE` on the vault, now subject to
 the mandatory timelock delay and public veto window specified in
 [ADR-0004](ADR-0004-agent-token-shortlist-governance.md). There is no
-separate token-holder vote over membership in the MVP.
+separate token-holder vote over membership.
 
 ## Amendment — 2026-06-15: Real four-vault demo shortlist
 
@@ -100,6 +100,58 @@ and the admin-curation governance path are unchanged by this amendment.
 DEUS and PEAQ remain excluded for the reasons recorded in the original
 decision (no active Base presence; not Base-native, respectively).
 
+## Amendment — 2026-10-05: Mainnet launch shortlist is RM only
+
+Owner decisions of 2026-10-05 (mainnet plan §2.2, §2.6, §3.1, §3.5)
+replace the 2026-06-15 three-token shortlist for the Base mainnet launch:
+
+- **Launch shortlist: RM only.** rmAGENT holds RM from day 2. BNKR and
+  JUNO have no usable token/USDC pool today; they are added later
+  through the timelock path of
+  [ADR-0004](ADR-0004-agent-token-shortlist-governance.md) (core 1491).
+- **RM is the live Base token.** RM is ROBOTMONEY at
+  `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (on-chain name
+  "Robot Money", symbol `ROBOTMONEY`, 18 decimals). Nothing deploys RM
+  in production. No test deploys an RM mock: the Twin fork of Base
+  carries the live token. The address is config, pinned by code hash
+  like USDC. This voids the 2026-06-15 statements that the demo seeds RM
+  as a stand-in `DemoBasketToken` and that the live address is a `TODO`.
+- **Branch state when this amendment was written** (`impl/core-contracts`,
+  core PR 1505): `config/agent-token-shortlist.json` still carries an
+  empty `shortlist`, so the RM entry is not yet added (core 1491).
+  `contracts/script/DeployRmToken.s.sol` is already deleted and is listed
+  as forbidden in `scripts/ci/check-no-test-only-code.ts`.
+  `contracts/RmToken.sol` is also deleted (core 1489, 2026-10-05) and is
+  listed as a deleted path in the same gate. The dapp reads the live RM
+  address for its balance row; the faucet no longer drips RM.
+- **RM's deepest liquidity is no longer on Aerodrome.** Read on Base on
+  2026-10-05 (block 52222597):
+
+  | RM pool | Approx. value | Note |
+  |---|---|---|
+  | Uniswap V4 RM/WETH | ~$170k | Deepest RM pool. Not usable: `addAsset` accepts only a token/USDC pool on every venue (see the [ADR-0005](ADR-0005-basketvault-multi-dex-routing.md) amendment). |
+  | Uniswap V4 RM/USDC, fee 2.91% | ~$809 | Deepest RM/USDC pool. Needs the restored V4 adapter. |
+  | Uniswap V3 RM/USDC, fee 10000, `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` | — | In-range liquidity 0, observation cardinality 1. `addAsset` refuses it today (`MIN_POOL_CARDINALITY` 2, `MIN_POOL_LIQUIDITY` 1e6). |
+  | Aerodrome Slipstream RM/USDC, `0x0992af1070f7fe4654a033fec8f153a6991465a8` | ~$8 | No deploy script registers the Aerodrome adapter. |
+
+- **RM's venue is decided (owner, 2026-10-06; mainnet plan §2.6
+  item 2).** rmAGENT launches on the existing Uniswap V3 RM/USDC pool
+  above (`0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882`, fee 10000), the
+  only venue the deploy script wires; no code change. The owner funds it
+  with in-range liquidity at market price before the mainnet run, sized
+  to rmAGENT's first-period cap, and raises its observation cardinality.
+  Restoring the Uniswap V4 swap adapter is a later option, not a launch
+  blocker (see the ADR-0005 amendment for what the restore must first
+  prove). No route goes through WETH.
+
+Unchanged by this amendment: the hand-picked-not-quant-filtered method,
+the equal-weight allocation, the admin-curation path (now as amended in
+ADR-0004), and the absence of any RM-specific guard in code.
+
+2026-10-06: no token-based governance is foreseen; considered alternatives that mention token voting are historical only.
+
+2026-10-06: the owner decided RM's venue: the existing Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), funded by the owner before the mainnet run. The V4 adapter restore is a later option, not a launch blocker.
+
 ## Consequences
 
 **Positive.**
@@ -128,8 +180,8 @@ decision (no active Base presence; not Base-native, respectively).
 **Out of scope of this decision.**
 
 - The long-term ownership model (admin-curated vs. RM-inclusion vote
-  vs. bribery flow) is **deferred**, not decided. This ADR commits the
-  MVP only.
+  vs. bribery flow) was **deferred** here. ADR-0004 decides it: admin
+  curation behind the timelock. This ADR commits the MVP only.
 - Trading authority and strategy inside the vault (open-questions §3.2)
   is not resolved; the MVP vault holds the basket and rebalances per
   §3.15 only.

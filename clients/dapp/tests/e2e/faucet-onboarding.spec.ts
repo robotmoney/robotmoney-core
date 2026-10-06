@@ -10,9 +10,12 @@
  * auto-bypasses the registration gate; this spec opens the dapp with
  * `?force-onboarding=1` (a documented dev-only URL toggle handled in
  * AgentsPanel.tsx) so the OnboardingWizard mounts against the real
- * chain. The wizard signs `authorizeAgent` with the admin EOA; on
- * success, the seed handler drips 100 USDC into the admin EOA via the
- * harness holder, and the spec asserts the balance delta on-chain.
+ * chain. A fresh depositor wallet (gas funded through the Twin "fund gas"
+ * step, no USDC, no role) authorizes its own agent through the wizard's
+ * commit/reveal path, which needs no ADMIN_ROLE. On success the seed
+ * handler drips 100 USDC into that new account from the harness holder,
+ * and the spec asserts the balance delta and the agent's owner on-chain.
+ * The new account is never the holder, so the delta is a real transfer.
  *
  * Plus: a second scenario stubs the chain id as 1 (mainnet) at the
  * window.ethereum layer and asserts the Faucet tab is absent and the
@@ -23,8 +26,9 @@
 
 import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
+import { freshDepositor, waitForAgentState } from "./helpers/depositor";
 import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";
 
 const FAUCET_DRIP_AMOUNT_USDC = 100_000_000n;
@@ -86,8 +90,12 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
   test("authorizing through onboarding drips exactly 100 USDC into the new account", async ({
     page,
   }) => {
+    const depositor = await freshDepositor(endpoints);
+    expect(depositor.address.toLowerCase()).not.toBe(
+      endpoints.harness_usdc_holder_addr.toLowerCase(),
+    );
     await injectWallet(page, {
-      privateKey: endpoints.admin_private_key as Hex,
+      privateKey: depositor.privateKey,
       rpcUrl: endpoints.rpc_url,
       chainId: endpoints.chain_id,
     });
@@ -102,36 +110,37 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
 
     // Step 2: paste agent + shareReceiver.
     //
-    // Per issue #269, `authorizeAgent` is permissionless and reverts with
-    // `AgentAlreadyOwned` if called twice for the same agent address. The
-    // smoke-test devnet's Deploy.s.sol already authorized `endpoints.agent_addr`
-    // at deploy time (recording the deployer as agentOwner). Re-authorizing it
-    // here would revert in simulation and leave the wizard's submit button
-    // disabled forever. Use a fresh, deterministic-but-unused address instead;
-    // the wizard's invariant under test is "the seed handler drips 100 USDC
-    // into the connected wallet after a successful authorize", which does not
-    // care which agent address is being granted AGENT_ROLE.
-    const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000fa11";
+    // Per issue #269, authorization reverts with `AgentAlreadyOwned` if the
+    // agent address already has an owner. The publish run authorized
+    // `endpoints.agent_addr` at deploy time. Re-authorizing it here would
+    // revert. Use a fresh, deterministic-but-unused address instead; the
+    // wizard's invariant under test is "the seed handler drips 100 USDC into
+    // the connected wallet after a successful authorize", which does not care
+    // which agent address is being granted AGENT_ROLE.
+    //
+    // The gateway requires a caller without ADMIN_ROLE to name itself as
+    // shareReceiver (RobotMoneyGateway._validatePolicy), so the depositor
+    // receives its own shares.
+    const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000fa11" as Address;
     await page.getByTestId("wizard-agent-input").fill(FRESH_AGENT_ADDR);
-    await page.getByTestId("wizard-shareReceiver-input").fill(endpoints.share_receiver_addr);
+    await page.getByTestId("wizard-shareReceiver-input").fill(depositor.address);
     await page.getByTestId("step-2-next").click();
 
     // Step 3: commit/reveal authorize (two-step flow, AZ-DAPP-1).
-    const baseline = await usdcBalanceOf(
-      endpoints.rpc_url,
-      endpoints.usdc_addr,
-      endpoints.admin_addr,
-    );
+    const baseline = await usdcBalanceOf(endpoints.rpc_url, endpoints.usdc_addr, depositor.address);
 
     // Step 3a: commit — signs commitAuthorization(keccak256(agent,caller,salt)).
     const commitSubmit = page.getByTestId("wizard-commit-submit");
     await expect(commitSubmit).toBeEnabled({ timeout: 30_000 });
     await commitSubmit.click();
 
-    // Step 3b: reveal — enabled once currentBlock > commitBlockNumber (~12s on Geth).
+    // Step 3b: reveal — enabled once currentBlock > commitBlockNumber.
     const revealSubmit = page.getByTestId("wizard-reveal-submit");
     await expect(revealSubmit).toBeEnabled({ timeout: 60_000 });
     await revealSubmit.click();
+
+    // The reveal mined: the depositor owns the agent and the agent holds AGENT_ROLE.
+    await waitForAgentState(endpoints, FRESH_AGENT_ADDR, depositor.address);
 
     // The seed handler runs after the authorize tx is broadcast. Poll
     // on-chain balance — the wizard surfaces a `wizard-seed-result`
@@ -140,7 +149,7 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
     const after = await waitForBalanceDelta(
       endpoints.rpc_url,
       endpoints.usdc_addr,
-      endpoints.admin_addr,
+      depositor.address,
       baseline,
       FAUCET_DRIP_AMOUNT_USDC,
     );

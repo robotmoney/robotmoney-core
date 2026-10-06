@@ -16,7 +16,7 @@ import {
 } from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "../gateway/MockVault.sol";
+import {MockVault} from "./helpers/MockVault.sol";
 
 /// @title DeployConsensusRecommendationReceiptTest
 /// @notice AC10: the receipt contract deploys **alongside**

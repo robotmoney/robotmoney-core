@@ -23,6 +23,7 @@ import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.so
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
 import {ISafe, ISafeProxyFactory, _ISafeSetup} from "./SafeIntegration.t.sol";
+import {ForkSelect} from "./helpers/ForkSelect.sol";
 
 /// @title GovernanceExecutePathAfterHandover
 /// @notice R7's two halves, proved on one topology built the way the deploy
@@ -44,9 +45,9 @@ import {ISafe, ISafeProxyFactory, _ISafeSetup} from "./SafeIntegration.t.sol";
 ///         runs (issue #1447): a SafeProxy created through the canonical
 ///         SafeProxyFactory on the canonical SafeL2 singleton, 2-of-3, driven
 ///         by `execTransaction` with two owner signatures. Those contracts
-///         exist only on a Base fork, so CI runs this file through
-///         scripts/devnet/run-golden-forge-forks.sh against the golden
-///         fixture, like SafeIntegration.t.sol.
+///         exist only on a Base fork, so CI runs this file with
+///         FORK_RPC_URL set to the Twin chain (a pinned lazy fork of real Base), like
+///         SafeIntegration.t.sol. Unset, it skips with a named reason.
 contract GovernanceExecutePathAfterHandoverTest is Test {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
@@ -107,8 +108,8 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     uint256 internal constant MIN_DELAY = 2 days;
 
     function setUp() public {
-        string memory rpc = vm.envOr("FORK_RPC_URL", string("http://127.0.0.1:8545"));
-        vm.createSelectFork(rpc);
+        string memory rpc = vm.envOr("FORK_RPC_URL", string(""));
+        if (!ForkSelect.selectOrSkip(rpc)) return;
 
         timelockScript = new DeployTimelock();
         govScript = new DeployRouterGovernance();
@@ -184,7 +185,8 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             address(gov),
             address(safe),
             emergency,
-            MIN_DELAY
+            MIN_DELAY,
+            DeployTimelock.SafeSpec({owners: _ownersOfSafe(), threshold: 2})
         );
         timelock = t.timelock;
     }
@@ -360,7 +362,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     }
 
     /// @dev A 2-of-3 SafeProxy on SafeL2 through the canonical factory — the
-    ///      same call stage's ceremony makes (fusion-ceremony.sh create_safe).
+    ///      same call the stage deploy makes through the Safe SDK.
     function _createSafe() internal returns (ISafe created) {
         ownerPks[0] = uint256(keccak256("handover-safe-owner-1"));
         ownerPks[1] = uint256(keccak256("handover-safe-owner-2"));
@@ -377,6 +379,14 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             ISafeProxyFactory(SAFE_PROXY_FACTORY)
                 .createProxyWithNonce(SAFE_SINGLETON_L2, setup, uint256(keccak256("handover-safe")))
         );
+    }
+
+    /// @dev The owners `_createSafe` set up, for DeployTimelock's SAFE_OWNERS check.
+    function _ownersOfSafe() internal view returns (address[] memory owners) {
+        owners = new address[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            owners[i] = vm.addr(ownerPks[i]);
+        }
     }
 
     /// @dev Owner keys ordered by owner address, ascending (Safe requirement).

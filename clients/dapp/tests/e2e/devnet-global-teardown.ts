@@ -1,5 +1,5 @@
 /**
- * Playwright globalTeardown for the full-stack Geth+Lighthouse devnet.
+ * Playwright globalTeardown for the full-stack Twin chain.
  *
  * Called automatically by Playwright after all tests complete when
  * `globalTeardown` is set in playwright.config.ts. Kills the smoke-test

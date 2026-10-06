@@ -1,17 +1,17 @@
 ---
 title: "TwapTickMath"
-description: "Shared time-weighted-average-price tick helpers for the BasketVault swap adapters. `AerodromeSwapAdapter` and `UniswapV4SwapAdapter` previously carried byte-identical copies of pool-pair validation, mean-tick computation, and price-from-tick conversion, differing only in the concrete pool interface type. Both pool types expose the Uniswap V3 `observe()` ABI, so the logic is consolidated here over the minimal `IObservablePool` surface."
+description: "Shared time-weighted-average-price tick helpers for the BasketVault swap adapters. `AerodromeSwapAdapter` and `UniswapV3SwapAdapter` share one copy of of pool-pair validation, mean-tick computation, and price-from-tick conversion, differing only in the concrete pool interface type. Both pool types expose the Uniswap V3 `observe()` ABI, so the logic is consolidated here over the minimal `IObservablePool` surface."
 ---
 
 # TwapTickMath
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/lib/TwapTickMath.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/lib/TwapTickMath.sol)
 
 **Title:** TwapTickMath
 
 Shared time-weighted-average-price tick helpers for the BasketVault
-swap adapters. `AerodromeSwapAdapter` and `UniswapV4SwapAdapter`
-previously carried byte-identical copies of pool-pair validation,
+swap adapters. `AerodromeSwapAdapter` and `UniswapV3SwapAdapter`
+share one copy of of pool-pair validation,
 mean-tick computation, and price-from-tick conversion, differing only
 in the concrete pool interface type. Both pool types expose the
 Uniswap V3 `observe()` ABI, so the logic is consolidated here over

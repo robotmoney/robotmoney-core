@@ -1,30 +1,33 @@
 ---
 title: "ActivateBasketVaultEligibility"
-description: "Calls `VaultRegistry.setRouterEligible(vault, true)` for both `ProtocolAssetVault` (rmPROTO) and `AgentTokenVault` (rmAGENT)."
+description: "Makes `ProtocolAssetVault` (rmPROTO), `AgentTokenVault` (rmAGENT) and `RwaBasketVault` (rmRWA) router-eligible, one atomic `migrateEligibility` each."
 ---
 
 # ActivateBasketVaultEligibility
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/script/ActivateBasketVaultEligibility.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/ActivateBasketVaultEligibility.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
 **Title:** ActivateBasketVaultEligibility
 
-Calls `VaultRegistry.setRouterEligible(vault, true)` for both
-`ProtocolAssetVault` (rmPROTO) and `AgentTokenVault` (rmAGENT).
-
-SAFETY GATE: the script reverts unless `BASKET_VAULT_AUDIT_COMPLETE`
-env var is set to exactly `"true"`. This prevents accidental execution
-before the Architecture §4.1 certification checklist is satisfied.
+Makes `ProtocolAssetVault` (rmPROTO), `AgentTokenVault` (rmAGENT) and
+`RwaBasketVault` (rmRWA) router-eligible, one atomic `migrateEligibility` each.
 
 Required env vars:
-BASKET_VAULT_AUDIT_COMPLETE — must be "true" (reverts otherwise)
-REGISTRY_ADDRESS            — deployed VaultRegistry
-PROTOCOL_VAULT_ADDRESS      — deployed ProtocolAssetVault (rmPROTO)
-AGENT_VAULT_ADDRESS         — deployed AgentTokenVault (rmAGENT)
+EXPECTED_CHAIN_ID       mandatory and equal to 8453 on Base mainnet
+REGISTRY_ADDRESS        deployed VaultRegistry, router already linked
+PROTOCOL_VAULT_ADDRESS  rmPROTO
+AGENT_VAULT_ADDRESS     rmAGENT
+RWA_VAULT_ADDRESS       rmRWA
 
-The broadcaster must hold ADMIN_ROLE on the VaultRegistry.
+## Constants
+
+### BPS
+
+```solidity
+uint256 internal constant BPS = 10_000;
+```
 
 ## Functions
 
@@ -32,8 +35,7 @@ The broadcaster must hold ADMIN_ROLE on the VaultRegistry.
 
 ### run
 
-Forge broadcast entrypoint. Reads env vars, validates the audit
-gate, and calls `setRouterEligible(true)` for both basket vaults.
+Forge broadcast entrypoint.
 
 ```solidity
 function run() external returns (Activated memory a);
@@ -45,23 +47,19 @@ function run() external returns (Activated memory a);
 | ---- | ---- | ----------- |
 | a | `Activated` |  |
 
-<a id="runinprocesswith-address-address-address-bool"></a>
+<a id="runinprocesswith-address-address-address-address"></a>
 
 ### runInProcessWith
 
-In-process variant for forge tests. No broadcast. Caller must
-prank admin or call from a context that holds ADMIN_ROLE.
-
-`auditComplete` is passed explicitly so tests can exercise both
-the gated path (true) and the revert path (false) without setting
-env vars.
+In-process variant for forge tests. No broadcast. The caller context must hold
+ADMIN_ROLE on the registry (the test grants it to this script or pranks).
 
 ```solidity
 function runInProcessWith(
         address registry_,
         address protocolVault_,
         address agentVault_,
-        bool auditComplete
+        address rwaVault_
     ) external returns (Activated memory a);
 ```
 
@@ -72,7 +70,7 @@ function runInProcessWith(
 | registry_ | `address` |  |
 | protocolVault_ | `address` |  |
 | agentVault_ | `address` |  |
-| auditComplete | `bool` |  |
+| rwaVault_ | `address` |  |
 
 **Returns**
 
@@ -80,21 +78,17 @@ function runInProcessWith(
 | ---- | ---- | ----------- |
 | a | `Activated` |  |
 
-<a id="_activate-vaultregistry-address-address"></a>
+<a id="_activate-vaultregistry-address-address-address"></a>
 
 ### _activate
 
-<i>
-
-Activate router eligibility for both basket vaults. Caller must
-hold ADMIN_ROLE on the registry.
-
-</i>
-
 ```solidity
-function _activate(VaultRegistry registry, address protocolVault, address agentVault)
-        internal
-        returns (Activated memory a);
+function _activate(
+        VaultRegistry registry,
+        address protocolVault,
+        address agentVault,
+        address rwaVault
+    ) internal returns (Activated memory a);
 ```
 
 **Parameters**
@@ -104,6 +98,7 @@ function _activate(VaultRegistry registry, address protocolVault, address agentV
 | registry | `VaultRegistry` |  |
 | protocolVault | `address` |  |
 | agentVault | `address` |  |
+| rwaVault | `address` |  |
 
 **Returns**
 
@@ -111,21 +106,28 @@ function _activate(VaultRegistry registry, address protocolVault, address agentV
 | ---- | ---- | ----------- |
 | a | `Activated` |  |
 
-<a id="_requireauditcomplete"></a>
+<a id="_migrate-vaultregistry-address"></a>
 
-### _requireAuditComplete
+### _migrate
 
 <i>
 
-Revert unless `BASKET_VAULT_AUDIT_COMPLETE` env var equals "true".
-This guards the broadcast path so the operator cannot accidentally
-activate eligibility before the Architecture §4.1 checklist is done.
+One atomic flip. The new default vector is the current eligible set in registry order,
+then `vault`, at equal weight (the remainder goes to the first leg). Skips a vault that
+is already eligible so a rerun is safe.
 
 </i>
 
 ```solidity
-function _requireAuditComplete() internal view;
+function _migrate(VaultRegistry registry, address vault) internal;
 ```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| registry | `VaultRegistry` |  |
+| vault | `address` |  |
 
 ## Structs
 
@@ -137,6 +139,7 @@ Result returned to in-process callers (e.g. forge tests).
 struct Activated {
         address protocolVault;
         address agentVault;
+        address rwaVault;
         address registry;
     }
 ```
@@ -147,5 +150,6 @@ struct Activated {
 | ---- | ---- | ----------- |
 | protocolVault | `address` |  |
 | agentVault | `address` |  |
+| rwaVault | `address` |  |
 | registry | `address` |  |
 

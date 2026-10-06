@@ -1,6 +1,6 @@
 //! Canonical: Plan tracking issue #109 §5 — End-to-end scenarios
 //!
-//! End-to-end scenario tests for `rmpc` against the Geth+Lighthouse
+//! End-to-end scenario tests for `rmpc` against the Twin chain
 //! devnet (issues #18, #19, #37).
 //!
 //! Issue #37 consolidated the previous Anvil-flavor scenarios into
@@ -38,8 +38,8 @@
 //!
 //! ## Boot model
 //!
-//! All scenarios share a single Geth devnet boot. Bringing up the
-//! Geth + Lighthouse + 4-validator stack costs ~60-90s, so paying
+//! All scenarios share a single Twin chain boot. Bringing up the
+//! Twin chain (anvil lazy fork) costs a few seconds, so paying
 //! that nine times is a CI budget killer. We serialize via
 //! `--test-threads=1` (the only safe mode for Docker tests anyway —
 //! port 8545 is a global resource) and share one [`Fixture`] across
@@ -65,7 +65,7 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
-use rmpc_e2e::{Fixture, AGENT_PRIVATE_KEY, DEPLOYER_PRIVATE_KEY_HEX};
+use rmpc_e2e::{Fixture, AGENT_PRIVATE_KEY};
 use serde_json::Value;
 
 /// USDC has 6 decimals throughout the harness.
@@ -119,14 +119,14 @@ fn shared_fixture() -> &'static Mutex<Option<Fixture>> {
     CELL.get_or_init(|| Mutex::new(None))
 }
 
-/// Lazily boot the geth fixture on first call. Subsequent calls reuse
+/// Lazily boot the Twin chain fixture on first call. Subsequent calls reuse
 /// the live deployment. The lock is held for the duration of each
 /// test, which is fine because tests run with `--test-threads=1`.
 fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
     let cell = shared_fixture();
-    let mut guard = cell.lock().expect("shared fixture mutex poisoned");
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
-        let fx = Fixture::new().expect("boot geth devnet + deploy");
+        let fx = Fixture::new().expect("boot the Twin chain + deploy");
         *guard = Some(fx);
     }
     f(guard.as_ref().expect("fixture present"))
@@ -137,7 +137,7 @@ fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
 /// `--slow`/finality stutters that happen in early devnet life.
 const RECEIPT_TIMEOUT_SECS: &str = "180";
 
-/// Common deposit args for the geth flavor.
+/// Common deposit args for the Twin chain.
 fn deposit_args(amount: u128, oid: &str) -> [String; 6] {
     [
         "--amount".into(),
@@ -563,37 +563,20 @@ fn role_separation_invariant() {
         return;
     }
     with_fixture(|fx| {
-        let admin = rmpc_e2e::DEPLOYER_ADDRESS_HEX;
-        // allowedDestinations is empty ([]) — open policy used only to
-        // trigger the RoleSeparationViolated revert path before deposit.
-        let policy_tuple = format!("(true,18446744073709551615,1,1,{admin},[],0x0000000000000000000000000000000000000000,0,0,[])");
-
-        let out = Command::new("cast")
-            .args([
-                "send",
-                "--rpc-url",
-                fx.rpc_url(),
-                "--private-key",
-                DEPLOYER_PRIVATE_KEY_HEX,
-                &format!("{:#x}", fx.gateway()),
-                "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
-                admin,
-                &policy_tuple,
-            ])
-            .output()
-            .expect("invoke cast send");
-
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            !out.status.success(),
-            "authorizeAgent(admin) must revert; got success.\nstdout={stdout}\nstderr={stderr}"
-        );
-        let combined = format!("{stdout}\n{stderr}");
+        // The admin is the timelock after handover. Authorizing an admin-holding
+        // address as an agent goes through the real Safe and the timelock (a
+        // generic Safe -> Timelock call of `authorizeAgent`); the inner
+        // `_grantRole` override in `AccessRoles` reverts with
+        // `RoleSeparationViolated()` at execution, so the run must fail. No
+        // deployer key is involved.
+        let one_usdc = 1_000_000u128;
+        let result = fx.authorize_agent_for(fx.timelock(), 10_000 * one_usdc, 100_000 * one_usdc);
+        let err = result.expect_err("authorizeAgent(admin) must revert; the govern run succeeded");
+        let combined = err.to_string();
         assert!(
             combined.contains("RoleSeparationViolated")
-                || combined.contains("0x") && combined.to_lowercase().contains("revert"),
-            "expected RoleSeparationViolated in revert output;\nstdout={stdout}\nstderr={stderr}"
+                || combined.to_lowercase().contains("revert"),
+            "expected RoleSeparationViolated in revert output;\n{combined}"
         );
 
         // Sanity: AGENT_PRIVATE_KEY constant is not silently empty.

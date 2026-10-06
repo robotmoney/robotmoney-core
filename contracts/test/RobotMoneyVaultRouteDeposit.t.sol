@@ -169,7 +169,7 @@ contract RobotMoneyVaultRouteDepositTest is Test {
     ///      read at what the production read actually costs.
     uint256 internal constant METAMORPHO_TOTAL_ASSETS_GAS = 201_145;
 
-    /// @dev The devnet / `Deploy.s.sol` cap set: 3334 / 3333 / 3333, summing to
+    /// @dev The devnet cap set (the stage default): 3334 / 3333 / 3333, summing to
     ///      exactly `MAX_BPS`. Reproduced verbatim so the test models the real
     ///      three-adapter vault the out-of-gas failure was observed on.
     uint16[3] internal CAPS = [uint16(3334), uint16(3333), uint16(3333)];
@@ -513,7 +513,7 @@ contract RobotMoneyVaultRouteDepositTest is Test {
     /// @notice The exact devnet fork-fixture composition the out-of-gas failure
     ///         was traced on (PR #1394): NAV 1 050 131 554 with the three
     ///         adapters at 350 098 606 / 350 033 503 / 349 999 444 and the
-    ///         `Deploy.s.sol` cap set, taking the same 5 USDC deposit.
+    ///         devnet cap set, taking the same 5 USDC deposit.
     /// @dev The trace's starving frame was the SECOND `totalAssets()` on the
     ///      Morpho adapter (registry index 2), i.e. pass 2 walked all the way to
     ///      the end of the registry. This pins that pass 2 no longer runs at all.

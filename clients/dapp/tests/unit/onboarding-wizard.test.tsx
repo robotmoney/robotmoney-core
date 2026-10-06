@@ -2,19 +2,19 @@
  * Unit tests — OnboardingWizard step-1 Drip button (issue #614).
  *
  * Covers acceptance criteria:
- *   - Button shown when any balance (USDC, ETH, RM token) is zero
+ *   - Button shown when the USDC or ETH balance is zero
  *   - Button hidden when all balances are non-zero
  *   - Button hidden when harness key is absent
  *   - Button hidden on mainnet chain classification (chainId 1)
  *   - Button NOT shown on step 2 or step 3 — only step 1
- *   - All three drip handlers called on button click
+ *   - Both drip handlers (USDC, ETH) called on button click
  *   - Per-asset status feedback rendered with correct data-testid attributes
  *
  * Strategy: vi.mock wagmi at the network boundary. The mock returns
  * configurable balance data via module-level mutable refs so each test can
  * set up the exact balance state it needs, without a running chain.
  *
- * The component's injected dripUsdcFn / dripEthFn / dripRmFn props bypass
+ * The component's injected dripUsdcFn / dripEthFn props bypass
  * the real faucetClient so no wallet provider is needed for click tests.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
@@ -22,7 +22,7 @@ import { fireEvent, render, screen, waitFor } from "./helpers/render";
 import type { Hex } from "viem";
 import { OnboardingWizard } from "../../src/components/OnboardingWizard";
 import type { PreviewContext } from "../../src/lib/preview";
-import type { DripUsdcArgs, DripEthArgs, DripRmTokenArgs } from "../../src/lib/faucetClient";
+import type { DripUsdcArgs, DripEthArgs } from "../../src/lib/faucetClient";
 
 // ---------------------------------------------------------------------------
 // Wagmi mock — intercepts all wagmi imports inside the component source file.
@@ -30,7 +30,7 @@ import type { DripUsdcArgs, DripEthArgs, DripRmTokenArgs } from "../../src/lib/f
 // ---------------------------------------------------------------------------
 
 let mockUsdcContractData: unknown = undefined; // gateway.usdc() result
-let mockUsdcBalanceData: unknown = undefined; // user's USDC/RM balanceOf (shared for both balanceOf calls)
+let mockUsdcBalanceData: unknown = undefined; // user's USDC balanceOf
 let mockEthBalanceData: { value: bigint } | undefined = undefined; // user's ETH balance
 let mockChainId = 918453; // testnet by default
 
@@ -68,7 +68,6 @@ vi.mock("wagmi", async (importOriginal) => {
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as const;
 const USDC_ADDR = "0x4444444444444444444444444444444444444444" as const;
-const RM_TOKEN = "0x5555555555555555555555555555555555555555" as const;
 // A valid 32-byte hex private key for the harness env
 const HARNESS_KEY = "0x" + "ab".repeat(32);
 
@@ -82,10 +81,8 @@ const NOW = 1_893_456_000_000;
 
 interface RenderOpts {
   harnessKey?: string | null;
-  rmTokenAddress?: typeof RM_TOKEN;
   dripUsdcFn?: (args: DripUsdcArgs) => Promise<Hex>;
   dripEthFn?: (args: DripEthArgs) => Promise<Hex>;
-  dripRmFn?: (args: DripRmTokenArgs) => Promise<Hex>;
 }
 
 function renderWizard(opts: RenderOpts = {}) {
@@ -99,10 +96,8 @@ function renderWizard(opts: RenderOpts = {}) {
       ctx={ctx}
       env={env}
       now={NOW}
-      rmTokenAddress={opts.rmTokenAddress}
       dripUsdcFn={opts.dripUsdcFn}
       dripEthFn={opts.dripEthFn}
-      dripRmFn={opts.dripRmFn}
     />,
   );
 }
@@ -150,14 +145,6 @@ describe("OnboardingWizard — step-1 Drip button (issue #614)", () => {
     expect(screen.getByTestId("onboarding-drip-button")).toBeInTheDocument();
   });
 
-  it("shows the drip button when USDC balance is zero (with RM token address)", () => {
-    // When rmTokenAddress is provided, a zero USDC balance still triggers the button.
-    // The mock returns mockUsdcBalanceData for all balanceOf calls (USDC and RM).
-    setBalances({ usdc: 0n, eth: 10n });
-    renderWizard({ rmTokenAddress: RM_TOKEN });
-    expect(screen.getByTestId("onboarding-drip-button")).toBeInTheDocument();
-  });
-
   it("hides the drip button when all balances are non-zero", () => {
     setBalances({ usdc: 100n, eth: 1n });
     // usdc=100n (non-zero), eth=1n (non-zero) → button hidden
@@ -196,9 +183,9 @@ describe("OnboardingWizard — step-1 Drip button (issue #614)", () => {
     expect(screen.getByTestId("wizard-step-2")).toBeInTheDocument();
   });
 
-  // ── Click handler — all three drips called in parallel ────────────────────
+  // ── Click handler — both drips called in parallel ─────────────────────────
 
-  it("calls all three drip handlers when button is clicked", async () => {
+  it("calls both drip handlers when button is clicked", async () => {
     setBalances({ usdc: 0n, eth: 0n });
 
     // Stub window.ethereum so getInjectedProvider() returns a provider.
@@ -206,13 +193,10 @@ describe("OnboardingWizard — step-1 Drip button (issue #614)", () => {
 
     const dripUsdcFn = vi.fn(async (): Promise<Hex> => "0x1111" as Hex);
     const dripEthFn = vi.fn(async (): Promise<Hex> => "0x2222" as Hex);
-    const dripRmFn = vi.fn(async (): Promise<Hex> => "0x3333" as Hex);
 
     renderWizard({
-      rmTokenAddress: RM_TOKEN,
       dripUsdcFn,
       dripEthFn,
-      dripRmFn,
     });
 
     fireEvent.click(screen.getByTestId("onboarding-drip-button"));
@@ -227,7 +211,6 @@ describe("OnboardingWizard — step-1 Drip button (issue #614)", () => {
 
     expect(dripUsdcFn).toHaveBeenCalledTimes(1);
     expect(dripEthFn).toHaveBeenCalledTimes(1);
-    expect(dripRmFn).toHaveBeenCalledTimes(1);
 
     const usdcCall = (dripUsdcFn as ReturnType<typeof vi.fn>).mock.calls[0][0] as DripUsdcArgs;
     expect(usdcCall.usdcAddress).toBe(USDC_ADDR);
@@ -235,9 +218,6 @@ describe("OnboardingWizard — step-1 Drip button (issue #614)", () => {
 
     const ethCall = (dripEthFn as ReturnType<typeof vi.fn>).mock.calls[0][0] as DripEthArgs;
     expect(ethCall.recipient.toLowerCase()).toBe("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-
-    const rmCall = (dripRmFn as ReturnType<typeof vi.fn>).mock.calls[0][0] as DripRmTokenArgs;
-    expect(rmCall.rmTokenAddress).toBe(RM_TOKEN);
 
     delete (window as unknown as { ethereum?: unknown }).ethereum;
   });
@@ -273,9 +253,8 @@ describe("OnboardingWizard — step-1 Drip button (issue #614)", () => {
 
     const dripUsdcFn = vi.fn(async (): Promise<Hex> => "0xaabb" as Hex);
     const dripEthFn = vi.fn(async (): Promise<Hex> => "0xccdd" as Hex);
-    const dripRmFn = vi.fn(async (): Promise<Hex> => "0xeeff" as Hex);
 
-    renderWizard({ rmTokenAddress: RM_TOKEN, dripUsdcFn, dripEthFn, dripRmFn });
+    renderWizard({ dripUsdcFn, dripEthFn });
     fireEvent.click(screen.getByTestId("onboarding-drip-button"));
 
     await waitFor(() => {
@@ -285,10 +264,6 @@ describe("OnboardingWizard — step-1 Drip button (issue #614)", () => {
     await waitFor(() => {
       const ethStatus = screen.getByTestId("onboarding-drip-eth-status");
       expect(ethStatus).toHaveAttribute("data-status", "success");
-    });
-    await waitFor(() => {
-      const rmStatus = screen.getByTestId("onboarding-drip-rm-status");
-      expect(rmStatus).toHaveAttribute("data-status", "success");
     });
 
     delete (window as unknown as { ethereum?: unknown }).ethereum;

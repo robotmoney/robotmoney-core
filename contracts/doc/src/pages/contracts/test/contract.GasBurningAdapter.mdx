@@ -1,0 +1,181 @@
+---
+title: "GasBurningAdapter"
+---
+
+# GasBurningAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RobotMoneyVaultRedeemGas.t.sol)
+
+**Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter)
+
+<i>
+
+Lossless adapter whose `withdraw` and `totalAssets` burn a configurable amount of gas,
+to price them like the live protocol calls (MetaMorpho totalAssets ~201k).
+
+</i>
+
+## Constants
+
+### USDC
+
+```solidity
+IERC20 public immutable USDC;
+```
+
+### VAULT
+
+```solidity
+address public immutable VAULT;
+```
+
+## State Variables
+
+### withdrawCost
+
+```solidity
+uint256 public withdrawCost;
+```
+
+### readCost
+
+```solidity
+uint256 public readCost;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_, address vault_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+| vault_ | `address` |  |
+
+<a id="setcosts-uint256-uint256"></a>
+
+### setCosts
+
+```solidity
+function setCosts(uint256 withdrawCost_, uint256 readCost_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| withdrawCost_ | `uint256` |  |
+| readCost_ | `uint256` |  |
+
+<a id="_burn-uint256"></a>
+
+### _burn
+
+```solidity
+function _burn(uint256 cost) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cost | `uint256` |  |
+
+<a id="deploy-uint256"></a>
+
+### deploy
+
+```solidity
+function deploy(uint256) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+
+<a id="withdraw-uint256"></a>
+
+### withdraw
+
+Withdraw `amount` USDC from the underlying protocol and return it to the vault.
+
+```solidity
+function withdraw(uint256 amount) external returns (uint256 actual);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` | Amount of USDC to withdraw; pass `type(uint256).max` to withdraw all. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| actual | `uint256` | The amount of USDC actually withdrawn (may be ≤ amount on shortfall). |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+Live USDC value held by this adapter (principal + accrued interest).
+
+```solidity
+function totalAssets() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="sweepforeigntoken-address"></a>
+
+### sweepForeignToken
+
+```solidity
+function sweepForeignToken(address) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+<a id="harvestrewards"></a>
+
+### harvestRewards
+
+Claim any underlying-protocol reward tokens and forward them as
+USDC to the owning vault (custody invariant INV-2 — no emissions
+stranded on the adapter or router). Permissionless: anyone may
+trigger the harvest; the destination is always the vault, never a
+caller-supplied address (INV-1).
+
+<i>
+
+Adapters that have no on-chain claimable rewards (e.g. Aave
+interest accrues automatically in the aToken balance) implement
+this as a no-op. Adapters with discrete reward tokens claim them
+here, swap to USDC, and credit the vault. This function MUST NOT
+revert when there are no rewards to claim.
+
+</i>
+
+```solidity
+function harvestRewards() external;
+```
+

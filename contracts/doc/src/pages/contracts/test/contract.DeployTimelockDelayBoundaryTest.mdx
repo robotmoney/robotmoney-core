@@ -4,9 +4,16 @@ title: "DeployTimelockDelayBoundaryTest"
 
 # DeployTimelockDelayBoundaryTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
+
+<i>
+
+Ported from dev #1541: the floor is exact on the broadcast path, 172799 reverts and
+172800 passes through `run()` on chain id 8453.
+
+</i>
 
 ## Functions
 
@@ -34,8 +41,6 @@ function _prefix() internal pure override returns (string memory);
 <a id="test_run_floorboundaryonbase"></a>
 
 ### test_run_floorBoundaryOnBase
-
-The floor is exact: 172799 reverts, 172800 passes.
 
 ```solidity
 function test_run_floorBoundaryOnBase() public;

@@ -1,0 +1,112 @@
+# Canonical: docs/development/ci-suites.md (nightly third-party drift)
+# Issue: robotmoney-core 1497 (nightly job (c)); siblings 1495 (a) and 1496 (b).
+#
+# WHY THIS WORKFLOW EXISTS
+# Nothing recorded which third-party versions a release was deployed against.
+# At each release deploy, scripts/release/dependency-manifest-record.ts writes a
+# manifest (third-party addresses from the deploy config files, code hash, proxy
+# implementation and its code hash, block number) under
+# deployments/dependency-manifests/<chain id>/. This workflow reads the latest
+# manifest, reads the same values from live Base, and reports every difference
+# with the address, the old and new hash and, when archive state allows, the block.
+#
+# SHIPS DISABLED
+# Only workflow_dispatch is active. The schedule is commented out on purpose.
+# scripts/release/check-nightly-third-party-workflow.ts fails the PR job if an
+# active schedule appears. Enabling it is a separate, owner-approved change.
+#
+# NO SECRET
+# The public Base endpoint is used unless the repository variable BASE_RPC_URL is
+# set. No secrets.* is referenced.
+
+name: nightly-third-party-drift
+
+env:
+  CI_CLASS: ignore
+
+on:
+  # schedule:
+  #   - cron: "45 5 * * *" # 05:45 UTC, after nightly (b) at 05:30. Disabled until the owner enables it.
+  workflow_dispatch:
+    inputs:
+      chain_id:
+        description: "Chain id of the manifest to check"
+        required: false
+        default: "8453"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-third-party-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: third-party-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Report changes since the latest release manifest
+        env:
+          CHAIN_ID: ${{ inputs.chain_id || '8453' }}
+          RPC_URL: ${{ vars.BASE_RPC_URL || 'https://mainnet.base.org' }}
+        run: |
+          bun scripts/release/dependency-manifest-diff.ts \
+            --chain-id "$CHAIN_ID" --rpc-url "$RPC_URL" --locate \
+            --json-out "$RUNNER_TEMP/third-party-drift.json" | tee "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: third-party-drift
+          path: ${{ runner.temp }}/third-party-drift.json
+          if-no-files-found: ignore
+
+  checks:
+    name: workflow-and-manifest-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint .github/workflows/nightly-third-party-drift.yml
+
+      - name: yq asserts no schedule key and workflow_dispatch present
+        run: |
+          f=.github/workflows/nightly-third-party-drift.yml
+          yq -e '.on | has("schedule") | not' "$f"
+          yq -e '.on | has("workflow_dispatch")' "$f"
+
+      - name: Workflow is disabled (no active schedule, dispatch declared)
+        run: bun scripts/release/check-nightly-third-party-workflow.ts
+
+      - name: Every manifest address is in the deploy config
+        run: |
+          bun scripts/release/check-dependency-manifest-addresses.ts --manifest deployments/dependency-manifests/example.json
+          shopt -s nullglob
+          for m in deployments/dependency-manifests/*/*.json; do
+            bun scripts/release/check-dependency-manifest-addresses.ts --manifest "$m"
+          done
+
+      # The self-test reads real Base code and storage from the Twin chain (core 1498): a pinned lazy
+      # fork of Base made with anvil, no saved snapshot. The action exports TWIN_RPC_URL.
+      - name: Start the Twin fork
+        uses: ./.github/actions/twin-fork
+
+      - name: Self-test (edited code hash is named, accurate manifest shows no change)
+        run: bun scripts/release/dependency-manifest-selftest.ts
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

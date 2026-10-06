@@ -1,11 +1,11 @@
 ---
 title: "BasketVaultVenueSelectorTest"
-description: "Verifies that addAsset stores the Venue enum on AssetInfo and dispatches swap + TWAP through the matching adapter for all three venue types (V3, V4, Aerodrome). Acceptance criteria (issue #555): AC1 — addAsset accepts a venue selector and stores it on AssetInfo. AC2 — Swap and TWAP dispatch to the correct adapter per venue, including in emergency unwind. AC3 — Tests cover adding assets on V3, V4, and Aerodrome."
+description: "Verifies that addAsset stores the Venue enum on AssetInfo and dispatches swap + TWAP through the matching adapter for all three venue types (V3, V3 via adapter, Aerodrome). Acceptance criteria (issue #555): AC1 — addAsset accepts a venue selector and stores it on AssetInfo. AC2 — Swap and TWAP dispatch to the correct adapter per venue, including in emergency unwind. AC3 — Tests cover adding assets on V3, V3 via adapter, and Aerodrome."
 ---
 
 # BasketVaultVenueSelectorTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/BasketVault.t.sol)
 
 **Inherits:** Test
 
@@ -13,12 +13,12 @@ description: "Verifies that addAsset stores the Venue enum on AssetInfo and disp
 
 Verifies that addAsset stores the Venue enum on AssetInfo and
 dispatches swap + TWAP through the matching adapter for all three
-venue types (V3, V4, Aerodrome).
+venue types (V3, V3 via adapter, Aerodrome).
 Acceptance criteria (issue #555):
 AC1 — addAsset accepts a venue selector and stores it on AssetInfo.
 AC2 — Swap and TWAP dispatch to the correct adapter per venue,
 including in emergency unwind.
-AC3 — Tests cover adding assets on V3, V4, and Aerodrome.
+AC3 — Tests cover adding assets on V3, V3 via adapter, and Aerodrome.
 
 ## Constants
 
@@ -40,12 +40,6 @@ TestERC20 internal usdc;
 
 ```solidity
 MockSwapRouter internal v3Router;
-```
-
-### v4Router
-
-```solidity
-MockUniswapV4Router internal v4Router;
 ```
 
 ### aeroRouter
@@ -98,16 +92,6 @@ addAsset with Venue.V3 stores Venue.V3 on AssetInfo and emits AssetAdded.
 function test_addAsset_venueV3_storedOnAssetInfo() public;
 ```
 
-<a id="test_addasset_venuev4_storedonassetinfo"></a>
-
-### test_addAsset_venueV4_storedOnAssetInfo
-
-addAsset with Venue.V4 stores Venue.V4 on AssetInfo and emits AssetAdded.
-
-```solidity
-function test_addAsset_venueV4_storedOnAssetInfo() public;
-```
-
 <a id="test_addasset_venueaerodrome_storedonassetinfo"></a>
 
 ### test_addAsset_venueAerodrome_storedOnAssetInfo
@@ -138,26 +122,6 @@ V3 asset emergency unwind dispatches via the V3 router.
 function test_venueV3_emergencyUnwind_routesThroughV3Router() public;
 ```
 
-<a id="test_venuev4_deposit_routesthroughv4adapter"></a>
-
-### test_venueV4_deposit_routesThroughV4Adapter
-
-V4 asset (venue=V4) deposits via the V4 adapter, not V3 router.
-
-```solidity
-function test_venueV4_deposit_routesThroughV4Adapter() public;
-```
-
-<a id="test_venuev4_emergencyunwind_routesthroughv4adapter"></a>
-
-### test_venueV4_emergencyUnwind_routesThroughV4Adapter
-
-V4 asset emergency unwind dispatches via the V4 adapter.
-
-```solidity
-function test_venueV4_emergencyUnwind_routesThroughV4Adapter() public;
-```
-
 <a id="test_venueaerodrome_deposit_routesthroughaerodromeadapter"></a>
 
 ### test_venueAerodrome_deposit_routesThroughAerodromeAdapter
@@ -182,7 +146,7 @@ function test_venueAerodrome_emergencyUnwind_routesThroughAerodromeAdapter() pub
 
 ### test_mixedVenue_allVenueValuesStoredCorrectly
 
-A three-asset basket (V3 + V4 + Aerodrome) stores all three venue
+A three-asset basket (V3 + V3 adapter + Aerodrome) stores all three venue
 values correctly on AssetInfo.
 
 ```solidity

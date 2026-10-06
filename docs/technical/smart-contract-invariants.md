@@ -15,19 +15,11 @@ bugs FV must pin once fixed).
 - Implementing code is in `contracts/`; current FV lives in `contracts/test/*Invariant*.t.sol`
   (Foundry `StdInvariant` handler-driven) plus the static guard tests
   (`CustodyInvariantGuard`, `AdapterDelegatecallGuard`, `AccessRoles`, `ERC4626PreconditionChecks`).
-- Unified-vault re-homing (ADR-0010, landed): the per-family vault contracts
-  (`RobotMoneyVault`, `BasketVault` and its `RwaVault`/`AgentTokenVault`/
-  `ProtocolAssetVault` subclasses) are subsumed by one `contracts/Vault.sol` +
-  `IPositionAdapter` set (`contracts/adapters/*AssetPositionAdapter.sol` for
-  priced-asset themes; the retrofitted `MorphoAdapter`/`AaveV3Adapter`/
-  `CompoundV3Adapter` for the lending theme). Every invariant below is stated
-  against those unified homes; the old→new enforcement mapping is the
-  **invariant-preservation matrix** in
-  [`docs/technical/unified-vault-spec.md` §6](unified-vault-spec.md), and the
-  test re-pointing (fixture swap, no invariant deleted) is spec §7. Where a
-  property is now split across the vault shell and an adapter, both loci are
-  named. The legacy per-family `.t.sol` suites still run against the matching
-  composition until each is ported.
+- The unified-vault re-homing proposed by ADR-0010 was Rejected and its code is deleted. The
+  shipped vaults are `RobotMoneyVault` and `BasketVault` with its `AgentTokenVault`,
+  `ProtocolAssetVault` and `RwaBasketVault` subclasses. Entries below that mention a unified
+  `Vault`, `IPositionAdapter`, `AssetPositionAdapter` or a Chronicle composition are historical
+  findings and are kept for the audit trail only (`docs/audits.md`).
 
 ## How to read an entry
 
@@ -96,8 +88,8 @@ Sub-invariants that decompose the above and are individually worth proving:
 > **`SUP-5` — A redeem never reverts solely because the vault is paused/retired/shut down when the underlying is already idle USDC (no liveness trap on already-safe funds).**
 > ✅ HOLDS (fixed #966, NC-1) · the priced-asset `AssetPositionAdapter.totalAssets` (deSPXA Chronicle composition) short-circuits its freshness check on a zero adapter balance, so a unified `Vault` holding only idle USDC still redeems under a stale feed while priced reads fail closed (ORA-2) · stateful-invariant (StaleOracleRedemption.t.sol::test_SUP5_* re-pointed to the Chronicle-adapter composition per spec §6; RwaVault.t.sol::test_staleFeed_idleUsdcRedeemSurvives).
 
-> **`SUP-6` — `RmToken` total supply is fixed after deploy (no post-deploy mint).**
-> 🟢 HOLDS · dev/testnet only · static-guard. *(Not a mainnet surface; documented for completeness.)*
+> **`SUP-6` — ~~The RM test token's total supply is fixed after deploy (no post-deploy mint).~~ Retired 2026-10-05, see core 1489.**
+> Tombstone · no surface. The RM test token contract is deleted (core 1489). RM is the live ROBOTMONEY token `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` on Base, which nothing in this repo deploys, so no repo contract carries this invariant. The ID stays because IDs are append-only; its `InvariantRegistry` entry stays in step with the spec.
 
 ---
 
@@ -147,7 +139,8 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · every gateway flow pulls USDC from `msg.sender`; this is why F-01 is governance-capture, not theft · stateful-invariant (already implied by GW-1/GW-3).
 
 > **`ACL-8` — After the deployment handover, no gateway agent listed in `AGENT_ADDRESSES` is owned by the deployer EOA.**
-> ✅ PROVEN (issue #1476) for the listed agents · agent ownership carries `setPolicy`/`revokeAgent` authority, so `DeployTimelock` hands every agent listed in `AGENT_ADDRESSES` to the TimelockController with `transferAgentOwnership` (after the timelock's gateway `ADMIN_ROLE` grant, before the deployer's revoke) and requires afterwards that none is still deployer-owned. The transfer does not change `AGENT_ROLE`: a listed agent that held it still holds it, and a listed agent without it (renounced, or revoked by `ADMIN_ROLE`) is handed over without it. Ownership of such an agent still carries `setPolicy`/`revokeAgent` authority over its stored policy, which applies again if the agent is later granted `AGENT_ROLE`, so it is handed over too. The gateway cannot enumerate an owner's agents, so the guarantee is only as complete as the list: the broadcast run requires `AGENT_ADDRESSES` to be set (a comma-separated list, or `none`; unset or empty reverts before any broadcast), and the manifest records `roles.gateway_agents_listed_count` so a reader can compare the list's length with the deployer-owned agents the gateway logs name. The stage ceremony derives the list from the gateway's `AgentAuthorized`/`AgentOwnershipTransferred` logs, and `fusion-ceremony.sh verify` fails when any agent those logs give the deployer is still deployer-owned, so on stage the claim covers every agent the deployer ever owned. A direct `DeployTimelock` run (`docs/operations/manual-admin-actions.md`) must list every deployer-owned agent the same way · deploy-assertion (`DeployTimelock.t.sol::DeployTimelockAgentHandoverTest`, `DeployTimelock.t.sol::DeployTimelockRunEntrypointTest`, `SafeIntegration.t.sol::test_handover_noDeployerOwnedAgentRemains`) + ceremony check (`scripts/stage/tests/fusion-ceremony-selftest.sh`).
+> ✅ PROVEN (issue #1476) for the listed agents · agent ownership carries `setPolicy`/`revokeAgent` authority, so `DeployTimelock` hands every agent listed in `AGENT_ADDRESSES` to the TimelockController with `transferAgentOwnership` (after the timelock's gateway `ADMIN_ROLE` grant, before the deployer's revoke) and requires afterwards that none is still deployer-owned. The transfer does not change `AGENT_ROLE`: a listed agent that held it still holds it, and a listed agent without it (renounced, or revoked by `ADMIN_ROLE`) is handed over without it. Ownership of such an agent still carries `setPolicy`/`revokeAgent` authority over its stored policy, which applies again if the agent is later granted `AGENT_ROLE`, so it is handed over too. The gateway cannot enumerate an owner's agents, so the guarantee is only as complete as the list: the broadcast run requires `AGENT_ADDRESSES` to be set (a comma-separated list, or `none`; unset or empty reverts before any broadcast), and the manifest records `roles.gateway_agents_listed_count` so a reader can compare the list's length with the deployer-owned agents the gateway logs name. The stage ceremony derives the list from the gateway's `AgentAuthorized`/`AgentOwnershipTransferred` logs, and the publish contracts verifier fails when any agent those logs give the deployer is still deployer-owned, so on stage the claim covers every agent the deployer ever owned. A direct `DeployTimelock` run (`docs/operations/manual-admin-actions.md`) must list every deployer-owned agent the same way · deploy-assertion (`DeployTimelock.t.sol::DeployTimelockAgentHandoverTest`, `DeployTimelock.t.sol::DeployTimelockRunEntrypointTest`, `SafeIntegration.t.sol::test_handover_noDeployerOwnedAgentRemains`) + ceremony check (the publish contracts verifier and govern matrix (core `publish-contracts/`, `docs/development/stage-deployment.md`)).
+> *Mainnet plan (2026-10-05):* the deploy authorizes no agent, so `AGENT_ADDRESSES=none` at the handover and no agent is deployer-owned. Agents belong to depositors, who authorize them through `commitAuthorization`/`revealAuthorization`. (Not yet implemented: `DeployGateway.s.sol` still authorizes `AGENT_ADDRESS` at stage 5; core issue to be filed.)
 
 > **`ACL-7` — Registering an agent never blocks a future intended ADMIN/PAUSER address from being granted its role.**
 > ✅ PROVEN · the DeployTimelock handover asserts every intended ADMIN/PAUSER address is AGENT-free **before** any gateway grant, so the permissionless-registration grant-DoS becomes an explicit, typed deploy-time precondition rather than a late-stage `RoleSeparationViolated` brick — fixed by **NC-10 (#970)** · `DeployAssertions.t.sol::test_ACL7_agentRegistrationCannotBlockRoleGrant` · deploy-assertion.
@@ -192,6 +185,10 @@ Sub-invariants that decompose the above and are individually worth proving:
 
 > **`RTR-5` — `previewDeposit` and the executed deposit never disagree on which legs are available (no preview/execute divergence).**
 > ✅ HOLDS · `_executeLegs` skip-and-renormalises exactly the legs `previewDeposit` reports `unavailable` (or both report the whole basket unavailable) — preview-available ⇒ execute-deposits, preview-unavailable ⇒ execute-skips. A single `setVaultStatus(_, Paused)` no longer bricks *every* router deposit (F-13 / NC-4 fixed, #968) · fuzz (assert preview-available ⇒ execute-succeeds, or both fail) — `FvInvariants.t.sol::test_RTR5_previewMatchesExecute`.
+
+> **Routing eligibility, stated plainly (context for RTR-4 and RTR-5).** A vault is eligible for routing only when its registry status is `Active` AND its registry router-eligible flag is set AND its `asset()` is the router's USDC (`PortfolioRouter.isRouterEligibleAndActive`). `setWeights` and `_setDefaultWeights` run `_requireActiveAndEligible` on every listed vault, so an ineligible or non-Active vault cannot be listed even at 0 bps and receives 0. At deposit time `_availabilityAndAmounts` skips non-depositable legs and renormalises the full amount pro rata across the remaining legs, so no USDC is left with the router or returned to the user. When no leg is depositable, `_depositTo` reverts `NoWeightsSet` and the revert undoes the USDC pull. Per-vault caps do not renormalise: `_executeLeg` reverts `VaultCapExceeded` for an over-cap leg, and the whole deposit reverts.
+
+> **KNOWN GAP — a vault's own deposit pause is outside the availability check.** ⚠️ OPEN · `_isDepositable` reads registry status and router eligibility only. It does not read the vault's own deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pause()`, `shutdown`, or `maxDeposit == 0`). A registry-Active, router-eligible vault with deposits paused stays in the available set, its `vault.deposit` reverts inside `_executeLeg`, and the whole routed deposit reverts `UsdcLegTransferFailed(vault)` rather than skipping that leg. The shared skip set behind RTR-5 does not include this leg, so the deposit path does not skip it.
 
 > **`RTR-6` — A configured cap always bounds the size of a single transaction (per-tx sanity bound), not cumulative exposure.**
 > ✅ HOLDS (resolved #971, F-12) · DECISION: `routerCap`/`vaultCap` are DOCUMENTED as per-transaction sanity bounds, not cumulative/windowed exposure limits — a single over-cap `deposit()`/leg reverts, but deposits that *sum* over the cap across calls are allowed by design. Cumulative inflow throttling is the gateway's rolling-window job (GW-4); the router cap deliberately does not duplicate that state (see the `routerCap`/`vaultCap` NatSpec) · fuzz — `FvInvariants.t.sol::test_RTR6_expectedFail_capBoundsCumulativeExposure` (single over-cap reverts; two under-cap deposits summing over the cap both land).

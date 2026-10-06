@@ -19,13 +19,8 @@
 //     independently and never asserts they resolve to one pool. The #966 fix adds
 //     the equality check in addAsset; this asserts addAsset reverts on mismatch.
 //
-//   - ORA-6 (HOLDS — 🟡 TRUSTED, F-17): the decimals scaling between a priced
-//     asset and USDC is correct for the asset actually configured. Today the
-//     ChronicleOracleAdapter hardcodes 1e12 = 10^(18-6), correct only while
-//     deSPXA == 18 decimals and USDC == 6. The constructor SHOULD assert
-//     decimals()==18 && usdc.decimals()==6. This is a passing static-guard that
-//     documents the current trust assumption (the 1e12 constant) and is the seam
-//     where the dynamic decimals() read would be asserted.
+//   - ORA-6 (retired): the Chronicle decimals-scale guard went with the Chronicle adapter
+//     (core 1492). rmRWA prices through the UniswapV3SwapAdapter TWAP.
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -44,6 +39,7 @@ import {BasketVault} from "../../vaults/BasketVault.sol";
 import {BasketAssetConfigGuard} from "../../lib/BasketAssetConfigGuard.sol";
 import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 import {TestERC20} from "../helpers/TestERC20.sol";
+import {SafeFixture} from "../helpers/SafeFixture.sol";
 
 /// @dev Minimal 18-dec basket token for the ORA-3 addAsset rig.
 contract Ora3Token is ERC20 {
@@ -109,14 +105,6 @@ contract Ora3BasketVault is BasketVault {
     }
 }
 
-/// @dev Minimal 2-of-N Safe stub (code + threshold>=2) so DeployTimelock's
-///      SAFE_ADDRESS guards are satisfied without a real Safe.
-contract _FvSafeStub {
-    function getThreshold() external pure returns (uint256) {
-        return 2;
-    }
-}
-
 /// @dev Stand-in for the deployer EOA. It holds the constructor-granted roles and
 ///      itself calls `runHandover`, so inside the handover `msg.sender` (the
 ///      address revoked) is this harness — mirroring the broadcast path where the
@@ -156,15 +144,24 @@ contract _FvDeployerHarness {
         address governance_,
         address safe_,
         address emergency_,
-        uint256 minDelay_
+        uint256 minDelay_,
+        DeployTimelock.SafeSpec memory safeSpec_
     ) external returns (DeployTimelock.Deployed memory) {
         return script_.runInProcess(
-            vault_, gateway_, registry_, router_, governance_, safe_, emergency_, minDelay_
+            vault_,
+            gateway_,
+            registry_,
+            router_,
+            governance_,
+            safe_,
+            emergency_,
+            minDelay_,
+            safeSpec_
         );
     }
 }
 
-contract DeployAssertionsTest is Test {
+contract DeployAssertionsTest is SafeFixture {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     bytes32 internal constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
@@ -331,7 +328,8 @@ contract DeployAssertionsTest is Test {
         TestERC20 usdc = new TestERC20();
         DeployTimelock script = new DeployTimelock();
         _FvDeployerHarness harness = new _FvDeployerHarness();
-        address safe = address(new _FvSafeStub());
+        _installSafeSet();
+        address safe = _newDefaultSafe();
         _aclDeployer = address(harness);
         _aclEmergency = makeAddr("fv-emergency");
 
@@ -386,7 +384,8 @@ contract DeployAssertionsTest is Test {
             address(_aclGovernance),
             safe,
             _aclEmergency,
-            2 days
+            2 days,
+            _fixtureSpec()
         );
         return address(d.timelock);
     }
@@ -419,23 +418,5 @@ contract DeployAssertionsTest is Test {
         vm.prank(admin);
         vault.addAsset(address(token), address(matchedPool), 500, address(0), BasketVault.Venue.V3);
         assertEq(vault.assetCount(), 1, "matched pool/fee registers the asset");
-    }
-
-    /// @notice ORA-6 (HOLDS — 🟡 TRUSTED, F-17): documents the current decimals
-    ///         trust assumption. The ChronicleOracleAdapter hardcodes the
-    ///         1e12 = 10^(18-6) scale, correct only while the priced asset is
-    ///         18-dec and USDC is 6-dec. This passing static-guard pins that the
-    ///         hardcoded constant is still present (so a silent decimals change is
-    ///         caught) and marks the seam where #966 would add the dynamic
-    ///         `decimals()==18 && usdc.decimals()==6` constructor assertion.
-    function test_ORA6_chronicleAdapterDecimalsAssumptionIsDocumented() public view {
-        string memory src = vm.readFile("contracts/adapters/ChronicleOracleAdapter.sol");
-        // The 18→6 decimals scale is currently hardcoded (1e12). This guard makes
-        // any change to that scaling a deliberate, reviewed edit — and is the
-        // anchor for ORA-6's eventual dynamic decimals() assertion.
-        assertTrue(
-            _contains(src, "1e12"),
-            "ORA-6: ChronicleOracleAdapter 18->6 decimals scale (1e12) missing - re-verify F-17 assumption"
-        );
     }
 }

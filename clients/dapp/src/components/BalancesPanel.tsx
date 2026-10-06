@@ -11,8 +11,7 @@
  *     `symbol` (re-using `erc20Abi` from `lib/abi.ts`).
  *   - ETH balance via wagmi's `useBalance` (native-asset read).
  *   - RM balance — only fetched when `rmTokenAddress` is provided
- *     (gated on `VITE_RM_TOKEN_ADDRESS`), mirroring the optional-RM
- *     pattern used by `useFaucetBalances` (issue #365).
+ *     (gated on `VITE_RM_TOKEN_ADDRESS`, the live ROBOTMONEY token on Base).
  *   - Per-vault receipt tokens — iterates the shared `VaultRegistryContext`
  *     (issue #417) so newly registered vaults appear without code
  *     changes. Only receipts with a non-zero `balanceOf` render.

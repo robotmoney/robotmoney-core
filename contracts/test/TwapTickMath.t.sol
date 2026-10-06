@@ -59,7 +59,7 @@ contract MockObservablePool is IObservablePool {
 }
 
 /// @dev Re-implements the EXACT pre-extraction inline helper bodies that lived in
-///      AerodromeSwapAdapter / UniswapV4SwapAdapter, so the library output can be
+///      AerodromeSwapAdapter / UniswapV3SwapAdapter, so the library output can be
 ///      pinned against the prior implementation byte-for-byte.
 library ReferenceTwap {
     using Math for uint256;
