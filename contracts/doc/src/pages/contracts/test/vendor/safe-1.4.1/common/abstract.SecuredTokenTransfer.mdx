@@ -1,0 +1,45 @@
+---
+title: "SecuredTokenTransfer"
+---
+
+# SecuredTokenTransfer
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/vendor/safe-1.4.1/common/SecuredTokenTransfer.sol)
+
+**Title:** SecuredTokenTransfer - Secure token transfer.
+
+**Author:** Richard Meissner - @rmeissner
+
+## Functions
+
+<a id="transfertoken-address-address-uint256"></a>
+
+### transferToken
+
+Transfers a token and returns a boolean if it was a success
+
+<i>
+
+It checks the return data of the transfer call and returns true if the transfer was successful.
+     It doesn't check if the `token` address is a contract or not.
+
+</i>
+
+```solidity
+function transferToken(address token, address receiver, uint256 amount) internal returns (bool transferred);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` | Token that should be transferred |
+| receiver | `address` | Receiver to whom the token should be transferred |
+| amount | `uint256` | The amount of tokens that should be transferred |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| transferred | `bool` | Returns true if the transfer was successful |
+

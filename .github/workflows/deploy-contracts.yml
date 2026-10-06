@@ -118,6 +118,18 @@ jobs:
           AGENT_ADDRESS: ${{ secrets.DEPLOY_AGENT_ADDRESS }}
           SHARE_RECEIVER_ADDRESS: ${{ secrets.DEPLOY_SHARE_RECEIVER_ADDRESS }}
           USDC_ADDRESS: ${{ secrets.DEPLOY_USDC_ADDRESS }}
+          # One deployment scheme: no input has a default. Chain id 8453 requires
+          # EXPECTED_CHAIN_ID=8453 and the canonical Base USDC.
+          EXPECTED_CHAIN_ID: ${{ steps.chain.outputs.chain_id }}
+          FEE_RECIPIENT_ADDRESS: ${{ vars.DEPLOY_FEE_RECIPIENT_ADDRESS }}
+          VAULT_TVL_CAP: ${{ vars.DEPLOY_VAULT_TVL_CAP }}
+          VAULT_PER_DEPOSIT_CAP: ${{ vars.DEPLOY_VAULT_PER_DEPOSIT_CAP }}
+          SEED_DEPOSIT_USDC: ${{ vars.DEPLOY_SEED_DEPOSIT_USDC }}
+          AGENT_VALID_UNTIL: ${{ vars.DEPLOY_AGENT_VALID_UNTIL }}
+          AGENT_MAX_PER_PAYMENT: ${{ vars.DEPLOY_AGENT_MAX_PER_PAYMENT }}
+          AGENT_MAX_PER_WINDOW: ${{ vars.DEPLOY_AGENT_MAX_PER_WINDOW }}
+          AGENT_MAX_WITHDRAW_PER_PAYMENT: ${{ vars.DEPLOY_AGENT_MAX_WITHDRAW_PER_PAYMENT }}
+          AGENT_MAX_WITHDRAW_PER_WINDOW: ${{ vars.DEPLOY_AGENT_MAX_WITHDRAW_PER_WINDOW }}
           ETHERSCAN_API_KEY: ${{ secrets.BASESCAN_API_KEY }}
           DEPLOYMENT_OUT: deployments/${{ steps.chain.outputs.chain_id }}-${{ github.sha }}.json
         run: |

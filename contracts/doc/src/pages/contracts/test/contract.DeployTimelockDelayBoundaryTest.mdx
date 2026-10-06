@@ -1,10 +1,10 @@
 ---
-title: "DeployTimelockDelayOverrideTest"
+title: "DeployTimelockDelayBoundaryTest"
 ---
 
-# DeployTimelockDelayOverrideTest
+# DeployTimelockDelayBoundaryTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83eab89b8819bc1dd25ef3cee4ffbdd7220d6f63/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
 
@@ -31,11 +31,13 @@ function _prefix() internal pure override returns (string memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
-<a id="test_run_shortdelayallowedwithexplicitoverride"></a>
+<a id="test_run_floorboundaryonbase"></a>
 
-### test_run_shortDelayAllowedWithExplicitOverride
+### test_run_floorBoundaryOnBase
+
+The floor is exact: 172799 reverts, 172800 passes.
 
 ```solidity
-function test_run_shortDelayAllowedWithExplicitOverride() public;
+function test_run_floorBoundaryOnBase() public;
 ```
 

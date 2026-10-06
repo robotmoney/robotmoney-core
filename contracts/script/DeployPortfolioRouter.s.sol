@@ -56,6 +56,7 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
         address registry = vm.envAddress("REGISTRY_ADDRESS");
         address vault = vm.envAddress("VAULT_ADDRESS");
         address usdc = vm.envAddress("USDC_ADDRESS");
+        _requireCanonicalUsdc(usdc);
         require(registry.code.length > 0, "REGISTRY_ADDRESS has no code on this chain");
         require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
         require(usdc.code.length > 0, "USDC_ADDRESS has no code on this chain");

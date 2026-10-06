@@ -4,11 +4,11 @@
 // Implements: issue #365 (RM token drip in faucet tab)
 pragma solidity ^0.8.24;
 
-import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 
 import {RmToken} from "../RmToken.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployRmToken
 /// @notice Foundry deploy script for the RmToken ERC-20 contract.
@@ -25,7 +25,7 @@ import {RmToken} from "../RmToken.sol";
 ///           RM_TOKEN_SUPPLY     — initial supply in base units (default: 1_000_000 * 10^18)
 ///           DEPLOYMENT_OUT      — path for the output JSON
 ///                                 (default: "deployments/rm-token-<chain_id>.json")
-contract DeployRmToken is Script {
+contract DeployRmToken is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Default initial supply: 1 000 000 RM (18 decimals).
@@ -42,6 +42,7 @@ contract DeployRmToken is Script {
     ///         and writes a deployment JSON.
     /// @return d Struct containing the deployed token and key parameters.
     function run() external returns (Deployed memory d) {
+        _requireExpectedChain("");
         address initialHolder = vm.envAddress("INITIAL_HOLDER");
         string memory tokenName = vm.envOr("RM_TOKEN_NAME", string("Robot Money Token"));
         string memory tokenSymbol = vm.envOr("RM_TOKEN_SYMBOL", string("RM"));

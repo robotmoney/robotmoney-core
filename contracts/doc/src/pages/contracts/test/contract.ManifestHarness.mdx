@@ -4,7 +4,7 @@ title: "ManifestHarness"
 
 # ManifestHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f48839de85d7f70aa47a13db9bf253fdacf20af1/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelock](/contracts/script/contract.DeployTimelock)
 
@@ -58,6 +58,27 @@ function exposedReadAgentList(string memory name) external view returns (address
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address[]` |  |
+
+<a id="exposedvalidate-deployed-safespec"></a>
+
+### exposedValidate
+
+<i>
+
+The full input check, so a test can drive it with any Safe and any spec.
+
+</i>
+
+```solidity
+function exposedValidate(Deployed memory d, SafeSpec memory spec) external view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| spec | `SafeSpec` |  |
 
 <a id="exposedrunfrom-string"></a>
 

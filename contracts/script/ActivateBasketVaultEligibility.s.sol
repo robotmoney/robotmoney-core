@@ -20,10 +20,10 @@
 //   6. Run this script to activate router eligibility for both basket vaults
 pragma solidity ^0.8.24;
 
-import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title ActivateBasketVaultEligibility
 /// @notice Calls `VaultRegistry.setRouterEligible(vault, true)` for both
@@ -40,7 +40,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 ///           AGENT_VAULT_ADDRESS         — deployed AgentTokenVault (rmAGENT)
 ///
 ///         The broadcaster must hold ADMIN_ROLE on the VaultRegistry.
-contract ActivateBasketVaultEligibility is Script {
+contract ActivateBasketVaultEligibility is ExpectedChainGuard {
     /// @notice Result returned to in-process callers (e.g. forge tests).
     struct Activated {
         address protocolVault;
@@ -51,6 +51,7 @@ contract ActivateBasketVaultEligibility is Script {
     /// @notice Forge broadcast entrypoint. Reads env vars, validates the audit
     ///         gate, and calls `setRouterEligible(true)` for both basket vaults.
     function run() external returns (Activated memory a) {
+        _requireExpectedChain("");
         // Audit gate: revert unless the operator has explicitly set the flag.
         _requireAuditComplete();
 

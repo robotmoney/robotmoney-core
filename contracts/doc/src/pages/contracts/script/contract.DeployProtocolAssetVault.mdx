@@ -5,9 +5,9 @@ description: "Production deploy script for `ProtocolAssetVault` (PRD §11.2 — 
 
 # DeployProtocolAssetVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/script/DeployProtocolAssetVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/script/DeployProtocolAssetVault.s.sol)
 
-**Inherits:** Script
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
 **Title:** DeployProtocolAssetVault
 
@@ -25,13 +25,17 @@ in production for two-role key separation
 SWAP_ROUTER                — Uniswap V3 SwapRouter02
 USDC_ADDRESS               — ERC-20 asset the vault denominates in
 
+TVL_CAP                    — USDC TVL ceiling
+PER_DEPOSIT_CAP            — USDC per-deposit ceiling
+EXIT_FEE_BPS               — exit fee in basis points
+FEE_RECIPIENT              — recipient for exit fees
+
+On chain id 8453, EXPECTED_CHAIN_ID must be set to 8453 and USDC_ADDRESS must
+be the canonical Base USDC. No input has a default on any chain.
+
 Optional env vars:
 REGISTRY_ADDRESS  — when set, the vault is registered here as
 "Robot Money Protocol" (VaultMetadata.name)
-TVL_CAP           — USDC TVL ceiling (default: 10_000_000 * 1e6)
-PER_DEPOSIT_CAP   — USDC per-deposit ceiling (default: 1_000_000 * 1e6)
-EXIT_FEE_BPS      — exit fee in basis points (default: 0)
-FEE_RECIPIENT     — recipient for exit fees (default: ADMIN_ADDRESS)
 DEPLOYMENT_OUT    — output JSON path
 (default: deployments/protocol-asset-vault-&lt;chain_id>.json)
 
@@ -79,6 +83,33 @@ function run() external returns (Deployed memory d);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+
+<a id="_readparamsfrom-string"></a>
+
+### _readParamsFrom
+
+<i>
+
+Reads and checks every input. `prefix` is "" in production; tests pass their own
+because env vars are process-wide and forge runs tests in parallel.
+
+</i>
+
+```solidity
+function _readParamsFrom(string memory prefix) internal view returns (Params memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
 
 <a id="runinprocesswith-address-address-address-address-address"></a>
 
@@ -211,30 +242,6 @@ function _envAddressOrDefault(string memory key, address fallback_)
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address` |  |
 
-<a id="_envuintordefault-string-uint256"></a>
-
-### _envUintOrDefault
-
-```solidity
-function _envUintOrDefault(string memory key, uint256 fallback_)
-        internal
-        view
-        returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| key | `string` |  |
-| fallback_ | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
 <a id="_envstringordefault-string-string"></a>
 
 ### _envStringOrDefault
@@ -280,4 +287,34 @@ struct Deployed {
 | vault | `address` |  |
 | registry | `address` |  |
 | registered | `bool` |  |
+
+### Params
+
+The sheet inputs of `run()`, all required.
+
+```solidity
+struct Params {
+        address admin;
+        address emergencyResponder;
+        address swapRouter;
+        address usdc;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
+        address feeRecipient;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin | `address` |  |
+| emergencyResponder | `address` |  |
+| swapRouter | `address` |  |
+| usdc | `address` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
 

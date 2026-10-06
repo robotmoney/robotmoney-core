@@ -11,7 +11,6 @@
 // passed audit.
 pragma solidity ^0.8.24;
 
-import {Script} from "forge-std/Script.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
@@ -21,6 +20,7 @@ import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployAgentTokenVault
 /// @notice Deploys `AgentTokenVault` and seeds it with the active three-token
@@ -46,6 +46,9 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 ///           SWAP_ROUTER                — Uniswap V3 SwapRouter02
 ///           USDC_ADDRESS               — ERC-20 asset the vault denominates in
 ///
+///         On chain id 8453, EXPECTED_CHAIN_ID must be set to 8453 and USDC_ADDRESS must
+///         be the canonical Base USDC.
+///
 ///         Optional env vars:
 ///           REGISTRY_ADDRESS  — when set, the vault is registered here as
 ///                               "Robot Money Agent Tokens" (the same path the
@@ -54,7 +57,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 ///                               (default: config/agent-token-shortlist.json)
 ///           DEPLOYMENT_OUT    — output JSON path
 ///                               (default: deployments/agent-token-vault-<chain_id>.json)
-contract DeployAgentTokenVault is Script {
+contract DeployAgentTokenVault is ExpectedChainGuard {
     using stdJson for string;
 
     /// @notice Active shortlist symbols in deploy order.
@@ -90,6 +93,7 @@ contract DeployAgentTokenVault is Script {
     /// @notice Broadcast entrypoint. Deploys the vault, seeds the three-token
     ///         shortlist, optionally registers it, and writes a deployment JSON.
     function run() external returns (Deployed memory d) {
+        _requireExpectedChain("");
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address emergencyResponder = vm.envAddress("EMERGENCY_RESPONDER_ADDRESS");
         address swapRouter = vm.envAddress("SWAP_ROUTER");
@@ -98,6 +102,7 @@ contract DeployAgentTokenVault is Script {
         require(emergencyResponder != address(0), "EMERGENCY_RESPONDER_ADDRESS=0");
         require(swapRouter != address(0), "SWAP_ROUTER=0");
         require(usdc != address(0), "USDC_ADDRESS=0");
+        _requireCanonicalUsdc(usdc);
 
         Entry[3] memory entries = _resolveShortlist();
 

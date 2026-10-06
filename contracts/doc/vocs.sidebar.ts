@@ -185,7 +185,7 @@ export const sidebar = [
             { text: "IGatewayAgentOwnership", link: "/contracts/script/interface.IGatewayAgentOwnership" },
             { text: "IRetirableVaultLink", link: "/contracts/script/interface.IRetirableVaultLink" },
             { text: "IRouterGovernanceQuorum", link: "/contracts/script/interface.IRouterGovernanceQuorum" },
-            { text: "ISafeMinimal", link: "/contracts/script/interface.ISafeMinimal" },
+            { text: "ISafeFull", link: "/contracts/script/interface.ISafeFull" },
           ],
         },
         {
@@ -257,18 +257,23 @@ export const sidebar = [
             { text: "DeployPortfolioRouterTest", link: "/contracts/test/contract.DeployPortfolioRouterTest" },
             { text: "DeployProtocolAssetVaultTest", link: "/contracts/test/contract.DeployProtocolAssetVaultTest" },
             { text: "DeployRouterGovernanceDefaultsTest", link: "/contracts/test/contract.DeployRouterGovernanceDefaultsTest" },
+            { text: "DeployScriptChainGuardsTest", link: "/contracts/test/contract.DeployScriptChainGuardsTest" },
             { text: "DeploySeedDeposit", link: "/contracts/test/contract.DeploySeedDeposit" },
             { text: "DeployTest", link: "/contracts/test/contract.DeployTest" },
             { text: "DeployTimelockAgentHandoverTest", link: "/contracts/test/contract.DeployTimelockAgentHandoverTest" },
             { text: "DeployTimelockAgentListInputTest", link: "/contracts/test/contract.DeployTimelockAgentListInputTest" },
+            { text: "DeployTimelockBaseUnsetChainTest", link: "/contracts/test/contract.DeployTimelockBaseUnsetChainTest" },
+            { text: "DeployTimelockBaseWrongChainTest", link: "/contracts/test/contract.DeployTimelockBaseWrongChainTest" },
             { text: "DeployTimelockCommitteeTest", link: "/contracts/test/contract.DeployTimelockCommitteeTest" },
+            { text: "DeployTimelockDelayBoundaryTest", link: "/contracts/test/contract.DeployTimelockDelayBoundaryTest" },
             { text: "DeployTimelockDelayFloorTest", link: "/contracts/test/contract.DeployTimelockDelayFloorTest" },
-            { text: "DeployTimelockDelayOverrideTest", link: "/contracts/test/contract.DeployTimelockDelayOverrideTest" },
             { text: "DeployTimelockExpectedChainTest", link: "/contracts/test/contract.DeployTimelockExpectedChainTest" },
             { text: "DeployTimelockManifestTest", link: "/contracts/test/contract.DeployTimelockManifestTest" },
             { text: "DeployTimelockReceiptAdminTest", link: "/contracts/test/contract.DeployTimelockReceiptAdminTest" },
             { text: "DeployTimelockRunEntrypointTest", link: "/contracts/test/contract.DeployTimelockRunEntrypointTest" },
+            { text: "DeployTimelockSafeChecksTest", link: "/contracts/test/contract.DeployTimelockSafeChecksTest" },
             { text: "DeployTimelockTest", link: "/contracts/test/contract.DeployTimelockTest" },
+            { text: "DeployTimelockTwinDelayTest", link: "/contracts/test/contract.DeployTimelockTwinDelayTest" },
             { text: "DeployVaultRegistryTest", link: "/contracts/test/contract.DeployVaultRegistryTest" },
             { text: "ERC4626PreconditionChecks", link: "/contracts/test/contract.ERC4626PreconditionChecks" },
             { text: "EligibilityWeightsInterlockTest", link: "/contracts/test/contract.EligibilityWeightsInterlockTest" },
@@ -352,6 +357,8 @@ export const sidebar = [
             { text: "PosConfMorphoVault", link: "/contracts/test/contract.PosConfMorphoVault" },
             { text: "ProbeHoldAdapter", link: "/contracts/test/contract.ProbeHoldAdapter" },
             { text: "ProtocolAssetVaultShortlistTest", link: "/contracts/test/contract.ProtocolAssetVaultShortlistTest" },
+            { text: "ProtocolVaultInputsHarness", link: "/contracts/test/contract.ProtocolVaultInputsHarness" },
+            { text: "ProtocolVaultInputsTest", link: "/contracts/test/contract.ProtocolVaultInputsTest" },
             { text: "QuorumFloorInvariantTest", link: "/contracts/test/contract.QuorumFloorInvariantTest" },
             { text: "ReadCountingAdapter", link: "/contracts/test/contract.ReadCountingAdapter" },
             { text: "ReceiptRoleStub", link: "/contracts/test/contract.ReceiptRoleStub" },
@@ -501,10 +508,171 @@ export const sidebar = [
           ],
         },
         {
+          text: "Abstract Contracts",
+          collapsed: true,
+          items: [
+            { text: "SafeFixture", link: "/contracts/test/helpers/abstract.SafeFixture" },
+          ],
+        },
+        {
+          text: "Interfaces",
+          collapsed: true,
+          items: [
+            { text: "ISafeSetupCall", link: "/contracts/test/helpers/interface.ISafeSetupCall" },
+          ],
+        },
+        {
           text: "Libraries",
           collapsed: true,
           items: [
             { text: "RoleHolders", link: "/contracts/test/helpers/library.RoleHolders" },
+          ],
+        },
+      ],
+    },
+    {
+      text: "contracts/test/vendor/safe-1.4.1",
+      items: [
+        { text: "Safe", link: "/contracts/test/vendor/safe-1.4.1/contract.Safe" },
+        { text: "SafeL2", link: "/contracts/test/vendor/safe-1.4.1/contract.SafeL2" },
+      ],
+    },
+    {
+      text: "contracts/test/vendor/safe-1.4.1/base",
+      items: [
+        {
+          text: "Abstract Contracts",
+          collapsed: true,
+          items: [
+            { text: "BaseGuard", link: "/contracts/test/vendor/safe-1.4.1/base/abstract.BaseGuard" },
+            { text: "Executor", link: "/contracts/test/vendor/safe-1.4.1/base/abstract.Executor" },
+            { text: "FallbackManager", link: "/contracts/test/vendor/safe-1.4.1/base/abstract.FallbackManager" },
+            { text: "GuardManager", link: "/contracts/test/vendor/safe-1.4.1/base/abstract.GuardManager" },
+            { text: "ModuleManager", link: "/contracts/test/vendor/safe-1.4.1/base/abstract.ModuleManager" },
+            { text: "OwnerManager", link: "/contracts/test/vendor/safe-1.4.1/base/abstract.OwnerManager" },
+          ],
+        },
+        {
+          text: "Interfaces",
+          collapsed: true,
+          items: [
+            { text: "Guard", link: "/contracts/test/vendor/safe-1.4.1/base/interface.Guard" },
+          ],
+        },
+      ],
+    },
+    {
+      text: "contracts/test/vendor/safe-1.4.1/common",
+      items: [
+        { text: "Enum", link: "/contracts/test/vendor/safe-1.4.1/common/abstract.Enum" },
+        { text: "NativeCurrencyPaymentFallback", link: "/contracts/test/vendor/safe-1.4.1/common/abstract.NativeCurrencyPaymentFallback" },
+        { text: "SecuredTokenTransfer", link: "/contracts/test/vendor/safe-1.4.1/common/abstract.SecuredTokenTransfer" },
+        { text: "SelfAuthorized", link: "/contracts/test/vendor/safe-1.4.1/common/abstract.SelfAuthorized" },
+        { text: "SignatureDecoder", link: "/contracts/test/vendor/safe-1.4.1/common/abstract.SignatureDecoder" },
+        { text: "Singleton", link: "/contracts/test/vendor/safe-1.4.1/common/abstract.Singleton" },
+        { text: "StorageAccessible", link: "/contracts/test/vendor/safe-1.4.1/common/abstract.StorageAccessible" },
+      ],
+    },
+    {
+      text: "contracts/test/vendor/safe-1.4.1/external",
+      items: [
+        { text: "SafeMath", link: "/contracts/test/vendor/safe-1.4.1/external/library.SafeMath" },
+      ],
+    },
+    {
+      text: "contracts/test/vendor/safe-1.4.1/handler",
+      items: [
+        {
+          text: "Contracts",
+          collapsed: true,
+          items: [
+            { text: "CompatibilityFallbackHandler", link: "/contracts/test/vendor/safe-1.4.1/handler/contract.CompatibilityFallbackHandler" },
+            { text: "TokenCallbackHandler", link: "/contracts/test/vendor/safe-1.4.1/handler/contract.TokenCallbackHandler" },
+          ],
+        },
+        {
+          text: "Abstract Contracts",
+          collapsed: true,
+          items: [
+            { text: "HandlerContext", link: "/contracts/test/vendor/safe-1.4.1/handler/abstract.HandlerContext" },
+          ],
+        },
+      ],
+    },
+    {
+      text: "contracts/test/vendor/safe-1.4.1/interfaces",
+      items: [
+        {
+          text: "Contracts",
+          collapsed: true,
+          items: [
+            { text: "ISignatureValidatorConstants", link: "/contracts/test/vendor/safe-1.4.1/interfaces/contract.ISignatureValidatorConstants" },
+          ],
+        },
+        {
+          text: "Abstract Contracts",
+          collapsed: true,
+          items: [
+            { text: "ISignatureValidator", link: "/contracts/test/vendor/safe-1.4.1/interfaces/abstract.ISignatureValidator" },
+          ],
+        },
+        {
+          text: "Interfaces",
+          collapsed: true,
+          items: [
+            { text: "ERC1155TokenReceiver", link: "/contracts/test/vendor/safe-1.4.1/interfaces/interface.ERC1155TokenReceiver" },
+            { text: "ERC721TokenReceiver", link: "/contracts/test/vendor/safe-1.4.1/interfaces/interface.ERC721TokenReceiver" },
+            { text: "ERC777TokensRecipient", link: "/contracts/test/vendor/safe-1.4.1/interfaces/interface.ERC777TokensRecipient" },
+            { text: "IERC165", link: "/contracts/test/vendor/safe-1.4.1/interfaces/interface.IERC165" },
+            { text: "ViewStorageAccessible", link: "/contracts/test/vendor/safe-1.4.1/interfaces/interface.ViewStorageAccessible" },
+          ],
+        },
+      ],
+    },
+    {
+      text: "contracts/test/vendor/safe-1.4.1/libraries",
+      items: [
+        {
+          text: "Contracts",
+          collapsed: true,
+          items: [
+            { text: "CreateCall", link: "/contracts/test/vendor/safe-1.4.1/libraries/contract.CreateCall" },
+            { text: "MultiSend", link: "/contracts/test/vendor/safe-1.4.1/libraries/contract.MultiSend" },
+            { text: "MultiSendCallOnly", link: "/contracts/test/vendor/safe-1.4.1/libraries/contract.MultiSendCallOnly" },
+            { text: "SafeMigration", link: "/contracts/test/vendor/safe-1.4.1/libraries/contract.SafeMigration" },
+            { text: "SafeStorage", link: "/contracts/test/vendor/safe-1.4.1/libraries/contract.SafeStorage" },
+            { text: "SafeToL2Migration", link: "/contracts/test/vendor/safe-1.4.1/libraries/contract.SafeToL2Migration" },
+            { text: "SafeToL2Setup", link: "/contracts/test/vendor/safe-1.4.1/libraries/contract.SafeToL2Setup" },
+            { text: "SignMessageLib", link: "/contracts/test/vendor/safe-1.4.1/libraries/contract.SignMessageLib" },
+          ],
+        },
+        {
+          text: "Interfaces",
+          collapsed: true,
+          items: [
+            { text: "ISafe", link: "/contracts/test/vendor/safe-1.4.1/libraries/interface.ISafe" },
+            { text: "ISafe", link: "/contracts/test/vendor/safe-1.4.1/libraries/interface.ISafe" },
+          ],
+        },
+      ],
+    },
+    {
+      text: "contracts/test/vendor/safe-1.4.1/proxies",
+      items: [
+        {
+          text: "Contracts",
+          collapsed: true,
+          items: [
+            { text: "SafeProxy", link: "/contracts/test/vendor/safe-1.4.1/proxies/contract.SafeProxy" },
+            { text: "SafeProxyFactory", link: "/contracts/test/vendor/safe-1.4.1/proxies/contract.SafeProxyFactory" },
+          ],
+        },
+        {
+          text: "Interfaces",
+          collapsed: true,
+          items: [
+            { text: "IProxy", link: "/contracts/test/vendor/safe-1.4.1/proxies/interface.IProxy" },
+            { text: "IProxyCreationCallback", link: "/contracts/test/vendor/safe-1.4.1/proxies/interface.IProxyCreationCallback" },
           ],
         },
       ],

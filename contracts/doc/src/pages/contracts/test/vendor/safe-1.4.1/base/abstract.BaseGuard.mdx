@@ -1,0 +1,43 @@
+---
+title: "BaseGuard"
+---
+
+# BaseGuard
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/vendor/safe-1.4.1/base/GuardManager.sol)
+
+**Inherits:** [Guard](/contracts/test/vendor/safe-1.4.1/base/interface.Guard)
+
+## Functions
+
+<a id="supportsinterface-bytes4"></a>
+
+### supportsInterface
+
+<i>
+
+Returns true if this contract implements the interface defined by `interfaceId`.
+See the corresponding EIP section
+https://eips.ethereum.org/EIPS/eip-165#how-interfaces-are-identified
+to learn more about how these ids are created.
+
+This function call must use less than 30 000 gas.
+
+</i>
+
+```solidity
+function supportsInterface(bytes4 interfaceId) external view virtual override returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| interfaceId | `bytes4` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+

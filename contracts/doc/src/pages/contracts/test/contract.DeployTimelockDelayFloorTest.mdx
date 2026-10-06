@@ -4,15 +4,15 @@ title: "DeployTimelockDelayFloorTest"
 
 # DeployTimelockDelayFloorTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83eab89b8819bc1dd25ef3cee4ffbdd7220d6f63/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
 
 <i>
 
-devops review 2026-09-30: inputs the ceremony used to accept silently.
+One deployment scheme: the delay floor is keyed to chain id 8453.
 One contract per test: each mutates env vars the base setUp also sets,
-and forge runs tests in parallel over a process-wide environment.
+and forge runs the tests of a contract in parallel over a process-wide environment.
 
 </i>
 
@@ -39,14 +39,13 @@ function _prefix() internal pure override returns (string memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
-<a id="test_run_revertsbelowdelayfloor"></a>
+<a id="test_run_revertsbelowdelayflooronbase"></a>
 
-### test_run_revertsBelowDelayFloor
+### test_run_revertsBelowDelayFloorOnBase
 
-R-04: a delay under 48 hours is refused on the broadcast path
-unless the devnet override is set explicitly.
+On chain id 8453 a delay under 48 hours is refused.
 
 ```solidity
-function test_run_revertsBelowDelayFloor() public;
+function test_run_revertsBelowDelayFloorOnBase() public;
 ```
 

@@ -19,6 +19,14 @@ contract DeployInputsHarness is Deploy {
         return _seedAmount(prefix);
     }
 
+    function envOrDefault(string memory key, uint256 fallbackValue)
+        external
+        view
+        returns (uint256)
+    {
+        return _envOrDefault(key, fallbackValue);
+    }
+
     function deployWith(Params memory p) external returns (Deployed memory) {
         return _doDeploy(p);
     }
@@ -35,26 +43,130 @@ contract DeployMainnetInputsTest is Test {
     }
 
     function _base(string memory prefix) internal {
-        vm.setEnv(string.concat(prefix, "ADMIN_ADDRESS"), vm.toString(admin));
-        vm.setEnv(string.concat(prefix, "PAUSER_ADDRESS"), vm.toString(makeAddr("inputs-pauser")));
-        vm.setEnv(string.concat(prefix, "AGENT_ADDRESS"), vm.toString(makeAddr("inputs-agent")));
-        vm.setEnv(
-            string.concat(prefix, "SHARE_RECEIVER_ADDRESS"), vm.toString(makeAddr("inputs-recv"))
-        );
-        vm.setEnv(string.concat(prefix, "USDC_ADDRESS"), vm.toString(address(new TestERC20())));
+        _baseExcept(prefix, "");
     }
 
-    // --- defaults are the devnet values --------------------------------------------------
+    /// @dev Sets every input under `prefix` except `skip`. vm.setEnv cannot unset a variable,
+    ///      so a missing input is modelled by a prefix under which it was never written.
+    function _baseExcept(string memory prefix, string memory skip) internal {
+        _set(prefix, skip, "ADMIN_ADDRESS", vm.toString(admin));
+        _set(prefix, skip, "PAUSER_ADDRESS", vm.toString(makeAddr("inputs-pauser")));
+        _set(prefix, skip, "AGENT_ADDRESS", vm.toString(makeAddr("inputs-agent")));
+        _set(prefix, skip, "SHARE_RECEIVER_ADDRESS", vm.toString(makeAddr("inputs-recv")));
+        _set(prefix, skip, "USDC_ADDRESS", vm.toString(address(new TestERC20())));
+        // Every vault, fee and agent input the sheet carries. None has a default.
+        _set(prefix, skip, "FEE_RECIPIENT_ADDRESS", vm.toString(admin));
+        _set(prefix, skip, "VAULT_TVL_CAP", "10000000000000");
+        _set(prefix, skip, "VAULT_PER_DEPOSIT_CAP", "1000000000000");
+        _set(prefix, skip, "AGENT_VALID_UNTIL", "4102444800");
+        _set(prefix, skip, "AGENT_MAX_PER_PAYMENT", "10000000000");
+        _set(prefix, skip, "AGENT_MAX_PER_WINDOW", "100000000000");
+        _set(prefix, skip, "AGENT_MAX_WITHDRAW_PER_PAYMENT", "10000000000");
+        _set(prefix, skip, "AGENT_MAX_WITHDRAW_PER_WINDOW", "100000000000");
+        _set(prefix, skip, "SEED_DEPOSIT_USDC", "1000000");
+    }
 
-    function test_defaults_areDevnetValues() public {
+    function _set(string memory prefix, string memory skip, string memory name, string memory value)
+        internal
+    {
+        if (keccak256(bytes(skip)) == keccak256(bytes(name))) return;
+        vm.setEnv(string.concat(prefix, name), value);
+    }
+
+    // --- nothing has a default ----------------------------------------------------------
+
+    function test_exitFee_defaultsToZero_theOneOptionalInput() public {
         string memory p = "RM_INPUTS_DEFAULTS_";
         _base(p);
         Deploy.Params memory r = h.readParams(p);
-        assertEq(r.feeRecipient, admin, "default fee recipient is the admin (devnet only)");
-        assertEq(r.tvlCap, h.DEFAULT_TVL_CAP(), "default tvl cap");
-        assertEq(r.perDepositCap, h.DEFAULT_PER_DEPOSIT_CAP(), "default per-deposit cap");
         assertEq(r.exitFeeBps, 0, "default exit fee");
-        assertEq(h.seed(p), h.SEED_DEPOSIT_AMOUNT(), "default seed");
+        assertEq(r.feeRecipient, admin, "fee recipient is the one the sheet named");
+    }
+
+    function test_missingInputs_revertOnEveryChain() public {
+        string[9] memory names = [
+            "AGENT_VALID_UNTIL",
+            "AGENT_MAX_PER_PAYMENT",
+            "AGENT_MAX_PER_WINDOW",
+            "AGENT_MAX_WITHDRAW_PER_PAYMENT",
+            "AGENT_MAX_WITHDRAW_PER_WINDOW",
+            "FEE_RECIPIENT_ADDRESS",
+            "VAULT_TVL_CAP",
+            "VAULT_PER_DEPOSIT_CAP",
+            "SEED_DEPOSIT_USDC"
+        ];
+        uint256[2] memory chains = [uint256(31337), uint256(918453)];
+        for (uint256 c = 0; c < chains.length; c++) {
+            vm.chainId(chains[c]);
+            for (uint256 i = 0; i < names.length; i++) {
+                // A prefix under which every input is set except names[i].
+                string memory p =
+                    string.concat("RM_INPUTS_REQ_", vm.toString(c), "_", vm.toString(i), "_");
+                _baseExcept(p, names[i]);
+                bytes memory expected = bytes(string.concat(p, names[i], " must be set"));
+                vm.expectRevert(expected);
+                if (keccak256(bytes(names[i])) == keccak256("SEED_DEPOSIT_USDC")) {
+                    h.seed(p);
+                } else {
+                    h.readParams(p);
+                }
+            }
+        }
+    }
+
+    function test_malformedInputs_revert() public {
+        string[8] memory names = [
+            "AGENT_VALID_UNTIL",
+            "AGENT_MAX_PER_PAYMENT",
+            "AGENT_MAX_PER_WINDOW",
+            "AGENT_MAX_WITHDRAW_PER_PAYMENT",
+            "AGENT_MAX_WITHDRAW_PER_WINDOW",
+            "VAULT_TVL_CAP",
+            "VAULT_PER_DEPOSIT_CAP",
+            "SEED_DEPOSIT_USDC"
+        ];
+        for (uint256 i = 0; i < names.length; i++) {
+            string memory p = string.concat("RM_INPUTS_BAD_", vm.toString(i), "_");
+            _base(p);
+            vm.setEnv(string.concat(p, names[i]), "twelve");
+            vm.expectRevert(
+                bytes(string.concat(p, names[i], " is malformed: expected an unsigned integer"))
+            );
+            if (keccak256(bytes(names[i])) == keccak256("SEED_DEPOSIT_USDC")) {
+                h.seed(p);
+            } else {
+                h.readParams(p);
+            }
+        }
+    }
+
+    function test_malformedFeeRecipient_reverts() public {
+        string memory p = "RM_INPUTS_BAD_FEE_";
+        _base(p);
+        vm.setEnv(string.concat(p, "FEE_RECIPIENT_ADDRESS"), "treasury");
+        vm.expectRevert(
+            bytes(string.concat(p, "FEE_RECIPIENT_ADDRESS is malformed: expected an address"))
+        );
+        h.readParams(p);
+    }
+
+    // --- _envOrDefault reverts on bad input ----------------------------------------------
+
+    function test_envOrDefault_unsetUsesFallback() public view {
+        assertEq(h.envOrDefault("RM_INPUTS_ENV_OR_DEFAULT_NEVER_SET", 7), 7);
+    }
+
+    function test_envOrDefault_setIsRead() public {
+        vm.setEnv("RM_INPUTS_ENV_OR_DEFAULT_SET", "9");
+        assertEq(h.envOrDefault("RM_INPUTS_ENV_OR_DEFAULT_SET", 7), 9);
+    }
+
+    function test_envOrDefault_malformedReverts() public {
+        vm.setEnv("RM_INPUTS_ENV_OR_DEFAULT_BAD", "nine");
+        vm.expectRevert(
+            bytes("RM_INPUTS_ENV_OR_DEFAULT_BAD is malformed: expected an unsigned integer")
+        );
+        h.envOrDefault("RM_INPUTS_ENV_OR_DEFAULT_BAD", 7);
     }
 
     // --- explicit inputs win -------------------------------------------------------------
@@ -132,5 +244,54 @@ contract DeployMainnetInputsTest is Test {
         _base(p);
         vm.setEnv(string.concat(p, "EXPECTED_CHAIN_ID"), vm.toString(block.chainid));
         h.readParams(p); // does not revert
+    }
+
+    // --- chain id 8453: the guard is strict, USDC is the canonical one ---------------------
+
+    string internal constant BASE_MSG = "EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet";
+
+    function test_base_unsetExpectedChain_reverts() public {
+        vm.chainId(8453);
+        string memory p = "RM_INPUTS_BASE_UNSET_";
+        _base(p);
+        vm.expectRevert(bytes(BASE_MSG));
+        h.readParams(p);
+    }
+
+    function test_base_zeroOrWrongExpectedChain_reverts() public {
+        vm.chainId(8453);
+        string memory p = "RM_INPUTS_BASE_WRONG_";
+        _base(p);
+        vm.setEnv(string.concat(p, "EXPECTED_CHAIN_ID"), "0");
+        vm.expectRevert(bytes(BASE_MSG));
+        h.readParams(p);
+        vm.setEnv(string.concat(p, "EXPECTED_CHAIN_ID"), "918453");
+        vm.expectRevert(bytes(BASE_MSG));
+        h.readParams(p);
+    }
+
+    function test_base_nonCanonicalUsdc_reverts() public {
+        vm.chainId(8453);
+        string memory p = "RM_INPUTS_BASE_USDC_";
+        _base(p);
+        vm.setEnv(string.concat(p, "EXPECTED_CHAIN_ID"), "8453");
+        vm.expectRevert(bytes("USDC_ADDRESS is not the canonical Base USDC on Base mainnet"));
+        h.readParams(p);
+    }
+
+    function test_base_canonicalUsdcAndExpectedChain_passes() public {
+        vm.chainId(8453);
+        string memory p = "RM_INPUTS_BASE_OK_";
+        _base(p);
+        vm.setEnv(string.concat(p, "EXPECTED_CHAIN_ID"), "8453");
+        vm.setEnv(string.concat(p, "USDC_ADDRESS"), vm.toString(h.CANONICAL_BASE_USDC()));
+        h.readParams(p);
+    }
+
+    function test_twin_unsetExpectedChain_passes() public {
+        vm.chainId(918453);
+        string memory p = "RM_INPUTS_TWIN_";
+        _base(p);
+        h.readParams(p);
     }
 }

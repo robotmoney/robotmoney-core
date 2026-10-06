@@ -3559,6 +3559,17 @@ fn run_forge_deploy_with_env(
         // HARNESS_USDC_HOLDER) instead.
         .env("USDC_ADDRESS", genesis_alloc::BASE_USDC_ADDR)
         .env("DEPLOYMENT_OUT", dep_out)
+        // One deployment scheme: Deploy.s.sol has no defaults. These are the devnet
+        // sheet values (the caps the script used to default to); `extra_env` overrides.
+        .env("FEE_RECIPIENT_ADDRESS", DEPLOYER_ADDRESS_HEX)
+        .env("VAULT_TVL_CAP", "10000000000000")
+        .env("VAULT_PER_DEPOSIT_CAP", "1000000000000")
+        .env("AGENT_VALID_UNTIL", "4102444800")
+        .env("AGENT_MAX_PER_PAYMENT", "10000000000")
+        .env("AGENT_MAX_PER_WINDOW", "100000000000")
+        .env("AGENT_MAX_WITHDRAW_PER_PAYMENT", "10000000000")
+        .env("AGENT_MAX_WITHDRAW_PER_WINDOW", "100000000000")
+        .env("SEED_DEPOSIT_USDC", "1000000")
         .current_dir(repo_root);
     for (k, v) in extra_env {
         cmd.env(k, v);
@@ -3879,6 +3890,10 @@ fn run_forge_deploy_governance(
     .arg("-vvv")
     .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
     .env("ROUTER_ADDRESS", router_address)
+    // One deployment scheme: no defaults. Devnet sheet values.
+    .env("QUORUM_THRESHOLD", "2")
+    .env("VOTING_PERIOD", "3600")
+    .env("EXECUTION_DELAY", "3600")
     .env("DEPLOYMENT_OUT", governance_out)
     .current_dir(repo_root);
     let out = cmd.output()?;

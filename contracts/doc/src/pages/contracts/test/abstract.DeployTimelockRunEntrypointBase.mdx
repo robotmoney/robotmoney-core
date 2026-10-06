@@ -5,9 +5,9 @@ description: "`run()` hands the AGENT_ADDRESSES list it reads to the handover (i
 
 # DeployTimelockRunEntrypointBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83eab89b8819bc1dd25ef3cee4ffbdd7220d6f63/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/DeployTimelock.t.sol)
 
-**Inherits:** Test
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
 
 `run()` hands the AGENT_ADDRESSES list it reads to the handover
 (issue #1476). This drives run()'s own body, `_runFrom`, through

@@ -1,32 +1,77 @@
 ---
 title: "ExpectedChainGuard"
-description: "Shared chain-identity check for the broadcasting deploy scripts."
+description: "Shared chain-identity check and strict env readers for every deploy script."
 ---
 
 # ExpectedChainGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/ExpectedChainGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/script/ExpectedChainGuard.sol)
 
 **Inherits:** Script
 
 **Title:** ExpectedChainGuard
 
-Shared chain-identity check for the broadcasting deploy scripts.
+Shared chain-identity check and strict env readers for every deploy script.
 
 <i>
 
-The release policy says every broadcasting script verifies the chain id
-itself, but `forge script --chain &lt;id>` does not refuse an RPC that
-serves a different chain (tested against a chain-31337 node: it ran and
-only stopped because USDC had no code there). A ceremony therefore sets
-`EXPECTED_CHAIN_ID` (8453 on Base mainnet) and every script refuses to
-run anywhere else. Unset or 0 means "no check", which keeps devnets and
-forge tests working without configuration. Found by the devops mainnet
-runbook review (2026-09-30, B6).
+One deployment scheme: the scripts are the same on every chain. The only
+difference is a `require` that is keyed to chain id 8453 (Base mainnet).
+On 8453 `EXPECTED_CHAIN_ID` must be set to 8453: an unset value no longer
+disables the check. On any other chain an unset or 0 value means "no check"
+(the Twin chain 918453, anvil and forge tests); a set value must still match.
+No flag, env switch or sheet line lifts a floor on 8453.
 
 </i>
 
+## Constants
+
+### BASE_MAINNET_CHAIN_ID
+
+<i>
+
+Base mainnet chain id. Every floor in the scripts keys off this value.
+
+</i>
+
+```solidity
+uint256 internal constant BASE_MAINNET_CHAIN_ID = 8453;
+```
+
+### BASE_USDC
+
+<i>
+
+Canonical Base USDC (FiatTokenProxy).
+
+</i>
+
+```solidity
+address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
 ## Functions
+
+<a id="_requirecanonicalusdc-address"></a>
+
+### _requireCanonicalUsdc
+
+<i>
+
+On chain id 8453 the USDC a script is given must be the canonical Base USDC.
+Other chains (the Twin chain, anvil, forge tests) accept the address they are given.
+
+</i>
+
+```solidity
+function _requireCanonicalUsdc(address usdc) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
 
 <a id="_requireexpectedchain-string"></a>
 
@@ -34,9 +79,10 @@ runbook review (2026-09-30, B6).
 
 <i>
 
-Reverts unless `&lt;prefix>EXPECTED_CHAIN_ID` is unset/0 or equals
-`block.chainid`. `prefix` is "" in production; tests pass their own
-prefix because env vars are process-wide and forge runs tests in parallel.
+Reverts unless `&lt;prefix>EXPECTED_CHAIN_ID` matches `block.chainid`.
+On chain id 8453 the variable is mandatory and must equal 8453.
+`prefix` is "" in production; tests pass their own prefix because env vars
+are process-wide and forge runs tests in parallel.
 
 </i>
 
@@ -49,4 +95,109 @@ function _requireExpectedChain(string memory prefix) internal view;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | prefix | `string` |  |
+
+<a id="_envuintrequired-string"></a>
+
+### _envUintRequired
+
+<i>
+
+A required unsigned integer. Reverts when unset or malformed.
+
+</i>
+
+```solidity
+function _envUintRequired(string memory key) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_envaddressrequired-string"></a>
+
+### _envAddressRequired
+
+<i>
+
+A required address. Reverts when unset or malformed. Zero is allowed
+here: each script adds its own named non-zero check.
+
+</i>
+
+```solidity
+function _envAddressRequired(string memory key) internal view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_envstringrequired-string"></a>
+
+### _envStringRequired
+
+<i>
+
+A required non-empty string. Reverts when unset or empty.
+
+</i>
+
+```solidity
+function _envStringRequired(string memory key) internal view returns (string memory v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `string` |  |
+
+<a id="_envuint64required-string"></a>
+
+### _envUint64Required
+
+<i>
+
+A required uint64. Reverts when unset, malformed or above uint64 max.
+
+</i>
+
+```solidity
+function _envUint64Required(string memory key) internal view returns (uint64);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
 

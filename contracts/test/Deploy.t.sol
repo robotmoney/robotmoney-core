@@ -298,6 +298,15 @@ contract DeployTest is Test {
         vm.setEnv("AGENT_ADDRESS", vm.toString(agent));
         vm.setEnv("SHARE_RECEIVER_ADDRESS", vm.toString(shareReceiver));
         vm.setEnv("USDC_ADDRESS", vm.toString(address(usdc)));
+        // One deployment scheme: the caps, the fee recipient and the agent policy have no default.
+        vm.setEnv("FEE_RECIPIENT_ADDRESS", vm.toString(admin));
+        vm.setEnv("VAULT_TVL_CAP", "10000000000000");
+        vm.setEnv("VAULT_PER_DEPOSIT_CAP", "1000000000000");
+        vm.setEnv("AGENT_VALID_UNTIL", "4102444800");
+        vm.setEnv("AGENT_MAX_PER_PAYMENT", "10000000000");
+        vm.setEnv("AGENT_MAX_PER_WINDOW", "100000000000");
+        vm.setEnv("AGENT_MAX_WITHDRAW_PER_PAYMENT", "10000000000");
+        vm.setEnv("AGENT_MAX_WITHDRAW_PER_WINDOW", "100000000000");
         Deploy.Deployed memory d = script.runInProcess();
         assertEq(d.admin, admin);
         assertEq(d.pauser, pauser);

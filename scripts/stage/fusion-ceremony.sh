@@ -1025,13 +1025,15 @@ run_ceremony() {
     || die "the submitter ${addr[submitter]} is not among the deployer-owned gateway agents the logs name"
   info "gateway agents handed to the timelock: $(paste -sd' ' <<<"$owned_agents")"
 
-  # DeployTimelock refuses a delay under 48h unless told otherwise. This ceremony only runs on the
-  # 918453 devnet (the chain-id check above dies on anything else), where the short delay is deliberate.
+  # DeployTimelock refuses a delay under 48h only on chain id 8453. This ceremony only runs on the
+  # 918453 devnet (the chain-id check above dies on anything else), where the short delay is an
+  # allowed parameter. SAFE_OWNERS and SAFE_THRESHOLD are the facts DeployTimelock checks the Safe against.
   (cd "$REPO_ROOT" && \
     AGENT_ADDRESSES="$(paste -sd, <<<"$owned_agents")" \
     VAULT_ADDRESS="$vault" GATEWAY_ADDRESS="$gateway" REGISTRY_ADDRESS="$registry" ROUTER_ADDRESS="$router" \
     GOVERNANCE_ADDRESS="$governance" SAFE_ADDRESS="$safe" EMERGENCY_ADDRESS="${addr[emergency]}" \
-    TIMELOCK_MIN_DELAY="$MIN_DELAY" ALLOW_SHORT_TIMELOCK_DELAY=true IC_POLICY_ADDRESS="$ic_policy" CONSENSUS_RECEIPT_ADDRESS="$receipt" \
+    SAFE_OWNERS="$(IFS=,; echo "${owner_addrs[*]}")" SAFE_THRESHOLD="$SAFE_THRESHOLD" \
+    TIMELOCK_MIN_DELAY="$MIN_DELAY" IC_POLICY_ADDRESS="$ic_policy" CONSENSUS_RECEIPT_ADDRESS="$receipt" \
     RECEIPT_ADMIN_ADDRESS="$admin" DEPLOYMENT_OUT="$work/timelock.json" \
     "$FORGE" script contracts/script/DeployTimelock.s.sol:DeployTimelock \
       --rpc-url "$RPC_URL" "${as_deployer[@]}" --broadcast --slow) >"$work/timelock.log" 2>&1 \

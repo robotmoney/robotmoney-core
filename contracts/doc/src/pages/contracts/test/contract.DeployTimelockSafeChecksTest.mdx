@@ -1,0 +1,139 @@
+---
+title: "DeployTimelockSafeChecksTest"
+description: "The full Safe check of `_validate` (issue #1483): only a real SafeL2 1.4.1 proxy with the expected owners and threshold is accepted."
+---
+
+# DeployTimelockSafeChecksTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
+
+The full Safe check of `_validate` (issue #1483): only a real SafeL2 1.4.1 proxy with
+the expected owners and threshold is accepted.
+
+## State Variables
+
+### harness
+
+```solidity
+ManifestHarness internal harness;
+```
+
+### d
+
+```solidity
+DeployTimelock.Deployed internal d;
+```
+
+### deployer
+
+```solidity
+address internal deployer = makeAddr("safe-check-deployer");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_validate-address-deploytimelock-safespec"></a>
+
+### _validate
+
+```solidity
+function _validate(address safe, DeployTimelock.SafeSpec memory spec) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe | `address` |  |
+| spec | `DeployTimelock.SafeSpec` |  |
+
+<a id="test_realsafe_accepted"></a>
+
+### test_realSafe_accepted
+
+```solidity
+function test_realSafe_accepted() public;
+```
+
+<a id="test_tenbytestub_rejected"></a>
+
+### test_tenByteStub_rejected
+
+```solidity
+function test_tenByteStub_rejected() public;
+```
+
+<a id="test_mocksafe_rejected"></a>
+
+### test_mockSafe_rejected
+
+```solidity
+function test_mockSafe_rejected() public;
+```
+
+<a id="test_eoa_rejected"></a>
+
+### test_eoa_rejected
+
+```solidity
+function test_eoa_rejected() public;
+```
+
+<a id="test_wrongowners_rejected"></a>
+
+### test_wrongOwners_rejected
+
+```solidity
+function test_wrongOwners_rejected() public;
+```
+
+<a id="test_ownercountmismatch_rejected"></a>
+
+### test_ownerCountMismatch_rejected
+
+```solidity
+function test_ownerCountMismatch_rejected() public;
+```
+
+<a id="test_wrongthreshold_rejected"></a>
+
+### test_wrongThreshold_rejected
+
+```solidity
+function test_wrongThreshold_rejected() public;
+```
+
+<a id="test_safewiththresholdone_rejected"></a>
+
+### test_safeWithThresholdOne_rejected
+
+```solidity
+function test_safeWithThresholdOne_rejected() public;
+```
+
+<a id="test_noncanonicalfallbackhandler_rejected"></a>
+
+### test_nonCanonicalFallbackHandler_rejected
+
+```solidity
+function test_nonCanonicalFallbackHandler_rejected() public;
+```
+
+<a id="test_proxyonnoncanonicalsingleton_rejected"></a>
+
+### test_proxyOnNonCanonicalSingleton_rejected
+
+```solidity
+function test_proxyOnNonCanonicalSingleton_rejected() public;
+```
+

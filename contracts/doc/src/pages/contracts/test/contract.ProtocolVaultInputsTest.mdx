@@ -1,0 +1,106 @@
+---
+title: "ProtocolVaultInputsTest"
+description: "The rmPROTO script's sheet inputs: caps, exit fee and fee recipient are required on every chain, and the chain guard is strict on 8453. Every case reads through a prefix no other test uses (env vars are process-wide and forge runs tests in parallel)."
+---
+
+# ProtocolVaultInputsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/DeployScriptChainGuards.t.sol)
+
+**Inherits:** Test
+
+The rmPROTO script's sheet inputs: caps, exit fee and fee recipient are required on
+every chain, and the chain guard is strict on 8453. Every case reads through a prefix
+no other test uses (env vars are process-wide and forge runs tests in parallel).
+
+## State Variables
+
+### h
+
+```solidity
+ProtocolVaultInputsHarness internal h;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_sheet-string-string"></a>
+
+### _sheet
+
+```solidity
+function _sheet(string memory p, string memory skip) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `string` |  |
+| skip | `string` |  |
+
+<a id="_set-string-string-string-string"></a>
+
+### _set
+
+```solidity
+function _set(string memory p, string memory skip, string memory name, string memory v)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `string` |  |
+| skip | `string` |  |
+| name | `string` |  |
+| v | `string` |  |
+
+<a id="test_allinputs_read"></a>
+
+### test_allInputs_read
+
+```solidity
+function test_allInputs_read() public;
+```
+
+<a id="test_missinginputs_revert"></a>
+
+### test_missingInputs_revert
+
+```solidity
+function test_missingInputs_revert() public;
+```
+
+<a id="test_malformedcap_reverts"></a>
+
+### test_malformedCap_reverts
+
+```solidity
+function test_malformedCap_reverts() public;
+```
+
+<a id="test_base_unsetexpectedchain_reverts"></a>
+
+### test_base_unsetExpectedChain_reverts
+
+```solidity
+function test_base_unsetExpectedChain_reverts() public;
+```
+
+<a id="test_twin_mismatchedexpectedchain_reverts"></a>
+
+### test_twin_mismatchedExpectedChain_reverts
+
+```solidity
+function test_twin_mismatchedExpectedChain_reverts() public;
+```
+

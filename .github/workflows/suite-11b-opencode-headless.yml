@@ -196,6 +196,18 @@ jobs:
           set -euo pipefail
           ACCOUNTS=$(cast rpc eth_accounts --rpc-url http://127.0.0.1:8545)
           echo "ADMIN_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[0]')" >> $GITHUB_ENV
+          # One deployment scheme: Deploy.s.sol has no defaults. Devnet sheet values.
+          echo "FEE_RECIPIENT_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[0]')" >> $GITHUB_ENV
+          {
+            echo "VAULT_TVL_CAP=10000000000000"
+            echo "VAULT_PER_DEPOSIT_CAP=1000000000000"
+            echo "AGENT_VALID_UNTIL=4102444800"
+            echo "AGENT_MAX_PER_PAYMENT=10000000000"
+            echo "AGENT_MAX_PER_WINDOW=100000000000"
+            echo "AGENT_MAX_WITHDRAW_PER_PAYMENT=10000000000"
+            echo "AGENT_MAX_WITHDRAW_PER_WINDOW=100000000000"
+            echo "SEED_DEPOSIT_USDC=1000000"
+          } >> $GITHUB_ENV
           echo "PAUSER_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[1]')" >> $GITHUB_ENV
           echo "SHARE_RECEIVER_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[3]')" >> $GITHUB_ENV
           PRIVKEY=$(cast wallet private-key --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
@@ -524,6 +536,18 @@ jobs:
           set -euo pipefail
           ACCOUNTS=$(cast rpc eth_accounts --rpc-url http://127.0.0.1:8545)
           echo "ADMIN_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[0]')" >> $GITHUB_ENV
+          # One deployment scheme: Deploy.s.sol has no defaults. Devnet sheet values.
+          echo "FEE_RECIPIENT_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[0]')" >> $GITHUB_ENV
+          {
+            echo "VAULT_TVL_CAP=10000000000000"
+            echo "VAULT_PER_DEPOSIT_CAP=1000000000000"
+            echo "AGENT_VALID_UNTIL=4102444800"
+            echo "AGENT_MAX_PER_PAYMENT=10000000000"
+            echo "AGENT_MAX_PER_WINDOW=100000000000"
+            echo "AGENT_MAX_WITHDRAW_PER_PAYMENT=10000000000"
+            echo "AGENT_MAX_WITHDRAW_PER_WINDOW=100000000000"
+            echo "SEED_DEPOSIT_USDC=1000000"
+          } >> $GITHUB_ENV
           echo "PAUSER_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[1]')" >> $GITHUB_ENV
           echo "AGENT_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[2]')" >> $GITHUB_ENV
           echo "SHARE_RECEIVER_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[3]')" >> $GITHUB_ENV

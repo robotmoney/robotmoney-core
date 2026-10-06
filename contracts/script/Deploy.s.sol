@@ -48,22 +48,25 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///                                `TestERC20` helper and pass its address
 ///                                via `runInProcessWithUsdc`.
 ///
-///      Optional env vars (with safe defaults):
-///        AGENT_VALID_UNTIL               — uint64, default = block.timestamp + 30 days
-///        AGENT_MAX_PER_PAYMENT           — uint256, default = 10_000 * 1e6 (USDC, 6dp)
-///        AGENT_MAX_PER_WINDOW            — uint256, default = 100_000 * 1e6
-///        AGENT_MAX_WITHDRAW_PER_PAYMENT  — uint256, default = 10_000 * 1e6 (shares, 6dp)
-///        AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256, default = 100_000 * 1e6
+///      Required on every chain (no default; a missing or malformed value reverts):
+///        AGENT_VALID_UNTIL               — uint64 unix time
+///        AGENT_MAX_PER_PAYMENT           — uint256 (USDC, 6dp)
+///        AGENT_MAX_PER_WINDOW            — uint256
+///        AGENT_MAX_WITHDRAW_PER_PAYMENT  — uint256 (shares, 6dp)
+///        AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256
+///        FEE_RECIPIENT_ADDRESS  — vault fee recipient (the treasury, never the deployer)
+///        VAULT_TVL_CAP          — uint256 (USDC, 6dp)
+///        VAULT_PER_DEPOSIT_CAP  — uint256 (USDC, 6dp)
+///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units, non-zero
+///
+///      On chain id 8453, EXPECTED_CHAIN_ID must be set to 8453 and USDC_ADDRESS must be
+///      the canonical Base USDC.
+///
+///      Optional env vars:
 ///        DEPLOYMENT_OUT         — output JSON path,
 ///                                 default = "deployments/<chain_id>.json"
-///        EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches (8453 on Base)
-///        FEE_RECIPIENT_ADDRESS  — vault fee recipient, default ADMIN_ADDRESS (devnet only:
-///                                 a mainnet ceremony must name the treasury, never the deployer)
-///        VAULT_TVL_CAP          — default 10M USDC (devnet)
-///        VAULT_PER_DEPOSIT_CAP  — default 1M USDC (devnet)
+///        EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches (mandatory on 8453)
 ///        VAULT_EXIT_FEE_BPS     — default 0
-///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units; default 1 USDC. A mainnet ceremony
-///                                 sets it explicitly (devops runbook frozen sheet)
 contract Deploy is ExpectedChainGuard {
     using stdJson for string;
 
@@ -297,9 +300,9 @@ contract Deploy is ExpectedChainGuard {
     }
 
     /// @dev The seed this broadcast run deposits: `<prefix>SEED_DEPOSIT_USDC` (6-decimal
-    ///      units), default SEED_DEPOSIT_AMOUNT. Must be non-zero.
+    ///      units), required on every chain. Must be non-zero.
     function _seedAmount(string memory prefix) internal view returns (uint256 seed) {
-        seed = _envOrDefault(string.concat(prefix, "SEED_DEPOSIT_USDC"), SEED_DEPOSIT_AMOUNT);
+        seed = _envUintRequired(string.concat(prefix, "SEED_DEPOSIT_USDC"));
         require(seed > 0, "SEED_DEPOSIT_USDC=0");
     }
 
@@ -315,28 +318,20 @@ contract Deploy is ExpectedChainGuard {
         p.pauser = vm.envAddress(string.concat(prefix, "PAUSER_ADDRESS"));
         p.agent = vm.envAddress(string.concat(prefix, "AGENT_ADDRESS"));
         p.shareReceiver = vm.envAddress(string.concat(prefix, "SHARE_RECEIVER_ADDRESS"));
-        p.validUntil = uint64(
-            _envOrDefault(
-                string.concat(prefix, "AGENT_VALID_UNTIL"),
-                block.timestamp + DEFAULT_VALID_UNTIL_OFFSET
-            )
-        );
-        p.maxPerPayment =
-            _envOrDefault(string.concat(prefix, "AGENT_MAX_PER_PAYMENT"), DEFAULT_MAX_PER_PAYMENT);
-        p.maxPerWindow =
-            _envOrDefault(string.concat(prefix, "AGENT_MAX_PER_WINDOW"), DEFAULT_MAX_PER_WINDOW);
-        p.maxWithdrawPerPayment = _envOrDefault(
-            string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_PAYMENT"),
-            DEFAULT_MAX_WITHDRAW_PER_PAYMENT
-        );
-        p.maxWithdrawPerWindow = _envOrDefault(
-            string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_WINDOW"), DEFAULT_MAX_WITHDRAW_PER_WINDOW
-        );
+        // One deployment scheme: the agent policy, the caps and the fee recipient are
+        // required on every chain. A missing or malformed value reverts; none defaults.
+        p.validUntil = _envUint64Required(string.concat(prefix, "AGENT_VALID_UNTIL"));
+        p.maxPerPayment = _envUintRequired(string.concat(prefix, "AGENT_MAX_PER_PAYMENT"));
+        p.maxPerWindow = _envUintRequired(string.concat(prefix, "AGENT_MAX_PER_WINDOW"));
+        p.maxWithdrawPerPayment =
+            _envUintRequired(string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_PAYMENT"));
+        p.maxWithdrawPerWindow =
+            _envUintRequired(string.concat(prefix, "AGENT_MAX_WITHDRAW_PER_WINDOW"));
         p.usdcAddress = vm.envAddress(string.concat(prefix, "USDC_ADDRESS"));
-        p.feeRecipient = vm.envOr(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"), p.admin);
-        p.tvlCap = _envOrDefault(string.concat(prefix, "VAULT_TVL_CAP"), DEFAULT_TVL_CAP);
-        p.perDepositCap =
-            _envOrDefault(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"), DEFAULT_PER_DEPOSIT_CAP);
+        _requireCanonicalUsdc(p.usdcAddress);
+        p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT_ADDRESS"));
+        p.tvlCap = _envUintRequired(string.concat(prefix, "VAULT_TVL_CAP"));
+        p.perDepositCap = _envUintRequired(string.concat(prefix, "VAULT_PER_DEPOSIT_CAP"));
         p.exitFeeBps = _envOrDefault(string.concat(prefix, "VAULT_EXIT_FEE_BPS"), 0);
     }
 
@@ -538,16 +533,15 @@ contract Deploy is ExpectedChainGuard {
         require(d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.pauser), "pauser missing PAUSER_ROLE");
     }
 
+    /// @dev An optional uint: `fallbackValue` when the variable is unset, the parsed value
+    ///      when set. A set but malformed value reverts and never falls back.
     function _envOrDefault(string memory key, uint256 fallbackValue)
         internal
         view
         returns (uint256)
     {
-        try vm.envUint(key) returns (uint256 v) {
-            return v;
-        } catch {
-            return fallbackValue;
-        }
+        if (!vm.envExists(key)) return fallbackValue;
+        return _envUintRequired(key);
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {

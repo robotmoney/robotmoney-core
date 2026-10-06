@@ -5,11 +5,19 @@ description: "The vault economics, the seed and the chain check are explicit scr
 
 # DeployMainnetInputsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/test/DeployMainnetInputs.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b791ffd0a9860e205e9b54711c9aea03c227481f/contracts/test/DeployMainnetInputs.t.sol)
 
 **Inherits:** Test
 
 The vault economics, the seed and the chain check are explicit script inputs.
+
+## Constants
+
+### BASE_MSG
+
+```solidity
+string internal constant BASE_MSG = "EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet";
+```
 
 ## State Variables
 
@@ -55,12 +63,100 @@ function _base(string memory prefix) internal;
 | ---- | ---- | ----------- |
 | prefix | `string` |  |
 
-<a id="test_defaults_aredevnetvalues"></a>
+<a id="_baseexcept-string-string"></a>
 
-### test_defaults_areDevnetValues
+### _baseExcept
+
+<i>
+
+Sets every input under `prefix` except `skip`. vm.setEnv cannot unset a variable,
+so a missing input is modelled by a prefix under which it was never written.
+
+</i>
 
 ```solidity
-function test_defaults_areDevnetValues() public;
+function _baseExcept(string memory prefix, string memory skip) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+| skip | `string` |  |
+
+<a id="_set-string-string-string-string"></a>
+
+### _set
+
+```solidity
+function _set(string memory prefix, string memory skip, string memory name, string memory value)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+| skip | `string` |  |
+| name | `string` |  |
+| value | `string` |  |
+
+<a id="test_exitfee_defaultstozero_theoneoptionalinput"></a>
+
+### test_exitFee_defaultsToZero_theOneOptionalInput
+
+```solidity
+function test_exitFee_defaultsToZero_theOneOptionalInput() public;
+```
+
+<a id="test_missinginputs_revertoneverychain"></a>
+
+### test_missingInputs_revertOnEveryChain
+
+```solidity
+function test_missingInputs_revertOnEveryChain() public;
+```
+
+<a id="test_malformedinputs_revert"></a>
+
+### test_malformedInputs_revert
+
+```solidity
+function test_malformedInputs_revert() public;
+```
+
+<a id="test_malformedfeerecipient_reverts"></a>
+
+### test_malformedFeeRecipient_reverts
+
+```solidity
+function test_malformedFeeRecipient_reverts() public;
+```
+
+<a id="test_envordefault_unsetusesfallback"></a>
+
+### test_envOrDefault_unsetUsesFallback
+
+```solidity
+function test_envOrDefault_unsetUsesFallback() public view;
+```
+
+<a id="test_envordefault_setisread"></a>
+
+### test_envOrDefault_setIsRead
+
+```solidity
+function test_envOrDefault_setIsRead() public;
+```
+
+<a id="test_envordefault_malformedreverts"></a>
+
+### test_envOrDefault_malformedReverts
+
+```solidity
+function test_envOrDefault_malformedReverts() public;
 ```
 
 <a id="test_overrides_areread"></a>
@@ -119,5 +215,45 @@ function test_wrongExpectedChain_reverts() public;
 
 ```solidity
 function test_matchingExpectedChain_passes() public;
+```
+
+<a id="test_base_unsetexpectedchain_reverts"></a>
+
+### test_base_unsetExpectedChain_reverts
+
+```solidity
+function test_base_unsetExpectedChain_reverts() public;
+```
+
+<a id="test_base_zeroorwrongexpectedchain_reverts"></a>
+
+### test_base_zeroOrWrongExpectedChain_reverts
+
+```solidity
+function test_base_zeroOrWrongExpectedChain_reverts() public;
+```
+
+<a id="test_base_noncanonicalusdc_reverts"></a>
+
+### test_base_nonCanonicalUsdc_reverts
+
+```solidity
+function test_base_nonCanonicalUsdc_reverts() public;
+```
+
+<a id="test_base_canonicalusdcandexpectedchain_passes"></a>
+
+### test_base_canonicalUsdcAndExpectedChain_passes
+
+```solidity
+function test_base_canonicalUsdcAndExpectedChain_passes() public;
+```
+
+<a id="test_twin_unsetexpectedchain_passes"></a>
+
+### test_twin_unsetExpectedChain_passes
+
+```solidity
+function test_twin_unsetExpectedChain_passes() public;
 ```
 
