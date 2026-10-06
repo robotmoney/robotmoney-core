@@ -441,6 +441,9 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     ///      snapshot: four identical sweeps, since nothing between them moves an
     ///      adapter balance. This reads it once and threads it through. External
     ///      `maxDeposit` / `previewDeposit` / `totalAssets` are unchanged.
+    /// @param assets Amount of USDC to deposit.
+    /// @param receiver Address that receives the minted shares.
+    /// @return Shares minted to `receiver`.
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
         uint256 nav = totalAssets();
         uint256 maxAssets = _maxDepositAt(nav);

@@ -5,7 +5,7 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a0833555fd49401eb9d448beca36219e5dbb1cb/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f9cdb90ab20dda76e53e143248a6f5b8f6a1c11/contracts/RobotMoneyVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -437,14 +437,14 @@ function deposit(uint256 assets, address receiver) public override returns (uint
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| assets | `uint256` |  |
-| receiver | `address` |  |
+| assets | `uint256` | Amount of USDC to deposit. |
+| receiver | `address` | Address that receives the minted shares. |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint256` | Shares minted to `receiver`. |
 
 <a id="_deposit-address-address-uint256-uint256"></a>
 
