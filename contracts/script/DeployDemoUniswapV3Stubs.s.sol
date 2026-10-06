@@ -22,7 +22,7 @@ import {UniswapV3PoolSlot0Stub} from "../UniswapV3PoolSlot0Stub.sol";
 ///         0x4e59b44847b379578588920cA78FbF26c0B4956C, pre-installed in the
 ///         devnet genesis via `genesis_alloc.rs`) with fixed salts so the
 ///         deployed addresses are **deterministic** and pre-committed in
-///         `config/dex-pools.json::devnet.pools` and
+///         `config/dex-pools.json::pools` and
 ///         `testing/ethereum-testnet/config/expected-prices.json`.
 ///
 ///         Required env vars: none (all seeds are hardcoded).

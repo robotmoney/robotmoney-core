@@ -58,3 +58,4 @@ docs/papers/*.docx
 # Phase 7 demo run artifacts (per-run dirs under artifacts/demo/<timestamp>/).
 # Captured by testing/demo/demo.sh; uploaded by .github/workflows/demo.yml.
 artifacts/
+config-check-output/

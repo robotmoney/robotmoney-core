@@ -23,18 +23,13 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployAgentTokenVault
-/// @notice Deploys `AgentTokenVault` and seeds it with the active three-token
-///         demo shortlist: BNKR, JUNO, RM. Token, pool, adapter, and
+/// @notice Deploys `AgentTokenVault` and seeds it with the config shortlist
+///         (empty at launch). Token, pool, adapter, and
 ///         venue data are read from `config/agent-token-shortlist.json`; no
 ///         token address is hardcoded in Solidity source.
 ///
-///         Chain selection: `block.chainid == 8453` (Base mainnet) reads the
-///         `mainnet` block of the config. Any other chain id reads stand-in
-///         ERC20 + pool addresses from `DEVNET_AGENT_TOKEN_<SYMBOL>` /
-///         `DEVNET_AGENT_POOL_<SYMBOL>` / `DEVNET_AGENT_FEE_<SYMBOL>` /
-///         `DEVNET_AGENT_ADAPTER_<SYMBOL>` env
-///         overrides, matching the single-production-codebase principle: the
-///         same script ships everywhere, only the address source differs.
+///         One config for every chain: the script reads the same file on Base
+///         mainnet and on the Twin chain. An empty shortlist deploys an empty vault.
 ///
 ///         Required env vars:
 ///           ADMIN_ADDRESS              — receives ADMIN_ROLE on the vault and
@@ -59,11 +54,6 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///                               (default: deployments/agent-token-vault-<chain_id>.json)
 contract DeployAgentTokenVault is ExpectedChainGuard {
     using stdJson for string;
-
-    /// @notice Active shortlist symbols in deploy order.
-    ///         Ordering is load-bearing: AgentTokenVault.shortlist() returns
-    ///         tokens in this order, and the dapp/tests assert on it.
-    string[3] internal SYMBOLS = ["BNKR", "JUNO", "RM"];
 
     /// @notice TVL/per-deposit caps mirrored from the other demo vaults.
     uint256 public constant TVL_CAP = 10_000_000 * 1e6;
@@ -104,7 +94,7 @@ contract DeployAgentTokenVault is ExpectedChainGuard {
         require(usdc != address(0), "USDC_ADDRESS=0");
         _requireCanonicalUsdc(usdc);
 
-        Entry[3] memory entries = _resolveShortlist();
+        Entry[] memory entries = _resolveShortlist();
 
         vm.startBroadcast();
         d = _deployAndSeed(admin, emergencyResponder, swapRouter, usdc, entries);
@@ -121,7 +111,7 @@ contract DeployAgentTokenVault is ExpectedChainGuard {
         address emergencyResponder,
         address swapRouter,
         address usdc,
-        Entry[3] memory entries
+        Entry[] memory entries
     ) internal returns (Deployed memory d) {
         AgentTokenVault vault = new AgentTokenVault(
             IERC20(usdc),
@@ -154,41 +144,29 @@ contract DeployAgentTokenVault is ExpectedChainGuard {
         }
     }
 
-    /// @dev Resolve the three shortlist entries from config (mainnet) or env
-    ///      overrides (devnet), selected by chain id.
-    function _resolveShortlist() internal view returns (Entry[3] memory entries) {
-        bool isMainnet = block.chainid == 8453;
-        string memory json = isMainnet ? _readConfig() : "";
-
-        for (uint256 i = 0; i < SYMBOLS.length; i++) {
-            string memory sym = SYMBOLS[i];
-            entries[i].symbol = sym;
-            if (isMainnet) {
-                string memory base = string.concat(".mainnet.shortlist[", vm.toString(i), "]");
-                entries[i].token = json.readAddress(string.concat(base, ".token"));
-                entries[i].pool = json.readAddress(string.concat(base, ".pool"));
-                entries[i].swapFee = uint24(json.readUint(string.concat(base, ".swapFee")));
-                entries[i].adapter = json.readAddress(string.concat(base, ".adapter"));
-                entries[i].venue = _venueFromString(json.readString(string.concat(base, ".venue")));
-                require(entries[i].token != address(0), "mainnet token unset in config");
-                require(entries[i].pool != address(0), "mainnet pool unset in config");
-                if (entries[i].venue != BasketVault.Venue.V3) {
-                    require(entries[i].adapter != address(0), "mainnet adapter unset in config");
-                }
-            } else {
-                entries[i].token = vm.envAddress(string.concat("DEVNET_AGENT_TOKEN_", sym));
-                entries[i].pool = vm.envAddress(string.concat("DEVNET_AGENT_POOL_", sym));
-                entries[i].swapFee =
-                    uint24(_envUintOrDefault(string.concat("DEVNET_AGENT_FEE_", sym), 10_000));
-                entries[i].adapter = _envAddressOrZero(string.concat("DEVNET_AGENT_ADAPTER_", sym));
-                entries[i].venue = i == 0
-                    ? BasketVault.Venue.V3
-                    : i == 1 ? BasketVault.Venue.V4 : BasketVault.Venue.Aerodrome;
-                require(entries[i].token != address(0), "devnet token override unset");
-                require(entries[i].pool != address(0), "devnet pool override unset");
-                if (entries[i].venue != BasketVault.Venue.V3) {
-                    require(entries[i].adapter != address(0), "devnet adapter override unset");
-                }
+    /// @dev Resolve the shortlist entries from `config/agent-token-shortlist.json`.
+    ///      One config for every chain. An empty list yields an empty vault.
+    function _resolveShortlist() internal view returns (Entry[] memory entries) {
+        string memory json = vm.readFile("config/agent-token-shortlist.json");
+        address[] memory tokens;
+        try vm.parseJsonAddressArray(json, ".shortlist[*].token") returns (address[] memory t) {
+            tokens = t;
+        } catch {
+            tokens = new address[](0);
+        }
+        entries = new Entry[](tokens.length);
+        for (uint256 i = 0; i < tokens.length; i++) {
+            string memory base = string.concat(".shortlist[", vm.toString(i), "]");
+            entries[i].symbol = json.readString(string.concat(base, ".symbol"));
+            entries[i].token = tokens[i];
+            entries[i].pool = json.readAddress(string.concat(base, ".pool"));
+            entries[i].swapFee = uint24(json.readUint(string.concat(base, ".swapFee")));
+            entries[i].adapter = json.readAddress(string.concat(base, ".adapter"));
+            entries[i].venue = _venueFromString(json.readString(string.concat(base, ".venue")));
+            require(entries[i].token != address(0), "config token unset");
+            require(entries[i].pool != address(0), "config pool unset");
+            if (entries[i].venue != BasketVault.Venue.V3) {
+                require(entries[i].adapter != address(0), "config adapter unset");
             }
         }
     }
@@ -199,11 +177,6 @@ contract DeployAgentTokenVault is ExpectedChainGuard {
         if (venueHash == keccak256("V4")) return BasketVault.Venue.V4;
         if (venueHash == keccak256("Aerodrome")) return BasketVault.Venue.Aerodrome;
         revert("unsupported venue");
-    }
-
-    function _readConfig() internal view returns (string memory) {
-        string memory path = _envStringOrDefault("CONFIG_PATH", "config/agent-token-shortlist.json");
-        return vm.readFile(path);
     }
 
     function _registerIfAbsent(VaultRegistry registry, address vault, address asset) internal {
@@ -241,18 +214,6 @@ contract DeployAgentTokenVault is ExpectedChainGuard {
             return v;
         } catch {
             return address(0);
-        }
-    }
-
-    function _envUintOrDefault(string memory key, uint256 fallback_)
-        internal
-        view
-        returns (uint256)
-    {
-        try vm.envUint(key) returns (uint256 v) {
-            return v;
-        } catch {
-            return fallback_;
         }
     }
 

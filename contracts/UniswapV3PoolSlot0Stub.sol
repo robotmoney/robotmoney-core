@@ -7,7 +7,7 @@
 // have no bytecode there.  This stub is deployed via
 // `DeployDemoUniswapV3Stubs.s.sol` (issue #531) using CREATE2 with fixed
 // salts so its address is deterministic and pre-committed in
-// `config/dex-pools.json::devnet.pools`.  The deployer only sets
+// `config/dex-pools.json::pools`.  The deployer only sets
 // `sqrtPriceX96` at construction; all other slot0 fields return sensible
 // defaults that keep the dapp's price math alive without triggering
 // divide-by-zero or overflow.

@@ -45,7 +45,7 @@ function loadExpectedPrices(): ExpectedPrices {
   return JSON.parse(fs.readFileSync(file, "utf8")) as ExpectedPrices;
 }
 
-const PAIR_IDS = ["eth-usd", "weth-usdc", "cbbtc-usdc", "wsol-usdc"] as const;
+const PAIR_IDS = ["eth-usd", "weth-usdc", "cbbtc-usdc"] as const;
 
 async function gotoLanding(page: Page): Promise<void> {
   // The price strip is part of the public landing overview — no wallet

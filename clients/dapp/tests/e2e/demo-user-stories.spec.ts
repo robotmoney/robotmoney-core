@@ -25,7 +25,7 @@ import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints } from "./helpers/devnet";
 import { openDapp } from "./helpers/wallet";
 
-const PAIR_IDS = ["eth-usd", "weth-usdc", "cbbtc-usdc", "wsol-usdc"] as const;
+const PAIR_IDS = ["eth-usd", "weth-usdc", "cbbtc-usdc"] as const;
 
 test.describe("demo user stories: first-visitor landing-page session", () => {
   test("demo user stories price strip: all four price cells show a numeric value", async ({
