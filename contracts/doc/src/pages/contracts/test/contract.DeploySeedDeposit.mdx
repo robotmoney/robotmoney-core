@@ -5,7 +5,7 @@ description: "Fork test asserting that after running the deploy script the vault
 
 # DeploySeedDeposit
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/47813c6ce325a410eae924f85ab4c0cc53db31a1/contracts/test/DeploySeedDeposit.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/4d4c62291d911b074edc65739143e39936e0d7d0/contracts/test/DeploySeedDeposit.t.sol)
 
 **Inherits:** Test
 
@@ -207,6 +207,32 @@ The seed receiver holds the seed shares and the deployer holds none.
 
 ```solidity
 function test_fork_deploySeed_receiverHoldsShares() public;
+```
+
+<a id="test_fork_deployseed_depositusesfixedgas"></a>
+
+### test_fork_deploySeed_depositUsesFixedGas
+
+The seed deposit is called with the script's fixed gas, never a forge estimate
+(core 1505). forge broadcasts a call that names its gas with exactly that gas
+limit (`isFixedGasLimit` in the broadcast file), so this pins the gas limit of the
+broadcast seed transaction. It also shows the fixed gas clears every adapter gas
+floor at the fork's venue state.
+
+```solidity
+function test_fork_deploySeed_depositUsesFixedGas() public;
+```
+
+<a id="test_seeddepositgas_keepsheadroomovermeasuredestimate"></a>
+
+### test_seedDepositGas_keepsHeadroomOverMeasuredEstimate
+
+The fixed seed gas keeps at least 2x the largest `cast estimate` measured for the
+seed deposit (1 329 873 on the Twin chain at Base block 52256191, core 1505). Runs
+without a fork, so lowering the constant fails the plain unit run.
+
+```solidity
+function test_seedDepositGas_keepsHeadroomOverMeasuredEstimate() public;
 ```
 
 <a id="test_seedstep_unsetreceiver_reverts"></a>

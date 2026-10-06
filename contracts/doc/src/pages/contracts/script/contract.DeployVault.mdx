@@ -5,7 +5,7 @@ description: "Stage 2 of the core deploy (libs, vault, registry, router, gateway
 
 # DeployVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/4d4c62291d911b074edc65739143e39936e0d7d0/contracts/script/DeployVault.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -152,6 +152,38 @@ Third venue adapter cap in basis points.
 
 ```solidity
 uint16 public constant THIRD_VENUE_BPS = 3_333;
+```
+
+### SEED_DEPOSIT_GAS
+
+Explicit gas for the broadcast seed `deposit` (core 1505). forge sends a call that
+names its gas with exactly that gas limit, so the seed transaction is never sized by
+forge's own estimate.
+
+<i>
+
+Why the estimate is not enough: `deposit` routes the seed through every adapter, and
+before each `adapter.deploy` the vault checks `gasleft() >= ADAPTER_CALL_GAS_FLOOR`
+(400 000, `RobotMoneyVault._allocateTo`). forge 1.8.x sets a broadcast gas limit of
+about 1.38x to 1.46x the gas the call used with unlimited gas (G). A deposit needs
+about 1.40x G, because the floor is checked but not spent. On the Twin chain at
+Base block 52256191 forge sent 1 300 462 gas, the third (Moonwell) floor saw 370 589
+and the seed reverted `InsufficientGas(370589, 400000)` after the vault and adapters
+were already mined. `cast estimate` needed about 1.32M to 1.33M there.
+
+</i>
+
+How 3 000 000 is chosen: the floor is a check, not a cost, so the worst case is every
+gas unit the deposit spends (G, about 1.1M on the Twin pins: three adapter
+`totalAssets` reads, a second read pass, three `deploy` calls with the Moonwell
+MetaMorpho deposit the largest) plus one 400 000 floor plus 1/64 call forwarding and
+the intrinsic cost: about 1.55M. 3M covers that about 1.9x over, so venue state can
+roughly double G (a longer MetaMorpho queue, a new Aave or Comet code path) before
+the limit binds. Unused gas is refunded, so the only cost is the up-front balance
+check (3M x the max fee) that the runner's fee guard already covers.
+
+```solidity
+uint256 public constant SEED_DEPOSIT_GAS = 3_000_000;
 ```
 
 ## Functions
