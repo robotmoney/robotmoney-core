@@ -957,7 +957,7 @@ suite 20 `pg` 20→30).
 
 ### Resolution of the five smoke-test devnet targets (issue #1311)
 
-> **Historical.** This section records the decision of issue #1311, taken when `Fixture` booted the Geth + Lighthouse compose stack. The devnet is now the Twin chain (core 1498, 1496): a test binary shares one pinned fork through `TWIN_RPC_URL`, and `fund_usdc` asserts the Twin environment steps. The wiring outcomes below still stand.
+> **Historical.** This section records the decision of issue #1311, taken when `Fixture` booted the Geth + Lighthouse compose stack. The devnet is now the Twin chain (core 1498, 1496): a test binary shares one pinned fork through `TWIN_RPC_URL`, and `fund_usdc` asserts the Twin environment steps. The `faucet_eth` and `faucet_rm` targets wired here were deleted in core 1488 with the dapp faucet funding, and `demo_seeding` and `full_stack_demo_tvl` went with demo depositor seeding. Suite 14's devnet matrix today is `[cli_meta, fixture_meta, fund_usdc, governance, twin_fork_env]`. The `fund_usdc`, `governance` and `vault_deposit_redeem` outcomes below still stand.
 
 `smoke-test::faucet_eth`, `faucet_rm`, `fund_usdc`, `governance` and
 `vault_deposit_redeem` were allowlisted (issue #1282) rather than wired,
@@ -970,8 +970,6 @@ actual cost and resolved all five:
 
 | Target | Outcome | Reason |
 |--------|---------|--------|
-| `faucet_eth` | wired — suite 14 devnet matrix row | native Base ETH faucet drip round-trip (issue #466); no other executed target funds ETH through the fixture |
-| `faucet_rm` | wired — suite 14 devnet matrix row | RM token faucet drip round-trip (issue #365); no other executed target exercises `fund_rm_token` |
 | `fund_usdc` | wired — suite 14 devnet matrix row | real-signed-transfer + Geth-not-Anvil assertions (issue #255 step 7); no other executed target asserts the devnet backend rejects Anvil cheat RPCs |
 | `governance` | wired — suite 14 devnet matrix row | RouterGovernance deploy + `setVotingPower`/admin-role wiring on the **actual `forge script Deploy` output** (issue #364); distinct from `rmpc-fork-e2e::governance` (suite 5), which drives a hand-deployed governance stack's propose/vote/execute logic on an anvil fork and never touches the devnet's real deploy script — neither `fixture_meta` nor any other executed target reads `fx.governance()` |
 | `vault_deposit_redeem` | **deleted** | both of its assertions are already made by a suite that genuinely runs today: `vault_on_chain_state` (exitFeeBps==0, activeAdapterCount>=1) duplicates `smoke-test::fixture_meta::vault_has_zero_exit_fee_and_one_active_adapter`, already a suite-14 matrix row; `vault_deposit_redeem_round_trip` (deposit 1 USDC, redeem, assert USDC returned within tolerance) duplicates `rmpc-fork-e2e::vault_deposit_redeem_smoke` (suite-05 `anvil-goldens` group — confirmed executing for real against the checked-in fork fixture, `chain_id=8453 fork_block=48896605`, no skip). `rmpc-fork-e2e::devnet_adapter_round_trip` (suite-05 `geth-light` group) does **not** count as coverage despite naming the same scenario: it unconditionally self-skips in CI (`[fork-e2e] skipping: RMPC_FORK_RPC_URL not set`, `finished in 0.00s`) because that variable is never set anywhere in suite-05 — see issue #1239, which tracks provisioning it. The deleted test's docstring framing ("wired to the three real Aave/Compound/Morpho adapters") is therefore not independently re-proven by name anywhere; only the two narrower assertions it actually made (exit fee / adapter-count-`>=1`, and a generic deposit/redeem tolerance check) are covered by what runs |
@@ -992,9 +990,6 @@ behavior (the exact balance delta, the `Transfer` log's
 `from=HARNESS_USDC_HOLDER` shape, signature recovery, or the Geth-vs-Anvil
 backend check). No overlap with any of the five targets:
 
-- `faucet_eth` / `faucet_rm` — faucet drip round-trips through distinct
-  fixture methods (`fund_eth_from_harness`, `fund_rm_token`) `demo_seeding`
-  never calls.
 - `fund_usdc` — `demo_seeding` calls the same `fund_usdc` method as setup
   plumbing but asserts none of its distinguishing behavior (see above); the
   two targets are not redundant.
@@ -1009,7 +1004,7 @@ wired targets only add a `Fixture::new()` boot plus a handful of RPC
 round-trips on top — no dapp-stack build, no indexer recompile, no reseed.
 This PR's own first CI run against the new matrix
 ([run 33938728232](https://github.com/robotmoney/robotmoney-core/actions/runs/33938728232))
-measured the four new rows directly: `faucet_eth` 17m33s, `faucet_rm` 17m49s,
+measured the new rows directly (the two faucet rows, since deleted, are omitted):
 `fund_usdc` 18m01s, `governance` 17m28s — all landing right next to
 `fixture_meta`'s 18m19s in the same run (the closest existing analog: boot +
 several RPC/eth_call assertions, no heavier work), against `cli_meta` at

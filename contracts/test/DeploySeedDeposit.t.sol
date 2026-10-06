@@ -14,8 +14,11 @@ import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 /// @title DeploySeedDeposit
 /// @notice Fork test asserting that after running the deploy script the vault
 ///         satisfies the seed deposit precondition required by the deploy runbook:
-///           - vault.totalAssets() >= 1_000 * 1e6 (1,000 USDC)
+///           - vault.totalAssets() >= 99.99% of the seed (1 USDC, `VaultTestParams.SEED_DEPOSIT_AMOUNT`;
+///             the broadcast run reads it from `SEED_DEPOSIT_USDC`)
 ///           - vault.totalSupply() > 0
+///           - the seed shares go to the seed receiver (`SEED_SHARE_RECEIVER` in the broadcast run),
+///             never to the deployer, who pays the seed USDC and holds no shares
 ///         before any simulated public deposit.
 ///
 /// @dev CI runs this on the Twin chain (a pinned lazy anvil fork of real Base state) named by
@@ -61,7 +64,7 @@ contract DeploySeedDeposit is Test {
     }
 
     /// @dev Shared setup: create the deploy script, named test accounts,
-    ///      and ensure admin has enough USDC for the seed deposit.
+    ///      and fund the deployer (`admin`) with the 1 USDC seed it pays.
     ///      Returns false when the fork URL is absent (test should skip).
     function _setUp() internal returns (bool) {
         if (!_trySelectFork()) return false;
@@ -80,7 +83,8 @@ contract DeploySeedDeposit is Test {
 
     /// @dev Run the deploy script in-process with real Base USDC and seed deposit.
     ///      Adapters are deployed against real Base mainnet protocol addresses.
-    ///      Uses runInProcessWithSeed() which includes the mandatory seed deposit step.
+    ///      Uses runInProcessWithSeed() which includes the mandatory seed deposit step:
+    ///      the deployer pays the seed and `shareReceiver` gets the seed shares.
     function _runDeploy() internal returns (DeployVault.Deployed memory) {
         return script.runInProcessWithSeed(
             VaultTestParams.params(admin, BASE_USDC),
@@ -93,11 +97,13 @@ contract DeploySeedDeposit is Test {
     // Core seed deposit precondition tests (issue #656 acceptance criteria)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @notice After deploy, vault.totalAssets() >= 1_000_000_000 (1,000 USDC).
+    /// @notice After deploy, vault.totalAssets() >= 99.99% of the 1 USDC seed
+    ///         (`VaultTestParams.SEED_DEPOSIT_AMOUNT` = 1e6).
     ///
     ///         This is the primary AC from issue #656: the deploy runbook must
-    ///         seed the vault with ≥ 1,000 USDC before the vault is opened to
-    ///         the public (security-model.md §3).
+    ///         seed the vault before it is opened to the public
+    ///         (security-model.md §3). The broadcast run seeds `SEED_DEPOSIT_USDC`
+    ///         (1 USDC on the stage sheet) and mints the shares to `SEED_SHARE_RECEIVER`.
     function test_fork_deploySeed_totalAssetsAtLeastMinSeed() public {
         _setUp();
 

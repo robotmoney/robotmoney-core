@@ -120,7 +120,8 @@ function requireAllowedAdapter(address adapter, bool allowed) public pure;
 Assert the execution pool resolved from `swapFee` is the SAME pool
 the NAV TWAP reads from (ORA-3 / F-09): fee tier for V3/V4, tick
 spacing for Aerodrome. `swapFee == 0` is the pool-independent-pricing
-sentinel (e.g. the Chronicle NAV adapter) and is exempt.
+sentinel and is exempt. No shipped asset uses it: the basket deploy
+script requires a non-zero `poolFee` (`contracts/script/BasketVaultDeployBase.sol`).
 
 ```solidity
 function requireExecutionPoolMatchesTwap(address pool, uint24 swapFee, Venue venue)

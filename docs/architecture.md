@@ -1025,8 +1025,11 @@ token in tests or production, and the RM test token contract is deleted
 are gas, USDC and time warp only, so the harness holds no RM to drip.
 The main-page balances panel reads the RM balance at
 `VITE_RM_TOKEN_ADDRESS`, which every smoke-test env-injection site sets
-to the live address. A fresh account that needs RM voting power must
-obtain live RM; the faucet does not provide it.
+to the live address. No test needs to hold RM. `RouterGovernance` voting
+power is assigned by `ADMIN_ROLE` through `setVotingPower`
+(`contracts/RouterGovernance.sol`), not read from an RM balance. rmAGENT
+ships empty and paused with an empty `config/agent-token-shortlist.json`,
+so no deposit buys RM yet (the RM venue is core 1491).
 
 ### 5.4 Explorer Indexer and API
 

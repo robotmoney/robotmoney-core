@@ -1,5 +1,16 @@
 # Hybrid NAV Design — System Guards + User Asset Clarity
 
+> **Status (2026-10-06): this doc disagrees with the code. Where it does, the code governs until the owner decides otherwise.**
+>
+> What `contracts/vaults/BasketVault.sol` does today:
+>
+> - **NAV is `totalAssets()`:** idle USDC plus each active basket token valued at its TWAP (`_twapUsdcValue`).
+> - **Deposit mints shares from NAV:** `_deposit` snapshots `taBefore = totalAssets()`, swaps the USDC into the basket (`_routeDeposit`, each leg with a TWAP-derived `minOut`), then mints `realizedDelta * (supplyBefore + 10**_decimalsOffset()) / (taBefore - idle USDC + 1)`, where `realizedDelta = totalAssets() - taBefore`. It reverts with `DepositBelowSlippageFloor` when `realizedDelta` is below `usdcAmount * (1 - maxSlippageBps)`.
+> - **TVL cap uses NAV:** `_deposit` reverts with `TVLCapExceeded` when `taBefore + usdcAmount > tvlCap`. `maxDeposit` returns the headroom `tvlCap - totalAssets()`, capped by `perDepositCap`.
+> - **ORA-4 deviation check:** `_deposit` calls `BasketViews.checkNavDeviation` (`contracts/lib/BasketViews.sol`), which reverts with `NavMarketDeviationExceeded` when an active asset's spot price diverges from its TWAP by more than `navDeviationGuardBps`. A threshold of 0 disables it.
+> - **Redeem is a pro-rata sale, not a NAV payout:** `_withdraw` burns the shares, then `_sellProportional` sells `balance * shares / supplyBefore` of each active token and adds the same fraction of idle USDC. The share-to-token split does not use NAV. Each sell leg has a TWAP-derived min-out floor (`_slippageFloor`). The exit fee is taken from the USDC received.
+> - **No NAV growth limiter exists** in `contracts/` today, so the "NAV growth rate limiter" below describes nothing in code.
+
 ## Design Rationale
 
 This document specifies the **hybrid approach** that resolves the unspecified gap between "NAV-mediated position" (implicit) and "user-specific assets" (explicit) without fully transitioning to the latter's on-chain complexity.
