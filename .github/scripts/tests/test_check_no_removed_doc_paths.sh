@@ -86,24 +86,32 @@ done
 
 # Diff scope: only allowed paths, Rust changes are //! comment lines.
 base="$(git -C "$REPO_ROOT" merge-base HEAD origin/dev 2>/dev/null || true)"
-if [[ -n "$base" ]]; then
-  cases=$((cases + 1))
-  bad="$(git -C "$REPO_ROOT" diff --name-only "$base" |
-    grep -v -E '^(docs/|\.github/|tests/fixtures/committee-vote\.schema\.json$|testing/(fork-e2e-rust|smoke-test)/src/base_testnet\.rs$|scripts/ci/check-no-test-only-code\.ts$)' || true)"
-  if [[ -n "$bad" ]]; then
-    echo "FAIL: diff touches paths outside scope: $bad" >&2
-    failures=$((failures + 1))
-  else
-    echo "ok: diff paths in scope"
-  fi
-  cases=$((cases + 1))
-  badrs="$(git -C "$REPO_ROOT" diff -U0 "$base" -- '*.rs' | grep -E '^[+-][^+-]' | grep -v -E '^[+-]//!' || true)"
-  if [[ -n "$badrs" ]]; then
-    echo "FAIL: Rust diff has non-//! lines: $badrs" >&2
-    failures=$((failures + 1))
-  else
-    echo "ok: Rust diff is comment-only"
-  fi
+if [[ -z "$base" ]]; then
+  # Shallow checkout: fetch the base branch, then retry. Never skip silently.
+  git -C "$REPO_ROOT" fetch --quiet --unshallow origin dev 2>/dev/null ||
+    git -C "$REPO_ROOT" fetch --quiet origin dev 2>/dev/null || true
+  base="$(git -C "$REPO_ROOT" merge-base HEAD origin/dev 2>/dev/null || true)"
+fi
+if [[ -z "$base" ]]; then
+  echo "FAIL: cannot resolve merge-base with origin/dev; the diff-scope cases cannot run (shallow checkout? use fetch-depth: 0)" >&2
+  exit 1
+fi
+cases=$((cases + 1))
+bad="$(git -C "$REPO_ROOT" diff --name-only "$base" |
+  grep -v -E '^(docs/|\.github/|tests/fixtures/committee-vote\.schema\.json$|testing/(fork-e2e-rust|smoke-test)/src/base_testnet\.rs$|scripts/ci/check-no-test-only-code\.ts$)' || true)"
+if [[ -n "$bad" ]]; then
+  echo "FAIL: diff touches paths outside scope: $bad" >&2
+  failures=$((failures + 1))
+else
+  echo "ok: diff paths in scope"
+fi
+cases=$((cases + 1))
+badrs="$(git -C "$REPO_ROOT" diff -U0 "$base" -- '*.rs' | grep -E '^[+-][^+-]' | grep -v -E '^[+-]//!' || true)"
+if [[ -n "$badrs" ]]; then
+  echo "FAIL: Rust diff has non-//! lines: $badrs" >&2
+  failures=$((failures + 1))
+else
+  echo "ok: Rust diff is comment-only"
 fi
 
 if [[ $cases -eq 0 ]]; then

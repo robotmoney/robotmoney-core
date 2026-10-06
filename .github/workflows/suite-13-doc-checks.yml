@@ -59,6 +59,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # self-test needs merge-base with origin/dev (core 1556)
 
       - name: Set up Python
         uses: actions/setup-python@v5
