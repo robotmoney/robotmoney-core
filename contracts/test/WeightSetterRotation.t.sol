@@ -331,6 +331,34 @@ contract WeightSetterRotationTest is Test {
         assertEq(pending, address(0));
     }
 
+    /// @dev Rotating to the timelock would give it WEIGHT_SETTER_ROLE and reopen the 1522 path.
+    function test_propose_toRouterTimelockOrSafe_reverts() public {
+        vm.etch(safe, hex"00"); // a real Safe is a contract
+        address[3] memory bad = [address(router), address(timelock), safe];
+        for (uint256 i = 0; i < bad.length; i++) {
+            vm.prank(safe);
+            vm.expectRevert(
+                abi.encodeWithSelector(PortfolioRouter.RotationTargetForbidden.selector, bad[i])
+            );
+            router.proposeWeightSetterRotation(bad[i]);
+        }
+    }
+
+    /// @dev A target that became a rotation role holder after the proposal is refused at execution.
+    function test_execute_toATargetThatNowHoldsARotationRole_reverts() public {
+        bytes memory data = _executeCall(newGov);
+        _propose(newGov);
+        _schedule(data, bytes32(0));
+        vm.prank(safe);
+        router.grantRole(ROTATOR, newGov);
+        vm.warp(block.timestamp + DELAY);
+        vm.expectRevert(
+            abi.encodeWithSelector(PortfolioRouter.RotationTargetForbidden.selector, newGov)
+        );
+        _run(data, bytes32(0));
+        assertTrue(router.hasRole(WEIGHT_SETTER_ROLE, oldGov));
+    }
+
     function test_propose_whilePending_reverts() public {
         _propose(newGov);
         vm.prank(safe);

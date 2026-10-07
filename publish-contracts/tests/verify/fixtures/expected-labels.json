@@ -92,6 +92,8 @@
   "router: WEIGHT_SETTER_ROLE not held by emergency",
   "router: WEIGHT_SETTER_ROLE has exactly one holder",
   "router: no weight setter rotation pending",
+  "router: WEIGHT_SETTER_ROTATOR_ROLE has exactly one holder",
+  "router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE has exactly one holder",
   "router: WEIGHT_SETTER_ROTATOR_ROLE held by safe",
   "router: WEIGHT_SETTER_ROTATOR_ROLE not held by timelock",
   "router: WEIGHT_SETTER_ROTATOR_ROLE not held by deployer",

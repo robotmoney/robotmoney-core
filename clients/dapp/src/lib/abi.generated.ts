@@ -7510,6 +7510,17 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "RotationTargetForbidden",
+    inputs: [
+      {
+        name: "target",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "RotationTargetMismatch",
     inputs: [
       {

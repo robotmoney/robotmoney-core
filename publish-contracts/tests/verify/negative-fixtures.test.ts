@@ -72,6 +72,7 @@ const RULES: Rule[] = [
   [/^router: WEIGHT_SETTER_ROLE not held by (timelock|deployer|safe|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, { timelock: TIMELOCK, ...WHO }[m[1]]!)],
   [/^router: WEIGHT_SETTER_ROLE has exactly one holder$/, (w) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, OTHER)],
   [/^router: no weight setter rotation pending$/, (w) => w.chain.set(ROUTER, "pendingWeightSetterRotation", [OTHER, 4000n])],
+  [/^router: (WEIGHT_SETTER_ROTATOR_ROLE|WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE) has exactly one holder$/, (w, m) => w.chain.grant(ROUTER, m[1] === "WEIGHT_SETTER_ROTATOR_ROLE" ? WEIGHT_SETTER_ROTATOR_ROLE : WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, OTHER)],
   [/^router: WEIGHT_SETTER_ROTATOR_ROLE held by safe$/, (w) => w.chain.revoke(ROUTER, WEIGHT_SETTER_ROTATOR_ROLE, SAFE)],
   [/^router: WEIGHT_SETTER_ROTATOR_ROLE not held by (timelock|deployer|governance|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROTATOR_ROLE, { timelock: TIMELOCK, governance: GOV, ...WHO }[m[1]]!)],
   [/^router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE held by timelock$/, (w) => w.chain.revoke(ROUTER, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, TIMELOCK)],

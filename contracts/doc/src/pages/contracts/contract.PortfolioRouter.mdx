@@ -286,6 +286,26 @@ function proposeWeightSetterRotation(address newHolder)
 | ---- | ---- | ----------- |
 | newHolder | `address` | A deployed contract, for example a replacement RouterGovernance. |
 
+<a id="_requireallowedrotationtarget-address"></a>
+
+### _requireAllowedRotationTarget
+
+<i>
+
+Rejects this router and any holder of either rotation role (the Safe, the timelock).
+
+</i>
+
+```solidity
+function _requireAllowedRotationTarget(address target) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
 <a id="cancelweightsetterrotation"></a>
 
 ### cancelWeightSetterRotation
@@ -1568,6 +1588,20 @@ A rotation target must be a deployed contract (not address(0), an EOA or an empt
 
 ```solidity
 error RotationTargetNotContract(address target);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+### RotationTargetForbidden
+
+A rotation target must not be this router, the Safe (rotator) or the timelock (executor). Rotating to the timelock would hand it `WEIGHT_SETTER_ROLE` (core 1522).
+
+```solidity
+error RotationTargetForbidden(address target);
 ```
 
 **Parameters**

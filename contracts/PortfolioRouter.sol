@@ -330,6 +330,9 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice A rotation target must be a deployed contract (not address(0), an EOA or an empty address).
     error RotationTargetNotContract(address target);
 
+    /// @notice A rotation target must not be this router, the Safe (rotator) or the timelock (executor). Rotating to the timelock would hand it `WEIGHT_SETTER_ROLE` (core 1522).
+    error RotationTargetForbidden(address target);
+
     /// @notice A rotation is already pending. Cancel it first.
     error RotationAlreadyPending();
 
@@ -383,10 +386,19 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         onlyRole(WEIGHT_SETTER_ROTATOR_ROLE)
     {
         if (newHolder.code.length == 0) revert RotationTargetNotContract(newHolder);
+        _requireAllowedRotationTarget(newHolder);
         if (pendingWeightSetterRotation.newHolder != address(0)) revert RotationAlreadyPending();
         pendingWeightSetterRotation =
             WeightSetterRotation({newHolder: newHolder, proposedAt: uint64(block.timestamp)});
         emit WeightSetterRotationProposed(newHolder, uint64(block.timestamp));
+    }
+
+    /// @dev Rejects this router and any holder of either rotation role (the Safe, the timelock).
+    function _requireAllowedRotationTarget(address target) private view {
+        if (
+            target == address(this) || hasRole(WEIGHT_SETTER_ROTATOR_ROLE, target)
+                || hasRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, target)
+        ) revert RotationTargetForbidden(target);
     }
 
     /// @notice Cancel the pending rotation. Rotator (the Safe) only.
@@ -414,6 +426,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         uint256 readyAt = uint256(r.proposedAt) + IMinDelay(msg.sender).getMinDelay();
         if (block.timestamp < readyAt) revert RotationNotReady(readyAt);
         if (r.newHolder.code.length == 0) revert RotationTargetNotContract(r.newHolder);
+        _requireAllowedRotationTarget(r.newHolder);
 
         delete pendingWeightSetterRotation;
         uint256 revoked = getRoleMemberCount(WEIGHT_SETTER_ROLE);

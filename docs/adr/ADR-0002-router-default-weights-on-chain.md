@@ -90,7 +90,7 @@ router, the gateway, and the IC policy and receipt that bind the gateway (each
 holds its counterpart as an immutable) is only needed to replace the gateway or
 the router themselves. The registry is re-linked with `setRouter`, which is
 repeatable. After a rotation the old `RouterGovernance` still holds router
-`ADMIN_ROLE` until the timelock revokes it in a separate operation.
+`ADMIN_ROLE` unless the same timelock batch revokes it (see the bounds below).
 
 ## Amendment — 2026-10-07: Bounded rotation of `WEIGHT_SETTER_ROLE`
 
@@ -175,6 +175,34 @@ completed rotation the verifier reads the holder from the router (the single
 member of `WEIGHT_SETTER_ROLE`) and expects it to equal the governance address
 recorded in the manifest, so a rotation must be followed by the manifest update
 described in the runbook.
+
+### Additional bounds and limits (security review of core 1571)
+
+- **Forbidden targets.** `proposeWeightSetterRotation` and
+  `executeWeightSetterRotation` refuse the router itself, the caller, and any
+  holder of either rotation role (`RotationTargetForbidden`). Rotating to the
+  timelock would grant it `WEIGHT_SETTER_ROLE` at the Safe's choice and reopen the
+  1522 path.
+- **Old `ADMIN_ROLE`.** Execution moves `WEIGHT_SETTER_ROLE` only. The old
+  `RouterGovernance` keeps router `ADMIN_ROLE`, so it could still change caps,
+  the quarantine address and default weights. A rotation MUST therefore be
+  scheduled as one atomic timelock batch: execute the rotation, grant the new
+  governance `ADMIN_ROLE`, revoke the old one's `ADMIN_ROLE`. A fork test runs
+  exactly this batch through the real Safe and timelock. The alternative, revoking
+  `ADMIN_ROLE` inside the execute loop, needs a contract change and is the
+  owner's call.
+- **Holder flood.** Execution revokes every holder in a loop, about 19k gas per
+  holder (1501 holders cost about 28.97M gas). A target that can grant
+  `WEIGHT_SETTER_ROLE` to many accounts could push the loop past the block gas
+  limit. The current `RouterGovernance` cannot. A target must not be able to
+  grant the role.
+- **Delay is the timelock's policy.** The rotation delay is the executing
+  timelock's current `getMinDelay()`. The Safe plus timelock can lower it with
+  `updateDelay` after one full delay, and a later rotation then uses the lower
+  value. The floor is therefore the timelock's own policy (the stage 12 verifier
+  and `DeployTimelock` hold it to the chain floor at deploy time).
+- **Verifier.** Both rotation roles must have exactly one member, and
+  `WEIGHT_SETTER_ROLE` exactly one holder.
 
 ### Design choices the owner should confirm
 

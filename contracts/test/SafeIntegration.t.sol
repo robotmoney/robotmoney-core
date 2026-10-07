@@ -1454,6 +1454,95 @@ contract SafeIntegrationTest is Test {
         router.setWeights(v, b);
     }
 
+    /// @notice A rotation is scheduled as ONE timelock batch: execute the rotation, grant the new
+    ///         governance router ADMIN_ROLE, revoke the old governance's router ADMIN_ROLE. Through the
+    ///         real Safe and timelock, the old governance holds neither role afterwards.
+    function test_rotation_atomicBatch_oldGovernanceLosesBothRoles() public withSnap {
+        RouterGovernance replacement = _replacementGovernance();
+        assertTrue(
+            router.hasRole(ADMIN_ROLE, address(governance)), "old governance starts as ADMIN"
+        );
+        assertTrue(
+            _safeCall(
+                address(router),
+                abi.encodeCall(PortfolioRouter.proposeWeightSetterRotation, (address(replacement)))
+            ),
+            "safe propose failed"
+        );
+
+        address[] memory targets = new address[](3);
+        uint256[] memory values = new uint256[](3);
+        bytes[] memory payloads = new bytes[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            targets[i] = address(router);
+        }
+        payloads[0] =
+            abi.encodeCall(PortfolioRouter.executeWeightSetterRotation, (address(replacement)));
+        payloads[1] = abi.encodeCall(IAccessControl.grantRole, (ADMIN_ROLE, address(replacement)));
+        payloads[2] = abi.encodeCall(IAccessControl.revokeRole, (ADMIN_ROLE, address(governance)));
+        bytes32 salt = keccak256("atomic-rotation-batch");
+
+        assertTrue(
+            _safeCall(
+                address(d.timelock),
+                abi.encodeCall(
+                    d.timelock.scheduleBatch,
+                    (targets, values, payloads, bytes32(0), salt, MIN_DELAY)
+                )
+            ),
+            "safe scheduleBatch failed"
+        );
+        vm.warp(block.timestamp + MIN_DELAY);
+        assertTrue(
+            _safeCall(
+                address(d.timelock),
+                abi.encodeCall(
+                    d.timelock.executeBatch, (targets, values, payloads, bytes32(0), salt)
+                )
+            ),
+            "timelock executeBatch failed"
+        );
+
+        assertTrue(router.hasRole(WEIGHT_SETTER, address(replacement)));
+        assertEq(router.getRoleMemberCount(WEIGHT_SETTER), 1);
+        assertTrue(router.hasRole(ADMIN_ROLE, address(replacement)));
+        assertFalse(
+            router.hasRole(WEIGHT_SETTER, address(governance)), "old keeps the weight setter"
+        );
+        assertFalse(router.hasRole(ADMIN_ROLE, address(governance)), "old keeps ADMIN_ROLE");
+        assertTrue(router.hasRole(ADMIN_ROLE, address(d.timelock)), "timelock lost ADMIN_ROLE");
+    }
+
+    /// @notice The rotation target cannot be the timelock: that would hand it the weight setter.
+    function test_rotation_toTheTimelock_isRefused() public withSnap {
+        bytes32 h = safe.getTransactionHash(
+            address(router),
+            0,
+            abi.encodeCall(PortfolioRouter.proposeWeightSetterRotation, (address(d.timelock))),
+            0,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            safe.nonce()
+        );
+        bytes memory sigs = _buildTwoOwnerSigs(h);
+        vm.expectRevert();
+        safe.execTransaction(
+            address(router),
+            0,
+            abi.encodeCall(PortfolioRouter.proposeWeightSetterRotation, (address(d.timelock))),
+            0,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            sigs
+        );
+    }
+
     /// @notice The Safe alone cannot execute a rotation, with or without the delay.
     function test_rotation_safeAlone_cannotExecute() public withSnap {
         RouterGovernance replacement = _replacementGovernance();

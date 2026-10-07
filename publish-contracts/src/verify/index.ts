@@ -120,6 +120,10 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     const [holder] = (await chain.read(router, "function pendingWeightSetterRotation() view returns (address newHolder, uint64 proposedAt)")) as [string, bigint];
     return lc(holder);
   }, lc(ZERO));
+  for (const r of ["WEIGHT_SETTER_ROTATOR_ROLE", "WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE"] as const) {
+    const id = r === "WEIGHT_SETTER_ROTATOR_ROLE" ? WEIGHT_SETTER_ROTATOR_ROLE : WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE;
+    await c.runEq(`router: ${r} has exactly one holder`, async () => (await chain.read(router, "function getRoleMemberCount(bytes32 role) view returns (uint256)", [id])) as bigint, 1n);
+  }
   await c.runEq("router: WEIGHT_SETTER_ROTATOR_ROLE held by safe", () => hasRole(chain, router, WEIGHT_SETTER_ROTATOR_ROLE, safe), true);
   for (const [who, addr] of [["timelock", tl], ["deployer", D], ["governance", byName.governance!], ["pauser", sheet.pauser], ["emergency", sheet.emergency]] as Array<[string, Address]>) {
     await c.runEq(`router: WEIGHT_SETTER_ROTATOR_ROLE not held by ${who}`, () => hasRole(chain, router, WEIGHT_SETTER_ROTATOR_ROLE, addr), false);

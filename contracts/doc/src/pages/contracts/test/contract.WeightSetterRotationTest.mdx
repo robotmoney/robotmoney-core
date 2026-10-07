@@ -340,6 +340,34 @@ function test_routerGovernance_revokingTimelockAdmin_doesNotBlockRotation() publ
 function test_propose_toZeroEoaOrEmptyAddress_reverts() public;
 ```
 
+<a id="test_propose_toroutertimelockorsafe_reverts"></a>
+
+### test_propose_toRouterTimelockOrSafe_reverts
+
+<i>
+
+Rotating to the timelock would give it WEIGHT_SETTER_ROLE and reopen the 1522 path.
+
+</i>
+
+```solidity
+function test_propose_toRouterTimelockOrSafe_reverts() public;
+```
+
+<a id="test_execute_toatargetthatnowholdsarotationrole_reverts"></a>
+
+### test_execute_toATargetThatNowHoldsARotationRole_reverts
+
+<i>
+
+A target that became a rotation role holder after the proposal is refused at execution.
+
+</i>
+
+```solidity
+function test_execute_toATargetThatNowHoldsARotationRole_reverts() public;
+```
+
 <a id="test_propose_whilepending_reverts"></a>
 
 ### test_propose_whilePending_reverts

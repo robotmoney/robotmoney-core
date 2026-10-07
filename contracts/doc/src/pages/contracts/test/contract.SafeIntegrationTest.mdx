@@ -1049,6 +1049,28 @@ timelock executes: governance is replaced and holds the role alone.
 function test_rotation_viaRealSafeAndTimelock_atProductionDelay() public withSnap;
 ```
 
+<a id="test_rotation_atomicbatch_oldgovernancelosesbothroles"></a>
+
+### test_rotation_atomicBatch_oldGovernanceLosesBothRoles
+
+A rotation is scheduled as ONE timelock batch: execute the rotation, grant the new
+governance router ADMIN_ROLE, revoke the old governance's router ADMIN_ROLE. Through the
+real Safe and timelock, the old governance holds neither role afterwards.
+
+```solidity
+function test_rotation_atomicBatch_oldGovernanceLosesBothRoles() public withSnap;
+```
+
+<a id="test_rotation_tothetimelock_isrefused"></a>
+
+### test_rotation_toTheTimelock_isRefused
+
+The rotation target cannot be the timelock: that would hand it the weight setter.
+
+```solidity
+function test_rotation_toTheTimelock_isRefused() public withSnap;
+```
+
 <a id="test_rotation_safealone_cannotexecute"></a>
 
 ### test_rotation_safeAlone_cannotExecute
