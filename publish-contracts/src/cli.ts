@@ -23,7 +23,7 @@ import { callerInputs, parseSheet } from "./sheet.ts";
 import { loadCorrelatedOwners } from "./correlated-owners.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
-import { RECEIPT_ROW, assertReceiptId, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
+import { RECEIPT_REFUSED_ON_MAINNET, RECEIPT_ROW, assertReceiptId, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
 import { startAnvil, type ChainStarter } from "./preflight.ts";
 import { USDC_ADDRESS, assertUsdcCode } from "./usdc.ts";
@@ -53,7 +53,7 @@ export const USAGE = `publish contracts
                      scheduled in one sitting, then one wait, then executed (on 8453 only the unpauses run).
                      On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) once, with the ready time and the command to run again.
                      On demand, outside the ordered rows: --row release-receipt --receipt-id 0x<bytes32> releases one recorded consensus receipt
-                     (ConsensusRecommendationReceipt.releaseReceipt) as its own Safe -> Timelock round, on 918453 and 8453 alike.
+                     (ConsensusRecommendationReceipt.releaseReceipt) as its own Safe -> Timelock round, on 918453 only (refused with USAGE on 8453).
   --receipt-id ID    govern with --row release-receipt only: the bytes32 receipt id to release.
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
@@ -139,6 +139,7 @@ export function parseCli(argv: string[]): Parsed {
   if (row !== undefined) {
     const stageNames = verb === undefined ? stage : undefined;
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
+    if (row === RECEIPT_ROW && Number(chainRaw) === MAINNET_CHAIN_ID) throw new PublishError("USAGE", `${RECEIPT_REFUSED_ON_MAINNET}\n${USAGE}`);
     if (row !== RECEIPT_ROW) {
       const resolved = resolveGovernRow(row); // an unknown row fails here, before any work
       if (isTwinOnlyRow(resolved) && Number(chainRaw) === MAINNET_CHAIN_ID) throw new PublishError("USAGE", `--row ${resolved} is a Twin-fork demonstration of the Safe tool: it is refused on chain ${MAINNET_CHAIN_ID}\n${USAGE}`);

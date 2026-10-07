@@ -69,6 +69,13 @@ describe("rehearsal and production differ only in the arguments", () => {
     for (const row of ["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "1", "3"]) expect(parseCli(["govern", ...base("8453"), "--row", row]).row).toBe(row);
   });
 
+  test("--row release-receipt is refused with USAGE on --chain 8453 (named error) and accepted on 918453 (issue 1579)", () => {
+    const id = `0x${"ab".repeat(32)}`;
+    const base = (chain: string) => ["--chain", chain, "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
+    expect(() => parseCli(["govern", ...base("8453"), "--row", "release-receipt", "--receipt-id", id])).toThrow("release-receipt is the on-demand receipt release: it runs on a Twin fork only and is refused on chain 8453");
+    expect(parseCli(["govern", ...base("918453"), "--row", "release-receipt", "--receipt-id", id]).row).toBe("release-receipt");
+  });
+
   test("--receipt-id goes with govern --row release-receipt only, and must be a bytes32", () => {
     const base = ["--chain", "918453", "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
     const id = `0x${"AB".repeat(32)}`;
