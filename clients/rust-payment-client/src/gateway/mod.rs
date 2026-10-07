@@ -48,6 +48,9 @@ sol_binding!(
     RobotMoneyGateway,
     "abi/RobotMoneyGateway.json"
 );
+/// The `VoteParams` struct as the gateway ABI declares it, which
+/// `RobotMoneyGateway::committeeVoteSubmitCall` takes (issue #1511).
+pub use robot_money_gateway::IInvestmentCommitteePolicy::VoteParams as GatewayVoteParams;
 sol_binding!(erc20, Erc20, "abi/Erc20.json");
 sol_binding!(mock_vault, MockVault, "abi/MockVault.json");
 sol_binding!(vault_registry, VaultRegistry, "abi/VaultRegistry.json");
