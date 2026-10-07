@@ -108,6 +108,22 @@ describe("stage-table.json", () => {
     expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "registry", "router", "timelock"]);
   });
 
+  test("stage 13 is the basket unpauses only, with the deploy-time configuration set in stages 4 to 10 (issue 1520)", () => {
+    const g = (table as unknown as { govern: { stage: number; description: string; mainnetRows: string[]; twinOnlyRows: string[] } }).govern;
+    expect(g.stage).toBe(13);
+    expect(g.mainnetRows).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
+    expect(g.twinOnlyRows).toEqual(["update-delay", "batch", "cancel"]);
+    expect(g.description).toContain("only mainnet operation is the unpause of each basket vault");
+    expect(g.description).toContain("deploy-time configuration set by the deployer in stages 4 to 10");
+    expect(g.description).toContain("Twin-only");
+    // no 13-row list survives: none of the old matrix rows is named
+    for (const old of ["voting-power-quorum", "other-setters", "migrate-eligibility", "router-weights"]) expect(JSON.stringify(g)).not.toContain(old);
+    // the deploy-time configuration is read by the stages that set it
+    const env = (n: string) => table.stages.find((s) => s.name === n)!.requiredEnv;
+    expect(env("governance")).toEqual(expect.arrayContaining(["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]));
+    for (const n of ["proto", "agent", "rwa"]) expect(env(n)).toContain("ROUTER_DEFAULT_BPS");
+  });
+
   test("the one driver (publish-contracts CLI) reads the same table from the repo root", () => {
     const cli = cliLoadStageTable(ROOT);
     expect(cli.stages.map((s) => s.name)).toEqual(EXPECTED);

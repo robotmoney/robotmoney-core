@@ -50,6 +50,11 @@ const ASSETS: Record<string, { token: Address; pool: Address; swapFee: number; a
   rmRWA: [{ token: addr(0xde5), pool: addr(0xf003), swapFee: 500, adapter: addr(0xad01) }],
 };
 
+export const VOTER_A = addr(0xb001);
+export const VOTER_B = addr(0xb002);
+const GOV_SHEET = { voters: [VOTER_A, VOTER_B], voterPower: 1000n, quorum: 2n, votingPeriod: 3600n, executionDelay: 3600n };
+const DEFAULT_BPS = [9500, 500, 0, 0];
+
 type Handler = (args: any[]) => unknown;
 const SET_REGISTRY_SELECTOR = toFunctionSelector("function setRegistry(address)");
 
@@ -204,6 +209,13 @@ export function buildWorld(chainId = 8453): World {
   ch.set(GATEWAY, "agentOwner", () => TIMELOCK);
   ch.set(REGISTRY, "listVaults", Object.values(VAULTS).map((v) => v.address));
   ch.set(REGISTRY, "vaultCount", 4n);
+  ch.set(REGISTRY, "isRouterEligible", () => true);
+  // deploy-time configuration (issue 1520): voting power, quorum, voting period, execution delay and the router default weights
+  ch.set(GOV, "votingPower", () => GOV_SHEET.voterPower);
+  ch.set(GOV, "quorumThreshold", GOV_SHEET.quorum);
+  ch.set(GOV, "votingPeriod", GOV_SHEET.votingPeriod);
+  ch.set(GOV, "executionDelay", GOV_SHEET.executionDelay);
+  ch.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), DEFAULT_BPS.map((x) => BigInt(x))]);
   // deployer-authorized agent, from logs
   ch.logs.push({ address: GATEWAY, topics: [keccak256(toHex(SIG_AGENT_AUTHORIZED)), padTopic(AGENT), padTopic(DEPLOYER)], data: "0x", blockNumber: 300n });
   // deployer once held roles; all were renounced
@@ -232,7 +244,7 @@ export function buildWorld(chainId = 8453): World {
       return [x.token, x.pool, x.swapFee, true, x.adapter, 0];
     });
     vsheet[k] = {
-      tvlCap: caps.tvl, perDepositCap: caps.per, exitFeeBps: 10n, feeRecipient: SAFE, expectPaused: paused,
+      tvlCap: caps.tvl, perDepositCap: caps.per, exitFeeBps: 10n, feeRecipient: SAFE, expectPaused: paused, routerEligible: true,
       assets: assets.map((x) => ({ ...x })), ...(k === "rmUSDC" ? { seed: 1_000_000n, seedShareReceiver: SEED_RECEIVER } : {}),
     };
   }
@@ -258,6 +270,8 @@ export function buildWorld(chainId = 8453): World {
 
   const sheet: VerifySheet = {
     chainId, deployer: DEPLOYER, pauser: PAUSER, emergency: EMERGENCY, safeOwners: [...OWNERS], safeThreshold: 2, timelockDelay: delay, vaults: vsheet,
+    governance: { ...GOV_SHEET, voters: [...GOV_SHEET.voters] },
+    defaultWeights: Object.keys(VAULTS).map((vault, i) => ({ vault, bps: DEFAULT_BPS[i]! })),
   };
   const opts: VerifyOptions = { chain: ch, manifestDir, table, sheet, fromBlock: 0n, frozenCounts, artifactsDir, retryBaseMs: 0, usdcCodeHash: keccak256(USDC_CODE) };
   return { chain: ch, dir, manifestDir, artifactsDir, sheet, opts, libraries: LIBS };

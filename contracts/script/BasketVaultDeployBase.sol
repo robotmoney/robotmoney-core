@@ -110,13 +110,67 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
     {
         _requireExpectedChain(prefix);
         Params memory p = _readParamsFrom(prefix);
+        uint256[] memory eligibilityBps = _readEligibilityBps(prefix);
         Cfg memory cfg = _parseCfg(vm.readFile(configFile), arrayKey);
 
         vm.startBroadcast();
         d = _deployAll(p, cfg);
+        // Deploy-time router configuration (issue 1520): eligibility and the default weights are set here, by the deployer, before the
+        // timelock handover. The only mainnet operation after the handover is the basket unpause.
+        _makeRouterEligible(VaultRegistry(p.registry), d.vault, eligibilityBps);
         vm.stopBroadcast();
 
         _writeManifest(d, cfg);
+    }
+
+    /// @dev `ROUTER_DEFAULT_BPS` is required: the word `none` leaves this basket ineligible, otherwise a comma list of bps for the
+    ///      router default vector right after this basket flips eligible (rmUSDC, the already eligible baskets in registry order, this vault).
+    function _readEligibilityBps(string memory prefix)
+        internal
+        view
+        returns (uint256[] memory bps)
+    {
+        string memory key = string.concat(prefix, "ROUTER_DEFAULT_BPS");
+        string memory raw = _envStringRequired(key);
+        if (keccak256(bytes(raw)) == keccak256("none")) return new uint256[](0);
+        try vm.envUint(key, ",") returns (uint256[] memory v) {
+            return v;
+        } catch {
+            revert(
+                string.concat(
+                    key, " is malformed: expected none or a comma list of unsigned integers"
+                )
+            );
+        }
+    }
+
+    /// @dev One atomic `registry.migrateEligibility`: flips `vault` eligible and re-sets the router default vector in the same call. The
+    ///      vector is the current eligible set in registry order, then `vault`, with the given bps. The broadcaster holds ADMIN_ROLE on the
+    ///      registry until the timelock stage. An empty `bps` leaves the vault ineligible.
+    function _makeRouterEligible(VaultRegistry registry, address vault, uint256[] memory bps)
+        internal
+    {
+        if (bps.length == 0) return;
+        address[] memory listed = registry.listVaults();
+        uint256 count;
+        for (uint256 i = 0; i < listed.length; i++) {
+            if (registry.isRouterEligible(listed[i])) count++;
+        }
+        require(
+            bps.length == count + 1,
+            "ROUTER_DEFAULT_BPS length differs from the eligible set plus this vault"
+        );
+        address[] memory vaults = new address[](count + 1);
+        uint256 k;
+        for (uint256 i = 0; i < listed.length; i++) {
+            if (registry.isRouterEligible(listed[i])) vaults[k++] = listed[i];
+        }
+        vaults[k] = vault;
+        registry.migrateEligibility(vault, true, vaults, bps);
+        require(
+            registry.isRouterEligible(vault),
+            "vault is not router-eligible after migrateEligibility"
+        );
     }
 
     // ─── Config parsing ───────────────────────────────────────────────────────

@@ -59,6 +59,29 @@ delay. The real delay and the real signers are proven on Base mainnet through th
 real Safe (runbook Q2). What may never differ is that **two distinct owner
 signatures are required, and the Safe contract is what enforces it.**
 
+### 1.2 After the handover: the unpause-only matrix
+
+Exactly one class of operation runs after the timelock handover (issue 1520): the
+unpause of each basket vault (rmPROTO, rmAGENT, rmRWA). Unpause needs `ADMIN_ROLE`,
+which the timelock holds, so each unpause is a Safe transaction that schedules one
+timelock operation and a second Safe transaction that executes it after the delay
+([security-model.md](./security-model.md), the pause-key abuse and pause-trigger rows).
+"No batching" means one timelock operation per unpause and never a shared
+operation. It does not mean one wait per operation: all the unpauses are scheduled
+in one sitting and wait one 48 hour delay. Dependent operations use the timelock
+predecessor field and never a second wait.
+
+Everything else is **deploy-time configuration** that the deployer sets before the
+handover, in the deployer stages, and that the verify stage asserts against the
+sheet: voting power, quorum, voting period, execution delay, the vault setters
+(per-deposit cap, TVL cap, exit fee, fee recipient), router eligibility and the
+router default weights. A sheet that routes any of them through govern is refused.
+
+The Safe tool's other operations (`updateDelay`, a no-op `scheduleBatch`, a cancel)
+are demonstrations. They run on the Twin fork (`update-delay`, `batch`, `cancel`) and
+are refused on chain 8453. The evidence check rejects any non-unpause operation on
+8453.
+
 ---
 
 ## 2. Safe is third-party infrastructure

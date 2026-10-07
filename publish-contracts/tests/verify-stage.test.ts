@@ -44,6 +44,15 @@ describe("stage 12: the one verifier", () => {
     expect(v.timelockDelay).toBe(60);
   });
 
+  test("the verifier sheet carries every deploy-time value of the sheet: voting power, quorum, periods, eligibility and the router default weights (issue 1520)", () => {
+    const { ctx, sheet } = setup();
+    const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe");
+    expect(v.governance).toEqual({ voters: sheet.voters, voterPower: sheet.voterPower, quorum: sheet.quorum, votingPeriod: sheet.votingPeriod, executionDelay: sheet.executionDelay });
+    // the example sheet makes PROTO and RWA eligible: rmUSDC always is, rmAGENT is not
+    expect(Object.fromEntries(Object.entries(v.vaults).map(([k, x]) => [k, x.routerEligible]))).toEqual({ rmUSDC: true, rmPROTO: true, rmAGENT: false, rmRWA: true });
+    expect(v.defaultWeights).toEqual([{ vault: "rmUSDC", bps: 6000 }, { vault: "rmPROTO", bps: 2500 }, { vault: "rmRWA", bps: 1500 }]);
+  });
+
   test("a missing asset config is an error, not a silent skip", () => {
     const { ctx } = setup(null);
     expect(() => loadExpectedAssets(ctx, "PROTO")).toThrow(PublishError);

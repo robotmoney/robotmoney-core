@@ -55,11 +55,11 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   VOTING_PERIOD: { kind: "uint" },
   EXECUTION_DELAY: { kind: "uint" },
   TIMELOCK_MIN_DELAY: { kind: "uint" },
-  // govern stage (stage 13 matrix). Lists of vault keys, or the word none.
-  GOVERN_ELIGIBLE_VAULTS: { kind: "string" },
-  GOVERN_UNPAUSE_VAULTS: { kind: "string" },
-  GOVERN_AGENT_ADDRESSES: { kind: "string" },
+  // deploy-time router configuration, set by the deployer in the basket vault stages (before the timelock handover). Lists of vault keys, or the word none.
+  ELIGIBLE_VAULTS: { kind: "string" },
   ROUTER_WEIGHTS: { kind: "string" },
+  // govern stage (stage 13): the basket unpauses are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
+  GOVERN_UNPAUSE_VAULTS: { kind: "string" },
   GOVERN_NEW_DELAY: { kind: "uint" },
 };
 const VAULT_NAMES: Record<string, NameSpec> = Object.fromEntries(VAULT_KEYS.flatMap((k) => vaultSheetNames(k).map((n) => [n, { kind: "uint" as Kind }])));
@@ -76,6 +76,7 @@ const REFUSED: [RegExp, string][] = [
   [/^(RPC|RPC_URL|ETH_RPC_URL|RPC_ENDPOINT)$/, "the RPC is a CLI argument, never a sheet value"],
   [/^(PRIVATE_KEY|ETH_PRIVATE_KEY|MNEMONIC|ETH_MNEMONIC|ETH_PASSWORD|CHAIN_SIGNER_KEYSTORE|CHAIN_SIGNER_PASSWORD|[A-Z_]*(PRIVATE_KEY|PASSWORD|PASSPHRASE|SECRET|MNEMONIC)[A-Z_]*)$/, "a secret never goes in a sheet: use the credential engine, a hardware wallet or an encrypted keystore"],
   [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|IC_POLICY_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
+  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the basket unpauses only. Voting power, quorum, voting period, execution delay, agents, vault setters, eligibility and router weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VOTER_*, QUORUM_THRESHOLD, VAULT_<KEY>_*)"],
   [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
 ];
 
@@ -108,11 +109,14 @@ export interface Sheet {
   executionDelay: bigint;
   timelockMinDelay: bigint;
   vaults: Record<VaultKey, SheetVault>;
+  /** Baskets made router-eligible by the deployer in the basket vault stages (rmUSDC is eligible from the router stage). */
+  eligibleVaults: VaultKey[];
+  /** The router default weights the deployer leaves in place: rmUSDC and each eligible basket. */
+  weights: { key: VaultKey; bps: number }[];
   govern: {
-    eligibleVaults: VaultKey[];
+    /** The only mainnet govern rows: one timelock unpause per basket listed here. */
     unpauseVaults: VaultKey[];
-    agents: Address[];
-    weights: { key: VaultKey; bps: number }[];
+    /** Twin-only update-delay demonstration target. */
     newDelay: bigint;
   };
 }
@@ -282,11 +286,11 @@ export function parseSheet(text: string): Sheet {
     vaults[k] = { tvlCap, perDepositCap, exitFeeBps };
   }
 
+  // deploy-time router configuration
+  const eligibleVaults = asVaultKeys("ELIGIBLE_VAULTS", v.ELIGIBLE_VAULTS!);
+  if (eligibleVaults.includes("USDC")) throw err("ELIGIBLE_VAULTS lists baskets only: rmUSDC is eligible from the router stage");
   // govern matrix inputs
-  const eligibleVaults = asVaultKeys("GOVERN_ELIGIBLE_VAULTS", v.GOVERN_ELIGIBLE_VAULTS!);
-  if (eligibleVaults.includes("USDC")) throw err("GOVERN_ELIGIBLE_VAULTS lists baskets only: rmUSDC is eligible from the router stage");
   const unpauseVaults = asVaultKeys("GOVERN_UNPAUSE_VAULTS", v.GOVERN_UNPAUSE_VAULTS!);
-  const govAgents = v.GOVERN_AGENT_ADDRESSES === "none" ? [] : asList("GOVERN_AGENT_ADDRESSES", v.GOVERN_AGENT_ADDRESSES!);
   const weights = parseWeights(v.ROUTER_WEIGHTS!);
   const weightKeys = weights.map((w) => w.key).sort().join(",");
   const wantKeys = ["USDC", ...eligibleVaults].sort().join(",");
@@ -300,7 +304,7 @@ export function parseSheet(text: string): Sheet {
   return {
     values, chainId, expectedChainId, admin, pauser, emergency, agent, shareReceiver, receiptAdmin, voters, voterPower, safeOwners, safeThreshold,
     safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, agentPolicy, quorum, votingPeriod, executionDelay, timelockMinDelay, vaults,
-    govern: { eligibleVaults, unpauseVaults, agents: govAgents, weights, newDelay },
+    eligibleVaults, weights, govern: { unpauseVaults, newDelay },
   };
 }
 
@@ -329,4 +333,29 @@ export interface SheetDiffRow { name: string; a: string | undefined; b: string |
 export function diffSheets(a: Sheet, b: Sheet): SheetDiffRow[] {
   const names = [...new Set([...Object.keys(a.values), ...Object.keys(b.values)])].sort();
   return names.filter((n) => a.values[n] !== b.values[n]).map((name) => ({ name, a: a.values[name], b: b.values[name] }));
+}
+
+/** The baskets in migration order (PROTO, AGENT, RWA). */
+export const BASKET_KEYS = ["PROTO", "AGENT", "RWA"] as const satisfies readonly VaultKey[];
+
+/** The baskets the sheet makes eligible, in migration order. The default-weight vector grows in this order. */
+export const eligibleInOrder = (sheet: Pick<Sheet, "eligibleVaults">): VaultKey[] => BASKET_KEYS.filter((k) => sheet.eligibleVaults.includes(k));
+
+/**
+ * The default-weight vector (bps) right after the eligibility flip of `basket`: rmUSDC, then the eligible baskets up to and including this one.
+ * The flip of the last eligible basket is exactly the sheet's weights. Earlier flips are the sheet weights scaled to 10000 (equal if all zero).
+ * `undefined` when the sheet does not make this basket eligible.
+ */
+export function eligibilityBps(sheet: Pick<Sheet, "eligibleVaults" | "weights">, basket: VaultKey): number[] | undefined {
+  const eligible = eligibleInOrder(sheet);
+  const step = eligible.indexOf(basket);
+  if (step < 0) return undefined;
+  const keys = (["USDC", ...eligible] as VaultKey[]).slice(0, step + 2);
+  const w = new Map(sheet.weights.map((x) => [x.key, x.bps]));
+  const final = keys.map((k) => w.get(k) ?? 0);
+  if (step === eligible.length - 1) return final;
+  const sum = final.reduce((x, y) => x + y, 0);
+  const bps = sum === 0 ? keys.map((_, i) => Math.floor(10000 / keys.length) + (i === 0 ? 10000 % keys.length : 0)) : final.map((x) => Math.floor((x * 10000) / sum));
+  bps[0] = bps[0]! + (10000 - bps.reduce((x, y) => x + y, 0));
+  return bps;
 }

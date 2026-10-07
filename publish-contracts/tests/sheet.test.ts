@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, rmSync } from "node:fs";
 import { PublishError } from "../src/errors.ts";
-import { REQUIRED_NAMES, VAULT_KEYS, callerInputs, diffSheets, parseSheet, parseSheetText, vaultSheetNames } from "../src/sheet.ts";
+import { REQUIRED_NAMES, VAULT_KEYS, callerInputs, diffSheets, eligibilityBps, eligibleInOrder, parseSheet, parseSheetText, vaultSheetNames } from "../src/sheet.ts";
 import { exampleText, sheetText } from "./fixtures.ts";
 
 const refused = (text: string): PublishError => {
@@ -113,5 +113,51 @@ describe("whitelist parser", () => {
     const a = parseSheet(exampleText());
     const b = parseSheet(sheetText({ TIMELOCK_MIN_DELAY: "172800" }));
     expect(diffSheets(a, b).map((r) => r.name)).toEqual(["TIMELOCK_MIN_DELAY"]);
+  });
+});
+
+describe("govern carries the basket unpauses only; the rest is deploy-time configuration (issue 1520)", () => {
+  const why = "govern (stage 13) carries the basket unpauses only";
+  test("a sheet that routes voting power, quorum, agents, caps, fee, fee recipient, eligibility or router weights through govern is refused", () => {
+    for (const name of [
+      "GOVERN_VOTER_POWER", "GOVERN_VOTING_POWER", "GOVERN_QUORUM_THRESHOLD", "GOVERN_QUORUM", "GOVERN_VOTING_PERIOD", "GOVERN_EXECUTION_DELAY", "GOVERN_AGENT_ADDRESSES", "GOVERN_AGENTS",
+      "GOVERN_TVL_CAP", "GOVERN_PER_DEPOSIT_CAP", "GOVERN_CAPS", "GOVERN_EXIT_FEE_BPS", "GOVERN_FEE_RECIPIENT", "GOVERN_ELIGIBLE_VAULTS", "GOVERN_ROUTER_WEIGHTS", "GOVERN_MIGRATE_ELIGIBILITY",
+    ]) expect(refused(sheetText({}, [`${name}=1`])).message, name).toContain(why);
+    // the two names govern keeps still parse
+    const ok = parseSheet(sheetText({ GOVERN_UNPAUSE_VAULTS: "PROTO", GOVERN_NEW_DELAY: "3600" }));
+    expect(ok.govern.unpauseVaults).toEqual(["PROTO"]);
+  });
+  test("the govern block holds the unpauses and the Twin-only delay and nothing else; eligibility and weights are deploy-time fields", () => {
+    const s = parseSheet(exampleText());
+    expect(Object.keys(s.govern).sort()).toEqual(["newDelay", "unpauseVaults"]);
+    expect(s.eligibleVaults).toEqual(["PROTO", "RWA"]);
+    expect(s.weights).toEqual([{ key: "USDC", bps: 6000 }, { key: "PROTO", bps: 2500 }, { key: "RWA", bps: 1500 }]);
+    expect(s.values.GOVERN_ELIGIBLE_VAULTS).toBeUndefined();
+  });
+  test("ELIGIBLE_VAULTS is required, lists baskets only, and has no repeat", () => {
+    expect(refused(sheetText({ ELIGIBLE_VAULTS: null })).message).toContain("ELIGIBLE_VAULTS");
+    expect(refused(sheetText({ ELIGIBLE_VAULTS: "USDC,PROTO" })).message).toContain("baskets only");
+    expect(refused(sheetText({ ELIGIBLE_VAULTS: "PROTO,PROTO" })).message).toContain("twice");
+    expect(REQUIRED_NAMES).toContain("ELIGIBLE_VAULTS");
+    expect(REQUIRED_NAMES).not.toContain("GOVERN_ELIGIBLE_VAULTS");
+  });
+  test("the launch weights (rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps) are a valid sheet", () => {
+    const s = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0" }));
+    expect(s.weights.map((w) => w.bps)).toEqual([9500, 500, 0, 0]);
+  });
+  test("eligibilityBps: the last eligible basket leaves exactly the sheet weights, earlier flips are scaled to 10000, an ineligible basket has none", () => {
+    const s = parseSheet(exampleText());
+    expect(eligibleInOrder(s)).toEqual(["PROTO", "RWA"]);
+    expect(eligibilityBps(s, "PROTO")).toEqual([7059, 2941]);
+    expect(eligibilityBps(s, "RWA")).toEqual([6000, 2500, 1500]);
+    expect(eligibilityBps(s, "AGENT")).toBeUndefined();
+    const launch = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0" }));
+    expect(eligibilityBps(launch, "PROTO")).toEqual([9500, 500]);
+    expect(eligibilityBps(launch, "AGENT")).toEqual([9500, 500, 0]);
+    expect(eligibilityBps(launch, "RWA")).toEqual([9500, 500, 0, 0]);
+    for (const k of ["PROTO", "AGENT", "RWA"] as const) expect(eligibilityBps(launch, k)!.reduce((a, b) => a + b, 0)).toBe(10000);
+    // all-zero weights before the last flip fall back to an equal split that still sums to 10000
+    const zero = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:10000,PROTO:0,RWA:0" }));
+    expect(eligibilityBps(zero, "PROTO")).toEqual([10000, 0]);
   });
 });

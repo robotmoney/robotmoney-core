@@ -9,21 +9,12 @@ use smoke_test::publish::{check_govern_rows, parse_govern_output};
 
 const SAMPLE: &str = include_str!("fixtures/govern-stdout.jsonl");
 
-// One entry per round event: a round's `scheduled` line, then its `executed` (or `cancelled`) line.
-const ROWS: [&str; 20] = [
-    "voting-power-quorum",
-    "voting-power-quorum",
-    "other-setters",
-    "other-setters",
-    "migrate-eligibility-PROTO",
-    "migrate-eligibility-PROTO",
-    "migrate-eligibility-RWA",
-    "migrate-eligibility-RWA",
-    "router-weights",
-    "router-weights",
-    "unpause-PROTO",
+// One entry per round event, in the order the CLI prints them. The default stage sheet unpauses PROTO and RWA: both unpauses are scheduled in one
+// sitting (both `scheduled` lines first), then both `executed` lines, then the Twin-only rounds one at a time (`scheduled`, then `executed` or `cancelled`).
+const ROWS: [&str; 10] = [
     "unpause-PROTO",
     "unpause-RWA",
+    "unpause-PROTO",
     "unpause-RWA",
     "update-delay",
     "update-delay",
@@ -62,7 +53,7 @@ fn a_reverted_row_fails_the_check_and_names_the_row() {
     let bad = SAMPLE.replacen("\"status\":1", "\"status\":0", 1);
     let rows = parse_govern_output(&bad).unwrap();
     let err = check_govern_rows(&rows).unwrap_err().to_string();
-    assert!(err.contains("voting-power-quorum"), "{err}");
+    assert!(err.contains("unpause-PROTO"), "{err}");
     assert!(err.contains("status is 0"), "{err}");
 }
 

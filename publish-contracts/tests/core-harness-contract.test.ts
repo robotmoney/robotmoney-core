@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT_CODES } from "../src/errors.ts";
-import { GOVERN_ROWS } from "../src/govern.ts";
+import { GOVERN_ROWS, TWIN_ONLY_ROWS, UNPAUSE_ROWS } from "../src/govern.ts";
 import { getStageTable } from "../src/stages.ts";
 import { manifestFile } from "../src/stage-table.ts";
 import { REPO_ROOT } from "./repo-root.ts";
@@ -106,10 +106,14 @@ describe("core harness contract: the argument vector and environment core builds
     if (r.code !== 0) console.error(r.stderr.split("\n").slice(-8).join("\n"));
     expect(r.code).toBe(0);
     const rows = parseGovernOutput(r.stdout);
-    // the default sheet skips agents, migrate-eligibility-AGENT and unpause-AGENT: ten rounds run, two events each except cancel (scheduled, cancelled)
-    const ran = GOVERN_ROWS.filter((r) => !["agents", "migrate-eligibility-AGENT", "unpause-AGENT"].includes(r));
-    expect(rows.map((x) => x.row)).toEqual(ran.flatMap((r) => [r, r]));
-    expect(r.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l).phase)).toEqual(ran.flatMap((r) => (r === "cancel" ? ["scheduled", "cancelled"] : ["scheduled", "executed"])));
+    // the default sheet skips unpause-AGENT. The unpauses are scheduled in one sitting (both scheduled lines first), then executed; the Twin-only rows follow, one round each
+    const unpauses = UNPAUSE_ROWS.filter((r) => r !== "unpause-AGENT");
+    const twinOnly = TWIN_ONLY_ROWS;
+    expect(GOVERN_ROWS.length as number).toBe(UNPAUSE_ROWS.length + twinOnly.length);
+    expect(rows.map((x) => x.row)).toEqual([...unpauses, ...unpauses, ...twinOnly.flatMap((r) => [r, r])]);
+    expect(r.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l).phase)).toEqual([
+      ...unpauses.map(() => "scheduled"), ...unpauses.map(() => "executed"), ...twinOnly.flatMap((r) => (r === "cancel" ? ["scheduled", "cancelled"] : ["scheduled", "executed"])),
+    ]);
     for (const x of rows) { expect(x.txHash).toMatch(/^0x[0-9a-f]{64}$/); expect(x.status).toBe(1); }
     // stdout holds nothing but row lines; the structured log is on stderr
     for (const line of r.stdout.split("\n").filter(Boolean)) expect(JSON.parse(line).row).toBeDefined();
@@ -120,12 +124,12 @@ describe("core harness contract: the argument vector and environment core builds
   });
 
   test("govern --row by name and by number runs one round and prints its two lines", async () => {
-    for (const row of ["voting-power-quorum", "1"]) {
+    for (const row of ["unpause-PROTO", "1"]) {
       const c = boot();
       writeGovernManifests(c.manifestDir);
       const r = await runCli(c, "govern", ["--row", row]);
       expect(r.code).toBe(0);
-      expect(parseGovernOutput(r.stdout).map((x) => x.row)).toEqual(["voting-power-quorum", "voting-power-quorum"]);
+      expect(parseGovernOutput(r.stdout).map((x) => x.row)).toEqual(["unpause-PROTO", "unpause-PROTO"]);
       expect(r.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l).phase)).toEqual(["scheduled", "executed"]);
     }
   });
@@ -150,7 +154,7 @@ describe("core harness contract: the argument vector and environment core builds
     expect((await runCli(c, "publish", ["--stage", "libs"])).code).toBe(EXIT_CODES.USAGE);
     expect((await runCli(c, "publish", ["--row", "1"])).code).toBe(EXIT_CODES.USAGE);
     expect((await runCli(c, "govern", ["--row", "nope"])).code).toBe(EXIT_CODES.USAGE);
-    expect((await runCli(c, "govern", ["--row", "14"])).code).toBe(EXIT_CODES.USAGE);
+    expect((await runCli(c, "govern", ["--row", "7"])).code).toBe(EXIT_CODES.USAGE);
   });
 });
 

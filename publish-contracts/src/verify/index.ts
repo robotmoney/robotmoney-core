@@ -118,6 +118,9 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await c.runEq("gateway: router() equals the deployed router", async () => lc((await chain.read(gateway, "function router() view returns (address)")) as string), lc(router));
   await c.runEq("registry: router() equals the deployed router", async () => lc((await chain.read(registry, "function router() view returns (address)")) as string), lc(router));
 
+  // ---- deploy-time configuration, set by the deployer before the handover and never touched by govern (issue 1520)
+  await deployTimeChecks(c, chain, sheet, { governance: byName.governance!, router, vaults: man.vaults });
+
   // ---- vaults
   for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet });
 
@@ -195,6 +198,29 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   return c.report();
 }
 
+async function deployTimeChecks(
+  c: Collector, chain: ChainReader, sheet: VerifyOptions["sheet"], at: { governance: Address; router: Address; vaults: ManifestVault[] },
+): Promise<void> {
+  const g = sheet.governance;
+  await c.run("governance: votingPower of every voter equals sheet", async () => {
+    const bad: string[] = [];
+    for (const v of g.voters) if (BigInt((await chain.read(at.governance, "function votingPower(address voter) view returns (uint256)", [v])) as bigint) !== g.voterPower) bad.push(v);
+    return { ok: bad.length === 0, detail: bad.length ? `differs from ${g.voterPower} for ${bad.join(",")}` : `${g.voters.length} voters at ${g.voterPower}` };
+  });
+  await c.runEq("governance: quorumThreshold equals sheet", () => chain.read(at.governance, "function quorumThreshold() view returns (uint256)"), g.quorum);
+  await c.runEq("governance: votingPeriod equals sheet", () => chain.read(at.governance, "function votingPeriod() view returns (uint64)"), g.votingPeriod);
+  await c.runEq("governance: executionDelay equals sheet", () => chain.read(at.governance, "function executionDelay() view returns (uint64)"), g.executionDelay);
+  await c.run("router: default weights equal sheet", async () => {
+    const addrOf = new Map(at.vaults.map((v) => [v.key, v.address]));
+    const missing = sheet.defaultWeights.filter((w) => !addrOf.has(w.vault)).map((w) => w.vault);
+    if (missing.length) return { ok: false, detail: `no manifest vault for ${missing.join(",")}` };
+    const [vaults, bps] = (await chain.read(at.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
+    const got = vaults.map((v, i) => `${lc(v)}:${bps[i]}`).join(",");
+    const want = sheet.defaultWeights.map((w) => `${lc(addrOf.get(w.vault)!)}:${w.bps}`).join(",");
+    return { ok: got === want, detail: got === want ? `${vaults.length} weights` : `got ${got}, want ${want}` };
+  });
+}
+
 async function vaultChecks(
   c: Collector, chain: ChainReader, v: ManifestVault, vs: VaultSheet | undefined,
   ctx: { tl: Address; registry: Address; safe: Address; sheet: VerifyOptions["sheet"] },
@@ -218,7 +244,7 @@ async function vaultChecks(
     return { ok: !r.ok, detail: r.ok ? "the call succeeded" : `reverted: ${r.reason ?? "no reason"}` };
   });
   if (!vs) {
-    for (const l of ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
+    for (const l of ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
     if (v.kind !== "usdc") c.fail(`${p}: asset config equals sheet`, "no sheet entry for this vault");
     else { for (const l of ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault"); }
     return;
@@ -230,6 +256,7 @@ async function vaultChecks(
   await c.run(`${p}: feeRecipient is not deployer`, async () =>
     lc((await chain.read(a, "function feeRecipient() view returns (address)")) as string) !== lc(D));
   await c.runEq(`${p}: paused state equals sheet`, () => chain.read(a, "function depositsPaused() view returns (bool)"), vs.expectPaused);
+  await c.runEq(`${p}: router eligibility equals sheet`, () => chain.read(registry, "function isRouterEligible(address vault) view returns (bool)", [a]), vs.routerEligible);
   if (v.kind === "usdc") {
     await c.run(`${p}: seed present`, async () => {
       const total = BigInt((await chain.read(a, "function totalAssets() view returns (uint256)")) as bigint);

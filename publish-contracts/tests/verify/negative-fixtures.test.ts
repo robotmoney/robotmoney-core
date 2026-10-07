@@ -80,6 +80,13 @@ const RULES: Rule[] = [
   [/^(.+): ADMIN_ROLE not held by (deployer|pauser|emergency|safe)$/, (w, m) => w.chain.grant(subject(m[1]), ADMIN_ROLE, WHO[m[2]])],
   [/^(.+): EMERGENCY_ROLE held by emergency key$/, (w, m) => w.chain.revoke(subject(m[1]), EMERGENCY_ROLE, EMERGENCY)],
   [/^(.+): EMERGENCY_ROLE not held by deployer$/, (w, m) => w.chain.grant(subject(m[1]), EMERGENCY_ROLE, DEPLOYER)],
+  // deploy-time configuration (issue 1520)
+  [/^governance: votingPower of every voter equals sheet$/, (w) => w.chain.set(GOV, "votingPower", 1n)],
+  [/^governance: quorumThreshold equals sheet$/, (w) => w.chain.set(GOV, "quorumThreshold", 99n)],
+  [/^governance: votingPeriod equals sheet$/, (w) => w.chain.set(GOV, "votingPeriod", 99_999n)],
+  [/^governance: executionDelay equals sheet$/, (w) => w.chain.set(GOV, "executionDelay", 99_999n)],
+  [/^router: default weights equal sheet$/, (w) => w.chain.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), [5000n, 5000n, 0n, 0n]])],
+  [/^(vault\[\w+\]): router eligibility equals sheet$/, (w, m) => { w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].routerEligible = false; }],
   // vault facts
   [/^(vault\[\w+\]): registry link$/, (w, m) => w.chain.set(subject(m[1]), "registry", OTHER)],
   [/^(vault\[\w+\]): a second setRegistry reverts$/, (w) => { w.chain.setRegistryOpen = true; }],

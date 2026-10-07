@@ -22,7 +22,7 @@ import { callerInputs, parseSheet } from "./sheet.ts";
 import { loadCorrelatedOwners } from "./correlated-owners.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
-import { RECEIPT_ROW, assertReceiptId, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
+import { RECEIPT_ROW, assertReceiptId, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
 import { startAnvil, type ChainStarter } from "./preflight.ts";
 import { USDC_ADDRESS, assertUsdcCode } from "./usdc.ts";
@@ -46,10 +46,11 @@ export const USAGE = `publish contracts
                      address:0xADMIN is accepted with --dry-run only (no secret: the sender of a simulation).
   --environment NAME the GitHub Environment (or 'local' on a rehearsal)
   --core-sha SHA     the core DEPLOY_SHA (40 hex). The core checkout HEAD must equal it.
-  --row R            govern only: run one govern row (one round: schedule, wait for the real delay, execute, read back), by 1-based number or by name.
-                     Rows: voting-power-quorum, agents, other-setters, migrate-eligibility-PROTO, migrate-eligibility-AGENT, migrate-eligibility-RWA,
-                     router-weights, unpause-PROTO, unpause-AGENT, unpause-RWA, update-delay, batch, cancel. Without it, every row in order.
-                     On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) with the ready time and the command to run again with the same --row.
+  --row R            govern only: run one govern row, by 1-based number or by name.
+                     Rows: unpause-PROTO, unpause-AGENT, unpause-RWA (the only mainnet operation after the handover), then the Twin-only
+                     demonstrations update-delay, batch, cancel (refused with USAGE on 8453). Without --row, every unpause the sheet asks for is
+                     scheduled in one sitting, then one wait, then executed (on 8453 only the unpauses run).
+                     On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) once, with the ready time and the command to run again.
                      On demand, outside the ordered rows: --row release-receipt --receipt-id 0x<bytes32> releases one recorded consensus receipt
                      (ConsensusRecommendationReceipt.releaseReceipt) as its own Safe -> Timelock round, on 918453 and 8453 alike.
   --receipt-id ID    govern with --row release-receipt only: the bytes32 receipt id to release.
@@ -134,7 +135,10 @@ export function parseCli(argv: string[]): Parsed {
   if (row !== undefined) {
     const stageNames = verb === undefined ? stage : undefined;
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
-    if (row !== RECEIPT_ROW) resolveGovernRow(row); // an unknown row fails here, before any work
+    if (row !== RECEIPT_ROW) {
+      const resolved = resolveGovernRow(row); // an unknown row fails here, before any work
+      if (isTwinOnlyRow(resolved) && Number(chainRaw) === MAINNET_CHAIN_ID) throw new PublishError("USAGE", `--row ${resolved} is a Twin-fork demonstration of the Safe tool: it is refused on chain ${MAINNET_CHAIN_ID}\n${USAGE}`);
+    }
   }
   const receiptIdRaw = v["receipt-id"] as string | undefined;
   let receiptId: string | undefined;

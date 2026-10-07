@@ -21,15 +21,19 @@
 
 Run order is the table order. The per-stage wiring (which manifest key feeds which env name) lives in `publish-contracts/src/core-wiring.ts`, not in the table. The post-stage proofs (router wiring, basket vault config, timelock roles) are labels of the one verifier (`publish-contracts/src/verify`).
 
+## Stage 13 (govern)
+
+`stage-table.json` carries a `govern` block that describes stage 13: after the timelock handover the only mainnet operation is the unpause of each basket vault (`mainnetRows`), one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait. Voting power, quorum, voting period, execution delay, vault setters, router eligibility and router default weights are deploy-time configuration set in stages 4 to 10 (router through rwa) and asserted by the verify stage. `update-delay`, `batch` and `cancel` (`twinOnlyRows`) run on the Twin fork only. `stage-table.test.ts` asserts the description.
+
 ## Required env (no defaults)
 
 Every name in `requiredEnv` is read with no fallback. An unset or malformed value reverts the stage. The table lists them per stage. Names that used to default and are now required:
 
 - `DEPLOYMENT_OUT` for every stage. The publish-contracts CLI sets it. Anyone who runs a script directly must set it too. There is no `deployments/<vault>-<chainid>.json` default.
 - `vault`: `SEED_DEPOSIT_USDC` (non-zero, 6-decimal units) and `EXIT_FEE_BPS`.
-- `governance`: `QUORUM_THRESHOLD` (greater than 1), `VOTING_PERIOD` and `EXECUTION_DELAY` (seconds, at least the contract minimum).
+- `governance`: `QUORUM_THRESHOLD` (greater than 1), `VOTING_PERIOD` and `EXECUTION_DELAY` (seconds, at least the contract minimum), `VOTER_ADDRESSES` and `VOTER_POWER` (the deployer sets the voting power of each voter before the timelock handover).
 - `registry`: `VAULT_NAME` (the registered name comes from the sheet; there is no default).
-- `proto`, `agent`, `rwa`: the same four names as `vault` (`FEE_RECIPIENT`, `TVL_CAP`, `PER_DEPOSIT_CAP`, `EXIT_FEE_BPS`). Every vault is set up the same way.
+- `proto`, `agent`, `rwa`: the same four names as `vault` (`FEE_RECIPIENT`, `TVL_CAP`, `PER_DEPOSIT_CAP`, `EXIT_FEE_BPS`) and `ROUTER_DEFAULT_BPS`: `none` leaves the basket router-ineligible, otherwise a comma list of bps for the router default vector after this basket flips eligible (rmUSDC, the eligible baskets so far, this vault). The stage makes the basket eligible and sets that vector in one atomic `registry.migrateEligibility`, before the timelock handover.
 
 The `vault` manifest (`vault.json`) exposes the seed result: `seed_share_receiver`, `seed_shares` and `deployer_share_balance_after` (always 0, read from the vault after the seed). `SEED_SHARE_RECEIVER` is never zero and never the deployer.
 

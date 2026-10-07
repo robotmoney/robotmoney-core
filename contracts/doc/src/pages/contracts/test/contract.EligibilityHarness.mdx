@@ -1,0 +1,48 @@
+---
+title: "EligibilityHarness"
+---
+
+# EligibilityHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/19631eb6f0ab3bb0cf39ce0243c580c8032acb9f/contracts/test/DeployTimeRouterConfig.t.sol)
+
+**Inherits:** [DeployProtocolAssetVault](/contracts/script/contract.DeployProtocolAssetVault)
+
+## Functions
+
+<a id="makeeligible-vaultregistry-address-uint256"></a>
+
+### makeEligible
+
+```solidity
+function makeEligible(VaultRegistry registry, address vault, uint256[] memory bps) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| registry | `VaultRegistry` |  |
+| vault | `address` |  |
+| bps | `uint256[]` |  |
+
+<a id="readbps-string"></a>
+
+### readBps
+
+```solidity
+function readBps(string memory prefix) external view returns (uint256[] memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256[]` |  |
+

@@ -42,6 +42,8 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///           EXECUTION_DELAY    — delay from voting end to execution in seconds
 ///                                (at least the contract's MIN_EXECUTION_DELAY)
 ///           QUORUM_THRESHOLD   — minimum FOR voting power for quorum (greater than 1)
+///           VOTER_ADDRESSES    — comma list of the voters; each gets VOTER_POWER (issue 1520: set by the deployer, before the timelock handover)
+///           VOTER_POWER        — voting power of each voter, above 0
 ///           EXPECTED_CHAIN_ID  — mandatory and equal to 8453 on Base mainnet
 ///           DEPLOYMENT_OUT     — path for the output JSON (required, no default)
 ///
@@ -84,11 +86,15 @@ contract DeployRouterGovernance is ExpectedChainGuard {
 
         uint64 votingPeriod = _envUint64Required("VOTING_PERIOD");
         uint64 executionDelay = _envUint64Required("EXECUTION_DELAY");
+        address[] memory voters = _envVotersRequired("VOTER_ADDRESSES");
+        uint256 voterPower = _envUintRequired("VOTER_POWER");
+        require(voterPower > 0, "VOTER_POWER must be above 0");
 
         // `msg.sender` is the broadcasting account under `forge script`, and it
         // is that account whose router ADMIN_ROLE the grant below depends on.
         vm.startBroadcast();
         d = _deploy(msg.sender, admin, router, votingPeriod, executionDelay, quorumThreshold);
+        _setVotingPower(d, voters, voterPower);
         vm.stopBroadcast();
 
         _writeDeploymentJson(d);
@@ -125,6 +131,29 @@ contract DeployRouterGovernance is ExpectedChainGuard {
         _logResult(d);
     }
 
+    /// @notice In-process variant that also sets the voting power of every voter, as `run()` does. No broadcast, no JSON written.
+    /// @param voters_ Voters, each given `power_`.
+    /// @param power_  Voting power of each voter.
+    function runInProcessWithVoters(
+        address admin_,
+        address router_,
+        uint64 votingPeriod_,
+        uint64 executionDelay_,
+        uint256 quorumThreshold_,
+        address[] calldata voters_,
+        uint256 power_
+    ) external returns (Deployed memory d) {
+        require(admin_ != address(0), "ADMIN_ADDRESS=0");
+        require(router_ != address(0), "ROUTER_ADDRESS=0");
+        require(quorumThreshold_ > 1, "QUORUM_THRESHOLD must be greater than 1");
+        require(power_ > 0, "VOTER_POWER must be above 0");
+        vm.startPrank(admin_);
+        d = _deploy(admin_, admin_, router_, votingPeriod_, executionDelay_, quorumThreshold_);
+        _setVotingPower(d, voters_, power_);
+        vm.stopPrank();
+        _logResult(d);
+    }
+
     // ─── Internal ────────────────────────────────────────────────────────────
 
     function _deploy(
@@ -146,6 +175,36 @@ contract DeployRouterGovernance is ExpectedChainGuard {
 
         _grantRouterAdmin(d, granter_);
         _grantWeightSetter(d, granter_);
+    }
+
+    /// @dev Voting power is deploy-time configuration: the deployer holds ADMIN_ROLE on the governance contract it just deployed, so it sets
+    ///      the power of every voter here, before DeployTimelock hands ADMIN_ROLE away. Each value is read back.
+    function _setVotingPower(Deployed memory d, address[] memory voters, uint256 power) internal {
+        for (uint256 i = 0; i < voters.length; i++) {
+            d.governance.setVotingPower(voters[i], power);
+            require(d.governance.votingPower(voters[i]) == power, "voting power not set");
+        }
+        require(
+            d.governance.totalVotingPower() >= d.quorumThreshold,
+            "total voting power is below the quorum"
+        );
+    }
+
+    /// @dev A required comma list of non-zero addresses, no repeat.
+    function _envVotersRequired(string memory key) internal view returns (address[] memory voters) {
+        require(vm.envExists(key), string.concat(key, " must be set"));
+        try vm.envAddress(key, ",") returns (address[] memory v) {
+            voters = v;
+        } catch {
+            revert(string.concat(key, " is malformed: expected a comma list of addresses"));
+        }
+        require(voters.length > 0, string.concat(key, " is empty"));
+        for (uint256 i = 0; i < voters.length; i++) {
+            require(voters[i] != address(0), string.concat(key, " holds the zero address"));
+            for (uint256 j = 0; j < i; j++) {
+                require(voters[i] != voters[j], string.concat(key, " lists an address twice"));
+            }
+        }
     }
 
     /// @dev Give the governance contract the router `ADMIN_ROLE` its
@@ -209,6 +268,7 @@ contract DeployRouterGovernance is ExpectedChainGuard {
         vm.serializeAddress(obj, "admin", d.admin);
         vm.serializeUint(obj, "voting_period", d.votingPeriod);
         vm.serializeUint(obj, "execution_delay", d.executionDelay);
+        vm.serializeUint(obj, "total_voting_power", d.governance.totalVotingPower());
         string memory json = vm.serializeUint(obj, "quorum_threshold", d.quorumThreshold);
 
         vm.writeJson(json, outPath);
