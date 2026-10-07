@@ -69,8 +69,8 @@ This model was chosen over the alternatives for the following reasons:
 | Minimum delay for `addAsset` | 48 hours | Long enough for stakeholders to observe the pending change and raise a public challenge before the token appears in the vault. |
 | Minimum delay for `removeAsset` | 24 hours | Removal is lower-risk than addition (no new exposure); a shorter window is sufficient. |
 | Maximum shortlist size | 15 tokens | Inherited from PRD §11.3 cap. The `AgentTokenVault` contract enforces this via `maxAssets`. |
-| Timelock executor | Safe (≥2-of-3) | No change from current configuration. The Safe must also be the `TimelockController` proposer. |
-| Canceller | Any Safe signer (unilaterally) | Any single signer may cancel a queued change before execution, providing a low-friction veto path within the multisig. |
+| Timelock executor | Open (`address(0)`) | Anyone may execute a ready operation after the delay (amended 2026-10-05). The Safe is the only proposer. |
+| Canceller | The Safe only, at its threshold (≥ 2 signatures) | No single signer can cancel a queued change (amended 2026-10-05). |
 
 ### Veto / challenge path
 
@@ -86,9 +86,9 @@ During the timelock delay window:
    the queued change (`TimelockController.cancel(id)`) if the challenge reveals
    the token fails the gate criteria (see `addAsset` gate additions below).
 
-3. **Unilateral Safe cancellation:** any one Safe signer may call
-   `TimelockController.cancel(id)` at any time before execution, stopping the
-   change without requiring a full quorum. This is the cheapest veto path.
+3. **Safe cancellation:** the Safe may call `TimelockController.cancel(id)` at
+   any time before execution. It acts at its threshold (≥ 2 signatures), so no
+   single signer can cancel.
 
 ### `addAsset` gate additions
 
@@ -170,18 +170,18 @@ Owner decisions of 2026-10-05 (mainnet plan §2.2, §3.1, §3.3) and
 *Timelock parameters* table and veto step 3:
 
 - **Canceller: the Safe only.** A cancel needs the Safe acting at its
-  threshold (≥ 2 signatures). The "Any Safe signer (unilaterally)" row
-  and veto-path step 3 ("Unilateral Safe cancellation") are overridden;
+  threshold (≥ 2 signatures). The earlier single-signer cancel row
+  and veto-path step 3 (single-signer cancel) are replaced;
   no single signer can cancel. In code, `DeployTimelock` passes
   `proposers = [safe]`, and OpenZeppelin's `TimelockController`
   constructor grants `CANCELLER_ROLE` to each proposer, so the Safe is
   the sole canceller.
 - **Executor: open (`address(0)`).** Anyone may execute a ready
-  operation after the delay. This overrides the "Safe (≥2-of-3)"
-  executor row. The Safe stays the only proposer. Code state on
-  `impl/core-contracts` (core PR 1505): `DeployTimelock._deployAndWire`
-  still sets `executors = [safe]`; the change to an open executor, with
-  a verifier check, is core 1521.
+  operation after the delay. This replaces the earlier "Safe (≥2-of-3)"
+  executor row. The Safe stays the only proposer. `DeployTimelock`
+  passes `executors = [address(0)]`, records `executorPolicy` and
+  `cancellerPolicy` in `timelock.json`, and the stage 12 verifier reads
+  the role holders back from chain (core 1521).
 - **The 48-hour add / 24-hour remove split is not enforced on chain.**
   `AgentTokenVault.SHORTLIST_ADD_DELAY` (48 h) and
   `SHORTLIST_REMOVE_DELAY` (24 h) are public constants that no contract

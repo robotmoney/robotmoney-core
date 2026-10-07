@@ -1108,6 +1108,123 @@ contract SafeIntegrationTest is Test {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Open executor (core 1521): anyone executes a ready op; only the Safe proposes or cancels
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev Schedule `registerVault` through the Safe with two owner signatures.
+    function _scheduleViaSafe(bytes32 salt) internal returns (bytes memory callData, bytes32 opId) {
+        callData = abi.encodeCall(
+            VaultRegistry.registerVault,
+            (
+                makeAddr("openExecVault"),
+                VaultRegistry.VaultMetadata({
+                    name: "Open", asset: address(usdc), registeredAt: block.timestamp
+                })
+            )
+        );
+        opId = d.timelock.hashOperation(address(registry), 0, callData, bytes32(0), salt);
+        bytes memory scheduleCall = abi.encodeCall(
+            d.timelock.schedule, (address(registry), 0, callData, bytes32(0), salt, MIN_DELAY)
+        );
+        bytes32 txHash = safe.getTransactionHash(
+            address(d.timelock),
+            0,
+            scheduleCall,
+            0,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            safe.nonce()
+        );
+        assertTrue(
+            _safeExec(address(d.timelock), scheduleCall, _buildTwoOwnerSigs(txHash)),
+            "safe.execTransaction(schedule) failed"
+        );
+    }
+
+    function test_openExecutor_strangerExecutesReadyOperation() public withSnap {
+        bytes32 salt = keccak256("open-exec-1");
+        (bytes memory callData, bytes32 opId) = _scheduleViaSafe(salt);
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        address stranger = makeAddr("stranger");
+        assertFalse(
+            d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), stranger), "stranger holds no role"
+        );
+        vm.prank(stranger);
+        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+        assertTrue(d.timelock.isOperationDone(opId), "stranger must execute a ready operation");
+    }
+
+    function test_openExecutor_strangerCannotExecuteBeforeDelay() public withSnap {
+        bytes32 salt = keccak256("open-exec-2");
+        (bytes memory callData,) = _scheduleViaSafe(salt);
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert();
+        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+    }
+
+    function test_openExecutor_strangerCannotSchedule() public withSnap {
+        address stranger = makeAddr("stranger");
+        bytes32 proposer = d.timelock.PROPOSER_ROLE();
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, proposer
+            )
+        );
+        d.timelock.schedule(address(registry), 0, "", bytes32(0), keccak256("s"), MIN_DELAY);
+    }
+
+    function test_openExecutor_strangerCannotCancel() public withSnap {
+        (, bytes32 opId) = _scheduleViaSafe(keccak256("open-exec-3"));
+        address stranger = makeAddr("stranger");
+        bytes32 canceller = d.timelock.CANCELLER_ROLE();
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, canceller
+            )
+        );
+        d.timelock.cancel(opId);
+    }
+
+    /// @notice One owner is not the Safe: a direct cancel reverts, and one owner's
+    ///         signature on a Safe cancel is short of the threshold (GS020).
+    function test_openExecutor_singleOwnerCannotCancel() public withSnap {
+        (, bytes32 opId) = _scheduleViaSafe(keccak256("open-exec-4"));
+        bytes32 canceller = d.timelock.CANCELLER_ROLE();
+        vm.prank(owner1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, owner1, canceller
+            )
+        );
+        d.timelock.cancel(opId);
+
+        bytes memory cancelCall = abi.encodeCall(d.timelock.cancel, (opId));
+        bytes32 txHash = safe.getTransactionHash(
+            address(d.timelock),
+            0,
+            cancelCall,
+            0,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            safe.nonce()
+        );
+        bytes memory oneSig = _buildOneOwnerSig(txHash);
+        vm.expectRevert(bytes("GS020"));
+        safe.execTransaction(
+            address(d.timelock), 0, cancelCall, 0, 0, 0, 0, address(0), payable(address(0)), oneSig
+        );
+        assertTrue(d.timelock.isOperationPending(opId), "operation must still be pending");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Sad-path: cancelled operation cannot be executed
     // ─────────────────────────────────────────────────────────────────────────
 

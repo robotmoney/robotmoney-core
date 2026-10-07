@@ -144,11 +144,17 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     return { ok: delay >= BigInt(floor), detail: `delay ${delay}, floor ${floor}` };
   });
   await c.run("timelock: min delay equals sheet", async () => ({ ok: delay === BigInt(sheet.timelockDelay), detail: `delay ${delay}, sheet ${sheet.timelockDelay}` }));
-  for (const [nm, r] of [["PROPOSER_ROLE", PROPOSER_ROLE], ["EXECUTOR_ROLE", EXECUTOR_ROLE], ["CANCELLER_ROLE", CANCELLER_ROLE]] as const) {
+  // Policy (core 1521): PROPOSER_ROLE and CANCELLER_ROLE are the Safe only. EXECUTOR_ROLE is open (address(0)).
+  c.eq("timelock: manifest executorPolicy is open", tlManifest.executorPolicy, "open");
+  c.eq("timelock: manifest cancellerPolicy is safe-only", tlManifest.cancellerPolicy, "safe-only");
+  for (const [nm, r] of [["PROPOSER_ROLE", PROPOSER_ROLE], ["CANCELLER_ROLE", CANCELLER_ROLE]] as const) {
     await c.runEq(`timelock: ${nm} held by safe`, () => hasRole(chain, tl, r, safe), true);
     await c.runEq(`timelock: ${nm} not held by deployer`, () => hasRole(chain, tl, r, D), false);
     await c.runEq(`timelock: ${nm} not open to address zero`, () => hasRole(chain, tl, r, ZERO), false);
   }
+  await c.runEq("timelock: EXECUTOR_ROLE open to address zero", () => hasRole(chain, tl, EXECUTOR_ROLE, ZERO), true);
+  await c.runEq("timelock: EXECUTOR_ROLE not held by deployer", () => hasRole(chain, tl, EXECUTOR_ROLE, D), false);
+  await timelockHolderScan(c, chain, tl, safe, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
   await c.runEq("timelock: admin role held by timelock itself", () => hasRole(chain, tl, Z32, tl), true);
   await c.runEq("timelock: admin role not held by deployer", () => hasRole(chain, tl, Z32, D), false);
   await c.runEq("timelock: admin role not held by safe", () => hasRole(chain, tl, Z32, safe), false);
@@ -313,6 +319,31 @@ async function agentChecks(
     c.eq("agents: manifest listed count equals derived count", timelockManifest.roles?.gateway_agents_listed_count, agents.length);
   }
   c.eq("agents: manifest says deployer owns no listed agent", timelockManifest.roles?.deployer_owns_a_listed_gateway_agent, false);
+}
+
+/** Log-enumerated scan of the timelock's PROPOSER, CANCELLER and EXECUTOR holders: only the Safe, plus address(0) as the open executor. An EOA holder is named. */
+async function timelockHolderScan(c: Collector, chain: ChainReader, tl: Address, safe: Address, s: { fromBlock: bigint; head: bigint | undefined; chunk: number; retryBaseMs: number }): Promise<void> {
+  const label = "timelock: only the safe holds PROPOSER, CANCELLER or EXECUTOR role (log scan)";
+  if (s.head === undefined) { c.fail(label, "block number unreadable"); return; }
+  try {
+    const sig = keccak256(toHex(SIG_ROLE_GRANTED));
+    const roles = [PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE];
+    const logs = await scanLogs(chain, { address: tl, topics: [sig, roles], fromBlock: s.fromBlock, toBlock: s.head, chunk: s.chunk, retryBaseMs: s.retryBaseMs });
+    const pairs = new Map<string, { role: Hex; who: Address }>();
+    for (const l of logs) { const who = topicToAddress(l.topics[2]); pairs.set(`${l.topics[1]}:${lc(who)}`, { role: l.topics[1], who }); }
+    const bad: string[] = [];
+    for (const { role, who } of pairs.values()) {
+      if (!(await hasRole(chain, tl, role, who))) continue;
+      const isSafe = lc(who) === lc(safe);
+      const isOpenExecutor = lc(who) === lc(ZERO) && role === EXECUTOR_ROLE;
+      if (isSafe || isOpenExecutor) continue;
+      const eoa = (await chain.getCode(who)).length <= 2;
+      bad.push(`${who} holds ${role}${eoa ? " (EOA)" : ""}`);
+    }
+    c.push(label, bad.length === 0, bad.length ? bad.join(", ") : `${pairs.size} grants scanned, holders are the safe and the open executor`);
+  } catch (e: any) {
+    c.fail(label, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`);
+  }
 }
 
 /** Log-enumerated scan: every (contract, role) the deployer was ever granted must be gone now. Covers contracts no manifest names. */

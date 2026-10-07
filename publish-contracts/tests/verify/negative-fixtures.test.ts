@@ -55,7 +55,11 @@ const RULES: Rule[] = [
   // timelock (these come before the generic role rules: the subject is the timelock itself)
   [/^timelock: min delay at least chain floor$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],
   [/^timelock: min delay equals sheet$/, (w) => { w.sheet.timelockDelay = 999_999; }],
-  [/^timelock: (PROPOSER|EXECUTOR|CANCELLER)_ROLE held by safe$/, (w, m) => w.chain.revoke(TIMELOCK, { PROPOSER: PROPOSER_ROLE, EXECUTOR: EXECUTOR_ROLE, CANCELLER: CANCELLER_ROLE }[m[1]]!, SAFE)],
+  [/^timelock: manifest executorPolicy is open$/, (w) => editManifest(w, timelockFile(), (o) => { o.executorPolicy = "safe"; })],
+  [/^timelock: manifest cancellerPolicy is safe-only$/, (w) => editManifest(w, timelockFile(), (o) => { o.cancellerPolicy = "any-signer"; })],
+  [/^timelock: EXECUTOR_ROLE open to address zero$/, (w) => w.chain.revoke(TIMELOCK, EXECUTOR_ROLE, ZERO)],
+  [/^timelock: only the safe holds PROPOSER, CANCELLER or EXECUTOR role \(log scan\)$/, (w) => { w.chain.grant(TIMELOCK, PROPOSER_ROLE, OTHER); w.chain.roleGrantedLog(TIMELOCK, PROPOSER_ROLE, OTHER, 130n); }],
+  [/^timelock: (PROPOSER|CANCELLER)_ROLE held by safe$/, (w, m) => w.chain.revoke(TIMELOCK, { PROPOSER: PROPOSER_ROLE, EXECUTOR: EXECUTOR_ROLE, CANCELLER: CANCELLER_ROLE }[m[1]]!, SAFE)],
   [/^timelock: (PROPOSER|EXECUTOR|CANCELLER)_ROLE not held by deployer$/, (w, m) => w.chain.grant(TIMELOCK, { PROPOSER: PROPOSER_ROLE, EXECUTOR: EXECUTOR_ROLE, CANCELLER: CANCELLER_ROLE }[m[1]]!, DEPLOYER)],
   [/^timelock: (PROPOSER|EXECUTOR|CANCELLER)_ROLE not open to address zero$/, (w, m) => w.chain.grant(TIMELOCK, { PROPOSER: PROPOSER_ROLE, EXECUTOR: EXECUTOR_ROLE, CANCELLER: CANCELLER_ROLE }[m[1]]!, ZERO)],
   [/^timelock: admin role held by timelock itself$/, (w) => w.chain.revoke(TIMELOCK, Z32, TIMELOCK)],

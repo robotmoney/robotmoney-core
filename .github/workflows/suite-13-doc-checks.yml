@@ -95,6 +95,9 @@ jobs:
       - name: Retired sprint plan and scout notes stay deleted (core 1556)
         run: bash .github/scripts/check_no_removed_doc_paths.sh
 
+      - name: ADR-0004 states no single-signer cancel (core 1521)
+        run: python3 .github/scripts/check_adr0004_no_single_signer_cancel.py
+
       - name: Browser keygen ADR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

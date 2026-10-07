@@ -349,10 +349,49 @@ contract DeployTimelockTest is SafeFixture {
         );
     }
 
-    function test_safe_holdsExecutorRole() public view {
+    function test_safe_holdsCancellerRole() public view {
         assertTrue(
-            d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), safe), "safe missing EXECUTOR_ROLE"
+            d.timelock.hasRole(d.timelock.CANCELLER_ROLE(), safe), "safe missing CANCELLER_ROLE"
         );
+    }
+
+    /// @notice One policy (core 1521): EXECUTOR_ROLE is open, held by address(0).
+    function test_executorPolicy_executorRoleIsOpen() public view {
+        assertTrue(d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), address(0)), "executor not open");
+        assertFalse(d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), safe), "safe holds executor");
+    }
+
+    /// @notice The Safe is the only proposer and canceller: no deployer, emergency key or
+    ///         stranger holds either role, so no single signer can propose or cancel.
+    function test_executorPolicy_safeIsTheOnlyProposerAndCanceller() public view {
+        bytes32 proposer = d.timelock.PROPOSER_ROLE();
+        bytes32 canceller = d.timelock.CANCELLER_ROLE();
+        address[4] memory others = [deployer, emergency, stranger, address(0)];
+        for (uint256 i = 0; i < others.length; i++) {
+            assertFalse(d.timelock.hasRole(proposer, others[i]), "extra proposer");
+            assertFalse(d.timelock.hasRole(canceller, others[i]), "extra canceller");
+        }
+    }
+
+    /// @notice An address that is neither the Safe nor an owner cannot schedule or cancel.
+    function test_executorPolicy_strangerCannotScheduleOrCancel() public {
+        // stranger is the shared fixture address.
+        bytes32 proposer = d.timelock.PROPOSER_ROLE();
+        bytes32 canceller = d.timelock.CANCELLER_ROLE();
+        vm.startPrank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, proposer
+            )
+        );
+        d.timelock.schedule(address(0xBEEF), 0, "", bytes32(0), bytes32(uint256(1)), 2 days);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, canceller
+            )
+        );
+        d.timelock.cancel(bytes32(uint256(1)));
+        vm.stopPrank();
     }
 
     // ─── AC3: Direct ADMIN_ROLE call from Safe EOA reverts ────────────────────
@@ -1283,7 +1322,14 @@ contract DeployTimelockManifestTest is SafeFixture {
         );
         assertTrue(manifest.readBool(".roles.timelock_has_router_admin_role"));
         assertTrue(manifest.readBool(".roles.safe_is_timelock_proposer"));
-        assertTrue(manifest.readBool(".roles.safe_is_timelock_executor"));
+        assertTrue(manifest.readBool(".roles.safe_is_timelock_canceller"));
+        assertTrue(manifest.readBool(".roles.timelock_executor_is_open"));
+    }
+
+    /// @notice The policy the timelock was built with is in the manifest (core 1521).
+    function test_executorPolicy_manifestRecordsPolicy() public view {
+        assertEq(manifest.readString(".executorPolicy"), "open");
+        assertEq(manifest.readString(".cancellerPolicy"), "safe-only");
     }
 
     /// @notice Every manifest test in this file passes its output path to
