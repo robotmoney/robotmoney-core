@@ -314,6 +314,8 @@ async function assetReadBack(chain: ChainReader, vault: Address, want: ExpectedA
   return { ok: a === b, detail: a === b ? `${got.length} assets` : `on chain [${got.join("; ")}] sheet [${exp.join("; ")}]` };
 }
 
+// NEGATIVE-INVARIANT labels: each passes only when something is ABSENT (no agent log, zero listed agents, no AGENT_ROLE holder,
+// no deployer-owned agent). They are deliberate after the no-agent deploy (core 1527). Do not delete them as dead code.
 const AGENT_LABELS = [
   "agents: no agent authorized at handover",
   "agents: manifest lists zero agents",
