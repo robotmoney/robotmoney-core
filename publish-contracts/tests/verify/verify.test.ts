@@ -43,6 +43,20 @@ describe("the deploy authorizes no agent (core 1527)", () => {
   });
 });
 
+describe("agents the depositors authorize after the handover are theirs (core 1527)", () => {
+  const log = (block: bigint) => ({ address: GATEWAY, topics: [keccak256(toHex(SIG_AGENT_AUTHORIZED)), padTopic(OWNERS[0]!), padTopic(OWNERS[1]!)], data: "0x" as const, blockNumber: block });
+  test("an AgentAuthorized log after the handover block passes, one at or before it fails", async () => {
+    const after = buildWorld();
+    after.chain.logs.push(log(4000n));
+    after.opts.handoverBlock = 3000n;
+    expect(failed(await verifyDeployment(after.opts))).toEqual([]);
+    const before = buildWorld();
+    before.chain.logs.push(log(3000n));
+    before.opts.handoverBlock = 3000n;
+    expect(failed(await verifyDeployment(before.opts))).toEqual(["agents: no agent authorized at handover"]);
+  });
+});
+
 describe("label drift", () => {
   test("Twin chain label set equals mainnet label set equals the committed fixture", async () => {
     const main = (await verifyDeployment(buildWorld(8453).opts)).checks.map((c) => c.label);

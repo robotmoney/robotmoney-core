@@ -60,6 +60,8 @@ export interface StageRecord {
   broadcastCount?: number;
   txHashes?: string[];
   firstBlock?: number;
+  /** The last block of this stage's broadcast: the timelock stage's is the handover block. */
+  lastBlock?: number;
   startedAt: string;
   finishedAt?: string;
   /** Safe stage: the predicted or created address, recorded before the creation is sent so a resume can adopt it. */
@@ -374,14 +376,14 @@ export function libraryArgs(ctx: ManifestCtx, row: StageRow): string[] {
 
 const scriptFile = (script: string): string => basename(script.split(":")[0]!);
 
-function readTxCount(path: string): { count: number; hashes: string[]; firstBlock?: number } | undefined {
+function readTxCount(path: string): { count: number; hashes: string[]; firstBlock?: number; lastBlock?: number } | undefined {
   if (!existsSync(path)) return undefined;
   const j = JSON.parse(readFileSync(path, "utf8"));
   const txs: unknown[] = Array.isArray(j.transactions) ? j.transactions : [];
   const hashes = txs.map((t) => (t as { hash?: string }).hash).filter((h): h is string => typeof h === "string");
   const rc = Array.isArray(j.receipts) ? j.receipts : [];
   const blocks = rc.map((r: { blockNumber?: string }) => (r.blockNumber ? Number(BigInt(r.blockNumber)) : NaN)).filter((n: number) => Number.isFinite(n));
-  return { count: txs.length, hashes, firstBlock: blocks.length ? Math.min(...blocks) : undefined };
+  return { count: txs.length, hashes, firstBlock: blocks.length ? Math.min(...blocks) : undefined, lastBlock: blocks.length ? Math.max(...blocks) : undefined };
 }
 
 /** forge writes broadcast/<ScriptFile>/<chainId>/(dry-run/)run-latest.json. */
@@ -524,6 +526,7 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   rec.broadcastCount = sent.count;
   rec.txHashes = sent.hashes;
   rec.firstBlock = sent.firstBlock;
+  rec.lastBlock = sent.lastBlock;
   rec.endNonce = nonce1;
   const delta = nonce1 - startNonce;
   // the count checks that make the broadcast trustworthy: broadcast file, nonce delta and the frozen count all agree

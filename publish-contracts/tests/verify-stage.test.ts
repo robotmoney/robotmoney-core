@@ -6,7 +6,7 @@ import { publishLogger } from "../src/log.ts";
 import { newManifest, type RunContext } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
-import { buildVerifySheet, loadExpectedAssets, runVerifyStage } from "../src/verify-stage.ts";
+import { buildVerifySheet, handoverBlock, loadExpectedAssets, runVerifyStage } from "../src/verify-stage.ts";
 import { COUNTS, SHA, sheetText, tmp } from "./fixtures.ts";
 
 import { getStageTable } from "../src/stages.ts";
@@ -28,6 +28,16 @@ function setup(config: { proto?: object[]; rwa?: object[]; shortlist?: object[] 
   const ctx = { coreDir, chainId: 918453, sheet, coreSha: SHA, rpc: "http://x", evidenceDir: join(coreDir, "evidence"), frozen: COUNTS, measure: false, log: publishLogger((l) => lines.push(l)) } as unknown as RunContext;
   return { ctx, sheet, lines };
 }
+
+describe("stage 12: the agent scan ends at the handover block (core 1527)", () => {
+  test("handoverBlock is the last block of the timelock stage, and undefined until that stage has run", () => {
+    const { ctx } = setup();
+    const m = newManifest(ctx, "0x00000000000000000000000000000000000000a1");
+    expect(handoverBlock(m)).toBeUndefined();
+    m.stages.timelock = { status: "done", startedAt: "t", firstBlock: 40, lastBlock: 44 } as never;
+    expect(handoverBlock(m)).toBe(44n);
+  });
+});
 
 describe("stage 12: the one verifier", () => {
   test("the verifier sheet covers all four vaults, with baskets and the agent vault paused and the seed on rmUSDC only", () => {

@@ -954,8 +954,9 @@ Agent ownership and policy rules (issue #1476):
   `docs/technical/smart-contract-invariants.md`). The gateway stage reads
   no `AGENT_*` input, the sheet refuses them, and the verifier asserts
   the gateway has no `AgentAuthorized` or `AgentOwnershipTransferred`
-  log, the timelock manifest lists zero agents and nobody holds
-  `AGENT_ROLE` after handover.
+  log up to the handover block, the timelock manifest lists zero agents
+  and nobody holds `AGENT_ROLE` from a grant before it. Agents depositors
+  authorize after the handover are theirs and are not checked.
 
 The current gateway implementation gates agent deposits into a vault. The
 product architecture uses the same safety boundary for agent deposits and

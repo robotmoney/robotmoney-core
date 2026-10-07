@@ -40,6 +40,9 @@ describe("the stage runner on stub forge and cast", () => {
     expect(w.state().nonces["0x000000000000000000000000000000000000a001"]).toBe(n);
     expect(w.logs().some((l) => l.event === "run.nonce_ok" && l.nonce === n)).toBe(true);
     expect(m.firstBlock).toBe(7);
+    // the timelock stage's last block is the handover block the verifier bounds its agent scan with
+    expect(typeof m.stages.timelock.lastBlock).toBe("number");
+    expect(m.stages.timelock.lastBlock).toBeGreaterThanOrEqual(m.stages.timelock.firstBlock);
   });
 
   test("one deploy: manifests per the core table, --libraries on the basket stages, every required env name set", async () => {

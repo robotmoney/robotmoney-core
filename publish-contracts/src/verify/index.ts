@@ -132,7 +132,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
     c.fail("deployer: holds no role on any contract (log scan)", "block number unreadable");
   } else {
-    await agentChecks(c, chain, gateway, tlManifest, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
+    await agentChecks(c, chain, gateway, tlManifest, { fromBlock: opts.fromBlock, head: opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head, chunk, retryBaseMs });
     await roleScan(c, chain, D, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
   }
 
