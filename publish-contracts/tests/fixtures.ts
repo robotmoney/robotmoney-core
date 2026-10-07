@@ -12,6 +12,8 @@ export const exampleText = (): string => readFileSync(EXAMPLE_SHEET, "utf8");
 export function sheetText(over: Record<string, string | null> = {}, extra: string[] = []): string {
   // chain 8453 refuses a sheet that skips a stage 13 unpause (issue 1520): default it to all three unless the caller says otherwise
   if (over.CHAIN_ID === "8453" && !("GOVERN_UNPAUSE_VAULTS" in over)) over = { ...over, GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA" };
+  // and issue 1580: chain 8453 refuses any router weights but the launch vector (eligibility must then name all three baskets)
+  if (over.CHAIN_ID === "8453") over = { ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0", ...over };
   const lines = exampleText().split("\n");
   const out: string[] = [];
   const done = new Set<string>();

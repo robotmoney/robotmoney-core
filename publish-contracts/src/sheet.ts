@@ -281,6 +281,11 @@ export function parseSheet(text: string): Sheet {
   const weightKeys = weights.map((w) => w.key).sort().join(",");
   const wantKeys = ["USDC", ...eligibleVaults].sort().join(",");
   if (weightKeys !== wantKeys) throw err(`ROUTER_WEIGHTS must name exactly rmUSDC and the eligible baskets (${wantKeys}), got ${weightKeys}`);
+  // issue 1580 (owner amendment 2026-10-06 on the stage 13 issue): mainnet launches on exactly this vector. Twin sheets keep their own weights.
+  if (chainId === 8453) {
+    const got = weights.map((w) => `${w.key}:${w.bps}`).sort().join(",");
+    if (got !== LAUNCH_ROUTER_WEIGHTS_8453) throw err(`ROUTER_WEIGHTS must be the launch vector on chain 8453 (USDC:9500,PROTO:500,AGENT:0,RWA:0, every vault named), got ${v.ROUTER_WEIGHTS}`, { name: "ROUTER_WEIGHTS" });
+  }
   const newDelay = asUint("GOVERN_NEW_DELAY", v.GOVERN_NEW_DELAY!);
   if (newDelay < 3600n || newDelay > 2592000n) throw err("GOVERN_NEW_DELAY must be from 3600 to 2592000 seconds (the Safe tool's updateDelay bounds)");
 
@@ -293,6 +298,8 @@ export function parseSheet(text: string): Sheet {
     eligibleVaults, weights, govern: { unpauseVaults, newDelay },
   };
 }
+
+const LAUNCH_ROUTER_WEIGHTS_8453 = ["USDC:9500", "PROTO:500", "AGENT:0", "RWA:0"].sort().join(",");
 
 /** "USDC:6000,PROTO:3000,RWA:1000": every key once, bps sum 10000. */
 export function parseWeights(text: string): { key: VaultKey; bps: number }[] {
