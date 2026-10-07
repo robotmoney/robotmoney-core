@@ -849,17 +849,22 @@ invariant it restores.
 ### 28. Core stages (core-stages)
 **File:** `.github/workflows/suite-28-core-stages.yml`
 **CI class / tier:** `feature-correctness` (offline job), `system-correctness` (Twin chain job)
-**Environment:** `none` for the offline job; the Twin chain (918453) for the dispatch job
-**Trigger:** `pull_request` (no path filter); `push` to `releases-*`; tags
-`v*.*.*`; `workflow_dispatch`.
+**Environment:** `none` for the offline jobs; the Twin chain (918453), started by the job itself, for the rehearsal
+**Trigger:** `pull_request` (no path filter; the rehearsal skips drafts); `push` to `dev` and `releases-*`; tags
+`v*.*.*`; `workflow_dispatch`; `workflow_call` (the nightly Twin fork, suite 29, passes its one pin).
 
 There is one deploy driver: the publish-contracts CLI (`bun publish-contracts/src/cli.ts`). The offline job runs `bun test scripts/deploy
 scripts/ci`: the stage table (libs, vault, registry, router, gateway, governance,
 ic, three basket vaults, timelock, read by the CLI from the repo root) and the manifest rules. It is red when zero tests
-pass. The `publish-contracts-tests` job runs in `publish-contracts/`: `bun install --frozen-lockfile`, `bun x tsc --noEmit`, then `bun test --timeout 60000`, and it is red when the pass count is zero (the stub forge and cast, no chain). It is listed in the deploy-gate list of `check-sha-green` and is not a branch protection rule. The Twin chain job runs only
-on `workflow_dispatch` with a Twin chain RPC URL: the `twin-publish` action makes throwaway keystores,
-merges the committed stage sheet (`deployments/twin-918453/stage-sheet.env`), funds the deployer and runs `publish`, then `verify`.
-The router, basket vault and timelock role proofs are labels of the one verifier. No key is passed in an argument.
+pass. The `publish-contracts-tests` job runs in `publish-contracts/`: `bun install --frozen-lockfile`, `bun x tsc --noEmit`, then `bun test --timeout 60000`, and it is red when the pass count is zero (the stub forge and cast, no chain). It is listed in the deploy-gate list of `check-sha-green` and is not a branch protection rule. The rehearsal job (`core-stages-twin-chain`, core 1523)
+starts its own Twin chain at the run pin (`.github/actions/twin-fork`, no external RPC URL) and runs the `twin-publish` action with verify and govern:
+throwaway keystores, the committed stage sheet (`deployments/twin-918453/stage-sheet.env`), gas and USDC for the deployer (the only Twin environment steps
+besides the govern time warp), `publish` (stages 0 to 11), `verify` (12), `govern` (13). Any non-zero stage exit fails the job
+(`publish-contracts/tests/twin-publish-script.test.ts` runs the step script `publish-contracts/src/ci/twin-publish.ts` with a stub CLI). The job writes `counts.json`
+(`counts` per stage, `deployerNonce` read from the chain), checks that the keys equal the stage table and the nonce equals the sum
+(`publish-contracts/src/ci/rehearsal-counts.ts`), runs `bun publish-contracts/src/counts-drift.ts` (exit 0 when no `deployments/frozen-counts/<sha>.json` exists, non-zero naming each differing stage otherwise),
+and uploads `rehearsal-counts-<sha>` (counts.json, manifests, verifier labels, govern rows). It runs on every push to `dev`, on a ready pull request and in the nightly (suite 29 calls this workflow, so suite 21 does not dispatch it).
+The release procedure copies `counts` from the release SHA's artifact into `deployments/frozen-counts/<sha>.json`. The router, basket vault and timelock role proofs are labels of the one verifier. No key is passed in an argument.
 
 ---
 
@@ -1274,7 +1279,7 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 25 | `suite-25-fusion-harness-selftests.yml` | `fusion-harness-selftests` | `none` |
 | 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | the shared stage Twin fork `918453` (a service on the stage host, not started per run) |
 | 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |
-| 28 | `suite-28-core-stages.yml` | `core-stages-offline`, `publish-contracts-tests`, `core-stages-twin-chain` (dispatch) | `none` / Twin `918453` |
+| 28 | `suite-28-core-stages.yml` | `core-stages-offline`, `publish-contracts-tests`, `core-stages-twin-chain` (rehearsal: push to dev, ready PR, nightly) | `none` / Twin `918453` |
 | 28 | `suite-28-core-stack-selftest.yml` | `core-stack-selftest` | `none` |
 | 29 | `suite-29-nightly-twin-fork.yml` | `pin` (uploads `twin-pin`) → suites 5, 7, 8, 10, 11b, 14 (called with `pin_block`) → `record-results` | Twin chain `918453`, one shared pin |
 

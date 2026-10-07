@@ -102,7 +102,6 @@ jobs:
             suite-28-core-stack-selftest.yml
             fusion-cross-repo-drift.yml
             config-check.yml
-            suite-28-core-stages.yml
             suite-30-check-sha-green.yml
           )
           FAILED_LIST=()

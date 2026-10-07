@@ -5,7 +5,7 @@
  *
  * The Twin chain (id 918453) is a pinned lazy fork of real Base state made with anvil. This checks
  * the owner rule "ONE pin per workflow run (a setup job outputs the pin; jobs take it as input)":
- *   1. the nightly (suite-29-nightly-twin-fork.yml) calls suites 5, 7, 8, 10, 11b and 14 with
+ *   1. the nightly (suite-29-nightly-twin-fork.yml) calls suites 5, 7, 8, 10, 11b, 14 and 28 with
  *      pin_block taken from its own pin job, and passes secrets with `secrets: inherit`;
  *   2. each of those suites declares the workflow_call input pin_block, has a `pin` job that uses
  *      .github/actions/twin-pin with that input, and every step that uses .github/actions/twin-fork
@@ -40,6 +40,7 @@ const SUITES: Record<string, string> = {
   "suite-10": "suite-10-dapp-e2e.yml",
   "suite-11b": "suite-11b-opencode-headless.yml",
   "suite-14": "suite-14-smoke-test.yml",
+  "suite-28": "suite-28-core-stages.yml",
 };
 const PIN_OUT = "${{ needs.pin.outputs.block }}";
 
@@ -56,7 +57,7 @@ for (const [job, file] of Object.entries(SUITES)) {
   if (!needs.includes("pin")) bad(`${NIGHTLY} job ${job} must need the pin job`);
 }
 if (nightly.jobs["suite-26"]) bad(`${NIGHTLY} calls suite 26, which targets the shared stage devnet`);
-ok("the nightly calls suites 5, 7, 8, 10, 11b and 14 with ONE pin from its pin job");
+ok("the nightly calls suites 5, 7, 8, 10, 11b, 14 and 28 with ONE pin from its pin job");
 
 // 2. each suite: input, pin job, every twin-fork step takes the pin as input.
 for (const [job, file] of Object.entries(SUITES)) {
@@ -82,6 +83,23 @@ for (const [job, file] of Object.entries(SUITES)) {
   }
   if (forks === 0) bad(`${path} starts no Twin fork`);
   ok(`${file}: pin input, pin job and ${forks} twin-fork step(s) take the one pin`);
+}
+
+// 2a. suite 28 (core 1523): the rehearsal runs on every push to dev and is called by the nightly.
+{
+  const wf = yaml(".github/workflows/suite-28-core-stages.yml");
+  const on = wf.on ?? wf.true;
+  if (!on?.push?.branches?.includes("dev")) bad("suite-28-core-stages.yml must trigger on push to dev");
+  if (!on?.workflow_call) bad("suite-28-core-stages.yml must declare workflow_call");
+  if (on?.workflow_dispatch?.inputs?.twin_rpc_url) bad("suite-28-core-stages.yml still takes the external twin_rpc_url input");
+  const job = wf.jobs?.["core-stages-twin"];
+  if (!job) bad("suite-28-core-stages.yml has no core-stages-twin rehearsal job");
+  if (/inputs\.twin_rpc_url/.test(JSON.stringify(job))) bad("the rehearsal job must not read twin_rpc_url");
+  const uses = (job.steps ?? []).filter((x: any) => String(x.uses ?? "").endsWith("/twin-publish"));
+  if (uses.length !== 1 || uses[0].with?.verify !== "true" || uses[0].with?.govern !== "true") bad("the rehearsal job must run twin-publish once with verify and govern");
+  const up = (job.steps ?? []).find((x: any) => String(x.uses ?? "").includes("upload-artifact"));
+  if (!/rehearsal-counts-\$\{\{ github\.sha \}\}/.test(String(up?.with?.name))) bad("the rehearsal job must upload rehearsal-counts-<sha>");
+  ok("suite 28 rehearsal runs on push to dev, is called by the nightly, starts its own fork and uploads rehearsal-counts-<sha>");
 }
 
 // 2b. the nightly uploads the results and the pin file.

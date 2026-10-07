@@ -62,7 +62,10 @@ This section covers two different tags. Do not confuse them.
   *before* the final Twin rehearsal. It is the contracts-freeze gate: tag the
   release SHA, run the final Twin rehearsal at that SHA, then commit its
   frozen per-stage transaction counts to
-  `deployments/frozen-counts/<sha>.json`. The mainnet plan job refuses any
+  `deployments/frozen-counts/<sha>.json`. The rehearsal is the `core-stages-twin-chain`
+  job of suite 28 (every push to `dev` and the nightly). Download the `rehearsal-counts-<sha>`
+  artifact of the release SHA's run, review `counts.json`, and write its `counts` (with `deploySha` and
+  the `measured` chain id and time) to that file. CI never commits it. The mainnet plan job refuses any
   `DEPLOY_SHA` that is not a release-tagged SHA with committed frozen counts.
   Any later commit that changes `contracts/` has a new SHA with no tag and no
   counts, so it needs a new rehearsal and tag. This is the decided flow (not
