@@ -79,16 +79,116 @@ PR 1505):
 The on-chain source of truth, the fallback rule and the Safe → Timelock
 path for `defaultWeights` are unchanged.
 
-**Trade-off: `WEIGHT_SETTER_ROLE` is irrevocable after deployment.** The role
-is its own role admin and the deployer copy is revoked at stages 6 and 11.
-Nobody can grant it to a replacement `RouterGovernance` or revoke it from a
-buggy one. Making `ADMIN_ROLE` the role admin again would re-open the timelock
-bypass that core 1522 closed. Replacing `RouterGovernance` therefore means
-redeploying the router, `RouterGovernance`, the gateway, and the IC policy
-and receipt that bind the gateway (each holds its counterpart as an
-immutable). The registry is re-linked with `setRouter`, which is repeatable.
+**Trade-off: `WEIGHT_SETTER_ROLE` cannot be granted or revoked by any role admin.**
+The role is its own role admin and the deployer copy is revoked at stages 6
+and 11. Making `ADMIN_ROLE` the role admin again would re-open the timelock
+bypass that core 1522 closed. The only way to move the role is the bounded
+rotation in the amendment below (core 1571): the Safe proposes, the timelock
+executes after its delay, and execution leaves one holder. Replacing
+`RouterGovernance` is therefore a rotation, not a redeploy. A redeploy of the
+router, the gateway, and the IC policy and receipt that bind the gateway (each
+holds its counterpart as an immutable) is only needed to replace the gateway or
+the router themselves. The registry is re-linked with `setRouter`, which is
+repeatable. After a rotation the old `RouterGovernance` still holds router
+`ADMIN_ROLE` until the timelock revokes it in a separate operation.
 
-**Status (core 1571).** The owner decided on 2026-10-07 to add a bounded rotation path for `WEIGHT_SETTER_ROLE` (issue 1571, PR 1617). Until it lands, replacing RouterGovernance means redeploying the router (this section describes that current behaviour). PR 1617 will update it.
+## Amendment — 2026-10-07: Bounded rotation of `WEIGHT_SETTER_ROLE`
+
+Owner decision of 2026-10-07 on core 1571 (plan decision 23): replacing
+`RouterGovernance` by redeploying the router, the gateway, the IC policy and
+the receipt is **not** accepted. The router gets a bounded rotation path for
+`WEIGHT_SETTER_ROLE` that does not reopen the timelock bypass closed by core
+1522. Tracked by core 1616.
+
+### Mechanism
+
+Two new router roles, both **self-administered** (each is its own role admin,
+exactly as `WEIGHT_SETTER_ROLE` is), so no `ADMIN_ROLE` holder can grant either:
+
+- `WEIGHT_SETTER_ROTATOR_ROLE`: the Safe. It proposes and cancels.
+- `WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE`: the timelock. It executes.
+
+The router constructor seeds both to the deployer, as it does for the other
+roles. `DeployTimelock` (stage 11) grants the rotator role to the Safe and the
+executor role to the timelock, reads both back, and revokes the deployer's copy.
+
+Three functions and one pending record (`pendingWeightSetterRotation`):
+
+1. `proposeWeightSetterRotation(newHolder)`. Rotator only. `newHolder` must have
+   contract code, so address(0), an EOA and a not-yet-deployed address revert.
+   One proposal at a time. Stores `{newHolder, proposedAt}` and emits
+   `WeightSetterRotationProposed`.
+2. `cancelWeightSetterRotation()`. Rotator only. Clears the pending record and
+   emits `WeightSetterRotationCancelled`. This is the cancel path.
+3. `executeWeightSetterRotation(expectedNewHolder)`. Executor only. Requires a
+   pending record whose holder equals `expectedNewHolder`, and
+   `block.timestamp >= proposedAt + delay`, where `delay` is
+   `getMinDelay()` read from the calling timelock. It clears the record, revokes
+   `WEIGHT_SETTER_ROLE` from every current holder, grants it to `newHolder`, and
+   emits `WeightSetterRotated`. Afterwards the role has exactly one holder.
+
+The Safe reaches step 3 only as Safe to timelock `schedule` then `execute`, so
+the timelock's own delay also applies, and the scheduled call carries
+`expectedNewHolder`, so the target is public for the whole delay. The router-side
+delay is measured from the proposal, so the Safe cannot propose late and execute
+at once after scheduling early.
+
+### The delay
+
+The delay is the executing timelock's own `getMinDelay()`, not a number in the
+router. The mainnet floor (172800 s, `MAINNET_DELAY_FLOOR`) is already enforced
+where the timelock is built (`DeployTimelock` refuses a lower delay on 8453) and
+where it is verified (stage 12). The router inherits that floor and Twin
+inherits its short delay, so one codebase serves every chain. An executor
+that does not answer `getMinDelay()` cannot execute at all.
+
+### Why the 1522 bypass stays closed
+
+1522 closed a path where `ADMIN_ROLE` (the timelock) could grant itself
+`WEIGHT_SETTER_ROLE`. Here the timelock cannot propose (rotator role), cannot
+grant itself the rotator role (self-administered), cannot grant the weight
+setter role (self-administered), and can execute only a target the Safe
+proposed. The Safe alone cannot execute (executor role) and cannot grant
+anything on this role. The rotation target is whatever the Safe chose, so the
+Safe and the timelock together can install a new weight setter after the
+delay. That is the intended escape hatch, and it is the same authority that
+already controls `ADMIN_ROLE` through the timelock, but it is delayed,
+observable, and cannot be exercised by the timelock alone.
+
+### What each actor can and cannot do
+
+| Actor | Can | Cannot |
+|---|---|---|
+| Timelock alone | execute a rotation the Safe proposed, once the delay has passed (it administers the executor role, so it can also add executors, who still need a Safe proposal) | propose, cancel, grant itself either new role or `WEIGHT_SETTER_ROLE`, call `setWeights`, change the target |
+| Safe alone | propose, cancel | execute, call `setWeights`, grant `WEIGHT_SETTER_ROLE`, shorten the delay |
+| Safe plus timelock | rotate to a contract of the Safe's choosing after the delay | rotate to address(0) or a non-contract, execute before the delay, execute a target other than the pending one |
+| Deployer | nothing after stage 11, which revokes its copies | hold any rotation role or `WEIGHT_SETTER_ROLE` after the handover |
+| Emergency key, pauser | nothing here | propose, cancel, execute, set weights |
+| Compromised `RouterGovernance` | set active weights (its job) and grant `WEIGHT_SETTER_ROLE` to others (as every self-administered holder can; the rotation revokes all holders) | propose, cancel or execute a rotation, because it holds neither rotation role and has no `getMinDelay()` |
+| Compromised Safe | propose a hostile target | execute it without the timelock, whose delay lets honest parties react (the hostile `schedule` is public) |
+| Compromised timelock | nothing alone | anything on this path without a Safe proposal |
+
+A pending rotation is visible as a non-zero `pendingWeightSetterRotation()` and
+as a `WeightSetterRotationProposed` log. The stage 12 verifier treats a pending
+rotation as a failure (fail closed), so no run is accepted mid-rotation. After a
+completed rotation the verifier reads the holder from the router (the single
+member of `WEIGHT_SETTER_ROLE`) and expects it to equal the governance address
+recorded in the manifest, so a rotation must be followed by the manifest update
+described in the runbook.
+
+### Design choices the owner should confirm
+
+- **Who proposes.** Chosen: the Safe directly (separate on-chain actor). Alternative:
+  the timelock proposes and the Safe consents, which makes the Safe's consent
+  invisible to the router. Recommendation: keep the Safe as proposer.
+- **Does `RouterGovernance` consent.** Chosen: no. The reason to rotate is that it
+  may be broken or hostile, so requiring its consent would defeat the purpose.
+- **Delay source.** Chosen: the executing timelock's `getMinDelay()`. Alternative:
+  a literal 48 hours in the router, which would force 48 hours on Twin.
+- **Cancel.** Chosen: rotator (Safe) only. The timelock cannot cancel, because a
+  compromised `RouterGovernance` holds `ADMIN_ROLE` and must not be able to
+  block its own replacement.
+- **Cost.** Four more transactions at stage 11 (two grants, two deployer revokes).
 
 ## Consequences
 

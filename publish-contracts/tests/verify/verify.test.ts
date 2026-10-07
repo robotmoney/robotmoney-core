@@ -5,10 +5,10 @@ import { getStageTable } from "../../src/stages.ts";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import { keccak256, toHex } from "viem";
 import { padTopic } from "../../src/verify/logs.ts";
-import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
+import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
 import { LABELS_TXT, rewriteLabelsTxt, verifySection } from "./labels-file.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS } from "./world.ts";
+import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, type World } from "./world.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "expected-labels.json");
 
@@ -310,5 +310,57 @@ describe("deployer nonce after govern", () => {
     expect(failed(await verifyDeployment({ ...w.opts, deployerNonceAtDeployEnd: sum + 1 }))).toEqual(["deployer: nonce equals sum of frozen counts"]);
     w.chain.noncesMap.set(DEPLOYER.toLowerCase(), sum - 1);
     expect(failed(await verifyDeployment({ ...w.opts, deployerNonceAtDeployEnd: sum }))).toEqual(["deployer: nonce equals sum of frozen counts"]);
+  });
+});
+
+describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
+  const NEW_GOV = addr(0x60c);
+  /** The chain after a completed rotation: the new RouterGovernance is configured as the deploy scripts leave a governance contract, holds the weight setter alone, and holds router ADMIN_ROLE. */
+  function rotate(w: World, { updateManifest }: { updateManifest: boolean }): void {
+    const g = GOV.toLowerCase(), n = NEW_GOV.toLowerCase();
+    w.chain.codes.set(n, w.chain.codes.get(g)!);
+    for (const [k, v] of [...w.chain.handlers]) if (k.startsWith(`${g}:`)) w.chain.handlers.set(`${n}:${k.slice(g.length + 1)}`, v);
+    for (const r of [...w.chain.roles]) { const [at, role, who] = r.split("|"); if (at === g) w.chain.roles.add(`${n}|${role}|${who}`); }
+    w.chain.revoke(ROUTER, WEIGHT_SETTER_ROLE, GOV);
+    w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, NEW_GOV);
+    w.chain.revoke(ROUTER, ADMIN_ROLE, GOV);
+    w.chain.grant(ROUTER, ADMIN_ROLE, NEW_GOV);
+    if (updateManifest) {
+      const p = join(w.manifestDir, stageManifestFile(getStageTable(), "governance"));
+      const o = JSON.parse(readFileSync(p, "utf8"));
+      o.governance = NEW_GOV;
+      writeFileSync(p, JSON.stringify(o));
+    }
+  }
+
+  test("a pending rotation fails closed on its own label, on Twin and on mainnet", async () => {
+    for (const id of [8453, 918453]) {
+      const w = buildWorld(id);
+      w.chain.set(ROUTER, "pendingWeightSetterRotation", [NEW_GOV, 4000n]);
+      expect(failed(await verifyDeployment(w.opts))).toEqual(["router: no weight setter rotation pending"]);
+    }
+  });
+
+  test("a completed rotation passes every label once the manifest names the new governance", async () => {
+    for (const id of [8453, 918453]) {
+      const w = buildWorld(id);
+      rotate(w, { updateManifest: true });
+      const r = await verifyDeployment(w.opts);
+      expect(failed(r)).toEqual([]);
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  test("a completed rotation with a stale manifest fails on the governance holder label", async () => {
+    const w = buildWorld();
+    rotate(w, { updateManifest: false });
+    expect(failed(await verifyDeployment(w.opts))).toContain("router: WEIGHT_SETTER_ROLE held by governance");
+  });
+
+  test("a second holder after a rotation fails the exactly-one label", async () => {
+    const w = buildWorld();
+    rotate(w, { updateManifest: true });
+    w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, GOV);
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["router: WEIGHT_SETTER_ROLE has exactly one holder"]);
   });
 });

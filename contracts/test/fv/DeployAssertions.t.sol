@@ -362,6 +362,13 @@ contract DeployAssertionsTest is SafeFixture {
         vm.prank(_aclDeployer);
         _aclRouter.revokeRole(keccak256("WEIGHT_SETTER_ROLE"), _aclDeployer);
 
+        // The rotation roles are self-administered too. The script grants them to the Safe and
+        // the timelock and revokes the harness's copies, so it must hold them (core 1616).
+        vm.startPrank(_aclDeployer);
+        _aclRouter.grantRole(keccak256("WEIGHT_SETTER_ROTATOR_ROLE"), address(script));
+        _aclRouter.grantRole(keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE"), address(script));
+        vm.stopPrank();
+
         // The script's grant calls run as `address(script)`, so it needs ADMIN on
         // each contract (and the gateway DEFAULT_ADMIN_ROLE to hand the timelock
         // the gateway root and revoke it from the harness).

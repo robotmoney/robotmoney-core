@@ -1333,6 +1333,179 @@ contract SafeIntegrationTest is Test {
             _buildTwoOwnerSigs(executeTxHash)
         );
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // WEIGHT_SETTER_ROLE rotation (core 1616): real 2-of-3 Safe, real
+    // TimelockController at the production delay (172800 s = MIN_DELAY).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    bytes32 internal constant ROTATOR = keccak256("WEIGHT_SETTER_ROTATOR_ROLE");
+    bytes32 internal constant ROTATION_EXECUTOR = keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
+    bytes32 internal constant WEIGHT_SETTER = keccak256("WEIGHT_SETTER_ROLE");
+
+    /// @dev Two owners sign and the Safe calls `target` now. Reverts when the inner call reverts.
+    function _safeCall(address target, bytes memory data) internal returns (bool) {
+        bytes32 h = safe.getTransactionHash(
+            target, 0, data, 0, 0, 0, 0, address(0), payable(address(0)), safe.nonce()
+        );
+        return _safeExec(target, data, _buildTwoOwnerSigs(h));
+    }
+
+    /// @dev Two owners sign and the Safe calls `target` now, and the inner call must revert.
+    ///      The hash is read first: `expectRevert` binds to the very next external call.
+    function _safeCallReverts(address target, bytes memory data) internal {
+        bytes32 h = safe.getTransactionHash(
+            target, 0, data, 0, 0, 0, 0, address(0), payable(address(0)), safe.nonce()
+        );
+        bytes memory sigs = _buildTwoOwnerSigs(h);
+        vm.expectRevert();
+        safe.execTransaction(target, 0, data, 0, 0, 0, 0, address(0), payable(address(0)), sigs);
+    }
+
+    /// @dev The Safe schedules `data` on the router through the timelock.
+    function _safeSchedule(bytes memory data, bytes32 salt) internal {
+        assertTrue(
+            _safeCall(
+                address(d.timelock),
+                abi.encodeCall(
+                    d.timelock.schedule, (address(router), 0, data, bytes32(0), salt, MIN_DELAY)
+                )
+            ),
+            "safe schedule failed"
+        );
+    }
+
+    function _safeTimelockExecute(bytes memory data, bytes32 salt) internal returns (bool) {
+        return _safeCall(
+            address(d.timelock),
+            abi.encodeCall(d.timelock.execute, (address(router), 0, data, bytes32(0), salt))
+        );
+    }
+
+    function _safeTimelockExecuteReverts(bytes memory data, bytes32 salt) internal {
+        _safeCallReverts(
+            address(d.timelock),
+            abi.encodeCall(d.timelock.execute, (address(router), 0, data, bytes32(0), salt))
+        );
+    }
+
+    function _replacementGovernance() internal returns (RouterGovernance) {
+        return new RouterGovernance(address(router), address(this), 7 days, 1 days, 2);
+    }
+
+    /// @notice The stage 11 handover leaves the Safe as the only rotator and the timelock as the only executor.
+    function test_rotation_handover_safeIsRotator_timelockIsExecutor() public withSnap {
+        assertEq(router.getRoleMemberCount(ROTATOR), 1);
+        assertEq(router.getRoleMember(ROTATOR, 0), address(safe));
+        assertEq(router.getRoleMemberCount(ROTATION_EXECUTOR), 1);
+        assertEq(router.getRoleMember(ROTATION_EXECUTOR, 0), address(d.timelock));
+        assertFalse(router.hasRole(ROTATOR, deployer));
+        assertFalse(router.hasRole(ROTATION_EXECUTOR, deployer));
+        assertEq(router.getRoleMemberCount(WEIGHT_SETTER), 1);
+        assertEq(router.getRoleMember(WEIGHT_SETTER, 0), address(governance));
+    }
+
+    /// @notice Safe proposes (2-of-3), Safe schedules through the timelock, the delay passes, the
+    ///         timelock executes: governance is replaced and holds the role alone.
+    function test_rotation_viaRealSafeAndTimelock_atProductionDelay() public withSnap {
+        RouterGovernance replacement = _replacementGovernance();
+        bytes memory exec =
+            abi.encodeCall(PortfolioRouter.executeWeightSetterRotation, (address(replacement)));
+        bytes32 salt = keccak256("rotation-salt");
+
+        assertTrue(
+            _safeCall(
+                address(router),
+                abi.encodeCall(PortfolioRouter.proposeWeightSetterRotation, (address(replacement)))
+            ),
+            "safe propose failed"
+        );
+        (address pending,) = router.pendingWeightSetterRotation();
+        assertEq(pending, address(replacement));
+        _safeSchedule(exec, salt);
+
+        // Before the delay: the timelock refuses.
+        vm.warp(block.timestamp + MIN_DELAY - 1);
+        _safeTimelockExecuteReverts(exec, salt);
+        assertTrue(router.hasRole(WEIGHT_SETTER, address(governance)));
+
+        vm.warp(block.timestamp + 1);
+        assertTrue(_safeTimelockExecute(exec, salt), "timelock execute failed");
+
+        assertEq(router.getRoleMemberCount(WEIGHT_SETTER), 1);
+        assertTrue(router.hasRole(WEIGHT_SETTER, address(replacement)));
+        assertFalse(router.hasRole(WEIGHT_SETTER, address(governance)));
+        assertFalse(router.hasRole(WEIGHT_SETTER, address(safe)));
+        assertFalse(router.hasRole(WEIGHT_SETTER, address(d.timelock)));
+        (pending,) = router.pendingWeightSetterRotation();
+        assertEq(pending, address(0));
+
+        // The old governance can no longer set weights.
+        address[] memory v = new address[](0);
+        uint256[] memory b = new uint256[](0);
+        vm.prank(address(governance));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(governance),
+                WEIGHT_SETTER
+            )
+        );
+        router.setWeights(v, b);
+    }
+
+    /// @notice The Safe alone cannot execute a rotation, with or without the delay.
+    function test_rotation_safeAlone_cannotExecute() public withSnap {
+        RouterGovernance replacement = _replacementGovernance();
+        assertTrue(
+            _safeCall(
+                address(router),
+                abi.encodeCall(PortfolioRouter.proposeWeightSetterRotation, (address(replacement)))
+            )
+        );
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        _safeCallReverts(
+            address(router),
+            abi.encodeCall(PortfolioRouter.executeWeightSetterRotation, (address(replacement)))
+        );
+        assertTrue(router.hasRole(WEIGHT_SETTER, address(governance)));
+    }
+
+    /// @notice The timelock alone cannot grant itself the role: the Safe schedules the grant, the delay
+    ///         passes, and the execution reverts. This is the 1522 bypass staying closed.
+    function test_rotation_timelockAlone_cannotGrantItselfTheRole() public withSnap {
+        bytes memory grant =
+            abi.encodeCall(IAccessControl.grantRole, (WEIGHT_SETTER, address(d.timelock)));
+        bytes32 salt = keccak256("grant-salt");
+        _safeSchedule(grant, salt);
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        _safeTimelockExecuteReverts(grant, salt);
+        assertFalse(router.hasRole(WEIGHT_SETTER, address(d.timelock)));
+    }
+
+    /// @notice The Safe cancels an in-flight rotation, and the scheduled timelock call then fails.
+    function test_rotation_safeCancels_scheduledExecuteThenFails() public withSnap {
+        RouterGovernance replacement = _replacementGovernance();
+        bytes memory exec =
+            abi.encodeCall(PortfolioRouter.executeWeightSetterRotation, (address(replacement)));
+        bytes32 salt = keccak256("cancel-rotation-salt");
+        assertTrue(
+            _safeCall(
+                address(router),
+                abi.encodeCall(PortfolioRouter.proposeWeightSetterRotation, (address(replacement)))
+            )
+        );
+        _safeSchedule(exec, salt);
+        assertTrue(
+            _safeCall(
+                address(router), abi.encodeCall(PortfolioRouter.cancelWeightSetterRotation, ())
+            ),
+            "safe cancel failed"
+        );
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        _safeTimelockExecuteReverts(exec, salt);
+        assertTrue(router.hasRole(WEIGHT_SETTER, address(governance)));
+    }
 }
 
 // ─── Minimal interface shim for Safe.setup() ─────────────────────────────────

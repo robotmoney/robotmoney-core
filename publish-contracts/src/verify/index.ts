@@ -5,7 +5,7 @@ import { encodeFunctionData, keccak256, parseAbiItem, toHex } from "viem";
 import { Collector } from "./collector.ts";
 import { compareCode, loadArtifact } from "./codehash.ts";
 import {
-  ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
+  ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
   SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase } from "../stage-table.ts";
@@ -112,6 +112,21 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const setterHolders: Array<[string, Address]> = [["timelock", tl], ["deployer", D], ["safe", safe], ["pauser", sheet.pauser], ["emergency", sheet.emergency]];
   for (const [who, addr] of setterHolders) {
     await c.runEq(`router: WEIGHT_SETTER_ROLE not held by ${who}`, () => hasRole(chain, router, WEIGHT_SETTER_ROLE, addr), false);
+  }
+  // Rotation of the weight setter (core 1616, ADR-0002): exactly one holder, a Safe-only proposer, a timelock-only executor, and nothing pending.
+  // A pending rotation fails closed: the run is not accepted mid-rotation. After a completed rotation the governance manifest names the new holder.
+  await c.runEq("router: WEIGHT_SETTER_ROLE has exactly one holder", async () => (await chain.read(router, "function getRoleMemberCount(bytes32 role) view returns (uint256)", [WEIGHT_SETTER_ROLE])) as bigint, 1n);
+  await c.runEq("router: no weight setter rotation pending", async () => {
+    const [holder] = (await chain.read(router, "function pendingWeightSetterRotation() view returns (address newHolder, uint64 proposedAt)")) as [string, bigint];
+    return lc(holder);
+  }, lc(ZERO));
+  await c.runEq("router: WEIGHT_SETTER_ROTATOR_ROLE held by safe", () => hasRole(chain, router, WEIGHT_SETTER_ROTATOR_ROLE, safe), true);
+  for (const [who, addr] of [["timelock", tl], ["deployer", D], ["governance", byName.governance!], ["pauser", sheet.pauser], ["emergency", sheet.emergency]] as Array<[string, Address]>) {
+    await c.runEq(`router: WEIGHT_SETTER_ROTATOR_ROLE not held by ${who}`, () => hasRole(chain, router, WEIGHT_SETTER_ROTATOR_ROLE, addr), false);
+  }
+  await c.runEq("router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE held by timelock", () => hasRole(chain, router, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, tl), true);
+  for (const [who, addr] of [["safe", safe], ["deployer", D], ["governance", byName.governance!], ["pauser", sheet.pauser], ["emergency", sheet.emergency]] as Array<[string, Address]>) {
+    await c.runEq(`router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE not held by ${who}`, () => hasRole(chain, router, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, addr), false);
   }
   await c.runEq("gateway: not paused", () => chain.read(gateway, "function depositsPaused() view returns (bool)"), false);
   // The router-first split (core 1493): the gateway and the registry both name the router the router stage deployed.
