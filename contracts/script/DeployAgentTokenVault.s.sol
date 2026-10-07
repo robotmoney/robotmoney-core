@@ -3,8 +3,9 @@
 //            docs/prd.md §11.3 — Agent Token Vault (rmAGENT)
 //            robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486)
 //
-// Deploys `AgentTokenVault`, pauses it and registers it. The launch shortlist is empty, so the
-// vault ships with zero assets. The loop below stays in place: adding a token later is one
+// Deploys `AgentTokenVault`, pauses it and registers it. The launch shortlist is RM only (the live
+// ROBOTMONEY token on the owner-funded V3 pool, fee 10000), so the
+// vault ships with one asset. The loop below stays in place: adding a token later is one
 // config entry (the loop deploys the adapter, allows its code hash, then calls `addAsset`).
 // Router eligibility is deploy-time configuration (issue 1520): after registering, the broadcast
 // path calls `registry.migrateEligibility` once when `ROUTER_DEFAULT_BPS` is a vector (it also sets
@@ -36,7 +37,7 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 ///           EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
 ///           ROUTER_DEFAULT_BPS  `none`, or the router default weight vector (bps, comma list) after this vault flips eligible
 ///
-///         Assets come from `agent-token-shortlist.json` (empty at launch; tokens are added through the timelock). The vault is deployed paused.
+///         Assets come from `agent-token-shortlist.json` (RM only at launch; more tokens are added through the timelock). The vault is deployed paused.
 contract DeployAgentTokenVault is BasketVaultDeployBase {
     string public constant VAULT_NAME = "Robot Money Agent Tokens";
     string public constant CONFIG_FILE = "config/agent-token-shortlist.json";

@@ -32,6 +32,7 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
     using stdJson for string;
 
     DeployAgentTokenVault internal script;
+    address internal constant RM_TOKEN = 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3;
 
     function setUp() public {
         _fixtureSetUp();
@@ -42,40 +43,62 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         return vm.readFile("config/agent-token-shortlist.json");
     }
 
-    /// @dev Runs the SHIPPED config file through the script's parser, with no substitute body.
-    ///      The test points SWAP_ROUTER at the file's own swapRouter02 value.
-    function _runLaunch() internal returns (BasketVaultDeployBase.Deployed memory) {
-        string memory json = _launchConfig();
+    /// @dev The shipped file's router with no assets, for the paused-and-empty deploy path.
+    function _runEmpty() internal returns (BasketVaultDeployBase.Deployed memory) {
+        string memory json = _emptyConfig();
         BasketVaultDeployBase.Params memory p = _params();
         p.swapRouter = _configRouter(json);
         return script.runInProcess(p, json);
     }
 
-    /// @notice The shipped rmAGENT config carries swapRouter02 and an empty shortlist, so the
+    function _emptyConfig() internal view returns (string memory) {
+        return string.concat(
+            '{"swapRouter02":"', vm.toString(_configRouter(_launchConfig())), '","shortlist":[]}'
+        );
+    }
+
+    /// @dev Runs the SHIPPED config (RM) through the script. A mock pool paired with this test's
+    ///      USDC is etched at the shipped RM pool address, as the live pool is on Base.
+    function _runLaunch() internal returns (BasketVaultDeployBase.Deployed memory) {
+        string memory json = _etchConfigPools("config/agent-token-shortlist.json", "shortlist");
+        BasketVaultDeployBase.Params memory p = _params();
+        p.swapRouter = _configRouter(json);
+        return script.runInProcess(p, json);
+    }
+
+    /// @notice The shipped rmAGENT config carries swapRouter02 and the RM entry, so the
     ///         script's parser accepts it (review defect: it used to revert on a missing key).
     function test_shippedConfig_parsesThroughTheScriptParser() public {
         AgentDeployHarness h = new AgentDeployHarness();
         BasketVaultDeployBase.Cfg memory cfg = h.parse(_launchConfig());
         assertEq(cfg.swapRouter02, 0x2626664c2603336E57B271c5C0b26F421741e481);
-        assertEq(cfg.assets.length, 0);
+        assertEq(cfg.assets.length, 1);
+        assertEq(cfg.assets[0].symbol, "RM");
+        assertEq(cfg.assets[0].token, 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3);
+        assertEq(cfg.assets[0].pool, 0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882);
+        assertEq(cfg.assets[0].poolFee, 10000);
     }
 
     // ─── Launch path ──────────────────────────────────────────────────────────
 
-    function test_launchConfigShortlistIsEmpty() public view {
-        string[] memory symbols;
+    function test_launchConfigShortlistIsRmOnly() public view {
         string memory j = _launchConfig();
-        assertEq(abi.decode(j.parseRaw(".shortlist"), (address[])).length, 0);
-        symbols; // silence
+        assertEq(j.readString(".shortlist[0].symbol"), "RM");
+        assertFalse(vm.keyExistsJson(j, ".shortlist[1]"), "RM only");
     }
 
-    function test_deploy_isRegisteredPausedAndEmpty() public {
+    /// @notice The shipped launch config deploys rmAGENT holding RM, registered and paused.
+    function test_deploy_addsRmAndRegistersPaused() public {
         BasketVaultDeployBase.Deployed memory d = _runLaunch();
         AgentTokenVault v = AgentTokenVault(d.vault);
         assertTrue(v.depositsPaused(), "paused");
-        assertEq(v.assetCount(), 0, "zero assets");
-        assertEq(d.tokens.length, 0, "result lists no tokens");
-        assertEq(d.adapter, address(0), "no adapter deployed for an empty list");
+        assertEq(v.assetCount(), 1, "RM is the one asset");
+        (address t,, uint24 fee, bool active, address adapter,) = v.assets(0);
+        assertEq(t, 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3, "asset is RM");
+        assertEq(uint256(fee), 10000, "fee 10000");
+        assertTrue(active, "active");
+        assertTrue(adapter != address(0), "adapter deployed");
+        assertEq(d.tokens.length, 1, "result lists RM");
         address[] memory listed = registry.listVaults();
         assertEq(listed.length, 1, "registered once");
         assertEq(listed[0], d.vault);
@@ -103,10 +126,19 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         assertTrue(v.hasRole(v.ADMIN_ROLE(), deployer));
     }
 
+    /// @notice An empty shortlist still deploys a paused, empty vault.
+    function test_emptyShortlist_deploysPausedAndEmpty() public {
+        BasketVaultDeployBase.Deployed memory d = _runEmpty();
+        AgentTokenVault v = AgentTokenVault(d.vault);
+        assertTrue(v.depositsPaused(), "paused");
+        assertEq(v.assetCount(), 0, "zero assets");
+        assertEq(d.adapter, address(0), "no adapter for an empty list");
+    }
+
     function test_manifest_hasEmptyAssetList() public {
-        BasketVaultDeployBase.Deployed memory d = _runLaunch();
+        BasketVaultDeployBase.Deployed memory d = _runEmpty();
         AgentDeployHarness h = new AgentDeployHarness();
-        string memory json = _launchConfig();
+        string memory json = _emptyConfig();
         string memory path =
             string.concat(vm.projectRoot(), "/deployments/test-agent-manifest.json");
         h.writeManifestTo(path, d, json);

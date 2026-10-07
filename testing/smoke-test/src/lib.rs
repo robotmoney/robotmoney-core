@@ -759,7 +759,7 @@ impl Fixture {
     pub fn proto_vault(&self) -> Address {
         self.vault_by_key("rmPROTO")
     }
-    /// rmAGENT (AgentTokenVault: deployed empty and paused).
+    /// rmAGENT (AgentTokenVault: deployed paused, holding RM as its one asset).
     pub fn agent_vault(&self) -> Address {
         self.vault_by_key("rmAGENT")
     }
@@ -1283,6 +1283,34 @@ impl Fixture {
         } else {
             format!("; revert: {reason}")
         }
+    }
+
+    /// Raw `eth_call` of `sig` (for example `assets(uint256)`) with `args` on `to`: the undecoded
+    /// return data as a lowercase 0x hex string. Read-only, no signing.
+    pub fn cast_call_raw(
+        &self,
+        to: Address,
+        sig: &str,
+        args: &[&str],
+    ) -> Result<String, HarnessError> {
+        let mut cmd = Command::new("cast");
+        cmd.args([
+            "call",
+            "--raw",
+            "--rpc-url",
+            &self.rpc_url,
+            &format!("{to:#x}"),
+            sig,
+        ]);
+        cmd.args(args);
+        let out = cmd.output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast call {sig} on {to:#x} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_lowercase())
     }
 
     /// Read `token.balanceOf(owner)` via a plain `eth_call` (`cast call`).

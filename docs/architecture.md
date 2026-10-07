@@ -1122,8 +1122,10 @@ The main-page balances panel reads the RM balance at
 to the live address. No test needs to hold RM. `RouterGovernance` voting
 power is assigned by `ADMIN_ROLE` through `setVotingPower`
 (`contracts/RouterGovernance.sol`), not read from an RM balance. rmAGENT
-ships empty and paused with an empty `config/agent-token-shortlist.json`,
-so no deposit buys RM yet (RM is not yet in config: core 1491).
+launches paused and holding RM: `config/agent-token-shortlist.json` lists RM
+only, on the owner-funded Uniswap V3 RM/USDC pool at fee 10000. The owner
+funds the pool and raises its observation cardinality before the deploy,
+because `BasketVault.addAsset` refuses a pool below those floors (core 1554).
 
 ### 5.4 Explorer Indexer and API
 
