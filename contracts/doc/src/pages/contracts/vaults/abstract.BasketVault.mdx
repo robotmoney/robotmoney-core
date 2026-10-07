@@ -5,9 +5,9 @@ description: "Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
 
 # BasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/176388939d6f20be0d1e7ae20320a66e5e7f2986/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/545620af5e4698bceb8d0238b458204689682176/contracts/vaults/BasketVault.sol)
 
-**Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), Pausable, ReentrancyGuard
+**Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
 **Title:** BasketVault
 
@@ -218,6 +218,10 @@ bool public shutdown;
 
 ### depositsPaused
 
+When true, new deposits and mints are blocked. Withdrawals and
+redeems are never blocked, by anyone (owner decision 2026-10-05,
+core 1494). There is no generic pause function: this flag is the only pause.
+
 ```solidity
 bool public depositsPaused;
 ```
@@ -226,7 +230,7 @@ bool public depositsPaused;
 
 Whether the vault has been retired by the unified governance
 `retire()` action (DI-2 / FS-VLT-19). Distinct from
-`depositsPaused` so `unpause()` (ADMIN_ROLE) can never clear a
+`depositsPaused` so `unpauseDeposits()` (ADMIN_ROLE) can never clear a
 registry-driven retirement — matching RobotMoneyVault's and
 Vault's separate-flag model (the three enforcement paths never
 alias). Recovery is the deliberate governance abort
@@ -490,6 +494,29 @@ function deposit(uint256 assets, address receiver) public override returns (uint
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
+<a id="mint-uint256-address"></a>
+
+### mint
+
+Mint `shares`. Reverts `DepositsArePaused` while deposits are paused.
+
+```solidity
+function mint(uint256 shares, address receiver) public override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
 <a id="_deposit-address-address-uint256-uint256"></a>
 
 ### _deposit
@@ -538,7 +565,6 @@ function _deposit(
     )
         internal
         override
-        whenNotPaused
         nonReentrant;
 ```
 
@@ -729,7 +755,7 @@ function previewMint(uint256 shares) public view override returns (uint256);
 ### maxDeposit
 
 Maximum USDC that can be deposited given current vault state.
-Returns 0 when the vault is paused or shut down, when no basket
+Returns 0 when deposits are paused or the vault is shut down, when no basket
 asset is active, or when the TVL cap is reached; otherwise
 min(perDepositCap, TVL-cap headroom). Overrides the OZ default
 (`type(uint256).max`) for ERC-4626 conformance: max* views MUST
@@ -817,14 +843,14 @@ Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
 
 <i>
 
-LIFE-3 / NC-3 / F-06: withdrawals are intentionally NOT `whenNotPaused`.
-`pause()` is a deposits-only freeze (see `_deposit`, which is
-`whenNotPaused` and checks `depositsPaused`). Gating withdrawals on the
-same low-trust EMERGENCY_ROLE pause would let a hot key freeze
-already-deposited funds — and, combined with last-ADMIN renounce, freeze
+LIFE-3 / NC-3 / F-06: no pause gates withdrawals (core 1494).
+`pauseDeposits()` stops deposits only (see `deposit`, `mint` and
+`maxDeposit`, which check `depositsPaused`). Gating withdrawals on the
+low-trust EMERGENCY_ROLE would let a hot key lock up
+already-deposited funds — and, combined with last-ADMIN renounce, lock
 them forever (LIFE-4). The last-admin floor (AdminFloorAccessControl)
 and the deposits-only pause together keep withdrawals always reachable,
-matching RobotMoneyVault's separate `withdrawalsPaused` model.
+matching RobotMoneyVault and Vault, which have no withdrawal pause either.
 
 </i>
 
@@ -1248,7 +1274,7 @@ which sets registry status to `Retired` in the same call (atomic
 unified governance retire, DI-2 / FS-VLT-19). Idempotent.
 Withdrawals/redemptions stay open (ERC-4626 `redeem` is never
 revoked; ADR-0009). Sets the dedicated `retired` flag — distinct
-from `depositsPaused` so `unpause()` cannot clear it (matches
+from `depositsPaused` so `unpauseDeposits()` cannot clear it (matches
 RobotMoneyVault's / Vault's separate-flag model).
 
 ```solidity
@@ -1267,20 +1293,26 @@ transition in docs/architecture.md §4.7. Idempotent.
 function unretire() external;
 ```
 
-<a id="pause"></a>
+<a id="pausedeposits"></a>
 
-### pause
+### pauseDeposits
+
+Pause new deposits and mints. Restricted to `EMERGENCY_ROLE`.
+Redeems stay open while deposits are paused (core 1494; see `_withdraw`).
 
 ```solidity
-function pause() external onlyRole(EMERGENCY_ROLE);
+function pauseDeposits() external onlyRole(EMERGENCY_ROLE);
 ```
 
-<a id="unpause"></a>
+<a id="unpausedeposits"></a>
 
-### unpause
+### unpauseDeposits
+
+Resume deposits. Restricted to `ADMIN_ROLE`. Idempotent. Also clears
+the deposit halt set by `emergencyUnwind` and `emergencyUnwindWithOverride`.
 
 ```solidity
-function unpause() external onlyRole(ADMIN_ROLE);
+function unpauseDeposits() external onlyRole(ADMIN_ROLE);
 ```
 
 <a id="_setdepositspaused-bool"></a>
@@ -1393,7 +1425,7 @@ LIFE-4 / F-07: `shutdownVault` (an `EMERGENCY_ROLE` hot-key lever) sets
 reverse path — a low-trust key could otherwise freeze the deposit side forever.
 Withdrawals are never frozen (LIFE-3), so holder funds were always redeemable;
 this restores the DEPOSIT side and is therefore gated to the strictly higher-trust
-`ADMIN_ROLE` (timelock in production), mirroring `unpause`. A new `tvlCap` is
+`ADMIN_ROLE` (timelock in production), mirroring `unpauseDeposits`. A new `tvlCap` is
 required because shutdown zeroed it; pass `type(uint256).max` for no cap.
 Mirrors `RobotMoneyVault.restoreVault`: reverts when the vault is not shut down
 (`NotShutdown`), when the new cap is zero (`InvalidParam`), or when the new cap
@@ -1627,11 +1659,11 @@ Set the TWAP window in seconds for `token`. ADMIN_ROLE only.
 
 <i>
 
-The window must fall inside `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`.
-ADMIN_ROLE is expected to verify off-chain that the pool's
-observation cardinality is large enough to satisfy the requested
-window; otherwise NAV / unwind reads will revert with the pool's
-`"OLD"` error.
+The window must fall inside `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`, and
+the asset's pool must hold enough observation history to serve it now
+(`InsufficientObservationHistory` otherwise). A window longer than the
+pool's oldest observation would make every NAV and redeem-floor read
+revert with the pool's `"OLD"` error, which would block redeem (core 1494).
 
 </i>
 
@@ -2131,17 +2163,33 @@ event MaxSlippageUpdated(uint256 oldBps, uint256 newBps);
 | oldBps | `uint256` |  |
 | newBps | `uint256` |  |
 
-### DepositsPausedSet
+### DepositsPaused
+
+Emitted when new deposits become paused. Withdrawals stay open.
 
 ```solidity
-event DepositsPausedSet(bool paused);
+event DepositsPaused(address indexed account);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| paused | `bool` |  |
+| account | `address` |  |
+
+### DepositsUnpaused
+
+Emitted when new deposits are resumed.
+
+```solidity
+event DepositsUnpaused(address indexed account);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
 
 ### Shutdown
 
@@ -2618,6 +2666,18 @@ redeem() instead, which returns actual swap proceeds.
 
 ```solidity
 error RedeemOnly();
+```
+
+### DepositsArePaused
+
+<i>
+
+Deposit or mint attempted while deposits are paused.
+
+</i>
+
+```solidity
+error DepositsArePaused();
 ```
 
 ### DepositBelowSlippageFloor
