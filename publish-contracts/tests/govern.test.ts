@@ -1,167 +1,294 @@
-// Stage 13 govern, one 48-hour round per step, against a fake of the Safe tool's entry points (tests/govern-world.ts). The fake keeps a timelock in
-// memory: it checks the order, the one-round-per-step shape, the wait and the resume logic of govern.ts. The real Safe, the real signers and the
-// real delay are exercised on the Twin chain run and on 8453 (runbook Q2), never here.
+// Stage 13 govern against a fake of the Safe tool's entry points (tests/govern-world.ts). The fake keeps a timelock in memory: it checks the one-sitting
+// schedule, the single wait, the predecessor rule and the resume logic of govern.ts. The real Safe, the real signers and the real delay are exercised
+// by the Twin fork publish (core-stages-twin-chain) and on 8453 (runbook Q2), never here.
+// Issue 1520: the only mainnet operation after the handover is the basket unpause. Everything else is deploy-time configuration.
 import { describe, expect, test } from "bun:test";
 import { decodeFunctionData } from "viem";
 import { PublishError } from "../src/errors.ts";
-import { GATEWAY_ABI, GOV_ABI, GOVERN_ROWS, RECEIPT_ABI, RECEIPT_ROW, REGISTRY_ABI, ROUTER_ABI, VAULT_ABI, buildReleaseCall, buildStepCalls, governSalt, loadGovernAddrs, migrationVector, releaseRecordKey, resolveGovernRow, runGovern, type GovernRowName } from "../src/govern.ts";
+import { GOVERN_ROWS, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VAULT_ABI, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
 import { newManifest } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
-import { SHA } from "./fixtures.ts";
+import { SHA, sheetText } from "./fixtures.ts";
 import { A, addr, fakeTimelock, sender, setup, signers } from "./govern-world.ts";
 
 const ALL = {
-  GOVERN_ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA", GOVERN_AGENT_ADDRESSES: "0x000000000000000000000000000000000000d001",
+  ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA",
   ROUTER_WEIGHTS: "USDC:5000,PROTO:2500,AGENT:1000,RWA:1500",
 };
 const DELAY = 172800n;
+const BASKETS = ["PROTO", "AGENT", "RWA"] as const;
 
-const dec = (data: `0x${string}`) => {
-  for (const abi of [GOV_ABI, VAULT_ABI, GATEWAY_ABI, REGISTRY_ABI, ROUTER_ABI]) { try { return decodeFunctionData({ abi, data }); } catch { /* next */ } }
-  throw new Error("cannot decode");
-};
+describe("the govern rows: the basket unpauses plus the Twin-only demonstrations", () => {
+  test("governRowNames() is exactly the three unpauses then update-delay, batch, cancel", () => {
+    expect([...governRowNames()]).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
+    expect([...UNPAUSE_ROWS]).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
+    expect([...TWIN_ONLY_ROWS]).toEqual(["update-delay", "batch", "cancel"]);
+  });
+  test("on 8453 a stage run needs the unpauses only, on a Twin fork every row", () => {
+    expect([...stageRows(8453)]).toEqual([...UNPAUSE_ROWS]);
+    expect([...stageRows(918453)]).toEqual([...GOVERN_ROWS]);
+  });
+  test("an unknown or out-of-range row is a usage error, and the numbers are the six rows", () => {
+    for (const bad of ["0", "7", "13", "nope", "-1", "voting-power-quorum", "agents", "other-setters", "router-weights", "migrate-eligibility-PROTO"]) expect(() => resolveGovernRow(bad)).toThrow(PublishError);
+    expect(resolveGovernRow("1")).toBe("unpause-PROTO");
+    expect(resolveGovernRow("6")).toBe("cancel");
+    expect(resolveGovernRow("update-delay")).toBe("update-delay");
+  });
+});
 
-describe("step calldata: each step holds only its own calls", () => {
+describe("step calldata: an unpause is one unpause call on that basket vault", () => {
   const { ctx, sheet } = setup(ALL);
   const a = loadGovernAddrs(ctx);
-  const names = (row: GovernRowName) => buildStepCalls(sheet, a, row).map((c) => dec(c.data).functionName as string);
-
-  test("voting-power-quorum: voting power per voter, quorum, voting period, execution delay", () => {
-    const n = names("voting-power-quorum");
-    expect(n.filter((x) => x === "setVotingPower").length).toBe(sheet.voters.length);
-    expect(n).toContain("setQuorumThreshold"); expect(n).toContain("setVotingPeriod"); expect(n).toContain("setExecutionDelay");
-    expect(n.length).toBe(sheet.voters.length + 3);
-    for (const c of buildStepCalls(sheet, a, "voting-power-quorum")) expect(c.target).toBe(A.governance);
-  });
-  test("agents: authorizeAgent per sheet agent, with the sheet policy", () => {
-    const calls = buildStepCalls(sheet, a, "agents");
-    expect(calls.length).toBe(1);
-    expect(calls[0]!.target).toBe(A.gateway);
-    const d = dec(calls[0]!.data);
-    const p = (d.args as unknown as unknown[])[1] as { maxPerPayment: bigint; active: boolean; shareReceiver: string };
-    expect(p.active).toBe(true);
-    expect(p.maxPerPayment).toBe(sheet.agentPolicy.maxPerPayment);
-    expect(p.shareReceiver.toLowerCase()).toBe(sheet.shareReceiver.toLowerCase());
-  });
-  test("other-setters: the four vault setters on each of the four vaults", () => {
-    const calls = buildStepCalls(sheet, a, "other-setters");
-    const n = calls.map((c) => dec(c.data).functionName as string);
-    for (const f of ["setTvlCap", "setPerDepositCap", "setExitFeeBps", "setFeeRecipient"]) expect(n.filter((x) => x === f).length).toBe(4);
-    expect(n.length).toBe(16);
-    for (const c of calls) expect(Object.values(A.vaults)).toContain(c.target);
-  });
-  test("migrate-eligibility-<B>: exactly one atomic migrateEligibility call for that basket, the vector growing and ending on the sheet weights", () => {
-    const vectors = (["PROTO", "AGENT", "RWA"] as const).map((k) => {
-      const calls = buildStepCalls(sheet, a, `migrate-eligibility-${k}`);
-      expect(calls.length).toBe(1);
-      expect(calls[0]!.target).toBe(A.registry);
-      const d = dec(calls[0]!.data);
-      expect(d.functionName).toBe("migrateEligibility");
-      expect((d.args as unknown as unknown[])[0]).toBe(A.vaults[k]);
-      expect((d.args as unknown as unknown[])[1]).toBe(true);
-      return { vaults: (d.args as unknown as unknown[])[2] as string[], bps: (d.args as unknown as unknown[])[3] as bigint[] };
-    });
-    for (const v of vectors) expect(v.bps.reduce((x, y) => x + y, 0n)).toBe(10000n);
-    expect(vectors.map((v) => v.vaults.length)).toEqual([2, 3, 4]);
-    expect(vectors[2]!.bps).toEqual([5000n, 2500n, 1000n, 1500n]);
-    expect(migrationVector(sheet, a, 2).vaults).toEqual([A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA]);
-  });
-  test("router-weights: one setDefaultWeights with rmUSDC and the eligible baskets", () => {
-    const calls = buildStepCalls(sheet, a, "router-weights");
-    expect(calls.length).toBe(1);
-    expect(calls[0]!.target).toBe(A.router);
-    const d = dec(calls[0]!.data);
-    expect(d.functionName).toBe("setDefaultWeights");
-    expect((d.args as unknown as unknown[])[1]).toEqual([5000n, 2500n, 1000n, 1500n]);
-  });
   test("unpause-<B>: one unpause on that basket vault", () => {
-    for (const k of ["PROTO", "AGENT", "RWA"] as const) {
+    for (const k of BASKETS) {
       const calls = buildStepCalls(sheet, a, `unpause-${k}`);
-      expect(calls.map((c) => [c.target, dec(c.data).functionName])).toEqual([[A.vaults[k], "unpauseDeposits"]]);
+      expect(calls.map((c) => [c.target, decodeFunctionData({ abi: VAULT_ABI, data: c.data }).functionName])).toEqual([[A.vaults[k], "unpauseDeposits"]]);
     }
   });
-  test("a basket the sheet does not list builds no call: pause and eligibility are sheet data", () => {
+  test("a basket the sheet does not list builds no call: it stays paused", () => {
     const d = setup();
-    const da = loadGovernAddrs(d.ctx);
-    expect(buildStepCalls(d.sheet, da, "unpause-AGENT")).toEqual([]);
-    expect(buildStepCalls(d.sheet, da, "migrate-eligibility-AGENT")).toEqual([]);
-    expect(buildStepCalls(d.sheet, da, "agents")).toEqual([]);
-    expect(migrationVector(d.sheet, da, 1).bps).toEqual([6000n, 2500n, 1500n]);
+    expect(buildStepCalls(d.sheet, loadGovernAddrs(d.ctx), "unpause-AGENT")).toEqual([]);
   });
   test("salts are deterministic per SHA, chain and row, and differ between rows", () => {
-    expect(governSalt(SHA, 918453, "agents")).toBe(governSalt(SHA, 918453, "agents"));
-    expect(governSalt(SHA, 918453, "agents")).not.toBe(governSalt(SHA, 8453, "agents"));
-    expect(governSalt(SHA, 918453, "agents")).not.toBe(governSalt(SHA, 918453, "other-setters"));
+    expect(governSalt(SHA, 918453, "unpause-PROTO")).toBe(governSalt(SHA, 918453, "unpause-PROTO"));
+    expect(governSalt(SHA, 918453, "unpause-PROTO")).not.toBe(governSalt(SHA, 8453, "unpause-PROTO"));
+    expect(governSalt(SHA, 918453, "unpause-PROTO")).not.toBe(governSalt(SHA, 918453, "unpause-AGENT"));
   });
 });
 
 const opts = (sheet: ReturnType<typeof parseSheet>, tl: ReturnType<typeof fakeTimelock>, extra: object = {}) =>
   ({ ownerSigners: signers(sheet), sender, api: tl.api, sleep: async () => { tl.s.clock += 30n; }, pollMs: 0, warp: false as const, maxWaitSeconds: 10_000_000, emit: () => {}, ...extra });
 const warpTo = (tl: ReturnType<typeof fakeTimelock>) => async (sec: bigint) => { tl.s.clock += sec; };
+const run = (ctx: ReturnType<typeof setup>["ctx"], manifest: ReturnType<typeof newManifest>, sheet: ReturnType<typeof parseSheet>, tl: ReturnType<typeof fakeTimelock>, extra: object = {}) =>
+  runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, extra));
+/** Records every depositsPaused() read the govern run makes, by vault address. */
+const spyPaused = (tl: ReturnType<typeof fakeTimelock>) => {
+  const seen: string[] = [];
+  const orig = tl.handle.client.readContract;
+  tl.handle.client.readContract = async (a: { address: string; functionName: string }) => { if (a.functionName === "depositsPaused") seen.push(a.address); return orig(a as never); };
+  return seen;
+};
 
-describe("one round per step", () => {
-  test("a full run is one schedule and one execute per step, in order, never a shared round", async () => {
+describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, one resume executes them all", () => {
+  test("one run schedules PROTO, AGENT and RWA, each its own operation and its own Safe transaction, and exits GOVERN_PENDING exactly once", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    const out: string[] = [];
+    const manifest = newManifest(ctx, addr(0xa001));
+    let err: unknown;
+    let warps = 0;
+    try { await run(ctx, manifest, sheet, tl, { warp: async () => { warps++; }, emit: (l: string) => out.push(l) }); } catch (e) { err = e; }
+    const e = err as PublishError;
+    expect(e.kind).toBe("GOVERN_PENDING");
+    expect(e.exitCode).toBe(15);
+    expect(warps).toBe(0);
+    // all three scheduled in this one run, in order, none executed
+    expect(tl.s.events).toEqual(["schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA"]);
+    // distinct timelock operation ids
+    const ids = UNPAUSE_ROWS.map((r) => tl.s.ids.get(r)!);
+    expect(new Set(ids).size).toBe(3);
+    // no Safe transaction is shared by two operations: one transaction per operation, all hashes different
+    const hashes = ids.flatMap((id) => tl.s.safeTxs.get(id)!);
+    expect(hashes.length).toBe(3);
+    expect(new Set(hashes).size).toBe(3);
+    // each is a single-call unpause of its own vault
+    for (const k of BASKETS) {
+      const sc = tl.s.scheduled.get(`unpause-${k}`)!;
+      expect(sc.form).toBe("single");
+      expect(sc.calls.map((c) => c.target)).toEqual([A.vaults[k]]);
+      expect(sc.predecessor).toBeUndefined();
+    }
+    // ready_at and next_command, one for the stage
+    expect(e.details.ready_at).toBe((1000n + DELAY).toString());
+    expect(e.details.rows).toEqual([...UNPAUSE_ROWS]);
+    expect(String(e.details.next_command)).toContain("--chain 8453");
+    expect(String(e.details.next_command)).not.toContain("--row");
+    expect(e.message).toContain("1970-01-03T00:16:40.000Z");
+    for (const r of UNPAUSE_ROWS) expect(e.message).toContain(r);
+    expect(manifest.stages.govern).toBeUndefined();
+    const lines = out.map((l) => JSON.parse(l));
+    expect(lines.map((l) => `${l.row}:${l.phase}`)).toEqual(UNPAUSE_ROWS.map((r) => `${r}:scheduled`));
+  });
+
+  test("the resume after the delay executes every scheduled unpause and reads depositsPaused() == false for each, with no second schedule and no warp", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const out: string[] = [];
+    const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
+    await expect(run(ctx, manifest, sheet, tl, { warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    tl.s.clock += DELAY;
+    const paused = spyPaused(tl);
+    const res = await run(ctx, manifest, sheet, tl, { warp: noWarp, emit: (l: string) => out.push(l) });
+    expect(res.rows).toEqual([...UNPAUSE_ROWS]);
+    expect(tl.s.events).toEqual([
+      "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA",
+      "execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA",
+    ]);
+    expect([...new Set(paused)].sort()).toEqual(BASKETS.map((k) => A.vaults[k]).sort());
+    for (const k of BASKETS) expect((manifest.govern as any)[`unpause-${k}`].executed.tx_hash).toBeDefined();
+    // the stage is done on 8453 with the unpauses alone: the Twin-only rows never run there
+    expect(manifest.stages.govern!.status).toBe("done");
+    expect(Object.keys(manifest.govern!)).toEqual([...UNPAUSE_ROWS]);
+    const lines = out.map((l) => JSON.parse(l));
+    // the resume reprints the recorded schedule lines, then executes
+    expect(lines.map((l) => `${l.row}:${l.phase}`)).toEqual([...UNPAUSE_ROWS.map((r) => `${r}:scheduled`), ...UNPAUSE_ROWS.map((r) => `${r}:executed`)]);
+    for (const l of lines) { expect(Object.keys(l).sort()).toEqual(["phase", "readyAt", "row", "status", "txHash"]); expect(l.status).toBe(1); expect(l.txHash).toMatch(/^0x[0-9a-f]{64}$/); }
+  });
+
+  test("a resume before the delay pends again and sends nothing", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await expect(run(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    tl.s.clock += DELAY - 7200n;
+    await expect(run(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING", details: { remaining: 7200 } });
+    expect(tl.s.events.length).toBe(3);
+  });
+
+  test("a huge --max-wait still does not block for the delay on 8453", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    let slept = 0;
+    await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { maxWaitSeconds: 99_999_999, sleep: async () => { slept++; tl.s.clock += 30n; } })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    expect(slept).toBe(0);
+  });
+
+  test("a single --row unpause-X is the set of one: it schedules and pends with its own --row", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const err = await run(ctx, manifest, sheet, tl, { row: "unpause-AGENT" }).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
+    expect(err.kind).toBe("GOVERN_PENDING");
+    expect(String(err.details.next_command)).toContain("--row unpause-AGENT");
+    expect(tl.s.events).toEqual(["schedule:unpause-AGENT"]);
+    tl.s.clock += DELAY;
+    await run(ctx, manifest, sheet, tl, { row: "unpause-AGENT" });
+    expect(tl.s.events).toEqual(["schedule:unpause-AGENT", "execute:unpause-AGENT"]);
+    expect(manifest.stages.govern).toBeUndefined();
+  });
+
+  test("the Twin-only rows are refused with USAGE on 8453, by name and by number, and nothing is sent", async () => {
+    for (const row of [...TWIN_ONLY_ROWS, "4", "5", "6"]) {
+      const { ctx, sheet } = setup(ALL, 8453);
+      const tl = fakeTimelock(sheet, DELAY);
+      const err = await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row }).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
+      expect(err.kind).toBe("USAGE");
+      expect(err.message).toContain("8453");
+      expect(tl.s.events).toEqual([]);
+    }
+  });
+
+  test("a stage run on 8453 never runs the Twin-only rows", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await expect(run(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    tl.s.clock += DELAY;
+    await run(ctx, manifest, sheet, tl);
+    expect(tl.s.events.some((e) => /update-delay|batch|cancel/i.test(e.replace(/scheduleBatch|executeBatch/g, "")))).toBe(false);
+    expect(Object.keys(manifest.govern!).sort()).toEqual([...UNPAUSE_ROWS].sort());
+  });
+});
+
+describe("a dependent operation carries its predecessor and runs in the same resume, with no second wait", () => {
+  const dependsOn = { "unpause-AGENT": "unpause-PROTO" };
+
+  test("the dependent is scheduled with the predecessor's operation id, the predecessor with none, and one resume executes both in order", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await expect(run(ctx, manifest, sheet, tl, { dependsOn })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    const protoId = tl.s.ids.get("unpause-PROTO")!;
+    expect(tl.s.scheduled.get("unpause-PROTO")!.predecessor).toBeUndefined();
+    expect(tl.s.scheduled.get("unpause-AGENT")!.predecessor).toBe(protoId);
+    expect(tl.s.scheduled.get("unpause-RWA")!.predecessor).toBeUndefined();
+    // the dependent's operation id is not the id it would have without the predecessor
+    expect(tl.s.ids.get("unpause-AGENT")).not.toBe(tl.s.ids.get("unpause-RWA"));
+    tl.s.clock += DELAY;
+    await run(ctx, manifest, sheet, tl, { dependsOn });
+    expect(tl.s.events.slice(3)).toEqual(["execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA"]);
+    expect(manifest.stages.govern!.status).toBe("done");
+  });
+
+  test("on a Twin fork the dependent runs after the same single warp as everything else", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const warped: bigint[] = [];
+    await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { dependsOn, row: "unpause-AGENT", warp: async (s: bigint) => { warped.push(s); tl.s.clock += s; } }).catch((e) => e);
+    // unpause-AGENT alone has no predecessor row in this run: refused before anything is sent
+    expect(tl.s.events).toEqual([]);
+    const m = newManifest(ctx, addr(0xa001));
+    await run(ctx, m, sheet, tl, { dependsOn, warp: async (s: bigint) => { warped.push(s); tl.s.clock += s; } });
+    expect(warped[0]).toBe(DELAY + 1n);
+    expect(tl.s.events.slice(0, 7)).toEqual(["schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA", "execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA", "updateDelay.schedule:update-delay"]);
+  });
+
+  test("a predecessor that does not come first is a usage error", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { dependsOn: { "unpause-PROTO": "unpause-AGENT" } })).rejects.toMatchObject({ kind: "USAGE" });
+    await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { dependsOn: { "unpause-PROTO": "nope" } })).rejects.toMatchObject({ kind: "USAGE" });
+    expect(tl.s.events).toEqual([]);
+  });
+
+  test("a sheet that leaves a basket out is refused on 8453 (no stage 13 step may be skipped), and allowed on a Twin fork", () => {
+    for (const list of ["AGENT,RWA", "PROTO,RWA", "PROTO,AGENT", "PROTO", "none"]) {
+      expect(() => parseSheet(sheetText({ ...ALL, CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", GOVERN_UNPAUSE_VAULTS: list })), list).toThrow("no stage 13 step may be skipped");
+    }
+    const twin = setup({ ELIGIBLE_VAULTS: "PROTO,RWA", GOVERN_UNPAUSE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:6000,PROTO:2500,RWA:1500" });
+    expect(twin.sheet.govern.unpauseVaults).toEqual(["PROTO", "RWA"]);
+  });
+
+  test("a predecessor the sheet skips (Twin only) leaves the dependent without an operation to follow: refused", async () => {
+    const { ctx, sheet } = setup({ ...ALL, GOVERN_UNPAUSE_VAULTS: "AGENT,RWA" });
+    const tl = fakeTimelock(sheet, DELAY);
+    await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { dependsOn })).rejects.toThrow("has no operation in this run");
+  });
+});
+
+describe("a Twin fork: one sitting, ONE warp, then the Twin-only rows one round each", () => {
+  test("a full run schedules the three unpauses, warps once, executes them, then the Twin-only rounds, in order", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
     const manifest = newManifest(ctx, addr(0xa001));
     const out: string[] = [];
     const warped: bigint[] = [];
-    const res = await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: async (s: bigint) => { warped.push(s); tl.s.clock += s; }, emit: (l: string) => out.push(l) }));
-    const want = ["voting-power-quorum", "agents", "other-setters", "migrate-eligibility-PROTO", "migrate-eligibility-AGENT", "migrate-eligibility-RWA", "router-weights", "unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"];
-    expect([...GOVERN_ROWS] as string[]).toEqual(want);
-    expect(res.rows as string[]).toEqual(want);
-    // each row's schedule is followed by its own execute before the next row's schedule
-    const expected: string[] = [];
-    for (const r of want) {
-      if (r === "update-delay") expected.push("updateDelay.schedule:update-delay", "updateDelay.execute:update-delay");
-      else if (r === "cancel") expected.push("schedule:cancel", "cancel:cancel");
-      else if (r === "batch" || r === "voting-power-quorum" || r === "other-setters") expected.push(`scheduleBatch:${r}`, `executeBatch:${r}`);
-      else expected.push(`schedule:${r}`, `execute:${r}`);
-    }
-    expect(tl.s.events).toEqual(expected);
-    // one wait per round that executes: 12 (the cancel round has none)
-    expect(warped.length).toBe(12);
-    for (const w of warped) expect(w).toBeGreaterThanOrEqual(1n);
+    const res = await run(ctx, manifest, sheet, tl, { warp: async (s: bigint) => { warped.push(s); tl.s.events.push("warp"); tl.s.clock += s; }, emit: (l: string) => out.push(l) });
+    expect(res.rows as string[]).toEqual([...GOVERN_ROWS]);
+    expect(tl.s.events).toEqual([
+      "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA", "warp",
+      "execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA",
+      "updateDelay.schedule:update-delay", "warp", "updateDelay.execute:update-delay",
+      "scheduleBatch:batch", "warp", "executeBatch:batch",
+      "schedule:cancel", "cancel:cancel",
+    ]);
+    expect(warped[0]).toBe(DELAY + 1n);
     expect(tl.s.minDelay).toBe(sheet.govern.newDelay);
     expect(manifest.stages.govern!.status).toBe("done");
-    expect(Object.keys(manifest.govern!)).toEqual(want);
-    // one JSON line per round event
+    expect(Object.keys(manifest.govern!)).toEqual([...GOVERN_ROWS]);
     const lines = out.map((l) => JSON.parse(l));
-    expect(lines.map((l) => `${l.row}:${l.phase}`)).toEqual(want.flatMap((r) => r === "cancel" ? [`${r}:scheduled`, `${r}:cancelled`] : [`${r}:scheduled`, `${r}:executed`]));
-    for (const l of lines) {
-      expect(Object.keys(l).sort()).toEqual(["phase", "readyAt", "row", "status", "txHash"]);
-      expect(l.txHash).toMatch(/^0x[0-9a-f]{64}$/);
-      expect(l.status).toBe(1);
-      expect(l.readyAt).toBeGreaterThan(1000);
-    }
-    // every transaction is signed by the threshold of owners: 26 Safe transactions
-    expect(tl.s.signed.length).toBe(26 * sheet.safeThreshold);
+    expect(lines.map((l) => `${l.row}:${l.phase}`)).toEqual([
+      ...UNPAUSE_ROWS.map((r) => `${r}:scheduled`), ...UNPAUSE_ROWS.map((r) => `${r}:executed`),
+      "update-delay:scheduled", "update-delay:executed", "batch:scheduled", "batch:executed", "cancel:scheduled", "cancel:cancelled",
+    ]);
   });
 
-  test("a row's schedule and execute are separated by at least the timelock delay on the clock", async () => {
+  test("with the warp off and a long delay on a non-mainnet chain, the run exits GOVERN_PENDING too", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
-    const stamps: Record<string, bigint> = {};
-    const api = { ...tl.api, executeTx: (async (...args: unknown[]) => { const r = await (tl.api.executeTx as any)(...args); stamps[`${args[1] && (args[1] as any).action}:${tl.s.nonce}`] = tl.s.clock; return r; }) as never };
-    await runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { api, warp: warpTo(tl), row: undefined }));
-    const sched = Object.entries(stamps).filter(([k]) => k.startsWith("schedule:"));
-    const exec = Object.entries(stamps).filter(([k]) => k.startsWith("execute:"));
-    expect(sched.length).toBeGreaterThan(5);
-    expect(exec.length).toBeGreaterThan(5);
-    // pair them in order: the n-th execute follows the n-th schedule by the delay (the first rows run at the 172800 s delay)
-    for (let i = 0; i < 10; i++) expect(exec[i]![1] - sched[i]![1]).toBeGreaterThanOrEqual(DELAY);
+    await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { maxWaitSeconds: 60 })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
   });
 
-  test("a default sheet skips the rows it does not ask for and says why", async () => {
+  test("a default sheet skips the baskets it does not unpause and says why", async () => {
     const { ctx, sheet } = setup();
     const tl = fakeTimelock(sheet, DELAY);
     const manifest = newManifest(ctx, addr(0xa001));
-    const res = await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl) }));
-    expect(res.skipped).toEqual(["agents", "migrate-eligibility-AGENT", "unpause-AGENT"]);
-    expect((manifest.govern as any)["agents"].skipped.reason).toContain("no agents");
+    const res = await run(ctx, manifest, sheet, tl, { warp: warpTo(tl) });
+    expect(res.skipped).toEqual(["unpause-AGENT"]);
     expect((manifest.govern as any)["unpause-AGENT"].skipped.reason).toContain("stays paused");
-    expect(tl.s.events.some((e) => e.endsWith(":agents") || e.endsWith(":unpause-AGENT"))).toBe(false);
+    expect(tl.s.events.some((e) => e.endsWith(":unpause-AGENT"))).toBe(false);
     expect(manifest.stages.govern!.status).toBe("done");
   });
 
@@ -171,13 +298,12 @@ describe("one round per step", () => {
     const manifest = newManifest(ctx, addr(0xa001));
     const out: string[] = [];
     const idx = GOVERN_ROWS.indexOf(row);
-    // the rows before it run first (one round each), then this row alone
-    for (const earlier of GOVERN_ROWS.slice(0, idx)) await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl), row: earlier }));
+    for (const earlier of GOVERN_ROWS.slice(0, idx)) await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: earlier });
     const before = tl.s.events.length;
-    await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl), row, emit: (l: string) => out.push(l) }));
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row, emit: (l: string) => out.push(l) });
     const mine = tl.s.events.slice(before);
     expect(mine.length).toBe(2);
-    expect(mine.every((e) => e.endsWith(`:${row === "update-delay" ? "update-delay" : row}`))).toBe(true);
+    expect(mine.every((e) => e.endsWith(`:${row}`))).toBe(true);
     const lines = out.map((l) => JSON.parse(l));
     expect(lines.map((l) => l.phase)).toEqual(row === "cancel" ? ["scheduled", "cancelled"] : ["scheduled", "executed"]);
     expect(lines.every((l) => l.row === row)).toBe(true);
@@ -186,127 +312,51 @@ describe("one round per step", () => {
   });
   for (const r of GOVERN_ROWS) single(r);
 
-  test("migrate-eligibility is one call per basket, each its own operation", async () => {
+  test("batch is one scheduleBatch of two calls", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
-    await runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { warp: warpTo(tl) }));
-    for (const k of ["PROTO", "AGENT", "RWA"]) {
-      const s = tl.s.scheduled.get(`migrate-eligibility-${k}`)!;
-      expect(s.form).toBe("single");
-      expect(s.calls.length).toBe(1);
-    }
+    await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { warp: warpTo(tl) });
     expect(tl.s.scheduled.get("batch")!.form).toBe("batch");
     expect(tl.s.scheduled.get("batch")!.calls.length).toBe(2);
-    expect(tl.s.scheduled.get("voting-power-quorum")!.form).toBe("batch");
   });
 
-  test("a failed read-back stops the run on that row", async () => {
+  test("a failed read-back stops the run on that row: nothing after it executes", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
     tl.s.reads.depositsPaused = true;
     const manifest = newManifest(ctx, addr(0xa001));
-    await expect(runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl) }))).rejects.toThrow("unpause-PROTO");
+    await expect(run(ctx, manifest, sheet, tl, { warp: warpTo(tl) })).rejects.toThrow("unpause-PROTO");
+    // every unpause was scheduled in the one sitting, only the first execute ran and its read-back failed
     expect((manifest.govern as any)["unpause-PROTO"].scheduled).toBeDefined();
     expect((manifest.govern as any)["unpause-PROTO"].executed).toBeUndefined();
-    expect(tl.s.events.some((e) => e.endsWith(":unpause-AGENT"))).toBe(false);
+    expect((manifest.govern as any)["unpause-AGENT"].executed).toBeUndefined();
+    expect(tl.s.events.some((e) => e.startsWith("execute:unpause-AGENT"))).toBe(false);
   });
 });
 
-describe("ordering", () => {
-  test("a row cannot start before the earlier rows are complete", async () => {
+describe("ordering of the Twin-only rows", () => {
+  test("a Twin-only row cannot start before the unpauses are complete", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
-    const manifest = newManifest(ctx, addr(0xa001));
-    let err: unknown;
-    try { await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { row: "unpause-PROTO", warp: warpTo(tl) })); } catch (e) { err = e; }
-    expect((err as PublishError).kind).toBe("GOVERN");
-    expect((err as PublishError).message).toContain("voting-power-quorum");
+    const err = await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "update-delay", warp: warpTo(tl) }).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
+    expect(err.kind).toBe("GOVERN");
+    expect(err.message).toContain("unpause-PROTO");
     expect(tl.s.events).toEqual([]);
   });
 
-  test("rows run one at a time in order add up to the full matrix, and a rerun of a done row reprints its lines with no new transaction", async () => {
+  test("the six rows run one by one add up to the full matrix, and a rerun of a done row reprints its lines with no new transaction", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
     const manifest = newManifest(ctx, addr(0xa001));
     const out: string[] = [];
-    for (let n = 1; n <= GOVERN_ROWS.length; n++) await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl), row: String(n), emit: (l: string) => out.push(l) }));
+    for (let n = 1; n <= GOVERN_ROWS.length; n++) await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: String(n), emit: (l: string) => out.push(l) });
     expect(new Set(out.map((l) => JSON.parse(l).row))).toEqual(new Set(GOVERN_ROWS));
     expect(manifest.stages.govern!.status).toBe("done");
     const events = tl.s.events.length;
     const again: string[] = [];
-    await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl), row: "2", emit: (l: string) => again.push(l) }));
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "2", emit: (l: string) => again.push(l) });
     expect(again.map((l) => JSON.parse(l).phase)).toEqual(["scheduled", "executed"]);
     expect(tl.s.events.length).toBe(events);
-  });
-
-  test("an unknown or out-of-range row is a usage error", () => {
-    for (const bad of ["0", "14", "nope", "-1", "round1.schedule"]) expect(() => resolveGovernRow(bad)).toThrow(PublishError);
-    expect(resolveGovernRow("13")).toBe("cancel");
-    expect(resolveGovernRow("1")).toBe("voting-power-quorum");
-    expect(resolveGovernRow("update-delay")).toBe("update-delay");
-  });
-});
-
-describe("the wait: warp on a Twin fork only, GOVERN_PENDING on 8453", () => {
-  test("on 8453 the run schedules, then exits GOVERN_PENDING with the ready time and the next command, and never warps", async () => {
-    const { ctx, sheet } = setup(ALL, 8453);
-    const tl = fakeTimelock(sheet, DELAY);
-    let warps = 0;
-    const out: string[] = [];
-    const manifest = newManifest(ctx, addr(0xa001));
-    let err: unknown;
-    try { await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: async () => { warps++; }, emit: (l: string) => out.push(l), maxWaitSeconds: 10_000_000 })); } catch (e) { err = e; }
-    const e = err as PublishError;
-    expect(e.kind).toBe("GOVERN_PENDING");
-    expect(e.exitCode).toBe(15);
-    expect(warps).toBe(0);
-    expect(e.message).toContain("voting-power-quorum");
-    expect(e.message).toContain("--row voting-power-quorum");
-    expect(e.message).toContain("1970-01-03T00:16:40.000Z"); // the ready time, ISO (fake clock)
-    expect(e.details.ready_at).toBe((1000n + DELAY).toString());
-    expect(String(e.details.next_command)).toContain("--chain 8453");
-    expect(tl.s.events).toEqual(["scheduleBatch:voting-power-quorum"]);
-    const lines = out.map((l) => JSON.parse(l));
-    expect(lines.length).toBe(1);
-    expect(lines[0]).toMatchObject({ row: "voting-power-quorum", phase: "scheduled", status: 1, readyAt: 1000 + Number(DELAY) });
-  });
-
-  test("on 8453 a huge --max-wait still does not block for the delay", async () => {
-    const { ctx, sheet } = setup(ALL, 8453);
-    const tl = fakeTimelock(sheet, DELAY);
-    let slept = 0;
-    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { maxWaitSeconds: 99_999_999, sleep: async () => { slept++; tl.s.clock += 30n; } }))).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(slept).toBe(0);
-  });
-
-  test("on 8453 the same --row resumes after the ready time: no second schedule, then it executes and the next row waits again", async () => {
-    const { ctx, sheet } = setup(ALL, 8453);
-    const tl = fakeTimelock(sheet, DELAY);
-    const manifest = newManifest(ctx, addr(0xa001));
-    const out: string[] = [];
-    const run = (row?: string) => runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { row, emit: (l: string) => out.push(l) }));
-    await expect(run("voting-power-quorum")).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    tl.s.clock += DELAY;
-    await run("voting-power-quorum");
-    expect(tl.s.events).toEqual(["scheduleBatch:voting-power-quorum", "executeBatch:voting-power-quorum"]);
-    expect(manifest.stages.govern).toBeUndefined();
-    // the whole matrix without --row continues at the next row and pends there
-    await expect(run()).rejects.toMatchObject({ kind: "GOVERN_PENDING", details: { row: "agents" } });
-    expect(tl.s.events.filter((e) => e.startsWith("scheduleBatch:voting")).length).toBe(1);
-  });
-
-  test("on a Twin fork the wait runs by warp to one second past the ready time", async () => {
-    const { ctx, sheet } = setup(ALL);
-    const tl = fakeTimelock(sheet, DELAY);
-    const seconds: bigint[] = [];
-    await runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { row: "voting-power-quorum", warp: async (s: bigint) => { seconds.push(s); tl.s.clock += s; } }));
-    expect(seconds).toEqual([DELAY + 1n]);
-  });
-
-  test("with the warp off and a long delay on a non-mainnet chain, the run exits GOVERN_PENDING too", async () => {
-    const { ctx, sheet } = setup(ALL);
-    const tl = fakeTimelock(sheet, DELAY);
-    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { maxWaitSeconds: 60 }))).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
   });
 });
 
@@ -314,51 +364,49 @@ describe("resume of a half-done step", () => {
   test("a step scheduled on chain but not recorded is adopted, not scheduled twice", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
-    const first = newManifest(ctx, addr(0xa001));
-    await expect(runGovern(ctx, stageByName("govern"), first, opts(sheet, tl, { row: "voting-power-quorum", maxWaitSeconds: 60 }))).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "unpause-PROTO", maxWaitSeconds: 60 })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
     // a fresh manifest: the run lost its state after the schedule transaction
     const lost = newManifest(ctx, addr(0xa001));
     tl.s.clock += DELAY;
-    await runGovern(ctx, stageByName("govern"), lost, opts(sheet, tl, { row: "voting-power-quorum", warp: warpTo(tl) }));
-    expect(tl.s.events).toEqual(["scheduleBatch:voting-power-quorum", "executeBatch:voting-power-quorum"]);
-    expect((lost.govern as any)["voting-power-quorum"].scheduled.note).toContain("already scheduled");
-    expect((lost.govern as any)["voting-power-quorum"].executed.tx_hash).toBeDefined();
+    await run(ctx, lost, sheet, tl, { row: "unpause-PROTO", warp: warpTo(tl) });
+    expect(tl.s.events).toEqual(["schedule:unpause-PROTO", "execute:unpause-PROTO"]);
+    expect((lost.govern as any)["unpause-PROTO"].scheduled.note).toContain("already scheduled");
+    expect((lost.govern as any)["unpause-PROTO"].executed.tx_hash).toBeDefined();
   });
 
   test("a step scheduled and recorded, then rerun after the delay: only the execute is sent", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
     const manifest = newManifest(ctx, addr(0xa001));
-    const run = () => runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { row: "voting-power-quorum", maxWaitSeconds: 60 }));
-    await expect(run()).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(Object.keys((manifest.govern as any)["voting-power-quorum"])).toEqual(["scheduled"]);
+    const go = () => run(ctx, manifest, sheet, tl, { row: "unpause-PROTO", maxWaitSeconds: 60 });
+    await expect(go()).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    expect(Object.keys((manifest.govern as any)["unpause-PROTO"])).toEqual(["scheduled"]);
     tl.s.clock += DELAY;
-    await run();
-    expect(tl.s.events).toEqual(["scheduleBatch:voting-power-quorum", "executeBatch:voting-power-quorum"]);
-    expect(Object.keys((manifest.govern as any)["voting-power-quorum"])).toEqual(["scheduled", "executed"]);
+    await go();
+    expect(tl.s.events).toEqual(["schedule:unpause-PROTO", "execute:unpause-PROTO"]);
+    expect(Object.keys((manifest.govern as any)["unpause-PROTO"])).toEqual(["scheduled", "executed"]);
   });
 
   test("a step executed on chain but not recorded is read back and recorded without a second execute", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
-    const first = newManifest(ctx, addr(0xa001));
-    await runGovern(ctx, stageByName("govern"), first, opts(sheet, tl, { row: "voting-power-quorum", warp: warpTo(tl) }));
+    await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "unpause-PROTO", warp: warpTo(tl) });
     const lost = newManifest(ctx, addr(0xa001));
-    await runGovern(ctx, stageByName("govern"), lost, opts(sheet, tl, { row: "voting-power-quorum", warp: warpTo(tl) }));
+    await run(ctx, lost, sheet, tl, { row: "unpause-PROTO", warp: warpTo(tl) });
     expect(tl.s.events.length).toBe(2);
-    expect((lost.govern as any)["voting-power-quorum"].executed.note).toContain("already executed");
+    expect((lost.govern as any)["unpause-PROTO"].executed.note).toContain("already executed");
   });
 
   test("a cancel executed on chain but not recorded is adopted: no second schedule and no second cancel", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
     const manifest = newManifest(ctx, addr(0xa001));
-    await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl) }));
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl) });
     // forget the cancel phase only
     delete (manifest.govern as any)["cancel"].cancelled;
     delete (manifest.stages as any).govern;
     const before = tl.s.events.length;
-    await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl) }));
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl) });
     expect(tl.s.events.length).toBe(before);
     expect((manifest.govern as any)["cancel"].cancelled.note).toContain("already cancelled");
   });
@@ -430,8 +478,8 @@ describe("generic Safe -> Timelock call (Twin-only test verb, not a govern row)"
   test("not combined with --row, and the label may not be a govern row name", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
-    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { call, row: "agents" }))).rejects.toThrow("mutually exclusive");
-    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { call: { ...call, label: "agents" } }))).rejects.toThrow("not a govern row name");
+    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { call, row: "unpause-PROTO" }))).rejects.toThrow("mutually exclusive");
+    await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { call: { ...call, label: "unpause-PROTO" } }))).rejects.toThrow("not a govern row name");
   });
 });
 
@@ -523,7 +571,7 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
     const m = () => newManifest(ctx, addr(0xa001));
-    await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, { row: "agents", receiptId: RID }))).rejects.toThrow("--row release-receipt only");
+    await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, { row: "unpause-PROTO", receiptId: RID }))).rejects.toThrow("--row release-receipt only");
     await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, { row: RECEIPT_ROW }))).rejects.toThrow("needs --receipt-id");
     await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, rel("0x1234")))).rejects.toThrow("bytes32");
     await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, { call: { label: RECEIPT_ROW, target: A.gateway, data: "0x12" } }))).rejects.toThrow("not a govern row name");

@@ -19,7 +19,7 @@ Stage is the same deployment as mainnet. Only parameters differ. There is one ru
    Publish contracts deploys all four vaults, creates the real Safe (Safe SDK, `@safe-global/protocol-kit`), hands over to the Safe and the timelock, and verifies.
 5. The harness reads the manifests (`core.json`, `registry.json`, `router.json`, `governance.json`, `ic-policy.json`, `timelock.json`, `safe.json`, `libraries.json`, `vault-<key>.json`) and starts the dapp stack with those addresses.
    The signer is the string publish contracts accepts, `keystore:PATH:PASSFILE`. Only paths are passed. The passphrase stays in its 0600 file.
-6. `core-stack.ts governance ensure` runs the stage 13 govern matrix through the real Safe and the timelock. The matrix is the same on stage and mainnet. Every row prints a tx hash and a receipt status. `scripts/stage/govern-rows.ts` fails the verb unless every row has both and status 1.
+6. `core-stack.ts governance ensure` runs stage 13 through the real Safe and the timelock: the basket unpauses (one timelock operation each, all scheduled in one sitting, one wait). The unpauses are the same on stage and mainnet. On the Twin chain the Twin-only rows (`update-delay`, `batch`, `cancel`) follow. Every row prints a tx hash and a receipt status. `scripts/stage/govern-rows.ts` fails the verb unless every row has both and status 1.
 
 ## Environment
 

@@ -312,8 +312,9 @@ recorded, not released. Each receipt id is derived from the payload's own
 `session_id` and `subject_id`. Both payloads in
 `testing/ethereum-testnet/config/consensus-receipt-fixtures/` validate against
 `tests/fixtures/consensus-receipt.schema.json`. `receipt-a`'s weights equal the
-live Twin router vector under the missing-vault = 0 bps rule (rmUSDC 10000,
-the other three buckets 0), so it renders Applied; `receipt-b`'s weights differ,
+live Twin router vector under the missing-vault = 0 bps rule (the stage sheet's
+`ROUTER_WEIGHTS`, which the deployer leaves on the router before the handover:
+rmUSDC 6000, rmPROTO 2500, rmRWA 1500, rmAGENT 0), so it renders Applied; `receipt-b`'s weights differ,
 so it renders Not applied.
 
 The seeded pair is core's own fixture bytes — enough to prove the four rendered

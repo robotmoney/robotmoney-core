@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { PublishError } from "./errors.ts";
 import { MAINNET_CHAIN_ID } from "./floors.ts";
 import { governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
-import { VAULT_KEYS, VAULT_NAME, type VaultKey } from "./sheet.ts";
+import { VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
 import { VAULT_ADAPTER_FIELD } from "./core-wiring.ts";
 import { loadConfigAssets } from "./asset-config.ts";
 import { manifestBase } from "./stage-table.ts";
@@ -54,6 +54,7 @@ export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "ch
       tvlCap: v.tvlCap, perDepositCap: v.perDepositCap, exitFeeBps: v.exitFeeBps,
       feeRecipient: (s.feeRecipient === "@safe" ? safeAddress : s.feeRecipient) as `0x${string}`,
       expectPaused: k !== "USDC" && !unpaused.includes(k),
+      routerEligible: k === "USDC" || s.eligibleVaults.includes(k),
       assets: loadExpectedAssets(ctx, k),
       ...(k === "USDC" ? { seed: s.seedDeposit, seedShareReceiver: s.shareReceiver } : {}),
     };
@@ -61,6 +62,8 @@ export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "ch
   return {
     chainId: ctx.chainId, deployer: s.admin, pauser: s.pauser, emergency: s.emergency, safeOwners: s.safeOwners, safeThreshold: s.safeThreshold,
     timelockDelay: timelockDelay ?? Number(s.timelockMinDelay), vaults,
+    governance: { voters: s.voters, voterPower: s.voterPower, quorum: s.quorum, votingPeriod: s.votingPeriod, executionDelay: s.executionDelay },
+    defaultWeights: (["USDC", ...eligibleInOrder(s)] as VaultKey[]).map((k) => ({ vault: VAULT_NAME[k], bps: s.weights.find((w) => w.key === k)!.bps })),
   };
 }
 

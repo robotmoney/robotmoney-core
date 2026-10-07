@@ -42,15 +42,19 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     clock: 1000n, minDelay: startMinDelay, ops: new Map<string, Op>(), log: [] as string[], signed: [] as string[], nonce: 0,
     /** `kind:row` per timelock bundle built, in order: the row is the first word of the description. */
     events: [] as string[],
-    /** The scheduled calls per row. */
-    scheduled: new Map<string, { form: string; calls: { target: string; data: string }[] }>(),
+    /** The scheduled calls per row, with the timelock predecessor each operation carries (undefined: none). */
+    scheduled: new Map<string, { form: string; calls: { target: string; data: string }[]; predecessor?: string }>(),
+    /** The timelock operation id of each scheduled row. */
+    ids: new Map<string, Hex>(),
+    /** Every transaction hash the fake Safe sent, per timelock operation id: a Safe transaction shared by two operations would show here. */
+    safeTxs: new Map<string, string[]>(),
     /** Overrides for a read: `functionName` to the value the chain returns. */
     reads: {} as Record<string, unknown>,
     /** Receipt ids recordReceipt has anchored (the test seeds it) and releaseReceipt has released (an executed timelock call adds to it). */
     recorded: new Set<string>(), released: new Set<string>(),
   };
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
-  const idOf = (p: { calls: { target: string; data: string }[]; salt: string; form?: string }): Hex => keccak256(toBytes(JSON.stringify([p.calls.map((c) => [c.target, c.data]), p.salt, p.form ?? "batch"])));
+  const idOf = (p: { calls: { target: string; data: string }[]; salt: string; form?: string; predecessor?: string }): Hex => keccak256(toBytes(JSON.stringify([p.calls.map((c) => [c.target, c.data]), p.salt, p.form ?? "batch", p.predecessor ?? null])));
   const handle: any = {
     address: A.safe, owners: sheet.safeOwners, threshold: sheet.safeThreshold, chain: { rpcUrl: "x", chainId: 918453 },
     client: {
@@ -70,7 +74,6 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "executionDelay": return sheet.executionDelay;
           case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;
           case "agents": return [true, 0n];
-          case "defaultWeightsLength": return BigInt(1 + sheet.govern.eligibleVaults.length);
           case "isRecorded": return s.recorded.has(String(args?.[0]).toLowerCase());
           case "isReleased": return s.released.has(String(args?.[0]).toLowerCase());
         }
@@ -85,15 +88,16 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     timelockMinDelay: (async () => s.minDelay) as never,
     operationId: (async (_h: unknown, p: never) => idOf(p)) as never,
     operationState: (async (_h: unknown, _t: unknown, id: string) => { const o = s.ops.get(id); return o ? { exists: true, pending: o.pending, done: o.done, ready: o.pending && s.clock >= o.readyAt, readyAt: o.readyAt } : { exists: false, pending: false, done: false, ready: false, readyAt: 0n }; }) as never,
-    scheduleOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; calls: { target: string; data: string }[] }) => {
+    scheduleOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; predecessor?: string; calls: { target: string; data: string }[] }) => {
       const id = idOf(p as never); const k = p.form === "single" ? "schedule" : "scheduleBatch";
-      s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`); s.scheduled.set(rowOf(p.description), { form: p.form ?? "batch", calls: p.calls });
-      return bundle("schedule", id);
+      s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`); s.scheduled.set(rowOf(p.description), { form: p.form ?? "batch", calls: p.calls, predecessor: p.predecessor });
+      s.ids.set(rowOf(p.description), id);
+      return { ...bundle("schedule", id), predecessor: p.predecessor };
     }) as never,
-    executeOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; calls: { target: string; data: Hex }[] }) => {
+    executeOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; predecessor?: string; calls: { target: string; data: Hex }[] }) => {
       const k = p.form === "single" ? "execute" : "executeBatch";
       s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`);
-      return { ...bundle("execute", idOf(p as never)), calls: p.calls };
+      return { ...bundle("execute", idOf(p as never)), calls: p.calls, predecessor: p.predecessor };
     }) as never,
     cancelOnTimelock: (async (_h: unknown, p: { id: Hex; description?: string }) => { s.log.push("cancel"); s.events.push(`cancel:${rowOf(p.description)}`); return bundle("cancel", p.id); }) as never,
     updateTimelockDelay: (async (_h: unknown, p: { newDelay: bigint; phase: string; salt: Hex }) => {
@@ -108,6 +112,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       if (b.action === "schedule") s.ops.set(id, { exists: true, pending: true, done: false, readyAt: s.clock + s.minDelay });
       else if (b.action === "cancel") s.ops.delete(id);
       else if (b.action === "execute") {
+        // a TimelockController refuses an operation whose predecessor is not done
+        if (b.predecessor && !s.ops.get(b.predecessor)?.done) throw new Error("TimelockController: missing dependency");
         s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n });
         for (const c of (b.calls ?? []) as { target: string; data: Hex }[]) {
           if (c.target !== A.receipt) continue;
@@ -118,6 +124,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       else if (b.action === "updateDelay.schedule") s.ops.set(id, { exists: true, pending: true, done: false, readyAt: s.clock + s.minDelay });
       else if (b.action === "updateDelay.execute") { s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n }); s.minDelay = b.newDelay; }
       s.nonce++;
+      const hash = `0x${s.nonce.toString(16).padStart(64, "0")}`;
+      s.safeTxs.set(id, [...(s.safeTxs.get(id) ?? []), hash]);
       return { txHash: `0x${s.nonce.toString(16).padStart(64, "0")}` as Hex, bundle: { ...b, executed: { tx_hash: `0x${s.nonce.toString(16).padStart(64, "0")}`, status: 1 } } };
     }) as never,
     verifyTimelockEffect: (async () => ({ ok: true, detail: "", state: {} })) as never,

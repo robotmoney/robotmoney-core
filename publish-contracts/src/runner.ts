@@ -19,7 +19,7 @@ import { configCheck, loadVaultConfiguredAssets } from "./ci/config-check.ts";
 import { viemReader } from "./verify/reader.ts";
 import type { ChainReader } from "./verify/types.ts";
 import { manifestBase, manifestPathFor } from "./stage-table.ts";
-import type { Address, Sheet } from "./sheet.ts";
+import { eligibilityBps, type Address, type Sheet } from "./sheet.ts";
 import type { CallerInputs } from "./sheet.ts";
 import { createSafe, impersonatedSender, connectSafe, verifyCreatedSafe, type CreateSafePlan, type SafeManifest } from "./safe/index.ts";
 
@@ -330,6 +330,7 @@ function envValue(ctx: RunContext, row: StageRow, name: string): string | undefi
   else if (src.from === "out") v = row.manifest ? (ctx.manifestOut ? manifestFilePath(ctx, row.manifest) : manifestPathFor(`deployments/<chain>/${row.manifest}`, ctx.chainId)) : undefined;
   else if (src.from === "sheet") v = ctx.sheet.values[src.name];
   else if (src.from === "manifest") v = readManifestField(ctx, `${src.stage === "safe" ? "safe" : stageManifestBase(src.stage)}:${src.field}`);
+  else if (src.from === "computed") v = row.vault ? (eligibilityBps(ctx.sheet, row.vault)?.join(",") ?? "none") : undefined;
   else if (src.from === "vaults") v = getStageTable().vaults.map((x) => readManifestField(ctx, `${stageManifestBase(x.stage)}:${src.field}`)).join(",");
   else return undefined;
   if (v === "@safe") v = readManifestField(ctx, "safe:safe");

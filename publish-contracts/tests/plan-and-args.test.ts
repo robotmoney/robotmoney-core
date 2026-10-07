@@ -54,10 +54,19 @@ describe("rehearsal and production differ only in the arguments", () => {
     const c = ["--call-label", "x", "--call-target", `0x${"1".repeat(40)}`, "--call-data", "0xabcd"];
     expect(parseCli(["govern", ...base, ...c]).call).toEqual({ label: "x", target: `0x${"1".repeat(40)}`, data: "0xabcd" });
     expect(() => parseCli(["publish", ...base, ...c])).toThrow("govern verb only");
-    expect(() => parseCli(["govern", ...base, ...c, "--row", "agents"])).toThrow("mutually exclusive");
+    expect(() => parseCli(["govern", ...base, ...c, "--row", "unpause-PROTO"])).toThrow("mutually exclusive");
     expect(() => parseCli(["govern", ...base, "--call-label", "x"])).toThrow("go together");
     expect(() => parseCli(["govern", ...base, "--call-label", "x", "--call-target", "0x12", "--call-data", "0xab"])).toThrow("address");
     expect(() => parseCli(["govern", ...base, "--call-label", "x", "--call-target", `0x${"1".repeat(40)}`, "--call-data", "abcd"])).toThrow("hex");
+  });
+
+  test("--row update-delay, batch and cancel are refused with USAGE on --chain 8453 and accepted on 918453; the unpauses are accepted on both", () => {
+    const base = (chain: string) => ["--chain", chain, "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
+    for (const row of ["update-delay", "batch", "cancel", "4", "5", "6"]) {
+      expect(() => parseCli(["govern", ...base("8453"), "--row", row])).toThrow("refused on chain 8453");
+      expect(parseCli(["govern", ...base("918453"), "--row", row]).row).toBe(row);
+    }
+    for (const row of ["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "1", "3"]) expect(parseCli(["govern", ...base("8453"), "--row", row]).row).toBe(row);
   });
 
   test("--receipt-id goes with govern --row release-receipt only, and must be a bytes32", () => {
@@ -65,7 +74,7 @@ describe("rehearsal and production differ only in the arguments", () => {
     const id = `0x${"AB".repeat(32)}`;
     expect(parseCli(["govern", ...base, "--row", "release-receipt", "--receipt-id", id])).toMatchObject({ row: "release-receipt", receiptId: id.toLowerCase() });
     expect(() => parseCli(["govern", ...base, "--row", "release-receipt"])).toThrow("needs --receipt-id");
-    expect(() => parseCli(["govern", ...base, "--row", "agents", "--receipt-id", id])).toThrow("--row release-receipt only");
+    expect(() => parseCli(["govern", ...base, "--row", "unpause-PROTO", "--receipt-id", id])).toThrow("--row release-receipt only");
     expect(() => parseCli(["govern", ...base, "--receipt-id", id])).toThrow("--row release-receipt only");
     expect(() => parseCli(["govern", ...base, "--row", "release-receipt", "--receipt-id", "0x12"])).toThrow("bytes32");
     expect(() => parseCli(["publish", ...base, "--row", "release-receipt", "--receipt-id", id])).toThrow("govern verb");

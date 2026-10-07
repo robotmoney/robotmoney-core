@@ -1,68 +1,38 @@
-// Stage 13 govern: the post-handover matrix (runbook Q2) through the REAL Safe and the REAL timelock, with the Safe tool (src/safe).
+// Stage 13 govern: the post-handover operations through the REAL Safe and the REAL timelock, with the Safe tool (src/safe).
 // After the timelock stage the deployer holds no role. Everything here is a Safe transaction that schedules, executes or cancels a timelock operation.
-// ONE ROUND PER STEP (owner decision, 2026-10-05). Each step is its own schedule, its own wait for the timelock's real delay, its own execute and
-// its own on-chain read-back. Steps are never batched into a shared round. The steps, in order (GOVERN_ROWS):
-//   1 voting-power-quorum        setVotingPower per voter, setQuorumThreshold, setVotingPeriod, setExecutionDelay
-//   2 agents                     gateway.authorizeAgent per sheet agent
-//   3 other-setters              the vault setters: per-deposit cap, TVL cap, exit fee, fee recipient (re-assertion of the deployed values)
-//   4 migrate-eligibility-<B>    registry.migrateEligibility for one basket (atomic: one call per basket, PROTO then AGENT then RWA)
-//   5 router-weights             router.setDefaultWeights
-//   6 unpause-<B>                unpause of one basket vault
-//   7 update-delay, batch, cancel   updateDelay; one scheduleBatch round that proves batch scheduling; a schedule then a cancel
-// On demand, outside the ordered matrix (it never blocks or completes the govern stage):
+// ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520): the unpause of each basket vault. The docs put exactly this
+// there: unpause needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). Voting power,
+// quorum, voting period, execution delay, the vault setters, router eligibility and the router default weights are DEPLOY-TIME configuration the
+// deployer sets before the handover (the governance and basket vault stages), and the verify stage asserts them against the sheet.
+// The rows (GOVERN_ROWS):
+//   unpause-PROTO, unpause-AGENT, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting
+//   update-delay, batch, cancel                 Twin-only demonstrations of the Safe tool. Refused with USAGE on 8453.
+// A run schedules every unpause the sheet asks for (GOVERN_UNPAUSE_VAULTS), waits ONE timelock delay, then executes each and reads depositsPaused() back.
+// An operation declared dependent on another carries that operation's id as the timelock predecessor and runs in the same resume (no second wait).
+// On demand, outside the matrix (it never blocks or completes the govern stage):
 //   release-receipt              ConsensusRecommendationReceipt.releaseReceipt(receiptId), one round per receipt id (--receipt-id)
 // The receipt contract's ADMIN_ROLE is held by the TimelockController after the timelock stage (INV-3), so the release is the same Safe ->
 // Timelock round as every other row, on the Twin chain and on 8453 alike. Its run-manifest key and salt are `release-receipt-<receiptId>`.
-// A step the sheet does not ask for (no agents, a basket that is not eligible, a vault that stays paused) is recorded as skipped.
-// Whether a vault is unpaused, and which baskets become eligible, is sheet data (GOVERN_UNPAUSE_VAULTS, GOVERN_ELIGIBLE_VAULTS).
-// This module decides nothing about pause semantics.
-// The wait is the timelock's real delay. On a Twin fork (chain id is not 8453 and the RPC answers anvil_nodeInfo) it runs by time warp to one second past
-// the ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING with the ready time and the exact next command, and the same
-// --row resumes the round.
+// A basket the sheet does not list in GOVERN_UNPAUSE_VAULTS is recorded as skipped (it stays paused). This module decides nothing about pause semantics.
+// The wait is the timelock's real delay. On a Twin fork (chain id is not 8453 and the RPC answers anvil_nodeInfo) it runs by ONE time warp to one second
+// past the latest ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING once, with the ready time and the exact next
+// command, and the same command resumes the stage.
 import { encodeFunctionData, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
 import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import { readManifestField, saveRunManifest, type RunContext, type RunManifest } from "./runner.ts";
-import { VAULT_KEYS, VAULT_NAME, type Sheet, type VaultKey } from "./sheet.ts";
+import { BASKET_KEYS, VAULT_NAME, type Sheet, type VaultKey } from "./sheet.ts";
 import { VAULT_STAGES, manifestRef, type StageRow } from "./stages.ts";
 import {
   cancelOnTimelock, connectSafe, executeOnTimelock, executeTx, operationId, operationState, scheduleOnTimelock, signTx, timelockMinDelay,
   updateTimelockDelay, verifyTimelockEffect, type Signer, type SafeHandle, type SafeTxBundle, type TimelockCall,
 } from "./safe/index.ts";
 
-export const GOV_ABI = parseAbi([
-  "function setVotingPower(address voter, uint256 power)",
-  "function setQuorumThreshold(uint256 threshold)",
-  "function setVotingPeriod(uint64 period)",
-  "function setExecutionDelay(uint64 delay)",
-  "function votingPower(address voter) view returns (uint256)",
-  "function quorumThreshold() view returns (uint256)",
-  "function votingPeriod() view returns (uint64)",
-  "function executionDelay() view returns (uint64)",
-]);
 export const VAULT_ABI = parseAbi([
-  "function setTvlCap(uint256 newCap)",
   "function setPerDepositCap(uint256 newCap)",
-  "function setExitFeeBps(uint256 newBps)",
-  "function setFeeRecipient(address newRecipient)",
   "function unpauseDeposits()",
   "function depositsPaused() view returns (bool)",
-  "function tvlCap() view returns (uint256)",
   "function perDepositCap() view returns (uint256)",
-  "function exitFeeBps() view returns (uint256)",
-  "function feeRecipient() view returns (address)",
-]);
-export const GATEWAY_ABI = parseAbi([
-  "function authorizeAgent(address agent, (bool active, uint64 validUntil, uint256 maxPerPayment, uint256 maxPerWindow, address shareReceiver, address[] allowedDestinations, address assetRecipient, uint256 maxWithdrawPerPayment, uint256 maxWithdrawPerWindow, address[] allowedSourceVaults) p)",
-  "function agents(address) view returns (bool active, uint64 validUntil, uint256 maxPerPayment, uint256 maxPerWindow, address shareReceiver, address assetRecipient, uint256 maxWithdrawPerPayment, uint256 maxWithdrawPerWindow)",
-]);
-export const REGISTRY_ABI = parseAbi([
-  "function migrateEligibility(address vault, bool eligible, address[] defaultVaults, uint256[] defaultBps)",
-  "function isRouterEligible(address vault) view returns (bool)",
-]);
-export const ROUTER_ABI = parseAbi([
-  "function setDefaultWeights(address[] vaults, uint256[] bps)",
-  "function defaultWeightsLength() view returns (uint256)",
 ]);
 export const RECEIPT_ABI = parseAbi([
   "function releaseReceipt(bytes32 receiptId)",
@@ -72,32 +42,37 @@ export const RECEIPT_ABI = parseAbi([
 const TL_ABI = parseAbi(["function updateDelay(uint256 newDelay)"]);
 
 export interface GovernAddrs {
-  timelock: Address; safe: Address; router: Address; registry: Address; gateway: Address; governance: Address;
+  timelock: Address; safe: Address;
   vaults: Record<VaultKey, Address>;
 }
 
 export function loadGovernAddrs(ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): GovernAddrs {
   const r = (ref: string) => readManifestField(ctx, ref) as Address;
   return {
-    timelock: r(manifestRef("timelock", "timelock")), safe: r(manifestRef("safe", "safe")), router: r(manifestRef("router", "router")), registry: r(manifestRef("registry", "registry")),
-    gateway: r(manifestRef("gateway", "gateway")), governance: r(manifestRef("governance", "governance")),
+    timelock: r(manifestRef("timelock", "timelock")), safe: r(manifestRef("safe", "safe")),
     vaults: Object.fromEntries(VAULT_STAGES.map((v) => [v.key, r(manifestRef(v.stage, "vault"))])) as Record<VaultKey, Address>,
   };
 }
 
 export interface LabelledCall extends TimelockCall { label: string }
 
-/** The govern rows in run order. One row is one round: schedule, wait for the real delay, execute, read back. `--row` takes the 1-based number or the name. */
-export const BASKET_KEYS = ["PROTO", "AGENT", "RWA"] as const satisfies readonly VaultKey[];
-export const GOVERN_ROWS = [
-  "voting-power-quorum", "agents", "other-setters",
-  "migrate-eligibility-PROTO", "migrate-eligibility-AGENT", "migrate-eligibility-RWA",
-  "router-weights",
-  "unpause-PROTO", "unpause-AGENT", "unpause-RWA",
-  "update-delay", "batch", "cancel",
-] as const;
+/** The mainnet rows: one unpause per basket vault. Each is its own timelock operation, all scheduled in one sitting. */
+export { BASKET_KEYS };
+export const UNPAUSE_ROWS = ["unpause-PROTO", "unpause-AGENT", "unpause-RWA"] as const;
+/** Demonstrations of the Safe tool. They exist only as Twin-fork runs and are refused with USAGE on 8453. */
+export const TWIN_ONLY_ROWS = ["update-delay", "batch", "cancel"] as const;
+/** The govern rows in run order: the unpauses, then the Twin-only demonstrations. `--row` takes the 1-based number or the name. */
+export const GOVERN_ROWS = [...UNPAUSE_ROWS, ...TWIN_ONLY_ROWS] as const;
 export type GovernRowName = (typeof GOVERN_ROWS)[number];
 export const governRowNames = (): readonly string[] => GOVERN_ROWS;
+export const isTwinOnlyRow = (row: string): boolean => (TWIN_ONLY_ROWS as readonly string[]).includes(row);
+/** The rows a stage run needs on a chain: the unpauses on 8453, every row elsewhere. */
+export const stageRows = (chainId: number): readonly GovernRowName[] => (chainId === BASE_CHAIN_ID ? UNPAUSE_ROWS : GOVERN_ROWS);
+/**
+ * Declared dependencies between rows (row to the row it must follow). The dependent operation carries the other's operation id as the timelock
+ * predecessor, so both run in the same resume with no second wait. The basket unpauses are independent: none is declared.
+ */
+export const GOVERN_DEPENDENCIES: Readonly<Record<string, string>> = {};
 
 /**
  * The on-demand row: release one consensus receipt. Not in GOVERN_ROWS (the ordered matrix): it needs a receipt id, runs any number of times
@@ -136,72 +111,12 @@ export function resolveGovernRow(row: string): GovernRowName {
   throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${RECEIPT_ROW} --receipt-id 0x<bytes32>)`);
 }
 
-/** The baskets the sheet makes eligible, in migration order (PROTO, AGENT, RWA). The default-weight vector grows in this order. */
-export const eligibleInOrder = (sheet: Sheet): VaultKey[] => BASKET_KEYS.filter((k) => sheet.govern.eligibleVaults.includes(k));
-
-/** The default-weight vector after step i of the eligibility migration (i indexes eligibleInOrder). The last step is exactly the sheet's weights. */
-export function migrationVector(sheet: Sheet, a: GovernAddrs, step: number): { vaults: Address[]; bps: bigint[] } {
-  const eligible = eligibleInOrder(sheet);
-  const order: VaultKey[] = ["USDC", ...eligible];
-  const keys = order.slice(0, step + 2);
-  const w = new Map(sheet.govern.weights.map((x) => [x.key, x.bps]));
-  const final = keys.map((k) => w.get(k) ?? 0);
-  const isLast = step === eligible.length - 1;
-  let bps = final;
-  if (!isLast) {
-    const sum = final.reduce((x, y) => x + y, 0);
-    bps = sum === 0 ? keys.map((_, i) => Math.floor(10000 / keys.length) + (i === 0 ? 10000 % keys.length : 0)) : final.map((x) => Math.floor((x * 10000) / sum));
-    bps[0] = bps[0]! + (10000 - bps.reduce((x, y) => x + y, 0));
-  }
-  return { vaults: keys.map((k) => a.vaults[k]), bps: bps.map(BigInt) };
-}
-
-const feeRecipientOf = (sheet: Sheet, a: GovernAddrs): Address => (sheet.feeRecipient === "@safe" ? a.safe : sheet.feeRecipient) as Address;
-
-/**
- * The calls of one ordered step (rows 1 to 10). Empty means the sheet asks for nothing in this step: the row is skipped.
- * update-delay, batch and cancel are built in runGovern: they depend on the timelock's delay at that point of the run.
- */
+/** The calls of one unpause row. Empty means the sheet does not ask for it (the basket stays paused): the row is skipped. */
 export function buildStepCalls(sheet: Sheet, a: GovernAddrs, row: GovernRowName): LabelledCall[] {
   const calls: LabelledCall[] = [];
-  const add = (label: string, target: Address, data: Hex) => calls.push({ label, target, data });
-  if (row === "voting-power-quorum") {
-    for (const v of sheet.voters) add(`governance.setVotingPower(${v})`, a.governance, encodeFunctionData({ abi: GOV_ABI, functionName: "setVotingPower", args: [v, sheet.voterPower] }));
-    add("governance.setQuorumThreshold", a.governance, encodeFunctionData({ abi: GOV_ABI, functionName: "setQuorumThreshold", args: [sheet.quorum] }));
-    add("governance.setVotingPeriod", a.governance, encodeFunctionData({ abi: GOV_ABI, functionName: "setVotingPeriod", args: [sheet.votingPeriod] }));
-    add("governance.setExecutionDelay", a.governance, encodeFunctionData({ abi: GOV_ABI, functionName: "setExecutionDelay", args: [sheet.executionDelay] }));
-  } else if (row === "agents") {
-    const p = sheet.agentPolicy;
-    for (const agent of sheet.govern.agents) {
-      add(`gateway.authorizeAgent(${agent})`, a.gateway, encodeFunctionData({
-        abi: GATEWAY_ABI, functionName: "authorizeAgent",
-        args: [agent, { active: true, validUntil: p.validUntil, maxPerPayment: p.maxPerPayment, maxPerWindow: p.maxPerWindow, shareReceiver: sheet.shareReceiver,
-          allowedDestinations: [a.vaults.USDC], assetRecipient: sheet.shareReceiver, maxWithdrawPerPayment: p.maxWithdrawPerPayment, maxWithdrawPerWindow: p.maxWithdrawPerWindow, allowedSourceVaults: [a.vaults.USDC] }],
-      }));
-    }
-  } else if (row === "other-setters") {
-    const feeRecipient = feeRecipientOf(sheet, a);
-    for (const k of VAULT_KEYS) {
-      const v = sheet.vaults[k], t = a.vaults[k], n = VAULT_NAME[k];
-      add(`${n}.setPerDepositCap`, t, encodeFunctionData({ abi: VAULT_ABI, functionName: "setPerDepositCap", args: [v.perDepositCap] }));
-      add(`${n}.setTvlCap`, t, encodeFunctionData({ abi: VAULT_ABI, functionName: "setTvlCap", args: [v.tvlCap] }));
-      add(`${n}.setExitFeeBps`, t, encodeFunctionData({ abi: VAULT_ABI, functionName: "setExitFeeBps", args: [v.exitFeeBps] }));
-      add(`${n}.setFeeRecipient`, t, encodeFunctionData({ abi: VAULT_ABI, functionName: "setFeeRecipient", args: [feeRecipient] }));
-    }
-  } else if (row.startsWith("migrate-eligibility-")) {
-    const k = row.slice("migrate-eligibility-".length) as VaultKey;
-    const i = eligibleInOrder(sheet).indexOf(k);
-    if (i >= 0) {
-      const m = migrationVector(sheet, a, i);
-      add(`registry.migrateEligibility(${VAULT_NAME[k]})`, a.registry, encodeFunctionData({ abi: REGISTRY_ABI, functionName: "migrateEligibility", args: [a.vaults[k], true, m.vaults, m.bps] }));
-    }
-  } else if (row === "router-weights") {
-    const all: VaultKey[] = ["USDC", ...eligibleInOrder(sheet)];
-    const w = new Map(sheet.govern.weights.map((x) => [x.key, x.bps]));
-    add("router.setDefaultWeights", a.router, encodeFunctionData({ abi: ROUTER_ABI, functionName: "setDefaultWeights", args: [all.map((k) => a.vaults[k]), all.map((k) => BigInt(w.get(k)!))] }));
-  } else if (row.startsWith("unpause-")) {
+  if (row.startsWith("unpause-")) {
     const k = row.slice("unpause-".length) as VaultKey;
-    if (sheet.govern.unpauseVaults.includes(k)) add(`${VAULT_NAME[k]}.unpauseDeposits`, a.vaults[k], encodeFunctionData({ abi: VAULT_ABI, functionName: "unpauseDeposits" }));
+    if (sheet.govern.unpauseVaults.includes(k)) calls.push({ label: `${VAULT_NAME[k]}.unpauseDeposits`, target: a.vaults[k], data: encodeFunctionData({ abi: VAULT_ABI, functionName: "unpauseDeposits" }) });
   }
   return calls;
 }
@@ -245,8 +160,10 @@ export interface GovernOpts {
    * `false` turns the warp off (tests with a stub chain).
    */
   warp?: ((seconds: bigint) => Promise<void>) | false;
-  /** Run one row (one round) only, by number or name. Earlier rows must be done first. `release-receipt` (with `receiptId`) is on demand. */
+  /** Run one row only, by number or name. A Twin-only row needs the rows before it done first. `release-receipt` (with `receiptId`) is on demand. */
   row?: string;
+  /** Declared dependencies (row to the row it follows), default GOVERN_DEPENDENCIES. The dependent carries the other's operation id as predecessor. */
+  dependsOn?: Readonly<Record<string, string>>;
   /** With row `release-receipt` only: the bytes32 receipt id to release. */
   receiptId?: string;
   /** Where a row line goes. Default: stdout (console.log). */
@@ -301,32 +218,44 @@ async function warpFor(ctx: RunContext, o: GovernOpts): Promise<((seconds: bigin
 }
 const detected = new WeakMap<object, boolean>();
 
-/** The exact command that resumes a pending round. Arguments that carry no secret are spelled out, the rest are the same as this run's. */
-export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row: string): string {
-  if (row.startsWith(`${RECEIPT_ROW}-`)) row = `${RECEIPT_ROW} --receipt-id ${row.slice(RECEIPT_ROW.length + 1)}`;
-  return `bun publish-contracts/src/cli.ts govern --row ${row} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same --rpc, --sheet, --signer, --environment and --owner-signer arguments as this run)`;
+/** The exact command that resumes a pending run. Arguments that carry no secret are spelled out, the rest are the same as this run's. No row: the whole stage. */
+export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?: string): string {
+  if (row?.startsWith(`${RECEIPT_ROW}-`)) row = `${RECEIPT_ROW} --receipt-id ${row.slice(RECEIPT_ROW.length + 1)}`;
+  return `bun publish-contracts/src/cli.ts govern${row === undefined ? "" : ` --row ${row}`} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same --rpc, --sheet, --signer, --environment and --owner-signer arguments as this run)`;
 }
 
-async function waitReady(ctx: RunContext, o: GovernOpts, api: GovernApi, handle: SafeHandle, timelock: Address, id: Hex, row: string): Promise<void> {
+/**
+ * Waits until every operation is ready (or done), with ONE wait for the whole set: on a Twin fork one warp to one second past the latest ready
+ * time, on 8453 the run exits GOVERN_PENDING once with that latest ready time. `resumeRow` is the `--row` of the resume command (none: the stage).
+ */
+async function waitReady(ctx: RunContext, o: GovernOpts, api: GovernApi, handle: SafeHandle, timelock: Address, ops: { id: Hex; row: string }[], resumeRow?: string): Promise<void> {
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const maxWait = ctx.chainId === BASE_CHAIN_ID ? Math.min(o.maxWaitSeconds ?? 3600, 3600) : (o.maxWaitSeconds ?? 3600);
   for (;;) {
-    const st = await api.operationState(handle, timelock, id);
-    if (st.ready || st.done) return;
-    if (!st.pending) throw new PublishError("GOVERN", `operation ${id} (${row}) is not pending: it was cancelled or never scheduled`, { id });
-    const remaining = Number(st.readyAt - (await chainTime(handle)));
+    let latest = 0n;
+    for (const op of ops) {
+      const st = await api.operationState(handle, timelock, op.id);
+      if (st.ready || st.done) continue;
+      if (!st.pending) throw new PublishError("GOVERN", `operation ${op.id} (${op.row}) is not pending: it was cancelled or never scheduled`, { id: op.id });
+      if (st.readyAt > latest) latest = st.readyAt;
+    }
+    if (latest === 0n) return;
+    const remaining = Number(latest - (await chainTime(handle)));
+    const rows = ops.map((x) => x.row);
     const warp = remaining > 0 ? await warpFor(ctx, o) : undefined;
     if (warp) {
       const seconds = remaining + 1;
       await warp(BigInt(seconds));
-      ctx.log.log("info", "govern.warped", { row, seconds });
+      ctx.log.log("info", "govern.warped", { rows, seconds });
       continue;
     }
     if (remaining > maxWait) {
-      const next = resumeCommand(ctx, row);
-      throw new PublishError("GOVERN_PENDING", `govern row ${row} is scheduled and becomes ready at ${st.readyAt} (${new Date(Number(st.readyAt) * 1000).toISOString()}, in about ${remaining} s). After that time run: ${next}`, { id, row, ready_at: st.readyAt.toString(), remaining, next_command: next });
+      const next = resumeCommand(ctx, resumeRow);
+      const what = rows.length === 1 ? `govern row ${rows[0]} is scheduled` : `govern rows ${rows.join(", ")} are scheduled`;
+      throw new PublishError("GOVERN_PENDING", `${what} and become${rows.length === 1 ? "s" : ""} ready at ${latest} (${new Date(Number(latest) * 1000).toISOString()}, in about ${remaining} s). After that time run: ${next}`,
+        { ids: ops.map((x) => x.id), row: rows[0], rows, ready_at: latest.toString(), remaining, next_command: next });
     }
-    ctx.log.log("info", "govern.waiting", { row, remaining_s: remaining });
+    ctx.log.log("info", "govern.waiting", { rows, remaining_s: remaining });
     await sleep(o.pollMs ?? 5000);
   }
 }
@@ -343,36 +272,11 @@ type Rd = <T>(address: Address, abi: readonly unknown[], functionName: string, a
 const reader = (handle: SafeHandle): Rd => (address, abi, functionName, args = []) =>
   handle.client.readContract({ address, abi: abi as never, functionName: functionName as never, args: args as never }) as Promise<never>;
 
-/** Read-back of one ordered step: the problems found on chain after the round executed. An empty list is a pass. */
-export async function readBackStep(handle: SafeHandle, sheet: Sheet, a: GovernAddrs, row: GovernRowName): Promise<string[]> {
+/** Read-back of one unpause row: the problems found on chain after the round executed. An empty list is a pass. */
+export async function readBackStep(handle: SafeHandle, a: GovernAddrs, row: GovernRowName): Promise<string[]> {
   const bad: string[] = [];
   const rd = reader(handle);
-  if (row === "voting-power-quorum") {
-    for (const v of sheet.voters) if ((await rd<bigint>(a.governance, GOV_ABI, "votingPower", [v])) !== sheet.voterPower) bad.push(`votingPower(${v})`);
-    if ((await rd<bigint>(a.governance, GOV_ABI, "quorumThreshold")) !== sheet.quorum) bad.push("quorumThreshold");
-    if (BigInt(await rd<bigint>(a.governance, GOV_ABI, "votingPeriod")) !== BigInt(sheet.votingPeriod)) bad.push("votingPeriod");
-    if (BigInt(await rd<bigint>(a.governance, GOV_ABI, "executionDelay")) !== BigInt(sheet.executionDelay)) bad.push("executionDelay");
-  } else if (row === "agents") {
-    for (const agent of sheet.govern.agents) {
-      const r = await rd<readonly unknown[]>(a.gateway, GATEWAY_ABI, "agents", [agent]);
-      if (r[0] !== true) bad.push(`gateway.agents(${agent}).active`);
-    }
-  } else if (row === "other-setters") {
-    const feeRecipient = feeRecipientOf(sheet, a).toLowerCase();
-    for (const k of VAULT_KEYS) {
-      const v = sheet.vaults[k], n = VAULT_NAME[k];
-      if ((await rd<bigint>(a.vaults[k], VAULT_ABI, "tvlCap")) !== v.tvlCap) bad.push(`${n}.tvlCap`);
-      if ((await rd<bigint>(a.vaults[k], VAULT_ABI, "perDepositCap")) !== v.perDepositCap) bad.push(`${n}.perDepositCap`);
-      if ((await rd<bigint>(a.vaults[k], VAULT_ABI, "exitFeeBps")) !== v.exitFeeBps) bad.push(`${n}.exitFeeBps`);
-      if ((await rd<string>(a.vaults[k], VAULT_ABI, "feeRecipient")).toLowerCase() !== feeRecipient) bad.push(`${n}.feeRecipient`);
-    }
-  } else if (row.startsWith("migrate-eligibility-")) {
-    const k = row.slice("migrate-eligibility-".length) as VaultKey;
-    if (!(await rd<boolean>(a.registry, REGISTRY_ABI, "isRouterEligible", [a.vaults[k]]))) bad.push(`registry.isRouterEligible(${VAULT_NAME[k]})`);
-  } else if (row === "router-weights") {
-    const want = BigInt(1 + eligibleInOrder(sheet).length);
-    if ((await rd<bigint>(a.router, ROUTER_ABI, "defaultWeightsLength")) !== want) bad.push("router.defaultWeightsLength");
-  } else if (row.startsWith("unpause-")) {
+  if (row.startsWith("unpause-")) {
     const k = row.slice("unpause-".length) as VaultKey;
     if (await rd<boolean>(a.vaults[k], VAULT_ABI, "depositsPaused")) bad.push(`${VAULT_NAME[k]}.depositsPaused`);
   }
@@ -382,6 +286,8 @@ export async function readBackStep(handle: SafeHandle, sheet: Sheet, a: GovernAd
 /** One round, ready to run: the operation, how to send each phase, and how to check the effect. */
 interface RoundPlan {
   id: Hex;
+  /** The row whose operation this one follows (the timelock predecessor). */
+  dependsOn?: string;
   schedule: () => Promise<SafeTxBundle>;
   /** Absent for the cancel round: its second phase is the cancel. */
   execute?: () => Promise<SafeTxBundle>;
@@ -394,32 +300,47 @@ export interface GovernResult { rows: string[]; skipped: string[]; opIds: Record
 
 export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunManifest, o: GovernOpts): Promise<GovernResult> {
   const api = o.api ?? realGovernApi;
-  const a = loadGovernAddrs(ctx);
-  const sheet = ctx.sheet;
-  const handle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: a.safe, logger: ctx.log });
-  if (handle.owners.map((x) => x.toLowerCase()).sort().join() !== sheet.safeOwners.map((x) => x.toLowerCase()).sort().join()) throw new PublishError("GOVERN", "the Safe's owners on chain differ from the sheet", {});
-  ctx.log.log("info", "stage.start", { stage: row.name, safe: a.safe, timelock: a.timelock });
-  const state = (manifest.govern ??= {}) as GovernState;
+  // Usage errors first, before the Safe is read or anything is sent.
   if (o.call && ctx.chainId === BASE_CHAIN_ID) throw new PublishError("USAGE", "a generic timelock call is a Twin-chain test verb: it is refused on chain 8453");
   if (o.call && o.row !== undefined) throw new PublishError("USAGE", "a generic timelock call and --row are mutually exclusive");
   if (o.receiptId !== undefined && o.row !== RECEIPT_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only`);
   if (o.call && o.receiptId !== undefined) throw new PublishError("USAGE", "a generic timelock call and --receipt-id are mutually exclusive");
   const releasing = o.row === RECEIPT_ROW;
   const selected: GovernRowName | undefined = o.row === undefined || releasing ? undefined : resolveGovernRow(o.row);
+  if (selected !== undefined && isTwinOnlyRow(selected) && ctx.chainId === BASE_CHAIN_ID) {
+    throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet operation after the handover is the basket unpause)`);
+  }
+  const a = loadGovernAddrs(ctx);
+  const sheet = ctx.sheet;
+  const handle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: a.safe, logger: ctx.log });
+  if (handle.owners.map((x) => x.toLowerCase()).sort().join() !== sheet.safeOwners.map((x) => x.toLowerCase()).sort().join()) throw new PublishError("GOVERN", "the Safe's owners on chain differ from the sheet", {});
+  ctx.log.log("info", "stage.start", { stage: row.name, safe: a.safe, timelock: a.timelock });
+  const state = (manifest.govern ??= {}) as GovernState;
   const salt = (name: string) => governSalt(ctx.coreSha, ctx.chainId, name);
   const note = (b: SafeTxBundle) => ({ tx_hash: b.executed?.tx_hash, safe_tx_hash: b.safe_tx_hash, status: b.executed?.status });
   const save = () => saveRunManifest(ctx.evidenceDir, manifest);
   const opIds: Record<string, Hex> = {};
   const ran: string[] = [];
   const skipped: string[] = [];
+  const dependsOn = o.dependsOn ?? GOVERN_DEPENDENCIES;
+  for (const [dep, pre] of Object.entries(dependsOn)) {
+    const di = (GOVERN_ROWS as readonly string[]).indexOf(dep), pi = (GOVERN_ROWS as readonly string[]).indexOf(pre);
+    if (di < 0 || pi < 0 || pi >= di) throw new PublishError("USAGE", `row ${dep} cannot follow ${pre}: both must be govern rows and the predecessor comes first`, { dep, pre });
+  }
 
-  /** The plan of a row, or a reason to skip it. */
+  /** The plan of a row, or a reason to skip it. A declared predecessor must be a row of this run with an operation id. */
   async function plan(name: GovernRowName): Promise<RoundPlan | string> {
+    const pre = dependsOn[name];
+    let predecessor: Hex | undefined;
+    if (pre !== undefined) {
+      predecessor = opIds[pre];
+      if (predecessor === undefined) throw new PublishError("GOVERN", `govern row ${name} follows ${pre}, which has no operation in this run (skipped or not selected)`, { row: name, depends_on: pre });
+    }
     const orderedPlan = async (calls: LabelledCall[], saltName: string, readBack: () => Promise<string[]>, description: string): Promise<RoundPlan> => {
       const form = calls.length === 1 ? ("single" as const) : ("batch" as const);
-      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(saltName), form };
+      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(saltName), form, ...(predecessor ? { predecessor } : {}) };
       return {
-        id: await api.operationId(handle, p), readBack, description,
+        id: await api.operationId(handle, p), readBack, description, ...(pre !== undefined ? { dependsOn: pre } : {}),
         schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${name} (${calls.length} calls): ${calls.map((c) => c.label).join("; ")}` }),
         execute: () => api.executeOnTimelock(handle, { ...p, description: `${name} execute` }),
       };
@@ -462,70 +383,119 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       };
     }
     const calls = buildStepCalls(sheet, a, name);
-    if (calls.length === 0) {
-      if (name === "agents") return "the sheet registers no agents (GOVERN_AGENT_ADDRESSES is none)";
-      if (name.startsWith("migrate-eligibility-")) return `${name.slice("migrate-eligibility-".length)} is not in GOVERN_ELIGIBLE_VAULTS`;
-      if (name.startsWith("unpause-")) return `${name.slice("unpause-".length)} is not in GOVERN_UNPAUSE_VAULTS: it stays paused`;
-      return "no calls";
-    }
-    return orderedPlan(calls, name, () => readBackStep(handle, sheet, a, name), `${calls.length} call(s)`);
+    if (calls.length === 0) return `${name.slice("unpause-".length)} is not in GOVERN_UNPAUSE_VAULTS: it stays paused`;
+    return orderedPlan(calls, name, () => readBackStep(handle, a, name), `${calls.length} call(s)`);
   }
 
-  /** `emitAs` is the `row` of the printed lines (default: the record key). The release round prints `release-receipt` for every receipt. */
-  async function round(name: string, p: RoundPlan, emitAs: string = name): Promise<void> {
+  /** Phase 1 of a round: schedule (or, for an operation already on the timelock, adopt it). `emitAs` is the `row` of the printed lines. */
+  async function schedulePhase(name: string, p: RoundPlan, emitAs: string = name): Promise<void> {
     opIds[name] = p.id;
     const rec: RowRecord = state[name] ?? {};
-    // phase 1: schedule (or, for a row whose operation is already on the timelock, adopt it)
     if (rec.scheduled) {
       ctx.log.log("info", "govern.phase_skipped", { row: name, phase: "scheduled" });
       emitPhase(o, emitAs, "scheduled", rec.scheduled);
-    } else {
-      const st = await api.operationState(handle, a.timelock, p.id);
-      let sched: PhaseRecord;
-      if (st.exists) sched = { at: new Date().toISOString(), operation_id: p.id, ready_at: st.readyAt.toString(), note: "already scheduled by an earlier run" };
-      else {
-        const done = await signAndExecute(ctx, o, api, handle, await p.schedule());
-        const after = await api.operationState(handle, a.timelock, p.id);
-        sched = { at: new Date().toISOString(), operation_id: p.id, ready_at: after.readyAt.toString(), ...note(done) };
-      }
-      rec.scheduled = sched;
-      state[name] = rec;
-      save();
-      ctx.log.log("info", "govern.phase_done", { row: name, phase: "scheduled" });
-      emitPhase(o, emitAs, "scheduled", sched);
-    }
-    // phase 2: cancel (cancel row), or wait for the real delay and execute
-    if (p.cancel) {
-      if (rec.cancelled) { emitPhase(o, emitAs, "cancelled", rec.cancelled); return; }
-      let cancelled: PhaseRecord;
-      if (!(await api.operationState(handle, a.timelock, p.id)).exists) cancelled = { at: new Date().toISOString(), operation_id: p.id, ready_at: rec.scheduled.ready_at, note: "already cancelled by an earlier run" };
-      else cancelled = { at: new Date().toISOString(), operation_id: p.id, ready_at: rec.scheduled.ready_at, ...note(await signAndExecute(ctx, o, api, handle, await p.cancel())) };
-      const bad = await p.readBack();
-      if (bad.length) throw new PublishError("GOVERN", `govern row ${name} read-back failed: ${bad.join(", ")}`, { bad });
-      rec.cancelled = cancelled;
-      save();
-      emitPhase(o, emitAs, "cancelled", rec.cancelled);
       return;
     }
+    const st = await api.operationState(handle, a.timelock, p.id);
+    let sched: PhaseRecord;
+    if (st.exists) sched = { at: new Date().toISOString(), operation_id: p.id, ready_at: st.readyAt.toString(), note: "already scheduled by an earlier run" };
+    else {
+      const done = await signAndExecute(ctx, o, api, handle, await p.schedule());
+      const after = await api.operationState(handle, a.timelock, p.id);
+      sched = { at: new Date().toISOString(), operation_id: p.id, ready_at: after.readyAt.toString(), ...note(done) };
+    }
+    rec.scheduled = sched;
+    state[name] = rec;
+    save();
+    ctx.log.log("info", "govern.phase_done", { row: name, phase: "scheduled" });
+    emitPhase(o, emitAs, "scheduled", sched);
+  }
+
+  /** Phase 2 of a cancel round: the Safe cancels the scheduled operation. */
+  async function cancelPhase(name: string, p: RoundPlan, emitAs: string = name): Promise<void> {
+    const rec = state[name]!;
+    if (rec.cancelled) { emitPhase(o, emitAs, "cancelled", rec.cancelled); return; }
+    let cancelled: PhaseRecord;
+    if (!(await api.operationState(handle, a.timelock, p.id)).exists) cancelled = { at: new Date().toISOString(), operation_id: p.id, ready_at: rec.scheduled!.ready_at, note: "already cancelled by an earlier run" };
+    else cancelled = { at: new Date().toISOString(), operation_id: p.id, ready_at: rec.scheduled!.ready_at, ...note(await signAndExecute(ctx, o, api, handle, await p.cancel!())) };
+    const bad = await p.readBack();
+    if (bad.length) throw new PublishError("GOVERN", `govern row ${name} read-back failed: ${bad.join(", ")}`, { bad });
+    rec.cancelled = cancelled;
+    save();
+    emitPhase(o, emitAs, "cancelled", rec.cancelled);
+  }
+
+  /** Phase 2 of an executing round, once the delay has passed: execute (or adopt an execution already on chain), read back, record. */
+  async function executePhase(name: string, p: RoundPlan, emitAs: string = name): Promise<void> {
+    const rec = state[name]!;
     if (rec.executed) { emitPhase(o, emitAs, "executed", rec.executed); return; }
-    await waitReady(ctx, o, api, handle, a.timelock, p.id, name);
     let ex: PhaseRecord;
     if ((await api.operationState(handle, a.timelock, p.id)).done) {
       const bad = await p.readBack();
       if (bad.length) throw new PublishError("GOVERN", `govern row ${name} read-back differs from the sheet: ${bad.join(", ")}`, { bad });
-      ex = { at: new Date().toISOString(), operation_id: p.id, ready_at: rec.scheduled.ready_at, note: "already executed by an earlier run" };
+      ex = { at: new Date().toISOString(), operation_id: p.id, ready_at: rec.scheduled!.ready_at, note: "already executed by an earlier run" };
     } else {
       const done = await signAndExecute(ctx, o, api, handle, await p.execute!());
       const eff = await api.verifyTimelockEffect(handle, done);
       if (!eff.ok) throw new PublishError("GOVERN", `govern row ${name} effect not observed: ${eff.detail}`);
       const bad = await p.readBack();
       if (bad.length) throw new PublishError("GOVERN", `govern row ${name} read-back differs from the sheet: ${bad.join(", ")}`, { bad });
-      ex = { at: new Date().toISOString(), operation_id: p.id, ready_at: rec.scheduled.ready_at, ...note(done) };
+      ex = { at: new Date().toISOString(), operation_id: p.id, ready_at: rec.scheduled!.ready_at, ...note(done) };
     }
     rec.executed = ex;
     save();
     ctx.log.log("info", "govern.phase_done", { row: name, phase: "executed" });
     emitPhase(o, emitAs, "executed", ex);
+  }
+
+  /** One round on its own: schedule, then cancel or wait for the real delay and execute. The receipt release, the generic call and the Twin-only rows. */
+  async function round(name: string, p: RoundPlan, emitAs: string = name): Promise<void> {
+    await schedulePhase(name, p, emitAs);
+    if (p.cancel) return cancelPhase(name, p, emitAs);
+    if (state[name]!.executed) return executePhase(name, p, emitAs);
+    await waitReady(ctx, o, api, handle, a.timelock, [{ id: p.id, row: name }], name);
+    await executePhase(name, p, emitAs);
+  }
+
+  /** Reprint the lines of a row that is already complete. */
+  function reprint(name: string): void {
+    const r = state[name]!;
+    if (r.scheduled) emitPhase(o, name, "scheduled", r.scheduled);
+    if (r.executed) emitPhase(o, name, "executed", r.executed);
+    if (r.cancelled) emitPhase(o, name, "cancelled", r.cancelled);
+  }
+
+  /**
+   * The unpause rows as one set: every operation scheduled in one sitting (each its own timelock operation and its own Safe transaction), ONE wait
+   * for the latest ready time, then each executed in order and read back. A resume finds the schedules recorded and goes straight to the wait.
+   */
+  async function runSet(names: readonly GovernRowName[], resumeRow?: string): Promise<void> {
+    const live: { name: GovernRowName; p: RoundPlan }[] = [];
+    for (const name of names) {
+      if (rowComplete(state[name])) {
+        ctx.log.log("info", "govern.row_complete", { row: name });
+        const doneId = state[name]!.scheduled?.operation_id;
+        if (doneId) opIds[name] = doneId as Hex; // a dependent row of this run still needs its predecessor's id
+        reprint(name);
+        continue;
+      }
+      const p = await plan(name);
+      if (typeof p === "string") {
+        state[name] = { skipped: { at: new Date().toISOString(), reason: p } };
+        save();
+        skipped.push(name);
+        ctx.log.log("info", "govern.row_skipped", { row: name, reason: p });
+        continue;
+      }
+      await schedulePhase(name, p);
+      live.push({ name, p });
+    }
+    await waitReady(ctx, o, api, handle, a.timelock, live.map((x) => ({ id: x.p.id, row: x.name })), resumeRow);
+    for (const { name, p } of live) {
+      await executePhase(name, p);
+      ran.push(name);
+      ctx.log.log("info", "govern.row_done", { row: name });
+    }
   }
 
   if (releasing) {
@@ -588,35 +558,25 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     return { rows: [name], skipped: [], opIds };
   }
 
-  for (const name of GOVERN_ROWS) {
-    if (selected !== undefined && selected !== name) continue;
-    if (rowComplete(state[name])) {
-      ctx.log.log("info", "govern.row_complete", { row: name });
-      const r = state[name]!;
-      if (r.scheduled) emitPhase(o, name, "scheduled", r.scheduled);
-      if (r.executed) emitPhase(o, name, "executed", r.executed);
-      if (r.cancelled) emitPhase(o, name, "cancelled", r.cancelled);
-      continue;
-    }
-    // one round at a time, in order: a row starts only when every earlier row is complete
+  // The unpauses are one set: they have no order among themselves. A single --row unpause-X is the set of one.
+  const wanted = selected === undefined ? stageRows(ctx.chainId) : [selected];
+  const unpauses = wanted.filter((n) => !isTwinOnlyRow(n));
+  if (unpauses.length) await runSet(unpauses, selected);
+  // The Twin-only demonstrations run one round at a time, in order, after every unpause is complete.
+  for (const name of wanted.filter((n) => isTwinOnlyRow(n))) {
+    if (rowComplete(state[name])) { ctx.log.log("info", "govern.row_complete", { row: name }); reprint(name); continue; }
     const idx = GOVERN_ROWS.indexOf(name);
     const open = GOVERN_ROWS.slice(0, idx).find((n) => !rowComplete(state[n]));
-    if (open) throw new PublishError("GOVERN", `govern row ${name} cannot start: row ${open} is not complete. Rows run one round at a time, in order. Run ${open} first.`, { row: name, blocked_by: open });
+    if (open) throw new PublishError("GOVERN", `govern row ${name} cannot start: row ${open} is not complete. The Twin-only rows run one round at a time, after the unpauses. Run ${open} first.`, { row: name, blocked_by: open });
     const p = await plan(name);
-    if (typeof p === "string") {
-      state[name] = { skipped: { at: new Date().toISOString(), reason: p } };
-      save();
-      skipped.push(name);
-      ctx.log.log("info", "govern.row_skipped", { row: name, reason: p });
-      continue;
-    }
+    if (typeof p === "string") throw new PublishError("GOVERN", `govern row ${name} has nothing to run: ${p}`, { row: name });
     await round(name, p);
     ran.push(name);
     ctx.log.log("info", "govern.row_done", { row: name });
   }
 
-  // a single-row run leaves the stage open: only a run that finds every row complete marks govern done
-  if (GOVERN_ROWS.every((n) => rowComplete(state[n]))) {
+  // a single-row run leaves the stage open: only a run that finds every row of this chain complete marks govern done
+  if (stageRows(ctx.chainId).every((n) => rowComplete(state[n]))) {
     if (!manifest.stages[row.name] || manifest.stages[row.name]!.status !== "done") {
       manifest.stages[row.name] = { status: "done", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), steps: Object.keys(state).length };
     }

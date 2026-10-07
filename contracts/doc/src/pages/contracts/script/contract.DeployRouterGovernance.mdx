@@ -5,7 +5,7 @@ description: "Foundry deploy script for the RouterGovernance contract. Deploys R
 
 # DeployRouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a62b707f1cd64e98d8d714f9420d3ce1885da8d1/contracts/script/DeployRouterGovernance.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -38,6 +38,8 @@ VOTING_PERIOD      — voting period in seconds
 EXECUTION_DELAY    — delay from voting end to execution in seconds
 (at least the contract's MIN_EXECUTION_DELAY)
 QUORUM_THRESHOLD   — minimum FOR voting power for quorum (greater than 1)
+VOTER_ADDRESSES    — comma list of the voters; each gets VOTER_POWER (issue 1520: set by the deployer, before the timelock handover)
+VOTER_POWER        — voting power of each voter, above 0
 EXPECTED_CHAIN_ID  — mandatory and equal to 8453 on Base mainnet
 DEPLOYMENT_OUT     — path for the output JSON (required, no default)
 
@@ -108,6 +110,42 @@ function runInProcessWith(
 | ---- | ---- | ----------- |
 | d | `Deployed` | Struct containing the deployed governance and key parameters. |
 
+<a id="runinprocesswithvoters-address-address-uint64-uint64-uint256-address-uint256"></a>
+
+### runInProcessWithVoters
+
+In-process variant that also sets the voting power of every voter, as `run()` does. No broadcast, no JSON written.
+
+```solidity
+function runInProcessWithVoters(
+        address admin_,
+        address router_,
+        uint64 votingPeriod_,
+        uint64 executionDelay_,
+        uint256 quorumThreshold_,
+        address[] calldata voters_,
+        uint256 power_
+    ) external returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin_ | `address` |  |
+| router_ | `address` |  |
+| votingPeriod_ | `uint64` |  |
+| executionDelay_ | `uint64` |  |
+| quorumThreshold_ | `uint256` |  |
+| voters_ | `address[]` | Voters, each given `power_`. |
+| power_ | `uint256` | Voting power of each voter. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
 <a id="_deploy-address-address-address-uint64-uint64-uint256"></a>
 
 ### _deploy
@@ -139,6 +177,55 @@ function _deploy(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+
+<a id="_setvotingpower-deployed-address-uint256"></a>
+
+### _setVotingPower
+
+<i>
+
+Voting power is deploy-time configuration: the deployer holds ADMIN_ROLE on the governance contract it just deployed, so it sets
+the power of every voter here, before DeployTimelock hands ADMIN_ROLE away. Each value is read back.
+
+</i>
+
+```solidity
+function _setVotingPower(Deployed memory d, address[] memory voters, uint256 power) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| voters | `address[]` |  |
+| power | `uint256` |  |
+
+<a id="_envvotersrequired-string"></a>
+
+### _envVotersRequired
+
+<i>
+
+A required comma list of non-zero addresses, no repeat.
+
+</i>
+
+```solidity
+function _envVotersRequired(string memory key) internal view returns (address[] memory voters);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| voters | `address[]` |  |
 
 <a id="_grantrouteradmin-deployed-address"></a>
 

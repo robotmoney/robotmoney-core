@@ -1,0 +1,87 @@
+---
+title: "DeployTimeVotingPowerTest"
+description: "The deployer sets voting power in the governance stage, before the timelock handover."
+---
+
+# DeployTimeVotingPowerTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/19631eb6f0ab3bb0cf39ce0243c580c8032acb9f/contracts/test/DeployTimeRouterConfig.t.sol)
+
+**Inherits:** Test
+
+The deployer sets voting power in the governance stage, before the timelock handover.
+
+## State Variables
+
+### script
+
+```solidity
+GovernanceVotersHarness internal script;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("dt-gov-admin");
+```
+
+### voterA
+
+```solidity
+address internal voterA = makeAddr("dt-voter-a");
+```
+
+### voterB
+
+```solidity
+address internal voterB = makeAddr("dt-voter-b");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_votingpowerissetforeveryvoteratdeploytime"></a>
+
+### test_votingPowerIsSetForEveryVoterAtDeployTime
+
+```solidity
+function test_votingPowerIsSetForEveryVoterAtDeployTime() public;
+```
+
+<a id="test_totalvotingpowerbelowquorumreverts"></a>
+
+### test_totalVotingPowerBelowQuorumReverts
+
+```solidity
+function test_totalVotingPowerBelowQuorumReverts() public;
+```
+
+<a id="test_zerovoterpowerreverts"></a>
+
+### test_zeroVoterPowerReverts
+
+```solidity
+function test_zeroVoterPowerReverts() public;
+```
+
+<a id="test_voterlistisrequiredandstrict"></a>
+
+### test_voterListIsRequiredAndStrict
+
+```solidity
+function test_voterListIsRequiredAndStrict() public;
+```
+

@@ -69,3 +69,33 @@ describe.skipIf(!mainReady)(`devops 60: verifier exits 0 against chain 8453 (rea
     expect(p.exitCode).toBe(0);
   }, 600_000);
 });
+
+// Issue 1520, stage 12: the verifier asserts every deploy-time value against the sheet. The deployer set these before the handover and govern never
+// touches them, so a difference here is a deploy that did not land the sheet. The world is the in-memory chain of tests/verify/world.ts.
+describe("issue 1520: the stage 12 verifier fails when any deploy-time value differs from the sheet", () => {
+  const { buildWorld, failed, GOV, ROUTER, VAULTS, addr } = require("./verify/world.ts") as typeof import("./verify/world.ts");
+  const { verifyDeployment } = require("../src/verify/index.ts") as typeof import("../src/verify/index.ts");
+  const cases: [string, string, (w: ReturnType<typeof buildWorld>) => void][] = [
+    ["voting power", "governance: votingPower of every voter equals sheet", (w) => w.chain.set(GOV, "votingPower", 1n)],
+    ["quorum", "governance: quorumThreshold equals sheet", (w) => w.chain.set(GOV, "quorumThreshold", 3n)],
+    ["voting period", "governance: votingPeriod equals sheet", (w) => w.chain.set(GOV, "votingPeriod", 7200n)],
+    ["execution delay", "governance: executionDelay equals sheet", (w) => w.chain.set(GOV, "executionDelay", 7200n)],
+    ["tvl cap", "vault[rmPROTO]: tvlCap equals sheet", (w) => w.chain.set(VAULTS.rmPROTO.address, "tvlCap", 1n)],
+    ["per-deposit cap", "vault[rmAGENT]: perDepositCap equals sheet", (w) => w.chain.set(VAULTS.rmAGENT.address, "perDepositCap", 1n)],
+    ["exit fee", "vault[rmRWA]: exitFeeBps equals sheet", (w) => w.chain.set(VAULTS.rmRWA.address, "exitFeeBps", 9999n)],
+    ["fee recipient", "vault[rmUSDC]: feeRecipient equals sheet", (w) => w.chain.set(VAULTS.rmUSDC.address, "feeRecipient", addr(0xbad))],
+    ["router eligibility", "vault[rmPROTO]: router eligibility equals sheet", (w) => { w.sheet.vaults.rmPROTO.routerEligible = false; }],
+    ["router eligibility of a basket the sheet leaves ineligible", "vault[rmAGENT]: router eligibility equals sheet", (w) => { w.sheet.vaults.rmAGENT.routerEligible = false; }],
+    ["router default weights", "router: default weights equal sheet", (w) => w.chain.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), [1n, 2n, 3n, 9994n]])],
+  ];
+  test("the healthy world passes all of them", async () => {
+    expect(failed(await verifyDeployment(buildWorld().opts))).toEqual([]);
+  });
+  for (const [what, label, plant] of cases) {
+    test(`a ${what} that differs from the sheet fails ${label}`, async () => {
+      const w = buildWorld();
+      plant(w);
+      expect(failed(await verifyDeployment(w.opts))).toContain(label);
+    });
+  }
+});

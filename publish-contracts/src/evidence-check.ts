@@ -2,8 +2,8 @@
 // Evidence check for a mainnet run. Reads evidence/<run-id>/evidence.json (template: publish-contracts/evidence.example.json).
 // Usage: bun src/evidence-check.ts --evidence FILE [--frozen FILE --deploy-sha SHA] [--rpc URL [--record-chain-fixture OUT] | --chain-fixture FILE]
 // Rejects: a wrong tx count against the frozen count, a missing tx hash, a failed receipt, a delay under 172800 s, a govern
-// schedule-to-execute gap under 172800 s, a govern step that shares a round (a transaction or an operation id) with another step, a step scheduled
-// before the previous step executed, a chain id other than 8453, owner exceptions recorded at or after plan approval.
+// schedule-to-execute gap under 172800 s per operation, a govern operation that shares a transaction or a timelock operation id with another one, any
+// operation scheduled on 8453 that is not a basket unpause (issue 1520), a chain id other than 8453, owner exceptions recorded at or after plan approval.
 // Offline mode (no --rpc) checks the recorded JSON shape only. Online mode (--rpc URL, chain 8453) reads the chain with viem and
 // does not trust the recorded numbers: deployer nonce, every receipt status, the timelock events and block timestamps of each
 // govern step, registry.listVaults() against the recorded manifests, and depositsPaused() of the basket vaults against the unpause govern rows.
@@ -22,18 +22,13 @@ const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 
 /**
- * The Stage 13 matrix from the plan: one govern entry per step, and one 48-hour round per step (owner decision, 2026-10-05): each step has its own
- * schedule transaction, its own execute transaction and its own timelock operation. cancel has a cancel_tx in place of an execute_tx.
- * The names are the rows of the govern CLI (src/govern.ts GOVERN_ROWS).
+ * Stage 13 on 8453 (issue 1520): the only operation after the timelock handover is the unpause of each basket vault. One govern entry per basket, each with
+ * its own schedule transaction, its own execute transaction and its own timelock operation (never a shared one). All are scheduled in one sitting and wait
+ * one delay: each execute is at least 172800 s after the same operation's schedule. update-delay, batch and cancel are Twin-only demonstrations of the
+ * Safe tool: on 8453 they are rejected here. The names are the unpause rows of the govern CLI (src/govern.ts UNPAUSE_ROWS).
  */
 export const BASKETS = ["PROTO", "AGENT", "RWA"] as const;
-export const GOVERN_STEPS: readonly string[] = [
-  "voting-power-quorum", "agents", "other-setters",
-  ...BASKETS.map((b) => `migrate-eligibility-${b}`),
-  "router-weights",
-  ...BASKETS.map((b) => `unpause-${b}`),
-  "update-delay", "batch", "cancel",
-];
+export const GOVERN_STEPS: readonly string[] = BASKETS.map((b) => `unpause-${b}`);
 
 export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): string[] {
   const p: string[] = [];
@@ -62,38 +57,23 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): s
   for (const k of ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]) if (!ADDR.test(ev?.vaults?.[k]?.address ?? "")) bad(`vault ${k} address is missing`);
 
   const govern: any[] = Array.isArray(ev?.govern) ? ev.govern : [];
-  for (const step of GOVERN_STEPS) if (!govern.some((g) => g?.step === step)) bad(`govern step '${step}' of the Stage 13 matrix has no evidence entry`);
-  for (const g of govern) if (!GOVERN_STEPS.includes(g?.step)) bad(`govern step '${g?.step}' is not a step of the Stage 13 matrix (one round per step: ${GOVERN_STEPS.join(", ")})`);
+  for (const step of GOVERN_STEPS) if (!govern.some((g) => g?.step === step)) bad(`govern step '${step}' of Stage 13 has no evidence entry`);
+  for (const g of govern) if (!GOVERN_STEPS.includes(g?.step)) bad(`govern step '${g?.step}' is not a basket unpause: on 8453 the only operation after the handover is ${GOVERN_STEPS.join(", ")} (update-delay, batch and cancel are Twin-only)`);
   for (const step of GOVERN_STEPS) if (govern.filter((g) => g?.step === step).length > 1) bad(`govern step '${step}' has more than one evidence entry`);
-  // one round per step: no schedule or execute transaction is shared by two steps
-  for (const field of ["schedule_tx", "execute_tx", "cancel_tx"]) {
+  // one operation per unpause: no schedule or execute transaction, and no timelock operation id, is shared by two operations
+  for (const field of ["schedule_tx", "execute_tx", "operation_id"]) {
     const seen = new Map<string, string>();
     for (const g of govern) {
       const h = typeof g?.[field] === "string" ? g[field].toLowerCase() : "";
-      if (!TX.test(h)) continue;
+      if (!(field === "operation_id" ? h !== "" : TX.test(h))) continue;
       const other = seen.get(h);
-      if (other !== undefined) bad(`govern ${g.step}: ${field} is also the ${field} of step '${other}' (one round per step, no shared rounds)`);
+      if (other !== undefined) bad(`govern ${g.step}: ${field} is also the ${field} of step '${other}' (one operation per unpause, none shared)`);
       else seen.set(h, g.step);
     }
-  }
-  // rounds run one after the other: a step is scheduled only after the previous step executed
-  let prevExec: { step: string; ts: number } | undefined;
-  for (const step of GOVERN_STEPS) {
-    const g = govern.find((x) => x?.step === step);
-    if (!g) continue;
-    const sched = Number(g.schedule_block_timestamp);
-    if (prevExec && Number.isFinite(sched) && sched < prevExec.ts) bad(`govern ${step}: scheduled at ${sched}, before step '${prevExec.step}' executed at ${prevExec.ts} (rounds run one at a time)`);
-    const ex = Number(g.execute_block_timestamp);
-    if (step !== "cancel" && Number.isFinite(ex)) prevExec = { step, ts: ex };
   }
   for (const g of govern) {
     if (!TX.test(g.schedule_tx ?? "")) bad(`govern ${g.step}: schedule_tx is missing`);
     if (g.schedule_status !== 1) bad(`govern ${g.step}: schedule receipt status is ${g.schedule_status}`);
-    if (g.step === "cancel") {
-      if (!TX.test(g.cancel_tx ?? "")) bad(`govern ${g.step}: cancel_tx is missing`);
-      if (g.cancel_status !== 1) bad(`govern ${g.step}: cancel receipt status is ${g.cancel_status}`);
-      continue;
-    }
     if (!TX.test(g.execute_tx ?? "")) bad(`govern ${g.step}: execute_tx is missing`);
     if (g.execute_status !== 1) bad(`govern ${g.step}: execute receipt status is ${g.execute_status}`);
     const gap = Number(g.execute_block_timestamp) - Number(g.schedule_block_timestamp);
@@ -127,7 +107,7 @@ const REGISTRY_ABI = parseAbi(["function listVaults() view returns (address[])"]
 const PAUSED_ABI = parseAbi(["function depositsPaused() view returns (bool)"]);
 const lc = (x: string) => x.toLowerCase();
 
-function timelockEvents(rc: Awaited<ReturnType<ChainReader["getTransactionReceipt"]>>, timelock: string, name: "CallScheduled" | "CallExecuted" | "Cancelled") {
+function timelockEvents(rc: Awaited<ReturnType<ChainReader["getTransactionReceipt"]>>, timelock: string, name: "CallScheduled" | "CallExecuted") {
   const out: { id: string; delay?: bigint }[] = [];
   for (const l of rc.logs) {
     if (lc(l.address) !== lc(timelock)) continue;
@@ -167,32 +147,25 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
 
   const ts = async (rc: { blockNumber: bigint }) => Number((await chain.getBlock({ blockNumber: rc.blockNumber })).timestamp);
   const idsByStep = new Map<string, string>();
-  let prevExecTs: { step: string; ts: number } | undefined;
   const byStep = (ev.govern ?? []).slice().sort((x: any, y: any) => GOVERN_STEPS.indexOf(x?.step) - GOVERN_STEPS.indexOf(y?.step));
   for (const g of byStep) {
+    if (!GOVERN_STEPS.includes(g?.step)) { bad(`govern ${g?.step}: not a basket unpause, no other operation may be scheduled on 8453`); continue; }
     const sc = await status(`govern ${g.step} schedule`, g.schedule_tx);
     if (!sc) continue;
     const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled");
     if (scheduled.length === 0) { bad(`govern ${g.step}: the schedule tx has no CallScheduled event from the timelock`); continue; }
     for (const e of scheduled) if (!(e.delay !== undefined && e.delay >= BigInt(MAINNET_DELAY_FLOOR))) bad(`govern ${g.step}: CallScheduled delay ${e.delay} is under ${MAINNET_DELAY_FLOOR} s`);
-    // one round per step: a timelock operation id belongs to one step only, and a step is scheduled after the previous step executed
+    // one operation per unpause: a timelock operation id belongs to one step only
     for (const e of scheduled) {
       const other = idsByStep.get(e.id);
-      if (other !== undefined && other !== g.step) bad(`govern ${g.step}: the timelock operation ${e.id} is also the operation of step '${other}' (one round per step, no shared rounds)`);
+      if (other !== undefined && other !== g.step) bad(`govern ${g.step}: the timelock operation ${e.id} is also the operation of step '${other}' (one operation per unpause, none shared)`);
       idsByStep.set(e.id, g.step);
     }
     const schedTs = await ts(sc);
-    if (prevExecTs && schedTs < prevExecTs.ts) bad(`govern ${g.step}: scheduled on chain at ${schedTs}, before step '${prevExecTs.step}' executed at ${prevExecTs.ts} (rounds run one at a time)`);
-    if (g.step === "cancel") {
-      const cc = await status(`govern ${g.step} cancel`, g.cancel_tx);
-      if (cc && !timelockEvents(cc, ev.timelock.address, "Cancelled").some((e) => scheduled.some((s) => s.id === e.id))) bad(`govern ${g.step}: the cancel tx has no Cancelled event for the scheduled id`);
-      continue;
-    }
     const ex = await status(`govern ${g.step} execute`, g.execute_tx);
     if (!ex) continue;
     if (!timelockEvents(ex, ev.timelock.address, "CallExecuted").some((e) => scheduled.some((s) => s.id === e.id))) bad(`govern ${g.step}: the execute tx has no CallExecuted event for the scheduled id`);
     const execTs = await ts(ex);
-    prevExecTs = { step: g.step, ts: execTs };
     const gap = execTs - schedTs;
     if (!(gap >= MAINNET_DELAY_FLOOR)) bad(`govern ${g.step}: on-chain schedule-to-execute gap ${gap} s is under ${MAINNET_DELAY_FLOOR} s`);
   }

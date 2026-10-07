@@ -1,5 +1,5 @@
 {
-  "_comment": "Template for evidence/<run-id>/evidence.json. Every value here is a placeholder: fill each from the run, never invent one. One govern entry per Stage 13 step (one round per step): the step's own schedule tx and its own execute tx (cancel: its own cancel tx), the receipt statuses, and the block timestamps. Each execute timestamp is at least 172800 s after the same step's schedule timestamp, and each step is scheduled after the previous step executed. No two steps share a transaction. No secret goes in this file.",
+  "_comment": "Template for evidence/<run-id>/evidence.json. Every value here is a placeholder: fill each from the run, never invent one. Stage 13 on 8453 is the basket unpauses only (issue 1520): one govern entry per basket (unpause-PROTO, unpause-AGENT, unpause-RWA), each with its own schedule tx, its own execute tx, its own timelock operation id (operation_id, optional), the receipt statuses and the block timestamps. All three are scheduled in one sitting and wait one delay: each execute timestamp is at least 172800 s after the same entry's schedule timestamp. No two entries share a transaction or an operation id. update-delay, batch and cancel are Twin-only and are rejected on 8453. No secret goes in this file.",
   "chain_id": 8453,
   "core_sha": "<40 hex: the DEPLOY_SHA>",
   "plan_approved_at": "<ISO time>",
@@ -56,69 +56,6 @@
   },
   "govern": [
     {
-      "step": "voting-power-quorum",
-      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "schedule_status": 1,
-      "schedule_block_timestamp": 0,
-      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "execute_status": 1,
-      "execute_block_timestamp": 0
-    },
-    {
-      "step": "agents",
-      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "schedule_status": 1,
-      "schedule_block_timestamp": 0,
-      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "execute_status": 1,
-      "execute_block_timestamp": 0
-    },
-    {
-      "step": "other-setters",
-      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "schedule_status": 1,
-      "schedule_block_timestamp": 0,
-      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "execute_status": 1,
-      "execute_block_timestamp": 0
-    },
-    {
-      "step": "migrate-eligibility-PROTO",
-      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "schedule_status": 1,
-      "schedule_block_timestamp": 0,
-      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "execute_status": 1,
-      "execute_block_timestamp": 0
-    },
-    {
-      "step": "migrate-eligibility-AGENT",
-      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "schedule_status": 1,
-      "schedule_block_timestamp": 0,
-      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "execute_status": 1,
-      "execute_block_timestamp": 0
-    },
-    {
-      "step": "migrate-eligibility-RWA",
-      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "schedule_status": 1,
-      "schedule_block_timestamp": 0,
-      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "execute_status": 1,
-      "execute_block_timestamp": 0
-    },
-    {
-      "step": "router-weights",
-      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "schedule_status": 1,
-      "schedule_block_timestamp": 0,
-      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "execute_status": 1,
-      "execute_block_timestamp": 0
-    },
-    {
       "step": "unpause-PROTO",
       "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
       "schedule_status": 1,
@@ -144,32 +81,6 @@
       "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
       "execute_status": 1,
       "execute_block_timestamp": 0
-    },
-    {
-      "step": "update-delay",
-      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "schedule_status": 1,
-      "schedule_block_timestamp": 0,
-      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "execute_status": 1,
-      "execute_block_timestamp": 0
-    },
-    {
-      "step": "batch",
-      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "schedule_status": 1,
-      "schedule_block_timestamp": 0,
-      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "execute_status": 1,
-      "execute_block_timestamp": 0
-    },
-    {
-      "step": "cancel",
-      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "schedule_status": 1,
-      "schedule_block_timestamp": 0,
-      "cancel_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "cancel_status": 1
     }
   ]
 }

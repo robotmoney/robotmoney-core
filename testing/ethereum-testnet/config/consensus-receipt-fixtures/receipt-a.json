@@ -19,7 +19,7 @@
     "bullish": 0
   },
   "judge": {
-    "rationale": "Seeded harness fixture: keep the whole allocation in conservative DeFi yield, the one router-eligible vault on the live vector.",
+    "rationale": "Seeded harness fixture: hold the allocation the deployer left on the router, the Twin stage sheet ROUTER_WEIGHTS (rmUSDC 6000, rmPROTO 2500, rmRWA 1500 bps).",
     "disagreements": [],
     "release_safety": {
       "release": "safe",
@@ -54,15 +54,15 @@
     },
     {
       "bucket": "conservative_defi_yield",
-      "weight_bps": 10000
+      "weight_bps": 6000
     },
     {
       "bucket": "protocol_tokens",
-      "weight_bps": 0
+      "weight_bps": 2500
     },
     {
       "bucket": "real_world_assets",
-      "weight_bps": 0
+      "weight_bps": 1500
     }
   ]
 }

@@ -21,6 +21,8 @@ export type EnvSource =
   | { from: "manifest"; stage: string; field: string }
   /** One field of every vault stage manifest, in table `vaults` order, comma-joined. */
   | { from: "vaults"; field: string }
+  /** Derived from the sheet by this tool (the bps vector of a basket's eligibility flip). */
+  | { from: "computed" }
   | { from: "unmapped" };
 
 /** Env name -> earlier stage manifest field. */
@@ -35,6 +37,11 @@ export const MANIFEST_ENV: Record<string, { stage: string; field: string }> = {
   SAFE_ADDRESS: { stage: SAFE_STAGE, field: "safe" },
 };
 export const VAULT_LIST_ENV = "VAULT_ADDRESSES";
+/**
+ * Basket vault stages: the router default weights (bps, comma list) the deployer sets in the same stage that makes the basket router-eligible
+ * (registry.migrateEligibility), or the word none when the sheet leaves this basket ineligible. Computed from ELIGIBLE_VAULTS and ROUTER_WEIGHTS.
+ */
+export const ELIGIBILITY_BPS_ENV = "ROUTER_DEFAULT_BPS";
 export const VAULT_ADDRESS_FIELD = "vault";
 
 /** Env names core uses for the per-vault caps -> the suffix of the sheet name VAULT_<KEY>_<suffix>. */
@@ -54,6 +61,7 @@ export function resolveEnv(env: string, vault: VaultKey | null): EnvSource {
   if (env === "DEPLOYMENT_OUT") return { from: "out" };
   const m = MANIFEST_ENV[env];
   if (m) return { from: "manifest", ...m };
+  if (env === ELIGIBILITY_BPS_ENV) return { from: "computed" };
   if (env === VAULT_LIST_ENV) return { from: "vaults", field: VAULT_ADDRESS_FIELD };
   const cap = VAULT_CAP_ENV[env];
   if (cap && vault) return { from: "sheet", name: `VAULT_${vault}_${cap}` };

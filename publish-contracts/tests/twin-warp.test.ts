@@ -160,17 +160,17 @@ describe("govern warps the timelock waits on a Twin fork only", () => {
   const base = (sheet: ReturnType<typeof setup>["sheet"], tl: ReturnType<typeof fakeTimelock>, extra: object = {}) =>
     ({ ownerSigners: signers(sheet), sender, api: tl.api, sleep: async () => { throw new Error("must not sleep: the warp covers the wait"); }, pollMs: 0, maxWaitSeconds: 60, ...extra });
 
-  test("with an injected warp the 48 hour delay is crossed with one warp per wait and the run finishes", async () => {
+  test("with an injected warp the 48 hour delay is crossed with ONE warp for all the unpauses, then one per Twin-only round, and the run finishes", async () => {
     const { ctx, sheet } = setup();
     const tl = fakeTimelock(sheet, 172800n);
     const warps: bigint[] = [];
     const manifest = newManifest(ctx, addr(0xa001));
     await runGovern(ctx, stageByName("govern"), manifest, base(sheet, tl, { warp: async (s: bigint) => { warps.push(s); tl.s.clock += s; } }) as never);
     expect(manifest.stages.govern!.status).toBe("done");
-    expect(warps.length).toBe(9);                 // one wait per round that executes: 13 rows, minus 3 the default sheet skips, minus the cancel round
-    // the first eight waits are the real 172800 s delay; the batch round runs after update-delay, at the new delay (the sheet's GOVERN_NEW_DELAY)
-    expect(warps.slice(0, 8)).toEqual(Array(8).fill(172_801n));
-    expect(warps[8]).toBe(sheet.govern.newDelay + 1n);
+    expect(warps.length).toBe(3);                 // one wait for every unpause (the default sheet skips rmAGENT), one for update-delay, one for batch; the cancel round has none
+    // the unpauses and update-delay wait the real 172800 s delay; the batch round runs after update-delay, at the new delay (the sheet's GOVERN_NEW_DELAY)
+    expect(warps.slice(0, 2)).toEqual([172_801n, 172_801n]);
+    expect(warps[2]).toBe(sheet.govern.newDelay + 1n);
   });
 
   test("the default warp talks to the RPC only when it is a Twin fork: a stub anvil sees evm_increaseTime", async () => {
@@ -193,7 +193,7 @@ describe("govern warps the timelock waits on a Twin fork only", () => {
     const manifest = newManifest(ctx, addr(0xa001));
     await runGovern(ctx, stageByName("govern"), manifest, base(sheet, tl) as never);
     expect(manifest.stages.govern!.status).toBe("done");
-    expect(c.s.calls.filter((x) => x === "evm_increaseTime").length).toBe(9);
+    expect(c.s.calls.filter((x) => x === "evm_increaseTime").length).toBe(3);
   });
 
   test("an RPC that answers chain id 8453 never warps, even if it answers anvil_nodeInfo: a long delay exits GOVERN_PENDING", async () => {
@@ -246,6 +246,29 @@ describe("govern warp guards", () => {
     expect(r.calls.filter((m) => m.startsWith("anvil_") || m.startsWith("evm_"))).toEqual([]);
   });
 
+  test("--row update-delay, batch and cancel exit USAGE on an RPC answering chain id 8453 (no anvil_ or evm_ call, nothing sent) and run on a Twin fork", async () => {
+    for (const row of ["update-delay", "batch", "cancel"]) {
+      const main = setup();
+      (main.ctx as { chainId: number }).chainId = 8453;
+      writeGovernManifests(join(main.ctx.coreDir, "deployments", "8453"));
+      const tlMain = fakeTimelock(main.sheet, 172800n);
+      const r8453 = spy(tlMain, { chainId: 8453 });
+      (main.ctx as { rpc: string }).rpc = r8453.url;
+      await expect(runGovern(main.ctx, stageByName("govern"), newManifest(main.ctx, addr(0xa001)), { ...base(main.sheet, tlMain), row } as never)).rejects.toMatchObject({ kind: "USAGE" });
+      expect(tlMain.s.events).toEqual([]);
+      expect(r8453.calls.filter((m) => m.startsWith("anvil_") || m.startsWith("evm_"))).toEqual([]);
+    }
+    // on a Twin fork the same rows run, through the real default warp, after the unpauses
+    const { ctx, sheet } = setup();
+    const tl = fakeTimelock(sheet, 172800n);
+    const twin = spy(tl, { chainId: 918453 });
+    (ctx as { rpc: string }).rpc = twin.url;
+    const manifest = newManifest(ctx, addr(0xa001));
+    for (const row of ["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]) await runGovern(ctx, stageByName("govern"), manifest, { ...base(sheet, tl), row } as never);
+    expect(Object.keys(manifest.govern!)).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
+    expect(twin.calls).toContain("evm_increaseTime");
+  });
+
   test("an RPC that answers 8453 while ctx says a Twin id still never gets an anvil_* call", async () => {
     const { ctx, sheet } = setup();
     const tl = fakeTimelock(sheet, 172800n);
@@ -266,10 +289,10 @@ describe("govern warp guards", () => {
     const allowed = new Set(["eth_chainId", "anvil_nodeInfo", "evm_increaseTime", "evm_mine", "eth_getBlockByNumber"]);
     expect(r.calls.filter((m) => !allowed.has(m))).toEqual([]);   // no anvil_setStorageAt, anvil_setCode, setBalance
     const warped = lines.map((l) => JSON.parse(l)).filter((e) => e.event === "govern.warped" || e.msg === "govern.warped");
-    expect(warped.length).toBe(9);
+    expect(warped.length).toBe(3);
     const secs = warped.map((w) => w.seconds ?? w.data?.seconds);
-    expect(secs.slice(0, 8)).toEqual(Array(8).fill(172_801));
-    expect(secs[8]).toBe(Number(sheet.govern.newDelay) + 1);
+    expect(secs.slice(0, 2)).toEqual([172_801, 172_801]);
+    expect(secs[2]).toBe(Number(sheet.govern.newDelay) + 1);
   });
 });
 

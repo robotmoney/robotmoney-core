@@ -45,8 +45,19 @@ export interface VaultSheet {
   seed?: bigint;
   /** rmUSDC only: who receives the seed shares (the sheet SHARE_RECEIVER_ADDRESS). When set, the manifest must name the same address. */
   seedShareReceiver?: Address;
+  /** Router eligibility the deployer left in place: rmUSDC from the router stage, a basket when the sheet lists it in ELIGIBLE_VAULTS. */
+  routerEligible: boolean;
   /** Build artifact contract name when it is not implied by the kind. */
   contract?: string;
+}
+
+/** Deploy-time governance configuration the deployer sets before the timelock handover (issue 1520). */
+export interface GovernanceSheet {
+  voters: Address[];
+  voterPower: bigint;
+  quorum: bigint;
+  votingPeriod: bigint;
+  executionDelay: bigint;
 }
 
 export interface VerifySheet {
@@ -60,6 +71,9 @@ export interface VerifySheet {
   timelockDelay: number;
   /** Keyed by vault key (rmUSDC, rmPROTO, rmAGENT, rmRWA). */
   vaults: Record<string, VaultSheet>;
+  governance: GovernanceSheet;
+  /** The router default weights the deployer left in place, in router order (rmUSDC, then the eligible baskets): vault key and bps. */
+  defaultWeights: { vault: string; bps: number }[];
 }
 
 export interface VerifyOptions {

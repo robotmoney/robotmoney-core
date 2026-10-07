@@ -112,6 +112,8 @@ contracts/test/contract.DeployScriptChainGuardsTest.mdx
 contracts/test/contract.DeployScriptChainGuardsTwinTest.mdx
 contracts/test/contract.DeploySeedDeposit.mdx
 contracts/test/contract.DeployTest.mdx
+contracts/test/contract.DeployTimeEligibilityTest.mdx
+contracts/test/contract.DeployTimeVotingPowerTest.mdx
 contracts/test/contract.DeployTimelockAgentHandoverTest.mdx
 contracts/test/contract.DeployTimelockAgentListInputTest.mdx
 contracts/test/contract.DeployTimelockChainFloorTest.mdx
@@ -133,6 +135,7 @@ contracts/test/contract.DeployTimelockVaultListInputTest.mdx
 contracts/test/contract.DeployVaultManifestHarness.mdx
 contracts/test/contract.DeployVaultRegistryTest.mdx
 contracts/test/contract.ERC4626PreconditionChecks.mdx
+contracts/test/contract.EligibilityHarness.mdx
 contracts/test/contract.EligibilityWeightsInterlockTest.mdx
 contracts/test/contract.FeatureFlagsTest.mdx
 contracts/test/contract.FeeOnTransferUSDC.mdx
@@ -150,6 +153,7 @@ contracts/test/contract.GatewayRouterTest.mdx
 contracts/test/contract.GatewayWithdrawTest.mdx
 contracts/test/contract.GovernanceExecutePathAfterHandoverTest.mdx
 contracts/test/contract.GovernanceSeparationInvariant.mdx
+contracts/test/contract.GovernanceVotersHarness.mdx
 contracts/test/contract.GuardHarness.mdx
 contracts/test/contract.ICGatewayIntegration.mdx
 contracts/test/contract.InterlockMockVault.mdx

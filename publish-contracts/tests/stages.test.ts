@@ -7,6 +7,9 @@ import { LIBS_STAGE, MANIFEST_ENV, SHEET_RENAMES, requiredSheetNames, resolveEnv
 import { manifestBase, parseStageTable } from "../src/stage-table.ts";
 import { stagePlan } from "../src/plan.ts";
 import { COUNTS, REPO } from "./fixtures.ts";
+import { stageEnv } from "../src/runner.ts";
+import { setup } from "./govern-world.ts";
+import { governRowNames } from "../src/govern.ts";
 
 const table = getStageTable();
 const forge = STAGES.filter((s) => s.kind === "forge");
@@ -106,5 +109,51 @@ describe("stage list built from core's stage table", () => {
   test("the wiring tables name only env names the sheet or a manifest can supply", () => {
     for (const to of Object.values(SHEET_RENAMES)) expect(SHEET_SPEC[to], to).toBeDefined();
     expect(Object.keys(MANIFEST_ENV).length).toBeGreaterThan(0);
+  });
+});
+
+describe("deploy-time configuration is consumed by the deployer stages 4 to 10, never by govern (issue 1520)", () => {
+  const stage = (n: string) => STAGES.find((s) => s.name === n)!;
+  test("the governance stage takes voting power, quorum, voting period and execution delay", () => {
+    expect(stage("governance").requiredEnv).toEqual(expect.arrayContaining(["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]));
+    expect(requiredSheetNames(stage("governance"))).toEqual(expect.arrayContaining(["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]));
+  });
+  test("each basket stage takes the caps, the exit fee, the fee recipient and the router eligibility with the default weights", () => {
+    for (const n of ["proto", "agent", "rwa"]) {
+      expect(stage(n).requiredEnv, n).toEqual(expect.arrayContaining(["TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT", "ROUTER_DEFAULT_BPS"]));
+      expect(resolveEnv("ROUTER_DEFAULT_BPS", stage(n).vault ?? null).from).toBe("computed");
+    }
+    expect(stage("vault").requiredEnv).toEqual(expect.arrayContaining(["TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT"]));
+  });
+  test("every deploy-time key reaches a stage between router (4) and rwa (10), and no deployer stage reads a GOVERN_ name", () => {
+    const names = forge.map((s) => s.name);
+    const between = names.slice(names.indexOf("router"), names.indexOf("rwa") + 1);
+    expect(between).toEqual(["router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa"]);
+    const consumed = new Set(between.flatMap((n) => stage(n).requiredEnv));
+    for (const k of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY", "TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT", "ROUTER_DEFAULT_BPS"]) expect(consumed.has(k), k).toBe(true);
+    for (const s of forge) for (const e of s.requiredEnv) expect(e.startsWith("GOVERN_"), `${s.name} reads ${e}`).toBe(false);
+    expect(stage("govern").requiredEnv).toEqual([]);
+  });
+  test("stageEnv hands the sheet values to the stages: voters and power to governance, the eligibility vector to each basket", () => {
+    const { ctx, sheet } = setup();
+    const gov = stageEnv(ctx, stage("governance"));
+    expect(gov.VOTER_ADDRESSES.toLowerCase()).toBe(sheet.voters.join(",").toLowerCase());
+    expect(gov.VOTER_POWER).toBe(sheet.voterPower.toString());
+    expect(gov.QUORUM_THRESHOLD).toBe(sheet.quorum.toString());
+    // the example sheet makes PROTO and RWA eligible with USDC 6000, PROTO 2500, RWA 1500
+    expect(stageEnv(ctx, stage("proto")).ROUTER_DEFAULT_BPS).toBe("7059,2941");
+    expect(stageEnv(ctx, stage("agent")).ROUTER_DEFAULT_BPS).toBe("none");
+    expect(stageEnv(ctx, stage("rwa")).ROUTER_DEFAULT_BPS).toBe("6000,2500,1500");
+    expect(stageEnv(ctx, stage("rwa")).TVL_CAP).toBe(sheet.vaults.RWA.tvlCap.toString());
+    expect(stageEnv(ctx, stage("vault")).ROUTER_DEFAULT_BPS).toBeUndefined();
+  });
+});
+
+describe("the govern stage lists the unpause-only matrix (issue 1520)", () => {
+  test("governRowNames() is the three basket unpauses then the Twin-only demonstrations, and no 13-row list survives", () => {
+    expect([...governRowNames()]).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
+    expect(governRowNames().length).toBe(6);
+    const g = (table as unknown as { govern: { mainnetRows: string[]; twinOnlyRows: string[] } }).govern;
+    expect([...g.mainnetRows, ...g.twinOnlyRows]).toEqual([...governRowNames()]);
   });
 });

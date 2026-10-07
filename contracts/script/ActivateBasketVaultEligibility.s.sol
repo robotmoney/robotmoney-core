@@ -3,7 +3,9 @@
 //            docs/prd.md §11.2, §11.3, §11.4 — rmPROTO, rmAGENT, rmRWA
 //            robotmoney/devops issue 53 / core issue 1499, stage 13 step 4, core S4 (1486)
 //
-// Governed eligibility step for the three basket vaults. It uses `registry.migrateEligibility`
+// Standalone eligibility step for the three basket vaults. NOT a stage and NOT a govern row (issue 1520): the basket vault stages now flip
+// eligibility themselves, before the timelock handover, and govern carries the basket unpauses only. This script remains for a deployer that holds
+// ADMIN_ROLE on the registry and wants the flips outside the stages. It uses `registry.migrateEligibility`
 // once per basket. That call flips eligibility and re-sets the router default weight vector in
 // one transaction. The separate setters deadlock with `StaleDefaultWeightsLength` once a default
 // vector exists: `setRouterEligible` needs the vector to match the new count, and

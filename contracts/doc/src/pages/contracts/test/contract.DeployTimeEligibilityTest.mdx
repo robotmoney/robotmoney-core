@@ -1,0 +1,130 @@
+---
+title: "DeployTimeEligibilityTest"
+description: "The basket vault stages make a basket router-eligible and set the default weights, one atomic migrateEligibility."
+---
+
+# DeployTimeEligibilityTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/19631eb6f0ab3bb0cf39ce0243c580c8032acb9f/contracts/test/DeployTimeRouterConfig.t.sol)
+
+**Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
+
+The basket vault stages make a basket router-eligible and set the default weights, one atomic migrateEligibility.
+
+## State Variables
+
+### h
+
+```solidity
+EligibilityHarness internal h;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### protoVault
+
+```solidity
+address internal protoVault;
+```
+
+### agentVault
+
+```solidity
+address internal agentVault;
+```
+
+### rwaVault
+
+```solidity
+address internal rwaVault;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_two-uint256-uint256"></a>
+
+### _two
+
+```solidity
+function _two(uint256 a, uint256 b) internal pure returns (uint256[] memory v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256[]` |  |
+
+<a id="_three-uint256-uint256-uint256"></a>
+
+### _three
+
+```solidity
+function _three(uint256 a, uint256 b, uint256 c) internal pure returns (uint256[] memory v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+| c | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256[]` |  |
+
+<a id="test_eachflipsetsthedefaultvectorandazeroweightisaccepted"></a>
+
+### test_eachFlipSetsTheDefaultVectorAndAZeroWeightIsAccepted
+
+```solidity
+function test_eachFlipSetsTheDefaultVectorAndAZeroWeightIsAccepted() public;
+```
+
+<a id="test_noneleavesthebasketineligible"></a>
+
+### test_noneLeavesTheBasketIneligible
+
+```solidity
+function test_noneLeavesTheBasketIneligible() public;
+```
+
+<a id="test_avectorofthewronglengthreverts"></a>
+
+### test_aVectorOfTheWrongLengthReverts
+
+```solidity
+function test_aVectorOfTheWrongLengthReverts() public;
+```
+
+<a id="test_theenvisrequirednoneoralist"></a>
+
+### test_theEnvIsRequiredNoneOrAList
+
+```solidity
+function test_theEnvIsRequiredNoneOrAList() public;
+```
+

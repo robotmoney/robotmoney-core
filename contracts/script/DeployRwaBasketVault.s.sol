@@ -5,8 +5,11 @@
 //
 // Deploys `RwaBasketVault` (a plain BasketVault) with deSPXA priced from its Uniswap V3 fee 500
 // pool TWAP through the existing `UniswapV3SwapAdapter`, pauses it and registers it. No oracle.
-// It does NOT call `setRouterEligible`: that step is `ActivateBasketVaultEligibility.s.sol`,
-// run through the timelock after the checks pass.
+// Router eligibility is deploy-time configuration (issue 1520): after registering, the broadcast
+// path calls `registry.migrateEligibility` once when `ROUTER_DEFAULT_BPS` is a vector (it also sets
+// the router default weights), and leaves the vault ineligible when it is `none`. The deployer
+// holds ADMIN_ROLE on the registry until the timelock stage. The only operation after the handover
+// is the basket unpause.
 pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
@@ -30,6 +33,7 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 ///           DEPLOYMENT_OUT    output manifest path (required, no default)
 ///           EXPECTED_CHAIN_ID mandatory and equal to 8453 on Base mainnet
 ///           EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
+///           ROUTER_DEFAULT_BPS  `none`, or the router default weight vector (bps, comma list) after this vault flips eligible
 ///
 ///         Assets come from `rwa-assets.json` (deSPXA only at launch). The vault is deployed paused.
 contract DeployRwaBasketVault is BasketVaultDeployBase {
