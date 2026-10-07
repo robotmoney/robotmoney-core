@@ -558,3 +558,5 @@ The ABI bindings are generated at compile time from committed JSON artifacts via
 ---
 
 *Review conducted 2026-05-08. Full-codebase second pass completed same day. All referenced source is on the `dev` branch at commit `e54de4f` (most recent at review time). No audit tooling (Slither, Aderyn, Mythril) was run — this is a manual review. An automated pass before mainnet is strongly recommended.*
+
+> Note 2026-10-05 (core 1494): A pause now stops deposits only; withdrawals are never frozen. pause()/unpause()/paused() are now pauseDeposits()/unpauseDeposits()/depositsPaused(), PAUSER_ROLE is DEPOSIT_PAUSER_ROLE, VaultStatus.Paused is VaultStatus.DepositsPaused, EnforcedPause is DepositsArePaused, and withdrawalsPaused is deleted. The router redeems from a vault in every status (VaultPausedForRedeem is removed). The deployed v1 vault keeps its old code: never call v1 pause(), it also freezes withdrawals. The text above is kept as written.

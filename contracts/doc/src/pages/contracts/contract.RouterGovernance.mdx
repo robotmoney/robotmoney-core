@@ -5,7 +5,7 @@ description: "Admin-weighted MVP governance module that controls Portfolio Route
 
 # RouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/RouterGovernance.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -971,7 +971,7 @@ error ExecutionDelayBelowMinimum();
 
 Thrown by propose() when a vault in the proposed weight list is
 not router-eligible (zero address, unregistered, ineligible flag
-not set, or wrong underlying asset) OR not Active (Paused/Retired).
+not set, or wrong underlying asset) OR not Active (DepositsPaused/Retired).
 Identifies the offending vault so the proposer can correct the
 weight vector before resubmitting. Prevents governance deadlock
 and router self-DoS from stuck Queued proposals that would revert

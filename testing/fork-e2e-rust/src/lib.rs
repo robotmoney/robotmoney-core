@@ -788,7 +788,7 @@ sol! {
     /// without going through the rmpc binary's separate ABI binding.
     #[allow(missing_docs)]
     interface IOnchainVaultRegistry {
-        enum VaultStatus { Active, Paused, Retired }
+        enum VaultStatus { Active, DepositsPaused, Retired }
 
         struct VaultMetadata {
             string name;
@@ -832,7 +832,7 @@ sol! {
         function exitFeeBps() external view returns (uint256);
         function tvlCap() external view returns (uint256);
         function perDepositCap() external view returns (uint256);
-        function paused() external view returns (bool);
+        function depositsPaused() external view returns (bool);
         function symbol() external view returns (string memory);
         function decimals() external view returns (uint8);
         function activeAdapterCount() external view returns (uint256);
@@ -861,7 +861,7 @@ sol! {
         /// Worst-case USDC floor for redeeming `shares` (TWAP × slippage × exit-fee).
         function previewRedeem(uint256 shares) external view returns (uint256);
         /// Maximum shares `owner` can redeem (returns `balanceOf(owner)` for
-        /// BasketVault — no per-user cap beyond TVL and pause state).
+        /// BasketVault — a deposit pause never lowers it, core 1494).
         function maxRedeem(address owner) external view returns (uint256);
         /// ERC-4626 asset = USDC.
         function asset() external view returns (address);

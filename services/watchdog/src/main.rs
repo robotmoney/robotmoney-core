@@ -16,7 +16,7 @@
 //!
 //! # Pauser key
 //!
-//! The PAUSER_ROLE key comes from `WATCHDOG_PAUSER_KEY_HEX` (preferred for
+//! The DEPOSIT_PAUSER_ROLE key comes from `WATCHDOG_PAUSER_KEY_HEX` (preferred for
 //! deployments) or from the config file's `action.pauser_private_key_hex`
 //! literal (local dev). Either way it is consumed once here at startup: the
 //! daemon derives the signing state, drops the raw hex, and threads the derived

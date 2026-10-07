@@ -119,7 +119,7 @@ For `AgentTokenVault` only:
 
 | | |
 |---|---|
-| **What the prototype does** | `pause()` / `unpause()`, guarded `emergencyUnwind()`, explicit `emergencyUnwindWithOverride(tokens)`, and `shutdownVault()` are all present with appropriate role guards. Operators configure each basket token with `setEmergencyUnwindGuard(token, minUsdcOut, overrideAllowed)` before incident use. The default unwind passes the configured `minUsdcOut` to the router and reverts when the emergency swap cannot satisfy that floor. |
+| **What the prototype does** | `pauseDeposits()` / `unpauseDeposits()` (deposits only; redeem stays open, core 1494), guarded `emergencyUnwind()`, explicit `emergencyUnwindWithOverride(tokens)`, and `shutdownVault()` are all present with appropriate role guards. Operators configure each basket token with `setEmergencyUnwindGuard(token, minUsdcOut, overrideAllowed)` before incident use. The default unwind passes the configured `minUsdcOut` to the router and reverts when the emergency swap cannot satisfy that floor. |
 | **What is missing** | Nothing critical. If a distressed exit must accept less than the configured guard, the token must first have `overrideAllowed=true`; the emergency caller then uses `emergencyUnwindWithOverride(tokens)`, which emits `EmergencyUnwindOverrideUsed` before the zero-minimum swap so indexers and operators can audit the high-risk action. |
 | **Gap rating** | **Met** |
 

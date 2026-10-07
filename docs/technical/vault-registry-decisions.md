@@ -37,7 +37,7 @@ items that are blocked until this scout closes:
 
 The current codebase has `RobotMoneyGateway` with a single immutable
 `vaultContract` pinned at construction time and three separated roles:
-`ADMIN_ROLE`, `PAUSER_ROLE`, and `AGENT_ROLE` (see
+`ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, and `AGENT_ROLE` (see
 `contracts/gateway/AccessRoles.sol`). There is no vault-list storage of any
 kind — the gateway treats the vault address as a fixed immutable.
 
@@ -183,7 +183,7 @@ function vaultCount() external view returns (uint256);
 Supporting types:
 
 ```solidity
-enum VaultStatus { Active, Paused, Retired }
+enum VaultStatus { Active, DepositsPaused, Retired } // DepositsPaused was Paused (core 1494); no status blocks a redeem
 
 struct VaultRecord {
     address vault;          // ERC-4626 contract address

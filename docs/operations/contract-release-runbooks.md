@@ -87,7 +87,7 @@ The cycle:
    patch on `dev`, and go back through preflight (step 2) before deploying
    again. A contract deployment cannot be "patched in place": a postflight
    failure after broadcast means either the deployed contracts are
-   unusable (redeploy fresh addresses) or a mitigating admin action (pause,
+   unusable (redeploy fresh addresses) or a mitigating admin action (deposit pause,
    role revocation) contains the issue while a fix lands (§4.6).
 5. **Postflight clean** → tag `vA.B.C[-network]` at the exact commit that was
    deployed and verified.
@@ -258,12 +258,12 @@ the fixed commit."
 failure's mitigation depends on how far the ceremony got:
 
 - **Before the timelock/role handover (§4.3's last step):** the deployer EOA
-  still holds `ADMIN_ROLE` and can call `PAUSER_ROLE`-gated pause functions,
+  still holds `ADMIN_ROLE` and can call the `DEPOSIT_PAUSER_ROLE`-gated `pauseDeposits()`,
   or simply abandon the deployment (it holds no real user funds yet on a
   fresh network) and redeploy fresh addresses after the fix.
 - **After the timelock/role handover:** the deployer no longer holds admin
   authority. Mitigation is whatever the timelock's configured emergency path
-  allows (the vault's `EMERGENCY_ROLE` pause, per
+  allows (the vault's `EMERGENCY_ROLE` deposit pause, which never blocks a redeem, per
   `docs/operations/manual-admin-actions.md`) while a fix is prepared and a
   **new** deployment (new addresses) is planned — a live vault's stored
   state cannot be transplanted onto fixed contract code.

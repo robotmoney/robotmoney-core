@@ -4,7 +4,7 @@
 
 This repository hosts the in-development pieces that let agents transact against the Robot Money vault safely:
 
-- **`contracts/gateway/`** — `RobotMoneyGateway.sol` (deposit + per-agent policy + pause), `AccessRoles.sol`, mocks, and the deploy script. On-chain enforcement of per-agent caps, windowed limits, role separation, and idempotent payment IDs.
+- **`contracts/gateway/`** — `RobotMoneyGateway.sol` (deposit + per-agent policy + deposit pause; withdrawals are never paused), `AccessRoles.sol`, mocks, and the deploy script. On-chain enforcement of per-agent caps, windowed limits, role separation, and idempotent payment IDs.
 - **`clients/rust-payment-client/`** — `rmpc`, the Rust signing client. One-shot CLI with `deposit`, `self-check`, and `status` subcommands. Encrypted-keystore software signer, structured + audit logging, preflight checks pinned to a deployed gateway code-hash.
 - **`testing/ethereum-testnet/`** — Twin chain test assets (a pinned lazy anvil fork of real Base) and an end-to-end Rust test crate (`e2e-rust/`) that drives `rmpc` against a Twin chain.
 - **`docs/`** — architecture proposal, MVP implementation plan, project roadmap, and on-chain reference docs.

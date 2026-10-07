@@ -293,3 +293,5 @@ The 2026-06-06 report marks VAULT-002, VAULT-006, ORA-001/AC-005, MEV-001, AC-00
 6. **Correct Aerodrome routing and configuration drift:** close SR-M19 before any mainnet AgentTokenVault deployment.
 7. **Run a donation-DoS sweep:** SR-H1, SR-M6, and SR-L12 share the absolute-balance-check anti-pattern; fix them with a consistent delta-check or controlled-sweep design.
 8. Annotate the 2026-06-06 report per SR-P1.
+
+> Note 2026-10-05 (core 1494): A pause now stops deposits only; withdrawals are never frozen. pause()/unpause()/paused() are now pauseDeposits()/unpauseDeposits()/depositsPaused(), PAUSER_ROLE is DEPOSIT_PAUSER_ROLE, VaultStatus.Paused is VaultStatus.DepositsPaused, EnforcedPause is DepositsArePaused, and withdrawalsPaused is deleted. The router redeems from a vault in every status (VaultPausedForRedeem is removed). The deployed v1 vault keeps its old code: never call v1 pause(), it also freezes withdrawals. The text above is kept as written.

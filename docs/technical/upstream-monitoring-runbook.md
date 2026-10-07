@@ -29,7 +29,7 @@ exits non-zero when an alert condition is detected.
 - **Compound v3 (Comet):** `comet.isAbsorbing()` — returns `true` when the
   protocol is in absorption mode (market paused/absorbing underwater positions).
   Also detects RPC timeouts or reverts, which indicate the node cannot reach the contract.
-- **Aave v3 Pool:** `pool.paused()` — returns `true` when the pool is paused by
+- **Aave v3 Pool:** `pool.paused()` — returns `true` when the pool is paused by <!-- pause-guard: allow (Aave Pool's own pause) -->
   the emergency guardian or governance.
 
 ### Alert trigger
@@ -59,11 +59,13 @@ exits non-zero when an alert condition is detected.
    - Governance-initiated pause pending upgrade → may require adapter changes.
    - Chain-level issue (sequencer outage) → wait for recovery.
 
-3. **If paused for > 1 hour:** invoke the vault pause mechanism (operator
-   multisig) to prevent further `deploy()` calls to the affected adapter.
+3. **If paused for > 1 hour:** invoke the vault deposit pause
+   (`pauseDeposits()`, emergency key) to prevent further `deploy()` calls to
+   the affected adapter. It stops new deposits only. Holders can still redeem
+   (core 1494).
 
-4. **Unpausing:** Only unpause the vault adapter after confirming the venue is
-   live (`isAbsorbing()` = false / `paused()` = false) via a fresh on-chain call.
+4. **Unpausing:** Only call `unpauseDeposits()` (governance) after confirming the venue is
+   live (`isAbsorbing()` = false / Aave `pool.paused()` = false) via a fresh on-chain call. <!-- pause-guard: allow (Aave Pool's own pause) -->
 
 5. **Post-incident:** file an incident report in `docs/incidents/` and update
    this runbook if the procedure needs amendment.

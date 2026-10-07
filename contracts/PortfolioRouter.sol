@@ -211,12 +211,6 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param status The current non-Active status of the vault.
     error VaultNotActive(address vault, VaultRegistry.VaultStatus status);
 
-    /// @notice A redeem leg targets a Paused vault. Redemption permits Active OR
-    ///         Retired status (withdraw-only after retirement, F-02); only Paused
-    ///         blocks the exit path.
-    /// @param vault  The vault address whose status is Paused.
-    error VaultPausedForRedeem(address vault);
-
     /// @notice Gas left is below the floor a redeem leg needs. Raised before the leg
     ///         calls `vault.redeem`, so a gas limit that is too low reverts with a
     ///         reason instead of failing opaquely inside the vault fan-out. Retry
@@ -345,7 +339,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             // Active-status guard (F-05/RTR-4/GOV-4): a weight vector is only ever
             // executable if every weighted vault is simultaneously router-eligible
             // AND Active. `getVault` reverts NotRegistered if unknown; this also
-            // reverts VaultNotActive for any Paused/Retired vault so a
+            // reverts VaultNotActive for any DepositsPaused/Retired vault so a
             // non-depositable vector can never be written and self-DoS deposits.
             _requireActiveAndEligible(vaults[i]);
             total += bps[i];
@@ -430,7 +424,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             if (vaults[i] == address(0)) revert ZeroAddress();
             // Active-status guard (F-05/RTR-4): the default vector is also a
             // routed vector, so it must hold the same "eligible AND Active"
-            // invariant. Reverts VaultNotActive for any Paused/Retired vault.
+            // invariant. Reverts VaultNotActive for any DepositsPaused/Retired vault.
             _requireActiveAndEligible(vaults[i]);
             total += bps[i];
         }
@@ -689,9 +683,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///           targets exactly the address the caller named, so a reweight
     ///           between sign and execution can never redirect a leg to a vault
     ///           the caller did not name (NC-5).
-    ///         - Redemption succeeds when a leg's registry status is Active OR
-    ///           Retired; only Paused blocks the exit (F-02). Retired vaults are
-    ///           withdraw-only, never deposit targets — see ADR-0009.
+    ///         - Redemption succeeds whatever a leg's registry status is (Active,
+    ///           DepositsPaused or Retired). No status blocks an exit (F-02, core
+    ///           1494). Retired vaults are withdraw-only, never deposit targets —
+    ///           see ADR-0009.
     ///
     ///         SECURITY: users must NEVER grant a share-token approval directly to
     ///         this router. The router calls `vault.redeem` with itself as the
@@ -792,21 +787,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         uint256 shares,
         uint256 minAssets
     ) private returns (uint256 assetsOut) {
-        // Registry status (F-02): redemption permits Active OR Retired (Retired is
-        // withdraw-only — existing holders keep redeeming, no new deposits, see
-        // ADR-0009). Only Paused blocks the exit. `getVault` reverts
+        // Registry status (F-02, core 1494): redemption works for every status.
+        // Active, DepositsPaused and Retired vaults all keep exits open; a deposit
+        // pause or a retirement stops deposits only (ADR-0009). `getVault` reverts
         // `NotRegistered` for an unknown vault; surface that as
         // `RedeemVaultNotRegistered` so a caller-named bad address fails loudly.
-        VaultRegistry.VaultStatus vaultStatus;
         try registry.getVault(vault) returns (
-            VaultRegistry.VaultMetadata memory, VaultRegistry.VaultStatus status
-        ) {
-            vaultStatus = status;
-        } catch {
+            VaultRegistry.VaultMetadata memory, VaultRegistry.VaultStatus
+        ) {}
+        catch {
             revert RedeemVaultNotRegistered(vault);
-        }
-        if (vaultStatus == VaultRegistry.VaultStatus.Paused) {
-            revert VaultPausedForRedeem(vault);
         }
 
         // Confused-deputy guard (issue #751): caller must be shareHolder or
@@ -1063,7 +1053,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///         ERC-4626 `asset()` view equal to the router's USDC AND the
     ///         VaultRegistry has marked the vault as router-eligible.
     ///         This view is intentionally distinct from VaultRegistry
-    ///         lifecycle status (Active/Paused/Retired); clients (dapp,
+    ///         lifecycle status (Active/DepositsPaused/Retired); clients (dapp,
     ///         rmpc) read both signals to compose accurate UI state.
     /// @param vault Address of the vault to check.
     /// @return eligible True iff the vault's ERC-4626 asset equals the router's
@@ -1112,7 +1102,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///      the single guard that a weight vector is only ever written when every
     ///      leg is simultaneously eligible AND depositable (F-05/RTR-4/GOV-4):
     ///      eligibility and lifecycle status are independent signals, so checking
-    ///      eligibility alone would let an eligible-but-Paused/Retired vault enter
+    ///      eligibility alone would let an eligible-but-DepositsPaused/Retired vault enter
     ///      the vector and brick `deposit()` later. Used by `setWeights` and
     ///      `setDefaultWeights` at configuration time.
     function _requireActiveAndEligible(address vault) internal view {

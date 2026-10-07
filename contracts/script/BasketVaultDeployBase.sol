@@ -22,7 +22,7 @@ import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 ///
 ///      Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on the new vault. The
 ///      deployer needs ADMIN_ROLE for `addAsset` and `setAdapterCodeHashAllowed`, and
-///      EMERGENCY_ROLE for `pause()`. The timelock stage hands both roles over and revokes the
+///      EMERGENCY_ROLE for `pauseDeposits()`. The timelock stage hands both roles over and revokes the
 ///      deployer (core 1487). This script never grants a role to anyone else.
 abstract contract BasketVaultDeployBase is ExpectedChainGuard {
     using stdJson for string;
@@ -180,7 +180,7 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         _addAssets(vault, p, cfg, d);
 
         // Deployed paused. The govern stage unpauses after the checks pass.
-        vault.pause();
+        vault.pauseDeposits();
         d.paused = true;
 
         _registerIfAbsent(VaultRegistry(p.registry), address(vault), p.usdc);

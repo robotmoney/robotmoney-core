@@ -25,7 +25,9 @@ fn enc_b256(b: B256) -> String {
 const DEFAULT_ADMIN: B256 =
     b256!("0000000000000000000000000000000000000000000000000000000000000000");
 const ADMIN: B256 = b256!("a49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775");
-const PAUSER: B256 = b256!("65d7a28e3265b37a6474929f336521b332c1681b933f6cb9f3376673440d862a");
+// keccak256("DEPOSIT_PAUSER_ROLE"): the role pauses deposits only (core 1494).
+const DEPOSIT_PAUSER: B256 =
+    b256!("39d7c99df860586d89a6559d1f1be4c1787de0c0cafbcd46bfce1ec1f971e238");
 const AGENT: B256 = b256!("ad8b3c9c5e1bb39e7d11f60d1aac96f10b0b4b8cb71afd96b6c9f5cce2fae12d");
 
 #[tokio::test]
@@ -73,10 +75,10 @@ async fn get_roles_clean_envelope() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::PAUSER_ROLECall,
+            RobotMoneyGateway::DEPOSIT_PAUSER_ROLECall,
         >()))
         .with_status(200)
-        .with_body(jrpc_result(&enc_b256(PAUSER)))
+        .with_body(jrpc_result(&enc_b256(DEPOSIT_PAUSER)))
         .expect_at_least(0)
         .create_async()
         .await;
@@ -136,7 +138,7 @@ async fn get_roles_clean_envelope() {
         vec![
             "DEFAULT_ADMIN_ROLE",
             "ADMIN_ROLE",
-            "PAUSER_ROLE",
+            "DEPOSIT_PAUSER_ROLE",
             "AGENT_ROLE"
         ]
     );

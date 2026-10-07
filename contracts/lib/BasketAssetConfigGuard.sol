@@ -77,16 +77,26 @@ library BasketAssetConfigGuard {
         if (cardinality < minCardinality) {
             revert InsufficientPoolCardinality(pool, minCardinality, cardinality);
         }
+        requireObservationHistory(pool, twapWindow);
+        uint128 poolLiquidity = IUniswapV3Pool(pool).liquidity();
+        if (poolLiquidity < minLiquidity) {
+            revert InsufficientPoolLiquidity(pool, minLiquidity, poolLiquidity);
+        }
+    }
+
+    /// @notice Assert `pool` holds enough observation history to serve a
+    ///         `twapWindow`-second TWAP right now: `observe([twapWindow, 0])` must
+    ///         not revert. Used by `addAsset` (via `requirePoolUsable`) and by
+    ///         `setTwapWindow`, so governance can never set a window the pool's
+    ///         oldest observation does not reach. Such a window would make every
+    ///         NAV read revert ("OLD") and block every redeem (core 1494).
+    function requireObservationHistory(address pool, uint32 twapWindow) public view {
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = twapWindow;
         secondsAgos[1] = 0;
         try IUniswapV3Pool(pool).observe(secondsAgos) returns (int56[] memory, uint160[] memory) {}
         catch {
             revert InsufficientObservationHistory(pool, twapWindow);
-        }
-        uint128 poolLiquidity = IUniswapV3Pool(pool).liquidity();
-        if (poolLiquidity < minLiquidity) {
-            revert InsufficientPoolLiquidity(pool, minLiquidity, poolLiquidity);
         }
     }
 

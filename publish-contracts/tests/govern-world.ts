@@ -65,7 +65,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "perDepositCap": return sheet.vaults[key!].perDepositCap;
           case "exitFeeBps": return sheet.vaults[key!].exitFeeBps;
           case "isRouterEligible": return true;
-          case "paused": return false;
+          case "depositsPaused": return false;
           case "votingPeriod": return sheet.votingPeriod;
           case "executionDelay": return sheet.executionDelay;
           case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;

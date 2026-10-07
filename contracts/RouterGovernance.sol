@@ -249,7 +249,7 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     error ExecutionDelayBelowMinimum();
     /// @notice Thrown by propose() when a vault in the proposed weight list is
     ///         not router-eligible (zero address, unregistered, ineligible flag
-    ///         not set, or wrong underlying asset) OR not Active (Paused/Retired).
+    ///         not set, or wrong underlying asset) OR not Active (DepositsPaused/Retired).
     ///         Identifies the offending vault so the proposer can correct the
     ///         weight vector before resubmitting. Prevents governance deadlock
     ///         and router self-DoS from stuck Queued proposals that would revert
@@ -396,7 +396,7 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
         // governance deadlock — and self-DoS of router deposits — from proposals
         // that would permanently fail on execute() because router.setWeights()
         // reverts on a vault that is ineligible (zero address, unregistered,
-        // eligibility flag not set, wrong asset) OR not Active (Paused/Retired).
+        // eligibility flag not set, wrong asset) OR not Active (DepositsPaused/Retired).
         // A non-depositable weight vector can never enter the voting pipeline.
         for (uint256 i = 0; i < vaults.length; i++) {
             if (!router.isRouterEligibleAndActive(vaults[i])) {

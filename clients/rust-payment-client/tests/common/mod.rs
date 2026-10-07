@@ -230,7 +230,7 @@ pub async fn install_happy_path_mocks(
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::pausedCall,
+            RobotMoneyGateway::depositsPausedCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_bool(false)))
@@ -338,10 +338,10 @@ pub async fn install_happy_path_mocks(
 /// A per-test override registered with the default expectation still wins
 /// its first hit ahead of both sets.
 ///
-/// The three vault reads the withdraw preflight makes are already covered
-/// by `install_happy_path_mocks`: `vault.paused()` shares its selector
-/// with `gateway.paused()` (false), and the share allowance/balance reads
-/// are the same ERC-20 selectors it stubs at `u128::MAX`.
+/// The two vault reads the withdraw preflight makes are already covered
+/// by `install_happy_path_mocks`: the share allowance/balance reads are
+/// the same ERC-20 selectors it stubs at `u128::MAX`. The withdraw path
+/// never reads the vault's `depositsPaused()` (core 1494).
 pub async fn install_withdraw_preflight_mocks(
     server: &mut mockito::ServerGuard,
     max_withdraw_per_payment: U256,

@@ -64,7 +64,7 @@ Binding constraints:
 
 - **Decision.** The dapp must render a structured preview block before opening the wallet's signing modal. The preview has a fixed shape per action class (role grant, role revoke, agent registration, policy edit, pause, unpause, config export commit). Each preview row has the following required fields:
   - **Target.** Contract address plus a verified-by-bytecode-hash badge (matching the deployed code hash recorded in the harness fixtures or `docs/technical/smart-contracts.md`). Unknown bytecode hash is a hard refusal — the preview shows red and the wallet button is disabled.
-  - **Function.** Human-readable selector (`grantRole(bytes32,address)`, `setAgentPolicy(...)`, `pause()`, etc.) plus the raw 4-byte selector.
+  - **Function.** Human-readable selector (`grantRole(bytes32,address)`, `setAgentPolicy(...)`, `pauseDeposits()`, etc.) plus the raw 4-byte selector.
   - **Decoded args.** Each argument printed as both its raw ABI-decoded value and a human gloss (e.g. `role = AGENT_ROLE`, `cap = 100 USDC (6dp)`, `valid_until = 2026-06-01 UTC`).
   - **Role/policy effect.** A one-line sentence stating the post-state delta. For role grants: "Address `0xabc…` will hold AGENT_ROLE; this lets it call `deposit` within policy caps." For policy edits: "Per-deposit cap rises from 50 USDC to 100 USDC; per-window cap unchanged."
   - **Risk class.** One of `low` / `medium` / `high` / `unsafe` based on a fixed table:

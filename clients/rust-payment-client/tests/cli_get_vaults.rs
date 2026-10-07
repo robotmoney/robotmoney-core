@@ -257,9 +257,10 @@ async fn get_vaults_one_registered_vault() {
     assert_eq!(vault["total_assets"].as_str().unwrap(), "5000000");
 }
 
-/// Paused vault: status field in output is "paused".
+/// A `VaultStatus.DepositsPaused` vault: status field in output is
+/// "deposits_paused". It stops new deposits only; holders still redeem.
 #[tokio::test]
-async fn get_vaults_paused_vault_status() {
+async fn get_vaults_deposits_paused_vault_status() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
     let block_no = 0x30u64;
@@ -297,10 +298,10 @@ async fn get_vaults_paused_vault_status() {
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_vault_record(
-            "Paused Vault",
+            "Deposits Paused Vault",
             USDC,
             1_700_000_000,
-            1, // Paused
+            1, // DepositsPaused
         )))
         .expect_at_least(0)
         .create_async()
@@ -326,12 +327,12 @@ async fn get_vaults_paused_vault_status() {
 
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     let vaults = v["data"]["vaults"].as_array().unwrap();
-    assert_eq!(vaults[0]["status"], "paused");
+    assert_eq!(vaults[0]["status"], "deposits_paused");
     assert_eq!(vaults[0]["total_assets"], "0");
 }
 
 /// A reverting `totalAssets()` must not be reported as the in-domain value
-/// `"0"` — the exact string `get_vaults_paused_vault_status` above proves a
+/// `"0"` — the exact string `get_vaults_deposits_paused_vault_status` above proves a
 /// genuinely empty vault emits (issue #1390). The degraded value is `null`.
 #[tokio::test]
 async fn get_vaults_total_assets_revert_is_null_not_zero() {

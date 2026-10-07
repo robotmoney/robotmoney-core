@@ -341,12 +341,20 @@ contract RobotMoneyVaultRouteDepositTest is Test {
         );
     }
 
-    function test_deposit_whenPaused_revertsWithZeroMax() public {
+    function test_deposit_whenPaused_revertsDepositsArePaused() public {
         vm.prank(admin);
-        vault.pause();
-        _expectExceeded(ONE_USDC, 0);
+        vault.pauseDeposits();
+        vm.expectRevert(RobotMoneyVault.DepositsArePaused.selector);
         vm.prank(alice);
         vault.deposit(ONE_USDC, alice);
+    }
+
+    function test_mint_whenPaused_revertsDepositsArePaused() public {
+        vm.prank(admin);
+        vault.pauseDeposits();
+        vm.expectRevert(RobotMoneyVault.DepositsArePaused.selector);
+        vm.prank(alice);
+        vault.mint(ONE_USDC, alice);
     }
 
     function test_deposit_aboveHeadroom_revertsWithHeadroomMax() public {
@@ -386,13 +394,6 @@ contract RobotMoneyVaultRouteDepositTest is Test {
         assertEq(vault.balanceOf(alice), 5 * ONE_USDC, "shares not minted");
         assertEq(vault.totalAssets(), assets, "mint assets not counted in NAV");
         assertLe(usdc.balanceOf(address(vault)), 3, "mint left more than rounding dust idle");
-    }
-
-    function test_depositAt_whenDepositsPaused_reverts() public {
-        vm.prank(admin);
-        vault.pause();
-        vm.expectRevert(RobotMoneyVault.DepositsPaused.selector);
-        vault.exposed_depositAt(alice, alice, ONE_USDC, ONE_USDC, 0);
     }
 
     function test_depositAt_whenShutdown_reverts() public {

@@ -117,16 +117,17 @@
 RobotMoneyVault
   ├── ERC4626   (OpenZeppelin v5 — ERC-20 shares + ERC-4626 accounting)
   ├── AccessControl (three roles: ADMIN, EMERGENCY, KEEPER)
-  ├── Pausable
   └── ReentrancyGuard
 ```
+
+The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (core 1494). The deployed v1 vault predates this and still inherits OZ Pausable.
 
 ### 3.2 Access control roles
 
 | Role | Keccak | Granted at deploy | Powers |
 |---|---|---|---|
 | `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` constructor arg | Add/remove/reconfigure adapters, set caps/fees (governance-gated, INV-3: ADMIN_ROLE is held by the TimelockController in production), `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval`. **No** `rescueTokens` — arbitrary-recipient rescue is deleted (INV-1); the only token movement is the permissionless `sweepForeignToken` |
-| `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_admin` constructor arg | `pause`, `unpause`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault` |
+| `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_admin` constructor arg | `pauseDeposits`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault`. `unpauseDeposits` is `ADMIN_ROLE` only. |
 | `KEEPER_ROLE` | `keccak256("KEEPER_ROLE")` | **Not granted at launch** | `rebalance` |
 
 `ADMIN_ROLE` is its own admin (can grant/revoke itself). In production, the constructor arg is the Safe multisig `0x88bA…75A0`.
@@ -197,15 +198,15 @@ Dust from integer division is swept from `lastActiveIdx`. If total adapter balan
 
 | Function | Role | Effect |
 |---|---|---|
-| `pause()` | EMERGENCY | `whenNotPaused` blocks `deposit`, `withdraw`, `redeem`, `rebalance` |
-| `unpause()` | EMERGENCY | Reverses pause |
-| `emergencyWithdraw()` | EMERGENCY | Pauses vault, then tries `withdraw(balance)` on every active adapter with a `try/catch` — failures are logged but do not revert |
-| `emergencyWithdrawAdapter(i)` | EMERGENCY | Same for a single adapter index |
+| `pauseDeposits()` | EMERGENCY | Sets `depositsPaused`. `deposit` and `mint` revert `DepositsArePaused()`. Emits `DepositsPaused(account)`. Withdrawals are never frozen, by anyone: the vault has no withdrawal-pause flag, and `maxRedeem`/`maxWithdraw` are never lowered by a pause (core 1494). |
+| `unpauseDeposits()` | ADMIN (timelock) | Clears `depositsPaused` and emits `DepositsUnpaused(account)`. Also clears the deposit halt the three functions below set. |
+| `emergencyWithdraw()` | EMERGENCY | Pauses deposits, then tries `withdraw(balance)` on every active adapter with a `try/catch` — failures are logged but do not revert |
+| `emergencyWithdrawAdapter(i)` | EMERGENCY | Same for a single adapter index. Withdrawals stay open. |
 | `forceRemoveAdapter(i)` | EMERGENCY | Marks adapter inactive regardless of balance (accepts loss) — emits `AdapterForceRemoved(i, addr, lossAmount)` |
 | `shutdownVault()` | EMERGENCY | Sets `shutdown = true`, `tvlCap = 0`. Deposits revert with `VaultShutdown()`; withdrawals continue. Recoverable by ADMIN via `restoreVault` (see below). |
 
 `shutdownVault()` is not permanent. It is reversed by `restoreVault(uint256 newTvlCap)`,
-an **ADMIN**-only recovery path. The asymmetry mirrors `pause`/`unpause`: a
+an **ADMIN**-only recovery path. The asymmetry mirrors `pauseDeposits`/`unpauseDeposits`: a
 compromised emergency hot key can DoS deposits, but only the higher-trust admin
 role can re-open the vault. Because `shutdownVault` zeroes `tvlCap`, the admin
 must supply a fresh cap rather than silently reusing a stale value:
@@ -213,6 +214,28 @@ must supply a fresh cap rather than silently reusing a stale value:
 | Function | Role | Effect |
 |---|---|---|
 | `restoreVault(uint256 newTvlCap)` | ADMIN | Reverts with `NotShutdown()` unless `shutdown == true`. Requires `newTvlCap > 0` (else `InvalidCap()`) and `perDepositCap <= newTvlCap` (else `InvalidParam()`). Clears `shutdown`, sets `tvlCap = newTvlCap`, emits `VaultRestored(newTvlCap)` and `TvlCapUpdated(old, newTvlCap)`. Deposits resume under the new cap. |
+
+#### 3.8.1 Pause names (core 1494)
+
+Owner decision 2026-10-05: withdrawals are never frozen. A pause stops new deposits only, and the names say so. This is the one rename table. It covers RobotMoneyVault, the unified `Vault`, the BasketVault family (rmPROTO, rmAGENT, rmRWA), `RobotMoneyGateway` / `IGateway`, `VaultRegistry` and `PortfolioRouter`.
+
+| Old name | New name | Where | On the v1 vault |
+|---|---|---|---|
+| `pause()` | `pauseDeposits()` | vaults (`EMERGENCY_ROLE`), gateway (`DEPOSIT_PAUSER_ROLE`) | v1 keeps `pause()`, which also freezes withdrawals |
+| `unpause()` | `unpauseDeposits()` | vaults and gateway (`ADMIN_ROLE`, the timelock in production) | v1 keeps `unpause()` |
+| `paused()` | `depositsPaused()` | vaults and gateway (view) | v1 keeps `paused()` and also has `depositsPaused()` |
+| `PAUSER_ROLE` | `DEPOSIT_PAUSER_ROLE` (`keccak256("DEPOSIT_PAUSER_ROLE")`, a new hash) | gateway. The env var `PAUSER_ADDRESS` keeps its name and receives this role. | not a v1 vault name |
+| `Paused(address)` / `Unpaused(address)`, `DepositsPausedChanged(bool)`, `DepositsPausedSet(bool)` | `DepositsPaused(address indexed)` / `DepositsUnpaused(address indexed)` | vaults and gateway (events) | v1 keeps `DepositsPausedChanged` |
+| `EnforcedPause()`, vault error `DepositsPaused()`, gateway `PausedError()` | `DepositsArePaused()` | `deposit`, `mint`, `depositTo` while paused | v1 keeps error `DepositsPaused()` |
+| gateway `NotPaused()` | `DepositsNotPaused()` | gateway `unpauseDeposits()` when not paused | not a v1 vault name |
+| `ExpectedPause()` | removed | BasketVault no longer inherits OZ Pausable | not a v1 vault name |
+| `withdrawalsPaused`, `WithdrawalsPaused()`, `WithdrawalsPausedChanged`, `setWithdrawalsPaused` | deleted | no current vault has a withdrawal pause | v1 keeps `withdrawalsPaused()` |
+| `VaultStatus.Paused` | `VaultStatus.DepositsPaused` (ordinal 1, unchanged) | `VaultRegistry` | not a v1 vault name |
+| `VaultPausedForRedeem` | removed | `PortfolioRouter.redeemFor` redeems from a vault in every status | not a v1 vault name |
+
+Gateway `withdraw` and `withdrawFromRouter` do not read the pause. Emergency levers (`emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `emergencyUnwind`, `shutdownVault`) set a deposit halt or move funds to idle. They never block an exit.
+
+**The v1 exception.** The deployed v1 RobotMoneyVault (`0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd`, Base mainnet) keeps its old code and the old names. Its v1 `pause()` also freezes withdrawals (it sets v1 `withdrawalsPaused`). Never call `pause()` on v1. The v1 vault has `paused()`, `depositsPaused()` and `withdrawalsPaused()`. Clients read `depositsPaused()`, which exists on v1 and on every current contract.
 
 ### 3.9 Rebalance
 
@@ -314,7 +337,7 @@ The original `smart-contracts.md` was inferred from ABIs. Several claims were wr
 | "Reentrancy guard usage unverified" | `nonReentrant` confirmed on deposit, withdraw, rebalance |
 | "Adapter loss handling unknown" | Partial pull caps at available balance; `forceRemoveAdapter` accepts write-off |
 | "KEEPER_ROLE not granted at launch" | Confirmed in constructor comment |
-| "Two emergency switches: paused + shutdown" | Confirmed. `shutdownVault` also zeroes `tvlCap` |
+| "Two emergency switches: paused + shutdown" | Confirmed. Both stop deposits only (`depositsPaused`, core 1494). `shutdownVault` also zeroes `tvlCap` |
 | "Adapter rebalancing — targetBps tiltable?" | No stored `targetBps`. `adminRebalance` accepts explicit targets as calldata; `rebalance()` always uses equal-weight |
 
 ---
@@ -410,7 +433,7 @@ The seed deposit is not recoverable through normal channels (it is locked as vau
 `VaultRegistry` is the on-chain registry of authorized Robot Money vaults. It serves as the single source of truth for:
 
 - **Vault discovery**: Clients (rmpc, dapp, indexer) enumerate all registered vaults via `listVaults()`.
-- **Lifecycle status**: Each vault is marked `Active`, `Paused`, or `Retired` (withdraw-only); `PortfolioRouter` routes deposits only to `Active` vaults.
+- **Lifecycle status**: Each vault is marked `Active`, `DepositsPaused`, or `Retired` (withdraw-only); `PortfolioRouter` routes deposits only to `Active` vaults. `PortfolioRouter.redeemFor` redeems from a vault in every status (core 1494).
 - **Router eligibility**: ADMIN_ROLE flags which vaults have cleared production-readiness gating (audit, oracle hardening) and may be weighted by `PortfolioRouter`. This flag is state, not a code variant—the same contracts deploy into test, demo, and mainnet; only the registry flag's value differs (per `docs/development/single-production-codebase.md`).
 
 Access model: `ADMIN_ROLE` is self-administered (its own role-admin). The deployer is the initial admin.
@@ -420,7 +443,7 @@ Access model: `ADMIN_ROLE` is self-administered (its own role-admin). The deploy
 | Function | Role | Effect |
 |---|---|---|
 | `registerVault(address vault, VaultMetadata)` | ADMIN | Register a new vault with metadata (name, asset address). Vault starts `Active`. |
-| `setVaultStatus(address vault, VaultStatus)` | ADMIN | Transition vault status (Active ↔ Paused ↔ Retired). No forced migration; retiring is withdraw-only. |
+| `setVaultStatus(address vault, VaultStatus)` | ADMIN | Transition vault status (Active ↔ DepositsPaused ↔ Retired). No forced migration. No status blocks a redeem. |
 | `setRouterEligible(address vault, bool eligible)` | ADMIN | Toggle whether PortfolioRouter may weight and allocate to this vault. |
 | `setRouter(address newRouter)` | ADMIN | Link the PortfolioRouter whose default weight vector length is synchronized with router-eligible count (ADR-0002). |
 | `listVaults()` | view | Return all registered vault addresses in registration order. |
@@ -468,7 +491,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 - At deposit time `_availabilityAndAmounts` skips each non-depositable leg and renormalises the full amount pro rata across the remaining legs. Nothing is left with the router or returned to the user. If no leg is depositable, `_depositTo` reverts `NoWeightsSet` and no USDC moves.
 - Per-vault caps do not renormalise: `_executeLeg` reverts `VaultCapExceeded` for an over-cap leg, and the whole deposit reverts.
 - `_executeLeg` re-checks registry status (`VaultNotActive`) and router eligibility (`_requireRouterEligible`) before each deposited leg, as defence in depth.
-- **Known gap:** `_isDepositable` does not read a vault's own deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pause()`, `shutdown`, or `maxDeposit == 0`). A registry-Active, router-eligible vault with deposits paused stays in the available set, its `vault.deposit` reverts, and the whole routed deposit reverts `UsdcLegTransferFailed(vault)`. Not fixed yet.
+- **Known gap:** `_isDepositable` does not read a vault's own deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pauseDeposits()`, `shutdown`, or `maxDeposit == 0`). A registry-Active, router-eligible vault with deposits paused stays in the available set, its `vault.deposit` reverts, and the whole routed deposit reverts `UsdcLegTransferFailed(vault)`. Not fixed yet.
 
 ### 9.1.3 Caps and guards
 
@@ -584,9 +607,9 @@ BasketVault maintains an ordered list of active basket assets. Each asset has:
 
 | Config | Type | Min | Max | Default | Effect |
 |---|---|---|---|---|---|
-| `twapWindow` (per asset) | uint32 | `MIN_TWAP_WINDOW` (600s) | `MAX_TWAP_WINDOW` (86400s) | `DEFAULT_TWAP_WINDOW` (1800s) | Seconds of TWAP history for NAV and swap-minimum pricing. |
+| `twapWindow` (per asset) | uint32 | `MIN_TWAP_WINDOW` (600s) | `MAX_TWAP_WINDOW` (86400s) | `DEFAULT_TWAP_WINDOW` (1800s) | Seconds of TWAP history for NAV and swap-minimum pricing. `setTwapWindow` refuses a window longer than the pool's observation history (`InsufficientObservationHistory(pool, window)`). |
 
-Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or lowers the window per asset within `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`. See docs/technical/security-model.md §5 for TWAP-oracle failure modes and the emergency-unwind path.
+Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or lowers the window per asset within `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`. Governance cannot set a window the pool's oldest observation does not reach: such a window would make every NAV read revert and block every redeem (core 1494). See docs/technical/security-model.md §5 for TWAP-oracle failure modes and the emergency-unwind path.
 
 ### 9.3.4 Deposit and withdrawal flow
 
@@ -606,8 +629,8 @@ Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or low
 
 | Role | Powers |
 |---|---|
-| ADMIN_ROLE | Add/remove/activate assets, set TWAP windows, adjust TVL and per-deposit caps, set exit fee (max 1%), set fee recipient, set max slippage, pause deposits, trigger emergency-unwind. |
-| EMERGENCY_ROLE | `emergencyUnwind()` to liquidate the basket in a lossy, fast path (no slippage limit) if normal withdrawal is blocked (oracle failure, liquidity crash). Override allowed only if loss is within `maxLossBps` of the oracle-derived floor. |
+| ADMIN_ROLE | Add/remove/activate assets, set TWAP windows, adjust TVL and per-deposit caps, set exit fee (max 1%), set fee recipient, set max slippage, `unpauseDeposits()` (also clears the deposit halt `emergencyUnwind` sets), set the emergency-unwind guard. |
+| EMERGENCY_ROLE | `pauseDeposits()` (blocks new deposits only; `redeem` stays open, core 1494), `shutdownVault()`, and `emergencyUnwind()` to liquidate the basket in a lossy, fast path (no slippage limit) if normal withdrawal is blocked (oracle failure, liquidity crash). Override allowed only if loss is within `maxLossBps` of the oracle-derived floor. |
 
 ### 9.3.6 Subclasses: ProtocolAssetVault, AgentTokenVault, RwaBasketVault
 

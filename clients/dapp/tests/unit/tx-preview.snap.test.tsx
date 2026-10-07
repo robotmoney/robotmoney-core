@@ -43,8 +43,8 @@ const fixtures: { name: string; action: AdminAction }[] = [
     },
   },
   { name: "revokeAgent", action: { kind: "revokeAgent", agent } },
-  { name: "pause", action: { kind: "pause" } },
-  { name: "unpause", action: { kind: "unpause" } },
+  { name: "pauseDeposits", action: { kind: "pauseDeposits" } },
+  { name: "unpauseDeposits", action: { kind: "unpauseDeposits" } },
 ];
 
 describe("TxPreview snapshot per admin action", () => {

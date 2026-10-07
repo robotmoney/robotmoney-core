@@ -1,5 +1,5 @@
 /**
- * Snapshot test — pause / unpause TxPreview rendering.
+ * Snapshot test — pauseDeposits / unpauseDeposits TxPreview rendering.
  *
  * Covers issue #82 acceptance criterion:
  *   "Vitest unit tests snapshot the preview component output for both
@@ -9,8 +9,9 @@
  *   - The structured preview block renders with target, selector,
  *     decoded effect, and (collapsed) calldata.
  *   - The encoded calldata equals the well-known 4-byte selector for
- *     pause()/unpause() — guarantees the dapp signs exactly the bytes
- *     the operator expects.
+ *     pauseDeposits()/unpauseDeposits() — guarantees the dapp signs
+ *     exactly the bytes the operator expects.
+ *   - The effect copy says withdrawals stay open (core 1494).
  */
 import { describe, it, expect } from "vitest";
 import { render } from "./helpers/render";
@@ -27,12 +28,12 @@ const ctx: PreviewContext = {
   envClass: "fork",
 };
 
-const cases: { name: "pause" | "unpause"; action: AdminAction }[] = [
-  { name: "pause", action: { kind: "pause" } },
-  { name: "unpause", action: { kind: "unpause" } },
+const cases: { name: "pauseDeposits" | "unpauseDeposits"; action: AdminAction }[] = [
+  { name: "pauseDeposits", action: { kind: "pauseDeposits" } },
+  { name: "unpauseDeposits", action: { kind: "unpauseDeposits" } },
 ];
 
-describe("TxPreview snapshot — pause/unpause", () => {
+describe("TxPreview snapshot — pauseDeposits/unpauseDeposits", () => {
   for (const { name, action } of cases) {
     it(`renders structured preview for ${name}`, () => {
       const preview = buildPreview(action, ctx);
@@ -41,7 +42,7 @@ describe("TxPreview snapshot — pause/unpause", () => {
       // Structured fields exist.
       expect(getByTestId("tx-preview-target").textContent).toContain(gateway);
       expect(getByTestId("tx-preview-fn").textContent).toBe(name);
-      expect(getByTestId("tx-preview-effect").textContent).toBeTruthy();
+      expect(getByTestId("tx-preview-effect").textContent).toMatch(/Withdrawals (stay|were) open/);
       expect(queryByTestId("refusal-reason")).toBeNull();
 
       // Selector matches the canonical 4-byte function selector.
@@ -50,7 +51,7 @@ describe("TxPreview snapshot — pause/unpause", () => {
       expect(getByTestId("tx-preview-selector").textContent).toBe(expectedSelector);
 
       // Calldata equals the encoder output for the intended call. For
-      // pause()/unpause() the calldata is exactly the 4-byte selector
+      // pauseDeposits()/unpauseDeposits() the calldata is exactly the 4-byte selector
       // (no args), so this is a strict equality check.
       const expectedCalldata = encodeFunctionData({
         abi: gatewayAbi,

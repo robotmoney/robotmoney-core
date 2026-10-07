@@ -33,7 +33,7 @@ contract DeployBasketVaultRwaTest is BasketDeployFixture {
 
         RwaBasketVault v = RwaBasketVault(d.vault);
         assertEq(v.symbol(), "rmRWA");
-        assertTrue(v.paused(), "paused");
+        assertTrue(v.depositsPaused(), "paused");
         assertEq(v.assetCount(), 1, "one row");
         (
             address token,

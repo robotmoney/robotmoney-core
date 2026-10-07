@@ -35,7 +35,7 @@ AAVE_POOL_ADDRESS="0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"
 
 # isAbsorbing() selector: keccak256("isAbsorbing()")[0:4] = 0xaa63b9c9
 COMET_IS_ABSORBING_SELECTOR="0xaa63b9c9"
-# paused() on Aave V3 Pool: keccak256("paused()")[0:4] = 0x5c975abb
+# paused() on Aave V3 Pool: keccak256("paused()")[0:4] = 0x5c975abb  (Aave's own third-party pause; pause-guard: allow)
 AAVE_PAUSED_SELECTOR="0x5c975abb"
 
 eth_call() {

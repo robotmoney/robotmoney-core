@@ -4,7 +4,7 @@ title: "RobotMoneyGatewayTest"
 
 # RobotMoneyGatewayTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:** Test
 
@@ -461,44 +461,44 @@ can claim it via commit/reveal (issue #753).
 function test_revokeAgent_then_authorizeAgent_by_different_owner() public;
 ```
 
-<a id="test_pause_bypauser_unpause_byadmin"></a>
+<a id="test_pausedeposits_bypauser_unpause_byadmin"></a>
 
-### test_pause_byPauser_unpause_byAdmin
+### test_pauseDeposits_byPauser_unpause_byAdmin
 
 ```solidity
-function test_pause_byPauser_unpause_byAdmin() public;
+function test_pauseDeposits_byPauser_unpause_byAdmin() public;
 ```
 
-<a id="test_pause_nonpauserreverts"></a>
+<a id="test_pausedeposits_nonpauserreverts"></a>
 
-### test_pause_nonPauserReverts
+### test_pauseDeposits_nonPauserReverts
 
 ```solidity
-function test_pause_nonPauserReverts() public;
+function test_pauseDeposits_nonPauserReverts() public;
 ```
 
-<a id="test_unpause_nonadminreverts"></a>
+<a id="test_unpausedeposits_nonadminreverts"></a>
 
-### test_unpause_nonAdminReverts
+### test_unpauseDeposits_nonAdminReverts
 
 ```solidity
-function test_unpause_nonAdminReverts() public;
+function test_unpauseDeposits_nonAdminReverts() public;
 ```
 
-<a id="test_pause_revertsifalreadypaused"></a>
+<a id="test_pausedeposits_revertsifalreadypaused"></a>
 
-### test_pause_revertsIfAlreadyPaused
+### test_pauseDeposits_revertsIfAlreadyPaused
 
 ```solidity
-function test_pause_revertsIfAlreadyPaused() public;
+function test_pauseDeposits_revertsIfAlreadyPaused() public;
 ```
 
-<a id="test_unpause_revertsifnotpaused"></a>
+<a id="test_unpausedeposits_revertsifnotpaused"></a>
 
-### test_unpause_revertsIfNotPaused
+### test_unpauseDeposits_revertsIfNotPaused
 
 ```solidity
-function test_unpause_revertsIfNotPaused() public;
+function test_unpauseDeposits_revertsIfNotPaused() public;
 ```
 
 <a id="test_deposit_happypath_movesusdcmintssharesemitsevent"></a>

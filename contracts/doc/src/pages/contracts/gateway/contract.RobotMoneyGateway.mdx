@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b15af58af03b5cec83b6e49b77d4fb97b76e2873/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
 
@@ -273,12 +273,13 @@ Replay protection. `paymentId => used`.
 mapping(bytes32 => bool) public usedPaymentIds;
 ```
 
-### _paused
+### _depositsPaused
 
-Stop-the-world flag.
+Deposit pause flag. Blocks `deposit` and `depositTo` only. Withdrawals
+are never frozen (owner decision 2026-10-05, core 1494).
 
 ```solidity
-bool private _paused;
+bool private _depositsPaused;
 ```
 
 ### icPolicy
@@ -394,7 +395,7 @@ constructor(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, addr
 | usdc_ | `IERC20` | USDC (or 6-decimal stand-in) token address. |
 | vault_ | `IERC4626` | ERC-4626 vault whose `asset()` MUST equal `usdc_`. |
 | admin_ | `address` | Holder of `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`. |
-| pauser_ | `address` | Holder of `PAUSER_ROLE`. Must be distinct from agents. |
+| pauser_ | `address` | Holder of `DEPOSIT_PAUSER_ROLE`. Must be distinct from agents. |
 | router_ | `address` | Portfolio Router address, or `address(0)` to deploy without<br/>router support (single-vault mode). |
 
 <a id="usdc"></a>
@@ -445,14 +446,14 @@ function router() external view returns (address);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address` |  |
 
-<a id="paused"></a>
+<a id="depositspaused"></a>
 
-### paused
+### depositsPaused
 
-Whether the gateway is currently paused.
+Whether gateway deposits are currently paused. Withdrawals are never paused.
 
 ```solidity
-function paused() external view returns (bool);
+function depositsPaused() external view returns (bool);
 ```
 
 **Returns**
@@ -942,27 +943,29 @@ function _validatePolicy(address caller, AgentPolicy calldata p) internal view;
 | caller | `address` |  |
 | p | `AgentPolicy` |  |
 
-<a id="pause"></a>
+<a id="pausedeposits"></a>
 
-### pause
+### pauseDeposits
 
-Stop-the-world pause. Restricted to `PAUSER_ROLE`.
+Pause new deposits (`deposit`, `depositTo`). Restricted to
+`DEPOSIT_PAUSER_ROLE`. Withdrawals (`withdraw`, `withdrawFromRouter`)
+stay open (owner decision 2026-10-05, core 1494).
 
 ```solidity
-function pause() external onlyRole(PAUSER_ROLE);
+function pauseDeposits() external onlyRole(DEPOSIT_PAUSER_ROLE);
 ```
 
-<a id="unpause"></a>
+<a id="unpausedeposits"></a>
 
-### unpause
+### unpauseDeposits
 
-Resume operations. Restricted to `ADMIN_ROLE` (asymmetric).
-`ADMIN_ROLE` is retained as a protocol-wide kill-switch
-counterweight to `pause`; it has no authority over the
+Resume deposits. Restricted to `ADMIN_ROLE` (asymmetric).
+`ADMIN_ROLE` is retained as the counterweight to
+`pauseDeposits`; it has no authority over the
 lifecycle of an agent it does not own.
 
 ```solidity
-function unpause() external onlyRole(ADMIN_ROLE);
+function unpauseDeposits() external onlyRole(ADMIN_ROLE);
 ```
 
 <a id="deposit-bytes32-uint256-uint64-bytes32"></a>
@@ -1233,8 +1236,9 @@ function withdraw(
 
 Redeem vault shares proportionally across all Portfolio Router
 legs. Enforces the same policy checks (valid-until, per-payment
-cap, window cap, allowed-source-vaults, pause, idempotency,
-recipient) as single-vault `withdraw`. Each leg's vault must
+cap, window cap, allowed-source-vaults, idempotency,
+recipient) as single-vault `withdraw`. Works while deposits are
+paused: a pause never blocks a withdrawal (core 1494). Each leg's vault must
 appear in `policy.allowedSourceVaults` (when non-empty). USDC
 is forwarded exclusively to the policy-configured `assetRecipient`.
 
@@ -1576,20 +1580,21 @@ Constructor-time check: vault.asset() does not match the configured USDC token.
 error AssetMismatch();
 ```
 
-### PausedError
+### DepositsArePaused
 
-Operation rejected because the gateway is paused (also re-thrown by `pause()` if already paused).
+Deposit rejected because gateway deposits are paused (also raised by
+`pauseDeposits()` if deposits are already paused). Withdrawals never raise it.
 
 ```solidity
-error PausedError();
+error DepositsArePaused();
 ```
 
-### NotPaused
+### DepositsNotPaused
 
-`unpause()` called while the gateway was not paused.
+`unpauseDeposits()` called while deposits were not paused.
 
 ```solidity
-error NotPaused();
+error DepositsNotPaused();
 ```
 
 ### InvalidAmount

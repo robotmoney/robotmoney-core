@@ -39,7 +39,7 @@ function makeExplorerFetch(vaults: VaultsResponse, stats: StatsResponse | null =
 }
 
 // Four-vault demo set: three Active router vaults plus the non-Active
-// RWA/Thematic placeholder (status 1 = Paused).
+// RWA/Thematic placeholder (status 1 = DepositsPaused).
 const fourVaultFixture: VaultsResponse = {
   vaults: [
     {
@@ -80,7 +80,7 @@ const fourVaultFixture: VaultsResponse = {
       address: "0x4444444444444444444444444444444444444444",
       name: "Robot Money RWA / Thematic",
       risk_label: "SPECULATIVE",
-      status: 1, // non-Active (Paused) — the RWA/Thematic placeholder
+      status: 1, // non-Active (DepositsPaused) — the RWA/Thematic placeholder
       deposit_cap: "0",
       total_assets: null,
       exit_fee_bps: null,

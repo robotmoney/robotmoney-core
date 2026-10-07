@@ -117,13 +117,13 @@ strings are:
 ```
 ErrVaultDisabled: target vault is not registered or has been disabled
 ErrPolicyExpired: agent policy has expired (validUntil < block.timestamp)
-ErrLegUnavailable: router leg vault is unavailable (paused, full, or de-listed)
+ErrLegUnavailable: router leg vault is unavailable (deposits paused, full, or de-listed)
 ErrSlippageBoundExceeded: estimated shares per leg fall below the caller's minimum bound
 ```
 
 These are the only `RmpcError` variants that map directly from contract
 execution results rather than pre-flight checks.  Earlier variants such as
-`ErrGatewayPaused`, `ErrAllowanceInsufficient`, and `ErrBalanceInsufficient`
+`ErrDepositsPaused` (deposits only), `ErrAllowanceInsufficient`, and `ErrBalanceInsufficient`
 are raised before the transaction is signed; these four are raised from the
 on-chain revert data decoded from a mined or simulated transaction.
 

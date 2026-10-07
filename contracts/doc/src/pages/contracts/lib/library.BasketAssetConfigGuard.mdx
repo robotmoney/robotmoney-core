@@ -5,7 +5,7 @@ description: "The config-validation interface the 2026-06-19 audit recommended f
 
 # BasketAssetConfigGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/lib/BasketAssetConfigGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/lib/BasketAssetConfigGuard.sol)
 
 **Title:** BasketAssetConfigGuard
 
@@ -55,6 +55,28 @@ function requirePoolUsable(
 | twapWindow | `uint32` |  |
 | minCardinality | `uint16` |  |
 | minLiquidity | `uint128` |  |
+
+<a id="requireobservationhistory-address-uint32"></a>
+
+### requireObservationHistory
+
+Assert `pool` holds enough observation history to serve a
+`twapWindow`-second TWAP right now: `observe([twapWindow, 0])` must
+not revert. Used by `addAsset` (via `requirePoolUsable`) and by
+`setTwapWindow`, so governance can never set a window the pool's
+oldest observation does not reach. Such a window would make every
+NAV read revert ("OLD") and block every redeem (core 1494).
+
+```solidity
+function requireObservationHistory(address pool, uint32 twapWindow) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| twapWindow | `uint32` |  |
 
 <a id="reuseorrejectduplicate-assetinfo-address-address-uint24-address-venue"></a>
 

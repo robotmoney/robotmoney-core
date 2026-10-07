@@ -20,7 +20,7 @@ export async function hiddenPrompt(question: string): Promise<string> {
       };
       stdin.on("data", onData);
     });
-  } finally { stdin.setRawMode(false); stdin.pause(); }
+  } finally { stdin.setRawMode(false); stdin.pause(); } // pause-guard: allow (Node stdin, not a vault)
 }
 
 export function applyKey(input: string, ch: string): { input: string; done?: boolean; cancelled?: boolean } {

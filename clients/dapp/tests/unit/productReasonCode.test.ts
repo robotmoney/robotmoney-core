@@ -9,17 +9,23 @@
  * stable product reason codes.
  */
 import { describe, it, expect } from "vitest";
-import { mapEvmRevertToProductReason } from "../../src/lib/productReasonCode";
+import { toFunctionSelector } from "viem";
+import { mapEvmRevertToProductReason, productReasonDisplay } from "../../src/lib/productReasonCode";
 import type { ProductReasonCode } from "../../src/lib/productReasonCode";
+import {
+  gatewayAbiGenerated,
+  robotMoneyVaultAbiGenerated,
+  agentTokenVaultAbiGenerated,
+} from "../../src/lib/abi.generated";
 
 describe("mapEvmRevertToProductReason — all nine architecture-mandated codes", () => {
   // Each entry is [mock revert payload, expected ProductReasonCode].
   // The hex selectors must match the SELECTOR_MAP in productReasonCode.ts.
   const cases: [string, ProductReasonCode][] = [
-    // paused — GatewayPaused() selector
-    ["0x1a7e0d23", "paused"],
-    // paused — EnforcedPause() (OZ Pausable standard)
-    ["0xd93c0665", "paused"],
+    // paused — DepositsArePaused() (gateway and every vault, core 1494)
+    ["0x5a65d188", "paused"],
+    // paused — DepositsPaused() error on the deployed v1 RobotMoneyVault
+    ["0xdeeb6943", "paused"],
     // vault_disabled
     ["0x3a81d6fc", "vault_disabled"],
     // cap_exceeded
@@ -54,6 +60,23 @@ describe("mapEvmRevertToProductReason — all nine architecture-mandated codes",
 
   it('maps plain-text "paused" revert string → "paused"', () => {
     expect(mapEvmRevertToProductReason("execution reverted: paused")).toBe("paused");
+  });
+
+  it("deposit-pause selectors are the canonical errors in the generated ABIs", () => {
+    const errorNames = (abi: readonly { type: string; name?: string }[]) =>
+      abi.filter((e) => e.type === "error").map((e) => e.name);
+    expect(toFunctionSelector("DepositsArePaused()")).toBe("0x5a65d188");
+    expect(toFunctionSelector("DepositsNotPaused()")).toBe("0xa4d3098c");
+    expect(errorNames(gatewayAbiGenerated)).toContain("DepositsArePaused");
+    expect(errorNames(gatewayAbiGenerated)).toContain("DepositsNotPaused");
+    expect(errorNames(robotMoneyVaultAbiGenerated)).toContain("DepositsArePaused");
+    expect(errorNames(agentTokenVaultAbiGenerated)).toContain("DepositsArePaused");
+  });
+
+  it("the paused display says deposits are paused and withdrawals stay open", () => {
+    const text = productReasonDisplay("paused");
+    expect(text).toMatch(/Deposits are paused/);
+    expect(text).toMatch(/Withdrawals stay open/);
   });
 
   it('maps plain-text "allowance" revert string → "insufficient_allowance"', () => {

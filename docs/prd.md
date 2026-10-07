@@ -251,7 +251,8 @@ and no worker may submit a RouterGovernance proposal unattended.
 
 Common edge cases:
 
-- selected destination is paused, retired, full, or unavailable;
+- selected destination has deposits paused, is retired, full, or unavailable
+  (this refuses a deposit only; a withdrawal is never refused for a pause);
 - requested amount exceeds depositor, vault, allocation, or agent limits;
 - withdrawal path cannot meet synchronous settlement requirements;
 - a Portfolio Router allocation leg is unavailable, causing the whole deposit to revert;
@@ -264,7 +265,7 @@ Common edge cases:
 
 ## 6. Entity Lifecycle
 
-- **Vault.** Proposed -> active -> paused -> active; active -> retired;
+- **Vault.** Proposed -> active -> deposits paused -> active; active -> retired;
   retired -> redeemable archive when redemptions remain available. A retired
   vault remains withdraw-only: existing depositors keep standard ERC-4626
   redemption at any time, the router routes no new deposits into it, and the
@@ -293,9 +294,10 @@ Common edge cases:
   corrections are made by submitting a new vote. Committee votes are
   signalling-only and never transition product funds or router weights.
 - **Fee schedule.** Proposed -> published -> active -> superseded.
-- **Incident control.** Normal -> paused -> normal; normal or paused ->
-  shutdown. New deposits can be halted for incident response while
-  existing holders can always redeem — withdrawals are never blocked.
+- **Incident control.** Normal -> deposits paused -> normal; normal or
+  deposits paused -> shutdown. New deposits can be halted for incident
+  response while existing holders can always redeem. Withdrawals are never
+  blocked, by anyone.
 
 ## 7. Integration Needs
 
@@ -675,7 +677,7 @@ protocol's deliberate value and lifecycle actions: permissionless actions
 (foreign-token sweep, harvest trigger) need no privilege; emergency actions
 can only de-risk, never extract — new deposits can be halted for incident
 response while existing holders can always redeem, so withdrawals are never
-blocked; and governance actions (unpause, restore, retire, fee-recipient and
+blocked; and governance actions (unpause deposits, restore, retire, fee-recipient and
 fee-parameter changes, strategy add/allowlist/caps, quarantine set and
 recover) require multisig plus timelock. Depositor principal is moved by the
 depositor alone.

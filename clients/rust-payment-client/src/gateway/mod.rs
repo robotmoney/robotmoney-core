@@ -124,11 +124,28 @@ mod tests {
         assert_eq!(&actual, expected);
     }
 
+    /// `depositsPaused()` is one selector on the gateway and on every vault
+    /// (the MockVault binding rmpc reads vaults through), so the deposit
+    /// preflight reads both with the same call (core 1494).
     #[test]
-    fn paused_view_selector_matches() {
-        let expected = &keccak256(b"paused()")[..4];
-        let actual = RobotMoneyGateway::pausedCall::SELECTOR;
-        assert_eq!(&actual, expected);
+    fn deposits_paused_view_selector_matches() {
+        let expected = &keccak256(b"depositsPaused()")[..4];
+        assert_eq!(&RobotMoneyGateway::depositsPausedCall::SELECTOR, expected);
+        assert_eq!(&MockVault::depositsPausedCall::SELECTOR, expected);
+    }
+
+    /// The gateway's pause errors rmpc may see in revert data. `withdraw`
+    /// and `withdrawFromRouter` never raise either one (core 1494).
+    #[test]
+    fn deposit_pause_error_selectors_match() {
+        assert_eq!(
+            &RobotMoneyGateway::DepositsArePaused::SELECTOR,
+            &keccak256(b"DepositsArePaused()")[..4]
+        );
+        assert_eq!(
+            &RobotMoneyGateway::DepositsNotPaused::SELECTOR,
+            &keccak256(b"DepositsNotPaused()")[..4]
+        );
     }
 
     #[test]

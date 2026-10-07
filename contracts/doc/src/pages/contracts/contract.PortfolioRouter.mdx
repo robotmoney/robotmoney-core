@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7108b70cd9026b3c48f652fd02739362e4c14ef1/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -630,9 +630,10 @@ the router never silently skips or reorders a named vault.
 targets exactly the address the caller named, so a reweight
 between sign and execution can never redirect a leg to a vault
 the caller did not name (NC-5).
-- Redemption succeeds when a leg's registry status is Active OR
-Retired; only Paused blocks the exit (F-02). Retired vaults are
-withdraw-only, never deposit targets — see ADR-0009.
+- Redemption succeeds whatever a leg's registry status is (Active,
+DepositsPaused or Retired). No status blocks an exit (F-02, core
+1494). Retired vaults are withdraw-only, never deposit targets —
+see ADR-0009.
 
 SECURITY: users must NEVER grant a share-token approval directly to
 this router. The router calls `vault.redeem` with itself as the
@@ -958,7 +959,7 @@ Return true if `vault` is router-eligible: it exposes an
 ERC-4626 `asset()` view equal to the router's USDC AND the
 VaultRegistry has marked the vault as router-eligible.
 This view is intentionally distinct from VaultRegistry
-lifecycle status (Active/Paused/Retired); clients (dapp,
+lifecycle status (Active/DepositsPaused/Retired); clients (dapp,
 rmpc) read both signals to compose accurate UI state.
 
 ```solidity
@@ -1018,7 +1019,7 @@ AND it is router-eligible (asset == USDC + eligibility flag). This is
 the single guard that a weight vector is only ever written when every
 leg is simultaneously eligible AND depositable (F-05/RTR-4/GOV-4):
 eligibility and lifecycle status are independent signals, so checking
-eligibility alone would let an eligible-but-Paused/Retired vault enter
+eligibility alone would let an eligible-but-DepositsPaused/Retired vault enter
 the vector and brick `deposit()` later. Used by `setWeights` and
 `setDefaultWeights` at configuration time.
 
@@ -1276,22 +1277,6 @@ error VaultNotActive(address vault, VaultRegistry.VaultStatus status);
 | ---- | ---- | ----------- |
 | vault | `address` | The vault address that is not Active. |
 | status | `VaultRegistry.VaultStatus` | The current non-Active status of the vault. |
-
-### VaultPausedForRedeem
-
-A redeem leg targets a Paused vault. Redemption permits Active OR
-Retired status (withdraw-only after retirement, F-02); only Paused
-blocks the exit path.
-
-```solidity
-error VaultPausedForRedeem(address vault);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| vault | `address` | The vault address whose status is Paused. |
 
 ### InsufficientGas
 

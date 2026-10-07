@@ -279,7 +279,7 @@ fn refusal_documents_share_one_field_set() {
 fn abort_exit_codes_match_the_documented_cli_contract() {
     assert_eq!(WriteAbort::Startup.exit(false), EXIT_STARTUP_FAIL);
     assert_eq!(
-        WriteAbort::refused(WriteFailure::new("ErrGatewayPaused")).exit(false),
+        WriteAbort::refused(WriteFailure::new("ErrDepositsPaused")).exit(false),
         EXIT_REFUSAL
     );
 }

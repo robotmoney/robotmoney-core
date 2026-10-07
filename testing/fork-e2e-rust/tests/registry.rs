@@ -9,7 +9,7 @@
 //!   assert the `VaultRegistered` event is present in the receipt logs,
 //!   call `listVaults` and verify the vault address appears.
 //! - `registry_status_change` — after registration, call `setVaultStatus`
-//!   to Paused, assert the `VaultStatusChanged` event is present in the logs,
+//!   to DepositsPaused, assert the `VaultStatusChanged` event is present in the logs,
 //!   and verify `getVault` returns the updated status.
 //! - `registry_empty_list` — before any registration, `listVaults` returns
 //!   an empty array and `rmpc get-vaults` exits 0 with `vaults: []`.
@@ -367,7 +367,8 @@ fn registry_register_list() {
     eprintln!("[registry_register_list] rmpc get-vaults passed");
 }
 
-/// Scenario 2: register a vault then change its status to Paused.
+/// Scenario 2: register a vault then change its status to DepositsPaused
+/// (stops new deposits only; holders still redeem, core 1494).
 /// Assert the `VaultStatusChanged` event and verify `getVault` returns
 /// the updated status. Then verify `rmpc get-vaults` still exits 0 with
 /// the vault present in the output.
@@ -451,14 +452,14 @@ fn registry_status_change() {
         "initial status must be Active (0)"
     );
 
-    // setVaultStatus(fake_vault, Paused=1).
+    // setVaultStatus(fake_vault, DepositsPaused=1).
     let pause_call = IOnchainVaultRegistry::setVaultStatusCall {
         vault: fake_vault,
-        newStatus: IOnchainVaultRegistry::VaultStatus::Paused,
+        newStatus: IOnchainVaultRegistry::VaultStatus::DepositsPaused,
     };
     let pause_receipt = deployer
         .send(registry_addr, &pause_call, U256::ZERO, 200_000)
-        .expect("setVaultStatus Paused");
+        .expect("setVaultStatus DepositsPaused");
     assert_eq!(pause_receipt.status, 1, "setVaultStatus must succeed");
 
     // Assert VaultStatusChanged event.
@@ -487,14 +488,14 @@ fn registry_status_change() {
         vault_from_topic, fake_vault,
         "VaultStatusChanged topic1 vault mismatch"
     );
-    // newStatus=1 (Paused) is in topic2.
+    // newStatus=1 (DepositsPaused) is in topic2.
     let status_from_topic = log.topics[2].as_slice()[31];
     assert_eq!(
         status_from_topic, 1u8,
-        "VaultStatusChanged topic2 newStatus must be 1 (Paused)"
+        "VaultStatusChanged topic2 newStatus must be 1 (DepositsPaused)"
     );
 
-    // Verify getVault now returns Paused (status=1).
+    // Verify getVault now returns DepositsPaused (status=1).
     // Same Geth eth_call/"latest" visibility race as the pre-pause read above:
     // retry until the decoded status reflects the just-mined setVaultStatus TX
     // rather than failing on a stale-but-decodable pre-TX read.
@@ -518,7 +519,7 @@ fn registry_status_change() {
                         }
                         Ok(decoded) => {
                             last_err = format!(
-                                "getVault after pause attempt {attempt}: status={} (not yet Paused)",
+                                "getVault after pause attempt {attempt}: status={} (not yet DepositsPaused)",
                                 decoded.status as u8
                             );
                             eprintln!("[registry_status_change] {last_err}");
@@ -533,12 +534,12 @@ fn registry_status_change() {
             }
         }
         result.unwrap_or_else(|| {
-            panic!("getVault after pause never reflected Paused status after setVaultStatus: {last_err}")
+            panic!("getVault after pause never reflected DepositsPaused status after setVaultStatus: {last_err}")
         })
     };
     assert_eq!(
         decoded2.status as u8, 1u8,
-        "status must be Paused (1) after setVaultStatus"
+        "status must be DepositsPaused (1) after setVaultStatus"
     );
 
     // rmpc get-vaults still exits 0 and the vault appears in output.
@@ -567,8 +568,8 @@ fn registry_status_change() {
     // #1362), and the only one that also covers the status output, which is
     // `getVault`'s *second* top-level return value rather than a struct member.
     assert_eq!(
-        vaults_json[0]["status"], "paused",
-        "rmpc get-vaults must report the paused status it just read from the \
+        vaults_json[0]["status"], "deposits_paused",
+        "rmpc get-vaults must report the deposits_paused status it just read from the \
          live registry; envelope:\n{v:#}"
     );
     assert_eq!(

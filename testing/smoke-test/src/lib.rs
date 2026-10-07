@@ -15,7 +15,7 @@
 //! Public surface:
 //! - [`Fixture::new`] / [`Fixture::with_deploy_env`] — boot the Twin chain, fund keys, call publish contracts.
 //! - Address accessors: [`Fixture::rpc_url`], [`Fixture::gateway`], etc.
-//! - On-chain poke helpers: [`Fixture::pause_gateway`], [`Fixture::fund_usdc`], etc.
+//! - On-chain poke helpers: [`Fixture::pause_gateway_deposits`], [`Fixture::fund_usdc`], etc.
 //! - [`Fixture::warp`] / [`Fixture::fund_gas`] — the Twin chain environment steps.
 //! - [`prerequisites_available`] — check for anvil/bun/forge/cast on PATH.
 
@@ -45,8 +45,8 @@ use tempfile::TempDir;
 
 // -- Harness account constants ----------------------------------------
 
-/// Key paired with PAUSER_ROLE. The derived address (`0x6145…`) is
-/// the sheet's PAUSER_ADDRESS, granted PAUSER_ROLE by publish contracts, so [`Fixture::pause_gateway`] can
+/// Key paired with DEPOSIT_PAUSER_ROLE. The derived address (`0x6145…`) is
+/// the sheet's PAUSER_ADDRESS, granted DEPOSIT_PAUSER_ROLE by publish contracts, so [`Fixture::pause_gateway_deposits`] can
 /// use `cast send` with a real signed transaction.
 pub const PAUSER_PRIVATE_KEY_HEX: &str =
     "0x53321db7c1e331d93a11a41d16f004d7ff63972ec8ec7c25db329728ceeb1710";
@@ -1379,9 +1379,15 @@ impl Fixture {
         )
     }
 
-    /// Pause the gateway from the PAUSER_ROLE holder.
-    pub fn pause_gateway(&self) -> Result<String, HarnessError> {
-        self.cast_send(PAUSER_PRIVATE_KEY_HEX, self.gateway(), "pause()", &[])
+    /// Pause new gateway deposits from the DEPOSIT_PAUSER_ROLE holder.
+    /// Withdrawals stay open while deposits are paused (core 1494).
+    pub fn pause_gateway_deposits(&self) -> Result<String, HarnessError> {
+        self.cast_send(
+            PAUSER_PRIVATE_KEY_HEX,
+            self.gateway(),
+            "pauseDeposits()",
+            &[],
+        )
     }
 
     /// Send `sig(args)` to `target` as a Safe -> Timelock call through the real SafeL2 (the CLI's Twin-only
@@ -1415,10 +1421,15 @@ impl Fixture {
         Ok(rows.first().map(|r| r.tx_hash.clone()).unwrap_or_default())
     }
 
-    /// Unpause the gateway through the real Safe and the timelock (a generic timelock call: `unpause()` is
-    /// ADMIN_ROLE, held by the timelock after handover; it is not a mainnet govern row).
-    pub fn unpause_gateway(&self) -> Result<String, HarnessError> {
-        self.timelock_call("gateway-unpause", self.gateway(), "unpause()", &[])
+    /// Resume gateway deposits through the real Safe and the timelock (a generic timelock call:
+    /// `unpauseDeposits()` is ADMIN_ROLE, held by the timelock after handover; it is not a mainnet govern row).
+    pub fn unpause_gateway_deposits(&self) -> Result<String, HarnessError> {
+        self.timelock_call(
+            "gateway-unpause-deposits",
+            self.gateway(),
+            "unpauseDeposits()",
+            &[],
+        )
     }
 
     /// Revoke the agent through the real Safe and the timelock (a generic timelock call: the timelock is the

@@ -187,3 +187,5 @@ The following invariants are covered by regression tests in `contracts/test/Conf
 9. **BasketVault deposit slippage floor is non-zero** — every deposit swap sets `amountOutMinimum > 0` from TWAP.
 10. **BasketVault withdrawal slippage floor is non-zero** — every withdrawal swap sets `amountOutMinimum > 0` from TWAP.
 11. **PortfolioRouter runtime eligibility re-check** — a vault that became ineligible after weighting cannot receive USDC at deposit time.
+
+> Note 2026-10-05 (core 1494): A pause now stops deposits only; withdrawals are never frozen. pause()/unpause()/paused() are now pauseDeposits()/unpauseDeposits()/depositsPaused(), PAUSER_ROLE is DEPOSIT_PAUSER_ROLE, VaultStatus.Paused is VaultStatus.DepositsPaused, EnforcedPause is DepositsArePaused, and withdrawalsPaused is deleted. The router redeems from a vault in every status (VaultPausedForRedeem is removed). The deployed v1 vault keeps its old code: never call v1 pause(), it also freezes withdrawals. The text above is kept as written.

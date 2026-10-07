@@ -61,7 +61,7 @@ contract MockVault is ERC20, ReentrancyGuard {
     // ── IRetirableVault stubs ────────────────────────────────────────────────
 
     /// @notice No-op retire stub. Satisfies `IRetirableVault` so
-    ///         `VaultRegistry.setVaultStatus(Paused/Retired)` can call the
+    ///         `VaultRegistry.setVaultStatus(DepositsPaused/Retired)` can call the
     ///         deposit-halt hook without reverting. The mock has no registry
     ///         link and no deposit-halt flag; this is a test fixture only.
     function retire() external {}

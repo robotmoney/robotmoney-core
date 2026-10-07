@@ -188,7 +188,7 @@ async fn get_vault_clean_envelope_with_share_price() {
     // §9 explicit not_onchain markers
     let notes = &d["notes"];
     assert_eq!(notes["deposit_cap"], "not_onchain");
-    assert_eq!(notes["paused"], "not_onchain");
+    assert_eq!(notes["deposits_paused"], "not_onchain");
     assert_eq!(notes["shutdown"], "not_onchain");
     assert_eq!(notes["adapters"], "not_onchain");
     assert_eq!(notes["fees"], "not_onchain");

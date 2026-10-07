@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeFunctionData, keccak256, toFunctionSelector, parseAbiItem, toHex, pad, type Hex as VHex } from "viem";
 import {
-  ADMIN_ROLE, WEIGHT_SETTER_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
+  ADMIN_ROLE, WEIGHT_SETTER_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
   SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32,
 } from "../../src/verify/constants.ts";
 import { getStageTable } from "../../src/stages.ts";
@@ -190,12 +190,12 @@ export function buildWorld(chainId = 8453): World {
   // roles: timelock admin everywhere, emergency on vaults
   for (const a of [GATEWAY, REGISTRY, ROUTER, GOV, ICP, REC, ...Object.values(VAULTS).map((v) => v.address)]) ch.grant(a, ADMIN_ROLE, TIMELOCK);
   for (const a of [GATEWAY, ICP, REC, TIMELOCK]) ch.grant(a, Z32, TIMELOCK);
-  ch.grant(GATEWAY, PAUSER_ROLE, PAUSER);
+  ch.grant(GATEWAY, DEPOSIT_PAUSER_ROLE, PAUSER);
   ch.grant(ROUTER, ADMIN_ROLE, GOV);
   ch.grant(ROUTER, WEIGHT_SETTER_ROLE, GOV);
   for (const r of [PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE]) ch.grant(TIMELOCK, r, SAFE);
   ch.set(TIMELOCK, "getMinDelay", BigInt(delay));
-  ch.set(GATEWAY, "paused", false);
+  ch.set(GATEWAY, "depositsPaused", false);
   ch.set(GATEWAY, "router", ROUTER);
   ch.set(REGISTRY, "router", ROUTER);
   ch.set(GATEWAY, "agentOwner", () => TIMELOCK);
@@ -217,7 +217,7 @@ export function buildWorld(chainId = 8453): World {
     ch.set(v.address, "exitFeeBps", 10n);
     ch.set(v.address, "feeRecipient", SAFE);
     const paused = k !== "rmUSDC";
-    ch.set(v.address, "paused", paused);
+    ch.set(v.address, "depositsPaused", paused);
     if (v.kind === "usdc") {
       ch.set(v.address, "totalAssets", 1_000_000n); ch.set(v.address, "totalSupply", SEED_SHARES);
       ch.set(v.address, "balanceOf", (a: any[]) => (String(a[0]).toLowerCase() === SEED_RECEIVER.toLowerCase() ? SEED_SHARES : 0n));

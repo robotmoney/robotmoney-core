@@ -20,7 +20,7 @@ import {BasketViews, IBasketVaultViews} from "../lib/BasketViews.sol";
 ///
 ///         ISSUER FREEZE RISK. A tokenised-equity issuer may freeze transfers at any time. A
 ///         freeze makes swaps revert, which blocks deposits and withdrawals until the issuer
-///         lifts it. Holders keep their shares. `pause()` surfaces the state to users.
+///         lifts it. Holders keep their shares. `pauseDeposits()` surfaces the state to new depositors. It never blocks a redeem.
 ///         This vault never calls an issuer primary-redemption path. Entry and exit are
 ///         secondary-market swaps only.
 ///

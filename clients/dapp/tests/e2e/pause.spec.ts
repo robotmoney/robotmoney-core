@@ -1,12 +1,13 @@
 /**
- * Playwright E2E — pause flow UI invariants (issue #82).
+ * Playwright E2E — deposit pause flow UI invariants (issue #82).
  *
  * Runs against the smoke-test full-stack devnet. Asserts the structured
  * preview shape (selector + fn + effect + calldata) is rendered, no
  * raw-calldata leak, and the calldata equals the encoder output for
- * pause() (selector 0x8456cb59).
+ * pauseDeposits() (selector 0x02191980). The effect copy must say
+ * withdrawals stay open (core 1494).
  *
- * Connects as the pauser EOA so PAUSER_ROLE is set; the submit button
+ * Connects as the pauser EOA so DEPOSIT_PAUSER_ROLE is set; the submit button
  * is therefore enabled but we don't click it — this spec only asserts
  * UI invariants, not on-chain state changes.
  */
@@ -14,15 +15,15 @@ import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
 
-// keccak256("pause()")[0..4]
-const PAUSE_SELECTOR = "0x8456cb59";
+// keccak256("pauseDeposits()")[0..4]
+const PAUSE_SELECTOR = "0x02191980";
 
 let endpoints: DevnetEndpoints;
 test.beforeAll(() => {
   endpoints = loadEndpoints();
 });
 
-test.describe("pause flow — UI invariants", () => {
+test.describe("deposit pause flow — UI invariants", () => {
   test("renders structured preview, signs intended calldata, no raw-calldata leak", async ({
     page,
   }) => {
@@ -36,8 +37,9 @@ test.describe("pause flow — UI invariants", () => {
     await expect(pauseForm).toBeVisible();
 
     const previewFn = pauseForm.getByTestId("tx-preview-fn");
-    await expect(previewFn).toHaveText("pause");
-    await expect(pauseForm.getByTestId("tx-preview-effect")).toContainText("paused state");
+    await expect(previewFn).toHaveText("pauseDeposits");
+    await expect(pauseForm.getByTestId("tx-preview-effect")).toContainText("deposits are paused");
+    await expect(pauseForm.getByTestId("tx-preview-effect")).toContainText("Withdrawals stay open");
     await expect(pauseForm.locator('[data-testid="refusal-reason"]')).toHaveCount(0);
 
     await expect(pauseForm.getByTestId("tx-preview-selector")).toHaveText(PAUSE_SELECTOR);

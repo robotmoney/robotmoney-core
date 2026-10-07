@@ -330,8 +330,8 @@ contract V2MigrationIntegrationTest is Test {
         assertEq(usdc.balanceOf(legacyDepositor), 50 * ONE_USDC, "USDC out from v1a redeem");
 
         // Withdrawals stay open — path 2: redeem through the PortfolioRouter,
-        // which permits Active OR Retired for redemption (only Paused blocks the
-        // exit). The holder approves the router on the vault share token for the
+        // which redeems from every registry status (no status blocks an exit,
+        // core 1494). The holder approves the router on the vault share token for the
         // gateway-style self-custody redeem.
         vm.prank(legacyDepositor);
         v1b.approve(address(router), sharesB);

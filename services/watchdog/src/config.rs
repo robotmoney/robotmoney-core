@@ -16,7 +16,8 @@
 //! per_hour_burn_limit_usdc    = "2000000"
 //!
 //! [action]
-//! # "pause" → call gateway.pause() via funded PAUSER_ROLE key
+//! # "pause" → call gateway.pauseDeposits() via funded DEPOSIT_PAUSER_ROLE key
+//! #             (stops new deposits only; withdrawals are never frozen)
 //! # "alert" → dispatch structured JSON alert to webhook_url
 //! # "pause_and_alert" → both
 //! mode = "pause_and_alert"
@@ -25,7 +26,7 @@
 //! # Required when mode contains "pause"
 //! gateway_rpc_url = "https://mainnet.base.org"
 //! gateway_address = "0xDEADBEEF..."
-//! pauser_private_key_hex = "0x..."          # PAUSER_ROLE key (funded for gas)
+//! pauser_private_key_hex = "0x..."          # DEPOSIT_PAUSER_ROLE key (funded for gas)
 //!
 //! [sla]
 //! # Maximum seconds between breach detection and pause/alert dispatch.
@@ -43,7 +44,7 @@
 //!
 //! # Pauser key delivery and lifetime
 //!
-//! The PAUSER_ROLE key may be delivered either by the TOML literal above (local
+//! The DEPOSIT_PAUSER_ROLE key may be delivered either by the TOML literal above (local
 //! dev) or by the [`PAUSER_KEY_ENV`] environment variable, which wins when both
 //! are set. Whichever source is used, [`Config::from_file`] stores it in a
 //! [`PauserKeyHex`] — a wrapper that is **not** `Clone` and whose `Debug` is
@@ -71,11 +72,11 @@ use crate::pause::PauserSigningKey;
 use crate::receipt_liveness::ReceiptLivenessConfig;
 use crate::WatchdogError;
 
-/// Environment variable that supplies the PAUSER_ROLE private key (hex, with or
+/// Environment variable that supplies the DEPOSIT_PAUSER_ROLE private key (hex, with or
 /// without a `0x` prefix). Takes precedence over the TOML literal.
 pub const PAUSER_KEY_ENV: &str = "WATCHDOG_PAUSER_KEY_HEX";
 
-/// Hex text of the PAUSER_ROLE private key, held only until the startup
+/// Hex text of the DEPOSIT_PAUSER_ROLE private key, held only until the startup
 /// extraction consumes it.
 ///
 /// Deliberately **not** `Clone`: a derived `Clone` on the containing config
@@ -182,7 +183,7 @@ pub struct ActionConfig {
     pub gateway_rpc_url: Option<String>,
     /// Deployed gateway contract address (required when `mode` contains `"pause"`).
     pub gateway_address: Option<String>,
-    /// Hex-encoded private key for the PAUSER_ROLE account (required when `mode`
+    /// Hex-encoded private key for the DEPOSIT_PAUSER_ROLE account (required when `mode`
     /// contains `"pause"`, from this field or from [`PAUSER_KEY_ENV`]).
     ///
     /// Consumed exactly once by [`Config::take_pauser_signing_key`] at startup
@@ -218,7 +219,8 @@ fn default_pause_fee_bump_bps() -> u64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionMode {
-    /// Call `gateway.pause()` via a funded PAUSER_ROLE key.
+    /// Call `gateway.pauseDeposits()` via a funded DEPOSIT_PAUSER_ROLE key. Stops
+    /// new gateway deposits only; withdrawals are never frozen.
     Pause,
     /// Dispatch a structured JSON alert to the configured webhook/PagerDuty endpoint.
     Alert,
@@ -227,7 +229,7 @@ pub enum ActionMode {
 }
 
 impl ActionMode {
-    /// True if this mode involves calling `gateway.pause()`.
+    /// True if this mode involves calling `gateway.pauseDeposits()`.
     pub fn includes_pause(self) -> bool {
         matches!(self, ActionMode::Pause | ActionMode::PauseAndAlert)
     }

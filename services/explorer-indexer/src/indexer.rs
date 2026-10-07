@@ -1638,8 +1638,10 @@ pub async fn handle_log(
         return Ok(fee_rows + history_rows);
     }
 
-    // Paused / Unpaused — only drive state snapshots; no dedicated table row.
-    if topic0 == topics.paused || topic0 == topics.unpaused {
+    // DepositsPaused / DepositsUnpaused (gateway and vaults share the topic-0s).
+    // They only drive state snapshots; no dedicated table row. A deposit pause
+    // stops new deposits only and never freezes withdrawals (core 1494).
+    if topic0 == topics.deposits_paused || topic0 == topics.deposits_unpaused {
         return Ok(0);
     }
 
@@ -2431,8 +2433,10 @@ fn into_alloy_log(log: &LogEntry) -> alloy_primitives::Log {
     }
 }
 
-/// Read totalAssets / totalSupply / exitFeeBps / tvlCap / paused from a
-/// vault at `block` and write a `vault_snapshots` row.
+/// Read totalAssets / totalSupply / exitFeeBps / tvlCap / depositsPaused from a
+/// vault at `block` and write a `vault_snapshots` row. The `paused` column
+/// keeps its historical name but stores `depositsPaused()` (a deposit-only
+/// pause; withdrawals are never frozen).
 /// Snapshot one vault, logging and skipping on failure instead of propagating.
 ///
 /// A single vault's `totalAssets()`/`totalSupply()` read can fail for reasons
@@ -2492,9 +2496,15 @@ async fn snapshot_vault_address(
     let tvl_cap = call_u256(rpc, vault, IVaultReads::tvlCapCall {}.abi_encode(), block)
         .await
         .unwrap_or(U256::ZERO);
-    let paused = call_bool(rpc, vault, IVaultReads::pausedCall {}.abi_encode(), block)
-        .await
-        .unwrap_or(false);
+    // `depositsPaused()` exists on every vault, the v1 vault included.
+    let deposits_paused = call_bool(
+        rpc,
+        vault,
+        IVaultReads::depositsPausedCall {}.abi_encode(),
+        block,
+    )
+    .await
+    .unwrap_or(false);
 
     db.insert_vault_snapshot(
         chain_id,
@@ -2504,7 +2514,7 @@ async fn snapshot_vault_address(
         total_supply,
         exit_fee_bps.try_into().unwrap_or(0i64),
         tvl_cap,
-        paused,
+        deposits_paused,
     )
     .await
     .map_err(IndexerError::Db)

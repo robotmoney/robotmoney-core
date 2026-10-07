@@ -292,11 +292,11 @@ async fn vault_status_changed_updates_status() {
         "status must be Active before status-change"
     );
 
-    // Second tick: emit VaultStatusChanged (Active → Paused).
+    // Second tick: emit VaultStatusChanged (Active → DepositsPaused).
     let sc_log = encode_vault_status_changed_log(
         registry_addr,
         vault_addr,
-        1u8, // Paused
+        1u8, // DepositsPaused (holders can still redeem)
         1_748_000_100u64,
         80u64,
         [0x22u8; 32],
@@ -340,7 +340,7 @@ async fn vault_status_changed_updates_status() {
     assert!(o2.error.is_none(), "status-change tick: {:?}", o2.error);
     stub2.shutdown();
 
-    // Status must now be Paused (1).
+    // Status must now be DepositsPaused (1).
     let (status_after, changed_at): (i16, Option<i64>) =
         sqlx::query_as("SELECT status, status_changed_at FROM vaults WHERE chain_id = $1")
             .bind(8453i64)
@@ -350,7 +350,7 @@ async fn vault_status_changed_updates_status() {
 
     assert_eq!(
         status_after, 1,
-        "status must be Paused (1) after VaultStatusChanged"
+        "status must be DepositsPaused (1) after VaultStatusChanged"
     );
     assert_eq!(
         changed_at,

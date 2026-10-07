@@ -168,7 +168,7 @@ contract RobotMoneyGatewayTest is Test {
         );
 
         adminRole = gateway.ADMIN_ROLE();
-        pauserRole = gateway.PAUSER_ROLE();
+        pauserRole = gateway.DEPOSIT_PAUSER_ROLE();
         agentRole = gateway.AGENT_ROLE();
 
         // Pin a non-trivial timestamp so window math has headroom on both sides.
@@ -223,7 +223,7 @@ contract RobotMoneyGatewayTest is Test {
         assertEq(gateway.usdc(), address(usdc));
         assertEq(gateway.vault(), address(vault));
         assertEq(gateway.WINDOW_SECONDS(), 86400);
-        assertFalse(gateway.paused());
+        assertFalse(gateway.depositsPaused());
         assertTrue(gateway.hasRole(adminRole, admin));
         assertTrue(gateway.hasRole(pauserRole, pauser));
         assertTrue(gateway.hasRole(0x00, admin)); // DEFAULT_ADMIN_ROLE
@@ -646,54 +646,54 @@ contract RobotMoneyGatewayTest is Test {
     // pause / unpause
     // -------------------------------------------------------------------
 
-    function test_pause_byPauser_unpause_byAdmin() public {
+    function test_pauseDeposits_byPauser_unpause_byAdmin() public {
         vm.expectEmit(true, false, false, false, address(gateway));
-        emit IGateway.Paused(pauser);
+        emit IGateway.DepositsPaused(pauser);
         vm.prank(pauser);
-        gateway.pause();
-        assertTrue(gateway.paused());
+        gateway.pauseDeposits();
+        assertTrue(gateway.depositsPaused());
 
         vm.expectEmit(true, false, false, false, address(gateway));
-        emit IGateway.Unpaused(admin);
+        emit IGateway.DepositsUnpaused(admin);
         vm.prank(admin);
-        gateway.unpause();
-        assertFalse(gateway.paused());
+        gateway.unpauseDeposits();
+        assertFalse(gateway.depositsPaused());
     }
 
-    function test_pause_nonPauserReverts() public {
+    function test_pauseDeposits_nonPauserReverts() public {
         vm.prank(stranger);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, pauserRole
             )
         );
-        gateway.pause();
+        gateway.pauseDeposits();
     }
 
-    function test_unpause_nonAdminReverts() public {
+    function test_unpauseDeposits_nonAdminReverts() public {
         vm.prank(pauser);
-        gateway.pause();
+        gateway.pauseDeposits();
         vm.prank(pauser);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, pauser, adminRole
             )
         );
-        gateway.unpause();
+        gateway.unpauseDeposits();
     }
 
-    function test_pause_revertsIfAlreadyPaused() public {
+    function test_pauseDeposits_revertsIfAlreadyPaused() public {
         vm.prank(pauser);
-        gateway.pause();
+        gateway.pauseDeposits();
         vm.prank(pauser);
-        vm.expectRevert(RobotMoneyGateway.PausedError.selector);
-        gateway.pause();
+        vm.expectRevert(RobotMoneyGateway.DepositsArePaused.selector);
+        gateway.pauseDeposits();
     }
 
-    function test_unpause_revertsIfNotPaused() public {
+    function test_unpauseDeposits_revertsIfNotPaused() public {
         vm.prank(admin);
-        vm.expectRevert(RobotMoneyGateway.NotPaused.selector);
-        gateway.unpause();
+        vm.expectRevert(RobotMoneyGateway.DepositsNotPaused.selector);
+        gateway.unpauseDeposits();
     }
 
     // -------------------------------------------------------------------
@@ -751,10 +751,10 @@ contract RobotMoneyGatewayTest is Test {
         _authorize(agent, _defaultPolicy());
         _fundAndApprove(agent, 100 * ONE_USDC);
         vm.prank(pauser);
-        gateway.pause();
+        gateway.pauseDeposits();
 
         vm.prank(agent);
-        vm.expectRevert(RobotMoneyGateway.PausedError.selector);
+        vm.expectRevert(RobotMoneyGateway.DepositsArePaused.selector);
         gateway.deposit(bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 60), bytes32("i"));
     }
 
@@ -952,7 +952,7 @@ contract RobotMoneyGatewayTest is Test {
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
         gateway.authorizeAgent(admin, p);
 
-        // PAUSER_ROLE holder cannot also hold AGENT_ROLE.
+        // DEPOSIT_PAUSER_ROLE holder cannot also hold AGENT_ROLE.
         vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
         gateway.authorizeAgent(pauser, p);
@@ -2131,25 +2131,25 @@ contract GatewayWithdrawTest is Test {
     }
 
     // -------------------------------------------------------------------
-    // Reverts: paused
+    // A deposit pause never blocks a withdrawal (core 1494)
     // -------------------------------------------------------------------
 
-    function test_withdraw_revertsWhenPaused() public {
+    function test_withdraw_worksWhileDepositsPaused() public {
         _authorize(_defaultPolicy());
         _mintSharesAndApprove(100 * ONE_USDC);
 
         vm.prank(pauser);
-        gateway.pause();
+        gateway.pauseDeposits();
 
         vm.prank(agent);
-        vm.expectRevert(RobotMoneyGateway.PausedError.selector);
-        gateway.withdraw(
+        (, uint256 assetsOut) = gateway.withdraw(
             keccak256("o"),
             100 * ONE_USDC,
             address(vault),
             uint64(block.timestamp + 60),
             keccak256("i")
         );
+        assertGt(assetsOut, 0, "withdraw pays out while deposits are paused");
     }
 
     // -------------------------------------------------------------------

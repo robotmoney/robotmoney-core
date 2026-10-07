@@ -56,7 +56,7 @@ test.beforeAll(async ({ browser }) => {
   // The depositor holds no admin role: this is the production wallet shape.
   expect(await gatewayHasRole(endpoints, ADMIN_ROLE, DEPOSITOR.address)).toBe(false);
   // OLD_AGENT and NEW_AGENT are fresh addresses with no role and no owner.
-  // AccessRoles._grantRole is mutex with ADMIN/PAUSER, and authorization
+  // AccessRoles._grantRole is mutex with ADMIN/DEPOSIT_PAUSER, and authorization
   // reverts with AgentAlreadyOwned on an owned agent, so neither may be a
   // harness key.
   OLD_AGENT = freshAccount().address;

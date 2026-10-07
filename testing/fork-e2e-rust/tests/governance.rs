@@ -80,7 +80,7 @@ sol! {
     /// VaultRegistry interface.
     #[allow(missing_docs)]
     interface IVaultRegistry {
-        enum VaultStatus { Active, Paused, Retired }
+        enum VaultStatus { Active, DepositsPaused, Retired }
 
         struct VaultMetadata {
             string name;

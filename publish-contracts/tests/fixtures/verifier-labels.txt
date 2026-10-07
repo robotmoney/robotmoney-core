@@ -83,8 +83,8 @@ receipt: ADMIN_ROLE not held by safe
 gateway: DEFAULT_ADMIN held by timelock
 icpolicy: DEFAULT_ADMIN held by timelock
 receipt: DEFAULT_ADMIN held by timelock
-gateway: PAUSER_ROLE held by pauser
-gateway: PAUSER_ROLE not held by deployer
+gateway: DEPOSIT_PAUSER_ROLE held by pauser
+gateway: DEPOSIT_PAUSER_ROLE not held by deployer
 router: ADMIN_ROLE held by governance
 router: WEIGHT_SETTER_ROLE held by governance
 router: WEIGHT_SETTER_ROLE not held by timelock

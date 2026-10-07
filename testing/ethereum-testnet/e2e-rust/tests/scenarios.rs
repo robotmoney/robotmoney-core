@@ -24,9 +24,11 @@
 //!    `ErrOrderIdAlreadySubmitted`.
 //! 5. `over_per_payment_cap_rejected` — `amount > maxPerPayment`
 //!    refused by preflight (`ErrConfig`).
-//! 6. `paused_blocks_deposit` — `paused() == true` refused by
-//!    preflight (`ErrGatewayPaused`); test cleans up by calling
-//!    `unpause()` so subsequent tests can deposit.
+//! 6. `deposits_paused_blocks_deposit_not_withdraw` — with
+//!    `depositsPaused() == true` a deposit is refused by preflight
+//!    (`ErrDepositsPaused`) and a withdrawal is never refused for the
+//!    pause (core 1494); test cleans up by calling `unpauseDeposits()`
+//!    so subsequent tests can deposit.
 //! 7. `role_separation_invariant` — admin granting itself
 //!    `AGENT_ROLE` reverts via `RoleSeparationViolated`.
 //! 8. `software_fallback_disabled_aborts_startup` — startup-time
@@ -486,23 +488,38 @@ fn over_per_payment_cap_rejected() {
 
 // ------------------------------------------------------------- scenario 6
 
-/// `paused() == true` causes preflight to refuse with
-/// `ErrGatewayPaused`. The client never broadcasts. Cleans up by
-/// calling `unpause()` so subsequent tests can deposit.
+/// `depositsPaused() == true` causes the deposit preflight to refuse with
+/// `ErrDepositsPaused`. The client never broadcasts. A withdrawal under the
+/// same pause is never refused for it: a deposit pause never blocks a
+/// withdrawal (core 1494). Cleans up by calling `unpauseDeposits()` so
+/// subsequent tests can deposit.
 #[test]
-fn paused_blocks_deposit() {
-    if skip_if_no_prereqs("paused_blocks_deposit") {
+fn deposits_paused_blocks_deposit_not_withdraw() {
+    if skip_if_no_prereqs("deposits_paused_blocks_deposit_not_withdraw") {
         return;
     }
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT)
             .expect("approve usdc");
-        fx.pause_gateway().expect("pause()");
+        fx.pause_gateway_deposits().expect("pauseDeposits()");
 
-        let oid = order_id("paused_blocks_deposit");
+        let oid = order_id("deposits_paused_blocks_deposit");
         let run = fx
             .run_rmpc_deposit(deposit_args(SMALL_DEPOSIT, &oid))
             .expect("run rmpc deposit");
+        let withdraw_oid = order_id("deposits_paused_withdraw_not_refused");
+        let withdraw_run = fx
+            .run_rmpc_withdraw(vec![
+                "--shares".into(),
+                "1".into(),
+                "--source-vault".into(),
+                format!("{:#x}", fx.vault()),
+                "--order-id".into(),
+                withdraw_oid,
+                "--receipt-timeout-secs".into(),
+                "180".into(),
+            ])
+            .expect("run rmpc withdraw");
 
         // Always restore the gateway state, even if assertions panic.
         let pause_result = (|| -> Result<(), String> {
@@ -512,17 +529,17 @@ fn paused_blocks_deposit() {
                     run.status, run.stdout, run.stderr
                 ));
             }
-            let v = parse_json(&run.stdout, "paused_blocks_deposit");
+            let v = parse_json(&run.stdout, "deposits_paused_blocks_deposit_not_withdraw");
             if v["status"] != "refused" {
                 return Err(format!("expected refused; stdout={}", run.stdout));
             }
-            if v["error"] != "ErrGatewayPaused" {
-                return Err(format!("expected ErrGatewayPaused; stdout={}", run.stdout));
+            if v["error"] != "ErrDepositsPaused" {
+                return Err(format!("expected ErrDepositsPaused; stdout={}", run.stdout));
             }
             if let Some(checks) = v.get("checks") {
-                if checks["gateway_paused"] != true {
+                if checks["deposits_paused"] != true {
                     return Err(format!(
-                        "expected checks.gateway_paused=true; stdout={}",
+                        "expected checks.deposits_paused=true; stdout={}",
                         run.stdout
                     ));
                 }
@@ -533,13 +550,28 @@ fn paused_blocks_deposit() {
                     run.stdout
                 ));
             }
+            // The withdrawal is never refused for the deposit pause. The agent
+            // may hold no shares on this fixture, so a share-side refusal is
+            // allowed; a pause-named refusal is the failure this guards.
+            let w = parse_json(
+                &withdraw_run.stdout,
+                "deposits_paused_blocks_deposit_not_withdraw (withdraw)",
+            );
+            let werr = w.get("error").and_then(|e| e.as_str()).unwrap_or("");
+            if werr.to_ascii_lowercase().contains("paused") {
+                return Err(format!(
+                    "a deposit pause must never refuse a withdrawal; stdout={}",
+                    withdraw_run.stdout
+                ));
+            }
             Ok(())
         })();
 
-        // Unpause so subsequent scenarios can deposit. Errors here are
-        // surfaced after the assertion check so a real test failure
+        // Resume deposits so subsequent scenarios can deposit. Errors here
+        // are surfaced after the assertion check so a real test failure
         // reports the right thing.
-        fx.unpause_gateway().expect("unpause() to restore fixture");
+        fx.unpause_gateway_deposits()
+            .expect("unpauseDeposits() to restore fixture");
 
         if let Err(e) = pause_result {
             panic!("{e}");

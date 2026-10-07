@@ -4,7 +4,7 @@ title: "BasketVaultTest"
 
 # BasketVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/176388939d6f20be0d1e7ae20320a66e5e7f2986/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/545620af5e4698bceb8d0238b458204689682176/contracts/test/BasketVault.t.sol)
 
 **Inherits:** Test
 
@@ -181,15 +181,15 @@ revoked — the floor only blocks dropping the FINAL admin.
 function test_lastAdminFloor_revokeSucceedsWithTwoAdmins() public;
 ```
 
-<a id="test_pause_doesnotfreezewithdrawals"></a>
+<a id="test_pausedeposits_doesnotfreezewithdrawals"></a>
 
-### test_pause_doesNotFreezeWithdrawals
+### test_pauseDeposits_doesNotFreezeWithdrawals
 
-LIFE-3 / NC-3 / F-06: pause() freezes deposits but NOT withdrawals;
+LIFE-3 / NC-3 / F-06: pauseDeposits() stops deposits only, never withdrawals;
 a holder can still redeem while the vault is paused.
 
 ```solidity
-function test_pause_doesNotFreezeWithdrawals() public;
+function test_pauseDeposits_doesNotFreezeWithdrawals() public;
 ```
 
 <a id="test_sweepforeigntoken_revertsforactivebasketasset"></a>
@@ -568,6 +568,19 @@ function test_setTwapWindow_rejectsAboveMaximum() public;
 
 ```solidity
 function test_setTwapWindow_acceptsBoundary() public;
+```
+
+<a id="test_settwapwindow_rejectswindowbeyondpoolhistory_redeemstillworks"></a>
+
+### test_setTwapWindow_rejectsWindowBeyondPoolHistory_redeemStillWorks
+
+Governance can never set a TWAP window longer than the pool's
+observation history: such a window would make every NAV read
+revert "OLD" and block redeem. The setter rejects it, the old
+window stays in force, and a holder still redeems (core 1494).
+
+```solidity
+function test_setTwapWindow_rejectsWindowBeyondPoolHistory_redeemStillWorks() public;
 ```
 
 <a id="test_effectivetwapwindow_fallsbacktodefault"></a>
@@ -1141,7 +1154,7 @@ function test_AZBSK3_totalAssetsUnchangedByExclusionFix() public;
 
 issue #1284: retire() sets the dedicated `retired` flag, NOT
 `depositsPaused` — the two are independent so ADMIN_ROLE's
-`unpause()` (which unconditionally clears `depositsPaused`) can
+`unpauseDeposits()` (which unconditionally clears `depositsPaused`) can
 never re-open deposits on a registry-retired vault. Matches
 RobotMoneyVault's / Vault's separate-flag model; superseded the
 old aliasing behavior this test used to pin.
@@ -1165,11 +1178,11 @@ function test_unretire_clearsRetired() public;
 
 ### test_retirePauseUnpause_leavesDepositsClosedButRedeemOpen
 
-issue #1284 (F-06 regression): retire() -> emergency pause() ->
-admin unpause() must leave deposits closed (the registry still
+issue #1284 (F-06 regression): retire() -> emergency pauseDeposits() ->
+admin unpauseDeposits() must leave deposits closed (the registry still
 records the vault Retired) while ERC-4626 redeem stays open
 (ADR-0009). Before this fix, BasketVault aliased retirement
-onto `depositsPaused`, so `unpause()` (which unconditionally
+onto `depositsPaused`, so `unpauseDeposits()` (which unconditionally
 calls `_setDepositsPaused(false)`) silently re-opened deposits
 on a vault the registry still recorded as Retired.
 

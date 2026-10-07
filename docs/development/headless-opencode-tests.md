@@ -199,7 +199,7 @@ the five failure-case toggles):
 |---|---|---|
 | `unauthorized_agent` | Deploy authorizes a different EOA; test agent is not registered | `not authorized` |
 | `insufficient_allowance` | USDC approval to gateway left at 0 | `allowance below deposit amount` |
-| `paused_gateway` | `gateway.pause()` via admin impersonation | `gateway paused` |
+| `paused_gateway` | `gateway.pauseDeposits()` via admin impersonation | `deposits paused` (a deposit refusal; a withdrawal would still succeed) |
 | `fee_cap` | Agent re-authorized with `cap=1` (below deposit amount) | `deposit exceeds policy cap` |
 | `code_hash_mismatch` | Gateway bytecode replaced with `anvil_setCode` revert stub | `gateway code hash mismatch` |
 

@@ -790,11 +790,11 @@ contract GatewayRouterTest is Test {
         _authorize(agent, _policyWithRouter());
         _fundAndApprove(agent, 10 * ONE_USDC);
         vm.prank(pauser);
-        gateway.pause();
+        gateway.pauseDeposits();
 
         uint256[] memory empty = new uint256[](0);
         vm.prank(agent);
-        vm.expectRevert(RobotMoneyGateway.PausedError.selector);
+        vm.expectRevert(RobotMoneyGateway.DepositsArePaused.selector);
         gateway.depositTo(
             keccak256("o"),
             10 * ONE_USDC,
@@ -2040,15 +2040,24 @@ contract GatewayRouterTest is Test {
         );
     }
 
-    /// @dev router: paused gateway reverts.
-    function test_withdrawFromRouter_revertsWhenPaused() public {
+    /// @dev router: a deposit pause never blocks a router withdrawal (core 1494).
+    function test_withdrawFromRouter_worksWhileDepositsPaused() public {
         _authorize(agent, _policyWithRouterWithdrawal());
+        address assetRecipient = makeAddr("routerWithdrawRecipient");
+        uint256 amount = 100 * ONE_USDC;
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, amount);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
         vm.prank(pauser);
-        gateway.pause();
+        gateway.pauseDeposits();
 
         uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
         vm.prank(agent);
-        vm.expectRevert(RobotMoneyGateway.PausedError.selector);
         gateway.withdrawFromRouter(
             keccak256("o"),
             _routerVaults(),
@@ -2057,6 +2066,7 @@ contract GatewayRouterTest is Test {
             uint64(block.timestamp + 60),
             keccak256("i")
         );
+        assertEq(usdc.balanceOf(assetRecipient), amount, "full exit while deposits are paused");
     }
 
     /// @dev router: zero totalShares reverts.

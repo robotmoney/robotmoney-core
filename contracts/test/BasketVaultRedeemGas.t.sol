@@ -98,7 +98,7 @@ contract BasketVaultRedeemGasForkTest is Test {
 
     function _fund(BasketVault v) internal {
         vm.prank(admin);
-        v.unpause();
+        v.unpauseDeposits();
         deal(USDC, alice, DEPOSIT);
         vm.startPrank(alice);
         IERC20(USDC).approve(address(v), DEPOSIT);

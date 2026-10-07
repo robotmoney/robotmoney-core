@@ -4,7 +4,7 @@ title: "PortfolioRouterTest"
 
 # PortfolioRouterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7108b70cd9026b3c48f652fd02739362e4c14ef1/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:** Test
 
@@ -1088,15 +1088,15 @@ is withdraw-only, so the exit path must still succeed.
 function test_redeemFor_redeemsFromRetiredVault() public;
 ```
 
-<a id="test_redeemfor_revertswhenlegpaused"></a>
+<a id="test_redeemfor_redeemswhenlegdepositspaused"></a>
 
-### test_redeemFor_revertsWhenLegPaused
+### test_redeemFor_redeemsWhenLegDepositsPaused
 
-redeemFor reverts VaultPausedForRedeem when a named leg is Paused
-(F-02): only Paused blocks the exit path.
+redeemFor still redeems a leg whose registry status is DepositsPaused:
+no status blocks an exit (F-02, core 1494).
 
 ```solidity
-function test_redeemFor_revertsWhenLegPaused() public;
+function test_redeemFor_redeemsWhenLegDepositsPaused() public;
 ```
 
 <a id="test_redeemfor_revertsonunregisteredvault"></a>

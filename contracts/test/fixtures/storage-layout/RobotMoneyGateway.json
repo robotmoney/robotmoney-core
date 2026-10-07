@@ -67,7 +67,7 @@
       "type": "t_mapping(t_bytes32,t_bool)"
     },
     {
-      "label": "_paused",
+      "label": "_depositsPaused",
       "offset": 0,
       "slot": "11",
       "type": "t_bool"

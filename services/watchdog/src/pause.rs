@@ -1,15 +1,22 @@
-//! Gateway pause trigger via JSON-RPC `eth_sendRawTransaction`.
+//! Gateway deposit-pause trigger via JSON-RPC `eth_sendRawTransaction`.
 //!
-//! Canonical: docs/technical/security-model.md §9 — automated pause path.
+//! Canonical: docs/technical/security-model.md §9 — automated deposit-pause path.
 //!
 //! When the watchdog detects a threshold breach and the configured action mode
 //! includes `"pause"`, [`trigger_pause`] constructs and submits an EVM transaction
-//! that calls `gateway.pause()` from the configured PAUSER_ROLE account.
+//! that calls `gateway.pauseDeposits()` from the configured DEPOSIT_PAUSER_ROLE
+//! account.
+//!
+//! The deposit pause stops new gateway deposits (`deposit`, `depositTo`) only.
+//! Gateway withdrawals stay open while deposits are paused: withdrawals are never
+//! frozen, by anyone (owner decision 2026-10-05, core 1494). On a burn-rate breach
+//! the deposit pause stops new inflow. It never blocks an exit.
 //!
 //! # Transaction construction
 //!
-//! The `pause()` selector is the first 4 bytes of `keccak256("pause()")`.
-//! The transaction is signed with the configured PAUSER_ROLE private key and
+//! The `pauseDeposits()` selector is the first 4 bytes of
+//! `keccak256("pauseDeposits()")`.
+//! The transaction is signed with the configured DEPOSIT_PAUSER_ROLE private key and
 //! submitted via `eth_sendRawTransaction` to the configured JSON-RPC endpoint.
 //!
 //! Gas price and nonce are fetched live from `eth_gasPrice` / `eth_getTransactionCount`
@@ -25,12 +32,13 @@
 //! bump in [`PauseParams`], the replacement out-bids the stuck tx and the pause is
 //! actually mined. A pause is a safety-critical action — replacing a stuck tx
 //! matters more than the marginal nonce-gap risk of two concurrent pauses (both
-//! are idempotent: the second simply reverts `PausedError()`).
+//! are idempotent: the second simply reverts `DepositsArePaused()`).
 //!
 //! # Idempotency
 //!
-//! The gateway reverts with `PausedError()` if already paused — the watchdog treats
-//! this revert as a success (the gateway is already safe).
+//! The gateway reverts `pauseDeposits()` with `DepositsArePaused()` if deposits are
+//! already paused — the watchdog treats this revert as a success (deposits are
+//! already stopped).
 
 use std::fmt;
 
@@ -42,13 +50,13 @@ use zeroize::Zeroizing;
 
 use crate::WatchdogError;
 
-/// Selector for `pause()` — first 4 bytes of `keccak256("pause()")`.
+/// Selector for `pauseDeposits()` — first 4 bytes of `keccak256("pauseDeposits()")`.
 pub fn pause_selector() -> [u8; 4] {
-    let hash = keccak256(b"pause()");
+    let hash = keccak256(b"pauseDeposits()");
     [hash[0], hash[1], hash[2], hash[3]]
 }
 
-/// Signing state for the PAUSER_ROLE account, derived once at startup from the
+/// Signing state for the DEPOSIT_PAUSER_ROLE account, derived once at startup from the
 /// configured key hex (see [`crate::config::Config::take_pauser_signing_key`]).
 ///
 /// Holds the derived `k256` signing key and the sender address computed from it
@@ -92,7 +100,7 @@ impl PauserSigningKey {
         })
     }
 
-    /// The PAUSER_ROLE sender address derived from this key (public data).
+    /// The DEPOSIT_PAUSER_ROLE sender address derived from this key (public data).
     pub fn address(&self) -> Address {
         self.address
     }
@@ -116,7 +124,7 @@ fn address_from_signing_key(signing_key: &k256::ecdsa::SigningKey) -> Address {
     Address::from_slice(&hash[12..])
 }
 
-/// Parameters required to submit a `gateway.pause()` transaction.
+/// Parameters required to submit a `gateway.pauseDeposits()` transaction.
 ///
 /// Borrows the startup-derived [`PauserSigningKey`] rather than carrying key
 /// material of its own, so building these per breach copies no secret.
@@ -128,7 +136,7 @@ pub struct PauseParams<'a> {
     pub gateway_address: Address,
     /// Chain ID (used in EIP-155 transaction signing).
     pub chain_id: u64,
-    /// Signing state for the PAUSER_ROLE account, derived once at startup.
+    /// Signing state for the DEPOSIT_PAUSER_ROLE account, derived once at startup.
     pub signer: &'a PauserSigningKey,
     /// Gas-price bump applied over the network `eth_gasPrice`, in basis points
     /// (e.g. `1500` = +15%). Lets a retried pause replace a stuck same-nonce tx by
@@ -145,10 +153,11 @@ fn bump_gas_price(gas_price: u64, fee_bump_bps: u64) -> u64 {
     u64::try_from(bumped).unwrap_or(u64::MAX)
 }
 
-/// Submit a `gateway.pause()` transaction and return the transaction hash hex string.
+/// Submit a `gateway.pauseDeposits()` transaction and return the transaction hash
+/// hex string. The deposit pause stops new deposits only; withdrawals stay open.
 ///
-/// Returns `Ok(tx_hash_hex)` on successful submission.  If the gateway is already
-/// paused (revert `PausedError()`) the call returns `Ok("already_paused")` so the
+/// Returns `Ok(tx_hash_hex)` on successful submission.  If gateway deposits are
+/// already paused (revert `DepositsArePaused()`) the call returns `Ok("already_paused")` so the
 /// caller can log a no-op rather than treating it as an error.
 ///
 /// All network / signing errors are returned as [`WatchdogError::Pause`].
@@ -172,7 +181,7 @@ pub async fn trigger_pause(
         params.fee_bump_bps,
     );
 
-    // 4. Build the call data: pause() selector, no arguments.
+    // 4. Build the call data: pauseDeposits() selector, no arguments.
     let selector = pause_selector();
     let data = Bytes::copy_from_slice(&selector);
 
@@ -186,7 +195,7 @@ pub async fn trigger_pause(
         params.gateway_address,
         nonce,
         gas_price,
-        80_000u64, // gas limit: pause() is a simple storage write
+        80_000u64, // gas limit: pauseDeposits() is a simple storage write
         data,
         params.chain_id,
     )
@@ -439,12 +448,12 @@ mod tests {
 
     #[test]
     fn pause_selector_matches_keccak() {
-        // keccak256("pause()") = 0x8456cb59...
+        // keccak256("pauseDeposits()") = 0x02191980...
         let sel = pause_selector();
-        assert_eq!(sel[0], 0x84);
-        assert_eq!(sel[1], 0x56);
-        assert_eq!(sel[2], 0xcb);
-        assert_eq!(sel[3], 0x59);
+        assert_eq!(sel, [0x02, 0x19, 0x19, 0x80]);
+        // The removed stop-everything selector (0x8456cb59) no longer exists on
+        // the gateway; the watchdog must never send it.
+        assert_ne!(sel, [0x84, 0x56, 0xcb, 0x59]);
     }
 
     #[test]

@@ -303,7 +303,7 @@ mockito-backed targets that no workflow named before: `cli`, `cli_deposit`,
 suites. They drive the built `rmpc` binary through `assert_cmd` against a
 mockito JSON-RPC server — no chain, no Docker — which is why they belong in this
 binary-only job rather than the devnet matrix. `cli_deposit.rs` alone is 687
-lines covering the deposit happy path, chain-id mismatch, paused gateway, fee
+lines covering the deposit happy path, chain-id mismatch, deposit-paused gateway, fee
 cap, concurrent lock, receipt timeout, duplicate replay and revert. Wrapped in
 `cargo_test_require_executed.sh`.
 

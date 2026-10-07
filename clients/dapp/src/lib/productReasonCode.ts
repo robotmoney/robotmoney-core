@@ -9,6 +9,9 @@
  * mandates exactly these nine codes plus a catch-all for unrecognised
  * on-chain reverts.
  *
+ * `paused` means DEPOSITS are paused. A pause never blocks a withdrawal or
+ * redeem (core 1494), so no withdraw path ever maps to `paused`.
+ *
  * The codes are intentionally snake_case strings (not numeric enum values)
  * so they are stable across refactors and can be matched in logs and tests
  * without importing the enum.
@@ -36,12 +39,11 @@ export type ProductReasonCode =
  * Selectors are lowercase hex without leading zeros beyond the 8 hex chars.
  */
 const SELECTOR_MAP: Record<string, ProductReasonCode> = {
-  // GatewayPaused() — gateway.paused() == true
-  "0x1a7e0d23": "paused",
-  // VaultPaused() — source vault reports paused() == true
-  "0x6d50a6ce": "paused",
-  // EnforcedPause() — OZ Pausable standard error (used by vault and gateway)
-  "0xd93c0665": "paused",
+  // DepositsArePaused() — gateway or vault deposit()/depositTo()/mint() while
+  // depositsPaused() == true; also gateway pauseDeposits() when already paused.
+  "0x5a65d188": "paused",
+  // DepositsPaused() — the deployed v1 RobotMoneyVault's deposit-pause error.
+  "0xdeeb6943": "paused",
   // VaultDisabled() — vault is disabled / not registered
   "0x3a81d6fc": "vault_disabled",
   // CapExceeded() — per-payment or per-window cap exceeded
@@ -58,7 +60,7 @@ const SELECTOR_MAP: Record<string, ProductReasonCode> = {
   "0xdfd1fc1b": "insufficient_balance",
   // ERC20InsufficientBalance (OZ standard)
   "0xe450d38c": "insufficient_balance",
-  // LegUnavailable() — router leg vault is unavailable (e.g. full, paused)
+  // LegUnavailable() — router leg vault is unavailable (e.g. full, deposits paused)
   "0x8562ca85": "unavailable_leg",
   // FeeCapExceeded() — computed maxFeePerGas exceeds operator cap
   "0x35f3f5e8": "fee_cap_exceeded",
@@ -74,7 +76,8 @@ const SELECTOR_MAP: Record<string, ProductReasonCode> = {
  * happened without reading on-chain data.
  */
 const PRODUCT_REASON_DISPLAY: Record<ProductReasonCode, string> = {
-  paused: "Gateway or vault is paused. Writes are disabled until it is unpaused.",
+  paused:
+    "Deposits are paused on this gateway or vault. Withdrawals stay open. Deposits resume when governance unpauses them.",
   vault_disabled: "The target vault is disabled or not registered with the gateway.",
   cap_exceeded:
     "A per-payment or per-window cap has been exceeded. Wait for the window to reset or reduce the amount.",

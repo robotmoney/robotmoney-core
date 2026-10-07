@@ -1,8 +1,8 @@
 /**
- * Playwright E2E — ADMIN_ROLE / PAUSER_ROLE grant + revoke (issue #83).
+ * Playwright E2E — ADMIN_ROLE / DEPOSIT_PAUSER_ROLE grant + revoke (issue #83).
  *
  * Covers the four flows named in the acceptance criteria:
- *   ADMIN-grant, ADMIN-revoke, PAUSER-grant, PAUSER-revoke.
+ *   ADMIN-grant, ADMIN-revoke, DEPOSIT_PAUSER-grant, DEPOSIT_PAUSER-revoke.
  *
  * Per the existing dapp E2E pattern (see authorize.spec.ts) this runs
  * against the mock-wallet connector and asserts the UI invariants:
@@ -12,7 +12,7 @@
  *   - raw calldata is never visible in the DOM (it is only reachable
  *     by expanding the operator-opt-in <details> block),
  *   - the browser wallet cannot sign: after the timelock handover no EOA
- *     holds DEFAULT_ADMIN_ROLE (the admin of ADMIN_ROLE and PAUSER_ROLE) on
+ *     holds DEFAULT_ADMIN_ROLE (the admin of ADMIN_ROLE and DEPOSIT_PAUSER_ROLE) on
  *     any chain, so the submit button is disabled and the tab states why.
  *     The real grant/revoke through the Safe -> Timelock is covered by the
  *     Twin governance tests, not here.
@@ -35,7 +35,7 @@ let PAUSER_ACCOUNT: `0x${string}`;
 test.beforeAll(() => {
   endpoints = loadEndpoints();
   // ADMIN_ACCOUNT is an address with no existing role on the gateway:
-  // AccessRoles._grantRole is mutex with AGENT_ROLE/PAUSER_ROLE, so the
+  // AccessRoles._grantRole is mutex with AGENT_ROLE/DEPOSIT_PAUSER_ROLE, so the
   // previewed grantRole(ADMIN_ROLE, account) is one an admin could execute.
   ADMIN_ACCOUNT = "0x1111111111111111111111111111111111111111";
   PAUSER_ACCOUNT = endpoints.share_receiver_addr as `0x${string}`;
@@ -65,7 +65,7 @@ const ABI = [
 ] as const;
 
 const ADMIN_ROLE = keccak256(toBytes("ADMIN_ROLE"));
-const PAUSER_ROLE = keccak256(toBytes("PAUSER_ROLE"));
+const DEPOSIT_PAUSER_ROLE = keccak256(toBytes("DEPOSIT_PAUSER_ROLE"));
 
 async function connect(page: Page) {
   // The connected wallet (`admin_*`, the harness USDC holder) is a plain EOA.
@@ -121,7 +121,7 @@ interface RoleCase {
   revokeBtnId: string;
   revokePreviewId: string;
   role: `0x${string}`;
-  roleName: "ADMIN_ROLE" | "PAUSER_ROLE";
+  roleName: "ADMIN_ROLE" | "DEPOSIT_PAUSER_ROLE";
   tabId: AdminTabId;
   slug: "admin" | "pauser";
 }
@@ -148,8 +148,8 @@ const cases: RoleCase[] = [
     grantPreviewId: "grant-pauser-preview-wrap",
     revokeBtnId: "revoke-pauser-submit",
     revokePreviewId: "revoke-pauser-preview-wrap",
-    role: PAUSER_ROLE,
-    roleName: "PAUSER_ROLE",
+    role: DEPOSIT_PAUSER_ROLE,
+    roleName: "DEPOSIT_PAUSER_ROLE",
     tabId: "pauser-role",
     slug: "pauser",
   },

@@ -198,7 +198,13 @@ fn rmpc_get_vault_fork_robotmoney_devnet() {
 
     // §9 explicit not_onchain markers.
     let notes = &d["notes"];
-    for k in ["deposit_cap", "paused", "shutdown", "adapters", "fees"] {
+    for k in [
+        "deposit_cap",
+        "deposits_paused",
+        "shutdown",
+        "adapters",
+        "fees",
+    ] {
         assert_eq!(
             notes[k], "not_onchain",
             "notes.{k} drift; full envelope:\n{v:#}"

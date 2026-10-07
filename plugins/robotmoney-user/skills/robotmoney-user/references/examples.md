@@ -22,7 +22,8 @@ rmpc get-agent   --config ./config.toml --agent 0xAGENT --pretty
 
 **Expected agent behavior:**
 
-- Confirm `paused == false` on both vault (if exposed) and gateway.
+- Confirm `deposits_paused == false` on both vault (if exposed) and gateway
+  before a deposit. A pause stops new deposits only. Withdrawals stay open.
 - Confirm `agents[self].active == true` and `validUntil > now`.
 - Report remaining `maxPerWindow - agentWindowGross[self][windowId]` so the
   user knows the available capacity.
@@ -89,7 +90,7 @@ Returns non-zero exit and JSON error `{"code": "ErrInsufficientAllowance",
 
 ---
 
-## Example 4 — refusal: paused gateway
+## Example 4 — refusal: gateway deposits paused
 
 **User prompt:** "Deposit 50 USDC."
 
@@ -97,7 +98,7 @@ Returns non-zero exit and JSON error `{"code": "ErrInsufficientAllowance",
 rmpc get-gateway --config ./config.toml --pretty
 ```
 
-Reports `paused == true`.
+Reports `deposits_paused == true`.
 
 ```bash
 rmpc deposit --config ./config.toml \
@@ -105,13 +106,14 @@ rmpc deposit --config ./config.toml \
   --order-id 0x3333...3333
 ```
 
-Returns non-zero exit and JSON error `{"code": "ErrGatewayPaused", ...}`.
+Returns non-zero exit and JSON error `{"code": "ErrDepositsPaused", ...}`.
 
 **Expected agent behavior:**
 
 - Surface the refusal. Do not retry on a timer.
-- Note that pause is asymmetric: `PAUSER_ROLE` may have triggered it
-  unilaterally as a stop-the-world tool, and only `ADMIN_ROLE` can unpause.
+- Note that the pause is asymmetric: `DEPOSIT_PAUSER_ROLE` may have triggered it
+  unilaterally, and only `ADMIN_ROLE` can unpause. It stops new deposits only.
+  `rmpc withdraw` still works while deposits are paused.
 
 ---
 

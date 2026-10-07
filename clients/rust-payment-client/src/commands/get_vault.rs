@@ -91,7 +91,7 @@ pub struct VaultData {
 #[derive(Debug, Serialize)]
 pub struct VaultNotes {
     pub deposit_cap: &'static str,
-    pub paused: &'static str,
+    pub deposits_paused: &'static str,
     pub shutdown: &'static str,
     pub adapters: &'static str,
     pub fees: &'static str,
@@ -101,7 +101,7 @@ impl Default for VaultNotes {
     fn default() -> Self {
         Self {
             deposit_cap: "not_onchain",
-            paused: "not_onchain",
+            deposits_paused: "not_onchain",
             shutdown: "not_onchain",
             adapters: "not_onchain",
             fees: "not_onchain",
@@ -127,7 +127,9 @@ pub struct RegistryVaultData {
     pub address: String,
     /// Human-readable vault name from the registry.
     pub name: String,
-    /// Operational status: `"active"`, `"paused"`, or `"retired"`.
+    /// Operational status: `"active"`, `"deposits_paused"`, or `"retired"`.
+    /// `"deposits_paused"` (`VaultStatus.DepositsPaused`) stops new deposits
+    /// only; holders still redeem (core 1494).
     pub status: String,
     /// Unix timestamp when the vault was registered.
     pub registered_at: u64,
@@ -149,7 +151,7 @@ pub struct RegistryVaultData {
 fn status_to_str(s: u8) -> &'static str {
     match s {
         0 => "active",
-        1 => "paused",
+        1 => "deposits_paused",
         2 => "retired",
         _ => "unknown",
     }

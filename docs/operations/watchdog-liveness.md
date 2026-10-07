@@ -5,7 +5,9 @@ Implements: issue #1378 — a dead watchdog is indistinguishable from a quiet ma
 
 # Watchdog liveness: is the watchdog actually watching?
 
-The watchdog pauses the gateway when mint/burn volume breaches its limits. In a
+The watchdog pauses gateway deposits (`gateway.pauseDeposits()`) when mint/burn
+volume breaches its limits. The pause stops new deposits only. Withdrawals are
+never frozen, by anyone (core 1494). In a
 calm market it says nothing, and a dead watchdog also says nothing. This page
 is how you tell the two apart, what pages you, and what to do about each page.
 

@@ -318,13 +318,13 @@ async fn deposit_chain_id_mismatch_refuses_with_named_error() {
 }
 
 #[tokio::test]
-async fn deposit_paused_gateway_refuses_with_named_error() {
+async fn deposit_while_deposits_paused_refuses_with_named_error() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::pausedCall,
+            RobotMoneyGateway::depositsPausedCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_bool(true)))
@@ -361,8 +361,8 @@ async fn deposit_paused_gateway_refuses_with_named_error() {
         .clone();
     assert_eq!(out.status.code(), Some(2));
     let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
-    assert_eq!(v["error"], "ErrGatewayPaused");
-    assert_eq!(v["checks"]["gateway_paused"], true);
+    assert_eq!(v["error"], "ErrDepositsPaused");
+    assert_eq!(v["checks"]["deposits_paused"], true);
 }
 
 #[tokio::test]

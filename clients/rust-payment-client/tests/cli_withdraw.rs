@@ -339,34 +339,42 @@ async fn withdraw_chain_id_mismatch_refuses_with_named_error() {
     assert_eq!(v["checks"]["chain_id_match"], false);
 }
 
-/// Refusal path: the gateway's pause switch.
+/// A deposit pause never blocks a withdrawal (core 1494). With
+/// `depositsPaused() == true` on every target (gateway and vault share the
+/// selector) the withdrawal still signs, broadcasts and succeeds.
 #[tokio::test]
-async fn withdraw_paused_gateway_refuses_with_named_error() {
+async fn withdraw_succeeds_while_deposits_paused() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
-    server
+    install_withdraw_happy_path(&mut server, chain_id).await;
+    // Registered last with `expect_at_least`, so it serves every
+    // depositsPaused() read ahead of the happy-path `false`.
+    let paused_read = server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::pausedCall,
+            RobotMoneyGateway::depositsPausedCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_bool(true)))
+        .expect_at_least(1)
         .create_async()
         .await;
-    install_withdraw_happy_path(&mut server, chain_id).await;
 
     let fix = Fixture::build(&server.url(), chain_id);
     let state_dir = unique_state_dir();
 
     let out = withdraw_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .args(["--receipt-timeout-secs", "5"])
         .assert()
-        .failure()
+        .success()
         .get_output()
         .clone();
-    assert_eq!(out.status.code(), Some(2));
     let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
-    assert_eq!(v["error"], "ErrGatewayPaused");
-    assert_eq!(v["checks"]["gateway_paused"], true);
+    assert_eq!(v["status"], "success");
+    assert_eq!(v["assets_out"], ASSETS_OUT.to_string());
+    assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"));
+    // The preflight did observe the pause; it just never refuses on it.
+    paused_read.assert_async().await;
 }
 
 /// Refusal path: the withdrawal-specific policy cap. Issue #371 —
@@ -437,7 +445,7 @@ async fn withdraw_insufficient_share_allowance_refuses() {
     assert_eq!(v["error"], "ErrShareAllowanceInsufficient");
     // The vault check runs after the gateway preflight, so the full
     // snapshot is available.
-    assert_eq!(v["checks"]["gateway_paused"], false);
+    assert_eq!(v["checks"]["deposits_paused"], false);
 }
 
 /// Fee-cap path: a bid above the operator's cap is a refusal, not a

@@ -6,7 +6,7 @@
 // before the previous step executed, a chain id other than 8453, owner exceptions recorded at or after plan approval.
 // Offline mode (no --rpc) checks the recorded JSON shape only. Online mode (--rpc URL, chain 8453) reads the chain with viem and
 // does not trust the recorded numbers: deployer nonce, every receipt status, the timelock events and block timestamps of each
-// govern step, registry.listVaults() against the recorded manifests, and paused() of the basket vaults against the unpause govern rows.
+// govern step, registry.listVaults() against the recorded manifests, and depositsPaused() of the basket vaults against the unpause govern rows.
 // Recorded-fixture mode (--chain-fixture FILE, with --frozen) runs the same chain checks over a fixture of what the chain returned, recorded at the end
 // of the run with --rpc ... --record-chain-fixture OUT. CI uses it: acceptance criteria 2 (nonce and per-stage counts) and 3 (receipts, 48 hour gap)
 // are checked with no RPC and no network. No secret is read or needed.
@@ -124,7 +124,7 @@ const TIMELOCK_ABI = parseAbi([
   "event Cancelled(bytes32 indexed id)",
 ]);
 const REGISTRY_ABI = parseAbi(["function listVaults() view returns (address[])"]);
-const PAUSED_ABI = parseAbi(["function paused() view returns (bool)"]);
+const PAUSED_ABI = parseAbi(["function depositsPaused() view returns (bool)"]);
 const lc = (x: string) => x.toLowerCase();
 
 function timelockEvents(rc: Awaited<ReturnType<ChainReader["getTransactionReceipt"]>>, timelock: string, name: "CallScheduled" | "CallExecuted" | "Cancelled") {
@@ -196,17 +196,17 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     const gap = execTs - schedTs;
     if (!(gap >= MAINNET_DELAY_FLOOR)) bad(`govern ${g.step}: on-chain schedule-to-execute gap ${gap} s is under ${MAINNET_DELAY_FLOOR} s`);
   }
-  // The unpause govern rows and the paused() reads must tell one story: a basket vault is unpaused on chain exactly when its unpause step executed.
+  // The unpause govern rows and the depositsPaused() reads must tell one story: a basket vault is unpaused on chain exactly when its unpause step executed.
   for (const b of BASKETS) {
     const row = (ev.govern ?? []).find((g: any) => g?.step === `unpause-${b}`);
     const vault = ev.vaults?.[`rm${b}`]?.address;
     if (!vault) continue;
     let paused: unknown;
-    try { paused = await chain.readContract({ address: vault, abi: PAUSED_ABI, functionName: "paused" }); }
-    catch (e) { bad(`rm${b}.paused() not readable (${(e as Error).message})`); continue; }
+    try { paused = await chain.readContract({ address: vault, abi: PAUSED_ABI, functionName: "depositsPaused" }); }
+    catch (e) { bad(`rm${b}.depositsPaused() not readable (${(e as Error).message})`); continue; }
     const executed = !!row && row.execute_status === 1 && TX.test(row.execute_tx ?? "");
-    if (executed && paused !== false) bad(`govern unpause-${b} executed with receipt status 1, but rm${b}.paused() reads ${String(paused)} on chain, want false`);
-    if (!executed && paused === false) bad(`rm${b}.paused() reads false on chain, but govern unpause-${b} has no executed receipt`);
+    if (executed && paused !== false) bad(`govern unpause-${b} executed with receipt status 1, but rm${b}.depositsPaused() reads ${String(paused)} on chain, want false`);
+    if (!executed && paused === false) bad(`rm${b}.depositsPaused() reads false on chain, but govern unpause-${b} has no executed receipt`);
   }
   return p;
 }

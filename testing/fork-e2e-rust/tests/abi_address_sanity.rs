@@ -77,12 +77,13 @@ fn abi_address_sanity() {
         "Vault.exitFeeBps()={efee} exceeds documented 100-bps ceiling"
     );
 
-    // Vault paused() should be readable (we don't assert false — a
-    // paused vault is a legitimate pin if EMERGENCY_ROLE has paused
-    // it; we just assert the selector exists and decodes).
+    // Vault depositsPaused() should be readable (we don't assert false —
+    // paused deposits are a legitimate pin if EMERGENCY_ROLE has paused
+    // them; we just assert the selector exists and decodes). The v1 vault
+    // exposes depositsPaused() too.
     let _ = acct
-        .call(vault, &IRobotMoneyVault::pausedCall {})
-        .expect("Vault.paused()");
+        .call(vault, &IRobotMoneyVault::depositsPausedCall {})
+        .expect("Vault.depositsPaused()");
 }
 
 /// Minimal ABI string decoder — bytes32 offset, bytes32 length,

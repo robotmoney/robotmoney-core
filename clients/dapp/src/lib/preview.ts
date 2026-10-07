@@ -31,7 +31,7 @@ import { formatUsdc, formatShares } from "./format";
 /**
  * Union of every function name that may appear in a structured Preview.
  * Gateway admin actions cover the depositor-owned authorize/revoke/policy
- * surface and the pause/role kill switches; vault actions cover the
+ * surface and the deposit-pause/role switches; vault actions cover the
  * ERC-4626 deposit/redeem entrypoints driven by the Deposit/Withdraw tab
  * (issue #257). Both flow through the same TxPreview component, so the
  * preview success type accepts either.
@@ -61,8 +61,8 @@ export interface AgentPolicy {
 export type AdminAction =
   | { kind: "authorizeAgent"; agent: Address; policy: AgentPolicy }
   | { kind: "revokeAgent"; agent: Address }
-  | { kind: "pause" }
-  | { kind: "unpause" }
+  | { kind: "pauseDeposits" }
+  | { kind: "unpauseDeposits" }
   | { kind: "grantRole"; role: RoleName; account: Address }
   | { kind: "revokeRole"; role: RoleName; account: Address };
 
@@ -109,13 +109,14 @@ export interface PreviewContext {
 
 /**
  * Risk classifier. Implements the fixed table in §3.3:
- *   - unsafe: pause/unpause on non-fork without a recent self-check (we
- *     conservatively mark non-fork pause/unpause as unsafe here; the
- *     self-check freshness check is enforced by rmpc, not the dapp).
+ *   - unsafe: pauseDeposits/unpauseDeposits on non-fork without a recent
+ *     self-check (we conservatively mark non-fork deposit pause/unpause as
+ *     unsafe here; the self-check freshness check is enforced by rmpc, not
+ *     the dapp).
  *   - high:   granting AGENT_ROLE policy with a per-window cap above
  *             threshold, or unverified bytecode.
  *   - medium: standard authorizeAgent below threshold.
- *   - low:    revokeAgent, pause on a fork.
+ *   - low:    revokeAgent, pauseDeposits on a fork.
  */
 const HIGH_CAP_THRESHOLD = 1_000_000_000n; // 1,000 USDC in 6dp
 
@@ -133,8 +134,8 @@ export function isWithdrawalEnabled(policy: AgentPolicy): boolean {
 export function classifyRisk(action: AdminAction, ctx: PreviewContext): RiskClass {
   if (!ctx.gatewayCodeHashVerified) return "unsafe";
   switch (action.kind) {
-    case "pause":
-    case "unpause":
+    case "pauseDeposits":
+    case "unpauseDeposits":
       return ctx.envClass === "fork" ? "low" : "unsafe";
     case "revokeAgent":
       return "low";
@@ -147,8 +148,8 @@ export function classifyRisk(action: AdminAction, ctx: PreviewContext): RiskClas
       return action.policy.maxPerWindow > HIGH_CAP_THRESHOLD ? "high" : "medium";
     case "grantRole":
       // Granting any admin-tier role is "high" per ADR §3.3 risk table
-      // ("granting any admin role"). PAUSER is treated identically — it
-      // is privileged, even if its only power is `pause()`.
+      // ("granting any admin role"). DEPOSIT_PAUSER is treated identically —
+      // it is privileged, even if its only power is `pauseDeposits()`.
       return "high";
     case "revokeRole":
       // Revoke is recoverable (admin can re-grant) and reduces blast
@@ -276,18 +277,27 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
         args = [{ name: "agent", raw: action.agent, gloss: `Agent EOA ${shorten(action.agent)}` }];
         effect = `Address ${shorten(action.agent)} loses AGENT_ROLE and its policy is deleted; subsequent deposit() calls revert.`;
         break;
-      case "pause":
-        functionName = "pause";
-        calldata = encodeFunctionData({ abi: gatewayAbi, functionName: "pause", args: [] });
-        args = [];
-        effect = "Gateway enters paused state; deposit() reverts until unpause() is called.";
-        break;
-      case "unpause":
-        functionName = "unpause";
-        calldata = encodeFunctionData({ abi: gatewayAbi, functionName: "unpause", args: [] });
+      case "pauseDeposits":
+        functionName = "pauseDeposits";
+        calldata = encodeFunctionData({
+          abi: gatewayAbi,
+          functionName: "pauseDeposits",
+          args: [],
+        });
         args = [];
         effect =
-          "Gateway exits paused state; deposit() resumes for AGENT_ROLE holders within policy.";
+          "Gateway deposits are paused; deposit() and depositTo() revert with DepositsArePaused until unpauseDeposits() is called. Withdrawals stay open.";
+        break;
+      case "unpauseDeposits":
+        functionName = "unpauseDeposits";
+        calldata = encodeFunctionData({
+          abi: gatewayAbi,
+          functionName: "unpauseDeposits",
+          args: [],
+        });
+        args = [];
+        effect =
+          "Gateway deposits resume; deposit() resumes for AGENT_ROLE holders within policy. Withdrawals were open throughout.";
         break;
       case "grantRole": {
         functionName = "grantRole";
@@ -376,9 +386,9 @@ function roleEffectGrant(role: RoleName, account: Address): string {
   const who = shorten(account);
   switch (role) {
     case "ADMIN_ROLE":
-      return `Address ${who} will hold ADMIN_ROLE; this lets it authorize/revoke agents, edit policy, and call unpause(). Mutually exclusive with AGENT_ROLE and PAUSER_ROLE on the same account (enforced by AccessRoles._grantRole).`;
-    case "PAUSER_ROLE":
-      return `Address ${who} will hold PAUSER_ROLE; this lets it call pause() (asymmetric — unpause requires ADMIN_ROLE). Mutually exclusive with AGENT_ROLE and ADMIN_ROLE on the same account.`;
+      return `Address ${who} will hold ADMIN_ROLE; this lets it authorize/revoke agents, edit policy, and call unpauseDeposits(). Mutually exclusive with AGENT_ROLE and DEPOSIT_PAUSER_ROLE on the same account (enforced by AccessRoles._grantRole).`;
+    case "DEPOSIT_PAUSER_ROLE":
+      return `Address ${who} will hold DEPOSIT_PAUSER_ROLE; this lets it call pauseDeposits(), which stops new deposits only and never blocks a withdrawal (asymmetric — unpauseDeposits requires ADMIN_ROLE). Mutually exclusive with AGENT_ROLE and ADMIN_ROLE on the same account.`;
   }
 }
 
@@ -387,9 +397,9 @@ function roleEffectRevoke(role: RoleName, account: Address): string {
   const who = shorten(account);
   switch (role) {
     case "ADMIN_ROLE":
-      return `Address ${who} loses ADMIN_ROLE; subsequent authorizeAgent/revokeAgent/unpause calls from this account revert. The contract still requires at least one DEFAULT_ADMIN_ROLE holder for recovery.`;
-    case "PAUSER_ROLE":
-      return `Address ${who} loses PAUSER_ROLE; subsequent pause() calls from this account revert. Other PAUSER_ROLE holders (if any) are unaffected.`;
+      return `Address ${who} loses ADMIN_ROLE; subsequent authorizeAgent/revokeAgent/unpauseDeposits calls from this account revert. The contract still requires at least one DEFAULT_ADMIN_ROLE holder for recovery.`;
+    case "DEPOSIT_PAUSER_ROLE":
+      return `Address ${who} loses DEPOSIT_PAUSER_ROLE; subsequent pauseDeposits() calls from this account revert. Other DEPOSIT_PAUSER_ROLE holders (if any) are unaffected.`;
   }
 }
 
