@@ -107,11 +107,22 @@ on that router for good.
 
 Migration therefore means a router redeploy, and the redeploy cascades:
 
-1. Deploy a new `PortfolioRouter`. Its constructor defaults apply until you set
-   otherwise, so re-set `routerCap`, every `vaultCap[*]` and `quarantineAddress`
-   through the timelock-held `ADMIN_ROLE` (`setRouterCap`, `setVaultCap`,
-   `setQuarantineAddress`). Set the default weights before step 5. Their length
-   must equal the registry's `routerEligibleCount`.
+1. Deploy a new `PortfolioRouter`. Do not rerun `DeployPortfolioRouter.s.sol`
+   against the existing deployment. It calls `registry.setRouterEligible` and
+   `registry.setRouter` as the deployer, who no longer holds the registry
+   `ADMIN_ROLE`, so it would revert. Deploy the router contract on its own.
+   The constructor grants the deployer `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` on
+   the new router, and the constructor defaults apply until you set otherwise.
+   Order matters. While the deployer still holds `ADMIN_ROLE` on the new router,
+   which is before the new router's `ADMIN_ROLE` moves to the timelock, the
+   deployer sets `routerCap`, every `vaultCap[*]`, `quarantineAddress` and the
+   default weights (`setRouterCap`, `setVaultCap`, `setQuarantineAddress`,
+   `setDefaultWeights`). After that handover the same calls are Safe-scheduled
+   timelock calls. Eligibility is already on the registry, so no
+   `setRouterEligible` is needed. The default weights need one entry per
+   router-eligible vault, so their length equals `registry.routerEligibleCount()`.
+   The new router must also drop the deployer's `WEIGHT_SETTER_ROLE` (stage 6
+   and 11 do this for the new pair).
 2. Deploy a new `RouterGovernance` against it. `RouterGovernance.router` is an
    immutable. Voted weights, voting power and proposals start empty on the new
    instance. Run the stage 6 and 11 handoff again for the new pair.
@@ -124,11 +135,26 @@ Migration therefore means a router redeploy, and the redeploy cascades:
    and the receipt also takes the IC policy as an immutable, so they bind the
    gateway address (`DeployGateway.s.sol`). Wire them on the new gateway with
    `setICPolicy` and `setConsensusReceipt`.
-5. Call `VaultRegistry.setRouter(newRouter)` through the admin timelock. The
-   registry does not need a redeploy: `setRouter` is repeatable. Unlinking is
-   refused while the old router carries default weights, so re-link straight
-   to the new router.
-6. Re-point every off-chain reader at the new addresses:
+5. The Safe schedules and executes `VaultRegistry.setRouter(newRouter)` through
+   the admin timelock. The deployer cannot do it: it no longer holds the
+   registry `ADMIN_ROLE`. The registry does not need a redeploy because
+   `setRouter` is repeatable. `setRouter(address(0))` is refused while the old
+   router still carries default weights, so never unlink first. Re-link
+   straight to the new router, whose default weights step 1 already set.
+6. Retire the old router and gateway. `setRouter` does not stop them. The old
+   gateway stays depositable, and its router still serves any deposit routed
+   through it. The pause is `RobotMoneyGateway.pauseDeposits()` on the old
+   gateway, which reverts both `deposit` entry points with `DepositsArePaused`.
+   The holder of `DEPOSIT_PAUSER_ROLE` (the pauser key set at deploy, which the
+   timelock handover does not touch) calls it directly. It needs no timelock
+   call. Only `unpauseDeposits()` needs the timelock-held `ADMIN_ROLE`. Do not
+   use the vault's `pauseDeposits()`. The vault is shared, so that would stop
+   the new gateway as well. The old router has no switch of its own. It is
+   retired by pausing the old gateway and by revoking that gateway's agent
+   authorizations through the timelock. Users withdraw through the old gateway,
+   because `pauseDeposits` never freezes a withdrawal. Old receipts and old
+   agent authorizations stay on the old contracts and do not move.
+7. Re-point every off-chain reader at the new addresses:
    - dapp: `VITE_ROUTER_ADDRESS`, `VITE_GATEWAY_ADDRESS`, `VITE_GOVERNANCE_ADDRESS`
      (`clients/dapp/.env.example`) and the pinned `VITE_GATEWAY_EXPECTED_CODE_HASH`.
    - Rust payment client: `router_address`, `gateway_address`, `governance_address`
