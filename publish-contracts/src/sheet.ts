@@ -7,6 +7,7 @@
 import { USDC_ADDRESS } from "./usdc.ts";
 import { getAddress, isAddress } from "viem";
 import { PublishError } from "./errors.ts";
+import { MAINNET_CHAIN_ID } from "./chains.ts";
 
 export type Address = `0x${string}`;
 export const VAULT_KEYS = ["USDC", "PROTO", "AGENT", "RWA"] as const;
@@ -272,7 +273,7 @@ export function parseSheet(text: string): Sheet {
   // govern matrix inputs
   const unpauseVaults = asVaultKeys("GOVERN_UNPAUSE_VAULTS", v.GOVERN_UNPAUSE_VAULTS!);
   // issue 1520 (amended 2026-10-06): no stage 13 step may be skipped on a mainnet deploy. A basket left out would stay paused and verify green.
-  if (chainId === 8453) {
+  if (chainId === MAINNET_CHAIN_ID) {
     const missing = (["PROTO", "AGENT", "RWA"] as const).filter((k) => !unpauseVaults.includes(k));
     if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list PROTO, AGENT and RWA on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
   }

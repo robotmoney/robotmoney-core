@@ -5,6 +5,7 @@
 // Any tool that exits non-zero fails this script. The only Twin environment steps are fund-gas and fund-usdc; the govern time warp is inside the CLI.
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { TWIN_CHAIN_ID } from "../chains.ts";
 
 const env = (k: string, d = ""): string => process.env[k] ?? d;
 const fail = (m: string): never => { console.error(`twin-publish: ${m}`); process.exit(1); };
@@ -36,7 +37,7 @@ const pass = join(rh, "passphrase");
 writeFileSync(pass, Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("hex"), { mode: 0o600 });
 
 const fragment = join(rh, "fragment.env");
-run([bun, rehearsal, "keys", "--dir", join(rh, "keys"), "--password-file", pass, "--chain-id", "918453"], { cwd: pc, stdoutTo: fragment });
+run([bun, rehearsal, "keys", "--dir", join(rh, "keys"), "--password-file", pass, "--chain-id", String(TWIN_CHAIN_ID)], { cwd: pc, stdoutTo: fragment });
 // Later lines win in merge-sheet.
 if (env("SHARE_RECEIVER_IN")) appendFileSync(fragment, `SHARE_RECEIVER_ADDRESS=${env("SHARE_RECEIVER_IN")}\n`);
 const sheet = join(rh, "sheet.env");
@@ -51,7 +52,7 @@ exportVar("TWIN_DEPLOYER_ADDRESS", admin);
 exportVar("TWIN_RUN_DIR", rh);
 
 // One CLI verb, the same flags for each. The unattended Twin chain run needs YES=1 (the CLI refuses it on 8453).
-const stage = (verb: string, stdoutTo?: string) => run([bun, cli, verb, "--chain", "918453", "--rpc", rpc, "--sheet", sheet,
+const stage = (verb: string, stdoutTo?: string) => run([bun, cli, verb, "--chain", String(TWIN_CHAIN_ID), "--rpc", rpc, "--sheet", sheet,
   "--signer", `keystore:${join(rh, "keys/DEPLOYER")}:${pass}`, "--environment", "stage", "--core-sha", sha,
   "--counts-dir", join(rh, "counts"), "--evidence", join(rh, "evidence")], { cwd: pc, stdoutTo, childEnv: { PUBLISH_MANIFEST_DIR: join(rh, "manifests"), YES: "1" } });
 

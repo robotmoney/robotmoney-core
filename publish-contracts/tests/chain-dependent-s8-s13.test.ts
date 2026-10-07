@@ -32,7 +32,7 @@ describe("devops 57: the real SafeL2 1.4.1 criteria are all present in the skipp
   });
 
   test("the e2e file refuses Base mainnet and names the command that runs it", () => {
-    expect(e2eText).toContain("CHAIN_ID !== 8453");
+    expect(e2eText).toContain("CHAIN_ID !== MAINNET_CHAIN_ID");
     expect(e2eText).toContain("SAFE_TEST_RPC");
     expect(SAFE_CMD).toContain("bun test src/safe/e2e.test.ts");
   });

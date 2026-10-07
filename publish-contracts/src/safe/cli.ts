@@ -23,6 +23,7 @@ import {
 } from "./timelock.ts";
 import { describeBundle, executeTx, importSignatureBundle, proposeTx, readBundle, signTx, writeBundle } from "./tx.ts";
 import { assertNoPlaintextKeys } from "./guard.ts";
+import { MAINNET_CHAIN_ID } from "../chains.ts";
 
 export function parseFlags(argv: string[]): Record<string, string> {
   const o: Record<string, string> = {};
@@ -56,7 +57,7 @@ async function main(argv: string[]): Promise<number> {
   const f = parseFlags(rest);
   const rpcUrl = f.rpc ?? process.env.ETH_RPC_URL;
   if (!rpcUrl) throw new SafeToolError("BAD_INPUT", "set --rpc or ETH_RPC_URL");
-  const chainId = Number(f["chain-id"] ?? process.env.CHAIN_ID ?? 8453);
+  const chainId = Number(f["chain-id"] ?? process.env.CHAIN_ID ?? MAINNET_CHAIN_ID);
   const extra = csv(f["allow-chain-ids"]).map(Number);
   assertNoPlaintextKeys(rpcUrl, process.env);
   const logger = jsonLogger();
