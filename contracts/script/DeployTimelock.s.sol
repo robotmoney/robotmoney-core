@@ -78,7 +78,11 @@ interface IRouterGovernanceQuorum {
 ///         - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
 ///           hot key, not the deployer.
 ///         - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
-///           EXECUTOR_ROLE on the TimelockController.
+///           CANCELLER_ROLE on the TimelockController, and no other account
+///           does: no single signer can propose or cancel (security-model §4).
+///         - EXECUTOR_ROLE is open: it is held by address(0), so any address
+///           can execute an operation whose delay has elapsed. One policy, no
+///           switch (core 1521).
 ///         - Direct ADMIN_ROLE calls from any EOA revert with
 ///           AccessControlUnauthorizedAccount.
 ///         - Admin operations must be routed through
@@ -90,7 +94,7 @@ interface IRouterGovernanceQuorum {
 ///           REGISTRY_ADDRESS       — VaultRegistry
 ///           ROUTER_ADDRESS         — PortfolioRouter
 ///           GOVERNANCE_ADDRESS     — RouterGovernance
-///           SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + EXECUTOR)
+///           SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + CANCELLER)
 ///           EMERGENCY_ADDRESS      — independent hot key that receives the vault
 ///                                    EMERGENCY_ROLE (must differ from the deployer
 ///                                    EOA; ACL-1 / F-01)
@@ -154,6 +158,12 @@ contract DeployTimelock is ExpectedChainGuard {
     /// @dev security-model.md §4: production timelock delay floor, 48 hours. Enforced
     ///      by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin.
     uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
+
+    /// @dev Recorded in timelock.json as `executorPolicy` / `cancellerPolicy`.
+    ///      `open`: EXECUTOR_ROLE is held by address(0). `safe-only`: only the Safe
+    ///      (threshold >= 2) holds PROPOSER_ROLE and CANCELLER_ROLE.
+    string public constant EXECUTOR_POLICY = "open";
+    string public constant CANCELLER_POLICY = "safe-only";
 
     /// @dev Safe 1.4.1 canonical deployments (identical on Base and on the Twin chain,
     ///      whose state is a Base snapshot).
@@ -511,13 +521,16 @@ contract DeployTimelock is ExpectedChainGuard {
 
     function _deployAndWire(Deployed memory d) internal returns (TimelockController timelock) {
         // 1. Deploy TimelockController.
-        //    proposers = [safe], executors = [safe], admin = address(0)
+        //    proposers = [safe], executors = [address(0)], admin = address(0)
+        //    OZ grants CANCELLER_ROLE to each proposer, so the Safe is the only
+        //    proposer and canceller. address(0) as executor opens EXECUTOR_ROLE
+        //    to any caller once the delay has elapsed (security-model §4; core 1521).
         //    admin = address(0) means the timelock is self-administered
         //    (the safe can change delay/roles only through the timelock).
         address[] memory proposers = new address[](1);
         proposers[0] = d.safe;
         address[] memory executors = new address[](1);
-        executors[0] = d.safe;
+        executors[0] = address(0);
 
         timelock = new TimelockController(d.minDelay, proposers, executors, address(0));
 
@@ -911,6 +924,10 @@ contract DeployTimelock is ExpectedChainGuard {
         vm.serializeAddress(obj, "timelock", address(d.timelock));
         vm.serializeAddress(obj, "safe", d.safe);
         vm.serializeAddress(obj, "emergency", d.emergency);
+        // The policy the timelock was built with, for the stage 12 verifier to
+        // compare against the chain. One policy: no sheet key selects it.
+        vm.serializeString(obj, "executorPolicy", EXECUTOR_POLICY);
+        vm.serializeString(obj, "cancellerPolicy", CANCELLER_POLICY);
         vm.serializeAddress(obj, "vault", d.vaults[0]);
         vm.serializeAddress(obj, "vaults", d.vaults);
         vm.serializeAddress(obj, "gateway", d.gateway);
@@ -1083,10 +1100,15 @@ contract DeployTimelock is ExpectedChainGuard {
             "safe_is_timelock_proposer",
             d.timelock.hasRole(d.timelock.PROPOSER_ROLE(), d.safe)
         );
+        vm.serializeBool(
+            roles,
+            "safe_is_timelock_canceller",
+            d.timelock.hasRole(d.timelock.CANCELLER_ROLE(), d.safe)
+        );
         return vm.serializeBool(
             roles,
-            "safe_is_timelock_executor",
-            d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), d.safe)
+            "timelock_executor_is_open",
+            d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), address(0))
         );
     }
 }

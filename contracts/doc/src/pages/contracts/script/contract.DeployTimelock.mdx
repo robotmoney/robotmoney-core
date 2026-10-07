@@ -35,7 +35,11 @@ still owns).
 - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
 hot key, not the deployer.
 - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
-EXECUTOR_ROLE on the TimelockController.
+CANCELLER_ROLE on the TimelockController, and no other account
+does: no single signer can propose or cancel (security-model §4).
+- EXECUTOR_ROLE is open: it is held by address(0), so any address
+can execute an operation whose delay has elapsed. One policy, no
+switch (core 1521).
 - Direct ADMIN_ROLE calls from any EOA revert with
 AccessControlUnauthorizedAccount.
 - Admin operations must be routed through
@@ -47,7 +51,7 @@ GATEWAY_ADDRESS        — RobotMoneyGateway
 REGISTRY_ADDRESS       — VaultRegistry
 ROUTER_ADDRESS         — PortfolioRouter
 GOVERNANCE_ADDRESS     — RouterGovernance
-SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + EXECUTOR)
+SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + CANCELLER)
 EMERGENCY_ADDRESS      — independent hot key that receives the vault
 EMERGENCY_ROLE (must differ from the deployer
 EOA; ACL-1 / F-01)
@@ -169,6 +173,26 @@ by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin.
 
 ```solidity
 uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
+```
+
+### EXECUTOR_POLICY
+
+<i>
+
+Recorded in timelock.json as `executorPolicy` / `cancellerPolicy`.
+`open`: EXECUTOR_ROLE is held by address(0). `safe-only`: only the Safe
+(threshold >= 2) holds PROPOSER_ROLE and CANCELLER_ROLE.
+
+</i>
+
+```solidity
+string public constant EXECUTOR_POLICY = "open";
+```
+
+### CANCELLER_POLICY
+
+```solidity
+string public constant CANCELLER_POLICY = "safe-only";
 ```
 
 ### SAFE_L2_SINGLETON

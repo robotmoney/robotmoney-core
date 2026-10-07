@@ -810,6 +810,76 @@ AC6f: Direct ADMIN_ROLE call from random EOA reverts (all contracts).
 function test_sadPath_directAdminBypass_stranger() public withSnap;
 ```
 
+<a id="_scheduleviasafe-bytes32"></a>
+
+### _scheduleViaSafe
+
+<i>
+
+Schedule `registerVault` through the Safe with two owner signatures.
+
+</i>
+
+```solidity
+function _scheduleViaSafe(bytes32 salt) internal returns (bytes memory callData, bytes32 opId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| salt | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| callData | `bytes` |  |
+| opId | `bytes32` |  |
+
+<a id="test_openexecutor_strangerexecutesreadyoperation"></a>
+
+### test_openExecutor_strangerExecutesReadyOperation
+
+```solidity
+function test_openExecutor_strangerExecutesReadyOperation() public withSnap;
+```
+
+<a id="test_openexecutor_strangercannotexecutebeforedelay"></a>
+
+### test_openExecutor_strangerCannotExecuteBeforeDelay
+
+```solidity
+function test_openExecutor_strangerCannotExecuteBeforeDelay() public withSnap;
+```
+
+<a id="test_openexecutor_strangercannotschedule"></a>
+
+### test_openExecutor_strangerCannotSchedule
+
+```solidity
+function test_openExecutor_strangerCannotSchedule() public withSnap;
+```
+
+<a id="test_openexecutor_strangercannotcancel"></a>
+
+### test_openExecutor_strangerCannotCancel
+
+```solidity
+function test_openExecutor_strangerCannotCancel() public withSnap;
+```
+
+<a id="test_openexecutor_singleownercannotcancel"></a>
+
+### test_openExecutor_singleOwnerCannotCancel
+
+One owner is not the Safe: a direct cancel reverts, and one owner's
+signature on a Safe cancel is short of the threshold (GS020).
+
+```solidity
+function test_openExecutor_singleOwnerCannotCancel() public withSnap;
+```
+
 <a id="test_sadpath_cancelledoperation_cannotexecute"></a>
 
 ### test_sadPath_cancelledOperation_cannotExecute

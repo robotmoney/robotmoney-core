@@ -352,14 +352,14 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
 
     // ─── The Safe ────────────────────────────────────────────────────────────
 
-    /// @notice The Safe is the timelock's proposer and executor, and it is a
-    ///         real 2-of-3: threshold and owner set read back from the Safe.
+    /// @notice The Safe is the timelock's proposer, EXECUTOR_ROLE is open (address(0)),
+    ///         and the Safe is a real 2-of-3: threshold and owner set read back from the Safe.
     function test_safeIsTheTimelockDriverAndIsTwoOfThree() public view {
         assertTrue(
             timelock.hasRole(timelock.PROPOSER_ROLE(), address(safe)), "safe is not a proposer"
         );
         assertTrue(
-            timelock.hasRole(timelock.EXECUTOR_ROLE(), address(safe)), "safe is not an executor"
+            timelock.hasRole(timelock.EXECUTOR_ROLE(), address(0)), "executor role is not open"
         );
         assertEq(safe.getThreshold(), 2, "safe threshold must be 2");
         assertEq(safe.getOwners().length, 3, "safe must have 3 owners");

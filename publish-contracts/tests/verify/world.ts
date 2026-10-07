@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { decodeFunctionData, keccak256, toFunctionSelector, parseAbiItem, toHex, pad, type Hex as VHex } from "viem";
 import {
   ADMIN_ROLE, WEIGHT_SETTER_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
-  SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32,
+  SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { getStageTable } from "../../src/stages.ts";
 import { basename } from "node:path";
@@ -193,7 +193,10 @@ export function buildWorld(chainId = 8453): World {
   ch.grant(GATEWAY, DEPOSIT_PAUSER_ROLE, PAUSER);
   ch.grant(ROUTER, ADMIN_ROLE, GOV);
   ch.grant(ROUTER, WEIGHT_SETTER_ROLE, GOV);
-  for (const r of [PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE]) ch.grant(TIMELOCK, r, SAFE);
+  // Policy (core 1521): the Safe proposes and cancels; EXECUTOR_ROLE is open to address(0).
+  for (const r of [PROPOSER_ROLE, CANCELLER_ROLE]) { ch.grant(TIMELOCK, r, SAFE); ch.roleGrantedLog(TIMELOCK, r, SAFE, 110n); }
+  ch.grant(TIMELOCK, EXECUTOR_ROLE, ZERO);
+  ch.roleGrantedLog(TIMELOCK, EXECUTOR_ROLE, ZERO, 110n);
   ch.set(TIMELOCK, "getMinDelay", BigInt(delay));
   ch.set(GATEWAY, "depositsPaused", false);
   ch.set(GATEWAY, "router", ROUTER);
@@ -246,7 +249,7 @@ export function buildWorld(chainId = 8453): World {
   w(file("governance"), { chain_id: chainId, governance: GOV });
   w(file("ic-policy"), { chain_id: chainId, policy: ICP, consensus_receipt: REC });
   w(file("timelock"), {
-    chain_id: chainId, timelock: TIMELOCK, safe: SAFE, emergency: EMERGENCY, code_hashes: { safe: safeHash },
+    chain_id: chainId, timelock: TIMELOCK, safe: SAFE, emergency: EMERGENCY, executorPolicy: "open", cancellerPolicy: "safe-only", code_hashes: { safe: safeHash },
     roles: { gateway_agents_listed_count: 1, deployer_owns_a_listed_gateway_agent: false },
   });
   w("safe.json", { chain_id: chainId, safe: SAFE });
