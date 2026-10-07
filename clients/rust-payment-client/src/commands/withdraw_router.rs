@@ -65,7 +65,8 @@ pub struct Args {
     pub idempotency_key: Option<String>,
     pub deadline_secs: u64,
     pub receipt_timeout_secs: u64,
-    pub gas_limit: u64,
+    /// `None` derives the limit from the gateway entry floor and the leg count.
+    pub gas_limit: Option<u64>,
     /// Optional CLI override for `max_fee_per_gas_cap` in wei.
     pub fee_cap_wei: Option<u64>,
     /// Must be true to proceed past the preview. Without --confirm the
@@ -319,7 +320,9 @@ pub fn run(args: Args) -> i32 {
         &cfg,
         Submission {
             calldata,
-            gas_limit: args.gas_limit,
+            gas_limit: args
+                .gas_limit
+                .unwrap_or_else(|| default_gas_limit(vaults.len())),
             fee_cap_wei: args.fee_cap_wei,
             receipt_timeout_secs: args.receipt_timeout_secs,
             replay_deadline: deadline,
@@ -384,6 +387,25 @@ pub fn run(args: Args) -> i32 {
     EXIT_OK
 }
 
+/// Gateway `withdrawFromRouter` entry floor: fixed part
+/// (`ROUTER_WITHDRAW_BASE_GAS`) in gas.
+pub const ROUTER_WITHDRAW_BASE_GAS: u64 = 400_000;
+/// Gateway entry floor per non-zero leg (`ROUTER_WITHDRAW_GAS_PER_LEG`).
+pub const ROUTER_WITHDRAW_GAS_PER_LEG: u64 = 1_850_000;
+/// Headroom above the floor for intrinsic tx gas and calldata, which the
+/// entry check does not see.
+const GAS_MARGIN: u64 = 150_000;
+
+/// Gateway entry floor for a `withdrawFromRouter` with `legs` legs.
+pub fn gas_floor(legs: usize) -> u64 {
+    ROUTER_WITHDRAW_BASE_GAS.saturating_add(ROUTER_WITHDRAW_GAS_PER_LEG.saturating_mul(legs as u64))
+}
+
+/// Default tx gas limit: the entry floor for every leg plus a margin.
+pub fn default_gas_limit(legs: usize) -> u64 {
+    gas_floor(legs).saturating_add(GAS_MARGIN)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,5 +449,14 @@ mod tests {
             RobotMoneyGateway::withdrawFromRouterCall::SELECTOR
         );
         assert!(encoded.len() > 4, "encoded call must have non-trivial body");
+    }
+
+    #[test]
+    fn default_gas_limit_is_at_or_above_gateway_floor() {
+        for legs in 1..=8usize {
+            assert!(default_gas_limit(legs) >= gas_floor(legs));
+        }
+        assert_eq!(gas_floor(2), 4_100_000);
+        assert!(default_gas_limit(1) > 750_000);
     }
 }
