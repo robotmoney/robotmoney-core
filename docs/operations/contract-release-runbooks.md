@@ -69,7 +69,7 @@ This section covers two different tags. Do not confuse them.
   `bun publish-contracts/scripts/freeze-counts.ts --counts counts.json`. Take the artifact from the
   **push** run of the tagged SHA: on a pull request `github.sha` is the merge commit, not the release SHA.
   CI never commits it. The mainnet plan job refuses any
-  `DEPLOY_SHA` that is not an annotated-release-tagged SHA (`RELEASE_SHA_UNTAGGED`), has no committed
+  `DEPLOY_SHA` that is not an annotated-release-tagged SHA (`RELEASE_SHA_UNTAGGED`), whose tag object differs from, or is missing on, the checkout's `origin` or whose remote is unreachable (`RELEASE_TAG_REMOTE_MISMATCH`, exit 23; push the tag before planning), has no committed
   frozen counts (`COUNTS_MISSING`) or is not green in `check-sha-green` (`CI_NOT_GREEN`).
   Any later commit that changes `contracts/` has a new SHA with no tag and no
   counts, so it needs a new rehearsal and tag. This flow is enforced by the plan job (core #1524).
@@ -84,11 +84,11 @@ This section covers two different tags. Do not confuse them.
     frozen counts file only. Default: they do not re-check, because the deploy job needs the plan job in the devops
     workflow, and a re-check days later (stage 13 runs after the 48-hour delay) would fail on an unrelated
     flaky check mid-deploy. Revisit if a deploy job ever runs without the plan job.
-  - **Owner action (not done): protect `release/*` tags.** The gate reads local refs and does not compare with the
-    remote, so a pusher who can create or move a `release/*` tag can name a SHA. In the GitHub repository settings,
-    add a tag ruleset: target `Tags`, pattern `release/*`, enforcement `Active`, rules `Restrict creations`,
-    `Restrict updates` and `Restrict deletions`, bypass list only the release owners. Tick this item when done:
-    - [ ] `release/*` tag ruleset is active.
+  - **Remote tag check (core #1602).** The plan compares the local `release/<version>` tag with `origin` of the core
+    checkout (`git ls-remote`): the remote must hold the same tag object. Push the tag before planning.
+  - **Optional hardening (owner action, defense in depth).** A GitHub tag ruleset stops a pusher from creating or moving a
+    release tag at all. Settings: target `Tags`, pattern `release/*`, enforcement `Active`, rules `Restrict creations`,
+    `Restrict updates` and `Restrict deletions`, bypass list only the release owners. The gate does not depend on it.
 - The **version tag** (`vA.B.C[-network]`) is the post-deploy record
   described in the rest of this section.
 
