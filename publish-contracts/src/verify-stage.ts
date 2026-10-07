@@ -34,6 +34,13 @@ export function unpausedByGovern(manifest: Pick<RunManifest, "govern">, sheet: R
   return sheet.govern.unpauseVaults.filter((k) => !!g?.[`unpause-${k}`]?.executed);
 }
 
+/** The basket vaults whose unpause row never ran: on 8453 stage 13 must have executed all three (the sheet parser requires all three listed). */
+export const MAINNET_UNPAUSE_BASKETS: readonly VaultKey[] = ["PROTO", "AGENT", "RWA"];
+export function unexecutedMainnetUnpauses(manifest: Pick<RunManifest, "govern">): VaultKey[] {
+  const g = manifest.govern as Record<string, { executed?: unknown } | undefined> | undefined;
+  return MAINNET_UNPAUSE_BASKETS.filter((k) => !g?.[`unpause-${k}`]?.executed);
+}
+
 /** The timelock delay the chain should read: GOVERN_NEW_DELAY once the executed phase of the govern row `update-delay` ran, else TIMELOCK_MIN_DELAY. */
 export function expectedTimelockDelay(manifest: Pick<RunManifest, "govern">, sheet: RunContext["sheet"]): number {
   const g = manifest.govern as Record<string, { executed?: unknown } | undefined> | undefined;
@@ -95,14 +102,19 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   if (manifest.firstBlock === undefined) throw new PublishError("INPUT_MISSING", "the run manifest has no first deploy block: the role scan needs it. Run the deploy stages first.");
   const safe = readManifestField(ctx, manifestRef("safe", "safe"));
   const startedAt = Date.now();
+  const mainnet = ctx.chainId === MAINNET_CHAIN_ID;
+  // 8453: all three baskets ship unpaused, so every one is expected unpaused on chain whatever the manifest says (a part-way govern run must not pass).
+  const unpaused = mainnet ? [...MAINNET_UNPAUSE_BASKETS] : unpausedByGovern(manifest, ctx.sheet);
   ctx.log.log("info", "stage.start", { stage: row.name });
   const report = await deps.verifyDeployment({
-    chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpausedByGovern(manifest, ctx.sheet), expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
+    chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
     logChunk: 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"),
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
     handoverBlock: handoverBlock(manifest),
   });
-  if (ctx.chainId === MAINNET_CHAIN_ID) {
+  if (mainnet) {
+    for (const k of unexecutedMainnetUnpauses(manifest)) report.checks.push({ label: `govern unpause-${k} executed (stage 13)`, ok: false, detail: `the run manifest records no executed unpause-${k} row: stage 13 did not fully run` });
+    report.ok = report.checks.every((c) => c.ok);
     const s = await deps.verifySources({ chainId: ctx.chainId, contracts: contractsFromManifests(manifestDir(ctx), getStageTable()) });
     report.checks.push(...s.checks);
     report.ok = report.ok && s.ok;
