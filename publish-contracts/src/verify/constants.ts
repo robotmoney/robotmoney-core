@@ -9,7 +9,7 @@ export const role = (name: string): Hex => keccak256(toBytes(name));
 export const ADMIN_ROLE = role("ADMIN_ROLE");
 export const WEIGHT_SETTER_ROLE = role("WEIGHT_SETTER_ROLE");
 export const EMERGENCY_ROLE = role("EMERGENCY_ROLE");
-export const PAUSER_ROLE = role("PAUSER_ROLE");
+export const DEPOSIT_PAUSER_ROLE = role("DEPOSIT_PAUSER_ROLE");
 export const PROPOSER_ROLE = role("PROPOSER_ROLE");
 export const EXECUTOR_ROLE = role("EXECUTOR_ROLE");
 export const CANCELLER_ROLE = role("CANCELLER_ROLE");

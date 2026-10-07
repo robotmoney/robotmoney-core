@@ -8,7 +8,7 @@
 //! Sub-reads (all `eth_call`, pinned to a single `eth_blockNumber` snapshot):
 //!
 //! - `VaultRegistry.listVaults()` → `address[]` of all registered vaults
-//!   (active, paused, and retired).
+//!   (active, deposits paused, and retired).
 //! - For each vault address: `VaultRegistry.getVault(address)` → **two**
 //!   top-level outputs, `(VaultMetadata metadata, VaultStatus status)`, where
 //!   `VaultMetadata` is `{ name, asset, registeredAt }`. Two outputs decode as
@@ -64,7 +64,9 @@ pub struct VaultEntry {
     pub name: String,
     /// `VaultMetadata.asset` — the ERC-20 the vault denominates in.
     pub asset: String,
-    /// Operational status: `"active"`, `"paused"`, or `"retired"`.
+    /// Operational status: `"active"`, `"deposits_paused"`, or `"retired"`.
+    /// `"deposits_paused"` (`VaultStatus.DepositsPaused`) stops new deposits
+    /// only; holders still redeem (core 1494).
     pub status: String,
     /// `VaultMetadata.registeredAt` — block timestamp of `registerVault`.
     pub registered_at: u64,
@@ -213,7 +215,7 @@ async fn read_vaults(
 fn vault_status_to_str(s: u8) -> &'static str {
     match s {
         0 => "active",
-        1 => "paused",
+        1 => "deposits_paused",
         2 => "retired",
         _ => "unknown",
     }
@@ -303,7 +305,7 @@ mod tests {
     #[test]
     fn vault_status_to_str_coverage() {
         assert_eq!(vault_status_to_str(0), "active");
-        assert_eq!(vault_status_to_str(1), "paused");
+        assert_eq!(vault_status_to_str(1), "deposits_paused");
         assert_eq!(vault_status_to_str(2), "retired");
         assert_eq!(vault_status_to_str(99), "unknown");
     }

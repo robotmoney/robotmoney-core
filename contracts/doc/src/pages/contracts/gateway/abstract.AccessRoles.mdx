@@ -5,7 +5,7 @@ description: "Role constants and AccessControl wiring for the RobotMoney gateway
 
 # AccessRoles
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/gateway/AccessRoles.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/230eaace165b2eded59d836154b02cd6108a627d/contracts/gateway/AccessRoles.sol)
 
 **Inherits:** AccessControl
 
@@ -16,16 +16,17 @@ Role constants and AccessControl wiring for the RobotMoney gateway.
 <i>
 
 Three roles, all distinct keys (see `Plan tracking issue #109` §2.1):
-- `ADMIN_ROLE`  — grants/revokes other roles, sets policy, unpauses.
-- `PAUSER_ROLE` — `pause()` only. Asymmetric with unpause by design:
-pausing is a stop-the-world tool that must be fast and unilateral
-(one compromised PAUSER can only DoS, not steal); unpause is
+- `ADMIN_ROLE`  — grants/revokes other roles, sets policy, `unpauseDeposits()`.
+- `DEPOSIT_PAUSER_ROLE` — `pauseDeposits()` only. Asymmetric with
+`unpauseDeposits()` by design: pausing deposits must be fast and
+unilateral (one compromised deposit pauser can only DoS deposits; it
+can never block a withdrawal or steal, core 1494); resuming is
 deliberate and restricted to ADMIN.
 - `AGENT_ROLE`  — only role allowed to call `deposit()`.
 
 </i>
 
-Invariant. The three privileged roles `ADMIN_ROLE`, `PAUSER_ROLE`,
+Invariant. The three privileged roles `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`,
 and `AGENT_ROLE` are pairwise disjoint — no account may hold any
 two of them simultaneously. Pause is intentionally siloed from
 admin so that a compromised pauser key cannot also grant or revoke
@@ -37,7 +38,7 @@ the gateway's `authorizeAgent`.
 `DEFAULT_ADMIN_ROLE` is treated as part of the ADMIN tier
 (audit 2026-06-09, L-14): it may coexist with `ADMIN_ROLE` (the gateway
 constructor grants both to the same admin address), but never with
-`PAUSER_ROLE` or `AGENT_ROLE`. Without this, a `DEFAULT_ADMIN_ROLE`
+`DEPOSIT_PAUSER_ROLE` or `AGENT_ROLE`. Without this, a `DEFAULT_ADMIN_ROLE`
 holder could renounce `ADMIN_ROLE` and then self-grant `AGENT_ROLE`,
 silently bypassing the disjointness invariant.
 
@@ -45,18 +46,19 @@ silently bypassing the disjointness invariant.
 
 ### ADMIN_ROLE
 
-Grants/revokes other roles, sets policy, unpauses.
+Grants/revokes other roles, sets policy, resumes deposits.
 
 ```solidity
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 ```
 
-### PAUSER_ROLE
+### DEPOSIT_PAUSER_ROLE
 
-`pause()` only. Asymmetric with unpause by design.
+`pauseDeposits()` only. Asymmetric with `unpauseDeposits()` by design.
+Can never block a withdrawal (core 1494).
 
 ```solidity
-bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+bytes32 public constant DEPOSIT_PAUSER_ROLE = keccak256("DEPOSIT_PAUSER_ROLE");
 ```
 
 ### AGENT_ROLE
@@ -155,7 +157,7 @@ function _assertRoleSeparation(address account) internal view;
 ### RoleSeparationViolated
 
 Reverts when granting a role would cause an account to hold
-any two of `ADMIN, PAUSER, AGENT` simultaneously.
+any two of `ADMIN, DEPOSIT_PAUSER, AGENT` simultaneously.
 
 ```solidity
 error RoleSeparationViolated();

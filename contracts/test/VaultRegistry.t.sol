@@ -206,11 +206,11 @@ contract VaultRegistryTest is Test {
     function test_setVaultStatus_toPaused() public {
         vm.startPrank(admin);
         registry.registerVault(vault1, meta1);
-        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.DepositsPaused);
         vm.stopPrank();
 
         (, VaultRegistry.VaultStatus status) = registry.getVault(vault1);
-        assertEq(uint256(status), uint256(VaultRegistry.VaultStatus.Paused));
+        assertEq(uint256(status), uint256(VaultRegistry.VaultStatus.DepositsPaused));
     }
 
     function test_setVaultStatus_toRetired() public {
@@ -226,7 +226,7 @@ contract VaultRegistryTest is Test {
     function test_setVaultStatus_activeAfterPaused() public {
         vm.startPrank(admin);
         registry.registerVault(vault1, meta1);
-        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.DepositsPaused);
         registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Active);
         vm.stopPrank();
 
@@ -241,8 +241,10 @@ contract VaultRegistryTest is Test {
         vm.warp(2_000_000);
         vm.prank(admin);
         vm.expectEmit(true, true, false, true);
-        emit VaultRegistry.VaultStatusChanged(vault1, VaultRegistry.VaultStatus.Paused, 2_000_000);
-        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+        emit VaultRegistry.VaultStatusChanged(
+            vault1, VaultRegistry.VaultStatus.DepositsPaused, 2_000_000
+        );
+        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.DepositsPaused);
     }
 
     // ─── setVaultStatus: revert cases ────────────────────────────────────────
@@ -250,7 +252,7 @@ contract VaultRegistryTest is Test {
     function test_setVaultStatus_revertsForNotRegistered() public {
         vm.prank(admin);
         vm.expectRevert(VaultRegistry.NotRegistered.selector);
-        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.DepositsPaused);
     }
 
     function test_setVaultStatus_revertsForUnauthorizedCaller() public {
@@ -264,7 +266,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vm.prank(stranger);
-        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.DepositsPaused);
     }
 
     // ─── retire (unified governance action, DI-2) ─────────────────────────────
@@ -496,13 +498,13 @@ contract VaultRegistryTest is Test {
         vm.startPrank(admin);
         registry.registerVault(address(mockVault), meta1);
         registry.setRouterEligible(address(mockVault), true);
-        registry.setVaultStatus(address(mockVault), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(mockVault), VaultRegistry.VaultStatus.DepositsPaused);
         vm.stopPrank();
 
         (, VaultRegistry.VaultStatus status) = registry.getVault(address(mockVault));
         assertEq(
             uint256(status),
-            uint256(VaultRegistry.VaultStatus.Paused),
+            uint256(VaultRegistry.VaultStatus.DepositsPaused),
             "Paused transition must not be blocked by the retire strand guard"
         );
     }

@@ -181,22 +181,22 @@ fn eoas_are_funded() {
 
 // -- On-chain poke round-trips ----------------------------------------
 
-/// pause → unpause round-trips correctly.
+/// pauseDeposits → unpauseDeposits round-trips correctly.
 #[test]
-fn pause_unpause_round_trips() {
-    if skip_if_no_prereqs("pause_unpause_round_trips") {
+fn pause_deposits_round_trips() {
+    if skip_if_no_prereqs("pause_deposits_round_trips") {
         return;
     }
     let fx = fixture();
-    fx.pause_gateway().expect("pause()");
+    fx.pause_gateway_deposits().expect("pauseDeposits()");
     assert!(
-        gateway_is_paused(fx),
-        "gateway should be paused after pause()"
+        gateway_deposits_paused(fx),
+        "gateway deposits should be paused after pauseDeposits()"
     );
-    fx.unpause_gateway().expect("unpause()");
+    fx.unpause_gateway_deposits().expect("unpauseDeposits()");
     assert!(
-        !gateway_is_paused(fx),
-        "gateway should not be paused after unpause()"
+        !gateway_deposits_paused(fx),
+        "gateway deposits should not be paused after unpauseDeposits()"
     );
 }
 
@@ -347,16 +347,17 @@ fn u256_from_hex(hex: &str) -> u128 {
     u128::from_str_radix(slice, 16).unwrap_or(0)
 }
 
-fn gateway_is_paused(fx: &Fixture) -> bool {
-    // ABI-encode paused() selector: keccak256("paused()")[0..4] = 0x5c975abb
+fn gateway_deposits_paused(fx: &Fixture) -> bool {
+    // ABI-encode the depositsPaused() selector:
+    // keccak256("depositsPaused()")[0..4] = 0x60da3e83
     let result: String = rpc_call(
         fx.rpc_url(),
         "eth_call",
         serde_json::json!([
-            {"to": format!("{:#x}", fx.gateway()), "data": "0x5c975abb"},
+            {"to": format!("{:#x}", fx.gateway()), "data": "0x60da3e83"},
             "latest"
         ]),
     );
-    // Returns a 32-byte bool: last byte is 1 if paused.
+    // Returns a 32-byte bool: last byte is 1 if deposits are paused.
     result.trim_start_matches("0x").ends_with('1')
 }

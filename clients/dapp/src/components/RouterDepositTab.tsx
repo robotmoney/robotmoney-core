@@ -247,8 +247,9 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
       {/* All-or-revert warning when any leg is unavailable (AC §6) */}
       {hasUnavailable && (
         <p className="hint" data-testid="router-unavailable-warning" style={{ color: "red" }}>
-          One or more vault legs are paused or retired. The router will revert if you sign. Wait for
-          governance to update the weights or remove the unavailable vaults.
+          One or more vault legs have deposits paused or are retired. The router deposit will revert
+          if you sign. Withdrawals from those vaults stay open. Wait for governance to update the
+          weights or remove the unavailable vaults.
         </p>
       )}
 

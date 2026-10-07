@@ -15,7 +15,7 @@ vi.mock("wagmi", () => ({
   useChainId: () => 918453,
   useDisconnect: () => ({ disconnect: vi.fn() }),
   useReadContract: ({ functionName }: { functionName: string }) => {
-    if (functionName === "paused") return { data: false, error: null };
+    if (functionName === "depositsPaused") return { data: false, error: null };
     if (functionName === "usdc") {
       return { data: "0x2222222222222222222222222222222222222222", error: null };
     }

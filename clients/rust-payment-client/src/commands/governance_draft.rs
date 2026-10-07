@@ -60,7 +60,7 @@
 //!    (`tests/fixtures/consensus-receipt.bucket-vault-map.json`).
 //! 4. **Re-checks `PortfolioRouter.isRouterEligibleAndActive`** for every
 //!    mapped vault *at draft time* — a vault Active when the receipt was
-//!    recorded may be Paused by the time a human gets around to reviewing
+//!    recorded may be DepositsPaused by the time a human gets around to reviewing
 //!    the draft, and `propose()` would revert with `VaultNotEligible` on
 //!    exactly that vault. **Fallback:** any ineligible vault is dropped from
 //!    the vector and its bps redistributed proportionally across the
@@ -1132,7 +1132,7 @@ mod tests {
 
     #[test]
     fn redistribute_drops_ineligible_and_settles_last() {
-        // agent_tokens (2500) is Paused; the remaining 7500 (rmUSDC alone)
+        // agent_tokens (2500) is DepositsPaused; the remaining 7500 (rmUSDC alone)
         // absorbs it, and the last kept vault settles to the exact remainder.
         let entries = vec![
             vault("rmAGENT", 1, 2_500),

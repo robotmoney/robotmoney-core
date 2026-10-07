@@ -119,6 +119,13 @@ revert, blocking vault deposits and withdrawals for all users simultaneously.
   or redistribute. No automatic exit mechanism is triggered.
 - The admin may call `pause()` to halt all vault operations cleanly so that
   error messages are user-facing rather than opaque ERC-20 reverts.
+  > **Amended 2026-10-05 (core 1494, owner decision).** A pause stops new
+  > deposits only and never blocks `redeem`. The function is now
+  > `pauseDeposits()` (`EMERGENCY_ROLE`), and only `ADMIN_ROLE` (the timelock)
+  > calls `unpauseDeposits()`. `deposit` and `mint` revert `DepositsArePaused()`
+  > while it is set. During an issuer freeze the pause stops new deposits. The
+  > freeze itself, or a stale oracle, is what makes a withdrawal revert. No
+  > role can freeze withdrawals. The text above is kept as written.
 
 **Disclosure:** The freeze-control risk is disclosed to users in:
 

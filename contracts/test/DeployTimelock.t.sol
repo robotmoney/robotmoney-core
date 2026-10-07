@@ -726,7 +726,7 @@ contract DeployTimelockTest is SafeFixture {
     // ─── ACL-1 / F-01: deployer EOA holds NO privileged role after handover ───
     //
     // The handover (this script) must leave the deployer EOA with none of
-    // {DEFAULT_ADMIN_ROLE, ADMIN_ROLE, EMERGENCY_ROLE, PAUSER_ROLE} on the
+    // {DEFAULT_ADMIN_ROLE, ADMIN_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE} on the
     // Gateway or any vault. The deep deploy-assertion lives in
     // contracts/test/fv/DeployAssertions.t.sol::test_ACL1_*; these tests pin the
     // individual legs and the fix-interaction guarantees.

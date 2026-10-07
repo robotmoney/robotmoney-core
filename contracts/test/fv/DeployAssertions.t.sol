@@ -8,7 +8,7 @@
 // spec calls out for a post-deploy state check:
 //
 //   - ACL-1 (RED, F-01): after handover NO EOA holds ANY privileged role
-//     (DEFAULT_ADMIN_ROLE, ADMIN_ROLE, EMERGENCY_ROLE, PAUSER_ROLE). Today the
+//     (DEFAULT_ADMIN_ROLE, ADMIN_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE). Today the
 //     deployer EOA keeps the Gateway DEFAULT_ADMIN_ROLE and every vault
 //     EMERGENCY_ROLE; DeployTimelock.t.sol only asserts ADMIN_ROLE is clear. The
 //     #965 fix completes the handover AND broadens the assertion — this is where
@@ -164,7 +164,7 @@ contract _FvDeployerHarness {
 contract DeployAssertionsTest is SafeFixture {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
-    bytes32 internal constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 internal constant DEPOSIT_PAUSER_ROLE = keccak256("DEPOSIT_PAUSER_ROLE");
     bytes32 internal constant AGENT_ROLE = keccak256("AGENT_ROLE");
     bytes32 internal constant DEFAULT_ADMIN_ROLE = 0x00;
 
@@ -197,7 +197,7 @@ contract DeployAssertionsTest is SafeFixture {
 
     /// @notice ACL-1 (REMEDIATED by #965, F-01): after the DeployTimelock
     ///         handover the deployer EOA holds NONE of {DEFAULT_ADMIN_ROLE,
-    ///         ADMIN_ROLE, EMERGENCY_ROLE, PAUSER_ROLE} on the Gateway or the
+    ///         ADMIN_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE} on the Gateway or the
     ///         vault. The Timelock receives the Gateway root (ADMIN + DEFAULT),
     ///         and an independent hot key receives the vault EMERGENCY_ROLE. This
     ///         is the deep deploy-assertion: it actually runs the handover and
@@ -222,7 +222,8 @@ contract DeployAssertionsTest is SafeFixture {
             _aclGateway.hasRole(ADMIN_ROLE, deployer), "deployer retains Gateway ADMIN_ROLE"
         );
         assertFalse(
-            _aclGateway.hasRole(PAUSER_ROLE, deployer), "deployer retains Gateway PAUSER_ROLE"
+            _aclGateway.hasRole(DEPOSIT_PAUSER_ROLE, deployer),
+            "deployer retains Gateway DEPOSIT_PAUSER_ROLE"
         );
         assertFalse(_aclVault.hasRole(ADMIN_ROLE, deployer), "deployer retains vault ADMIN_ROLE");
         assertFalse(

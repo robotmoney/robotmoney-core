@@ -116,7 +116,7 @@ A second binding constraint from user memory applies: **no fast-feedback optimiz
   - `IGateway.AgentOwnershipTransferred` → `agent_policies` row naming the new owner, with the policy fields carried from the agent's latest earlier row (issue #1476).
   - `IGateway.AgentRevoked` → `agent_policies` upsert (with a tombstone column).
   - `IGateway.AgentDeposit` → `agent_deposits` insert.
-  - `IGateway.Paused` / `IGateway.Unpaused` → `agent_policies` global state row (or a `gateway_state` later table — defer).
+  - `IGateway.DepositsPaused` / `IGateway.DepositsUnpaused` → `agent_policies` global state row (or a `gateway_state` later table — defer).
   - `RobotMoneyVault.Allocated` / `Pulled` / `Rebalanced` / `ExitFeeCharged` / `EmergencyWithdraw*` → trigger `vault_snapshots`.
   - `MockVault.Deposit` (test fixture only, ERC-4626-shaped) → not watched in production.
 - **Constraint cited.** §11 "Boundaries" — the explorer is not the source of truth for safety decisions, and `rmpc` is. If the indexer consumed `rmpc` output, the dependency arrow would point the wrong way for any future cross-check.
@@ -190,7 +190,7 @@ A one-line cross-link is added to §11 directing readers to this ADR.
 - `docs/technical/rmpc-read-output-contract.md` — §3.3 (`source: "json_rpc"` lock) and §5 (future `Source::Indexer` variant).
 - `docs/development/testing-strategy-ethereum.md` § Forked Base mainnet harness — the fork-block env-var pattern (reused by indexer integration tests).
 - `docs/technical/security-model.md` — explorer-is-not-source-of-truth boundary.
-- `contracts/gateway/interfaces/IGateway.sol` — `AgentAuthorized`, `AgentRevoked`, `AgentDeposit`, `Paused`, `Unpaused` events (the watched event set in §3.5).
+- `contracts/gateway/interfaces/IGateway.sol` — `AgentAuthorized`, `AgentRevoked`, `AgentDeposit`, `DepositsPaused`, `DepositsUnpaused` events (the watched event set in §3.5).
 - `contracts/RobotMoneyVault.sol` — `Allocated`, `Pulled`, `Rebalanced`, `ExitFeeCharged`, `EmergencyWithdraw*` events.
 - Issue #56 — this scout.
 - User memory: "No fast-feedback optimization in test harness" (cited in §3.1 and §3.2).

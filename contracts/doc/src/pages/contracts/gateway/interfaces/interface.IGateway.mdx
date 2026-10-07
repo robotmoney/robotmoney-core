@@ -5,7 +5,7 @@ description: "Minimal interface stub for the RobotMoney deposit gateway."
 
 # IGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/230eaace165b2eded59d836154b02cd6108a627d/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:** IGateway
 
@@ -18,7 +18,9 @@ exposes state-mutating entrypoints for agents (`deposit` and
 friends), an owner-gated agent lifecycle surface
 (`commitAuthorization`/`revealAuthorization`, `authorizeAgent`,
 `setPolicy`, `transferAgentOwnership`, `revokeAgent`), and a
-protocol-wide pause asymmetry (PAUSER pauses, ADMIN unpauses).
+deposit-pause asymmetry (DEPOSIT_PAUSER pauses deposits, ADMIN
+resumes them). A pause stops new deposits only; withdrawals are never
+frozen (owner decision 2026-10-05, core 1494).
 
 </i>
 
@@ -45,7 +47,7 @@ resulting shares to the agent's configured `shareReceiver`.
 
 <i>
 
-Restricted to `AGENT_ROLE`. Reverts when paused. See MVP §2.2 for
+Restricted to `AGENT_ROLE`. Reverts `DepositsArePaused` while deposits are paused. See MVP §2.2 for
 the full preflight checklist (caps, window, deadline, idempotency).
 
 </i>
@@ -83,8 +85,8 @@ configured `shareReceiver`. When `destination` is the router,
 
 <i>
 
-Restricted to `AGENT_ROLE`. Reverts when paused. Enforces all the
-same caps, deadline, idempotency, and policy checks as `deposit`.
+Restricted to `AGENT_ROLE`. Reverts `DepositsArePaused` while deposits are
+paused. Enforces all the same caps, deadline, idempotency, and policy checks as `deposit`.
 `destination` must appear in the agent's `allowedDestinations` list
 (or the list must be empty, in which case only the pinned vault or
 the pinned router is accepted — no registry lookup is performed).
@@ -131,8 +133,9 @@ funds. The gateway pulls shares from `msg.sender` via
 
 <i>
 
-Restricted to `AGENT_ROLE`. Reverts when paused. Enforces all the
-same deadline, idempotency, and policy checks as `deposit`. The
+Restricted to `AGENT_ROLE`. Works while deposits are paused: a pause
+never blocks a withdrawal (core 1494). Enforces the same deadline,
+idempotency, and policy checks as `deposit`. The
 agent must approve the gateway to spend its vault shares before
 calling this function.
 
@@ -171,8 +174,9 @@ function withdraw(
 
 Redeem vault shares proportionally across all Portfolio Router
 legs. Enforces the same policy checks (valid-until, per-payment
-cap, window cap, allowed-source-vaults, pause, idempotency,
-recipient) as single-vault `withdraw`. Each leg's vault must
+cap, window cap, allowed-source-vaults, idempotency,
+recipient) as single-vault `withdraw`. Works while deposits are
+paused: a pause never blocks a withdrawal (core 1494). Each leg's vault must
 appear in `policy.allowedSourceVaults` (when non-empty). USDC
 is forwarded exclusively to the policy-configured `assetRecipient`.
 
@@ -184,7 +188,7 @@ minted and no intermediate custody persists beyond the call.
 
 <i>
 
-Restricted to `AGENT_ROLE`. Reverts when paused. `totalShares` is
+Restricted to `AGENT_ROLE`. No pause applies. `totalShares` is
 the sum of `sharesPerLeg` and is checked against
 `maxWithdrawPerPayment` and the rolling window cap.
 
@@ -373,27 +377,29 @@ function revokeAgent(address agent) external;
 | ---- | ---- | ----------- |
 | agent | `address` | The agent address whose policy and role are revoked. |
 
-<a id="pause"></a>
+<a id="pausedeposits"></a>
 
-### pause
+### pauseDeposits
 
-Stop-the-world pause. Restricted to `PAUSER_ROLE`.
+Pause new deposits (`deposit`, `depositTo`). Restricted to
+`DEPOSIT_PAUSER_ROLE`. Withdrawals (`withdraw`, `withdrawFromRouter`)
+stay open (owner decision 2026-10-05, core 1494).
 
 ```solidity
-function pause() external;
+function pauseDeposits() external;
 ```
 
-<a id="unpause"></a>
+<a id="unpausedeposits"></a>
 
-### unpause
+### unpauseDeposits
 
-Resume operations. Restricted to `ADMIN_ROLE` (asymmetric).
-`ADMIN_ROLE` is retained as a protocol-wide kill-switch
-counterweight to `pause`; it has no authority over the
+Resume deposits. Restricted to `ADMIN_ROLE` (asymmetric).
+`ADMIN_ROLE` is retained as the counterweight to
+`pauseDeposits`; it has no authority over the
 lifecycle of an agent it does not own.
 
 ```solidity
-function unpause() external;
+function unpauseDeposits() external;
 ```
 
 <a id="seticpolicy-address"></a>
@@ -570,14 +576,14 @@ function router() external view returns (address);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address` |  |
 
-<a id="paused"></a>
+<a id="depositspaused"></a>
 
-### paused
+### depositsPaused
 
-Whether the gateway is currently paused.
+Whether gateway deposits are currently paused. Withdrawals are never paused.
 
 ```solidity
-function paused() external view returns (bool);
+function depositsPaused() external view returns (bool);
 ```
 
 **Returns**
@@ -797,33 +803,33 @@ event AgentRevoked(address indexed agent, address indexed owner);
 | agent | `address` | Agent address whose policy was removed. |
 | owner | `address` | Depositor EOA that revoked (must equal the recorded owner). |
 
-### Paused
+### DepositsPaused
 
-Emitted when the gateway is paused.
+Emitted when gateway deposits are paused. Withdrawals stay open.
 
 ```solidity
-event Paused(address indexed by);
+event DepositsPaused(address indexed by);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| by | `address` | Address that called `pause()`. |
+| by | `address` | Address that called `pauseDeposits()`. |
 
-### Unpaused
+### DepositsUnpaused
 
-Emitted when the gateway is unpaused.
+Emitted when gateway deposits are resumed.
 
 ```solidity
-event Unpaused(address indexed by);
+event DepositsUnpaused(address indexed by);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| by | `address` | Address that called `unpause()`. |
+| by | `address` | Address that called `unpauseDeposits()`. |
 
 ### AgentDeposit
 

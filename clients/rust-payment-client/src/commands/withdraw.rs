@@ -10,12 +10,14 @@
 //!
 //! 1. Argument parsing.
 //! 2. The withdraw preflight: [`Preflight::run_withdraw_gateway`] (chain
-//!    id, code-hash pin, gateway paused, agent policy active + not
+//!    id, code-hash pin, agent policy active + not
 //!    expired, `shares <= maxWithdrawPerPayment`, and
 //!    `effectiveWithdrawWindowGross + shares <= maxWithdrawPerWindow` —
 //!    issue #449's rolling-window cap), then
-//!    [`Preflight::run_withdraw_vault`] for the source vault's paused
-//!    flag, share allowance, and share balance.
+//!    [`Preflight::run_withdraw_vault`] for the source vault's share
+//!    allowance and share balance. A deposit pause on the gateway or the
+//!    vault never refuses a withdrawal (core 1494); the gateway's
+//!    `depositsPaused()` is only reported in `checks.deposits_paused`.
 //! 3. `gateway.withdraw(...)` calldata.
 //! 4. Decoding the `AgentWithdrawal` event log → stable JSON on stdout.
 //!

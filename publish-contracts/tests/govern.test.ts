@@ -78,7 +78,7 @@ describe("step calldata: each step holds only its own calls", () => {
   test("unpause-<B>: one unpause on that basket vault", () => {
     for (const k of ["PROTO", "AGENT", "RWA"] as const) {
       const calls = buildStepCalls(sheet, a, `unpause-${k}`);
-      expect(calls.map((c) => [c.target, dec(c.data).functionName])).toEqual([[A.vaults[k], "unpause"]]);
+      expect(calls.map((c) => [c.target, dec(c.data).functionName])).toEqual([[A.vaults[k], "unpauseDeposits"]]);
     }
   });
   test("a basket the sheet does not list builds no call: pause and eligibility are sheet data", () => {
@@ -203,7 +203,7 @@ describe("one round per step", () => {
   test("a failed read-back stops the run on that row", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
-    tl.s.reads.paused = true;
+    tl.s.reads.depositsPaused = true;
     const manifest = newManifest(ctx, addr(0xa001));
     await expect(runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { warp: warpTo(tl) }))).rejects.toThrow("unpause-PROTO");
     expect((manifest.govern as any)["unpause-PROTO"].scheduled).toBeDefined();

@@ -671,7 +671,7 @@ contract PortfolioRouterTest is Test {
 
         // Pause vaultA.
         vm.prank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
 
         uint256 amount = 1000 * ONE_USDC;
         PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
@@ -708,8 +708,8 @@ contract PortfolioRouterTest is Test {
 
         // Pause both vaults.
         vm.startPrank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
-        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
+        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.DepositsPaused);
         vm.stopPrank();
 
         // Should not revert.
@@ -765,7 +765,7 @@ contract PortfolioRouterTest is Test {
 
         // Pause vaultA in the registry; the vault contract still accepts deposits.
         vm.prank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
 
         uint256 amount = 1000 * ONE_USDC;
 
@@ -827,7 +827,7 @@ contract PortfolioRouterTest is Test {
         // retired (#1173 make-ineligible-before-retire); it stays in the weight
         // vector so the all-legs-unavailable path is still exercised.
         vm.startPrank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
         registry.setRouterEligible(address(vaultB), false);
         registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Retired);
         vm.stopPrank();
@@ -1007,7 +1007,7 @@ contract PortfolioRouterTest is Test {
         // Pause vaultA in the registry. Router eligibility should not change —
         // Paused is transient and does not touch the eligibility flag.
         vm.prank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(router.isRouterEligible(address(vaultA)));
 
         // Retiring a still-eligible vault reverts (#1173 make-ineligible-before-
@@ -1496,7 +1496,7 @@ contract PortfolioRouterTest is Test {
         registry.registerVault(address(rwa), meta);
         // Non-Active status; isRouterEligible stays false (the registry
         // default). This is a plain basket-row placeholder.
-        registry.setVaultStatus(address(rwa), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(rwa), VaultRegistry.VaultStatus.DepositsPaused);
         vm.stopPrank();
     }
 
@@ -1823,20 +1823,17 @@ contract PortfolioRouterTest is Test {
         assertEq(assetsOut[1], sharesToRedeem[1], "Active vaultB redeemable");
     }
 
-    /// @notice redeemFor reverts VaultPausedForRedeem when a named leg is Paused
-    ///         (F-02): only Paused blocks the exit path.
-    function test_redeemFor_revertsWhenLegPaused() public {
+    /// @notice redeemFor still redeems a leg whose registry status is DepositsPaused:
+    ///         no status blocks an exit (F-02, core 1494).
+    function test_redeemFor_redeemsWhenLegDepositsPaused() public {
         uint256 amount = 1000 * ONE_USDC;
         uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
 
         vm.prank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
 
         vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.VaultPausedForRedeem.selector, address(vaultA))
-        );
-        router.redeemFor(
+        uint256[] memory assetsOut = router.redeemFor(
             depositor,
             depositor,
             _redeemVaults(),
@@ -1844,6 +1841,8 @@ contract PortfolioRouterTest is Test {
             new uint256[](2),
             type(uint256).max
         );
+        assertEq(assetsOut[0], sharesToRedeem[0], "DepositsPaused vaultA still redeemable");
+        assertEq(assetsOut[1], sharesToRedeem[1], "Active vaultB redeemable");
     }
 
     /// @notice redeemFor reverts RedeemVaultNotRegistered when a named vault is

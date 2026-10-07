@@ -55,7 +55,7 @@ contract ICGatewayIntegration is Test {
         vault = new MockVault(address(usdc));
 
         // 2. Deploy gateway (admin holds ADMIN_ROLE + DEFAULT_ADMIN_ROLE;
-        //    pauser holds PAUSER_ROLE; no router).
+        //    pauser holds DEPOSIT_PAUSER_ROLE; no router).
         gateway = new RobotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );

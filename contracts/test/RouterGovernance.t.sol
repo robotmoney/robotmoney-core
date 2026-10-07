@@ -360,7 +360,7 @@ contract RouterGovernanceTest is Test {
         // Mark vaultA Paused (transient status; eligibility flag stays set).
         vm.startPrank(registryAdmin);
         registry.setRouterEligible(address(vaultA), true);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
         vm.stopPrank();
         assertFalse(
             router.isRouterEligibleAndActive(address(vaultA)), "Paused vault must be ineligible"

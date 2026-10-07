@@ -45,6 +45,10 @@ contract MockPool {
     uint16 public cardinality;
     uint128 public poolLiquidity; // in-range liquidity returned by liquidity()
     bool public revertObserve;
+    /// @dev Oldest observation age in seconds; 0 means unlimited history.
+    ///      `observe()` reverts "OLD" for any `secondsAgo` beyond it, like a
+    ///      real pool whose ring buffer does not reach that far back.
+    uint32 public maxHistory;
     uint24 public feeTier; // fee() value asserted against swapFee_ by addAsset (ORA-3)
 
     constructor(address token0_, address token1_, uint160 sqrtPriceX96_) {
@@ -95,6 +99,10 @@ contract MockPool {
         revertObserve = value;
     }
 
+    function setMaxHistory(uint32 seconds_) external {
+        maxHistory = seconds_;
+    }
+
     function liquidity() external view returns (uint128) {
         return poolLiquidity;
     }
@@ -109,6 +117,9 @@ contract MockPool {
         returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq)
     {
         if (revertObserve) revert("OLD");
+        for (uint256 i = 0; i < secondsAgos.length; i++) {
+            if (maxHistory != 0 && secondsAgos[i] > maxHistory) revert("OLD");
+        }
         tickCumulatives = new int56[](secondsAgos.length);
         secondsPerLiq = new uint160[](secondsAgos.length);
         // Cumulative grows linearly: cum(now) > cum(past). Use uint256 to do
@@ -257,7 +268,10 @@ contract BasketVaultTest is Test {
         assertEq(basketToken.balanceOf(address(vault)), 0, "basket asset unwound");
         assertEq(usdc.balanceOf(address(vault)), amountOut, "guarded USDC received");
         assertTrue(vault.depositsPaused(), "emergency unwind pauses deposits");
-        assertFalse(vault.paused(), "emergency unwind keeps redemption available");
+        assertTrue(
+            vault.depositsPaused(),
+            "unwind halts deposits only; emergency unwind keeps redemption available"
+        );
     }
 
     function test_emergencyUnwindWithOverride_emitsHighRiskEvent() public {
@@ -376,9 +390,9 @@ contract BasketVaultTest is Test {
         assertTrue(vault.hasRole(adminRole, admin2), "second admin retains role");
     }
 
-    /// @notice LIFE-3 / NC-3 / F-06: pause() freezes deposits but NOT withdrawals;
+    /// @notice LIFE-3 / NC-3 / F-06: pauseDeposits() stops deposits only, never withdrawals;
     ///         a holder can still redeem while the vault is paused.
-    function test_pause_doesNotFreezeWithdrawals() public {
+    function test_pauseDeposits_doesNotFreezeWithdrawals() public {
         // Seed a position via a direct deposit on the default V3 path. The deposit
         // swaps USDC→basketToken, so the router yields basketToken.
         usdc.mint(stranger, 1_000 * ONE_USDC);
@@ -392,8 +406,8 @@ contract BasketVaultTest is Test {
 
         // EMERGENCY pauses (deposits-only freeze).
         vm.prank(emergencyResponder);
-        vault.pause();
-        assertTrue(vault.paused(), "vault paused");
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused(), "vault paused");
 
         // Redeem must still succeed under pause (withdrawals are never frozen). The
         // redeem swaps basketToken→USDC, so the router now yields USDC. Output must
@@ -719,12 +733,12 @@ contract BasketVaultTest is Test {
 
     function test_maxDeposit_zeroWhenPaused() public {
         vm.prank(emergencyResponder);
-        vault.pause();
+        vault.pauseDeposits();
         assertEq(vault.maxDeposit(stranger), 0, "maxDeposit 0 while paused");
         assertEq(vault.maxMint(stranger), 0, "maxMint 0 while paused");
 
         vm.prank(admin);
-        vault.unpause();
+        vault.unpauseDeposits();
         assertGt(vault.maxDeposit(stranger), 0, "maxDeposit restored after unpause");
     }
 
@@ -972,8 +986,8 @@ contract BasketVaultTest is Test {
 
     function test_pauseAndShutdownEmergencyControlsRemainFunctional() public {
         vm.prank(emergencyResponder);
-        vault.pause();
-        assertTrue(vault.paused(), "pause remains available");
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused(), "pause remains available");
 
         vm.prank(emergencyResponder);
         vault.shutdownVault();
@@ -1043,6 +1057,37 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setTwapWindow(address(basketToken), 86_400);
         assertEq(vault.effectiveTwapWindow(address(basketToken)), 86_400, "max window set");
+    }
+
+    /// @notice Governance can never set a TWAP window longer than the pool's
+    ///         observation history: such a window would make every NAV read
+    ///         revert "OLD" and block redeem. The setter rejects it, the old
+    ///         window stays in force, and a holder still redeems (core 1494).
+    function test_setTwapWindow_rejectsWindowBeyondPoolHistory_redeemStillWorks() public {
+        uint256 shares = _depositAt1to1(stranger, 1_000 * ONE_USDC);
+        // The pool's oldest observation is 1 hour old.
+        pool.setMaxHistory(3_600);
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientObservationHistory.selector,
+                address(pool),
+                uint32(7_200)
+            )
+        );
+        vault.setTwapWindow(address(basketToken), 7_200);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 1_800, "default window unchanged");
+
+        // A window the history covers is still accepted.
+        vm.prank(admin);
+        vault.setTwapWindow(address(basketToken), 3_600);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 3_600, "covered window set");
+
+        usdc.mint(address(router), 995 * ONE_USDC);
+        router.setAmountOut(995 * ONE_USDC);
+        vm.prank(stranger);
+        assertEq(vault.redeem(shares, stranger, stranger), 995 * ONE_USDC, "redeem still works");
     }
 
     function test_effectiveTwapWindow_fallsBackToDefault() public view {
@@ -1163,7 +1208,10 @@ contract BasketVaultTest is Test {
         assertEq(basketToken.balanceOf(address(vault)), 0, "all tokens swapped");
         assertEq(usdc.balanceOf(address(vault)), routerOut, "USDC received");
         assertTrue(vault.depositsPaused(), "deposits paused after unwind");
-        assertFalse(vault.paused(), "redemption remains available after unwind");
+        assertTrue(
+            vault.depositsPaused(),
+            "unwind halts deposits only; redemption remains available after unwind"
+        );
     }
 
     /// @notice Override execution remains available when the TWAP oracle is unavailable.
@@ -1278,16 +1326,16 @@ contract BasketVaultTest is Test {
 
         // Pre-pause first — the common incident sequence.
         vm.prank(emergencyResponder);
-        vault.pause();
-        assertTrue(vault.paused(), "pre-condition: vault is paused");
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused(), "pre-condition: vault is paused");
 
-        // emergencyUnwind must not revert with EnforcedPause.
+        // emergencyUnwind must not revert when deposits are already paused.
         vm.prank(emergencyResponder);
         vault.emergencyUnwind();
 
         assertEq(basketToken.balanceOf(address(vault)), 0, "basket asset fully unwound");
         assertEq(usdc.balanceOf(address(vault)), amountOut, "USDC received after pre-paused unwind");
-        assertTrue(vault.paused(), "vault remains paused after unwind");
+        assertTrue(vault.depositsPaused(), "vault remains paused after unwind");
     }
 
     /// @notice emergencyUnwindWithOverride succeeds when vault is already paused.
@@ -1304,8 +1352,8 @@ contract BasketVaultTest is Test {
 
         // Pre-pause first.
         vm.prank(emergencyResponder);
-        vault.pause();
-        assertTrue(vault.paused(), "pre-condition: vault is paused");
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused(), "pre-condition: vault is paused");
 
         address[] memory tokens = new address[](1);
         tokens[0] = address(basketToken);
@@ -1314,7 +1362,7 @@ contract BasketVaultTest is Test {
         vault.emergencyUnwindWithOverride(tokens);
 
         assertEq(basketToken.balanceOf(address(vault)), 0, "basket asset unwound with override");
-        assertTrue(vault.paused(), "vault remains paused after override unwind");
+        assertTrue(vault.depositsPaused(), "vault remains paused after override unwind");
     }
 
     /// @notice emergencyUnwind on an unpaused vault pauses deposits only.
@@ -1329,13 +1377,15 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setEmergencyUnwindGuard(address(basketToken), 400 * ONE_USDC, false, 0);
 
-        assertFalse(vault.paused(), "pre-condition: vault is not paused");
+        assertFalse(vault.depositsPaused(), "pre-condition: vault is not paused");
 
         vm.prank(emergencyResponder);
         vault.emergencyUnwind();
 
         assertTrue(vault.depositsPaused(), "deposits are paused after emergencyUnwind");
-        assertFalse(vault.paused(), "redemption remains available");
+        assertTrue(
+            vault.depositsPaused(), "unwind halts deposits only; redemption remains available"
+        );
         assertEq(basketToken.balanceOf(address(vault)), 0, "assets unwound");
     }
 
@@ -1351,7 +1401,7 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setEmergencyUnwindGuard(address(basketToken), 400 * ONE_USDC, true, 500);
 
-        assertFalse(vault.paused(), "pre-condition: vault is not paused");
+        assertFalse(vault.depositsPaused(), "pre-condition: vault is not paused");
 
         address[] memory tokens = new address[](1);
         tokens[0] = address(basketToken);
@@ -1360,7 +1410,9 @@ contract BasketVaultTest is Test {
         vault.emergencyUnwindWithOverride(tokens);
 
         assertTrue(vault.depositsPaused(), "deposits are paused after override unwind");
-        assertFalse(vault.paused(), "redemption remains available");
+        assertTrue(
+            vault.depositsPaused(), "unwind halts deposits only; redemption remains available"
+        );
         assertEq(basketToken.balanceOf(address(vault)), 0, "assets unwound with override");
     }
 
@@ -1384,7 +1436,10 @@ contract BasketVaultTest is Test {
         vm.prank(emergencyResponder);
         vault.emergencyUnwind();
         assertTrue(vault.depositsPaused(), "emergencyUnwind pauses deposits");
-        assertFalse(vault.paused(), "emergencyUnwind keeps redemption available");
+        assertTrue(
+            vault.depositsPaused(),
+            "unwind halts deposits only; emergencyUnwind keeps redemption available"
+        );
     }
 
     // ─── Pool cardinality check on addAsset (issue #494) ──────────────
@@ -2311,7 +2366,7 @@ contract BasketVaultTest is Test {
 
     /// @notice issue #1284: retire() sets the dedicated `retired` flag, NOT
     ///         `depositsPaused` — the two are independent so ADMIN_ROLE's
-    ///         `unpause()` (which unconditionally clears `depositsPaused`) can
+    ///         `unpauseDeposits()` (which unconditionally clears `depositsPaused`) can
     ///         never re-open deposits on a registry-retired vault. Matches
     ///         RobotMoneyVault's / Vault's separate-flag model; superseded the
     ///         old aliasing behavior this test used to pin.
@@ -2346,11 +2401,11 @@ contract BasketVaultTest is Test {
         assertFalse(vault.retired(), "unretire() must clear retired");
     }
 
-    /// @notice issue #1284 (F-06 regression): retire() -> emergency pause() ->
-    ///         admin unpause() must leave deposits closed (the registry still
+    /// @notice issue #1284 (F-06 regression): retire() -> emergency pauseDeposits() ->
+    ///         admin unpauseDeposits() must leave deposits closed (the registry still
     ///         records the vault Retired) while ERC-4626 redeem stays open
     ///         (ADR-0009). Before this fix, BasketVault aliased retirement
-    ///         onto `depositsPaused`, so `unpause()` (which unconditionally
+    ///         onto `depositsPaused`, so `unpauseDeposits()` (which unconditionally
     ///         calls `_setDepositsPaused(false)`) silently re-opened deposits
     ///         on a vault the registry still recorded as Retired.
     function test_retirePauseUnpause_leavesDepositsClosedButRedeemOpen() public {
@@ -2374,12 +2429,12 @@ contract BasketVaultTest is Test {
         assertTrue(vault.retired(), "vault must be retired");
 
         vm.prank(emergencyResponder);
-        vault.pause();
+        vault.pauseDeposits();
 
         vm.prank(admin);
-        vault.unpause();
+        vault.unpauseDeposits();
 
-        assertTrue(vault.retired(), "unpause() must not clear retirement (issue #1284)");
+        assertTrue(vault.retired(), "unpauseDeposits() must not clear retirement (issue #1284)");
         assertEq(vault.maxDeposit(stranger), 0, "deposits must stay closed on a retired vault");
 
         vm.prank(stranger);
@@ -2958,7 +3013,10 @@ contract BasketVaultAerodromeTest is Test {
         assertEq(aeroToken.balanceOf(address(vault)), 0, "aeroToken unwound via Aerodrome");
         assertEq(usdc.balanceOf(address(vault)), amountOut, "USDC received via Aerodrome adapter");
         assertTrue(vault.depositsPaused(), "deposits paused after Aerodrome emergency unwind");
-        assertFalse(vault.paused(), "Aerodrome unwind keeps redemption available");
+        assertTrue(
+            vault.depositsPaused(),
+            "unwind halts deposits only; Aerodrome unwind keeps redemption available"
+        );
     }
 
     // ─── AerodromeSwapAdapter unit tests ──────────────────────────────────

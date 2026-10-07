@@ -68,7 +68,7 @@ const fourVaultFixture: VaultsResponse = {
       address: "0x4444444444444444444444444444444444444444",
       name: "Robot Money RWA / Thematic",
       risk_label: "SPECULATIVE",
-      status: 1, // non-Active (Paused)
+      status: 1, // non-Active (DepositsPaused)
       deposit_cap: "0",
       total_assets: null,
       exit_fee_bps: null,
@@ -103,7 +103,7 @@ describe("VaultList — table rendering", () => {
     expect(nameEls[0].textContent).toBe("Robot Money USDC");
     expect(riskEls[0].textContent).toBe("STABLE_YIELD");
     expect(statusEls[0].textContent).toBe("Active");
-    expect(statusEls[3].textContent).toBe("Paused");
+    expect(statusEls[3].textContent).toBe("Deposits paused");
   });
 
   it("no Assets toggle button is present (VaultListRowAssets retired in #941)", async () => {

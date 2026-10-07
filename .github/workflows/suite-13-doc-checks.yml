@@ -143,6 +143,19 @@ jobs:
       - name: shutdownVault recoverability docs invariant (issue #923)
         run: python3 .github/scripts/check_shutdown_restore_docs.py
 
+      - name: Self-test pause-semantics guard (core 1494, issue #1518)
+        # Confirms every old-name rule and the wording rule fire, and that v1
+        # lines, dated-history notes and the allow marker are honoured, BEFORE
+        # the real check runs.
+        run: python3 .github/scripts/check_pause_semantics.py --self-test
+
+      - name: Withdrawals are never frozen — pause names and wording (core 1494, issue #1518)
+        # A pause stops deposits only. Fails on the pre-1494 pause names (the
+        # script's docstring lists them) or on wording that says a withdrawal
+        # can be paused, anywhere in the tree except v1 lines and dated history
+        # that carries a 2026-10-05 note.
+        run: python3 .github/scripts/check_pause_semantics.py
+
       - name: RmpcError §7.2 variants documented in rmpc-read-output-contract.md (issue #806)
         run: python3 .github/scripts/check_rmpc_error_variants_doc.py
 

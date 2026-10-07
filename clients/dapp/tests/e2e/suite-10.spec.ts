@@ -130,7 +130,7 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
 
     // Every vault row must expose a TVL cell and a status cell.
     // TVL must be a non-blank string (may be "—" when not yet snapshotted).
-    // Status must be a non-blank string (Active / Paused / Retired).
+    // Status must be a non-blank string (Active / Deposits paused / Retired).
     // NOTE: per-vault depositor count is not surfaced by the VaultList component —
     // aggregate depositor count is available at /v1/stats (protocol-stats tests above).
     const tvlCells = page.getByTestId("vault-list-row-tvl");
@@ -165,13 +165,13 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
           if (rows.length < registeredVaults.length) return false;
           for (const row of rows) {
             const statusText = (await row.textContent())?.trim();
-            if (!["Active", "Paused", "Retired"].includes(statusText ?? "")) return false;
+            if (!["Active", "Deposits paused", "Retired"].includes(statusText ?? "")) return false;
           }
           return true;
         },
         {
           message:
-            "each registered vault must have a status cell reading Active / Paused / Retired",
+            "each registered vault must have a status cell reading Active / Deposits paused / Retired",
           timeout: 120_000,
           intervals: [5_000],
         },
@@ -201,12 +201,12 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
           if (rows.length === 0) return false;
           for (const row of rows) {
             const text = (await row.textContent())?.trim();
-            if (!["Active", "Paused", "Retired"].includes(text ?? "")) return false;
+            if (!["Active", "Deposits paused", "Retired"].includes(text ?? "")) return false;
           }
           return true;
         },
         {
-          message: "every vault row status must read Active / Paused / Retired",
+          message: "every vault row status must read Active / Deposits paused / Retired",
           timeout: 120_000,
           intervals: [5_000],
         },

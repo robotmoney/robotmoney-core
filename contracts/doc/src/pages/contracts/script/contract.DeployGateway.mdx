@@ -5,7 +5,7 @@ description: "Stage 5 of the core deploy (libs, vault, registry, router, gateway
 
 # DeployGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployGateway.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/230eaace165b2eded59d836154b02cd6108a627d/contracts/script/DeployGateway.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -25,7 +25,7 @@ their own stage AFTER this one (`DeployInvestmentCommitteePolicy`).
 Required env vars (all required on every chain, no defaults):
 EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet
 ADMIN_ADDRESS         — receives DEFAULT_ADMIN_ROLE + ADMIN_ROLE
-PAUSER_ADDRESS        — receives PAUSER_ROLE (must differ from ADMIN)
+PAUSER_ADDRESS        — receives DEPOSIT_PAUSER_ROLE (must differ from ADMIN)
 AGENT_ADDRESS         — receives AGENT_ROLE  (must differ from both)
 SHARE_RECEIVER_ADDRESS — recipient of minted rmUSDC shares
 VAULT_ADDRESS         — the rmUSDC RobotMoneyVault

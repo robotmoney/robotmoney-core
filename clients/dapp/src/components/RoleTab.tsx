@@ -2,7 +2,7 @@
 // Canonical: docs/technical/dapp-credential-decisions.md §3.2 (2026-10-06 amendment)
 
 /**
- * RoleTab — ADMIN_ROLE / PAUSER_ROLE grant + revoke preview.
+ * RoleTab — ADMIN_ROLE / DEPOSIT_PAUSER_ROLE grant + revoke preview.
  *
  * Both roles are administered by DEFAULT_ADMIN_ROLE. After the timelock
  * handover only the TimelockController holds it, on every chain, so a
@@ -28,7 +28,7 @@ type Props = Readonly<{
 
 const SLUG: Record<RoleName, string> = {
   ADMIN_ROLE: "admin",
-  PAUSER_ROLE: "pauser",
+  DEPOSIT_PAUSER_ROLE: "pauser",
 };
 
 export function RoleTab(props: Props) {
@@ -48,7 +48,7 @@ export function RoleTab(props: Props) {
     ? { kind: "revokeRole", role: props.role, account: account as Address }
     : null;
 
-  // DEFAULT_ADMIN_ROLE is the admin role of both ADMIN_ROLE and PAUSER_ROLE
+  // DEFAULT_ADMIN_ROLE is the admin role of both ADMIN_ROLE and DEPOSIT_PAUSER_ROLE
   // on the gateway. Only a settled `false` shows the refusal, so a pending
   // read never flashes it.
   const { data: hasRoleAdmin } = useReadContract({

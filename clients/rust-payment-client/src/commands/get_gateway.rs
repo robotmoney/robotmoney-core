@@ -12,7 +12,8 @@
 //!   TOML is also reported so callers can diff observed-vs-pinned without
 //!   a second tool.
 //! - `usdc()` and `vault()` → addresses the gateway will route deposits to.
-//! - `paused()` → operator-pause flag.
+//! - `depositsPaused()` → deposit-pause flag. It stops new deposits only;
+//!   withdrawals stay open while it is set (core 1494).
 //! - `eth_chainId` → the §9 `chain_id` envelope field.
 //!
 //! Output is the §9 envelope from `crate::read_output`. Per-field failures
@@ -63,8 +64,9 @@ pub struct GatewayData {
     pub usdc: String,
     /// `gateway.vault()` lowercase 0x-hex.
     pub vault: String,
-    /// `gateway.paused()` boolean.
-    pub paused: bool,
+    /// `gateway.depositsPaused()` boolean. True stops new deposits only;
+    /// withdrawals stay open (core 1494).
+    pub deposits_paused: bool,
 }
 
 /// Entry point invoked from `main.rs`. Returns the desired process exit code.
@@ -181,10 +183,10 @@ async fn read_gateway(
         Err(e) => b.record_err("vault", e),
     }
 
-    // paused()
-    match call_view_paused(rpc, gateway_addr, &block_tag).await {
-        Ok(p) => b.data_mut().paused = p,
-        Err(e) => b.record_err("paused", e),
+    // depositsPaused()
+    match call_view_deposits_paused(rpc, gateway_addr, &block_tag).await {
+        Ok(p) => b.data_mut().deposits_paused = p,
+        Err(e) => b.record_err("deposits_paused", e),
     }
 
     Ok(b.finish())
@@ -235,12 +237,12 @@ impl ReturnAddress for RobotMoneyGateway::vaultReturn {
     }
 }
 
-async fn call_view_paused(
+async fn call_view_deposits_paused(
     rpc: &FailoverRpcClient,
     gateway: Address,
     block_tag: &str,
 ) -> std::result::Result<bool, String> {
-    let data = RobotMoneyGateway::pausedCall {}.abi_encode();
+    let data = RobotMoneyGateway::depositsPausedCall {}.abi_encode();
     let out = rpc
         .eth_call(
             &CallRequest {
@@ -252,7 +254,7 @@ async fn call_view_paused(
         )
         .await
         .map_err(|e| format!("eth_call failed: {e}"))?;
-    let decoded = RobotMoneyGateway::pausedCall::abi_decode_returns(&out, true)
+    let decoded = RobotMoneyGateway::depositsPausedCall::abi_decode_returns(&out, true)
         .map_err(|e| format!("abi decode: {e}"))?;
     Ok(decoded._0)
 }

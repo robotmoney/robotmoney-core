@@ -137,7 +137,7 @@ Three boundary properties are load-bearing and are enforced architecturally:
 | --- | --- | --- | --- |
 | Chain | Base mainnet, chain id 8453; forked Base for integration tests | Current verified deployments and test strategy are Base-oriented. | `docs/technical/smart-contracts.md` §2; `docs/development/testing-strategy-ethereum.md` § Forked Base mainnet harness |
 | Smart contracts | Solidity 0.8.24, EVM Cancun, Foundry | Existing vault, gateway, adapter, and tests use this toolchain. | `foundry.toml`; `docs/technical/smart-contracts.md` §1 |
-| Contract libraries | OpenZeppelin v5 ERC-4626, ERC-20, AccessControl, Pausable, ReentrancyGuard | Standardizes vault accounting, role separation, pause behavior, and reentrancy protection. | `docs/technical/smart-contracts.md` §3.1 |
+| Contract libraries | OpenZeppelin v5 ERC-4626, ERC-20, AccessControl, ReentrancyGuard | Standardizes vault accounting, role separation and reentrancy protection. The deposit pause is each contract's own `depositsPaused` flag, not OZ Pausable (core 1494). | `docs/technical/smart-contracts.md` §3.1 |
 | Primary asset | USDC, 6 decimals | Product accepts USDC as the treasury input asset. | `docs/prd.md` §1; `docs/technical/smart-contracts.md` §1 |
 | Vault standard | ERC-4626 for individual vaults | Standard deposit, withdraw, redeem, preview, conversion, and `totalAssets()` surface. | `docs/technical/adapter-architecture.md` §1 |
 | Stable-yield venues | Moonwell Flagship USDC, Aave V3, Compound V3 through vault adapters | Current deployed stable-yield vault normalizes these venues behind adapters. | `docs/technical/adapter-architecture.md` §4; `docs/technical/smart-contracts.md` §4 |
@@ -165,14 +165,14 @@ Three boundary properties are load-bearing and are enforced architecturally:
 
 A Robot Money vault is an individual strategy container with a mandate,
 accepted asset, receipt token, caps, fees, risk label, and status. Each
-vault is independently observable and independently pausable. Retiring a
+vault is independently observable and its deposits are independently pausable. Retiring a
 vault stops new deposits while preserving redemption rights — the full
 deprecation/retirement lifecycle (registry status, vault shutdown/restore,
 and the authority tier that gates each transition) is canonical in §4.7.
 
 The current production-deployed source-backed vault is
 `RobotMoneyVault`, an ERC-4626 USDC vault with rmUSDC shares,
-OpenZeppelin access control, pause support, reentrancy protection,
+OpenZeppelin access control, a deposit pause, reentrancy protection,
 caps, an exit fee ceiling, adapter routing, rebalance controls, and
 emergency shutdown. It is a direct non-proxy deployment on Base.
 
@@ -216,8 +216,10 @@ Characteristics:
   a permissionless smart-contract vault cannot satisfy the KYC requirement.
 - **Issuer freeze-control risk.** The deSPXA issuer may freeze token
   transfers, blocking swaps and therefore deposits and withdrawals. Existing
-  holders keep their shares. Admin should pause the vault when a freeze is
-  detected. See `docs/adr/ADR-0006-despxa-rwa-vault-design.md` §4.
+  holders keep their shares. The emergency key should call `pauseDeposits()`
+  when a freeze is detected, so new deposits get a user-facing
+  `DepositsArePaused()` instead of an opaque ERC-20 revert. The pause never
+  blocks `redeem`. The freeze itself is what makes a withdrawal revert. See `docs/adr/ADR-0006-despxa-rwa-vault-design.md` §4.
 - **Router eligibility.** Eligibility follows the same
   `VaultRegistry.isRouterEligible` flag as other basket vaults, flipped by
   ADMIN_ROLE once pool cardinality and the rebalancing model are certified.
@@ -262,7 +264,7 @@ Router requirements:
 The source tree contains `contracts/PortfolioRouter.sol`, a dedicated
 router contract that backs the requirements above. It integrates with
 `VaultRegistry` for eligibility — both lifecycle status
-(Active/Paused/Retired) and the registry-backed router-eligibility
+(Active/DepositsPaused/Retired) and the registry-backed router-eligibility
 flag (`VaultRegistry.isRouterEligible(vault)`) that expresses
 production-readiness as state set by ADMIN_ROLE. The router applies
 per-vault withdrawal caps over a fixed window and depends on
@@ -314,7 +316,7 @@ over its cap, and the whole deposit reverts.
 **Known gap: a vault's own deposit pause is not read.** `_isDepositable`
 checks registry status and router eligibility only. It does not read the
 vault's own deposit pause: `BasketVault.depositsPaused`, the `EMERGENCY_ROLE`
-`pause()`, `shutdown`, or `maxDeposit(...) == 0` (`RobotMoneyVault` has the
+`pauseDeposits()`, `shutdown`, or `maxDeposit(...) == 0` (`RobotMoneyVault` has the
 same kind of flags). A registry-Active, router-eligible vault with deposits
 paused therefore stays in the available set. Its `vault.deposit` reverts
 inside `_executeLeg`, and the whole routed deposit reverts
@@ -460,16 +462,16 @@ migration — see
 
 **Lifecycle states and transitions.** The lifecycle runs
 `Active → Retired (draining) → empty → deregistered`, with an
-independent emergency `shut-down` overlay and a `Paused` halt. The
+independent emergency `shut-down` overlay and a `DepositsPaused` halt. The
 states map to real code: the registry lifecycle states are the
-`VaultRegistry.VaultStatus` enum values (`Active`, `Paused`, `Retired`,
+`VaultRegistry.VaultStatus` enum values (`Active`, `DepositsPaused`, `Retired`,
 in `contracts/VaultRegistry.sol`); the `shut-down` overlay is the
 `RobotMoneyVault.shutdown` flag.
 
 | State / transition | Layer | Mechanism (at HEAD) | Trigger role | Effect |
 |---|---|---|---|---|
 | **Active** | registry | `VaultStatus.Active` | — | Router routes new deposits (if also router-eligible); direct deposits open. |
-| **Paused** | registry / vault | `VaultStatus.Paused`; vault `pause()` | `setVaultStatus`: governance · `pause()`: emergency (hot key) | Reversible halt. Router stops routing; vault `pause()` halts deposits and withdrawals. `unpause()` is governance. |
+| **DepositsPaused** | registry / vault | `VaultStatus.DepositsPaused`; vault `pauseDeposits()` | `setVaultStatus`: governance · `pauseDeposits()`: emergency (hot key) | Reversible deposit halt. The router stops routing new deposits. Vault `pauseDeposits()` halts new deposits only (`DepositsArePaused()`). Withdrawals are never frozen, by anyone: no flag, role or function can block a redeem. The router still redeems from a vault in every status (core 1494). `unpauseDeposits()` is governance. |
 | **Active → Retired** (unified) | registry + vault | `VaultRegistry.retire(vault)` | governance (`ADMIN_ROLE` = timelock) | Atomic in one call: sets registry status `Retired` **and** halts **direct** vault deposits (`IRetirableVault.retire()`, sets the vault `retired` flag → `VaultRetired()`). Withdraw-only thereafter; existing depositors keep unconditional `redeem`. Emits `VaultStatusChanged` + `Retired`. The two enforcement layers can no longer drift. **Precondition (#1173):** reverts `RetireWhileRouterEligible` if the vault is still router-eligible — drop it from `routerEligibleCount` first (see the retire strand invariant below). |
 | **shut-down** (overlay) | vault | `shutdownVault()` (sets `shutdown = true`, zeroes `tvlCap`) | emergency (`EMERGENCY_ROLE`, hot key) | Hard-stops **direct** vault deposits (`VaultShutdown()`); withdrawals continue. Vault-level only — makes no lifecycle/registry decision. Emits `Shutdown`. |
 | **shut-down → reopened** | vault | `restoreVault(newTvlCap)` | governance (`ADMIN_ROLE`) | Clears `shutdown`, sets a fresh `tvlCap`, re-opens deposits. Emits `VaultRestored`. Deliberately asymmetric with the fast emergency shutdown. |
@@ -478,11 +480,11 @@ in `contracts/VaultRegistry.sol`); the `shut-down` overlay is the
 | **empty → deregistered** | registry | eventual removal from the registry vault set | governance (`ADMIN_ROLE`) | Conceptual terminal state once TVL has fully drained. No deregistration function exists at HEAD; this is the planned end of the lifecycle, not a shipped mechanism. |
 
 **How the two layers relate.** Two enforcement layers exist: the
-registry `Retired`/`Paused` status (stops the **router** from sending new
+registry `Retired`/`DepositsPaused` status (stops the **router** from sending new
 deposits) and the vault deposit-halt (stops **direct** deposits on the
 vault contract itself). `setVaultStatus(vault, …)` now drives **both**
 layers in one call (LIFE-1, #968): any non-`Active` status (`Retired` or
-`Paused`) calls the vault's `IRetirableVault.retire()` deposit-halt leg
+`DepositsPaused`) calls the vault's `IRetirableVault.retire()` deposit-halt leg
 and `Active` calls `unretire()`, so the registry status and the vault flag
 can never drift on this path either — closing the former back-door where
 the bare `setVaultStatus(vault, Retired)` flipped only the router layer.
@@ -529,8 +531,9 @@ in-contract rather than by convention: `VaultRegistry.retire(vault)` **and**
 while `isRouterEligible(vault)` is true. Governance must first drop the vault
 from `routerEligibleCount` — `setRouterEligible(vault, false)`, or atomically
 with a re-set default vector via `migrateEligibility(vault, false, …)` — then
-retire. (`Paused` is transient and reversible via `unpause`, so it is not
-gated; only the terminal `Retired` transition is.)
+retire. (`DepositsPaused` is transient and reversible with
+`setVaultStatus(vault, Active)`, so it is not gated; only the terminal
+`Retired` transition is.)
 
 **Authority tier.** Transitions follow the graduated-authority model
 (see §4.5 and the authority tier below): permissionless actions need no
@@ -543,8 +546,8 @@ depositor principal is the depositor's own signed action alone.
 | Action | Tier |
 |---|---|
 | sweep foreign token, trigger harvest | permissionless |
-| `pause`, `shutdownVault`, `emergencyWithdraw` (→ vault only), `forceRemoveAdapter` | emergency (hot key, `EMERGENCY_ROLE`) |
-| `unpause`, `restoreVault`, `retire`, `reactivate`, `setFeeRecipient`, adapter add/allowlist/caps, quarantine set + recover | governance (multisig + timelock) |
+| `pauseDeposits`, `shutdownVault`, `emergencyWithdraw` (→ vault only), `forceRemoveAdapter` | emergency (hot key, `EMERGENCY_ROLE`) |
+| `unpauseDeposits`, `restoreVault`, `retire`, `reactivate`, `setFeeRecipient`, adapter add/allowlist/caps, quarantine set + recover | governance (multisig + timelock) |
 | `redeem` / move depositor principal | depositor only |
 
 **No assisted migration.** At no point does the protocol move a
@@ -827,7 +830,7 @@ if a future ADR adds that path.
 
 - `get-vaults` — vault registry: all registered vaults, their name,
   underlying asset, registration timestamp, status
-  (active/paused/retired), and TVL. Risk label, mandate, caps, exit fee
+  (active/deposits_paused/retired), and TVL. Risk label, mandate, caps, exit fee
   and receipt token address are **not** registry state — the shipped
   `VaultRegistry.sol` (#329) stores only `VaultMetadata { name, asset,
   registeredAt }` plus a status, and the read shape that promised the rest
@@ -963,7 +966,7 @@ agent withdrawals across single-vault and Portfolio Router paths:
 - the agent cannot add vaults, change mandates, alter router weights, or
   bypass disabled vaults;
 - the gateway enforces amount, expiry, window usage, destination,
-  idempotency, pause, receiver, and recipient constraints on-chain;
+  idempotency, deposit pause, receiver, and recipient constraints on-chain;
 - the client must read registry, vault status, router weights, policy,
   allowance, balance, and projected cap usage before signing.
 
@@ -977,8 +980,9 @@ spender. The depositor or configured receipt owner grants the gateway the
 needed vault-receipt allowance, or uses an owner contract that exposes
 the same policy boundary. The agent submits a gateway withdrawal request;
 the gateway verifies policy, cap usage, allowed source vault/router path,
-receipt allowance, receipt balance, previewed assets out, pause state,
-and recipient, then calls the vault or Portfolio Router redemption path.
+receipt allowance, receipt balance, previewed assets out, and recipient,
+then calls the vault or Portfolio Router redemption path. A gateway or vault
+pause stops new deposits only, so a withdrawal never checks it (core 1494).
 Withdrawn USDC is sent only to the policy-configured asset recipient.
 The agent cannot redirect proceeds to itself.
 
@@ -1001,7 +1005,7 @@ explorer API plus live chain reads for vault state. It contains:
 
 - Vault registry view: all registered vaults listed with name, risk
   label, TVL, current APY estimate, exit fee, deposit cap headroom, and
-  status (active/paused/retired). The list is derived from the on-chain
+  status (active, deposits paused, retired). The list is derived from the on-chain
   vault registry so new vaults appear automatically.
 - Vault detail view: single-vault breakdown — adapter allocations and
   their individual TVL, rebalance state, fee schedule, caps, receipt
@@ -1240,16 +1244,19 @@ operations.
 On a threshold breach the watchdog follows `action.mode`: `alert`, `pause`,
 or `pause_and_alert`. The alert path dispatches PagerDuty-compatible
 structured JSON through `src/alert.rs` to `action.webhook_url`. The pause
-path constructs and submits a `gateway.pause()` EIP-155 transaction through
+path constructs and submits a `gateway.pauseDeposits()` EIP-155 transaction through
 `src/pause.rs`, using `action.gateway_rpc_url`,
-`action.gateway_address`, and the funded PAUSER_ROLE key from either
+`action.gateway_address`, and the funded `DEPOSIT_PAUSER_ROLE` key from either
 `WATCHDOG_PAUSER_KEY_HEX` (preferred in deployments; it overrides the file)
 or the `action.pauser_private_key_hex` literal (local dev). Whichever source
 supplies it, the daemon consumes the raw key exactly once at startup, derives
 the signing key, and drops the hex — the poll loop signs from that derived
-state and no code path re-reads a raw pauser secret from the config. The
-pauser is distinct from `ADMIN_ROLE`:
-it can pause but cannot unpause, matching the guardian/quorum separation in
+state and no code path re-reads a raw pauser secret from the config. A gateway
+deposit pause stops new gateway deposits (`deposit`, `depositTo`) only.
+Withdrawals are never frozen, by anyone (owner decision 2026-10-05, core
+1494). On a burn-rate breach the watchdog pause therefore stops new inflow,
+not exits. The pauser is distinct from `ADMIN_ROLE`:
+it can call `pauseDeposits()` but not `unpauseDeposits()`, matching the guardian/quorum separation in
 security-model.md §9. Unpause still requires `ADMIN_ROLE` through the
 timelock.
 
@@ -1346,7 +1353,7 @@ custody an outer share position under the current product definition.
 ### 6.3 Role Separation
 
 Protocol authority is limited to contract upgrade where applicable,
-configuration of protocol-level controls, pause, and permanent shutdown.
+configuration of protocol-level controls, deposit pause, and permanent shutdown.
 Depositor-owned agent policies are controlled by the depositor. Agent
 keys must not hold admin or pause authority. The deploy authorizes no
 agent; each depositor authorizes its own. Every agent listed in
@@ -1568,7 +1575,7 @@ this architecture:
 | --- | --- | --- | --- |
 | Base | Production chain | Current chain for verified deployments and fork tests. | `docs/technical/smart-contracts.md` §2 |
 | Circle USDC | Asset | Current accepted treasury asset. | `docs/prd.md` §1 |
-| OpenZeppelin | Contract library | Used for ERC-4626, AccessControl, Pausable, and ReentrancyGuard. | `docs/technical/smart-contracts.md` §3.1 |
+| OpenZeppelin | Contract library | Used for ERC-4626, AccessControl, and ReentrancyGuard. | `docs/technical/smart-contracts.md` §3.1 |
 | Moonwell Flagship USDC | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Aave V3 | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Compound V3 Comet | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |

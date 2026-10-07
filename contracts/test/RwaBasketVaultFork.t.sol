@@ -65,7 +65,7 @@ contract RwaBasketVaultFork is Test {
         address pool = cfg.readAddress(".assets[0].pool");
 
         vm.prank(admin);
-        vault.unpause();
+        vault.unpauseDeposits();
 
         vm.startPrank(alice);
         IERC20(BASE_USDC).approve(address(vault), DEPOSIT);

@@ -186,7 +186,7 @@ contract CustodyHandler is Test {
         // 3. Re-open deposits (emergencyWithdrawAdapter pauses them) and retire
         //    the now-empty adapter. removeAdapter requires a zero balance.
         vm.startPrank(admin);
-        vault.unpause();
+        vault.unpauseDeposits();
         (,,, uint256 adapterBalance,) = vault.getAdapterInfo(index);
         if (adapterBalance == 0) {
             try vault.removeAdapter(index) {} catch {}
@@ -214,7 +214,7 @@ contract CustodyHandler is Test {
             try vault.emergencyWithdrawAdapter(i) {} catch {}
         }
         // Re-open deposits that emergencyWithdrawAdapter paused.
-        try vault.unpause() {} catch {}
+        try vault.unpauseDeposits() {} catch {}
         vm.stopPrank();
 
         // With every adapter drained, all custody is the vault's idle balance:

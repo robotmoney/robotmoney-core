@@ -57,10 +57,10 @@ fx.run_rmpc_status("0x…")?;
 fx.run_rmpc_deposit(["--amount", "1000000", "--order-id", "0x…"])?;
 
 // On-chain pokes signed with real harness keys (no impersonation):
-fx.pause_gateway()?;          // signs with PAUSER_PRIVATE_KEY_HEX
-fx.unpause_gateway()?;        // signs with deployer (admin)
-fx.revoke_agent()?;           // signs with deployer (admin)
-fx.reauthorize_agent(p, w)?;  // restore deploy-time policy
+fx.pause_gateway_deposits()?;   // pauseDeposits(), signs with PAUSER_PRIVATE_KEY_HEX
+fx.unpause_gateway_deposits()?; // unpauseDeposits(), signs with deployer (admin)
+fx.revoke_agent()?;             // signs with deployer (admin)
+fx.reauthorize_agent(p, w)?;    // restore deploy-time policy
 fx.fund_usdc(fx.agent(), 1_000_000_000)?;
 ```
 

@@ -4,7 +4,7 @@ title: "RobotMoneyVaultRouteDepositTest"
 
 # RobotMoneyVaultRouteDepositTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/230eaace165b2eded59d836154b02cd6108a627d/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
 
 **Inherits:** Test
 
@@ -306,12 +306,20 @@ function _expectExceeded(uint256 assets, uint256 max) internal;
 | assets | `uint256` |  |
 | max | `uint256` |  |
 
-<a id="test_deposit_whenpaused_revertswithzeromax"></a>
+<a id="test_deposit_whenpaused_revertsdepositsarepaused"></a>
 
-### test_deposit_whenPaused_revertsWithZeroMax
+### test_deposit_whenPaused_revertsDepositsArePaused
 
 ```solidity
-function test_deposit_whenPaused_revertsWithZeroMax() public;
+function test_deposit_whenPaused_revertsDepositsArePaused() public;
+```
+
+<a id="test_mint_whenpaused_revertsdepositsarepaused"></a>
+
+### test_mint_whenPaused_revertsDepositsArePaused
+
+```solidity
+function test_mint_whenPaused_revertsDepositsArePaused() public;
 ```
 
 <a id="test_deposit_aboveheadroom_revertswithheadroommax"></a>
@@ -336,14 +344,6 @@ function test_deposit_atTvlCap_revertsWithZeroMax() public;
 
 ```solidity
 function test_mint_routesThroughSharedDepositPath() public;
-```
-
-<a id="test_depositat_whendepositspaused_reverts"></a>
-
-### test_depositAt_whenDepositsPaused_reverts
-
-```solidity
-function test_depositAt_whenDepositsPaused_reverts() public;
 ```
 
 <a id="test_depositat_whenshutdown_reverts"></a>

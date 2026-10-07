@@ -49,7 +49,7 @@ contract AccessRolesTest is Test {
     function setUp() public {
         roles = new AccessRolesHarness(admin);
         ADMIN = roles.ADMIN_ROLE();
-        PAUSER = roles.PAUSER_ROLE();
+        PAUSER = roles.DEPOSIT_PAUSER_ROLE();
         AGENT = roles.AGENT_ROLE();
     }
 
@@ -60,7 +60,7 @@ contract AccessRolesTest is Test {
     }
 
     function test_pauserRole_isKeccakOfName() public view {
-        assertEq(roles.PAUSER_ROLE(), keccak256("PAUSER_ROLE"));
+        assertEq(roles.DEPOSIT_PAUSER_ROLE(), keccak256("DEPOSIT_PAUSER_ROLE"));
     }
 
     function test_agentRole_isKeccakOfName() public view {
@@ -71,7 +71,7 @@ contract AccessRolesTest is Test {
 
     function test_allRoleIds_areDistinct() public view {
         bytes32 a = roles.ADMIN_ROLE();
-        bytes32 p = roles.PAUSER_ROLE();
+        bytes32 p = roles.DEPOSIT_PAUSER_ROLE();
         bytes32 g = roles.AGENT_ROLE();
         bytes32 d = 0x00; // DEFAULT_ADMIN_ROLE
 

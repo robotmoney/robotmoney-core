@@ -198,7 +198,7 @@ async fn dapp_toml_drives_rmpc_self_check_to_success() {
     assert_eq!(v["checks"]["chain_id_match"], true);
     assert_eq!(v["checks"]["gateway_code_hash_match"], true);
     assert_eq!(v["checks"]["agent_active"], true);
-    assert_eq!(v["checks"]["gateway_paused"], false);
+    assert_eq!(v["checks"]["deposits_paused"], false);
 }
 
 /// Negative drift-detector test: renaming a required flat field in the fixture
@@ -226,7 +226,7 @@ fn renamed_required_field_fails_direct_load() {
         match_eth_call_selector,
         jrpc_result,
         enc_bool,
-        selector_hex_of::<RobotMoneyGateway::pausedCall>,
+        selector_hex_of::<RobotMoneyGateway::depositsPausedCall>,
         json!({}),
         Matcher::Any,
     );

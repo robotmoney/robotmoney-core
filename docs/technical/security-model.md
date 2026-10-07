@@ -89,14 +89,14 @@ go through explicit approval.
 | PROPOSER_ROLE held by a plain EOA | The `TimelockController` PROPOSER_ROLE and CANCELLER_ROLE must be held by a Safe multisig with a minimum threshold of 2-of-N signers. EXECUTOR_ROLE should be open (`address(0)`) so any address can execute an already-delayed, already-authorized operation after the delay; if a restricted executor is used, it must be a Safe with threshold ≥ 2 and the liveness tradeoff must be documented. `DeployTimelock.s.sol` must verify at deploy time that every Safe address has deployed code and `getThreshold() >= 2`. The Safe address, threshold, executor policy, and canceller policy must be recorded in this document at deploy time (§4.1). **Decided policy (owner, 2026-10-05):** proposer and canceller are the Safe (threshold ≥ 2); executor is open (`address(0)`); the timelock has no admin (`admin = address(0)`). (Not yet implemented: core #1521. `DeployTimelock.s.sol` on this branch still sets `executors = [safe]`.) |
 | `ADMIN_ROLE` self-grant escalation | `ADMIN_ROLE` is its own admin by design. All role changes must route through the `TimelockController`. The Safe multisig must enforce quorum independently. |
 | Timelock bypass | A `TimelockController` must hold `ADMIN_ROLE` on all governed contracts. The production delay for high-risk operations must be ≥ 48 hours; any lower-delay operation class must be explicitly enumerated with its rationale, maximum authority, and affected functions. Admin operations must route through `schedule → delay → execute`; direct `ADMIN_ROLE` calls from any address must revert with `AccessControlUnauthorizedAccount`. The deployed timelock address, min delay, proposers, executors, cancellers, pending operations, and operation salts must be verifiable via `rmpc get-timelock` and the dapp timelock panel. |
-| Pause-key abuse (denial of deposit) | The pause role must be separable from `ADMIN_ROLE`. Pause must halt deposits but must not be able to move funds. The pause role should be held by a lower-quorum guardian to allow fast response; the unpause role must require `ADMIN_ROLE` through the timelock. |
+| Pause-key abuse (denial of deposit) | The pause role must be separable from `ADMIN_ROLE`. Pause must halt new deposits only. Withdrawals are never frozen, by anyone: no role, flag or function on any vault, the gateway or the router can block a redeem (core 1494). Pause must not be able to move funds. The pause role should be held by a lower-quorum guardian to allow fast response; the unpause role must require `ADMIN_ROLE` through the timelock. |
 | Emergency-role abuse to drain | `EMERGENCY_ROLE` must return funds to the vault only, never to an attacker-chosen address. `emergencyWithdraw` must use `try/catch` per adapter to prevent a single bad adapter from blocking recovery. |
 | Fee parameter manipulation above ceiling | `MAX_EXIT_FEE_BPS` must be `immutable`. `setExitFeeBps` must revert above this ceiling. |
 | Rebalance-throttle removal | Rebalance interval floor and bps ceiling must be `immutable` constants. Admin must not be able to remove these constraints. |
 | Fee-recipient swap to attacker address | `setFeeRecipient` must be admin-gated and routed through the timelock. The fee recipient must be verified to be a non-zero address. |
 | Multisig social engineering (Drift-class) | A signer playbook must be published and followed. Signers must independently simulate the operation before approving, review the calldata diff against the expected effect, and meet a minimum deliberation time. No signer may approve on the same device as the proposer. |
 | Signer-device compromise | All Safe signers must use hardware wallets. Software key signing is prohibited for any `ADMIN_ROLE` or `PROPOSER_ROLE` operation. |
-| Role separation drift | At deploy and at every admin operation, an off-chain assertion must confirm that admin, pause, emergency, agent, proposer, canceller, and executor authorities satisfy their documented separation rules. No account may hold more than one of gateway `ADMIN_ROLE`, `PAUSER_ROLE`, or `AGENT_ROLE`. |
+| Role separation drift | At deploy and at every admin operation, an off-chain assertion must confirm that admin, pause, emergency, agent, proposer, canceller, and executor authorities satisfy their documented separation rules. No account may hold more than one of gateway `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, or `AGENT_ROLE`. |
 
 ### 4.1 Deploy-time governance record
 
@@ -150,12 +150,16 @@ source. The manipulation-resistance posture is:
   cardinality causes the pool's `observe()` to revert (`"OLD"`), which
   fails NAV and emergency-unwind reads closed — preferred to silently
   reading a manipulable short window.
-- **Circuit breaker.** `pause()` (EMERGENCY_ROLE) suspends deposits and
-  withdrawals; `shutdownVault()` zeroes the TVL cap. Both remain available
+- **Circuit breaker.** `pauseDeposits()` (EMERGENCY_ROLE) suspends new
+  deposits only. Withdrawals are never frozen, by anyone (core 1494).
+  `shutdownVault()` zeroes the TVL cap. Both remain available
   if a TWAP-derived NAV starts looking anomalous.
 - **Single-source disclosure.** BasketVault currently relies on a single
   Uniswap V3 pool per asset. The TWAP window is the documented
-  manipulation-resistance control; production deployments that require a
+  manipulation-resistance control. Governance cannot set a window longer
+  than the pool's observation history: `setTwapWindow` refuses it with
+  `InsufficientObservationHistory`, because such a window would make every
+  NAV read revert and block every redeem (core 1494); production deployments that require a
   second source must wrap the vault behind an adapter that cross-checks
   the TWAP against an independent oracle (Chainlink, etc.) before being
   marked router-eligible in the registry.
@@ -220,9 +224,9 @@ source. The manipulation-resistance posture is:
 
 | Attack | Required control |
 |---|---|
-| No anomaly detection on mint/burn rate | An automated watchdog must monitor per-block and per-hour mint and burn volume against defined thresholds. Breach must trigger an automated pause or alert to an on-call operator with a maximum response-time SLA. |
+| No anomaly detection on mint/burn rate | An automated watchdog must monitor per-block and per-hour mint and burn volume against defined thresholds. Breach must trigger an automated deposit pause or alert to an on-call operator with a maximum response-time SLA. |
 | Manual incident response too slow | On-chain events (cap saturation, large single deposits, adapter balance deviations) must feed an automated alert system. The on-call rotation and escalation path must be documented. |
-| Pause-trigger key not pre-positioned | A guardian role with lower quorum than the full Safe must be able to pause without going through the timelock. This guardian may not unpause; that requires `ADMIN_ROLE` through the timelock. |
+| Pause-trigger key not pre-positioned | A guardian role with lower quorum than the full Safe must be able to pause deposits without going through the timelock. This guardian may not unpause deposits; that requires `ADMIN_ROLE` through the timelock. |
 | Missing on-chain kill switch for adapter | `forceRemoveAdapter` must exist with explicit loss-acceptance semantics. Every adapter deployment must confirm this path is exercised in tests. |
 | Dismissed audit finding later exploited (Venus-class) | Every audit finding must be logged in `docs/audits.md` with a disposition: fixed, accepted-with-rationale, or dismissed-with-rationale. Dismissed findings must be reviewed before any major change that touches the relevant code path. |
 
@@ -234,7 +238,7 @@ This section maps onto `docs/architecture.md` §15.
 
 | Attack | Required control |
 |---|---|
-| Prompt injection of agent planner causing unsafe asset movement | The planner must not be able to sign. The gateway must enforce role, amount/share caps, destination/source allowlists, deadline, idempotency, share receiver, asset recipient, and pause state independently of any agent-side state. `rmpc` must verify chain id, runtime code hash, and configured addresses before building calldata. |
+| Prompt injection of agent planner causing unsafe asset movement | The planner must not be able to sign. The gateway must enforce role, amount/share caps, destination/source allowlists, deadline, idempotency, share receiver, asset recipient, and deposit pause state independently of any agent-side state. `rmpc` must verify chain id, runtime code hash, and configured addresses before building calldata. |
 | Agent key exposure | Agent keys must be constrained to gateway `AGENT_ROLE` paths only. Loss budget must equal the configured deposit cap plus the configured withdrawal share cap and any receipt-token allowance the depositor deliberately grants to the gateway, not total vault assets. The withdrawal cap MUST be enforced as a strict rolling window so the loss budget equals the configured per-window cap (no boundary-burst inflation). Withdrawn USDC must be sent only to the depositor-configured asset recipient. |
 | Client host compromise | The signer API must be narrow and accept only known calldata shapes for gateway deposits, routed deposits, withdrawals, policy reads, and approved admin/operator commands. On-chain caps, allowlists, recipients, and deadlines are the backstop regardless of client state. |
 | Local state rollback | Idempotency keys, cap usage, policy expiry, destination/source allowlists, share receiver, and asset recipient must be enforced on-chain, not in local state. |

@@ -19,9 +19,10 @@
 //! 1. `eth_chainId` matches `config.chain_id`
 //! 2. `keccak256(eth_getCode(gateway))` matches `config.gateway_runtime_hash`
 //!    (eth_getCode returning empty bytecode is itself a refusal)
-//! 3. `gateway.paused() == false`
+//! 3. `gateway.depositsPaused() == false`
 //! 4. `gateway.usdc()` matches `config.usdc_address`
-//! 5. `gateway.vault()` matches `config.vault_address`
+//! 5. `gateway.vault()` matches `config.vault_address`, and
+//!    `vault.depositsPaused() == false`
 //! 6. `gateway.agents(self).active && validUntil >= now`
 //! 7. `amount <= agents(self).maxPerPayment`
 //! 8. `effectiveDepositWindowGross(self) + amount <= maxPerWindow`
@@ -33,6 +34,10 @@
 //! `maxWithdrawPerPayment` and `maxWithdrawPerWindow` together with
 //! `agentWithdrawWindowGross` instead of the deposit fields. See
 //! `run_withdraw_gateway` and issue #371.
+//!
+//! A deposit pause never refuses a withdrawal (core 1494). Checks 3 and 5
+//! refuse deposits only: the withdraw preflight reads the gateway's
+//! `depositsPaused()` as information and never reads it on the vault.
 //!
 //! Each rule maps onto a specific [`RmpcError`] variant. Operator tooling
 //! matches on those names; renaming them is a breaking change.
@@ -72,7 +77,9 @@ pub struct PreflightInputs {
 pub struct PreflightReport {
     pub chain_id: u64,
     pub gateway_runtime_hash_ok: bool,
-    pub paused: bool,
+    /// `gateway.depositsPaused()`. Refuses a deposit; information only on
+    /// a withdrawal.
+    pub deposits_paused: bool,
     pub agent_active: bool,
     pub agent_valid_until: u64,
     pub max_per_payment: U256,
@@ -97,7 +104,7 @@ impl<'a> Preflight<'a> {
 
     /// Execute every preflight rule. Returns on the first refusal. The
     /// order is: cheap chain-level checks first (chain id, code hash,
-    /// paused, addresses), then per-agent reads, then balance/allowance.
+    /// deposits paused, addresses), then per-agent reads, then balance/allowance.
     /// This minimises wasted RPC on the unhappy path.
     pub async fn run(&self, inputs: PreflightInputs) -> Result<PreflightReport> {
         self.run_inner(inputs, true).await
@@ -112,7 +119,7 @@ impl<'a> Preflight<'a> {
     }
 
     /// Withdraw-specific gateway preflight. Runs checks 1–6 (chain id, code
-    /// hash, paused, usdc/vault addresses, agent active+expiry) then checks
+    /// hash, usdc/vault addresses, agent active+expiry) then checks
     /// 7–8 using the withdrawal-specific caps:
     ///   7w. `shares <= agents(self).maxWithdrawPerPayment`
     ///   8w. `agentWithdrawWindowGross(self, window) + shares <=
@@ -120,6 +127,10 @@ impl<'a> Preflight<'a> {
     ///
     /// USDC allowance/balance checks are skipped (N/A for withdrawals).
     /// Vault-level share checks run separately in `withdraw_vault_preflight`.
+    ///
+    /// `gateway.depositsPaused()` is read and reported, never a refusal: a
+    /// deposit pause never blocks a withdrawal (core 1494). A failed read of
+    /// that flag is not a refusal either.
     ///
     /// Addresses issue #371: the old `run_gateway_only` path checked the
     /// deposit caps (`maxPerPayment`, `maxPerWindow`) instead of the
@@ -152,11 +163,13 @@ impl<'a> Preflight<'a> {
             return Err(RmpcError::ErrCodeHashMismatch);
         }
 
-        // 3. paused()
-        let paused = self.call_view_paused(gateway_addr).await?;
-        if paused {
-            return Err(RmpcError::ErrGatewayPaused);
-        }
+        // 3. depositsPaused() — information only. A deposit pause never
+        //    blocks a withdrawal (core 1494), so neither the flag nor a
+        //    failed read of it refuses here.
+        let deposits_paused = self
+            .call_view_deposits_paused(gateway_addr)
+            .await
+            .unwrap_or(false);
 
         // 4-5. usdc()/vault() addresses pinned in config
         let usdc_addr_on_chain = self.call_view_usdc(gateway_addr).await?;
@@ -213,7 +226,7 @@ impl<'a> Preflight<'a> {
         Ok(PreflightReport {
             chain_id,
             gateway_runtime_hash_ok: true,
-            paused: false,
+            deposits_paused,
             agent_active: agent.active,
             agent_valid_until: agent.validUntil,
             max_per_payment: agent.maxWithdrawPerPayment,
@@ -248,10 +261,9 @@ impl<'a> Preflight<'a> {
             return Err(RmpcError::ErrCodeHashMismatch);
         }
 
-        // 3. paused()
-        let paused = self.call_view_paused(gateway_addr).await?;
-        if paused {
-            return Err(RmpcError::ErrGatewayPaused);
+        // 3. depositsPaused() on the gateway — a deposit refusal.
+        if self.call_view_deposits_paused(gateway_addr).await? {
+            return Err(RmpcError::ErrDepositsPaused);
         }
 
         // 4-5. usdc()/vault() addresses pinned in config
@@ -268,6 +280,11 @@ impl<'a> Preflight<'a> {
             return Err(RmpcError::ErrConfig(format!(
                 "gateway.vault() = {vault_addr_on_chain:?} does not match configured vault_address = {vault_addr_cfg:?}"
             )));
+        }
+        // 5b. depositsPaused() on the vault the gateway deposits into. The
+        //     vault's deposit() reverts DepositsArePaused while it is set.
+        if self.call_view_deposits_paused(vault_addr_cfg).await? {
+            return Err(RmpcError::ErrDepositsPaused);
         }
 
         // 6. agents(self) — active + validUntil
@@ -330,7 +347,7 @@ impl<'a> Preflight<'a> {
         Ok(PreflightReport {
             chain_id,
             gateway_runtime_hash_ok: true,
-            paused: false,
+            deposits_paused: false,
             agent_active: agent.active,
             agent_valid_until: agent.validUntil,
             max_per_payment: agent.maxPerPayment,
@@ -343,9 +360,11 @@ impl<'a> Preflight<'a> {
 
     /// Vault-side preflight for a redemption leg (issue #312, #1285):
     ///
-    /// 1. `vault.paused() == false`
-    /// 2. `vault.allowance(agent, gateway) >= shares`
-    /// 3. `vault.balanceOf(agent) >= shares`
+    /// 1. `vault.allowance(agent, gateway) >= shares`
+    /// 2. `vault.balanceOf(agent) >= shares`
+    ///
+    /// It never reads `depositsPaused()`: a deposit pause never blocks a
+    /// redeem, in any vault status (core 1494).
     ///
     /// The redeem burns the agent's *vault shares*, which the gateway
     /// pulls from the source vault, so these are the share-side mirror of
@@ -354,7 +373,7 @@ impl<'a> Preflight<'a> {
     /// identity-bound `(vault, shares)` leg.
     ///
     /// This is the policy layer's rule. It previously lived in
-    /// `commands::withdraw` with its own private copies of the three
+    /// `commands::withdraw` with its own private copies of the
     /// `eth_call` decoders, which made `commands::withdraw_router` import
     /// a policy rule from a sibling command module.
     pub async fn run_withdraw_vault(
@@ -364,9 +383,6 @@ impl<'a> Preflight<'a> {
         agent: Address,
         shares: U256,
     ) -> Result<()> {
-        if self.call_view_paused(vault).await? {
-            return Err(RmpcError::ErrVaultPaused);
-        }
         if self.call_view_allowance(vault, agent, gateway).await? < shares {
             return Err(RmpcError::ErrShareAllowanceInsufficient);
         }
@@ -378,21 +394,23 @@ impl<'a> Preflight<'a> {
 
     // --- typed view helpers ---------------------------------------------
 
-    async fn call_view_paused(&self, gateway: Address) -> Result<bool> {
-        let data = RobotMoneyGateway::pausedCall {}.abi_encode();
+    /// `depositsPaused()` on the gateway or a vault. Both expose the same
+    /// `depositsPaused() returns (bool)` view, so one selector serves both.
+    async fn call_view_deposits_paused(&self, target: Address) -> Result<bool> {
+        let data = RobotMoneyGateway::depositsPausedCall {}.abi_encode();
         let out = self
             .rpc
             .eth_call(
                 &CallRequest {
-                    to: gateway,
+                    to: target,
                     from: None,
                     data: data.into(),
                 },
                 None,
             )
             .await?;
-        let decoded = RobotMoneyGateway::pausedCall::abi_decode_returns(&out, true)
-            .map_err(|e| RmpcError::ErrRpcDecode(format!("paused() decode: {e}")))?;
+        let decoded = RobotMoneyGateway::depositsPausedCall::abi_decode_returns(&out, true)
+            .map_err(|e| RmpcError::ErrRpcDecode(format!("depositsPaused() decode: {e}")))?;
         Ok(decoded._0)
     }
 
@@ -591,7 +609,9 @@ impl<'a> Preflight<'a> {
 pub struct ChecksOutput {
     pub chain_id_match: bool,
     pub gateway_code_hash_match: bool,
-    pub gateway_paused: bool,
+    /// `depositsPaused()` was observed true. A refusal on a deposit;
+    /// information only on a withdrawal, which proceeds regardless.
+    pub deposits_paused: bool,
     pub agent_active: bool,
     pub agent_valid_until: u64,
     pub max_per_payment: String,
@@ -606,7 +626,7 @@ impl ChecksOutput {
         Self {
             chain_id_match: true,
             gateway_code_hash_match: r.gateway_runtime_hash_ok,
-            gateway_paused: r.paused,
+            deposits_paused: r.deposits_paused,
             agent_active: r.agent_active,
             agent_valid_until: r.agent_valid_until,
             max_per_payment: r.max_per_payment.to_string(),
@@ -627,10 +647,10 @@ impl ChecksOutput {
             RmpcError::ErrCodeHashMismatch => {
                 c.chain_id_match = true;
             }
-            RmpcError::ErrGatewayPaused => {
+            RmpcError::ErrDepositsPaused => {
                 c.chain_id_match = true;
                 c.gateway_code_hash_match = true;
-                c.gateway_paused = true;
+                c.deposits_paused = true;
             }
             _ => {
                 c.chain_id_match = true;
@@ -644,7 +664,7 @@ impl ChecksOutput {
         Self {
             chain_id_match: false,
             gateway_code_hash_match: false,
-            gateway_paused: false,
+            deposits_paused: false,
             agent_active: false,
             agent_valid_until: 0,
             max_per_payment: "0".into(),

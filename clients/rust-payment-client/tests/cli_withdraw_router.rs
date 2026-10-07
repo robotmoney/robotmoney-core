@@ -410,32 +410,42 @@ async fn router_chain_id_mismatch_refuses_with_named_error() {
     assert_eq!(v["checks"]["chain_id_match"], false);
 }
 
+/// A deposit pause never blocks a router redemption (core 1494). With
+/// `depositsPaused() == true` on every target the redemption still signs,
+/// broadcasts and succeeds across both legs.
 #[tokio::test]
-async fn router_paused_gateway_refuses_with_named_error() {
+async fn router_withdraw_succeeds_while_deposits_paused() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
-    server
+    install_router_happy_path(&mut server, chain_id).await;
+    // Registered last with `expect_at_least`, so it serves every
+    // depositsPaused() read ahead of the happy-path `false`.
+    let paused_read = server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::pausedCall,
+            RobotMoneyGateway::depositsPausedCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_bool(true)))
+        .expect_at_least(1)
         .create_async()
         .await;
-    install_router_happy_path(&mut server, chain_id).await;
 
     let fix = Fixture::build(&server.url(), chain_id);
     let out = router_args(fix.config_path.to_str().unwrap(), &unique_state_dir())
-        .args(["--confirm"])
+        .args(["--confirm", "--receipt-timeout-secs", "5"])
         .assert()
-        .failure()
+        .success()
         .get_output()
         .clone();
-    assert_eq!(out.status.code(), Some(2));
     let v = stdout_json(&out);
-    assert_eq!(v["error"], "ErrGatewayPaused");
-    assert_eq!(v["checks"]["gateway_paused"], true);
+    assert_eq!(v["status"], "success");
+    assert_eq!(
+        v["assets_per_leg"],
+        json!([(LEG_A - 1_000).to_string(), (LEG_B - 1_000).to_string()])
+    );
+    assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"));
+    paused_read.assert_async().await;
 }
 
 /// The window cap is checked against the SUM of the legs, not each leg —

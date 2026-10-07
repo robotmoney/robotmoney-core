@@ -3,7 +3,7 @@ import { sidebar } from './vocs.sidebar'
 
 export default defineConfig({
   title: "Documentation",
-  editLink: { pattern: 'https://github.com/robotmoney/robotmoney-core/edit/dev/{path}' },
+  editLink: { pattern: 'https://github.com/robotmoney/robotmoney-core/edit/main/{path}' },
   codeHighlight: {
     fallbackLanguage: 'plaintext',
     langs: [

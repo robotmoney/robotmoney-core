@@ -237,7 +237,7 @@ describe("VaultList", () => {
 
     const statuses = getAllByTestId("vault-list-row-status").map((n) => n.textContent);
     expect(statuses).toContain("Active");
-    expect(statuses).toContain("Paused");
+    expect(statuses).toContain("Deposits paused");
   });
 
   it("renders without a connected wallet — no wagmi hooks used", async () => {

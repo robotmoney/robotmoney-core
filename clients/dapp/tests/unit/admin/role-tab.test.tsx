@@ -2,7 +2,7 @@
  * Unit tests — RoleTab component (issue #254).
  *
  * Focus:
- *  - data-testid slugs render correctly for both ADMIN_ROLE and PAUSER_ROLE.
+ *  - data-testid slugs render correctly for both ADMIN_ROLE and DEPOSIT_PAUSER_ROLE.
  *  - Both grant and revoke buttons are disabled when simulate has not
  *    returned a result (network boundary mocked to return undefined).
  */
@@ -78,37 +78,37 @@ describe("RoleTab — ADMIN_ROLE slug and button gating", () => {
   });
 });
 
-describe("RoleTab — PAUSER_ROLE slug and button gating", () => {
+describe("RoleTab — DEPOSIT_PAUSER_ROLE slug and button gating", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetWagmi();
   });
 
-  it("renders data-testid with pauser slug for PAUSER_ROLE", () => {
-    renderTab("PAUSER_ROLE");
+  it("renders data-testid with pauser slug for DEPOSIT_PAUSER_ROLE", () => {
+    renderTab("DEPOSIT_PAUSER_ROLE");
     expect(screen.getByTestId("pauser-role-form")).toBeInTheDocument();
     expect(screen.getByTestId("pauser-account-input")).toBeInTheDocument();
     expect(screen.getByTestId("grant-pauser-submit")).toBeInTheDocument();
     expect(screen.getByTestId("revoke-pauser-submit")).toBeInTheDocument();
   });
 
-  it("grant button is disabled when simulate returns undefined (PAUSER_ROLE)", () => {
-    renderTab("PAUSER_ROLE");
+  it("grant button is disabled when simulate returns undefined (DEPOSIT_PAUSER_ROLE)", () => {
+    renderTab("DEPOSIT_PAUSER_ROLE");
     expect(screen.getByTestId("grant-pauser-submit")).toBeDisabled();
   });
 
-  it("revoke button is disabled when simulate returns undefined (PAUSER_ROLE)", () => {
-    renderTab("PAUSER_ROLE");
+  it("revoke button is disabled when simulate returns undefined (DEPOSIT_PAUSER_ROLE)", () => {
+    renderTab("DEPOSIT_PAUSER_ROLE");
     expect(screen.getByTestId("revoke-pauser-submit")).toBeDisabled();
   });
 
-  it("no ADMIN_ROLE slugs appear when rendering PAUSER_ROLE", () => {
-    renderTab("PAUSER_ROLE");
+  it("no ADMIN_ROLE slugs appear when rendering DEPOSIT_PAUSER_ROLE", () => {
+    renderTab("DEPOSIT_PAUSER_ROLE");
     expect(screen.queryByTestId("admin-role-form")).toBeNull();
     expect(screen.queryByTestId("grant-admin-submit")).toBeNull();
   });
 
-  it("no PAUSER_ROLE slugs appear when rendering ADMIN_ROLE", () => {
+  it("no DEPOSIT_PAUSER_ROLE slugs appear when rendering ADMIN_ROLE", () => {
     renderTab("ADMIN_ROLE");
     expect(screen.queryByTestId("pauser-role-form")).toBeNull();
     expect(screen.queryByTestId("grant-pauser-submit")).toBeNull();
@@ -126,7 +126,7 @@ describe("RoleTab — wallet without DEFAULT_ADMIN_ROLE (post timelock handover)
 
   it.each([
     ["ADMIN_ROLE", "admin"],
-    ["PAUSER_ROLE", "pauser"],
+    ["DEPOSIT_PAUSER_ROLE", "pauser"],
   ] as const)(
     "%s: shows the refusal reason and keeps both buttons disabled even when simulate returns data",
     (role, slug) => {

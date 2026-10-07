@@ -20,7 +20,6 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
@@ -41,12 +40,7 @@ import {AdminFloorAccessControlCounter} from "../lib/AdminFloorAccessControlCoun
 ///         arithmetic-mean tick) over a per-asset, admin-configurable window.
 ///
 ///         Subclasses set the vault name/symbol, max basket size, and default slippage.
-abstract contract BasketVault is
-    ERC4626,
-    AdminFloorAccessControlCounter,
-    Pausable,
-    ReentrancyGuard
-{
+abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
@@ -155,10 +149,13 @@ abstract contract BasketVault is
     address public feeRecipient;
     uint256 public maxSlippageBps;
     bool public shutdown;
+    /// @notice When true, new deposits and mints are blocked. Withdrawals and
+    ///         redeems are never blocked, by anyone (owner decision 2026-10-05,
+    ///         core 1494). There is no generic pause function: this flag is the only pause.
     bool public depositsPaused;
     /// @notice Whether the vault has been retired by the unified governance
     ///         `retire()` action (DI-2 / FS-VLT-19). Distinct from
-    ///         `depositsPaused` so `unpause()` (ADMIN_ROLE) can never clear a
+    ///         `depositsPaused` so `unpauseDeposits()` (ADMIN_ROLE) can never clear a
     ///         registry-driven retirement — matching RobotMoneyVault's and
     ///         Vault's separate-flag model (the three enforcement paths never
     ///         alias). Recovery is the deliberate governance abort
@@ -242,7 +239,10 @@ abstract contract BasketVault is
     event ExitFeeUpdated(uint256 oldBps, uint256 newBps);
     event FeeRecipientUpdated(address oldRecipient, address newRecipient);
     event MaxSlippageUpdated(uint256 oldBps, uint256 newBps);
-    event DepositsPausedSet(bool paused);
+    /// @notice Emitted when new deposits become paused. Withdrawals stay open.
+    event DepositsPaused(address indexed account);
+    /// @notice Emitted when new deposits are resumed.
+    event DepositsUnpaused(address indexed account);
     event Shutdown();
     /// @dev Emitted when ADMIN_ROLE reverses a `shutdownVault`, re-opening deposits.
     event Restored(uint256 newTvlCap);
@@ -378,6 +378,8 @@ abstract contract BasketVault is
     ///      guarantee ERC-4626 exactness for proportional-swap exits — use
     ///      redeem() instead, which returns actual swap proceeds.
     error RedeemOnly();
+    /// @dev Deposit or mint attempted while deposits are paused.
+    error DepositsArePaused();
     /// @dev AZ-BSK-1: raised (belt-and-suspenders) when the realized NAV delta
     ///      from the deposit swaps falls below the slippage-discounted floor.
     ///      Under normal operation the swap router's `amountOutMinimum` guard
@@ -513,8 +515,15 @@ abstract contract BasketVault is
     ///         This override reads _lastMintedShares written by _deposit() and
     ///         returns that instead.
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        if (depositsPaused) revert DepositsArePaused();
         super.deposit(assets, receiver);
         return _lastMintedShares;
+    }
+
+    /// @notice Mint `shares`. Reverts `DepositsArePaused` while deposits are paused.
+    function mint(uint256 shares, address receiver) public override returns (uint256) {
+        if (depositsPaused) revert DepositsArePaused();
+        return super.mint(shares, receiver);
     }
 
     /// @notice Deposit `assets` USDC and mint shares on the REALIZED swap
@@ -550,7 +559,6 @@ abstract contract BasketVault is
     )
         internal
         override
-        whenNotPaused
         nonReentrant
     {
         // `shutdown`/`depositsPaused`/`retired` are already gated by
@@ -763,13 +771,13 @@ abstract contract BasketVault is
     }
 
     /// @notice Maximum USDC that can be deposited given current vault state.
-    ///         Returns 0 when the vault is paused or shut down, when no basket
+    ///         Returns 0 when deposits are paused or the vault is shut down, when no basket
     ///         asset is active, or when the TVL cap is reached; otherwise
     ///         min(perDepositCap, TVL-cap headroom). Overrides the OZ default
     ///         (`type(uint256).max`) for ERC-4626 conformance: max* views MUST
     ///         return 0 when deposits are disabled (audit 2026-06-09, L-16).
     function maxDeposit(address) public view override returns (uint256) {
-        if (paused() || depositsPaused || shutdown || retired) return 0;
+        if (depositsPaused || shutdown || retired) return 0;
         if (_activeAssetCount() == 0) return 0;
         if (tvlCap == type(uint256).max && perDepositCap == type(uint256).max) {
             return type(uint256).max;
@@ -803,14 +811,14 @@ abstract contract BasketVault is
     ///      is intentionally unused because the actual USDC received depends on
     ///      swap execution. Callers MUST NOT use `withdraw()` — use `redeem()` instead.
     ///      Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
-    /// @dev LIFE-3 / NC-3 / F-06: withdrawals are intentionally NOT `whenNotPaused`.
-    ///      `pause()` is a deposits-only freeze (see `_deposit`, which is
-    ///      `whenNotPaused` and checks `depositsPaused`). Gating withdrawals on the
-    ///      same low-trust EMERGENCY_ROLE pause would let a hot key freeze
-    ///      already-deposited funds — and, combined with last-ADMIN renounce, freeze
+    /// @dev LIFE-3 / NC-3 / F-06: no pause gates withdrawals (core 1494).
+    ///      `pauseDeposits()` stops deposits only (see `deposit`, `mint` and
+    ///      `maxDeposit`, which check `depositsPaused`). Gating withdrawals on the
+    ///      low-trust EMERGENCY_ROLE would let a hot key lock up
+    ///      already-deposited funds — and, combined with last-ADMIN renounce, lock
     ///      them forever (LIFE-4). The last-admin floor (AdminFloorAccessControl)
     ///      and the deposits-only pause together keep withdrawals always reachable,
-    ///      matching RobotMoneyVault's separate `withdrawalsPaused` model.
+    ///      matching RobotMoneyVault and Vault, which have no withdrawal pause either.
     function _withdraw(
         address caller,
         address receiver,
@@ -1214,7 +1222,7 @@ abstract contract BasketVault is
     ///         unified governance retire, DI-2 / FS-VLT-19). Idempotent.
     ///         Withdrawals/redemptions stay open (ERC-4626 `redeem` is never
     ///         revoked; ADR-0009). Sets the dedicated `retired` flag — distinct
-    ///         from `depositsPaused` so `unpause()` cannot clear it (matches
+    ///         from `depositsPaused` so `unpauseDeposits()` cannot clear it (matches
     ///         RobotMoneyVault's / Vault's separate-flag model).
     function retire() external {
         if (msg.sender != registry) revert OnlyRegistry();
@@ -1235,20 +1243,23 @@ abstract contract BasketVault is
 
     // ─── Emergency ────────────────────────────────────────────────────
 
-    function pause() external onlyRole(EMERGENCY_ROLE) {
+    /// @notice Pause new deposits and mints. Restricted to `EMERGENCY_ROLE`.
+    ///         Redeems stay open while deposits are paused (core 1494; see `_withdraw`).
+    function pauseDeposits() external onlyRole(EMERGENCY_ROLE) {
         _setDepositsPaused(true);
-        _pause();
     }
 
-    function unpause() external onlyRole(ADMIN_ROLE) {
+    /// @notice Resume deposits. Restricted to `ADMIN_ROLE`. Idempotent. Also clears
+    ///         the deposit halt set by `emergencyUnwind` and `emergencyUnwindWithOverride`.
+    function unpauseDeposits() external onlyRole(ADMIN_ROLE) {
         _setDepositsPaused(false);
-        _unpause();
     }
 
     function _setDepositsPaused(bool paused_) internal {
         if (depositsPaused == paused_) return;
         depositsPaused = paused_;
-        emit DepositsPausedSet(paused_);
+        if (paused_) emit DepositsPaused(msg.sender);
+        else emit DepositsUnpaused(msg.sender);
     }
 
     /// @notice Pause deposits and swap all basket assets back to USDC.
@@ -1328,7 +1339,7 @@ abstract contract BasketVault is
     ///      reverse path — a low-trust key could otherwise freeze the deposit side forever.
     ///      Withdrawals are never frozen (LIFE-3), so holder funds were always redeemable;
     ///      this restores the DEPOSIT side and is therefore gated to the strictly higher-trust
-    ///      `ADMIN_ROLE` (timelock in production), mirroring `unpause`. A new `tvlCap` is
+    ///      `ADMIN_ROLE` (timelock in production), mirroring `unpauseDeposits`. A new `tvlCap` is
     ///      required because shutdown zeroed it; pass `type(uint256).max` for no cap.
     ///      Mirrors `RobotMoneyVault.restoreVault`: reverts when the vault is not shut down
     ///      (`NotShutdown`), when the new cap is zero (`InvalidParam`), or when the new cap
@@ -1481,18 +1492,18 @@ abstract contract BasketVault is
     }
 
     /// @notice Set the TWAP window in seconds for `token`. ADMIN_ROLE only.
-    /// @dev The window must fall inside `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`.
-    ///      ADMIN_ROLE is expected to verify off-chain that the pool's
-    ///      observation cardinality is large enough to satisfy the requested
-    ///      window; otherwise NAV / unwind reads will revert with the pool's
-    ///      `"OLD"` error.
+    /// @dev The window must fall inside `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`, and
+    ///      the asset's pool must hold enough observation history to serve it now
+    ///      (`InsufficientObservationHistory` otherwise). A window longer than the
+    ///      pool's oldest observation would make every NAV and redeem-floor read
+    ///      revert with the pool's `"OLD"` error, which would block redeem (core 1494).
     /// @param token   Active basket asset to configure.
     /// @param window  TWAP window in seconds (10 min ≤ window ≤ 24 h).
     function setTwapWindow(address token, uint32 window) external onlyRole(ADMIN_ROLE) {
         if (window < MIN_TWAP_WINDOW || window > MAX_TWAP_WINDOW) {
             revert InvalidTwapWindow(window);
         }
-        _activeAssetForToken(token);
+        BasketAssetConfigGuard.requireObservationHistory(_activeAssetForToken(token).pool, window);
         uint32 old = twapWindow[token];
         twapWindow[token] = window;
         emit TwapWindowUpdated(token, old, window);

@@ -474,3 +474,5 @@ Reordered to reflect the Layer 2 re-grades (composition-aware severity).
 8. **(Tests)** add the cross-contract regression cases below, prioritizing
    F-01/F-02/F-03/F-05 and the Layer 2 chains (NC-1 stale redeem, NC-4 whole-router
    deposit DoS, F-09 misconfig pool mismatch).
+
+> Note 2026-10-05 (core 1494): A pause now stops deposits only; withdrawals are never frozen. pause()/unpause()/paused() are now pauseDeposits()/unpauseDeposits()/depositsPaused(), PAUSER_ROLE is DEPOSIT_PAUSER_ROLE, VaultStatus.Paused is VaultStatus.DepositsPaused, EnforcedPause is DepositsArePaused, and withdrawalsPaused is deleted. The router redeems from a vault in every status (VaultPausedForRedeem is removed). The deployed v1 vault keeps its old code: never call v1 pause(), it also freezes withdrawals. The text above is kept as written.

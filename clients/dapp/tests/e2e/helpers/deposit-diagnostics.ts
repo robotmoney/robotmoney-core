@@ -71,7 +71,7 @@
  *      alone would report gas starvation as a custom error, so the VERDICT
  *      takes the call trace's `out of gas` frame as authoritative over it.
  *   2. `RobotMoneyVault`'s own `PerDepositCapExceeded` / `TVLCapExceeded` /
- *      `DepositsPaused` / `VaultShutdown` / `VaultRetired` / `NoActiveAdapters`
+ *      `DepositsArePaused` / `VaultShutdown` / `VaultRetired` / `NoActiveAdapters`
  *      guards are NOT reachable through ERC-4626 `deposit()` or `mint()`:
  *      `maxDeposit` (:565) already returns 0 or clamps to `perDepositCap` for
  *      every one of those conditions, so OpenZeppelin's max check fires first
@@ -157,8 +157,8 @@ const adapterViewAbi = [
  * `PerDepositCapExceeded()` does from the vault, and the log should not make
  * the reader guess.
  *
- * The vault entry is the full generated ABI — 47 error entries, its own guards
- * plus the inherited OpenZeppelin ERC-20 / ERC-4626 / AccessControl / Pausable
+ * The vault entry is the full generated ABI — 46 error entries, its own guards
+ * plus the inherited OpenZeppelin ERC-20 / ERC-4626 / AccessControl
  * / ReentrancyGuard errors.
  */
 const decodeTables: { source: string; abi: Abi }[] = [

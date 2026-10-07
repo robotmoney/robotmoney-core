@@ -115,7 +115,7 @@ async function waitUntil<T>(predicate: () => Promise<T | null>, description: str
  *
  * viem resolves `waitForTransactionReceipt` for REVERTED transactions too, so
  * each receipt's `status` is asserted here. Without that, a reverted deposit
- * (paused vault, deposit cap, insufficient USDC) passes silently and only
+ * (deposits-paused vault, deposit cap, insufficient USDC) passes silently and only
  * surfaces downstream as a zero share balance — which reads as "the registry
  * decode broke" and points at entirely the wrong defect (issue #1366).
  *

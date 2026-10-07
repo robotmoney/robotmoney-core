@@ -14,6 +14,10 @@
  *   - Preview block shows estimated USDC out, exit fee, and net amount from
  *     live `previewRedeem` and `exitFeeBps` reads (AC §9).
  *   - Submit disabled when `maxRedeem` is zero for the selected vault (AC §10).
+ *     This is the ERC-4626 limit read live, not a pause check: a deposit
+ *     pause never lowers maxRedeem, and the tab never reads registry status
+ *     or `depositsPaused()`, so a holder can redeem from a vault in every
+ *     status (core 1494).
  *
  * All preview values sourced exclusively from useReadContract (AC §11).
  *
@@ -227,7 +231,8 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
       {/* maxRedeem zero gate (AC §10) */}
       {maxRedeemIsZero && selectedVault && (
         <p className="hint" data-testid="max-redeem-zero-warning" style={{ color: "red" }}>
-          maxRedeem is zero for this vault. Withdrawals are currently blocked.
+          maxRedeem is zero for this vault right now, so a redeem would revert. A deposit pause
+          never lowers maxRedeem.
         </p>
       )}
 

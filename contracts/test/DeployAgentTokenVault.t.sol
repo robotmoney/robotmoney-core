@@ -72,7 +72,7 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
     function test_deploy_isRegisteredPausedAndEmpty() public {
         BasketVaultDeployBase.Deployed memory d = _runLaunch();
         AgentTokenVault v = AgentTokenVault(d.vault);
-        assertTrue(v.paused(), "paused");
+        assertTrue(v.depositsPaused(), "paused");
         assertEq(v.assetCount(), 0, "zero assets");
         assertEq(d.tokens.length, 0, "result lists no tokens");
         assertEq(d.adapter, address(0), "no adapter deployed for an empty list");
@@ -146,7 +146,7 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         assertEq(adapter, d.adapter);
         assertTrue(v.adapterCodeHashAllowed(adapter.codehash), "code hash allowed");
         assertEq(address(UniswapV3SwapAdapter(adapter).ROUTER()), router02);
-        assertTrue(v.paused(), "still paused");
+        assertTrue(v.depositsPaused(), "still paused");
     }
 
     function test_reverts_whenSwapRouterIsNotSwapRouter02() public {

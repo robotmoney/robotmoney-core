@@ -108,25 +108,25 @@
 //! - **Name changed** from `WeightsSet` to `WeightsApplied`; `proposalId` added.
 //! - **Topic-0 impact:** All `WeightsApplied` events silently dropped (wrong name too).
 //!
-//! # Vault Pause Split Seam (issue #368)
+//! # Deposit pause only; withdrawals are never frozen (issue #368, core 1494)
 //!
-//! `RobotMoneyVault` inherits OZ `Pausable` which uses a single boolean pause flag.
-//! Both `_deposit` (line 303: `whenNotPaused`) and `_withdraw` (line 401: `whenNotPaused`)
-//! gate on the same flag.  `emergencyWithdraw()` (line 610) calls `_pause()` then drains
-//! adapters — leaving USDC idle in the vault — but blocks all user redemptions because
-//! `_withdraw` is still guarded by `whenNotPaused`.
+//! Issue #368 found that an emergency drain left USDC idle in the vault while a
+//! single shared pause flag also blocked every redemption. Core 1494 (owner
+//! decision 2026-10-05: "We do not ever freeze withdrawals") settled it:
 //!
-//! **State variables to split for issue #368:**
-//! - Replace OZ `Pausable` (single `_paused` bool) with two independent booleans:
-//!   `depositsPaused` and `withdrawalsPaused` (or equivalent modifier split).
-//! - `pause()` (EMERGENCY_ROLE) sets both to `true`.
-//! - `emergencyWithdraw()` (EMERGENCY_ROLE) sets only `depositsPaused = true`.
-//! - `unpause()` (ADMIN_ROLE) clears both.
-//! - `_deposit` guards on `depositsPaused`; `_withdraw` guards on `withdrawalsPaused`.
-//! - Coupling risk: removing OZ `Pausable` also removes `Paused(address)`/`Unpaused(address)`
-//!   events from the inherited contract — those are re-declared in `IGateway` (gateway-side);
-//!   the vault emits them via `_pause()`/`_unpause()` calls today.  Issue #368 must either
-//!   retain those OZ events or re-emit them manually from the new modifier paths.
+//! - A pause stops new deposits only. The vaults expose `pauseDeposits()`
+//!   (EMERGENCY_ROLE), `unpauseDeposits()` (ADMIN_ROLE) and the `depositsPaused()`
+//!   view. The gateway exposes the same three, gated by `DEPOSIT_PAUSER_ROLE`.
+//! - There is no withdrawal pause flag and no setter for one. `_withdraw`,
+//!   `maxRedeem` and `maxWithdraw` never consult the deposit pause.
+//! - Emergency levers (`emergencyWithdraw`, `emergencyUnwind`, `shutdownVault`)
+//!   set `depositsPaused` and move funds to idle. They never block an exit.
+//! - Events: gateway and vaults emit `DepositsPaused(address indexed)` /
+//!   `DepositsUnpaused(address indexed)`. Both share one topic-0 per event, so
+//!   the indexer's `deposits_paused` / `deposits_unpaused` topics cover both
+//!   emitters. They only drive state snapshots (no dedicated table row).
+//! - The deployed v1 vault keeps its old code and its old OZ pause events.
+//!   It also exposes `depositsPaused()`, which is what the snapshot reads.
 //!
 //! # Gateway Pinned-Vault vs Multi-Vault Constraint (issue #370)
 //!
@@ -223,8 +223,12 @@ sol! {
         );
         /// IGateway.sol:122
         event AgentRevoked(address indexed agent, address indexed owner);
-        event Paused(address indexed by);
-        event Unpaused(address indexed by);
+        /// IGateway — `pauseDeposits()` succeeded. Stops new deposits only;
+        /// withdrawals stay open. The vaults emit the same signature
+        /// (`DepositsPaused(address indexed account)`), so one topic-0 covers both.
+        event DepositsPaused(address indexed by);
+        /// IGateway — `unpauseDeposits()` succeeded (vaults emit the same topic-0).
+        event DepositsUnpaused(address indexed by);
         event AgentDeposit(
             bytes32 indexed paymentId,
             bytes32 indexed orderId,
@@ -300,7 +304,9 @@ sol! {
         function totalSupply() external view returns (uint256);
         function exitFeeBps() external view returns (uint256);
         function tvlCap() external view returns (uint256);
-        function paused() external view returns (bool);
+        /// Deposit pause flag. Present on every vault, the v1 vault included. A
+        /// `true` value stops deposits only; redemptions stay open.
+        function depositsPaused() external view returns (bool);
     }
 
     /// Event surface from `VaultRegistry`.  Signatures match `VaultRegistry.sol`
@@ -450,8 +456,10 @@ pub struct Topics {
     pub agent_withdrawal: B256,
     /// Multi-leg router deposit emitted by IGateway.sol:156.
     pub agent_deposit_routed: B256,
-    pub paused: B256,
-    pub unpaused: B256,
+    /// `DepositsPaused(address)` — emitted by the gateway and by every vault.
+    pub deposits_paused: B256,
+    /// `DepositsUnpaused(address)` — emitted by the gateway and by every vault.
+    pub deposits_unpaused: B256,
     pub vault_allocated: B256,
     pub vault_pulled: B256,
     pub vault_rebalanced: B256,
@@ -513,8 +521,8 @@ impl Topics {
             agent_deposit_routed: keccak256(
                 b"AgentDepositRouted(bytes32,bytes32,address,address,address,uint256,uint256[],uint64)",
             ),
-            paused: keccak256(b"Paused(address)"),
-            unpaused: keccak256(b"Unpaused(address)"),
+            deposits_paused: keccak256(b"DepositsPaused(address)"),
+            deposits_unpaused: keccak256(b"DepositsUnpaused(address)"),
             vault_allocated: keccak256(b"Allocated(uint256,address,uint256)"),
             vault_pulled: keccak256(b"Pulled(uint256,address,uint256)"),
             vault_rebalanced: keccak256(b"Rebalanced(uint256)"),
@@ -562,8 +570,8 @@ impl Topics {
             self.agent_deposit,
             self.agent_withdrawal,
             self.agent_deposit_routed,
-            self.paused,
-            self.unpaused,
+            self.deposits_paused,
+            self.deposits_unpaused,
             self.vault_allocated,
             self.vault_pulled,
             self.vault_rebalanced,
@@ -881,14 +889,14 @@ mod tests {
             (
                 "RobotMoneyGateway.sol",
                 "RobotMoneyGateway",
-                "Paused",
-                t.paused,
+                "DepositsPaused",
+                t.deposits_paused,
             ),
             (
                 "RobotMoneyGateway.sol",
                 "RobotMoneyGateway",
-                "Unpaused",
-                t.unpaused,
+                "DepositsUnpaused",
+                t.deposits_unpaused,
             ),
             // RobotMoneyVault — vault state-snapshot triggers plus the two
             // ERC-4626 standard events the vault inherits.
@@ -897,6 +905,19 @@ mod tests {
                 "RobotMoneyVault",
                 "Allocated",
                 t.vault_allocated,
+            ),
+            // The vault's deposit-pause events share the gateway's topic-0.
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "DepositsPaused",
+                t.deposits_paused,
+            ),
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "DepositsUnpaused",
+                t.deposits_unpaused,
             ),
             (
                 "RobotMoneyVault.sol",
@@ -1145,8 +1166,14 @@ mod tests {
             t.agent_revoked,
             IGatewayEvents::AgentRevoked::SIGNATURE_HASH
         );
-        assert_eq!(t.paused, IGatewayEvents::Paused::SIGNATURE_HASH);
-        assert_eq!(t.unpaused, IGatewayEvents::Unpaused::SIGNATURE_HASH);
+        assert_eq!(
+            t.deposits_paused,
+            IGatewayEvents::DepositsPaused::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.deposits_unpaused,
+            IGatewayEvents::DepositsUnpaused::SIGNATURE_HASH
+        );
         assert_eq!(t.vault_allocated, IVaultEvents::Allocated::SIGNATURE_HASH);
         assert_eq!(t.vault_pulled, IVaultEvents::Pulled::SIGNATURE_HASH);
         assert_eq!(t.vault_rebalanced, IVaultEvents::Rebalanced::SIGNATURE_HASH);

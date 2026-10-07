@@ -61,7 +61,7 @@ Each item is a hard gate. None is satisfied by v0.1.
 | C-1 | Private key material lives in an **HSM or a cloud KMS** (non-exportable key, sign-only API). No plaintext key, no software keystore, no key in an env var or CI secret. | A software keystore's passphrase is recoverable from any host that ever ran the signer. |
 | C-2 | Signing is reachable only from a **dedicated submitter host or workload identity**, with a deny-by-default network egress allowlist covering the RPC endpoint and the swarm API only. | Limits the blast radius to one machine and makes exfiltration visible. |
 | C-3 | Every signature request is **logged with the calldata it signed** to an append-only store the submitter host cannot rewrite. | A compromise is only detectable if the tampered call is distinguishable from a legitimate one after the fact. |
-| C-4 | The submitter EOA holds **`AGENT_ROLE` and `COMMITTEE_AGENT_ROLE` and nothing else** — never `ADMIN_ROLE`, `PAUSER_ROLE`, or `DEFAULT_ADMIN_ROLE` on any contract. Verified after every deploy and every role change. | The gateway already enforces role separation (`AccessRoles`); this makes the check explicit at the operational layer too. |
+| C-4 | The submitter EOA holds **`AGENT_ROLE` and `COMMITTEE_AGENT_ROLE` and nothing else** — never `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, or `DEFAULT_ADMIN_ROLE` on any contract. Verified after every deploy and every role change. | The gateway already enforces role separation (`AccessRoles`); this makes the check explicit at the operational layer too. |
 | C-5 | The gas-funding wallet is **separate** from the submitter key and tops it up on a schedule, never the reverse. | The submitter should never hold a balance worth stealing on its own. |
 | C-6 | A **named on-call owner** and a tested rotation drill exist before the first mainnet submission. | An untested rotation procedure is not a rotation procedure. |
 
@@ -252,7 +252,7 @@ produced roughly 7 200 pages a day. Each condition carries a stable `dedup_key`
 the first cycle the gap comes back within budget — which is how AC-CORE-09's
 "successful anchoring resolves the alert" is delivered.
 
-**This path never pauses the gateway.** It is deliberately separate from the
+**This path never pauses gateway deposits.** It is deliberately separate from the
 mint/burn breach cycle so a quiet swarm can never halt the protocol. The
 response to a missing receipt is a page, never a halt.
 

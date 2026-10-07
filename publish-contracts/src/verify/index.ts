@@ -5,7 +5,7 @@ import { encodeFunctionData, keccak256, parseAbiItem, toHex } from "viem";
 import { Collector } from "./collector.ts";
 import { compareCode, loadArtifact } from "./codehash.ts";
 import {
-  ADMIN_ROLE, WEIGHT_SETTER_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
+  ADMIN_ROLE, WEIGHT_SETTER_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
   SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase } from "../stage-table.ts";
@@ -104,8 +104,8 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   };
   for (const n of ["gateway", "registry", "router", "governance", "icpolicy", "receipt"]) await roleChecks(n, byName[n]);
   for (const n of ["gateway", "icpolicy", "receipt"]) await c.runEq(`${n}: DEFAULT_ADMIN held by timelock`, () => hasRole(chain, byName[n], Z32, tl), true);
-  await c.runEq("gateway: PAUSER_ROLE held by pauser", () => hasRole(chain, gateway, PAUSER_ROLE, sheet.pauser), true);
-  await c.runEq("gateway: PAUSER_ROLE not held by deployer", () => hasRole(chain, gateway, PAUSER_ROLE, D), false);
+  await c.runEq("gateway: DEPOSIT_PAUSER_ROLE held by pauser", () => hasRole(chain, gateway, DEPOSIT_PAUSER_ROLE, sheet.pauser), true);
+  await c.runEq("gateway: DEPOSIT_PAUSER_ROLE not held by deployer", () => hasRole(chain, gateway, DEPOSIT_PAUSER_ROLE, D), false);
   await c.runEq("router: ADMIN_ROLE held by governance", () => hasRole(chain, router, ADMIN_ROLE, byName.governance), true);
   // setWeights is gated by WEIGHT_SETTER_ROLE: only RouterGovernance holds it, so the timelock and the Safe cannot bypass the vote.
   await c.runEq("router: WEIGHT_SETTER_ROLE held by governance", () => hasRole(chain, router, WEIGHT_SETTER_ROLE, byName.governance), true);
@@ -113,7 +113,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   for (const [who, addr] of setterHolders) {
     await c.runEq(`router: WEIGHT_SETTER_ROLE not held by ${who}`, () => hasRole(chain, router, WEIGHT_SETTER_ROLE, addr), false);
   }
-  await c.runEq("gateway: not paused", () => chain.read(gateway, "function paused() view returns (bool)"), false);
+  await c.runEq("gateway: not paused", () => chain.read(gateway, "function depositsPaused() view returns (bool)"), false);
   // The router-first split (core 1493): the gateway and the registry both name the router the router stage deployed.
   await c.runEq("gateway: router() equals the deployed router", async () => lc((await chain.read(gateway, "function router() view returns (address)")) as string), lc(router));
   await c.runEq("registry: router() equals the deployed router", async () => lc((await chain.read(registry, "function router() view returns (address)")) as string), lc(router));
@@ -223,7 +223,7 @@ async function vaultChecks(
   await c.runEq(`${p}: feeRecipient equals sheet`, () => chain.read(a, "function feeRecipient() view returns (address)"), vs.feeRecipient);
   await c.run(`${p}: feeRecipient is not deployer`, async () =>
     lc((await chain.read(a, "function feeRecipient() view returns (address)")) as string) !== lc(D));
-  await c.runEq(`${p}: paused state equals sheet`, () => chain.read(a, "function paused() view returns (bool)"), vs.expectPaused);
+  await c.runEq(`${p}: paused state equals sheet`, () => chain.read(a, "function depositsPaused() view returns (bool)"), vs.expectPaused);
   if (v.kind === "usdc") {
     await c.run(`${p}: seed present`, async () => {
       const total = BigInt((await chain.read(a, "function totalAssets() view returns (uint256)")) as bigint);

@@ -28,8 +28,8 @@ MVP end-to-end:
 
 Deferred to follow-ups:
 
-- Pause / unpause UI (encoder + preview already in `src/lib/preview.ts`; UI surface to be added)
-- Role grant / revoke for ADMIN/PAUSER roles
+- Deposit pause / unpause UI (`pauseDeposits` / `unpauseDeposits`; encoder + preview already in `src/lib/preview.ts`). A deposit pause stops new deposits only; withdrawals stay open.
+- Role grant / revoke for ADMIN/DEPOSIT_PAUSER roles
 - Full fork-anvil-driven Playwright authorize/revoke + `rmpc self-check` integration (see test plan)
 - TOML round-trip Rust integration test inside `clients/rust-payment-client/tests/`
 

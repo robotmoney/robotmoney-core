@@ -242,8 +242,8 @@ pub fn run(args: Args) -> i32 {
 
     // -- Preflight --------------------------------------------------------
     // The withdrawal-specific gateway preflight (chain id, code hash,
-    // gateway paused, agent active+expiry, withdrawal window cap) with
-    // totalShares as the amount.
+    // agent active+expiry, withdrawal window cap) with totalShares as the
+    // amount. A deposit pause never refuses it (core 1494).
     let preflight_result = session.rt.block_on(async {
         Preflight::new(&session.rpc, &cfg)
             .run_withdraw_gateway(PreflightInputs {
@@ -270,7 +270,7 @@ pub fn run(args: Args) -> i32 {
     // *vault shares*, which the gateway pulls from each source vault, so the
     // agent must (a) hold enough shares in each vault and (b) have approved
     // the gateway to spend them. Run the same per-vault share
-    // allowance/balance/paused check the single-vault `withdraw` path uses,
+    // allowance/balance check the single-vault `withdraw` path uses,
     // once per identity-bound (vault, shares) leg.
     for (vault, leg_shares) in vaults.iter().zip(shares_per_leg.iter()) {
         let leg_result = session.rt.block_on(async {

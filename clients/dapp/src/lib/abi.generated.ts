@@ -97,6 +97,19 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "DEPOSIT_PAUSER_ROLE",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "MAX_DEADLINE_SKEW",
     inputs: [],
     outputs: [
@@ -117,19 +130,6 @@ export const gatewayAbiGenerated = [
         name: "",
         type: "uint256",
         internalType: "uint256",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "PAUSER_ROLE",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bytes32",
-        internalType: "bytes32",
       },
     ],
     stateMutability: "view",
@@ -620,6 +620,19 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "depositsPaused",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "effectiveDepositWindowGross",
     inputs: [
       {
@@ -732,23 +745,10 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "pause",
+    name: "pauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "paused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "function",
@@ -1035,7 +1035,7 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "unpause",
+    name: "unpauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
@@ -1582,6 +1582,32 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "event",
+    name: "DepositsPaused",
+    inputs: [
+      {
+        name: "by",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "DepositsUnpaused",
+    inputs: [
+      {
+        name: "by",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "ICPolicySet",
     inputs: [
       {
@@ -1592,19 +1618,6 @@ export const gatewayAbiGenerated = [
       },
       {
         name: "policy",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "Paused",
-    inputs: [
-      {
-        name: "by",
         type: "address",
         indexed: true,
         internalType: "address",
@@ -1680,19 +1693,6 @@ export const gatewayAbiGenerated = [
       },
       {
         name: "sender",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "Unpaused",
-    inputs: [
-      {
-        name: "by",
         type: "address",
         indexed: true,
         internalType: "address",
@@ -1810,6 +1810,16 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "DepositsArePaused",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "DepositsNotPaused",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "FailedInnerCall",
     inputs: [],
   },
@@ -1882,16 +1892,6 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "NotAgentOwner",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "NotPaused",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "PausedError",
     inputs: [],
   },
   {
@@ -3800,23 +3800,10 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "pause",
+    name: "pauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "paused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "function",
@@ -4368,7 +4355,7 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "unpause",
+    name: "unpauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
@@ -4408,19 +4395,6 @@ export const robotMoneyVaultAbiGenerated = [
       },
     ],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "withdrawalsPaused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "event",
@@ -4637,13 +4611,26 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "DepositsPausedChanged",
+    name: "DepositsPaused",
     inputs: [
       {
-        name: "paused",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "DepositsUnpaused",
+    inputs: [
+      {
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
       },
     ],
     anonymous: false,
@@ -5119,19 +5106,6 @@ export const robotMoneyVaultAbiGenerated = [
     anonymous: false,
   },
   {
-    type: "event",
-    name: "WithdrawalsPausedChanged",
-    inputs: [
-      {
-        name: "paused",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
-      },
-    ],
-    anonymous: false,
-  },
-  {
     type: "error",
     name: "AccessControlBadConfirmation",
     inputs: [],
@@ -5266,7 +5240,7 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
-    name: "DepositsPaused",
+    name: "DepositsArePaused",
     inputs: [],
   },
   {
@@ -5586,11 +5560,6 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "VaultShutdown",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "WithdrawalsPaused",
     inputs: [],
   },
   {
@@ -7514,17 +7483,6 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
-    name: "VaultPausedForRedeem",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
     name: "ZeroAddress",
     inputs: [],
   },
@@ -8519,23 +8477,10 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "pause",
+    name: "pauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "paused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "function",
@@ -9213,7 +9158,7 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "unpause",
+    name: "unpauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
@@ -9393,13 +9338,26 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "DepositsPausedSet",
+    name: "DepositsPaused",
     inputs: [
       {
-        name: "paused",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "DepositsUnpaused",
+    inputs: [
+      {
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
       },
     ],
     anonymous: false,
@@ -9612,19 +9570,6 @@ export const agentTokenVaultAbiGenerated = [
         type: "uint256",
         indexed: false,
         internalType: "uint256",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "Paused",
-    inputs: [
-      {
-        name: "account",
-        type: "address",
-        indexed: false,
-        internalType: "address",
       },
     ],
     anonymous: false,
@@ -9869,19 +9814,6 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "Unpaused",
-    inputs: [
-      {
-        name: "account",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
     name: "Unretired",
     inputs: [],
     anonymous: false,
@@ -10027,6 +9959,11 @@ export const agentTokenVaultAbiGenerated = [
         internalType: "uint256",
       },
     ],
+  },
+  {
+    type: "error",
+    name: "DepositsArePaused",
+    inputs: [],
   },
   {
     type: "error",
@@ -10233,16 +10170,6 @@ export const agentTokenVaultAbiGenerated = [
   {
     type: "error",
     name: "EmergencyUnwindOverrideDisabled",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "EnforcedPause",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "ExpectedPause",
     inputs: [],
   },
   {
@@ -11448,23 +11375,10 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "pause",
+    name: "pauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "paused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "function",
@@ -12142,7 +12056,7 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "unpause",
+    name: "unpauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
@@ -12322,13 +12236,26 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "DepositsPausedSet",
+    name: "DepositsPaused",
     inputs: [
       {
-        name: "paused",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "DepositsUnpaused",
+    inputs: [
+      {
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
       },
     ],
     anonymous: false,
@@ -12541,19 +12468,6 @@ export const protocolAssetVaultAbiGenerated = [
         type: "uint256",
         indexed: false,
         internalType: "uint256",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "Paused",
-    inputs: [
-      {
-        name: "account",
-        type: "address",
-        indexed: false,
-        internalType: "address",
       },
     ],
     anonymous: false,
@@ -12798,19 +12712,6 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "Unpaused",
-    inputs: [
-      {
-        name: "account",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
     name: "Unretired",
     inputs: [],
     anonymous: false,
@@ -12956,6 +12857,11 @@ export const protocolAssetVaultAbiGenerated = [
         internalType: "uint256",
       },
     ],
+  },
+  {
+    type: "error",
+    name: "DepositsArePaused",
+    inputs: [],
   },
   {
     type: "error",
@@ -13162,16 +13068,6 @@ export const protocolAssetVaultAbiGenerated = [
   {
     type: "error",
     name: "EmergencyUnwindOverrideDisabled",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "EnforcedPause",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "ExpectedPause",
     inputs: [],
   },
   {

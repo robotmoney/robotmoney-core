@@ -25,7 +25,7 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 /// @dev Required env vars (all required on every chain, no defaults):
 ///        EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet
 ///        ADMIN_ADDRESS         — receives DEFAULT_ADMIN_ROLE + ADMIN_ROLE
-///        PAUSER_ADDRESS        — receives PAUSER_ROLE (must differ from ADMIN)
+///        PAUSER_ADDRESS        — receives DEPOSIT_PAUSER_ROLE (must differ from ADMIN)
 ///        AGENT_ADDRESS         — receives AGENT_ROLE  (must differ from both)
 ///        SHARE_RECEIVER_ADDRESS — recipient of minted rmUSDC shares
 ///        VAULT_ADDRESS         — the rmUSDC RobotMoneyVault
@@ -229,9 +229,15 @@ contract DeployGateway is ExpectedChainGuard {
 
         require(d.gateway.hasRole(d.gateway.AGENT_ROLE(), d.agent), "agent missing AGENT_ROLE");
         require(!d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.agent), "agent has ADMIN_ROLE");
-        require(!d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.agent), "agent has PAUSER_ROLE");
+        require(
+            !d.gateway.hasRole(d.gateway.DEPOSIT_PAUSER_ROLE(), d.agent),
+            "agent has DEPOSIT_PAUSER_ROLE"
+        );
         require(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.admin), "admin missing ADMIN_ROLE");
-        require(d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.pauser), "pauser missing PAUSER_ROLE");
+        require(
+            d.gateway.hasRole(d.gateway.DEPOSIT_PAUSER_ROLE(), d.pauser),
+            "pauser missing DEPOSIT_PAUSER_ROLE"
+        );
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {

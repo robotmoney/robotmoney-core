@@ -45,8 +45,8 @@ export const VAULT_ABI = parseAbi([
   "function setPerDepositCap(uint256 newCap)",
   "function setExitFeeBps(uint256 newBps)",
   "function setFeeRecipient(address newRecipient)",
-  "function unpause()",
-  "function paused() view returns (bool)",
+  "function unpauseDeposits()",
+  "function depositsPaused() view returns (bool)",
   "function tvlCap() view returns (uint256)",
   "function perDepositCap() view returns (uint256)",
   "function exitFeeBps() view returns (uint256)",
@@ -201,7 +201,7 @@ export function buildStepCalls(sheet: Sheet, a: GovernAddrs, row: GovernRowName)
     add("router.setDefaultWeights", a.router, encodeFunctionData({ abi: ROUTER_ABI, functionName: "setDefaultWeights", args: [all.map((k) => a.vaults[k]), all.map((k) => BigInt(w.get(k)!))] }));
   } else if (row.startsWith("unpause-")) {
     const k = row.slice("unpause-".length) as VaultKey;
-    if (sheet.govern.unpauseVaults.includes(k)) add(`${VAULT_NAME[k]}.unpause`, a.vaults[k], encodeFunctionData({ abi: VAULT_ABI, functionName: "unpause" }));
+    if (sheet.govern.unpauseVaults.includes(k)) add(`${VAULT_NAME[k]}.unpauseDeposits`, a.vaults[k], encodeFunctionData({ abi: VAULT_ABI, functionName: "unpauseDeposits" }));
   }
   return calls;
 }
@@ -374,7 +374,7 @@ export async function readBackStep(handle: SafeHandle, sheet: Sheet, a: GovernAd
     if ((await rd<bigint>(a.router, ROUTER_ABI, "defaultWeightsLength")) !== want) bad.push("router.defaultWeightsLength");
   } else if (row.startsWith("unpause-")) {
     const k = row.slice("unpause-".length) as VaultKey;
-    if (await rd<boolean>(a.vaults[k], VAULT_ABI, "paused")) bad.push(`${VAULT_NAME[k]}.paused`);
+    if (await rd<boolean>(a.vaults[k], VAULT_ABI, "depositsPaused")) bad.push(`${VAULT_NAME[k]}.depositsPaused`);
   }
   return bad;
 }

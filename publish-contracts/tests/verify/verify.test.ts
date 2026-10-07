@@ -129,7 +129,7 @@ describe("mutations fail with the expected label", () => {
 
   test("rmAGENT must be empty and paused", async () => {
     const w = buildWorld();
-    w.chain.set(VAULTS.rmAGENT.address, "paused", false);
+    w.chain.set(VAULTS.rmAGENT.address, "depositsPaused", false);
     expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmAGENT]: paused state equals sheet"]);
   });
 

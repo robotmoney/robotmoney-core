@@ -17,7 +17,8 @@
 //! 6. Sleep for `poll_interval_secs` and repeat.
 //!
 //! The watchdog does NOT exit on a breach — it continues polling to catch
-//! subsequent breaches and to log that the gateway remains paused.
+//! subsequent breaches and to log that gateway deposits remain paused (a deposit
+//! pause never freezes withdrawals).
 
 use std::time::Duration;
 
@@ -272,11 +273,11 @@ pub async fn run_cycle(
                 config.action.pause_fee_bump_bps,
             ) {
                 Ok(params) => match timeout(sla, trigger_pause(client, &params)).await {
-                    Ok(Ok(tx)) => info!(tx_hash = %tx, "gateway.pause() submitted"),
-                    Ok(Err(e)) => error!("gateway.pause() failed: {e}"),
+                    Ok(Ok(tx)) => info!(tx_hash = %tx, "gateway.pauseDeposits() submitted"),
+                    Ok(Err(e)) => error!("gateway.pauseDeposits() failed: {e}"),
                     Err(_) => error!(
                         sla_secs = config.sla.max_response_secs,
-                        "gateway.pause() exceeded SLA budget; aborted (alert already dispatched)"
+                        "gateway.pauseDeposits() exceeded SLA budget; aborted (alert already dispatched)"
                     ),
                 },
                 Err(e) => error!("pause params invalid: {e}"),
@@ -286,7 +287,7 @@ pub async fn run_cycle(
             // Never silent: the pause simply did not happen.
             None => error!(
                 "action.mode includes pause but no pauser signing key was derived \
-                 at startup; gateway.pause() NOT attempted (alert already dispatched)"
+                 at startup; gateway.pauseDeposits() NOT attempted (alert already dispatched)"
             ),
         }
     }

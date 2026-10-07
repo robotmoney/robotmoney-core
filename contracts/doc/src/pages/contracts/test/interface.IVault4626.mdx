@@ -1,0 +1,66 @@
+---
+title: "IVault4626"
+---
+
+# IVault4626
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/4104dd3a305dc981311d0d2ad0b09d71e85fc618/contracts/test/WithdrawalsNeverFrozen.t.sol)
+
+<i>
+
+The ERC-4626 entry points and the deposit-pause pair every shipped vault shares.
+
+</i>
+
+## Functions
+
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+```solidity
+function deposit(uint256 assets, address receiver) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="mint-uint256-address"></a>
+
+### mint
+
+```solidity
+function mint(uint256 shares, address receiver) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="unpausedeposits"></a>
+
+### unpauseDeposits
+
+```solidity
+function unpauseDeposits() external;
+```
+

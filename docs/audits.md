@@ -358,6 +358,8 @@ the Passthrough natspec drift (L3-D2) by **#922**.
 | HR-L3-D2 | HR-0618 | Info | fixed | script/AdapterBytecodeGuard | #922 | Stale natspec listed Passthrough; purged from natspec + forge-doc mirror, grep-guarded |
 | HR-S-1 | HR-0618 | Info | dismissed-with-rationale | Slither (production source) | — | 0 High, 0 true-positive Medium; all hits known-safe patterns, no action |
 
+> Note 2026-10-05 (core 1494): HR-L-1 above predates core 1494. Withdrawals are now never frozen, and `withdrawalsPaused` is deleted. A pause stops deposits only (`pauseDeposits()` / `unpauseDeposits()` / `depositsPaused()`, `DEPOSIT_PAUSER_ROLE`, `VaultStatus.DepositsPaused`, `DepositsArePaused`). The deployed v1 vault keeps its old code. The rows above are kept as written.
+
 ### CD-0602 — Confused-deputy / caller-supplied-identity audit
 
 Defense-in-depth audit (SquidRouterModule class) of every fund-moving entrypoint

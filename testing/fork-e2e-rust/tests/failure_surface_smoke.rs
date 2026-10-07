@@ -3,8 +3,9 @@
 //!
 //! Exercises the documented refusal surfaces of the deployed
 //! vault: insufficient balance, missing allowance, and (where
-//! safely reproducible against a fork) `paused()` / `tvlCap`
-//! permutations. Each case asserts that the call reverts cleanly
+//! safely reproducible against a fork) `depositsPaused()` / `tvlCap`
+//! permutations. A deposit pause refuses deposits only; redeems stay
+//! open (core 1494). Each case asserts that the call reverts cleanly
 //! and does not leave partial state behind.
 //!
 //! Manually-triggered / post-merge per ADR §3.4 — the matrix is

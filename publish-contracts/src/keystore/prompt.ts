@@ -20,7 +20,7 @@ export async function hidden(question: string): Promise<string> {
       };
       stdin.on("data", onData);
     });
-  } finally { stdin.setRawMode(false); stdin.pause(); }
+  } finally { stdin.setRawMode(false); stdin.pause(); } // pause-guard: allow (Node stdin, not a vault)
 }
 
 /** One keystroke applied to the input so far. Pure, so it is testable without a terminal. */

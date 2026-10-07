@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { keccak256, pad, toHex } from "viem";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import {
-  ADMIN_ROLE, WEIGHT_SETTER_ROLE, EMERGENCY_ROLE, PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
+  ADMIN_ROLE, WEIGHT_SETTER_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
   SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
@@ -65,9 +65,9 @@ const RULES: Rule[] = [
   [/^router: ADMIN_ROLE held by governance$/, (w) => w.chain.revoke(ROUTER, ADMIN_ROLE, GOV)],
   [/^router: WEIGHT_SETTER_ROLE held by governance$/, (w) => w.chain.revoke(ROUTER, WEIGHT_SETTER_ROLE, GOV)],
   [/^router: WEIGHT_SETTER_ROLE not held by (timelock|deployer|safe|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, { timelock: TIMELOCK, ...WHO }[m[1]]!)],
-  [/^gateway: PAUSER_ROLE held by pauser$/, (w) => w.chain.revoke(GATEWAY, PAUSER_ROLE, PAUSER)],
-  [/^gateway: PAUSER_ROLE not held by deployer$/, (w) => w.chain.grant(GATEWAY, PAUSER_ROLE, DEPLOYER)],
-  [/^gateway: not paused$/, (w) => w.chain.set(GATEWAY, "paused", true)],
+  [/^gateway: DEPOSIT_PAUSER_ROLE held by pauser$/, (w) => w.chain.revoke(GATEWAY, DEPOSIT_PAUSER_ROLE, PAUSER)],
+  [/^gateway: DEPOSIT_PAUSER_ROLE not held by deployer$/, (w) => w.chain.grant(GATEWAY, DEPOSIT_PAUSER_ROLE, DEPLOYER)],
+  [/^gateway: not paused$/, (w) => w.chain.set(GATEWAY, "depositsPaused", true)],
   [/^gateway: router\(\) equals the deployed router$/, (w) => w.chain.set(GATEWAY, "router", OTHER)],
   [/^registry: router\(\) equals the deployed router$/, (w) => w.chain.set(REGISTRY, "router", OTHER)],
   [/^(.+): ADMIN_ROLE held by timelock$/, (w, m) => w.chain.revoke(subject(m[1]), ADMIN_ROLE, TIMELOCK)],
@@ -85,7 +85,7 @@ const RULES: Rule[] = [
   [/^(vault\[\w+\]): exitFeeBps equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "exitFeeBps", 999n)],
   [/^(vault\[\w+\]): feeRecipient equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", OTHER)],
   [/^(vault\[\w+\]): feeRecipient is not deployer$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", DEPLOYER)],
-  [/^(vault\[\w+\]): paused state equals sheet$/, (w, m) => { const a = subject(m[1]); const was = w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].expectPaused; w.chain.set(a, "paused", !was); }],
+  [/^(vault\[\w+\]): paused state equals sheet$/, (w, m) => { const a = subject(m[1]); const was = w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].expectPaused; w.chain.set(a, "depositsPaused", !was); }],
   [/^vault\[rmAGENT\]: asset config equals sheet$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): asset config equals sheet$/, (w, m) => { w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].assets = []; }],
   [/^vault\[rmUSDC\]: seed present$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "totalAssets", 0n)],

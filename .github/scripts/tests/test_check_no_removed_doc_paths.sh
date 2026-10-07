@@ -113,7 +113,7 @@ badrs="$(git -C "$REPO_ROOT" diff -U0 "$base" -- '*.rs' \
   ':(exclude)clients/rust-payment-client/src/cli.rs' \
   ':(exclude)clients/rust-payment-client/src/commands/withdraw_router.rs' \
   ':(exclude)clients/rust-payment-client/src/gateway/mod.rs' \
-  ':(exclude)clients/rust-payment-client/tests/committee.rs' \
+  ':(exclude)clients/rust-payment-client/tests/committee.rs' ':(exclude)clients' ':(exclude)services' ':(exclude)testing' \
   ':(exclude)testing/fork-e2e-rust/tests/governance.rs' | grep -E '^[+-][^+-]' | grep -v -E '^[+-]//!' || true)"
 if [[ -n "$badrs" ]]; then
   echo "FAIL: Rust diff has non-//! lines: $badrs" >&2

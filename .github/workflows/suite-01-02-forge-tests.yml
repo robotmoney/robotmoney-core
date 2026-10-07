@@ -148,7 +148,7 @@ jobs:
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen}.t.sol"
 
       # Fusion's named evidence files need an execution boundary in the CI log.
       # A whole-suite `forge test` is not enough for a fail-closed external
@@ -337,6 +337,15 @@ jobs:
 
       - name: forge test (rmRWA fork regression — core 1492)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
+      - name: forge test (withdrawals are never frozen, through a real 2-of-3 Safe - core 1494)
+        # Every shipped vault, the gateway and the router: no emergency, deposit-pauser
+        # or governance lever blocks an exit, and unpauseDeposits runs only through the
+        # canonical SafeL2 proxy and the timelock at 172800 s. Fork-only like the Safe
+        # tests above.
+        run: |
+          echo "::group::contracts/test/WithdrawalsNeverFrozen.t.sol:"
+          bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/WithdrawalsNeverFrozen.t.sol"
+          echo "::endgroup::"
 
       - name: forge test (split-stage router deposit and withdraw on the fork — core 1485)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/CoreStagesFork.t.sol"
@@ -451,7 +460,7 @@ jobs:
         #     1476), but coverage instruments bytecode and inflates every contract
         #     past it, so the assertion is meaningless here. They run in the unit job.
         #   - `DeploySeedDeposit` / `SafeIntegration` / `VaultForkRegressions` /
-        #     `GovernanceExecutePathAfterHandover`: fork tests, same reason.
+        #     `GovernanceExecutePathAfterHandover` / `WithdrawalsNeverFrozen`: fork tests, same reason.
         #
         # The wrapper measures the run's peak RSS and fails the job above 50% of
         # runner RAM, so the next contract-adding PR meets an explanatory red gate
@@ -461,7 +470,7 @@ jobs:
           forge coverage --report lcov
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

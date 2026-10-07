@@ -306,8 +306,8 @@ pub enum Command {
     },
     /// Redeem vault shares through the gateway (agent-initiated redemption).
     ///
-    /// Performs preflight reads (gateway paused, agent policy, vault paused,
-    /// share allowance, share balance) then builds and broadcasts a
+    /// Performs preflight reads (agent policy, share allowance, share
+    /// balance) then builds and broadcasts a
     /// `gateway.withdraw(orderId, shares, sourceVault, deadline, idempotencyKey)`
     /// call. Emits a stable JSON result with `assetsOut`, `assetRecipient`,
     /// `txHash`, and `blockNumber` on success; exits non-zero on any refusal.

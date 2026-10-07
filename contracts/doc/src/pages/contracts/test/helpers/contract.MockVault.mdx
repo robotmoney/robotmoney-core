@@ -5,7 +5,7 @@ description: "Minimal `IERC4626`-shaped vault for gateway tests. Mints `rmUSDC` 
 
 # MockVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/helpers/MockVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/230eaace165b2eded59d836154b02cd6108a627d/contracts/test/helpers/MockVault.sol)
 
 **Inherits:** ERC20, ReentrancyGuard
 
@@ -60,7 +60,7 @@ constructor(address asset_) ERC20("Mock Robot Money USDC", "rmUSDC");
 ### retire
 
 No-op retire stub. Satisfies `IRetirableVault` so
-`VaultRegistry.setVaultStatus(Paused/Retired)` can call the
+`VaultRegistry.setVaultStatus(DepositsPaused/Retired)` can call the
 deposit-halt hook without reverting. The mock has no registry
 link and no deposit-halt flag; this is a test fixture only.
 

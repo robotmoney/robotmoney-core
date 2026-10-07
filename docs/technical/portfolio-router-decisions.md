@@ -139,7 +139,7 @@ struct DepositLeg {
     uint256 usdc;           // USDC allocated to this leg (amount * weightBps / 10_000)
     uint256 estimatedShares;// vault.previewDeposit(usdc); 0 if unavailable
     uint256 estimatedFee;   // vault.exitFeeBps() applied to usdc; 0 if unavailable
-    bool    unavailable;    // true if leg is Paused, Retired, or cap-full
+    bool    unavailable;    // true if leg is DepositsPaused, Retired, or cap-full
     string  unavailableReason; // "paused" | "retired" | "cap_full" | ""
 }
 ```
@@ -159,7 +159,7 @@ struct DepositLeg {
   the ABI stable while allowing the dapp to render a human label without
   requiring contract upgrades.
 - `estimatedShares` is 0 for unavailable legs because calling
-  `vault.previewDeposit` on a paused vault may revert. The router catches that
+  `vault.previewDeposit` on a vault with deposits paused may revert. The router catches that
   revert in the preview path only and sets `estimatedShares = 0`.
 
 **Rejected alternatives.**
@@ -215,7 +215,7 @@ immutable. Any hot-file change to `VaultRegistry.sol`'s `VaultRecord` struct or
 | Condition | Error | Revert triggered by |
 |---|---|---|
 | Router cap exceeded | `RouterCapExceeded` | Router cap check (step 1) |
-| Any leg is Paused | `UnavailableLeg(vault, "paused")` | Status check before vault call |
+| Any leg is DepositsPaused | `UnavailableLeg(vault, "paused")` | Status check before vault call |
 | Any leg is Retired | `UnavailableLeg(vault, "retired")` | Status check before vault call |
 | Any leg cap-full | `UnavailableLeg(vault, "cap_full")` | Per-vault cap check (step 3) |
 | `vault.deposit()` reverts | bubble up | Vault call (step 4) |
@@ -230,7 +230,7 @@ immutable. Any hot-file change to `VaultRegistry.sol`'s `VaultRecord` struct or
 these cause the deposit to revert because unavailable legs always revert):**
 
 The `previewDeposit()` view function catches reverts from `vault.previewDeposit`
-(e.g. the vault is paused and its preview function reverts) and returns
+(e.g. the vault has deposits paused and its preview function reverts) and returns
 `estimatedShares = 0, unavailable = true` rather than bubbling up. The live
 `deposit()` does not call `previewDeposit`; it makes the real deposit calls and
 lets any revert propagate.
@@ -284,8 +284,9 @@ The `shareReceiver` routing rule:
 - `paymentId` replay protection: computed at the gateway level; the router
   receives it as `orderId` and emits it in `RouterDeposit` for correlation but
   does not re-check it.
-- Pause: the gateway's stop-the-world pause blocks all destinations including
-  the router.
+- Pause: the gateway deposit pause blocks new deposits to all destinations,
+  the router included. It never blocks `withdrawFromRouter`. Exits stay open
+  while deposits are paused (core 1494).
 
 ### 3.6 Unavailable-leg detection logic
 
@@ -294,13 +295,13 @@ of the `deposit()` call:
 
 | Condition | Source | Check order |
 |---|---|---|
-| `VaultRegistry.getVault(vault).status == VaultStatus.Paused` | Registry | First |
+| `VaultRegistry.getVault(vault).status == VaultStatus.DepositsPaused` | Registry | First |
 | `VaultRegistry.getVault(vault).status == VaultStatus.Retired` | Registry | First |
 | `vault.totalAssets() + legUsdc > depositCap && depositCap > 0` | Vault + Registry | After status check |
 
 A leg is **not** considered unavailable solely because:
 
-- The vault's on-chain `paused()` flag differs from the registry status (this
+- The vault's on-chain `depositsPaused()` flag differs from the registry status (this
   is a misconfiguration risk; the router trusts the registry status as the
   authoritative source for routing decisions).
 - The router cap would be exceeded (that causes a `RouterCapExceeded` revert
@@ -311,6 +312,10 @@ In `previewDeposit()`, unavailable-leg detection additionally catches:
 - `vault.previewDeposit(legUsdc)` reverts for any reason. The router treats
   such a revert as `unavailable = true`, `unavailableReason = "preview_revert"`,
   `estimatedShares = 0`.
+
+These rules apply to deposits only. `redeemFor` redeems from a vault in every
+registry status, `DepositsPaused` and `Retired` included. No status blocks an
+exit (core 1494).
 
 ---
 
@@ -356,7 +361,7 @@ implementation issues to begin, but the assigned implementer must address each.
 2. **`activeVaults()` ordering stability.** The router's parallel array API
    (`minSharesPerLeg`, `sharesPerLeg`) depends on a stable ordering of active
    vaults across the `previewDeposit` → `deposit` call pair. If the active
-   vault list changes between preview and deposit (e.g. a vault is paused or
+   vault list changes between preview and deposit (e.g. a vault has deposits paused or
    a weight is updated), the leg order may shift and the caller's
    `minSharesPerLeg` array may refer to the wrong vault. Mitigation: the router
    should include the active-vault snapshot hash in the `paymentId` or require
@@ -370,7 +375,7 @@ implementation issues to begin, but the assigned implementer must address each.
    the registry address as an immutable and consider storing a local weight bps
    mapping to avoid per-deposit registry reads for weight data (weights change
    only via governance, not per-deposit). Status reads must remain live because
-   a vault can be paused between blocks.
+   a vault's deposits can be paused between blocks.
 
 4. **No outer share token.** `docs/architecture.md` §2.2 is explicit: the
    Portfolio Router does not issue an outer share token. The dapp and `rmpc`

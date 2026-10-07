@@ -87,7 +87,7 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     getTransactionCount: async () => o.nonce ?? 2,
     getTransactionReceipt: async ({ hash }) => { const r = receipts.get(hash); if (!r) throw new Error("not found"); return r; },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(blocks.get(blockNumber)!) }),
-    readContract: async ({ functionName }) => (functionName === "paused" ? (o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
+    readContract: async ({ functionName }) => (functionName === "depositsPaused" ? (o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
   };
 }
 const online = (o: Opts = {}, mutate: (e: any) => void = () => {}) => { const e = good(); const chain = stub(e, o); mutate(e); return checkEvidenceOnChain(e, chain, { safe: 2 }); };
@@ -116,12 +116,12 @@ describe("unpause govern rows and paused=false reads tell one story", () => {
   test("every unpause row executed and every basket vault reads paused=false: passes", async () => expect(await online({ paused: false })).toEqual([]));
   test("an unpause row that executed while the vault still reads paused=true is rejected, naming the row", async () => {
     const p = await online({ paused: true });
-    expect(p.join("\n")).toContain("govern unpause-PROTO executed with receipt status 1, but rmPROTO.paused() reads true");
-    expect(p.filter((m) => m.includes("paused()")).length).toBe(3);
+    expect(p.join("\n")).toContain("govern unpause-PROTO executed with receipt status 1, but rmPROTO.depositsPaused() reads true");
+    expect(p.filter((m) => m.includes("depositsPaused()")).length).toBe(3);
   });
   test("a vault that reads paused=false with no executed unpause row is rejected", async () => {
     const p = await online({ paused: false }, (e) => { const g = e.govern.find((x: any) => x.step === "unpause-RWA"); g.execute_status = 0; });
-    expect(p.join("\n")).toContain("rmRWA.paused() reads false on chain, but govern unpause-RWA has no executed receipt");
+    expect(p.join("\n")).toContain("rmRWA.depositsPaused() reads false on chain, but govern unpause-RWA has no executed receipt");
   });
   test("rmUSDC ships unpaused and is not part of the link", async () => expect((await online({ paused: false })).join()).not.toContain("rmUSDC"));
 });

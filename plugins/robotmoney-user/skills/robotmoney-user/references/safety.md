@@ -11,7 +11,7 @@ This document maps every refusal to its source in the implementation plan.
 
 Before signing any deposit transaction, the client RPC-reads:
 
-- `gateway.paused()`
+- `gateway.depositsPaused()`
 - `gateway.agents(self_addr)` (active, validUntil, caps, shareReceiver)
 - `usdc.allowance(self, gateway)`
 - `usdc.balanceOf(self)`
@@ -21,7 +21,7 @@ Before signing any deposit transaction, the client RPC-reads:
 
 | Condition | Error code | Meaning |
 |---|---|---|
-| `gateway.paused() == true` | `ErrGatewayPaused` | Operations are halted by `PAUSER_ROLE`; only `ADMIN_ROLE` can unpause. |
+| `gateway.depositsPaused() == true` | `ErrDepositsPaused` | New deposits are halted by `DEPOSIT_PAUSER_ROLE`; only `ADMIN_ROLE` can unpause. Deposits only: a withdrawal is never refused for a pause. |
 | Agent record missing or `active == false` | `ErrAgentNotAuthorized` | This address is not (or no longer) an authorized agent. |
 | `validUntil < block.timestamp` | `ErrAgentExpired` | The authorization has expired; ADMIN must re-authorize. |
 | `amount > maxPerPayment` | `ErrPerPaymentCapExceeded` | Operator-set per-payment cap. |
@@ -118,7 +118,7 @@ they do not bypass chain-id or code-hash checks.
 
 These refusals are not the agent's to override:
 
-- Pause / unpause: `PAUSER_ROLE` and `ADMIN_ROLE` only.
+- Pause / unpause deposits: `DEPOSIT_PAUSER_ROLE` and `ADMIN_ROLE` only.
 - Cap changes, share-receiver changes, agent authorization: `ADMIN_ROLE`
   only, via the human dapp (implementation-plan §12).
 - Code-hash rotation: redeploy + operator config bump. The client has no

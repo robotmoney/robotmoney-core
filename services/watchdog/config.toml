@@ -23,7 +23,8 @@ per_hour_burn_limit_usdc    = "10000000000"  # 10 000 USDC per hour
 
 [action]
 # Breach response mode.
-#   "pause"           → call gateway.pause() via funded PAUSER_ROLE key
+#   "pause"           → call gateway.pauseDeposits() via funded DEPOSIT_PAUSER_ROLE key
+#                       (stops new deposits only; withdrawals are never frozen)
 #   "alert"           → dispatch structured JSON alert to webhook_url
 #   "pause_and_alert" → both (recommended for production)
 mode = "pause_and_alert"
@@ -41,7 +42,7 @@ gateway_rpc_url = "https://mainnet.base.org"
 # Required when mode includes "pause".
 gateway_address = "0x0000000000000000000000000000000000000000"
 
-# Hex-encoded private key for the PAUSER_ROLE account (must be funded for gas).
+# Hex-encoded private key for the DEPOSIT_PAUSER_ROLE account (must be funded for gas).
 # SECURITY: Do not commit a real key. Provide via the WATCHDOG_PAUSER_KEY_HEX
 # environment variable (it overrides this literal) or a secrets manager at
 # runtime; this literal exists for local dev. Either way the daemon reads the key
@@ -52,7 +53,7 @@ gateway_address = "0x0000000000000000000000000000000000000000"
 pauser_private_key_hex = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 # Gas-price bump (basis points) applied over the network eth_gasPrice when
-# submitting gateway.pause(). The pause tx uses the CONFIRMED nonce, so a retried
+# submitting gateway.pauseDeposits(). The pause tx uses the CONFIRMED nonce, so a retried
 # pause replaces a stuck under-priced same-nonce tx by out-bidding it (scan
 # finding WD-5). 1500 = +15%. Optional; defaults to 1500 when omitted.
 pause_fee_bump_bps = 1500

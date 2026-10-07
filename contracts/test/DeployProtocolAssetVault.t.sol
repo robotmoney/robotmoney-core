@@ -59,7 +59,7 @@ contract DeployProtocolAssetVaultTest is BasketDeployFixture {
         BasketVaultDeployBase.Deployed memory d = script.runInProcess(p, json);
 
         ProtocolAssetVault vault = ProtocolAssetVault(d.vault);
-        assertTrue(vault.paused(), "vault must be paused");
+        assertTrue(vault.depositsPaused(), "vault must be paused");
         assertTrue(d.paused, "result reports paused");
 
         address[] memory cfgTokens = new address[](2);

@@ -105,7 +105,7 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
                   ctx={a.ctx}
                   description={
                     <p>
-                      Mutually exclusive with AGENT_ROLE and PAUSER_ROLE per
+                      Mutually exclusive with AGENT_ROLE and DEPOSIT_PAUSER_ROLE per
                       <code> AccessRoles._grantRole</code>. Only DEFAULT_ADMIN_ROLE holders may
                       grant.
                     </p>
@@ -115,17 +115,18 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
             },
             {
               id: "pauser-role",
-              label: "Pauser Role",
+              label: "Deposit Pauser Role",
               content: (
                 <RoleTab
-                  role="PAUSER_ROLE"
+                  role="DEPOSIT_PAUSER_ROLE"
                   gatewayAddress={a.gatewayAddress}
                   ctx={a.ctx}
                   description={
                     <p>
-                      PAUSER may call <code>pause()</code> only; <code>unpause()</code> requires
-                      ADMIN_ROLE. Mutually exclusive with AGENT_ROLE and ADMIN_ROLE on the same
-                      account.
+                      DEPOSIT_PAUSER may call <code>pauseDeposits()</code> only;{" "}
+                      <code>unpauseDeposits()</code> requires ADMIN_ROLE. A deposit pause stops new
+                      deposits only and never blocks a withdrawal. Mutually exclusive with
+                      AGENT_ROLE and ADMIN_ROLE on the same account.
                     </p>
                   }
                 />
@@ -139,7 +140,7 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
 
   tabs.push({
     id: "pause",
-    label: "Pause / Unpause",
+    label: "Pause / Unpause Deposits",
     content: (
       <PauseFlow
         gatewayAddress={a.gatewayAddress}

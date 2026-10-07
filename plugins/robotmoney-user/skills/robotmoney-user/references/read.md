@@ -73,7 +73,7 @@ rmpc get-vaults --config ./config.toml [--pretty]
 Lists all vaults registered in the `VaultRegistry` contract (requires
 `registry_address` in the operator config). Returns a `vaults` array with
 registry metadata and live `total_assets` for each registered vault (active,
-paused, and retired). An empty registry returns `vaults: []` with exit code 0.
+deposits_paused, and retired). Every status still redeems. An empty registry returns `vaults: []` with exit code 0.
 
 Use it to discover all available deposit destinations programmatically.
 
@@ -127,7 +127,8 @@ rmpc get-gateway --config ./config.toml [--pretty]
 
 Reads the configured `RobotMoneyGateway`. Returns gateway address, chain id,
 configured USDC and vault addresses, the runtime code hash (compared against
-`gateway_runtime_hash` in config), and the pause flag. A code-hash mismatch is
+`gateway_runtime_hash` in config), and the deposit-pause flag (`deposits_paused`,
+from `depositsPaused()`). It stops deposits only. A withdrawal still works. A code-hash mismatch is
 a hard refusal at write time (see `references/safety.md`).
 
 ---
@@ -151,9 +152,9 @@ deposit to confirm the agent is authorized and has remaining cap.
 rmpc get-roles --config ./config.toml --address <0x...> [--pretty]
 ```
 
-Reports membership of `ADMIN_ROLE`, `PAUSER_ROLE`, and `AGENT_ROLE` on the
+Reports membership of `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, and `AGENT_ROLE` on the
 gateway for the supplied address. The gateway enforces an invariant that an
-`AGENT_ROLE` holder must not also hold `ADMIN_ROLE` or `PAUSER_ROLE`; this
+`AGENT_ROLE` holder must not also hold `ADMIN_ROLE` or `DEPOSIT_PAUSER_ROLE`; this
 command is the agent-side check.
 
 ---

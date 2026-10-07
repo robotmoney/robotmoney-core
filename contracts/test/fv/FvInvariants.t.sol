@@ -270,7 +270,7 @@ contract FvInvariantsTest is Test {
     ///         onto vaultB and Retire vaultA. The holder still redeems the vaultA
     ///         position through `redeemFor` by naming it explicitly — the redeem
     ///         path no longer iterates the live weight vector, and a Retired leg
-    ///         (only Paused is blocked) is still redeemable.
+    ///         (no status blocks an exit, core 1494) is still redeemable.
     function test_LIFE5_expectedFail_reweightKeepsPositionRedeemable() public {
         _assertHolds("LIFE-5");
 
@@ -458,7 +458,7 @@ contract FvInvariantsTest is Test {
         assertFalse(vault.retired(), "LIFE-1: setVaultStatus(Active) must re-open deposits");
 
         // Back-door #2: setVaultStatus(_, Paused) also halts the vault.
-        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(vault.retired(), "LIFE-1: setVaultStatus(Paused) must halt vault deposits");
 
         // The atomic governance path stays in sync as well.
@@ -488,7 +488,7 @@ contract FvInvariantsTest is Test {
         router.setWeights(vaults, bps);
 
         // Pause via the registry: the vault is still eligible but not Active.
-        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(router.isRouterEligible(address(vault)), "still eligible");
 
         // setWeights must now revert VaultNotActive — a non-depositable vector can
@@ -497,7 +497,7 @@ contract FvInvariantsTest is Test {
             abi.encodeWithSelector(
                 PortfolioRouter.VaultNotActive.selector,
                 address(vault),
-                VaultRegistry.VaultStatus.Paused
+                VaultRegistry.VaultStatus.DepositsPaused
             )
         );
         router.setWeights(vaults, bps);
@@ -507,7 +507,7 @@ contract FvInvariantsTest is Test {
             abi.encodeWithSelector(
                 PortfolioRouter.VaultNotActive.selector,
                 address(vault),
-                VaultRegistry.VaultStatus.Paused
+                VaultRegistry.VaultStatus.DepositsPaused
             )
         );
         router.setDefaultWeights(vaults, bps);
@@ -533,7 +533,7 @@ contract FvInvariantsTest is Test {
         router.setWeights(vaults, bps);
 
         // Pause vaultA AFTER weighting (allowed; the vector was valid when written).
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
 
         uint256 amount = 1_000e6;
 
@@ -555,7 +555,7 @@ contract FvInvariantsTest is Test {
         // Whole-basket-unavailable case: both paused ⇒ preview all-unavailable AND
         // execute reverts (consistent), never a preview-healthy / execute-revert
         // divergence.
-        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.DepositsPaused);
         legs = router.previewDeposit(amount);
         assertTrue(legs[0].unavailable && legs[1].unavailable, "RTR-5: all legs unavailable");
         usdc.mint(address(this), amount);
@@ -591,7 +591,7 @@ contract FvInvariantsTest is Test {
 
         // Pause the vault: a proposal that would route deposits to it must be
         // rejected at propose() time (GOV-4) — it can never become executable.
-        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(router.isRouterEligible(address(vault)), "still eligible");
         assertFalse(
             router.isRouterEligibleAndActive(address(vault)),

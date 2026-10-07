@@ -1,5 +1,5 @@
 /**
- * Playwright E2E — unpause flow UI invariants (issue #82).
+ * Playwright E2E — deposit unpause flow UI invariants (issue #82).
  *
  * Runs against the smoke-test full-stack devnet. Connects as the
  * admin EOA for the positive structured-preview path, and as the
@@ -9,15 +9,15 @@ import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
 
-// keccak256("unpause()")[0..4]
-const UNPAUSE_SELECTOR = "0x3f4ba83a";
+// keccak256("unpauseDeposits()")[0..4]
+const UNPAUSE_SELECTOR = "0x63d8882a";
 
 let endpoints: DevnetEndpoints;
 test.beforeAll(() => {
   endpoints = loadEndpoints();
 });
 
-test.describe("unpause flow — UI invariants", () => {
+test.describe("deposit unpause flow — UI invariants", () => {
   test("renders structured preview, signs intended calldata, no raw-calldata leak", async ({
     page,
   }) => {
@@ -28,8 +28,8 @@ test.describe("unpause flow — UI invariants", () => {
     await expect(unpauseForm).toBeVisible();
 
     const previewFn = unpauseForm.getByTestId("tx-preview-fn");
-    await expect(previewFn).toHaveText("unpause");
-    await expect(unpauseForm.getByTestId("tx-preview-effect")).toContainText("exits paused state");
+    await expect(previewFn).toHaveText("unpauseDeposits");
+    await expect(unpauseForm.getByTestId("tx-preview-effect")).toContainText("deposits resume");
     await expect(unpauseForm.locator('[data-testid="refusal-reason"]')).toHaveCount(0);
 
     await expect(unpauseForm.getByTestId("tx-preview-selector")).toHaveText(UNPAUSE_SELECTOR);
@@ -45,9 +45,9 @@ test.describe("unpause flow — UI invariants", () => {
     await expect(calldataElement).toBeHidden();
   });
 
-  test("unpause button is disabled when wallet lacks ADMIN_ROLE", async ({ page }) => {
+  test("unpauseDeposits button is disabled when wallet lacks ADMIN_ROLE", async ({ page }) => {
     // Connect as the agent EOA — it holds no roles on the gateway, so
-    // unpause (which requires ADMIN_ROLE) must stay disabled.
+    // unpauseDeposits (which requires ADMIN_ROLE) must stay disabled.
     await openDapp(page, endpoints, { role: "agent" });
     await openTab(page, "pause");
     const unpauseBtn = page.getByTestId("unpause-submit");

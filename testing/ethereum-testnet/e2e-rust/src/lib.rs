@@ -167,12 +167,12 @@ impl Fixture {
         self.devnet.approve_usdc_from_agent(amount)
     }
 
-    pub fn pause_gateway(&self) -> Result<String, HarnessError> {
-        self.devnet.pause_gateway()
+    pub fn pause_gateway_deposits(&self) -> Result<String, HarnessError> {
+        self.devnet.pause_gateway_deposits()
     }
 
-    pub fn unpause_gateway(&self) -> Result<String, HarnessError> {
-        self.devnet.unpause_gateway()
+    pub fn unpause_gateway_deposits(&self) -> Result<String, HarnessError> {
+        self.devnet.unpause_gateway_deposits()
     }
 
     pub fn revoke_agent(&self) -> Result<String, HarnessError> {

@@ -56,10 +56,10 @@ export function DebugPage(props: DebugPageProps) {
   const { data: blockNumber, error: blockError } = useBlockNumber({
     query: { enabled: isConnected, refetchInterval: 12_000 },
   });
-  const { data: pausedData, error: pausedError } = useReadContract({
+  const { data: depositsPausedData, error: depositsPausedError } = useReadContract({
     address: props.gatewayAddress,
     abi: gatewayAbi,
-    functionName: "paused",
+    functionName: "depositsPaused",
     query: { enabled: isConnected },
   });
   const { data: usdcAddressData, error: usdcError } = useReadContract({
@@ -69,16 +69,16 @@ export function DebugPage(props: DebugPageProps) {
     query: { enabled: isConnected },
   });
 
-  const paused = Boolean(pausedData);
+  const depositsPaused = Boolean(depositsPausedData);
   const usdcAddress = (usdcAddressData as Address | undefined) ?? "";
   const readErrors = useMemo(
     () =>
       [
         blockError ? `blockNumber: ${blockError.message}` : undefined,
-        pausedError ? `gateway.paused: ${pausedError.message}` : undefined,
+        depositsPausedError ? `gateway.depositsPaused: ${depositsPausedError.message}` : undefined,
         usdcError ? `gateway.usdc: ${usdcError.message}` : undefined,
       ].filter((item): item is string => item !== undefined),
-    [blockError, pausedError, usdcError],
+    [blockError, depositsPausedError, usdcError],
   );
 
   const handleSwitchChain = () => {
@@ -132,8 +132,8 @@ export function DebugPage(props: DebugPageProps) {
         <DebugRow label="Router" value={props.routerAddress ?? "—"} />
         <DebugRow label="USDC" value={usdcAddress || "—"} testId="debug-usdc-address" />
         <DebugRow
-          label="Gateway state"
-          value={isConnected ? (paused ? "PAUSED" : "ACTIVE") : "—"}
+          label="Gateway deposits"
+          value={isConnected ? (depositsPaused ? "PAUSED (withdrawals open)" : "OPEN") : "—"}
           testId="debug-public-paused"
         />
         <DebugRow label="Expected code hash" value={props.expectedCodeHash ?? "—"} />

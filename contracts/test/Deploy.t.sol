@@ -234,11 +234,11 @@ contract DeployTest is Test {
 
         assertTrue(s.gateway.hasRole(s.gateway.ADMIN_ROLE(), admin), "admin role");
         assertTrue(s.gateway.hasRole(s.gateway.DEFAULT_ADMIN_ROLE(), admin), "default admin");
-        assertTrue(s.gateway.hasRole(s.gateway.PAUSER_ROLE(), pauser), "pauser role");
+        assertTrue(s.gateway.hasRole(s.gateway.DEPOSIT_PAUSER_ROLE(), pauser), "pauser role");
 
         assertTrue(s.gateway.hasRole(s.gateway.AGENT_ROLE(), agent), "agent role");
         assertFalse(s.gateway.hasRole(s.gateway.ADMIN_ROLE(), agent), "agent !admin");
-        assertFalse(s.gateway.hasRole(s.gateway.PAUSER_ROLE(), agent), "agent !pauser");
+        assertFalse(s.gateway.hasRole(s.gateway.DEPOSIT_PAUSER_ROLE(), agent), "agent !pauser");
 
         assertEq(s.gatewayRuntimeHash, keccak256(address(s.gateway).code));
 
