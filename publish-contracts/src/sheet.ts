@@ -282,7 +282,7 @@ export function parseSheet(text: string): Sheet {
   const wantKeys = ["USDC", ...eligibleVaults].sort().join(",");
   if (weightKeys !== wantKeys) throw err(`ROUTER_WEIGHTS must name exactly rmUSDC and the eligible baskets (${wantKeys}), got ${weightKeys}`);
   // issue 1580 (owner amendment 2026-10-06 on the stage 13 issue): mainnet launches on exactly this vector. Twin sheets keep their own weights.
-  if (chainId === 8453) {
+  if (chainId === MAINNET_CHAIN_ID) {
     const got = weights.map((w) => `${w.key}:${w.bps}`).sort().join(",");
     if (got !== LAUNCH_ROUTER_WEIGHTS_8453) throw err(`ROUTER_WEIGHTS must be the launch vector on chain 8453 (USDC:9500,PROTO:500,AGENT:0,RWA:0, every vault named), got ${v.ROUTER_WEIGHTS}`, { name: "ROUTER_WEIGHTS" });
   }

@@ -167,6 +167,9 @@ describe("govern carries the basket unpauses only; the rest is deploy-time confi
       expect(e.message, w).toContain("launch vector");
       expect(e.message).toContain("ROUTER_WEIGHTS");
     }
+    // a vault left out of the vector is refused too (the vector must name all four)
+    const short = refused(sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO", GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500" }));
+    expect(short.message).toContain("launch vector");
     expect(parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:6000,PROTO:2500,RWA:1500" })).weights.length).toBe(3);
   });
   test("the govern block holds the unpauses and the Twin-only delay and nothing else; eligibility and weights are deploy-time fields", () => {
