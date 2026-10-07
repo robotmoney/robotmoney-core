@@ -72,7 +72,7 @@ contract RwaVaultB20Test is Test {
         adapter = new AerodromeSwapAdapter(makeAddr("slipstreamRouter"), makeAddr("factory"));
         vm.prank(admin);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        cfg = vm.readFile("config/rwa-b20-assets.json");
+        cfg = vm.readFile("contracts/test/fixtures/rwa-b20-assets.json");
     }
 
     function _pool(address token) internal returns (address) {

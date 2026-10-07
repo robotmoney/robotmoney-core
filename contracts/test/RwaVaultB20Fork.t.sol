@@ -60,7 +60,7 @@ contract RwaVaultB20ForkTest is Test {
         string memory rpc = vm.envOr("FORK_RPC_URL", string(""));
         if (!ForkSelect.selectOrSkip(rpc)) return;
 
-        b20Cfg = vm.readFile("config/rwa-b20-assets.json");
+        b20Cfg = vm.readFile("contracts/test/fixtures/rwa-b20-assets.json");
         v3Cfg = vm.readFile("config/rwa-assets.json");
 
         // The launch vault: deSPXA only, deployed by the production script.
