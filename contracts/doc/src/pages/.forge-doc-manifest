@@ -246,6 +246,7 @@ contracts/test/contract.VaultFamilyInvariantsTest.mdx
 contracts/test/contract.VaultForkRegressions.mdx
 contracts/test/contract.VaultHarness.mdx
 contracts/test/contract.VaultRegistryTest.mdx
+contracts/test/contract.WithdrawalsNeverFrozenTest.mdx
 contracts/test/contract.ZeroLiquidityPool.mdx
 contracts/test/function.uniqueManifestPath.mdx
 contracts/test/fv/contract.CoverageMapTest.mdx
@@ -283,6 +284,7 @@ contracts/test/interface.IRetireVaultLinks.mdx
 contracts/test/interface.ISafe.mdx
 contracts/test/interface.ISafeProxyFactory.mdx
 contracts/test/interface.IStrat.mdx
+contracts/test/interface.IVault4626.mdx
 contracts/test/interface.IVaultLinkRead.mdx
 contracts/test/interface._ISafeSetup.mdx
 contracts/test/library.BytecodePatch.mdx
