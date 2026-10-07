@@ -6377,6 +6377,32 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "WEIGHT_SETTER_ROTATOR_ROLE",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "applyMigrationDefaultWeights",
     inputs: [
       {
@@ -6390,6 +6416,13 @@ export const routerAbiGenerated = [
         internalType: "uint256[]",
       },
     ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "cancelWeightSetterRotation",
+    inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
   },
@@ -6464,6 +6497,19 @@ export const routerAbiGenerated = [
         internalType: "uint256[]",
       },
     ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "executeWeightSetterRotation",
+    inputs: [
+      {
+        name: "expectedNewHolder",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
     stateMutability: "nonpayable",
   },
   {
@@ -6664,6 +6710,24 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "pendingWeightSetterRotation",
+    inputs: [],
+    outputs: [
+      {
+        name: "newHolder",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "proposedAt",
+        type: "uint64",
+        internalType: "uint64",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "previewDeposit",
     inputs: [
       {
@@ -6707,6 +6771,19 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "proposeWeightSetterRotation",
+    inputs: [
+      {
+        name: "newHolder",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -7211,6 +7288,63 @@ export const routerAbiGenerated = [
   },
   {
     type: "event",
+    name: "WeightSetterRotated",
+    inputs: [
+      {
+        name: "newHolder",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "revokedHolders",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "WeightSetterRotationCancelled",
+    inputs: [
+      {
+        name: "newHolder",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "by",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "WeightSetterRotationProposed",
+    inputs: [
+      {
+        name: "newHolder",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "proposedAt",
+        type: "uint64",
+        indexed: false,
+        internalType: "uint64",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "WeightsSet",
     inputs: [
       {
@@ -7324,6 +7458,11 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "NoRotationPending",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "NoWeightsSet",
     inputs: [],
   },
@@ -7352,6 +7491,60 @@ export const routerAbiGenerated = [
     type: "error",
     name: "ReentrancyGuardReentrantCall",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "RotationAlreadyPending",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "RotationNotReady",
+    inputs: [
+      {
+        name: "readyAt",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "RotationTargetForbidden",
+    inputs: [
+      {
+        name: "target",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "RotationTargetMismatch",
+    inputs: [
+      {
+        name: "pending",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "expected",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "RotationTargetNotContract",
+    inputs: [
+      {
+        name: "target",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",

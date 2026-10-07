@@ -11,6 +11,8 @@ export const ADMIN_ROLE = role("ADMIN_ROLE");
 // (AGENT_LABELS in index.ts) use them: the deploy authorizes no agent (core 1527, architecture 5.2 and 6.3).
 export const AGENT_ROLE = role("AGENT_ROLE");
 export const WEIGHT_SETTER_ROLE = role("WEIGHT_SETTER_ROLE");
+export const WEIGHT_SETTER_ROTATOR_ROLE = role("WEIGHT_SETTER_ROTATOR_ROLE");
+export const WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE = role("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
 export const EMERGENCY_ROLE = role("EMERGENCY_ROLE");
 export const DEPOSIT_PAUSER_ROLE = role("DEPOSIT_PAUSER_ROLE");
 export const PROPOSER_ROLE = role("PROPOSER_ROLE");

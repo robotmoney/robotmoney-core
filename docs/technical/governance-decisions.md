@@ -244,8 +244,18 @@ in the weight-update path.
 > reaches `setDefaultWeights` and `clearVotedWeights`. A direct `setWeights` from
 > the timelock reverts, so active weights come only from RouterGovernance votes.
 > `WEIGHT_SETTER_ROLE` is its own role admin. `ADMIN_ROLE` is not its admin, so the
-> timelock cannot grant itself the role through a scheduled operation. The cost is
-> that RouterGovernance cannot be rotated without a router redeploy.
+> timelock cannot grant itself the role through a scheduled operation.
+>
+> **Rotation (core 1616).** RouterGovernance is replaced without a router redeploy
+> through a bounded rotation, not through a role grant. The Safe holds
+> `WEIGHT_SETTER_ROTATOR_ROLE` and proposes a contract target on the router
+> (`proposeWeightSetterRotation`). The timelock holds
+> `WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE` and executes it after the timelock's own
+> delay, measured from the proposal (`executeWeightSetterRotation`). The Safe can
+> cancel. Execution revokes every holder and grants the target, so one holder
+> remains. Neither the timelock nor the Safe can grant either role or
+> `WEIGHT_SETTER_ROLE` (all three are self-administered). Design and threat table:
+> ADR-0002, amendment 2026-10-07.
 
 **Constraint.** `RouterGovernance.sol` must call `setWeights` only from its
 `execute(proposalId)` function. No other function on the governance contract may

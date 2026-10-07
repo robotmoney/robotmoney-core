@@ -132,6 +132,24 @@ bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 uint256 public constant MIN_DELAY = 2 days;
 ```
 
+### ROTATOR
+
+```solidity
+bytes32 internal constant ROTATOR = keccak256("WEIGHT_SETTER_ROTATOR_ROLE");
+```
+
+### ROTATION_EXECUTOR
+
+```solidity
+bytes32 internal constant ROTATION_EXECUTOR = keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
+```
+
+### WEIGHT_SETTER
+
+```solidity
+bytes32 internal constant WEIGHT_SETTER = keccak256("WEIGHT_SETTER_ROLE");
+```
+
 ## State Variables
 
 ### ownerPk1
@@ -888,5 +906,199 @@ AC7: A cancelled timelock operation cannot be executed after cancellation.
 
 ```solidity
 function test_sadPath_cancelledOperation_cannotExecute() public withSnap;
+```
+
+<a id="_safecall-address-bytes"></a>
+
+### _safeCall
+
+<i>
+
+Two owners sign and the Safe calls `target` now. Reverts when the inner call reverts.
+
+</i>
+
+```solidity
+function _safeCall(address target, bytes memory data) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_safecallreverts-address-bytes"></a>
+
+### _safeCallReverts
+
+<i>
+
+Two owners sign and the Safe calls `target` now, and the inner call must revert.
+The hash is read first: `expectRevert` binds to the very next external call.
+
+</i>
+
+```solidity
+function _safeCallReverts(address target, bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+
+<a id="_safeschedule-bytes-bytes32"></a>
+
+### _safeSchedule
+
+<i>
+
+The Safe schedules `data` on the router through the timelock.
+
+</i>
+
+```solidity
+function _safeSchedule(bytes memory data, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+
+<a id="_safetimelockexecute-bytes-bytes32"></a>
+
+### _safeTimelockExecute
+
+```solidity
+function _safeTimelockExecute(bytes memory data, bytes32 salt) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_safetimelockexecutereverts-bytes-bytes32"></a>
+
+### _safeTimelockExecuteReverts
+
+```solidity
+function _safeTimelockExecuteReverts(bytes memory data, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+
+<a id="_replacementgovernance"></a>
+
+### _replacementGovernance
+
+```solidity
+function _replacementGovernance() internal returns (RouterGovernance);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `RouterGovernance` |  |
+
+<a id="test_rotation_handover_safeisrotator_timelockisexecutor"></a>
+
+### test_rotation_handover_safeIsRotator_timelockIsExecutor
+
+The stage 11 handover leaves the Safe as the only rotator and the timelock as the only executor.
+
+```solidity
+function test_rotation_handover_safeIsRotator_timelockIsExecutor() public withSnap;
+```
+
+<a id="test_rotation_viarealsafeandtimelock_atproductiondelay"></a>
+
+### test_rotation_viaRealSafeAndTimelock_atProductionDelay
+
+Safe proposes (2-of-3), Safe schedules through the timelock, the delay passes, the
+timelock executes: governance is replaced and holds the role alone.
+
+```solidity
+function test_rotation_viaRealSafeAndTimelock_atProductionDelay() public withSnap;
+```
+
+<a id="test_rotation_atomicbatch_oldgovernancelosesbothroles"></a>
+
+### test_rotation_atomicBatch_oldGovernanceLosesBothRoles
+
+A rotation is scheduled as ONE timelock batch: execute the rotation, grant the new
+governance router ADMIN_ROLE, revoke the old governance's router ADMIN_ROLE. Through the
+real Safe and timelock, the old governance holds neither role afterwards.
+
+```solidity
+function test_rotation_atomicBatch_oldGovernanceLosesBothRoles() public withSnap;
+```
+
+<a id="test_rotation_tothetimelock_isrefused"></a>
+
+### test_rotation_toTheTimelock_isRefused
+
+The rotation target cannot be the timelock: that would hand it the weight setter.
+
+```solidity
+function test_rotation_toTheTimelock_isRefused() public withSnap;
+```
+
+<a id="test_rotation_safealone_cannotexecute"></a>
+
+### test_rotation_safeAlone_cannotExecute
+
+The Safe alone cannot execute a rotation, with or without the delay.
+
+```solidity
+function test_rotation_safeAlone_cannotExecute() public withSnap;
+```
+
+<a id="test_rotation_timelockalone_cannotgrantitselftherole"></a>
+
+### test_rotation_timelockAlone_cannotGrantItselfTheRole
+
+The timelock alone cannot grant itself the role: the Safe schedules the grant, the delay
+passes, and the execution reverts. This is the 1522 bypass staying closed.
+
+```solidity
+function test_rotation_timelockAlone_cannotGrantItselfTheRole() public withSnap;
+```
+
+<a id="test_rotation_safecancels_scheduledexecutethenfails"></a>
+
+### test_rotation_safeCancels_scheduledExecuteThenFails
+
+The Safe cancels an in-flight rotation, and the scheduled timelock call then fails.
+
+```solidity
+function test_rotation_safeCancels_scheduledExecuteThenFails() public withSnap;
 ```
 

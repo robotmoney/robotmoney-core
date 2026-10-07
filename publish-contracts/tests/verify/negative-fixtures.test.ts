@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { keccak256, pad, toHex } from "viem";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import {
-  ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
+  ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
   SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
@@ -70,6 +70,13 @@ const RULES: Rule[] = [
   [/^router: ADMIN_ROLE held by governance$/, (w) => w.chain.revoke(ROUTER, ADMIN_ROLE, GOV)],
   [/^router: WEIGHT_SETTER_ROLE held by governance$/, (w) => w.chain.revoke(ROUTER, WEIGHT_SETTER_ROLE, GOV)],
   [/^router: WEIGHT_SETTER_ROLE not held by (timelock|deployer|safe|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, { timelock: TIMELOCK, ...WHO }[m[1]]!)],
+  [/^router: WEIGHT_SETTER_ROLE has exactly one holder$/, (w) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, OTHER)],
+  [/^router: no weight setter rotation pending$/, (w) => w.chain.set(ROUTER, "pendingWeightSetterRotation", [OTHER, 4000n])],
+  [/^router: (WEIGHT_SETTER_ROTATOR_ROLE|WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE) has exactly one holder$/, (w, m) => w.chain.grant(ROUTER, m[1] === "WEIGHT_SETTER_ROTATOR_ROLE" ? WEIGHT_SETTER_ROTATOR_ROLE : WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, OTHER)],
+  [/^router: WEIGHT_SETTER_ROTATOR_ROLE held by safe$/, (w) => w.chain.revoke(ROUTER, WEIGHT_SETTER_ROTATOR_ROLE, SAFE)],
+  [/^router: WEIGHT_SETTER_ROTATOR_ROLE not held by (timelock|deployer|governance|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROTATOR_ROLE, { timelock: TIMELOCK, governance: GOV, ...WHO }[m[1]]!)],
+  [/^router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE held by timelock$/, (w) => w.chain.revoke(ROUTER, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, TIMELOCK)],
+  [/^router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE not held by (safe|deployer|governance|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, { governance: GOV, ...WHO }[m[1]]!)],
   [/^gateway: DEPOSIT_PAUSER_ROLE held by pauser$/, (w) => w.chain.revoke(GATEWAY, DEPOSIT_PAUSER_ROLE, PAUSER)],
   [/^gateway: DEPOSIT_PAUSER_ROLE not held by deployer$/, (w) => w.chain.grant(GATEWAY, DEPOSIT_PAUSER_ROLE, DEPLOYER)],
   [/^gateway: not paused$/, (w) => w.chain.set(GATEWAY, "depositsPaused", true)],

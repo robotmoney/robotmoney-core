@@ -150,6 +150,9 @@ contract DeployTimelock is ExpectedChainGuard {
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
+    bytes32 public constant WEIGHT_SETTER_ROTATOR_ROLE = keccak256("WEIGHT_SETTER_ROTATOR_ROLE");
+    bytes32 public constant WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE =
+        keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     bytes32 public constant DEPOSIT_PAUSER_ROLE = keccak256("DEPOSIT_PAUSER_ROLE");
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
@@ -739,6 +742,30 @@ contract DeployTimelock is ExpectedChainGuard {
         require(
             IAccessControl(d.router).hasRole(ADMIN_ROLE, d.governance),
             "R7: RouterGovernance lost router ADMIN_ROLE during handover"
+        );
+
+        // Rotation roles (ADR-0002, core 1616). Both are self-administered, so the
+        // deployer, as their only holder, hands them over: the rotator role to the
+        // Safe (propose, cancel) and the executor role to the timelock (execute after
+        // the delay). The timelock must not hold the rotator role and the Safe must not
+        // hold the executor role, or one actor could rotate the weight setter alone.
+        IAccessControl(d.router).grantRole(WEIGHT_SETTER_ROTATOR_ROLE, d.safe);
+        IAccessControl(d.router).grantRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, address(timelock));
+        IAccessControl(d.router).revokeRole(WEIGHT_SETTER_ROTATOR_ROLE, msg.sender);
+        IAccessControl(d.router).revokeRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, msg.sender);
+        require(
+            IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROTATOR_ROLE, d.safe)
+                && !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROTATOR_ROLE, msg.sender)
+                && !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROTATOR_ROLE, address(timelock)),
+            "R7: router rotator role is not the Safe alone"
+        );
+        require(
+            IAccessControl(d.router)
+                    .hasRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, address(timelock))
+                && !IAccessControl(d.router)
+                    .hasRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, msg.sender)
+                && !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, d.safe),
+            "R7: router rotation executor role is not the timelock alone"
         );
 
         // RouterGovernance

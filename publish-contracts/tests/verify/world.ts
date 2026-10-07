@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeFunctionData, keccak256, toFunctionSelector, parseAbiItem, toHex, pad, type Hex as VHex } from "viem";
 import {
-  ADMIN_ROLE, WEIGHT_SETTER_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
+  ADMIN_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
   SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { getStageTable } from "../../src/stages.ts";
@@ -91,6 +91,7 @@ export class FakeChain implements ChainReader {
     const name: string = item.name;
     const A = a.toLowerCase();
     if (name === "hasRole") return this.has(a, args[0] as Hex, args[1] as Address);
+    if (name === "getRoleMemberCount") return BigInt([...this.roles].filter((k) => k.startsWith(`${A}|${(args[0] as string).toLowerCase()}|`) || k.startsWith(`${A}|${args[0] as string}|`)).length);
     if (name === "getOwners" && A === SAFE.toLowerCase()) return this.owners;
     if (name === "getThreshold" && A === SAFE.toLowerCase()) return BigInt(this.threshold);
     if (name === "getModulesPaginated" && A === SAFE.toLowerCase()) return { array: this.modules, next: addr(1) };
@@ -198,6 +199,10 @@ export function buildWorld(chainId = 8453): World {
   ch.grant(GATEWAY, DEPOSIT_PAUSER_ROLE, PAUSER);
   ch.grant(ROUTER, ADMIN_ROLE, GOV);
   ch.grant(ROUTER, WEIGHT_SETTER_ROLE, GOV);
+  // Rotation of the weight setter (core 1616): the Safe proposes, the timelock executes, nothing is pending.
+  ch.grant(ROUTER, WEIGHT_SETTER_ROTATOR_ROLE, SAFE);
+  ch.grant(ROUTER, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, TIMELOCK);
+  ch.set(ROUTER, "pendingWeightSetterRotation", [ZERO, 0n]);
   // Policy (core 1521): the Safe proposes and cancels; EXECUTOR_ROLE is open to address(0).
   for (const r of [PROPOSER_ROLE, CANCELLER_ROLE]) { ch.grant(TIMELOCK, r, SAFE); ch.roleGrantedLog(TIMELOCK, r, SAFE, 110n); }
   ch.grant(TIMELOCK, EXECUTOR_ROLE, ZERO);

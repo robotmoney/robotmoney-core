@@ -1,0 +1,416 @@
+---
+title: "WeightSetterRotationTest"
+description: "One test per safety property of the rotation. Each test is mutation-checked: the property's guard in `PortfolioRouter` is removed and the test must fail. The Safe is an address here (the real 2-of-3 Safe runs in `SafeIntegration`). The timelock is a real `TimelockController` at the production delay."
+---
+
+# WeightSetterRotationTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/94a474ba53da2c0db2f819b63668620ce69d765a/contracts/test/WeightSetterRotation.t.sol)
+
+**Inherits:** Test
+
+**Title:** WeightSetterRotationTest
+
+One test per safety property of the rotation. Each test is mutation-checked: the
+property's guard in `PortfolioRouter` is removed and the test must fail.
+The Safe is an address here (the real 2-of-3 Safe runs in `SafeIntegration`).
+The timelock is a real `TimelockController` at the production delay.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### WEIGHT_SETTER_ROLE
+
+```solidity
+bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
+```
+
+### ROTATOR
+
+```solidity
+bytes32 internal constant ROTATOR = keccak256("WEIGHT_SETTER_ROTATOR_ROLE");
+```
+
+### EXECUTOR
+
+```solidity
+bytes32 internal constant EXECUTOR = keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
+```
+
+### DELAY
+
+<i>
+
+The Base mainnet floor (172800 s). The test uses the production value.
+
+</i>
+
+```solidity
+uint256 internal constant DELAY = 172800;
+```
+
+## State Variables
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### safe
+
+```solidity
+address internal safe = makeAddr("safe");
+```
+
+### deployer
+
+```solidity
+address internal deployer = makeAddr("deployer");
+```
+
+### oldGov
+
+```solidity
+address internal oldGov;
+```
+
+### newGov
+
+```solidity
+address internal newGov;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_unauthorized-address-bytes32"></a>
+
+### _unauthorized
+
+```solidity
+function _unauthorized(address who, bytes32 role) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| role | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_executecall-address"></a>
+
+### _executeCall
+
+```solidity
+function _executeCall(address target) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_schedule-bytes-bytes32"></a>
+
+### _schedule
+
+<i>
+
+The Safe schedules `data` on the router through the timelock.
+
+</i>
+
+```solidity
+function _schedule(bytes memory data, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+
+<a id="_run-bytes-bytes32"></a>
+
+### _run
+
+```solidity
+function _run(bytes memory data, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+
+<a id="_propose-address"></a>
+
+### _propose
+
+```solidity
+function _propose(address target) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+<a id="test_rotationroles_areselfadministered"></a>
+
+### test_rotationRoles_areSelfAdministered
+
+```solidity
+function test_rotationRoles_areSelfAdministered() public view;
+```
+
+<a id="test_afterceremony_eachrolehasoneholder"></a>
+
+### test_afterCeremony_eachRoleHasOneHolder
+
+```solidity
+function test_afterCeremony_eachRoleHasOneHolder() public view;
+```
+
+<a id="test_timelockalone_cannotproposeorcancel"></a>
+
+### test_timelockAlone_cannotProposeOrCancel
+
+```solidity
+function test_timelockAlone_cannotProposeOrCancel() public;
+```
+
+<a id="test_timelockalone_cannotgrantitselftheweightsetterorrotatorrole"></a>
+
+### test_timelockAlone_cannotGrantItselfTheWeightSetterOrRotatorRole
+
+```solidity
+function test_timelockAlone_cannotGrantItselfTheWeightSetterOrRotatorRole() public;
+```
+
+<a id="test_timelockalone_cannotsetactiveweights"></a>
+
+### test_timelockAlone_cannotSetActiveWeights
+
+```solidity
+function test_timelockAlone_cannotSetActiveWeights() public;
+```
+
+<a id="test_timelockalone_cannotexecutewithoutasafeproposal"></a>
+
+### test_timelockAlone_cannotExecuteWithoutASafeProposal
+
+```solidity
+function test_timelockAlone_cannotExecuteWithoutASafeProposal() public;
+```
+
+<a id="test_safealone_cannotexecuteorgrant"></a>
+
+### test_safeAlone_cannotExecuteOrGrant
+
+```solidity
+function test_safeAlone_cannotExecuteOrGrant() public;
+```
+
+<a id="test_executebeforedelayfromproposal_reverts"></a>
+
+### test_executeBeforeDelayFromProposal_reverts
+
+<i>
+
+The Safe schedules the timelock call early, waits out the delay, then proposes and
+executes at once. The router measures the delay from the proposal, so this reverts.
+
+</i>
+
+```solidity
+function test_executeBeforeDelayFromProposal_reverts() public;
+```
+
+<a id="test_rotation_safeproposes_timelockexecutes_afterdelay"></a>
+
+### test_rotation_safeProposes_timelockExecutes_afterDelay
+
+```solidity
+function test_rotation_safeProposes_timelockExecutes_afterDelay() public;
+```
+
+<a id="test_afterrotation_oldholdercannotsetweights_newholderpassesthegate"></a>
+
+### test_afterRotation_oldHolderCannotSetWeights_newHolderPassesTheGate
+
+```solidity
+function test_afterRotation_oldHolderCannotSetWeights_newHolderPassesTheGate() public;
+```
+
+<a id="test_rotation_revokeseveryholder_exactlyoneremains"></a>
+
+### test_rotation_revokesEveryHolder_exactlyOneRemains
+
+<i>
+
+A holder is its own role admin and can grant the role to others. Execution
+revokes every holder, so exactly one remains.
+
+</i>
+
+```solidity
+function test_rotation_revokesEveryHolder_exactlyOneRemains() public;
+```
+
+<a id="test_rotation_canrunagainafterwards"></a>
+
+### test_rotation_canRunAgainAfterwards
+
+```solidity
+function test_rotation_canRunAgainAfterwards() public;
+```
+
+<a id="test_routergovernance_cannotproposecancelorexecute"></a>
+
+### test_routerGovernance_cannotProposeCancelOrExecute
+
+<i>
+
+RouterGovernance holds ADMIN_ROLE on the router. That grants no rotation power.
+
+</i>
+
+```solidity
+function test_routerGovernance_cannotProposeCancelOrExecute() public;
+```
+
+<a id="test_routergovernance_revokingtimelockadmin_doesnotblockrotation"></a>
+
+### test_routerGovernance_revokingTimelockAdmin_doesNotBlockRotation
+
+<i>
+
+A hostile RouterGovernance with ADMIN_ROLE strips the timelock's ADMIN_ROLE. The
+rotation still works, because the executor role is not administered by ADMIN_ROLE.
+
+</i>
+
+```solidity
+function test_routerGovernance_revokingTimelockAdmin_doesNotBlockRotation() public;
+```
+
+<a id="test_propose_tozeroeoaoremptyaddress_reverts"></a>
+
+### test_propose_toZeroEoaOrEmptyAddress_reverts
+
+```solidity
+function test_propose_toZeroEoaOrEmptyAddress_reverts() public;
+```
+
+<a id="test_propose_toroutertimelockorsafe_reverts"></a>
+
+### test_propose_toRouterTimelockOrSafe_reverts
+
+<i>
+
+Rotating to the timelock would give it WEIGHT_SETTER_ROLE and reopen the 1522 path.
+
+</i>
+
+```solidity
+function test_propose_toRouterTimelockOrSafe_reverts() public;
+```
+
+<a id="test_execute_toatargetthatnowholdsarotationrole_reverts"></a>
+
+### test_execute_toATargetThatNowHoldsARotationRole_reverts
+
+<i>
+
+A target that became a rotation role holder after the proposal is refused at execution.
+
+</i>
+
+```solidity
+function test_execute_toATargetThatNowHoldsARotationRole_reverts() public;
+```
+
+<a id="test_propose_whilepending_reverts"></a>
+
+### test_propose_whilePending_reverts
+
+```solidity
+function test_propose_whilePending_reverts() public;
+```
+
+<a id="test_execute_toadifferenttarget_reverts"></a>
+
+### test_execute_toADifferentTarget_reverts
+
+```solidity
+function test_execute_toADifferentTarget_reverts() public;
+```
+
+<a id="test_cancel_clearspending_andexecutethenreverts"></a>
+
+### test_cancel_clearsPending_andExecuteThenReverts
+
+```solidity
+function test_cancel_clearsPending_andExecuteThenReverts() public;
+```
+
+<a id="test_cancel_withnothingpending_reverts"></a>
+
+### test_cancel_withNothingPending_reverts
+
+```solidity
+function test_cancel_withNothingPending_reverts() public;
+```
+
+<a id="test_execute_byanexecutorthatisnotatimelock_reverts"></a>
+
+### test_execute_byAnExecutorThatIsNotATimelock_reverts
+
+<i>
+
+An executor that is not a timelock has no delay to read, so it cannot execute.
+
+</i>
+
+```solidity
+function test_execute_byAnExecutorThatIsNotATimelock_reverts() public;
+```
+

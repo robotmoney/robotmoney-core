@@ -17,6 +17,11 @@ import {VaultRegistry} from "./VaultRegistry.sol";
 import {BpsMath} from "./lib/BpsMath.sol";
 import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
 
+/// @dev The one TimelockController getter the rotation delay reads.
+interface IMinDelay {
+    function getMinDelay() external view returns (uint256);
+}
+
 /// @title PortfolioRouter
 /// @notice Outer allocation contract that accepts USDC and splits deposits
 ///         across active vaults by RM-governed weight bps.
@@ -55,6 +60,18 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///         the initial weights. The governance deploy stage revokes it. The role is its
     ///         own role admin, so no `ADMIN_ROLE` holder can grant it.
     bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
+
+    /// @notice Proposes and cancels a rotation of `WEIGHT_SETTER_ROLE`. After the
+    ///         deploy ceremony only the Safe holds it. Self-administered, so no
+    ///         `ADMIN_ROLE` holder (the timelock) can grant it to itself. ADR-0002.
+    bytes32 public constant WEIGHT_SETTER_ROTATOR_ROLE = keccak256("WEIGHT_SETTER_ROTATOR_ROLE");
+
+    /// @notice Executes a rotation of `WEIGHT_SETTER_ROLE` the rotator proposed, after
+    ///         the delay. After the deploy ceremony only the timelock holds it.
+    ///         Self-administered, so `RouterGovernance` (which holds `ADMIN_ROLE`) cannot
+    ///         revoke it to block its own replacement. ADR-0002.
+    bytes32 public constant WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE =
+        keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
 
     // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -141,6 +158,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param vaults  New ordered list of vault addresses.
     /// @param bps     Parallel weight array (must sum to BPS_DENOMINATOR).
     event WeightsSet(address[] vaults, uint256[] bps);
+
+    /// @notice A rotation of `WEIGHT_SETTER_ROLE` to `newHolder` is pending. It can execute
+    ///         from `proposedAt` plus the executing timelock's delay.
+    event WeightSetterRotationProposed(address indexed newHolder, uint64 proposedAt);
+
+    /// @notice The pending rotation to `newHolder` was cancelled by `by`.
+    event WeightSetterRotationCancelled(address indexed newHolder, address indexed by);
+
+    /// @notice `WEIGHT_SETTER_ROLE` now has exactly one holder, `newHolder`.
+    event WeightSetterRotated(address indexed newHolder, uint256 revokedHolders);
 
     /// @notice Emitted when the default (below-quorum fallback) weight vector
     ///         is updated by ADMIN_ROLE.
@@ -300,6 +327,24 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///         callable directly. Governance sets defaults via `setDefaultWeights`.
     error OnlyRegistry();
 
+    /// @notice A rotation target must be a deployed contract (not address(0), an EOA or an empty address).
+    error RotationTargetNotContract(address target);
+
+    /// @notice A rotation target must not be this router, the Safe (rotator) or the timelock (executor). Rotating to the timelock would hand it `WEIGHT_SETTER_ROLE` (core 1522).
+    error RotationTargetForbidden(address target);
+
+    /// @notice A rotation is already pending. Cancel it first.
+    error RotationAlreadyPending();
+
+    /// @notice No rotation is pending.
+    error NoRotationPending();
+
+    /// @notice The pending rotation is for `pending`, not `expected`.
+    error RotationTargetMismatch(address pending, address expected);
+
+    /// @notice The delay has not passed. The rotation can execute from `readyAt`.
+    error RotationNotReady(uint256 readyAt);
+
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     /// @param _usdc      USDC token address.
@@ -317,6 +362,79 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         _grantRole(ADMIN_ROLE, _admin);
         _setRoleAdmin(WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROLE);
         _grantRole(WEIGHT_SETTER_ROLE, _admin);
+        _setRoleAdmin(WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATOR_ROLE);
+        _grantRole(WEIGHT_SETTER_ROTATOR_ROLE, _admin);
+        _setRoleAdmin(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE);
+        _grantRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, _admin);
+    }
+
+    // ─── Weight setter rotation (ADR-0002, 2026-10-07 amendment) ─────────────
+
+    /// @notice The pending rotation of `WEIGHT_SETTER_ROLE`. `newHolder` is address(0) when none is pending.
+    ///         The stage 12 verifier fails a run while a rotation is pending.
+    WeightSetterRotation public pendingWeightSetterRotation;
+
+    struct WeightSetterRotation {
+        address newHolder;
+        uint64 proposedAt;
+    }
+
+    /// @notice Propose rotating `WEIGHT_SETTER_ROLE` to `newHolder`. Rotator (the Safe) only.
+    /// @param newHolder A deployed contract, for example a replacement RouterGovernance.
+    function proposeWeightSetterRotation(address newHolder)
+        external
+        onlyRole(WEIGHT_SETTER_ROTATOR_ROLE)
+    {
+        if (newHolder.code.length == 0) revert RotationTargetNotContract(newHolder);
+        _requireAllowedRotationTarget(newHolder);
+        if (pendingWeightSetterRotation.newHolder != address(0)) revert RotationAlreadyPending();
+        pendingWeightSetterRotation =
+            WeightSetterRotation({newHolder: newHolder, proposedAt: uint64(block.timestamp)});
+        emit WeightSetterRotationProposed(newHolder, uint64(block.timestamp));
+    }
+
+    /// @dev Rejects this router and any holder of either rotation role (the Safe, the timelock).
+    function _requireAllowedRotationTarget(address target) private view {
+        if (
+            target == address(this) || hasRole(WEIGHT_SETTER_ROTATOR_ROLE, target)
+                || hasRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, target)
+        ) revert RotationTargetForbidden(target);
+    }
+
+    /// @notice Cancel the pending rotation. Rotator (the Safe) only.
+    function cancelWeightSetterRotation() external onlyRole(WEIGHT_SETTER_ROTATOR_ROLE) {
+        address pending = pendingWeightSetterRotation.newHolder;
+        if (pending == address(0)) revert NoRotationPending();
+        delete pendingWeightSetterRotation;
+        emit WeightSetterRotationCancelled(pending, msg.sender);
+    }
+
+    /// @notice Execute the pending rotation after the delay. Executor (the timelock) only.
+    ///         The delay is the calling timelock's `getMinDelay()`, measured from the proposal.
+    ///         Revokes `WEIGHT_SETTER_ROLE` from every holder, then grants it to the target,
+    ///         so exactly one holder remains.
+    /// @param expectedNewHolder The target the scheduled call names. Must equal the pending target.
+    function executeWeightSetterRotation(address expectedNewHolder)
+        external
+        onlyRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE)
+    {
+        WeightSetterRotation memory r = pendingWeightSetterRotation;
+        if (r.newHolder == address(0)) revert NoRotationPending();
+        if (r.newHolder != expectedNewHolder) {
+            revert RotationTargetMismatch(r.newHolder, expectedNewHolder);
+        }
+        uint256 readyAt = uint256(r.proposedAt) + IMinDelay(msg.sender).getMinDelay();
+        if (block.timestamp < readyAt) revert RotationNotReady(readyAt);
+        if (r.newHolder.code.length == 0) revert RotationTargetNotContract(r.newHolder);
+        _requireAllowedRotationTarget(r.newHolder);
+
+        delete pendingWeightSetterRotation;
+        uint256 revoked = getRoleMemberCount(WEIGHT_SETTER_ROLE);
+        for (uint256 i = revoked; i > 0; i--) {
+            _revokeRole(WEIGHT_SETTER_ROLE, getRoleMember(WEIGHT_SETTER_ROLE, i - 1));
+        }
+        _grantRole(WEIGHT_SETTER_ROLE, r.newHolder);
+        emit WeightSetterRotated(r.newHolder, revoked);
     }
 
     // ─── Admin: weight management ────────────────────────────────────────────

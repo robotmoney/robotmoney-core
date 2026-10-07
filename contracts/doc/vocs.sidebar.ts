@@ -20,6 +20,7 @@ export const sidebar = [
           collapsed: true,
           items: [
             { text: "IExactnessVault", link: "/contracts/interface.IExactnessVault" },
+            { text: "IMinDelay", link: "/contracts/interface.IMinDelay" },
             { text: "IRetirableVault", link: "/contracts/interface.IRetirableVault" },
             { text: "IRouterDefaultWeights", link: "/contracts/interface.IRouterDefaultWeights" },
           ],
@@ -337,6 +338,7 @@ export const sidebar = [
             { text: "RobotMoneyVaultRouteDepositTest", link: "/contracts/test/contract.RobotMoneyVaultRouteDepositTest" },
             { text: "RobotMoneyVaultTest", link: "/contracts/test/contract.RobotMoneyVaultTest" },
             { text: "RobotMoneyVaultWithdrawDepositGasTest", link: "/contracts/test/contract.RobotMoneyVaultWithdrawDepositGasTest" },
+            { text: "RotationStubGovernance", link: "/contracts/test/contract.RotationStubGovernance" },
             { text: "RouteHarness", link: "/contracts/test/contract.RouteHarness" },
             { text: "RouteUSDC", link: "/contracts/test/contract.RouteUSDC" },
             { text: "RouterGovernanceTest", link: "/contracts/test/contract.RouterGovernanceTest" },
@@ -368,6 +370,7 @@ export const sidebar = [
             { text: "VaultForkRegressions", link: "/contracts/test/contract.VaultForkRegressions" },
             { text: "VaultHarness", link: "/contracts/test/contract.VaultHarness" },
             { text: "VaultRegistryTest", link: "/contracts/test/contract.VaultRegistryTest" },
+            { text: "WeightSetterRotationTest", link: "/contracts/test/contract.WeightSetterRotationTest" },
             { text: "WithdrawalsNeverFrozenTest", link: "/contracts/test/contract.WithdrawalsNeverFrozenTest" },
             { text: "ZeroLiquidityPool", link: "/contracts/test/contract.ZeroLiquidityPool" },
           ],

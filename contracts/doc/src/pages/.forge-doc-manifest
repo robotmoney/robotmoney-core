@@ -16,6 +16,7 @@ contracts/gateway/interfaces/interface.IGateway.mdx
 contracts/gateway/interfaces/interface.IInvestmentCommitteePolicy.mdx
 contracts/gateway/interfaces/interface.IPortfolioRouter.mdx
 contracts/interface.IExactnessVault.mdx
+contracts/interface.IMinDelay.mdx
 contracts/interface.IRetirableVault.mdx
 contracts/interface.IRouterDefaultWeights.mdx
 contracts/interfaces/interface.IAavePool.mdx
@@ -223,6 +224,7 @@ contracts/test/contract.RobotMoneyVaultRedeemGasUnitTest.mdx
 contracts/test/contract.RobotMoneyVaultRouteDepositTest.mdx
 contracts/test/contract.RobotMoneyVaultTest.mdx
 contracts/test/contract.RobotMoneyVaultWithdrawDepositGasTest.mdx
+contracts/test/contract.RotationStubGovernance.mdx
 contracts/test/contract.RouteHarness.mdx
 contracts/test/contract.RouteUSDC.mdx
 contracts/test/contract.RouterGovernanceTest.mdx
@@ -254,6 +256,7 @@ contracts/test/contract.VaultFamilyInvariantsTest.mdx
 contracts/test/contract.VaultForkRegressions.mdx
 contracts/test/contract.VaultHarness.mdx
 contracts/test/contract.VaultRegistryTest.mdx
+contracts/test/contract.WeightSetterRotationTest.mdx
 contracts/test/contract.WithdrawalsNeverFrozenTest.mdx
 contracts/test/contract.ZeroLiquidityPool.mdx
 contracts/test/function.uniqueManifestPath.mdx

@@ -89,22 +89,56 @@ twenty is still a minority carrying a change. The quorum is set at deploy time
 via the `QUORUM_THRESHOLD` env var (or after deploy via `setQuorumThreshold`,
 routed through the admin timelock).
 
-**Migrating an existing deployment.** `MIN_QUORUM_THRESHOLD` is a `constant`, so
-raising it changed the contract's bytecode. A `RouterGovernance` deployed before
-this change keeps the old floor of 1 and cannot be upgraded into the new one:
-replace it by redeploying the router, not by moving a role.
+**Replacing RouterGovernance is a rotation, not a redeploy (core 1571).**
+`MIN_QUORUM_THRESHOLD` is a `constant`, so a `RouterGovernance` deployed before
+the floor change keeps the old floor of 1 and cannot be upgraded in place. The
+same holds for a buggy instance. Replace it through the router's bounded
+rotation of `WEIGHT_SETTER_ROLE` (ADR-0002, amendment 2026-10-07). Granting a
+new `RouterGovernance` `ADMIN_ROLE` does not move `setWeights` authority,
+because `setWeights` is gated on `WEIGHT_SETTER_ROLE`, which no role admin can
+grant. Only the rotation moves it.
 
-> **Note (core 1571).** The owner decided on 2026-10-07 to add a bounded rotation path for `WEIGHT_SETTER_ROLE` (issue 1571, PR 1617).
-> Until it lands, replacing RouterGovernance means redeploying the router (this section describes that current behaviour). PR 1617 will update it.
+1. Deploy the new `RouterGovernance` against the existing router
+   (`RouterGovernance.router` is an immutable). Its deployer sets quorum,
+   voting power and delays, then hands its `ADMIN_ROLE` to the timelock. Voted
+   weights and proposals start empty on the new instance.
+2. The Safe calls `router.proposeWeightSetterRotation(newGovernance)` directly.
+   It needs the Safe's 2-of-3 signatures. The target must be a contract. Only
+   one proposal can be pending. The `WeightSetterRotationProposed` log and
+   `pendingWeightSetterRotation()` make it observable, and the stage 12
+   verifier fails while it is pending.
+3. The Safe schedules ONE timelock batch (`scheduleBatch`) with three router
+   calls, in this order: `executeWeightSetterRotation(newGovernance)`,
+   `grantRole(ADMIN_ROLE, newGovernance)`, `revokeRole(ADMIN_ROLE, oldGovernance)`.
+   Never schedule them separately. The execute call does not touch `ADMIN_ROLE`,
+   so the old `RouterGovernance` would keep it (caps, quarantine, default
+   weights) between operations. The batch runs once the timelock delay has
+   passed (172800 s on 8453), counted from the proposal in step 2 and from the
+   schedule. Anyone may then run the ready batch. To abort before execution, the
+   Safe calls `router.cancelWeightSetterRotation()` and cancels the scheduled
+   batch. The timelock cannot cancel.
+4. Check after the batch: `getRoleMemberCount(WEIGHT_SETTER_ROLE) == 1`, the new
+   instance holds `WEIGHT_SETTER_ROLE` and router `ADMIN_ROLE`, and the old
+   instance holds neither. Check the router caps, `quarantineAddress` and
+   default weights are unchanged (`routerCap`, `vaultCap[*]`,
+   `quarantineAddress`, `getDefaultWeights`).
+5. The target must not be able to grant `WEIGHT_SETTER_ROLE` to other accounts.
+   Execution revokes every holder in a loop of about 19k gas per holder, so a
+   target that floods the role with holders (1501 holders cost about 28.97M gas)
+   could make the rotation unexecutable. The current `RouterGovernance` has no
+   such path. Audit any other target for it before proposing. The router refuses
+   itself, the Safe and the timelock as targets.
+6. Update the governance entry of the governance manifest to the new address,
+   then rerun the stage 12 verifier. Re-point the off-chain readers listed in
+   redeploy step 7 that name the governance address (`VITE_GOVERNANCE_ADDRESS`,
+   `governance_address`, `INDEXER_ROUTER_GOVERNANCE`).
 
-Granting a new `RouterGovernance` `ADMIN_ROLE` on the `PortfolioRouter` does not
-move `setWeights` authority. `setWeights` is gated on `WEIGHT_SETTER_ROLE`, which
-is its own role admin (`PortfolioRouter` constructor). The deployer's copy is
-revoked at stages 6 and 11, so nobody can grant the role to a new instance or
-revoke it from the old one. The old `RouterGovernance` keeps `WEIGHT_SETTER_ROLE`
-on that router for good.
+The old instance cannot set weights after step 4. Its proposals, votes and
+voting power do not carry over.
 
-Migration therefore means a router redeploy, and the redeploy cascades:
+**Replacing the gateway or the router themselves.** The rotation does not cover
+these. The gateway holds the router as an immutable, so a new router needs a
+redeploy that cascades:
 
 1. Deploy a new `PortfolioRouter`. Do not rerun `DeployPortfolioRouter.s.sol`
    against the existing deployment. It calls `registry.setRouterEligible` and
@@ -151,8 +185,10 @@ Migration therefore means a router redeploy, and the redeploy cascades:
    the new gateway as well. The old router has no switch of its own.
    `PortfolioRouter.deposit` and `depositFor` are public with no gateway gate,
    so pausing the old gateway does not stop direct deposits to the old router.
-   No contract call stops the old router. Treat it as still depositable,
-   tell users to stop using it, and pause the old gateway. Each agent's owner may also call
+   No router-level call stops the old router. The only stop is the shared vault
+   `pauseDeposits`, which also halts the new gateway, so do not use it. Treat
+   the old router as still depositable, tell users to stop using it, and pause
+   the old gateway. Each agent's owner may also call
    `revokeAgent` on the old gateway. Users withdraw through the old gateway,
    because `pauseDeposits` never freezes a withdrawal. Old receipts and old
    agent authorizations stay on the old contracts and do not move.

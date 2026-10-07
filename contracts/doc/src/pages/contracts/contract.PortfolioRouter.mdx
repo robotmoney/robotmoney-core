@@ -57,6 +57,28 @@ own role admin, so no `ADMIN_ROLE` holder can grant it.
 bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 ```
 
+### WEIGHT_SETTER_ROTATOR_ROLE
+
+Proposes and cancels a rotation of `WEIGHT_SETTER_ROLE`. After the
+deploy ceremony only the Safe holds it. Self-administered, so no
+`ADMIN_ROLE` holder (the timelock) can grant it to itself. ADR-0002.
+
+```solidity
+bytes32 public constant WEIGHT_SETTER_ROTATOR_ROLE = keccak256("WEIGHT_SETTER_ROTATOR_ROLE");
+```
+
+### WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE
+
+Executes a rotation of `WEIGHT_SETTER_ROLE` the rotator proposed, after
+the delay. After the deploy ceremony only the timelock holds it.
+Self-administered, so `RouterGovernance` (which holds `ADMIN_ROLE`) cannot
+revoke it to block its own replacement. ADR-0002.
+
+```solidity
+bytes32 public constant WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE =
+        keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
+```
+
 ### BPS_DENOMINATOR
 
 Basis-points denominator (10 000 = 100%). Sourced from the
@@ -219,6 +241,15 @@ Parallel array — must always sum to BPS_DENOMINATOR.
 uint256[] private _defaultWeightBps;
 ```
 
+### pendingWeightSetterRotation
+
+The pending rotation of `WEIGHT_SETTER_ROLE`. `newHolder` is address(0) when none is pending.
+The stage 12 verifier fails a run while a rotation is pending.
+
+```solidity
+WeightSetterRotation public pendingWeightSetterRotation;
+```
+
 ## Functions
 
 <a id="constructor-address-address-address"></a>
@@ -236,6 +267,75 @@ constructor(address _usdc, address _registry, address _admin);
 | _usdc | `address` | USDC token address. |
 | _registry | `address` | VaultRegistry contract address. |
 | _admin | `address` | Address that receives `ADMIN_ROLE` at deploy time. |
+
+<a id="proposeweightsetterrotation-address"></a>
+
+### proposeWeightSetterRotation
+
+Propose rotating `WEIGHT_SETTER_ROLE` to `newHolder`. Rotator (the Safe) only.
+
+```solidity
+function proposeWeightSetterRotation(address newHolder)
+        external
+        onlyRole(WEIGHT_SETTER_ROTATOR_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newHolder | `address` | A deployed contract, for example a replacement RouterGovernance. |
+
+<a id="_requireallowedrotationtarget-address"></a>
+
+### _requireAllowedRotationTarget
+
+<i>
+
+Rejects this router and any holder of either rotation role (the Safe, the timelock).
+
+</i>
+
+```solidity
+function _requireAllowedRotationTarget(address target) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+<a id="cancelweightsetterrotation"></a>
+
+### cancelWeightSetterRotation
+
+Cancel the pending rotation. Rotator (the Safe) only.
+
+```solidity
+function cancelWeightSetterRotation() external onlyRole(WEIGHT_SETTER_ROTATOR_ROLE);
+```
+
+<a id="executeweightsetterrotation-address"></a>
+
+### executeWeightSetterRotation
+
+Execute the pending rotation after the delay. Executor (the timelock) only.
+The delay is the calling timelock's `getMinDelay()`, measured from the proposal.
+Revokes `WEIGHT_SETTER_ROLE` from every holder, then grants it to the target,
+so exactly one holder remains.
+
+```solidity
+function executeWeightSetterRotation(address expectedNewHolder)
+        external
+        onlyRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| expectedNewHolder | `address` | The target the scheduled call names. Must equal the pending target. |
 
 <a id="setweights-address-uint256"></a>
 
@@ -1099,6 +1199,52 @@ event WeightsSet(address[] vaults, uint256[] bps);
 | vaults | `address[]` | New ordered list of vault addresses. |
 | bps | `uint256[]` | Parallel weight array (must sum to BPS_DENOMINATOR). |
 
+### WeightSetterRotationProposed
+
+A rotation of `WEIGHT_SETTER_ROLE` to `newHolder` is pending. It can execute
+from `proposedAt` plus the executing timelock's delay.
+
+```solidity
+event WeightSetterRotationProposed(address indexed newHolder, uint64 proposedAt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newHolder | `address` |  |
+| proposedAt | `uint64` |  |
+
+### WeightSetterRotationCancelled
+
+The pending rotation to `newHolder` was cancelled by `by`.
+
+```solidity
+event WeightSetterRotationCancelled(address indexed newHolder, address indexed by);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newHolder | `address` |  |
+| by | `address` |  |
+
+### WeightSetterRotated
+
+`WEIGHT_SETTER_ROLE` now has exactly one holder, `newHolder`.
+
+```solidity
+event WeightSetterRotated(address indexed newHolder, uint256 revokedHolders);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newHolder | `address` |  |
+| revokedHolders | `uint256` |  |
+
 ### DefaultWeightsSet
 
 Emitted when the default (below-quorum fallback) weight vector
@@ -1436,7 +1582,96 @@ callable directly. Governance sets defaults via `setDefaultWeights`.
 error OnlyRegistry();
 ```
 
+### RotationTargetNotContract
+
+A rotation target must be a deployed contract (not address(0), an EOA or an empty address).
+
+```solidity
+error RotationTargetNotContract(address target);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+### RotationTargetForbidden
+
+A rotation target must not be this router, the Safe (rotator) or the timelock (executor). Rotating to the timelock would hand it `WEIGHT_SETTER_ROLE` (core 1522).
+
+```solidity
+error RotationTargetForbidden(address target);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+### RotationAlreadyPending
+
+A rotation is already pending. Cancel it first.
+
+```solidity
+error RotationAlreadyPending();
+```
+
+### NoRotationPending
+
+No rotation is pending.
+
+```solidity
+error NoRotationPending();
+```
+
+### RotationTargetMismatch
+
+The pending rotation is for `pending`, not `expected`.
+
+```solidity
+error RotationTargetMismatch(address pending, address expected);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pending | `address` |  |
+| expected | `address` |  |
+
+### RotationNotReady
+
+The delay has not passed. The rotation can execute from `readyAt`.
+
+```solidity
+error RotationNotReady(uint256 readyAt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| readyAt | `uint256` |  |
+
 ## Structs
+
+### WeightSetterRotation
+
+```solidity
+struct WeightSetterRotation {
+        address newHolder;
+        uint64 proposedAt;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newHolder | `address` |  |
+| proposedAt | `uint64` |  |
 
 ### LegPreview
 
