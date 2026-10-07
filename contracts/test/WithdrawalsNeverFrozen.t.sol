@@ -102,6 +102,7 @@ contract WithdrawalsNeverFrozenTest is Test {
 
         vm.startPrank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
+        router.grantRole(router.WEIGHT_SETTER_ROLE(), address(governance));
         rmUsdc = new RobotMoneyVault(
             usdc,
             type(uint256).max,
