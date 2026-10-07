@@ -13,12 +13,12 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
-import type { Address, Hex } from "viem";
+import { decodeFunctionData, type Address, type Hex } from "viem";
 import { render, screen, fireEvent, waitFor } from "../helpers/render";
 import { RoleTab } from "../../../src/components/RoleTab";
 import type { PreviewContext } from "../../../src/lib/preview";
 import type { RoleName } from "../../../src/lib/abi";
-import { buildSafeTx } from "../../../src/lib/safeProposal";
+import { buildSafeTx, timelockCallAbi } from "../../../src/lib/safeProposal";
 import type { SafeContext } from "../../../src/lib/safeProposalChain";
 
 const OWNER_KEY: Hex = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -221,6 +221,29 @@ describe.each([
     expect(screen.queryByTestId(`grant-${slug}-submit`)).toBeNull();
     expect(screen.queryByTestId(`revoke-${slug}-submit`)).toBeNull();
     expect(state.requests).toHaveLength(0);
+  });
+
+  it("schedules with the live getMinDelay (3600, not a constant) and a zero predecessor", async () => {
+    state.ctx = safeContext({ minDelay: 3600n });
+    connect(OWNER.address);
+    renderTab(role);
+    fireEvent.change(screen.getByTestId(`${slug}-account-input`), { target: { value: TARGET } });
+
+    for (const verb of ["grant", "revoke"] as const) {
+      const shown = await screen.findByTestId(`${verb}-${slug}-typed-data`);
+      const message = (JSON.parse(shown.textContent ?? "{}") as { message: { data: Hex } }).message;
+      const decoded = decodeFunctionData({ abi: timelockCallAbi, data: message.data });
+      const args = decoded.args as readonly unknown[];
+      expect(decoded.functionName).toBe("schedule");
+      expect(args[5]).toBe(3600n);
+      expect(args[3]).toBe(`0x${"00".repeat(32)}`);
+      expect(screen.getByTestId(`${verb}-${slug}-timelock-min-delay`).textContent).toContain(
+        "3600",
+      );
+      expect(screen.getByTestId(`${verb}-${slug}-timelock-predecessor`).textContent).toBe(
+        `0x${"00".repeat(32)}`,
+      );
+    }
   });
 
   it("refuses a wallet that is not a Safe owner before any signature request", async () => {

@@ -15,11 +15,17 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "./helpers/render";
-import { encodeFunctionData, toFunctionSelector, type Address, type Hex } from "viem";
+import {
+  decodeFunctionData,
+  encodeFunctionData,
+  toFunctionSelector,
+  type Address,
+  type Hex,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { PauseFlow } from "../../src/components/PauseFlow";
 import { TxPreview } from "../../src/components/TxPreview";
-import { buildSafeTx } from "../../src/lib/safeProposal";
+import { buildSafeTx, timelockCallAbi } from "../../src/lib/safeProposal";
 import type { SafeContext } from "../../src/lib/safeProposalChain";
 import { gatewayAbi } from "../../src/lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../../src/lib/preview";
@@ -197,6 +203,31 @@ describe("PauseFlow — unpause is a Safe proposal, never a wallet transaction (
     expect(methods).not.toContain("eth_sendTransaction");
     expect(wallet.writeContract).not.toHaveBeenCalled();
     expect(wallet.writeContractAsync).not.toHaveBeenCalled();
+  });
+
+  it("unpause schedules with the live getMinDelay (3600, not a constant) and a zero predecessor", async () => {
+    wallet.ctx = { ...(wallet.ctx as SafeContext), minDelay: 3600n };
+    connect(OWNER.address);
+    render(
+      <PauseFlow
+        gatewayAddress={gateway}
+        gatewayCodeHashVerified
+        envClass="fork"
+        safeAddress={SAFE}
+        timelockAddress={TIMELOCK}
+      />,
+    );
+    const shown = await screen.findByTestId("unpause-typed-data");
+    const message = (JSON.parse(shown.textContent ?? "{}") as { message: { data: Hex } }).message;
+    const decoded = decodeFunctionData({ abi: timelockCallAbi, data: message.data });
+    const args = decoded.args as readonly unknown[];
+    expect(decoded.functionName).toBe("schedule");
+    expect(args[5]).toBe(3600n);
+    expect(args[3]).toBe(`0x${"00".repeat(32)}`);
+    expect(screen.getByTestId("unpause-timelock-min-delay").textContent).toContain("3600");
+    expect(screen.getByTestId("unpause-timelock-predecessor").textContent).toBe(
+      `0x${"00".repeat(32)}`,
+    );
   });
 
   it("renders a blocking preview with no button when the Safe address is missing from config", () => {

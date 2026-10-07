@@ -17,6 +17,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor, fireEvent } from "./helpers/render";
+import { RuntimeConfigProvider } from "../../src/lib/RuntimeConfigContext";
 import { encodeFunctionData, keccak256, toBytes, type Address, type Hex } from "viem";
 import { gatewayAbi } from "../../src/lib/abi";
 import { timelockOperationId } from "../../src/lib/safeProposal";
@@ -487,5 +488,57 @@ describe("TimelockPanel — execute proposal for a ready operation (core 1544)",
     expect(document.querySelector(`[data-testid^="timelock-op-execute-"]`)).toBeNull();
     // The operation id of a mismatched payload may differ from the scheduled one.
     expect(id).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+});
+
+describe("TimelockPanel — log scan start (core 1544)", () => {
+  it("uses VITE_TIMELOCK_DEPLOY_BLOCK when set: no eth_getCode search, scan starts there", async () => {
+    setupHappyPath();
+    const getCode = vi.fn(async () => "0x6001" as const);
+    (usePublicClient as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...stablePublicClient,
+      getCode,
+      getBlockNumber: async () => 1_200n,
+    });
+    const { getByTestId } = render(
+      <RuntimeConfigProvider config={{ VITE_TIMELOCK_DEPLOY_BLOCK: "700" }}>
+        <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />
+      </RuntimeConfigProvider>,
+    );
+    await waitFor(() => expect(getByTestId("timelock-panel")).toBeTruthy());
+    expect(getCode).not.toHaveBeenCalled();
+    const froms = mockGetLogs.mock.calls.map((c) => (c[0] as { fromBlock: bigint }).fromBlock);
+    expect(froms.length).toBeGreaterThan(0);
+    expect(froms.every((f) => f >= 700n)).toBe(true);
+    expect(froms).toContain(700n);
+    expect(document.querySelector('[data-testid="timelock-scan-warning"]')).toBeNull();
+  });
+
+  it("shows a visible warning when the deployment-block search could not read historical state", async () => {
+    setupHappyPath();
+    (usePublicClient as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...stablePublicClient,
+      getBlockNumber: async () => 10_000n,
+      getCode: async ({ blockNumber }: { blockNumber?: bigint }) => {
+        if ((blockNumber ?? 10_000n) < 9_000n) throw new Error("state not available");
+        return "0x6001" as const;
+      },
+    });
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
+    await waitFor(() => expect(getByTestId("timelock-panel")).toBeTruthy());
+    const warning = getByTestId("timelock-scan-warning").textContent ?? "";
+    expect(warning).toContain("Could not read historical state");
+    expect(warning).toContain("VITE_TIMELOCK_DEPLOY_BLOCK");
+  });
+
+  it("shows no warning when every probe answers", async () => {
+    setupHappyPath();
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
+    await waitFor(() => expect(getByTestId("timelock-panel")).toBeTruthy());
+    expect(document.querySelector('[data-testid="timelock-scan-warning"]')).toBeNull();
   });
 });

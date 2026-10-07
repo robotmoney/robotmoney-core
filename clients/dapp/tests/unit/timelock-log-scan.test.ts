@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 import type { Address } from "viem";
 import {
   LOG_PAGE_BLOCKS,
+  LOG_PAGE_CONCURRENCY,
   findDeploymentBlock,
+  parseDeployBlock,
   scanInPages,
   type DeploymentProbeClient,
 } from "../../src/lib/timelockApi";
@@ -33,7 +35,11 @@ describe("findDeploymentBlock", () => {
     "finds a deployment at block %s exactly",
     async (deployedAt) => {
       const { client } = chainWithDeployment(deployedAt, 5_000n);
-      expect(await findDeploymentBlock(client, ADDR)).toEqual({ from: deployedAt, to: 5_000n });
+      expect(await findDeploymentBlock(client, ADDR)).toEqual({
+        from: deployedAt,
+        to: 5_000n,
+        incomplete: false,
+      });
     },
   );
 
@@ -44,21 +50,35 @@ describe("findDeploymentBlock", () => {
     expect(probes.length).toBeLessThan(30);
   });
 
-  it("treats a probe that errors (state unavailable) as no code, so it never scans further back", async () => {
+  it("flags the range incomplete when a probe errors (state unavailable), so the late start is never silent", async () => {
     const { client } = chainWithDeployment(100n, 10_000n, 9_000n);
     const r = await findDeploymentBlock(client, ADDR);
     expect(r.from >= 9_000n).toBe(true);
     expect(r.to).toBe(10_000n);
+    expect(r.incomplete).toBe(true);
+  });
+
+  it("does not flag a range incomplete when every probe answers", async () => {
+    const { client } = chainWithDeployment(777n, 5_000n);
+    expect((await findDeploymentBlock(client, ADDR)).incomplete).toBe(false);
   });
 
   it("returns the head when the address has no code at all", async () => {
     const { client } = chainWithDeployment(9_999_999n, 500n);
-    expect(await findDeploymentBlock(client, ADDR)).toEqual({ from: 500n, to: 500n });
+    expect(await findDeploymentBlock(client, ADDR)).toEqual({
+      from: 500n,
+      to: 500n,
+      incomplete: false,
+    });
   });
 
   it("starts at block 0 for a contract present since genesis", async () => {
     const { client } = chainWithDeployment(0n, 300n);
-    expect(await findDeploymentBlock(client, ADDR)).toEqual({ from: 0n, to: 300n });
+    expect(await findDeploymentBlock(client, ADDR)).toEqual({
+      from: 0n,
+      to: 300n,
+      incomplete: false,
+    });
   });
 });
 
@@ -85,5 +105,34 @@ describe("scanInPages", () => {
       return [];
     });
     expect(calls).toEqual([[5n, 5n]]);
+  });
+});
+
+describe("scanInPages concurrency", () => {
+  it("fetches pages concurrently, a bounded number at a time, and returns results in block order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const out = await scanInPages({ from: 0n, to: 500n * 20n - 1n }, async (from) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return [from];
+    });
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(LOG_PAGE_CONCURRENCY);
+    expect(out).toEqual(Array.from({ length: 20 }, (_, i) => BigInt(i) * 500n));
+  });
+});
+
+describe("parseDeployBlock", () => {
+  it("reads a non-negative integer and ignores anything else", () => {
+    expect(parseDeployBlock("123")).toBe(123n);
+    expect(parseDeployBlock(" 0 ")).toBe(0n);
+    expect(parseDeployBlock("")).toBeUndefined();
+    expect(parseDeployBlock(undefined)).toBeUndefined();
+    expect(parseDeployBlock("-5")).toBeUndefined();
+    expect(parseDeployBlock("0x10")).toBeUndefined();
+    expect(parseDeployBlock("12.5")).toBeUndefined();
   });
 });

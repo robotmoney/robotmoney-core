@@ -25,6 +25,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   createPublicClient,
+  decodeFunctionData,
   http,
   keccak256,
   parseAbi,
@@ -51,6 +52,9 @@ const timelockAbi = parseAbi([
   "function getMinDelay() view returns (uint256)",
   "function isOperationPending(bytes32 id) view returns (bool)",
   "function isOperationDone(bytes32 id) view returns (bool)",
+]);
+const scheduleAbi = parseAbi([
+  "function schedule(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt, uint256 delay)",
 ]);
 const gatewayAbi = parseAbi([
   "function hasRole(bytes32 role, address account) view returns (bool)",
@@ -153,6 +157,10 @@ test.describe("Safe -> Timelock proposal from the dapp admin tabs", () => {
     const typed = await renderedTypedData(page, "grant-pauser");
     const dappHash = await page.getByTestId("grant-pauser-safe-tx-hash").textContent();
     expect(typed.message.to.toLowerCase()).toBe(endpoints.timelock_addr.toLowerCase());
+    // The schedule delay is the chain's getMinDelay() (not a constant) and the predecessor is zero.
+    const scheduled = decodeFunctionData({ abi: scheduleAbi, data: typed.message.data });
+    expect((scheduled.args as readonly unknown[])[5]).toBe(minDelay);
+    expect((scheduled.args as readonly unknown[])[3]).toBe(`0x${"00".repeat(32)}`);
     expect(dappHash).toBe(await safeTxHashOnChain(typed.message));
     // Rendering a proposal is not asking the wallet for anything.
     expect(signRequests).toHaveLength(0);

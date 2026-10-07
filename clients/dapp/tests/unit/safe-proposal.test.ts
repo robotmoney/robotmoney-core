@@ -9,7 +9,14 @@
  * dapp never signs, and produces no typed data when it does.
  */
 import { describe, expect, it } from "vitest";
-import { encodeFunctionData, keccak256, toBytes, type Address, type Hex } from "viem";
+import {
+  decodeFunctionData,
+  encodeFunctionData,
+  keccak256,
+  toBytes,
+  type Address,
+  type Hex,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import golden from "../fixtures/safe-tx/typed-data.golden.json";
 import {
@@ -30,6 +37,7 @@ import {
   parseBundle,
   proposalSalt,
   recoverSigner,
+  timelockCallAbi,
   timelockOperationId,
   toSafeSignature,
   verifyBundleFields,
@@ -340,5 +348,66 @@ describe("safeProposal — signatures and the robotmoney-safe-tx/1 bundle", () =
         }),
       ),
     ).rejects.toMatchObject({ code: "SIGNATURE_INVALID" });
+  });
+});
+
+// Vectors computed with foundry cast (cast keccak, cast abi-encode, cast calldata), independent of viem.
+const PRED = "0x9ab40b06a76192a7ac7324f1d4f8ebca7bc4c0702ecc74c95d6af6e636d76235" as Hex;
+const SALT = "0xb6e88ac5957d805585f52aecb6e457aa81819fb8d46f683b0ee39ecf3ce3b95a" as Hex;
+const ZERO32 = `0x${"00".repeat(32)}` as Hex;
+const CAST_OPERATION_ID = "0x35c0f202d4cdb1ce4e07f1d1d4a47c2e047136737f21cbc5fd49f919c781ade5";
+const CAST_EXECUTE =
+  "0x134008d30000000000000000000000001111111111111111111111111111111111111111000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a09ab40b06a76192a7ac7324f1d4f8ebca7bc4c0702ecc74c95d6af6e636d76235b6e88ac5957d805585f52aecb6e457aa81819fb8d46f683b0ee39ecf3ce3b95a00000000000000000000000000000000000000000000000000000000000000442f2ff15d39d7c99df860586d89a6559d1f1be4c1787de0c0cafbcd46bfce1ec1f971e238000000000000000000000000222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000";
+const CAST_SCHEDULE_3600 =
+  "0x01d5062a0000000000000000000000001111111111111111111111111111111111111111000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000000b6e88ac5957d805585f52aecb6e457aa81819fb8d46f683b0ee39ecf3ce3b95a0000000000000000000000000000000000000000000000000000000000000e1000000000000000000000000000000000000000000000000000000000000000442f2ff15d39d7c99df860586d89a6559d1f1be4c1787de0c0cafbcd46bfce1ec1f971e238000000000000000000000000222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000";
+
+describe("safeProposal — delay and predecessor are carried through, never defaulted", () => {
+  const inner = fixtureInner();
+  const op = (predecessor: Hex) => ({ target: TARGET, data: inner, predecessor, salt: SALT });
+
+  it("encodes the delay it is given (3600), equal to cast, and decodes back to 3600", () => {
+    const data = encodeSchedule(op(ZERO32), 3600n);
+    expect(data).toBe(CAST_SCHEDULE_3600);
+    const d = decodeFunctionData({ abi: timelockCallAbi, data });
+    expect(d.functionName).toBe("schedule");
+    expect((d.args as readonly unknown[])[5]).toBe(3600n);
+    // A different delay gives different calldata (the delay is not a constant).
+    expect(encodeSchedule(op(ZERO32), 172800n)).not.toBe(data);
+  });
+
+  it("encodes a non-zero predecessor into schedule calldata", () => {
+    const d = decodeFunctionData({
+      abi: timelockCallAbi,
+      data: encodeSchedule(op(PRED), 3600n),
+    });
+    expect((d.args as readonly unknown[])[3]).toBe(PRED);
+    expect((d.args as readonly unknown[])[4]).toBe(SALT);
+  });
+
+  it("encodeExecute with a non-zero predecessor and salt equals cast calldata", () => {
+    expect(encodeExecute(op(PRED))).toBe(CAST_EXECUTE);
+    const d = decodeFunctionData({ abi: timelockCallAbi, data: encodeExecute(op(PRED)) });
+    expect(d.functionName).toBe("execute");
+    expect((d.args as readonly unknown[])[3]).toBe(PRED);
+    expect((d.args as readonly unknown[])[4]).toBe(SALT);
+  });
+
+  it("timelockOperationId with a non-zero predecessor and salt equals cast hashOperation", () => {
+    expect(timelockOperationId(op(PRED))).toBe(CAST_OPERATION_ID);
+    // The predecessor and the salt each change the id.
+    expect(timelockOperationId(op(ZERO32))).not.toBe(CAST_OPERATION_ID);
+    expect(timelockOperationId({ ...op(PRED), salt: ZERO32 })).not.toBe(CAST_OPERATION_ID);
+  });
+
+  it("a SafeTx over the execute payload carries the predecessor and salt in its calldata", () => {
+    const built = buildSafeTx({
+      chainId: inputs.chainId,
+      safe: SAFE,
+      timelock: TIMELOCK,
+      to: TIMELOCK,
+      data: encodeExecute(op(PRED)),
+      nonce: 1n,
+    });
+    expect(built.typedData.message.data).toBe(CAST_EXECUTE);
   });
 });
