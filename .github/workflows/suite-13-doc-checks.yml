@@ -59,6 +59,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # self-test needs merge-base with origin/dev (core 1556)
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -85,6 +87,13 @@ jobs:
         # (RwaVault, ChronicleOracleAdapter, DeSpxaAssetPositionAdapter, V4 adapters)
         # and no shipped source comment names one.
         run: bash scripts/check-audit-ledger.sh
+
+      - name: Removed doc paths self-test (core 1556)
+        # Plants retired-path links and expects the guard to fail.
+        run: bash .github/scripts/tests/test_check_no_removed_doc_paths.sh
+
+      - name: Retired sprint plan and scout notes stay deleted (core 1556)
+        run: bash .github/scripts/check_no_removed_doc_paths.sh
 
       - name: Browser keygen ADR
         env:

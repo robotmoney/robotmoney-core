@@ -134,8 +134,6 @@ const HISTORY_DIRS = [
   "docs/history",
   "docs/code-review",
   "docs/adr",
-  "docs/sprint",
-  "docs/scout",
   "docs/future",
   "contracts/doc", // generated mirror, refreshed by forge doc
 ];
