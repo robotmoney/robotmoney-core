@@ -10,6 +10,8 @@ export const exampleText = (): string => readFileSync(EXAMPLE_SHEET, "utf8");
 
 /** The example sheet with some names replaced, and extra lines appended. */
 export function sheetText(over: Record<string, string | null> = {}, extra: string[] = []): string {
+  // chain 8453 refuses a sheet that skips a stage 13 unpause (issue 1520): default it to all three unless the caller says otherwise
+  if (over.CHAIN_ID === "8453" && !("GOVERN_UNPAUSE_VAULTS" in over)) over = { ...over, GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA" };
   const lines = exampleText().split("\n");
   const out: string[] = [];
   const done = new Set<string>();

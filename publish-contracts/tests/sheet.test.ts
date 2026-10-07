@@ -127,6 +127,17 @@ describe("govern carries the basket unpauses only; the rest is deploy-time confi
     const ok = parseSheet(sheetText({ GOVERN_UNPAUSE_VAULTS: "PROTO", GOVERN_NEW_DELAY: "3600" }));
     expect(ok.govern.unpauseVaults).toEqual(["PROTO"]);
   });
+  test("on 8453 a GOVERN_UNPAUSE_VAULTS that lacks PROTO, AGENT or RWA is refused with a named error; Twin allows it", () => {
+    const main = (list: string) => sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0", GOVERN_UNPAUSE_VAULTS: list });
+    for (const list of ["PROTO,RWA", "AGENT,RWA", "PROTO,AGENT", "PROTO", "none"]) {
+      const e = refused(main(list));
+      expect(e.message, list).toContain("no stage 13 step may be skipped");
+      expect(e.message).toContain("GOVERN_UNPAUSE_VAULTS");
+    }
+    expect(parseSheet(main("PROTO,AGENT,RWA")).govern.unpauseVaults).toEqual(["PROTO", "AGENT", "RWA"]);
+    expect(parseSheet(main("RWA,AGENT,PROTO")).govern.unpauseVaults).toEqual(["RWA", "AGENT", "PROTO"]);
+    expect(parseSheet(sheetText({ GOVERN_UNPAUSE_VAULTS: "PROTO,RWA" })).govern.unpauseVaults).toEqual(["PROTO", "RWA"]);
+  });
   test("the govern block holds the unpauses and the Twin-only delay and nothing else; eligibility and weights are deploy-time fields", () => {
     const s = parseSheet(exampleText());
     expect(Object.keys(s.govern).sort()).toEqual(["newDelay", "unpauseVaults"]);

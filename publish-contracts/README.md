@@ -112,7 +112,7 @@ bun publish-contracts/src/cli.ts [VERB] --chain N --rpc URL --sheet FILE --signe
 |---|---|---|
 | `publish` | the Safe, then every table stage through the timelock handover | no (refuses a stage whose manifest exists) |
 | `verify` | the one verifier (labels) | implied |
-| `govern` | stage 13: one 48-hour round per step | implied |
+| `govern` | basket unpauses, one 48-hour wait | implied |
 | none | `--stage` decides (default: everything through verify) | `--resume` |
 
 **Flags.** The full list with meanings is in the table under Run it. Required on every run: `--chain` (8453 or 918453, equal to `cast chain-id` of the RPC), `--rpc`, `--sheet`, `--core-sha` (alias `--deploy-sha`), `--signer` (never a key: `keystore:PATH[:PASSFILE]`, `env:signer`, `ledger`, `trezor`; `address:0xADMIN` with `--dry-run` only), `--environment`. Optional: `--stage`, `--row`, `--resume`, `--dry-run`, `--measure`, `--owner-signer` (repeat), `--correlated-owners-file` (required on 8453), `--core-dir`, `--evidence`, `--counts-dir`, `--compare-sheet`, `--max-wait`. Aliases: `--chain-id`, `--deploy-sha`. `--help` prints the usage and exits 2 (usage).

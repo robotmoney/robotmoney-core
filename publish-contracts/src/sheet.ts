@@ -291,6 +291,11 @@ export function parseSheet(text: string): Sheet {
   if (eligibleVaults.includes("USDC")) throw err("ELIGIBLE_VAULTS lists baskets only: rmUSDC is eligible from the router stage");
   // govern matrix inputs
   const unpauseVaults = asVaultKeys("GOVERN_UNPAUSE_VAULTS", v.GOVERN_UNPAUSE_VAULTS!);
+  // issue 1520 (amended 2026-10-06): no stage 13 step may be skipped on a mainnet deploy. A basket left out would stay paused and verify green.
+  if (chainId === 8453) {
+    const missing = (["PROTO", "AGENT", "RWA"] as const).filter((k) => !unpauseVaults.includes(k));
+    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list PROTO, AGENT and RWA on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
+  }
   const weights = parseWeights(v.ROUTER_WEIGHTS!);
   const weightKeys = weights.map((w) => w.key).sort().join(",");
   const wantKeys = ["USDC", ...eligibleVaults].sort().join(",");

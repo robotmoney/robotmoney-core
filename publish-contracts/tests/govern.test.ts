@@ -9,7 +9,7 @@ import { GOVERN_ROWS, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VA
 import { newManifest } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
-import { SHA } from "./fixtures.ts";
+import { SHA, sheetText } from "./fixtures.ts";
 import { A, addr, fakeTimelock, sender, setup, signers } from "./govern-world.ts";
 
 const ALL = {
@@ -233,8 +233,16 @@ describe("a dependent operation carries its predecessor and runs in the same res
     expect(tl.s.events).toEqual([]);
   });
 
-  test("a predecessor the sheet skips leaves the dependent without an operation to follow: refused", async () => {
-    const { ctx, sheet } = setup({ ...ALL, GOVERN_UNPAUSE_VAULTS: "AGENT,RWA" }, 8453);
+  test("a sheet that leaves a basket out is refused on 8453 (no stage 13 step may be skipped), and allowed on a Twin fork", () => {
+    for (const list of ["AGENT,RWA", "PROTO,RWA", "PROTO,AGENT", "PROTO", "none"]) {
+      expect(() => parseSheet(sheetText({ ...ALL, CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", GOVERN_UNPAUSE_VAULTS: list })), list).toThrow("no stage 13 step may be skipped");
+    }
+    const twin = setup({ ELIGIBLE_VAULTS: "PROTO,RWA", GOVERN_UNPAUSE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:6000,PROTO:2500,RWA:1500" });
+    expect(twin.sheet.govern.unpauseVaults).toEqual(["PROTO", "RWA"]);
+  });
+
+  test("a predecessor the sheet skips (Twin only) leaves the dependent without an operation to follow: refused", async () => {
+    const { ctx, sheet } = setup({ ...ALL, GOVERN_UNPAUSE_VAULTS: "AGENT,RWA" });
     const tl = fakeTimelock(sheet, DELAY);
     await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { dependsOn })).rejects.toThrow("has no operation in this run");
   });
