@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PublishError } from "../src/errors.ts";
 import { assertSha, checkNonce, countFor, frozenPath, loadFrozen, resolveCounts, sumCounts, writeFrozen } from "../src/counts.ts";
@@ -73,7 +73,7 @@ describe("frozen counts keyed by DEPLOY_SHA", () => {
 describe("freeze-counts (core 1524)", () => {
   const counts = (over: Record<string, unknown> = {}): string => {
     const p = join(tmp(), "counts.json");
-    writeFileSync(p, JSON.stringify({ deploySha: SHA, chainId: 918453, counts: COUNTS, deployerNonce: sumCounts(COUNTS), ...over }));
+    writeFileSync(p, JSON.stringify({ deploySha: SHA, chainId: 918453, counts: COUNTS, deployerNonce: sumCounts(COUNTS), rehearsal: { conclusion: "success" }, ...over }));
     return p;
   };
   test("writes the frozen file from a counts.json fixture", () => {
@@ -103,6 +103,13 @@ describe("freeze-counts (core 1524)", () => {
     expect(run(counts()).exitCode).toBe(0);
     const other = { ...COUNTS, vault: 19 };
     expect(run(counts({ counts: other, deployerNonce: sumCounts(other) })).exitCode).toBe(10);
+  });
+  test("a counts.json from a rehearsal that did not conclude success, or that records no conclusion, is refused and writes nothing", () => {
+    const dir = tmp();
+    for (const rehearsal of [{ conclusion: "failure" }, { conclusion: "cancelled" }, {}, undefined]) {
+      expect(kind(() => freezeCounts(counts({ rehearsal }), dir))).toBe("USAGE");
+    }
+    expect(existsSync(frozenPath(dir, SHA))).toBe(false);
   });
   test("a counts.json whose nonce is not the summed counts, or from chain 8453, or with a bad sha, is refused", () => {
     const dir = tmp();

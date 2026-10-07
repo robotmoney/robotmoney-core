@@ -73,6 +73,22 @@ This section covers two different tags. Do not confuse them.
   frozen counts (`COUNTS_MISSING`) or is not green in `check-sha-green` (`CI_NOT_GREEN`).
   Any later commit that changes `contracts/` has a new SHA with no tag and no
   counts, so it needs a new rehearsal and tag. This flow is enforced by the plan job (core #1524).
+  - **Green rehearsal only.** The artifact uploads even when the rehearsal failed. The job therefore records its
+    own conclusion in `counts.json` (`rehearsal.conclusion`), and `freeze-counts.ts` refuses any file whose
+    conclusion is not `success` (core #1602). `core-stages-twin-chain` is deliberately not in
+    `scripts/ci/required-checks.json`: it reads a public upstream that can rate limit, and a required entry would
+    block every DEPLOY_SHA on a provider outage. Freezing needs a green run, and `check-sha-green` still gates the plan.
+  - **Required list source.** `check-sha-green` runs from the tagged SHA's own checkout, so it reads that SHA's
+    `scripts/ci/required-checks.json`. Review that file's diff since the last release before tagging.
+  - **Later 8453 stages (decision, core #1602).** Only the `plan` stage checks the tag and green CI. Later stages check the
+    frozen counts file only. Default: they do not re-check, because the deploy job needs the plan job in the devops
+    workflow, and a re-check days later (stage 13 runs after the 48-hour delay) would fail on an unrelated
+    flaky check mid-deploy. Revisit if a deploy job ever runs without the plan job.
+  - **Owner action (not done): protect `release/*` tags.** The gate reads local refs and does not compare with the
+    remote, so a pusher who can create or move a `release/*` tag can name a SHA. In the GitHub repository settings,
+    add a tag ruleset: target `Tags`, pattern `release/*`, enforcement `Active`, rules `Restrict creations`,
+    `Restrict updates` and `Restrict deletions`, bypass list only the release owners. Tick this item when done:
+    - [ ] `release/*` tag ruleset is active.
 - The **version tag** (`vA.B.C[-network]`) is the post-deploy record
   described in the rest of this section.
 

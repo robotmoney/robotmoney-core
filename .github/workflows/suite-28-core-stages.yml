@@ -122,11 +122,14 @@ jobs:
         run: bun publish-contracts/src/counts-drift.ts --counts "$TWIN_COUNTS_JSON"
       - name: Collect the counts and the run files
         if: always()
+        env:
+          # success only when every step above passed: freeze-counts (core 1602) refuses a counts.json without it
+          REHEARSAL_CONCLUSION: ${{ job.status }}
         run: |
           set -uo pipefail
           out="$RUNNER_TEMP/rehearsal-out"
           mkdir -p "$out"
-          [ -z "${TWIN_COUNTS_JSON:-}" ] || cp "$TWIN_COUNTS_JSON" "$out/counts.json"
+          [ -z "${TWIN_COUNTS_JSON:-}" ] || jq --arg c "$REHEARSAL_CONCLUSION" '. + {rehearsal: {conclusion: $c}}' "$TWIN_COUNTS_JSON" > "$out/counts.json"
           [ -z "${TWIN_MANIFEST_DIR:-}" ] || cp -r "$TWIN_MANIFEST_DIR" "$out/manifests"
           [ -z "${TWIN_VERIFY_LABELS:-}" ] || cp "$TWIN_VERIFY_LABELS" "$out/verify-labels.txt"
           [ -z "${TWIN_GOVERN_ROWS:-}" ] || cp "$TWIN_GOVERN_ROWS" "$out/govern-rows.txt"

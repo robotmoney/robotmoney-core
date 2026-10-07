@@ -44,6 +44,19 @@ describe("plan gate", () => {
     expect(r.code).toBe(EXIT_CODES.RELEASE_SHA_UNTAGGED);
     expect(r.signerMade).toBe(false);
   });
+  test("gate order: with no tag, no counts file and CI red at once, the refusal is RELEASE_SHA_UNTAGGED and neither the counts nor check-sha-green is consulted", async () => {
+    let greenRan = false;
+    const r = await plan(world({ chainId: 8453, writeFrozen: false }), { releaseTag: async () => null, env: { GITHUB_TOKEN: undefined, GH_TOKEN: undefined }, checkShaGreen: async () => { greenRan = true; return { code: 1, output: "RED" }; } });
+    expect(r.code).toBe(EXIT_CODES.RELEASE_SHA_UNTAGGED);
+    expect(r.signerMade).toBe(false);
+    expect(greenRan).toBe(false);
+  });
+  test("gate order: a tagged SHA with no counts file and CI red is COUNTS_MISSING, before check-sha-green runs", async () => {
+    let greenRan = false;
+    const r = await plan(world({ chainId: 8453, writeFrozen: false }), { checkShaGreen: async () => { greenRan = true; return { code: 1, output: "RED" }; } });
+    expect(r.code).toBe(EXIT_CODES.COUNTS_MISSING);
+    expect(greenRan).toBe(false);
+  });
   test("8453 refuses a tagged SHA with no frozen counts file: COUNTS_MISSING, no signer", async () => {
     const r = await plan(world({ chainId: 8453, writeFrozen: false }));
     expect(r.code).toBe(EXIT_CODES.COUNTS_MISSING);
