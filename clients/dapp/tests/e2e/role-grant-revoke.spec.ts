@@ -11,12 +11,13 @@
  *     (function, role, account) triple,
  *   - raw calldata is never visible in the DOM (it is only reachable
  *     by expanding the operator-opt-in <details> block),
- *   - the browser wallet cannot sign: after the timelock handover no EOA
- *     holds DEFAULT_ADMIN_ROLE (the admin of ADMIN_ROLE and DEPOSIT_PAUSER_ROLE) on
- *     any chain, so the submit button is disabled and the tab states why.
- *     The real grant/revoke through the Safe -> Timelock is covered by the
- *     Twin governance tests, not here.
- *     (docs/technical/dapp-credential-decisions.md §3.2, 2026-10-06 amendment)
+ *   - the browser wallet cannot grant or revoke directly: after the timelock
+ *     handover no EOA holds DEFAULT_ADMIN_ROLE (the admin of ADMIN_ROLE and
+ *     DEPOSIT_PAUSER_ROLE) on any chain. The button reads "Create Safe proposal"
+ *     and is disabled for a wallet that is not a Safe owner, with the refusal
+ *     visible. The real grant through the Safe -> Timelock, signed by Safe
+ *     owners, is covered by safe-proposal-role-grant.spec.ts.
+ *     (docs/technical/dapp-credential-decisions.md §3.2, 2026-10-07 amendment)
  *
  * The optional on-chain writeContract round-trip is gated by FORK_E2E=1
  * and ships in a sibling spec; we keep this file focused on the UI
@@ -78,16 +79,16 @@ async function connect(page: Page) {
 }
 
 /**
- * Production behavior for a wallet without DEFAULT_ADMIN_ROLE: the submit
- * button is refused and the tab shows the visible reason.
+ * Production behavior for a wallet that is not a Safe owner: the "Create Safe
+ * proposal" button is disabled and the panel shows the visible reason.
  */
-async function expectRefusedForNonAdminWallet(page: Page, c: RoleCase, btnId: string) {
+async function expectRefusedForNonOwnerWallet(page: Page, btnId: string) {
+  const prefix = btnId.replace(/-submit$/, "");
   await expect(page.getByTestId(btnId)).toBeDisabled();
-  const reason = page.getByTestId(`${c.slug}-role-wallet-refusal`);
-  await expect(reason).toBeVisible();
-  await expect(reason).toContainText("lacks DEFAULT_ADMIN_ROLE");
-  await expect(reason).toContainText(c.roleName);
-  await expect(reason).toContainText("Safe -> Timelock");
+  await expect(page.getByTestId(btnId)).toHaveText("Create Safe proposal");
+  const reason = page.getByTestId(`${prefix}-safe-refusal`);
+  await expect(reason).toBeVisible({ timeout: 60_000 });
+  await expect(reason).toContainText("not an owner of the Safe");
 }
 
 /**
@@ -186,8 +187,8 @@ for (const c of cases) {
       // The preview itself is OK: no preview refusal banner.
       await expect(previewWrap.getByTestId("refusal-reason")).toHaveCount(0);
 
-      // The wallet cannot sign it: submit refused, reason visible.
-      await expectRefusedForNonAdminWallet(page, c, c.grantBtnId);
+      // The wallet is not a Safe owner: the proposal button is refused, reason visible.
+      await expectRefusedForNonOwnerWallet(page, c.grantBtnId);
     });
 
     test(`revoke ${c.label}_ROLE: preview matches encoder, no raw calldata exposed`, async ({
@@ -213,15 +214,17 @@ for (const c of cases) {
 
       await expectNoRawCalldataExposed(page, expected);
       await expect(previewWrap.getByTestId("refusal-reason")).toHaveCount(0);
-      await expectRefusedForNonAdminWallet(page, c, c.revokeBtnId);
+      await expectRefusedForNonOwnerWallet(page, c.revokeBtnId);
     });
 
-    test(`${c.label}_ROLE submit buttons stay disabled with no address`, async ({ page }) => {
+    test(`${c.label}_ROLE offers no proposal button until an address is entered`, async ({
+      page,
+    }) => {
       await connect(page);
       await openTab(page, c.tabId);
-      // Inputs are empty.
-      await expect(page.getByTestId(c.grantBtnId)).toBeDisabled();
-      await expect(page.getByTestId(c.revokeBtnId)).toBeDisabled();
+      // Inputs are empty: no preview, so no proposal and no button.
+      await expect(page.getByTestId(c.grantBtnId)).toHaveCount(0);
+      await expect(page.getByTestId(c.revokeBtnId)).toHaveCount(0);
     });
   });
 }

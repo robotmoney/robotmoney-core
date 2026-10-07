@@ -67,12 +67,27 @@ export const timelockAbi = [
   },
   {
     type: "function",
+    name: "isOperationReady",
+    stateMutability: "view",
+    inputs: [{ name: "id", type: "bytes32" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
     name: "getTimestamp",
     stateMutability: "view",
     inputs: [{ name: "id", type: "bytes32" }],
     outputs: [{ name: "", type: "uint256" }],
   },
   // Events used to discover role members and pending operations.
+  {
+    type: "event",
+    name: "CallSalt",
+    inputs: [
+      { name: "id", type: "bytes32", indexed: true },
+      { name: "salt", type: "bytes32", indexed: false },
+    ],
+  },
   {
     type: "event",
     name: "RoleGranted",
@@ -116,6 +131,20 @@ export interface TimelockPendingOp {
   readonly readyTimestamp: bigint;
   /** Human-readable status: "waiting" (delay not elapsed) or "ready" (executable). */
   readonly status: "waiting" | "ready";
+  /**
+   * The scheduled call, rebuilt from the CallScheduled and CallSalt logs, present
+   * only for a single-call operation whose `hashOperation` equals `operationId`.
+   * The Safe execute proposal (core 1544) is offered only when this is present.
+   */
+  readonly call?: TimelockScheduledCall;
+}
+
+/** The arguments `timelock.execute` needs to run a scheduled single-call operation. */
+export interface TimelockScheduledCall {
+  readonly target: Address;
+  readonly data: `0x${string}`;
+  readonly predecessor: `0x${string}`;
+  readonly salt: `0x${string}`;
 }
 
 /** Full TimelockController state surfaced by the panel. */

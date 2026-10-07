@@ -268,6 +268,11 @@ services:
         # Default to zero address so the governance panel shows the
         # config-missing placeholder in standalone builds.
         VITE_GOVERNANCE_ADDRESS: ${VITE_GOVERNANCE_ADDRESS:-0x0000000000000000000000000000000000000000}
+        # Core 1544: TimelockController and the Safe that proposes to it. The admin
+        # tabs build a Safe -> Timelock proposal for these. Zero address in
+        # standalone builds: the proposal is then blocked, with no signing button.
+        VITE_TIMELOCK_ADDRESS: ${VITE_TIMELOCK_ADDRESS:-0x0000000000000000000000000000000000000000}
+        VITE_SAFE_ADDRESS: ${VITE_SAFE_ADDRESS:-0x0000000000000000000000000000000000000000}
         # Issue #463: RM token address for the balances panel RM row. Defaults to
         # the live ROBOTMONEY token on Base; nothing deploys RM (core 1489).
         VITE_RM_TOKEN_ADDRESS: ${VITE_RM_TOKEN_ADDRESS:-0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3}

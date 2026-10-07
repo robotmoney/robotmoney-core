@@ -34,6 +34,10 @@ export const REQUIRED_SPECS: readonly string[] = [
   // AC-CORE-08: the four consensus-receipt state dimensions and the required
   // explanatory language, against the harness-seeded devnet fixtures.
   "consensus-receipts-seeded.spec.ts",
+  // Core 1544: the admin tabs produce a Safe-signable Safe -> Timelock proposal. Runs in the
+  // `safe-governance` Playwright project against the real 2-of-3 SafeL2 and timelock. A skipped
+  // or missing run fails suite-10 rather than letting the gap pass quietly.
+  "safe-proposal-role-grant.spec.ts",
 ];
 
 /** How many tests of each kind a single spec file contributed to a run. */
@@ -74,7 +78,7 @@ export function evaluateCoverage(
       failures.push(
         `required spec '${spec}' executed 0 tests (${outcome.skipped} skipped). ` +
           `A skipped required spec is a coverage hole, not a pass: this spec is ` +
-          `the standing browser proof for AC-CORE-08 and must run unconditionally.`,
+          `standing browser proof (AC-CORE-08, core 1544) and must run unconditionally.`,
       );
     }
   }

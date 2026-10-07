@@ -1,0 +1,101 @@
+{
+  "_doc": "Golden fixture for the dapp Safe proposal builder (core 1544). Every derived value was computed with foundry cast (cast keccak, cast abi-encode, cast calldata), independent of viem and of src/lib/safeProposal.ts. tests/unit/safe-proposal.test.ts rebuilds it from 'inputs' and asserts byte equality.",
+  "inputs": {
+    "chainId": 918453,
+    "safe": "0x5afe5afE5afE5afE5afE5aFe5aFe5Afe5Afe5AfE",
+    "timelock": "0x7172717271727172717271727172717271727172",
+    "target": "0x1111111111111111111111111111111111111111",
+    "roleName": "DEPOSIT_PAUSER_ROLE",
+    "account": "0x2222222222222222222222222222222222222222",
+    "safeNonce": 7,
+    "delaySeconds": 172800,
+    "predecessor": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "derived": {
+    "role": "0x39d7c99df860586d89a6559d1f1be4c1787de0c0cafbcd46bfce1ec1f971e238",
+    "innerData": "0x2f2ff15d39d7c99df860586d89a6559d1f1be4c1787de0c0cafbcd46bfce1ec1f971e2380000000000000000000000002222222222222222222222222222222222222222",
+    "salt": "0x57e1001f50565a153043cbe6d26164f58a10b2415c95614e435fca57a5c51fb2",
+    "scheduleData": "0x01d5062a0000000000000000000000001111111111111111111111111111111111111111000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000000057e1001f50565a153043cbe6d26164f58a10b2415c95614e435fca57a5c51fb2000000000000000000000000000000000000000000000000000000000002a30000000000000000000000000000000000000000000000000000000000000000442f2ff15d39d7c99df860586d89a6559d1f1be4c1787de0c0cafbcd46bfce1ec1f971e238000000000000000000000000222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000",
+    "operationId": "0x998a1e34a2517bb16bc65b841db15e70c4c3429a3d4b693cc0d141c800d4665c"
+  },
+  "typeHashes": {
+    "EIP712Domain": "0x47e79534a245952e8b16893a336b85a3d9ea9fa8c573f3d803afb92a79469218",
+    "SafeTx": "0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8"
+  },
+  "domainSeparator": "0xcdc2b10b94d3439ff139472aad5cb81d32b666d7d0bac1f1d53d650fe5917cd0",
+  "structHash": "0x94992c864544d75ce79eed06f27e3b7a20ba38d4eb874ce4625bfe2a213ba661",
+  "safeTxHash": "0x61288c3374f06e3b26af199d89238f3a4e3f487a2d4a522cdf9fb76633ffce4d",
+  "typedData": {
+    "types": {
+      "EIP712Domain": [
+        {
+          "name": "chainId",
+          "type": "uint256"
+        },
+        {
+          "name": "verifyingContract",
+          "type": "address"
+        }
+      ],
+      "SafeTx": [
+        {
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "name": "value",
+          "type": "uint256"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        },
+        {
+          "name": "operation",
+          "type": "uint8"
+        },
+        {
+          "name": "safeTxGas",
+          "type": "uint256"
+        },
+        {
+          "name": "baseGas",
+          "type": "uint256"
+        },
+        {
+          "name": "gasPrice",
+          "type": "uint256"
+        },
+        {
+          "name": "gasToken",
+          "type": "address"
+        },
+        {
+          "name": "refundReceiver",
+          "type": "address"
+        },
+        {
+          "name": "nonce",
+          "type": "uint256"
+        }
+      ]
+    },
+    "primaryType": "SafeTx",
+    "domain": {
+      "chainId": 918453,
+      "verifyingContract": "0x5afe5afE5afE5afE5afE5aFe5aFe5Afe5Afe5AfE"
+    },
+    "message": {
+      "to": "0x7172717271727172717271727172717271727172",
+      "value": "0",
+      "data": "0x01d5062a0000000000000000000000001111111111111111111111111111111111111111000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000000057e1001f50565a153043cbe6d26164f58a10b2415c95614e435fca57a5c51fb2000000000000000000000000000000000000000000000000000000000002a30000000000000000000000000000000000000000000000000000000000000000442f2ff15d39d7c99df860586d89a6559d1f1be4c1787de0c0cafbcd46bfce1ec1f971e238000000000000000000000000222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000",
+      "operation": 0,
+      "safeTxGas": "0",
+      "baseGas": "0",
+      "gasPrice": "0",
+      "gasToken": "0x0000000000000000000000000000000000000000",
+      "refundReceiver": "0x0000000000000000000000000000000000000000",
+      "nonce": "7"
+    }
+  }
+}

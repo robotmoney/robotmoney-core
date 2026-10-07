@@ -59,6 +59,12 @@ export type BuildAdminTabsArgs = Readonly<{
    * When absent the tab is still rendered in the error/missing-config state.
    */
   timelockAddress?: Address;
+  /**
+   * The 2-of-3 Safe that proposes to the timelock (core 1544). Admin tabs build
+   * a Safe -> Timelock proposal for it. Absent: those tabs show a blocking
+   * preview with no signing button.
+   */
+  safeAddress?: Address;
 }>;
 
 export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
@@ -103,11 +109,13 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
                   role="ADMIN_ROLE"
                   gatewayAddress={a.gatewayAddress}
                   ctx={a.ctx}
+                  safeAddress={a.safeAddress}
+                  timelockAddress={a.timelockAddress}
                   description={
                     <p>
                       Mutually exclusive with AGENT_ROLE and DEPOSIT_PAUSER_ROLE per
-                      <code> AccessRoles._grantRole</code>. Only DEFAULT_ADMIN_ROLE holders may
-                      grant.
+                      <code> AccessRoles._grantRole</code>. Only DEFAULT_ADMIN_ROLE holders (the
+                      timelock, after handover) may grant.
                     </p>
                   }
                 />
@@ -121,6 +129,8 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
                   role="DEPOSIT_PAUSER_ROLE"
                   gatewayAddress={a.gatewayAddress}
                   ctx={a.ctx}
+                  safeAddress={a.safeAddress}
+                  timelockAddress={a.timelockAddress}
                   description={
                     <p>
                       DEPOSIT_PAUSER may call <code>pauseDeposits()</code> only;{" "}
@@ -146,6 +156,8 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
         gatewayAddress={a.gatewayAddress}
         gatewayCodeHashVerified={a.ctx.gatewayCodeHashVerified}
         envClass={a.ctx.envClass}
+        safeAddress={a.safeAddress}
+        timelockAddress={a.timelockAddress}
       />
     ),
   });
@@ -156,7 +168,9 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
   tabs.push({
     id: "timelock",
     label: "Timelock",
-    content: <TimelockPanel timelockAddress={a.timelockAddress} now={a.now} />,
+    content: (
+      <TimelockPanel timelockAddress={a.timelockAddress} safeAddress={a.safeAddress} now={a.now} />
+    ),
   });
 
   // History tab — only when an explorer API URL and a plausible agent

@@ -737,9 +737,15 @@ impl Fixture {
     pub fn timelock(&self) -> Address {
         parse_addr(&self.topology.timelock)
     }
+    pub fn timelock_hex(&self) -> &str {
+        &self.topology.timelock
+    }
     /// The real 2-of-3 Safe (SafeL2 1.4.1 proxy) that proposes to the timelock.
     pub fn safe(&self) -> Address {
         parse_addr(&self.topology.safe)
+    }
+    pub fn safe_hex(&self) -> &str {
+        &self.topology.safe
     }
     /// A vault by its key: rmUSDC, rmPROTO, rmAGENT or rmRWA.
     pub fn vault_by_key(&self, key: &str) -> Address {
@@ -2828,6 +2834,10 @@ impl DappStack {
                 "VITE_GOVERNANCE_ADDRESS",
                 fixture.governance_hex().to_string(),
             ),
+            // Core 1544: the timelock and the Safe that proposes to it, so the admin
+            // tabs build a Safe -> Timelock proposal instead of a wallet transaction.
+            ("VITE_TIMELOCK_ADDRESS", fixture.timelock_hex().to_string()),
+            ("VITE_SAFE_ADDRESS", fixture.safe_hex().to_string()),
             // Issues #463/#466: the live RM token address so the main-page
             // balances panel renders the RM row (core 1489: nothing deploys RM).
             ("VITE_RM_TOKEN_ADDRESS", RM_TOKEN_ADDRESS_HEX.to_string()),
@@ -2929,6 +2939,12 @@ impl DappStack {
                 "VITE_GOVERNANCE_ADDRESS".into(),
                 fixture.governance_hex().to_string(),
             ),
+            // Core 1544: the timelock and the Safe that proposes to it.
+            (
+                "VITE_TIMELOCK_ADDRESS".into(),
+                fixture.timelock_hex().to_string(),
+            ),
+            ("VITE_SAFE_ADDRESS".into(), fixture.safe_hex().to_string()),
             // Issues #463/#466: the live RM token address so the main-page
             // balances panel renders the RM row (core 1489: nothing deploys RM).
             ("VITE_RM_TOKEN_ADDRESS".into(), RM_TOKEN_ADDRESS_HEX.into()),
@@ -3000,6 +3016,9 @@ impl DappStack {
             .env("VITE_ROUTER_ADDRESS", fixture.router_hex())
             // Issue #364: thread governance address into the dapp build.
             .env("VITE_GOVERNANCE_ADDRESS", fixture.governance_hex())
+            // Core 1544: the timelock and the Safe that proposes to it (admin tabs).
+            .env("VITE_TIMELOCK_ADDRESS", fixture.timelock_hex())
+            .env("VITE_SAFE_ADDRESS", fixture.safe_hex())
             // Issues #463/#466: thread the live RM token address into the dapp
             // build so the main-page balances panel renders the RM row.
             .env("VITE_RM_TOKEN_ADDRESS", RM_TOKEN_ADDRESS_HEX)

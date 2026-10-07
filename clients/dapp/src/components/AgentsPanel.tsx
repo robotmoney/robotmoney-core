@@ -45,6 +45,8 @@ type Props = Readonly<{
    * Forwarded to AdminFlow → buildAdminTabs → TimelockPanel.
    */
   timelockAddress?: Address;
+  /** The Safe that proposes to the timelock (core 1544). Forwarded to AdminFlow. */
+  safeAddress?: Address;
 }>;
 
 export function AgentsPanel(props: Props) {
@@ -166,6 +168,7 @@ export function AgentsPanel(props: Props) {
       registryAddress={props.registryAddress}
       routerAddress={props.routerAddress}
       timelockAddress={props.timelockAddress}
+      safeAddress={props.safeAddress}
     />
   );
 }

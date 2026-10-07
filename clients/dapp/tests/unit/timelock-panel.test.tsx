@@ -16,8 +16,10 @@
  * live RPC. The pattern follows governance-panel.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, waitFor } from "./helpers/render";
-import type { Address } from "viem";
+import { render, waitFor, fireEvent } from "./helpers/render";
+import { encodeFunctionData, keccak256, toBytes, type Address, type Hex } from "viem";
+import { gatewayAbi } from "../../src/lib/abi";
+import { timelockOperationId } from "../../src/lib/safeProposal";
 import {
   TimelockPanel,
   reconstructRoleMembers,
@@ -37,6 +39,10 @@ vi.mock("wagmi", () => ({
   useReadContracts: vi.fn(),
   // Return a stable object so the useEffect dep array doesn't fire on every render.
   usePublicClient: vi.fn(),
+  // Imported by SafeProposalPanel (core 1544). The execute tests never open a
+  // configured panel, so these are never called here.
+  useAccount: vi.fn(() => ({ isConnected: false })),
+  useWriteContract: vi.fn(() => ({ writeContractAsync: vi.fn() })),
 }));
 
 import { useReadContracts, usePublicClient } from "wagmi";
@@ -373,5 +379,106 @@ describe("TimelockPanel — ready state: all six data fields", () => {
     expect(table.textContent).toContain(OP_ID_2);
     expect(table.textContent).toContain("Waiting for delay");
     expect(table.textContent).toContain("Ready to execute");
+  });
+});
+
+// ─── Execute proposal (core 1544) ─────────────────────────────────────────────
+
+describe("TimelockPanel — execute proposal for a ready operation (core 1544)", () => {
+  const TARGET = "0x1111111111111111111111111111111111111111" as Address;
+  const ZERO32 = `0x${"00".repeat(32)}` as Hex;
+  const SALT = keccak256(toBytes("salt-1544"));
+  const DATA = encodeFunctionData({ abi: gatewayAbi, functionName: "unpauseDeposits" });
+
+  function setupOp(opts: {
+    ready: boolean;
+    data?: Hex;
+    salt?: Hex;
+    value?: bigint;
+    extraLogs?: number;
+    emitSalt?: boolean;
+  }) {
+    const data = opts.data ?? DATA;
+    const id = timelockOperationId({ target: TARGET, data, predecessor: ZERO32, salt: SALT });
+    (useReadContracts as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeScalars(),
+      error: null,
+    });
+    const scheduled = {
+      args: {
+        id,
+        index: 0n,
+        target: TARGET,
+        value: opts.value ?? 0n,
+        data,
+        predecessor: ZERO32,
+        delay: MIN_DELAY,
+      },
+    };
+    mockGetLogs.mockImplementation(async (params: { event?: { name?: string } }) => {
+      const name = params.event?.name;
+      if (name === "CallScheduled") {
+        return [scheduled, ...Array.from({ length: opts.extraLogs ?? 0 }, () => scheduled)];
+      }
+      if (name === "CallSalt") {
+        return opts.emitSalt === false ? [] : [{ args: { id, salt: opts.salt ?? SALT } }];
+      }
+      return [];
+    });
+    mockReadContract.mockImplementation(async (params: { functionName?: string }) => {
+      if (params.functionName === "hasRole") return true;
+      if (params.functionName === "getTimestamp") return 1_700_000_100n;
+      // The chain, not the browser clock, decides readiness.
+      if (params.functionName === "isOperationReady") return opts.ready;
+      return null;
+    });
+    return id;
+  }
+
+  it("offers the execute proposal when the chain says the operation is ready", async () => {
+    const id = setupOp({ ready: true });
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
+    await waitFor(() => expect(getByTestId(`timelock-op-execute-${id}`)).toBeTruthy());
+    // No Safe configured: opening the panel shows the blocking message, never a button.
+    fireEvent.click(getByTestId(`timelock-op-execute-${id}`));
+    expect(getByTestId(`timelock-exec-${id}-safe-blocked-reason`).textContent).toContain(
+      "VITE_SAFE_ADDRESS",
+    );
+    expect(document.querySelector(`[data-testid="timelock-exec-${id}-submit"]`)).toBeNull();
+  });
+
+  it("uses the chain's readiness verdict even when the browser clock disagrees", async () => {
+    const id = setupOp({ ready: true });
+    // now is 1970: by the wall clock the operation is far in the future.
+    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} now={1000} />);
+    await waitFor(() => expect(getByTestId(`timelock-op-${id}`)).toBeTruthy());
+    expect(getByTestId("timelock-op-status").textContent).toBe("Ready to execute");
+    expect(getByTestId(`timelock-op-execute-${id}`)).toBeTruthy();
+  });
+
+  it("offers nothing for an operation that is still waiting", async () => {
+    const id = setupOp({ ready: false });
+    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} now={1000} />);
+    await waitFor(() => expect(getByTestId(`timelock-op-${id}`)).toBeTruthy());
+    expect(getByTestId("timelock-op-status").textContent).toBe("Waiting for delay");
+    expect(document.querySelector(`[data-testid="timelock-op-execute-${id}"]`)).toBeNull();
+  });
+
+  it.each([
+    ["a batch (several CallScheduled logs)", { extraLogs: 1 }],
+    ["a call with value", { value: 1n }],
+    ["a payload the dapp cannot decode", { data: "0xdeadbeef" as Hex }],
+    ["an operation whose salt cannot be recovered", { emitSalt: false }],
+  ])("offers no execute proposal for %s", async (_name, over) => {
+    const id = setupOp({ ready: true, ...over });
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
+    await waitFor(() => expect(getByTestId("timelock-panel")).toBeTruthy());
+    expect(document.querySelector(`[data-testid^="timelock-op-execute-"]`)).toBeNull();
+    // The operation id of a mismatched payload may differ from the scheduled one.
+    expect(id).toMatch(/^0x[0-9a-f]{64}$/);
   });
 });
