@@ -74,6 +74,8 @@ contracts/test/contract.AgentGuardHarness.mdx
 contracts/test/contract.AgentTokenVaultGovernanceTest.mdx
 contracts/test/contract.AgentTokenVaultScriptGuardsTest.mdx
 contracts/test/contract.AgentTokenVaultTest.mdx
+contracts/test/contract.B20ConstPool.mdx
+contracts/test/contract.B20Stand.mdx
 contracts/test/contract.BadTickMathVault.mdx
 contracts/test/contract.BasketDeployHarness.mdx
 contracts/test/contract.BasketVaultAerodromeTest.mdx
@@ -225,6 +227,8 @@ contracts/test/contract.RunEntrypointRelay.mdx
 contracts/test/contract.RwaBasketVaultFork.mdx
 contracts/test/contract.RwaBasketVaultScriptGuardsTest.mdx
 contracts/test/contract.RwaGuardHarness.mdx
+contracts/test/contract.RwaVaultB20ForkTest.mdx
+contracts/test/contract.RwaVaultB20Test.mdx
 contracts/test/contract.SafeIntegrationTest.mdx
 contracts/test/contract.ShareLeakRedeemVault.mdx
 contracts/test/contract.ShareLeakVault.mdx

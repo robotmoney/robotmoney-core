@@ -1,0 +1,109 @@
+---
+title: "B20ConstPool"
+---
+
+# B20ConstPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/aff4c40a1ddd0d52759d7846c6e06e93e8a10512/contracts/test/RwaVaultB20.t.sol)
+
+<i>
+
+Slipstream pool double: every field is an immutable or a constant.
+
+</i>
+
+## Constants
+
+### token0
+
+```solidity
+address public immutable token0;
+```
+
+### token1
+
+```solidity
+address public immutable token1;
+```
+
+### tickSpacing
+
+```solidity
+int24 public immutable tickSpacing;
+```
+
+## Functions
+
+<a id="constructor-address-address-int24"></a>
+
+### constructor
+
+```solidity
+constructor(address a, address b, int24 spacing);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+| b | `address` |  |
+| spacing | `int24` |  |
+
+<a id="liquidity"></a>
+
+### liquidity
+
+```solidity
+function liquidity() external pure returns (uint128);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint128` |  |
+
+<a id="slot0"></a>
+
+### slot0
+
+```solidity
+function slot0() external pure returns (uint160, int24, uint16, uint16, uint16, bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+| &lt;none&gt; | `int24` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `bool` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+        external
+        pure
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secondsAgos | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickCumulatives | `int56[]` |  |
+| secondsPerLiq | `uint160[]` |  |
+

@@ -1,0 +1,59 @@
+---
+title: "B20Stand"
+---
+
+# B20Stand
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/aff4c40a1ddd0d52759d7846c6e06e93e8a10512/contracts/test/RwaVaultB20Fork.t.sol)
+
+**Inherits:** ERC20
+
+<i>
+
+Plain 8-decimal ERC20 etched at each B20 address. Anvil and forge cannot run the Base B20
+precompile (the account code is the single byte 0xef, an invalid opcode off Base), so the
+token behaviour is a standard ERC20 and everything else is real: the Aerodrome Slipstream
+factory, router and pools, the pool TWAP history, USDC and the deSPXA pool.
+
+</i>
+
+## Functions
+
+<a id="constructor"></a>
+
+### constructor
+
+```solidity
+constructor() ERC20("B20 stand-in", "B20");
+```
+
+<a id="decimals"></a>
+
+### decimals
+
+<i>
+
+Returns the number of decimals used to get its user representation.
+For example, if `decimals` equals `2`, a balance of `505` tokens should
+be displayed to a user as `5.05` (`505 / 10 ** 2`).
+
+Tokens usually opt for a value of 18, imitating the relationship between
+Ether and Wei. This is the default value returned by this function, unless
+it's overridden.
+
+NOTE: This information is only used for _display_ purposes: it in
+no way affects any of the arithmetic of the contract, including
+`IERC20` and `IERC20`.
+
+</i>
+
+```solidity
+function decimals() public pure override returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+

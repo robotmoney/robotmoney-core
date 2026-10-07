@@ -337,6 +337,9 @@ jobs:
 
       - name: forge test (rmRWA fork regression — core 1492)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
+      - name: forge test (rmRWA adds the four Coinbase B20 tokens through the real timelock - core 1500)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "RwaVaultB20ForkTest"
+
       - name: forge test (withdrawals are never frozen, through a real 2-of-3 Safe - core 1494)
         # Every shipped vault, the gateway and the router: no emergency, deposit-pauser
         # or governance lever blocks an exit, and unpauseDeposits runs only through the
