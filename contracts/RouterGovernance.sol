@@ -288,7 +288,7 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
         _grantRole(ADMIN_ROLE, _admin);
 
         // Operational note: only RouterGovernance (deployed behind Safe→Timelock)
-        // should hold ADMIN_ROLE on the Portfolio Router. If the router's ADMIN_ROLE
+        // should hold WEIGHT_SETTER_ROLE on the Portfolio Router. If that role
         // is held elsewhere, setWeights bypasses the propose/vote/delay path entirely.
     }
 

@@ -4,7 +4,7 @@ title: "RouterGovernanceTest"
 
 # RouterGovernanceTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RouterGovernance.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cedbfcdfb3487fb7d6e49ade987ea664a7113b8f/contracts/test/RouterGovernance.t.sol)
 
 **Inherits:** Test
 
@@ -532,6 +532,22 @@ function test_proposalState_revertsOnNonExistent() public;
 
 ```solidity
 function test_execute_success() public;
+```
+
+<a id="test_execute_setsactiveweightsthroughweightsetterrole"></a>
+
+### test_execute_setsActiveWeightsThroughWeightSetterRole
+
+```solidity
+function test_execute_setsActiveWeightsThroughWeightSetterRole() public;
+```
+
+<a id="test_execute_revertswhengovernancelacksweightsetterrole"></a>
+
+### test_execute_revertsWhenGovernanceLacksWeightSetterRole
+
+```solidity
+function test_execute_revertsWhenGovernanceLacksWeightSetterRole() public;
 ```
 
 <a id="test_execute_emitsproposalexecuted"></a>

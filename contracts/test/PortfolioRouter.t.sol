@@ -319,19 +319,114 @@ contract PortfolioRouterTest is Test {
         router.setWeights(vaults, bps);
     }
 
-    function test_setWeights_revertsForUnauthorized() public {
-        address[] memory vaults = new address[](1);
-        uint256[] memory bps = new uint256[](1);
+    function _oneVault() internal view returns (address[] memory vaults, uint256[] memory bps) {
+        vaults = new address[](1);
+        bps = new uint256[](1);
         vaults[0] = address(vaultA);
         bps[0] = 10_000;
-        bytes32 role = router.ADMIN_ROLE();
+    }
+
+    function _expectWeightSetterRevert(address caller) internal {
+        bytes32 role = router.WEIGHT_SETTER_ROLE();
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
+                IAccessControl.AccessControlUnauthorizedAccount.selector, caller, role
             )
         );
+    }
+
+    function test_setWeights_revertsForUnauthorized() public {
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        _expectWeightSetterRevert(stranger);
         vm.prank(stranger);
         router.setWeights(vaults, bps);
+    }
+
+    /// @notice The timelock holds ADMIN_ROLE and still cannot set active weights.
+    function test_setWeights_revertsForTimelock() public {
+        address timelock = makeAddr("timelock");
+        vm.startPrank(admin);
+        router.grantRole(router.ADMIN_ROLE(), timelock);
+        router.revokeRole(router.WEIGHT_SETTER_ROLE(), admin);
+        vm.stopPrank();
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        _expectWeightSetterRevert(timelock);
+        vm.prank(timelock);
+        router.setWeights(vaults, bps);
+    }
+
+    /// @notice The Safe holds no router role: it reaches the router only through the timelock.
+    function test_setWeights_revertsForSafe() public {
+        address safe = makeAddr("safe");
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        _expectWeightSetterRevert(safe);
+        vm.prank(safe);
+        router.setWeights(vaults, bps);
+    }
+
+    /// @notice After the deploy ceremony drops the deployer's copy, the deployer
+    ///         and a random EOA both revert.
+    function test_setWeights_revertsForDeployerAndEoa() public {
+        bytes32 setterRole = router.WEIGHT_SETTER_ROLE();
+        vm.prank(admin);
+        router.revokeRole(setterRole, admin);
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        _expectWeightSetterRevert(admin);
+        vm.prank(admin);
+        router.setWeights(vaults, bps);
+        address eoa = makeAddr("eoa");
+        _expectWeightSetterRevert(eoa);
+        vm.prank(eoa);
+        router.setWeights(vaults, bps);
+    }
+
+    function test_setWeights_succeedsForWeightSetterRole() public {
+        address setter = makeAddr("weightSetter");
+        bytes32 setterRole = router.WEIGHT_SETTER_ROLE();
+        vm.prank(admin);
+        router.grantRole(setterRole, setter);
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        vm.prank(setter);
+        router.setWeights(vaults, bps);
+        (address[] memory got,) = router.getWeights();
+        assertEq(got.length, 1);
+        assertEq(got[0], address(vaultA));
+    }
+
+    /// @notice The timelock (ADMIN_ROLE only) can still set the default weights.
+    function test_setDefaultWeights_succeedsForTimelockAdmin() public {
+        address timelock = makeAddr("timelock");
+        vm.startPrank(admin);
+        router.grantRole(router.ADMIN_ROLE(), timelock);
+        router.revokeRole(router.WEIGHT_SETTER_ROLE(), admin);
+        vm.stopPrank();
+        // setDefaultWeights needs one entry per router-eligible vault.
+        address[] memory vaults = new address[](2);
+        uint256[] memory bps = new uint256[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        bps[0] = 6_000;
+        bps[1] = 4_000;
+        vm.prank(timelock);
+        router.setDefaultWeights(vaults, bps);
+        (address[] memory got,) = router.getDefaultWeights();
+        assertEq(got.length, 2);
+    }
+
+    function test_setDefaultWeights_revertsForWeightSetterRoleOnly() public {
+        address setter = makeAddr("weightSetterOnly");
+        bytes32 setterRole = router.WEIGHT_SETTER_ROLE();
+        bytes32 adminRole = router.ADMIN_ROLE();
+        vm.prank(admin);
+        router.grantRole(setterRole, setter);
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, setter, adminRole
+            )
+        );
+        vm.prank(setter);
+        router.setDefaultWeights(vaults, bps);
     }
 
     function test_setWeights_happyPath_emitsEvent() public {

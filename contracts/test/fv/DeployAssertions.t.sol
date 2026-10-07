@@ -354,6 +354,8 @@ contract DeployAssertionsTest is SafeFixture {
         bytes32 routerAdminRole = _aclRouter.ADMIN_ROLE();
         vm.prank(_aclDeployer);
         _aclRouter.grantRole(routerAdminRole, address(_aclGovernance));
+        vm.prank(_aclDeployer);
+        _aclRouter.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(_aclGovernance));
 
         // The script's grant calls run as `address(script)`, so it needs ADMIN on
         // each contract (and the gateway DEFAULT_ADMIN_ROLE to hand the timelock

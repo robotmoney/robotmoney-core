@@ -6395,6 +6395,19 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "WEIGHT_SETTER_ROLE",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "applyMigrationDefaultWeights",
     inputs: [
       {

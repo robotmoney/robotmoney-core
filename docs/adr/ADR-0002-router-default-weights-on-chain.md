@@ -59,12 +59,15 @@ Owner decisions of 2026-10-05 (mainnet plan §2.2, §3.1, §3.5):
 Code state when this amendment was written (`impl/core-contracts`, core
 PR 1505):
 
-- `PortfolioRouter.setWeights` and `setDefaultWeights` are both gated on
-  the same `ADMIN_ROLE`. `DeployTimelock` grants router `ADMIN_ROLE` to
-  the timelock, and `DeployRouterGovernance` grants it to
-  `RouterGovernance`. The timelock can therefore still call `setWeights`
-  directly. The separate weight-setter role that limits the timelock to
-  `defaultWeights` is core 1522 and is **not yet implemented**.
+- `PortfolioRouter.setWeights` is gated on `WEIGHT_SETTER_ROLE`, the only
+  `setWeights` gate. `RouterGovernance` is the only holder after the deploy
+  ceremony: `DeployRouterGovernance` (stage 6) grants it and drops the
+  deployer's copy, and the stage 12 verifier asserts the timelock, the
+  deployer, the Safe, the pauser and the emergency key do not hold it.
+  `setDefaultWeights` and `clearVotedWeights` stay on `ADMIN_ROLE`, the
+  defaultWeights gate, which `DeployTimelock` grants to the timelock and
+  `DeployRouterGovernance` grants to `RouterGovernance`. The timelock can
+  therefore set `defaultWeights` and cannot call `setWeights` (core 1522).
 - `_setDefaultWeights` requires one entry per router-eligible vault, each
   registered Active and eligible, summing to 10 000 bps. It does not
   refuse a 0 bps entry. Whether rmAGENT and rmRWA are marked eligible at

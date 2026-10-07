@@ -72,6 +72,27 @@ contract DeployRouterGovernanceDefaultsTest is Test {
         );
     }
 
+    // ─── Stage 6 wires the weight-setter role ────────────────────────────────
+
+    /// @notice Stage 6 grants WEIGHT_SETTER_ROLE to RouterGovernance, the sole setWeights gate.
+    function test_stage6_grantsWeightSetterRoleToGovernance() public {
+        DeployRouterGovernance.Deployed memory d = script.runInProcessWith(
+            admin, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
+        );
+        assertTrue(router.hasRole(router.WEIGHT_SETTER_ROLE(), address(d.governance)));
+    }
+
+    /// @notice The router constructor seeds the deployer with the role. Stage 6 drops it.
+    function test_stage6_deployerHoldsNoWeightSetterRole() public {
+        bytes32 role = router.WEIGHT_SETTER_ROLE();
+        assertTrue(router.hasRole(role, admin), "precondition: deployer seeded");
+        script.runInProcessWith(
+            admin, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
+        );
+        assertFalse(router.hasRole(role, admin));
+        assertTrue(router.hasRole(router.ADMIN_ROLE(), admin), "admin role stays until stage 11");
+    }
+
     // ─── The floor is enforced, not merely defaulted ─────────────────────────
 
     /// @notice An explicit `QUORUM_THRESHOLD=1` is refused by the broadcast

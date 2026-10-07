@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeFunctionData, keccak256, toFunctionSelector, parseAbiItem, toHex, pad, type Hex as VHex } from "viem";
 import {
-  ADMIN_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
+  ADMIN_ROLE, WEIGHT_SETTER_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
   SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32,
 } from "../../src/verify/constants.ts";
 import { getStageTable } from "../../src/stages.ts";
@@ -192,6 +192,7 @@ export function buildWorld(chainId = 8453): World {
   for (const a of [GATEWAY, ICP, REC, TIMELOCK]) ch.grant(a, Z32, TIMELOCK);
   ch.grant(GATEWAY, PAUSER_ROLE, PAUSER);
   ch.grant(ROUTER, ADMIN_ROLE, GOV);
+  ch.grant(ROUTER, WEIGHT_SETTER_ROLE, GOV);
   for (const r of [PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE]) ch.grant(TIMELOCK, r, SAFE);
   ch.set(TIMELOCK, "getMinDelay", BigInt(delay));
   ch.set(GATEWAY, "paused", false);

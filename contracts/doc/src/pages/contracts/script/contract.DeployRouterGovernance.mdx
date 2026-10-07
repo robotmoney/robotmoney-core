@@ -5,7 +5,7 @@ description: "Foundry deploy script for the RouterGovernance contract. Deploys R
 
 # DeployRouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cedbfcdfb3487fb7d6e49ade987ea664a7113b8f/contracts/script/DeployRouterGovernance.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -164,6 +164,29 @@ function _grantRouterAdmin(Deployed memory d, address granter_) internal;
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 | granter_ | `address` | The account whose ADMIN_ROLE on the router authorises<br/>the grant — the broadcaster under `run()`, the pranked<br/>admin in-process. |
+
+<a id="_grantweightsetter-deployed-address"></a>
+
+### _grantWeightSetter
+
+<i>
+
+Give the governance contract `WEIGHT_SETTER_ROLE`, the sole gate on
+`setWeights`, then drop the granter's own copy so no key but
+governance can set active weights. Both effects are read back.
+
+</i>
+
+```solidity
+function _grantWeightSetter(Deployed memory d, address granter_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| granter_ | `address` |  |
 
 <a id="_logresult-deployed"></a>
 

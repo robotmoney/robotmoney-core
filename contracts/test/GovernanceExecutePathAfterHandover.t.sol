@@ -50,6 +50,7 @@ import {ForkSelect} from "./helpers/ForkSelect.sol";
 ///         SafeIntegration.t.sol. Unset, it skips with a named reason.
 contract GovernanceExecutePathAfterHandoverTest is Test {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 
     // ─── Scripts (the "deployer EOA" is the timelock script address) ─────────
 
@@ -201,6 +202,19 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         );
     }
 
+    /// @notice `setWeights` is gated by WEIGHT_SETTER_ROLE: governance holds it,
+    ///         the timelock, the deployer, the Safe, the pauser and the
+    ///         emergency key do not.
+    function test_onlyGovernanceHoldsWeightSetterRole() public view {
+        IAccessControl r = IAccessControl(address(router));
+        assertTrue(r.hasRole(WEIGHT_SETTER_ROLE, address(gov)), "governance lacks the setter");
+        assertFalse(r.hasRole(WEIGHT_SETTER_ROLE, address(timelock)), "timelock holds the setter");
+        assertFalse(r.hasRole(WEIGHT_SETTER_ROLE, deployer), "deployer holds the setter");
+        assertFalse(r.hasRole(WEIGHT_SETTER_ROLE, address(safe)), "safe holds the setter");
+        assertFalse(r.hasRole(WEIGHT_SETTER_ROLE, pauser), "pauser holds the setter");
+        assertFalse(r.hasRole(WEIGHT_SETTER_ROLE, emergency), "emergency holds the setter");
+    }
+
     /// @notice THE R7 regression: propose (routed through the timelock, which
     ///         now holds governance ADMIN_ROLE) → both voters vote → delay
     ///         elapses → execute() lands the weights on the router.
@@ -253,6 +267,66 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             IAccessControl(address(router)).hasRole(ADMIN_ROLE, deployer),
             "deployer EOA still holds router ADMIN_ROLE"
         );
+    }
+
+    // ─── The timelock cannot bypass RouterGovernance ─────────────────────────
+
+    /// @notice The Safe schedules and executes router.setWeights through the
+    ///         timelock. The operation is ready and the Safe signs it with real
+    ///         owner signatures (no vm.prank of the Safe), yet the router
+    ///         rejects the timelock, so the execute fails and no weight lands.
+    function test_timelockSetWeightsThroughRealSafeScheduleExecute_reverts() public {
+        (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
+        bytes memory data = abi.encodeCall(PortfolioRouter.setWeights, (vaults, bps));
+        bytes32 salt = keccak256("timelock-set-weights");
+
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule, (address(router), 0, data, bytes32(0), salt, MIN_DELAY)
+            )
+        );
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        bytes32 opId = timelock.hashOperation(address(router), 0, data, bytes32(0), salt);
+        assertTrue(timelock.isOperationReady(opId), "operation should be ready");
+
+        // The Safe reports GS013 when the inner timelock call fails.
+        _safeExecExpectRevert(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.execute, (address(router), 0, data, bytes32(0), salt)
+            ),
+            bytes("GS013")
+        );
+        assertFalse(timelock.isOperationDone(opId), "operation must not be done");
+        (address[] memory applied,) = router.getWeights();
+        assertEq(applied.length, 0, "the timelock must not have set active weights");
+    }
+
+    /// @notice The same Safe -> Timelock path still reaches setDefaultWeights,
+    ///         the below-quorum fallback the timelock keeps through ADMIN_ROLE.
+    function test_timelockSetDefaultWeightsThroughRealSafeScheduleExecute_succeeds() public {
+        (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
+        bytes memory data = abi.encodeCall(PortfolioRouter.setDefaultWeights, (vaults, bps));
+        bytes32 salt = keccak256("timelock-set-default-weights");
+
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule, (address(router), 0, data, bytes32(0), salt, MIN_DELAY)
+            )
+        );
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(TimelockController.execute, (address(router), 0, data, bytes32(0), salt))
+        );
+
+        (address[] memory defaults, uint256[] memory defaultBps) = router.getDefaultWeights();
+        assertEq(defaults.length, 2, "default weights not set");
+        assertEq(defaults[0], address(vaultA));
+        assertEq(defaultBps[0], 6_000);
+        assertEq(defaultBps[1], 4_000);
     }
 
     // ─── INV-4: the two bodies are disjoint ──────────────────────────────────
@@ -409,6 +483,16 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     function _sign(uint256 pk, bytes32 txHash) internal pure returns (bytes memory) {
         (uint8 v, bytes32 r, bytes32 s_) = vm.sign(pk, txHash);
         return abi.encodePacked(r, s_, v);
+    }
+
+    /// @dev Like `_safeExec`, but expects the Safe itself to revert. The digest and
+    ///      signatures are built first so `expectRevert` binds to `execTransaction`.
+    function _safeExecExpectRevert(address to, bytes memory data, bytes memory reason) internal {
+        bytes32 txHash = _safeTxHash(to, data);
+        uint256[3] memory pks = _sortedOwnerPks();
+        bytes memory sigs = bytes.concat(_sign(pks[0], txHash), _sign(pks[1], txHash));
+        vm.expectRevert(reason);
+        safe.execTransaction(to, 0, data, 0, 0, 0, 0, address(0), payable(address(0)), sigs);
     }
 
     /// @dev execTransaction with the two lowest-address owners' signatures.

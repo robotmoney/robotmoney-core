@@ -4,7 +4,7 @@ title: "DeployRouterGovernanceDefaultsTest"
 
 # DeployRouterGovernanceDefaultsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/DeployRouterGovernanceDefaults.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cedbfcdfb3487fb7d6e49ade987ea664a7113b8f/contracts/test/DeployRouterGovernanceDefaults.t.sol)
 
 **Inherits:** Test
 
@@ -106,6 +106,26 @@ GovernanceSeparationInvariant.t.sol::test_quorumReflectsTheVoterSet.
 
 ```solidity
 function test_defaultQuorumExceedsOneUnitOfVotingPower() public;
+```
+
+<a id="test_stage6_grantsweightsetterroletogovernance"></a>
+
+### test_stage6_grantsWeightSetterRoleToGovernance
+
+Stage 6 grants WEIGHT_SETTER_ROLE to RouterGovernance, the sole setWeights gate.
+
+```solidity
+function test_stage6_grantsWeightSetterRoleToGovernance() public;
+```
+
+<a id="test_stage6_deployerholdsnoweightsetterrole"></a>
+
+### test_stage6_deployerHoldsNoWeightSetterRole
+
+The router constructor seeds the deployer with the role. Stage 6 drops it.
+
+```solidity
+function test_stage6_deployerHoldsNoWeightSetterRole() public;
 ```
 
 <a id="test_runrefusesanexplicitquorumofone"></a>
