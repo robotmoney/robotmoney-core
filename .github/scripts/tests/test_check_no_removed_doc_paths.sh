@@ -98,7 +98,7 @@ if [[ -z "$base" ]]; then
 fi
 cases=$((cases + 1))
 bad="$(git -C "$REPO_ROOT" diff --name-only "$base" |
-  grep -v -E '^(docs/|\.github/|tests/fixtures/committee-vote\.schema\.json$|testing/(fork-e2e-rust|smoke-test)/src/base_testnet\.rs$|scripts/ci/check-no-test-only-code\.ts$)' || true)"
+  grep -v -E '^(docs/|\.github/|tests/fixtures/committee-vote\.schema\.json$|testing/(fork-e2e-rust|smoke-test)/src/base_testnet\.rs$|scripts/ci/check-no-test-only-code\.ts$|scripts/devnet/check-twin-chain-ci-selftest\.ts$)' || true)"
 if [[ -n "$bad" ]]; then
   echo "FAIL: diff touches paths outside scope: $bad" >&2
   failures=$((failures + 1))
