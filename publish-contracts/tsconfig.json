@@ -3,5 +3,5 @@
     "target": "ESNext", "module": "ESNext", "moduleResolution": "bundler", "strict": true,
     "noEmit": true, "allowImportingTsExtensions": true, "skipLibCheck": true, "types": ["bun"]
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests", "scripts"]
 }

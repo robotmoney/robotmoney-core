@@ -21,7 +21,7 @@ export const SUITES: Record<string, string[]> = {
   // reads core's stage table from REPO_ROOT (core checked out at the pinned DEPLOY_SHA): every row, env name, manifest and artifact exists in core
   parity: ["tests/core-parity.test.ts"],
   // the workflow gates: plan gate (core check-sha-green wiring), workflow inputs and pins, config-check, sheet merge
-  gates: ["tests/plan-gate.test.ts", "tests/config-check.test.ts"],
+  gates: ["tests/plan-gate.test.ts", "tests/release-tag.test.ts", "tests/config-check.test.ts"],
 };
 
 export interface FileResult { file: string; ok: boolean; passed: number; failed: number; skipped: number; reason?: string }
