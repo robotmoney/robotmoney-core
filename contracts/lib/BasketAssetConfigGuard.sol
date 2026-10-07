@@ -49,6 +49,14 @@ library BasketAssetConfigGuard {
     error InsufficientObservationHistory(address pool, uint32 requiredWindow);
     /// @dev Pool in-range liquidity below the synchronous-redemption minimum.
     error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
+    /// @dev Token has no usable bytecode and its code hash is not the allowed B20 marker.
+    error TokenHasNoCode(address token);
+
+    /// @dev Code hash of the single byte `0xef`. Coinbase B20 tokenized stocks are protocol
+    ///      precompiles: the account code on Base is exactly `0xef`, so a plain "has code"
+    ///      check would be the only thing standing between a typo and a codeless token. This
+    ///      is the one explicit code-hash allowance for tokens with a 1-byte code (core 1500).
+    bytes32 internal constant B20_PRECOMPILE_CODEHASH = keccak256(hex"ef");
 
     /// @notice Assert `pool` is usable as an `addAsset` venue: it pairs `token`
     ///         with `usdc`, has enough observation cardinality and history to serve
@@ -64,6 +72,11 @@ library BasketAssetConfigGuard {
         uint16 minCardinality,
         uint128 minLiquidity
     ) public view {
+        // A token with no bytecode is rejected. A 1-byte code is accepted only when it is the
+        // B20 precompile marker. Any other bytecode is accepted as before.
+        if (token.code.length < 2 && token.codehash != B20_PRECOMPILE_CODEHASH) {
+            revert TokenHasNoCode(token);
+        }
         address t0 = IUniswapV3Pool(pool).token0();
         address t1 = IUniswapV3Pool(pool).token1();
         if (!((t0 == token && t1 == usdc) || (t1 == token && t0 == usdc))) {

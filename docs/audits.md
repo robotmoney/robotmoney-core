@@ -110,7 +110,7 @@ exists. Test-only contracts live under `contracts/test/` and are not shipped to 
 | `lib/TwapTickMath.sol` | HR-0618 (via BasketVault TWAP path) | Audited | TWAP helper exercised through BasketVault NAV review |
 | `lib/AdminFloorAccessControl.sol` | MC-0619 (via F-06 admin-floor remediation) | Audited | Admin-floor mixin introduced by the F-06 remediation |
 | `lib/AdminFloorAccessControlCounter.sol` | HR-0618 (L-10) | Audited | Counter variant of the admin-floor mixin used by `RobotMoneyVault` and `BasketVault`; introduced by the HR-0618 L-10 remediation |
-| `lib/BasketAssetConfigGuard.sol` | HR-0618, MC-0619 (via BasketVault addAsset path) | Audited | Reviewed through BasketVault `addAsset` config-validation findings |
+| `lib/BasketAssetConfigGuard.sol` | HR-0618, MC-0619 (via BasketVault addAsset path) | Audited | Reviewed through BasketVault `addAsset` config-validation findings. Post-audit change (core 1500): `requirePoolUsable` rejects a token with no bytecode and accepts a 1-byte code only when it is the Coinbase B20 marker `0xef`. Not yet re-reviewed. |
 | `lib/BasketViews.sol` | HR-0618 (via BasketVault NAV/preview path) | Audited | View helper exercised through BasketVault preview findings |
 | `lib/BpsMath.sol` | VA-0609, HR-0618 (via exit-fee rounding findings) | Audited | Basis-point math exercised through exit-fee rounding findings |
 | `lib/ForeignTokenQuarantine.sol` | HR-0618 (via reabsorb/quarantine path) | Audited | Quarantine/reabsorb path reviewed under MC-0619 F-17 / HR-0618 |

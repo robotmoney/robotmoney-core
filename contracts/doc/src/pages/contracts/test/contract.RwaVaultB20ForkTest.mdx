@@ -1,0 +1,216 @@
+---
+title: "RwaVaultB20ForkTest"
+description: "Fork test for core 1500: the four Coinbase B20 tokens join rmRWA through a real TimelockController at the production delay, then USDC deposits and redeems with all five assets held. Runs on the Twin chain (FORK_RPC_URL). Unset, it skips with a named reason, and CI refuses a run in which no test executed."
+---
+
+# RwaVaultB20ForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/aff4c40a1ddd0d52759d7846c6e06e93e8a10512/contracts/test/RwaVaultB20Fork.t.sol)
+
+**Inherits:** Test
+
+Fork test for core 1500: the four Coinbase B20 tokens join rmRWA through a real
+TimelockController at the production delay, then USDC deposits and redeems with all
+five assets held. Runs on the Twin chain (FORK_RPC_URL). Unset, it skips with a named
+reason, and CI refuses a run in which no test executed.
+
+## Constants
+
+### BASE_USDC
+
+```solidity
+address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### MIN_DELAY
+
+<i>
+
+Base mainnet timelock delay (security-model.md §4).
+
+</i>
+
+```solidity
+uint256 internal constant MIN_DELAY = 172_800;
+```
+
+### DEPOSIT
+
+```solidity
+uint256 internal constant DEPOSIT = 1_000 * 1e6;
+```
+
+### TOLERANCE_BPS
+
+<i>
+
+Vault slippage bound (100 bps) plus pool fee between spot execution and the TWAP.
+
+</i>
+
+```solidity
+uint256 internal constant TOLERANCE_BPS = 150;
+```
+
+### POOL_B20_FUNDING
+
+```solidity
+uint256 internal constant POOL_B20_FUNDING = 1e13;
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### proposer
+
+```solidity
+address internal proposer = makeAddr("proposer");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### vault
+
+```solidity
+RwaBasketVault internal vault;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### adapter
+
+```solidity
+AerodromeSwapAdapter internal adapter;
+```
+
+### b20Cfg
+
+```solidity
+string internal b20Cfg;
+```
+
+### v3Cfg
+
+```solidity
+string internal v3Cfg;
+```
+
+### twapWindow
+
+```solidity
+uint32 internal twapWindow;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_key-uint256"></a>
+
+### _key
+
+```solidity
+function _key(uint256 i) internal pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_token-uint256"></a>
+
+### _token
+
+```solidity
+function _token(uint256 i) internal view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_pool-uint256"></a>
+
+### _pool
+
+```solidity
+function _pool(uint256 i) internal view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_addallfourthroughtimelock"></a>
+
+### _addAllFourThroughTimelock
+
+<i>
+
+One batch: allow the adapter code hash, then addAsset for each of the four tokens.
+
+</i>
+
+```solidity
+function _addAllFourThroughTimelock() internal;
+```
+
+<a id="test_fork_b20_addedthroughrealtimelockatrealdelay"></a>
+
+### test_fork_b20_addedThroughRealTimelockAtRealDelay
+
+```solidity
+function test_fork_b20_addedThroughRealTimelockAtRealDelay() public;
+```
+
+<a id="test_fork_b20_depositandredeemwithfourheld"></a>
+
+### test_fork_b20_depositAndRedeemWithFourHeld
+
+```solidity
+function test_fork_b20_depositAndRedeemWithFourHeld() public;
+```
+

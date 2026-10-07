@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "rmRWA phase two (core 1500): the four Coinbase B20 tokenized stocks added to RwaBasketVault through the timelock. Each is a plain basket row on its Aerodrome Slipstream USDC pool (tick spacing 10), priced from the pool TWAP through the existing AerodromeSwapAdapter. Token decimals are 8. The token account code on Base is the single byte 0xef (a protocol precompile). Pools, factory and router read from Base mainnet at block 52284978.",
+  "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "aerodromeSlipstreamFactory": "0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef",
+  "aerodromeSlipstreamRouter": "0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F",
+  "assets": [
+    {
+      "symbol": "METAc",
+      "token": "0xb2000000000000000000008bC8786B856E61707C",
+      "tokenDecimals": 8,
+      "venue": "Aerodrome",
+      "pool": "0xEAF57753BC382E0324a1D43F72E7027705a2273E",
+      "poolFee": 10
+    },
+    {
+      "symbol": "NVDAc",
+      "token": "0xb20000000000000000000078ee7ce2fE4908108C",
+      "tokenDecimals": 8,
+      "venue": "Aerodrome",
+      "pool": "0x853F5f1B92b16714Fe6CDA67CAad0856B83C7ab9",
+      "poolFee": 10
+    },
+    {
+      "symbol": "GOOGLc",
+      "token": "0xb2000000000000000000002D0BA3164cc74f58B7",
+      "tokenDecimals": 8,
+      "venue": "Aerodrome",
+      "pool": "0xB1987CAD1682841b4b641d50E520777eC5Ab5542",
+      "poolFee": 10
+    },
+    {
+      "symbol": "TSLAc",
+      "token": "0xb2000000000000000000001e800a7f5189430cD0",
+      "tokenDecimals": 8,
+      "venue": "Aerodrome",
+      "pool": "0x469337fDcc5E8f38e2E4B670B04F57865D13a7BB",
+      "poolFee": 10
+    }
+  ]
+}

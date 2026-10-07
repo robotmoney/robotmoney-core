@@ -5,7 +5,7 @@ description: "The config-validation interface the 2026-06-19 audit recommended f
 
 # BasketAssetConfigGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/lib/BasketAssetConfigGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/aff4c40a1ddd0d52759d7846c6e06e93e8a10512/contracts/lib/BasketAssetConfigGuard.sol)
 
 **Title:** BasketAssetConfigGuard
 
@@ -20,6 +20,23 @@ single deployed library instead of being inlined into every vault in the
 already-EIP-170-tight basket family.
 
 </i>
+
+## Constants
+
+### B20_PRECOMPILE_CODEHASH
+
+<i>
+
+Code hash of the single byte `0xef`. Coinbase B20 tokenized stocks are protocol
+precompiles: the account code on Base is exactly `0xef`, so a plain "has code"
+check would be the only thing standing between a typo and a codeless token. This
+is the one explicit code-hash allowance for tokens with a 1-byte code (core 1500).
+
+</i>
+
+```solidity
+bytes32 internal constant B20_PRECOMPILE_CODEHASH = keccak256(hex"ef");
+```
 
 ## Functions
 
@@ -267,6 +284,24 @@ error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
 | pool | `address` |  |
 | required | `uint128` |  |
 | actual | `uint128` |  |
+
+### TokenHasNoCode
+
+<i>
+
+Token has no usable bytecode and its code hash is not the allowed B20 marker.
+
+</i>
+
+```solidity
+error TokenHasNoCode(address token);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
 
 ## Structs
 
