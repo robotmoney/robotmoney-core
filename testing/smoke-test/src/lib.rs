@@ -1515,17 +1515,14 @@ impl Fixture {
             "commitAuthorization(bytes32)",
             &[&commit_hash],
         )?;
-        // The reveal must land in a later block than the commit (CommitmentTooRecent otherwise). The Twin fork
-        // mines a block every second: wait for the head to move past the commit's block.
+        // The reveal must land in a later block than the commit (CommitmentTooRecent otherwise). A fork without a
+        // block time mines only on transactions, so mine one block here (a one-second warp).
         let commit_head = self.nonce_tracker.eth_block_number()?;
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        while self.nonce_tracker.eth_block_number()? <= commit_head {
-            if std::time::Instant::now() > deadline {
-                return Err(HarnessError::other(
-                    "no new block within 30s after commitAuthorization",
-                ));
-            }
-            thread::sleep(Duration::from_millis(250));
+        self.warp(1)?;
+        if self.nonce_tracker.eth_block_number()? <= commit_head {
+            return Err(HarnessError::other(
+                "no new block after commitAuthorization and a one-second warp",
+            ));
         }
         let receiver = format!("{depositor:#x}");
         // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
