@@ -600,7 +600,7 @@ Router allocation.
 
 | Property | Value |
 | --- | --- |
-| Name | Robot Money RWA / Thematic |
+| Name | Robot Money RWA |
 | Receipt token | rmRWA |
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |

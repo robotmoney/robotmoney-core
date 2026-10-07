@@ -1659,7 +1659,7 @@ pub async fn handle_log(
                 cfg.chain_id,
                 decoded.vault.into_array(),
                 &decoded.name,
-                risk_label_from_vault_name(&decoded.name),
+                risk_label_from_vault_name(decoded.vault, &decoded.name),
                 U256::ZERO,              // depositCap removed
                 0i16,                    // VaultStatus::Active at registration
                 log.block_number as i64, // registeredAt removed; use block_number
@@ -2546,18 +2546,49 @@ async fn call_bool(
     Ok(v != U256::ZERO)
 }
 
-/// Map vault name to risk label per PRD §11.
-/// The VaultRegistered event carries only name and asset; risk_label was
-/// removed from VaultMetadata to avoid contract changes. The indexer derives
-/// it from the registration name as a stopgap — a contract-level risk_label
-/// field is a future improvement.
-fn risk_label_from_vault_name(name: &str) -> &'static str {
-    match name {
-        "RM USDC" => "STABLE_YIELD",
-        "RM Protocol" => "VOLATILE",
-        "RM Agent Tokens" | "RM RWA / Thematic" => "SPECULATIVE",
-        _ => "STABLE_YIELD",
+/// Label stored when a registration name matches no discriminator.
+const DEFAULT_RISK_LABEL: &str = "STABLE_YIELD";
+
+/// Classify a vault registration name into its PRD §11 risk label, or `None`
+/// when no discriminator matches.
+///
+/// The deploy scripts register `Robot Money ...` names (`Robot Money USDC`,
+/// `Robot Money Protocol`, `Robot Money Agent Tokens`, `Robot Money RWA`); the
+/// legacy `RM ...` names also classify. The name is lower-cased and
+/// whitespace-collapsed first, because the rmUSDC name is a deploy-time env
+/// input. Basket discriminators (agent, rwa, protocol) are tested before
+/// `usdc` so a basket vault denominated in USDC classifies on what it holds.
+fn classify_vault_risk_label(name: &str) -> Option<&'static str> {
+    let n = name
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    if n.contains("agent") || n.contains("rwa") {
+        Some("SPECULATIVE")
+    } else if n.contains("protocol") {
+        Some("VOLATILE")
+    } else if n.contains("usdc") {
+        Some("STABLE_YIELD")
+    } else {
+        None
     }
+}
+
+/// Map vault name to risk label per PRD §11.
+/// The VaultRegistered event carries only (vault, name, asset), so the indexer
+/// derives risk_label from the registration name via
+/// [`classify_vault_risk_label`]. An unrecognised name stores STABLE_YIELD and
+/// logs a warning, because the dapp renders basket composition off this column.
+fn risk_label_from_vault_name(vault: Address, name: &str) -> &'static str {
+    classify_vault_risk_label(name).unwrap_or_else(|| {
+        tracing::warn!(
+            vault = %vault,
+            name = %name,
+            "vault name matches no risk-label discriminator; defaulting to STABLE_YIELD"
+        );
+        DEFAULT_RISK_LABEL
+    })
 }
 
 /// Unit coverage for the deploy-block derivation (the start-block bug).
@@ -2571,6 +2602,94 @@ fn risk_label_from_vault_name(name: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── risk_label classification (issue 1566) ──────────────────────────────
+
+    #[test]
+    fn risk_label_robot_money_names() {
+        for (name, want) in [
+            ("Robot Money USDC", "STABLE_YIELD"),
+            ("Robot Money Protocol", "VOLATILE"),
+            ("Robot Money Agent Tokens", "SPECULATIVE"),
+            ("Robot Money RWA", "SPECULATIVE"),
+            ("Robot Money RWA / Thematic", "SPECULATIVE"),
+        ] {
+            assert_eq!(classify_vault_risk_label(name), Some(want), "{name}");
+        }
+    }
+
+    #[test]
+    fn risk_label_legacy_rm_names() {
+        for (name, want) in [
+            ("RM USDC", "STABLE_YIELD"),
+            ("RM Protocol", "VOLATILE"),
+            ("RM Agent Tokens", "SPECULATIVE"),
+            ("RM RWA / Thematic", "SPECULATIVE"),
+        ] {
+            assert_eq!(classify_vault_risk_label(name), Some(want), "{name}");
+        }
+    }
+
+    #[test]
+    fn risk_label_normalises_case_and_whitespace() {
+        for name in [
+            "ROBOT MONEY AGENT TOKENS",
+            "  robot  money\tagent   tokens\n",
+        ] {
+            assert_eq!(classify_vault_risk_label(name), Some("SPECULATIVE"));
+        }
+    }
+
+    #[test]
+    fn risk_label_basket_outranks_usdc() {
+        assert_eq!(
+            classify_vault_risk_label("Robot Money Protocol (USDC)"),
+            Some("VOLATILE")
+        );
+    }
+
+    #[test]
+    fn risk_label_unrecognised_is_none_and_defaults() {
+        assert_eq!(classify_vault_risk_label("Some Unrelated Vault"), None);
+        assert_eq!(
+            risk_label_from_vault_name(Address::ZERO, "Some Unrelated Vault"),
+            "STABLE_YIELD"
+        );
+    }
+
+    #[test]
+    fn risk_label_deploy_script_vault_names_classify_as_baskets() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts/script");
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("read contracts/script") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("sol") {
+                continue;
+            }
+            for line in std::fs::read_to_string(&path).expect("read script").lines() {
+                let t = line.trim_start();
+                if t.starts_with("//") || !t.contains("VAULT_NAME = \"") {
+                    continue;
+                }
+                if !t.contains("string public constant VAULT_NAME") {
+                    continue;
+                }
+                let lit = t.split('"').nth(1).expect("string literal");
+                found.push(lit.to_string());
+            }
+        }
+        assert!(
+            found.len() >= 3,
+            "scraped only {found:?}; scrape went blind"
+        );
+        for name in &found {
+            let label = classify_vault_risk_label(name);
+            assert!(
+                matches!(label, Some("VOLATILE") | Some("SPECULATIVE")),
+                "{name} classified {label:?}, expected a basket label"
+            );
+        }
+    }
 
     fn server_error(message: &str) -> Result<Bytes, RpcError> {
         Err(RpcError::Server {
