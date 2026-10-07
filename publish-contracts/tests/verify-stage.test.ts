@@ -14,18 +14,19 @@ import { manifestBase } from "../src/stage-table.ts";
 import { CONFIG_ASSET, MANIFEST_ADAPTER, writeCoreAssetConfig } from "./fixtures.ts";
 
 /** A core checkout fixture: the real-shaped config files, the vault manifests with the adapter each run deploys, and the Safe manifest. */
-function setup(config: { proto?: object[]; rwa?: object[]; shortlist?: object[] } | null = {}, o: { adapters?: boolean } = {}) {
+function setup(config: { proto?: object[]; rwa?: object[]; shortlist?: object[] } | null = {}, o: { adapters?: boolean; chain?: number } = {}) {
+  const chain = o.chain ?? 918453;
   const coreDir = tmp("pc-verify-");
-  const m = join(coreDir, "deployments", "918453");
+  const m = join(coreDir, "deployments", String(chain));
   mkdirSync(m, { recursive: true });
   writeFileSync(join(m, "safe.json"), JSON.stringify({ safe: "0x00000000000000000000000000000000000050fe" }));
   if (o.adapters !== false) {
-    for (const v of getStageTable().vaults) if (v.key !== "USDC") writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: 918453, vault: "0x00000000000000000000000000000000000000b1", adapter: MANIFEST_ADAPTER }));
+    for (const v of getStageTable().vaults) if (v.key !== "USDC") writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: chain, vault: "0x00000000000000000000000000000000000000b1", adapter: MANIFEST_ADAPTER }));
   }
   if (config) writeCoreAssetConfig(coreDir, config);
   const sheet = parseSheet(sheetText());
   const lines: string[] = [];
-  const ctx = { coreDir, chainId: 918453, sheet, coreSha: SHA, rpc: "http://x", evidenceDir: join(coreDir, "evidence"), frozen: COUNTS, measure: false, log: publishLogger((l) => lines.push(l)) } as unknown as RunContext;
+  const ctx = { coreDir, chainId: chain, sheet, coreSha: SHA, rpc: "http://x", evidenceDir: join(coreDir, "evidence"), frozen: COUNTS, measure: false, log: publishLogger((l) => lines.push(l)) } as unknown as RunContext;
   return { ctx, sheet, lines };
 }
 
@@ -161,5 +162,46 @@ describe("stage 12 after govern: the unpause rows are linked to the paused reads
     const deps = { verifyDeployment: async () => ({ ok: true, checks: [{ label: "chain: id equals sheet", ok: true, detail: "" }, { label: "manifest: vault.json present", ok: true, detail: "" }] }), verifySources: async () => ({ ok: true, checks: [] }), emit: (l: string) => out.push(l) };
     await runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest as never, deps as never);
     expect(out).toEqual(["[verify]", "chain: id equals sheet", "manifest: vault.json present"]);
+  });
+});
+
+describe("stage 12 on 8453: all three basket unpauses must have executed (issue 1581)", () => {
+  const exec = { scheduled: { at: "t", tx_hash: "0x1" }, executed: { at: "t", tx_hash: "0x2" } };
+  async function run(govern: Record<string, unknown>) {
+    const { ctx } = setup({}, { chain: 8453 });
+    const mctx = { ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext;
+    const manifest = { ...newManifest(mctx, "0xa"), firstBlock: 5, govern };
+    let seen: any;
+    const deps = { verifyDeployment: async (o: any) => { seen = o; return { ok: true, checks: [{ label: "x", ok: true, detail: "" }] }; }, verifySources: async () => ({ ok: true, checks: [] }), emit: () => {}, recorderSpawn: (() => ({ status: 0, stdout: "", stderr: "" })) as never };
+    let err: any;
+    try { await runVerifyStage(mctx, stageByName("verify"), manifest as never, deps as never); } catch (e) { err = e; }
+    return { err, seen, manifest };
+  }
+
+  test("a govern run that executed only unpause-PROTO fails with the named labels for the two unrun baskets", async () => {
+    const { err, seen } = await run({ "unpause-PROTO": exec });
+    expect(err).toMatchObject({ kind: "VERIFY" });
+    expect(err.message).toContain("govern unpause-AGENT executed (stage 13)");
+    expect(err.message).toContain("govern unpause-RWA executed (stage 13)");
+    expect(err.message).not.toContain("unpause-PROTO");
+    // the verifier is told every basket must read unpaused, not just the executed ones
+    for (const k of ["rmPROTO", "rmAGENT", "rmRWA"]) expect(seen.sheet.vaults[k].expectPaused).toBe(false);
+  });
+
+  test("no govern run at all fails for all three", async () => {
+    const { err } = await run({});
+    expect(err).toMatchObject({ kind: "VERIFY" });
+    for (const k of ["PROTO", "AGENT", "RWA"]) expect(err.message).toContain(`govern unpause-${k} executed`);
+  });
+
+  test("a scheduled but not executed row does not count", async () => {
+    const { err } = await run({ "unpause-PROTO": exec, "unpause-AGENT": exec, "unpause-RWA": { scheduled: exec.scheduled } });
+    expect(err.message).toContain("govern unpause-RWA executed");
+  });
+
+  test("all three executed passes", async () => {
+    const { err, manifest } = await run({ "unpause-PROTO": exec, "unpause-AGENT": exec, "unpause-RWA": exec });
+    expect(err).toBeUndefined();
+    expect((manifest as any).stages.verify.status).toBe("done");
   });
 });
