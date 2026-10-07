@@ -92,11 +92,35 @@ routed through the admin timelock).
 **Migrating an existing deployment.** `MIN_QUORUM_THRESHOLD` is a `constant`, so
 raising it changed the contract's bytecode. A `RouterGovernance` deployed before
 this change keeps the old floor of 1 and cannot be upgraded into the new one:
-redeploy `RouterGovernance`, grant the new instance `ADMIN_ROLE` on the
-`PortfolioRouter`, revoke it from the old instance, and re-point every
-off-chain reader (explorer indexer, dapp, watchdog) at the new address. The
-`PortfolioRouter` and the receipt contract are untouched, so allocation state
-and anchored receipts survive.
+replace it by redeploying the router, not by moving a role.
+
+> **Default pending owner confirmation (core 1571).** Redeploy-only replacement
+> is the working default. The owner has not yet confirmed it. If the owner
+> chooses a bounded rotation path instead, this paragraph changes.
+
+Granting a new `RouterGovernance` `ADMIN_ROLE` on the `PortfolioRouter` does not
+move `setWeights` authority. `setWeights` is gated on `WEIGHT_SETTER_ROLE`, which
+is its own role admin (`PortfolioRouter` constructor). The deployer's copy is
+revoked at stages 6 and 11, so nobody can grant the role to a new instance or
+revoke it from the old one. The old `RouterGovernance` keeps `WEIGHT_SETTER_ROLE`
+on that router for good.
+
+Migration therefore means a router redeploy:
+
+1. Deploy a new `PortfolioRouter`. `RouterGovernance.router` is an immutable, so
+   deploy a new `RouterGovernance` against it and run the stage 6 and 11
+   handoff again for the new pair.
+2. Deploy a new gateway. `RobotMoneyGateway.routerContract` is an immutable.
+   Depositors must authorize agents on the new gateway again.
+3. Call `VaultRegistry.setRouter(newRouter)` through the admin timelock. The
+   registry does not need a redeploy: `setRouter` is repeatable. Unlinking is
+   refused while the old router carries default weights, so re-link straight
+   to the new router.
+4. Re-point every off-chain reader (explorer indexer, dapp, watchdog) at the new
+   addresses.
+
+The receipt contract is untouched, so anchored receipts survive. Allocation
+state on the old router does not carry over.
 
 Selection rule: pick a quorum that **no minority subset of the voter set can
 reach**, so a change requires broad consent of the approving body. Concretely,

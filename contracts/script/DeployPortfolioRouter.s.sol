@@ -23,7 +23,7 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         `rmpc get-router` and the dapp router view return real data.
 ///
 ///         Required env vars:
-///           ADMIN_ADDRESS      — receives ADMIN_ROLE on the router
+///           ADMIN_ADDRESS      — receives ADMIN_ROLE and WEIGHT_SETTER_ROLE on the router
 ///           REGISTRY_ADDRESS   — deployed VaultRegistry address
 ///           VAULT_ADDRESS      — RobotMoneyVault (sole active vault, 10 000 bps)
 ///
@@ -53,7 +53,7 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
     ///
     ///         In broadcast mode the broadcaster IS admin (the deployer signs
     ///         the broadcast), so msg.sender on
-    ///         setWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
+    ///         setWeights holds WEIGHT_SETTER_ROLE. No vm.prank is needed or allowed.
     /// @return d Struct containing the deployed router and key parameters.
     function run() external returns (Deployed memory d) {
         _requireExpectedChain("");
@@ -73,8 +73,8 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
     }
 
     /// @notice In-process variant for forge tests. No broadcast, no JSON written.
-    ///         setWeights requires ADMIN_ROLE; this method pranks admin.
-    /// @param admin_     Address to receive ADMIN_ROLE.
+    ///         setWeights requires WEIGHT_SETTER_ROLE; this method pranks admin.
+    /// @param admin_     Address to receive ADMIN_ROLE and WEIGHT_SETTER_ROLE.
     /// @param registry_  Deployed VaultRegistry address.
     /// @param vault_     RobotMoneyVault to seed with 10 000 bps.
     /// @param usdc_      ERC-20 asset the router accepts.
@@ -97,7 +97,7 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
 
     // ─── Internal ────────────────────────────────────────────────────────────
 
-    /// @dev Deploy router and set initial weights. Caller must ensure ADMIN_ROLE
+    /// @dev Deploy router and set initial weights. Caller must ensure ADMIN_ROLE and WEIGHT_SETTER_ROLE
     ///      is active on the call context (broadcast or prank).
     function _deploy(address admin_, address registry_, address vault_, address usdc_)
         internal
