@@ -175,6 +175,12 @@ mapping(address => address[]) internal adminHolders;
 address[] internal gatewayRootHolders;
 ```
 
+### executorHolders
+
+```solidity
+address[] internal executorHolders;
+```
+
 ### vaultEmergencyHolders
 
 ```solidity
@@ -324,12 +330,55 @@ function test_handover_timelockIsTheOnlyGatewayRootHolder() public view;
 function test_safe_holdsProposerRole() public view;
 ```
 
-<a id="test_safe_holdsexecutorrole"></a>
+<a id="test_safe_holdscancellerrole"></a>
 
-### test_safe_holdsExecutorRole
+### test_safe_holdsCancellerRole
 
 ```solidity
-function test_safe_holdsExecutorRole() public view;
+function test_safe_holdsCancellerRole() public view;
+```
+
+<a id="test_executorpolicy_executorroleisopen"></a>
+
+### test_executorPolicy_executorRoleIsOpen
+
+One policy (core 1521): EXECUTOR_ROLE is open, held by address(0).
+
+```solidity
+function test_executorPolicy_executorRoleIsOpen() public view;
+```
+
+<a id="test_executorpolicy_onlyaddresszeroholdsexecutorrole"></a>
+
+### test_executorPolicy_onlyAddressZeroHoldsExecutorRole
+
+The complete EXECUTOR_ROLE member set, replayed from every RoleGranted and
+RoleRevoked log since before construction, is exactly `address(0)`. No named
+key (emergency, deployer, Safe, admin) and no unnamed address may execute.
+
+```solidity
+function test_executorPolicy_onlyAddressZeroHoldsExecutorRole() public view;
+```
+
+<a id="test_executorpolicy_safeistheonlyproposerandcanceller"></a>
+
+### test_executorPolicy_safeIsTheOnlyProposerAndCanceller
+
+The Safe is the only proposer and canceller: no deployer, emergency key or
+stranger holds either role, so no single signer can propose or cancel.
+
+```solidity
+function test_executorPolicy_safeIsTheOnlyProposerAndCanceller() public view;
+```
+
+<a id="test_executorpolicy_strangercannotscheduleorcancel"></a>
+
+### test_executorPolicy_strangerCannotScheduleOrCancel
+
+An address that is neither the Safe nor an owner cannot schedule or cancel.
+
+```solidity
+function test_executorPolicy_strangerCannotScheduleOrCancel() public;
 ```
 
 <a id="test_directadmincall_revertsfromsafe"></a>

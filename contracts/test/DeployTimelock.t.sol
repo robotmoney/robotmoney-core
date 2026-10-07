@@ -103,6 +103,7 @@ contract DeployTimelockTest is SafeFixture {
     /// not AccessControlEnumerable, so this is the only complete list).
     mapping(address => address[]) internal adminHolders;
     address[] internal gatewayRootHolders;
+    address[] internal executorHolders;
     address[] internal vaultEmergencyHolders;
     /// Contracts on which the logs show the deployer losing ADMIN_ROLE.
     mapping(address => bool) internal deployerAdminRevoked;
@@ -197,6 +198,7 @@ contract DeployTimelockTest is SafeFixture {
             RoleHolders.wasRevoked(logs, address(gateway), DEFAULT_ADMIN_ROLE, deployer);
         gatewayRootHolders = RoleHolders.holders(logs, address(gateway), DEFAULT_ADMIN_ROLE);
         vaultEmergencyHolders = RoleHolders.holders(logs, address(vault), EMERGENCY_ROLE);
+        executorHolders = RoleHolders.holders(logs, address(d.timelock), d.timelock.EXECUTOR_ROLE());
     }
 
     function _governed() internal view returns (address[5] memory) {
@@ -359,6 +361,18 @@ contract DeployTimelockTest is SafeFixture {
     function test_executorPolicy_executorRoleIsOpen() public view {
         assertTrue(d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), address(0)), "executor not open");
         assertFalse(d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), safe), "safe holds executor");
+    }
+
+    /// @notice The complete EXECUTOR_ROLE member set, replayed from every RoleGranted and
+    ///         RoleRevoked log since before construction, is exactly {address(0)}. No named
+    ///         key (emergency, deployer, Safe, admin) and no unnamed address may execute.
+    function test_executorPolicy_onlyAddressZeroHoldsExecutorRole() public view {
+        assertEq(executorHolders.length, 1, "EXECUTOR_ROLE must have exactly one holder");
+        assertEq(executorHolders[0], address(0), "EXECUTOR_ROLE holder is not address(0)");
+        address[6] memory named = [emergency, deployer, safe, admin, address(script), address(this)];
+        for (uint256 i = 0; i < named.length; i++) {
+            assertFalse(d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), named[i]), "named executor");
+        }
     }
 
     /// @notice The Safe is the only proposer and canceller: no deployer, emergency key or

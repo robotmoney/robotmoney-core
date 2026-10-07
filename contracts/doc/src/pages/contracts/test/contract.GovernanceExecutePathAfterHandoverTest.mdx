@@ -370,8 +370,8 @@ function test_quorumIsTwoOfTotalVotingPowerTwo() public view;
 
 ### test_safeIsTheTimelockDriverAndIsTwoOfThree
 
-The Safe is the timelock's proposer and executor, and it is a
-real 2-of-3: threshold and owner set read back from the Safe.
+The Safe is the timelock's proposer, EXECUTOR_ROLE is open (address(0)),
+and the Safe is a real 2-of-3: threshold and owner set read back from the Safe.
 
 ```solidity
 function test_safeIsTheTimelockDriverAndIsTwoOfThree() public view;
