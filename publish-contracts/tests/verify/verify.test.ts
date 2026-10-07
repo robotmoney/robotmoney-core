@@ -7,6 +7,7 @@ import { keccak256, toHex } from "viem";
 import { padTopic } from "../../src/verify/logs.ts";
 import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
+import { LABELS_TXT, rewriteLabelsTxt, verifySection } from "./labels-file.ts";
 import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS } from "./world.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "expected-labels.json");
@@ -62,11 +63,16 @@ describe("label drift", () => {
     const main = (await verifyDeployment(buildWorld(8453).opts)).checks.map((c) => c.label);
     const twin = (await verifyDeployment(buildWorld(918453).opts)).checks.map((c) => c.label);
     expect(twin).toEqual(main);
-    if (process.env.UPDATE_LABELS === "1" || !existsSync(FIXTURE)) writeFileSync(FIXTURE, JSON.stringify(main, null, 2) + "\n");
+    if (process.env.UPDATE_LABELS === "1") {
+      writeFileSync(FIXTURE, JSON.stringify(main, null, 2) + "\n");
+      rewriteLabelsTxt(main);
+    }
     const expected = JSON.parse(readFileSync(FIXTURE, "utf8")) as string[];
     expect(main.filter((l) => !expected.includes(l))).toEqual([]);
     expect(expected.filter((l) => !main.includes(l))).toEqual([]);
     expect(main).toEqual(expected);
+    // verifier-labels.txt is the second committed copy (core 1604): its [verify] section must be the same list, in the same order.
+    expect(verifySection(readFileSync(LABELS_TXT, "utf8"))).toEqual(main);
   });
 
   test("a Twin chain run with a short delay passes while the same delay fails on 8453", async () => {

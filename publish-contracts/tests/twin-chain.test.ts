@@ -1,6 +1,7 @@
 // Chain-dependent acceptance criteria of devops 55, 56, 58 and 61. Each test needs a live Twin chain (918453),
 // so it is skipped unless TWIN_RPC_URL is set in the environment (a local Twin fork started by core's twin-fork tool, or the output of the twin-fork action in CI; it is not a repository variable). The skip reason is the exact command that runs it later.
 // No secret is read here: signing material comes from the rehearsal keystores the runbook writes.
+import { LABELS_TXT, verifySection } from "./verify/labels-file.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -42,7 +43,7 @@ describe.skipIf(!ready)(`Twin chain runs (${needs})`, () => {
     const out = process.env.VERIFY_STDOUT_FILE;
     expect(out, "set VERIFY_STDOUT_FILE to the saved stdout of the verify stage").toBeTruthy();
     const have = new Set(readFileSync(out!, "utf8").split("\n").map((l) => l.trim()));
-    const want = readFileSync(join(import.meta.dir, "fixtures", "verifier-labels.txt"), "utf8").split("\n").filter((l) => l && !l.startsWith("["));
+    const want = verifySection(readFileSync(LABELS_TXT, "utf8"));
     for (const l of want) expect(have.has(l) || [...have].some((h) => h.includes(l)), l).toBe(true);
   });
 
