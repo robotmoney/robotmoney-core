@@ -396,6 +396,13 @@ the prod `injected()` wagmi connector exactly like a real wallet
 extension. The harness supplies the real expected code hash. See
 `docs/development/smoke-test-design.md`.
 
+**Projects (core 1544):** the Playwright config has two projects over the one devnet. `dapp` runs every
+spec except one. `safe-governance` runs `safe-proposal-role-grant.spec.ts` after `dapp` finishes, because
+that spec advances the Twin chain clock past the timelock delay (`evm_increaseTime`) and drives the
+publish-contracts Safe tool (`bun publish-contracts/src/safe/cli.ts`, installed by the
+`publish-contracts-setup` step). The spec is in `REQUIRED_SPECS`, so a skipped or missing run fails the job.
+It signs with the real 2-of-3 SafeL2 owner keystores the harness mints and passes through the real timelock.
+
 **Steps:**
 1. Checkout repository (recursive submodules)
 2. Setup Bun + Node 22

@@ -20,6 +20,25 @@ describe("required browser coverage guard", () => {
     expect(REQUIRED_SPECS).toContain("consensus-receipts-seeded.spec.ts");
   });
 
+  it("names the Safe proposal spec as required (core 1544)", () => {
+    expect(REQUIRED_SPECS).toContain("safe-proposal-role-grant.spec.ts");
+  });
+
+  it("fails the run when the Safe proposal spec did not execute", () => {
+    const v = evaluateCoverage(
+      seen({ "consensus-receipts-seeded.spec.ts": { executed: 1, skipped: 0 } }),
+    );
+    expect(v.ok).toBe(false);
+    expect(v.failures.join("\n")).toContain("safe-proposal-role-grant.spec.ts");
+    const skipped = evaluateCoverage(
+      seen({
+        "consensus-receipts-seeded.spec.ts": { executed: 1, skipped: 0 },
+        "safe-proposal-role-grant.spec.ts": { executed: 0, skipped: 3 },
+      }),
+    );
+    expect(skipped.ok).toBe(false);
+  });
+
   it("does NOT require the environment-gated real-artifact spec", () => {
     // That spec is allowed to skip; requiring it would make every ordinary CI
     // run red instead of making the coverage hole visible.

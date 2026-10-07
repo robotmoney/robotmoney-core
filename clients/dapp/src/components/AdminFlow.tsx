@@ -31,6 +31,8 @@ type Props = Readonly<{
    * renders its config-missing state rather than being hidden.
    */
   timelockAddress?: Address;
+  /** The Safe that proposes to the timelock (core 1544). Forwarded to the admin tabs. */
+  safeAddress?: Address;
 }>;
 
 export function AdminFlow(props: Props) {
@@ -80,6 +82,7 @@ export function AdminFlow(props: Props) {
     // from the explorer API (issue #321).
     explorerApiUrl: resolveExplorerApiUrl(props.flagEnv),
     timelockAddress: props.timelockAddress,
+    safeAddress: props.safeAddress,
     gatewayRuntimeHash:
       gatewayVerificationState.status === "verified"
         ? gatewayVerificationState.computedHash

@@ -13,12 +13,16 @@
  *
  * Role gating per contracts/gateway/AccessRoles.sol:
  *   - pauseDeposits()   requires DEPOSIT_PAUSER_ROLE on the connected wallet.
- *   - unpauseDeposits() requires ADMIN_ROLE on the connected wallet
- *     (asymmetric by design — see AccessRoles.sol invariant comment).
+ *   - unpauseDeposits() requires ADMIN_ROLE (asymmetric by design — see
+ *     AccessRoles.sol invariant comment). After the timelock handover only
+ *     the TimelockController holds ADMIN_ROLE, so unpause is NOT a wallet
+ *     transaction: its button reads "Create Safe proposal" and the dapp
+ *     builds timelock.schedule(gateway, 0, unpauseDeposits(), ...) as a SafeTx
+ *     for a Safe owner to sign (SafeProposalPanel, core 1544).
  *
- * Buttons are disabled when the connected wallet lacks the role; the
- * structured preview still renders so the operator sees what *would*
- * be signed.
+ * The pause button is disabled when the connected wallet lacks
+ * DEPOSIT_PAUSER_ROLE; the structured preview still renders so the operator
+ * sees what *would* be signed. Pause stays a direct wallet transaction.
  */
 import {
   useAccount,
@@ -28,14 +32,18 @@ import {
   useChainId,
 } from "wagmi";
 import type { Address } from "viem";
-import { ADMIN_ROLE_HASH, DEPOSIT_PAUSER_ROLE_HASH, gatewayAbi } from "../lib/abi";
+import { DEPOSIT_PAUSER_ROLE_HASH, gatewayAbi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
+import { SafeProposalPanel } from "./SafeProposalPanel";
 import { TxPreview } from "./TxPreview";
 
 interface PauseFlowProps {
   gatewayAddress: Address;
   gatewayCodeHashVerified: boolean;
   envClass: PreviewContext["envClass"];
+  /** Safe that proposes to the timelock. Absent: the unpause proposal is blocked, no button. */
+  safeAddress?: Address;
+  timelockAddress?: Address;
 }
 
 export function PauseFlow(props: PauseFlowProps) {
@@ -59,15 +67,6 @@ export function PauseFlow(props: PauseFlowProps) {
   });
   const hasPauserRole = Boolean(hasPauserData);
 
-  const { data: hasAdminData } = useReadContract({
-    address: props.gatewayAddress,
-    abi: gatewayAbi,
-    functionName: "hasRole",
-    args: address ? [ADMIN_ROLE_HASH, address] : undefined,
-    query: { enabled: isConnected && Boolean(address) },
-  });
-  const hasAdminRole = Boolean(hasAdminData);
-
   const { writeContract, isPending } = useWriteContract();
 
   const ctx: PreviewContext = {
@@ -88,21 +87,10 @@ export function PauseFlow(props: PauseFlowProps) {
     functionName: "pauseDeposits",
     query: { enabled: isConnected && pausePreview.ok && hasPauserRole && !depositsPaused },
   });
-  const { data: unpauseSim } = useSimulateContract({
-    address: props.gatewayAddress,
-    abi: gatewayAbi,
-    functionName: "unpauseDeposits",
-    query: { enabled: isConnected && unpausePreview.ok && hasAdminRole && depositsPaused },
-  });
 
   const onPause = () => {
     if (!pauseSim) return;
     writeContract(pauseSim.request);
-  };
-
-  const onUnpause = () => {
-    if (!unpauseSim) return;
-    writeContract(unpauseSim.request);
   };
 
   return (
@@ -134,18 +122,24 @@ export function PauseFlow(props: PauseFlowProps) {
 
       <section data-testid="unpause-form">
         <h3>Unpause deposits</h3>
-        <p data-testid="unpause-role-status">
-          ADMIN_ROLE: <code>{hasAdminRole ? "yes" : "no"}</code>
+        <p className="hint" data-testid="unpause-safe-note">
+          ADMIN_ROLE is held by the timelock, so unpause goes through the Safe {" -> "} Timelock.
         </p>
         <TxPreview preview={unpausePreview} />
-        <button
-          type="button"
-          data-testid="unpause-submit"
-          disabled={!isConnected || !unpauseSim || isPending}
-          onClick={onUnpause}
-        >
-          Sign deposit unpause with wallet
-        </button>
+        {unpausePreview.ok && (
+          <SafeProposalPanel
+            testId="unpause"
+            safeAddress={props.safeAddress}
+            timelockAddress={props.timelockAddress}
+            request={{
+              kind: "schedule",
+              target: props.gatewayAddress,
+              data: unpausePreview.calldata,
+              action: "schedule",
+              description: `unpauseDeposits() on ${props.gatewayAddress}`,
+            }}
+          />
+        )}
       </section>
     </section>
   );

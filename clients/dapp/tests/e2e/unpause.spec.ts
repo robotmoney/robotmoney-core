@@ -1,9 +1,12 @@
 /**
  * Playwright E2E — deposit unpause flow UI invariants (issue #82).
  *
- * Runs against the smoke-test full-stack devnet. Connects as the
- * admin EOA for the positive structured-preview path, and as the
- * agent EOA (no admin role) for the disabled-button negative path.
+ * Runs against the smoke-test full-stack devnet. Unpause needs ADMIN_ROLE, which
+ * only the timelock holds after the handover, so the dapp offers a Safe proposal
+ * ("Create Safe proposal", core 1544) rather than a wallet transaction. Connects as
+ * a plain EOA for the structured-preview path, and as the agent EOA for the
+ * disabled-button negative path (neither is a Safe owner). The owner-signed flow
+ * is covered by safe-proposal-role-grant.spec.ts.
  */
 import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
@@ -45,12 +48,18 @@ test.describe("deposit unpause flow — UI invariants", () => {
     await expect(calldataElement).toBeHidden();
   });
 
-  test("unpauseDeposits button is disabled when wallet lacks ADMIN_ROLE", async ({ page }) => {
-    // Connect as the agent EOA — it holds no roles on the gateway, so
-    // unpauseDeposits (which requires ADMIN_ROLE) must stay disabled.
+  test("the unpause proposal button is disabled when the wallet is not a Safe owner", async ({
+    page,
+  }) => {
+    // Connect as the agent EOA — it is not an owner of the Safe, so it cannot create
+    // the proposal and the dapp states why.
     await openDapp(page, endpoints, { role: "agent" });
     await openTab(page, "pause");
     const unpauseBtn = page.getByTestId("unpause-submit");
     await expect(unpauseBtn).toBeDisabled();
+    await expect(unpauseBtn).toHaveText("Create Safe proposal");
+    await expect(page.getByTestId("unpause-safe-refusal")).toContainText(
+      "not an owner of the Safe",
+    );
   });
 });

@@ -54,6 +54,12 @@ const REQUIRED_KEYS = [
   // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
   "ic_policy_addr",
   "consensus_receipt_addr",
+  // Core 1544: the real 2-of-3 SafeL2 and the timelock it proposes to, plus the
+  // rehearsal keystores (SAFE_OWNER_A/B/C) and their passphrase file. Paths only.
+  "safe_addr",
+  "timelock_addr",
+  "key_dir",
+  "password_file",
 ] as const;
 type RequiredKey = (typeof REQUIRED_KEYS)[number];
 
@@ -201,6 +207,11 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
     ic_policy_addr: raw.ic_policy_addr,
     consensus_receipt_addr: raw.consensus_receipt_addr,
+    // Core 1544: Safe -> Timelock governance through the dapp.
+    safe_addr: raw.safe_addr,
+    timelock_addr: raw.timelock_addr,
+    key_dir: raw.key_dir,
+    password_file: raw.password_file,
   };
 
   console.log("devnet-global-setup: endpoint summary received");

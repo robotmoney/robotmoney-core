@@ -39,6 +39,17 @@ export default defineConfig({
       { open: "never", outputFolder: process.env.PLAYWRIGHT_HTML_REPORT ?? "playwright-report" },
     ],
   ],
+  // Two projects over the one devnet (globalSetup runs once). `safe-governance` holds the
+  // spec that advances the Twin chain clock past the timelock delay (evm_increaseTime), so it
+  // runs after every other spec has finished with the chain (core 1544).
+  projects: [
+    { name: "dapp", testIgnore: ["**/safe-proposal-role-grant.spec.ts"] },
+    {
+      name: "safe-governance",
+      testMatch: ["**/safe-proposal-role-grant.spec.ts"],
+      dependencies: ["dapp"],
+    },
+  ],
   globalSetup: "./tests/e2e/devnet-global-setup.ts",
   globalTeardown: "./tests/e2e/devnet-global-teardown.ts",
   use: {
