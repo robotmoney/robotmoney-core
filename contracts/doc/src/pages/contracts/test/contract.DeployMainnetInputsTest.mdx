@@ -5,7 +5,7 @@ description: "The vault economics, the agent policy, the seed and the chain chec
 
 # DeployMainnetInputsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/DeployMainnetInputs.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/576aff644e408fb5307ccd0861671d76fce2f11f/contracts/test/DeployMainnetInputs.t.sol)
 
 **Inherits:** Test
 
@@ -213,38 +213,6 @@ function test_missingTvlCap_reverts() public;
 function test_missingPerDepositCap_reverts() public;
 ```
 
-<a id="test_missingagentmaxperpayment_reverts"></a>
-
-### test_missingAgentMaxPerPayment_reverts
-
-```solidity
-function test_missingAgentMaxPerPayment_reverts() public;
-```
-
-<a id="test_missingagentmaxperwindow_reverts"></a>
-
-### test_missingAgentMaxPerWindow_reverts
-
-```solidity
-function test_missingAgentMaxPerWindow_reverts() public;
-```
-
-<a id="test_missingagentwithdrawcaps_revert"></a>
-
-### test_missingAgentWithdrawCaps_revert
-
-```solidity
-function test_missingAgentWithdrawCaps_revert() public;
-```
-
-<a id="test_missingagentvaliduntil_reverts"></a>
-
-### test_missingAgentValidUntil_reverts
-
-```solidity
-function test_missingAgentValidUntil_reverts() public;
-```
-
 <a id="test_missingrouteraddress_reverts"></a>
 
 ### test_missingRouterAddress_reverts
@@ -277,14 +245,6 @@ function test_malformedCap_reverts() public;
 
 ```solidity
 function test_malformedFeeRecipient_reverts() public;
-```
-
-<a id="test_malformedagentcap_reverts"></a>
-
-### test_malformedAgentCap_reverts
-
-```solidity
-function test_malformedAgentCap_reverts() public;
 ```
 
 <a id="test_envuintrequired_revertsonbadinput"></a>
@@ -334,17 +294,6 @@ Every integer input reverts when malformed, never falls back (ported from dev #1
 
 ```solidity
 function test_malformedInputs_revert() public;
-```
-
-<a id="test_agentvaliduntilaboveuint64_reverts"></a>
-
-### test_agentValidUntilAboveUint64_reverts
-
-AGENT_VALID_UNTIL above the uint64 range reverts instead of truncating to a
-different expiry (ported from dev #1541, which reads it with `_envUint64Required`).
-
-```solidity
-function test_agentValidUntilAboveUint64_reverts() public;
 ```
 
 <a id="test_missinginputs_revertoneverychain"></a>

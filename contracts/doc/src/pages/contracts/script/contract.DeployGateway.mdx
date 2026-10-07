@@ -1,11 +1,11 @@
 ---
 title: "DeployGateway"
-description: "Stage 5 of the core deploy (libs, vault, registry, router, gateway). Deploys RobotMoneyGateway bound to the vault AND the router, asserts `gateway.router()` is the deployed router and not zero, then authorizes the deploy agent. The router must exist first: the gateway stores it as an immutable, so a gateway deployed with a zero router can never route (core 1493)."
+description: "Stage 5 of the core deploy (libs, vault, registry, router, gateway). Deploys RobotMoneyGateway bound to the vault AND the router, asserts `gateway.router()` is the deployed router and not zero. The deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3). The router must exist first: the gateway stores it as an immutable, so a gateway deployed with a zero router can never route (core 1493)."
 ---
 
 # DeployGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/script/DeployGateway.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/576aff644e408fb5307ccd0861671d76fce2f11f/contracts/script/DeployGateway.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -13,8 +13,9 @@ description: "Stage 5 of the core deploy (libs, vault, registry, router, gateway
 
 Stage 5 of the core deploy (libs, vault, registry, router, gateway).
 Deploys RobotMoneyGateway bound to the vault AND the router, asserts
-`gateway.router()` is the deployed router and not zero, then authorizes the
-deploy agent. The router must exist first: the gateway stores it as an immutable,
+`gateway.router()` is the deployed router and not zero. The deploy authorizes no
+agent: an agent belongs to a depositor, who authorizes it through commitAuthorization
+and revealAuthorization (architecture 5.2 and 6.3). The router must exist first: the gateway stores it as an immutable,
 so a gateway deployed with a zero router can never route (core 1493).
 
 The IC policy and the consensus receipt bind the gateway address, so they run in
@@ -26,12 +27,9 @@ Required env vars (all required on every chain, no defaults):
 EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet
 ADMIN_ADDRESS         — receives DEFAULT_ADMIN_ROLE + ADMIN_ROLE
 PAUSER_ADDRESS        — receives DEPOSIT_PAUSER_ROLE (must differ from ADMIN)
-AGENT_ADDRESS         — receives AGENT_ROLE  (must differ from both)
 SHARE_RECEIVER_ADDRESS — recipient of minted rmUSDC shares
 VAULT_ADDRESS         — the rmUSDC RobotMoneyVault
 ROUTER_ADDRESS        — the PortfolioRouter from the router stage, non-zero
-AGENT_VALID_UNTIL, AGENT_MAX_PER_PAYMENT, AGENT_MAX_PER_WINDOW,
-AGENT_MAX_WITHDRAW_PER_PAYMENT, AGENT_MAX_WITHDRAW_PER_WINDOW — agent policy
 DEPLOYMENT_OUT        — output JSON path
 USDC is the canonical Base USDC constant on every chain.
 
@@ -45,54 +43,6 @@ Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-t
 
 ```solidity
 string public constant MANIFEST_FILE = "gateway.json";
-```
-
-### DEFAULT_MAX_PER_PAYMENT
-
-In-process test seam defaults. Env runs require every agent cap.
-
-```solidity
-uint256 public constant DEFAULT_MAX_PER_PAYMENT = 10_000 * 1e6;
-```
-
-### DEFAULT_MAX_PER_WINDOW
-
-Default agent spend cap per window in USDC units (test seam only).
-
-```solidity
-uint256 public constant DEFAULT_MAX_PER_WINDOW = 100_000 * 1e6;
-```
-
-### DEFAULT_MAX_WITHDRAW_PER_PAYMENT
-
-Default per-payment withdraw cap in raw rmUSDC shares (test seam only).
-
-<i>
-
-Withdraw caps count raw rmUSDC shares, not USDC: the vault's share offset is 18, so
-1 USDC (1e6 units) is 1e24 raw shares on a fresh vault. A cap sized in USDC units
-would block every withdraw (core 1493).
-
-</i>
-
-```solidity
-uint256 public constant DEFAULT_MAX_WITHDRAW_PER_PAYMENT = 10_000 * 1e6 * 1e18;
-```
-
-### DEFAULT_MAX_WITHDRAW_PER_WINDOW
-
-Default per-window withdraw cap in raw rmUSDC shares (test seam only).
-
-```solidity
-uint256 public constant DEFAULT_MAX_WITHDRAW_PER_WINDOW = 100_000 * 1e6 * 1e18;
-```
-
-### DEFAULT_VALID_UNTIL_OFFSET
-
-Default agent authorization lifetime from deployment (test seam only).
-
-```solidity
-uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
 ```
 
 ## Functions
@@ -117,7 +67,7 @@ function run() external returns (Deployed memory d);
 
 ### runInProcess
 
-In-process variant, env-driven. Pranks the admin for the authorization.
+In-process variant, env-driven.
 
 ```solidity
 function runInProcess() external returns (Deployed memory d);
@@ -129,7 +79,7 @@ function runInProcess() external returns (Deployed memory d);
 | ---- | ---- | ----------- |
 | d | `Deployed` | The deployed gateway and its wiring. |
 
-<a id="runinprocesswith-address-address-address-address-address-address-address"></a>
+<a id="runinprocesswith-address-address-address-address-address-address"></a>
 
 ### runInProcessWith
 
@@ -139,7 +89,6 @@ Direct-parameter variant for forge tests. Skips env resolution.
 function runInProcessWith(
         address admin_,
         address pauser_,
-        address agent_,
         address shareReceiver_,
         address usdc_,
         address vault_,
@@ -153,7 +102,6 @@ function runInProcessWith(
 | ---- | ---- | ----------- |
 | admin_ | `address` | Gateway admin. |
 | pauser_ | `address` | Address granted the pauser role. |
-| agent_ | `address` | Agent authorized to spend through the gateway. |
 | shareReceiver_ | `address` | Address that receives vault shares. |
 | usdc_ | `address` | USDC token address. |
 | vault_ | `address` | Robot Money vault address. |
@@ -212,28 +160,6 @@ function _deployGateway(Params memory p) internal returns (Deployed memory d);
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="_authorizedeployagent-deployed-params"></a>
-
-### _authorizeDeployAgent
-
-<i>
-
-Builds the agent policy, calls authorizeAgent, then runs role-separation checks.
-msg.sender must hold DEFAULT_ADMIN_ROLE (d.admin or the broadcast deployer).
-
-</i>
-
-```solidity
-function _authorizeDeployAgent(Deployed memory d, Params memory p) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| d | `Deployed` |  |
-| p | `Params` |  |
-
 <a id="_writedeploymentjson-deployed"></a>
 
 ### _writeDeploymentJson
@@ -256,15 +182,9 @@ function _writeDeploymentJson(Deployed memory d) internal;
 struct Params {
         address admin;
         address pauser;
-        address agent;
         address shareReceiver;
         address vault;
         address router;
-        uint64 validUntil;
-        uint256 maxPerPayment;
-        uint256 maxPerWindow;
-        uint256 maxWithdrawPerPayment;
-        uint256 maxWithdrawPerWindow;
         address usdcAddress;
     }
 ```
@@ -275,15 +195,9 @@ struct Params {
 | ---- | ---- | ----------- |
 | admin | `address` |  |
 | pauser | `address` |  |
-| agent | `address` |  |
 | shareReceiver | `address` |  |
 | vault | `address` |  |
 | router | `address` |  |
-| validUntil | `uint64` |  |
-| maxPerPayment | `uint256` |  |
-| maxPerWindow | `uint256` |  |
-| maxWithdrawPerPayment | `uint256` |  |
-| maxWithdrawPerWindow | `uint256` |  |
 | usdcAddress | `address` |  |
 
 ### Deployed
@@ -296,7 +210,6 @@ struct Deployed {
         address router;
         address admin;
         address pauser;
-        address agent;
         address shareReceiver;
         bytes32 gatewayRuntimeHash;
     }
@@ -312,7 +225,6 @@ struct Deployed {
 | router | `address` |  |
 | admin | `address` |  |
 | pauser | `address` |  |
-| agent | `address` |  |
 | shareReceiver | `address` |  |
 | gatewayRuntimeHash | `bytes32` |  |
 
