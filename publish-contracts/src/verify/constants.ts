@@ -7,6 +7,8 @@ export const ZERO: Address = "0x0000000000000000000000000000000000000000";
 export const Z32: Hex = "0x0000000000000000000000000000000000000000000000000000000000000000";
 export const role = (name: string): Hex => keccak256(toBytes(name));
 export const ADMIN_ROLE = role("ADMIN_ROLE");
+// AGENT_ROLE and the SIG_AGENT_* signatures below are kept on purpose. Only the negative-invariant agent checks
+// (AGENT_LABELS in index.ts) use them: the deploy authorizes no agent (core 1527, architecture 5.2 and 6.3).
 export const AGENT_ROLE = role("AGENT_ROLE");
 export const WEIGHT_SETTER_ROLE = role("WEIGHT_SETTER_ROLE");
 export const EMERGENCY_ROLE = role("EMERGENCY_ROLE");
@@ -26,6 +28,7 @@ export const SAFE_GUARD_SLOT: Hex = "0x4a204f620c8c5ccdca3fd54d003badd85ba500436
 export const SAFE_FALLBACK_SLOT: Hex = "0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5";
 export const SAFE_SENTINEL: Address = "0x0000000000000000000000000000000000000001";
 
+// Scanned to prove NO such log exists since the deploy began (negative invariant), never to find an agent.
 export const SIG_AGENT_AUTHORIZED = "AgentAuthorized(address,address,uint64,uint256,uint256,address)";
 export const SIG_AGENT_OWNERSHIP = "AgentOwnershipTransferred(address,address,address)";
 export const SIG_ROLE_GRANTED = "RoleGranted(bytes32,address,address)";
