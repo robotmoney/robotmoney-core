@@ -105,22 +105,43 @@ revoked at stages 6 and 11, so nobody can grant the role to a new instance or
 revoke it from the old one. The old `RouterGovernance` keeps `WEIGHT_SETTER_ROLE`
 on that router for good.
 
-Migration therefore means a router redeploy:
+Migration therefore means a router redeploy, and the redeploy cascades:
 
-1. Deploy a new `PortfolioRouter`. `RouterGovernance.router` is an immutable, so
-   deploy a new `RouterGovernance` against it and run the stage 6 and 11
-   handoff again for the new pair.
-2. Deploy a new gateway. `RobotMoneyGateway.routerContract` is an immutable.
-   Depositors must authorize agents on the new gateway again.
-3. Call `VaultRegistry.setRouter(newRouter)` through the admin timelock. The
+1. Deploy a new `PortfolioRouter`. Its constructor defaults apply until you set
+   otherwise, so re-set `routerCap`, every `vaultCap[*]` and `quarantineAddress`
+   through the timelock-held `ADMIN_ROLE` (`setRouterCap`, `setVaultCap`,
+   `setQuarantineAddress`). Set the default weights before step 5. Their length
+   must equal the registry's `routerEligibleCount`.
+2. Deploy a new `RouterGovernance` against it. `RouterGovernance.router` is an
+   immutable. Voted weights, voting power and proposals start empty on the new
+   instance. Run the stage 6 and 11 handoff again for the new pair.
+3. Deploy a new gateway. `RobotMoneyGateway.routerContract` is an immutable.
+   Depositors must authorize agents on the new gateway again. Hand the new
+   gateway to the timelock as well (gateway `ADMIN_ROLE` handover), not only
+   the router pair.
+4. Deploy a new `InvestmentCommitteePolicy` and `ConsensusRecommendationReceipt`
+   (`DeployInvestmentCommitteePolicy`). Both hold the gateway as an immutable,
+   and the receipt also takes the IC policy as an immutable, so they bind the
+   gateway address (`DeployGateway.s.sol`). Wire them on the new gateway with
+   `setICPolicy` and `setConsensusReceipt`.
+5. Call `VaultRegistry.setRouter(newRouter)` through the admin timelock. The
    registry does not need a redeploy: `setRouter` is repeatable. Unlinking is
    refused while the old router carries default weights, so re-link straight
    to the new router.
-4. Re-point every off-chain reader (explorer indexer, dapp, watchdog) at the new
-   addresses.
+6. Re-point every off-chain reader at the new addresses:
+   - dapp: `VITE_ROUTER_ADDRESS`, `VITE_GATEWAY_ADDRESS`, `VITE_GOVERNANCE_ADDRESS`
+     (`clients/dapp/.env.example`) and the pinned `VITE_GATEWAY_EXPECTED_CODE_HASH`.
+   - Rust payment client: `router_address`, `gateway_address`, `governance_address`
+     and the pinned `gateway_runtime_hash` (`clients/rust-payment-client/config.example.toml`).
+   - explorer indexer: `INDEXER_PORTFOLIO_ROUTER`, `INDEXER_ROUTER_GOVERNANCE`,
+     `INDEXER_GATEWAY`, `INDEXER_CONSENSUS_RECEIPT` (`services/explorer-indexer/src/main.rs`).
+   - publish-contracts manifests: the `router`, `gateway` and governance
+     entries of the new deployment manifest (sheet keys `ROUTER_ADDRESS`,
+     `GATEWAY_ADDRESS`, `GOVERNANCE_ADDRESS`, `IC_POLICY_ADDRESS`,
+     `CONSENSUS_RECEIPT_ADDRESS` are read from manifests, never typed).
 
-The receipt contract is untouched, so anchored receipts survive. Allocation
-state on the old router does not carry over.
+Old receipts stay readable on the old receipt contract but do not move to the
+new one. Allocation state on the old router does not carry over either.
 
 Selection rule: pick a quorum that **no minority subset of the voter set can
 reach**, so a change requires broad consent of the approving body. Concretely,
