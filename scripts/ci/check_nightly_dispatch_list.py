@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 NIGHTLY = "suite-21-nightly.yml"
 # Every other workflow file is dispatched by the nightly (the SUITES array), including
-# config-check.yml and suite-28-core-stages.yml (both declare workflow_dispatch; the
-# core-stages dispatch runs its offline job because its Twin chain inputs default empty).
+# config-check.yml (declares workflow_dispatch). suite-28-core-stages.yml is NOT dispatched here:
+# the Twin fork nightly (suite-29) calls it with the run's one pin (core 1523).
 
 # Workflows that must NOT be dispatched by the nightly, with the reason.
 EXCLUDED = {
@@ -27,6 +27,7 @@ EXCLUDED = {
     "release-record.yml": "release workflow: requires a release tag input, dispatched by the release operator (issue 1497)",
     "nightly-third-party-drift.yml": "nightly job (c), shipped disabled: workflow_dispatch only, schedule commented out until the owner enables it (issue 1497)",
     "suite-29-nightly-twin-fork.yml": "nightly (b) on its own schedule: it calls the chain suites itself with one shared Twin chain pin (issue 1496)",
+    "suite-28-core-stages.yml": "run by the Twin fork nightly (suite 29) through workflow_call with the run's one pin, so a dispatch here would run the rehearsal twice (issue 1523)",
     # Add a workflow that must not be dispatched here with its reason, for example one that
     # has no workflow_dispatch trigger or needs required inputs.
 }

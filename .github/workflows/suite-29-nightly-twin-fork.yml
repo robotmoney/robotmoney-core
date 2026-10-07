@@ -11,7 +11,7 @@
 #
 # ONE PIN FOR THE WHOLE RUN
 # The `pin` job chooses the block once (.github/actions/twin-pin). Each suite is the existing
-# workflow, called with workflow_call and pin_block: suites 5, 7, 8, 10, 11b and 14. Steps are not
+# workflow, called with workflow_call and pin_block: suites 5, 7, 8, 10, 11b, 14 and 28. Steps are not
 # copied: a suite change lands in one file and this nightly picks it up. Each suite's own pin job
 # hands that block through unchanged, then its chain jobs start their own Twin fork at it.
 #
@@ -139,10 +139,18 @@ jobs:
     with:
       pin_block: ${{ needs.pin.outputs.block }}
 
+  suite-28:
+    name: suite-28 core stages rehearsal
+    needs: pin
+    uses: ./.github/workflows/suite-28-core-stages.yml
+    secrets: inherit
+    with:
+      pin_block: ${{ needs.pin.outputs.block }}
+
   results:
     name: record-results
     if: ${{ always() }}
-    needs: [pin, suite-05, suite-07, suite-08, suite-10, suite-11b, suite-14]
+    needs: [pin, suite-05, suite-07, suite-08, suite-10, suite-11b, suite-14, suite-28]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -164,7 +172,7 @@ jobs:
           pin_result="$(echo "$NEEDS" | jq -r '.pin.result')"
           echo "pin job: $pin_result (Twin pin block ${PIN_BLOCK:-none})" | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$pin_result" = "success" ] || bad=1
-          [ "$(find "$RUNNER_TEMP/suite-results" -maxdepth 1 -name "suite-*.json" | wc -l)" -ge 6 ] || { echo "::error::fewer than six suite results were recorded"; bad=1; }
+          [ "$(find "$RUNNER_TEMP/suite-results" -maxdepth 1 -name "suite-*.json" | wc -l)" -ge 7 ] || { echo "::error::fewer than seven suite results were recorded"; bad=1; }
           exit "$bad"
 
       - name: Upload the suite results
