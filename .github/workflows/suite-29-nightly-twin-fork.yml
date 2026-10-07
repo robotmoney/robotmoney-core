@@ -65,13 +65,24 @@ jobs:
       - name: Write the pin file
         env:
           PIN_BLOCK: ${{ steps.pin.outputs.block }}
+          BASE_UPSTREAM_RPC: ${{ secrets.BASE_UPSTREAM_RPC }}
+          TWIN_LIB: ${{ github.workspace }}/scripts/devnet/twin-fork-lib.ts
+          OUT_DIR: ${{ runner.temp }}/twin-pin
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/twin-pin"
-          jq -n --arg block "$PIN_BLOCK" --arg run "$GITHUB_RUN_ID" --arg at "$(date -u +%FT%TZ)" \
-            '{chain_id: 918453, pin_block: ($block | tonumber), pin_rule: "upstream head at run start minus 2", run_id: $run, chosen_at: $at}' \
-            > "$RUNNER_TEMP/twin-pin/twin-pin.json"
-          cat "$RUNNER_TEMP/twin-pin/twin-pin.json"
+          mkdir -p "$OUT_DIR"
+          # Block, hash, block timestamp and upstream HOST only. The URL is never written.
+          bun -e '
+            const {selectPin, resolveUpstream} = await import(process.env.TWIN_LIB!);
+            const up = resolveUpstream();
+            const secrets = up === process.env.BASE_UPSTREAM_RPC?.trim() ? [up] : [];
+            const p = await selectPin(up, process.env.PIN_BLOCK!, {secrets});
+            const out = {chain_id: 918453, pin_block: p.block, pin_hash: p.hash, pin_timestamp: p.timestamp,
+              upstream_host: p.upstreamHost, pin_rule: "upstream head at run start minus 2",
+              run_id: process.env.GITHUB_RUN_ID, chosen_at: new Date().toISOString()};
+            await Bun.write(process.env.OUT_DIR + "/twin-pin.json", JSON.stringify(out, null, 2) + "\n");
+          '
+          cat "$OUT_DIR/twin-pin.json"
 
       - name: Upload the pin file
         uses: actions/upload-artifact@v4

@@ -89,6 +89,12 @@ const uploads = Object.values<any>(nightly.jobs).flatMap((j: any) => (j.steps ??
 for (const want of ["suite-results", "twin-pin"]) if (!uploads.includes(want)) bad(`${NIGHTLY} does not upload the ${want} artifact`);
 if (JSON.stringify(nightly).includes("secrets.") && /secrets\.(?!BASE_UPSTREAM_RPC|GITHUB_TOKEN)/.test(JSON.stringify(nightly)))
   bad(`${NIGHTLY} references a secret other than the optional BASE_UPSTREAM_RPC`);
+{
+  const pinStep = (nightly.jobs.pin.steps ?? []).find((x: any) => /pin file/i.test(String(x.name ?? "")));
+  const run = String(pinStep?.run ?? "");
+  for (const f of ["pin_block", "pin_hash", "pin_timestamp", "upstream_host"]) if (!run.includes(f)) bad(`${NIGHTLY} pin file must carry ${f}`);
+  if (/upstream_url|upstream:\s*up\b|JSON\.stringify\(up\)/.test(run)) bad(`${NIGHTLY} pin file must not carry the upstream URL`);
+}
 ok("the nightly uploads suite-results and twin-pin and needs no secret beyond the optional BASE_UPSTREAM_RPC");
 
 // 2c. suite 1-2: the forge fork job runs on the Twin fork at one pin and no saved state.
