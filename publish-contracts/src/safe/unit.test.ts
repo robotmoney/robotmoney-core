@@ -15,6 +15,7 @@ import { proxyRuntimeCodeOf } from "./safe.ts";
 import { parseFlags, callsFromFlags } from "./cli.ts";
 import { assertNoPlaintextKeys } from "./guard.ts";
 import { revertReasonOf } from "./errors.ts";
+import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../chains.ts";
 
 const A = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as `0x${string}`;
 const code = (f: () => unknown): string | undefined => { try { f(); } catch (e) { return e instanceof SafeToolError ? e.code : "OTHER"; } return undefined; };
@@ -61,7 +62,7 @@ describe("signatures", () => {
     expect(packed.slice(2, 4)).toBe("bb");
     expect(packed.length).toBe(2 + 130 * 2);
   });
-  test("local EIP-712 hash is a stable 32 bytes", () => expect(localSafeTxHash(918453, A(1), A(2), "0x", 0)).toMatch(/^0x[0-9a-f]{64}$/));
+  test("local EIP-712 hash is a stable 32 bytes", () => expect(localSafeTxHash(TWIN_CHAIN_ID, A(1), A(2), "0x", 0)).toMatch(/^0x[0-9a-f]{64}$/));
 });
 
 describe("keystore signer", () => {
@@ -82,8 +83,8 @@ describe("keystore signer", () => {
     expect(code(() => readPassphraseFile(p))).toBe("PASSPHRASE_FILE_PERMISSIONS");
   });
   test("a plaintext key is refused off loopback and on mainnet", () => {
-    expect(code(() => loopbackKeySigner(pk, { rpcUrl: "https://mainnet.base.org", chainId: 8453 }))).toBe("PLAINTEXT_KEY_REFUSED");
-    expect(code(() => loopbackKeySigner(pk, { rpcUrl: "http://127.0.0.1:8545", chainId: 8453 }))).toBe("PLAINTEXT_KEY_REFUSED");
+    expect(code(() => loopbackKeySigner(pk, { rpcUrl: "https://mainnet.base.org", chainId: MAINNET_CHAIN_ID }))).toBe("PLAINTEXT_KEY_REFUSED");
+    expect(code(() => loopbackKeySigner(pk, { rpcUrl: "http://127.0.0.1:8545", chainId: MAINNET_CHAIN_ID }))).toBe("PLAINTEXT_KEY_REFUSED");
     expect(code(() => loopbackKeySigner(pk, { rpcUrl: "http://127.0.0.1:8545", chainId: 31337, allowChainIds: [31337] }))).toBeUndefined();
   });
   test("env guard refuses a key in the environment off loopback", () => {

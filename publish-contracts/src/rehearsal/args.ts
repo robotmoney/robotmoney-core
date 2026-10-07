@@ -3,8 +3,8 @@
  * devops SHA and core DEPLOY_SHA, so they differ only in the values of these arguments (plan principle 24).
  * Flag spellings are the CLI's own (--chain, --core-sha), never the aliases.
  */
-export const TWIN_CHAIN_ID = 918453;
-export const MAINNET_CHAIN_ID = 8453;
+export { TWIN_CHAIN_ID, MAINNET_CHAIN_ID } from "../chains.ts";
+import { TWIN_CHAIN_ID } from "../chains.ts";
 
 export interface PublishTarget {
   chainId: number;

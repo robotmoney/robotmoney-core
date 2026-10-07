@@ -16,10 +16,8 @@ export const EXECUTOR_ROLE = role("EXECUTOR_ROLE");
 export const CANCELLER_ROLE = role("CANCELLER_ROLE");
 
 /** The timelock delay floor keyed to chain id. 172800 s (48 h) on Base mainnet, at least 1 s elsewhere. Principle 4 and 6. */
-export const MAINNET_CHAIN_ID = 8453;
-export function minDelayFloor(chainId: number): number {
-  return chainId === MAINNET_CHAIN_ID ? 172800 : 1;
-}
+export { MAINNET_CHAIN_ID } from "../chains.ts";
+export { delayFloor as minDelayFloor } from "../chains.ts";
 
 // Safe 1.4.1 canonical addresses and storage slots.
 export const SAFE_L2_141_SINGLETON: Address = "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762";

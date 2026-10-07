@@ -3,6 +3,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PublishError } from "./errors.ts";
+import { MAINNET_CHAIN_ID } from "./chains.ts";
 
 export type FrozenCounts = Record<string, number>;
 export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string }; counts: FrozenCounts }
@@ -79,7 +80,7 @@ export function resolveCounts(o: { dir: string; sha: string; measureFlag: boolea
     o.warn?.("dry_run.counts_missing", { file, note: "no frozen counts for this SHA: the dry run measures them and writes nothing" });
     return { measure: true, mode: "dry-run-measure", file };
   }
-  if (o.chainId === 8453) return { frozen: loadFrozen(o.dir, o.sha).counts, measure: false, mode: "frozen", file }; // throws COUNTS_MISSING
+  if (o.chainId === MAINNET_CHAIN_ID) return { frozen: loadFrozen(o.dir, o.sha).counts, measure: false, mode: "frozen", file }; // throws COUNTS_MISSING
   o.warn?.("counts.measuring", { file, note: "no frozen counts for this SHA on a non-8453 chain: this run measures them and writes the file under the counts dir (review it, then commit it)" });
   return { measure: true, mode: "twin-measure", file };
 }

@@ -6,6 +6,7 @@ import { loadManifests } from "./manifests.ts";
 import { coreContracts } from "./constants.ts";
 import type { StageTable } from "../stage-table.ts";
 import type { Address, VerifyReport } from "./types.ts";
+import { MAINNET_CHAIN_ID } from "../chains.ts";
 
 export interface SourcesOptions {
   chainId: number;
@@ -34,7 +35,7 @@ export function contractsFromManifests(dir: string, table: StageTable): Record<s
 
 export async function verifySources(o: SourcesOptions): Promise<VerifyReport> {
   const c = new Collector();
-  if (o.chainId !== 8453) throw new Error(`source verification needs an explorer; chain ${o.chainId} has none (Base 8453 only)`);
+  if (o.chainId !== MAINNET_CHAIN_ID) throw new Error(`source verification needs an explorer; chain ${o.chainId} has none (Base 8453 only)`);
   const f = o.fetchFn ?? fetch;
   const bs = o.blockscoutBase ?? "https://base.blockscout.com";
   const sf = o.sourcifyBase ?? "https://sourcify.dev/server";

@@ -2,6 +2,7 @@
 // funding amounts come from a measurement. Base fee = L2 execution (gas used x L2 gas price) + L1 data fee (GasPriceOracle).
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { MAINNET_CHAIN_ID } from "../chains.ts";
 import { createPublicClient, http, parseAbi, type Hex } from "viem";
 
 export const GAS_PRICE_ORACLE = "0x420000000000000000000000000000000000000F" as const;
@@ -26,8 +27,8 @@ export function readBroadcasts(dir: string, chainId: number): { stage: string; f
 
 export async function estimateFees(o: { rpc: string; broadcastDir: string; chainId?: number; margin?: bigint }): Promise<FeeEstimate> {
   const client = createPublicClient({ transport: http(o.rpc) });
-  const chainId = o.chainId ?? 8453;
-  if (await client.getChainId() !== 8453) throw new Error("RPC is not Base mainnet (8453): the estimate prices live Base fees");
+  const chainId = o.chainId ?? MAINNET_CHAIN_ID;
+  if (await client.getChainId() !== MAINNET_CHAIN_ID) throw new Error("RPC is not Base mainnet (8453): the estimate prices live Base fees");
   const margin = o.margin ?? 5n;
   const gasPrice = await client.getGasPrice();
   const l1BaseFee = await client.readContract({ address: GAS_PRICE_ORACLE, abi: ORACLE_ABI, functionName: "l1BaseFee" });

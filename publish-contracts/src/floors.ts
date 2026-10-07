@@ -4,13 +4,8 @@ import { PublishError } from "./errors.ts";
 import { isLoopbackRpc } from "./safe/chain.ts";
 import type { Sheet, CallerInputs } from "./sheet.ts";
 
-export const MAINNET_CHAIN_ID = 8453;
-export const TWIN_CHAIN_ID = 918453;
-export const MAINNET_DELAY_FLOOR = 172800;
-
-export const isMainnet = (chainId: number): boolean => chainId === MAINNET_CHAIN_ID;
-/** The timelock delay floor: 172800 s on 8453, at least 1 s on any other chain. */
-export const delayFloor = (chainId: number): number => (isMainnet(chainId) ? MAINNET_DELAY_FLOOR : 1);
+import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID, MAINNET_DELAY_FLOOR, isMainnet, delayFloor } from "./chains.ts";
+export { MAINNET_CHAIN_ID, TWIN_CHAIN_ID, MAINNET_DELAY_FLOOR, isMainnet, delayFloor };
 
 /** Env names that carry plaintext signing material. Refused on 8453 in the caller environment. */
 export const PLAINTEXT_ENV = ["PRIVATE_KEY", "ETH_PRIVATE_KEY", "MNEMONIC", "ETH_MNEMONIC", "ETH_PASSWORD", "ETH_KEYSTORE_PASSWORD"];

@@ -6,8 +6,8 @@ export const SAFE_VERSION = "1.4.1" as const;
 export const ZERO_ADDRESS: Address = "0x0000000000000000000000000000000000000000";
 export const ZERO_BYTES32: Hex = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
-export const BASE_MAINNET_CHAIN_ID = 8453;
-export const TWIN_CHAIN_ID = 918453;
+import { MAINNET_CHAIN_ID as BASE_MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../chains.ts";
+export { BASE_MAINNET_CHAIN_ID, TWIN_CHAIN_ID };
 /** Chains the tool will sign or send on. Anything else needs an explicit `allowChainIds` (a local anvil for unit work). */
 export const DEFAULT_ALLOWED_CHAIN_IDS: readonly number[] = [BASE_MAINNET_CHAIN_ID, TWIN_CHAIN_ID];
 

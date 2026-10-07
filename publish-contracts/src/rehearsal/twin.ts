@@ -10,7 +10,8 @@
 import { encodeAbiParameters, keccak256, pad, toHex, type Hex } from "viem";
 import { USDC_ADDRESS, assertUsdcCode } from "../usdc.ts";
 
-export const BASE_CHAIN_ID = 8453;
+import { MAINNET_CHAIN_ID as BASE_CHAIN_ID } from "../chains.ts";
+export { BASE_CHAIN_ID };
 /** FiatTokenV2_2: `mapping(address => uint256) balanceAndBlacklistStates` is storage slot 9. Bit 255 is the blacklist flag, the rest is the balance. */
 export const USDC_BALANCE_SLOT = 9n;
 const BLACKLIST_BIT = 1n << 255n;

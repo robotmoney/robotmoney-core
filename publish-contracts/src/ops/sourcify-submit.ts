@@ -2,6 +2,7 @@
 // checkout at the core DEPLOY_SHA. The gate is the verifier (src/verify/sources.ts), not this command.
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { MAINNET_CHAIN_ID } from "../chains.ts";
 
 export interface Deployed { name: string; address: string }
 export type ForgeRunner = (args: string[], cwd: string) => Promise<{ code: number; tail: string }>;
@@ -27,7 +28,7 @@ export const realForge: ForgeRunner = async (args, cwd) => {
 };
 
 export async function submitToSourcify(o: { coreDir: string; broadcastDir?: string; chainId?: number; forge?: ForgeRunner }): Promise<{ submitted: number; failed: string[] }> {
-  const chainId = o.chainId ?? 8453;
+  const chainId = o.chainId ?? MAINNET_CHAIN_ID;
   const list = createdContracts(o.broadcastDir ?? join(o.coreDir, "broadcast"), chainId);
   if (list.length === 0) throw new Error("no CREATE transactions found in the broadcast directory");
   const forge = o.forge ?? realForge;

@@ -7,14 +7,15 @@
 // Threshold used: 2 of N. Needs the canonical Safe 1.4.1 infrastructure on the chain.
 import { describe, expect, test } from "bun:test";
 import { getAddress, encodeFunctionData, parseAbi, type Address } from "viem";
+import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../chains.ts";
 import {
   SAFE_141, SAFE_ABI, SafeRevertError, createSafe, executeTx, importSignatureBundle, keystoreSigner, proposeTx, signTx,
   checkSignaturesOnChain, addSignature, type SafeHandle, type Signer, type SafeTxBundle,
 } from "./index.ts";
 
 const RPC = process.env.SAFE_TEST_RPC;
-const CHAIN_ID = Number(process.env.SAFE_TEST_CHAIN_ID ?? 918453);
-const enabled = Boolean(RPC && process.env.SAFE_TEST_DEPLOYER && process.env.SAFE_TEST_OWNERS && process.env.SAFE_TEST_PASSFILE) && CHAIN_ID !== 8453;
+const CHAIN_ID = Number(process.env.SAFE_TEST_CHAIN_ID ?? TWIN_CHAIN_ID);
+const enabled = Boolean(RPC && process.env.SAFE_TEST_DEPLOYER && process.env.SAFE_TEST_OWNERS && process.env.SAFE_TEST_PASSFILE) && CHAIN_ID !== MAINNET_CHAIN_ID;
 const MODULE_ABI = parseAbi(["function enableModule(address module)", "function isModuleEnabled(address module) view returns (bool)"]);
 
 describe.skipIf(!enabled)("real SafeL2 1.4.1 on the Twin chain", () => {
