@@ -121,8 +121,8 @@ Migration therefore means a router redeploy, and the redeploy cascades:
    timelock calls. Eligibility is already on the registry, so no
    `setRouterEligible` is needed. The default weights need one entry per
    router-eligible vault, so their length equals `registry.routerEligibleCount()`.
-   The new router must also drop the deployer's `WEIGHT_SETTER_ROLE` (stage 6
-   and 11 do this for the new pair).
+   The deployer's `WEIGHT_SETTER_ROLE` on the new router must be dropped too.
+   Step 2 covers it.
 2. Deploy a new `RouterGovernance` against it. `RouterGovernance.router` is an
    immutable. Voted weights, voting power and proposals start empty on the new
    instance. Run the stage 6 and 11 handoff again for the new pair.
@@ -150,8 +150,8 @@ Migration therefore means a router redeploy, and the redeploy cascades:
    call. Only `unpauseDeposits()` needs the timelock-held `ADMIN_ROLE`. Do not
    use the vault's `pauseDeposits()`. The vault is shared, so that would stop
    the new gateway as well. The old router has no switch of its own. It is
-   retired by pausing the old gateway and by revoking that gateway's agent
-   authorizations through the timelock. Users withdraw through the old gateway,
+   retired by pausing the old gateway. Each agent's owner may also call
+   `revokeAgent` on the old gateway. Users withdraw through the old gateway,
    because `pauseDeposits` never freezes a withdrawal. Old receipts and old
    agent authorizations stay on the old contracts and do not move.
 7. Re-point every off-chain reader at the new addresses:
