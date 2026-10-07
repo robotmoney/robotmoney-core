@@ -7,6 +7,7 @@ export const ZERO: Address = "0x0000000000000000000000000000000000000000";
 export const Z32: Hex = "0x0000000000000000000000000000000000000000000000000000000000000000";
 export const role = (name: string): Hex => keccak256(toBytes(name));
 export const ADMIN_ROLE = role("ADMIN_ROLE");
+export const AGENT_ROLE = role("AGENT_ROLE");
 export const WEIGHT_SETTER_ROLE = role("WEIGHT_SETTER_ROLE");
 export const EMERGENCY_ROLE = role("EMERGENCY_ROLE");
 export const DEPOSIT_PAUSER_ROLE = role("DEPOSIT_PAUSER_ROLE");

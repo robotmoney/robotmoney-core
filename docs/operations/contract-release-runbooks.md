@@ -199,7 +199,7 @@ adds `safe`, `verify` and `govern`:
 | 2 `vault` | rmUSDC and its lending adapters. Seed 1 USDC to `SEED_SHARE_RECEIVER`; the deployer holds no shares. |
 | 3 `registry` | Register rmUSDC. |
 | 4 `router` | Portfolio Router, `registry.setRouter`. |
-| 5 `gateway` | Gateway with the router as an immutable. No agent is authorized (not yet implemented: `DeployGateway` still authorizes `AGENT_ADDRESS`; tracked in the mainnet plan). |
+| 5 `gateway` | Gateway with the router as an immutable. No agent is authorized: `DeployGateway` reads no `AGENT_*` input and the sheet refuses them. Depositors authorize their own agents through `commitAuthorization` and `revealAuthorization`. |
 | 6 `governance` | RouterGovernance from the sheet. |
 | 7 `ic-policy` | IC policy and consensus receipt, bound to the gateway. |
 | 8 `proto` | rmPROTO, paused, wETH and cbBTC, registered. |
@@ -207,7 +207,7 @@ adds `safe`, `verify` and `govern`:
 | 10 `rwa` | rmRWA, paused, a plain basket row: deSPXA on its Uniswap V3 fee 500 pool, no oracle. |
 | — config | Before stage 11 the deployer sets the deploy-time configuration: setters, router eligibility, voting power, and router default weights rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps (not yet implemented: core #1520). |
 | 11 `timelock` | TimelockController: proposer and canceller the Safe, executor open `address(0)` (implemented: core #1521; `DeployTimelock` grants `EXECUTOR_ROLE` to `address(0)` only, and the verifier checks it), delay from the sheet with a 172800 s floor on 8453. Every role on every vault, the gateway, registry, router, governance, IC policy and receipt goes to the timelock (vault EMERGENCY_ROLE to the emergency key), and the deployer is revoked. `AGENT_ADDRESSES=none`. |
-| 12 `verify` | One verifier reads the chain and checks every postcondition, including the Safe owners and threshold, the delay floor, that the deployer holds no role, and the deployer nonce against the frozen per-stage counts for the release SHA (counts not yet committed: core #1524). |
+| 12 `verify` | One verifier reads the chain and checks every postcondition, including the Safe owners and threshold, the delay floor, that the deployer holds no role, that the gateway has no `AgentAuthorized` or `AgentOwnershipTransferred` log up to the handover block and nobody holds `AGENT_ROLE` from an earlier grant (the deploy authorizes no agent), and the deployer nonce against the frozen per-stage counts for the release SHA (counts not yet committed: core #1524). |
 | 13 `govern` | Only `unpauseDeposits()` on each basket vault (rmPROTO, rmAGENT, rmRWA). Each is its own timelock operation, scheduled the same day through the real Safe and executed after one 48-hour delay. None is skipped on any deploy. On 8453 the CLI exits `GOVERN_PENDING` with the resume command; on the Twin chain the wait runs by time warp (not yet implemented: core #1520; `govern.ts` still runs the older per-step matrix). |
 
 Every privileged action after stage 11 is Safe → `TimelockController` →

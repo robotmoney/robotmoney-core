@@ -206,7 +206,6 @@ export function buildWorld(chainId = 8453): World {
   ch.set(GATEWAY, "depositsPaused", false);
   ch.set(GATEWAY, "router", ROUTER);
   ch.set(REGISTRY, "router", ROUTER);
-  ch.set(GATEWAY, "agentOwner", () => TIMELOCK);
   ch.set(REGISTRY, "listVaults", Object.values(VAULTS).map((v) => v.address));
   ch.set(REGISTRY, "vaultCount", 4n);
   ch.set(REGISTRY, "isRouterEligible", () => true);
@@ -216,8 +215,7 @@ export function buildWorld(chainId = 8453): World {
   ch.set(GOV, "votingPeriod", GOV_SHEET.votingPeriod);
   ch.set(GOV, "executionDelay", GOV_SHEET.executionDelay);
   ch.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), DEFAULT_BPS.map((x) => BigInt(x))]);
-  // deployer-authorized agent, from logs
-  ch.logs.push({ address: GATEWAY, topics: [keccak256(toHex(SIG_AGENT_AUTHORIZED)), padTopic(AGENT), padTopic(DEPLOYER)], data: "0x", blockNumber: 300n });
+  // the deploy authorizes no agent: the gateway carries no AgentAuthorized log and nobody holds AGENT_ROLE
   // deployer once held roles; all were renounced
   ch.roleGrantedLog(TIMELOCK, ADMIN_ROLE, DEPLOYER, 120n);
   ch.roleGrantedLog(VAULTS.rmUSDC.address, EMERGENCY_ROLE, DEPLOYER, 2500n);
@@ -262,7 +260,7 @@ export function buildWorld(chainId = 8453): World {
   w(file("ic-policy"), { chain_id: chainId, policy: ICP, consensus_receipt: REC });
   w(file("timelock"), {
     chain_id: chainId, timelock: TIMELOCK, safe: SAFE, emergency: EMERGENCY, executorPolicy: "open", cancellerPolicy: "safe-only", code_hashes: { safe: safeHash },
-    roles: { gateway_agents_listed_count: 1, deployer_owns_a_listed_gateway_agent: false },
+    roles: { gateway_agents_listed_count: 0, deployer_owns_a_listed_gateway_agent: false },
   });
   w("safe.json", { chain_id: chainId, safe: SAFE });
   w(file("libs"), { chain_id: chainId, tick_math: LIBS.tick_math });

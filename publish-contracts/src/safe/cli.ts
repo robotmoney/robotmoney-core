@@ -67,7 +67,7 @@ async function main(argv: string[]): Promise<number> {
     const res = await createSafe({
       ...chain, owners: csv(need(f, "owners")), threshold: Number(need(f, "threshold")), deployer, saltNonce: f["salt-nonce"], deploySha: f["deploy-sha"],
       expectDeployerNonce: f["expect-deployer-nonce"] !== undefined ? Number(f["expect-deployer-nonce"]) : undefined, dryRun: f["dry-run"] === "1", logger,
-      forbiddenOwners: Object.fromEntries(["ADMIN_ADDRESS", "PAUSER_ADDRESS", "EMERGENCY_ADDRESS", "AGENT_ADDRESS"].map((k) => [k, process.env[k]])),
+      forbiddenOwners: Object.fromEntries(["ADMIN_ADDRESS", "PAUSER_ADDRESS", "EMERGENCY_ADDRESS"].map((k) => [k, process.env[k]])),
       confirm: f.yes === "1" ? undefined : async (plan) => {
         const rl = createInterface({ input: process.stdin, output: process.stderr });
         const ask = (q: string) => new Promise<string>((r) => rl.question(q, r));

@@ -12,10 +12,6 @@ inputs:
     description: "The Twin chain RPC."
     required: false
     default: "http://127.0.0.1:8545"
-  agent-address:
-    description: "Optional: the deploy agent (AGENT_ADDRESS in the sheet). Empty: the throwaway AGENT keystore address."
-    required: false
-    default: ""
   share-receiver-address:
     description: "Optional: the rmUSDC seed share receiver (SHARE_RECEIVER_ADDRESS in the sheet). Empty: the sheet's value."
     required: false
@@ -35,7 +31,6 @@ runs:
     - shell: bash
       env:
         RPC_URL: ${{ inputs.rpc-url }}
-        AGENT_ADDRESS_IN: ${{ inputs.agent-address }}
         SHARE_RECEIVER_IN: ${{ inputs.share-receiver-address }}
         VERIFY_IN: ${{ inputs.verify }}
         GOVERN_IN: ${{ inputs.govern }}

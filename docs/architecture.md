@@ -951,9 +951,12 @@ Agent ownership and policy rules (issue #1476):
   gateway. The list is a required input (a comma-separated list, or
   `none`); the deploy passes `none`, and a direct run must list every
   deployer-owned agent (invariants `ACL-8`, `GW-7` in
-  `docs/technical/smart-contract-invariants.md`). Not yet implemented:
-  the gateway stage still authorizes a deployer-chosen `AGENT_ADDRESS`
-  (tracked in the mainnet plan).
+  `docs/technical/smart-contract-invariants.md`). The gateway stage reads
+  no `AGENT_*` input, the sheet refuses them, and the verifier asserts
+  the gateway has no `AgentAuthorized` or `AgentOwnershipTransferred`
+  log up to the handover block, the timelock manifest lists zero agents
+  and nobody holds `AGENT_ROLE` from a grant before it. Agents depositors
+  authorize after the handover are theirs and are not checked.
 
 The current gateway implementation gates agent deposits into a vault. The
 product architecture uses the same safety boundary for agent deposits and
@@ -1359,8 +1362,7 @@ keys must not hold admin or pause authority. The deploy authorizes no
 agent; each depositor authorizes its own. Every agent listed in
 `DeployTimelock`'s required `AGENT_ADDRESSES` input is owned by the
 `TimelockController` after handover, not by the deployer EOA; the deploy
-passes `none` (§5.2, invariant `ACL-8`; not yet implemented, tracked in
-the mainnet plan).
+passes `none` (§5.2, invariant `ACL-8`).
 
 ## 7. Interface and Execution Contracts
 

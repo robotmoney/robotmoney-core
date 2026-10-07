@@ -85,6 +85,8 @@ export interface VerifyOptions {
   sheet: VerifySheet;
   /** First block of the deployment (the first deploy receipt). The role scan starts here. */
   fromBlock: bigint;
+  /** The block of the timelock handover. The agent checks stop here, because depositors authorize their own agents after it. Unset: the chain head. */
+  handoverBlock?: bigint;
   /** Blocks per eth_getLogs call. The public Base RPC caps at 2000. */
   logChunk?: number;
   /** Frozen per-stage transaction counts for this DEPLOY_SHA. The deployer nonce must equal their sum. */

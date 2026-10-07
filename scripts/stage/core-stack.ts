@@ -84,7 +84,7 @@ export const RECORD_REQUIRED_FIELDS = [
   ".addresses.consensus_receipt", ".addresses.ic_policy", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
   ".code_hashes.gateway",
   ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmAGENT", ".vault_addresses.rmRWA",
-  ".ephemeral.submitter", ".ephemeral.approver", ".ephemeral.voters", ".ephemeral.emergency",
+  ".ephemeral.approver", ".ephemeral.voters", ".ephemeral.emergency",
   ".ephemeral.keystore_dir", ".ephemeral.safe_signers",
 ];
 
@@ -932,7 +932,6 @@ async function recordWrite(s: Stack): Promise<void> {
     code_hashes: { gateway: hash },
     vault_addresses: { rmUSDC: vaults.rmUSDC!.vault, rmPROTO: vaults.rmPROTO!.vault, rmAGENT: vaults.rmAGENT!.vault, rmRWA: vaults.rmRWA!.vault },
     ephemeral: {
-      submitter: sg("AGENT_ADDRESS"),
       approver: owners[0],
       voters,
       emergency,
@@ -970,7 +969,7 @@ export function validateRecord(rec: Json, recordPath: string): void {
     ".deployer", ".addresses.gateway", ".addresses.vault", ".addresses.registry", ".addresses.router", ".addresses.governance",
     ".addresses.consensus_receipt", ".addresses.ic_policy", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
     ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmAGENT", ".vault_addresses.rmRWA",
-    ".ephemeral.submitter", ".ephemeral.approver", ".ephemeral.emergency", ".ephemeral.voters[0]", ".ephemeral.voters[1]",
+    ".ephemeral.approver", ".ephemeral.emergency", ".ephemeral.voters[0]", ".ephemeral.voters[1]",
   ]) addr(f);
   const hash = get(".code_hashes.gateway");
   if (!BYTES32.test(hash) || /^0x0{64}$/.test(hash)) throw recordBad("record-field-malformed", `.code_hashes.gateway is not a non-zero bytes32 ('${hash}')`);

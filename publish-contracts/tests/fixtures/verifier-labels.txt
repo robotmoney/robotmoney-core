@@ -179,9 +179,9 @@ vault[rmRWA]: feeRecipient is not deployer
 vault[rmRWA]: paused state equals sheet
 vault[rmRWA]: router eligibility equals sheet
 vault[rmRWA]: asset config equals sheet
-agents: every deployer agent is owned by timelock
-agents: at least one deployer agent found in gateway logs
-agents: manifest listed count equals derived count
+agents: no agent authorized at handover
+agents: manifest lists zero agents
+agents: no address holds AGENT_ROLE after handover
 agents: manifest says deployer owns no listed agent
 deployer: holds no role on any contract (log scan)
 timelock: min delay at least chain floor

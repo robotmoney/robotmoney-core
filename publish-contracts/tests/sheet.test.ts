@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { PublishError } from "../src/errors.ts";
 import { REQUIRED_NAMES, VAULT_KEYS, callerInputs, diffSheets, eligibilityBps, eligibleInOrder, parseSheet, parseSheetText, vaultSheetNames } from "../src/sheet.ts";
-import { exampleText, sheetText } from "./fixtures.ts";
+import { REPO, exampleText, sheetText } from "./fixtures.ts";
 
 const refused = (text: string): PublishError => {
   try { parseSheet(text); } catch (e) { expect(e).toBeInstanceOf(PublishError); expect((e as PublishError).kind).toBe("SHEET"); return e as PublishError; }
@@ -23,6 +24,24 @@ describe("whitelist parser", () => {
     expect(refused(sheetText({ RECEIPT_ADMIN_ADDRESS: other })).message).toContain("RECEIPT_ADMIN_ADDRESS");
     const ok = parseSheet(exampleText());
     expect(ok.receiptAdmin.toLowerCase()).toBe(ok.admin.toLowerCase());
+  });
+
+  test("a sheet that carries an agent key is refused with a named error: the deploy authorizes no agent (core 1527)", () => {
+    for (const name of ["AGENT_ADDRESS", "AGENT_VALID_UNTIL", "AGENT_MAX_PER_PAYMENT", "AGENT_MAX_PER_WINDOW", "AGENT_MAX_WITHDRAW_PER_PAYMENT", "AGENT_MAX_WITHDRAW_PER_WINDOW", "GOVERN_AGENT_ADDRESSES"]) {
+      const e = refused(sheetText({}, [`${name}=1`]));
+      expect(e.message, name).toContain(`${name} is refused`);
+      expect((e.details as { name?: string }).name).toBe(name);
+    }
+    for (const name of ["AGENT_ADDRESS", "AGENT_VALID_UNTIL", "AGENT_MAX_PER_PAYMENT", "AGENT_MAX_PER_WINDOW", "AGENT_MAX_WITHDRAW_PER_PAYMENT", "AGENT_MAX_WITHDRAW_PER_WINDOW", "GOVERN_AGENT_ADDRESSES"]) {
+      expect(REQUIRED_NAMES).not.toContain(name);
+    }
+    expect(refused(sheetText({}, ["AGENT_ADDRESS=0x000000000000000000000000000000000000a004"])).message).toContain("commitAuthorization");
+  });
+
+  test("the Twin stage sheet parses and carries no agent key", () => {
+    const text = readFileSync(join(REPO, "deployments", "twin-918453", "stage-sheet.env"), "utf8");
+    expect(text).not.toMatch(/AGENT_ADDRESS=|AGENT_VALID_UNTIL|AGENT_MAX_|GOVERN_AGENT_ADDRESSES/);
+    expect(parseSheet(text).chainId).toBe(918453);
   });
 
   test("REHEARSAL=1 is refused", () => {

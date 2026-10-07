@@ -12,12 +12,14 @@ import {DeployPortfolioRouter} from "../../script/DeployPortfolioRouter.s.sol";
 import {DeployGateway} from "../../script/DeployGateway.s.sol";
 import {RobotMoneyVault} from "../../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../../gateway/RobotMoneyGateway.sol";
+import {IGateway} from "../../gateway/interfaces/IGateway.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 
 /// @notice Runs the core stage scripts in process, in production order:
-///         libs, vault, registry, router, gateway. Tests use it where a single deploy script used to be called. Agent authorization is part of the gateway stage and runs
-///         after the gateway exists. The IC policy stage is a separate script that tests call
+///         libs, vault, registry, router, gateway. Tests use it where a single deploy script used to be called. The production gateway stage authorizes no agent. `run` authorizes
+///         `agent_` as a test seam so tests that spend through an agent keep a ready one; `runWithoutAgent`
+///         is the production-faithful path. The IC policy stage is a separate script that tests call
 ///         when they need it.
 /// @dev Not a Script: it carries no cheatcode state of its own. The stage scripts it creates
 ///      are the production scripts. `stages` is the order the run followed, for tests that
@@ -38,6 +40,17 @@ contract CoreStages {
         address shareReceiver;
         bytes32 gatewayRuntimeHash;
     }
+
+    /// @notice Test-seam agent policy defaults (the production deploy authorizes no agent).
+    uint256 public constant DEFAULT_MAX_PER_PAYMENT = 10_000 * 1e6;
+    /// @notice Test-seam agent spend cap per window in USDC units.
+    uint256 public constant DEFAULT_MAX_PER_WINDOW = 100_000 * 1e6;
+    /// @notice Test-seam per-payment withdraw cap in raw rmUSDC shares (share offset 18).
+    uint256 public constant DEFAULT_MAX_WITHDRAW_PER_PAYMENT = 10_000 * 1e6 * 1e18;
+    /// @notice Test-seam per-window withdraw cap in raw rmUSDC shares.
+    uint256 public constant DEFAULT_MAX_WITHDRAW_PER_WINDOW = 100_000 * 1e6 * 1e18;
+    /// @notice Test-seam agent authorization lifetime from the run.
+    uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
 
     DeployLibs public libsScript;
     DeployVault public vaultScript;
@@ -60,6 +73,7 @@ contract CoreStages {
         return stages.length;
     }
 
+    /// @notice Runs the production stages, then authorizes `agent_` as the admin (test seam).
     function run(
         address admin_,
         address pauser_,
@@ -67,9 +81,32 @@ contract CoreStages {
         address shareReceiver_,
         address usdc_
     ) external returns (Stack memory s) {
+        s = runWithoutAgent(admin_, pauser_, shareReceiver_, usdc_);
+        s.agent = agent_;
+        address[] memory none = new address[](0);
+        IGateway.AgentPolicy memory policy = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + DEFAULT_VALID_UNTIL_OFFSET),
+            maxPerPayment: DEFAULT_MAX_PER_PAYMENT,
+            maxPerWindow: DEFAULT_MAX_PER_WINDOW,
+            shareReceiver: shareReceiver_,
+            allowedDestinations: none,
+            assetRecipient: shareReceiver_,
+            maxWithdrawPerPayment: DEFAULT_MAX_WITHDRAW_PER_PAYMENT,
+            maxWithdrawPerWindow: DEFAULT_MAX_WITHDRAW_PER_WINDOW,
+            allowedSourceVaults: none
+        });
+        vm.prank(admin_);
+        s.gateway.authorizeAgent(agent_, policy);
+    }
+
+    /// @notice Runs the production stages exactly as the deploy does: no agent is authorized.
+    function runWithoutAgent(address admin_, address pauser_, address shareReceiver_, address usdc_)
+        public
+        returns (Stack memory s)
+    {
         s.admin = admin_;
         s.pauser = pauser_;
-        s.agent = agent_;
         s.shareReceiver = shareReceiver_;
         s.usdc = usdc_;
 
@@ -91,7 +128,7 @@ contract CoreStages {
         stages.push("router");
 
         DeployGateway.Deployed memory g = gatewayScript.runInProcessWith(
-            admin_, pauser_, agent_, shareReceiver_, usdc_, address(s.vault), address(s.router)
+            admin_, pauser_, shareReceiver_, usdc_, address(s.vault), address(s.router)
         );
         s.gateway = g.gateway;
         s.gatewayRuntimeHash = g.gatewayRuntimeHash;

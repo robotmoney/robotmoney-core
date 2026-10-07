@@ -40,6 +40,9 @@ describe("the stage runner on stub forge and cast", () => {
     expect(w.state().nonces["0x000000000000000000000000000000000000a001"]).toBe(n);
     expect(w.logs().some((l) => l.event === "run.nonce_ok" && l.nonce === n)).toBe(true);
     expect(m.firstBlock).toBe(7);
+    // the timelock stage's last block is the handover block the verifier bounds its agent scan with
+    expect(typeof m.stages.timelock.lastBlock).toBe("number");
+    expect(m.stages.timelock.lastBlock).toBeGreaterThanOrEqual(m.stages.timelock.firstBlock);
   });
 
   test("one deploy: manifests per the core table, --libraries on the basket stages, every required env name set", async () => {
@@ -72,6 +75,12 @@ describe("the stage runner on stub forge and cast", () => {
     expect(proto.env.TVL_CAP).toBe(sheetValue("VAULT_PROTO_TVL_CAP"));
     expect(proto.env.FEE_RECIPIENT).toBeTruthy();
     expect(proto.env.VAULT_TVL_CAP).toBeUndefined();
+    // the deploy authorizes no agent (core 1527): stage 11 passes AGENT_ADDRESSES=none and stage 5 reads no AGENT_* name
+    const timelock = forgeScripts(w).find((c: any) => String(c.args[1]).startsWith(t.stages.find((s) => s.name === "timelock")!.script) && c.args.includes("--broadcast"));
+    expect(timelock.env.AGENT_ADDRESSES).toBe("none");
+    for (const c of forgeScripts(w).filter((x: any) => String(x.args[1]).startsWith(t.stages.find((s) => s.name === "gateway")!.script))) {
+      expect(Object.keys(c.env).filter((k) => k.startsWith("AGENT_"))).toEqual([]);
+    }
   });
 
   test("the run stops at the first failing stage with a non-zero exit code", async () => {

@@ -73,6 +73,12 @@ export function deployEndNonce(manifest: RunManifest): number | undefined {
   return manifest.stages[DEPLOYER_STAGES[DEPLOYER_STAGES.length - 1]!.name]?.endNonce;
 }
 
+/** The last block of the last deployer stage (the timelock handover). Agents depositors authorize after it are theirs, not the deploy's. */
+export function handoverBlock(manifest: RunManifest): bigint | undefined {
+  const b = manifest.stages[DEPLOYER_STAGES[DEPLOYER_STAGES.length - 1]!.name]?.lastBlock;
+  return b === undefined ? undefined : BigInt(b);
+}
+
 export interface VerifyDeps {
   verifyDeployment: (o: VerifyOptions) => Promise<VerifyReport>;
   verifySources: typeof verifySources;
@@ -94,6 +100,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpausedByGovern(manifest, ctx.sheet), expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
     logChunk: 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"),
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
+    handoverBlock: handoverBlock(manifest),
   });
   if (ctx.chainId === MAINNET_CHAIN_ID) {
     const s = await deps.verifySources({ chainId: ctx.chainId, contracts: contractsFromManifests(manifestDir(ctx), getStageTable()) });

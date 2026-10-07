@@ -15,6 +15,8 @@ export const SAFE_MANIFEST = "safe.json";
 
 export type EnvSource =
   | { from: "chain" }
+  /** A fixed value the deploy sets itself (stage 11 AGENT_ADDRESSES is the word none: the deploy authorizes no agent). */
+  | { from: "literal"; value: string }
   /** The stage's own manifest path (DEPLOYMENT_OUT): set by the runner from the table's manifest, never typed. */
   | { from: "out" }
   | { from: "sheet"; name: string }
@@ -52,13 +54,13 @@ export const VAULT_CAP_ENV: Record<string, string> = {
 export const SHEET_RENAMES: Record<string, string> = {
   SEED_SHARE_RECEIVER: "SHARE_RECEIVER_ADDRESS",
   FEE_RECIPIENT: "FEE_RECIPIENT_ADDRESS",
-  AGENT_ADDRESSES: "AGENT_ADDRESS",
 };
 
 /** Where the value of env name `env` comes from for a stage of vault `vault` (null for a non-vault stage). */
 export function resolveEnv(env: string, vault: VaultKey | null): EnvSource {
   if (env === "EXPECTED_CHAIN_ID") return { from: "chain" };
   if (env === "DEPLOYMENT_OUT") return { from: "out" };
+  if (env === "AGENT_ADDRESSES") return { from: "literal", value: "none" };
   const m = MANIFEST_ENV[env];
   if (m) return { from: "manifest", ...m };
   if (env === ELIGIBILITY_BPS_ENV) return { from: "computed" };

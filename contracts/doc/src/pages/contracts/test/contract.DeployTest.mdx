@@ -4,7 +4,7 @@ title: "DeployTest"
 
 # DeployTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/576aff644e408fb5307ccd0861671d76fce2f11f/contracts/test/Deploy.t.sol)
 
 **Inherits:** Test
 
@@ -160,12 +160,15 @@ Flagship address the constant names.
 function test_deploy_wiresThreeDistinctRealAdapterAddresses() public;
 ```
 
-<a id="test_deploy_authorizesagentwithsanepolicy"></a>
+<a id="test_deploy_authorizesnoagent"></a>
 
-### test_deploy_authorizesAgentWithSanePolicy
+### test_deploy_authorizesNoAgent
+
+The production deploy authorizes no agent: no AgentAuthorized log from the
+gateway and no address holds AGENT_ROLE afterwards (core 1527).
 
 ```solidity
-function test_deploy_authorizesAgentWithSanePolicy() public;
+function test_deploy_authorizesNoAgent() public;
 ```
 
 <a id="test_deploy_doesnotminttoagent"></a>
@@ -228,22 +231,6 @@ function test_deploy_grantingAgentRoleToPauserReverts() public;
 
 ```solidity
 function test_deploy_revertsWhenAdminEqualsPauser() public;
-```
-
-<a id="test_deploy_revertswhenadminequalsagent"></a>
-
-### test_deploy_revertsWhenAdminEqualsAgent
-
-```solidity
-function test_deploy_revertsWhenAdminEqualsAgent() public;
-```
-
-<a id="test_deploy_revertswhenpauserequalsagent"></a>
-
-### test_deploy_revertsWhenPauserEqualsAgent
-
-```solidity
-function test_deploy_revertsWhenPauserEqualsAgent() public;
 ```
 
 <a id="test_deploy_seeddepositamount_isoneusdc"></a>

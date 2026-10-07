@@ -39,6 +39,9 @@ describe("keys", () => {
     expect(sheet).toContain(`SAFE_OWNERS=${["SAFE_OWNER_A", "SAFE_OWNER_B", "SAFE_OWNER_C"].map((n) => k.addresses[n]).join(",")}`);
     expect(sheet).toContain(`ADMIN_ADDRESS=${k.addresses.DEPLOYER}`);
     expect(sheet).toContain(`RECEIPT_ADMIN_ADDRESS=${k.addresses.DEPLOYER}`);
+    // the deploy authorizes no agent (core 1527): no AGENT key is minted and the fragment has no AGENT line
+    expect(k.names).not.toContain("AGENT");
+    expect(sheet).not.toMatch(/AGENT/);
   }, 120_000);
   test("refuses existing name, bad name, short passphrase, loose password file; writes nothing", () => {
     const s = setup();

@@ -9,9 +9,10 @@ import { join } from "node:path";
 import { keccak256, pad, toHex } from "viem";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import {
-  ADMIN_ROLE, WEIGHT_SETTER_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
+  ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
   SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
+import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
 import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, OWNERS, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
 
@@ -107,9 +108,9 @@ const RULES: Rule[] = [
   [/^vault\[rmUSDC\]: deployer holds no shares$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "balanceOf", (a: any[]) => (String(a[0]).toLowerCase() === DEPLOYER.toLowerCase() ? 1n : SEED_SHARES))],
   [/^vault\[rmUSDC\]: seed share receiver holds the seed shares$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "balanceOf", 0n)],
   // agents and the role scan
-  [/^agents: every deployer agent is owned by timelock$/, (w) => w.chain.set(GATEWAY, "agentOwner", OTHER)],
-  [/^agents: at least one deployer agent found in gateway logs$/, (w) => { const t = keccak256(toHex(SIG_AGENT_AUTHORIZED)); w.chain.logs = w.chain.logs.filter((l) => l.topics[0] !== t); }],
-  [/^agents: manifest listed count equals derived count$/, (w) => editManifest(w, timelockFile(), (o) => { o.roles.gateway_agents_listed_count = 7; })],
+  [/^agents: no agent authorized at handover$/, (w) => w.chain.logs.push({ address: GATEWAY, topics: [keccak256(toHex(SIG_AGENT_AUTHORIZED)), padTopic(OTHER), padTopic(DEPLOYER)], data: "0x", blockNumber: 300n })],
+  [/^agents: manifest lists zero agents$/, (w) => editManifest(w, timelockFile(), (o) => { o.roles.gateway_agents_listed_count = 1; })],
+  [/^agents: no address holds AGENT_ROLE after handover$/, (w) => { w.chain.roleGrantedLog(GATEWAY, AGENT_ROLE, OTHER, 300n); w.chain.grant(GATEWAY, AGENT_ROLE, OTHER); }],
   [/^agents: manifest says deployer owns no listed agent$/, (w) => editManifest(w, timelockFile(), (o) => { o.roles.deployer_owns_a_listed_gateway_agent = true; })],
   [/^deployer: holds no role on any contract \(log scan\)$/, (w) => w.chain.grant(TIMELOCK, ADMIN_ROLE, DEPLOYER)],
   // the Safe

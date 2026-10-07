@@ -13,9 +13,9 @@ export const SAFE_OWNER_COUNT = 3;
 export const SAFE_THRESHOLD = 2;
 export const KEY_NAME_RE = /^[A-Za-z0-9_-]+$/;
 
-/** Key names for one rehearsal: deployer, pauser, emergency, agent, voters and three Safe owners. */
+/** Key names for one rehearsal: deployer, pauser, emergency, voters (no agent: the deploy authorizes none) and three Safe owners. */
 export function defaultKeyNames(voters = DEFAULT_VOTERS): string[] {
-  const names = ["DEPLOYER", "PAUSER", "EMERGENCY", "AGENT"];
+  const names = ["DEPLOYER", "PAUSER", "EMERGENCY"];
   for (let i = 1; i <= voters; i++) names.push(`VOTER${i}`);
   names.push("SAFE_OWNER_A", "SAFE_OWNER_B", "SAFE_OWNER_C");
   return names;
@@ -81,7 +81,6 @@ export function sheetFragment(k: RehearsalKeys, chainId?: number): string {
     `RECEIPT_ADMIN_ADDRESS=${get("DEPLOYER")}`, // the sheet requires it to equal ADMIN_ADDRESS (the deployer revokes the receipt roles in the timelock stage)
     `PAUSER_ADDRESS=${get("PAUSER")}`,
     `EMERGENCY_ADDRESS=${get("EMERGENCY")}`,
-    `AGENT_ADDRESS=${get("AGENT")}`,
     `VOTER_ADDRESSES=${voters.join(",")}`,
     `SAFE_OWNERS=${owners.join(",")}`,
     `SAFE_THRESHOLD=${SAFE_THRESHOLD}`,

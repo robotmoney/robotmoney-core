@@ -75,14 +75,8 @@ contract DeployMainnetInputsTest is Test {
     function _baseNoFeeSeed(string memory prefix) internal {
         _set(prefix, "ADMIN_ADDRESS", vm.toString(admin));
         _set(prefix, "PAUSER_ADDRESS", vm.toString(makeAddr("inputs-pauser")));
-        _set(prefix, "AGENT_ADDRESS", vm.toString(makeAddr("inputs-agent")));
         _set(prefix, "SHARE_RECEIVER_ADDRESS", vm.toString(makeAddr("inputs-recv")));
         _set(prefix, "FEE_RECIPIENT", vm.toString(treasury));
-        _set(prefix, "AGENT_VALID_UNTIL", vm.toString(block.timestamp + 30 days));
-        _set(prefix, "AGENT_MAX_PER_PAYMENT", "10000000000");
-        _set(prefix, "AGENT_MAX_PER_WINDOW", "100000000000");
-        _set(prefix, "AGENT_MAX_WITHDRAW_PER_PAYMENT", "10000000000");
-        _set(prefix, "AGENT_MAX_WITHDRAW_PER_WINDOW", "100000000000");
         _set(prefix, "TVL_CAP", "2000000000000");
         _set(prefix, "PER_DEPOSIT_CAP", "100000000000");
         _set(prefix, "VAULT_ADDRESS", vm.toString(makeAddr("inputs-vault")));
@@ -108,7 +102,7 @@ contract DeployMainnetInputsTest is Test {
         assertEq(r.feeRecipient, treasury);
         assertEq(r.tvlCap, 2_000_000_000_000);
         assertEq(r.perDepositCap, 100_000_000_000);
-        assertEq(gp.maxPerPayment, 10_000_000_000);
+        assertEq(gp.admin, admin);
         assertEq(gp.router, makeAddr("inputs-router"), "router comes from ROUTER_ADDRESS");
         assertEq(r.exitFeeBps, 25);
         assertEq(r.usdcAddress, h.CANONICAL_BASE_USDC(), "USDC is the constant on every chain");
@@ -162,17 +156,11 @@ contract DeployMainnetInputsTest is Test {
     }
 
     function _copyAllExcept(string memory from, string memory to, string memory skip) internal {
-        string[14] memory keys = [
+        string[8] memory keys = [
             "ADMIN_ADDRESS",
             "PAUSER_ADDRESS",
-            "AGENT_ADDRESS",
             "SHARE_RECEIVER_ADDRESS",
             "FEE_RECIPIENT",
-            "AGENT_VALID_UNTIL",
-            "AGENT_MAX_PER_PAYMENT",
-            "AGENT_MAX_PER_WINDOW",
-            "AGENT_MAX_WITHDRAW_PER_PAYMENT",
-            "AGENT_MAX_WITHDRAW_PER_WINDOW",
             "TVL_CAP",
             "PER_DEPOSIT_CAP",
             "VAULT_ADDRESS",
@@ -194,23 +182,6 @@ contract DeployMainnetInputsTest is Test {
 
     function test_missingPerDepositCap_reverts() public {
         _assertMissing("RM_INPUTS_M_PDC_", "PER_DEPOSIT_CAP");
-    }
-
-    function test_missingAgentMaxPerPayment_reverts() public {
-        _assertMissing("RM_INPUTS_M_AMP_", "AGENT_MAX_PER_PAYMENT");
-    }
-
-    function test_missingAgentMaxPerWindow_reverts() public {
-        _assertMissing("RM_INPUTS_M_AMW_", "AGENT_MAX_PER_WINDOW");
-    }
-
-    function test_missingAgentWithdrawCaps_revert() public {
-        _assertMissing("RM_INPUTS_M_AWP_", "AGENT_MAX_WITHDRAW_PER_PAYMENT");
-        _assertMissing("RM_INPUTS_M_AWW_", "AGENT_MAX_WITHDRAW_PER_WINDOW");
-    }
-
-    function test_missingAgentValidUntil_reverts() public {
-        _assertMissing("RM_INPUTS_M_AVU_", "AGENT_VALID_UNTIL");
     }
 
     /// @notice The gateway stage has no default router: ROUTER_ADDRESS must be set (core 1493).
@@ -240,18 +211,6 @@ contract DeployMainnetInputsTest is Test {
         _set(p, "FEE_RECIPIENT", "treasury");
         vm.expectRevert(bytes("RM_INPUTS_BAD_FEE_FEE_RECIPIENT is malformed: expected an address"));
         h.readParams(p);
-    }
-
-    function test_malformedAgentCap_reverts() public {
-        string memory p = "RM_INPUTS_BAD_AGENT_";
-        _base(p);
-        _set(p, "AGENT_MAX_PER_WINDOW", "-5");
-        vm.expectRevert(
-            bytes(
-                "RM_INPUTS_BAD_AGENT_AGENT_MAX_PER_WINDOW is malformed: expected an unsigned integer"
-            )
-        );
-        g.readParams(p);
     }
 
     /// @notice A required integer reverts when malformed.
@@ -287,17 +246,7 @@ contract DeployMainnetInputsTest is Test {
     /// @notice Every integer input reverts when malformed, never falls back (ported from dev #1541
     ///         `test_malformedInputs_revert`, adapted to the split vault and gateway stages).
     function test_malformedInputs_revert() public {
-        string[9] memory names = [
-            "TVL_CAP",
-            "PER_DEPOSIT_CAP",
-            "EXIT_FEE_BPS",
-            "AGENT_VALID_UNTIL",
-            "AGENT_MAX_PER_PAYMENT",
-            "AGENT_MAX_PER_WINDOW",
-            "AGENT_MAX_WITHDRAW_PER_PAYMENT",
-            "AGENT_MAX_WITHDRAW_PER_WINDOW",
-            "SEED_DEPOSIT_USDC"
-        ];
+        string[4] memory names = ["TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "SEED_DEPOSIT_USDC"];
         for (uint256 i = 0; i < names.length; i++) {
             string memory p = string.concat("RM_INPUTS_BADALL_", vm.toString(i), "_");
             _base(p);
@@ -309,35 +258,19 @@ contract DeployMainnetInputsTest is Test {
         }
     }
 
-    /// @notice AGENT_VALID_UNTIL above the uint64 range reverts instead of truncating to a
-    ///         different expiry (ported from dev #1541, which reads it with `_envUint64Required`).
-    function test_agentValidUntilAboveUint64_reverts() public {
-        string memory p = "RM_INPUTS_AVU_BIG_";
-        _base(p);
-        _set(p, "AGENT_VALID_UNTIL", "18446744073709551616");
-        vm.expectRevert(bytes(string.concat(p, "AGENT_VALID_UNTIL exceeds uint64")));
-        g.readParams(p);
-    }
-
     /// @notice Every required input reverts when unset, on anvil (31337) and on the Twin chain
     ///         (918453) alike (ported from dev #1541 `test_missingInputs_revertOnEveryChain`).
     function test_missingInputs_revertOnEveryChain() public {
-        string[16] memory names = [
+        string[10] memory names = [
             "ADMIN_ADDRESS",
             "FEE_RECIPIENT",
             "TVL_CAP",
             "PER_DEPOSIT_CAP",
             "EXIT_FEE_BPS",
             "PAUSER_ADDRESS",
-            "AGENT_ADDRESS",
             "SHARE_RECEIVER_ADDRESS",
             "VAULT_ADDRESS",
             "ROUTER_ADDRESS",
-            "AGENT_VALID_UNTIL",
-            "AGENT_MAX_PER_PAYMENT",
-            "AGENT_MAX_PER_WINDOW",
-            "AGENT_MAX_WITHDRAW_PER_PAYMENT",
-            "AGENT_MAX_WITHDRAW_PER_WINDOW",
             "SEED_DEPOSIT_USDC"
         ];
         uint256[2] memory chains = [uint256(31337), uint256(918453)];

@@ -78,15 +78,9 @@
       "requiredEnv": [
         "ADMIN_ADDRESS",
         "PAUSER_ADDRESS",
-        "AGENT_ADDRESS",
         "SHARE_RECEIVER_ADDRESS",
         "VAULT_ADDRESS",
         "ROUTER_ADDRESS",
-        "AGENT_VALID_UNTIL",
-        "AGENT_MAX_PER_PAYMENT",
-        "AGENT_MAX_PER_WINDOW",
-        "AGENT_MAX_WITHDRAW_PER_PAYMENT",
-        "AGENT_MAX_WITHDRAW_PER_WINDOW",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [

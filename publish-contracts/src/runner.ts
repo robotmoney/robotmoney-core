@@ -60,6 +60,8 @@ export interface StageRecord {
   broadcastCount?: number;
   txHashes?: string[];
   firstBlock?: number;
+  /** The last block of this stage's broadcast: the timelock stage's is the handover block. */
+  lastBlock?: number;
   startedAt: string;
   finishedAt?: string;
   /** Safe stage: the predicted or created address, recorded before the creation is sent so a resume can adopt it. */
@@ -327,6 +329,7 @@ function envValue(ctx: RunContext, row: StageRow, name: string): string | undefi
   const src = resolveEnv(name, row.vault ?? null);
   let v: string | undefined;
   if (src.from === "chain") v = String(ctx.chainId);
+  else if (src.from === "literal") v = src.value;
   else if (src.from === "out") v = row.manifest ? (ctx.manifestOut ? manifestFilePath(ctx, row.manifest) : manifestPathFor(`deployments/<chain>/${row.manifest}`, ctx.chainId)) : undefined;
   else if (src.from === "sheet") v = ctx.sheet.values[src.name];
   else if (src.from === "manifest") v = readManifestField(ctx, `${src.stage === "safe" ? "safe" : stageManifestBase(src.stage)}:${src.field}`);
@@ -373,14 +376,14 @@ export function libraryArgs(ctx: ManifestCtx, row: StageRow): string[] {
 
 const scriptFile = (script: string): string => basename(script.split(":")[0]!);
 
-function readTxCount(path: string): { count: number; hashes: string[]; firstBlock?: number } | undefined {
+function readTxCount(path: string): { count: number; hashes: string[]; firstBlock?: number; lastBlock?: number } | undefined {
   if (!existsSync(path)) return undefined;
   const j = JSON.parse(readFileSync(path, "utf8"));
   const txs: unknown[] = Array.isArray(j.transactions) ? j.transactions : [];
   const hashes = txs.map((t) => (t as { hash?: string }).hash).filter((h): h is string => typeof h === "string");
   const rc = Array.isArray(j.receipts) ? j.receipts : [];
   const blocks = rc.map((r: { blockNumber?: string }) => (r.blockNumber ? Number(BigInt(r.blockNumber)) : NaN)).filter((n: number) => Number.isFinite(n));
-  return { count: txs.length, hashes, firstBlock: blocks.length ? Math.min(...blocks) : undefined };
+  return { count: txs.length, hashes, firstBlock: blocks.length ? Math.min(...blocks) : undefined, lastBlock: blocks.length ? Math.max(...blocks) : undefined };
 }
 
 /** forge writes broadcast/<ScriptFile>/<chainId>/(dry-run/)run-latest.json. */
@@ -523,6 +526,7 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   rec.broadcastCount = sent.count;
   rec.txHashes = sent.hashes;
   rec.firstBlock = sent.firstBlock;
+  rec.lastBlock = sent.lastBlock;
   rec.endNonce = nonce1;
   const delta = nonce1 - startNonce;
   // the count checks that make the broadcast trustworthy: broadcast file, nonce delta and the frozen count all agree
@@ -551,7 +555,7 @@ async function createSafeOnSimulationChain(ctx: RunContext, api: SafeApi, deploy
   const simNonce = await deployerNonce({ ...ctx, rpc: simRpc }, deployer);
   const res = await api.createSafe({
     ...chain, owners: ctx.sheet.safeOwners, threshold: ctx.sheet.safeThreshold, deployer: impersonatedSender(deployer, chain), deploySha: ctx.coreSha, saltNonce: ctx.sheet.safeSalt,
-    forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency, AGENT_ADDRESS: ctx.sheet.agent },
+    forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency },
     expectDeployerNonce: simNonce, logger: ctx.log, dryRun: false, confirm: async () => true,
   });
   if (!res.created || !res.manifest) throw new PublishError("SIMULATION", "the Safe was not created on the local preflight chain, so the later stages cannot be simulated");
@@ -593,7 +597,7 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
   const signer = await ctx.signer.safeSigner();
   const res = await api.createSafe({
     ...chain, owners: ctx.sheet.safeOwners, threshold: ctx.sheet.safeThreshold, deployer: signer, deploySha: ctx.coreSha, saltNonce: ctx.sheet.safeSalt,
-    forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency, AGENT_ADDRESS: ctx.sheet.agent },
+    forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency },
     expectDeployerNonce: nonce0, logger: ctx.log, dryRun: ctx.dryRun,
     confirm: async (plan: CreateSafePlan) => {
       // record the predicted address BEFORE anything is sent: a resume adopts it
