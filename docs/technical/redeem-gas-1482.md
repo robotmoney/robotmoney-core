@@ -103,3 +103,22 @@ CI runs the same selection through the Twin chain in the `forge-fork-vault-regre
 - **Cold-state cost:** whether a real cold transaction costs more than the forge in-process run. Forge showed no cold versus warm difference across a state revert.
 - **Single-vault gateway path on the fork:** the fork does not run estimate-then-include for `gateway.withdraw`. Only the stub test covers it.
 - **Live chain:** nothing ran on a live chain. The product-acceptance redeem at the node estimate (devops 63) is still to run.
+
+## Basket vault redeem (core 1513)
+`BasketVault` (rmPROTO, rmAGENT, rmRWA) sells each held asset on Uniswap V3 during `redeem`. The swap cost depends on pool state (oracle observation writes, tick crossings), so the node estimate can differ from the cost at inclusion, as in 1482.
+
+Measured on a Base fork with no guard (test `BasketVaultRedeemGasForkTest`, 1,000 USDC deposited, half the shares redeemed):
+
+| Vault | Estimate in the deposit block | Smallest passing limit one hour later |
+|---|---|---|
+| rmPROTO (wETH, cbBTC) | 601,119 | 487,773 |
+| rmAGENT (same two pools in the test) | 738,126 | 624,780 |
+| rmRWA (deSPXA) | 394,723 | 394,723 |
+
+The cost moves by about 113k between states for rmPROTO and rmAGENT. A limit estimated in the cheaper later state fails with an empty revert when the transaction runs in the costlier state. The test failed for rmPROTO and rmAGENT before the fix.
+
+Fix: `redeem` checks `REDEEM_BASE_GAS + assets.length * REDEEM_GAS_PER_ASSET` (300,000 + 400,000 per listed asset) at entry, before any state-dependent work, and reverts `InsufficientGas(available, required)`. The floor binds in every state, so the estimate lands on it. It counts every listed asset, so it is an upper bound. The runtime size of each basket vault stays under the 24,576 byte limit.
+
+Not proven: that 400k per asset stays above the worst case if a pool is thin and the swap crosses many ticks. Re-run the margin test when the asset list or the pools change.
+
+Fork command: `FORK_RPC_URL=https://mainnet.base.org forge test --match-path contracts/test/BasketVaultRedeemGas.t.sol -vv`. CI runs it in the `forge-fork-vault-regressions` job.

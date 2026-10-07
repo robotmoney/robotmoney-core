@@ -340,6 +340,22 @@ abstract contract BasketVault is
     ///      implemented in the MVP. The selector is reserved for Phase B.
     ///      See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
     error NotImplemented();
+    /// @notice Gas left at `redeem` entry is below the floor for this basket. Retry with a
+    ///         higher gas limit. (core 1513, same mechanism as core 1482.)
+    /// @param available `gasleft()` at the check.
+    /// @param required  The floor that was not met.
+    error InsufficientGas(uint256 available, uint256 required);
+
+    /// @dev Fixed part of the `redeem` entry gas floor: burn, fee and payout transfers, and the
+    ///      idle USDC read.
+    uint256 internal constant REDEEM_BASE_GAS = 300_000;
+    /// @dev Per-asset part of the `redeem` entry gas floor: one TWAP-bounded Uniswap V3 sell. A
+    ///      real sell costs about 200k to 340k on a Base fork, and the cost moves with the pool
+    ///      state (observation writes, tick crossings) between the node estimate and inclusion.
+    ///      The floor binds at entry, before any state-dependent work, so `eth_estimateGas`
+    ///      lands on it in every state. It counts every listed asset, so it is an upper bound.
+    ///      See docs/technical/redeem-gas-1482.md (core 1513).
+    uint256 internal constant REDEEM_GAS_PER_ASSET = 400_000;
     /// @dev Raised by addAsset() when the pool's observation cardinality is
     ///      below the minimum required to service TWAP reads over
     ///      `DEFAULT_TWAP_WINDOW`. Cardinality=1 (the Uniswap default) means
@@ -671,6 +687,9 @@ abstract contract BasketVault is
         override
         returns (uint256)
     {
+        uint256 floor = REDEEM_BASE_GAS + assets.length * REDEEM_GAS_PER_ASSET;
+        uint256 g = gasleft();
+        if (g < floor) revert InsufficientGas(g, floor);
         super.redeem(shares, receiver, owner);
         return _lastWithdrawnAssets;
     }
