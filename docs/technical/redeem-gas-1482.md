@@ -115,7 +115,7 @@ Measured on a Base fork with no guard (test `BasketVaultRedeemGasForkTest`, 1,00
 | rmAGENT (same two pools in the test) | 738,126 | 624,780 |
 | rmRWA (deSPXA) | 394,723 | 394,723 |
 
-The cost moves by about 113k between states for rmPROTO and rmAGENT. A limit estimated in the cheaper later state fails with an empty revert when the transaction runs in the costlier state. The test failed for rmPROTO and rmAGENT before the fix.
+The cost moves by about 113k between states for rmPROTO and rmAGENT. A limit estimated in the cheaper later state fails with an empty revert when the transaction runs in the costlier state. Without the guard, five of the six fork tests fail: the later-state and shifted tests for rmPROTO and rmAGENT, and the third-party-swap test for rmRWA. Only the rmRWA later-state test passes, as the table shows. rmAGENT is measured with the real wETH and cbBTC pools supplied by the test, because it ships with an empty shortlist.
 
 Fix: `redeem` checks `REDEEM_BASE_GAS + assets.length * REDEEM_GAS_PER_ASSET` (300,000 + 400,000 per listed asset) at entry, before any state-dependent work, and reverts `InsufficientGas(available, required)`. The floor binds in every state, so the estimate lands on it. It counts every listed asset, so it is an upper bound. The runtime size of each basket vault stays under the 24,576 byte limit.
 
