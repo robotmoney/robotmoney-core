@@ -88,7 +88,7 @@ export function world(o: WorldOpts = {}): World {
     deps(over = {}) {
       return {
         cwd: dir, logSink: (l) => w.lines.push(l), prompt: typedPrompt(),
-        makeSigner: () => fakeSigner(), coreConfigCheck: async (i) => { w.coreChecks.push({ outDir: i.outDir, rpc: i.rpc, chainId: i.chainId }); return w.coreCheckCode === 0 ? { code: 0, output: "PASS  fixture\nconfig-check: ok" } : { code: w.coreCheckCode, output: "FAIL  fixture  pool-fee-equals-config\nconfig-check: 1 failure(s)" }; }, chainReader: () => healthyPoolReader(), releaseTag: async () => "release/1.0.0", checkShaGreen: async () => ({ code: 0, output: "GREEN" }), usdcCodeHash: keccak256(STUB_CODE as `0x${string}`), correlatedOwners: async () => [], safeApi: fakeSafeApi(w), startChain: fakeChain(w), ...over,
+        makeSigner: () => fakeSigner(), coreConfigCheck: async (i) => { w.coreChecks.push({ outDir: i.outDir, rpc: i.rpc, chainId: i.chainId }); return w.coreCheckCode === 0 ? { code: 0, output: "PASS  fixture\nconfig-check: ok" } : { code: w.coreCheckCode, output: "FAIL  fixture  pool-fee-equals-config\nconfig-check: 1 failure(s)" }; }, chainReader: () => healthyPoolReader(), releaseTag: async () => "release/1.0.0", remoteTag: async () => {}, checkShaGreen: async () => ({ code: 0, output: "GREEN" }), usdcCodeHash: keccak256(STUB_CODE as `0x${string}`), correlatedOwners: async () => [], safeApi: fakeSafeApi(w), startChain: fakeChain(w), ...over,
       };
     },
     async run(extra = [], overAll = {}) {

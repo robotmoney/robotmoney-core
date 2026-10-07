@@ -33,3 +33,24 @@ export async function releaseTagsFor(coreDir: string, sha: string, git: GitRunne
 export async function releaseTagFor(coreDir: string, sha: string, git: GitRunner = spawnGit): Promise<string | null> {
   return (await releaseTagsFor(coreDir, sha, git))[0] ?? null;
 }
+
+/** Test seam: the remote check of a found release tag. The real one is verifyRemoteTag against the core checkout's origin. */
+export type RemoteTagCheck = (coreDir: string, tag: string) => Promise<void>;
+
+/**
+ * The local release tag must exist on the remote with the same tag object (core 1602). A pusher who moved or created a tag locally, or a
+ * tag deleted or moved on the remote, is a refusal. An unreachable remote is a refusal too: the check is never skipped.
+ * `remote` is a remote name or a URL.
+ */
+export async function verifyRemoteTag(coreDir: string, tag: string, remote = "origin", git: GitRunner = spawnGit): Promise<void> {
+  const fail = (why: string, d: Record<string, unknown> = {}) => new PublishError("RELEASE_TAG_REMOTE_MISMATCH", `release tag ${tag} does not match the remote ${remote}: ${why}. Fetch the tags (git fetch --tags --force) or re-tag, then plan.`, { tag, remote, ...d });
+  const ref = `refs/tags/${tag}`;
+  const local = await git(["-C", coreDir, "rev-parse", "--verify", "-q", ref]);
+  if (local.code !== 0) throw fail("the tag is not in the local checkout");
+  const localObj = local.stdout.trim();
+  const r = await git(["-C", coreDir, "ls-remote", "--tags", remote, ref]);
+  if (r.code !== 0) throw fail(`the remote is unreachable (${(r.stderr || "").trim().split("\n").slice(-1)[0] ?? "git ls-remote failed"})`);
+  const lines = r.stdout.split("\n").map((l) => l.trim().split(/\s+/)).filter((p) => p[1] === ref);
+  if (lines.length === 0) throw fail("the remote has no such tag");
+  if (lines[0]![0] !== localObj) throw fail(`the remote tag object is ${lines[0]![0]}, the local one is ${localObj}`, { local: localObj, remoteObj: lines[0]![0] });
+}

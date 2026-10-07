@@ -1,6 +1,7 @@
 // devops 58 (S11): the plan job's gate. A planted short delay on 8453 fails before any signer exists, so before any approval.
 import { describe, expect, test } from "bun:test";
-import { EXIT_CODES } from "../src/errors.ts";
+import { EXIT_CODES, PublishError } from "../src/errors.ts";
+import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../src/chains.ts";
 import { world } from "./harness.ts";
 
 async function plan(w: ReturnType<typeof world>, over: Record<string, unknown> = {}): Promise<{ code: number; signerMade: boolean; forgeCalls: number }> {
@@ -43,6 +44,31 @@ describe("plan gate", () => {
     const r = await plan(world({ chainId: 8453 }), { releaseTag: async () => null });
     expect(r.code).toBe(EXIT_CODES.RELEASE_SHA_UNTAGGED);
     expect(r.signerMade).toBe(false);
+  });
+  test("gate order: with no tag, no counts file and CI red at once, the refusal is RELEASE_SHA_UNTAGGED and neither the counts nor check-sha-green is consulted", async () => {
+    let greenRan = false;
+    const r = await plan(world({ chainId: 8453, writeFrozen: false }), { releaseTag: async () => null, env: { GITHUB_TOKEN: undefined, GH_TOKEN: undefined }, checkShaGreen: async () => { greenRan = true; return { code: 1, output: "RED" }; } });
+    expect(r.code).toBe(EXIT_CODES.RELEASE_SHA_UNTAGGED);
+    expect(r.signerMade).toBe(false);
+    expect(greenRan).toBe(false);
+  });
+  test("gate order: a tagged SHA with no counts file and CI red is COUNTS_MISSING, before check-sha-green runs", async () => {
+    let greenRan = false;
+    const r = await plan(world({ chainId: 8453, writeFrozen: false }), { checkShaGreen: async () => { greenRan = true; return { code: 1, output: "RED" }; } });
+    expect(r.code).toBe(EXIT_CODES.COUNTS_MISSING);
+    expect(greenRan).toBe(false);
+  });
+  test("8453 refuses when the release tag does not match the remote: RELEASE_TAG_REMOTE_MISMATCH, no signer, before counts and check-sha-green", async () => {
+    let greenRan = false;
+    const r = await plan(world({ chainId: MAINNET_CHAIN_ID, writeFrozen: false }), { remoteTag: async () => { throw new PublishError("RELEASE_TAG_REMOTE_MISMATCH", "moved"); }, checkShaGreen: async () => { greenRan = true; return { code: 0, output: "GREEN" }; } });
+    expect(r.code).toBe(EXIT_CODES.RELEASE_TAG_REMOTE_MISMATCH);
+    expect(r.signerMade).toBe(false);
+    expect(greenRan).toBe(false);
+  });
+  test("the Twin chain never checks the remote tag", async () => {
+    let remoteRan = false;
+    await plan(world({ chainId: TWIN_CHAIN_ID }), { remoteTag: async () => { remoteRan = true; throw new PublishError("RELEASE_TAG_REMOTE_MISMATCH", "x"); } });
+    expect(remoteRan).toBe(false);
   });
   test("8453 refuses a tagged SHA with no frozen counts file: COUNTS_MISSING, no signer", async () => {
     const r = await plan(world({ chainId: 8453, writeFrozen: false }));

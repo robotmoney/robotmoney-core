@@ -98,6 +98,7 @@ export interface CliDeps {
   /** Test seams: the contracts-freeze gate of the 8453 plan job (core 1524): the release tag read and check-sha-green. Defaults: the real ones. */
   releaseTag?: (coreDir: string, sha: string) => Promise<string | null>;
   checkShaGreen?: CheckShaGreen;
+  remoteTag?: (coreDir: string, tag: string) => Promise<void>;
   /** Test seam: the blank local chain a --dry-run simulates on. Default: anvil, when installed. */
   startChain?: ChainStarter;
 }
@@ -252,7 +253,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
     // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
     if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {
-      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, releaseTag: deps.releaseTag, checkShaGreen: deps.checkShaGreen });
+      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, releaseTag: deps.releaseTag, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
       log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha });
     }
     // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts.
