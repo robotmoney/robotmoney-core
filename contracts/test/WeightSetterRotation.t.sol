@@ -298,8 +298,14 @@ contract WeightSetterRotationTest is Test {
     /// @dev A hostile RouterGovernance with ADMIN_ROLE strips the timelock's ADMIN_ROLE. The
     ///      rotation still works, because the executor role is not administered by ADMIN_ROLE.
     function test_routerGovernance_revokingTimelockAdmin_doesNotBlockRotation() public {
-        vm.prank(oldGov);
+        vm.startPrank(oldGov);
         router.revokeRole(ADMIN_ROLE, address(timelock));
+        // ADMIN_ROLE does not administer the rotation roles, so the hostile holder cannot strip them.
+        vm.expectRevert(_unauthorized(oldGov, EXECUTOR));
+        router.revokeRole(EXECUTOR, address(timelock));
+        vm.expectRevert(_unauthorized(oldGov, ROTATOR));
+        router.revokeRole(ROTATOR, safe);
+        vm.stopPrank();
         assertFalse(router.hasRole(ADMIN_ROLE, address(timelock)));
 
         bytes memory data = _executeCall(newGov);
