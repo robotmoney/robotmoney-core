@@ -5,7 +5,7 @@ description: "Production deploy script for `RwaBasketVault` (rmRWA). One path on
 
 # DeployRwaBasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/script/DeployRwaBasketVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a62b707f1cd64e98d8d714f9420d3ce1885da8d1/contracts/script/DeployRwaBasketVault.s.sol)
 
 **Inherits:** [BasketVaultDeployBase](/contracts/script/abstract.BasketVaultDeployBase)
 
@@ -23,6 +23,7 @@ FEE_RECIPIENT   recipient for exit fees (not the deployer, not the admin)
 DEPLOYMENT_OUT    output manifest path (required, no default)
 EXPECTED_CHAIN_ID mandatory and equal to 8453 on Base mainnet
 EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid value)
+ROUTER_DEFAULT_BPS  `none`, or the router default weight vector (bps, comma list) after this vault flips eligible
 
 Assets come from `rwa-assets.json` (deSPXA only at launch). The vault is deployed paused.
 

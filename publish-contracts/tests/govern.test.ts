@@ -62,11 +62,11 @@ const opts = (sheet: ReturnType<typeof parseSheet>, tl: ReturnType<typeof fakeTi
 const warpTo = (tl: ReturnType<typeof fakeTimelock>) => async (sec: bigint) => { tl.s.clock += sec; };
 const run = (ctx: ReturnType<typeof setup>["ctx"], manifest: ReturnType<typeof newManifest>, sheet: ReturnType<typeof parseSheet>, tl: ReturnType<typeof fakeTimelock>, extra: object = {}) =>
   runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, extra));
-/** Records every paused() read the govern run makes, by vault address. */
+/** Records every depositsPaused() read the govern run makes, by vault address. */
 const spyPaused = (tl: ReturnType<typeof fakeTimelock>) => {
   const seen: string[] = [];
   const orig = tl.handle.client.readContract;
-  tl.handle.client.readContract = async (a: { address: string; functionName: string }) => { if (a.functionName === "paused") seen.push(a.address); return orig(a as never); };
+  tl.handle.client.readContract = async (a: { address: string; functionName: string }) => { if (a.functionName === "depositsPaused") seen.push(a.address); return orig(a as never); };
   return seen;
 };
 
@@ -111,7 +111,7 @@ describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, o
     expect(lines.map((l) => `${l.row}:${l.phase}`)).toEqual(UNPAUSE_ROWS.map((r) => `${r}:scheduled`));
   });
 
-  test("the resume after the delay executes every scheduled unpause and reads paused() == false for each, with no second schedule and no warp", async () => {
+  test("the resume after the delay executes every scheduled unpause and reads depositsPaused() == false for each, with no second schedule and no warp", async () => {
     const { ctx, sheet } = setup(ALL, 8453);
     const tl = fakeTimelock(sheet, DELAY);
     const manifest = newManifest(ctx, addr(0xa001));

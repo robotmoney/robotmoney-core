@@ -5,7 +5,7 @@ description: "Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on
 
 # BasketVaultDeployBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/script/BasketVaultDeployBase.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a62b707f1cd64e98d8d714f9420d3ce1885da8d1/contracts/script/BasketVaultDeployBase.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -192,6 +192,61 @@ function _runFrom(string memory prefix, string memory configFile, string memory 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+
+<a id="_readeligibilitybps-string"></a>
+
+### _readEligibilityBps
+
+<i>
+
+`ROUTER_DEFAULT_BPS` is required: the word `none` leaves this basket ineligible, otherwise a comma list of bps for the
+router default vector right after this basket flips eligible (rmUSDC, the already eligible baskets in registry order, this vault).
+
+</i>
+
+```solidity
+function _readEligibilityBps(string memory prefix)
+        internal
+        view
+        returns (uint256[] memory bps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+
+<a id="_makeroutereligible-vaultregistry-address-uint256"></a>
+
+### _makeRouterEligible
+
+<i>
+
+One atomic `registry.migrateEligibility`: flips `vault` eligible and re-sets the router default vector in the same call. The
+vector is the current eligible set in registry order, then `vault`, with the given bps. The broadcaster holds ADMIN_ROLE on the
+registry until the timelock stage. An empty `bps` leaves the vault ineligible.
+
+</i>
+
+```solidity
+function _makeRouterEligible(VaultRegistry registry, address vault, uint256[] memory bps)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| registry | `VaultRegistry` |  |
+| vault | `address` |  |
+| bps | `uint256[]` |  |
 
 <a id="_parsecfg-string-string"></a>
 
