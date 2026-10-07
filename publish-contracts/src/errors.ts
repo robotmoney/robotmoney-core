@@ -1,11 +1,13 @@
 // Typed errors for the publish contracts CLI. Every failure class has its own exit code, so CI and the operator branch on the code.
 export type PublishErrorKind =
   | "USAGE" | "SHEET" | "FLOOR" | "CHAIN" | "SIGNER" | "COUNTS_MISSING" | "SIMULATION" | "BROADCAST" | "COUNT_MISMATCH" | "NONCE"
-  | "MANIFEST" | "VERIFY" | "GOVERN" | "GOVERN_PENDING" | "RESUME" | "REFUSED" | "TOOL" | "SAFE" | "INPUT_MISSING";
+  | "MANIFEST" | "VERIFY" | "GOVERN" | "GOVERN_PENDING" | "RESUME" | "REFUSED" | "TOOL" | "SAFE" | "INPUT_MISSING"
+  | "RELEASE_SHA_UNTAGGED" | "CI_NOT_GREEN";
 
 export const EXIT_CODES: Record<PublishErrorKind, number> = {
   USAGE: 2, SHEET: 3, FLOOR: 4, CHAIN: 5, SIGNER: 6, COUNTS_MISSING: 7, SIMULATION: 8, BROADCAST: 9, COUNT_MISMATCH: 10, NONCE: 11,
   MANIFEST: 12, VERIFY: 13, GOVERN: 14, GOVERN_PENDING: 15, RESUME: 16, REFUSED: 17, TOOL: 18, SAFE: 19, INPUT_MISSING: 20,
+  RELEASE_SHA_UNTAGGED: 21, CI_NOT_GREEN: 22,
 };
 
 export class PublishError extends Error {

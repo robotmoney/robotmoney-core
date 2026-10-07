@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PublishError } from "../src/errors.ts";
 import { assertSha, checkNonce, countFor, frozenPath, loadFrozen, resolveCounts, sumCounts, writeFrozen } from "../src/counts.ts";
+import { freezeCounts } from "../scripts/freeze-counts.ts";
 import { COUNTS, SHA, SHA2, tmp, writeCounts } from "./fixtures.ts";
 
 const kind = (f: () => unknown): string | undefined => { try { f(); } catch (e) { return (e as PublishError).kind; } return undefined; };
@@ -66,5 +67,47 @@ describe("frozen counts keyed by DEPLOY_SHA", () => {
     writeCounts(dir);
     expect(resolveCounts({ ...base, chainId: 8453 })).toMatchObject({ measure: false, mode: "frozen", frozen: COUNTS });
     expect(resolveCounts({ ...base, chainId: 918453, dryRun: true }).mode).toBe("frozen");
+  });
+});
+
+describe("freeze-counts (core 1524)", () => {
+  const counts = (over: Record<string, unknown> = {}): string => {
+    const p = join(tmp(), "counts.json");
+    writeFileSync(p, JSON.stringify({ deploySha: SHA, chainId: 918453, counts: COUNTS, deployerNonce: sumCounts(COUNTS), ...over }));
+    return p;
+  };
+  test("writes the frozen file from a counts.json fixture", () => {
+    const dir = tmp();
+    const p = freezeCounts(counts(), dir);
+    expect(p).toBe(frozenPath(dir, SHA));
+    expect(loadFrozen(dir, SHA).counts).toEqual(COUNTS);
+  });
+  test("an identical rerun leaves the file byte-identical", () => {
+    const dir = tmp();
+    const p = freezeCounts(counts(), dir);
+    const before = readFileSync(p, "utf8");
+    freezeCounts(counts(), dir);
+    expect(readFileSync(p, "utf8")).toBe(before);
+  });
+  test("a rerun with different counts is COUNT_MISMATCH and leaves the file unchanged", () => {
+    const dir = tmp();
+    const p = freezeCounts(counts(), dir);
+    const before = readFileSync(p, "utf8");
+    const other = { ...COUNTS, vault: 19 };
+    expect(kind(() => freezeCounts(counts({ counts: other, deployerNonce: sumCounts(other) }), dir))).toBe("COUNT_MISMATCH");
+    expect(readFileSync(p, "utf8")).toBe(before);
+  });
+  test("the CLI exits 10 (COUNT_MISMATCH) on a differing rerun", () => {
+    const dir = tmp();
+    const run = (f: string) => Bun.spawnSync(["bun", join(import.meta.dir, "..", "scripts", "freeze-counts.ts"), "--counts", f, "--counts-dir", dir], { stdout: "pipe", stderr: "pipe" });
+    expect(run(counts()).exitCode).toBe(0);
+    const other = { ...COUNTS, vault: 19 };
+    expect(run(counts({ counts: other, deployerNonce: sumCounts(other) })).exitCode).toBe(10);
+  });
+  test("a counts.json whose nonce is not the summed counts, or from chain 8453, or with a bad sha, is refused", () => {
+    const dir = tmp();
+    expect(kind(() => freezeCounts(counts({ deployerNonce: 1 }), dir))).toBe("USAGE");
+    expect(kind(() => freezeCounts(counts({ chainId: 8453 }), dir))).toBe("USAGE");
+    expect(kind(() => freezeCounts(counts({ deploySha: "../x" }), dir))).toBe("USAGE");
   });
 });

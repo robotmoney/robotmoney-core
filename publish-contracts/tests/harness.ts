@@ -88,7 +88,7 @@ export function world(o: WorldOpts = {}): World {
     deps(over = {}) {
       return {
         cwd: dir, logSink: (l) => w.lines.push(l), prompt: typedPrompt(),
-        makeSigner: () => fakeSigner(), coreConfigCheck: async (i) => { w.coreChecks.push({ outDir: i.outDir, rpc: i.rpc, chainId: i.chainId }); return w.coreCheckCode === 0 ? { code: 0, output: "PASS  fixture\nconfig-check: ok" } : { code: w.coreCheckCode, output: "FAIL  fixture  pool-fee-equals-config\nconfig-check: 1 failure(s)" }; }, chainReader: () => healthyPoolReader(), usdcCodeHash: keccak256(STUB_CODE as `0x${string}`), correlatedOwners: async () => [], safeApi: fakeSafeApi(w), startChain: fakeChain(w), ...over,
+        makeSigner: () => fakeSigner(), coreConfigCheck: async (i) => { w.coreChecks.push({ outDir: i.outDir, rpc: i.rpc, chainId: i.chainId }); return w.coreCheckCode === 0 ? { code: 0, output: "PASS  fixture\nconfig-check: ok" } : { code: w.coreCheckCode, output: "FAIL  fixture  pool-fee-equals-config\nconfig-check: 1 failure(s)" }; }, chainReader: () => healthyPoolReader(), releaseTag: async () => "release/1.0.0", checkShaGreen: async () => ({ code: 0, output: "GREEN" }), usdcCodeHash: keccak256(STUB_CODE as `0x${string}`), correlatedOwners: async () => [], safeApi: fakeSafeApi(w), startChain: fakeChain(w), ...over,
       };
     },
     async run(extra = [], overAll = {}) {
@@ -96,7 +96,7 @@ export function world(o: WorldOpts = {}): World {
       const { chain: chainOver, signer: signerOver, env: envOver, ...over } = overAll;
       const chain = chainOver ?? chainId;
       const env: Record<string, string | undefined> = {
-        PATH: `${STUB_DIR}:${process.env.PATH}`, HOME: process.env.HOME, STUB_STATE: statePath, STUB_CONFIG: cfgPath, ...(envOver ?? {}),
+        PATH: `${STUB_DIR}:${process.env.PATH}`, HOME: process.env.HOME, STUB_STATE: statePath, STUB_CONFIG: cfgPath, GITHUB_TOKEN: "test-token", ...(envOver ?? {}),
       };
       const args = ["--chain", String(chain), "--rpc", "http://rpc.test:8545", "--sheet", sheetPath, "--signer", signerOver ?? "keystore:/dev/shm/stub/DEPLOYER",
         "--environment", "local", "--core-sha", SHA, "--core-dir", coreDir, "--counts-dir", countsDir, "--evidence", w.evidence, ...extra];

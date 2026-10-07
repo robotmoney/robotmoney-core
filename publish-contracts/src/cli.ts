@@ -15,6 +15,7 @@ import { siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
 import { publishLogger, type Logger } from "./log.ts";
 import { stagePlan } from "./plan.ts";
+import { assertReleaseGate, type CheckShaGreen } from "./release-gate.ts";
 import { DEPLOYER_STAGES, STAGE_NAMES, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
 import { finalNonceCheck, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
@@ -94,6 +95,9 @@ export interface CliDeps {
   coreConfigCheck?: CoreConfigCheck;
   /** Test seam only: the pinned FiatTokenProxy code hash. Production uses the pin in usdc.ts. */
   usdcCodeHash?: string;
+  /** Test seams: the contracts-freeze gate of the 8453 plan job (core 1524): the release tag read and check-sha-green. Defaults: the real ones. */
+  releaseTag?: (coreDir: string, sha: string) => Promise<string | null>;
+  checkShaGreen?: CheckShaGreen;
   /** Test seam: the blank local chain a --dry-run simulates on. Default: anvil, when installed. */
   startChain?: ChainStarter;
 }
@@ -245,6 +249,11 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo
     useStageTable(loadStageTable(coreDir));
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
+    // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
+    if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {
+      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, releaseTag: deps.releaseTag, checkShaGreen: deps.checkShaGreen });
+      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha });
+    }
     // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts.
     const counts = a.stage === "plan"
       ? { frozen: a.measure ? undefined : loadFrozen(countsDir, a.coreSha).counts, measure: a.measure, mode: (a.measure ? "measure-flag" : "frozen") as "measure-flag" | "frozen", file: "" }

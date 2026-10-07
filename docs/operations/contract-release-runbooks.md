@@ -65,11 +65,14 @@ This section covers two different tags. Do not confuse them.
   `deployments/frozen-counts/<sha>.json`. The rehearsal is the `core-stages-twin-chain`
   job of suite 28 (every push to `dev` and the nightly). Download the `rehearsal-counts-<sha>`
   artifact of the release SHA's run, review `counts.json`, and write its `counts` (with `deploySha` and
-  the `measured` chain id and time) to that file. CI never commits it. The mainnet plan job refuses any
-  `DEPLOY_SHA` that is not a release-tagged SHA with committed frozen counts.
+  the `measured` chain id and time) to that file with
+  `bun publish-contracts/scripts/freeze-counts.ts --counts counts.json`. Take the artifact from the
+  **push** run of the tagged SHA: on a pull request `github.sha` is the merge commit, not the release SHA.
+  CI never commits it. The mainnet plan job refuses any
+  `DEPLOY_SHA` that is not an annotated-release-tagged SHA (`RELEASE_SHA_UNTAGGED`), has no committed
+  frozen counts (`COUNTS_MISSING`) or is not green in `check-sha-green` (`CI_NOT_GREEN`).
   Any later commit that changes `contracts/` has a new SHA with no tag and no
-  counts, so it needs a new rehearsal and tag. This is the decided flow (not
-  yet implemented: core #1524).
+  counts, so it needs a new rehearsal and tag. This flow is enforced by the plan job (core #1524).
 - The **version tag** (`vA.B.C[-network]`) is the post-deploy record
   described in the rest of this section.
 
