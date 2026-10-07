@@ -19,8 +19,10 @@ mod common;
 
 use crate::common::{jrpc_result, jrpc_result_raw, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE};
 use alloy_primitives::{address, b256, hex as ahex, Address, B256};
+use alloy_sol_types::SolCall;
 use assert_cmd::Command;
 use mockito::Matcher;
+use rust_payment_client::gateway::RobotMoneyGateway;
 use rust_payment_client::signer::software::PASSPHRASE_ENV_VAR;
 use serde_json::json;
 use std::path::PathBuf;
@@ -281,12 +283,18 @@ async fn test_committee_vote_submit_happy_path() {
         .create_async()
         .await;
 
-    // eth_sendRawTransaction
+    // eth_sendRawTransaction. Issue #1511: the signed tx must target the
+    // GATEWAY (not the IC policy, whose `submitVote` is `onlyGateway`) and
+    // carry the `committeeVoteSubmit` selector. The raw tx hex embeds the `to`
+    // address and the calldata, so a body regex pins both; a tx aimed at the
+    // policy matches no mock and the command fails.
+    let selector = ahex::encode(RobotMoneyGateway::committeeVoteSubmitCall::SELECTOR);
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(
-            json!({"method": "eth_sendRawTransaction"}),
-        ))
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_sendRawTransaction"})),
+            Matcher::Regex(format!("{GATEWAY:x}[0-9a-f]{{0,12}}{selector}")),
+        ]))
         .with_status(200)
         .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
         .expect(1)

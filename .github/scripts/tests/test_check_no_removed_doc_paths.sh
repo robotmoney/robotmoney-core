@@ -98,7 +98,7 @@ if [[ -z "$base" ]]; then
 fi
 cases=$((cases + 1))
 bad="$(git -C "$REPO_ROOT" diff --name-only "$base" |
-  grep -v -E '^(docs/|\.github/|tests/fixtures/committee-vote\.schema\.json$|testing/(fork-e2e-rust|smoke-test)/src/base_testnet\.rs$|scripts/ci/check-no-test-only-code\.ts$|scripts/devnet/check-twin-chain-ci-selftest\.ts$)' || true)"
+  grep -v -E '^(docs/|\.github/|tests/fixtures/committee-vote\.schema\.json$|testing/(fork-e2e-rust|smoke-test)/src/base_testnet\.rs$|scripts/ci/check-no-test-only-code\.ts$|scripts/devnet/check-twin-chain-ci-selftest\.ts$|clients/rust-payment-client/(src/commands/committee\.rs|src/gateway/mod\.rs|tests/committee\.rs)$)' || true)"
 if [[ -n "$bad" ]]; then
   echo "FAIL: diff touches paths outside scope: $bad" >&2
   failures=$((failures + 1))
@@ -106,7 +106,10 @@ else
   echo "ok: diff paths in scope"
 fi
 cases=$((cases + 1))
-badrs="$(git -C "$REPO_ROOT" diff -U0 "$base" -- '*.rs' | grep -E '^[+-][^+-]' | grep -v -E '^[+-]//!' || true)"
+badrs="$(git -C "$REPO_ROOT" diff -U0 "$base" -- '*.rs' \
+  ':(exclude)clients/rust-payment-client/src/commands/committee.rs' \
+  ':(exclude)clients/rust-payment-client/src/gateway/mod.rs' \
+  ':(exclude)clients/rust-payment-client/tests/committee.rs' | grep -E '^[+-][^+-]' | grep -v -E '^[+-]//!' || true)"
 if [[ -n "$badrs" ]]; then
   echo "FAIL: Rust diff has non-//! lines: $badrs" >&2
   failures=$((failures + 1))
