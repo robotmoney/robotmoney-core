@@ -157,6 +157,21 @@ describe("govern carries the basket unpauses only; the rest is deploy-time confi
     expect(parseSheet(main("RWA,AGENT,PROTO")).govern.unpauseVaults).toEqual(["RWA", "AGENT", "PROTO"]);
     expect(parseSheet(sheetText({ GOVERN_UNPAUSE_VAULTS: "PROTO,RWA" })).govern.unpauseVaults).toEqual(["PROTO", "RWA"]);
   });
+  test("on 8453 ROUTER_WEIGHTS must be the launch vector, with a named error; Twin keeps its own weights", () => {
+    const main = (w: string) => sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: w });
+    const ok = parseSheet(main("USDC:9500,PROTO:500,AGENT:0,RWA:0"));
+    expect(ok.weights.map((x) => x.bps)).toEqual([9500, 500, 0, 0]);
+    expect(parseSheet(main("RWA:0,AGENT:0,PROTO:500,USDC:9500")).weights.length).toBe(4);
+    for (const w of ["USDC:8500,PROTO:500,AGENT:500,RWA:500", "USDC:9000,PROTO:1000,AGENT:0,RWA:0", "USDC:9500,PROTO:0,AGENT:500,RWA:0"]) {
+      const e = refused(main(w));
+      expect(e.message, w).toContain("launch vector");
+      expect(e.message).toContain("ROUTER_WEIGHTS");
+    }
+    // a vault left out of the vector is refused too (the vector must name all four)
+    const short = refused(sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO", GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500" }));
+    expect(short.message).toContain("launch vector");
+    expect(parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:6000,PROTO:2500,RWA:1500" })).weights.length).toBe(3);
+  });
   test("the govern block holds the unpauses and the Twin-only delay and nothing else; eligibility and weights are deploy-time fields", () => {
     const s = parseSheet(exampleText());
     expect(Object.keys(s.govern).sort()).toEqual(["newDelay", "unpauseVaults"]);
