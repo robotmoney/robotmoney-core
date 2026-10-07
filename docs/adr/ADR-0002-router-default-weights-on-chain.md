@@ -88,10 +88,7 @@ redeploying the router, `RouterGovernance`, the gateway, and the IC policy
 and receipt that bind the gateway (each holds its counterpart as an
 immutable). The registry is re-linked with `setRouter`, which is repeatable.
 
-**Status: default pending owner confirmation (core 1571).** Redeploy-only
-replacement is the working default. A bounded rotation path, for example a
-delayed Safe-only role-admin handover, is the alternative. The owner has not
-chosen yet.
+**Status (core 1571).** The owner decided on 2026-10-07 to add a bounded rotation path for `WEIGHT_SETTER_ROLE` (issue 1571, PR 1617). Until it lands, replacing RouterGovernance means redeploying the router (this section describes that current behaviour). PR 1617 will update it.
 
 ## Consequences
 

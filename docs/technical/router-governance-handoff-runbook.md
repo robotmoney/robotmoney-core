@@ -94,9 +94,8 @@ raising it changed the contract's bytecode. A `RouterGovernance` deployed before
 this change keeps the old floor of 1 and cannot be upgraded into the new one:
 replace it by redeploying the router, not by moving a role.
 
-> **Default pending owner confirmation (core 1571).** Redeploy-only replacement
-> is the working default. The owner has not yet confirmed it. If the owner
-> chooses a bounded rotation path instead, this paragraph changes.
+> **Note (core 1571).** The owner decided on 2026-10-07 to add a bounded rotation path for `WEIGHT_SETTER_ROLE` (issue 1571, PR 1617).
+> Until it lands, replacing RouterGovernance means redeploying the router (this section describes that current behaviour). PR 1617 will update it.
 
 Granting a new `RouterGovernance` `ADMIN_ROLE` on the `PortfolioRouter` does not
 move `setWeights` authority. `setWeights` is gated on `WEIGHT_SETTER_ROLE`, which
@@ -149,8 +148,11 @@ Migration therefore means a router redeploy, and the redeploy cascades:
    timelock handover does not touch) calls it directly. It needs no timelock
    call. Only `unpauseDeposits()` needs the timelock-held `ADMIN_ROLE`. Do not
    use the vault's `pauseDeposits()`. The vault is shared, so that would stop
-   the new gateway as well. The old router has no switch of its own. It is
-   retired by pausing the old gateway. Each agent's owner may also call
+   the new gateway as well. The old router has no switch of its own.
+   `PortfolioRouter.deposit` and `depositFor` are public with no gateway gate,
+   so pausing the old gateway does not stop direct deposits to the old router.
+   No contract call stops the old router. Treat it as still depositable,
+   tell users to stop using it, and pause the old gateway. Each agent's owner may also call
    `revokeAgent` on the old gateway. Users withdraw through the old gateway,
    because `pauseDeposits` never freezes a withdrawal. Old receipts and old
    agent authorizations stay on the old contracts and do not move.
