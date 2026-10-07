@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/16fd0e09ff8c86e2a83df04fbe99e0d46acb8df7/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b15af58af03b5cec83b6e49b77d4fb97b76e2873/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -84,6 +84,22 @@ for later ones. See docs/technical/redeem-gas-1482.md.
 
 ```solidity
 uint256 internal constant REDEEM_GAS_PER_LEG = 1_700_000;
+```
+
+### DEPOSIT_GAS_PER_LEG
+
+<i>
+
+Gas `_depositTo` needs per weighted leg, checked once at entry (core 1482). Same
+reasoning as `REDEEM_GAS_PER_LEG`: each leg must hand `vault.deposit` its
+1_600_000 entry floor after the 63/64 forward, and a per-leg check in the vault
+would run after earlier legs spent accrual-dependent gas. Legs that end up skipped
+still count, so the floor is an upper bound. See docs/technical/redeem-gas-1482.md.
+
+</i>
+
+```solidity
+uint256 internal constant DEPOSIT_GAS_PER_LEG = 1_700_000;
 ```
 
 ## State Variables

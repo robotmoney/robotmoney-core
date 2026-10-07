@@ -433,4 +433,129 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
     function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs() public {
         _includeLater(true, 3);
     }
+
+    // ─── Deposit paths (core 1482): router.deposit, gateway.depositTo(router), gateway.deposit ───
+
+    uint256 internal constant DEPOSIT_AMOUNT = 100 * 1e6;
+
+    /// @dev Weight the router equally over the first `k` vaults.
+    function _weightLegs(uint256 k) internal {
+        address[] memory vs = new address[](k);
+        uint256[] memory bps = new uint256[](k);
+        uint256 used;
+        for (uint256 i = 0; i < k; i++) {
+            vs[i] = vaults[i];
+            bps[i] = i == k - 1 ? 10_000 - used : 10_000 / k;
+            used += bps[i];
+            vm.prank(admin);
+            s.registry.setRouterEligible(vaults[i], true);
+        }
+        vm.prank(admin);
+        s.router.setWeights(vs, bps);
+    }
+
+    /// @dev mode 0 = router.deposit, 1 = gateway.depositTo(router), 2 = gateway.deposit (one vault).
+    function _depositCall(uint256 mode, uint256 gasLimit)
+        internal
+        returns (bool ok, bytes memory ret)
+    {
+        if (mode == 0) {
+            vm.prank(user);
+            (ok, ret) = address(s.router).call{gas: gasLimit}(
+                abi.encodeCall(s.router.deposit, (DEPOSIT_AMOUNT, new uint256[](0)))
+            );
+        } else if (mode == 1) {
+            vm.prank(agent);
+            (ok, ret) = address(s.gateway).call{gas: gasLimit}(
+                abi.encodeCall(
+                    s.gateway.depositTo,
+                    (
+                        bytes32("dep-order"),
+                        DEPOSIT_AMOUNT,
+                        uint64(block.timestamp + 300),
+                        bytes32("dep-idem"),
+                        address(s.router),
+                        new uint256[](0)
+                    )
+                )
+            );
+        } else {
+            vm.prank(agent);
+            (ok, ret) = address(s.gateway).call{gas: gasLimit}(
+                abi.encodeCall(
+                    s.gateway.deposit,
+                    (
+                        bytes32("dep-order"),
+                        DEPOSIT_AMOUNT,
+                        uint64(block.timestamp + 300),
+                        bytes32("dep-idem")
+                    )
+                )
+            );
+        }
+    }
+
+    function _depositEstimate(uint256 mode) internal returns (uint256) {
+        uint256 snap = vm.snapshotState();
+        uint256 lo = 21_000;
+        uint256 hi = 15_000_000;
+        while (lo + 1 < hi) {
+            uint256 mid = (lo + hi) / 2;
+            (bool ok,) = _depositCall(mode, mid);
+            vm.revertToState(snap);
+            snap = vm.snapshotState();
+            if (ok) hi = mid;
+            else lo = mid;
+        }
+        return hi;
+    }
+
+    function _depositIncludeLater(uint256 mode, uint256 k) internal {
+        _weightLegs(k);
+        deal(USDC_BASE, user, 10_000 * 1e6);
+        deal(USDC_BASE, agent, 10_000 * 1e6);
+        vm.prank(user);
+        IERC20(USDC_BASE).approve(address(s.router), type(uint256).max);
+        vm.prank(agent);
+        IERC20(USDC_BASE).approve(address(s.gateway), type(uint256).max);
+        // Accrue every venue in this block: the estimate then runs in the cheap state.
+        vm.prank(user);
+        RobotMoneyVault(vaults[0]).redeem(1e12, user, user);
+        uint256 est = _depositEstimate(mode);
+        vm.warp(block.timestamp + 2);
+        vm.roll(block.number + 1);
+        uint256 g = gasleft();
+        (bool ok, bytes memory ret) = _depositCall(mode, est);
+        uint256 used = g - gasleft();
+        emit log_named_uint("mode", mode);
+        emit log_named_uint("legs", k);
+        emit log_named_uint("deposit estimate in accrued-this-block state", est);
+        emit log_named_uint("gas used one block later", ok ? used : 0);
+        emit log_named_uint("return or revert data length", ret.length);
+        assertTrue(ok, "deposit failed at the estimate one block later");
+    }
+
+    function test_router_deposit_estimateThenIncludeNextBlock_1leg() public {
+        _depositIncludeLater(0, 1);
+    }
+
+    function test_router_deposit_estimateThenIncludeNextBlock_2legs() public {
+        _depositIncludeLater(0, 2);
+    }
+
+    function test_router_deposit_estimateThenIncludeNextBlock_3legs() public {
+        _depositIncludeLater(0, 3);
+    }
+
+    function test_gateway_depositTo_router_estimateThenIncludeNextBlock_1leg() public {
+        _depositIncludeLater(1, 1);
+    }
+
+    function test_gateway_depositTo_router_estimateThenIncludeNextBlock_3legs() public {
+        _depositIncludeLater(1, 3);
+    }
+
+    function test_gateway_deposit_estimateThenIncludeNextBlock() public {
+        _depositIncludeLater(2, 1);
+    }
 }

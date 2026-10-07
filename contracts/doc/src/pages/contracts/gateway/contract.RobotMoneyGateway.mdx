@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/16fd0e09ff8c86e2a83df04fbe99e0d46acb8df7/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b15af58af03b5cec83b6e49b77d4fb97b76e2873/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
 
@@ -62,6 +62,40 @@ uint256 internal constant ROUTER_WITHDRAW_BASE_GAS = 400_000;
 
 ```solidity
 uint256 internal constant ROUTER_WITHDRAW_GAS_PER_LEG = 1_850_000;
+```
+
+### DEPOSIT_GAS_FLOOR
+
+<i>
+
+`deposit` and a vault-destination `depositTo` need this at entry. The vault's deposit
+entry floor is 1_600_000 after the 63/64 forward, and the gateway spends its policy
+reads, window and payment-id writes and the USDC pull before the call.
+
+</i>
+
+```solidity
+uint256 internal constant DEPOSIT_GAS_FLOOR = 2_000_000;
+```
+
+### ROUTER_DEPOSIT_BASE_GAS
+
+<i>
+
+A router-destination `depositTo` needs this fixed part plus
+`ROUTER_DEPOSIT_GAS_PER_LEG` per effective weight leg, checked before the first
+vault call. Per leg the router needs 1_700_000 after the 63/64 forward.
+
+</i>
+
+```solidity
+uint256 internal constant ROUTER_DEPOSIT_BASE_GAS = 400_000;
+```
+
+### ROUTER_DEPOSIT_GAS_PER_LEG
+
+```solidity
+uint256 internal constant ROUTER_DEPOSIT_GAS_PER_LEG = 1_850_000;
 ```
 
 ### WINDOW_SECONDS
@@ -1018,6 +1052,26 @@ function depositTo(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | paymentId | `bytes32` | keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent,<br/>orderId, amount, idempotencyKey)) — op-kind prefix ensures<br/>depositTo ids are disjoint from deposit and withdraw ids. |
+
+<a id="_requiredepositgas-bool"></a>
+
+### _requireDepositGas
+
+<i>
+
+Entry gas floor for `depositTo`. The router floor scales with the effective legs.
+
+</i>
+
+```solidity
+function _requireDepositGas(bool isRouter) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| isRouter | `bool` |  |
 
 <a id="_validatedestination-address-address"></a>
 

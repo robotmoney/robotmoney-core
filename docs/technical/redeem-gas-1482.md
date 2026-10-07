@@ -50,6 +50,16 @@ Gateway (`contracts/gateway/RobotMoneyGateway.sol`):
 - **`withdrawFromRouter`:** checks `ROUTER_WITHDRAW_BASE_GAS + legs * ROUTER_WITHDRAW_GAS_PER_LEG` (400,000 + legs * 1,850,000) at entry, after the array-length checks. Per leg, the router needs 1.7M after the 63/64 forward (about 1,727,000) plus the gateway's share pull, approvals and custody reads for that leg.
 - **Mid-path checks removed:** the checks before `vault.redeem` and `router.redeemFor` are gone.
 
+### Deposit paths
+Deposit has the same defect. On the Base fork, with the deposit entry floor removed, a vault deposit estimated in the accrued-this-block state (1,157,832) fails one block later with an empty revert. The smallest passing limit there is 1,198,732, about 41k higher. The same sequence through `router.deposit`, `gateway.depositTo` to the router and `gateway.deposit` also fails on the unfixed contracts, for 1, 2 and 3 legs.
+
+The same fix applies:
+- **Vault:** `deposit` and `mint` check `DEPOSIT_ENTRY_GAS_FLOOR` = 1,600,000 at entry. The mid-path 400k check before `adpt.deploy` stays. With the entry floor removed it binds at about 1.20M, so 1.6M leaves about 400k of margin.
+- **Router:** `_depositTo` checks `legs * DEPOSIT_GAS_PER_LEG` (1,700,000) at entry, where `legs` is the length of the effective weight vector. Legs that are later skipped still count, so the floor is an upper bound.
+- **Gateway:** `deposit` checks `DEPOSIT_GAS_FLOOR` = 2,000,000 at entry. `depositTo` checks the same floor for a vault destination. For the router it checks `ROUTER_DEPOSIT_BASE_GAS + legs * ROUTER_DEPOSIT_GAS_PER_LEG` (400,000 + legs * 1,850,000), with `legs` read from `router.getEffectiveWeights()`. That read costs the same in every state, and it runs before the first vault call.
+
+Fork tests: `test_fork_deposit_estimateThenIncludeLater` in `RobotMoneyVaultRedeemGas.t.sol` (vault, 2 s, 1 h and 1 day) and the `*_deposit_*` and `*_depositTo_*` cases in `RobotMoneyVaultRedeemGasRootCause.t.sol` (router 1, 2 and 3 legs, gateway to router 1 and 3 legs, gateway single vault).
+
 ### Effect on estimates and cost
 Estimates measured on the fork. Each was executed one block later at exactly that limit, and every run succeeded:
 

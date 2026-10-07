@@ -4,7 +4,7 @@ title: "RobotMoneyVaultRedeemGasForkTest"
 
 # RobotMoneyVaultRedeemGasForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ff779339cf5b6e69f5be1d75f08dd6c9d091c8e0/contracts/test/RobotMoneyVaultRedeemGas.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b15af58af03b5cec83b6e49b77d4fb97b76e2873/contracts/test/RobotMoneyVaultRedeemGas.t.sol)
 
 **Inherits:** Test
 
@@ -126,5 +126,17 @@ function test_fork_withdraw_executesAtExactEstimate() public;
 
 ```solidity
 function test_fork_deposit_executesAtExactEstimate() public;
+```
+
+<a id="test_fork_deposit_estimatethenincludelater"></a>
+
+### test_fork_deposit_estimateThenIncludeLater
+
+The reported defect shape for deposit: estimate in the accrued-this-block state,
+include later at exactly that limit. Venues accrue interest on the first write in
+a later block, so the deposit may cost more than it did at the estimate.
+
+```solidity
+function test_fork_deposit_estimateThenIncludeLater() public;
 ```
 

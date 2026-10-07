@@ -272,4 +272,33 @@ contract RobotMoneyVaultRedeemGasForkTest is Test {
         uint256 est = _estimate(data);
         assertTrue(_try(data, est), "deposit failed at the exact estimate");
     }
+
+    /// @notice The reported defect shape for deposit: estimate in the accrued-this-block state,
+    ///         include later at exactly that limit. Venues accrue interest on the first write in
+    ///         a later block, so the deposit may cost more than it did at the estimate.
+    function test_fork_deposit_estimateThenIncludeLater() public {
+        // Accrue every venue in this block (a tiny deposit writes to the adapters).
+        vm.prank(user);
+        vault.deposit(10 * 1e6, user);
+        bytes memory data = abi.encodeCall(vault.deposit, (100 * 1e6, user));
+        uint256[3] memory gaps = [uint256(2), 1 hours, 1 days];
+        uint256 t0 = block.timestamp;
+        uint256 n0 = block.number;
+        uint256 snap = vm.snapshotState();
+        for (uint256 i = 0; i < gaps.length; i++) {
+            uint256 est = _estimate(data);
+            vm.warp(t0 + gaps[i]);
+            vm.roll(n0 + 1 + gaps[i] / 2);
+            uint256 sharesBefore = vault.balanceOf(user);
+            emit log_named_uint("deposit estimate (accrued state)", est);
+            emit log_named_uint("deposit smallest passing limit later", _estimate(data));
+            assertTrue(_try(data, est), "deposit failed at the estimated limit in a later block");
+            assertGt(vault.balanceOf(user), sharesBefore, "deposit minted no shares");
+
+            vm.revertToState(snap);
+            snap = vm.snapshotState();
+            vm.warp(t0);
+            vm.roll(n0);
+        }
+    }
 }

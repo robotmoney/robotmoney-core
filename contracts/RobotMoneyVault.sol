@@ -350,6 +350,16 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     ///      See docs/technical/redeem-gas-1482.md.
     uint256 internal constant PULL_ENTRY_GAS_FLOOR = 1_600_000;
 
+    /// @dev Gas that must be available at the `deposit`/`mint` entrypoint (core 1482). Same
+    ///      reasoning as `PULL_ENTRY_GAS_FLOOR`: the mid-path `ADAPTER_CALL_GAS_FLOOR` before
+    ///      `adpt.deploy` runs after accrual-dependent work, so the estimate would land on a
+    ///      threshold that moves between estimate and inclusion.
+    ///      Measured on a Base fork, a deposit costs about 41k more in the first block after the
+    ///      venues accrue. With the entry floor removed, the mid-path floor sets the smallest
+    ///      passing limit at about 1.20M in that later block, so 1.6M binds with about 400k to
+    ///      spare. See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant DEPOSIT_ENTRY_GAS_FLOOR = 1_600_000;
+
     function _requireGas(uint256 floor) private view {
         uint256 g = gasleft();
         if (g < floor) revert InsufficientGas(g, floor);
@@ -481,6 +491,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @param receiver Address that receives the minted shares.
     /// @return Shares minted to `receiver`.
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        _requireGas(DEPOSIT_ENTRY_GAS_FLOOR);
         uint256 nav = totalAssets();
         uint256 maxAssets = _maxDepositAt(nav);
         if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
@@ -489,6 +500,16 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             assets.mulDiv(totalSupply() + 10 ** _decimalsOffset(), nav + 1, Math.Rounding.Floor);
         _depositAt(_msgSender(), receiver, assets, shares, nav);
         return shares;
+    }
+
+    /// @notice Mint exactly `shares` to `receiver`, pulling the matching USDC.
+    /// @dev core 1482: same entry gas floor as `deposit`. Share math is the inherited ERC-4626 one.
+    /// @param shares Amount of vault shares to mint.
+    /// @param receiver Address that receives the minted shares.
+    /// @return The amount of USDC pulled from the caller.
+    function mint(uint256 shares, address receiver) public override returns (uint256) {
+        _requireGas(DEPOSIT_ENTRY_GAS_FLOOR);
+        return super.mint(shares, receiver);
     }
 
     /// @dev Reached by `mint()`, which has no cached NAV to offer.

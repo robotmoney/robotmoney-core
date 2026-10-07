@@ -5,7 +5,7 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/16fd0e09ff8c86e2a83df04fbe99e0d46acb8df7/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b15af58af03b5cec83b6e49b77d4fb97b76e2873/contracts/RobotMoneyVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -139,6 +139,25 @@ See docs/technical/redeem-gas-1482.md.
 
 ```solidity
 uint256 internal constant PULL_ENTRY_GAS_FLOOR = 1_600_000;
+```
+
+### DEPOSIT_ENTRY_GAS_FLOOR
+
+<i>
+
+Gas that must be available at the `deposit`/`mint` entrypoint (core 1482). Same
+reasoning as `PULL_ENTRY_GAS_FLOOR`: the mid-path `ADAPTER_CALL_GAS_FLOOR` before
+`adpt.deploy` runs after accrual-dependent work, so the estimate would land on a
+threshold that moves between estimate and inclusion.
+Measured on a Base fork, a deposit costs about 41k more in the first block after the
+venues accrue. With the entry floor removed, the mid-path floor sets the smallest
+passing limit at about 1.20M in that later block, so 1.6M binds with about 400k to
+spare. See docs/technical/redeem-gas-1482.md.
+
+</i>
+
+```solidity
+uint256 internal constant DEPOSIT_ENTRY_GAS_FLOOR = 1_600_000;
 ```
 
 ## State Variables
@@ -503,6 +522,35 @@ function deposit(uint256 assets, address receiver) public override returns (uint
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` | Shares minted to `receiver`. |
+
+<a id="mint-uint256-address"></a>
+
+### mint
+
+Mint exactly `shares` to `receiver`, pulling the matching USDC.
+
+<i>
+
+core 1482: same entry gas floor as `deposit`. Share math is the inherited ERC-4626 one.
+
+</i>
+
+```solidity
+function mint(uint256 shares, address receiver) public override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Amount of vault shares to mint. |
+| receiver | `address` | Address that receives the minted shares. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | The amount of USDC pulled from the caller. |
 
 <a id="_deposit-address-address-uint256-uint256"></a>
 

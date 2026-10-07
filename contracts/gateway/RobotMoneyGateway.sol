@@ -49,6 +49,15 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///      custody reads for that leg.
     uint256 internal constant ROUTER_WITHDRAW_BASE_GAS = 400_000;
     uint256 internal constant ROUTER_WITHDRAW_GAS_PER_LEG = 1_850_000;
+    /// @dev `deposit` and a vault-destination `depositTo` need this at entry. The vault's deposit
+    ///      entry floor is 1_600_000 after the 63/64 forward, and the gateway spends its policy
+    ///      reads, window and payment-id writes and the USDC pull before the call.
+    uint256 internal constant DEPOSIT_GAS_FLOOR = 2_000_000;
+    /// @dev A router-destination `depositTo` needs this fixed part plus
+    ///      `ROUTER_DEPOSIT_GAS_PER_LEG` per effective weight leg, checked before the first
+    ///      vault call. Per leg the router needs 1_700_000 after the 63/64 forward.
+    uint256 internal constant ROUTER_DEPOSIT_BASE_GAS = 400_000;
+    uint256 internal constant ROUTER_DEPOSIT_GAS_PER_LEG = 1_850_000;
 
     /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();
@@ -784,6 +793,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         returns (bytes32 paymentId, uint256 sharesMinted)
     {
         if (_paused) revert PausedError();
+        // Gas guard (core 1482): at entry, before any state-dependent work.
+        if (gasleft() < DEPOSIT_GAS_FLOOR) revert InsufficientGas(gasleft(), DEPOSIT_GAS_FLOOR);
 
         AgentPolicy memory p = agents[msg.sender];
 
@@ -924,6 +935,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             args.maxPerWindow = p.maxPerWindow;
         }
 
+        // Gas guard (core 1482): before any vault call, so the estimate sits on this floor.
+        _requireDepositGas(args.isRouter);
+
         // 5. windowId — used for event emission only; cap is enforced by the
         //    rolling-window accounting below (#497).
         args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
@@ -979,6 +993,16 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         _executeDeposit(args, minSharesPerLeg);
         // slither-disable-end reentrancy-balance
+    }
+
+    /// @dev Entry gas floor for `depositTo`. The router floor scales with the effective legs.
+    function _requireDepositGas(bool isRouter) internal view {
+        uint256 floor = DEPOSIT_GAS_FLOOR;
+        if (isRouter) {
+            (address[] memory legs,) = routerContract.getEffectiveWeights();
+            floor = ROUTER_DEPOSIT_BASE_GAS + legs.length * ROUTER_DEPOSIT_GAS_PER_LEG;
+        }
+        if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
     }
 
     /// @dev Internal args struct to avoid stack-too-deep in `depositTo`.
