@@ -142,7 +142,14 @@ function setupHappyPath({
 
 // Stable public client reference — same object across renders so the
 // useEffect dep array doesn't re-fire on every render cycle.
-const stablePublicClient = { getLogs: mockGetLogs, readContract: mockReadContract };
+// getBlockNumber/getCode feed findDeploymentBlock: the timelock "exists" from block 0, so the
+// whole (tiny) range is one log page.
+const stablePublicClient = {
+  getLogs: mockGetLogs,
+  readContract: mockReadContract,
+  getBlockNumber: async () => 10n,
+  getCode: async () => "0x6001" as const,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();

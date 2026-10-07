@@ -41,6 +41,8 @@ import { decodeFunctionData, keccak256, toBytes, zeroAddress } from "viem";
 import { gatewayAbi } from "../lib/abi";
 import { timelockOperationId } from "../lib/safeProposal";
 import {
+  findDeploymentBlock,
+  scanInPages,
   timelockAbi,
   type TimelockPendingOp,
   type TimelockScheduledCall,
@@ -57,42 +59,42 @@ const DONE_TIMESTAMP = 1n;
 
 // ─── Module-level async helpers ──────────────────────────────────────────────
 
+/** Block range every log scan covers: the timelock's deployment block to the head. */
+type ScanRange = { readonly from: bigint; readonly to: bigint };
+
+type PublicClientLike = NonNullable<ReturnType<typeof usePublicClient>>;
+
+const ROLE_EVENT_INPUTS = [
+  { name: "role", type: "bytes32", indexed: true },
+  { name: "account", type: "address", indexed: true },
+  { name: "sender", type: "address", indexed: true },
+] as const;
+
 async function fetchRoleMembers(
-  publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
+  publicClient: PublicClientLike,
   timelockAddress: Address,
   roleHash: `0x${string}`,
+  range: ScanRange,
 ): Promise<Address[]> {
-  const grantedLogs = await publicClient.getLogs({
-    address: timelockAddress,
-    event: {
-      type: "event",
-      name: "RoleGranted",
-      inputs: [
-        { name: "role", type: "bytes32", indexed: true },
-        { name: "account", type: "address", indexed: true },
-        { name: "sender", type: "address", indexed: true },
-      ],
-    },
-    args: { role: roleHash },
-    fromBlock: 0n,
-    toBlock: "latest",
-  });
+  const grantedLogs = await scanInPages(range, (fromBlock, toBlock) =>
+    publicClient.getLogs({
+      address: timelockAddress,
+      event: { type: "event", name: "RoleGranted", inputs: ROLE_EVENT_INPUTS },
+      args: { role: roleHash },
+      fromBlock,
+      toBlock,
+    }),
+  );
 
-  const revokedLogs = await publicClient.getLogs({
-    address: timelockAddress,
-    event: {
-      type: "event",
-      name: "RoleRevoked",
-      inputs: [
-        { name: "role", type: "bytes32", indexed: true },
-        { name: "account", type: "address", indexed: true },
-        { name: "sender", type: "address", indexed: true },
-      ],
-    },
-    args: { role: roleHash },
-    fromBlock: 0n,
-    toBlock: "latest",
-  });
+  const revokedLogs = await scanInPages(range, (fromBlock, toBlock) =>
+    publicClient.getLogs({
+      address: timelockAddress,
+      event: { type: "event", name: "RoleRevoked", inputs: ROLE_EVENT_INPUTS },
+      args: { role: roleHash },
+      fromBlock,
+      toBlock,
+    }),
+  );
 
   return reconstructRoleMembers(grantedLogs, revokedLogs);
 }
@@ -173,39 +175,44 @@ async function fetchPendingOps(
   publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
   timelockAddress: Address,
   nowSecs: bigint,
+  range: ScanRange,
 ): Promise<TimelockPendingOp[]> {
-  const scheduledLogs = (await publicClient.getLogs({
-    address: timelockAddress,
-    event: {
-      type: "event",
-      name: "CallScheduled",
-      inputs: [
-        { name: "id", type: "bytes32", indexed: true },
-        { name: "index", type: "uint256", indexed: true },
-        { name: "target", type: "address", indexed: false },
-        { name: "value", type: "uint256", indexed: false },
-        { name: "data", type: "bytes", indexed: false },
-        { name: "predecessor", type: "bytes32", indexed: false },
-        { name: "delay", type: "uint256", indexed: false },
-      ],
-    },
-    fromBlock: 0n,
-    toBlock: "latest",
-  })) as unknown as readonly ScheduledLog[];
+  const scheduledLogs = (await scanInPages(range, (fromBlock, toBlock) =>
+    publicClient.getLogs({
+      address: timelockAddress,
+      event: {
+        type: "event",
+        name: "CallScheduled",
+        inputs: [
+          { name: "id", type: "bytes32", indexed: true },
+          { name: "index", type: "uint256", indexed: true },
+          { name: "target", type: "address", indexed: false },
+          { name: "value", type: "uint256", indexed: false },
+          { name: "data", type: "bytes", indexed: false },
+          { name: "predecessor", type: "bytes32", indexed: false },
+          { name: "delay", type: "uint256", indexed: false },
+        ],
+      },
+      fromBlock,
+      toBlock,
+    }),
+  )) as unknown as readonly ScheduledLog[];
 
-  const saltLogs = (await publicClient.getLogs({
-    address: timelockAddress,
-    event: {
-      type: "event",
-      name: "CallSalt",
-      inputs: [
-        { name: "id", type: "bytes32", indexed: true },
-        { name: "salt", type: "bytes32", indexed: false },
-      ],
-    },
-    fromBlock: 0n,
-    toBlock: "latest",
-  })) as unknown as ReadonlyArray<{ args: { id?: Hex; salt?: Hex } }>;
+  const saltLogs = (await scanInPages(range, (fromBlock, toBlock) =>
+    publicClient.getLogs({
+      address: timelockAddress,
+      event: {
+        type: "event",
+        name: "CallSalt",
+        inputs: [
+          { name: "id", type: "bytes32", indexed: true },
+          { name: "salt", type: "bytes32", indexed: false },
+        ],
+      },
+      fromBlock,
+      toBlock,
+    }),
+  )) as unknown as ReadonlyArray<{ args: { id?: Hex; salt?: Hex } }>;
   const saltById = new Map<Hex, Hex>();
   for (const log of saltLogs) {
     if (log.args.id && log.args.salt) saltById.set(log.args.id, log.args.salt);
@@ -296,6 +303,7 @@ function decodeInner(data: Hex): string | undefined {
 async function fetchExecutorPolicy(
   publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
   timelockAddress: Address,
+  range: ScanRange,
 ): Promise<{ policy: "open" | "restricted"; executors: Address[] }> {
   const isOpen = await publicClient.readContract({
     address: timelockAddress,
@@ -308,7 +316,7 @@ async function fetchExecutorPolicy(
     return { policy: "open", executors: [] };
   }
 
-  const executors = await fetchRoleMembers(publicClient, timelockAddress, EXECUTOR_ROLE);
+  const executors = await fetchRoleMembers(publicClient, timelockAddress, EXECUTOR_ROLE, range);
   return { policy: "restricted", executors };
 }
 
@@ -408,11 +416,15 @@ export function TimelockPanel({ timelockAddress, safeAddress, now }: TimelockPan
 
         const nowSecs = BigInt(Math.floor(now / 1000));
 
+        // eth_getLogs is range-limited (500 blocks on many RPCs and on a fork's
+        // upstream), so scan only from the timelock's deployment block, in pages.
+        const range = await findDeploymentBlock(publicClient, timelockAddress);
+
         const [proposers, cancellers, executorInfo, pendingOps] = await Promise.all([
-          fetchRoleMembers(publicClient, timelockAddress, PROPOSER_ROLE),
-          fetchRoleMembers(publicClient, timelockAddress, CANCELLER_ROLE),
-          fetchExecutorPolicy(publicClient, timelockAddress),
-          fetchPendingOps(publicClient, timelockAddress, nowSecs),
+          fetchRoleMembers(publicClient, timelockAddress, PROPOSER_ROLE, range),
+          fetchRoleMembers(publicClient, timelockAddress, CANCELLER_ROLE, range),
+          fetchExecutorPolicy(publicClient, timelockAddress, range),
+          fetchPendingOps(publicClient, timelockAddress, nowSecs, range),
         ]);
 
         setState({
