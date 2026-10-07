@@ -36,11 +36,28 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @param required  The floor that was not met.
     error InsufficientGas(uint256 available, uint256 required);
 
-    /// @dev Gas that must remain before the gateway calls `vault.redeem` or `router.redeemFor`.
-    ///      The router's leg floor is 1_250_000 and the vault's is 1_200_000 (both measured
-    ///      after a 63/64 forward), so the gateway needs about 1_270_000 plus its own tail work.
-    ///      A tunable constant pending the fork measurement in docs/technical/redeem-gas-1482.md.
-    uint256 internal constant WITHDRAW_GAS_FLOOR = 1_300_000;
+    /// @dev Gas `withdraw` needs, checked at entry before any state-dependent work (core 1482).
+    ///      The vault's entry floor is 1_600_000 after the 63/64 forward (about 1_625_400 at the
+    ///      call), and the gateway spends its policy reads, window and payment-id writes and the
+    ///      share pull before the call. A floor checked after that work would move with the
+    ///      state, so eth_estimateGas could land on it and fail at inclusion.
+    ///      See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant WITHDRAW_GAS_FLOOR = 2_000_000;
+    /// @dev `withdrawFromRouter` needs this fixed part plus `ROUTER_WITHDRAW_GAS_PER_LEG` per
+    ///      non-zero leg, checked at entry. Per leg the router needs 1_700_000 after the 63/64
+    ///      forward (about 1_727_000 at the call) plus the gateway's share pull, approvals and
+    ///      custody reads for that leg.
+    uint256 internal constant ROUTER_WITHDRAW_BASE_GAS = 400_000;
+    uint256 internal constant ROUTER_WITHDRAW_GAS_PER_LEG = 1_850_000;
+    /// @dev `deposit` and a vault-destination `depositTo` need this at entry. The vault's deposit
+    ///      entry floor is 1_600_000 after the 63/64 forward, and the gateway spends its policy
+    ///      reads, window and payment-id writes and the USDC pull before the call.
+    uint256 internal constant DEPOSIT_GAS_FLOOR = 2_000_000;
+    /// @dev A router-destination `depositTo` needs this fixed part plus
+    ///      `ROUTER_DEPOSIT_GAS_PER_LEG` per effective weight leg, checked before the first
+    ///      vault call. Per leg the router needs 1_700_000 after the 63/64 forward.
+    uint256 internal constant ROUTER_DEPOSIT_BASE_GAS = 400_000;
+    uint256 internal constant ROUTER_DEPOSIT_GAS_PER_LEG = 1_850_000;
 
     /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();
@@ -776,6 +793,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         returns (bytes32 paymentId, uint256 sharesMinted)
     {
         if (_paused) revert PausedError();
+        // Gas guard (core 1482): at entry, before any state-dependent work.
+        if (gasleft() < DEPOSIT_GAS_FLOOR) revert InsufficientGas(gasleft(), DEPOSIT_GAS_FLOOR);
 
         AgentPolicy memory p = agents[msg.sender];
 
@@ -916,6 +935,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             args.maxPerWindow = p.maxPerWindow;
         }
 
+        // Gas guard (core 1482): before any vault call, so the estimate sits on this floor.
+        _requireDepositGas(args.isRouter);
+
         // 5. windowId — used for event emission only; cap is enforced by the
         //    rolling-window accounting below (#497).
         args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
@@ -971,6 +993,16 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         _executeDeposit(args, minSharesPerLeg);
         // slither-disable-end reentrancy-balance
+    }
+
+    /// @dev Entry gas floor for `depositTo`. The router floor scales with the effective legs.
+    function _requireDepositGas(bool isRouter) internal view {
+        uint256 floor = DEPOSIT_GAS_FLOOR;
+        if (isRouter) {
+            (address[] memory legs,) = routerContract.getEffectiveWeights();
+            floor = ROUTER_DEPOSIT_BASE_GAS + legs.length * ROUTER_DEPOSIT_GAS_PER_LEG;
+        }
+        if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
     }
 
     /// @dev Internal args struct to avoid stack-too-deep in `depositTo`.
@@ -1113,6 +1145,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         bytes32 idempotencyKey
     ) external nonReentrant onlyRole(AGENT_ROLE) returns (bytes32 paymentId, uint256 assetsOut) {
         if (_paused) revert PausedError();
+        // Gas guard (core 1482): at entry, before any state-dependent work.
+        if (gasleft() < WITHDRAW_GAS_FLOOR) revert InsufficientGas(gasleft(), WITHDRAW_GAS_FLOOR);
 
         AgentPolicy memory p = agents[msg.sender];
 
@@ -1196,8 +1230,6 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         uint256 usdcBefore = usdcToken.balanceOf(address(this));
 
         // 12. Call vault.redeem — sends USDC to assetRecipient directly.
-        //     Gas guard (core 1482): a limit too low for the vault fan-out reverts typed.
-        if (gasleft() < WITHDRAW_GAS_FLOOR) revert InsufficientGas(gasleft(), WITHDRAW_GAS_FLOOR);
         assetsOut = IERC4626(sourceVault).redeem(shares, p.assetRecipient, address(this));
 
         // 13. Verify the vault did not leave unexpected USDC in the gateway.
@@ -1280,6 +1312,16 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         //     share vector (GW-5 / F-11). The gateway forwards this floor verbatim
         //     to the router; it no longer fabricates an all-zero vector.
         if (minAssetsPerLeg.length != sharesPerLeg.length) revert RouterLegLengthMismatch();
+
+        // Gas guard (core 1482): one floor at entry, scaled by the non-zero legs.
+        {
+            uint256 legs;
+            for (uint256 i = 0; i < sharesPerLeg.length; i++) {
+                if (sharesPerLeg[i] != 0) legs++;
+            }
+            uint256 floor = ROUTER_WITHDRAW_BASE_GAS + legs * ROUTER_WITHDRAW_GAS_PER_LEG;
+            if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
+        }
 
         // Build args struct early to collapse locals onto the heap.
         RouterWithdrawArgs memory args;
@@ -1577,8 +1619,6 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         //     forwarded verbatim: each non-zero leg reverts `SlippageExceeded`
         //     when realized USDC proceeds fall below the floor. The gateway no
         //     longer fabricates an all-zero floor vector (GW-5 / F-11).
-        //     Gas guard (core 1482): a limit too low for the router and vault fan-out reverts typed.
-        if (gasleft() < WITHDRAW_GAS_FLOOR) revert InsufficientGas(gasleft(), WITHDRAW_GAS_FLOOR);
         assetsPerLeg = routerContract.redeemFor(
             address(this),
             args.assetRecipient,

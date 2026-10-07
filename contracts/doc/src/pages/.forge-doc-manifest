@@ -206,10 +206,12 @@ contracts/test/contract.RedeemGasGuardsTest.mdx
 contracts/test/contract.ReentrantVault.mdx
 contracts/test/contract.RevertingRetireVault.mdx
 contracts/test/contract.RobotMoneyGatewayTest.mdx
+contracts/test/contract.RobotMoneyRouterRedeemGasRootCauseTest.mdx
 contracts/test/contract.RobotMoneyVault4626Conformance.mdx
 contracts/test/contract.RobotMoneyVault4626ConformanceWithFee.mdx
 contracts/test/contract.RobotMoneyVaultRedeemGasForkTest.mdx
 contracts/test/contract.RobotMoneyVaultRedeemGasMechanismTest.mdx
+contracts/test/contract.RobotMoneyVaultRedeemGasRootCauseTest.mdx
 contracts/test/contract.RobotMoneyVaultRedeemGasUnitTest.mdx
 contracts/test/contract.RobotMoneyVaultRouteDepositTest.mdx
 contracts/test/contract.RobotMoneyVaultTest.mdx
@@ -279,8 +281,10 @@ contracts/test/interface.ILendingMinOutSurface.mdx
 contracts/test/interface.IRetireVaultLinks.mdx
 contracts/test/interface.ISafe.mdx
 contracts/test/interface.ISafeProxyFactory.mdx
+contracts/test/interface.IStrat.mdx
 contracts/test/interface.IVaultLinkRead.mdx
 contracts/test/interface._ISafeSetup.mdx
+contracts/test/library.BytecodePatch.mdx
 contracts/test/library.ReferenceTwap.mdx
 contracts/test/vendor/safe-1.4.1/base/abstract.BaseGuard.mdx
 contracts/test/vendor/safe-1.4.1/base/abstract.Executor.mdx

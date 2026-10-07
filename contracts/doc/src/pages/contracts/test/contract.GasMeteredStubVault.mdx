@@ -4,7 +4,7 @@ title: "GasMeteredStubVault"
 
 # GasMeteredStubVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/RedeemGasGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/16fd0e09ff8c86e2a83df04fbe99e0d46acb8df7/contracts/test/RedeemGasGuards.t.sol)
 
 **Inherits:** ERC20
 
@@ -35,6 +35,31 @@ uint256 public redeemCost;
 
 ```solidity
 uint256 public entryGas;
+```
+
+### entryFloor
+
+<i>
+
+Models the real vault: a typed entry floor, and an extra cost paid by the first
+redeem in a new timestamp (interest accrual, about 96k on the Base fork).
+
+</i>
+
+```solidity
+uint256 public entryFloor;
+```
+
+### accrualCost
+
+```solidity
+uint256 public accrualCost;
+```
+
+### lastAccrual
+
+```solidity
+uint256 public lastAccrual;
 ```
 
 ## Functions
@@ -126,6 +151,22 @@ function setRedeemCost(uint256 cost) external;
 | ---- | ---- | ----------- |
 | cost | `uint256` |  |
 
+<a id="setrealistic-uint256-uint256-uint256"></a>
+
+### setRealistic
+
+```solidity
+function setRealistic(uint256 entryFloor_, uint256 cost, uint256 accrualCost_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| entryFloor_ | `uint256` |  |
+| cost | `uint256` |  |
+| accrualCost_ | `uint256` |  |
+
 <a id="retire"></a>
 
 ### retire
@@ -165,4 +206,25 @@ function redeem(uint256 shares, address receiver, address owner)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | assets | `uint256` |  |
+
+## Errors
+
+### InsufficientGas
+
+<i>
+
+Same signature as the real vault's error, so the selector matches.
+
+</i>
+
+```solidity
+error InsufficientGas(uint256 available, uint256 required);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| available | `uint256` |  |
+| required | `uint256` |  |
 

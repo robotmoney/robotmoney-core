@@ -1,0 +1,367 @@
+---
+title: "RobotMoneyRouterRedeemGasRootCauseTest"
+description: "Multi-leg estimate-then-include on the fork (core 1482 review). The core stage stack plus two more vaults built by the same DeployVault script, all on the real Aave, Compound and Moonwell venues. Estimate in the accrued-this-block state, include one block later at exactly that limit, through the router and through the gateway."
+---
+
+# RobotMoneyRouterRedeemGasRootCauseTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b15af58af03b5cec83b6e49b77d4fb97b76e2873/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
+
+**Inherits:** Test
+
+Multi-leg estimate-then-include on the fork (core 1482 review). The core stage stack
+plus two more vaults built by the same DeployVault script, all on the real Aave,
+Compound and Moonwell venues. Estimate in the accrued-this-block state, include one
+block later at exactly that limit, through the router and through the gateway.
+
+## Constants
+
+### USDC_BASE
+
+```solidity
+address internal constant USDC_BASE = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### DEPOSIT_AMOUNT
+
+```solidity
+uint256 internal constant DEPOSIT_AMOUNT = 100 * 1e6;
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("agent");
+```
+
+### shareReceiver
+
+```solidity
+address internal shareReceiver = makeAddr("shareReceiver");
+```
+
+### user
+
+```solidity
+address internal user = makeAddr("routerGasUser");
+```
+
+### s
+
+```solidity
+CoreStages.Stack internal s;
+```
+
+### vaults
+
+```solidity
+address[3] internal vaults;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_fund-address-address-address"></a>
+
+### _fund
+
+```solidity
+function _fund(address holder, address vault, address spender) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| holder | `address` |  |
+| vault | `address` |  |
+| spender | `address` |  |
+
+<a id="_legs-address-uint256"></a>
+
+### _legs
+
+```solidity
+function _legs(address holder, uint256 k)
+        internal
+        view
+        returns (address[] memory vs, uint256[] memory sh);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| holder | `address` |  |
+| k | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vs | `address[]` |  |
+| sh | `uint256[]` |  |
+
+<a id="_call-bool-uint256-uint256"></a>
+
+### _call
+
+```solidity
+function _call(bool viaGateway, uint256 k, uint256 gasLimit)
+        internal
+        returns (bool ok, bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| viaGateway | `bool` |  |
+| k | `uint256` |  |
+| gasLimit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+
+<a id="_estimate-bool-uint256"></a>
+
+### _estimate
+
+```solidity
+function _estimate(bool viaGateway, uint256 k) internal returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| viaGateway | `bool` |  |
+| k | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_includelater-bool-uint256"></a>
+
+### _includeLater
+
+```solidity
+function _includeLater(bool viaGateway, uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| viaGateway | `bool` |  |
+| k | `uint256` |  |
+
+<a id="test_router_estimatethenincludenextblock_1leg"></a>
+
+### test_router_estimateThenIncludeNextBlock_1leg
+
+```solidity
+function test_router_estimateThenIncludeNextBlock_1leg() public;
+```
+
+<a id="test_gateway_withdrawfromrouter_estimatethenincludenextblock_1leg"></a>
+
+### test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_1leg
+
+```solidity
+function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_1leg() public;
+```
+
+<a id="test_router_estimatethenincludenextblock_2legs"></a>
+
+### test_router_estimateThenIncludeNextBlock_2legs
+
+```solidity
+function test_router_estimateThenIncludeNextBlock_2legs() public;
+```
+
+<a id="test_router_estimatethenincludenextblock_3legs"></a>
+
+### test_router_estimateThenIncludeNextBlock_3legs
+
+```solidity
+function test_router_estimateThenIncludeNextBlock_3legs() public;
+```
+
+<a id="test_gateway_withdrawfromrouter_estimatethenincludenextblock_2legs"></a>
+
+### test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_2legs
+
+```solidity
+function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_2legs() public;
+```
+
+<a id="test_gateway_withdrawfromrouter_estimatethenincludenextblock_3legs"></a>
+
+### test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs
+
+```solidity
+function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs() public;
+```
+
+<a id="_weightlegs-uint256"></a>
+
+### _weightLegs
+
+<i>
+
+Weight the router equally over the first `k` vaults.
+
+</i>
+
+```solidity
+function _weightLegs(uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `uint256` |  |
+
+<a id="_depositcall-uint256-uint256"></a>
+
+### _depositCall
+
+<i>
+
+mode 0 = router.deposit, 1 = gateway.depositTo(router), 2 = gateway.deposit (one vault).
+
+</i>
+
+```solidity
+function _depositCall(uint256 mode, uint256 gasLimit)
+        internal
+        returns (bool ok, bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mode | `uint256` |  |
+| gasLimit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+
+<a id="_depositestimate-uint256"></a>
+
+### _depositEstimate
+
+```solidity
+function _depositEstimate(uint256 mode) internal returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mode | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_depositincludelater-uint256-uint256"></a>
+
+### _depositIncludeLater
+
+```solidity
+function _depositIncludeLater(uint256 mode, uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mode | `uint256` |  |
+| k | `uint256` |  |
+
+<a id="test_router_deposit_estimatethenincludenextblock_1leg"></a>
+
+### test_router_deposit_estimateThenIncludeNextBlock_1leg
+
+```solidity
+function test_router_deposit_estimateThenIncludeNextBlock_1leg() public;
+```
+
+<a id="test_router_deposit_estimatethenincludenextblock_2legs"></a>
+
+### test_router_deposit_estimateThenIncludeNextBlock_2legs
+
+```solidity
+function test_router_deposit_estimateThenIncludeNextBlock_2legs() public;
+```
+
+<a id="test_router_deposit_estimatethenincludenextblock_3legs"></a>
+
+### test_router_deposit_estimateThenIncludeNextBlock_3legs
+
+```solidity
+function test_router_deposit_estimateThenIncludeNextBlock_3legs() public;
+```
+
+<a id="test_gateway_depositto_router_estimatethenincludenextblock_1leg"></a>
+
+### test_gateway_depositTo_router_estimateThenIncludeNextBlock_1leg
+
+```solidity
+function test_gateway_depositTo_router_estimateThenIncludeNextBlock_1leg() public;
+```
+
+<a id="test_gateway_depositto_router_estimatethenincludenextblock_3legs"></a>
+
+### test_gateway_depositTo_router_estimateThenIncludeNextBlock_3legs
+
+```solidity
+function test_gateway_depositTo_router_estimateThenIncludeNextBlock_3legs() public;
+```
+
+<a id="test_gateway_deposit_estimatethenincludenextblock"></a>
+
+### test_gateway_deposit_estimateThenIncludeNextBlock
+
+```solidity
+function test_gateway_deposit_estimateThenIncludeNextBlock() public;
+```
+

@@ -91,6 +91,11 @@ contract UnderPullRouter {
         usdc.transferFrom(msg.sender, address(this), amount - 1);
         sharesPerLeg = new uint256[](0);
     }
+
+    /// @dev The gateway reads the leg count for its deposit gas floor (core 1482).
+    function getEffectiveWeights() external pure returns (address[] memory, uint256[] memory) {
+        return (new address[](0), new uint256[](0));
+    }
 }
 
 /// @notice Standalone ERC-4626-shaped vault that leaks one share to the caller

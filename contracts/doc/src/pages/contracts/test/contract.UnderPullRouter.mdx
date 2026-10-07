@@ -5,7 +5,7 @@ description: "Mock router that underpulls USDC during deposit, leaving residual 
 
 # UnderPullRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b15af58af03b5cec83b6e49b77d4fb97b76e2873/contracts/test/GatewayRouter.t.sol)
 
 Mock router that underpulls USDC during deposit, leaving residual USDC
 in the caller (gateway). Used to trigger the router-path USDC custody invariant.
@@ -57,4 +57,25 @@ function depositFor(address, uint256 amount, uint256[] calldata)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | sharesPerLeg | `uint256[]` |  |
+
+<a id="geteffectiveweights"></a>
+
+### getEffectiveWeights
+
+<i>
+
+The gateway reads the leg count for its deposit gas floor (core 1482).
+
+</i>
+
+```solidity
+function getEffectiveWeights() external pure returns (address[] memory, uint256[] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
+| &lt;none&gt; | `uint256[]` |  |
 

@@ -325,22 +325,40 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @param required  The floor that was not met.
     error InsufficientGas(uint256 available, uint256 required);
 
-    // CHANGELOG (core 1482, audit-impact: no change to share accounting or fee math):
+    // CHANGELOG (core 1482, audit-impact: no change to share accounting or fee math; one change
+    // to how a withdrawal is split across adapters):
     //   Added `InsufficientGas` and `_requireGas` guards before each adapter `withdraw`
-    //   in `_pullProportional` (plus an entry floor), on the `redeem`/`withdraw` overrides, before `adpt.deploy` in `_routeDeposit`, and a tail
-    //   reserve before the burn and payout transfers. The guard only reverts earlier,
-    //   with a reason, when the caller supplied too little gas. Floors are tunable
-    //   constants pending fork measurement (see docs/technical/redeem-gas-1482.md).
+    //   in `_pullProportional`, on the `redeem`/`withdraw` overrides (the entry floor, which must
+    //   bind), before `adpt.deploy` in `_routeDeposit`, and a tail reserve before the burn and
+    //   payout transfers. The guard only reverts earlier, with a reason, when the caller supplied
+    //   too little gas. In pass 1 of `_pullProportional` the last counted adapter now takes the
+    //   flooring remainder (still capped at its balance), so pass 2 runs only for a short adapter.
+    //   Total pulled is unchanged; up to a few wei of USDC move from the first adapter with a
+    //   balance to the last one. See docs/technical/redeem-gas-1482.md.
     /// @dev Gas that must remain before an adapter external call (its nested protocol calls
     ///      and the 63/64 forwarding rule need headroom).
     uint256 internal constant ADAPTER_CALL_GAS_FLOOR = 400_000;
     /// @dev Gas that must remain after the last adapter call for burn, fee and payout transfers.
     uint256 internal constant TAIL_GAS_FLOOR = 150_000;
-    /// @dev Gas that must be available when the adapter-sourcing path starts (idle balance
-    ///      does not cover the withdrawal). The path reads every adapter's `totalAssets()`
-    ///      twice (MetaMorpho ~201k each), so it needs well over the per-call floor. Below
-    ///      this the call reverts `InsufficientGas` instead of running out of gas silently.
-    uint256 internal constant PULL_ENTRY_GAS_FLOOR = 1_200_000;
+    /// @dev Gas that must be available at the `redeem`/`withdraw` entrypoint. Below this the call
+    ///      reverts `InsufficientGas` instead of running out of gas. It must be the binding
+    ///      floor: eth_estimateGas returns the smallest passing limit in the estimate-time state,
+    ///      and a floor checked mid-path moves with that state. Measured on a Base fork, a redeem
+    ///      costs about 96k more in the first block after the venues accrue. With the entry
+    ///      floor removed, the mid-path floors set the smallest passing limit at about 1.22M in
+    ///      that later block, so 1.6M binds with about 378k to spare.
+    ///      See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant PULL_ENTRY_GAS_FLOOR = 1_600_000;
+
+    /// @dev Gas that must be available at the `deposit`/`mint` entrypoint (core 1482). Same
+    ///      reasoning as `PULL_ENTRY_GAS_FLOOR`: the mid-path `ADAPTER_CALL_GAS_FLOOR` before
+    ///      `adpt.deploy` runs after accrual-dependent work, so the estimate would land on a
+    ///      threshold that moves between estimate and inclusion.
+    ///      Measured on a Base fork, a deposit costs about 41k more in the first block after the
+    ///      venues accrue. With the entry floor removed, the mid-path floor sets the smallest
+    ///      passing limit at about 1.20M in that later block, so 1.6M binds with about 400k to
+    ///      spare. See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant DEPOSIT_ENTRY_GAS_FLOOR = 1_600_000;
 
     function _requireGas(uint256 floor) private view {
         uint256 g = gasleft();
@@ -473,6 +491,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @param receiver Address that receives the minted shares.
     /// @return Shares minted to `receiver`.
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        _requireGas(DEPOSIT_ENTRY_GAS_FLOOR);
         uint256 nav = totalAssets();
         uint256 maxAssets = _maxDepositAt(nav);
         if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
@@ -481,6 +500,16 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             assets.mulDiv(totalSupply() + 10 ** _decimalsOffset(), nav + 1, Math.Rounding.Floor);
         _depositAt(_msgSender(), receiver, assets, shares, nav);
         return shares;
+    }
+
+    /// @notice Mint exactly `shares` to `receiver`, pulling the matching USDC.
+    /// @dev core 1482: same entry gas floor as `deposit`. Share math is the inherited ERC-4626 one.
+    /// @param shares Amount of vault shares to mint.
+    /// @param receiver Address that receives the minted shares.
+    /// @return The amount of USDC pulled from the caller.
+    function mint(uint256 shares, address receiver) public override returns (uint256) {
+        _requireGas(DEPOSIT_ENTRY_GAS_FLOOR);
+        return super.mint(shares, receiver);
     }
 
     /// @dev Reached by `mint()`, which has no cached NAV to offer.
@@ -832,11 +861,14 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             return assetsNeeded;
         }
 
-        _requireGas(PULL_ENTRY_GAS_FLOOR);
         uint256 totalInAdapters;
         uint256 len = adapters.length;
+        uint256 lastCounted = type(uint256).max;
         for (uint256 i = 0; i < len; i++) {
-            if (_isAdapterCounted(i)) totalInAdapters += adapters[i].adapter.totalAssets();
+            if (_isAdapterCounted(i)) {
+                totalInAdapters += adapters[i].adapter.totalAssets();
+                lastCounted = i;
+            }
         }
 
         // Remaining amount that must come from adapters (after idle covers part of it).
@@ -856,7 +888,11 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             if (!_isAdapterCounted(i)) continue;
             IStrategyAdapter adpt = adapters[i].adapter;
             uint256 adapterBalance = adpt.totalAssets();
-            uint256 pull = (remainingNeeded * adapterBalance) / totalInAdapters;
+            // The last counted adapter takes the rounding remainder (core 1482), so pass 2 runs
+            // only when an adapter is short, not for flooring dust. Each pass-2 pull is one more
+            // adapter call behind a 400k gas floor. Still capped at the adapter's balance (L-2).
+            uint256 pull =
+                i == lastCounted ? remaining : (remainingNeeded * adapterBalance) / totalInAdapters;
             if (pull > remaining) pull = remaining;
             if (pull > adapterBalance) pull = adapterBalance;
             if (pull == 0) continue;

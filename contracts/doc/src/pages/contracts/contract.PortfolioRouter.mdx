@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b15af58af03b5cec83b6e49b77d4fb97b76e2873/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -68,19 +68,38 @@ router-eligibility state are read.
 VaultRegistry public immutable registry;
 ```
 
-### REDEEM_LEG_GAS_FLOOR
+### REDEEM_GAS_PER_LEG
 
 <i>
 
-Gas that must remain before a redeem leg calls `vault.redeem`. The vault's
-own adapter-sourcing floor is 1_200_000 measured after the 63/64 forward,
-so the router needs about 1_219_000 to hand it that much. 1_250_000 adds margin.
-A tunable constant pending the fork measurement in docs/technical/redeem-gas-1482.md.
+Gas `redeemFor` needs per non-zero leg, checked once at entry (core 1482). The floor
+is checked at entry, never per leg: a per-leg check runs after earlier legs spent
+gas that depends on interest-accrual state, so eth_estimateGas would land on a
+threshold that moves between estimate and inclusion. Each leg must hand its vault
+1_600_000 after the 63/64 forward (about 1_625_400) plus its registry and allowance
+reads; a leg's real cost is about 1.11M on a Base fork, so earlier legs leave slack
+for later ones. See docs/technical/redeem-gas-1482.md.
 
 </i>
 
 ```solidity
-uint256 internal constant REDEEM_LEG_GAS_FLOOR = 1_250_000;
+uint256 internal constant REDEEM_GAS_PER_LEG = 1_700_000;
+```
+
+### DEPOSIT_GAS_PER_LEG
+
+<i>
+
+Gas `_depositTo` needs per weighted leg, checked once at entry (core 1482). Same
+reasoning as `REDEEM_GAS_PER_LEG`: each leg must hand `vault.deposit` its
+1_600_000 entry floor after the 63/64 forward, and a per-leg check in the vault
+would run after earlier legs spent accrual-dependent gas. Legs that end up skipped
+still count, so the floor is an upper bound. See docs/technical/redeem-gas-1482.md.
+
+</i>
+
+```solidity
+uint256 internal constant DEPOSIT_GAS_PER_LEG = 1_700_000;
 ```
 
 ## State Variables
