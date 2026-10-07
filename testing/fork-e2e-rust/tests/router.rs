@@ -413,7 +413,7 @@ fn router_deposit_happy_path() {
         minSharesPerLeg: vec![],
     };
     let receipt = deployer
-        .send(router, &deposit_call, U256::ZERO, 1_500_000)
+        .send(router, &deposit_call, U256::ZERO, 4_000_000)
         .expect("router.deposit");
 
     assert_eq!(receipt.status, 1, "router.deposit must succeed");
@@ -569,7 +569,7 @@ fn router_unavailable_leg_skipped_and_renormalised() {
                 minSharesPerLeg: vec![],
             },
             U256::ZERO,
-            1_500_000,
+            4_000_000,
         )
         .expect(
             "router.deposit must succeed when one weighted leg is paused (skip-and-renormalise)",
@@ -702,7 +702,7 @@ fn router_all_legs_unavailable_reverts() {
             minSharesPerLeg: vec![],
         },
         U256::ZERO,
-        1_500_000,
+        4_000_000,
     );
     assert!(
         result.is_err(),
@@ -795,7 +795,7 @@ fn router_cap_exceeded_reverts() {
             minSharesPerLeg: vec![],
         },
         U256::ZERO,
-        1_000_000,
+        2_000_000,
     );
 
     assert!(
@@ -933,7 +933,7 @@ fn agent_gateway_router_deposit() {
                 minSharesPerLeg: vec![],
             },
             U256::ZERO,
-            2_000_000,
+            3_000_000,
         )
         .expect("gateway.depositTo");
 

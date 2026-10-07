@@ -392,7 +392,7 @@ fn agent_withdrawal_happy_path() {
                 idempotencyKey: alloy_primitives::B256::from([2u8; 32]),
             },
             U256::ZERO,
-            800_000,
+            3_000_000,
         )
         .expect("gateway.deposit");
     assert_eq!(deposit_receipt.status, 1, "deposit must succeed");
@@ -562,7 +562,7 @@ fn agent_withdrawal_redirect_blocked() {
                 idempotencyKey: alloy_primitives::B256::from([4u8; 32]),
             },
             U256::ZERO,
-            800_000,
+            3_000_000,
         )
         .expect("gateway.deposit");
 
@@ -680,7 +680,7 @@ fn agent_withdrawal_window_cap() {
                 idempotencyKey: alloy_primitives::B256::from([6u8; 32]),
             },
             U256::ZERO,
-            800_000,
+            3_000_000,
         )
         .expect("gateway.deposit");
 
@@ -975,7 +975,7 @@ fn router_withdrawal() {
                 minSharesPerLeg: vec![],
             },
             U256::ZERO,
-            1_500_000,
+            5_000_000,
         )
         .expect("gateway.depositTo(router)");
     assert_eq!(deposit_receipt.status, 1, "depositTo must succeed");

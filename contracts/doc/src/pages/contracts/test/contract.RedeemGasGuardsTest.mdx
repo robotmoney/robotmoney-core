@@ -4,7 +4,7 @@ title: "RedeemGasGuardsTest"
 
 # RedeemGasGuardsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/16fd0e09ff8c86e2a83df04fbe99e0d46acb8df7/contracts/test/RedeemGasGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/8e9675f5e9d60f7a67ec591afeb0d1b3c42f42fc/contracts/test/RedeemGasGuards.t.sol)
 
 **Inherits:** Test
 
@@ -528,4 +528,48 @@ function _slice(bytes memory ret) internal pure returns (bytes memory out);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | out | `bytes` |  |
+
+<a id="_weigh-uint256"></a>
+
+### _weigh
+
+<i>
+
+Weight the router equally over the first `k` stub vaults.
+
+</i>
+
+```solidity
+function _weigh(uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `uint256` |  |
+
+<a id="test_router_deposit_belowfloor_scaleswithweightedlegs"></a>
+
+### test_router_deposit_belowFloor_scalesWithWeightedLegs
+
+```solidity
+function test_router_deposit_belowFloor_scalesWithWeightedLegs() public;
+```
+
+<a id="test_gateway_deposit_belowfloor_revertsinsufficientgas"></a>
+
+### test_gateway_deposit_belowFloor_revertsInsufficientGas
+
+```solidity
+function test_gateway_deposit_belowFloor_revertsInsufficientGas() public;
+```
+
+<a id="test_gateway_depositto_router_belowfloor_scaleswithweightedlegs"></a>
+
+### test_gateway_depositTo_router_belowFloor_scalesWithWeightedLegs
+
+```solidity
+function test_gateway_depositTo_router_belowFloor_scalesWithWeightedLegs() public;
+```
 

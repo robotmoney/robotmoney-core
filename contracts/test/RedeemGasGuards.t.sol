@@ -485,4 +485,80 @@ contract RedeemGasGuardsTest is Test {
             out[i] = ret[i + 4];
         }
     }
+
+    // --- deposit entry floors (core 1482) ----------------------------------------------------
+
+    /// @dev Weight the router equally over the first `k` stub vaults.
+    function _weigh(uint256 k) internal {
+        GasMeteredStubVault[3] memory all = [vault, vault2, vault3];
+        address[] memory vs = new address[](k);
+        uint256[] memory bps = new uint256[](k);
+        uint256 used;
+        for (uint256 i = 0; i < k; i++) {
+            vs[i] = address(all[i]);
+            bps[i] = i == k - 1 ? 10_000 - used : 10_000 / k;
+            used += bps[i];
+            vm.prank(admin);
+            registry.setRouterEligible(vs[i], true);
+        }
+        vm.prank(admin);
+        router.setWeights(vs, bps);
+    }
+
+    function test_router_deposit_belowFloor_scalesWithWeightedLegs() public {
+        for (uint256 k = 1; k <= 3; k++) {
+            _weigh(k);
+            address alice = makeAddr("alice");
+            vm.prank(alice);
+            (bool ok, bytes memory ret) = address(router).call{gas: 900_000}(
+                abi.encodeCall(router.deposit, (10 * ONE, new uint256[](0)))
+            );
+            assertFalse(ok);
+            assertEq(
+                _sel(ret), PortfolioRouter.InsufficientGas.selector, "expected InsufficientGas"
+            );
+            (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
+            assertEq(required, k * ROUTER_PER_LEG, "router deposit floor per weighted leg");
+        }
+    }
+
+    function test_gateway_deposit_belowFloor_revertsInsufficientGas() public {
+        vm.prank(agent);
+        (bool ok, bytes memory ret) = address(gateway).call{gas: 900_000}(
+            abi.encodeCall(
+                gateway.deposit,
+                (bytes32(uint256(5)), 10 * ONE, uint64(block.timestamp + 60), bytes32(uint256(5)))
+            )
+        );
+        assertFalse(ok);
+        assertEq(_sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas");
+        (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
+        assertEq(required, GATEWAY_WITHDRAW, "gateway deposit floor");
+    }
+
+    function test_gateway_depositTo_router_belowFloor_scalesWithWeightedLegs() public {
+        for (uint256 k = 1; k <= 3; k++) {
+            _weigh(k);
+            vm.prank(agent);
+            (bool ok, bytes memory ret) = address(gateway).call{gas: 900_000}(
+                abi.encodeCall(
+                    gateway.depositTo,
+                    (
+                        bytes32(uint256(6)),
+                        10 * ONE,
+                        uint64(block.timestamp + 60),
+                        bytes32(uint256(6)),
+                        address(router),
+                        new uint256[](0)
+                    )
+                )
+            );
+            assertFalse(ok);
+            assertEq(
+                _sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas"
+            );
+            (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
+            assertEq(required, 400_000 + k * GATEWAY_ROUTER_PER_LEG, "gateway deposit router floor");
+        }
+    }
 }
