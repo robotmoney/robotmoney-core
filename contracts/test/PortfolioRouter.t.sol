@@ -355,6 +355,27 @@ contract PortfolioRouterTest is Test {
         router.setWeights(vaults, bps);
     }
 
+    /// @notice WEIGHT_SETTER_ROLE is its own role admin, so the timelock (ADMIN_ROLE
+    ///         only) cannot grant itself the role, and a granted setter cannot be
+    ///         escalated by an ADMIN_ROLE holder. Closes the self-grant loophole.
+    function test_timelock_cannotGrantItselfWeightSetterRole() public {
+        address timelock = makeAddr("timelock");
+        bytes32 setterRole = router.WEIGHT_SETTER_ROLE();
+        assertEq(router.getRoleAdmin(setterRole), setterRole);
+        vm.startPrank(admin);
+        router.grantRole(router.ADMIN_ROLE(), timelock);
+        router.revokeRole(setterRole, admin);
+        vm.stopPrank();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, timelock, setterRole
+            )
+        );
+        vm.prank(timelock);
+        router.grantRole(setterRole, timelock);
+        assertFalse(router.hasRole(setterRole, timelock));
+    }
+
     /// @notice The Safe holds no router role: it reaches the router only through the timelock.
     function test_setWeights_revertsForSafe() public {
         address safe = makeAddr("safe");

@@ -4,7 +4,7 @@ title: "PortfolioRouterTest"
 
 # PortfolioRouterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cedbfcdfb3487fb7d6e49ade987ea664a7113b8f/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7108b70cd9026b3c48f652fd02739362e4c14ef1/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:** Test
 
@@ -224,6 +224,18 @@ The timelock holds ADMIN_ROLE and still cannot set active weights.
 
 ```solidity
 function test_setWeights_revertsForTimelock() public;
+```
+
+<a id="test_timelock_cannotgrantitselfweightsetterrole"></a>
+
+### test_timelock_cannotGrantItselfWeightSetterRole
+
+WEIGHT_SETTER_ROLE is its own role admin, so the timelock (ADMIN_ROLE
+only) cannot grant itself the role, and a granted setter cannot be
+escalated by an ADMIN_ROLE holder. Closes the self-grant loophole.
+
+```solidity
+function test_timelock_cannotGrantItselfWeightSetterRole() public;
 ```
 
 <a id="test_setweights_revertsforsafe"></a>

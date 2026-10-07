@@ -243,6 +243,9 @@ in the weight-update path.
 > (`DeployTimelock.s.sol`) grants the TimelockController `ADMIN_ROLE` only, which
 > reaches `setDefaultWeights` and `clearVotedWeights`. A direct `setWeights` from
 > the timelock reverts, so active weights come only from RouterGovernance votes.
+> `WEIGHT_SETTER_ROLE` is its own role admin. `ADMIN_ROLE` is not its admin, so the
+> timelock cannot grant itself the role through a scheduled operation. The cost is
+> that RouterGovernance cannot be rotated without a router redeploy.
 
 **Constraint.** `RouterGovernance.sol` must call `setWeights` only from its
 `execute(proposalId)` function. No other function on the governance contract may

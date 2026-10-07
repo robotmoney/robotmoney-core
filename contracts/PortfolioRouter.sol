@@ -52,7 +52,8 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///         execution delay. The timelock keeps `ADMIN_ROLE` and reaches
     ///         `setDefaultWeights` and `clearVotedWeights` only. The constructor
     ///         seeds the role to `_admin` so the router deploy stage can write
-    ///         the initial weights. The governance deploy stage revokes it.
+    ///         the initial weights. The governance deploy stage revokes it. The role is its
+    ///         own role admin, so no `ADMIN_ROLE` holder can grant it.
     bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 
     // ─── Constants ───────────────────────────────────────────────────────────
@@ -320,7 +321,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, _admin);
-        _setRoleAdmin(WEIGHT_SETTER_ROLE, ADMIN_ROLE);
+        _setRoleAdmin(WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROLE);
         _grantRole(WEIGHT_SETTER_ROLE, _admin);
     }
 

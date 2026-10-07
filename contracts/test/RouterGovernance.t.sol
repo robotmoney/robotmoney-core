@@ -701,8 +701,9 @@ contract RouterGovernanceTest is Test {
 
     function test_execute_revertsWhenGovernanceLacksWeightSetterRole() public {
         bytes32 role = router.WEIGHT_SETTER_ROLE();
-        vm.prank(routerAdmin);
-        router.revokeRole(role, address(gov));
+        // The role is self-administered, so only the holder can drop it.
+        vm.prank(address(gov));
+        router.renounceRole(role, address(gov));
 
         uint256 pid = _proposeValid();
         vm.prank(alice);
@@ -1011,7 +1012,6 @@ contract RouterGovernanceTest is Test {
         // Grant minGov ADMIN_ROLE on the router.
         vm.startPrank(routerAdmin);
         router.grantRole(router.ADMIN_ROLE(), address(minGov));
-        router.grantRole(router.WEIGHT_SETTER_ROLE(), address(minGov));
         vm.stopPrank();
 
         // Grant voting power via govAdmin on minGov.
