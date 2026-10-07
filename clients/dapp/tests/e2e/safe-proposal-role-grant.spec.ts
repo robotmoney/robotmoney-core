@@ -178,7 +178,6 @@ test.describe("Safe -> Timelock proposal from the dapp admin tabs", () => {
 
   test("schedules a DEPOSIT_PAUSER_ROLE grant with two owner signatures, then executes it through the Safe", async ({
     page,
-    context,
     browser,
   }) => {
     test.setTimeout(20 * 60 * 1000);
@@ -277,7 +276,10 @@ test.describe("Safe -> Timelock proposal from the dapp admin tabs", () => {
 
     // ── 4. The dapp's execute proposal, signed by owners A and B ────────────
     const execPrefix = `timelock-exec-${operationId}`;
-    const pageA = await context.newPage();
+    // A fresh context per wallet: the first page's context already remembers owner A's
+    // wagmi connection, so a second page there would reconnect instead of showing Connect.
+    const ctxA = await browser.newContext();
+    const pageA = await ctxA.newPage();
     await openDapp(pageA, endpoints, { privateKey: ownerA.privateKey });
     await openTab(pageA, "timelock");
     const prepareA = pageA.getByTestId(`timelock-op-execute-${operationId}`);
@@ -338,7 +340,8 @@ test.describe("Safe -> Timelock proposal from the dapp admin tabs", () => {
       }),
     ).toBe(true);
 
-    const holderPage = await context.newPage();
+    const ctxHolder = await browser.newContext();
+    const holderPage = await ctxHolder.newPage();
     await openDapp(holderPage, endpoints, { privateKey: holderKey });
     await openTab(holderPage, "pause");
     await expect(holderPage.getByTestId("pause-role-status")).toContainText("yes", {
