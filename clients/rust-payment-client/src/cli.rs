@@ -399,10 +399,12 @@ pub enum Command {
         /// Maximum seconds to wait for the receipt. Default 60.
         #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
         receipt_timeout_secs: u64,
-        /// Gas limit for the withdraw-router tx. Default 750_000 (covers
-        /// N-leg vault redemption with cold storage writes).
-        #[arg(long = "gas-limit", default_value_t = 750_000)]
-        gas_limit: u64,
+        /// Gas limit for the withdraw-router tx. When omitted the client
+        /// derives it from the gateway entry floor (400_000 + 1_850_000 per
+        /// leg) plus a margin, so the default is never below the floor
+        /// (issue #1512).
+        #[arg(long = "gas-limit")]
+        gas_limit: Option<u64>,
         /// Optional override for `max_fee_per_gas_cap` in wei.
         #[arg(long = "fee-cap")]
         fee_cap: Option<u64>,
