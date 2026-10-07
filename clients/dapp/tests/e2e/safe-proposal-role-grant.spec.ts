@@ -124,10 +124,13 @@ test.describe("Safe -> Timelock proposal from the dapp admin tabs", () => {
     await expect(button).toBeEnabled({ timeout: 90_000 });
     await expect(button).toHaveText("Create Safe proposal");
 
-    await expect(page.getByTestId("grant-pauser-safe-address")).toHaveText(endpoints.safe_addr);
+    // The harness prints lowercase addresses; the dapp renders EIP-55 checksummed ones.
+    await expect(page.getByTestId("grant-pauser-safe-address")).toHaveText(
+      new RegExp(`^${endpoints.safe_addr}$`, "i"),
+    );
     await expect(page.getByTestId("grant-pauser-safe-threshold")).toHaveText("2 of 3");
     await expect(page.getByTestId("grant-pauser-timelock-address")).toHaveText(
-      endpoints.timelock_addr,
+      new RegExp(`^${endpoints.timelock_addr}$`, "i"),
     );
     const minDelay = await chain.readContract({
       address: endpoints.timelock_addr as Address,
