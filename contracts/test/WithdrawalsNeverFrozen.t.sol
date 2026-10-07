@@ -127,6 +127,9 @@ contract WithdrawalsNeverFrozenTest is Test {
         vaults[1] = address(rmProto);
         vaults[2] = address(rmAgent);
         vaults[3] = address(rmRwa);
+        // Read the owners first: an external call between prank and the script call would consume the prank.
+        DeployTimelock.SafeSpec memory spec =
+            DeployTimelock.SafeSpec({owners: safe.getOwners(), threshold: 2});
         vm.prank(deployer);
         DeployTimelock.Deployed memory d = script.runInProcessVaults(
             vaults,
@@ -137,7 +140,7 @@ contract WithdrawalsNeverFrozenTest is Test {
             address(safe),
             emergency,
             MIN_DELAY,
-            DeployTimelock.SafeSpec({owners: safe.getOwners(), threshold: 2})
+            spec
         );
         timelock = d.timelock;
         address[3] memory others = _others();
