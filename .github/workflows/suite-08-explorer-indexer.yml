@@ -100,6 +100,12 @@ jobs:
         working-directory: services/explorer-indexer
         run: cargo test --lib -- abi::tests::abi_drift_gate --nocapture
 
+      # Vault risk_label classifier (issue 1566). Fails if zero tests ran.
+      - name: Vault risk_label classifier lib tests
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --lib -- indexer::tests::risk_label --nocapture
+
       # MIGRATIONS + BOOT SCHEMA GUARD (issues #1359, #1392, #1429)
       # tests/migrations.rs covers the schema itself, the `--migrate-only` CLI,
       # and (issues #1392, #1429) the boot-time refusal to run against a schema
