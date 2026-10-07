@@ -224,10 +224,10 @@ jobs:
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
 
       # Issue #469: derive the SHARE_RECEIVER from Anvil's funded accounts (the deployer and the other roles
-      # are throwaway keystores made by the twin-publish action), but DO NOT pre-bake AGENT_ADDRESS from an Anvil account.
+      # are throwaway keystores made by the twin-publish action), but DO NOT pre-bake the agent from an Anvil account.
       # The agent EOA is generated fresh in a later step and that generated
-      # address is what the gateway stage authorizes — this is the proof that the
-      # entire onboarding path (key generation -> authorizeAgent -> deposit)
+      # address is what the depositor authorizes after the deploy — this is the proof that the
+      # entire onboarding path (key generation -> commit and reveal -> deposit)
       # works against a single identity.
       - name: Derive the share receiver from Anvil accounts
         run: |
@@ -249,7 +249,7 @@ jobs:
       #      passphrase under RMPC_KEYSTORE_PASSPHRASE.
       #   3. Run rmpc-keystore-import with the desired keystore path as
       #      argv[1] and capture the printed address from stdout.
-      #   4. Persist the captured address as AGENT_ADDRESS so the gateway stage
+      #   4. Persist the captured address as AGENT_ADDRESS so the depositor
       #      authorizes THIS key (not a pre-baked Anvil account).
       # A non-empty 0x[0-9a-fA-F]{40} address and an existing keystore file
       # are both required; either being missing fails the step.
@@ -305,25 +305,24 @@ jobs:
           echo "::add-mask::$AGENT_PRIVKEY"
           echo "AGENT_PRIVKEY=$AGENT_PRIVKEY" >> $GITHUB_ENV
 
-      - name: Deploy contracts on the Twin chain (authorizes generated agent)
+      - name: Deploy contracts on the Twin chain (authorizes no agent)
         # The one deploy driver (bun publish-contracts/src/cli.ts publish): libs through the timelock handover
         # and the real Safe, with the three real Aave/Compound/Morpho adapters against the Twin chain (real
-        # protocol storage is present). The sheet's AGENT_ADDRESS is the generated key, so the gateway stage
-        # authorizes it. After the timelock stage the timelock owns the agent.
+        # protocol storage is present). The deploy authorizes no agent: the next steps have the depositor
+        # (the share receiver) authorize the generated key through commitAuthorization and revealAuthorization.
         uses: ./.github/actions/twin-publish
         with:
-          agent-address: ${{ env.AGENT_ADDRESS }}
           share-receiver-address: ${{ env.SHARE_RECEIVER_ADDRESS }}
 
-      # Issue #469 acceptance criterion: assert ON-CHAIN that
-      # gateway.authorizeAgent has actually been called for the
-      # freshly-generated key, BEFORE any deposit is attempted. Reads
-      # agentOwner(generatedKey) and hasRole(AGENT_ROLE, generatedKey)
-      # directly from the gateway with `cast call`. Either check missing
-      # fails the job — proving the create-key -> authorize path is real.
-      - name: Assert generated agent is authorized on-chain
+      # The deploy authorizes no agent (core 1527; architecture 5.2 and 6.3). Read the stage manifests, assert
+      # on-chain that the generated key holds no authorization yet, then have the depositor (the share
+      # receiver, an unlocked Anvil account) authorize it the way any depositor does: commitAuthorization,
+      # then revealAuthorization in a later block. Finally assert agentOwner and AGENT_ROLE (issue #469: the
+      # create-key -> authorize path is real, before any deposit is attempted).
+      - name: Depositor authorizes the generated agent on-chain
         run: |
           set -euo pipefail
+          RPC=http://127.0.0.1:8545
           for f in gateway vault timelock; do
             if [ ! -f "$TWIN_MANIFEST_DIR/$f.json" ]; then
               echo "FAIL: stage manifest $f.json not found in $TWIN_MANIFEST_DIR" >&2
@@ -336,29 +335,42 @@ jobs:
           echo "VAULT_ADDRESS=$VAULT" >> $GITHUB_ENV
           GATEWAY_RUNTIME_HASH=$(jq -r '.gateway_runtime_hash' "$TWIN_MANIFEST_DIR/gateway.json")
           echo "GATEWAY_RUNTIME_HASH=$GATEWAY_RUNTIME_HASH" >> $GITHUB_ENV
-          PARENT_ADDRESS=$(jq -r '.timelock' "$TWIN_MANIFEST_DIR/timelock.json")
+          AGENT_ROLE=$(cast call "$GATEWAY" "AGENT_ROLE()(bytes32)" --rpc-url "$RPC")
 
-          # 1. agentOwner(generatedKey) must equal the timelock: the deployer authorized it, then the timelock stage handed it over.
-          OWNER_RAW=$(cast call "$GATEWAY" "agentOwner(address)(address)" "$AGENT_ADDRESS" \
-            --rpc-url http://127.0.0.1:8545)
-          OWNER="${OWNER_RAW,,}"
-          PARENT="${PARENT_ADDRESS,,}"
-          if [ "$OWNER" != "$PARENT" ]; then
-            echo "FAIL: agentOwner($AGENT_ADDRESS) = $OWNER_RAW, expected $PARENT_ADDRESS" >&2
+          # 1. The deploy authorized nothing: the generated key has no owner and no AGENT_ROLE.
+          OWNER_RAW=$(cast call "$GATEWAY" "agentOwner(address)(address)" "$AGENT_ADDRESS" --rpc-url "$RPC")
+          if [ "${OWNER_RAW,,}" != "0x0000000000000000000000000000000000000000" ]; then
+            echo "FAIL: agentOwner($AGENT_ADDRESS) = $OWNER_RAW before the depositor authorized it" >&2
             exit 1
           fi
-          # 2. hasRole(AGENT_ROLE, generatedKey) must be true. AGENT_ROLE is
-          #    keccak256("AGENT_ROLE") = 0xa9c1...; query the constant from
-          #    the deployed gateway to stay drift-proof.
-          AGENT_ROLE=$(cast call "$GATEWAY" "AGENT_ROLE()(bytes32)" \
-            --rpc-url http://127.0.0.1:8545)
-          HAS_ROLE=$(cast call "$GATEWAY" "hasRole(bytes32,address)(bool)" \
-            "$AGENT_ROLE" "$AGENT_ADDRESS" --rpc-url http://127.0.0.1:8545)
+          HAS_ROLE=$(cast call "$GATEWAY" "hasRole(bytes32,address)(bool)" "$AGENT_ROLE" "$AGENT_ADDRESS" --rpc-url "$RPC")
+          if [ "$HAS_ROLE" != "false" ]; then
+            echo "FAIL: hasRole(AGENT_ROLE, $AGENT_ADDRESS) = $HAS_ROLE before the depositor authorized it" >&2
+            exit 1
+          fi
+
+          # 2. The depositor commits, then reveals in a later block (Anvil mines a block per transaction).
+          DEPOSITOR="$SHARE_RECEIVER_ADDRESS"
+          SALT=$(cast keccak "suite-11b depositor agent authorization")
+          COMMIT=$(cast keccak "$(cast abi-encode 'f(address,address,bytes32)' "$AGENT_ADDRESS" "$DEPOSITOR" "$SALT")")
+          cast send "$GATEWAY" "commitAuthorization(bytes32)" "$COMMIT" --unlocked --from "$DEPOSITOR" --rpc-url "$RPC"
+          POLICY="(true,4102444800,10000000000,100000000000,$DEPOSITOR,[],$DEPOSITOR,10000000000,100000000000,[])"
+          cast send "$GATEWAY" \
+            "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))" \
+            "$AGENT_ADDRESS" "$SALT" "$POLICY" --unlocked --from "$DEPOSITOR" --rpc-url "$RPC"
+
+          # 3. agentOwner is the depositor and the agent holds AGENT_ROLE.
+          OWNER_RAW=$(cast call "$GATEWAY" "agentOwner(address)(address)" "$AGENT_ADDRESS" --rpc-url "$RPC")
+          if [ "${OWNER_RAW,,}" != "${DEPOSITOR,,}" ]; then
+            echo "FAIL: agentOwner($AGENT_ADDRESS) = $OWNER_RAW, expected the depositor $DEPOSITOR" >&2
+            exit 1
+          fi
+          HAS_ROLE=$(cast call "$GATEWAY" "hasRole(bytes32,address)(bool)" "$AGENT_ROLE" "$AGENT_ADDRESS" --rpc-url "$RPC")
           if [ "$HAS_ROLE" != "true" ]; then
-            echo "FAIL: hasRole(AGENT_ROLE, $AGENT_ADDRESS) = $HAS_ROLE" >&2
+            echo "FAIL: hasRole(AGENT_ROLE, $AGENT_ADDRESS) = $HAS_ROLE after the reveal" >&2
             exit 1
           fi
-          echo "OK: generated agent $AGENT_ADDRESS is owned by the timelock $PARENT_ADDRESS and holds AGENT_ROLE"
+          echo "OK: generated agent $AGENT_ADDRESS is owned by the depositor $DEPOSITOR and holds AGENT_ROLE"
 
       # Approve the gateway to pull the agent's USDC, signed by the generated
       # agent key. rmpc's deposit preflight (§4.4) hard-refuses when
@@ -564,7 +576,6 @@ jobs:
         # Aave/Compound/Morpho adapters against the Twin chain (real protocol storage is present).
         uses: ./.github/actions/twin-publish
         with:
-          agent-address: ${{ env.AGENT_ADDRESS }}
           share-receiver-address: ${{ env.SHARE_RECEIVER_ADDRESS }}
 
       - name: Read-only isolation assertions

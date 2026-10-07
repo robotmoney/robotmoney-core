@@ -2846,7 +2846,7 @@ contract GatewayRouterSplitStagesForkTest is Test {
         DeployGateway gw = stages.gatewayScript();
         vm.expectRevert(bytes("ROUTER_ADDRESS=0"));
         gw.runInProcessWith(
-            admin, pauser, agent, shareReceiver, address(token), address(s.vault), address(0)
+            admin, pauser, shareReceiver, address(token), address(s.vault), address(0)
         );
     }
 }

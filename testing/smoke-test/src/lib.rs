@@ -52,8 +52,19 @@ pub const PAUSER_PRIVATE_KEY_HEX: &str =
     "0x53321db7c1e331d93a11a41d16f004d7ff63972ec8ec7c25db329728ceeb1710";
 pub const PAUSER_ADDRESS_HEX: &str = "0x614561D2d143621E126e87831AEF287678B442b8";
 
-/// EOA registered as the vault share receiver (funded with gas at boot).
-pub const SHARE_RECEIVER_ADDRESS_HEX: &str = "0x1CBd3b2770909D4e10f157cABC84C7264073C9Ec";
+/// The test depositor: the EOA registered as the vault share receiver (funded with gas at boot). It
+/// authorizes the harness agent the way a depositor does, through commitAuthorization and
+/// revealAuthorization (the deploy authorizes no agent, core 1527). Test-only, never use on a real chain.
+pub const SHARE_RECEIVER_PRIVATE_KEY_HEX: &str =
+    "0x933674982877bf1253a5009559b380ddf0eadaa9bd1938d08074ba9c8a8be893";
+/// Address derived from [`SHARE_RECEIVER_PRIVATE_KEY_HEX`].
+pub const SHARE_RECEIVER_ADDRESS_HEX: &str = "0x5662f34e72De59CCAB95Ec7Ed0e1D1895D5fA7DD";
+
+/// Default policy caps (USDC base units) of the agent the test depositor authorizes after the deploy:
+/// per payment 10_000 USDC, per window 100_000 USDC.
+pub const DEFAULT_AGENT_MAX_PER_PAYMENT: u128 = 10_000 * 1_000_000;
+/// See [`DEFAULT_AGENT_MAX_PER_PAYMENT`].
+pub const DEFAULT_AGENT_MAX_PER_WINDOW: u128 = 100_000 * 1_000_000;
 
 /// Harness USDC holder — the clean-history EOA that receives a USDC balance grant at boot
 /// (the Twin chain environment step "fund USDC", a write to the real FiatToken balance slot). See
@@ -462,8 +473,26 @@ impl Fixture {
     }
 
     /// Like [`Self::new`] but passes allow-listed sheet parameter overrides to publish contracts.
-    /// Used to override deploy-time parameters (e.g. `AGENT_MAX_PER_WINDOW`).
+    /// Used to override deploy-time parameters. `AGENT_MAX_PER_PAYMENT` and `AGENT_MAX_PER_WINDOW` are not
+    /// sheet keys (the deploy authorizes no agent): they set the caps of the policy the test depositor
+    /// authorizes for the harness agent after the deploy.
     pub fn with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
+        let cap = |name: &str, default: u128| -> Result<u128, HarnessError> {
+            match extra_deploy_env.iter().find(|(k, _)| *k == name) {
+                Some((_, v)) => v
+                    .parse::<u128>()
+                    .map_err(|e| HarnessError::other(format!("{name}={v} is not a number: {e}"))),
+                None => Ok(default),
+            }
+        };
+        let agent_max_per_payment = cap("AGENT_MAX_PER_PAYMENT", DEFAULT_AGENT_MAX_PER_PAYMENT)?;
+        let agent_max_per_window = cap("AGENT_MAX_PER_WINDOW", DEFAULT_AGENT_MAX_PER_WINDOW)?;
+        let sheet_env: Vec<(&str, &str)> = extra_deploy_env
+            .iter()
+            .filter(|(k, _)| !k.starts_with("AGENT_"))
+            .copied()
+            .collect();
+        let extra_deploy_env = sheet_env.as_slice();
         for tool in ["anvil", "forge", "cast", "bun"] {
             if which::which(tool).is_err() {
                 return Err(HarnessError::FoundryMissing(tool));
@@ -544,7 +573,6 @@ impl Fixture {
         let mut identity = keys.fragment.clone();
         identity.insert("CHAIN_ID".into(), publish::TWIN_CHAIN_ID.to_string());
         identity.insert("PAUSER_ADDRESS".into(), PAUSER_ADDRESS_HEX.to_string());
-        identity.insert("AGENT_ADDRESS".into(), agent_hex.clone());
         identity.insert(
             "SHARE_RECEIVER_ADDRESS".into(),
             SHARE_RECEIVER_ADDRESS_HEX.to_string(),
@@ -578,6 +606,16 @@ impl Fixture {
             repo_root,
             nonce_tracker,
         };
+
+        // The deploy authorized no agent. The test depositor authorizes the harness agent the way any depositor
+        // does: commitAuthorization, then revealAuthorization in a later block.
+        fx.depositor_authorize_agent(agent_max_per_payment, agent_max_per_window)
+            .inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("depositor authorization failed: {err}"),
+                );
+            })?;
 
         // Fund the agent's USDC balance on the real token. Generous amount: the largest scenario
         // deposit is OVER_PAYMENT_CAP_DEPOSIT = 20_000 USDC.
@@ -644,7 +682,7 @@ impl Fixture {
     pub fn moonwell_flagship_adapter(&self) -> Address {
         parse_addr(&self.topology.moonwell_flagship_adapter)
     }
-    /// The harness agent key's address (the sheet's AGENT_ADDRESS).
+    /// The harness agent key's address. The test depositor authorizes it after the deploy.
     pub fn agent(&self) -> Address {
         agent_address()
     }
@@ -1432,26 +1470,64 @@ impl Fixture {
         )
     }
 
-    /// Revoke the agent through the real Safe and the timelock (a generic timelock call: the timelock is the
-    /// agent's recorded owner after handover, and `revokeAgent` requires the owner).
+    /// Revoke the agent as its owner, the test depositor (`revokeAgent` requires the recorded owner).
     pub fn revoke_agent(&self) -> Result<String, HarnessError> {
         let agent = format!("{:#x}", self.agent());
-        self.timelock_call(
-            "gateway-revoke-agent",
+        self.cast_send(
+            SHARE_RECEIVER_PRIVATE_KEY_HEX,
             self.gateway(),
             "revokeAgent(address)",
             &[&agent],
         )
     }
 
-    /// Re-grant the agent with the given policy caps through the real Safe and the timelock (a generic
-    /// timelock call of `authorizeAgent`, ADMIN_ROLE). The timelock becomes the agent's owner again.
+    /// Re-authorize the agent with the given policy caps, as the test depositor (commit then reveal). The
+    /// agent must not be authorized now: revoke it first.
     pub fn reauthorize_agent(
         &self,
         max_per_payment: u128,
         max_per_window: u128,
     ) -> Result<String, HarnessError> {
-        self.authorize_agent_for(self.agent(), max_per_payment, max_per_window)
+        self.depositor_authorize_agent(max_per_payment, max_per_window)
+    }
+
+    /// The test depositor authorizes the harness agent: `commitAuthorization(keccak(agent, depositor, salt))`,
+    /// then `revealAuthorization(agent, salt, policy)` in a later block. The policy names the depositor as the
+    /// share receiver (the permissionless path requires it). Returns the reveal transaction hash.
+    pub fn depositor_authorize_agent(
+        &self,
+        max_per_payment: u128,
+        max_per_window: u128,
+    ) -> Result<String, HarnessError> {
+        let agent = self.agent();
+        let depositor = self.share_receiver();
+        let salt = keccak256(b"smoke-test depositor agent authorization");
+        let mut preimage = Vec::with_capacity(96);
+        for addr in [agent, depositor] {
+            preimage.extend_from_slice(&[0u8; 12]);
+            preimage.extend_from_slice(addr.as_slice());
+        }
+        preimage.extend_from_slice(salt.as_slice());
+        let commit_hash = format!("0x{}", hex::encode(keccak256(&preimage).0));
+        self.cast_send(
+            SHARE_RECEIVER_PRIVATE_KEY_HEX,
+            self.gateway(),
+            "commitAuthorization(bytes32)",
+            &[&commit_hash],
+        )?;
+        let receiver = format!("{depositor:#x}");
+        // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
+        //  assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow, allowedSourceVaults)
+        // validUntil is the year 2100: the Twin chain time warps forward through every timelock delay.
+        let policy = format!(
+            "(true,4102444800,{max_per_payment},{max_per_window},{receiver},[],{receiver},{max_per_payment},{max_per_window},[])"
+        );
+        self.cast_send(
+            SHARE_RECEIVER_PRIVATE_KEY_HEX,
+            self.gateway(),
+            "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
+            &[&format!("{agent:#x}"), &format!("0x{}", hex::encode(salt.0)), &policy],
+        )
     }
 
     /// `authorizeAgent(agent, policy)` through the real Safe and the timelock (a generic timelock call,
@@ -3289,6 +3365,14 @@ fn wait_for_http_ok_with_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The depositor key must derive the share receiver address the sheet names, or the depositor's
+    /// commit and reveal would be signed by a different account than the policy's share receiver.
+    #[test]
+    fn share_receiver_key_derives_the_share_receiver_address() {
+        let pk = privkey_hex_to_bytes(SHARE_RECEIVER_PRIVATE_KEY_HEX).unwrap();
+        assert_eq!(derive_address(&pk), parse_addr(SHARE_RECEIVER_ADDRESS_HEX));
+    }
 
     const RECEIPT_A_ID_VECTOR: &str =
         "0x379e538a5b294305dbd33d7781ef89aafee97b59e2a0ede478cd87c1895fc17a";

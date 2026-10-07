@@ -6,7 +6,7 @@ import { exampleText } from "./fixtures.ts";
 const A = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
 describe("merge-sheet", () => {
   test("fragment names replace the template lines and the result parses", () => {
-    const frag = `CHAIN_ID=918453\nADMIN_ADDRESS=${A(0x1111)}\nRECEIPT_ADMIN_ADDRESS=${A(0x1111)}\nPAUSER_ADDRESS=${A(0x2222)}\nEMERGENCY_ADDRESS=${A(0x3333)}\nAGENT_ADDRESS=${A(0x4444)}\n`
+    const frag = `CHAIN_ID=918453\nADMIN_ADDRESS=${A(0x1111)}\nRECEIPT_ADMIN_ADDRESS=${A(0x1111)}\nPAUSER_ADDRESS=${A(0x2222)}\nEMERGENCY_ADDRESS=${A(0x3333)}\n`
       + `VOTER_ADDRESSES=${A(0x5551)},${A(0x5552)}\nSAFE_OWNERS=${A(0x6661)},${A(0x6662)},${A(0x6663)}\nSAFE_THRESHOLD=2\n`;
     const out = mergeSheet(exampleText(), frag);
     expect(parseSheet(out).admin.toLowerCase()).toBe(A(0x1111));

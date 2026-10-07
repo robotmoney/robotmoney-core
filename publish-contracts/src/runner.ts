@@ -327,6 +327,7 @@ function envValue(ctx: RunContext, row: StageRow, name: string): string | undefi
   const src = resolveEnv(name, row.vault ?? null);
   let v: string | undefined;
   if (src.from === "chain") v = String(ctx.chainId);
+  else if (src.from === "literal") v = src.value;
   else if (src.from === "out") v = row.manifest ? (ctx.manifestOut ? manifestFilePath(ctx, row.manifest) : manifestPathFor(`deployments/<chain>/${row.manifest}`, ctx.chainId)) : undefined;
   else if (src.from === "sheet") v = ctx.sheet.values[src.name];
   else if (src.from === "manifest") v = readManifestField(ctx, `${src.stage === "safe" ? "safe" : stageManifestBase(src.stage)}:${src.field}`);
@@ -551,7 +552,7 @@ async function createSafeOnSimulationChain(ctx: RunContext, api: SafeApi, deploy
   const simNonce = await deployerNonce({ ...ctx, rpc: simRpc }, deployer);
   const res = await api.createSafe({
     ...chain, owners: ctx.sheet.safeOwners, threshold: ctx.sheet.safeThreshold, deployer: impersonatedSender(deployer, chain), deploySha: ctx.coreSha, saltNonce: ctx.sheet.safeSalt,
-    forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency, AGENT_ADDRESS: ctx.sheet.agent },
+    forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency },
     expectDeployerNonce: simNonce, logger: ctx.log, dryRun: false, confirm: async () => true,
   });
   if (!res.created || !res.manifest) throw new PublishError("SIMULATION", "the Safe was not created on the local preflight chain, so the later stages cannot be simulated");
@@ -593,7 +594,7 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
   const signer = await ctx.signer.safeSigner();
   const res = await api.createSafe({
     ...chain, owners: ctx.sheet.safeOwners, threshold: ctx.sheet.safeThreshold, deployer: signer, deploySha: ctx.coreSha, saltNonce: ctx.sheet.safeSalt,
-    forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency, AGENT_ADDRESS: ctx.sheet.agent },
+    forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency },
     expectDeployerNonce: nonce0, logger: ctx.log, dryRun: ctx.dryRun,
     confirm: async (plan: CreateSafePlan) => {
       // record the predicted address BEFORE anything is sent: a resume adopts it

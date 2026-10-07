@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // The step script of the twin-publish action (core 1488, 1523), in TypeScript because no shell file may orchestrate the deploy driver.
-// Environment in: RPC_URL, AGENT_ADDRESS_IN, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, GITHUB_WORKSPACE, GITHUB_ENV.
+// Environment in: RPC_URL, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, GITHUB_WORKSPACE, GITHUB_ENV.
 // Tests replace the tools with stubs: TWIN_CLI (default src/cli.ts), TWIN_REHEARSAL_CLI (src/rehearsal/cli.ts), TWIN_MERGE_SHEET (src/ci/merge-sheet.ts), CAST (cast).
 // Any tool that exits non-zero fails this script. The only Twin environment steps are fund-gas and fund-usdc; the govern time warp is inside the CLI.
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -38,7 +38,6 @@ writeFileSync(pass, Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toSt
 const fragment = join(rh, "fragment.env");
 run([bun, rehearsal, "keys", "--dir", join(rh, "keys"), "--password-file", pass, "--chain-id", "918453"], { cwd: pc, stdoutTo: fragment });
 // Later lines win in merge-sheet.
-if (env("AGENT_ADDRESS_IN")) appendFileSync(fragment, `AGENT_ADDRESS=${env("AGENT_ADDRESS_IN")}\n`);
 if (env("SHARE_RECEIVER_IN")) appendFileSync(fragment, `SHARE_RECEIVER_ADDRESS=${env("SHARE_RECEIVER_IN")}\n`);
 const sheet = join(rh, "sheet.env");
 run([bun, mergeSheet, "--template", join(core, "deployments/twin-918453/stage-sheet.env"), "--fragment", fragment, "--out", sheet], { cwd: pc });

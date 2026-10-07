@@ -3,9 +3,11 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { getStageTable } from "../../src/stages.ts";
 import { verifyDeployment } from "../../src/verify/index.ts";
-import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT } from "../../src/verify/constants.ts";
+import { keccak256, toHex } from "viem";
+import { padTopic } from "../../src/verify/logs.ts";
+import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, OWNERS } from "./world.ts";
+import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS } from "./world.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "expected-labels.json");
 
@@ -22,6 +24,22 @@ describe("healthy deployment", () => {
     const labels = r.checks.map((c) => c.label);
     expect(new Set(labels).size).toBe(labels.length);
     for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "")).not.toMatch(/\d{3,}/); }
+  });
+});
+
+describe("the deploy authorizes no agent (core 1527)", () => {
+  test("agents: no agent authorized at handover is ok with zero gateway agent logs, and the manifest and role checks are ok", async () => {
+    const r = await verifyDeployment(buildWorld().opts);
+    for (const l of ["agents: no agent authorized at handover", "agents: manifest lists zero agents", "agents: no address holds AGENT_ROLE after handover", "agents: manifest says deployer owns no listed agent"]) {
+      expect(r.checks.find((c) => c.label === l)?.ok, l).toBe(true);
+    }
+  });
+  test("one AgentAuthorized log on the gateway fails it, as does one AgentOwnershipTransferred log", async () => {
+    for (const sig of [SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP]) {
+      const w = buildWorld();
+      w.chain.logs.push({ address: GATEWAY, topics: [keccak256(toHex(sig)), padTopic(OWNERS[0]!), padTopic(DEPLOYER)], data: "0x", blockNumber: 300n });
+      expect(failed(await verifyDeployment(w.opts))).toEqual(["agents: no agent authorized at handover"]);
+    }
   });
 });
 
@@ -195,7 +213,7 @@ describe("log scan", () => {
     w.chain.maxLogSpan = 10n; // the chunk size of 2000 now errors on every call
     const f = failed(await verifyDeployment(w.opts));
     expect(f).toContain("deployer: holds no role on any contract (log scan)");
-    expect(f).toContain("agents: at least one deployer agent found in gateway logs");
+    expect(f).toContain("agents: no agent authorized at handover");
   });
 });
 

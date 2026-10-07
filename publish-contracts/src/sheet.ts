@@ -27,7 +27,6 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   ADMIN_ADDRESS: { kind: "address" },
   PAUSER_ADDRESS: { kind: "address" },
   EMERGENCY_ADDRESS: { kind: "address" },
-  AGENT_ADDRESS: { kind: "address" },
   SHARE_RECEIVER_ADDRESS: { kind: "address" },
   RECEIPT_ADMIN_ADDRESS: { kind: "address" },
   VOTER_ADDRESSES: { kind: "address-list" },
@@ -44,12 +43,6 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   VAULT_NAME: { kind: "string" },
   /** The Uniswap V3 SwapRouter02 the basket vaults trade through (core env SWAP_ROUTER). */
   SWAP_ROUTER: { kind: "address" },
-  // agent policy (all five required)
-  AGENT_VALID_UNTIL: { kind: "uint" },
-  AGENT_MAX_PER_PAYMENT: { kind: "uint" },
-  AGENT_MAX_PER_WINDOW: { kind: "uint" },
-  AGENT_MAX_WITHDRAW_PER_PAYMENT: { kind: "uint" },
-  AGENT_MAX_WITHDRAW_PER_WINDOW: { kind: "uint" },
   // governance
   QUORUM_THRESHOLD: { kind: "uint" },
   VOTING_PERIOD: { kind: "uint" },
@@ -76,6 +69,7 @@ const REFUSED: [RegExp, string][] = [
   [/^(RPC|RPC_URL|ETH_RPC_URL|RPC_ENDPOINT)$/, "the RPC is a CLI argument, never a sheet value"],
   [/^(PRIVATE_KEY|ETH_PRIVATE_KEY|MNEMONIC|ETH_MNEMONIC|ETH_PASSWORD|CHAIN_SIGNER_KEYSTORE|CHAIN_SIGNER_PASSWORD|[A-Z_]*(PRIVATE_KEY|PASSWORD|PASSPHRASE|SECRET|MNEMONIC)[A-Z_]*)$/, "a secret never goes in a sheet: use the credential engine, a hardware wallet or an encrypted keystore"],
   [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|IC_POLICY_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
+  [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
   [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the basket unpauses only. Voting power, quorum, voting period, execution delay, agents, vault setters, eligibility and router weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VOTER_*, QUORUM_THRESHOLD, VAULT_<KEY>_*)"],
   [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
 ];
@@ -90,7 +84,6 @@ export interface Sheet {
   admin: Address;
   pauser: Address;
   emergency: Address;
-  agent: Address;
   shareReceiver: Address;
   receiptAdmin: Address;
   voters: Address[];
@@ -103,7 +96,6 @@ export interface Sheet {
   /** The checksummed address, or "@safe" meaning the Safe the deployer created. */
   feeRecipient: Address | "@safe";
   seedDeposit: bigint;
-  agentPolicy: { validUntil: bigint; maxPerPayment: bigint; maxPerWindow: bigint; maxWithdrawPerPayment: bigint; maxWithdrawPerWindow: bigint };
   quorum: bigint;
   votingPeriod: bigint;
   executionDelay: bigint;
@@ -218,7 +210,6 @@ export function parseSheet(text: string): Sheet {
   const admin = asAddress("ADMIN_ADDRESS", v.ADMIN_ADDRESS!);
   const pauser = asAddress("PAUSER_ADDRESS", v.PAUSER_ADDRESS!);
   const emergency = asAddress("EMERGENCY_ADDRESS", v.EMERGENCY_ADDRESS!);
-  const agent = asAddress("AGENT_ADDRESS", v.AGENT_ADDRESS!);
   const shareReceiver = asAddress("SHARE_RECEIVER_ADDRESS", v.SHARE_RECEIVER_ADDRESS!);
   const receiptAdmin = asAddress("RECEIPT_ADMIN_ADDRESS", v.RECEIPT_ADMIN_ADDRESS!);
   const voters = asList("VOTER_ADDRESSES", v.VOTER_ADDRESSES!);
@@ -231,10 +222,10 @@ export function parseSheet(text: string): Sheet {
   // with AccessControlUnauthorizedAccount (found in the first Twin rehearsal), after the vaults are already deployed.
   if (lc(receiptAdmin) !== lc(admin)) throw err(`RECEIPT_ADMIN_ADDRESS ${receiptAdmin} must equal ADMIN_ADDRESS ${admin}: the deployer holds the receipt roles until the timelock stage revokes them`);
   // roles and owners: pairwise distinct on every chain (plan, Parameters)
-  assertDistinct("roles", [["ADMIN_ADDRESS", admin], ["PAUSER_ADDRESS", pauser], ["EMERGENCY_ADDRESS", emergency], ["AGENT_ADDRESS", agent]]);
+  assertDistinct("roles", [["ADMIN_ADDRESS", admin], ["PAUSER_ADDRESS", pauser], ["EMERGENCY_ADDRESS", emergency]]);
   assertDistinct("voters", voters.map((a, i) => [`VOTER_ADDRESSES[${i}]`, a]));
   assertDistinct("Safe owners", safeOwners.map((a, i) => [`SAFE_OWNERS[${i}]`, a]));
-  const roleSet = new Map<string, string>([[lc(admin), "ADMIN_ADDRESS"], [lc(pauser), "PAUSER_ADDRESS"], [lc(emergency), "EMERGENCY_ADDRESS"], [lc(agent), "AGENT_ADDRESS"]]);
+  const roleSet = new Map<string, string>([[lc(admin), "ADMIN_ADDRESS"], [lc(pauser), "PAUSER_ADDRESS"], [lc(emergency), "EMERGENCY_ADDRESS"]]);
   for (const o of safeOwners) { const r = roleSet.get(lc(o)); if (r) throw err(`Safe owner ${o} is also ${r}: signers are separate from the deployer and the operational keys`); }
   for (const a of voters) { const r = roleSet.get(lc(a)); if (r) throw err(`voter ${a} is also ${r}`); }
   // Safe structure floor, every chain
@@ -251,17 +242,6 @@ export function parseSheet(text: string): Sheet {
   if (feeRecipient !== "@safe" && lc(feeRecipient) === lc(admin)) throw err("FEE_RECIPIENT_ADDRESS equals ADMIN_ADDRESS (the deployer): the fee recipient is never the deployer. Use the treasury Safe, @safe or another treasury address");
   const seedDeposit = asUint("SEED_DEPOSIT_USDC", v.SEED_DEPOSIT_USDC!);
   if (seedDeposit === 0n) throw err("SEED_DEPOSIT_USDC must be above 0 (rmUSDC seed)");
-
-  const agentPolicy = {
-    validUntil: asUint("AGENT_VALID_UNTIL", v.AGENT_VALID_UNTIL!),
-    maxPerPayment: asUint("AGENT_MAX_PER_PAYMENT", v.AGENT_MAX_PER_PAYMENT!),
-    maxPerWindow: asUint("AGENT_MAX_PER_WINDOW", v.AGENT_MAX_PER_WINDOW!),
-    maxWithdrawPerPayment: asUint("AGENT_MAX_WITHDRAW_PER_PAYMENT", v.AGENT_MAX_WITHDRAW_PER_PAYMENT!),
-    maxWithdrawPerWindow: asUint("AGENT_MAX_WITHDRAW_PER_WINDOW", v.AGENT_MAX_WITHDRAW_PER_WINDOW!),
-  };
-  if (agentPolicy.validUntil === 0n) throw err("AGENT_VALID_UNTIL must be an absolute unix time above 0");
-  if (agentPolicy.maxPerPayment > agentPolicy.maxPerWindow) throw err("AGENT_MAX_PER_PAYMENT exceeds AGENT_MAX_PER_WINDOW");
-  if (agentPolicy.maxWithdrawPerPayment > agentPolicy.maxWithdrawPerWindow) throw err("AGENT_MAX_WITHDRAW_PER_PAYMENT exceeds AGENT_MAX_WITHDRAW_PER_WINDOW");
 
   const quorum = asUint("QUORUM_THRESHOLD", v.QUORUM_THRESHOLD!);
   if (quorum <= 1n) throw err("QUORUM_THRESHOLD must be above 1 on every chain");
@@ -307,8 +287,8 @@ export function parseSheet(text: string): Sheet {
   for (const [k, val] of Object.entries(raw)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") && val !== "@safe" && !val.includes(",") ? getAddress(val) : val;
 
   return {
-    values, chainId, expectedChainId, admin, pauser, emergency, agent, shareReceiver, receiptAdmin, voters, voterPower, safeOwners, safeThreshold,
-    safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, agentPolicy, quorum, votingPeriod, executionDelay, timelockMinDelay, vaults,
+    values, chainId, expectedChainId, admin, pauser, emergency, shareReceiver, receiptAdmin, voters, voterPower, safeOwners, safeThreshold,
+    safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, quorum, votingPeriod, executionDelay, timelockMinDelay, vaults,
     eligibleVaults, weights, govern: { unpauseVaults, newDelay },
   };
 }

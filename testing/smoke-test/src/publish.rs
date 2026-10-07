@@ -44,12 +44,9 @@ pub const MANIFEST_DIR_ENV: &str = "PUBLISH_MANIFEST_DIR";
 pub const DEPLOYER_KEY_NAME: &str = "DEPLOYER";
 
 /// Sheet keys the harness may add to the stage sheet from its caller (for
-/// example a window-cap test that needs `AGENT_MAX_PER_WINDOW`). Anything else
+/// example a quorum or voting period). Anything else
 /// is refused, so a test can only change a parameter, never the scheme.
 pub const OVERRIDABLE_SHEET_KEYS: &[&str] = &[
-    "AGENT_MAX_PER_PAYMENT",
-    "AGENT_MAX_PER_WINDOW",
-    "AGENT_WINDOW_SECONDS",
     "TVL_CAP",
     "PER_DEPOSIT_CAP",
     "QUORUM_THRESHOLD",
@@ -697,13 +694,13 @@ mod tests {
         let s = render_sheet(
             "export ADMIN_ADDRESS=0xold\nexport TIMELOCK_MIN_DELAY=60\n",
             &id,
-            &[("AGENT_MAX_PER_WINDOW", "5")],
+            &[("QUORUM_THRESHOLD", "5")],
         )
         .unwrap();
         assert!(!s.contains("0xold"));
         assert!(s.contains("export ADMIN_ADDRESS=0xnew"));
         assert!(s.contains("export TIMELOCK_MIN_DELAY=60"));
-        assert!(s.contains("export AGENT_MAX_PER_WINDOW=5"));
+        assert!(s.contains("export QUORUM_THRESHOLD=5"));
         assert!(render_sheet("", &id, &[("REHEARSAL", "1")]).is_err());
     }
 

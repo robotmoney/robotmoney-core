@@ -134,17 +134,11 @@ contract DeployTest is Test {
         DeployGateway gw = stages.gatewayScript();
         vm.expectRevert(bytes("ROUTER_ADDRESS=0"));
         gw.runInProcessWith(
-            admin, pauser, agent, shareReceiver, address(usdc), address(s.vault), address(0)
+            admin, pauser, shareReceiver, address(usdc), address(s.vault), address(0)
         );
         vm.expectRevert(bytes("ROUTER_ADDRESS has no code on this chain"));
         gw.runInProcessWith(
-            admin,
-            pauser,
-            agent,
-            shareReceiver,
-            address(usdc),
-            address(s.vault),
-            makeAddr("not-a-router")
+            admin, pauser, shareReceiver, address(usdc), address(s.vault), makeAddr("not-a-router")
         );
     }
 
@@ -276,25 +270,30 @@ contract DeployTest is Test {
         assertEq(s.vault.activeAdapterCount(), 3, "vault should have 3 active adapters");
     }
 
-    function test_deploy_authorizesAgentWithSanePolicy() public {
-        CoreStages.Stack memory s = _run();
-        DeployGateway gw = stages.gatewayScript();
-        (
-            bool active,
-            uint64 validUntil,
-            uint256 maxPerPayment,
-            uint256 maxPerWindow,
-            address recv,,
-            uint256 maxWithdrawPerPayment,
-            uint256 maxWithdrawPerWindow
-        ) = s.gateway.agents(agent);
-        assertTrue(active);
-        assertGt(validUntil, block.timestamp);
-        assertEq(maxPerPayment, gw.DEFAULT_MAX_PER_PAYMENT());
-        assertEq(maxPerWindow, gw.DEFAULT_MAX_PER_WINDOW());
-        assertEq(recv, shareReceiver);
-        assertEq(maxWithdrawPerPayment, gw.DEFAULT_MAX_WITHDRAW_PER_PAYMENT());
-        assertEq(maxWithdrawPerWindow, gw.DEFAULT_MAX_WITHDRAW_PER_WINDOW());
+    /// @notice The production deploy authorizes no agent: no AgentAuthorized log from the
+    ///         gateway and no address holds AGENT_ROLE afterwards (core 1527).
+    function test_deploy_authorizesNoAgent() public {
+        vm.recordLogs();
+        CoreStages.Stack memory s =
+            stages.runWithoutAgent(admin, pauser, shareReceiver, address(usdc));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter != address(s.gateway)) continue;
+            assertTrue(
+                logs[i].topics[0] != IGateway.AgentAuthorized.selector,
+                "deploy emitted AgentAuthorized"
+            );
+            assertTrue(
+                logs[i].topics[0] != IGateway.AgentOwnershipTransferred.selector,
+                "deploy emitted AgentOwnershipTransferred"
+            );
+        }
+        bytes32 agentRole = s.gateway.AGENT_ROLE();
+        address[6] memory holders =
+            [admin, pauser, shareReceiver, agent, address(this), address(stages)];
+        for (uint256 i = 0; i < holders.length; i++) {
+            assertFalse(s.gateway.hasRole(agentRole, holders[i]), "an address holds AGENT_ROLE");
+        }
     }
 
     function test_deploy_doesNotMintToAgent() public {
@@ -357,25 +356,7 @@ contract DeployTest is Test {
         DeployGateway gw = stages.gatewayScript();
         vm.expectRevert(bytes("ADMIN==PAUSER"));
         gw.runInProcessWith(
-            admin, admin, agent, shareReceiver, address(usdc), address(s.vault), address(s.router)
-        );
-    }
-
-    function test_deploy_revertsWhenAdminEqualsAgent() public {
-        CoreStages.Stack memory s = _run();
-        DeployGateway gw = stages.gatewayScript();
-        vm.expectRevert(bytes("ADMIN==AGENT"));
-        gw.runInProcessWith(
-            admin, pauser, admin, shareReceiver, address(usdc), address(s.vault), address(s.router)
-        );
-    }
-
-    function test_deploy_revertsWhenPauserEqualsAgent() public {
-        CoreStages.Stack memory s = _run();
-        DeployGateway gw = stages.gatewayScript();
-        vm.expectRevert(bytes("PAUSER==AGENT"));
-        gw.runInProcessWith(
-            admin, pauser, pauser, shareReceiver, address(usdc), address(s.vault), address(s.router)
+            admin, admin, shareReceiver, address(usdc), address(s.vault), address(s.router)
         );
     }
 
@@ -394,14 +375,8 @@ contract DeployTest is Test {
     function test_deploy_envDriven_vaultAndGatewayStages() public {
         vm.setEnv("ADMIN_ADDRESS", vm.toString(admin));
         vm.setEnv("PAUSER_ADDRESS", vm.toString(pauser));
-        vm.setEnv("AGENT_ADDRESS", vm.toString(agent));
         vm.setEnv("SHARE_RECEIVER_ADDRESS", vm.toString(shareReceiver));
         vm.setEnv("FEE_RECIPIENT", vm.toString(makeAddr("env-treasury")));
-        vm.setEnv("AGENT_VALID_UNTIL", vm.toString(block.timestamp + 30 days));
-        vm.setEnv("AGENT_MAX_PER_PAYMENT", "10000000000");
-        vm.setEnv("AGENT_MAX_PER_WINDOW", "100000000000");
-        vm.setEnv("AGENT_MAX_WITHDRAW_PER_PAYMENT", "10000000000");
-        vm.setEnv("AGENT_MAX_WITHDRAW_PER_WINDOW", "100000000000");
         vm.setEnv("TVL_CAP", "10000000000000");
         vm.setEnv("PER_DEPOSIT_CAP", "1000000000000");
         vm.setEnv("EXIT_FEE_BPS", "0");
@@ -424,7 +399,6 @@ contract DeployTest is Test {
         DeployGateway.Deployed memory g = stages.gatewayScript().runInProcess();
         assertEq(g.admin, admin);
         assertEq(g.pauser, pauser);
-        assertEq(g.agent, agent);
         assertEq(g.gateway.router(), address(rt.router));
     }
 

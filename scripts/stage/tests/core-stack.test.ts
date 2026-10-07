@@ -336,7 +336,7 @@ describe("record", () => {
     code_hashes: { gateway: h(12) },
     vault_addresses: { rmUSDC: a(3), rmPROTO: a(13), rmAGENT: a(14), rmRWA: a(15) },
     ephemeral: {
-      submitter: a(16), approver: a(17), voters: [a(18), a(19)], emergency: a(11), keystore_dir: join(OUT, "keys"),
+      approver: a(17), voters: [a(18), a(19)], emergency: a(11), keystore_dir: join(OUT, "keys"),
       safe_signers: [{ role: "approver", address: a(17) }, { role: "approver-b", address: a(20) }, { role: "approver-c", address: a(21) }],
     },
   });

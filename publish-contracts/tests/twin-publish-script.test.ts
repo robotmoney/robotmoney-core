@@ -36,7 +36,7 @@ function runScript(env: Record<string, string>) {
   writeFileSync(log, ""); writeFileSync(ghEnv, "");
   const r = Bun.spawnSync([process.execPath, join(REPO_ROOT, "publish-contracts/src/ci/twin-publish.ts")], {
     env: { ...process.env, ...stubs(), STUB_LOG: log, STUB_COUNTS: JSON.stringify(COUNTS), STUB_NONCE: String(sum), STUB_FAIL: "",
-      GITHUB_WORKSPACE: REPO_ROOT, GITHUB_ENV: ghEnv, RPC_URL: "http://127.0.0.1:1", AGENT_ADDRESS_IN: "", SHARE_RECEIVER_IN: "", VERIFY_IN: "true", GOVERN_IN: "true", ...env },
+      GITHUB_WORKSPACE: REPO_ROOT, GITHUB_ENV: ghEnv, RPC_URL: "http://127.0.0.1:1", SHARE_RECEIVER_IN: "", VERIFY_IN: "true", GOVERN_IN: "true", ...env },
     stdout: "pipe", stderr: "pipe",
   });
   const exported = Object.fromEntries(readFileSync(ghEnv, "utf8").split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));

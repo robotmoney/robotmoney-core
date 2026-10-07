@@ -3,7 +3,7 @@
 // by the Twin fork publish (core-stages-twin-chain) and on 8453 (runbook Q2), never here.
 // Issue 1520: the only mainnet operation after the handover is the basket unpause. Everything else is deploy-time configuration.
 import { describe, expect, test } from "bun:test";
-import { decodeFunctionData } from "viem";
+import { decodeFunctionData, toFunctionSelector } from "viem";
 import { PublishError } from "../src/errors.ts";
 import { GOVERN_ROWS, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VAULT_ABI, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
 import { newManifest } from "../src/runner.ts";
@@ -17,6 +17,7 @@ const ALL = {
   ROUTER_WEIGHTS: "USDC:5000,PROTO:2500,AGENT:1000,RWA:1500",
 };
 const DELAY = 172800n;
+const authorizeAgentSelector = toFunctionSelector("authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))");
 const BASKETS = ["PROTO", "AGENT", "RWA"] as const;
 
 describe("the govern rows: the basket unpauses plus the Twin-only demonstrations", () => {
@@ -24,6 +25,13 @@ describe("the govern rows: the basket unpauses plus the Twin-only demonstrations
     expect([...governRowNames()]).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
     expect([...UNPAUSE_ROWS]).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
     expect([...TWIN_ONLY_ROWS]).toEqual(["update-delay", "batch", "cancel"]);
+  });
+  test("there is no agents row and the planner never encodes authorizeAgent (core 1527)", () => {
+    expect([...governRowNames()].some((r) => /agent/i.test(r) && !r.startsWith("unpause-"))).toBe(false);
+    expect([...governRowNames()]).not.toContain("agents");
+    const { ctx, sheet } = setup(ALL);
+    const a = loadGovernAddrs(ctx);
+    for (const row of governRowNames()) for (const c of buildStepCalls(sheet, a, row as GovernRowName)) expect(c.data.slice(0, 10)).not.toBe(authorizeAgentSelector);
   });
   test("on 8453 a stage run needs the unpauses only, on a Twin fork every row", () => {
     expect([...stageRows(8453)]).toEqual([...UNPAUSE_ROWS]);

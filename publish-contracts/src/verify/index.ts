@@ -5,7 +5,7 @@ import { encodeFunctionData, keccak256, parseAbiItem, toHex } from "viem";
 import { Collector } from "./collector.ts";
 import { compareCode, loadArtifact } from "./codehash.ts";
 import {
-  ADMIN_ROLE, WEIGHT_SETTER_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
+  ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
   SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase } from "../stage-table.ts";
@@ -129,13 +129,10 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const chunk = opts.logChunk ?? 2000;
   const retryBaseMs = opts.retryBaseMs ?? 500;
   if (head === undefined) {
-    c.fail("agents: every deployer agent is owned by timelock", "block number unreadable");
-    c.fail("agents: at least one deployer agent found in gateway logs", "block number unreadable");
-    c.fail("agents: manifest listed count equals derived count", "block number unreadable");
-    c.fail("agents: manifest says deployer owns no listed agent", "block number unreadable");
+    for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
     c.fail("deployer: holds no role on any contract (log scan)", "block number unreadable");
   } else {
-    await agentChecks(c, chain, gateway, tl, D, tlManifest, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
+    await agentChecks(c, chain, gateway, tlManifest, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
     await roleScan(c, chain, D, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
   }
 
@@ -317,35 +314,33 @@ async function assetReadBack(chain: ChainReader, vault: Address, want: ExpectedA
   return { ok: a === b, detail: a === b ? `${got.length} assets` : `on chain [${got.join("; ")}] sheet [${exp.join("; ")}]` };
 }
 
+const AGENT_LABELS = [
+  "agents: no agent authorized at handover",
+  "agents: manifest lists zero agents",
+  "agents: no address holds AGENT_ROLE after handover",
+  "agents: manifest says deployer owns no listed agent",
+];
+
+/** The deploy authorizes no agent (architecture 5.2 and 6.3): an agent belongs to a depositor. The gateway has no agent log since the deploy began, the timelock manifest lists none and nobody holds AGENT_ROLE. */
 async function agentChecks(
-  c: Collector, chain: ChainReader, gateway: Address, tl: Address, deployer: Address, timelockManifest: any,
+  c: Collector, chain: ChainReader, gateway: Address, timelockManifest: any,
   s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number },
 ): Promise<void> {
-  let agents: string[] = [];
-  let scanErr: string | undefined;
+  const base = { address: gateway, fromBlock: s.fromBlock, toBlock: s.head, chunk: s.chunk, retryBaseMs: s.retryBaseMs };
   try {
     const t1 = keccak256(toHex(SIG_AGENT_AUTHORIZED)), t2 = keccak256(toHex(SIG_AGENT_OWNERSHIP));
-    const base = { address: gateway, fromBlock: s.fromBlock, toBlock: s.head, chunk: s.chunk, retryBaseMs: s.retryBaseMs };
-    const l1 = await scanLogs(chain, { ...base, topics: [t1, null, padTopic(deployer)] });
-    const l2 = await scanLogs(chain, { ...base, topics: [t2, null, null, padTopic(deployer)] });
-    agents = [...new Set([...l1, ...l2].map((l) => lc(topicToAddress(l.topics[1]))))];
-  } catch (e: any) { scanErr = String(e?.message ?? e); }
-  if (scanErr) {
-    for (const l of ["agents: every deployer agent is owned by timelock", "agents: at least one deployer agent found in gateway logs", "agents: manifest listed count equals derived count"]) c.fail(l, scanErr);
-  } else {
-    await c.run("agents: every deployer agent is owned by timelock", async () => {
-      const bad: string[] = [];
-      for (const ag of agents) {
-        const o = lc((await chain.read(gateway, "function agentOwner(address) view returns (address)", [ag])) as string);
-        const admin = await hasRole(chain, gateway, ADMIN_ROLE, ag as Address);
-        if (o !== lc(tl) || admin) bad.push(ag);
-      }
-      return { ok: bad.length === 0, detail: bad.length ? `not owned by timelock or holds ADMIN: ${bad}` : `${agents.length} agents` };
-    });
-    c.push("agents: at least one deployer agent found in gateway logs", agents.length > 0, `${agents.length} found from block ${s.fromBlock}`);
-    c.eq("agents: manifest listed count equals derived count", timelockManifest.roles?.gateway_agents_listed_count, agents.length);
-  }
-  c.eq("agents: manifest says deployer owns no listed agent", timelockManifest.roles?.deployer_owns_a_listed_gateway_agent, false);
+    const logs = [...(await scanLogs(chain, { ...base, topics: [t1] })), ...(await scanLogs(chain, { ...base, topics: [t2] }))];
+    const agents = [...new Set(logs.map((l) => lc(topicToAddress(l.topics[1]))))];
+    c.push(AGENT_LABELS[0]!, logs.length === 0, logs.length ? `${logs.length} agent logs from block ${s.fromBlock}, agents ${agents.join(", ")}` : `no AgentAuthorized or AgentOwnershipTransferred log from block ${s.fromBlock}`);
+  } catch (e: any) { c.fail(AGENT_LABELS[0]!, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`); }
+  c.eq(AGENT_LABELS[1]!, timelockManifest.roles?.gateway_agents_listed_count, 0);
+  try {
+    const logs = await scanLogs(chain, { ...base, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), AGENT_ROLE] });
+    const holders: string[] = [];
+    for (const who of new Set(logs.map((l) => topicToAddress(l.topics[2])))) if (await hasRole(chain, gateway, AGENT_ROLE, who)) holders.push(who);
+    c.push(AGENT_LABELS[2]!, holders.length === 0, holders.length ? `holders ${holders.join(", ")}` : `${logs.length} AGENT_ROLE grants scanned, none held`);
+  } catch (e: any) { c.fail(AGENT_LABELS[2]!, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`); }
+  c.eq(AGENT_LABELS[3]!, timelockManifest.roles?.deployer_owns_a_listed_gateway_agent, false);
 }
 
 /** Log-enumerated scan of the timelock's PROPOSER, CANCELLER and EXECUTOR holders: only the Safe, plus address(0) as the open executor. An EOA holder is named. */
