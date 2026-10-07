@@ -95,6 +95,8 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         // DeployTimelock now asserts before completing the handover.
         vm.prank(address(script));
         router.grantRole(keccak256("ADMIN_ROLE"), address(governance));
+        vm.prank(address(script));
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         // InvestmentCommitteePolicy: admin_ == address(this) (this test
         // contract), so that DeployTimelock's `revokeRole(ADMIN_ROLE,

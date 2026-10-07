@@ -265,6 +265,9 @@ contract SafeIntegrationTest is Test {
         // it below.
         vm.prank(deployer);
         IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        IAccessControl(address(router))
+            .grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         // Deploy 2-of-3 Safe proxy via the canonical factory on Base mainnet.
         // Owners must be sorted ascending for the Safe setup call.

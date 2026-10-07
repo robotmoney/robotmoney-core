@@ -5,7 +5,7 @@ description: "R7's two halves, proved on one topology built the way the deploy s
 
 # GovernanceExecutePathAfterHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/47813c6ce325a410eae924f85ab4c0cc53db31a1/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cedbfcdfb3487fb7d6e49ade987ea664a7113b8f/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
 
 **Inherits:** Test
 
@@ -44,6 +44,12 @@ SafeIntegration.t.sol. Unset, it skips with a named reason.
 
 ```solidity
 bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### WEIGHT_SETTER_ROLE
+
+```solidity
+bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 ```
 
 ### SAFE_PROXY_FACTORY
@@ -271,6 +277,18 @@ The deploy script leaves governance able to call setWeights.
 function test_governanceHoldsRouterAdminRole() public view;
 ```
 
+<a id="test_onlygovernanceholdsweightsetterrole"></a>
+
+### test_onlyGovernanceHoldsWeightSetterRole
+
+`setWeights` is gated by WEIGHT_SETTER_ROLE: governance holds it,
+the timelock, the deployer, the Safe, the pauser and the
+emergency key do not.
+
+```solidity
+function test_onlyGovernanceHoldsWeightSetterRole() public view;
+```
+
 <a id="test_executereachessetweightsonafreshdeployment"></a>
 
 ### test_executeReachesSetWeightsOnAFreshDeployment
@@ -300,6 +318,30 @@ function test_deployerEoaCannotCallSetWeightsDirectly() public;
 
 ```solidity
 function test_deployerEoaHasNoRouterAdminRole() public view;
+```
+
+<a id="test_timelocksetweightsthroughrealsafescheduleexecute_reverts"></a>
+
+### test_timelockSetWeightsThroughRealSafeScheduleExecute_reverts
+
+The Safe schedules and executes router.setWeights through the
+timelock. The operation is ready and the Safe signs it with real
+owner signatures (no vm.prank of the Safe), yet the router
+rejects the timelock, so the execute fails and no weight lands.
+
+```solidity
+function test_timelockSetWeightsThroughRealSafeScheduleExecute_reverts() public;
+```
+
+<a id="test_timelocksetdefaultweightsthroughrealsafescheduleexecute_succeeds"></a>
+
+### test_timelockSetDefaultWeightsThroughRealSafeScheduleExecute_succeeds
+
+The same Safe -> Timelock path still reaches setDefaultWeights,
+the below-quorum fallback the timelock keeps through ADMIN_ROLE.
+
+```solidity
+function test_timelockSetDefaultWeightsThroughRealSafeScheduleExecute_succeeds() public;
 ```
 
 <a id="test_votersetisdisjointfromthecommittee"></a>
@@ -500,6 +542,29 @@ function _sign(uint256 pk, bytes32 txHash) internal pure returns (bytes memory);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bytes` |  |
+
+<a id="_safeexecexpectrevert-address-bytes-bytes"></a>
+
+### _safeExecExpectRevert
+
+<i>
+
+Like `_safeExec`, but expects the Safe itself to revert. The digest and
+signatures are built first so `expectRevert` binds to `execTransaction`.
+
+</i>
+
+```solidity
+function _safeExecExpectRevert(address to, bytes memory data, bytes memory reason) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
+| reason | `bytes` |  |
 
 <a id="_safeexec-address-bytes"></a>
 

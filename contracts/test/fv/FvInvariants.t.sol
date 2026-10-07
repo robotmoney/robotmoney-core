@@ -577,6 +577,7 @@ contract FvInvariantsTest is Test {
         RouterGovernance gov =
             new RouterGovernance(address(router), address(this), 1 hours, 1 hours, 2);
         router.grantRole(router.ADMIN_ROLE(), address(gov));
+        router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
 
         address[] memory vaults = new address[](1);
         uint256[] memory bps = new uint256[](1);

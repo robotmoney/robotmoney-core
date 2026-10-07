@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7e7d4997a6e03af61ea2ee0f6218ea9e88f622ae/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cedbfcdfb3487fb7d6e49ade987ea664a7113b8f/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -120,6 +120,12 @@ string public constant MANIFEST_FILE = "timelock.json";
 
 ```solidity
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### WEIGHT_SETTER_ROLE
+
+```solidity
+bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 ```
 
 ### EMERGENCY_ROLE

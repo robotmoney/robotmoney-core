@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/b15af58af03b5cec83b6e49b77d4fb97b76e2873/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7108b70cd9026b3c48f652fd02739362e4c14ef1/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -40,6 +40,21 @@ Grants/revokes roles, sets weights, caps, and registry address.
 
 ```solidity
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### WEIGHT_SETTER_ROLE
+
+Sole gate on `setWeights`, the active weight setter. After the
+deploy ceremony only the RouterGovernance contract holds it, so
+active weights move only through propose, vote, quorum and the
+execution delay. The timelock keeps `ADMIN_ROLE` and reaches
+`setDefaultWeights` and `clearVotedWeights` only. The constructor
+seeds the role to `_admin` so the router deploy stage can write
+the initial weights. The governance deploy stage revokes it. The role is its
+own role admin, so no `ADMIN_ROLE` holder can grant it.
+
+```solidity
+bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 ```
 
 ### BPS_DENOMINATOR
@@ -229,12 +244,12 @@ constructor(address _usdc, address _registry, address _admin);
 Set the vault weight vector. All vaults must be registered in the
 VaultRegistry and must be marked router-eligible there. The bps
 values must sum to exactly BPS_DENOMINATOR.
-Restricted to `ADMIN_ROLE`.
+Restricted to `WEIGHT_SETTER_ROLE`, held only by RouterGovernance.
 
 ```solidity
 function setWeights(address[] calldata vaults, uint256[] calldata bps)
         external
-        onlyRole(ADMIN_ROLE);
+        onlyRole(WEIGHT_SETTER_ROLE);
 ```
 
 **Parameters**

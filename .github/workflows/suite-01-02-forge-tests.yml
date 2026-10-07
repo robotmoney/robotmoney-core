@@ -96,6 +96,14 @@ jobs:
           bash scripts/check-audit-ledger.sh
           bash scripts/check-audit-ledger.test.sh
 
+      # Core 1522: the docs name WEIGHT_SETTER_ROLE as the only setWeights gate and ADMIN_ROLE as the defaultWeights gate.
+      - name: Docs name the weight-setter split
+        run: |
+          for f in docs/technical/security-model.md docs/adr/ADR-0002-router-default-weights-on-chain.md; do
+            grep -q 'WEIGHT_SETTER_ROLE' "$f" || { echo "::error file=$f::WEIGHT_SETTER_ROLE is missing"; exit 1; }
+            grep -Eq 'defaultWeights.? gate' "$f" || { echo "::error file=$f::the ADMIN_ROLE defaultWeights gate is missing"; exit 1; }
+          done
+
       # Core S3 (issue 1485): no reader of the deploy manifest names a retired key or script.
       - name: Retired manifest keys are absent
         run: bun scripts/ci/check-manifest-keys.ts

@@ -46,6 +46,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice Grants/revokes roles, sets weights, caps, and registry address.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
+    /// @notice Sole gate on `setWeights`, the active weight setter. After the
+    ///         deploy ceremony only the RouterGovernance contract holds it, so
+    ///         active weights move only through propose, vote, quorum and the
+    ///         execution delay. The timelock keeps `ADMIN_ROLE` and reaches
+    ///         `setDefaultWeights` and `clearVotedWeights` only. The constructor
+    ///         seeds the role to `_admin` so the router deploy stage can write
+    ///         the initial weights. The governance deploy stage revokes it. The role is its
+    ///         own role admin, so no `ADMIN_ROLE` holder can grant it.
+    bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
+
     // ─── Constants ───────────────────────────────────────────────────────────
 
     /// @notice Basis-points denominator (10 000 = 100%). Sourced from the
@@ -311,6 +321,8 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, _admin);
+        _setRoleAdmin(WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROLE);
+        _grantRole(WEIGHT_SETTER_ROLE, _admin);
     }
 
     // ─── Admin: weight management ────────────────────────────────────────────
@@ -318,12 +330,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice Set the vault weight vector. All vaults must be registered in the
     ///         VaultRegistry and must be marked router-eligible there. The bps
     ///         values must sum to exactly BPS_DENOMINATOR.
-    ///         Restricted to `ADMIN_ROLE`.
+    ///         Restricted to `WEIGHT_SETTER_ROLE`, held only by RouterGovernance.
     /// @param vaults  Ordered list of vault addresses.
     /// @param bps     Parallel weight array in basis points (must sum to 10 000).
     function setWeights(address[] calldata vaults, uint256[] calldata bps)
         external
-        onlyRole(ADMIN_ROLE)
+        onlyRole(WEIGHT_SETTER_ROLE)
     {
         if (vaults.length != bps.length) revert LengthMismatch();
 

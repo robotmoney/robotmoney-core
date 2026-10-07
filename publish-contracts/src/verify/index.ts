@@ -5,7 +5,7 @@ import { encodeFunctionData, keccak256, parseAbiItem, toHex } from "viem";
 import { Collector } from "./collector.ts";
 import { compareCode, loadArtifact } from "./codehash.ts";
 import {
-  ADMIN_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
+  ADMIN_ROLE, WEIGHT_SETTER_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
   SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase } from "../stage-table.ts";
@@ -107,6 +107,12 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await c.runEq("gateway: PAUSER_ROLE held by pauser", () => hasRole(chain, gateway, PAUSER_ROLE, sheet.pauser), true);
   await c.runEq("gateway: PAUSER_ROLE not held by deployer", () => hasRole(chain, gateway, PAUSER_ROLE, D), false);
   await c.runEq("router: ADMIN_ROLE held by governance", () => hasRole(chain, router, ADMIN_ROLE, byName.governance), true);
+  // setWeights is gated by WEIGHT_SETTER_ROLE: only RouterGovernance holds it, so the timelock and the Safe cannot bypass the vote.
+  await c.runEq("router: WEIGHT_SETTER_ROLE held by governance", () => hasRole(chain, router, WEIGHT_SETTER_ROLE, byName.governance), true);
+  const setterHolders: Array<[string, Address]> = [["timelock", tl], ["deployer", D], ["safe", safe], ["pauser", sheet.pauser], ["emergency", sheet.emergency]];
+  for (const [who, addr] of setterHolders) {
+    await c.runEq(`router: WEIGHT_SETTER_ROLE not held by ${who}`, () => hasRole(chain, router, WEIGHT_SETTER_ROLE, addr), false);
+  }
   await c.runEq("gateway: not paused", () => chain.read(gateway, "function paused() view returns (bool)"), false);
   // The router-first split (core 1493): the gateway and the registry both name the router the router stage deployed.
   await c.runEq("gateway: router() equals the deployed router", async () => lc((await chain.read(gateway, "function router() view returns (address)")) as string), lc(router));

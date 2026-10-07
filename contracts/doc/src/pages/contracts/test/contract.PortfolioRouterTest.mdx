@@ -4,7 +4,7 @@ title: "PortfolioRouterTest"
 
 # PortfolioRouterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7108b70cd9026b3c48f652fd02739362e4c14ef1/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:** Test
 
@@ -179,12 +179,110 @@ function test_setWeights_revertsIfVaultNotRegistered() public;
 function test_setWeights_revertsIfLengthMismatch() public;
 ```
 
+<a id="_onevault"></a>
+
+### _oneVault
+
+```solidity
+function _oneVault() internal view returns (address[] memory vaults, uint256[] memory bps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+
+<a id="_expectweightsetterrevert-address"></a>
+
+### _expectWeightSetterRevert
+
+```solidity
+function _expectWeightSetterRevert(address caller) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+
 <a id="test_setweights_revertsforunauthorized"></a>
 
 ### test_setWeights_revertsForUnauthorized
 
 ```solidity
 function test_setWeights_revertsForUnauthorized() public;
+```
+
+<a id="test_setweights_revertsfortimelock"></a>
+
+### test_setWeights_revertsForTimelock
+
+The timelock holds ADMIN_ROLE and still cannot set active weights.
+
+```solidity
+function test_setWeights_revertsForTimelock() public;
+```
+
+<a id="test_timelock_cannotgrantitselfweightsetterrole"></a>
+
+### test_timelock_cannotGrantItselfWeightSetterRole
+
+WEIGHT_SETTER_ROLE is its own role admin, so the timelock (ADMIN_ROLE
+only) cannot grant itself the role, and a granted setter cannot be
+escalated by an ADMIN_ROLE holder. Closes the self-grant loophole.
+
+```solidity
+function test_timelock_cannotGrantItselfWeightSetterRole() public;
+```
+
+<a id="test_setweights_revertsforsafe"></a>
+
+### test_setWeights_revertsForSafe
+
+The Safe holds no router role: it reaches the router only through the timelock.
+
+```solidity
+function test_setWeights_revertsForSafe() public;
+```
+
+<a id="test_setweights_revertsfordeployerandeoa"></a>
+
+### test_setWeights_revertsForDeployerAndEoa
+
+After the deploy ceremony drops the deployer's copy, the deployer
+and a random EOA both revert.
+
+```solidity
+function test_setWeights_revertsForDeployerAndEoa() public;
+```
+
+<a id="test_setweights_succeedsforweightsetterrole"></a>
+
+### test_setWeights_succeedsForWeightSetterRole
+
+```solidity
+function test_setWeights_succeedsForWeightSetterRole() public;
+```
+
+<a id="test_setdefaultweights_succeedsfortimelockadmin"></a>
+
+### test_setDefaultWeights_succeedsForTimelockAdmin
+
+The timelock (ADMIN_ROLE only) can still set the default weights.
+
+```solidity
+function test_setDefaultWeights_succeedsForTimelockAdmin() public;
+```
+
+<a id="test_setdefaultweights_revertsforweightsetterroleonly"></a>
+
+### test_setDefaultWeights_revertsForWeightSetterRoleOnly
+
+```solidity
+function test_setDefaultWeights_revertsForWeightSetterRoleOnly() public;
 ```
 
 <a id="test_setweights_happypath_emitsevent"></a>

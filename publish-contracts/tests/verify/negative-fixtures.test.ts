@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { keccak256, pad, toHex } from "viem";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import {
-  ADMIN_ROLE, EMERGENCY_ROLE, PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
+  ADMIN_ROLE, WEIGHT_SETTER_ROLE, EMERGENCY_ROLE, PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
   SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
@@ -63,6 +63,8 @@ const RULES: Rule[] = [
   [/^timelock: admin role not held by safe$/, (w) => w.chain.grant(TIMELOCK, Z32, SAFE)],
   // the role matrix
   [/^router: ADMIN_ROLE held by governance$/, (w) => w.chain.revoke(ROUTER, ADMIN_ROLE, GOV)],
+  [/^router: WEIGHT_SETTER_ROLE held by governance$/, (w) => w.chain.revoke(ROUTER, WEIGHT_SETTER_ROLE, GOV)],
+  [/^router: WEIGHT_SETTER_ROLE not held by (timelock|deployer|safe|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, { timelock: TIMELOCK, ...WHO }[m[1]]!)],
   [/^gateway: PAUSER_ROLE held by pauser$/, (w) => w.chain.revoke(GATEWAY, PAUSER_ROLE, PAUSER)],
   [/^gateway: PAUSER_ROLE not held by deployer$/, (w) => w.chain.grant(GATEWAY, PAUSER_ROLE, DEPLOYER)],
   [/^gateway: not paused$/, (w) => w.chain.set(GATEWAY, "paused", true)],

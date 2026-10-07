@@ -100,6 +100,7 @@ sol! {
         function setWeights(address[] calldata vaults, uint256[] calldata bps) external;
         function getWeights() external view returns (address[] memory vaults, uint256[] memory bps);
         function ADMIN_ROLE() external view returns (bytes32);
+        function WEIGHT_SETTER_ROLE() external view returns (bytes32);
         function grantRole(bytes32 role, address account) external;
     }
 
@@ -259,8 +260,8 @@ fn mark_router_eligible(admin: &rmpc_fork_e2e::Account<'_>, registry: Address, v
         .expect("setRouterEligible(true)");
 }
 
-/// Grant ADMIN_ROLE on the PortfolioRouter to `governance` so it can call
-/// `setWeights`.
+/// Grant ADMIN_ROLE and WEIGHT_SETTER_ROLE on the PortfolioRouter to `governance`.
+/// `setWeights` is gated by WEIGHT_SETTER_ROLE, the other governance calls by ADMIN_ROLE.
 fn grant_router_admin(deployer: &rmpc_fork_e2e::Account<'_>, router: Address, governance: Address) {
     // Fetch ADMIN_ROLE selector: `ADMIN_ROLE()` → bytes32.
     let raw = deployer
@@ -281,6 +282,25 @@ fn grant_router_admin(deployer: &rmpc_fork_e2e::Account<'_>, router: Address, go
             200_000,
         )
         .expect("grantRole(ADMIN_ROLE, governance)");
+
+    let raw = deployer
+        .call(router, &IPortfolioRouter::WEIGHT_SETTER_ROLECall {})
+        .expect("WEIGHT_SETTER_ROLE()");
+    if raw.len() < 32 {
+        panic!("WEIGHT_SETTER_ROLE() returned fewer than 32 bytes");
+    }
+    let setter_role = alloy_primitives::B256::from_slice(&raw[..32]);
+    deployer
+        .send(
+            router,
+            &IPortfolioRouter::grantRoleCall {
+                role: setter_role,
+                account: governance,
+            },
+            U256::ZERO,
+            200_000,
+        )
+        .expect("grantRole(WEIGHT_SETTER_ROLE, governance)");
 }
 
 /// Advance the EVM clock by `seconds` using `evm_increaseTime` + `evm_mine`.

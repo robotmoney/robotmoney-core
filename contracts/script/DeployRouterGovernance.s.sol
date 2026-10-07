@@ -145,6 +145,7 @@ contract DeployRouterGovernance is ExpectedChainGuard {
             new RouterGovernance(router_, admin_, votingPeriod_, executionDelay_, quorumThreshold_);
 
         _grantRouterAdmin(d, granter_);
+        _grantWeightSetter(d, granter_);
     }
 
     /// @dev Give the governance contract the router `ADMIN_ROLE` its
@@ -169,6 +170,23 @@ contract DeployRouterGovernance is ExpectedChainGuard {
             IAccessControl(address(d.router)).hasRole(routerAdminRole, governance),
             "RouterGovernance missing router ADMIN_ROLE: execute() would revert in setWeights"
         );
+    }
+
+    /// @dev Give the governance contract `WEIGHT_SETTER_ROLE`, the sole gate on
+    ///      `setWeights`, then drop the granter's own copy so no key but
+    ///      governance can set active weights. Both effects are read back.
+    function _grantWeightSetter(Deployed memory d, address granter_) internal {
+        IAccessControl router = IAccessControl(address(d.router));
+        bytes32 role = d.router.WEIGHT_SETTER_ROLE();
+        address governance = address(d.governance);
+
+        router.grantRole(role, governance);
+        require(
+            router.hasRole(role, governance),
+            "RouterGovernance missing router WEIGHT_SETTER_ROLE: execute() would revert in setWeights"
+        );
+        if (router.hasRole(role, granter_)) router.revokeRole(role, granter_);
+        require(!router.hasRole(role, granter_), "deployer still holds router WEIGHT_SETTER_ROLE");
     }
 
     function _logResult(Deployed memory d) internal pure {

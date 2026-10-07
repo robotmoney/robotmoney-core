@@ -86,6 +86,12 @@ receipt: DEFAULT_ADMIN held by timelock
 gateway: PAUSER_ROLE held by pauser
 gateway: PAUSER_ROLE not held by deployer
 router: ADMIN_ROLE held by governance
+router: WEIGHT_SETTER_ROLE held by governance
+router: WEIGHT_SETTER_ROLE not held by timelock
+router: WEIGHT_SETTER_ROLE not held by deployer
+router: WEIGHT_SETTER_ROLE not held by safe
+router: WEIGHT_SETTER_ROLE not held by pauser
+router: WEIGHT_SETTER_ROLE not held by emergency
 gateway: not paused
 gateway: router() equals the deployed router
 registry: router() equals the deployed router

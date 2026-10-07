@@ -170,6 +170,8 @@ contract DeployTimelockTest is SafeFixture {
         // ADMIN_ROLE on the router.
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         vm.prank(deployer);
         d = script.runInProcess(
@@ -1077,6 +1079,8 @@ contract DeployTimelockChainFloorTest is SafeFixture {
         governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
     }
 
     function _run(uint256 delay) internal returns (DeployTimelock.Deployed memory) {
@@ -1209,6 +1213,9 @@ contract DeployTimelockManifestTest is SafeFixture {
 
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
+
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         // Call the script FROM the script's own address so the roles it revokes
         // from `msg.sender` are the roles it actually holds.
@@ -1371,6 +1378,8 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
         governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         listed.push(deployAgent);
         listed.push(submitter);
@@ -1499,6 +1508,8 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
             new RouterGovernance(address(router2), deployer2, 7 days, 1 days, 2);
         vm.prank(deployer2);
         router2.grantRole(ADMIN_ROLE, address(governance2));
+        vm.prank(deployer2);
+        router2.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance2));
 
         // Owned by another account, through the permissionless path.
         address other = makeAddr("other-owner");
@@ -1633,6 +1644,8 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
             new RouterGovernance(address(router_), deployer_, 7 days, 1 days, 2);
         vm.prank(deployer_);
         router_.grantRole(ADMIN_ROLE, address(governance_));
+        vm.prank(deployer_);
+        router_.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance_));
         vm.prank(deployer_);
         out = script_.runInProcessWithAgents(
             address(dep_.vault),
@@ -1844,6 +1857,8 @@ abstract contract DeployTimelockRunEntrypointBase is SafeFixture {
             new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         _set(
             "AGENT_ADDRESSES", string.concat(vm.toString(deployAgent), ",", vm.toString(submitter))
@@ -2171,6 +2186,8 @@ contract DeployTimelockFourVaultsTest is SafeFixture {
         governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         // Register every vault while the deployer still administers the registry (the vault
         // stages and registry stage do this in the ceremony).

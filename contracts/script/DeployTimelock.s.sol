@@ -145,6 +145,7 @@ contract DeployTimelock is ExpectedChainGuard {
     string public constant MANIFEST_FILE = "timelock.json";
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
@@ -681,6 +682,17 @@ contract DeployTimelock is ExpectedChainGuard {
             "R7: RouterGovernance lacks router ADMIN_ROLE - execute() cannot reach setWeights"
         );
 
+        require(
+            IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, d.governance),
+            "R7: RouterGovernance lacks router WEIGHT_SETTER_ROLE - execute() cannot reach setWeights"
+        );
+        // Defence in depth: DeployRouterGovernance already drops the deployer's
+        // WEIGHT_SETTER_ROLE. Drop it here too, while the deployer still holds
+        // ADMIN_ROLE (the role admin), so a skipped stage cannot leave it behind.
+        if (IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, msg.sender)) {
+            IAccessControl(d.router).revokeRole(WEIGHT_SETTER_ROLE, msg.sender);
+        }
+
         IAccessControl(d.router).grantRole(ADMIN_ROLE, address(timelock));
         require(
             IAccessControl(d.router).hasRole(ADMIN_ROLE, address(timelock)),
@@ -698,8 +710,15 @@ contract DeployTimelock is ExpectedChainGuard {
         // capability — asserted separately from the revoke above so the
         // failure message names what an operator actually cares about.
         require(
-            !IAccessControl(d.router).hasRole(ADMIN_ROLE, msg.sender),
+            !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, msg.sender),
             "R7: deployer EOA can still call router.setWeights directly"
+        );
+        // `setWeights` is gated by WEIGHT_SETTER_ROLE, held only by
+        // RouterGovernance. The timelock gets ADMIN_ROLE (setDefaultWeights,
+        // clearVotedWeights) and must not hold the active weight setter.
+        require(
+            !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, address(timelock)),
+            "R7: timelock holds router WEIGHT_SETTER_ROLE - it could bypass RouterGovernance"
         );
         // And the grant survived the handover: nothing above touched it, but
         // this is the invariant the ceremony exists to establish, so read it
