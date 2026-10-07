@@ -723,7 +723,8 @@ Operators release a receipt with the publish-contracts govern row
 release-receipt --receipt-id 0x<bytes32> ...`, wrapped by `bun
 scripts/stage/core-stack.ts governance release --receipt-id ID`): the real Safe
 schedules `releaseReceipt` on the timelock, the delay passes, and the Safe
-executes it. That is the same path on the Twin chain and on Base mainnet. No
+executes it. That path runs on the Twin chain only: the row is refused with USAGE on Base
+mainnet (8453), where govern is the three basket unpauses. No
 EOA can release a receipt after handover.
 
 **Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,

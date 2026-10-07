@@ -563,16 +563,18 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
     expect(tl.s.events.length).toBe(0);
   });
 
-  test("on 8453 it is allowed (a real admin action), schedules, and exits GOVERN_PENDING with a resume command that names the receipt", async () => {
-    const { ctx, sheet } = setup(ALL, 8453);
-    const tl = fakeTimelock(sheet, DELAY);
-    tl.s.recorded.add(RID);
-    let err: unknown;
-    try { await runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, rel(RID, { warp: async () => { throw new Error("no warp on 8453"); } }))); } catch (e) { err = e; }
-    const e = err as PublishError;
-    expect(e.kind).toBe("GOVERN_PENDING");
-    expect(String(e.details.next_command)).toContain(`--row release-receipt --receipt-id ${RID}`);
-    expect(tl.s.events).toEqual(["schedule:release-receipt"]);
+  test("on 8453 the release row is refused with the named USAGE error before the Safe is read or anything is scheduled; on a Twin fork the same call runs (issue 1579)", async () => {
+    const mainnet = setup(ALL, 8453);
+    const tl = fakeTimelock(mainnet.sheet, DELAY);
+    const p = runGovern(mainnet.ctx, stageByName("govern"), newManifest(mainnet.ctx, addr(0xa001)), opts(mainnet.sheet, tl, rel(RID)));
+    await expect(p).rejects.toThrow("refused on chain 8453");
+    await expect(p).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining(RECEIPT_ROW) });
+    expect(tl.s.events.length).toBe(0);
+    const twin = setup(ALL);
+    const tl2 = fakeTimelock(twin.sheet, DELAY);
+    tl2.s.recorded.add(RID);
+    await runGovern(twin.ctx, stageByName("govern"), newManifest(twin.ctx, addr(0xa001)), opts(twin.sheet, tl2, rel(RID)));
+    expect(tl2.s.events).toEqual(["schedule:release-receipt", "execute:release-receipt"]);
   });
 
   test("usage: --receipt-id needs --row release-receipt, the row needs a bytes32 id, and it is not a generic call label or a matrix row", async () => {
