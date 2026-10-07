@@ -2418,6 +2418,48 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setRegistry(reg);
     }
+
+    // ─── core 1513: redeem entry gas floor ───────────────────────────────────────
+
+    /// @notice A redeem entered with less gas than the floor reverts with the typed
+    ///         `InsufficientGas(available, required)` error, before any state change.
+    ///         The harness lists one asset, so the floor is 300k + 400k = 700k.
+    function test_redeem_revertsInsufficientGasBelowFloor() public {
+        uint256 shares = _depositAt1to1(stranger, 1_000e6);
+        uint256 floor = 700_000;
+
+        vm.prank(stranger);
+        (bool ok, bytes memory ret) = address(vault).call{gas: 600_000}(
+            abi.encodeCall(vault.redeem, (shares, stranger, stranger))
+        );
+        assertFalse(ok, "redeem below the floor must revert");
+        assertEq(bytes4(ret), BasketVault.InsufficientGas.selector, "typed floor error");
+        (uint256 available, uint256 required) = abi.decode(_tail(ret), (uint256, uint256));
+        assertLt(available, floor, "reported gas is below the floor");
+        assertEq(required, floor, "reported floor is base + one asset");
+        assertEq(vault.balanceOf(stranger), shares, "shares untouched by the refused redeem");
+    }
+
+    /// @notice A redeem entered with at least the floor does not hit the guard.
+    function test_redeem_succeedsAtOrAboveFloor() public {
+        uint256 shares = _depositAt1to1(stranger, 1_000e6);
+        usdc.mint(address(router), 1_000e6);
+        router.setAmountOut(1_000e6);
+
+        vm.prank(stranger);
+        (bool ok,) = address(vault).call{gas: 2_000_000}(
+            abi.encodeCall(vault.redeem, (shares, stranger, stranger))
+        );
+        assertTrue(ok, "redeem with ample gas succeeds");
+        assertEq(vault.balanceOf(stranger), 0, "shares burned");
+    }
+
+    function _tail(bytes memory data) internal pure returns (bytes memory out) {
+        out = new bytes(data.length - 4);
+        for (uint256 i = 0; i < out.length; i++) {
+            out[i] = data[i + 4];
+        }
+    }
 }
 
 // ─── ADR-0003: Rebalancing model (WeightSnapshot, previewDepositWeights, realizedWeights, rebalance stub) ─────────

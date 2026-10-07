@@ -1,0 +1,324 @@
+---
+title: "BasketVaultRedeemGasForkTest"
+description: "Fork test: for each basket vault (rmPROTO, rmAGENT, rmRWA) a redeem estimated in one block must execute at exactly that limit in a later block. Estimation is the smallest passing limit by bisection, as `eth_estimateGas` does. Requires FORK_RPC_URL."
+---
+
+# BasketVaultRedeemGasForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/176388939d6f20be0d1e7ae20320a66e5e7f2986/contracts/test/BasketVaultRedeemGas.t.sol)
+
+**Inherits:** Test
+
+Fork test: for each basket vault (rmPROTO, rmAGENT, rmRWA) a redeem estimated in one
+block must execute at exactly that limit in a later block. Estimation is the smallest
+passing limit by bisection, as `eth_estimateGas` does. Requires FORK_RPC_URL.
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### SWAP_ROUTER
+
+```solidity
+address internal constant SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
+```
+
+### WETH
+
+```solidity
+address internal constant WETH = 0x4200000000000000000000000000000000000006;
+```
+
+### CBBTC
+
+```solidity
+address internal constant CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
+```
+
+### DESPXA
+
+```solidity
+address internal constant DESPXA = 0x9c5C365e764829876243d0b289733B9D2b729685;
+```
+
+### DEPOSIT
+
+```solidity
+uint256 internal constant DEPOSIT = 1_000 * 1e6;
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### selected
+
+```solidity
+bool internal selected;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_params"></a>
+
+### _params
+
+```solidity
+function _params() internal returns (BasketVaultDeployBase.Params memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultDeployBase.Params` |  |
+
+<a id="_proto"></a>
+
+### _proto
+
+```solidity
+function _proto() internal returns (BasketVault);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVault` |  |
+
+<a id="_agent"></a>
+
+### _agent
+
+<i>
+
+rmAGENT ships with an empty shortlist, so the fork test gives it the real wETH and
+cbBTC pools to make the redeem sell through Uniswap.
+
+</i>
+
+```solidity
+function _agent() internal returns (BasketVault);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVault` |  |
+
+<a id="_agentcfg"></a>
+
+### _agentCfg
+
+```solidity
+function _agentCfg() internal pure returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_rwa"></a>
+
+### _rwa
+
+```solidity
+function _rwa() internal returns (BasketVault);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVault` |  |
+
+<a id="_try-basketvault-bytes-uint256"></a>
+
+### _try
+
+```solidity
+function _try(BasketVault v, bytes memory data, uint256 gasLimit) internal returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+| data | `bytes` |  |
+| gasLimit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="_estimate-basketvault-bytes"></a>
+
+### _estimate
+
+```solidity
+function _estimate(BasketVault v, bytes memory data) internal returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_fund-basketvault"></a>
+
+### _fund
+
+```solidity
+function _fund(BasketVault v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+<a id="_estimatethenincludelater-basketvault-string"></a>
+
+### _estimateThenIncludeLater
+
+```solidity
+function _estimateThenIncludeLater(BasketVault v, string memory label) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+| label | `string` |  |
+
+<a id="_estimatethenincludeshifted-basketvault-string"></a>
+
+### _estimateThenIncludeShifted
+
+<i>
+
+The other drift direction: the estimate runs in a later block, the transaction is
+included in the state of the deposit block. Also a third party swaps a large size in
+the first pool between estimate and inclusion, so the redeem crosses more ticks.
+
+</i>
+
+```solidity
+function _estimateThenIncludeShifted(BasketVault v, string memory label) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+| label | `string` |  |
+
+<a id="_holds-basketvault-address"></a>
+
+### _holds
+
+```solidity
+function _holds(BasketVault v, address token) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+| token | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="test_fork_rmproto_redeemestimatethenincludelater"></a>
+
+### test_fork_rmproto_redeemEstimateThenIncludeLater
+
+```solidity
+function test_fork_rmproto_redeemEstimateThenIncludeLater() public;
+```
+
+<a id="test_fork_rmagent_redeemestimatethenincludelater"></a>
+
+### test_fork_rmagent_redeemEstimateThenIncludeLater
+
+```solidity
+function test_fork_rmagent_redeemEstimateThenIncludeLater() public;
+```
+
+<a id="test_fork_rmrwa_redeemestimatethenincludelater"></a>
+
+### test_fork_rmrwa_redeemEstimateThenIncludeLater
+
+```solidity
+function test_fork_rmrwa_redeemEstimateThenIncludeLater() public;
+```
+
+<a id="test_fork_rmproto_redeemestimatethenincludeshifted"></a>
+
+### test_fork_rmproto_redeemEstimateThenIncludeShifted
+
+```solidity
+function test_fork_rmproto_redeemEstimateThenIncludeShifted() public;
+```
+
+<a id="test_fork_rmagent_redeemestimatethenincludeshifted"></a>
+
+### test_fork_rmagent_redeemEstimateThenIncludeShifted
+
+```solidity
+function test_fork_rmagent_redeemEstimateThenIncludeShifted() public;
+```
+
+<a id="test_fork_rmrwa_redeemestimatethenincludeshifted"></a>
+
+### test_fork_rmrwa_redeemEstimateThenIncludeShifted
+
+```solidity
+function test_fork_rmrwa_redeemEstimateThenIncludeShifted() public;
+```
+

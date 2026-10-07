@@ -10252,6 +10252,22 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "InsufficientGas",
+    inputs: [
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "required",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "InsufficientObservationHistory",
     inputs: [
       {
@@ -13162,6 +13178,22 @@ export const protocolAssetVaultAbiGenerated = [
     type: "error",
     name: "FailedInnerCall",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "InsufficientGas",
+    inputs: [
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "required",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
   },
   {
     type: "error",

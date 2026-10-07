@@ -194,6 +194,7 @@ export const sidebar = [
             { text: "BasketVaultHarness", link: "/contracts/test/contract.BasketVaultHarness" },
             { text: "BasketVaultHarnessForGuards", link: "/contracts/test/contract.BasketVaultHarnessForGuards" },
             { text: "BasketVaultRebalanceTest", link: "/contracts/test/contract.BasketVaultRebalanceTest" },
+            { text: "BasketVaultRedeemGasForkTest", link: "/contracts/test/contract.BasketVaultRedeemGasForkTest" },
             { text: "BasketVaultSwapGuardsTest", link: "/contracts/test/contract.BasketVaultSwapGuardsTest" },
             { text: "BasketVaultTest", link: "/contracts/test/contract.BasketVaultTest" },
             { text: "BasketVaultTimelockTest", link: "/contracts/test/contract.BasketVaultTimelockTest" },

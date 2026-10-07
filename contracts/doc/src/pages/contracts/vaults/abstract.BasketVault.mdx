@@ -5,7 +5,7 @@ description: "Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
 
 # BasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/176388939d6f20be0d1e7ae20320a66e5e7f2986/contracts/vaults/BasketVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), Pausable, ReentrancyGuard
 
@@ -108,6 +108,36 @@ the EIP-170-tight vault family — the value is documented here.
 
 ```solidity
 uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000;
+```
+
+### REDEEM_BASE_GAS
+
+<i>
+
+Fixed part of the `redeem` entry gas floor: burn, fee and payout transfers, and the
+idle USDC read.
+
+</i>
+
+```solidity
+uint256 internal constant REDEEM_BASE_GAS = 300_000;
+```
+
+### REDEEM_GAS_PER_ASSET
+
+<i>
+
+Per-asset part of the `redeem` entry gas floor: one TWAP-bounded Uniswap V3 sell. A
+real sell costs about 200k to 340k on a Base fork, and the cost moves with the pool
+state (observation writes, tick crossings) between the node estimate and inclusion.
+The floor binds at entry, before any state-dependent work, so `eth_estimateGas`
+lands on it in every state. It counts every listed asset, so it is an upper bound.
+See docs/technical/redeem-gas-1482.md (core 1513).
+
+</i>
+
+```solidity
+uint256 internal constant REDEEM_GAS_PER_ASSET = 400_000;
 ```
 
 ### MIN_POOL_CARDINALITY
@@ -2493,6 +2523,22 @@ See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
 ```solidity
 error NotImplemented();
 ```
+
+### InsufficientGas
+
+Gas left at `redeem` entry is below the floor for this basket. Retry with a
+higher gas limit. (core 1513, same mechanism as core 1482.)
+
+```solidity
+error InsufficientGas(uint256 available, uint256 required);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| available | `uint256` | `gasleft()` at the check. |
+| required | `uint256` | The floor that was not met. |
 
 ### InsufficientPoolCardinality
 
