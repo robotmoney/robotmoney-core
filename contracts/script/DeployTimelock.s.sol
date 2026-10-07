@@ -676,7 +676,7 @@ contract DeployTimelock is ExpectedChainGuard {
 
         // PortfolioRouter
         //
-        // R7 / §4.3: the router's ADMIN_ROLE is what gates `setWeights`, so
+        // R7 / §4.3: the router's WEIGHT_SETTER_ROLE is what gates `setWeights`, so
         // this block decides who can move allocation weights afterwards. Two
         // conditions must BOTH hold when it finishes, and neither is implied
         // by the other:
@@ -719,7 +719,7 @@ contract DeployTimelock is ExpectedChainGuard {
 
         // (b), stated as the capability rather than as the role: after this
         // point `setWeights` from the deployer EOA reverts. `setWeights` is
-        // `onlyRole(ADMIN_ROLE)` on the router, so the role read IS the
+        // `onlyRole(WEIGHT_SETTER_ROLE)` on the router, so the role read IS the
         // capability — asserted separately from the revoke above so the
         // failure message names what an operator actually cares about.
         require(

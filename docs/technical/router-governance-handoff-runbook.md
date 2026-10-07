@@ -92,11 +92,84 @@ routed through the admin timelock).
 **Migrating an existing deployment.** `MIN_QUORUM_THRESHOLD` is a `constant`, so
 raising it changed the contract's bytecode. A `RouterGovernance` deployed before
 this change keeps the old floor of 1 and cannot be upgraded into the new one:
-redeploy `RouterGovernance`, grant the new instance `ADMIN_ROLE` on the
-`PortfolioRouter`, revoke it from the old instance, and re-point every
-off-chain reader (explorer indexer, dapp, watchdog) at the new address. The
-`PortfolioRouter` and the receipt contract are untouched, so allocation state
-and anchored receipts survive.
+replace it by redeploying the router, not by moving a role.
+
+> **Note (core 1571).** The owner decided on 2026-10-07 to add a bounded rotation path for `WEIGHT_SETTER_ROLE` (issue 1571, PR 1617).
+> Until it lands, replacing RouterGovernance means redeploying the router (this section describes that current behaviour). PR 1617 will update it.
+
+Granting a new `RouterGovernance` `ADMIN_ROLE` on the `PortfolioRouter` does not
+move `setWeights` authority. `setWeights` is gated on `WEIGHT_SETTER_ROLE`, which
+is its own role admin (`PortfolioRouter` constructor). The deployer's copy is
+revoked at stages 6 and 11, so nobody can grant the role to a new instance or
+revoke it from the old one. The old `RouterGovernance` keeps `WEIGHT_SETTER_ROLE`
+on that router for good.
+
+Migration therefore means a router redeploy, and the redeploy cascades:
+
+1. Deploy a new `PortfolioRouter`. Do not rerun `DeployPortfolioRouter.s.sol`
+   against the existing deployment. It calls `registry.setRouterEligible` and
+   `registry.setRouter` as the deployer, who no longer holds the registry
+   `ADMIN_ROLE`, so it would revert. Deploy the router contract on its own.
+   The constructor grants the deployer `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` on
+   the new router, and the constructor defaults apply until you set otherwise.
+   Order matters. While the deployer still holds `ADMIN_ROLE` on the new router,
+   which is before the new router's `ADMIN_ROLE` moves to the timelock, the
+   deployer sets `routerCap`, every `vaultCap[*]`, `quarantineAddress` and the
+   default weights (`setRouterCap`, `setVaultCap`, `setQuarantineAddress`,
+   `setDefaultWeights`). After that handover the same calls are Safe-scheduled
+   timelock calls. Eligibility is already on the registry, so no
+   `setRouterEligible` is needed. The default weights need one entry per
+   router-eligible vault, so their length equals `registry.routerEligibleCount()`.
+   The deployer's `WEIGHT_SETTER_ROLE` on the new router must be dropped too.
+   Step 2 covers it.
+2. Deploy a new `RouterGovernance` against it. `RouterGovernance.router` is an
+   immutable. Voted weights, voting power and proposals start empty on the new
+   instance. Run the stage 6 and 11 handoff again for the new pair.
+3. Deploy a new gateway. `RobotMoneyGateway.routerContract` is an immutable.
+   Depositors must authorize agents on the new gateway again. Hand the new
+   gateway to the timelock as well (gateway `ADMIN_ROLE` handover), not only
+   the router pair.
+4. Deploy a new `InvestmentCommitteePolicy` and `ConsensusRecommendationReceipt`
+   (`DeployInvestmentCommitteePolicy`). Both hold the gateway as an immutable,
+   and the receipt also takes the IC policy as an immutable, so they bind the
+   gateway address (`DeployGateway.s.sol`). Wire them on the new gateway with
+   `setICPolicy` and `setConsensusReceipt`.
+5. The Safe schedules and executes `VaultRegistry.setRouter(newRouter)` through
+   the admin timelock. The deployer cannot do it: it no longer holds the
+   registry `ADMIN_ROLE`. The registry does not need a redeploy because
+   `setRouter` is repeatable. `setRouter(address(0))` is refused while the old
+   router still carries default weights, so never unlink first. Re-link
+   straight to the new router, whose default weights step 1 already set.
+6. Retire the old router and gateway. `setRouter` does not stop them. The old
+   gateway stays depositable, and its router still serves any deposit routed
+   through it. The pause is `RobotMoneyGateway.pauseDeposits()` on the old
+   gateway, which reverts both `deposit` entry points with `DepositsArePaused`.
+   The holder of `DEPOSIT_PAUSER_ROLE` (the pauser key set at deploy, which the
+   timelock handover does not touch) calls it directly. It needs no timelock
+   call. Only `unpauseDeposits()` needs the timelock-held `ADMIN_ROLE`. Do not
+   use the vault's `pauseDeposits()`. The vault is shared, so that would stop
+   the new gateway as well. The old router has no switch of its own.
+   `PortfolioRouter.deposit` and `depositFor` are public with no gateway gate,
+   so pausing the old gateway does not stop direct deposits to the old router.
+   No contract call stops the old router. Treat it as still depositable,
+   tell users to stop using it, and pause the old gateway. Each agent's owner may also call
+   `revokeAgent` on the old gateway. Users withdraw through the old gateway,
+   because `pauseDeposits` never freezes a withdrawal. Old receipts and old
+   agent authorizations stay on the old contracts and do not move.
+7. Re-point every off-chain reader at the new addresses:
+   - dapp: `VITE_ROUTER_ADDRESS`, `VITE_GATEWAY_ADDRESS`, `VITE_GOVERNANCE_ADDRESS`
+     (`clients/dapp/.env.example`) and the pinned `VITE_GATEWAY_EXPECTED_CODE_HASH`.
+   - Rust payment client: `router_address`, `gateway_address`, `governance_address`
+     and the pinned `gateway_runtime_hash` (`clients/rust-payment-client/config.example.toml`).
+   - explorer indexer: `INDEXER_PORTFOLIO_ROUTER`, `INDEXER_ROUTER_GOVERNANCE`,
+     `INDEXER_GATEWAY`, `INDEXER_CONSENSUS_RECEIPT` (`services/explorer-indexer/src/main.rs`).
+   - publish-contracts manifests: the `router`, `gateway` and governance
+     entries of the new deployment manifest (sheet keys `ROUTER_ADDRESS`,
+     `GATEWAY_ADDRESS`, `GOVERNANCE_ADDRESS`, `IC_POLICY_ADDRESS`,
+     `CONSENSUS_RECEIPT_ADDRESS` are read from manifests, never typed).
+
+Old receipts stay readable on the old receipt contract but do not move to the
+new one. Allocation state on the old router does not carry over either.
 
 Selection rule: pick a quorum that **no minority subset of the voter set can
 reach**, so a change requires broad consent of the approving body. Concretely,

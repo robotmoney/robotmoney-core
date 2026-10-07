@@ -79,6 +79,17 @@ PR 1505):
 The on-chain source of truth, the fallback rule and the Safe → Timelock
 path for `defaultWeights` are unchanged.
 
+**Trade-off: `WEIGHT_SETTER_ROLE` is irrevocable after deployment.** The role
+is its own role admin and the deployer copy is revoked at stages 6 and 11.
+Nobody can grant it to a replacement `RouterGovernance` or revoke it from a
+buggy one. Making `ADMIN_ROLE` the role admin again would re-open the timelock
+bypass that core 1522 closed. Replacing `RouterGovernance` therefore means
+redeploying the router, `RouterGovernance`, the gateway, and the IC policy
+and receipt that bind the gateway (each holds its counterpart as an
+immutable). The registry is re-linked with `setRouter`, which is repeatable.
+
+**Status (core 1571).** The owner decided on 2026-10-07 to add a bounded rotation path for `WEIGHT_SETTER_ROLE` (issue 1571, PR 1617). Until it lands, replacing RouterGovernance means redeploying the router (this section describes that current behaviour). PR 1617 will update it.
+
 ## Consequences
 
 **Positive.**

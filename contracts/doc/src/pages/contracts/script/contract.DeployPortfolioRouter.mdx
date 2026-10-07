@@ -23,7 +23,7 @@ The stage driver runs this script on every chain so that
 `rmpc get-router` and the dapp router view return real data.
 
 Required env vars:
-ADMIN_ADDRESS      — receives ADMIN_ROLE on the router
+ADMIN_ADDRESS      — receives ADMIN_ROLE and WEIGHT_SETTER_ROLE on the router
 REGISTRY_ADDRESS   — deployed VaultRegistry address
 VAULT_ADDRESS      — RobotMoneyVault (sole active vault, 10 000 bps)
 
@@ -64,7 +64,7 @@ sets initial weights, and writes a deployment JSON.
 
 In broadcast mode the broadcaster IS admin (the deployer signs
 the broadcast), so msg.sender on
-setWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
+setWeights holds WEIGHT_SETTER_ROLE. No vm.prank is needed or allowed.
 
 ```solidity
 function run() external returns (Deployed memory d);
@@ -81,7 +81,7 @@ function run() external returns (Deployed memory d);
 ### runInProcessWith
 
 In-process variant for forge tests. No broadcast, no JSON written.
-setWeights requires ADMIN_ROLE; this method pranks admin.
+setWeights requires WEIGHT_SETTER_ROLE; this method pranks admin.
 
 ```solidity
 function runInProcessWith(address admin_, address registry_, address vault_, address usdc_)
@@ -93,7 +93,7 @@ function runInProcessWith(address admin_, address registry_, address vault_, add
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| admin_ | `address` | Address to receive ADMIN_ROLE. |
+| admin_ | `address` | Address to receive ADMIN_ROLE and WEIGHT_SETTER_ROLE. |
 | registry_ | `address` | Deployed VaultRegistry address. |
 | vault_ | `address` | RobotMoneyVault to seed with 10 000 bps. |
 | usdc_ | `address` | ERC-20 asset the router accepts. |
@@ -110,7 +110,7 @@ function runInProcessWith(address admin_, address registry_, address vault_, add
 
 <i>
 
-Deploy router and set initial weights. Caller must ensure ADMIN_ROLE
+Deploy router and set initial weights. Caller must ensure ADMIN_ROLE and WEIGHT_SETTER_ROLE
 is active on the call context (broadcast or prank).
 
 </i>
