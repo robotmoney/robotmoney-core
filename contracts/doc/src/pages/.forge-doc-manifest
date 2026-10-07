@@ -80,6 +80,7 @@ contracts/test/contract.BasketVaultAerodromeTest.mdx
 contracts/test/contract.BasketVaultHarness.mdx
 contracts/test/contract.BasketVaultHarnessForGuards.mdx
 contracts/test/contract.BasketVaultRebalanceTest.mdx
+contracts/test/contract.BasketVaultRedeemGasForkTest.mdx
 contracts/test/contract.BasketVaultSwapGuardsTest.mdx
 contracts/test/contract.BasketVaultTest.mdx
 contracts/test/contract.BasketVaultTimelockTest.mdx

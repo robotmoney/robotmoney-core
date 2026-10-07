@@ -4,7 +4,7 @@ title: "BasketVaultTest"
 
 # BasketVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/04c494d92ce87df3b9ba252c17541e08e28fdf97/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/176388939d6f20be0d1e7ae20320a66e5e7f2986/contracts/test/BasketVault.t.sol)
 
 **Inherits:** Test
 
@@ -1206,6 +1206,48 @@ setRegistry() is set-once; a second call reverts RegistryAlreadySet.
 ```solidity
 function test_setRegistry_revertsOnSecondCall() public;
 ```
+
+<a id="test_redeem_revertsinsufficientgasbelowfloor"></a>
+
+### test_redeem_revertsInsufficientGasBelowFloor
+
+A redeem entered with less gas than the floor reverts with the typed
+`InsufficientGas(available, required)` error, before any state change.
+The harness lists one asset, so the floor is 300k + 400k = 700k.
+
+```solidity
+function test_redeem_revertsInsufficientGasBelowFloor() public;
+```
+
+<a id="test_redeem_succeedsatorabovefloor"></a>
+
+### test_redeem_succeedsAtOrAboveFloor
+
+A redeem entered with at least the floor does not hit the guard.
+
+```solidity
+function test_redeem_succeedsAtOrAboveFloor() public;
+```
+
+<a id="_tail-bytes"></a>
+
+### _tail
+
+```solidity
+function _tail(bytes memory data) internal pure returns (bytes memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `bytes` |  |
 
 ## Events
 
