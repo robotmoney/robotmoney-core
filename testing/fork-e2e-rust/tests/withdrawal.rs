@@ -424,7 +424,7 @@ fn agent_withdrawal_happy_path() {
                 idempotencyKey: alloy_primitives::B256::from([11u8; 32]),
             },
             U256::ZERO,
-            2_000_000,
+            3_000_000,
         )
         .expect("gateway.withdraw");
     assert_eq!(withdraw_receipt.status, 1, "withdraw must succeed");
@@ -702,7 +702,7 @@ fn agent_withdrawal_window_cap() {
                 idempotencyKey: alloy_primitives::B256::from([21u8; 32]),
             },
             U256::ZERO,
-            2_000_000,
+            3_000_000,
         )
         .expect("first withdrawal must succeed");
     assert_eq!(w1.status, 1, "first withdrawal must succeed");
@@ -723,7 +723,7 @@ fn agent_withdrawal_window_cap() {
             idempotencyKey: alloy_primitives::B256::from([23u8; 32]),
         },
         U256::ZERO,
-        2_000_000,
+        3_000_000,
     );
     assert!(
         result.is_err(),
@@ -1021,7 +1021,7 @@ fn router_withdrawal() {
                 idempotencyKey: alloy_primitives::B256::from([61u8; 32]),
             },
             U256::ZERO,
-            3_000_000,
+            6_000_000,
         )
         .expect("gateway.withdrawFromRouter");
     assert_eq!(
