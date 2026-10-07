@@ -18,8 +18,7 @@
  *      two browser contexts and executed through the Safe, and the role is
  *      held on chain and shown by the dapp.
  *
- * The role is DEPOSIT_PAUSER_ROLE: the gateway's pauser role (the issue text
- * says PAUSER_ROLE).
+ * The role is DEPOSIT_PAUSER_ROLE, the gateway's deposit-pauser role.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
