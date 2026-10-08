@@ -90,6 +90,14 @@ pub const RECEIPT_FIXTURES_PORT: u16 = 8097;
 /// Compose profile that gates the `receipt-fixtures` service.
 pub const RECEIPT_FIXTURES_PROFILE: &str = "receipt-fixtures";
 
+/// Env: a directory the harness puts this run's files in (keystores, sheet, manifests) instead of a throwaway
+/// temp directory and `/dev/shm`. The stage deploy container mounts a host directory here.
+pub const WORK_DIR_ENV: &str = "SMOKE_TEST_WORK_DIR";
+
+/// Env: the RPC URL the dapp stack's explorer-indexer container dials, when it is not the host-side fork's
+/// Docker-bridge address (the stage stack reaches the chain container by its service name).
+pub const INDEXER_RPC_URL_ENV: &str = "SMOKE_TEST_INDEXER_RPC_URL";
+
 /// Setting this env var (any value) boots the devnet without the seeded
 /// fixture receipts and without the `receipt-fixtures` service, so an
 /// acceptance stack indexes only receipts a real frontend produced.
@@ -218,7 +226,10 @@ pub struct Fixture {
     /// Tempdir for harness artifacts (deployment JSON, etc.).
     /// Exposed via [`Fixture::tempdir`] so callers can write
     /// additional files (keystores, configs) into the same directory.
-    tmp: TempDir,
+    /// `None` once [`Fixture::keep_work_dir`] handed the directory to the caller.
+    tmp: Option<TempDir>,
+    /// The directory behind `tmp`, valid for the whole life of the fixture.
+    work_dir: PathBuf,
     rpc_port: u16,
     rpc_url: String,
     chain_id: u64,
@@ -493,14 +504,33 @@ impl Fixture {
             .copied()
             .collect();
         let extra_deploy_env = sheet_env.as_slice();
+        // anvil is the Twin fork's binary: a harness that reuses a running fork (TWIN_RPC_URL, the stage chain
+        // container) never starts one.
+        let reuses_fork = std::env::var(twin_fork::TWIN_RPC_URL_ENV)
+            .map(|u| !u.trim().is_empty())
+            .unwrap_or(false);
         for tool in ["anvil", "forge", "cast", "bun"] {
+            if tool == "anvil" && reuses_fork {
+                continue;
+            }
             if which::which(tool).is_err() {
                 return Err(HarnessError::FoundryMissing(tool));
             }
         }
 
         let repo_root = locate_repo_root()?;
-        let tmp = TempDir::new()?;
+        // SMOKE_TEST_WORK_DIR puts the run's files (keystores, sheet, manifests) in a directory the caller owns
+        // (the stage harness container mounts a host directory there). Otherwise a throwaway directory.
+        let work_parent = std::env::var_os(WORK_DIR_ENV)
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty());
+        let tmp = match &work_parent {
+            Some(dir) => {
+                std::fs::create_dir_all(dir)?;
+                TempDir::new_in(dir)?
+            }
+            None => TempDir::new()?,
+        };
         // Stamp this boot with a unique run-id (exported for the compose label interpolation) and
         // reap any dapp containers stranded by a previous run.
         let (run_id, _run_created) = ensure_run_identity();
@@ -529,7 +559,9 @@ impl Fixture {
         let publish_cfg = publish::PublishConfig::from_env(&repo_root).inspect_err(|err| {
             logging::error("smoke-test", format!("publish contracts config: {err}"));
         })?;
-        let key_parent = if Path::new("/dev/shm").is_dir() {
+        let key_parent = if work_parent.is_some() {
+            tmp.path().to_path_buf()
+        } else if Path::new("/dev/shm").is_dir() {
             PathBuf::from("/dev/shm")
         } else {
             tmp.path().to_path_buf()
@@ -601,9 +633,11 @@ impl Fixture {
         let gateway_runtime_hash = runtime_code_hash(&rpc_url, &topology.gateway)?;
         let chain_id = publish::TWIN_CHAIN_ID;
 
+        let work_dir = tmp.path().to_path_buf();
         let fx = Fixture {
             twin,
-            tmp,
+            tmp: Some(tmp),
+            work_dir,
             rpc_port,
             rpc_url,
             chain_id,
@@ -806,7 +840,15 @@ impl Fixture {
     /// Path to the fixture's private tempdir. Callers may write
     /// additional files (keystores, client configs) here.
     pub fn tempdir(&self) -> &Path {
-        self.tmp.path()
+        &self.work_dir
+    }
+    /// Stop deleting the work directory when the fixture drops. The stage deploy job (`--deploy-only`) calls this:
+    /// the keystores, sheet and manifests outlive the process that made them. Returns the directory.
+    pub fn keep_work_dir(&mut self) -> PathBuf {
+        if let Some(t) = self.tmp.take() {
+            let _ = t.keep();
+        }
+        self.work_dir.clone()
     }
     pub fn repo_root(&self) -> &Path {
         &self.repo_root
@@ -1755,8 +1797,12 @@ fn fund_rm_pool(
 /// (anvil, started by the bun tool) and the publish run (forge, cast, bun) need them. The dapp
 /// stack additionally needs docker, which [`DappStack::boot`] checks itself.
 pub fn prerequisites_available() -> bool {
+    let reuses_fork = std::env::var(twin_fork::TWIN_RPC_URL_ENV)
+        .map(|u| !u.trim().is_empty())
+        .unwrap_or(false);
     ["anvil", "bun", "forge", "cast"]
         .iter()
+        .filter(|t| !(reuses_fork && **t == "anvil"))
         .all(|t| which::which(t).is_ok())
 }
 
@@ -2491,7 +2537,7 @@ pub fn locate_repo_root() -> Result<PathBuf, HarnessError> {
 fn start_compose_log_follower(
     compose_dir: &Path,
     compose_args: &[String],
-    compose_env: &[(&str, String)],
+    compose_env: &[(String, String)],
     service_label: &'static str,
 ) -> Result<MonitoredChild, HarnessError> {
     let mut cmd = Command::new("docker");
@@ -2542,7 +2588,7 @@ fn start_compose_log_follower(
 fn log_compose_state(
     compose_dir: &Path,
     compose_args: &[String],
-    compose_env: &[(&str, String)],
+    compose_env: &[(String, String)],
     service_label: &'static str,
     reason: &str,
     tail_lines: u32,
@@ -2599,7 +2645,7 @@ fn log_compose_state(
 fn compose_health_probe<'a>(
     compose_dir: &'a Path,
     compose_args: &'a [String],
-    compose_env: &'a [(&str, String)],
+    compose_env: &'a [(String, String)],
     service_label: &'static str,
 ) -> impl FnMut() -> Result<(), HarnessError> + 'a {
     move || {
@@ -2633,7 +2679,7 @@ fn compose_health_probe<'a>(
 fn compose_container_statuses(
     compose_dir: &Path,
     compose_args: &[String],
-    compose_env: &[(&str, String)],
+    compose_env: &[(String, String)],
 ) -> Result<Vec<ComposeContainerStatus>, HarnessError> {
     let mut ps = Command::new("docker");
     ps.arg("compose");
@@ -2802,6 +2848,179 @@ pub struct DappStackOptions {
     pub public_endpoints: PublicEndpoints,
 }
 
+/// The three URLs a browser reaches the stack on (baked into the dapp bundle and the explorer CORS list).
+#[derive(Debug, Clone)]
+pub struct DappPublicUrls {
+    pub rpc: String,
+    pub explorer_api: String,
+    pub dapp: String,
+}
+
+/// The environment `docker-compose.dapp.yaml` interpolates: the deployed addresses, the host ports and the URLs.
+/// One function feeds `compose up`, the log follower, the health probe and the per-service rebuild of host mode
+/// ([`DappStack::boot`]) and the stage deploy job (`smoke-test --deploy-only`), which hands it to
+/// `scripts/stage/core-stack.ts` as JSON so the dapp stack starts without this process owning it.
+fn dapp_compose_env(
+    d: &DappDeployed,
+    ports: &DappPorts,
+    indexer_rpc_url: &str,
+    urls: &DappPublicUrls,
+) -> Vec<(String, String)> {
+    let kv = |k: &str, v: &str| (k.to_string(), v.to_string());
+    vec![
+        kv("POSTGRES_PORT", &ports.postgres_port.to_string()),
+        kv("EXPLORER_API_PORT", &ports.explorer_api_port.to_string()),
+        kv("DAPP_PORT", &ports.dapp_port.to_string()),
+        kv("VITE_GATEWAY_ADDRESS", &d.gateway),
+        kv("VITE_VAULT_ADDRESS", &d.vault),
+        kv("VITE_GATEWAY_EXPECTED_CODE_HASH", &d.gateway_runtime_hash),
+        // Issue #320: registry and router addresses so the DestinationSelector can list registered vaults and
+        // offer the Portfolio Router deposit path.
+        kv("VITE_REGISTRY_ADDRESS", &d.registry),
+        kv("VITE_ROUTER_ADDRESS", &d.router),
+        // Issue #364: RouterGovernance address for the Governance tab.
+        kv("VITE_GOVERNANCE_ADDRESS", &d.governance),
+        // Core 1544: the timelock and the Safe that proposes to it (the admin tabs build a Safe -> Timelock
+        // proposal instead of a wallet transaction).
+        kv("VITE_TIMELOCK_ADDRESS", &d.timelock),
+        kv("VITE_SAFE_ADDRESS", &d.safe),
+        // Issues #463/#466: the live RM token address (core 1489: nothing deploys RM).
+        kv("VITE_RM_TOKEN_ADDRESS", RM_TOKEN_ADDRESS_HEX),
+        // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can compute applied vs not-applied.
+        kv("VITE_VAULT_ADDRESSES", &d.vault_addresses_json),
+        kv("INDEXER_GATEWAY", &d.gateway),
+        kv("INDEXER_VAULT", &d.vault),
+        kv("INDEXER_REGISTRY", &d.registry),
+        // WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter (issue #615).
+        kv("INDEXER_PORTFOLIO_ROUTER", &d.router),
+        // Issue #1294: ReceiptRecorded/ReceiptReleased events from ConsensusRebalanceReceipt.
+        kv("INDEXER_CONSENSUS_RECEIPT", &d.consensus_receipt),
+        // Issue #1294: fixed port for the receipt-fixtures compose service.
+        kv("RECEIPT_FIXTURES_PORT", &RECEIPT_FIXTURES_PORT.to_string()),
+        kv("INDEXER_RPC_URL", indexer_rpc_url),
+        kv("VITE_DEVNET_RPC_URL", &urls.rpc),
+        kv("VITE_EXPLORER_API_URL", &urls.explorer_api),
+        kv("VITE_DAPP_URL", &urls.dapp),
+        // The dapp faucet signs with the harness USDC holder, the Twin chain's funded faucet reserve. Test-only
+        // key; a mainnet build refuses any faucet key (clients/dapp/src/lib/buildEnvValidation.ts).
+        kv(
+            "VITE_FAUCET_HARNESS_PRIVATE_KEY",
+            HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
+        ),
+        kv("INDEXER_CHAIN_ID", "918453"),
+        kv("INDEXER_CHAIN_NAME", "devnet"),
+        kv("EXPLORER_API_CHAIN_ID", "918453"),
+    ]
+}
+
+/// What a deploy leaves on chain that the dapp stack is configured with.
+#[derive(Debug, Clone)]
+struct DappDeployed {
+    gateway: String,
+    vault: String,
+    gateway_runtime_hash: String,
+    registry: String,
+    router: String,
+    governance: String,
+    timelock: String,
+    safe: String,
+    consensus_receipt: String,
+    vault_addresses_json: String,
+}
+
+impl DappDeployed {
+    fn of(fixture: &Fixture) -> Self {
+        Self {
+            gateway: fixture.gateway_hex().to_string(),
+            vault: fixture.vault_hex().to_string(),
+            gateway_runtime_hash: fixture.gateway_runtime_hash().to_string(),
+            registry: fixture.registry_hex().to_string(),
+            router: fixture.router_hex().to_string(),
+            governance: fixture.governance_hex().to_string(),
+            timelock: fixture.timelock_hex().to_string(),
+            safe: fixture.safe_hex().to_string(),
+            consensus_receipt: fixture.consensus_receipt_hex().to_string(),
+            vault_addresses_json: fixture.vault_address_map_json(),
+        }
+    }
+}
+
+/// The JSON object `scripts/stage/core-stack.ts` reads: the compose environment plus `COMPOSE_PROFILES`.
+fn compose_env_json(env: Vec<(String, String)>, compose_profiles: &str) -> String {
+    let mut map: serde_json::Map<String, serde_json::Value> = env
+        .into_iter()
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .collect();
+    map.insert(
+        "COMPOSE_PROFILES".to_string(),
+        serde_json::Value::String(compose_profiles.to_string()),
+    );
+    serde_json::Value::Object(map).to_string()
+}
+
+/// What the stage deploy job (`smoke-test --deploy-only`) leaves for `scripts/stage/core-stack.ts`.
+#[derive(Debug, Clone)]
+pub struct StageDeployOutput {
+    /// `COMPOSE_PROFILES` plus every variable `docker-compose.dapp.yaml` interpolates, as a JSON object.
+    pub dapp_env_json: String,
+    /// The URLs the stack is reached on (the endpoint summary prints them).
+    pub urls: DappPublicUrls,
+}
+
+/// Seed what the dapp stack needs on chain and compute the dapp compose environment, without starting a
+/// container. The host-mode counterpart is [`DappStack::boot`]. `postgres` publishes no host port in the stage
+/// overlay, so its port entry is the compose default.
+pub fn stage_deploy_output(
+    fixture: &Fixture,
+    opts: &DappStackOptions,
+) -> Result<StageDeployOutput, HarnessError> {
+    if receipt_fixtures_enabled() {
+        fixture.seed_consensus_receipts()?;
+    }
+    let explorer_api_port = opts.explorer_api_port.ok_or_else(|| {
+        HarnessError::other("--deploy-only needs --explorer-port (the stage stack has fixed ports)")
+    })?;
+    let dapp_port = opts.dapp_port.ok_or_else(|| {
+        HarnessError::other("--deploy-only needs --dapp-port (the stage stack has fixed ports)")
+    })?;
+    let ports = DappPorts {
+        postgres_port: 5432,
+        explorer_api_port,
+        dapp_port,
+    };
+    let urls = match &opts.public_endpoints {
+        PublicEndpoints::Named {
+            rpc_url,
+            dapp_url,
+            explorer_api_url,
+        } => DappPublicUrls {
+            rpc: rpc_url.clone(),
+            explorer_api: explorer_api_url.clone(),
+            dapp: dapp_url.clone(),
+        },
+        PublicEndpoints::Local => DappPublicUrls {
+            rpc: fixture.rpc_url().to_string(),
+            explorer_api: ports.explorer_api_url(),
+            dapp: ports.dapp_url(),
+        },
+        PublicEndpoints::EphemeralTunnel => {
+            return Err(HarnessError::other(
+                "--deploy-only does not open tunnels: use --public-*-url",
+            ))
+        }
+    };
+    let indexer_rpc_url = std::env::var(INDEXER_RPC_URL_ENV)
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| fixture.indexer_rpc_url());
+    let env = dapp_compose_env(&DappDeployed::of(fixture), &ports, &indexer_rpc_url, &urls);
+    let dapp_env_json = compose_env_json(env, dapp_compose_profiles_for_up());
+    Ok(StageDeployOutput {
+        dapp_env_json,
+        urls,
+    })
+}
+
 impl DappStack {
     /// Build and start the dapp compose stack, injecting the deployed
     /// contract addresses as build args. Waits for the dapp and
@@ -2880,71 +3099,7 @@ impl DappStack {
         let local_dapp_url = ports.dapp_url();
         let local_explorer_api_url = ports.explorer_api_url();
         let local_rpc_url = fixture.rpc_url().to_string();
-        // The Docker-bridge host address and the Twin fork port (the fork runs on the host).
-        let indexer_rpc_url = fixture.indexer_rpc_url();
         let dapp_compose_files = vec!["-f".to_string(), "docker-compose.dapp.yaml".to_string()];
-        let dapp_log_env = vec![
-            ("POSTGRES_PORT", ports.postgres_port.to_string()),
-            ("EXPLORER_API_PORT", ports.explorer_api_port.to_string()),
-            ("DAPP_PORT", ports.dapp_port.to_string()),
-            ("VITE_GATEWAY_ADDRESS", gateway_hex.to_string()),
-            ("VITE_VAULT_ADDRESS", vault_hex.to_string()),
-            (
-                "VITE_GATEWAY_EXPECTED_CODE_HASH",
-                gateway_runtime_hash.clone(),
-            ),
-            // Issue #320: surface registry and router addresses so the dapp's
-            // DestinationSelector can list registered vaults and offer the
-            // Portfolio Router deposit path.
-            ("VITE_REGISTRY_ADDRESS", fixture.registry_hex().to_string()),
-            ("VITE_ROUTER_ADDRESS", fixture.router_hex().to_string()),
-            // Issue #364: RouterGovernance address for the Governance tab.
-            (
-                "VITE_GOVERNANCE_ADDRESS",
-                fixture.governance_hex().to_string(),
-            ),
-            // Core 1544: the timelock and the Safe that proposes to it, so the admin
-            // tabs build a Safe -> Timelock proposal instead of a wallet transaction.
-            ("VITE_TIMELOCK_ADDRESS", fixture.timelock_hex().to_string()),
-            ("VITE_SAFE_ADDRESS", fixture.safe_hex().to_string()),
-            // Issues #463/#466: the live RM token address so the main-page
-            // balances panel renders the RM row (core 1489: nothing deploys RM).
-            ("VITE_RM_TOKEN_ADDRESS", RM_TOKEN_ADDRESS_HEX.to_string()),
-            // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
-            // compute applied vs not-applied against live router weights.
-            ("VITE_VAULT_ADDRESSES", fixture.vault_address_map_json()),
-            ("INDEXER_GATEWAY", gateway_hex.to_string()),
-            ("INDEXER_VAULT", vault_hex.to_string()),
-            ("INDEXER_REGISTRY", fixture.registry_hex().to_string()),
-            // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter
-            // (issue #615); router deposits trigger fresh TVL snapshots for all registered vaults.
-            ("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex().to_string()),
-            // Issue #1294: index ReceiptRecorded/ReceiptReleased events from
-            // ConsensusRebalanceReceipt and verify each payload_uri's digest.
-            (
-                "INDEXER_CONSENSUS_RECEIPT",
-                fixture.consensus_receipt_hex().to_string(),
-            ),
-            // Issue #1294: fixed port for the receipt-fixtures compose service
-            // (see RECEIPT_FIXTURES_PORT).
-            ("RECEIPT_FIXTURES_PORT", RECEIPT_FIXTURES_PORT.to_string()),
-            // The indexer reaches the host-side Twin fork over the Docker bridge (gateway address
-            // and fork port), see Fixture::indexer_rpc_url.
-            ("INDEXER_RPC_URL", indexer_rpc_url.clone()),
-            ("VITE_DEVNET_RPC_URL", "".to_string()),
-            ("VITE_EXPLORER_API_URL", "".to_string()),
-            ("VITE_DAPP_URL", "".to_string()),
-            // The dapp faucet (Faucet tab and onboarding seed) signs with the harness USDC holder,
-            // the Twin chain's funded faucet reserve. Test-only key; a mainnet build refuses any
-            // faucet key (clients/dapp/src/lib/buildEnvValidation.ts).
-            (
-                "VITE_FAUCET_HARNESS_PRIVATE_KEY",
-                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX.to_string(),
-            ),
-            ("INDEXER_CHAIN_ID", "918453".to_string()),
-            ("INDEXER_CHAIN_NAME", "devnet".to_string()),
-            ("EXPLORER_API_CHAIN_ID", "918453".to_string()),
-        ];
         logging::info(
             "smoke-test",
             format!(
@@ -2982,85 +3137,20 @@ impl DappStack {
             } => (None, rpc_url, dapp_url, explorer_api_url),
         };
 
-        let rebuild_env: Vec<(String, String)> = vec![
-            ("POSTGRES_PORT".into(), ports.postgres_port.to_string()),
-            (
-                "EXPLORER_API_PORT".into(),
-                ports.explorer_api_port.to_string(),
-            ),
-            ("DAPP_PORT".into(), ports.dapp_port.to_string()),
-            ("VITE_GATEWAY_ADDRESS".into(), gateway_hex.to_string()),
-            ("VITE_VAULT_ADDRESS".into(), vault_hex.to_string()),
-            (
-                "VITE_GATEWAY_EXPECTED_CODE_HASH".into(),
-                gateway_runtime_hash.clone(),
-            ),
-            (
-                "VITE_REGISTRY_ADDRESS".into(),
-                fixture.registry_hex().to_string(),
-            ),
-            (
-                "VITE_ROUTER_ADDRESS".into(),
-                fixture.router_hex().to_string(),
-            ),
-            // Issue #364: RouterGovernance address for the Governance tab.
-            (
-                "VITE_GOVERNANCE_ADDRESS".into(),
-                fixture.governance_hex().to_string(),
-            ),
-            // Core 1544: the timelock and the Safe that proposes to it.
-            (
-                "VITE_TIMELOCK_ADDRESS".into(),
-                fixture.timelock_hex().to_string(),
-            ),
-            ("VITE_SAFE_ADDRESS".into(), fixture.safe_hex().to_string()),
-            // Issues #463/#466: the live RM token address so the main-page
-            // balances panel renders the RM row (core 1489: nothing deploys RM).
-            ("VITE_RM_TOKEN_ADDRESS".into(), RM_TOKEN_ADDRESS_HEX.into()),
-            // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
-            // compute applied vs not-applied against live router weights.
-            (
-                "VITE_VAULT_ADDRESSES".into(),
-                fixture.vault_address_map_json(),
-            ),
-            ("INDEXER_GATEWAY".into(), gateway_hex.to_string()),
-            ("INDEXER_VAULT".into(), vault_hex.to_string()),
-            (
-                "INDEXER_REGISTRY".into(),
-                fixture.registry_hex().to_string(),
-            ),
-            // Index WeightsSet/DefaultWeightsSet from PortfolioRouter (issue #615).
-            (
-                "INDEXER_PORTFOLIO_ROUTER".into(),
-                fixture.router_hex().to_string(),
-            ),
-            // Issue #1294: index ReceiptRecorded/ReceiptReleased events from
-            // ConsensusRebalanceReceipt and verify each payload_uri's digest.
-            (
-                "INDEXER_CONSENSUS_RECEIPT".into(),
-                fixture.consensus_receipt_hex().to_string(),
-            ),
-            // Issue #1294: fixed port for the receipt-fixtures compose service.
-            (
-                "RECEIPT_FIXTURES_PORT".into(),
-                RECEIPT_FIXTURES_PORT.to_string(),
-            ),
-            // Issue #775: see dapp_log_env comment above.
-            ("INDEXER_RPC_URL".into(), indexer_rpc_url.clone()),
-            ("VITE_DEVNET_RPC_URL".into(), vite_rpc_url.clone()),
-            (
-                "VITE_EXPLORER_API_URL".into(),
-                vite_explorer_api_url.clone(),
-            ),
-            ("VITE_DAPP_URL".into(), vite_dapp_url.clone()),
-            (
-                "VITE_FAUCET_HARNESS_PRIVATE_KEY".into(),
-                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX.to_string(),
-            ),
-            ("INDEXER_CHAIN_ID".into(), "918453".into()),
-            ("INDEXER_CHAIN_NAME".into(), "devnet".into()),
-            ("EXPLORER_API_CHAIN_ID".into(), "918453".into()),
-        ];
+        // The one environment the compose file interpolates (up, ps, logs, per-service rebuild). The indexer
+        // reaches the host-side Twin fork over the Docker bridge (gateway address and fork port).
+        let dapp_env = dapp_compose_env(
+            &DappDeployed::of(fixture),
+            &ports,
+            &fixture.indexer_rpc_url(),
+            &DappPublicUrls {
+                rpc: vite_rpc_url.clone(),
+                explorer_api: vite_explorer_api_url.clone(),
+                dapp: vite_dapp_url.clone(),
+            },
+        );
+        let dapp_log_env = dapp_env.clone();
+        let rebuild_env = dapp_env.clone();
 
         eprintln!("smoke-test: building and starting dapp stack (this may take several minutes for first build)...");
 
@@ -3073,59 +3163,10 @@ impl DappStack {
             .arg("-d")
             .arg("--build")
             .env("COMPOSE_PROFILES", dapp_compose_profiles_for_up())
-            .env("POSTGRES_PORT", ports.postgres_port.to_string())
-            .env("EXPLORER_API_PORT", ports.explorer_api_port.to_string())
-            .env("DAPP_PORT", ports.dapp_port.to_string())
-            .env("VITE_GATEWAY_ADDRESS", gateway_hex)
-            .env("VITE_VAULT_ADDRESS", vault_hex)
-            .env("VITE_GATEWAY_EXPECTED_CODE_HASH", &gateway_runtime_hash)
-            // Issue #320: thread registry and router addresses into the dapp
-            // build so the DestinationSelector and router deposit flow work.
-            .env("VITE_REGISTRY_ADDRESS", fixture.registry_hex())
-            .env("VITE_ROUTER_ADDRESS", fixture.router_hex())
-            // Issue #364: thread governance address into the dapp build.
-            .env("VITE_GOVERNANCE_ADDRESS", fixture.governance_hex())
-            // Core 1544: the timelock and the Safe that proposes to it (admin tabs).
-            .env("VITE_TIMELOCK_ADDRESS", fixture.timelock_hex())
-            .env("VITE_SAFE_ADDRESS", fixture.safe_hex())
-            // Issues #463/#466: thread the live RM token address into the dapp
-            // build so the main-page balances panel renders the RM row.
-            .env("VITE_RM_TOKEN_ADDRESS", RM_TOKEN_ADDRESS_HEX)
-            // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
-            // compute applied vs not-applied against live router weights.
-            .env("VITE_VAULT_ADDRESSES", fixture.vault_address_map_json())
-            .env("INDEXER_GATEWAY", gateway_hex)
-            .env("INDEXER_VAULT", vault_hex)
-            .env("INDEXER_REGISTRY", fixture.registry_hex())
-            // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter (issue #615).
-            .env("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex())
-            // Issue #1294: index ReceiptRecorded/ReceiptReleased events from
-            // ConsensusRebalanceReceipt and verify each payload_uri's digest.
-            .env("INDEXER_CONSENSUS_RECEIPT", fixture.consensus_receipt_hex())
-            // Issue #1294: fixed port for the receipt-fixtures compose service.
-            .env("RECEIPT_FIXTURES_PORT", RECEIPT_FIXTURES_PORT.to_string())
-            // The indexer reaches the host-side Twin fork over the Docker bridge (gateway address
-            // and fork port). The fork listens on every interface.
-            .env("INDEXER_RPC_URL", &indexer_rpc_url)
-            // VITE_FORK_RPC_URL intentionally NOT set: the dapp routes all
-            // chain reads through the user's wallet RPC (see
-            // docs/technical/dapp-topology.md §2). VITE_DEVNET_RPC_URL is
-            // passed as a *UX hint*: the dapp's Connect Wallet button uses
-            // it to call `wallet_addEthereumChain` so MetaMask prefills the
-            // RPC URL when prompting the user to add chain 918453. The
-            // dapp never fetches from this URL itself.
-            .env("VITE_DEVNET_RPC_URL", &vite_rpc_url)
-            .env("VITE_EXPLORER_API_URL", &vite_explorer_api_url)
-            .env("VITE_DAPP_URL", &vite_dapp_url)
-            // The faucet is a Twin chain environment step (fund USDC from the harness holder), not
-            // a deployment step, so the publish run never sees this key. The dapp build gets it.
-            .env(
-                "VITE_FAUCET_HARNESS_PRIVATE_KEY",
-                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
-            )
-            .env("INDEXER_CHAIN_ID", "918453")
-            .env("INDEXER_CHAIN_NAME", "devnet")
-            .env("EXPLORER_API_CHAIN_ID", "918453")
+            // VITE_FORK_RPC_URL intentionally NOT set: the dapp routes all chain reads through the user's wallet
+            // RPC (docs/technical/dapp-topology.md §2). VITE_DEVNET_RPC_URL is a UX hint for
+            // `wallet_addEthereumChain`; the dapp never fetches from it.
+            .envs(dapp_env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .current_dir(&compose_dir)
             .output()
             .map_err(HarnessError::from)?;
@@ -3147,17 +3188,6 @@ impl DappStack {
         }
 
         let mut compose_log_followers = Vec::new();
-        let dapp_log_env = {
-            dapp_log_env
-                .into_iter()
-                .map(|(key, value)| match key {
-                    "VITE_DEVNET_RPC_URL" => (key, vite_rpc_url.clone()),
-                    "VITE_EXPLORER_API_URL" => (key, vite_explorer_api_url.clone()),
-                    "VITE_DAPP_URL" => (key, vite_dapp_url.clone()),
-                    _ => (key, value),
-                })
-                .collect::<Vec<_>>()
-        };
         let dapp_log_follower = start_compose_log_follower(
             &compose_dir,
             &dapp_compose_files,
@@ -3972,6 +4002,108 @@ ccc333\t\teth-beacon
         assert!(
             !text.contains("replacement transaction underpriced"),
             "a genuine funding failure must not read as the nonce race: {text}"
+        );
+    }
+    // ---- the dapp compose environment (core 1549) --------------------------------------------------------
+
+    fn sample_deployed() -> DappDeployed {
+        let a = |n: u8| format!("0x{n:040x}");
+        DappDeployed {
+            gateway: a(1),
+            vault: a(2),
+            gateway_runtime_hash: format!("0x{:064x}", 3),
+            registry: a(4),
+            router: a(5),
+            governance: a(6),
+            timelock: a(7),
+            safe: a(8),
+            consensus_receipt: a(9),
+            vault_addresses_json: "{\"rmUSDC\":\"0x01\"}".to_string(),
+        }
+    }
+
+    fn sample_env() -> Vec<(String, String)> {
+        dapp_compose_env(
+            &sample_deployed(),
+            &DappPorts {
+                postgres_port: 5432,
+                explorer_api_port: 18546,
+                dapp_port: 5173,
+            },
+            "http://twin-chain:8545",
+            &DappPublicUrls {
+                rpc: "https://rpc.example".to_string(),
+                explorer_api: "https://explorer.example".to_string(),
+                dapp: "https://dapp.example".to_string(),
+            },
+        )
+    }
+
+    /// Every variable `docker-compose.dapp.yaml` requires with `:?` is in the environment the harness hands
+    /// compose, so neither host mode nor the stage deploy job can start a stack compose refuses to interpolate.
+    #[test]
+    fn dapp_compose_env_names_every_required_compose_variable() {
+        let root = locate_repo_root().expect("repo root");
+        let compose = std::fs::read_to_string(
+            root.join("testing/ethereum-testnet/config/docker-compose.dapp.yaml"),
+        )
+        .expect("compose file");
+        let mut required = Vec::new();
+        for part in compose.split("${").skip(1) {
+            let Some(end) = part.find('}') else { continue };
+            let expr = &part[..end];
+            if let Some((name, _)) = expr.split_once(":?") {
+                required.push(name.to_string());
+            }
+        }
+        assert!(
+            required.len() >= 4,
+            "the compose file lost its required variables: {required:?}"
+        );
+        let env = sample_env();
+        for name in &required {
+            assert!(
+                env.iter().any(|(k, v)| k == name && !v.is_empty()),
+                "{name} is required by docker-compose.dapp.yaml but missing or empty in the harness environment"
+            );
+        }
+    }
+
+    #[test]
+    fn dapp_compose_env_has_unique_keys_and_the_public_urls() {
+        let env = sample_env();
+        let mut keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        keys.sort_unstable();
+        let n = keys.len();
+        keys.dedup();
+        assert_eq!(keys.len(), n, "a compose variable is set twice");
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("VITE_DEVNET_RPC_URL"), Some("https://rpc.example"));
+        assert_eq!(
+            get("VITE_EXPLORER_API_URL"),
+            Some("https://explorer.example")
+        );
+        assert_eq!(get("VITE_DAPP_URL"), Some("https://dapp.example"));
+        assert_eq!(get("INDEXER_RPC_URL"), Some("http://twin-chain:8545"));
+        assert_eq!(get("DAPP_PORT"), Some("5173"));
+        assert_eq!(get("EXPLORER_API_PORT"), Some("18546"));
+    }
+
+    /// The JSON the stage deploy job writes: a flat string object that carries `COMPOSE_PROFILES`, which
+    /// `core-stack.ts` hands to `docker compose` as its environment.
+    #[test]
+    fn compose_env_json_is_a_flat_string_object_with_the_profiles() {
+        let json = compose_env_json(sample_env(), RECEIPT_FIXTURES_PROFILE);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("json");
+        let obj = v.as_object().expect("object");
+        assert!(obj.values().all(|x| x.is_string()));
+        assert_eq!(obj["COMPOSE_PROFILES"], RECEIPT_FIXTURES_PROFILE);
+        assert_eq!(obj["VITE_VAULT_ADDRESSES"], "{\"rmUSDC\":\"0x01\"}");
+        assert_eq!(obj.len(), sample_env().len() + 1);
+        let none = compose_env_json(sample_env(), "");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&none).unwrap()["COMPOSE_PROFILES"],
+            ""
         );
     }
 }
