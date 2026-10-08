@@ -87,31 +87,33 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
         "rmAGENT ships empty and stays paused"
     );
 
-    // A real depositor puts USDC into the router: shares in every open vault.
+    // A real depositor puts USDC straight into each open vault: shares in rmUSDC, rmPROTO and rmRWA.
     let user = fx.agent();
     let user_s = format!("{user:#x}");
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
-    let amount: u128 = 100_000_000; // 100 USDC
+    let per_vault: u128 = 20_000_000; // 20 USDC, under every per-deposit cap
     fx.fund_gas(user, 10_000_000_000_000_000_000)
         .expect("fund gas for the depositor");
-    fx.fund_usdc(user, amount)
+    fx.fund_usdc(user, per_vault * 3)
         .expect("fund USDC for the depositor");
-    let (router_s, amount_s) = (format!("{:#x}", fx.router()), amount.to_string());
-    let usdc_s = format!("{:#x}", fx.usdc());
-    fx.cast_send(
-        &pk,
-        fx.usdc(),
-        "approve(address,uint256)",
-        &[&router_s, &amount_s],
-    )
-    .expect("approve the router");
-    fx.cast_send(
-        &pk,
-        fx.router(),
-        "deposit(uint256,uint256[])",
-        &[&amount_s, "[]"],
-    )
-    .expect("the router deposit must succeed before the pause");
+    let (amount_s, usdc_s) = (per_vault.to_string(), format!("{:#x}", fx.usdc()));
+    for n in ["rmUSDC", "rmPROTO", "rmRWA"] {
+        let vault: alloy_primitives::Address = vaults[n].parse().expect("a vault address");
+        fx.cast_send(
+            &pk,
+            fx.usdc(),
+            "approve(address,uint256)",
+            &[&vaults[n], &amount_s],
+        )
+        .expect("approve the vault");
+        fx.cast_send(
+            &pk,
+            vault,
+            "deposit(uint256,address)",
+            &[&amount_s, &user_s],
+        )
+        .unwrap_or_else(|e| panic!("the deposit into open {n} must succeed before the pause: {e}"));
+    }
     let before: Vec<(&str, u128)> = VAULT_NAMES
         .iter()
         .map(|n| (*n, balance_of(&rpc, &vaults[*n], &user_s)))
