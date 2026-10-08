@@ -21,20 +21,61 @@ use std::time::{Duration, Instant};
 use doctests::opencode::{config_template_path, rmpc_bin};
 use serde_json::Value;
 
-/// Skip-clean macro mirroring `rmpc_fork_e2e::skip_if_no_fork!`.
+/// True when `ci` (the `CI` env var) marks a CI run: set, non-empty, not a literal false.
+fn ci_is_set(ci: Option<&str>) -> bool {
+    match ci {
+        Some(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !(v.is_empty() || v == "false" || v == "0")
+        }
+        None => false,
+    }
+}
+
+/// Issue 1656: a skip is a pass with zero assertions. Under CI the fork and anvil are always
+/// wired in, so a missing one panics. With `CI` unset the caller prints the reason and returns.
+fn refuse_skip_in_ci(ci: Option<&str>, reason: &str) {
+    if ci_is_set(ci) {
+        panic!(
+            "[opencode-walkthrough] CI is set but the fork prerequisite is missing: {reason}. \
+             Refusing to skip: a skipped fork test is a false green."
+        );
+    }
+}
+
+/// Resolve the fork URL, or `None` to skip (only when `CI` is unset).
+fn fork_url_or_skip(ci: Option<&str>, url: Option<String>) -> Option<String> {
+    match url {
+        Some(s) if !s.is_empty() => Some(s),
+        _ => {
+            refuse_skip_in_ci(ci, "RMPC_FORK_RPC_URL not set");
+            eprintln!(
+                "[opencode-walkthrough] skipping: RMPC_FORK_RPC_URL not set. \
+                 Configure an archive RPC to exercise the fork test."
+            );
+            None
+        }
+    }
+}
+
+/// Skip-clean locally, fatal under CI (issue 1656).
 macro_rules! skip_if_no_fork {
     () => {
-        match std::env::var("RMPC_FORK_RPC_URL") {
-            Ok(s) if !s.is_empty() => s,
-            _ => {
-                eprintln!(
-                    "[opencode-walkthrough] skipping: RMPC_FORK_RPC_URL not set. \
-                     Configure an archive RPC to exercise the fork test."
-                );
-                return;
-            }
+        match fork_url_or_skip(
+            std::env::var("CI").ok().as_deref(),
+            std::env::var("RMPC_FORK_RPC_URL").ok(),
+        ) {
+            Some(s) => s,
+            None => return,
         }
     };
+}
+
+/// A vault deployed on the fork, when the job has one (suite 11b's Twin deploy).
+fn vault_override() -> Option<String> {
+    std::env::var("RMPC_FORK_VAULT_ADDRESS")
+        .ok()
+        .filter(|v| !v.is_empty())
 }
 
 /// Find a TCP port that's free on 127.0.0.1 right now. Best-effort —
@@ -104,6 +145,10 @@ fn boot_anvil(fork_url: &str) -> Result<AnvilGuard, String> {
 /// shape stays in lockstep with the walkthrough's documented template).
 fn write_temp_config(tmp: &tempfile::TempDir, port: u16) -> std::path::PathBuf {
     let template = fs::read_to_string(config_template_path()).expect("read template");
+    let template = match vault_override() {
+        Some(v) => template.replace("0xCd9BB6428180c89cC0E5b9F1Bf6Bb98155Cf9CFf", &v),
+        None => template,
+    };
     let body = template.replace(
         "rpc_url               = \"http://127.0.0.1:8545\"",
         &format!("rpc_url               = \"http://127.0.0.1:{port}\""),
@@ -119,6 +164,7 @@ fn get_vault_against_fork_envelope_contract() {
     let anvil = match boot_anvil(&fork_url) {
         Ok(g) => g,
         Err(e) => {
+            refuse_skip_in_ci(std::env::var("CI").ok().as_deref(), &e);
             eprintln!("[opencode-walkthrough] skipping: {e}");
             return;
         }
@@ -179,15 +225,33 @@ fn get_vault_against_fork_envelope_contract() {
     );
     assert!(v.get("errors").is_some(), "envelope missing `errors`: {v}");
 
-    // Vault data — confirm the walkthrough config points at the right contract.
-    let data = &v["data"];
-    assert_eq!(
-        data["asset"].as_str().unwrap_or("").to_lowercase(),
-        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-        "get-vault data.asset must be Base USDC"
-    );
-    assert_eq!(data["symbol"], "rmUSDC", "get-vault data.symbol drift");
-    assert_eq!(data["decimals"], 6, "get-vault data.decimals drift");
+    // Vault data. When a vault was deployed on the fork (RMPC_FORK_VAULT_ADDRESS, e.g. suite 11b's
+    // Twin deploy) the config points at it and the vault's identity is asserted. Otherwise the
+    // template's vault address is not a contract on real Base state, and get-vault must degrade
+    // the documented way: `partial: true` with named per-field errors (as get-gateway does).
+    if vault_override().is_some() {
+        let data = &v["data"];
+        assert_eq!(
+            data["asset"].as_str().unwrap_or("").to_lowercase(),
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "get-vault data.asset must be Base USDC"
+        );
+        assert_eq!(data["symbol"], "rmUSDC", "get-vault data.symbol drift");
+        assert_eq!(data["decimals"], 6, "get-vault data.decimals drift");
+    } else {
+        assert_eq!(
+            v.get("partial").and_then(Value::as_bool),
+            Some(true),
+            "get-vault against a fork without the vault must be partial: {v}"
+        );
+        assert!(
+            v["errors"]
+                .as_array()
+                .map(|e| !e.is_empty())
+                .unwrap_or(false),
+            "get-vault against a fork without the vault must name per-field errors: {v}"
+        );
+    }
 
     drop(anvil); // explicit teardown
 }
@@ -198,6 +262,7 @@ fn get_gateway_against_fork_is_partial() {
     let anvil = match boot_anvil(&fork_url) {
         Ok(g) => g,
         Err(e) => {
+            refuse_skip_in_ci(std::env::var("CI").ok().as_deref(), &e);
             eprintln!("[opencode-walkthrough] skipping: {e}");
             return;
         }
@@ -252,4 +317,35 @@ fn get_gateway_against_fork_is_partial() {
     }
 
     drop(anvil);
+}
+
+/// Issue 1656: with `CI` set and the fork URL absent (or empty) the gate panics. Removing the
+/// panic in `refuse_skip_in_ci` fails these.
+#[test]
+#[should_panic(expected = "Refusing to skip")]
+fn fork_gate_panics_in_ci_without_fork_url() {
+    let _ = fork_url_or_skip(Some("true"), None);
+}
+
+#[test]
+#[should_panic(expected = "Refusing to skip")]
+fn fork_gate_panics_in_ci_with_empty_fork_url() {
+    let _ = fork_url_or_skip(Some("1"), Some(String::new()));
+}
+
+#[test]
+#[should_panic(expected = "Refusing to skip")]
+fn anvil_missing_panics_in_ci() {
+    refuse_skip_in_ci(Some("true"), "anvil not on PATH");
+}
+
+#[test]
+fn fork_gate_skips_when_ci_unset_and_passes_url_through() {
+    assert_eq!(fork_url_or_skip(None, None), None);
+    assert_eq!(fork_url_or_skip(Some("false"), Some(String::new())), None);
+    refuse_skip_in_ci(None, "anvil not on PATH");
+    assert_eq!(
+        fork_url_or_skip(Some("true"), Some("http://x".into())),
+        Some("http://x".to_string())
+    );
 }

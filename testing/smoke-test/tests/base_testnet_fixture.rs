@@ -147,6 +147,47 @@ fn integration_seams_ready_for_issue_839() {
     assert!(config.usdc_amount_units >= assertion.min_usdc_units);
 }
 
+/// True when `ci` (the `CI` env var) marks a CI run: set, non-empty, not a literal false.
+fn ci_is_set(ci: Option<&str>) -> bool {
+    match ci {
+        Some(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !(v.is_empty() || v == "false" || v == "0")
+        }
+        None => false,
+    }
+}
+
+/// Issue 1656: a skip is a pass with zero assertions. Under CI the testnet endpoint and the funder
+/// address are wired in, so an absent one panics. With `CI` unset the caller prints and returns.
+fn refuse_skip_in_ci(ci: Option<&str>, reason: &str) {
+    if ci_is_set(ci) {
+        panic!(
+            "[base_testnet_fixture] CI is set but the testnet prerequisite is missing: {reason}. \
+             Refusing to skip: a skipped funding assertion is a false green."
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "Refusing to skip")]
+fn funding_skip_panics_in_ci_without_rpc() {
+    refuse_skip_in_ci(Some("true"), "BASE_TESTNET_RPC_URL unset");
+}
+
+#[test]
+#[should_panic(expected = "Refusing to skip")]
+fn funding_skip_panics_in_ci_without_funder_addr() {
+    refuse_skip_in_ci(Some("1"), "BASE_TESTNET_FUNDER_ADDR unset");
+}
+
+#[test]
+fn funding_skip_is_allowed_when_ci_unset() {
+    refuse_skip_in_ci(None, "BASE_TESTNET_RPC_URL unset");
+    refuse_skip_in_ci(Some(""), "BASE_TESTNET_RPC_URL unset");
+    refuse_skip_in_ci(Some("false"), "BASE_TESTNET_FUNDER_ADDR unset");
+}
+
 /// Issue #839: live `eth_getBalance` funding assertion against Base testnet.
 ///
 /// When `BASE_TESTNET_RPC_URL` is set (CI with the secret provisioned), this
@@ -154,7 +195,7 @@ fn integration_seams_ready_for_issue_839() {
 /// `BASE_TESTNET_FUNDER_ADDR` and asserts it holds at least the default
 /// [`AccountFundingAssertion`] thresholds (0.1 ETH / 10 USDC) via real
 /// `eth_getBalance` + `balanceOf` RPC calls. Without the secret it skips
-/// gracefully, so the local/laptop run passes.
+/// gracefully locally (`CI` unset) and panics under CI (issue 1656).
 ///
 /// Acceptance criterion: "Test account funding works … and all transactions
 /// execute on Base testnet (assert via … balances via eth_getBalance)".
@@ -182,6 +223,10 @@ fn base_testnet_account_funding_assertion() {
     let account = match BaseTestnetAccount::new(&endpoint, who) {
         Ok(a) => a,
         Err(e) if e.is_skip() => {
+            refuse_skip_in_ci(
+                std::env::var("CI").ok().as_deref(),
+                "BASE_TESTNET_RPC_URL unset",
+            );
             eprintln!(
                 "[base_testnet_fixture] funding assertion skipped: BASE_TESTNET_RPC_URL unset"
             );
@@ -191,6 +236,10 @@ fn base_testnet_account_funding_assertion() {
     };
 
     if who == Address::ZERO {
+        refuse_skip_in_ci(
+            std::env::var("CI").ok().as_deref(),
+            "BASE_TESTNET_FUNDER_ADDR unset",
+        );
         eprintln!(
             "[base_testnet_fixture] BASE_TESTNET_RPC_URL set but BASE_TESTNET_FUNDER_ADDR unset; \
              skipping balance assertion (set the funder address in CI)."

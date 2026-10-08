@@ -203,6 +203,16 @@ jobs:
           bash .github/scripts/tests/test_check_governance_tests_unmocked.sh
           bash .github/scripts/check_governance_tests_unmocked.sh
 
+      # Issue 1656: a bare `cargo test --test X` exits 0 when X collects zero tests. The guard fails
+      # on any such step in .github/workflows that skips cargo_test_require_executed.sh. Its
+      # self-test runs it on a bare and a wrapped fixture workflow. The floors test replays a stub
+      # cargo through the real wrapper at each floor, floor minus one and zero.
+      - name: every cargo test --test step is wrapped with an executed floor (guard + self-tests, hermetic)
+        run: |
+          bash .github/scripts/tests/test_check_no_bare_cargo_test.sh
+          python3 .github/scripts/check_no_bare_cargo_test.py
+          bash .github/scripts/tests/test_wrapped_step_floors.sh
+
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once. Every chain job
   # below takes it as input.
   pin:
