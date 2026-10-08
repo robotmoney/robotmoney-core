@@ -7,7 +7,7 @@
 # the static bundle). The runtime stage serves the built dist/ via Bun so
 # the same port (5173) is used in dev and in the containerized devnet.
 
-FROM oven/bun:1.3.5 AS builder
+FROM oven/bun:1.3.5@sha256:e90cdbaf9ccdb3d4bd693aa335c3310a6004286a880f62f79b18f9b1312a8ec3 AS builder
 WORKDIR /build
 
 ARG VITE_EXPLORER_API_URL=http://localhost:8080
@@ -76,7 +76,7 @@ COPY clients/dapp ./
 COPY config/dex-pools.json /config/dex-pools.json
 RUN bun run build
 
-FROM oven/bun:1.3.5
+FROM oven/bun:1.3.5@sha256:e90cdbaf9ccdb3d4bd693aa335c3310a6004286a880f62f79b18f9b1312a8ec3
 WORKDIR /app
 # `vite preview` needs vite + the config's imported plugins resolvable
 # at runtime; the simplest hermetic answer is to copy the builder's
