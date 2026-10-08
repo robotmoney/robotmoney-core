@@ -300,6 +300,15 @@ jobs:
             --test cors \
             --test canonical_schema -- --test-threads=1 --nocapture
 
+      # Issue #1430: the compiled explorer-api binary refuses a stale schema
+      # (exit non-zero, naming both versions) and serves on a matching one.
+      # Testcontainer Postgres, same Docker check as above.
+      - name: explorer-api boot-time schema guard (compiled binary)
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-api \
+            --test boot_schema_guard -- --nocapture
+
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
   pin:
     name: twin-pin

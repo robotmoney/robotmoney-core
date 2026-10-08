@@ -23,6 +23,7 @@ use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use explorer_api::{router, AppState};
+use explorer_indexer::Db;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -52,6 +53,29 @@ async fn main() -> anyhow::Result<()> {
         .connect(&database_url)
         .await
         .context("connecting to Postgres")?;
+
+    // Issue #1430: refuse to serve a schema this binary does not match.
+    // `explorer-indexer` has had this guard since #1392; this service reads the
+    // same database and previously bound and served regardless. The check is the
+    // indexer's own (`Db::assert_schema_matches_embedded`, version AND checksum
+    // set, #1429) rather than a copy, so the two cannot drift. `/health` does not
+    // cover this: it proves a table is present, not that the schema is current,
+    // and it is a compose-level control that does not exist outside the stack.
+    // Like the indexer, this never migrates; it only declines to run.
+    let schema_version = match Db::from_pool(pool.clone())
+        .assert_schema_matches_embedded()
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("explorer-api refusing to start: {e}");
+            std::process::exit(1);
+        }
+    };
+    tracing::info!(
+        schema_version,
+        "applied migration set matches the embedded one; starting explorer-api"
+    );
 
     let state = AppState::new(pool, chain_id);
     let base_app = router(state);
