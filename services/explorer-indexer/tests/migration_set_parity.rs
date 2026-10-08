@@ -67,7 +67,7 @@ fn on_disk_migrations() -> BTreeMap<i64, OnDisk> {
 /// [`on_disk_migrations`] over an arbitrary directory, so a test can mutate a
 /// COPY of the migrations and never the checked-in files.
 fn on_disk_migrations_in(dir: &Path) -> BTreeMap<i64, OnDisk> {
-    let entries = std::fs::read_dir(&dir)
+    let entries = std::fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("read migrations directory {}: {e}", dir.display()));
 
     let mut found = BTreeMap::new();
