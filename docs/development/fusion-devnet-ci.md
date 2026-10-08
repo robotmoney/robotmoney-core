@@ -70,7 +70,7 @@ no workflow creates a key.**
 | `FUSION_ROUTER_ADDRESS` | `PortfolioRouter` (INV-4 witness) |
 | `FUSION_VAULT_ADDRESSES` | `rmUSDC,rmPROTO,rmAGENT,rmRWA` in canonical bucket order |
 | `FUSION_SUBMITTER_ADDRESS` | the authorized submitter (positive control) |
-| `FUSION_RELEASE_ADDRESS` | an EOA that does **not** hold `ADMIN_ROLE` on the receipt contract, used only as `--from` for the duplicate-release probe (`cast call releaseReceipt`, which must revert `ReceiptAlreadyReleased`) |
+| `FUSION_TIMELOCK_ADDRESS` | the `TimelockController`, the only `ADMIN_ROLE` holder on the receipt contract after handover, used as `--from` for the duplicate-release probe (`cast call releaseReceipt`, which passes the role check and must revert `ReceiptAlreadyReleased`, not `AccessControlUnauthorizedAccount`) |
 | `FUSION_GOVERN_CMD` | the govern release command, `bun scripts/stage/core-stack.ts governance release`; the script appends `--receipt-id ID` and it runs publish contracts govern row `release-receipt` (`--row release-receipt --receipt-id ID`) through the real Safe and the `TimelockController` |
 | `FUSION_UNAUTHORIZED_SUBMITTER` | EOA with neither `AGENT_ROLE` nor submit rights |
 | `FUSION_UNAUTHORIZED_RELEASER` | EOA **without** `ADMIN_ROLE` on the receipt |

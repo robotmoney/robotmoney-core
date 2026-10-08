@@ -3568,6 +3568,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "smoke-test",
  "tempfile",
  "test-utils",
  "thiserror 1.0.69",

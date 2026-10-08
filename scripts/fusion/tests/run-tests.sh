@@ -36,11 +36,12 @@ REPO_ROOT="$(cd "$FUSION_DIR/../.." && pwd)"
 # could hide in. It was 55, then 63; the round-2 harness cycle (T10, T11, T15,
 # T16, T25, T29) adds the guards below; merging the T01/T07/T09 watcher guards with them at
 # integration took the union to 156, and merging with r2/wf1-verify-fixes (the decoy check
-# and explorer-API block) raises the total to 170. Raise it whenever
+# and explorer-API block) raises the total to 170, and the timelock-sourced duplicate-release probe
+# check (issue 1647) makes it 171. Raise it whenever
 # assertions are added; lowering it is a deliberate, reviewable act and the
 # workflow re-checks the same number independently (see below), so lowering it
 # here alone buys nothing.
-MIN_EXPECTED_ASSERTIONS=170
+MIN_EXPECTED_ASSERTIONS=171
 
 # The workflow that runs this suite re-asserts the same floor against the
 # machine-readable FUSION_SELFTESTS_EXECUTED line, precisely so a silently
@@ -269,7 +270,14 @@ case "$1" in
       isRecorded*) [[ -n "$d" ]] && echo true || echo false; exit 0 ;;
       isReleased*) [[ -s "$STUB_DIR/released" ]] && echo true || echo false; exit 0 ;;
       releaseReceipt*)
-        # An eth_call of releaseReceipt: already-released receipts revert.
+        # An eth_call of releaseReceipt. onlyRole(ADMIN_ROLE) runs first: only the
+        # timelock holds ADMIN_ROLE, so any other --from reverts on authority and
+        # never reaches the one-shot check (issue 1647).
+        if [[ "$*" != *"--from $FUSION_TIMELOCK_ADDRESS"* ]]; then
+          echo "server returned an error response: execution reverted: AccessControlUnauthorizedAccount()" >&2
+          exit 1
+        fi
+        # Already-released receipts revert.
         if [[ -s "$STUB_DIR/released" ]]; then
           echo "server returned an error response: execution reverted: ReceiptAlreadyReleased()" >&2
           exit 1
@@ -821,7 +829,7 @@ printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
 printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"   # already anchored
 echo 1 >"$STUB_DIR/released"                                     # already released
 export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-release" \
-       FUSION_RELEASE_ADDRESS=0x00000000000000000000000000000000000000cc \
+       FUSION_TIMELOCK_ADDRESS=0x00000000000000000000000000000000000000cc \
        FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
 cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
 #!/usr/bin/env bash
@@ -848,7 +856,7 @@ new_stubs; acceptance_env
 printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
 printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
 export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-release" \
-       FUSION_RELEASE_ADDRESS=0x00000000000000000000000000000000000000cc \
+       FUSION_TIMELOCK_ADDRESS=0x00000000000000000000000000000000000000cc \
        FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
 cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
 #!/usr/bin/env bash
@@ -862,6 +870,10 @@ chmod +x "$STUB_DIR/bin/curl"
   --out "$RESULT" >/dev/null 2>&1
 check "an unreleased receipt still broadcasts exactly one release" \
   "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "1"
+# The duplicate probe must reach ReceiptAlreadyReleased: it is sent from the
+# timelock (the only ADMIN_ROLE holder), so it passes onlyRole first (issue 1647).
+check "the duplicate-release probe reaches ReceiptAlreadyReleased (sent from the timelock)" \
+  "$(jq -r '[.assertions[]|select(.assertion|test("duplicate release is rejected"))|.result]|first' "$RESULT" 2>/dev/null)" "PASS"
 
 # ─── T10: one shared INV-4 witness reader, failing LOUDLY ────────────────────
 # `witnesses()` built each reading as `out="proposals=$(cast call … 2>&1 | …)"`:
@@ -951,7 +963,7 @@ echo
 echo "T11 — the acceptance verdict"
 
 new_stubs; acceptance_env; new_curl_stub; receipt_fixture
-unset FUSION_GOVERN_CMD FUSION_RELEASE_ADDRESS \
+unset FUSION_GOVERN_CMD FUSION_TIMELOCK_ADDRESS \
       FUSION_EXPLORER_API FUSION_DAPP_URL FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS || true
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages release --out "$RESULT" >/dev/null 2>&1
 check "a SELECTED but unconfigured release stage exits non-zero" "$?" "1"
