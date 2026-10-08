@@ -7,7 +7,7 @@ description: "Registry of admin-allowlisted committee agents and their signed al
 
 [Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/gateway/InvestmentCommitteePolicy.sol)
 
-**Inherits:** AccessControl, ReentrancyGuard
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
 **Title:** InvestmentCommitteePolicy
 
@@ -91,6 +91,35 @@ constructor(address admin_, address gateway_);
 | ---- | ---- | ----------- |
 | admin_ | `address` | Address granted DEFAULT_ADMIN_ROLE and ADMIN_ROLE. |
 | gateway_ | `address` | Address of the deployed RobotMoneyGateway. |
+
+<a id="_revokerole-bytes32-address"></a>
+
+### _revokeRole
+
+<i>
+
+Last-admin floor for `DEFAULT_ADMIN_ROLE` (ADMIN_ROLE is covered by
+`AdminFloorAccessControl`). Both `revokeRole` and `renounceRole`
+route here, so the timelock cannot lock itself out (#1447, L).
+
+</i>
+
+```solidity
+function _revokeRole(bytes32 role, address account) internal virtual override returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 
 <a id="onlygateway"></a>
 
