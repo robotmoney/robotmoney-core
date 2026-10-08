@@ -54,6 +54,41 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .verify()
         .expect("the verifier must pass on the Twin chain");
     assert!(!verified.trim().is_empty(), "the verifier printed nothing");
+    // Core 1618: before the stage 11 handover the real Safe executed one self-call signed by EVERY owner. The verifier read it back
+    // from the chain (four `safe:` labels, all passed or `verify()` above would have failed), and the run manifest records it.
+    for label in [
+        "safe: control proof transaction recorded",
+        "safe: control proof transaction succeeded",
+        "safe: control proof is a self-call signed by every owner",
+        "safe: nonce at least 1",
+    ] {
+        assert!(
+            verified.lines().any(|l| l.trim() == label),
+            "the verifier output lacks the label '{label}'"
+        );
+    }
+    let run_manifest_path = dir
+        .parent()
+        .unwrap_or(dir)
+        .join("evidence")
+        .join("publish-run.json");
+    let run_manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&run_manifest_path).expect("read the run manifest"),
+    )
+    .expect("the run manifest is JSON");
+    let proof = &run_manifest["stages"]["prove-control"];
+    assert_eq!(proof["status"], "done", "no finished prove-control record");
+    assert!(
+        proof["txHash"]
+            .as_str()
+            .is_some_and(|h| h.starts_with("0x") && h.len() == 66),
+        "the prove-control record has no transaction hash"
+    );
+    assert_eq!(
+        proof["signers"].as_array().map(|a| a.len()),
+        Some(3),
+        "the prove-control record must name all three Safe owners"
+    );
     // Saved for scripts/stage/label-diff.ts: the stage label set must equal mainnet's.
     if let Ok(path) = std::env::var("SMOKE_TEST_VERIFY_OUT") {
         std::fs::write(&path, &verified).expect("write the verifier output");

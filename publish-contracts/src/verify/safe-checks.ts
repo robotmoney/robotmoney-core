@@ -6,7 +6,8 @@ import {
   SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT, SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SAFE_PROBE_ADDRESS,
   SAFE_PROBE_ADDRESS_2, SAFE_SENTINEL, Z32,
 } from "./constants.ts";
-import type { Address, ChainReader, Hex, VerifySheet } from "./types.ts";
+import { inspectProofTx } from "../control-proof.ts";
+import type { Address, ChainReader, Hex, VerifyOptions, VerifySheet } from "./types.ts";
 
 export const CHECK_SIGS = parseAbiItem("function checkSignatures(bytes32 dataHash, bytes data, bytes signatures)"); // Safe 1.4.1 (the executor form is 1.5.0: on 1.4.1 that selector does not exist and every call reverts with empty data)
 const slotAddr = (v: Hex): string => (`0x${v.replace(/^0x/, "").padStart(64, "0").slice(24)}`).toLowerCase();
@@ -14,7 +15,7 @@ const slotAddr = (v: Hex): string => (`0x${v.replace(/^0x/, "").padStart(64, "0"
 /** v=1 approved-hash signature whose owner field is `who`. Valid only when msg.sender == who. */
 const approvedSig = (who: Address): Hex => concatHex([pad(who, { size: 32 }), Z32, toHex(1, { size: 1 })]);
 
-export async function safeChecks(c: Collector, chain: ChainReader, safe: Address, sheet: VerifySheet, manifestSafeCodeHash: string | undefined): Promise<void> {
+export async function safeChecks(c: Collector, chain: ChainReader, safe: Address, sheet: VerifySheet, manifestSafeCodeHash: string | undefined, proof?: VerifyOptions["controlProof"]): Promise<void> {
   await c.run("safe: has code", async () => (await chain.getCode(safe)).length > 2);
   await c.runEq("safe: singleton is SafeL2 1.4.1", async () => slotAddr(await chain.getStorageAt(safe, Z32)), SAFE_L2_141_SINGLETON);
   await c.runEq("safe: version is 1.4.1", async () => await chain.read(safe, "function VERSION() view returns (string)"), "1.4.1");
@@ -50,6 +51,24 @@ export async function safeChecks(c: Collector, chain: ChainReader, safe: Address
   });
   await c.runEq("safe: no guard set", async () => slotAddr(await chain.getStorageAt(safe, SAFE_GUARD_SLOT)), "0x0000000000000000000000000000000000000000");
   await c.runEq("safe: fallback handler is canonical", async () => slotAddr(await chain.getStorageAt(safe, SAFE_FALLBACK_SLOT)), SAFE_141_FALLBACK_HANDLER);
+
+  // The control proof (core 1618): the Safe executed one self-call signed by every owner. Read back from the chain, not from the run manifest.
+  await c.run("safe: control proof transaction recorded", async () => ({ ok: !!proof, detail: proof ? proof.txHash : "the run manifest records no prove-control transaction" }));
+  await c.run("safe: control proof transaction succeeded", async () => {
+    if (!proof) return { ok: false, detail: "no proof recorded" };
+    const st = await chain.receiptStatus(proof.txHash);
+    return { ok: st === "success", detail: `${proof.txHash} ${st ?? "not found"}` };
+  });
+  await c.run("safe: control proof is a self-call signed by every owner", async () => {
+    if (!proof) return { ok: false, detail: "no proof recorded" };
+    const tx = await chain.getTransaction(proof.txHash);
+    if (!tx) return { ok: false, detail: `${proof.txHash} not found on chain` };
+    return inspectProofTx({ chainId: await chain.chainId(), safe, owners, nonce: proof.nonce, tx });
+  });
+  await c.run("safe: nonce at least 1", async () => {
+    const n = Number(await chain.read(safe, "function nonce() view returns (uint256)"));
+    return { ok: n >= 1, detail: `Safe nonce ${n}` };
+  });
 
   const hash = keccak256(toHex("robotmoney verifier negative control"));
   const expectRevert = async (label: string, from: Address | undefined, sigs: Hex, gs: string) => {

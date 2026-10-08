@@ -25,6 +25,7 @@ import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { RECEIPT_REFUSED_ON_MAINNET, RECEIPT_ROW, assertReceiptId, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
+import { runProveControl, type ProveOpts } from "./prove-control.ts";
 import { startAnvil, type ChainStarter } from "./preflight.ts";
 import { USDC_ADDRESS, assertUsdcCode } from "./usdc.ts";
 import { assertExitFeeBound } from "./asset-config.ts";
@@ -37,7 +38,8 @@ export type Verb = (typeof VERBS)[number];
 
 export const USAGE = `publish contracts
   VERB               optional first word: publish | verify | govern. An alias for a stage set (below). Not combined with --stage.
-                       publish = every deployer stage up to and including timelock (the same as --stage deploy)
+                       publish = every deployer stage up to and including timelock (the same as --stage deploy), with the prove-control step
+                                 before the timelock stage: the real Safe executes one self-call signed by EVERY owner, or stage 11 refuses (exit 24)
                        verify  = the verify stage (the one verifier; a follow-on verb, so it implies --resume)
                        govern  = the govern stage (a follow-on verb, so it implies --resume)
   --chain N          target chain id (8453 or 918453). Must equal 'cast chain-id' of the RPC.
@@ -65,7 +67,7 @@ export const USAGE = `publish contracts
   --evidence DIR     evidence directory (run manifest, isomorphism report)
   --counts-dir DIR   frozen counts directory (default: deployments/frozen-counts in the working directory if present, else this repo's)
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
-  --owner-signer S   govern: a Safe owner signer spec (repeat for each owner needed). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
+  --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
                      beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453.
   --compare-sheet F  a second sheet for the sheet diff in the isomorphism report
   --call-label L --call-target ADDR --call-data 0x..   govern, Twin chain 918453 only (refused on 8453): one generic Safe -> Timelock call (schedule, wait by warp, execute),
@@ -87,6 +89,8 @@ export interface CliDeps {
   ownerSigner?: (spec: string) => Promise<Signer>;
   safeApi?: RunContext["safeApi"];
   govern?: Partial<GovernOpts>;
+  /** Test seam: the Safe tool calls behind the prove-control step (default: the real ones). */
+  prove?: Partial<ProveOpts>;
   /** Test seam: the verifier behind the verify stage (default: the real one, labels on stdout). */
   verify?: Partial<VerifyDeps>;
   /** Test seam: the read-only chain reader behind the config-check that runs before each vault stage. */
@@ -286,14 +290,17 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions: env.GITHUB_ACTIONS === "true", baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, coreConfigCheck: deps.coreConfigCheck,
       manifestOut, startChain: a.dryRun ? (deps.startChain ?? startAnvil) : undefined,
     };
+    // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
+    const ownerSigners = async (c: RunContext): Promise<Signer[]> => {
+      const mk = deps.ownerSigner ?? ((s: string) => signerFromSpec(s));
+      const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
+      return Promise.all(specs.map((s) => mk(s)));
+    };
     const result = await runStages(ctx, names, {
+      prove: async (c, row, m) => { await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), ...(deps.prove ?? {}) }); },
       verify: async (c, row, m) => { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); },
       govern: async (c, row, m) => {
-        const mk = deps.ownerSigner ?? ((s: string) => signerFromSpec(s));
-        // no --owner-signer on the Twin chain: the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts)
-        const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
-        const owners = await Promise.all(specs.map((s) => mk(s)));
-        await runGovern(c, row, m, { ownerSigners: owners, sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+        await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
       },
     });
     await finalNonceCheck(ctx, result.manifest, result.ran);

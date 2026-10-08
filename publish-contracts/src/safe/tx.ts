@@ -316,6 +316,8 @@ export interface ExecuteOpts {
   localChecks?: boolean;
   /** Simulate only: run every check and the execTransaction call, send nothing. */
   dryRun?: boolean;
+  /** Send every signature in the bundle, not only the threshold. The Safe checks the first `threshold` of them: the rest are readable from the chain by a verifier (the control proof). */
+  allSignatures?: boolean;
 }
 
 export interface ExecuteResult {
@@ -346,8 +348,8 @@ export async function executeTx(handle: SafeHandle, bundle: SafeTxBundle, sender
       prev = o;
     }
   }
-  const used = [...sigs].sort((a, b) => (lc(a.owner) < lc(b.owner) ? -1 : 1)).slice(0, strict ? handle.threshold : sigs.length);
-  await checkSignaturesOnChain(handle, bundle, used);
+  const used = [...sigs].sort((a, b) => (lc(a.owner) < lc(b.owner) ? -1 : 1)).slice(0, strict && !opts.allSignatures ? handle.threshold : sigs.length);
+  await checkSignaturesOnChain(handle, bundle, used, opts.allSignatures ? used.length : undefined);
 
   const senderAddr = await sender.address();
   const packed = packSignatures(used);

@@ -1,13 +1,14 @@
 // The stage list AS DATA, built from core's stage table (scripts/deploy/stage-table.json at DEPLOY_SHA, see stage-table.ts).
-// The forge rows (script, env, manifest, libraries, vault) come from the table. This file adds only the three orchestration rows that
-// run no core script: safe (the real Safe through the Safe tool), verify and govern. One loop runs every stage on every chain.
+// The forge rows (script, env, manifest, libraries, vault) come from the table. This file adds only the four orchestration rows that
+// run no core script: safe (the real Safe through the Safe tool), prove-control (the Safe signs once, before the handover), verify and govern. One loop runs every stage on every chain.
 // The expected tx count of a row is never typed here: it is read from deployments/frozen-counts/<sha>.json.
+import { PROOF_STAGE } from "./control-proof.ts";
 import { PublishError } from "./errors.ts";
 import { SAFE_MANIFEST, isVaultKey } from "./core-wiring.ts";
 import type { VaultKey } from "./sheet.ts";
 import { manifestFile, type StageTable, type TableLibrary } from "./stage-table.ts";
 
-export type StageKind = "safe" | "forge" | "verify" | "govern";
+export type StageKind = "safe" | "forge" | "prove" | "verify" | "govern";
 
 export interface StageRow {
   name: string;
@@ -31,6 +32,8 @@ export interface StageRow {
 }
 
 const SAFE_ROW: StageRow = { name: "safe", kind: "safe", countKey: "safe", manifest: SAFE_MANIFEST, requiredEnv: [], optionalEnv: [], libraries: [] };
+// The Safe control proof (core 1618): no core script, no deployer transaction. It sits just before the timelock stage (the handover).
+const PROVE_ROW: StageRow = { name: PROOF_STAGE, kind: "prove", countKey: null, usesSafeOwners: true, requiredEnv: [], optionalEnv: [], libraries: [] };
 const VERIFY_ROW: StageRow = { name: "verify", kind: "verify", countKey: null, requiredEnv: [], optionalEnv: [], libraries: [] };
 const GOVERN_ROW: StageRow = { name: "govern", kind: "govern", countKey: null, usesSafeOwners: true, requiredEnv: [], optionalEnv: [], libraries: [] };
 
@@ -42,7 +45,9 @@ export function buildStages(table: StageTable): StageRow[] {
     libraries: s.libraries.map((n) => table.libraries.find((l) => l.name === n)!),
     ...(s.vault && isVaultKey(s.vault) ? { vault: s.vault } : {}),
   }));
-  return [SAFE_ROW, ...forge, VERIFY_ROW, GOVERN_ROW];
+  const handover = forge.findIndex((r) => r.name === "timelock");
+  const ordered = handover < 0 ? [...forge, PROVE_ROW] : [...forge.slice(0, handover), PROVE_ROW, ...forge.slice(handover)];
+  return [SAFE_ROW, ...ordered, VERIFY_ROW, GOVERN_ROW];
 }
 
 // Live bindings: set once by useStageTable() (the CLI, after it has the core checkout) and read everywhere else.

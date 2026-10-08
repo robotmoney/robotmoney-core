@@ -12,7 +12,8 @@ import { countFor, sumCounts, checkNonce, type FrozenCounts } from "./counts.ts"
 import type { Logger } from "./log.ts";
 import { DryRunFiles, type ChainStarter } from "./preflight.ts";
 import type { PublishSigner } from "./signer.ts";
-import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, stageByName, type StageRow } from "./stages.ts";
+import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, manifestRef, stageByName, type StageRow } from "./stages.ts";
+import { PROOF_STAGE, assertControlProven } from "./control-proof.ts";
 import { LIBS_STAGE, VAULT_KIND, resolveEnv } from "./core-wiring.ts";
 import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts";
 import { configCheck, loadVaultConfiguredAssets } from "./ci/config-check.ts";
@@ -440,7 +441,23 @@ async function applyToSimulationChain(ctx: RunContext, row: StageRow, base: stri
   if (!existsSync(outPath)) throw new PublishError("MANIFEST", `manifest ${outPath} was not written by ${row.name}`, { stage: row.name });
 }
 
+/**
+ * The stage 11 gate (core 1618): the handover gives every role to a timelock whose proposer is the Safe, so the Safe must have signed
+ * before it. Refuses with CONTROL_NOT_PROVEN unless the run manifest holds the finished proof on this Safe, signed by every owner, and
+ * the live Safe nonce is 1 or more. A dry run has no proof to find (it sends nothing) and skips the gate, loudly.
+ */
+export async function controlProofGate(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
+  if (row.name !== "timelock") return;
+  if (ctx.dryRun) { ctx.log.log("warn", "stage.control_proof_skipped", { stage: row.name, reason: "dry run: the proof is a real transaction" }); return; }
+  const api: Pick<SafeApi, "connectSafe"> = { connectSafe, ...(ctx.safeApi ?? {}) };
+  const safe = readManifestField(ctx, manifestRef("safe", "safe"));
+  const handle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: safe as Address, logger: ctx.log });
+  const rec = assertControlProven(manifest.stages[PROOF_STAGE], { safe, owners: handle.owners, nonce: await handle.nonce() });
+  ctx.log.log("info", "stage.control_proof_ok", { stage: row.name, safe, tx_hash: rec.txHash, signers: rec.signers.length });
+}
+
 async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
+  await controlProofGate(ctx, row, manifest);
   await vaultConfigGate(ctx, row);
   const script = row.script!;
   const env = stageEnv(ctx, row);
@@ -636,7 +653,7 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
 // ---- the loop --------------------------------------------------------------------------------------------------------------
 
 export type StageHandler = (ctx: RunContext, row: StageRow, manifest: RunManifest) => Promise<void>;
-export interface Handlers { verify: StageHandler; govern: StageHandler }
+export interface Handlers { prove: StageHandler; verify: StageHandler; govern: StageHandler }
 
 export function newManifest(ctx: RunContext, deployer: string): RunManifest {
   return { version: 1, chainId: ctx.chainId, coreSha: ctx.coreSha, deployer, environment: ctx.environment, startedAt: new Date().toISOString(), stages: {} };
@@ -654,7 +671,7 @@ export function dryRunOrder(names: string[]): StageRow[] {
   const deployer = STAGES.filter((s) => s.kind === "safe" || s.kind === "forge");
   const last = Math.max(-1, ...deployer.map((s, i) => (names.includes(s.name) ? i : -1)));
   const upTo = deployer.slice(0, last + 1);
-  const rest = STAGES.filter((s) => (s.kind === "verify" || s.kind === "govern") && names.includes(s.name));
+  const rest = STAGES.filter((s) => (s.kind === "prove" || s.kind === "verify" || s.kind === "govern") && names.includes(s.name));
   return [...upTo, ...rest];
 }
 
@@ -703,8 +720,8 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
         skipped.push(row.name);
         continue;
       }
-      if (ctx.dryRun && (row.kind === "verify" || row.kind === "govern")) {
-        ctx.log.log("warn", "stage.dry_run_skipped", { stage: row.name, reason: `${row.kind} reads a finished deployment: nothing to simulate` });
+      if (ctx.dryRun && (row.kind === "prove" || row.kind === "verify" || row.kind === "govern")) {
+        ctx.log.log("warn", "stage.dry_run_skipped", { stage: row.name, reason: row.kind === "prove" ? "the control proof is a real Safe transaction signed by every owner: nothing to simulate" : `${row.kind} reads a finished deployment: nothing to simulate` });
         skipped.push(row.name);
         continue;
       }
@@ -716,6 +733,7 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
       try {
         if (row.kind === "safe") await runSafeStage(ctx, row, manifest);
         else if (row.kind === "forge") await runForgeStage(ctx, row, manifest);
+        else if (row.kind === "prove") await handlers.prove(ctx, row, manifest);
         else if (row.kind === "verify") await handlers.verify(ctx, row, manifest);
         else await handlers.govern(ctx, row, manifest);
         ran.push(row.name);

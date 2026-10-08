@@ -98,6 +98,11 @@ export interface VerifyOptions {
    * gas for the Safe execTransaction calls from the deployer keystore, so the live nonce then exceeds the frozen sum by design.
    */
   deployerNonceAtDeployEnd?: number;
+  /**
+   * The Safe control proof the run manifest recorded (core 1618): the execTransaction hash and the Safe nonce it used. The verifier reads the
+   * transaction back from the chain. Absent: the proof label fails (a deploy without the prove-control step is not accepted).
+   */
+  controlProof?: { txHash: Hex; nonce: number };
   /** Test seam only: the pinned FiatTokenProxy code hash. Production never sets it (src/usdc.ts holds the pin). */
   usdcCodeHash?: string;
   /** Delay in ms between 429 retries (tests set 0). */
@@ -130,6 +135,10 @@ export interface ChainReader {
   getStorageAt(address: Address, slot: Hex): Promise<Hex>;
   /** Decoded read. `signature` is a human-readable ABI fragment such as "function hasRole(bytes32,address) view returns (bool)". Throws on revert. */
   read(address: Address, signature: string, args?: unknown[]): Promise<unknown>;
+  /** One transaction by hash (the Safe control proof). Null when the chain does not know it. */
+  getTransaction(hash: Hex): Promise<{ to: Address | null; input: Hex; value: bigint } | null>;
+  /** The receipt status of a mined transaction, or null when it is not mined. */
+  receiptStatus(hash: Hex): Promise<"success" | "reverted" | null>;
   /** Raw eth_call that never throws on revert. */
   callRaw(to: Address, data: Hex, from?: Address): Promise<RawCallResult>;
   getLogs(params: { address?: Address; topics: (Hex | Hex[] | null)[]; fromBlock: bigint; toBlock: bigint }): Promise<LogEntry[]>;

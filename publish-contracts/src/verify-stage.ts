@@ -6,6 +6,7 @@ import { MAINNET_CHAIN_ID } from "./floors.ts";
 import { governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
 import { VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
 import { VAULT_ADAPTER_FIELD } from "./core-wiring.ts";
+import { PROOF_STAGE } from "./control-proof.ts";
 import { loadConfigAssets } from "./asset-config.ts";
 import { manifestBase } from "./stage-table.ts";
 import { DEPLOYER_STAGES, getStageTable, manifestRef, type StageRow } from "./stages.ts";
@@ -86,6 +87,12 @@ export function handoverBlock(manifest: RunManifest): bigint | undefined {
   return b === undefined ? undefined : BigInt(b);
 }
 
+/** The Safe control proof the run manifest holds (core 1618), for the verifier to read back from the chain. */
+export function controlProofOf(manifest: Pick<RunManifest, "stages">): { txHash: `0x${string}`; nonce: number } | undefined {
+  const r = manifest.stages[PROOF_STAGE];
+  return r?.status === "done" && typeof r.txHash === "string" && Number.isInteger(r.nonce) ? { txHash: r.txHash as `0x${string}`, nonce: r.nonce as number } : undefined;
+}
+
 export interface VerifyDeps {
   verifyDeployment: (o: VerifyOptions) => Promise<VerifyReport>;
   verifySources: typeof verifySources;
@@ -111,6 +118,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     logChunk: 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"),
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
     handoverBlock: handoverBlock(manifest),
+    controlProof: controlProofOf(manifest),
   });
   if (mainnet) {
     for (const k of unexecutedMainnetUnpauses(manifest)) report.checks.push({ label: `govern unpause-${k} executed (stage 13)`, ok: false, detail: `the run manifest records no executed unpause-${k} row: stage 13 did not fully run` });
