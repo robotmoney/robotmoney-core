@@ -348,6 +348,16 @@ contract UniswapV4SwapAdapterTest is Test {
         assertEq(out, expected);
     }
 
+    /// @notice A fill that does not consume the whole exact input (a price limit stopped it) is refused, not settled short.
+    function test_swap_refusesAPartialFill() public {
+        pm.setPartialFill(true);
+        vm.startPrank(alice);
+        usdc.approve(address(adapter), 1_000e6);
+        vm.expectPartialRevert(UniswapV4SwapAdapter.SlippageExceeded.selector);
+        adapter.swap(address(usdc), address(rm), FEE, 1_000e6, 0, alice, block.timestamp);
+        vm.stopPrank();
+    }
+
     // ─── Callback and reentrancy ─────────────────────────────────────
 
     function test_unlockCallback_rejectsAnyCallerButThePoolManager() public {

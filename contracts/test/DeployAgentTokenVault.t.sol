@@ -505,6 +505,17 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         script.runInProcess(p, json);
     }
 
+    /// @notice The script pokes the recorder itself: a recorder nobody has recorded on for over one window (stale) still lets the stage run.
+    function test_v4_theScriptPokesAStaleRecorderBeforeAddAsset() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        string memory json = _prepare(p);
+        vm.warp(block.timestamp + 5_000); // the warmed recorder is now stale
+        assertFalse(recorder.isFresh());
+        BasketVaultDeployBase.Deployed memory d = script.runInProcess(p, json);
+        assertEq(d.tokens.length, 1);
+        assertTrue(recorder.isFresh(), "the script recorded");
+    }
+
     function test_v4_manifestNamesTheRecorderAndTheV4Adapter() public {
         BasketVaultDeployBase.Deployed memory d = _runLaunch();
         AgentDeployHarness h = new AgentDeployHarness();

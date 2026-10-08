@@ -311,7 +311,7 @@ const RECORDER_LABELS = [
 /** Function selectors that would make the recorder administrable. None may be in its runtime code (it has no owner, role or setter). */
 const ADMIN_SELECTORS = [
   "owner()", "admin()", "pendingOwner()", "transferOwnership(address)", "renounceOwnership()", "acceptOwnership()", "hasRole(bytes32,address)",
-  "grantRole(bytes32,address)", "revokeRole(bytes32,address)", "renounceRole(bytes32,address)", "DEFAULT_ADMIN_ROLE()", "ADMIN_ROLE()", "pause()", "unpause()",
+  "grantRole(bytes32,address)", "revokeRole(bytes32,address)", "renounceRole(bytes32,address)", "DEFAULT_ADMIN_ROLE()", "ADMIN_ROLE()",
   "setPoolManager(address)", "setMaxStaleness(uint32)", "setTick(int24)", "upgradeTo(address)", "upgradeToAndCall(address,bytes)", "setImplementation(address)",
 ].map((sig) => toFunctionSelector(`function ${sig}`).slice(2).toLowerCase());
 

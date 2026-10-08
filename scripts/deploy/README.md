@@ -7,7 +7,7 @@
 ## Schema (version 1)
 
 - `stages[]`, in deploy order:
-  - `name`: `libs|vault|registry|router|gateway|governance|ic-policy|proto|agent|rwa|timelock`.
+  - `name`: `libs|recorder|vault|registry|router|gateway|governance|ic-policy|proto|agent|rwa|timelock`.
   - `kind`: always `forge`.
   - `script`: `contracts/script/<File>.s.sol:<Contract>`.
   - `requiredEnv`: names the script reads with no default. This includes `DEPLOYMENT_OUT`. Some are fed by earlier manifests (for example `REGISTRY_ADDRESS`).
@@ -34,7 +34,8 @@ Every name in `requiredEnv` is read with no fallback. An unset or malformed valu
 - `governance`: `QUORUM_THRESHOLD` (greater than 1), `VOTING_PERIOD` and `EXECUTION_DELAY` (seconds, at least the contract minimum), `VOTER_ADDRESSES` and `VOTER_POWER` (the deployer sets the voting power of each voter before the timelock handover).
 - `registry`: `VAULT_NAME` (the registered name comes from the sheet; there is no default).
 - `proto`, `agent`, `rwa`: the same four names as `vault` (`FEE_RECIPIENT`, `TVL_CAP`, `PER_DEPOSIT_CAP`, `EXIT_FEE_BPS`) and `ROUTER_DEFAULT_BPS`: `none` leaves the basket router-ineligible, otherwise a comma list of bps for the router default vector after this basket flips eligible (rmUSDC, the eligible baskets so far, this vault). The stage makes the basket eligible and sets that vector in one atomic `registry.migrateEligibility`, before the timelock handover.
-- `proto`, `agent`, `rwa` also read `NAV_DEVIATION_BPS` (1 to 2000, never 0: the vault default 0 disables the ORA-4 deposit check; the script calls `setNavDeviationGuardBps` before the handover and reads it back) and `MIN_POOL_LIQUIDITY` (above 0, a floor for `IUniswapV3Pool.liquidity()`, a uint128 L and not a USDC amount; every configured pool must meet it). The sheet names are `VAULT_<PROTO|AGENT|RWA>_NAV_DEVIATION_BPS` and `VAULT_<PROTO|AGENT|RWA>_MIN_POOL_LIQUIDITY`. rmUSDC has neither (issue 1666).
+- `recorder` (core 1676) reads only `DEPLOYMENT_OUT`: it deploys the permissionless Uniswap V4 price recorder for the UniswapV4 entry of `config/agent-token-shortlist.json`, grows its ring to 901 slots and records the first snapshot. `agent` reads `RECORDER_ADDRESS` (the recorder stage manifest's `recorder`); the other basket stages ignore it. The runner waits for a full 1800 s window of recorder history before the `agent` stage.
+- `proto`, `agent`, `rwa` also read `NAV_DEVIATION_BPS` (1 to 2000, never 0: the vault default 0 disables the ORA-4 deposit check; the script calls `setNavDeviationGuardBps` before the handover and reads it back) and `MIN_POOL_LIQUIDITY` (above 0, a floor for the pool's in-range liquidity: `IUniswapV3Pool.liquidity()` for a V3 pool and the V4 pool's liquidity L (`StateView.getLiquidity`) for a V4 pool, a uint128 L and not a USDC amount; every configured pool must meet it). The sheet names are `VAULT_<PROTO|AGENT|RWA>_NAV_DEVIATION_BPS` and `VAULT_<PROTO|AGENT|RWA>_MIN_POOL_LIQUIDITY`. rmUSDC has neither (issue 1666).
 
 The `vault` manifest (`vault.json`) exposes the seed result: `seed_share_receiver`, `seed_shares` and `deployer_share_balance_after` (always 0, read from the vault after the seed). `SEED_SHARE_RECEIVER` is never zero and never the deployer.
 

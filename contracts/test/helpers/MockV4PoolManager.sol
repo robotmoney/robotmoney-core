@@ -27,6 +27,8 @@ contract MockV4PoolManager {
     bool public unlocked;
     address public locker;
     int256 public impactTicks = 1;
+    /// @dev When true `swap` fills only half of the exact input, as a real pool does when the price limit stops it.
+    bool public partialFill;
     uint256 public nonzeroDeltas;
     address private _syncedCurrency;
     uint256 private _syncedBalance;
@@ -42,6 +44,10 @@ contract MockV4PoolManager {
         pools[id] = true;
         setTick(id, tick);
         setLiquidity(id, liquidity_);
+    }
+
+    function setPartialFill(bool v) external {
+        partialFill = v;
     }
 
     function setImpactTicks(int256 v) external {
@@ -108,8 +114,9 @@ contract MockV4PoolManager {
         bytes32 id = keccak256(abi.encode(key));
         if (!pools[id]) revert PoolNotInitialized();
         if (params.amountSpecified >= 0) revert NotExactInput();
+        uint256 inAmount = uint256(-params.amountSpecified);
         (int128 a0, int128 a1) =
-            _quote(id, key, params.zeroForOne, uint256(-params.amountSpecified));
+            _quote(id, key, params.zeroForOne, partialFill ? inAmount / 2 : inAmount);
         swapCount++;
         _account(key.currency0, a0);
         _account(key.currency1, a1);

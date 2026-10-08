@@ -381,7 +381,7 @@ contract UniswapV4PriceRecorderTest is Test {
             "setTick(int24)",
             "setPoolManager(address)",
             "setMaxStaleness(uint32)",
-            "pause()"
+            "pauseDeposits()"
         ];
         for (uint256 i = 0; i < sigs.length; i++) {
             (bool ok,) = address(rec).call(abi.encodeWithSignature(sigs[i]));
