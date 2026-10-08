@@ -235,9 +235,10 @@ test.describe("suite-10: GovernancePanel E2E on the real Safe topology", () => {
         intervals: [2_000],
       })
       .toBe(Number(VOTING_POWER));
-    await page.reload();
-    await expect(page.getByTestId("governance-panel")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId("governance-proposal-votes-for")).toHaveText(
+    // A fresh page (a reload lands on the default tab): the panel shows the indexed tally.
+    const fresh = await page.context().newPage();
+    await openGovernancePanel(fresh);
+    await expect(fresh.getByTestId("governance-proposal-votes-for")).toHaveText(
       String(VOTING_POWER),
     );
   });
