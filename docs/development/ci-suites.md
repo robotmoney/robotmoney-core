@@ -68,7 +68,7 @@ compare (it names the mismatch rather than reporting stale docs).
 2. Install Foundry toolchain
 3. Cache Foundry build artifacts (`cache/`, `out/`)
 4. `forge build`
-5. `forge test` with fuzzer enabled — invariant tests: share accounting, per-agent cap sequences, deposit monotonicity, reentrancy under malicious stub, pause invariant
+5. `forge test` with fuzzer enabled — invariant tests: share accounting, per-agent cap sequences, deposit monotonicity, reentrancy under malicious stub, pause invariant. It runs through `.github/scripts/forge_test_require_executed.sh` on `contracts/test/*Invariant*.t.sol` with `--match-test "^invariant_"`. `forge test` exits 0 when a path filter matches nothing, so the wrapper fails the job when no test passed (issue 1643). The same wrapper guards the per-file `--match-path` steps of the `unit` job. Step 6 runs its self-test, `.github/scripts/tests/test_forge_test_require_executed.sh`, which plants an empty `--match-path` and requires a red result.
 
 **Steps — `coverage` job:**
 1. Checkout repository

@@ -116,6 +116,16 @@ impl HarnessError {
 macro_rules! skip_if_no_fork {
     () => {
         if !$crate::can_run() {
+            // Issue 1643: a skip is a pass with zero assertions. In CI the fork is always wired
+            // in, so its absence is a broken job and must be red. Locally (CI unset) it still
+            // skips so a contributor without a fork can run the crate.
+            if $crate::skip_is_fatal() {
+                panic!(
+                    "[fork-e2e] CI is set but no fork is available (no RMPC_TESTNET_RPC_URL and no \
+                     usable RMPC_FORK_RPC_URL with anvil). Refusing to skip: a skipped fork test \
+                     is a false green."
+                );
+            }
             eprintln!(
                 "[fork-e2e] skipping: no RMPC_TESTNET_RPC_URL and no RMPC_FORK_RPC_URL. \
                  Point RMPC_TESTNET_RPC_URL at a running Twin fork (anvil on real Base state), \
@@ -235,6 +245,23 @@ macro_rules! parameterized_e2e {
             }
         }
     };
+}
+
+/// True when `ci` (the value of the `CI` env var) marks a CI run: set and non-empty, and not a
+/// literal false. GitHub Actions sets `CI=true`.
+pub fn ci_value_is_ci(ci: Option<&str>) -> bool {
+    match ci {
+        Some(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !(v.is_empty() || v == "false" || v == "0")
+        }
+        None => false,
+    }
+}
+
+/// True when an unavailable fork must fail the test instead of skipping it (issue 1643).
+pub fn skip_is_fatal() -> bool {
+    ci_value_is_ci(std::env::var("CI").ok().as_deref())
 }
 
 /// Returns true iff the harness can run fork-e2e tests: `RMPC_TESTNET_RPC_URL` (the shared Twin
@@ -1330,6 +1357,18 @@ fn sign_eip1559(tx: &TxEip1559, sk: &SigningKey) -> alloy_primitives::Signature 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue 1643: `CI=true` makes a missing fork fatal, an unset or false `CI` keeps the
+    /// local skip.
+    #[test]
+    fn ci_value_decides_whether_a_missing_fork_is_fatal() {
+        assert!(ci_value_is_ci(Some("true")));
+        assert!(ci_value_is_ci(Some("1")));
+        assert!(!ci_value_is_ci(Some("")));
+        assert!(!ci_value_is_ci(Some("false")));
+        assert!(!ci_value_is_ci(Some("0")));
+        assert!(!ci_value_is_ci(None));
+    }
 
     /// The transient-detection predicate that gates [`Rpc::wait_for_receipt`]'s
     /// retry: it must match Geth's "indexing is in progress" message (however

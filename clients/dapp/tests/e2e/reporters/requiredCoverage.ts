@@ -38,6 +38,10 @@ export const REQUIRED_SPECS: readonly string[] = [
   // `safe-governance` Playwright project against the real 2-of-3 SafeL2 and timelock. A skipped
   // or missing run fails suite-10 rather than letting the gap pass quietly.
   "safe-proposal-role-grant.spec.ts",
+  // Issue 1643: the GovernancePanel proposal list, vote handoff and empty state. Every test in it
+  // calls test.skip() when the panel is not mounted, so without this entry a dropped tab would
+  // leave the spec "green" with zero executed tests.
+  "governance.spec.ts",
 ];
 
 /** How many tests of each kind a single spec file contributed to a run. */
