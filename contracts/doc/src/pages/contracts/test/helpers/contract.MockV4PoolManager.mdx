@@ -1,0 +1,409 @@
+---
+title: "MockV4PoolManager"
+---
+
+# MockV4PoolManager
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/helpers/MockV4PoolManager.sol)
+
+<i>
+
+Unit-test stand-in for the Uniswap V4 PoolManager. It mirrors the real contract where the adapter and
+the recorder depend on it: the `_pools` mapping at storage slot 6 (so `extsload` of
+`keccak256(abi.encode(id, 6))` returns the packed slot0 and `+3` the liquidity), the unlock lock, the
+`sync` / `settle` / `take` delta accounting, and the revert when a delta is left unsettled. Pricing is a
+fixed-tick quote (`TwapTickMath.priceFromTick`) minus the pool fee, and every swap moves the tick by
+`impactTicks`. The real PoolManager is exercised by `UniswapV4SwapAdapterFork.t.sol` against live Base.
+
+</i>
+
+## State Variables
+
+### _pad
+
+```solidity
+uint256[7] private _pad;
+```
+
+### pools
+
+```solidity
+mapping(bytes32 => bool) public pools;
+```
+
+### unlocked
+
+```solidity
+bool public unlocked;
+```
+
+### locker
+
+```solidity
+address public locker;
+```
+
+### impactTicks
+
+```solidity
+int256 public impactTicks = 1;
+```
+
+### partialFill
+
+<i>
+
+When true `swap` fills only half of the exact input, as a real pool does when the price limit stops it.
+
+</i>
+
+```solidity
+bool public partialFill;
+```
+
+### nonzeroDeltas
+
+```solidity
+uint256 public nonzeroDeltas;
+```
+
+### _syncedCurrency
+
+```solidity
+address private _syncedCurrency;
+```
+
+### _syncedBalance
+
+```solidity
+uint256 private _syncedBalance;
+```
+
+### currencyDelta
+
+```solidity
+mapping(address => mapping(address => int256)) public currencyDelta;
+```
+
+### swapCount
+
+```solidity
+uint256 public swapCount;
+```
+
+## Functions
+
+<a id="initializepool-ipoolmanagerv4-poolkey-int24-uint128"></a>
+
+### initializePool
+
+```solidity
+function initializePool(IPoolManagerV4.PoolKey memory key, int24 tick, uint128 liquidity_)
+        external
+        returns (bytes32 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `IPoolManagerV4.PoolKey` |  |
+| tick | `int24` |  |
+| liquidity_ | `uint128` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+
+<a id="setpartialfill-bool"></a>
+
+### setPartialFill
+
+```solidity
+function setPartialFill(bool v) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `bool` |  |
+
+<a id="setimpactticks-int256"></a>
+
+### setImpactTicks
+
+```solidity
+function setImpactTicks(int256 v) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `int256` |  |
+
+<a id="settick-bytes32-int24"></a>
+
+### setTick
+
+```solidity
+function setTick(bytes32 id, int24 tick) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| tick | `int24` |  |
+
+<a id="setliquidity-bytes32-uint128"></a>
+
+### setLiquidity
+
+```solidity
+function setLiquidity(bytes32 id, uint128 liquidity_) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| liquidity_ | `uint128` |  |
+
+<a id="tickof-bytes32"></a>
+
+### tickOf
+
+```solidity
+function tickOf(bytes32 id) public view returns (int24);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int24` |  |
+
+<a id="extsload-bytes32"></a>
+
+### extsload
+
+```solidity
+function extsload(bytes32 slot) external view returns (bytes32 value);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| slot | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `bytes32` |  |
+
+<a id="unlock-bytes"></a>
+
+### unlock
+
+```solidity
+function unlock(bytes calldata data) external returns (bytes memory result);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| result | `bytes` |  |
+
+<a id="_account-address-int256"></a>
+
+### _account
+
+```solidity
+function _account(address currency, int256 d) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| currency | `address` |  |
+| d | `int256` |  |
+
+<a id="swap-ipoolmanagerv4-poolkey-ipoolmanagerv4-swapparams-bytes"></a>
+
+### swap
+
+```solidity
+function swap(
+        IPoolManagerV4.PoolKey memory key,
+        IPoolManagerV4.SwapParams memory params,
+        bytes calldata
+    ) external returns (int256 swapDelta);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `IPoolManagerV4.PoolKey` |  |
+| params | `IPoolManagerV4.SwapParams` |  |
+| _ | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| swapDelta | `int256` |  |
+
+<a id="_quote-bytes32-ipoolmanagerv4-poolkey-bool-uint256"></a>
+
+### _quote
+
+```solidity
+function _quote(
+        bytes32 id,
+        IPoolManagerV4.PoolKey memory key,
+        bool zeroForOne,
+        uint256 amountIn
+    ) private returns (int128 a0, int128 a1);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| key | `IPoolManagerV4.PoolKey` |  |
+| zeroForOne | `bool` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a0 | `int128` |  |
+| a1 | `int128` |  |
+
+<a id="_out-int24-ipoolmanagerv4-poolkey-bool-uint256"></a>
+
+### _out
+
+```solidity
+function _out(int24 tick, IPoolManagerV4.PoolKey memory key, bool zeroForOne, uint256 amountIn)
+        private
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tick | `int24` |  |
+| key | `IPoolManagerV4.PoolKey` |  |
+| zeroForOne | `bool` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="sync-address"></a>
+
+### sync
+
+```solidity
+function sync(address currency) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| currency | `address` |  |
+
+<a id="settle"></a>
+
+### settle
+
+```solidity
+function settle() external payable returns (uint256 paid);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| paid | `uint256` |  |
+
+<a id="take-address-address-uint256"></a>
+
+### take
+
+```solidity
+function take(address currency, address to, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| currency | `address` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+## Errors
+
+### AlreadyUnlocked
+
+```solidity
+error AlreadyUnlocked();
+```
+
+### ManagerLocked
+
+```solidity
+error ManagerLocked();
+```
+
+### CurrencyNotSettled
+
+```solidity
+error CurrencyNotSettled();
+```
+
+### PoolNotInitialized
+
+```solidity
+error PoolNotInitialized();
+```
+
+### NotExactInput
+
+```solidity
+error NotExactInput();
+```
+

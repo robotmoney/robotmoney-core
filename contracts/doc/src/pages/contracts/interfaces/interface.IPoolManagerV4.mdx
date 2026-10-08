@@ -1,0 +1,193 @@
+---
+title: "IPoolManagerV4"
+description: "The minimum slice of the Uniswap V4 `PoolManager` (Base: 0x498581fF718922c3f8e6A244956aF099B2652b2b) that the Robot Money V4 swap adapter and price recorder call. Selectors and struct layouts equal the canonical `v4-core` ones: `Currency` is an `address` user-defined value type and `BalanceDelta` is an `int256` that packs `(int128 amount0, int128 amount1)` with amount0 in the upper 128 bits. Declared here instead of importing `v4-core` so the repo keeps its two-submodule footprint."
+---
+
+# IPoolManagerV4
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/interfaces/IPoolManagerV4.sol)
+
+**Title:** IPoolManagerV4
+
+The minimum slice of the Uniswap V4 `PoolManager` (Base: 0x498581fF718922c3f8e6A244956aF099B2652b2b)
+that the Robot Money V4 swap adapter and price recorder call. Selectors and struct layouts equal
+the canonical `v4-core` ones: `Currency` is an `address` user-defined value type and `BalanceDelta`
+is an `int256` that packs `(int128 amount0, int128 amount1)` with amount0 in the upper 128 bits.
+Declared here instead of importing `v4-core` so the repo keeps its two-submodule footprint.
+
+## Functions
+
+<a id="unlock-bytes"></a>
+
+### unlock
+
+Open the lock and call `msg.sender.unlockCallback(data)`. All deltas must net to zero by the end.
+
+```solidity
+function unlock(bytes calldata data) external returns (bytes memory result);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| result | `bytes` |  |
+
+<a id="swap-poolkey-swapparams-bytes"></a>
+
+### swap
+
+Swap inside an open lock. Returns the packed `BalanceDelta` owed to (negative) or by (positive) the caller.
+
+```solidity
+function swap(PoolKey memory key, SwapParams memory params, bytes calldata hookData)
+        external
+        returns (int256 swapDelta);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `PoolKey` |  |
+| params | `SwapParams` |  |
+| hookData | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| swapDelta | `int256` |  |
+
+<a id="sync-address"></a>
+
+### sync
+
+Snapshot `currency`'s balance before the caller transfers tokens in, so `settle` can measure the payment.
+
+```solidity
+function sync(address currency) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| currency | `address` |  |
+
+<a id="settle"></a>
+
+### settle
+
+Credit the caller with the tokens transferred in since `sync`.
+
+```solidity
+function settle() external payable returns (uint256 paid);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| paid | `uint256` |  |
+
+<a id="take-address-address-uint256"></a>
+
+### take
+
+Debit the caller's positive delta by sending `amount` of `currency` to `to`.
+
+```solidity
+function take(address currency, address to, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| currency | `address` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="extsload-bytes32"></a>
+
+### extsload
+
+Read one raw storage slot of the PoolManager.
+
+```solidity
+function extsload(bytes32 slot) external view returns (bytes32 value);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| slot | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `bytes32` |  |
+
+## Structs
+
+### PoolKey
+
+<i>
+
+`v4-core` `PoolKey`. `currency0` is the lower address. The pool id is `keccak256(abi.encode(key))`.
+
+</i>
+
+```solidity
+struct PoolKey {
+        address currency0;
+        address currency1;
+        uint24 fee;
+        int24 tickSpacing;
+        address hooks;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| currency0 | `address` |  |
+| currency1 | `address` |  |
+| fee | `uint24` |  |
+| tickSpacing | `int24` |  |
+| hooks | `address` |  |
+
+### SwapParams
+
+<i>
+
+`v4-core` `IPoolManager.SwapParams`. A negative `amountSpecified` is an exact-input swap.
+
+</i>
+
+```solidity
+struct SwapParams {
+        bool zeroForOne;
+        int256 amountSpecified;
+        uint160 sqrtPriceLimitX96;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| zeroForOne | `bool` |  |
+| amountSpecified | `int256` |  |
+| sqrtPriceLimitX96 | `uint160` |  |
+

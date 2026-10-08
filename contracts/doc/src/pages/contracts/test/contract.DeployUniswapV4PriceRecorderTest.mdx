@@ -1,0 +1,135 @@
+---
+title: "DeployUniswapV4PriceRecorderTest"
+---
+
+# DeployUniswapV4PriceRecorderTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/DeployUniswapV4PriceRecorder.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### PM_ADDR
+
+```solidity
+address internal constant PM_ADDR = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
+```
+
+### RM
+
+```solidity
+address internal constant RM = 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3;
+```
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### RM_POOL_ID
+
+```solidity
+bytes32 internal constant RM_POOL_ID =
+        0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391;
+```
+
+## State Variables
+
+### script
+
+```solidity
+RecorderDeployHarness internal script;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_shipped"></a>
+
+### _shipped
+
+```solidity
+function _shipped() internal view returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="test_deploystherecorderfortheshippedkeywitha901slotringtarget"></a>
+
+### test_deploysTheRecorderForTheShippedKeyWithA901SlotRingTarget
+
+```solidity
+function test_deploysTheRecorderForTheShippedKeyWithA901SlotRingTarget() public;
+```
+
+<a id="test_alaterrecordwidensthelivering"></a>
+
+### test_aLaterRecordWidensTheLiveRing
+
+The first record after the grow widens the live ring once a later block exists.
+
+```solidity
+function test_aLaterRecordWidensTheLiveRing() public;
+```
+
+<a id="test_noroleisleftontherecorder"></a>
+
+### test_noRoleIsLeftOnTheRecorder
+
+```solidity
+function test_noRoleIsLeftOnTheRecorder() public;
+```
+
+<a id="test_revertswhenthepoolkeydoesnothashtothepoolid"></a>
+
+### test_revertsWhenThePoolKeyDoesNotHashToThePoolId
+
+```solidity
+function test_revertsWhenThePoolKeyDoesNotHashToThePoolId() public;
+```
+
+<a id="test_revertswhentheconfighasnov4asset"></a>
+
+### test_revertsWhenTheConfigHasNoV4Asset
+
+```solidity
+function test_revertsWhenTheConfigHasNoV4Asset() public;
+```
+
+<a id="test_revertsontwov4assets"></a>
+
+### test_revertsOnTwoV4Assets
+
+```solidity
+function test_revertsOnTwoV4Assets() public;
+```
+
+<a id="test_revertswhenthepoolisnotinitialised"></a>
+
+### test_revertsWhenThePoolIsNotInitialised
+
+```solidity
+function test_revertsWhenThePoolIsNotInitialised() public;
+```
+
+<a id="test_manifestnamestherecorderandthepool"></a>
+
+### test_manifestNamesTheRecorderAndThePool
+
+```solidity
+function test_manifestNamesTheRecorderAndThePool() public;
+```
+

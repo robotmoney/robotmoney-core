@@ -5,7 +5,7 @@ description: "Production deploy script for `AgentTokenVault` (rmAGENT). One path
 
 # DeployAgentTokenVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a62b707f1cd64e98d8d714f9420d3ce1885da8d1/contracts/script/DeployAgentTokenVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/script/DeployAgentTokenVault.s.sol)
 
 **Inherits:** [BasketVaultDeployBase](/contracts/script/abstract.BasketVaultDeployBase)
 
@@ -17,6 +17,7 @@ Required env vars (no defaults):
 ADMIN_ADDRESS     the broadcaster. Holds ADMIN_ROLE and EMERGENCY_ROLE on the new
 vault and ADMIN_ROLE on the registry until the timelock stage.
 SWAP_ROUTER       must equal `swapRouter02` in agent-token-shortlist.json (Uniswap V3 SwapRouter02)
+RECORDER_ADDRESS  the deployed `UniswapV4PriceRecorder` for the RM pool key (required for the shipped config; the `recorder` stage)
 REGISTRY_ADDRESS  the vault is registered here as "Robot Money Agent Tokens"
 TVL_CAP, PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
 FEE_RECIPIENT   recipient for exit fees (not the deployer, not the admin)
@@ -39,6 +40,15 @@ string public constant VAULT_NAME = "Robot Money Agent Tokens";
 
 ```solidity
 string public constant CONFIG_FILE = "config/agent-token-shortlist.json";
+```
+
+### RM_TOKEN
+
+RM, the live ROBOTMONEY token. Owner decision 2026-10-08: RM trades only on the Uniswap V4 RM/USDC 2.91% pool. The V3 RM
+pool has no in-range liquidity, so a config that lists RM on UniswapV3 is refused at parse.
+
+```solidity
+address public constant RM_TOKEN = 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3;
 ```
 
 ## Functions
@@ -115,6 +125,26 @@ function _newVault(Params memory p, address emergencyResponder)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `BasketVault` |  |
+
+<a id="_requiredvenue-address"></a>
+
+### _requiredVenue
+
+```solidity
+function _requiredVenue(address token) internal pure override returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
 
 <a id="_registryname"></a>
 
