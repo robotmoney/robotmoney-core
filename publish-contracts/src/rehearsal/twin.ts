@@ -146,11 +146,13 @@ export async function fundUsdc(rpc: Rpc, addresses: string[], units: bigint, pin
 export const UNISWAP_V3_NPM: Hex = "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1";
 /** An EOA with no code that holds the RM and USDC for the position. anvil impersonates it, so no key exists. */
 export const RM_POOL_FUNDER: Hex = "0x000000000000000000000000000000000000f1d0";
-export const RM_POOL_CARDINALITY_NEXT = 10;
+/** Above the 901 floor so the pool clears it with margin once the first observation write grows the ring. */
+export const RM_POOL_CARDINALITY_NEXT = 1000;
 export const RM_POOL_RM_UNITS = 1_000_000n * 10n ** 18n;
 export const RM_POOL_USDC_UNITS = 1_000n * 10n ** 6n;
 /** BasketVault.addAsset floors. They are checked here as well, never relaxed. */
-export const ADD_ASSET_MIN_CARDINALITY = 2;
+/** Window-derived (core 1665): the 1800 s default TWAP window at Base's 2 s blocks needs 1800 / 2 + 1 slots. */
+export const ADD_ASSET_MIN_CARDINALITY = 901;
 export const ADD_ASSET_MIN_LIQUIDITY = 1_000_000n;
 
 const POOL_ABI = parseAbi([

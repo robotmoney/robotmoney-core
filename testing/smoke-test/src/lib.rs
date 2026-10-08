@@ -1726,7 +1726,7 @@ fn cast_call_raw_at(
 /// implementation of the step (the twin-publish CI action runs the same verb). Real pool, real position manager,
 /// real transactions: it gives a funder RM and USDC with the fork's balance helpers, raises the pool's
 /// observation cardinality and mints one in-range position. It asserts the `BasketVault.addAsset` floors
-/// (cardinality >= 2, liquidity >= 1e6) itself, so a failure names the pool and not a later revert.
+/// (cardinality >= 901, liquidity >= 1e6) itself, so a failure names the pool and not a later revert.
 fn fund_rm_pool(
     cfg: &publish::PublishConfig,
     rpc_url: &str,

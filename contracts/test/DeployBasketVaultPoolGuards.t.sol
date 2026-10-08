@@ -17,8 +17,8 @@ contract ZeroLiquidityPool is ConstPool {
     }
 }
 
-/// @dev A pool whose observation cardinality is 1 (below the floor of 2).
-contract CardinalityOnePool is ConstPool {
+/// @dev A pool whose observation cardinality is 900, one below the 1800 s window floor of 901 (core 1665).
+contract CardinalityBelowFloorPool is ConstPool {
     constructor(address a, address b, uint24 fee_) ConstPool(a, b, fee_) {}
 
     function slot0()
@@ -27,7 +27,7 @@ contract CardinalityOnePool is ConstPool {
         override
         returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
     {
-        return (uint160(1 << 96), 0, 0, 1, 1, 0, true);
+        return (uint160(1 << 96), 0, 0, 900, 900, 0, true);
     }
 }
 
@@ -58,9 +58,12 @@ contract DeployBasketVaultPoolGuardsTest is BasketDeployFixture {
         json = _oneAssetJson(address(new ZeroLiquidityPool(token, address(usdc), 500)), token);
     }
 
-    function _cardinalityOne() internal returns (string memory json) {
+    address internal lowPool;
+
+    function _cardinalityBelowFloor() internal returns (string memory json) {
         address token = address(new TestERC20());
-        json = _oneAssetJson(address(new CardinalityOnePool(token, address(usdc), 500)), token);
+        lowPool = address(new CardinalityBelowFloorPool(token, address(usdc), 500));
+        json = _oneAssetJson(lowPool, token);
     }
 
     function test_proto_revertsOnZeroLiquidityPool() public {
@@ -69,9 +72,13 @@ contract DeployBasketVaultPoolGuardsTest is BasketDeployFixture {
         proto.runInProcess(_params(), json);
     }
 
-    function test_proto_revertsOnCardinalityBelowTwo() public {
-        string memory json = _cardinalityOne();
-        vm.expectPartialRevert(BasketVault.InsufficientPoolCardinality.selector);
+    function test_proto_revertsOnCardinalityBelowWindowFloor() public {
+        string memory json = _cardinalityBelowFloor();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketVault.InsufficientPoolCardinality.selector, lowPool, uint16(901), uint16(900)
+            )
+        );
         proto.runInProcess(_params(), json);
     }
 
@@ -81,9 +88,13 @@ contract DeployBasketVaultPoolGuardsTest is BasketDeployFixture {
         rwa.runInProcess(_params(), json);
     }
 
-    function test_rwa_revertsOnCardinalityBelowTwo() public {
-        string memory json = _cardinalityOne();
-        vm.expectPartialRevert(BasketVault.InsufficientPoolCardinality.selector);
+    function test_rwa_revertsOnCardinalityBelowWindowFloor() public {
+        string memory json = _cardinalityBelowFloor();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketVault.InsufficientPoolCardinality.selector, lowPool, uint16(901), uint16(900)
+            )
+        );
         rwa.runInProcess(_params(), json);
     }
 

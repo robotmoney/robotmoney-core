@@ -36,7 +36,7 @@ contract ConstPool {
         virtual
         returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
     {
-        return (uint160(1 << 96), 0, 0, 100, 100, 0, true);
+        return (uint160(1 << 96), 0, 0, 1000, 1000, 0, true);
     }
 
     function observe(uint32[] calldata secondsAgos)
