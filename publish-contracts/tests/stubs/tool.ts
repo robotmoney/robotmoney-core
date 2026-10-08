@@ -76,6 +76,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
       writeFileSync(outPath, JSON.stringify({
         vault: addr(0x1001), registry: addr(0x1002), router: addr(0x1003), gateway: addr(0x1004), governance: addr(0x1005), policy: addr(0x1006),
         consensus_receipt: addr(0x1007), timelock: addr(0x1008), tick_math: addr(0x1009), adapter: addr(0xa2),
+        recorder: addr(0x100a), adapter_v4: addr(0xa4),
       }));
     }
   };

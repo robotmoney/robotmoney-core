@@ -14,10 +14,10 @@ import {
 } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
+import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
 
 const LABELS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "expected-labels.json"), "utf8")) as string[];
-const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK };
+const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
 const LIB_TICK_MATH = addr(0x11b1);
 const WHO: Record<string, `0x${string}`> = { deployer: DEPLOYER, pauser: PAUSER, emergency: EMERGENCY, safe: SAFE };
 const OTHER = addr(0x0bad);
@@ -27,6 +27,7 @@ function subject(name: string): `0x${string}` {
   const v = /^vault\[(\w+)\]$/.exec(name); if (v) return VAULTS[v[1]].address;
   if (/^library\[tick_math\]$/.test(name)) return LIB_TICK_MATH;
   if (name === "safe") return SAFE;
+  if (name === "adapter[V4:rmAGENT]") return V4_ADAPTER;
   const c = CORE[name]; if (c) return c;
   throw new Error(`no subject for '${name}'`);
 }
@@ -98,6 +99,19 @@ const RULES: Rule[] = [
   // vault facts
   [/^(vault\[\w+\]): registry link$/, (w, m) => w.chain.set(subject(m[1]), "registry", OTHER)],
   [/^(vault\[\w+\]): a second setRegistry reverts$/, (w) => { w.chain.setRegistryOpen = true; }],
+  // core 1676: the Uniswap V4 asset of rmAGENT. Each label has the one fault it exists to catch.
+  [/^vault\[rmAGENT\]: asset row is venue V4 with the price recorder as its pool$/, (w) => {
+    const rm = VAULTS.rmAGENT.address;
+    w.chain.set(rm, "assets", (a: any[]) => { if (Number(a[0]) !== 0) throw new Error("execution reverted"); return [w.sheet.vaults.rmAGENT.assets[0]!.token, OTHER, 29100, true, V4_ADAPTER, 1]; });
+  }],
+  [/^vault\[rmAGENT\]: V4 adapter codehash is allowed$/, (w) => w.chain.set(VAULTS.rmAGENT.address, "adapterCodeHashAllowed", false)],
+  [/^vault\[rmAGENT\]: V4 adapter is bound to the recorder, the PoolManager and the pool key$/, (w) => w.chain.set(V4_ADAPTER, "RECORDER", OTHER)],
+  [/^recorder: PoolKey and PoolManager equal config$/, (w) => w.chain.set(RECORDER, "tickSpacing", 200)],
+  [/^recorder: observation ring holds the full window floor$/, (w) => w.chain.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 900])],
+  [/^recorder: has no owner, role or setter$/, (w) => {
+    // the recorder code gains the `owner()` selector 0x8da5cb5b, as a PUSH4 would carry it
+    w.chain.codes.set(RECORDER.toLowerCase(), `${w.chain.codes.get(RECORDER.toLowerCase())!}638da5cb5b` as `0x${string}`);
+  }],
   [/^vault\[rmAGENT\]: holds RM as its one asset$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): tvlCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "tvlCap", 1n)],
   [/^(vault\[\w+\]): perDepositCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "perDepositCap", 1n)],

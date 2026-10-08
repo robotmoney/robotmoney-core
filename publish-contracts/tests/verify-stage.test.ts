@@ -17,6 +17,8 @@ import { CONFIG_ASSET, MANIFEST_ADAPTER, writeCoreAssetConfig } from "./fixtures
 
 /** One distinct address per vault, so a test can say which vault reads paused. */
 const vaultAddr = (key: string): `0x${string}` => `0x00000000000000000000000000000000000000c${["USDC", "PROTO", "AGENT", "RWA"].indexOf(key) + 1}`;
+const MANIFEST_ADAPTER_V4 = "0x00000000000000000000000000000000000000a4";
+const MANIFEST_RECORDER = "0x00000000000000000000000000000000000000d5";
 
 /** A core checkout fixture: the real-shaped config files, the vault manifests with the adapter each run deploys, and the Safe manifest. */
 function setup(config: { proto?: object[]; rwa?: object[]; shortlist?: object[] } | null = {}, o: { adapters?: boolean; chain?: number } = {}) {
@@ -26,7 +28,8 @@ function setup(config: { proto?: object[]; rwa?: object[]; shortlist?: object[] 
   mkdirSync(m, { recursive: true });
   writeFileSync(join(m, "safe.json"), JSON.stringify({ safe: "0x00000000000000000000000000000000000050fe" }));
   if (o.adapters !== false) {
-    for (const v of getStageTable().vaults) writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: chain, vault: vaultAddr(v.key), ...(v.key !== "USDC" ? { adapter: MANIFEST_ADAPTER } : {}) }));
+    for (const v of getStageTable().vaults) writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: chain, vault: vaultAddr(v.key), ...(v.key !== "USDC" ? { adapter: MANIFEST_ADAPTER, adapter_v4: MANIFEST_ADAPTER_V4, recorder: MANIFEST_RECORDER } : {}) }));
+    writeFileSync(join(m, "recorder.json"), JSON.stringify({ chain_id: chain, recorder: MANIFEST_RECORDER }));
   }
   if (config) writeCoreAssetConfig(coreDir, config);
   const sheet = parseSheet(sheetText());
@@ -101,13 +104,23 @@ describe("stage 12: the one verifier", () => {
     expect(loadExpectedAssets(ctx, "USDC")).toEqual([]);
   });
 
-  test("the committed agent shortlist expects RM as rmAGENT's one asset, on the V3 pool at fee 10000, with the run's adapter (core 1554)", () => {
+  test("the committed agent shortlist expects RM as rmAGENT's one asset, on the V4 venue (1) at fee 29100, with the recorder as its pool and the run's V4 adapter (core 1676)", () => {
     const { ctx } = setup({}, {});
     copyFileSync(join(import.meta.dir, "..", "..", "config", "agent-token-shortlist.json"), join(ctx.coreDir, "config", "agent-token-shortlist.json"));
     const want = loadExpectedAssets(ctx, "AGENT");
-    expect(want.map((a) => [a.token.toLowerCase(), a.pool.toLowerCase(), a.swapFee, a.adapter])).toEqual([
-      [RM_TOKEN.toLowerCase(), "0x8cd8c7015b6a8f8310c15ccc8aa3d200d9c74882", 10000, MANIFEST_ADAPTER],
+    expect(want.map((a) => [a.token.toLowerCase(), a.pool, a.swapFee, a.adapter, a.venue])).toEqual([
+      [RM_TOKEN.toLowerCase(), MANIFEST_RECORDER, 29100, MANIFEST_ADAPTER_V4, 1],
     ]);
+    // the PoolKey the verifier compares the recorder and the adapter with comes from the config, hooks zero, tickSpacing 582
+    expect(want[0]!.v4).toMatchObject({ poolId: "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391", key: { fee: 29100, tickSpacing: 582, hooks: "0x0000000000000000000000000000000000000000" } });
+  });
+
+  test("a V4 asset whose vault manifest has no adapter_v4 is an error, not a silent V3 fallback", () => {
+    const { ctx } = setup({}, {});
+    copyFileSync(join(import.meta.dir, "..", "..", "config", "agent-token-shortlist.json"), join(ctx.coreDir, "config", "agent-token-shortlist.json"));
+    const m = join(ctx.coreDir, "deployments", String(ctx.chainId), "agent-token-vault.json");
+    writeFileSync(m, JSON.stringify({ chain_id: ctx.chainId, vault: "0x00000000000000000000000000000000000000b1", adapter: MANIFEST_ADAPTER }));
+    expect(() => loadExpectedAssets(ctx, "AGENT")).toThrow(/adapter_v4/);
   });
 
   test("a failing check fails the stage with the VERIFY exit class", async () => {

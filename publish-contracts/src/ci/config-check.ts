@@ -5,13 +5,18 @@
 //   and the oracle (the pool TWAP that prices the basket vault): observe() covers the TWAP window, the last observation is fresh, and the
 //   TWAP is within ORACLE_MAX_DEVIATION_PERCENT of the V3 slot0 spot.
 // Missing config is a failure, never a skip.
-import { decodeFunctionResult, encodeFunctionData, parseAbi } from "viem";
+import { decodeFunctionResult, encodeAbiParameters, encodeFunctionData, keccak256, parseAbi } from "viem";
+import { VENUE_V4 } from "../core-wiring.ts";
 import { Collector } from "../verify/collector.ts";
 import type { Address, ChainReader, ExpectedAsset, Hex, VerifyReport } from "../verify/types.ts";
 import { loadConfigAssets } from "../asset-config.ts";
 import { VAULT_KEYS, VAULT_NAME, type VaultKey } from "../sheet.ts";
 
 export const POOL_SELECTORS = { fee: "0xddca3f43", slot0: "0x3850c7bd", liquidity: "0x1a686502", observations: "0x252c09d7" } as const;
+/** Uniswap V4 StateView on Base: getSlot0(bytes32) and getLiquidity(bytes32), keyed by the pool id (core 1676). */
+export const STATE_VIEW_SELECTORS = { getSlot0: "0xc815641c", getLiquidity: "0xfa6793d5" } as const;
+/** The addAsset in-range liquidity floor (BasketVault.MIN_POOL_LIQUIDITY). For a V4 pool the unit is the pool's liquidity L, not USDC. */
+export const MIN_POOL_LIQUIDITY = 1_000_000n;
 /** The vault names whose assets the config-check reads. rmUSDC holds no basket assets. */
 export const CONFIG_VAULTS = ["rmPROTO", "rmAGENT", "rmRWA"] as const;
 
@@ -59,6 +64,7 @@ export async function configCheck(chain: ChainReader, assets: ConfiguredAsset[])
     const n = (labelsSeen.get(base) ?? 0) + 1;
     labelsSeen.set(base, n);
     const p = n === 1 ? base : `${base} #${n}`;
+    if (a.venue === VENUE_V4) { await v4Checks(c, chain, a, p); continue; }
     const tokenCode = await (async () => { try { return (await chain.getCode(a.token)) !== "0x"; } catch { return false; } })();
     c.push(`${p}: token code present`, tokenCode, tokenCode ? `${a.token}` : `no code at token ${a.token}`);
     const hasCode = await (async () => { try { return (await chain.getCode(a.pool)) !== "0x"; } catch { return false; } })();
@@ -118,3 +124,44 @@ export async function configCheck(chain: ChainReader, assets: ConfiguredAsset[])
 }
 
 export type { Address };
+
+
+/**
+ * The Uniswap V4 asset (core 1676). V4 keeps no PoolKey on chain, only its hash as the pool id, so the key from config is read through
+ * StateView by deriving the pool id: `getSlot0(derivedId)` gives a non-zero price only for an initialized pool with exactly that key, and
+ * its lpFee must equal the configured fee. `getLiquidity` is the pool's in-range liquidity L (a raw uint128, not USDC) and must reach the
+ * addAsset floor. An unfunded or under-funded pool fails here: the owner funds it, nothing bypasses it.
+ */
+async function v4Checks(c: Collector, chain: ChainReader, a: ConfiguredAsset, p: string): Promise<void> {
+  const x = a.v4;
+  const tokenCode = await (async () => { try { return (await chain.getCode(a.token)) !== "0x"; } catch { return false; } })();
+  c.push(`${p}: token code present`, tokenCode, tokenCode ? `${a.token}` : `no code at token ${a.token}`);
+  if (!x) { c.fail(`${p}: V4 pool key is configured`, "the config entry has no poolManager, stateView, poolId and poolKey"); return; }
+  for (const [what, addr] of [["PoolManager", x.poolManager], ["StateView", x.stateView]] as const) {
+    const has = await (async () => { try { return (await chain.getCode(addr)) !== "0x"; } catch { return false; } })();
+    c.push(`${p}: ${what} code present`, has, has ? addr : `no code at ${what} ${addr}`);
+  }
+  const derived = keccak256(encodeAbiParameters(
+    [{ type: "address" }, { type: "address" }, { type: "uint24" }, { type: "int24" }, { type: "address" }],
+    [x.key.currency0, x.key.currency1, x.key.fee, x.key.tickSpacing, x.key.hooks]));
+  c.push(`${p}: pool key hashes to the pool id`, derived.toLowerCase() === x.poolId.toLowerCase(), `hash(poolKey) ${derived}, poolId ${x.poolId}`);
+  const arg = derived.slice(2);
+  let initialized = false;
+  await c.run(`${p}: V4 pool is initialized and its fee equals config`, async () => {
+    const r = await chain.callRaw(x.stateView, (STATE_VIEW_SELECTORS.getSlot0 + arg) as Hex);
+    if (!r.ok) return { ok: false, detail: `StateView.getSlot0 reverted: ${r.reason ?? ""}` };
+    const sqrt = word(r.data, 0);
+    const lpFee = word(r.data, 3);
+    initialized = sqrt !== 0n;
+    return { ok: initialized && lpFee === BigInt(a.swapFee), detail: initialized ? `lpFee ${lpFee}, want ${a.swapFee}` : `no initialized pool has id ${derived}: the PoolKey in config does not resolve to a live pool` };
+  });
+  await c.run(`${p}: liquidity at least ${MIN_POOL_LIQUIDITY}`, async () => {
+    const r = await chain.callRaw(x.stateView, (STATE_VIEW_SELECTORS.getLiquidity + arg) as Hex);
+    if (!r.ok) return { ok: false, detail: `StateView.getLiquidity reverted: ${r.reason ?? ""}` };
+    const liq = word(r.data, 0);
+    return {
+      ok: liq >= MIN_POOL_LIQUIDITY,
+      detail: liq >= MIN_POOL_LIQUIDITY ? `liquidity L ${liq}` : `liquidity L ${liq} is below ${MIN_POOL_LIQUIDITY}: the pool is not funded yet, the owner must add in-range liquidity (the unit is the pool's liquidity L, not USDC)`,
+    };
+  });
+}

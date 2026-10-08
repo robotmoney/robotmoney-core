@@ -23,6 +23,7 @@ export function writeGovernManifests(dir: string): void {
   const t = getStageTable();
   const n = (stage: string) => stageManifestName(t, stage);
   w(n("timelock"), { timelock: A.timelock }); w("safe", { safe: A.safe }); w(n("router"), { router: A.router }); w(n("registry"), { registry: A.registry });
+  w(n("recorder"), { recorder: "0x00000000000000000000000000000000000c0c0c" });
   w(n("gateway"), { gateway: A.gateway }); w(n("governance"), { governance: A.governance }); w(n("ic-policy"), { consensus_receipt: A.receipt });
   for (const v of t.vaults) w(manifestBase(v.manifest), { vault: A.vaults[v.key] });
 }

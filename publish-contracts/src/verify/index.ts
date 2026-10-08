@@ -1,7 +1,7 @@
 // The one verifier (stage 12). Same code, same labels on the Twin chain (918453) and Base mainnet (8453).
 // Replaces the three superseded verifier shell scripts and the stage verifier.
 // Read-only: it sends nothing.
-import { encodeFunctionData, keccak256, parseAbiItem, toHex } from "viem";
+import { encodeAbiParameters, encodeFunctionData, keccak256, parseAbiItem, toFunctionSelector, toHex } from "viem";
 import { Collector } from "./collector.ts";
 import { compareCode, loadArtifact } from "./codehash.ts";
 import {
@@ -9,7 +9,7 @@ import {
   RM_TOKEN, SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase } from "../stage-table.ts";
-import { SAFE_MANIFEST } from "../core-wiring.ts";
+import { SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V4 } from "../core-wiring.ts";
 import { isAddress, loadManifests, lc, type ManifestVault } from "./manifests.ts";
 import { padTopic, scanLogs, topicToAddress } from "./logs.ts";
 import { safeChecks } from "./safe-checks.ts";
@@ -86,9 +86,12 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await c.run("usdc: code hash equals pinned FiatTokenProxy", async () => checkUsdcCode(await chain.getCode(USDC_ADDRESS), opts.usdcCodeHash));
 
   // ---- code present
+  // core 1676: the V4 swap adapter a vault stage deployed (the agent vault manifest names it) is checked like a core contract.
+  const v4Adapters = man.vaults.flatMap((v) => (isAddress(v.data?.[VAULT_ADAPTER_V4_FIELD]) && lc(v.data[VAULT_ADAPTER_V4_FIELD]) !== lc(ZERO) ? [{ vault: v.key, address: v.data[VAULT_ADAPTER_V4_FIELD] as Address }] : []));
   const targets: { name: string; address: Address }[] = [
     ...core.map((x) => ({ name: x.name, address: x.address })),
     ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address })),
+    ...v4Adapters.map((a) => ({ name: `adapter[V4:${a.vault}]`, address: a.address })),
   ];
   for (const t of targets) await c.run(`${t.name}: has code`, async () => (await chain.getCode(t.address)).length > 2);
 
@@ -141,7 +144,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await deployTimeChecks(c, chain, sheet, { governance: byName.governance!, router, vaults: man.vaults });
 
   // ---- vaults
-  for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet });
+  for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet, recorder: byName.recorder!, artifactsDir: opts.artifactsDir, v4AdapterArtifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY] });
 
   // ---- gateway agents, derived from logs
   const head = await chain.blockNumber().catch(() => undefined);
@@ -190,6 +193,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const codeTargets: { label: string; address: Address; artifact: string }[] = [
     ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact })),
     ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact })),
+    ...v4Adapters.map((a) => ({ label: `adapter[V4:${a.vault}]`, address: a.address, artifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY]! })),
     ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]! })),
   ];
   for (const t of codeTargets) {
@@ -239,7 +243,7 @@ async function deployTimeChecks(
 
 async function vaultChecks(
   c: Collector, chain: ChainReader, v: ManifestVault, vs: VaultSheet | undefined,
-  ctx: { tl: Address; registry: Address; safe: Address; sheet: VerifyOptions["sheet"] },
+  ctx: { tl: Address; registry: Address; safe: Address; sheet: VerifyOptions["sheet"]; recorder: Address; artifactsDir: string; v4AdapterArtifact?: string },
 ): Promise<void> {
   const p = `vault[${v.key}]`;
   const { tl, registry, safe, sheet } = ctx;
@@ -287,7 +291,107 @@ async function vaultChecks(
     await basketGuardChecks(c, chain, a, p, vs);
     // rmAGENT launches holding RM only (core 1554). "asset config equals sheet" ties the chain to the sheet, so this ties the sheet to RM.
     if (v.kind === "agent") await c.run(`${p}: holds RM as its one asset`, async () => ({ ok: vs.assets.length === 1 && lc(vs.assets[0]!.token) === lc(RM_TOKEN), detail: `sheet lists [${vs.assets.map((a) => a.token).join(", ")}], expected only ${RM_TOKEN}` }));
+    // core 1676: every UniswapV4 asset is wired to the permissionless price recorder, the V4 adapter and the configured PoolKey.
+    for (const asset of vs.assets.filter((x) => x.venue === VENUE_V4)) await v4AssetChecks(c, chain, v, asset, ctx);
   }
+}
+
+/** The labels v4AssetChecks pushes. A vault whose sheet lists a V4 asset must pass every one. */
+const V4_LABELS = [
+  "asset row is venue V4 with the price recorder as its pool",
+  "V4 adapter codehash is allowed",
+  "V4 adapter is bound to the recorder, the PoolManager and the pool key",
+] as const;
+const RECORDER_LABELS = [
+  "recorder: PoolKey and PoolManager equal config",
+  "recorder: observation ring holds the full window floor",
+  "recorder: has no owner, role or setter",
+] as const;
+
+/** Function selectors that would make the recorder administrable. None may be in its runtime code (it has no owner, role or setter). */
+const ADMIN_SELECTORS = [
+  "owner()", "admin()", "pendingOwner()", "transferOwnership(address)", "renounceOwnership()", "acceptOwnership()", "hasRole(bytes32,address)",
+  "grantRole(bytes32,address)", "revokeRole(bytes32,address)", "renounceRole(bytes32,address)", "DEFAULT_ADMIN_ROLE()", "ADMIN_ROLE()", "pause()", "unpause()",
+  "setPoolManager(address)", "setMaxStaleness(uint32)", "setTick(int24)", "upgradeTo(address)", "upgradeToAndCall(address,bytes)", "setImplementation(address)",
+].map((sig) => toFunctionSelector(`function ${sig}`).slice(2).toLowerCase());
+
+/**
+ * Core 1676 (owner decision 2026-10-08). The rmAGENT asset is a Uniswap V4 pool. Its vault pool is the price recorder, its adapter the V4 swap
+ * adapter. Read from the chain and compared with core's config (never with the chain itself): the asset row's venue and pool, the adapter's
+ * codehash on the vault allowlist, the adapter's immutable binding, the recorder's PoolKey (and that the key hashes to the configured pool id),
+ * the recorder's ring size, and the absence of any admin selector in the recorder's runtime code (the negative invariant).
+ */
+async function v4AssetChecks(
+  c: Collector, chain: ChainReader, v: ManifestVault, asset: ExpectedAsset,
+  ctx: { recorder: Address; artifactsDir: string; v4AdapterArtifact?: string },
+): Promise<void> {
+  const p = `vault[${v.key}]`;
+  const x = asset.v4;
+  const rec = asset.pool; // the recorder the asset must be registered with
+  await c.run(`${p}: ${V4_LABELS[0]}`, async () => {
+    if (!x) return { ok: false, detail: "the expected asset has no V4 config" };
+    let row: any;
+    for (let i = 0; i < 64; i++) {
+      let r: any;
+      try { r = await chain.read(v.address, ASSET_SIG, [BigInt(i)]); } catch { break; }
+      const t = Array.isArray(r) ? r : [r.token, r.pool, r.swapFee, r.active, r.adapter, r.venue];
+      if (lc(t[0]) === lc(asset.token)) row = t;
+    }
+    if (!row) return { ok: false, detail: `no asset row for ${asset.token}` };
+    const ok = Number(row[5]) === VENUE_V4 && lc(row[1]) === lc(rec) && lc(rec) === lc(ctx.recorder) && Number(row[2]) === x.key.fee;
+    return { ok, detail: `venue ${row[5]}, pool ${row[1]}, swapFee ${row[2]}; recorder ${ctx.recorder}, fee in config ${x.key.fee}` };
+  });
+  await c.run(`${p}: ${V4_LABELS[1]}`, async () => {
+    const code = await chain.getCode(asset.adapter);
+    if (code.length <= 2) return { ok: false, detail: `no code at the adapter ${asset.adapter}` };
+    const allowed = (await chain.read(v.address, "function adapterCodeHashAllowed(bytes32) view returns (bool)", [keccak256(code)])) as boolean;
+    return { ok: allowed === true, detail: `adapterCodeHashAllowed(${keccak256(code)}) ${String(allowed)}` };
+  });
+  await c.run(`${p}: ${V4_LABELS[2]}`, async () => {
+    if (!x) return { ok: false, detail: "the expected asset has no V4 config" };
+    const a = asset.adapter;
+    const got = {
+      pm: lc((await chain.read(a, "function POOL_MANAGER() view returns (address)")) as string),
+      recorder: lc((await chain.read(a, "function RECORDER() view returns (address)")) as string),
+      id: String(await chain.read(a, "function POOL_ID() view returns (bytes32)")).toLowerCase(),
+      c0: lc((await chain.read(a, "function CURRENCY0() view returns (address)")) as string),
+      c1: lc((await chain.read(a, "function CURRENCY1() view returns (address)")) as string),
+      fee: Number(await chain.read(a, "function POOL_FEE() view returns (uint24)")),
+      spacing: Number(await chain.read(a, "function TICK_SPACING() view returns (int24)")),
+    };
+    const ok = got.pm === lc(x.poolManager) && got.recorder === lc(rec) && got.id === x.poolId.toLowerCase() && got.c0 === lc(x.key.currency0) && got.c1 === lc(x.key.currency1) && got.fee === x.key.fee && got.spacing === x.key.tickSpacing;
+    return { ok, detail: ok ? `bound to recorder ${rec}` : `adapter reads ${JSON.stringify(got)}, config says PoolManager ${x.poolManager} recorder ${rec} poolId ${x.poolId} key ${JSON.stringify(x.key)}` };
+  });
+  await c.run(RECORDER_LABELS[0], async () => {
+    if (!x) return { ok: false, detail: "the expected asset has no V4 config" };
+    const r = ctx.recorder;
+    const got = {
+      pm: lc((await chain.read(r, "function POOL_MANAGER() view returns (address)")) as string),
+      id: String(await chain.read(r, "function POOL_ID() view returns (bytes32)")).toLowerCase(),
+      c0: lc((await chain.read(r, "function token0() view returns (address)")) as string),
+      c1: lc((await chain.read(r, "function token1() view returns (address)")) as string),
+      fee: Number(await chain.read(r, "function fee() view returns (uint24)")),
+      spacing: Number(await chain.read(r, "function tickSpacing() view returns (int24)")),
+      hooks: lc((await chain.read(r, "function hooks() view returns (address)")) as string),
+    };
+    // the configured key must hash to the configured pool id (abi.encode of the five fields), and the recorder must read that very pool
+    const hash = keccak256(encodeAbiParameters(
+      [{ type: "address" }, { type: "address" }, { type: "uint24" }, { type: "int24" }, { type: "address" }],
+      [x.key.currency0, x.key.currency1, x.key.fee, x.key.tickSpacing, x.key.hooks]));
+    const ok = got.pm === lc(x.poolManager) && got.id === x.poolId.toLowerCase() && hash.toLowerCase() === x.poolId.toLowerCase() && got.c0 === lc(x.key.currency0) && got.c1 === lc(x.key.currency1)
+      && got.fee === x.key.fee && got.spacing === x.key.tickSpacing && got.hooks === lc(x.key.hooks);
+    return { ok, detail: ok ? `pool id ${x.poolId}` : `recorder reads ${JSON.stringify(got)}, hash of the config key ${hash}, config says ${JSON.stringify({ pm: x.poolManager, id: x.poolId, key: x.key })}` };
+  });
+  await c.run(RECORDER_LABELS[1], async () => {
+    const [, , , cardinality] = (await chain.read(ctx.recorder, "function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality)")) as readonly [bigint, number, number, number];
+    return { ok: Number(cardinality) >= 901, detail: `observationCardinality ${cardinality}, the 1800 s window needs 901` };
+  });
+  await c.run(RECORDER_LABELS[2], async () => {
+    const code = (await chain.getCode(ctx.recorder)).slice(2).toLowerCase();
+    if (code.length === 0) return { ok: false, detail: `no code at the recorder ${ctx.recorder}` };
+    const found = ADMIN_SELECTORS.filter((sel) => code.includes(sel));
+    return { ok: found.length === 0, detail: found.length ? `the runtime code carries admin selector(s) ${found.join(", ")}` : `none of ${ADMIN_SELECTORS.length} admin selectors in ${code.length / 2} bytes of runtime code` };
+  });
 }
 
 /** The labels basketGuardChecks pushes (a vault with no sheet entry fails them by name). */

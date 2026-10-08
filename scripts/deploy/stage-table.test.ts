@@ -105,7 +105,7 @@ describe("stage-table.json", () => {
       if (name === "TimelockController") continue; // OpenZeppelin, deployed by DeployTimelock
       expect([k, new RegExp(`contract ${name}\\b`).test(src)]).toEqual([k, true]);
     }
-    expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "registry", "router", "timelock"]);
+    expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "recorder", "registry", "router", "timelock", "v4Adapter"]);
   });
 
   test("stage 13 is the basket unpauses only, with the deploy-time configuration set in stages 4 to 10 (issue 1520)", () => {

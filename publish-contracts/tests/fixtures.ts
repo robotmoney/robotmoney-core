@@ -32,7 +32,7 @@ export const SHA = "a".repeat(40);
 export const SHA2 = "b".repeat(40);
 
 /** Frozen counts used across the tests. Deployer stages only. */
-export const COUNTS: Record<string, number> = { safe: 1, libs: 4, vault: 18, registry: 2, router: 3, gateway: 3, governance: 2, "ic-policy": 5, proto: 6, agent: 6, rwa: 6, timelock: 25 };
+export const COUNTS: Record<string, number> = { safe: 1, libs: 4, recorder: 6, vault: 18, registry: 2, router: 3, gateway: 3, governance: 2, "ic-policy": 5, proto: 6, agent: 6, rwa: 6, timelock: 25 };
 
 export function tmp(prefix = "pc-"): string { return mkdtempSync(join(tmpdir(), prefix)); }
 

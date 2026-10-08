@@ -306,6 +306,8 @@
     "governance": "RouterGovernance",
     "timelock": "TimelockController",
     "icPolicy": "InvestmentCommitteePolicy",
-    "receipt": "ConsensusRecommendationReceipt"
+    "receipt": "ConsensusRecommendationReceipt",
+    "recorder": "UniswapV4PriceRecorder",
+    "v4Adapter": "UniswapV4SwapAdapter"
   }
 }

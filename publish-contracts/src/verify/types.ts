@@ -21,14 +21,25 @@ export interface VerifyReport {
 
 export type VaultKind = "usdc" | "basket" | "agent";
 
+/** The Uniswap V4 facts of an expected asset (core 1676): the PoolManager, StateView, pool id and the full PoolKey, all from core's config. */
+export interface ExpectedV4 {
+  poolManager: Address;
+  stateView: Address;
+  poolId: Hex;
+  key: { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
+}
+
 export interface ExpectedAsset {
   token: Address;
+  /** The pool the vault registers. For a UniswapV4 asset this is the price recorder, not a pool: V4 has no pool address. */
   pool: Address;
   swapFee: number;
   adapter: Address;
-  /** Venue enum index as stored on chain (0 = V3 for the shipped vaults). Optional per asset. */
+  /** Venue enum index as stored on chain (0 = V3, 1 = V4). Optional per asset. */
   venue?: number;
   active?: boolean;
+  /** UniswapV4 only: what the recorder and the V4 adapter must be bound to. */
+  v4?: ExpectedV4;
 }
 
 /** Everything the frozen sheet says about one vault. All fields are required: nothing is skipped silently. */
