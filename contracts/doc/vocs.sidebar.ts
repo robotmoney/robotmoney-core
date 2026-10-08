@@ -89,6 +89,7 @@ export const sidebar = [
         { text: "ISwapRouter", link: "/contracts/interfaces/interface.ISwapRouter" },
         { text: "IUniswapV3Pool", link: "/contracts/interfaces/interface.IUniswapV3Pool" },
         { text: "IUpstreamMonitor", link: "/contracts/interfaces/interface.IUpstreamMonitor" },
+        { text: "IVault", link: "/contracts/interfaces/interface.IVault" },
       ],
     },
     {
@@ -107,6 +108,7 @@ export const sidebar = [
           collapsed: true,
           items: [
             { text: "IBasketVaultViews", link: "/contracts/lib/interface.IBasketVaultViews" },
+            { text: "IInKindVault", link: "/contracts/lib/interface.IInKindVault" },
           ],
         },
         {
@@ -205,7 +207,7 @@ export const sidebar = [
             { text: "BlacklistableUSDC", link: "/contracts/test/contract.BlacklistableUSDC" },
             { text: "BlacklistableVault", link: "/contracts/test/contract.BlacklistableVault" },
             { text: "BpsMathTest", link: "/contracts/test/contract.BpsMathTest" },
-            { text: "CardinalityOnePool", link: "/contracts/test/contract.CardinalityOnePool" },
+            { text: "CardinalityBelowFloorPool", link: "/contracts/test/contract.CardinalityBelowFloorPool" },
             { text: "CompoundV3AdapterPositionTest", link: "/contracts/test/contract.CompoundV3AdapterPositionTest" },
             { text: "ConfigFilesTest", link: "/contracts/test/contract.ConfigFilesTest" },
             { text: "ConfusedDeputyGuardsTest", link: "/contracts/test/contract.ConfusedDeputyGuardsTest" },
@@ -327,6 +329,7 @@ export const sidebar = [
             { text: "ReceiptRoleStub", link: "/contracts/test/contract.ReceiptRoleStub" },
             { text: "RecordingSwapRouter", link: "/contracts/test/contract.RecordingSwapRouter" },
             { text: "RedeemGasGuardsTest", link: "/contracts/test/contract.RedeemGasGuardsTest" },
+            { text: "ReentrantHookToken", link: "/contracts/test/contract.ReentrantHookToken" },
             { text: "ReentrantVault", link: "/contracts/test/contract.ReentrantVault" },
             { text: "RevertingRetireVault", link: "/contracts/test/contract.RevertingRetireVault" },
             { text: "RobotMoneyGatewayTest", link: "/contracts/test/contract.RobotMoneyGatewayTest" },

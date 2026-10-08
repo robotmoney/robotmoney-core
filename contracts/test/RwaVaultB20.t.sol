@@ -30,7 +30,7 @@ contract B20ConstPool {
     }
 
     function slot0() external pure returns (uint160, int24, uint16, uint16, uint16, bool) {
-        return (uint160(1 << 96), 0, 0, 100, 100, true);
+        return (uint160(1 << 96), 0, 0, 1000, 1000, true);
     }
 
     function observe(uint32[] calldata secondsAgos)

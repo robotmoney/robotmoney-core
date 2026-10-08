@@ -141,7 +141,7 @@ describe("live rules against a fake RPC", () => {
       if (sel === "0xddca3f43") return "0x" + w(o.fee ?? feeOf(t));
       if (sel === "0x0dfe1681") return "0x" + a(cfg.rwa.usdc);
       if (sel === "0xd21220a7") return "0x" + a(asset!.token);
-      if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(0) + w(o.cardinality ?? 50) + w(0) + w(1);
+      if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(0) + w(o.cardinality ?? 1000) + w(0) + w(1);
       if (sel === "0x1a686502") return "0x" + w(o.liquidity ?? 10n ** 18n);
       if (sel === "0x70a08231") return "0x" + w(2_000_000n * 10n ** 6n);
       if (sel === "0x1698ee82" && t === FACTORY) {
@@ -169,8 +169,10 @@ describe("live rules against a fake RPC", () => {
   test("fails when the factory returns another pool", async () => {
     expect(await bad({ deSPXA: { factoryPool: "0x1111111111111111111111111111111111111111" } }, "factory-getPool-equals-config", "deSPXA")).toBe(true);
   });
-  test("fails when observation cardinality is below 2", async () => {
-    expect(await bad({ deSPXA: { cardinality: 1 } }, "observation-cardinality>=2", "deSPXA")).toBe(true);
+  test("fails when observation cardinality is below the 901 window floor, passes at 901", async () => {
+    expect(await bad({ deSPXA: { cardinality: 900 } }, "observation-cardinality>=901", "deSPXA")).toBe(true);
+    expect(await bad({ deSPXA: { cardinality: 901 } }, "observation-cardinality>=901", "deSPXA")).toBe(false);
+    expect(await bad({ deSPXA: { cardinality: 1 } }, "observation-cardinality>=901", "deSPXA")).toBe(true);
   });
   test("fails when liquidity is zero", async () => {
     expect(await bad({ deSPXA: { liquidity: 0n } }, "liquidity>0", "deSPXA")).toBe(true);
@@ -182,8 +184,8 @@ describe("live rules against a fake RPC", () => {
     test(`${sym}: a factory that returns another pool fails`, async () => {
       expect(await bad({ [sym]: { factoryPool: "0x2222222222222222222222222222222222222222" } }, "factory-getPool-equals-config", sym)).toBe(true);
     });
-    test(`${sym}: cardinality below 2 and zero liquidity fail`, async () => {
-      expect(await bad({ [sym]: { cardinality: 0 } }, "observation-cardinality>=2", sym)).toBe(true);
+    test(`${sym}: cardinality below 901 and zero liquidity fail`, async () => {
+      expect(await bad({ [sym]: { cardinality: 0 } }, "observation-cardinality>=901", sym)).toBe(true);
       expect(await bad({ [sym]: { liquidity: 0n } }, "liquidity>0", sym)).toBe(true);
     });
   }
@@ -219,12 +221,12 @@ describe("live rules against a fake RPC", () => {
   });
   test("RM: an unfunded pool (no liquidity, cardinality 1) fails until the owner funds it", async () => {
     expect(await bad({ RM: { liquidity: 0n } }, "liquidity>0", "RM")).toBe(true);
-    expect(await bad({ RM: { cardinality: 1 } }, "observation-cardinality>=2", "RM")).toBe(true);
+    expect(await bad({ RM: { cardinality: 1 } }, "observation-cardinality>=901", "RM")).toBe(true);
   });
   test("RM: an unfunded pool fails with a message that names the pool and the owner action", async () => {
     const r = await liveFindings(rpcFor({ RM: { liquidity: 0n, cardinality: 1 } }), "latest", cfg);
     const failed = r.findings.filter((f) => !f.ok && f.scope.endsWith(":RM"));
-    expect(failed.map((f) => f.rule).sort()).toEqual(["liquidity>0", "liquidity>=1000000", "observation-cardinality>=2"]);
+    expect(failed.map((f) => f.rule).sort()).toEqual(["liquidity>0", "liquidity>=1000000", "observation-cardinality>=901"]);
     for (const f of failed) expect(f.detail).toMatch(/0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882 is not funded yet: the owner must add in-range liquidity/);
   });
   test("RM: liquidity under the addAsset floor of 1e6 fails even though it is above zero", async () => {

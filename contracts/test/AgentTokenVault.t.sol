@@ -32,7 +32,7 @@ import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 contract MockPool {
     address public immutable token0;
     address public immutable token1;
-    uint16 public cardinality = 100;
+    uint16 public cardinality = 1000;
     uint128 public poolLiquidity = 1e18; // large default so all existing tests pass unmodified
     uint24 public feeTier; // fee() read by addAsset's ORA-3 equality check
 
@@ -562,7 +562,7 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
     function test_governance_addAsset_rejects_low_cardinality_pool() public {
         TestERC20 newToken = new TestERC20();
         MockPool lowCardPool = new MockPool(address(newToken), address(usdc), 3000);
-        lowCardPool.setCardinality(1); // below MIN_POOL_CARDINALITY = 2
+        lowCardPool.setCardinality(1); // below the window floor (901)
 
         bytes memory callData = abi.encodeCall(
             BasketVault.addAsset,
@@ -588,7 +588,7 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
             abi.encodeWithSelector(
                 BasketVault.InsufficientPoolCardinality.selector,
                 address(lowCardPool),
-                uint16(2), // MIN_POOL_CARDINALITY
+                uint16(901), // window-derived floor (1800 s / 2 s + 1)
                 uint16(1)
             )
         );

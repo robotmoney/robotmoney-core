@@ -3,7 +3,7 @@
 // and the refusals that keep it off a real chain.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { fundRmPool, readRmPoolFacts, tickRangeAround, TwinError, type Rpc } from "../src/rehearsal/twin.ts";
+import { withObservationCardinality, fundRmPool, readRmPoolFacts, tickRangeAround, TwinError, type Rpc } from "../src/rehearsal/twin.ts";
 
 const core = join(import.meta.dir, "..", "..");
 
@@ -12,6 +12,15 @@ describe("fund-rm-pool", () => {
     expect(tickRangeAround(-389_201, 200)).toEqual([-389_400, -389_200]);
     expect(tickRangeAround(-389_200, 200)).toEqual([-389_200, -389_000]);
     expect(tickRangeAround(150, 200)).toEqual([0, 200]);
+  });
+  test("withObservationCardinality sets both cardinality fields and keeps every other slot0 field", () => {
+    const price = 0x1234n, tick = 0xabcdefn, index = 7n;
+    const word = `0x${(price | (tick << 160n) | (index << 184n) | (1n << 200n) | (1n << 216n) | (1n << 232n) | (1n << 240n)).toString(16).padStart(64, "0")}` as const;
+    const out = BigInt(withObservationCardinality(word, 1000));
+    expect((out >> 200n) & 0xffffn).toBe(1000n);
+    expect((out >> 216n) & 0xffffn).toBe(1000n);
+    expect(out & ((1n << 200n) - 1n)).toBe(price | (tick << 160n) | (index << 184n));
+    expect(out >> 232n).toBe((1n << 8n) | 1n);
   });
   test("the facts are the RM entry of the committed shortlist", () => {
     const f = readRmPoolFacts(core);

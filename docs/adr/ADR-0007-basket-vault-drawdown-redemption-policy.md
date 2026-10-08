@@ -158,6 +158,25 @@ that the cap remain conservative for any router-eligible basket vault.
   §3.5).
 - In-vault agent trading authority — see ADR-0008 (open-questions §1.B, §3.2).
 
+## Amendment (core 1665): oracle-free exit and a window-derived cardinality floor
+
+The USDC `redeem` keeps the behaviour above. It may still revert when spot is more than `maxSlippageBps`
+below the TWAP, as the owner reconfirmed on 2026-10-06. That revert is accepted.
+
+A holder must still always be able to exit, even if a TWAP read or a swap leg cannot be priced or filled
+(adversarial audit 2026-10-08, devops 72). Two changes keep withdrawals never frozen:
+
+- **Cardinality floor.** `addAsset` and `setTwapWindow` refuse a pool whose observation cardinality is below
+  `window / 2 s + 1`. Uniswap V3 writes at most one observation per block and cardinality never decreases, so at
+  Base's 2 s blocks a griefer cannot churn the ring below the window. The 1800 s default needs 901 slots and a
+  3600 s window needs 1801. This replaces `MIN_POOL_CARDINALITY = 2` (core 494). The live Base RM/USDC pool must
+  reach cardinality 901 or more before the mainnet run.
+- **`redeemInKind(shares, receiver, owner)`.** It burns shares and pays the pro-rata idle USDC plus the pro-rata
+  amount of each active basket token. It reads no TWAP and sells nothing. `exitFeeBps` is taken from each leg and
+  sent to `feeRecipient`. Each leg is floored, so rounding favours the vault and remaining holders' per-share
+  backing never falls. A caller other than the owner spends allowance. The entry gas floor matches `redeem`.
+  Pause, shutdown, retire and roles do not gate it. Removed assets are not paid.
+
 ## NatSpec disclosure
 
 A NatSpec block on `contracts/vaults/BasketVault.sol` documents the NAV-haircut

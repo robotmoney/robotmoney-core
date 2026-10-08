@@ -151,6 +151,10 @@ source. The manipulation-resistance posture is:
   cardinality causes the pool's `observe()` to revert (`"OLD"`), which
   fails NAV and emergency-unwind reads closed — preferred to silently
   reading a manipulable short window.
+  On-chain, `addAsset` and `setTwapWindow` now refuse a pool whose cardinality is
+  below `window / 2 s + 1` (901 for the default window), so griefing swaps cannot
+  churn the ring below the window. `redeemInKind` is the oracle-free exit if a
+  read still fails (core 1665, ADR-0007 amendment).
 - **Circuit breaker.** `pauseDeposits()` (EMERGENCY_ROLE) suspends new
   deposits only. Withdrawals are never frozen, by anyone (core 1494).
   `shutdownVault()` zeroes the TVL cap. Both remain available

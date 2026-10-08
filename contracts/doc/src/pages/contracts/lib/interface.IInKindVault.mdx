@@ -1,0 +1,73 @@
+---
+title: "IInKindVault"
+description: "The config-validation interface the 2026-06-19 audit recommended for `BasketVault.addAsset`: it enforces the ADP-2 adapter codehash allowlist and the ORA-3 execution-pool == TWAP-pool equality (F-09)."
+---
+
+# IInKindVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/lib/BasketAssetConfigGuard.sol)
+
+**Title:** BasketAssetConfigGuard
+
+The config-validation interface the 2026-06-19 audit recommended for
+`BasketVault.addAsset`: it enforces the ADP-2 adapter codehash
+allowlist and the ORA-3 execution-pool == TWAP-pool equality (F-09).
+
+<i>
+
+Declared `public` (external, DELEGATECALL-linked) so the checks live in a
+single deployed library instead of being inlined into every vault in the
+already-EIP-170-tight basket family.
+
+</i>
+
+<i>
+
+The vault getters `payInKind` reads from `address(this)`.
+
+</i>
+
+## Functions
+
+<a id="asset"></a>
+
+### asset
+
+```solidity
+function asset() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="exitfeebps"></a>
+
+### exitFeeBps
+
+```solidity
+function exitFeeBps() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="feerecipient"></a>
+
+### feeRecipient
+
+```solidity
+function feeRecipient() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

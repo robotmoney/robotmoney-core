@@ -39,7 +39,7 @@ function handle(method: string, params: any[]): string {
   if (sel === "0xddca3f43") return "0x" + w(asset ? (liveFeeOverride[asset.symbol] ?? Number(asset.poolFee)) : 0);
   if (sel === "0x0dfe1681") return "0x" + a(base.rwa.usdc);
   if (sel === "0xd21220a7") return "0x" + a(asset!.token);
-  if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(0) + w(50) + w(0) + w(1);
+  if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(0) + w(1000) + w(0) + w(1);
   if (sel === "0x1a686502") return "0x" + w(10n ** 18n);
   if (sel === "0x70a08231") return "0x" + w(2_000_000n * 10n ** 6n);
   if (sel === "0x1698ee82" && t === FACTORY) {

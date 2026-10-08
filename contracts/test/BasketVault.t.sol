@@ -58,7 +58,7 @@ contract MockPool {
         // Tick=0 means 1:1 price (sqrtP = 2^96); arithmetic-mean tick is 0
         // when tickCumulativeRate=0. Tests override as needed.
         tickCumulativeRate = 0;
-        cardinality = 100;
+        cardinality = 50_000;
         poolLiquidity = 1e18; // large default so existing tests pass unmodified
         feeTier = 500; // matches the swapFee_ tests pass to addAsset by default
     }
@@ -187,6 +187,40 @@ contract BasketVaultHarness is BasketVault {
 
     function maxAssets() public pure override returns (uint256) {
         return 4;
+    }
+}
+
+/// @dev Basket token that calls back into the vault while the vault pays out (an ERC-777 style hook).
+///      Records the owner's share balance and the total supply at callback time, then tries to
+///      re-enter `redeemInKind`. Core 1665 reentrancy probe.
+contract ReentrantHookToken is TestERC20 {
+    BasketVault public target;
+    address public victim;
+    bool public armed;
+    bool public reentered;
+    bool public reentrySucceeded;
+    bytes4 public reentryReason;
+    uint256 public sharesAtCallback = type(uint256).max;
+    uint256 public supplyAtCallback;
+
+    function arm(BasketVault target_, address victim_) external {
+        target = target_;
+        victim = victim_;
+        armed = true;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        if (armed && from == address(target) && !reentered) {
+            reentered = true;
+            sharesAtCallback = target.balanceOf(victim);
+            supplyAtCallback = target.totalSupply();
+            try target.redeemInKind(1, victim, victim) {
+                reentrySucceeded = true;
+            } catch (bytes memory reason) {
+                reentryReason = bytes4(reason); // expected: ReentrancyGuardReentrantCall
+            }
+        }
+        super._update(from, to, value);
     }
 }
 
@@ -1455,7 +1489,7 @@ contract BasketVaultTest is Test {
             abi.encodeWithSelector(
                 BasketVault.InsufficientPoolCardinality.selector,
                 address(lowCardPool),
-                vault.MIN_POOL_CARDINALITY(),
+                uint16(901),
                 uint16(1)
             )
         );
@@ -1526,11 +1560,11 @@ contract BasketVaultTest is Test {
         assertGt(redeemed, 0, "existing holder can redeem after unwind");
     }
 
-    /// @notice addAsset() succeeds when pool cardinality equals MIN_POOL_CARDINALITY (2).
+    /// @notice addAsset() succeeds when pool cardinality equals the 1800 s window floor (901).
     function test_addAsset_succeedsWhenCardinalityMeetsMinimum() public {
         TestERC20 newAsset = new TestERC20();
         MockPool goodPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
-        goodPool.setCardinality(vault.MIN_POOL_CARDINALITY());
+        goodPool.setCardinality(901);
 
         vm.prank(admin);
         vault.addAsset(address(newAsset), address(goodPool), 500, address(0), BasketVault.Venue.V3);
@@ -1543,7 +1577,7 @@ contract BasketVaultTest is Test {
     function test_totalAssets_doesNotRevertAfterValidAddAsset() public {
         TestERC20 newAsset = new TestERC20();
         MockPool goodPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
-        goodPool.setCardinality(100);
+        goodPool.setCardinality(1000);
 
         vm.prank(admin);
         vault.addAsset(address(newAsset), address(goodPool), 500, address(0), BasketVault.Venue.V3);
@@ -1589,7 +1623,7 @@ contract BasketVaultTest is Test {
     }
 
     /// @notice Fuzz: addAsset() reverts exactly when pool cardinality is below
-    ///         MIN_POOL_CARDINALITY and succeeds at or above it.
+    ///         the window floor (901) and succeeds at or above it.
     function testFuzz_addAsset_cardinalityBoundary(uint16 cardinality_) public {
         // Use a fresh vault so we don't hit MaxAssetsReached after repeated calls.
         BasketVaultHarness freshVault = new BasketVaultHarness(
@@ -1600,7 +1634,7 @@ contract BasketVaultTest is Test {
         MockPool fuzzPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
         fuzzPool.setCardinality(cardinality_);
 
-        uint16 required = freshVault.MIN_POOL_CARDINALITY();
+        uint16 required = 901;
 
         if (cardinality_ < required) {
             vm.expectRevert(
@@ -2604,6 +2638,266 @@ contract BasketVaultTest is Test {
         assertEq(vault.balanceOf(stranger), 0, "shares burned");
     }
 
+    // ─── Core 1665: window-derived cardinality floor ──────────────────
+
+    /// @notice The 1800 s default window needs 1800 / 2 + 1 = 901 slots: 900 reverts, 901 registers.
+    function test_addAsset_rejectsCardinalityBelowWindowFloor() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool p = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        p.setCardinality(900);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientPoolCardinality.selector,
+                address(p),
+                uint16(901),
+                uint16(900)
+            )
+        );
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(p), 500, address(0), BasketVault.Venue.V3);
+
+        p.setCardinality(901);
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(p), 500, address(0), BasketVault.Venue.V3);
+        assertEq(vault.assetCount(), 2, "registered at exactly the floor");
+    }
+
+    /// @notice A 3600 s window needs 1801 slots: 1800 reverts, 1801 is accepted.
+    function test_setTwapWindow_rejectsCardinalityBelowNewFloor() public {
+        pool.setCardinality(1_800);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientPoolCardinality.selector,
+                address(pool),
+                uint16(1_801),
+                uint16(1_800)
+            )
+        );
+        vm.prank(admin);
+        vault.setTwapWindow(address(basketToken), 3_600);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 1_800, "window unchanged");
+
+        pool.setCardinality(1_801);
+        vm.prank(admin);
+        vault.setTwapWindow(address(basketToken), 3_600);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 3_600, "window set at floor");
+    }
+
+    // ─── Core 1665: redeemInKind ──────────────────────────────────────
+
+    /// @dev Alice holds all shares of a vault with `basketToken` backing, idle USDC and a 1% exit fee.
+    function _seedInKind() internal returns (address alice, uint256 shares) {
+        alice = makeAddr("alice");
+        shares = _depositAt1to1(alice, 10_000 * ONE_USDC);
+        usdc.mint(address(vault), 777 * ONE_USDC); // idle USDC
+        vm.prank(admin);
+        vault.setExitFeeBps(100);
+    }
+
+    /// @dev Registers a second ACTIVE asset holding `amount` tokens.
+    function _addSecond(uint256 amount) internal returns (TestERC20 t2) {
+        t2 = new TestERC20();
+        MockPool p2 = new MockPool(address(t2), address(usdc), uint160(1 << 96));
+        vm.prank(admin);
+        vault.addAsset(address(t2), address(p2), 500, address(0), BasketVault.Venue.V3);
+        t2.mint(address(vault), amount);
+    }
+
+    /// @notice PoC test_redeemBlockedByOracle: with observe() reverting, redeem reverts and
+    ///         redeemInKind pays the pro-rata tokens and idle USDC minus the exit fee.
+    function test_redeemInKind_succeedsWhenObserveReverts() public {
+        (address alice, uint256 shares) = _seedInKind();
+        pool.setRevertObserve(true);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.redeem(shares / 2, alice, alice);
+
+        uint256 sup = vault.totalSupply();
+        uint256 tokBal = basketToken.balanceOf(address(vault));
+        uint256 usdcBal = usdc.balanceOf(address(vault));
+        uint256 tokAmt = tokBal * (shares / 2) / sup;
+        uint256 usdcAmt = usdcBal * (shares / 2) / sup;
+        uint256 tokFee = tokAmt * 100 / 10_000;
+        uint256 usdcFee = usdcAmt * 100 / 10_000;
+        assertGt(tokFee, 0, "fee leg exercised");
+
+        vm.prank(alice);
+        vault.redeemInKind(shares / 2, alice, alice);
+
+        assertEq(vault.balanceOf(alice), shares - shares / 2, "shares burned");
+        assertEq(basketToken.balanceOf(alice), tokAmt - tokFee, "token net of fee");
+        assertEq(usdc.balanceOf(alice), usdcAmt - usdcFee, "idle USDC net of fee");
+        assertEq(basketToken.balanceOf(admin), tokFee, "token fee to feeRecipient");
+        assertEq(usdc.balanceOf(admin), usdcFee, "usdc fee to feeRecipient");
+        assertEq(
+            basketToken.balanceOf(address(vault)), tokBal - tokAmt, "vault paid exactly pro rata"
+        );
+    }
+
+    /// @notice redeemInKind is not blocked by pause, unwind, shutdown or retire. A third party with
+    ///         allowance redeems for the owner and the allowance is spent.
+    function test_redeemInKind_neverBlocked() public {
+        (address alice, uint256 shares) = _seedInKind();
+        uint256 q = shares / 5;
+
+        vm.prank(emergencyResponder);
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused());
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        // After emergencyUnwind the basket token is USDC.
+        usdc.mint(address(router), 10_000 * ONE_USDC);
+        router.setAmountOut(9_000 * ONE_USDC);
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        vm.prank(emergencyResponder);
+        vault.shutdownVault();
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        address reg = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(reg);
+        vm.prank(reg);
+        vault.retire();
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        // Third party with allowance, receiver differs from owner.
+        address spender = makeAddr("spender");
+        address dest = makeAddr("dest");
+        vm.prank(alice);
+        vault.approve(spender, q + 5);
+        vm.prank(spender);
+        vault.redeemInKind(q, dest, alice);
+        assertEq(vault.allowance(alice, spender), 5, "allowance spent by exactly shares");
+        assertGt(usdc.balanceOf(dest), 0, "receiver paid");
+
+        // Without allowance it reverts and nothing is burned.
+        address nobody = makeAddr("nobody");
+        uint256 before_ = vault.balanceOf(alice);
+        vm.prank(nobody);
+        vm.expectRevert();
+        vault.redeemInKind(1, nobody, alice);
+        assertEq(vault.balanceOf(alice), before_, "no burn without allowance");
+    }
+
+    /// @notice Fuzz: exact floor pro-rata per ACTIVE asset, inactive assets not paid, and the remaining
+    ///         holder's per-share backing never decreases for any token or USDC.
+    function testFuzz_redeemInKind_proRataExact(uint256 shares_) public {
+        (address alice, uint256 aliceShares) = _seedInKind();
+        address bob = makeAddr("bob");
+        // Bob joins so there is a remaining holder.
+        _depositAt1to1(bob, 3_000 * ONE_USDC);
+        TestERC20 t2 = _addSecond(1_234_567);
+        // A removed (inactive) asset whose balance reappeared must not be paid.
+        TestERC20 t3 = new TestERC20();
+        MockPool p3 = new MockPool(address(t3), address(usdc), uint160(1 << 96));
+        vm.startPrank(admin);
+        vault.addAsset(address(t3), address(p3), 500, address(0), BasketVault.Venue.V3);
+        vault.removeAsset(2);
+        vm.stopPrank();
+        t3.mint(address(vault), 999_999);
+
+        shares_ = bound(shares_, 1, aliceShares);
+        uint256[4] memory pre = [
+            vault.totalSupply(),
+            basketToken.balanceOf(address(vault)),
+            t2.balanceOf(address(vault)),
+            usdc.balanceOf(address(vault))
+        ];
+        uint256 aliceUsdc0 = usdc.balanceOf(alice);
+
+        vm.prank(alice);
+        vault.redeemInKind(shares_, alice, alice);
+
+        assertEq(
+            basketToken.balanceOf(alice) + basketToken.balanceOf(admin),
+            pre[1] * shares_ / pre[0],
+            "token1 exact"
+        );
+        assertEq(
+            t2.balanceOf(alice) + t2.balanceOf(admin), pre[2] * shares_ / pre[0], "token2 exact"
+        );
+        assertEq(
+            usdc.balanceOf(alice) - aliceUsdc0 + usdc.balanceOf(admin),
+            pre[3] * shares_ / pre[0],
+            "usdc exact"
+        );
+        assertEq(t3.balanceOf(address(vault)), 999_999, "inactive asset not paid");
+        assertEq(t3.balanceOf(alice), 0, "inactive asset not paid out");
+
+        assertEq(vault.totalSupply(), pre[0] - shares_, "supply reduced by shares");
+        uint256 sup2 = vault.totalSupply();
+        assertGe(basketToken.balanceOf(address(vault)) * pre[0], pre[1] * sup2, "token1 backing");
+        assertGe(t2.balanceOf(address(vault)) * pre[0], pre[2] * sup2, "token2 backing");
+        assertGe(usdc.balanceOf(address(vault)) * pre[0], pre[3] * sup2, "usdc backing");
+    }
+
+    /// @notice A token callback cannot re-enter, and shares are already burned when the callback runs.
+    function test_redeemInKind_reentrancyBlockedAndSharesBurnedFirst() public {
+        ReentrantHookToken hook = new ReentrantHookToken();
+        MockPool hp = new MockPool(address(hook), address(usdc), uint160(1 << 96));
+        BasketVaultHarness v = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
+        );
+        vm.prank(admin);
+        v.addAsset(address(hook), address(hp), 500, address(0), BasketVault.Venue.V3);
+        address alice = makeAddr("alice");
+        // Mint shares by seeding the vault through a deposit at 1:1.
+        hook.mint(address(router), 1_000 * ONE_USDC);
+        router.setAmountOut(1_000 * ONE_USDC);
+        usdc.mint(alice, 1_000 * ONE_USDC);
+        vm.startPrank(alice);
+        usdc.approve(address(v), 1_000 * ONE_USDC);
+        uint256 sh = v.deposit(1_000 * ONE_USDC, alice);
+        vm.stopPrank();
+
+        hook.arm(v, alice);
+        vm.prank(alice);
+        v.redeemInKind(sh, alice, alice);
+
+        assertTrue(hook.reentered(), "callback ran");
+        assertFalse(hook.reentrySucceeded(), "re-entry must not succeed");
+        assertEq(
+            hook.reentryReason(),
+            bytes4(abi.encodeWithSignature("ReentrancyGuardReentrantCall()")),
+            "blocked by the reentrancy guard"
+        );
+        assertEq(hook.sharesAtCallback(), 0, "shares were burned before the first transfer");
+        assertEq(hook.supplyAtCallback(), 0, "supply already reduced at the callback");
+        assertEq(hook.balanceOf(alice), 1_000 * ONE_USDC, "paid in kind (fee is 0 on this vault)");
+    }
+
+    /// @notice redeemInKind reads no TWAP and sells nothing: it works with a router that has no
+    ///         liquidity and a pool that reverts on both observe and slot0-priced reads.
+    function test_redeemInKind_noSwapNoOracle() public {
+        (address alice, uint256 shares) = _seedInKind();
+        pool.setRevertObserve(true);
+        router.setAmountOut(0);
+        vm.prank(alice);
+        vault.redeemInKind(shares, alice, alice);
+        assertEq(vault.totalSupply(), 0);
+        assertGt(basketToken.balanceOf(alice), 0);
+    }
+
+    /// @notice The entry gas floor applies as in redeem.
+    function test_redeemInKind_revertsBelowGasFloor() public {
+        (address alice, uint256 shares) = _seedInKind();
+        vm.prank(alice);
+        (bool ok, bytes memory ret) = address(vault).call{gas: 400_000}(
+            abi.encodeCall(vault.redeemInKind, (shares, alice, alice))
+        );
+        assertFalse(ok, "low gas must revert");
+        assertEq(bytes4(ret), BasketVault.InsufficientGas.selector, "InsufficientGas");
+        assertEq(vault.balanceOf(alice), shares, "no burn");
+    }
+
     function _tail(bytes memory data) internal pure returns (bytes memory out) {
         out = new bytes(data.length - 4);
         for (uint256 i = 0; i < out.length; i++) {
@@ -2877,7 +3171,7 @@ contract MockAerodromePool {
         token0 = token0_;
         token1 = token1_;
         tickCumulativeRate = 0;
-        cardinality = 100;
+        cardinality = 1000;
     }
 
     function setTickCumulativeRate(int56 rate) external {

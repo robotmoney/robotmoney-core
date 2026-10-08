@@ -7852,19 +7852,6 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "MIN_POOL_CARDINALITY",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "uint16",
-        internalType: "uint16",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
     name: "MIN_POOL_LIQUIDITY",
     inputs: [],
     outputs: [
@@ -8879,6 +8866,29 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "redeemInKind",
+    inputs: [
+      {
+        name: "shares",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "receiver",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "owner",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "registry",
     inputs: [],
     outputs: [
@@ -9779,6 +9789,31 @@ export const agentTokenVaultAbiGenerated = [
       },
       {
         name: "newCap",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "RedeemedInKind",
+    inputs: [
+      {
+        name: "owner",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "receiver",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "shares",
         type: "uint256",
         indexed: false,
         internalType: "uint256",
@@ -10776,19 +10811,6 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "MIN_POOL_CARDINALITY",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "uint16",
-        internalType: "uint16",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
     name: "MIN_POOL_LIQUIDITY",
     inputs: [],
     outputs: [
@@ -11777,6 +11799,29 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "redeemInKind",
+    inputs: [
+      {
+        name: "shares",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "receiver",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "owner",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "registry",
     inputs: [],
     outputs: [
@@ -12677,6 +12722,31 @@ export const protocolAssetVaultAbiGenerated = [
       },
       {
         name: "newCap",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "RedeemedInKind",
+    inputs: [
+      {
+        name: "owner",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "receiver",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "shares",
         type: "uint256",
         indexed: false,
         internalType: "uint256",
