@@ -3,7 +3,7 @@
 // cases that prove each kind of drift fails and names the row.
 import { describe, expect, test } from "bun:test";
 import { loadStageTable, type StageTable } from "../src/stage-table.ts";
-import { getStageTable, useStageTable } from "../src/stages.ts";
+import { STAGES, getStageTable, useStageTable } from "../src/stages.ts";
 import { parityProblems, stageProblems, tableProblems } from "../src/ci/core-parity.ts";
 import { requiredSheetNames } from "../src/core-wiring.ts";
 import { REPO_ROOT } from "./repo-root.ts";
@@ -37,7 +37,7 @@ describe(`core parity against ${REPO_ROOT}`, () => {
 describe("issue 1666: the basket stages read the NAV deviation guard and the pool liquidity floor", () => {
   test("proto, agent and rwa require NAV_DEVIATION_BPS and MIN_POOL_LIQUIDITY, fed by their own VAULT_<KEY> sheet names", () => {
     for (const key of ["PROTO", "AGENT", "RWA"] as const) {
-      const row = table.stages.find((s) => s.vault === key)!;
+      const row = STAGES.find((s) => s.vault === key)!;
       expect(row.requiredEnv, row.name).toContain("NAV_DEVIATION_BPS");
       expect(row.requiredEnv, row.name).toContain("MIN_POOL_LIQUIDITY");
       expect(requiredSheetNames(row), row.name).toContain(`VAULT_${key}_NAV_DEVIATION_BPS`);
