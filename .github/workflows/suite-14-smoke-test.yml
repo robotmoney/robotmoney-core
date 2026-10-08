@@ -186,6 +186,15 @@ jobs:
       - name: executed-test guard self-test (required markers, hermetic)
         run: bash .github/scripts/tests/test_cargo_test_require_executed.sh
 
+      # Issue 1436: a devnet test that prints "skipping" and returns early is recorded as PASSED.
+      # The guard fails on any skip_if_no_* helper or direct prerequisites_available() call in the
+      # smoke-test and e2e-rust test dirs (use smoke_test::require_prereqs). The self-test
+      # mutates a temp tree to prove the guard goes red.
+      - name: no silent prerequisite skip in devnet tests (guard + self-test, hermetic)
+        run: |
+          bash .github/scripts/tests/test_check_no_silent_prereq_skip.sh
+          bash .github/scripts/check_no_silent_prereq_skip.sh
+
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once. Every chain job
   # below takes it as input.
   pin:

@@ -11,7 +11,7 @@
 //! Run with:
 //!   cargo test -p smoke-test --release --test twin_pause_all -- --test-threads=1 --nocapture
 
-use smoke_test::{prerequisites_available, Fixture};
+use smoke_test::{require_prereqs, Fixture};
 use std::process::Command;
 
 const VAULT_NAMES: [&str; 4] = ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"];
@@ -52,9 +52,9 @@ fn balance_of(rpc: &str, token: &str, owner: &str) -> u128 {
 
 #[test]
 fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_works() {
-    if !prerequisites_available() {
-        panic!("anvil/bun/forge/cast not on PATH: the Twin chain pause-all run cannot be skipped in CI");
-    }
+    require_prereqs(
+        "twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_works",
+    );
     let fx = Fixture::new().expect("smoke-test fixture boot failed");
     let rpc = fx.rpc_url().to_string();
     let vaults = fx.vault_addresses().clone();

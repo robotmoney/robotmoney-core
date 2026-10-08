@@ -10,22 +10,18 @@
 //!   TWIN_RPC_URL=http://127.0.0.1:8545 cargo test -p smoke-test --release --test twin_fork_env -- --test-threads=1
 
 use smoke_test::twin_fork::{TwinFork, BASE_USDC_ADDR, TWIN_CHAIN_ID, TWIN_RPC_URL_ENV};
-use smoke_test::{locate_repo_root, prerequisites_available};
+use smoke_test::{locate_repo_root, require_prereqs};
 
-fn twin() -> Option<TwinFork> {
-    if !prerequisites_available() {
-        eprintln!("[twin_fork_env] SKIP: anvil/bun/forge/cast not on PATH");
-        return None;
-    }
-    if std::env::var(TWIN_RPC_URL_ENV)
-        .map(|v| v.is_empty())
-        .unwrap_or(true)
-    {
-        eprintln!("[twin_fork_env] SKIP: {TWIN_RPC_URL_ENV} is not set (start a fork with scripts/devnet/twin-fork.ts)");
-        return None;
-    }
+fn twin() -> TwinFork {
+    require_prereqs("twin_fork_env");
+    assert!(
+        std::env::var(TWIN_RPC_URL_ENV)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false),
+        "[twin_fork_env] {TWIN_RPC_URL_ENV} is not set: start a fork with scripts/devnet/twin-fork.ts"
+    );
     let root = locate_repo_root().expect("repo root");
-    Some(TwinFork::boot(&root, 0).expect("reuse the running Twin fork"))
+    TwinFork::boot(&root, 0).expect("reuse the running Twin fork")
 }
 
 fn rpc(url: &str, method: &str, params: serde_json::Value) -> serde_json::Value {
@@ -44,7 +40,7 @@ fn rpc(url: &str, method: &str, params: serde_json::Value) -> serde_json::Value 
 
 #[test]
 fn the_fork_is_the_twin_chain_on_real_base_state() {
-    let Some(t) = twin() else { return };
+    let t = twin();
     assert!(
         !t.is_owned(),
         "a fork named by {TWIN_RPC_URL_ENV} must be reused, never owned"
@@ -71,7 +67,7 @@ fn the_fork_is_the_twin_chain_on_real_base_state() {
 
 #[test]
 fn fund_usdc_sets_the_real_balance_slot() {
-    let Some(t) = twin() else { return };
+    let t = twin();
     let who = "0x00000000000000000000000000000000000000c3";
     t.set_usdc_balance(who, 7_654_321).expect("fund usdc");
     assert_eq!(t.usdc_balance(who).unwrap(), 7_654_321);
@@ -82,7 +78,7 @@ fn fund_usdc_sets_the_real_balance_slot() {
 
 #[test]
 fn fund_gas_sets_the_native_balance_exactly() {
-    let Some(t) = twin() else { return };
+    let t = twin();
     let who = "0x00000000000000000000000000000000000000d4";
     t.fund_gas(who, 2_500_000_000_000_000_000)
         .expect("fund gas");
@@ -99,7 +95,7 @@ fn fund_gas_sets_the_native_balance_exactly() {
 
 #[test]
 fn warp_moves_block_time_forward_without_waiting() {
-    let Some(t) = twin() else { return };
+    let t = twin();
     let ts = |t: &TwinFork| {
         let b = rpc(
             t.rpc_url(),

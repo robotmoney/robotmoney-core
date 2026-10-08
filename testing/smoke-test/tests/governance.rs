@@ -9,15 +9,7 @@
 //!   cargo test -p smoke-test --release -- governance --test-threads=1 --nocapture
 
 use alloy_primitives::Address;
-use smoke_test::{prerequisites_available, Fixture};
-
-fn skip_if_no_prereqs(name: &str) -> bool {
-    if !prerequisites_available() {
-        eprintln!("[{name}] anvil/bun/forge/cast not on PATH; skipping.");
-        return true;
-    }
-    false
-}
+use smoke_test::{require_prereqs, Fixture};
 
 /// One shared fixture for the whole suite.
 fn fixture() -> &'static Fixture {
@@ -31,9 +23,7 @@ fn fixture() -> &'static Fixture {
 /// RouterGovernance is deployed at a non-zero address (issue #364 AC).
 #[test]
 fn governance_address_is_non_zero() {
-    if skip_if_no_prereqs("governance_address_is_non_zero") {
-        return;
-    }
+    require_prereqs("governance_address_is_non_zero");
     let fx = fixture();
     assert_ne!(
         fx.governance(),
@@ -45,9 +35,7 @@ fn governance_address_is_non_zero() {
 /// RouterGovernance has bytecode deployed on-chain.
 #[test]
 fn governance_has_code() {
-    if skip_if_no_prereqs("governance_has_code") {
-        return;
-    }
+    require_prereqs("governance_has_code");
     let fx = fixture();
     let code = get_code(fx.rpc_url(), fx.governance());
     assert!(
@@ -62,9 +50,7 @@ fn governance_has_code() {
 /// and the timelock (the stage 13 govern matrix).
 #[test]
 fn deployer_holds_no_voting_power() {
-    if skip_if_no_prereqs("deployer_holds_no_voting_power") {
-        return;
-    }
+    require_prereqs("deployer_holds_no_voting_power");
     let fx = fixture();
     let deployer: Address = fx
         .published()
@@ -83,9 +69,7 @@ fn deployer_holds_no_voting_power() {
 /// The deployer does NOT hold ADMIN_ROLE on RouterGovernance after handover; the timelock does.
 #[test]
 fn deployer_holds_no_admin_role_timelock_does() {
-    if skip_if_no_prereqs("deployer_holds_no_admin_role_timelock_does") {
-        return;
-    }
+    require_prereqs("deployer_holds_no_admin_role_timelock_does");
     let fx = fixture();
     let deployer: Address = fx
         .published()

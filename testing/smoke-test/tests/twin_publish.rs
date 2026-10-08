@@ -9,7 +9,7 @@
 //! Run with:
 //!   cargo test -p smoke-test --release --test twin_publish -- --test-threads=1 --nocapture
 
-use smoke_test::{prerequisites_available, Fixture};
+use smoke_test::{require_prereqs, Fixture};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -35,11 +35,7 @@ fn run_bun(repo_root: &Path, args: &[String]) {
 
 #[test]
 fn twin_chain_publish_verify_and_govern_matrix() {
-    if !prerequisites_available() {
-        panic!(
-            "anvil/bun/forge/cast not on PATH: the Twin chain publish run cannot be skipped in CI"
-        );
-    }
+    require_prereqs("twin_chain_publish_verify_and_govern_matrix");
     let fx = Fixture::new().expect("smoke-test fixture boot failed");
     let dir = fx.manifest_dir();
     let table = smoke_test::stage_table::StageTable::load_default().expect("read the stage table");
