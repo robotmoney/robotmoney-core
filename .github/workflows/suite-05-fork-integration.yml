@@ -219,6 +219,21 @@ jobs:
           bash .github/scripts/cargo_test_require_executed.sh \
             --manifest-path testing/fork-e2e-rust/Cargo.toml --release --lib -- --nocapture
 
+      # Issue 1643: skip_if_no_fork! must be RED in CI when no fork is available, never a quiet pass.
+      # Runs one fork test with CI=true and both fork URLs unset and requires a non-zero exit that
+      # names the refusal. If the macro ever goes back to returning early, this step goes red.
+      - name: fork-e2e-rust refuses to skip without a fork when CI is set (issue 1643)
+        run: |
+          set +e
+          out="$(env -u RMPC_TESTNET_RPC_URL -u RMPC_FORK_RPC_URL CI=true \
+            cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml --release \
+            --test rmpc_get_balance_fork 2>&1)"
+          status=$?
+          set -e
+          echo "$out" | tail -25
+          [ "$status" -ne 0 ] || { echo "ERROR: fork test exited 0 with CI=true and no fork URL" >&2; exit 1; }
+          echo "$out" | grep -q "Refusing to skip" || { echo "ERROR: failure was not the skip refusal" >&2; exit 1; }
+
       - name: Base testnet account-funding assertion (smoke-test)
         run: cargo test -p smoke-test --release --test base_testnet_fixture -- --nocapture
 
