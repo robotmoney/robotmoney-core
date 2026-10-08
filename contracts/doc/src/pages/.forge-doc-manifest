@@ -157,6 +157,7 @@ contracts/test/contract.GatewayWithdrawTest.mdx
 contracts/test/contract.GovernanceExecutePathAfterHandoverTest.mdx
 contracts/test/contract.GovernanceSeparationInvariant.mdx
 contracts/test/contract.GovernanceVotersHarness.mdx
+contracts/test/contract.GovernedSurfacesSafeTimelockTest.mdx
 contracts/test/contract.GovernedVaultSafeTimelockTest.mdx
 contracts/test/contract.GuardHarness.mdx
 contracts/test/contract.ICGatewayIntegration.mdx
@@ -285,6 +286,7 @@ contracts/test/helpers/contract.EtchComet.mdx
 contracts/test/helpers/contract.EtchErc4626Venue.mdx
 contracts/test/helpers/contract.MockVault.mdx
 contracts/test/helpers/contract.NoYieldTestAdapter.mdx
+contracts/test/helpers/contract.SafeCallRelay.mdx
 contracts/test/helpers/contract.TestERC20.mdx
 contracts/test/helpers/interface.ISafeSetupCall.mdx
 contracts/test/helpers/interface.ISafeTx.mdx

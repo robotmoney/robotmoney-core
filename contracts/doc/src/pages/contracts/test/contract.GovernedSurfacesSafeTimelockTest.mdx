@@ -1,0 +1,247 @@
+---
+title: "GovernedSurfacesSafeTimelockTest"
+description: "One real Safe -> Timelock test for each governed surface that had none: the InvestmentCommitteePolicy, adapter admin, role revoke, `setVotingPower` after the handover, `RouterGovernance.cancel` after the handover, and the AgentTokenVault non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`, the timelock waits, the timelock calls the contract. Nothing pranks the Safe."
+---
+
+# GovernedSurfacesSafeTimelockTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32dc89aac0e117b542fc122e5e44ef2022a5d8b3/contracts/test/GovernedSurfacesSafeTimelock.t.sol)
+
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
+
+**Title:** GovernedSurfacesSafeTimelockTest
+
+One real Safe -> Timelock test for each governed surface that had none: the
+InvestmentCommitteePolicy, adapter admin, role revoke, `setVotingPower` after the
+handover, `RouterGovernance.cancel` after the handover, and the AgentTokenVault
+non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`,
+the timelock waits, the timelock calls the contract. Nothing pranks the Safe.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### AGENT_ROLE
+
+```solidity
+bytes32 internal constant AGENT_ROLE = keccak256("AGENT_ROLE");
+```
+
+### COMMITTEE_AGENT_ROLE
+
+```solidity
+bytes32 internal constant COMMITTEE_AGENT_ROLE = keccak256("COMMITTEE_AGENT_ROLE");
+```
+
+### DELAY
+
+```solidity
+uint256 internal constant DELAY = 2 days;
+```
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+MockUsdc internal usdc;
+```
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### core
+
+```solidity
+RobotMoneyVault internal core;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### ic
+
+```solidity
+InvestmentCommitteePolicy internal ic;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
+
+### agentVault
+
+```solidity
+AgentTokenVault internal agentVault;
+```
+
+### vaultA
+
+```solidity
+MockGovVault internal vaultA;
+```
+
+### vaultB
+
+```solidity
+MockGovVault internal vaultB;
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### voter
+
+```solidity
+address internal voter = makeAddr("voter");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("agent");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_runchecked-address-bytes-bytes32"></a>
+
+### _runChecked
+
+<i>
+
+Schedule, refuse an early execute, execute, then refuse the replay. All exact.
+
+</i>
+
+```solidity
+function _runChecked(address target, bytes memory data, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+
+<a id="test_icpolicy_registerandrevokeagent_viasafethentimelock"></a>
+
+### test_icPolicy_registerAndRevokeAgent_viaSafeThenTimelock
+
+```solidity
+function test_icPolicy_registerAndRevokeAgent_viaSafeThenTimelock() public;
+```
+
+<a id="test_icpolicy_directsafecallisrefused_exactreason"></a>
+
+### test_icPolicy_directSafeCallIsRefused_exactReason
+
+```solidity
+function test_icPolicy_directSafeCallIsRefused_exactReason() public;
+```
+
+<a id="test_adapteradmin_allowadapterandcodehash_viasafethentimelock"></a>
+
+### test_adapterAdmin_allowAdapterAndCodeHash_viaSafeThenTimelock
+
+```solidity
+function test_adapterAdmin_allowAdapterAndCodeHash_viaSafeThenTimelock() public;
+```
+
+<a id="test_rolerevoke_gatewayagentrole_viasafethentimelock"></a>
+
+### test_roleRevoke_gatewayAgentRole_viaSafeThenTimelock
+
+```solidity
+function test_roleRevoke_gatewayAgentRole_viaSafeThenTimelock() public;
+```
+
+<a id="test_routergovernance_setvotingpower_afterhandover_viasafethentimelock"></a>
+
+### test_routerGovernance_setVotingPower_afterHandover_viaSafeThenTimelock
+
+```solidity
+function test_routerGovernance_setVotingPower_afterHandover_viaSafeThenTimelock() public;
+```
+
+<a id="test_routergovernance_cancel_afterhandover_viasafethentimelock"></a>
+
+### test_routerGovernance_cancel_afterHandover_viaSafeThenTimelock
+
+```solidity
+function test_routerGovernance_cancel_afterHandover_viaSafeThenTimelock() public;
+```
+
+<a id="test_routergovernance_directsafecall_isrefused_exactreason"></a>
+
+### test_routerGovernance_directSafeCall_isRefused_exactReason
+
+```solidity
+function test_routerGovernance_directSafeCall_isRefused_exactReason() public;
+```
+
+<a id="test_agenttokenvault_nonassetsetters_viasafethentimelock"></a>
+
+### test_agentTokenVault_nonAssetSetters_viaSafeThenTimelock
+
+```solidity
+function test_agentTokenVault_nonAssetSetters_viaSafeThenTimelock() public;
+```
+
+<a id="test_agenttokenvault_directsafecall_isrefused_exactreason"></a>
+
+### test_agentTokenVault_directSafeCall_isRefused_exactReason
+
+```solidity
+function test_agentTokenVault_directSafeCall_isRefused_exactReason() public;
+```
+

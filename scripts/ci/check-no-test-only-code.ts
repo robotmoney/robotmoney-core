@@ -117,11 +117,9 @@ const TEST_FORBIDDEN: { name: string; re: RegExp }[] = [
 // Check F: no pranked Safe in a forge test (issue 1644).
 // ---------------------------------------------------------------------------------------------
 export const PRANK_SAFE_RE = /\bvm\.(?:start)?[Pp]rank\(\s*safe\w*/;
-// Transitional debt, shrinking: files still to move onto helpers/SafeGovernance.sol.
-export const PRANK_SAFE_DEBT = [
-  "contracts/test/WeightSetterRotation.t.sol",
-  "contracts/test/PortfolioRouter.t.sol",
-];
+// Transitional debt: files still to move onto helpers/SafeGovernance.sol. Empty since issue 1644
+// finished; an entry added back is a warning, never a pass for new code.
+export const PRANK_SAFE_DEBT: string[] = [];
 
 // ---------------------------------------------------------------------------------------------
 // Check E: names that must not appear anywhere outside history.

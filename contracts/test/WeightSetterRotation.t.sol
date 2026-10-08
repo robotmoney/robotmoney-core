@@ -4,13 +4,13 @@
 // Implements: core 1616 — bounded rotation path for WEIGHT_SETTER_ROLE
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 
 /// @dev Any contract: a rotation target needs code, nothing else.
 contract RotationStubGovernance {}
@@ -18,9 +18,12 @@ contract RotationStubGovernance {}
 /// @title WeightSetterRotationTest
 /// @notice One test per safety property of the rotation. Each test is mutation-checked: the
 ///         property's guard in `PortfolioRouter` is removed and the test must fail.
-///         The Safe is an address here (the real 2-of-3 Safe runs in `SafeIntegration`).
+///         The Safe is a real SafeL2 proxy. State changes go through a two-signature
+///         `execTransaction`. A call that must fail with an exact router error is replayed
+///         with the Safe as `msg.sender` (`_assertSafeCallReverts`), because `execTransaction`
+///         would hide that error as `GS013`.
 ///         The timelock is a real `TimelockController` at the production delay.
-contract WeightSetterRotationTest is Test {
+contract WeightSetterRotationTest is SafeGovernance {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
     bytes32 internal constant ROTATOR = keccak256("WEIGHT_SETTER_ROTATOR_ROLE");
@@ -31,7 +34,7 @@ contract WeightSetterRotationTest is Test {
 
     PortfolioRouter internal router;
     TimelockController internal timelock;
-    address internal safe = makeAddr("safe");
+    address internal safe;
     address internal deployer = makeAddr("deployer");
     address internal oldGov;
     address internal newGov;
@@ -41,11 +44,10 @@ contract WeightSetterRotationTest is Test {
         VaultRegistry registry = new VaultRegistry(deployer);
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
 
-        address[] memory proposers = new address[](1);
-        proposers[0] = safe;
-        address[] memory executors = new address[](1);
-        executors[0] = address(0); // open executor, as DeployTimelock builds it
-        timelock = new TimelockController(DELAY, proposers, executors, address(0));
+        _installSafeSet();
+        safe = _newDefaultSafe();
+        // Safe is the only proposer and canceller, executor open, as DeployTimelock builds it.
+        timelock = _newGovTimelock(safe, DELAY);
 
         oldGov = address(new RotationStubGovernance());
         newGov = address(new RotationStubGovernance());
@@ -80,8 +82,7 @@ contract WeightSetterRotationTest is Test {
 
     /// @dev The Safe schedules `data` on the router through the timelock.
     function _schedule(bytes memory data, bytes32 salt) internal {
-        vm.prank(safe);
-        timelock.schedule(address(router), 0, data, bytes32(0), salt, DELAY);
+        _govSchedule(safe, timelock, address(router), data, salt, DELAY);
     }
 
     function _run(bytes memory data, bytes32 salt) internal {
@@ -89,8 +90,23 @@ contract WeightSetterRotationTest is Test {
     }
 
     function _propose(address target) internal {
-        vm.prank(safe);
-        router.proposeWeightSetterRotation(target);
+        assertTrue(
+            _safeExec(
+                safe,
+                address(router),
+                abi.encodeCall(PortfolioRouter.proposeWeightSetterRotation, (target))
+            ),
+            "safe.execTransaction(propose) failed"
+        );
+    }
+
+    function _proposeReverts(address target, bytes memory expected) internal {
+        _assertSafeCallReverts(
+            safe,
+            address(router),
+            abi.encodeCall(PortfolioRouter.proposeWeightSetterRotation, (target)),
+            expected
+        );
     }
 
     // ─── roles are separate and self-administered ────────────────────────────
@@ -167,13 +183,16 @@ contract WeightSetterRotationTest is Test {
     function test_safeAlone_cannotExecuteOrGrant() public {
         _propose(newGov);
         vm.warp(block.timestamp + DELAY + 1);
-        vm.prank(safe);
-        vm.expectRevert(_unauthorized(safe, EXECUTOR));
-        router.executeWeightSetterRotation(newGov);
+        _assertSafeCallReverts(
+            safe, address(router), _executeCall(newGov), _unauthorized(safe, EXECUTOR)
+        );
 
-        vm.prank(safe);
-        vm.expectRevert(_unauthorized(safe, WEIGHT_SETTER_ROLE));
-        router.grantRole(WEIGHT_SETTER_ROLE, newGov);
+        _assertSafeCallReverts(
+            safe,
+            address(router),
+            abi.encodeCall(IAccessControl.grantRole, (WEIGHT_SETTER_ROLE, newGov)),
+            _unauthorized(safe, WEIGHT_SETTER_ROLE)
+        );
         assertTrue(router.hasRole(WEIGHT_SETTER_ROLE, oldGov));
     }
 
@@ -321,11 +340,10 @@ contract WeightSetterRotationTest is Test {
     function test_propose_toZeroEoaOrEmptyAddress_reverts() public {
         address[3] memory bad = [address(0), makeAddr("an-eoa"), address(0xdead0000)];
         for (uint256 i = 0; i < bad.length; i++) {
-            vm.prank(safe);
-            vm.expectRevert(
+            _proposeReverts(
+                bad[i],
                 abi.encodeWithSelector(PortfolioRouter.RotationTargetNotContract.selector, bad[i])
             );
-            router.proposeWeightSetterRotation(bad[i]);
         }
         (address pending,) = router.pendingWeightSetterRotation();
         assertEq(pending, address(0));
@@ -333,14 +351,12 @@ contract WeightSetterRotationTest is Test {
 
     /// @dev Rotating to the timelock would give it WEIGHT_SETTER_ROLE and reopen the 1522 path.
     function test_propose_toRouterTimelockOrSafe_reverts() public {
-        vm.etch(safe, hex"00"); // a real Safe is a contract
         address[3] memory bad = [address(router), address(timelock), safe];
         for (uint256 i = 0; i < bad.length; i++) {
-            vm.prank(safe);
-            vm.expectRevert(
+            _proposeReverts(
+                bad[i],
                 abi.encodeWithSelector(PortfolioRouter.RotationTargetForbidden.selector, bad[i])
             );
-            router.proposeWeightSetterRotation(bad[i]);
         }
     }
 
@@ -349,8 +365,12 @@ contract WeightSetterRotationTest is Test {
         bytes memory data = _executeCall(newGov);
         _propose(newGov);
         _schedule(data, bytes32(0));
-        vm.prank(safe);
-        router.grantRole(ROTATOR, newGov);
+        assertTrue(
+            _safeExec(
+                safe, address(router), abi.encodeCall(IAccessControl.grantRole, (ROTATOR, newGov))
+            ),
+            "safe.execTransaction(grant rotator) failed"
+        );
         vm.warp(block.timestamp + DELAY);
         vm.expectRevert(
             abi.encodeWithSelector(PortfolioRouter.RotationTargetForbidden.selector, newGov)
@@ -361,9 +381,9 @@ contract WeightSetterRotationTest is Test {
 
     function test_propose_whilePending_reverts() public {
         _propose(newGov);
-        vm.prank(safe);
-        vm.expectRevert(PortfolioRouter.RotationAlreadyPending.selector);
-        router.proposeWeightSetterRotation(oldGov);
+        _proposeReverts(
+            oldGov, abi.encodeWithSelector(PortfolioRouter.RotationAlreadyPending.selector)
+        );
     }
 
     function test_execute_toADifferentTarget_reverts() public {
@@ -385,8 +405,14 @@ contract WeightSetterRotationTest is Test {
 
         vm.expectEmit(true, true, false, true, address(router));
         emit PortfolioRouter.WeightSetterRotationCancelled(newGov, safe);
-        vm.prank(safe);
-        router.cancelWeightSetterRotation();
+        assertTrue(
+            _safeExec(
+                safe,
+                address(router),
+                abi.encodeCall(PortfolioRouter.cancelWeightSetterRotation, ())
+            ),
+            "safe.execTransaction(cancel) failed"
+        );
         (address pending,) = router.pendingWeightSetterRotation();
         assertEq(pending, address(0));
 
@@ -400,9 +426,12 @@ contract WeightSetterRotationTest is Test {
     }
 
     function test_cancel_withNothingPending_reverts() public {
-        vm.prank(safe);
-        vm.expectRevert(PortfolioRouter.NoRotationPending.selector);
-        router.cancelWeightSetterRotation();
+        _assertSafeCallReverts(
+            safe,
+            address(router),
+            abi.encodeCall(PortfolioRouter.cancelWeightSetterRotation, ()),
+            abi.encodeWithSelector(PortfolioRouter.NoRotationPending.selector)
+        );
     }
 
     /// @dev An executor that is not a timelock has no delay to read, so it cannot execute.
