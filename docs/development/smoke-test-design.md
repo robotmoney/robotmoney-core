@@ -55,6 +55,24 @@ gateway_addr=0xabc...
 The binary blocks until interrupted; `Drop` (or a SIGINT handler) runs
 `docker compose down` on exit and stops a Twin fork it started.
 
+### Stage stack in containers (core 1549)
+
+The stage host does not run the harness as a long-lived parent. Every stage service is a container and
+`scripts/stage/core-stack.ts` only calls `docker compose` (no host process, no Docker socket mount):
+
+- **Chain**: `twin-chain` (`docker-compose.stage-chain.yaml`, image from `docker/stage-images.Dockerfile`) runs the
+  pinned lazy Twin fork in the foreground (`twin-fork.ts serve`). The harness reuses it through `TWIN_RPC_URL`, the
+  same mechanism the CI suites use for the fork their composite action starts.
+- **Deploy job**: `smoke-test --deploy-only` is the harness cut down to its ceremony. It funds keys, runs the real
+  publish contracts run (Safe handover included), writes the keystores and manifests to `SMOKE_TEST_WORK_DIR`, writes
+  the dapp compose environment (`--dapp-env-out`, one function, `dapp_compose_env`, feeds both this file and host
+  mode) and the endpoint summary (`--summary-out`), then exits. It starts no container.
+- **Dapp stack**: `core-stack.ts` starts `docker-compose.dapp.yaml` plus the stage overlay from that environment.
+
+Host mode (`cargo run -p smoke-test -- --full-stack`, `Fixture::new`) is unchanged: the test runner still owns the
+stack for the CI suites. Images are reproducible: base images pinned by digest, `cargo build --locked`,
+`bun install --frozen-lockfile` (`scripts/ci/check-stage-containers.ts` fails CI otherwise).
+
 ---
 
 ## Guiding principle: no test-only code in production

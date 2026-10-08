@@ -155,11 +155,12 @@ jobs:
       # silently empty the crate.
       # Floor calibrated to the real count after the fork_manifest and genesis
       # machinery was retired (52 lib tests at the final tree; the earlier 60 was
-      # never reachable). Raise it when tests are added.
+      # never reachable). Core 1549 added the dapp compose environment tests: 60.
+      # Raise it when tests are added.
       - name: smoke-test lib test count floor
         working-directory: testing/smoke-test
         env:
-          SMOKE_TEST_LIB_TEST_FLOOR: "53"
+          SMOKE_TEST_LIB_TEST_FLOOR: "60"
         run: |
           set -o pipefail
           cargo test -p smoke-test --lib 2>&1 | tee "$RUNNER_TEMP/smoke-lib.log"
@@ -177,6 +178,15 @@ jobs:
       - name: harness unit tests (reaper, Twin fork args, nonce tracker, hermetic)
         working-directory: testing/smoke-test
         run: "cargo test -p smoke-test --lib tests:: -- --nocapture"
+
+      # Core 1549: the stage deploy job's command line (`smoke-test --deploy-only`). The refusals of
+      # impossible flag combinations are decided before anything boots, so this is hermetic: no chain,
+      # no Docker. Routed through the executed-test guard so a run that collects zero tests is red.
+      - name: deploy-only command line (hermetic)
+        working-directory: testing/smoke-test
+        env:
+          CARGO_TEST_MIN_EXECUTED: "5"
+        run: bash ../../.github/scripts/cargo_test_require_executed.sh -p smoke-test --test deploy_only_cli
 
       # Self-test for the executed-test guard's REQUIRE_EXECUTED_MARKERS gate
       # (issue #1371): replays canned libtest transcripts through a stub cargo

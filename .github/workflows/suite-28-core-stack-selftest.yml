@@ -43,14 +43,16 @@ jobs:
       CI_CLASS: system-correctness
       # Executed-test floor: a run that silently did less (a section skipped, a
       # truncated file, a lost exit status) is red. Raise it when cases are added.
-      CORE_STACK_SELFTEST_FLOOR: "45"
+      CORE_STACK_SELFTEST_FLOOR: "107"
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # scripts/stage/tests/core-stack.test.ts: the stage verbs in
     # scripts/stage/core-stack.ts (publish / governance / parity / record) against a fake
     # runner standing in for publish contracts, offline: the exact Twin chain
     # argument list with the keystore:PATH:PASSFILE signer, exit-code passthrough, the govern
     # row gate, a fresh keystore set per boot and the record contract. core-stack deploys
-    # nothing itself (core 1488).
+    # nothing itself (core 1488). Core 1549: the same file runs chain up, chain down, chain status
+    # and dapp status against a fake `docker compose` (every stage service is a container, the tool
+    # starts no host process) and holds every status class line and exit code verbatim.
     steps:
       - uses: actions/checkout@v4
 
@@ -102,3 +104,149 @@ jobs:
       - name: bun test scripts/stage/tests
         working-directory: scripts/stage
         run: bun test tests
+
+  # Core 1549: the static rules of the stage stack in containers. Every base image is pinned by digest, builds are
+  # --locked and --frozen-lockfile, the lockfiles are committed, no Docker socket is mounted anywhere and
+  # core-stack.ts starts no host process. Fast, no docker, no chain: it runs on drafts.
+  stage-container-rules:
+    name: stage-container-rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: feature-correctness
+      STAGE_CONTAINER_RULES_FLOOR: "25"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Gate the stage stack files
+        run: bun scripts/ci/check-stage-containers.ts .
+      - name: Mutation tests of the gate (one failing case per rule)
+        run: |
+          set -o pipefail
+          bun test scripts/ci/check-stage-containers.test.ts 2>&1 | tee stage-container-rules.log
+          passed="$(grep -E '^ *[0-9]+ pass$' stage-container-rules.log | tail -1 | tr -dc '0-9')"
+          failed="$(grep -E '^ *[0-9]+ fail$' stage-container-rules.log | tail -1 | tr -dc '0-9')"
+          echo "stage-container-rules: ${passed:-0} passed, ${failed:-unknown} failed, floor $STAGE_CONTAINER_RULES_FLOOR"
+          if [ "${failed:-1}" != 0 ] || [ "${passed:-0}" -lt "$STAGE_CONTAINER_RULES_FLOOR" ]; then
+            echo "::error::stage-container-rules: ${passed:-0} passed / ${failed:-unknown} failed, floor $STAGE_CONTAINER_RULES_FLOOR"
+            exit 1
+          fi
+
+  # Core 1549, REQUIRED: the Twin chain runs in its own container. Builds the image, starts it with the stage chain
+  # compose file, and asserts eth_chainId is 0xe03b5 on the published port 18545, that the head reached the pin the
+  # container chose, and that the container is healthy and holds no Docker socket. The container is always removed.
+  # The fork needs the public upstream (or the optional BASE_UPSTREAM_RPC secret).
+  stage-chain-container:
+    name: stage-chain-container
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI_CLASS: system-correctness
+      STAGE_PROJECT: robotmoney-stage-chain
+      STAGE_COMPOSE: testing/ethereum-testnet/config/docker-compose.stage-chain.yaml
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the Twin chain container
+        env:
+          BASE_UPSTREAM_RPC: ${{ secrets.BASE_UPSTREAM_RPC }}
+        run: |
+          set -euo pipefail
+          export STAGE_UID="$(id -u)" STAGE_GID="$(id -g)" STAGE_REPO="$PWD" STAGE_WORK_DIR="$RUNNER_TEMP/stage-work"
+          docker compose --project-name "$STAGE_PROJECT" -f "$STAGE_COMPOSE" up --detach --build --wait --wait-timeout 600 twin-chain
+      - name: Assert the chain id, the pin and the container
+        run: |
+          set -euo pipefail
+          rpc() { curl -sf --max-time 10 -X POST -H 'content-type: application/json' --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":[]}" http://127.0.0.1:18545 | jq -r .result; }
+          id="$(rpc eth_chainId)"
+          echo "eth_chainId on 18545: $id"
+          [ "$id" = "0xe03b5" ] || { echo "::error::eth_chainId is '$id', want 0xe03b5"; exit 1; }
+          pin="$(docker exec stage-twin-chain cat /state/pin.json | jq -r .block)"
+          head="$(printf '%d' "$(rpc eth_blockNumber)")"
+          echo "pin block $pin, head $head"
+          [ "$pin" -gt 0 ] && [ "$head" -ge "$pin" ] || { echo "::error::head $head is below the pin $pin"; exit 1; }
+          [ "$(docker inspect -f '{{.State.Health.Status}}' stage-twin-chain)" = healthy ] || { echo "::error::the chain container is not healthy"; exit 1; }
+          if docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' stage-twin-chain | grep -q docker.sock; then echo "::error::the chain container mounts the Docker socket"; exit 1; fi
+          # The block time is 1 s: the head keeps moving (the explorer-indexer's safe head is tip minus 5).
+          sleep 5
+          later="$(printf '%d' "$(rpc eth_blockNumber)")"
+          [ "$later" -gt "$head" ] || { echo "::error::the head did not move ($head -> $later)"; exit 1; }
+      - name: Remove the container
+        if: always()
+        run: |
+          export STAGE_UID="$(id -u)" STAGE_GID="$(id -g)" STAGE_REPO="$PWD" STAGE_WORK_DIR="$RUNNER_TEMP/stage-work"
+          docker compose --project-name "$STAGE_PROJECT" -f "$STAGE_COMPOSE" --profile deploy down --volumes --remove-orphans || true
+
+  # Core 1549: the whole stage path in containers, for real. `core-stack chain up` on the runner: the pinned lazy Twin
+  # fork in a container, the deploy job (the real publish contracts ceremony with the Safe handover) in a container
+  # against it, then the dapp stack. Then chain status, dapp status and the host-side governance preflight (cast against
+  # the container chain), proof that the chain and the deploy tools are not host processes, and `chain down`. Nothing is
+  # mocked: the ceremony is the one the stage host runs.
+  stage-core-stack-containers:
+    name: stage-core-stack-containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Only the host-side verbs need these: `governance preflight` calls cast. The chain, the ceremony and the dapp
+      # stack need nothing but docker.
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      # The out dir stays outside the checkout: the publish run refuses a checkout with untracked files.
+      - name: Choose the out dir
+        run: echo "STAGE_OUT=$RUNNER_TEMP/stage-out" >> "$GITHUB_ENV"
+      - name: chain up (chain container, deploy job, dapp stack)
+        env:
+          BASE_UPSTREAM_RPC: ${{ secrets.BASE_UPSTREAM_RPC }}
+        run: bun scripts/stage/core-stack.ts chain up --out-dir "$STAGE_OUT" --timeout 3300
+      - name: chain status and dapp status exit 0
+        run: |
+          set -euo pipefail
+          bun scripts/stage/core-stack.ts chain status --out-dir "$STAGE_OUT"
+          bun scripts/stage/core-stack.ts dapp status
+      - name: Every stage manifest is there and the host verbs reach the container chain
+        run: |
+          set -euo pipefail
+          summary="$STAGE_OUT/core-smoke.log"
+          grep -q '^chain_id=918453$' "$summary"
+          mdir="$(grep '^manifest_dir=' "$summary" | tail -1 | cut -d= -f2-)"
+          bun -e 'import { countStageManifests } from "./scripts/stage/core-stack.ts"; import { expectedManifestCount } from "./scripts/stage/stage-manifests.ts"; const [d] = process.argv.slice(1); const n = countStageManifests(d), want = expectedManifestCount(); console.log(`stage manifests in ${d}: ${n} of ${want}`); if (n !== want || want < 1) process.exit(1);' "$mdir"
+          bun scripts/stage/core-stack.ts governance preflight --out-dir "$STAGE_OUT"
+      - name: The chain and the deploy tools are containers, not host processes
+        run: |
+          set -euo pipefail
+          docker ps --filter label=com.docker.compose.project=robotmoney-stage-chain --filter status=running --format '{{.Names}}' | grep -qx stage-twin-chain
+          # A container's processes are visible from the host: every anvil, smoke-test, forge or cast must sit in a docker cgroup.
+          bad=0
+          for name in anvil smoke-test forge; do
+            for pid in $(pgrep -x "$name" || true); do
+              if ! grep -q docker "/proc/$pid/cgroup"; then echo "::error::host process $name ($pid) is outside a container"; bad=1; fi
+            done
+          done
+          [ "$bad" = 0 ]
+          # No stage container holds the Docker socket.
+          for c in $(docker ps -q); do
+            if docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' "$c" | grep -q docker.sock; then echo "::error::container $c mounts the Docker socket"; exit 1; fi
+          done
+      - name: Container logs on failure
+        if: failure()
+        run: |
+          for c in $(docker ps -a --format '{{.Names}}'); do echo "::group::$c"; docker logs --tail 80 "$c" 2>&1 || true; echo "::endgroup::"; done
+      - name: chain down removes every stage container and the work directory
+        if: always()
+        run: |
+          bun scripts/stage/core-stack.ts chain down --out-dir "$STAGE_OUT" || true
+          chain="$(docker ps -aq --filter label=com.docker.compose.project=robotmoney-stage-chain | wc -l)"
+          dapp="$(docker ps -aq --filter label=com.docker.compose.project=robotmoney-dapp | wc -l)"
+          echo "left after chain down: chain=$chain dapp=$dapp"
+          [ "$chain" = 0 ] && [ "$dapp" = 0 ]
+          [ ! -e /tmp/robotmoney-stage-work ]

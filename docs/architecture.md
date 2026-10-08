@@ -1479,6 +1479,13 @@ fork of real Base at the upstream head minus 2, pinned once per CI run.
 Tests deploy their own vault every time (clean room). The stage sequence
 is in `docs/operations/contract-release-runbooks.md` §4.3.
 
+On the stage host every service runs in a container (core 1549): the Twin chain
+(the pinned lazy fork), the one-shot deploy job that runs the same publish
+contracts ceremony against it, and the dapp stack. `scripts/stage/core-stack.ts`
+only calls `docker compose`, no stage process runs on the host, and no
+container mounts the Docker socket. Images are pinned by digest and built with
+`--locked` (`docs/development/stage-deployment.md`).
+
 The `rmpc` rule (one client, no env-specific behavior, never spoof
 users) is the same principle applied to the daemon. The detailed
 rationale, historical lineage (configuration management, Continuous
