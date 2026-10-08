@@ -31,9 +31,11 @@ contracts/interfaces/interface.IStrategyAdapter.mdx
 contracts/interfaces/interface.ISwapRouter.mdx
 contracts/interfaces/interface.IUniswapV3Pool.mdx
 contracts/interfaces/interface.IUpstreamMonitor.mdx
+contracts/interfaces/interface.IVault.mdx
 contracts/lib/abstract.AdminFloorAccessControl.mdx
 contracts/lib/abstract.AdminFloorAccessControlCounter.mdx
 contracts/lib/interface.IBasketVaultViews.mdx
+contracts/lib/interface.IInKindVault.mdx
 contracts/lib/library.BasketAssetConfigGuard.mdx
 contracts/lib/library.BasketViews.mdx
 contracts/lib/library.BpsMath.mdx
@@ -91,7 +93,7 @@ contracts/test/contract.BasketVaultVenueSelectorTest.mdx
 contracts/test/contract.BlacklistableUSDC.mdx
 contracts/test/contract.BlacklistableVault.mdx
 contracts/test/contract.BpsMathTest.mdx
-contracts/test/contract.CardinalityOnePool.mdx
+contracts/test/contract.CardinalityBelowFloorPool.mdx
 contracts/test/contract.CompoundV3AdapterPositionTest.mdx
 contracts/test/contract.ConfigFilesTest.mdx
 contracts/test/contract.ConfusedDeputyGuardsTest.mdx
@@ -213,6 +215,7 @@ contracts/test/contract.ReadCountingAdapter.mdx
 contracts/test/contract.ReceiptRoleStub.mdx
 contracts/test/contract.RecordingSwapRouter.mdx
 contracts/test/contract.RedeemGasGuardsTest.mdx
+contracts/test/contract.ReentrantHookToken.mdx
 contracts/test/contract.ReentrantVault.mdx
 contracts/test/contract.RevertingRetireVault.mdx
 contracts/test/contract.RobotMoneyGatewayTest.mdx

@@ -1,25 +1,10 @@
 ---
 title: "BasketAssetConfigGuard"
-description: "The config-validation interface the 2026-06-19 audit recommended for `BasketVault.addAsset`: it enforces the ADP-2 adapter codehash allowlist and the ORA-3 execution-pool == TWAP-pool equality (F-09)."
 ---
 
 # BasketAssetConfigGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/aff4c40a1ddd0d52759d7846c6e06e93e8a10512/contracts/lib/BasketAssetConfigGuard.sol)
-
-**Title:** BasketAssetConfigGuard
-
-The config-validation interface the 2026-06-19 audit recommended for
-`BasketVault.addAsset`: it enforces the ADP-2 adapter codehash
-allowlist and the ORA-3 execution-pool == TWAP-pool equality (F-09).
-
-<i>
-
-Declared `public` (external, DELEGATECALL-linked) so the checks live in a
-single deployed library instead of being inlined into every vault in the
-already-EIP-170-tight basket family.
-
-</i>
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/lib/BasketAssetConfigGuard.sol)
 
 ## Constants
 
@@ -38,9 +23,21 @@ is the one explicit code-hash allowance for tokens with a 1-byte code (core 1500
 bytes32 internal constant B20_PRECOMPILE_CODEHASH = keccak256(hex"ef");
 ```
 
+### BASE_BLOCK_SECONDS
+
+<i>
+
+Base block time in seconds, the cadence the cardinality floor is derived from.
+
+</i>
+
+```solidity
+uint32 internal constant BASE_BLOCK_SECONDS = 2;
+```
+
 ## Functions
 
-<a id="requirepoolusable-address-address-address-uint32-uint16-uint128"></a>
+<a id="requirepoolusable-address-address-address-uint32-uint128"></a>
 
 ### requirePoolUsable
 
@@ -57,7 +54,6 @@ function requirePoolUsable(
         address token,
         address usdc,
         uint32 twapWindow,
-        uint16 minCardinality,
         uint128 minLiquidity
     ) public view;
 ```
@@ -70,7 +66,6 @@ function requirePoolUsable(
 | token | `address` |  |
 | usdc | `address` |  |
 | twapWindow | `uint32` |  |
-| minCardinality | `uint16` |  |
 | minLiquidity | `uint128` |  |
 
 <a id="requireobservationhistory-address-uint32"></a>
@@ -176,7 +171,80 @@ function requireExecutionPoolMatchesTwap(address pool, uint24 swapFee, Venue ven
 | swapFee | `uint24` |  |
 | venue | `Venue` |  |
 
+<a id="payinkind-assetinfo-address-uint256-uint256"></a>
+
+### payInKind
+
+The payout loop of `BasketVault.redeemInKind` (core 1665), delegatecall-linked so it
+runs as the vault (`address(this)` is the vault) and stays out of the EIP-170-tight
+vault bytecode. Pays `receiver` the floor-pro-rata share (`shares / supplyBefore`) of
+the vault's idle USDC and of each ACTIVE basket token. `exitFeeBps` of each leg goes to
+`feeRecipient`. No oracle read and no swap. The caller has already burned `shares`.
+
+```solidity
+function payInKind(
+        AssetInfo[] storage assets,
+        address receiver,
+        uint256 shares,
+        uint256 supplyBefore
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `AssetInfo[]` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+<a id="_payleg-ierc20-address-uint256-uint256-uint256-address"></a>
+
+### _payLeg
+
+```solidity
+function _payLeg(
+        IERC20 token,
+        address receiver,
+        uint256 shares,
+        uint256 supplyBefore,
+        uint256 exitFeeBps,
+        address feeRecipient
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `IERC20` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+
 ## Errors
+
+### InsufficientGas
+
+<i>
+
+Mirror of `BasketVault.InsufficientGas` (same selector): gas left at in-kind redeem entry is below the floor.
+
+</i>
+
+```solidity
+error InsufficientGas(uint256 available, uint256 required);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| available | `uint256` |  |
+| required | `uint256` |  |
 
 ### AdapterCodeHashNotAllowed
 

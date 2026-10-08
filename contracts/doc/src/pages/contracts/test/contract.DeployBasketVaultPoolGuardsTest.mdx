@@ -5,7 +5,7 @@ description: "Core 1490 and 1492: the rmPROTO and rmRWA scripts refuse an asset 
 
 # DeployBasketVaultPoolGuardsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/DeployBasketVaultPoolGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/test/DeployBasketVaultPoolGuards.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -26,6 +26,12 @@ DeployProtocolAssetVault internal proto;
 
 ```solidity
 DeployRwaBasketVault internal rwa;
+```
+
+### lowPool
+
+```solidity
+address internal lowPool;
 ```
 
 ## Functions
@@ -73,12 +79,12 @@ function _zeroLiquidity() internal returns (string memory json);
 | ---- | ---- | ----------- |
 | json | `string` |  |
 
-<a id="_cardinalityone"></a>
+<a id="_cardinalitybelowfloor"></a>
 
-### _cardinalityOne
+### _cardinalityBelowFloor
 
 ```solidity
-function _cardinalityOne() internal returns (string memory json);
+function _cardinalityBelowFloor() internal returns (string memory json);
 ```
 
 **Returns**
@@ -95,12 +101,12 @@ function _cardinalityOne() internal returns (string memory json);
 function test_proto_revertsOnZeroLiquidityPool() public;
 ```
 
-<a id="test_proto_revertsoncardinalitybelowtwo"></a>
+<a id="test_proto_revertsoncardinalitybelowwindowfloor"></a>
 
-### test_proto_revertsOnCardinalityBelowTwo
+### test_proto_revertsOnCardinalityBelowWindowFloor
 
 ```solidity
-function test_proto_revertsOnCardinalityBelowTwo() public;
+function test_proto_revertsOnCardinalityBelowWindowFloor() public;
 ```
 
 <a id="test_rwa_revertsonzeroliquiditypool"></a>
@@ -111,12 +117,12 @@ function test_proto_revertsOnCardinalityBelowTwo() public;
 function test_rwa_revertsOnZeroLiquidityPool() public;
 ```
 
-<a id="test_rwa_revertsoncardinalitybelowtwo"></a>
+<a id="test_rwa_revertsoncardinalitybelowwindowfloor"></a>
 
-### test_rwa_revertsOnCardinalityBelowTwo
+### test_rwa_revertsOnCardinalityBelowWindowFloor
 
 ```solidity
-function test_rwa_revertsOnCardinalityBelowTwo() public;
+function test_rwa_revertsOnCardinalityBelowWindowFloor() public;
 ```
 
 <a id="test_rwa_revertswhenpoolhasnocode"></a>
