@@ -362,5 +362,5 @@ fn get_timelock_integration() {
         vec![safe_lc],
         "the proposer is still the real Safe"
     );
-    eprintln!("[get_timelock_integration] all assertions passed");
+    eprintln!("\n[get_timelock_integration] all assertions passed");
 }

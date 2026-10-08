@@ -121,7 +121,6 @@ jobs:
           - group: twin-light
             cargo_tests: >-
               --test failure_surface_smoke
-              --test rmpc_get_timelock_fork
               --test rmpc_get_vault_fork
               --test rmpc_get_balance_fork
               --test rmpc_get_allowance_fork
@@ -131,6 +130,15 @@ jobs:
               --test landing_price_strip_fork
               --test basket_vault_round_trip
             mode: shared
+          # Issue 1647: rmpc get-timelock on the REAL Safe topology. The smoke-test Fixture runs the one
+          # deploy driver on the shared Twin chain (real 2-of-3 Safe, timelock, handover), the Safe
+          # schedules a pending operation, and the test reads rmpc's output against on-chain state.
+          # Its own group: the topology deploy takes minutes and must not eat twin-light's budget.
+          - group: twin-governance-topology
+            cargo_tests: --test rmpc_get_timelock_fork
+            mode: shared
+            required_markers: |
+              [get_timelock_integration] all assertions passed
           - group: anvil-goldens
             cargo_tests: >-
               --test abi_address_sanity
@@ -180,7 +188,12 @@ jobs:
           RMPC_TESTNET_RPC_URL: ${{ matrix.mode == 'shared' && steps.twin.outputs.rpc-url || '' }}
           RMPC_FORK_RPC_URL: ${{ matrix.mode == 'fork' && steps.twin.outputs.rpc-url || '' }}
           RMPC_FORK_BLOCK: ${{ matrix.mode == 'fork' && steps.twin.outputs.pin-block || '' }}
-        run: cargo test --release ${{ matrix.cargo_tests }} -- --test-threads=1 --nocapture
+          # Issue 1647: a group that executes zero tests is red, and a group that names markers needs
+          # each printed on a real assertion's success path (cargo_test_require_executed.sh).
+          REQUIRE_EXECUTED_MARKERS: ${{ matrix.required_markers }}
+        run: >-
+          bash ../../.github/scripts/cargo_test_require_executed.sh
+          --release ${{ matrix.cargo_tests }} -- --test-threads=1 --nocapture
 
       - name: Stop the Twin fork and save its RPC cache
         if: always()
