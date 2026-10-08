@@ -52,7 +52,8 @@ enforcement, quorum, delay, or execution path."
   proposals and cast votes.
 - The product publishes vote outcome, execution state, and resulting weights.
 - The governance proposal lifecycle is: Draft → Open for voting → Approved or
-  Rejected → Executed or Expired.
+  Rejected → Executed or Expired. (This is the PRD wording. The shipped
+  states are in §3.5.)
 
 `docs/development/open-questions.md` §3.9 confirms that quorum threshold and fallback rules are TBD.
 
@@ -115,10 +116,12 @@ no token-based governance, so quorum is always an absolute amount of
 admin-assigned voting power. The cliff problem
 (`docs/development/open-questions.md` §3.9) is noted in §6.2 below.
 
-**Fallback.** If no proposal reaches quorum and the current weights become stale,
-the protocol admin retains `ADMIN_ROLE` as an emergency override for the first
-deployment cycle. A future phase must specify an on-chain fallback-weights
-mechanism before the admin role is fully renounced.
+**Fallback.** If no proposal reaches quorum, the router routes by its default
+weight vector. `PortfolioRouter` keeps `defaultWeights` next to the voted vector
+and uses it while `votedWeightsActive` is false. `RouterGovernance.setDefaultWeights`
+and `clearVotedWeights` forward to the router and are `ADMIN_ROLE` only, so after
+stage 11 they go Safe -> Timelock -> `ADMIN_ROLE` (ADR-0002). Nothing in the
+fallback needs `ADMIN_ROLE` on the router to call `setWeights` (see §3.6).
 
 ### 3.2 Voting cadence
 
@@ -194,79 +197,68 @@ choice within `[MIN_EXECUTION_DELAY, ∞)`, not a contract constant.
 
 ### 3.5 Proposal lifecycle states
 
-```
-Draft → Open → Passed → Executed
-                      ↘ Expired (if not executed within 14 days)
-       → Rejected
-```
+The deployed `ProposalState` enum in `contracts/RouterGovernance.sol` has five
+states: `Active`, `Defeated`, `Queued`, `Executed`, `Cancelled`.
 
 | State | Entry condition | Exit conditions |
 |---|---|---|
-| **Draft** | `createProposal()` called; validated weight vector stored. | Creator calls `openProposal()` or proposal is auto-opened at creation (design choice for implementation). |
-| **Open** | Proposal is accepting votes. | Voting period ends (`block.timestamp >= openAt + votingPeriod`). |
-| **Passed** | Voting period ended; quorum reached; yes > no. | `execute()` called after delay → Executed; or 14-day expiry → Expired. |
-| **Rejected** | Voting period ended; quorum not reached OR no >= yes. | Terminal. |
-| **Executed** | `execute()` succeeded; `PortfolioRouter.setWeights` was called. | Terminal. |
-| **Expired** | Passed but not executed within 14 days. | Terminal. |
+| **Active** | `propose()` succeeded (`ADMIN_ROLE` only). Voters cast FOR votes until `votingDeadline`. | Voting period ends: `Queued` if `votesFor >= snapshotQuorum`, else `Defeated`. `cancel()` moves it to `Cancelled`. |
+| **Defeated** | Voting period ended with `votesFor < snapshotQuorum`. | Terminal. Does not block a new proposal. |
+| **Queued** | Voting period ended with quorum reached. | Any caller may `execute()` once `executableAfter` has passed. `cancel()` moves it to `Cancelled`. |
+| **Executed** | `execute()` called `PortfolioRouter.setWeights`. | Terminal. |
+| **Cancelled** | `ADMIN_ROLE` called `cancel()` before execution. | Terminal. Does not block a new proposal. |
 
-**Events.** The contract must emit:
+There is no `Draft`, `Rejected`, `Passed` or `Expired` state. There is no
+against-vote: `vote(proposalId)` only adds FOR power, and a proposal that is
+Queued does not expire.
 
-- `ProposalCreated(uint256 proposalId, address proposer, address[] vaults, uint256[] bps, uint256 snapshotBlock)`
-- `VoteCast(uint256 proposalId, address voter, bool support, uint256 power)`
-- `ProposalPassed(uint256 proposalId, uint256 yesVotes, uint256 noVotes, uint256 quorumAtSnapshot)`
-- `ProposalRejected(uint256 proposalId, uint256 yesVotes, uint256 noVotes)`
-- `ProposalExecuted(uint256 proposalId, address[] vaults, uint256[] bps)`
-- `ProposalExpired(uint256 proposalId)`
-- `WeightsApplied(uint256 proposalId, address[] vaults, uint256[] bps)` (emitted alongside `PortfolioRouter.WeightsSet`)
+**Events.** The contract emits `ProposalCreated`, `VoteCast`, `ProposalExecuted`,
+`WeightsApplied`, `ProposalCancelled`, `QuorumThresholdSet`, `VotingPeriodSet`,
+`ExecutionDelaySet` and `VotingPowerSet`. Exact signatures are in
+`contracts/RouterGovernance.sol`.
 
 ### 3.6 setWeights call path
 
 **Decision: `RouterGovernance.sol` is the only permitted caller of
 `PortfolioRouter.setWeights` in production.**
 
-`PortfolioRouter.setWeights` is currently gated by `ADMIN_ROLE`. The deployment
-and wiring sequence is:
+`PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE` (core 1522), not by
+`ADMIN_ROLE`. `RouterGovernance.execute(proposalId)` is the only function in
+`contracts/RouterGovernance.sol` that calls `setWeights`.
 
-1. Deploy `RouterGovernance.sol` with `portfolioRouter` address as an immutable.
-2. Current `ADMIN_ROLE` holder on `PortfolioRouter` calls
-   `PortfolioRouter.grantRole(ADMIN_ROLE, routerGovernance)`.
-3. Current `ADMIN_ROLE` holder on `PortfolioRouter` calls
-   `PortfolioRouter.renounceRole(ADMIN_ROLE, admin)`.
+- `DeployRouterGovernance.s.sol` grants RouterGovernance `WEIGHT_SETTER_ROLE` and
+  drops the deployer's copy.
+- Stage 11 (`DeployTimelock.s.sol`) grants the TimelockController `ADMIN_ROLE`
+  only, which reaches `setDefaultWeights` and `clearVotedWeights`. A direct
+  `setWeights` from the timelock reverts, so active weights come only from
+  RouterGovernance votes.
+- `WEIGHT_SETTER_ROLE` is its own role admin. `ADMIN_ROLE` is not its admin, so the
+  timelock cannot grant itself the role through a scheduled operation.
+- Rotation (core 1616): RouterGovernance is replaced without a router redeploy
+  through a bounded rotation, not through a role grant. The Safe holds
+  `WEIGHT_SETTER_ROTATOR_ROLE` and proposes a contract target on the router
+  (`proposeWeightSetterRotation`). The timelock holds
+  `WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE` and executes it after the timelock's own
+  delay, measured from the proposal (`executeWeightSetterRotation`). The Safe can
+  cancel. Execution revokes every holder and grants the target, so one holder
+  remains. Neither the timelock nor the Safe can grant either role or
+  `WEIGHT_SETTER_ROLE` (all three are self-administered). Design and threat table:
+  ADR-0002, amendment 2026-10-07.
 
-After step 3, `routerGovernance` is the sole `ADMIN_ROLE` holder and the only
-address that can call `setWeights`. No off-chain relay, multisig, or keeper is
-in the weight-update path.
+RouterGovernance holds `ADMIN_ROLE` on the router as well, because
+`RouterGovernance.setDefaultWeights` and `clearVotedWeights` forward to router
+functions gated by it (`DeployTimelock.s.sol` asserts this before it finishes).
+No admin renounces anything to make RouterGovernance the weight setter: the role
+split above does that. No off-chain relay, multisig, or keeper is in the
+weight-update path.
 
-> **Status (core 1522).** `PortfolioRouter.setWeights` is gated by
-> `WEIGHT_SETTER_ROLE`, not `ADMIN_ROLE`. `DeployRouterGovernance.s.sol` grants
-> RouterGovernance `WEIGHT_SETTER_ROLE` and drops the deployer's copy. Stage 11
-> (`DeployTimelock.s.sol`) grants the TimelockController `ADMIN_ROLE` only, which
-> reaches `setDefaultWeights` and `clearVotedWeights`. A direct `setWeights` from
-> the timelock reverts, so active weights come only from RouterGovernance votes.
-> `WEIGHT_SETTER_ROLE` is its own role admin. `ADMIN_ROLE` is not its admin, so the
-> timelock cannot grant itself the role through a scheduled operation.
->
-> **Rotation (core 1616).** RouterGovernance is replaced without a router redeploy
-> through a bounded rotation, not through a role grant. The Safe holds
-> `WEIGHT_SETTER_ROTATOR_ROLE` and proposes a contract target on the router
-> (`proposeWeightSetterRotation`). The timelock holds
-> `WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE` and executes it after the timelock's own
-> delay, measured from the proposal (`executeWeightSetterRotation`). The Safe can
-> cancel. Execution revokes every holder and grants the target, so one holder
-> remains. Neither the timelock nor the Safe can grant either role or
-> `WEIGHT_SETTER_ROLE` (all three are self-administered). Design and threat table:
-> ADR-0002, amendment 2026-10-07.
+**Constraint.** `RouterGovernance.sol` calls `setWeights` only from its
+`execute(proposalId)` function.
 
-**Constraint.** `RouterGovernance.sol` must call `setWeights` only from its
-`execute(proposalId)` function. No other function on the governance contract may
-call `setWeights`.
-
-**Emergency path.** The governance contract itself must include an `ADMIN_ROLE`
-or `GUARDIAN_ROLE` that can pause proposal execution (but NOT directly call
-`setWeights`). Emergency weight overrides require a governance proposal that
-passes within a short emergency cadence. The exact emergency mechanism is
-deferred to the `RouterGovernance.sol` implementation issue but must be
-specified before the fork e2e.
+**Emergency path.** `RouterGovernance` has no pause or guardian role. The
+emergency levers are `cancel(proposalId)` (`ADMIN_ROLE`) for a proposal that has
+not executed, and `clearVotedWeights` to return routing to the default vector.
+Both go through the timelock after stage 11.
 
 ---
 
@@ -301,7 +293,7 @@ governance".
 
 **Strict serial dependency:**
 
-- `PortfolioRouter.setWeights` role transfer (§3.6) cannot happen until
+- The `WEIGHT_SETTER_ROLE` grant (§3.6) cannot happen until
   `RouterGovernance.sol` is deployed to the target network. Deploy scripts must
   sequence this explicitly.
 - Fork e2e requires both the governance contract and the router to be deployed
@@ -341,31 +333,26 @@ be registered in `VaultRegistry` and the bps sum to exactly 10 000. If a vault
 is deregistered between proposal creation and execution, `execute()` will revert
 and the proposal cannot be executed.
 
-**Action.** `RouterGovernance.createProposal()` must validate the weight vector
-against the registry at creation time. `execute()` must also re-validate (or the
-implementation must document that execution can be blocked by vault deregistration
-and handle the resulting Expired state gracefully).
+**Action.** `RouterGovernance.propose()` validates every vault with
+`router.isRouterEligibleAndActive` and the bps sum at creation time. `execute()`
+calls `setWeights`, which validates again, so a vault that becomes ineligible
+after proposal creation makes `execute()` revert.
 
 ### 6.4 Single active proposal constraint enforcement
 
-**Risk.** Only one proposal may be Open at a time (§3.2). If the enforcement is
-per-caller instead of global, a second proposer could bypass the cadence window.
+The rule is global. `propose()` reverts with `ActiveProposalExists` while the
+latest proposal (`currentProposalId`) is `Active` or `Queued`. `Defeated` and
+`Cancelled` proposals do not block a new one.
 
-**Action.** Enforcement must be global: the contract stores a single
-`activeProposalId` state variable. `createProposal()` reverts if
-`activeProposalId != 0` and the current proposal is still Open.
+### 6.5 Governance that cannot reach quorum
 
-### 6.5 Emergency weight override before governance renouncement
+**Risk.** If too little voting power is assigned to reach `quorumThreshold`, no
+proposal can pass and `setWeights` cannot be called.
 
-**Risk.** §3.6 specifies that the admin renounces `ADMIN_ROLE` after wiring the
-governance contract. If the governance contract has a bug (e.g., unable to reach
-quorum because too little voting power is assigned), there is no path to update weights until the
-governance contract is upgraded or redeployed.
-
-**Action.** Before renouncing the admin role, confirm that the assigned voting
-power can reach `quorumThreshold` in practice. The deploy script should include
-a pre-flight check: `quorumThreshold <= totalVotingPower`. Document the emergency recovery path (redeploy
-governance, re-grant ADMIN_ROLE) in the deploy runbook.
+**Action.** Before the handover, confirm that the assigned voting power can reach
+`quorumThreshold`. Routing is not stuck meanwhile: the router uses its default
+vector (§3.1 fallback). Replacing a broken RouterGovernance uses the rotation in
+§3.6. The runbook is `docs/technical/router-governance-handoff-runbook.md`.
 
 ### 6.6 No outer share token constraint propagation
 
@@ -383,35 +370,30 @@ is calling `PortfolioRouter.setWeights`.
 
 ## 7. Read surface — function signatures for `RouterGovernance.sol`
 
-The following signatures are fixed by this ADR. Implementers must not change
-these without a new ADR.
+The read surface below is what `contracts/RouterGovernance.sol` exposes. There
+is no `voteTallies` function: the tally is `votesFor` and `snapshotQuorum` in the
+`activeProposal()` return. Implementers must not change these without a new ADR.
 
 ```solidity
-/// @notice Return the currently active proposal (id=0 if none).
-function activeProposal() external view returns (uint256 proposalId);
+/// @notice Latest proposal (reverts NoActiveProposal if none was ever made).
+function activeProposal() external view returns (
+    uint256 id, address proposer, address[] memory vaults, uint256[] memory bps,
+    uint64 votingDeadline, uint64 executableAfter, uint256 votesFor,
+    uint256 snapshotQuorum, bool executed, bool cancelled
+);
 
-/// @notice Return vote tallies for a proposal.
-function voteTallies(uint256 proposalId)
-    external view
-    returns (uint256 yesVotes, uint256 noVotes, uint256 snapshotQuorum);
+/// @notice State of one proposal.
+function proposalState(uint256 proposalId) external view returns (ProposalState);
 
-/// @notice Return the weight vector most recently applied to the router
-///         (the weights currently active on PortfolioRouter).
-function currentWeights()
-    external view
-    returns (address[] memory vaults, uint256[] memory bps);
+/// @notice The weight vector currently active on PortfolioRouter.
+function currentWeights() external view returns (address[] memory vaults, uint256[] memory bps);
 
-/// @notice Return governance timing parameters.
-function cadenceParams()
-    external view
-    returns (
-        uint256 cadenceWindow,   // 604800 — minimum seconds between proposals
-        uint256 votingPeriod,    // 432000 — voting open duration in seconds
-        uint256 executionDelay,  // 172800 — seconds after Passed before execute()
-        uint256 expiryDelay      // 1209600 — seconds before a Passed proposal Expires
-    );
+/// @notice Governance parameters in one call.
+function cadenceParams() external view returns (
+    uint64 votingPeriod, uint64 executionDelay, uint256 quorumThreshold, uint256 totalVotingPower
+);
 ```
 
-These four read functions correspond to the `rmpc get-governance` output
+These read functions correspond to the `rmpc get-governance` output
 contract specified in `docs/architecture.md` §4.4 and `Plan tracking issue #109`
 §"Phase: Router-weight governance".
