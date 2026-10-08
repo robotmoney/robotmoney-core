@@ -30,6 +30,18 @@ export const passphraseFileReason = (spec: string): string | undefined =>
 export const plaintextSignerReason = (spec: string, env: Record<string, string | undefined> = {}): string | undefined =>
   plaintextKeyReason(spec, env) ?? passphraseFileReason(spec);
 
+/** The signer-spec floors alone, for a second signer (the pause-all EMERGENCY key): plaintext material is refused off loopback on every chain, and passphrase files on mainnet. */
+export function assertSignerSpec(spec: string, i: { rpcChainId: number; rpc: string; env?: Record<string, string | undefined> }): void {
+  if (!isLoopbackRpc(i.rpc)) {
+    const why = plaintextKeyReason(spec, i.env ?? {});
+    if (why) throw floor(`plaintext signing material is refused against a non-loopback RPC: ${why}`, { chainId: i.rpcChainId });
+  }
+  if (isMainnet(i.rpcChainId)) {
+    const why = plaintextSignerReason(spec, i.env ?? {});
+    if (why) throw floor(`plaintext signing is refused on chain ${MAINNET_CHAIN_ID}: ${why}`);
+  }
+}
+
 export interface FloorInput {
   /** Chain id read from the RPC (cast chain-id). */
   rpcChainId: number;
