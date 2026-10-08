@@ -310,6 +310,27 @@ that was already unpaused. Each opens a new numbered round (a new timelock opera
 command executes it after the delay. A default `govern` run never reopens a vault that was paused again. Record each round under `govern` in the evidence
 file with its `round` number (`unpause-USDC` is optional there, and every step may have rounds 1 to n).
 
+**Never resume `govern` after a `pause-all` without cancelling first (issue 1686).**
+If an unpause was already scheduled when `pause-all` ran (by hand, or the
+automatic one after a failed verify), the timelock would still execute it after
+its delay and reopen the vault you just paused. `pause-all` therefore records a
+`pauses` entry (sequence number, timestamp, trigger, per-vault result) in
+`publish-run.json`, and `govern` refuses before it sends anything when a pause
+entry is newer than a pending unpause's schedule: `GOVERN` (exit 14), naming
+the row, the pause entry and the operation id. The tool has no cancel on 8453,
+so the recovery is, in this order:
+
+1. Cancel the pending operation through the Safe on the timelock: a Safe
+   transaction that calls `cancel(<operation id>)` on the timelock (the id is
+   in the error and in `publish-run.json` under `govern.<row>.scheduled.operation_id`).
+2. Fix what made you pause.
+3. Run `govern --row unpause-X` (same arguments as before). It sees the
+   cancelled operation, archives it in the manifest as `<row>:round-<n>:cancelled-<k>`
+   and schedules the same round again with a fresh sequence number, a new
+   48-hour delay and the usual `GOVERN_PENDING`. The same command executes it.
+4. A pause-all older than the schedule does not block. A row whose vault was
+   paused again after it executed opens round n+1 as described above.
+
 There is no branch to cherry-pick onto and no rc-numbering cost — every
 contract deployment is a fresh broadcast, so "try again" is simply "deploy
 the fixed commit."
