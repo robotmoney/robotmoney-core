@@ -9,11 +9,16 @@ import {
 
 /// @title AdminFloorAccessControl
 /// @notice `AccessControlEnumerable` with a "last-admin floor": the final
-///         holder of the contract's self-administered `ADMIN_ROLE` cannot be
-///         revoked or renounced down to zero holders.
+///         holder of the contract's `ADMIN_ROLE` cannot be revoked or
+///         renounced down to zero holders.
 ///
-///         Finding L-10 (2026-06-18 holistic review): these contracts use a
-///         single self-administered `ADMIN_ROLE` as their own role-admin. OZ's
+///         `ADMIN_ROLE` is self-administered on RouterGovernance,
+///         PortfolioRouter and VaultRegistry. On InvestmentCommitteePolicy and
+///         ConsensusRecommendationReceipt `DEFAULT_ADMIN_ROLE` administers it,
+///         so those two contracts also floor `DEFAULT_ADMIN_ROLE` (#1447).
+///
+///         Finding L-10 (2026-06-18 holistic review): the floored contracts use a
+///         single `ADMIN_ROLE` for configuration. OZ's
 ///         `renounceRole`/`revokeRole` are public, so the sole admin dropping
 ///         itself would brick all configuration and governance forever. This
 ///         base forbids that one transition while leaving every other

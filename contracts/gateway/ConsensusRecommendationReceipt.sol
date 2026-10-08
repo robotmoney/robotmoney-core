@@ -4,7 +4,7 @@
 // Implements: issue #1247 — (fusion) anchor the receipt on chain
 pragma solidity ^0.8.24;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -50,7 +50,7 @@ import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommenda
 ///
 /// Emits: `ReceiptRecorded`, `ReceiptReleased`.
 contract ConsensusRecommendationReceipt is
-    AccessControl,
+    AdminFloorAccessControl,
     ReentrancyGuard,
     IConsensusRecommendationReceipt
 {
@@ -101,6 +101,16 @@ contract ConsensusRecommendationReceipt is
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
+    }
+
+    /// @dev Last-admin floor for `DEFAULT_ADMIN_ROLE` (ADMIN_ROLE is covered by
+    ///      `AdminFloorAccessControl`). Both `revokeRole` and `renounceRole`
+    ///      route here, so the timelock cannot lock itself out (#1447, L).
+    function _revokeRole(bytes32 role, address account) internal virtual override returns (bool) {
+        if (role == DEFAULT_ADMIN_ROLE && hasRole(role, account) && getRoleMemberCount(role) == 1) {
+            revert LastAdminFloor();
+        }
+        return super._revokeRole(role, account);
     }
 
     // ─── Modifiers ───────────────────────────────────────────────────────────

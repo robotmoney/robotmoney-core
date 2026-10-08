@@ -5,6 +5,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 
+import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 
 // ─── Minimal gateway stub ────────────────────────────────────────────────────
@@ -297,5 +298,43 @@ contract InvestmentCommitteePolicyTest is Test {
         assertEq(after_, before + 1, "vote appended");
         // Balance unchanged — no value moved.
         assertEq(address(ic).balance, 0, "IC balance must remain zero");
+    }
+
+    // ─── Last-admin floor (#1447, workstream L) ──────────────────────────────
+
+    function test_ic_lastAdminFloor_revokeAndRenounceRevert() public {
+        bytes32 adminRole = ic.ADMIN_ROLE();
+        bytes32 defaultAdmin = ic.DEFAULT_ADMIN_ROLE();
+        vm.startPrank(admin);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        ic.revokeRole(adminRole, admin);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        ic.renounceRole(adminRole, admin);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        ic.revokeRole(defaultAdmin, admin);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        ic.renounceRole(defaultAdmin, admin);
+        vm.stopPrank();
+        assertTrue(ic.hasRole(adminRole, admin));
+        assertTrue(ic.hasRole(defaultAdmin, admin));
+    }
+
+    function test_ic_lastAdminFloor_handoverSucceeds() public {
+        address next = address(0xBEEF);
+        bytes32 adminRole = ic.ADMIN_ROLE();
+        bytes32 defaultAdmin = ic.DEFAULT_ADMIN_ROLE();
+        vm.startPrank(admin);
+        ic.grantRole(adminRole, next);
+        ic.grantRole(defaultAdmin, next);
+        ic.renounceRole(adminRole, admin);
+        ic.renounceRole(defaultAdmin, admin);
+        vm.stopPrank();
+        assertFalse(ic.hasRole(adminRole, admin));
+        assertFalse(ic.hasRole(defaultAdmin, admin));
+        // The new holder is now the last admin and is floored in turn.
+        vm.startPrank(next);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        ic.renounceRole(defaultAdmin, next);
+        vm.stopPrank();
     }
 }
