@@ -5,7 +5,7 @@ description: "rmPROTO script: paused, exactly wETH and cbBTC, config read back e
 
 # DeployProtocolAssetVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/DeployProtocolAssetVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/DeployProtocolAssetVault.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -175,5 +175,105 @@ function test_reverts_whenVenueUnsupported() public;
 
 ```solidity
 function test_manifest_listsAssetsAndPausedState() public;
+```
+
+<a id="_prepare-basketvaultdeploybase-params"></a>
+
+### _prepare
+
+```solidity
+function _prepare(BasketVaultDeployBase.Params memory) internal returns (string memory json);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `BasketVaultDeployBase.Params` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+<a id="_deploywith-basketvaultdeploybase-params"></a>
+
+### _deployWith
+
+```solidity
+function _deployWith(BasketVaultDeployBase.Params memory p)
+        internal
+        returns (BasketVaultDeployBase.Deployed memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `BasketVaultDeployBase.Params` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultDeployBase.Deployed` |  |
+
+<a id="test_guard_navdeviationguardbpsequalsthesheetvalue"></a>
+
+### test_guard_navDeviationGuardBpsEqualsTheSheetValue
+
+The vault ships with the sheet guard, not the vault default of 0 (which disables ORA-4).
+
+```solidity
+function test_guard_navDeviationGuardBpsEqualsTheSheetValue() public;
+```
+
+<a id="test_guard_acceptstheceiling"></a>
+
+### test_guard_acceptsTheCeiling
+
+```solidity
+function test_guard_acceptsTheCeiling() public;
+```
+
+<a id="test_reverts_whennavdeviationbpsunset"></a>
+
+### test_reverts_whenNavDeviationBpsUnset
+
+```solidity
+function test_reverts_whenNavDeviationBpsUnset() public;
+```
+
+<a id="test_reverts_whennavdeviationbpszero"></a>
+
+### test_reverts_whenNavDeviationBpsZero
+
+```solidity
+function test_reverts_whenNavDeviationBpsZero() public;
+```
+
+<a id="test_reverts_whennavdeviationbpsaboveceiling"></a>
+
+### test_reverts_whenNavDeviationBpsAboveCeiling
+
+```solidity
+function test_reverts_whenNavDeviationBpsAboveCeiling() public;
+```
+
+<a id="test_reverts_whenminpoolliquidityunset"></a>
+
+### test_reverts_whenMinPoolLiquidityUnset
+
+```solidity
+function test_reverts_whenMinPoolLiquidityUnset() public;
+```
+
+<a id="test_reverts_whenminpoolliquidityzero"></a>
+
+### test_reverts_whenMinPoolLiquidityZero
+
+```solidity
+function test_reverts_whenMinPoolLiquidityZero() public;
 ```
 

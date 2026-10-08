@@ -230,6 +230,21 @@ adds `safe`, `prove-control` (between stages 10 and 11), `verify` and `govern`:
 | 12 `verify` | One verifier reads the chain and checks every postcondition, including the Safe owners and threshold, the proof transaction read back from the chain (a self-call of the Safe, signed by every owner, Safe nonce 1 or more), the delay floor, that the deployer holds no role, that the gateway has no `AgentAuthorized` or `AgentOwnershipTransferred` log up to the handover block and nobody holds `AGENT_ROLE` from an earlier grant (the deploy authorizes no agent), and the deployer nonce against the frozen per-stage counts for the release SHA (counts not yet committed: core #1524). |
 | 13 `govern` | Only `unpauseDeposits()` on each basket vault (rmPROTO, rmAGENT, rmRWA). Each is its own timelock operation, scheduled the same day through the real Safe and executed after one 48-hour delay. None is skipped on any deploy. On 8453 the CLI exits `GOVERN_PENDING` with the resume command; on the Twin chain the wait runs by time warp (not yet implemented: core #1520; `govern.ts` still runs the older per-step matrix). |
 
+**Basket sheet values (issue 1666).** Each basket (`PROTO`, `AGENT`, `RWA`, never `USDC`) carries two more
+names in the frozen sheet, read by its stage as `NAV_DEVIATION_BPS` and `MIN_POOL_LIQUIDITY`:
+
+| Sheet name | Rule |
+| --- | --- |
+| `VAULT_<KEY>_NAV_DEVIATION_BPS` | The ORA-4 deposit guard in basis points, from 1 to 2000. The vault default is 0, which disables the check, so 0 is refused. A value above 2000 is refused (the vault ceiling is 20 percent). The unit is basis points: 100 is 1 percent. The guard runs on deposit only, never on redeem. |
+| `VAULT_<KEY>_MIN_POOL_LIQUIDITY` | The floor for `IUniswapV3Pool.liquidity()` of every pool the basket lists. The unit is the pool's in-range liquidity L (a `uint128`, about sqrt(token0 x token1) in raw units), not a USDC amount. Above 0 and at most 2^128 - 1. It is checked on top of the vault's own dust constant `MIN_POOL_LIQUIDITY` (1e6), which is not changed. Read the live value with `cast call <pool> "liquidity()(uint128)"` before you pick it. |
+
+`VAULT_USDC_NAV_DEVIATION_BPS` and `VAULT_USDC_MIN_POOL_LIQUIDITY` are refused: rmUSDC has no guard and no pool.
+The 8453 values are the owner's, set in the frozen sheet. The deploy script sets the guard on the new vault before the
+timelock handover and reads it back, then refuses any pool below the floor. The verifier (stage 12) reads
+`navDeviationGuardBps` from the chain and asserts it equals the sheet and is above zero, and asserts each basket pool's
+liquidity meets the floor. Each basket stage sends one more transaction (`setNavDeviationGuardBps`), so the frozen
+per-stage counts are the ones the Twin rehearsal measures after this change.
+
 Every privileged action after stage 11 is Safe → `TimelockController` →
 target. `updateDelay`, a batch and a cancel run only as Twin-chain tests of
 the Safe tool, never on 8453.

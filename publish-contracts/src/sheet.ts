@@ -18,6 +18,15 @@ export const VAULT_NAME: Record<VaultKey, string> = { USDC: "rmUSDC", PROTO: "rm
 /** Per-vault sheet names. Always required, never defaulted. */
 export const vaultSheetNames = (k: VaultKey): string[] => [`VAULT_${k}_TVL_CAP`, `VAULT_${k}_PER_DEPOSIT_CAP`, `VAULT_${k}_EXIT_FEE_BPS`];
 
+/** The baskets (rmPROTO, rmAGENT, rmRWA). rmUSDC is not a basket: it has no navDeviationGuardBps and no pool. */
+export const BASKET_KEYS = ["PROTO", "AGENT", "RWA"] as const satisfies readonly VaultKey[];
+/** Basket-only sheet names (issue 1666): the ORA-4 deposit guard in bps and the floor for every pool's in-range liquidity (`IUniswapV3Pool.liquidity()`, a uint128 L, not a USDC amount). */
+export const basketSheetNames = (k: VaultKey): string[] => (BASKET_KEYS as readonly string[]).includes(k) ? [`VAULT_${k}_NAV_DEVIATION_BPS`, `VAULT_${k}_MIN_POOL_LIQUIDITY`] : [];
+/** The vault's own ceiling: BasketVault.MAX_NAV_DEVIATION_BPS. The deploy script requires the same range 1..2000. */
+export const MAX_NAV_DEVIATION_BPS = 2000n;
+/** `IUniswapV3Pool.liquidity()` is a uint128. */
+export const MAX_POOL_LIQUIDITY = (1n << 128n) - 1n;
+
 type Kind = "address" | "address-or-safe" | "address-list" | "uint" | "string";
 interface NameSpec { kind: Kind }
 
@@ -56,7 +65,7 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   GOVERN_UNPAUSE_VAULTS: { kind: "string" },
   GOVERN_NEW_DELAY: { kind: "uint" },
 };
-const VAULT_NAMES: Record<string, NameSpec> = Object.fromEntries(VAULT_KEYS.flatMap((k) => vaultSheetNames(k).map((n) => [n, { kind: "uint" as Kind }])));
+const VAULT_NAMES: Record<string, NameSpec> = Object.fromEntries(VAULT_KEYS.flatMap((k) => [...vaultSheetNames(k), ...basketSheetNames(k)].map((n) => [n, { kind: "uint" as Kind }])));
 export const SHEET_SPEC: Record<string, NameSpec> = { ...GLOBAL_NAMES, ...VAULT_NAMES };
 
 /** Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE and USDC_ADDRESS are the only optional names (USDC_ADDRESS is a constant: when present it must equal it). */
@@ -73,9 +82,16 @@ const REFUSED: [RegExp, string][] = [
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
   [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the basket unpauses only. Voting power, quorum, voting period, execution delay, agents, vault setters, eligibility and router weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VOTER_*, QUORUM_THRESHOLD, VAULT_<KEY>_*)"],
   [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
+  [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO, AGENT or RWA), for example VAULT_AGENT_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
 ];
 
-export interface SheetVault { tvlCap: bigint; perDepositCap: bigint; exitFeeBps: bigint }
+export interface SheetVault {
+  tvlCap: bigint; perDepositCap: bigint; exitFeeBps: bigint;
+  /** Baskets only: the ORA-4 guard in bps, 1..2000. */
+  navDeviationBps?: bigint;
+  /** Baskets only: the floor for the in-range liquidity (uint128 L) of every configured pool. Above 0. */
+  minPoolLiquidity?: bigint;
+}
 
 export interface Sheet {
   /** Normalised raw values by name, exactly what the sheet said (addresses checksummed). */
@@ -264,7 +280,18 @@ export function parseSheet(text: string): Sheet {
     if (tvlCap === 0n) throw err(`${t} must be above 0: a zero TVL cap is refused`);
     if (perDepositCap > tvlCap) throw err(`${p} exceeds ${t}: the per-deposit cap is never above the TVL cap`);
     if (exitFeeBps > 10000n) throw err(`${f} is above 10000`);
-    vaults[k] = { tvlCap, perDepositCap, exitFeeBps };
+    const vault: SheetVault = { tvlCap, perDepositCap, exitFeeBps };
+    if (k !== "USDC") {
+      const [g, l] = basketSheetNames(k) as [string, string];
+      const nav = asUint(g, v[g]!), floor = asUint(l, v[l]!);
+      // issue 1666: 0 disables ORA-4 (BasketViews.checkNavDeviation), above 2000 is refused by the vault setter. Refuse both before any transaction.
+      if (nav === 0n) throw err(`${g} must be above 0: a zero NAV deviation guard disables the ORA-4 deposit check`, { name: g });
+      if (nav > MAX_NAV_DEVIATION_BPS) throw err(`${g} is above ${MAX_NAV_DEVIATION_BPS} bps (20 percent): the value is in basis points`, { name: g });
+      if (floor === 0n) throw err(`${l} must be above 0: a zero pool liquidity floor accepts an empty pool`, { name: l });
+      if (floor > MAX_POOL_LIQUIDITY) throw err(`${l} exceeds uint128: it is a Uniswap V3 liquidity value, not a USDC amount`, { name: l });
+      vault.navDeviationBps = nav; vault.minPoolLiquidity = floor;
+    }
+    vaults[k] = vault;
   }
 
   // deploy-time router configuration
@@ -327,9 +354,6 @@ export function diffSheets(a: Sheet, b: Sheet): SheetDiffRow[] {
   const names = [...new Set([...Object.keys(a.values), ...Object.keys(b.values)])].sort();
   return names.filter((n) => a.values[n] !== b.values[n]).map((name) => ({ name, a: a.values[name], b: b.values[name] }));
 }
-
-/** The baskets in migration order (PROTO, AGENT, RWA). */
-export const BASKET_KEYS = ["PROTO", "AGENT", "RWA"] as const satisfies readonly VaultKey[];
 
 /** The baskets the sheet makes eligible, in migration order. The default-weight vector grows in this order. */
 export const eligibleInOrder = (sheet: Pick<Sheet, "eligibleVaults">): VaultKey[] => BASKET_KEYS.filter((k) => sheet.eligibleVaults.includes(k));

@@ -140,6 +140,8 @@
         "PER_DEPOSIT_CAP",
         "FEE_RECIPIENT",
         "EXIT_FEE_BPS",
+        "NAV_DEVIATION_BPS",
+        "MIN_POOL_LIQUIDITY",
         "ROUTER_DEFAULT_BPS",
         "DEPLOYMENT_OUT"
       ],
@@ -164,6 +166,8 @@
         "PER_DEPOSIT_CAP",
         "FEE_RECIPIENT",
         "EXIT_FEE_BPS",
+        "NAV_DEVIATION_BPS",
+        "MIN_POOL_LIQUIDITY",
         "ROUTER_DEFAULT_BPS",
         "DEPLOYMENT_OUT"
       ],
@@ -188,6 +192,8 @@
         "PER_DEPOSIT_CAP",
         "FEE_RECIPIENT",
         "EXIT_FEE_BPS",
+        "NAV_DEVIATION_BPS",
+        "MIN_POOL_LIQUIDITY",
         "ROUTER_DEFAULT_BPS",
         "DEPLOYMENT_OUT"
       ],

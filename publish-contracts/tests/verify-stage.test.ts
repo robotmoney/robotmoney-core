@@ -56,6 +56,18 @@ describe("stage 12: the one verifier", () => {
     expect(v.timelockDelay).toBe(60);
   });
 
+  test("the verifier sheet carries the NAV deviation guard and the pool liquidity floor of every basket, and none for rmUSDC (issue 1666)", () => {
+    const { ctx, sheet } = setup();
+    const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe");
+    for (const [k, key] of [["rmPROTO", "PROTO"], ["rmAGENT", "AGENT"], ["rmRWA", "RWA"]] as const) {
+      expect(v.vaults[k]!.navDeviationBps).toBe(sheet.vaults[key].navDeviationBps!);
+      expect(v.vaults[k]!.minPoolLiquidity).toBe(sheet.vaults[key].minPoolLiquidity!);
+      expect(v.vaults[k]!.navDeviationBps!).toBeGreaterThan(0n);
+    }
+    expect(v.vaults.rmUSDC!.navDeviationBps).toBeUndefined();
+    expect(v.vaults.rmUSDC!.minPoolLiquidity).toBeUndefined();
+  });
+
   test("the verifier sheet carries every deploy-time value of the sheet: voting power, quorum, periods, eligibility and the router default weights (issue 1520)", () => {
     const { ctx, sheet } = setup();
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe");

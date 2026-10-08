@@ -102,6 +102,11 @@ const RULES: Rule[] = [
   [/^(vault\[\w+\]): tvlCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "tvlCap", 1n)],
   [/^(vault\[\w+\]): perDepositCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "perDepositCap", 1n)],
   [/^(vault\[\w+\]): exitFeeBps equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "exitFeeBps", 999n)],
+  [/^(vault\[\w+\]): navDeviationGuardBps equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "navDeviationGuardBps", 500n)],
+  // the vault default: a basket the deploy never armed. Fails "above zero" and "equals sheet" together.
+  [/^(vault\[\w+\]): navDeviationGuardBps above zero$/, (w, m) => w.chain.set(subject(m[1]), "navDeviationGuardBps", 0n)],
+  // a thin pool: the first asset pool of the vault reports liquidity below the sheet floor
+  [/^(vault\[\w+\]): pool liquidity meets the sheet floor$/, (w, m) => w.chain.set(w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].assets[0]!.pool, "liquidity", 1n)],
   [/^(vault\[\w+\]): feeRecipient equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", OTHER)],
   [/^(vault\[\w+\]): feeRecipient is not deployer$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", DEPLOYER)],
   [/^(vault\[\w+\]): paused state equals sheet$/, (w, m) => { const a = subject(m[1]); const was = w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].expectPaused; w.chain.set(a, "depositsPaused", !was); }],

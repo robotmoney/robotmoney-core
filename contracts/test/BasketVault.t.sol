@@ -2127,6 +2127,31 @@ contract BasketVaultTest is Test {
         assertGt(shares, 0, "ORA-4: deposit succeeds once the guard is disabled");
     }
 
+    /// @notice Issue 1666: the guard runs on deposit only. With the guard at 100 bps and spot moved past it, a deposit reverts
+    ///         `NavMarketDeviationExceeded` and an existing holder still redeems. The sheet-set guard can never trap exits.
+    function test_ORA4_guardNeverBlocksRedeem() public {
+        uint256 shares = _depositAt1to1(stranger, 1_000e6);
+        assertGt(shares, 0, "holder has shares");
+
+        vm.prank(admin);
+        vault.setNavDeviationGuardBps(100);
+        pool.setSpotTick(200); // about +2%, beyond the 1% band
+
+        usdc.mint(address(this), 1_000e6);
+        usdc.approve(address(vault), 1_000e6);
+        vm.expectPartialRevert(BasketVault.NavMarketDeviationExceeded.selector);
+        vault.deposit(1_000e6, address(this));
+
+        // The holder redeems through the same deviated spot.
+        usdc.mint(address(router), 1_000e6);
+        router.setAmountOut(1_000e6);
+        uint256 balBefore = usdc.balanceOf(stranger);
+        vm.prank(stranger);
+        uint256 out = vault.redeem(shares, stranger, stranger);
+        assertGt(out, 0, "redeem returns USDC");
+        assertEq(usdc.balanceOf(stranger) - balBefore, out, "redeem paid the holder");
+    }
+
     /// @notice ORA-4: a deposit within the deviation band settles normally — the
     ///         guard does not block ordinary, market-consistent settlement.
     function test_ORA4_withinBandSettles() public {

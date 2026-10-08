@@ -106,6 +106,42 @@ describe("whitelist parser", () => {
     }
   });
 
+  test("issue 1666: every basket carries a nonzero NAV deviation guard of at most 2000 bps and a pool liquidity floor above zero", () => {
+    const ok = parseSheet(exampleText());
+    for (const k of ["PROTO", "AGENT", "RWA"] as const) {
+      expect(ok.vaults[k].navDeviationBps!).toBeGreaterThan(0n);
+      expect(ok.vaults[k].navDeviationBps!).toBeLessThanOrEqual(2000n);
+      expect(ok.vaults[k].minPoolLiquidity!).toBeGreaterThan(0n);
+    }
+    expect(ok.vaults.USDC.navDeviationBps).toBeUndefined();
+    expect(ok.vaults.USDC.minPoolLiquidity).toBeUndefined();
+    // missing
+    expect(refused(sheetText({ VAULT_AGENT_NAV_DEVIATION_BPS: null })).message).toContain("VAULT_AGENT_NAV_DEVIATION_BPS");
+    expect(refused(sheetText({ VAULT_AGENT_MIN_POOL_LIQUIDITY: null })).message).toContain("VAULT_AGENT_MIN_POOL_LIQUIDITY");
+    // zero disables ORA-4
+    expect(refused(sheetText({ VAULT_PROTO_NAV_DEVIATION_BPS: "0" })).message).toContain("VAULT_PROTO_NAV_DEVIATION_BPS must be above 0");
+    // above the vault ceiling, and the edge
+    expect(refused(sheetText({ VAULT_RWA_NAV_DEVIATION_BPS: "2001" })).message).toContain("VAULT_RWA_NAV_DEVIATION_BPS is above 2000");
+    expect(parseSheet(sheetText({ VAULT_RWA_NAV_DEVIATION_BPS: "2000" })).vaults.RWA.navDeviationBps).toBe(2000n);
+    expect(parseSheet(sheetText({ VAULT_RWA_NAV_DEVIATION_BPS: "1" })).vaults.RWA.navDeviationBps).toBe(1n);
+    // a basis point value typed as a decimal or a percent sign is not an integer
+    expect(refused(sheetText({ VAULT_RWA_NAV_DEVIATION_BPS: "5%" })).message).toContain("VAULT_RWA_NAV_DEVIATION_BPS");
+    expect(refused(sheetText({ VAULT_RWA_NAV_DEVIATION_BPS: "1.5" })).message).toContain("VAULT_RWA_NAV_DEVIATION_BPS");
+    // floor: zero and above uint128
+    expect(refused(sheetText({ VAULT_AGENT_MIN_POOL_LIQUIDITY: "0" })).message).toContain("VAULT_AGENT_MIN_POOL_LIQUIDITY must be above 0");
+    expect(refused(sheetText({ VAULT_AGENT_MIN_POOL_LIQUIDITY: (2n ** 128n).toString() })).message).toContain("exceeds uint128");
+    expect(parseSheet(sheetText({ VAULT_AGENT_MIN_POOL_LIQUIDITY: (2n ** 128n - 1n).toString() })).vaults.AGENT.minPoolLiquidity).toBe(2n ** 128n - 1n);
+  });
+
+  test("issue 1666: rmUSDC has no NAV deviation guard and no pool: the USDC names and the unprefixed names are refused", () => {
+    expect(refused(sheetText({}, ["VAULT_USDC_NAV_DEVIATION_BPS=100"])).message).toContain("VAULT_USDC_NAV_DEVIATION_BPS is refused");
+    expect(refused(sheetText({}, ["VAULT_USDC_MIN_POOL_LIQUIDITY=1000"])).message).toContain("VAULT_USDC_MIN_POOL_LIQUIDITY is refused");
+    expect(refused(sheetText({}, ["VAULT_NAV_DEVIATION_BPS=100"])).message).toContain("refused");
+    expect(REQUIRED_NAMES).not.toContain("VAULT_USDC_NAV_DEVIATION_BPS");
+    expect(REQUIRED_NAMES).toContain("VAULT_AGENT_NAV_DEVIATION_BPS");
+    expect(REQUIRED_NAMES).toContain("VAULT_RWA_MIN_POOL_LIQUIDITY");
+  });
+
   test("duplicate names, bad addresses, bad numbers and bad quoting are refused", () => {
     expect(() => parseSheetText("A=1\nA=2")).toThrow(PublishError);
     expect(refused(sheetText({ ADMIN_ADDRESS: "0x123" })).message).toContain("ADMIN_ADDRESS");

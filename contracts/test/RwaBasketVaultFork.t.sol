@@ -52,7 +52,9 @@ contract RwaBasketVaultFork is Test {
             tvlCap: 100_000 * 1e6,
             perDepositCap: 10_000 * 1e6,
             exitFeeBps: 0,
-            feeRecipient: makeAddr("feeRecipient")
+            feeRecipient: makeAddr("feeRecipient"),
+            navDeviationGuardBps: 2000,
+            minPoolLiquidity: 1e6
         });
         BasketVaultDeployBase.Deployed memory d = new DeployRwaBasketVault().runInProcess(p, cfg);
         vault = RwaBasketVault(d.vault);
