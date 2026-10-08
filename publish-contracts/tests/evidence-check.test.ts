@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { encodeAbiParameters, encodeEventTopics, parseAbi, type Hex } from "viem";
-import { chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, type ChainReader } from "../src/evidence-check.ts";
+import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, type Hex } from "viem";
+import { chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -81,7 +81,7 @@ const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: numbe
     : eventName === "CallExecuted" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [target as Hex, 0n, calldata as Hex]) : "0x";
   return { address: tl, topics: topics as Hex[], data: data as Hex };
 };
-interface Opts { relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
+interface Opts { stepData?: Record<string, string>; stepTarget?: Record<string, string>; pausedBy?: Record<string, boolean>; relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
 function stub(ev: any, o: Opts = {}): ChainReader {
   const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
   const add = (hash: string, logs: any[], ts: number) => { receipts.set(hash, { status: o.failed === hash ? "reverted" : "success", blockNumber: bn, logs }); blocks.set(bn++, ts); };
@@ -89,9 +89,12 @@ function stub(ev: any, o: Opts = {}): ChainReader {
   add(ev.safe.creation_tx, [], 1);
   ev.govern.forEach((g: any, i: number) => {
     const id = o.sharedId && i === 1 ? 1 : i + 1;
-    const t0 = T0 + i;
-    add(g.schedule_tx, [log("CallScheduled", id, o.delay)], t0);
-    add(g.execute_tx, [log("CallExecuted", id)], t0 + (o.gap ?? 172800));
+    const t0 = g.schedule_block_timestamp ?? T0 + i;
+    const label = g.round > 1 ? `${g.step}#${g.round}` : g.step;
+    const target = o.stepTarget?.[label] ?? ev.vaults[VAULT[g.step] ?? "rmPROTO"].address;
+    const data = o.stepData?.[label] ?? unpauseCalldata();
+    add(g.schedule_tx, [log("CallScheduled", id, o.delay, target, data)], t0);
+    add(g.execute_tx, [log("CallExecuted", id, 0n, target, data)], t0 + (o.gap ?? 172800));
   });
   (ev.receipt_releases ?? []).forEach((r: any, i: number) => {
     const id = 50 + i;
@@ -106,9 +109,10 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     getTransactionCount: async () => o.nonce ?? 2,
     getTransactionReceipt: async ({ hash }) => { const r = receipts.get(hash); if (!r) throw new Error("not found"); return r; },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(blocks.get(blockNumber)!) }),
-    readContract: async ({ functionName }) => (functionName === "depositsPaused" ? (o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
+    readContract: async ({ address, functionName }) => (functionName === "depositsPaused" ? (o.pausedBy?.[address] ?? o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
   };
 }
+const VAULT: Record<string, string> = { "unpause-USDC": "rmUSDC", "unpause-PROTO": "rmPROTO", "unpause-AGENT": "rmAGENT", "unpause-RWA": "rmRWA" };
 const RCPT = a(30);
 const RID = h(0xabc);
 const withRelease = (e: any) => {
@@ -188,13 +192,13 @@ describe("unpause govern rows and paused=false reads tell one story", () => {
   test("an unpause row that executed while the vault still reads paused=true is rejected, naming the row", async () => {
     const p = await online({ paused: true });
     expect(p.join("\n")).toContain("govern unpause-PROTO executed with receipt status 1, but rmPROTO.depositsPaused() reads true");
-    expect(p.filter((m) => m.includes("depositsPaused()")).length).toBe(3);
+    expect(p.filter((m) => m.includes("depositsPaused()")).length).toBe(4); // three baskets and rmUSDC (which must read open)
   });
   test("a vault that reads paused=false with no executed unpause row is rejected", async () => {
     const p = await online({ paused: false }, (e) => { const g = e.govern.find((x: any) => x.step === "unpause-RWA"); g.execute_status = 0; });
     expect(p.join("\n")).toContain("rmRWA.depositsPaused() reads false on chain, but govern unpause-RWA has no executed receipt");
   });
-  test("rmUSDC ships unpaused and is not part of the link", async () => expect((await online({ paused: false })).join()).not.toContain("rmUSDC"));
+  test("rmUSDC ships unpaused: it reads false with no unpause-USDC round", async () => expect((await online({ paused: false })).join()).not.toContain("rmUSDC"));
 });
 
 describe("recorded chain fixture (offline mode of the same chain checks)", () => {
@@ -270,3 +274,60 @@ describe("the evidence template", () => {
     expect(checkEvidence(tpl).length).toBeGreaterThan(0);
   });
 });
+
+// ---- issue 1667: the four-vault unpause rounds ----
+describe("issue 1667: rmUSDC and re-paused vaults come back through numbered Safe unpause rounds", () => {
+  const usdc = (n = 0, round?: number) => ({ step: "unpause-USDC", ...(round ? { round } : {}), operation_id: h(800 + n), schedule_tx: h(300 + n * 2), schedule_block_timestamp: T0 + 400000 + n * 400000, execute_tx: h(301 + n * 2), execute_block_timestamp: T0 + 400000 + n * 400000 + 172800, schedule_status: 1, execute_status: 1 });
+  /** a second PROTO round: scheduled after round 1 executed */
+  const proto2 = () => ({ ...usdc(5, 2), step: "unpause-PROTO" });
+  const withUsdc = (e: any) => { e.govern.push(usdc()); };
+  const offline = (f: (e: any) => void) => { const e = good(); f(e); return checkEvidence(e).join("\n"); };
+  const chain = (o: Opts, f: (e: any) => void) => { const e = good(); f(e); return checkEvidenceOnChain(e, stub(e, o), { safe: 2 }).then((p) => p.join("\n")); };
+
+  test("an unpause-USDC round is accepted offline and on chain, and rmUSDC may also have no round at all", async () => {
+    expect(offline(withUsdc)).toBe("");
+    expect(await chain({}, withUsdc)).toBe("");
+    expect(checkEvidence(good())).toEqual([]);
+  });
+  test("the template step list still has the three basket steps only: rmUSDC is optional", () => expect(GOVERN_STEPS).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]));
+  test("any other call on rmUSDC is rejected: another function (setPerDepositCap), garbage calldata, another target", async () => {
+    const calls = ["0x12345678", encodeFunctionDataSetCap()];
+    for (const data of calls) expect(await chain({ stepData: { "unpause-USDC": data } }, withUsdc)).toContain("unpauseDeposits(): the only call");
+    expect(await chain({ stepTarget: { "unpause-USDC": a(6) } }, withUsdc)).toContain("is not rmUSDC");
+  });
+  test("a basket step is held to the same rule: one unpauseDeposits on its own vault", async () => {
+    expect(await chain({ stepData: { "unpause-PROTO": "0x12345678" } }, () => {})).toContain("unpauseDeposits()");
+    expect(await chain({ stepTarget: { "unpause-RWA": a(5) } }, () => {})).toContain("is not rmRWA");
+  });
+  test("a step that is not an unpause is still rejected, rmUSDC included", () => {
+    expect(offline((e) => { e.govern.push({ ...usdc(), step: "set-cap-USDC" }); })).toContain("is not a basket unpause");
+  });
+  test("rmUSDC that reads paused is rejected even when a round is recorded", async () => {
+    const p = await chain({ pausedBy: { [a(5)]: true } }, withUsdc);
+    expect(p).toContain("rmUSDC.depositsPaused() reads true on chain, want false");
+  });
+  test("a second round of a basket is accepted when it is scheduled after round 1 executed and has its own transactions and operation id", async () => {
+    const add = (e: any) => { e.govern.push(proto2()); };
+    expect(offline(add)).toBe("");
+    expect(await chain({}, add)).toBe("");
+  });
+  test("rounds: a repeated round, a gap in the numbers, a round scheduled before the one it follows executed, and a bad round number are rejected", () => {
+    expect(offline((e) => { e.govern.push({ ...proto2(), round: 1 }); })).toContain("more than one evidence entry");
+    expect(offline((e) => { e.govern.push({ ...proto2(), round: 3 }); })).toContain("rounds must be 1 to 2 in order");
+    expect(offline((e) => { e.govern.push({ ...proto2(), schedule_block_timestamp: T0 + 100 }); })).toContain("not after round 1 executed");
+    expect(offline((e) => { e.govern.push({ ...proto2(), round: 0 }); })).toContain("round 0 is not a positive integer");
+  });
+  test("a second round that reuses the first round's operation id or transactions is rejected (a replay, not a new round)", () => {
+    expect(offline((e) => { e.govern.push({ ...proto2(), operation_id: e.govern[0].operation_id }); })).toContain("operation_id is also");
+    expect(offline((e) => { e.govern.push({ ...proto2(), schedule_tx: e.govern[0].schedule_tx }); })).toContain("none shared");
+  });
+  test("a second round whose on-chain gap is under 172800 s is rejected", async () => {
+    const add = (e: any) => { e.govern.push(proto2()); };
+    expect(await chain({ gap: 172799 }, add)).toContain("on-chain schedule-to-execute gap");
+  });
+  test("the latest round decides the paused link: round 2 executed and the vault reads unpaused passes, reads paused fails", async () => {
+    const add = (e: any) => { e.govern.push(proto2()); };
+    expect(await chain({ pausedBy: { [a(6)]: true } }, add)).toContain("rmPROTO.depositsPaused() reads true");
+  });
+});
+function encodeFunctionDataSetCap(): string { return encodeFunctionData({ abi: parseAbi(["function setPerDepositCap(uint256 newCap)"]), functionName: "setPerDepositCap", args: [1n] }); }

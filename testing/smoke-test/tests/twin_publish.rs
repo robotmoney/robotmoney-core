@@ -2,7 +2,8 @@
 //!
 //! One test boots the Twin chain (918453) through the harness. The harness has already called
 //! `publish` (deploy all four vaults, real Safe handover). This test then asserts the four
-//! manifests, runs the one verifier (which holds the router, basket and timelock role proofs), and runs the stage 13 govern matrix through the real Safe.
+//! manifests, runs the one verifier (which holds the router, basket and timelock role proofs), runs the stage 13 govern matrix through the real Safe,
+//! and runs the verifier again (the order is publish, verify, govern, verify: issue 1667).
 //! The verifier output (SMOKE_TEST_VERIFY_OUT) and the run sheet (SMOKE_TEST_SHEET_OUT) are saved for the
 //! parity step in suite 14. Every govern row must carry a tx hash and receipt status 1 (checked by `govern_matrix`).
 //!
@@ -148,6 +149,24 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .govern_matrix()
         .expect("the govern matrix must pass through the real Safe");
     assert!(!rows.is_empty(), "the govern matrix ran no rows");
+
+    // Issue 1667: the order is publish, verify, govern, verify. The first verify above passed before govern (the baskets paused). This second verify reads the
+    // post-govern state: the unpause rows are executed, so the verifier expects those vaults open. The Twin run only checks that the scripts execute in this
+    // order. The 48 hour delay and the Safe signers are proven on chain 8453 through the real Safe.
+    let verified_after = fx
+        .published()
+        .verify()
+        .expect("the verifier must pass on the Twin chain after govern");
+    assert!(
+        !verified_after.trim().is_empty(),
+        "the post-govern verifier printed nothing"
+    );
+    let labels = |out: &str| -> Vec<String> { out.lines().map(|l| l.trim().to_string()).collect() };
+    assert_eq!(
+        labels(&verified),
+        labels(&verified_after),
+        "the verifier ran the same checks before and after govern"
+    );
 
     // Core 1611: one consensus receipt is released end to end through the REAL Safe and the REAL timelock on the fork. The seed records two
     // receipts (the gateway committee registration is itself a Safe -> Timelock call), then `govern --row release-receipt` schedules
