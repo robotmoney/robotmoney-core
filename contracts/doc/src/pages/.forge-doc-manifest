@@ -157,6 +157,7 @@ contracts/test/contract.GatewayWithdrawTest.mdx
 contracts/test/contract.GovernanceExecutePathAfterHandoverTest.mdx
 contracts/test/contract.GovernanceSeparationInvariant.mdx
 contracts/test/contract.GovernanceVotersHarness.mdx
+contracts/test/contract.GovernedVaultSafeTimelockTest.mdx
 contracts/test/contract.GuardHarness.mdx
 contracts/test/contract.ICGatewayIntegration.mdx
 contracts/test/contract.InterlockMockVault.mdx
@@ -276,6 +277,7 @@ contracts/test/fv/contract._FvDeployerHarness.mdx
 contracts/test/fv/library.InvariantRegistry.mdx
 contracts/test/helpers/abstract.BasketDeployFixture.mdx
 contracts/test/helpers/abstract.SafeFixture.mdx
+contracts/test/helpers/abstract.SafeGovernance.mdx
 contracts/test/helpers/contract.ConstPool.mdx
 contracts/test/helpers/contract.CoreStages.mdx
 contracts/test/helpers/contract.EtchAavePool.mdx
@@ -285,6 +287,7 @@ contracts/test/helpers/contract.MockVault.mdx
 contracts/test/helpers/contract.NoYieldTestAdapter.mdx
 contracts/test/helpers/contract.TestERC20.mdx
 contracts/test/helpers/interface.ISafeSetupCall.mdx
+contracts/test/helpers/interface.ISafeTx.mdx
 contracts/test/helpers/interface.Vm__.mdx
 contracts/test/helpers/library.ForkSelect.mdx
 contracts/test/helpers/library.RoleHolders.mdx

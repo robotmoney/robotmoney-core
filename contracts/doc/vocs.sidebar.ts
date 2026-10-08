@@ -271,6 +271,7 @@ export const sidebar = [
             { text: "GovernanceExecutePathAfterHandoverTest", link: "/contracts/test/contract.GovernanceExecutePathAfterHandoverTest" },
             { text: "GovernanceSeparationInvariant", link: "/contracts/test/contract.GovernanceSeparationInvariant" },
             { text: "GovernanceVotersHarness", link: "/contracts/test/contract.GovernanceVotersHarness" },
+            { text: "GovernedVaultSafeTimelockTest", link: "/contracts/test/contract.GovernedVaultSafeTimelockTest" },
             { text: "GuardHarness", link: "/contracts/test/contract.GuardHarness" },
             { text: "ICGatewayIntegration", link: "/contracts/test/contract.ICGatewayIntegration" },
             { text: "InterlockMockVault", link: "/contracts/test/contract.InterlockMockVault" },
@@ -470,6 +471,7 @@ export const sidebar = [
           items: [
             { text: "BasketDeployFixture", link: "/contracts/test/helpers/abstract.BasketDeployFixture" },
             { text: "SafeFixture", link: "/contracts/test/helpers/abstract.SafeFixture" },
+            { text: "SafeGovernance", link: "/contracts/test/helpers/abstract.SafeGovernance" },
           ],
         },
         {
@@ -477,6 +479,7 @@ export const sidebar = [
           collapsed: true,
           items: [
             { text: "ISafeSetupCall", link: "/contracts/test/helpers/interface.ISafeSetupCall" },
+            { text: "ISafeTx", link: "/contracts/test/helpers/interface.ISafeTx" },
             { text: "Vm__", link: "/contracts/test/helpers/interface.Vm__" },
           ],
         },
