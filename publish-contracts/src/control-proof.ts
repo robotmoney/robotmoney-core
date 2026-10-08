@@ -25,6 +25,8 @@ export interface ControlProofRecord {
   signers: Address[];
   block: number;
   sentBy: Address;
+  /** True when the run died after the proof landed and a rerun with --resume found it on chain (prove-control.ts adoptLandedProof). Absent on a proof this run sent. */
+  adopted?: boolean;
 }
 
 const lc = (a: string): string => a.toLowerCase();
@@ -81,6 +83,7 @@ export async function inspectProofTx(a: { chainId: number; safe: Address; owners
   for (let i = 0; i < blob.length; i += 130) {
     try { recovered.add(lc(await recoverSafeSigner(hash, `0x${blob.slice(i, i + 130)}` as Hex))); } catch { return { ok: false, detail: `signature ${i / 130} is not an EOA signature` }; }
   }
+  if (recovered.size !== blob.length / 130) return { ok: false, detail: `the proof carries ${blob.length / 130} signatures from ${recovered.size} distinct signers: a signer is repeated` };
   const missing = a.owners.filter((x) => !recovered.has(lc(x)));
   if (missing.length > 0) return { ok: false, detail: `no valid signature over the proof hash from ${missing.join(", ")}` };
   const extra = [...recovered].filter((x) => !a.owners.some((o) => lc(o) === x));

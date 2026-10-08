@@ -605,6 +605,12 @@ impl Published {
         run_cli_raw(&self.cfg, &p, "verify", &[])
     }
 
+    /// Issue 1670: one publish verb run with extra arguments, returning the raw outcome. The exit code is the thing under test.
+    pub fn publish_raw(&self, extra: &[&str]) -> Result<CliRun, HarnessError> {
+        let extra: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
+        run_cli_raw(&self.cfg, self, "publish", &extra)
+    }
+
     /// Core 1619: `pause-all` by hand. Fails on a non-zero exit (a vault not confirmed paused is exit 25).
     pub fn pause_all(&self) -> Result<String, HarnessError> {
         run_cli(&self.cfg, self, "pause-all", &[])

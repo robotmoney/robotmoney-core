@@ -3,13 +3,13 @@
 // calldata and recovers the signers. What is a fake: the chain (the runner tests stub forge and cast). The proof against a real Safe contract
 // on a real fork is the Twin rehearsal (suite 28, and the suite 14 twin_publish test).
 import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Hex } from "viem";
+import { encodeFunctionData, keccak256, parseAbi, toHex, type Address, type Hex } from "viem";
 import { assertControlProven, inspectProofTx, PROOF_STAGE } from "../src/control-proof.ts";
 import { EXIT_CODES } from "../src/errors.ts";
 import { assertEveryOwnerSigned } from "../src/prove-control.ts";
-import { signTx, type SafeTxBundle } from "../src/safe/index.ts";
+import { localSafeTxHash, signTx, type SafeTxBundle } from "../src/safe/index.ts";
 import { PROVE_OWNERS, PROVE_SIGNERS, fakeProveApi, keySigner, world } from "./harness.ts";
 import { OWNERS, OWNER_KEYS, SAFE, buildWorld, failed, proofInput } from "./verify/world.ts";
 import { verifyDeployment } from "../src/verify/index.ts";
@@ -201,9 +201,172 @@ describe("the verifier reads the proof transaction back", () => {
     expect((await inspect(tx(proofInput(8453), { value: 1n }))).ok).toBe(false);
     expect((await inspect(tx("0x12345678"))).ok).toBe(false);
   });
+  test("a repeated signature on top of every owner: not ok", async () => {
+    const r = await inspect(tx(proofInput(8453, [...OWNER_KEYS, OWNER_KEYS[0]!])));
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain("repeated");
+  });
   test("a signature from someone who is not an owner: not ok", async () => {
     const r = await inspect(tx(proofInput(8453)), 0, OWNERS.slice(0, 2));
     expect(r.ok).toBe(false);
     expect(r.detail).toContain("non-owners");
+  });
+});
+
+
+// ---- adoption of a proof that landed before the run died (issue 1670) -------------------------------------------------------------------
+// The chain is the injected ProveChain (events and transaction); the signatures and calldata are real: the owners sign for real, the proof
+// calldata is a real execTransaction encoding, and the adoption recovers every signer from it.
+const SAFE_ADDR = "0x00000000000000000000000000000000000050fe" as Address;
+const CHAIN = 918453;
+const LANDED_TX = `0x${"ab".repeat(32)}` as Hex;
+const ZERO = "0x0000000000000000000000000000000000000000";
+const EXEC = parseAbi(["function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures) payable returns (bool success)"]);
+const STRANGER = keySigner(`0x${"44".repeat(32)}`);
+
+/** execTransaction calldata signed over `hash` by the given signers, packed ascending by signer address (repeats kept). */
+async function execCalldata(o: { signers?: typeof PROVE_SIGNERS; hash?: Hex; to?: Address; value?: bigint; data?: Hex; operation?: number; gasPrice?: bigint } = {}): Promise<Hex> {
+  const hash = o.hash ?? localSafeTxHash(CHAIN, SAFE_ADDR, SAFE_ADDR, "0x", 0);
+  const sigs = await Promise.all((o.signers ?? PROVE_SIGNERS).map(async (s) => ({ owner: (await s.address()).toLowerCase(), sig: await s.signSafeHash(hash, "raw") })));
+  const packed = ("0x" + sigs.sort((a, b) => (a.owner < b.owner ? -1 : 1)).map((x) => x.sig.slice(2)).join("")) as Hex;
+  return encodeFunctionData({ abi: EXEC, functionName: "execTransaction", args: [o.to ?? SAFE_ADDR, o.value ?? 0n, o.data ?? "0x", o.operation ?? 0, 0n, 0n, o.gasPrice ?? 0n, ZERO, ZERO, packed] });
+}
+
+/** A Safe at nonce 1 whose only execution is on chain. Override any part to build a hostile one. */
+async function landed(w: ReturnType<typeof world>, o: { input?: Hex; safeTxHash?: Hex; success?: boolean; value?: bigint; to?: string | null; status?: "success" | "reverted"; nonce?: number; extra?: number } = {}): Promise<void> {
+  w.safeNonce = o.nonce ?? 1;
+  const ev = { txHash: LANDED_TX, safeTxHash: o.safeTxHash ?? localSafeTxHash(CHAIN, SAFE_ADDR, SAFE_ADDR, "0x", 0), success: o.success ?? true, block: 9, logIndex: 0 };
+  w.landed.executions = [ev, ...Array.from({ length: o.extra ?? 0 }, (_, i) => ({ ...ev, txHash: `0x${"cd".repeat(31)}0${i}` as Hex, block: 10 + i }))];
+  w.landed.txs[LANDED_TX] = { from: PROVE_OWNERS[0]!, to: o.to === undefined ? SAFE_ADDR : o.to, input: o.input ?? (await execCalldata()), value: o.value ?? 0n, status: o.status ?? "success", block: 9 };
+}
+const sends = (w: ReturnType<typeof world>) => w.safeCalls.filter((c) => c === "proposeTx" || c === "signTx" || c === "checkSignaturesOnChain" || c.startsWith("executeTx"));
+const resumeProof = (w: ReturnType<typeof world>) => w.run(["--stage", PROOF_STAGE, "--resume"]);
+
+describe("prove-control adopts a proof that landed before the run died", () => {
+  test("a Safe at nonce 1 with the valid nonce-0 self-call signed by every owner: recorded done and adopted with the on-chain hash, and nothing is proposed, signed or sent", async () => {
+    const w = world({ writeSafeManifest: true });
+    await landed(w);
+    expect(await resumeProof(w)).toBe(0);
+    expect(sends(w)).toEqual([]);
+    expect(forgeBroadcasts(w)).toEqual([]);
+    expect(w.safeNonce).toBe(1);
+    expect(w.landed.reads[0]).toBe("executions:7"); // from the safe stage block
+    const rec = manifest(w).stages[PROOF_STAGE];
+    expect(rec).toMatchObject({ status: "done", adopted: true, safe: SAFE_ADDR, txHash: LANDED_TX, nonce: 0, block: 9 });
+    expect(rec.signers).toEqual(PROVE_OWNERS.map((a) => a.toLowerCase()).sort());
+    expect(rec.safeTxHash).toBe(localSafeTxHash(CHAIN, SAFE_ADDR, SAFE_ADDR, "0x", 0));
+  });
+
+  test("a crash between the execution and the manifest write, then --resume: the proof is adopted, the stage 11 gate accepts it, the timelock stage runs, and the proof is sent once", async () => {
+    const w = world({ startNonce: 0 });
+    const api = fakeProveApi(w);
+    const crashing = { ...api, executeTx: async (...a: Parameters<typeof api.executeTx>) => {
+      await api.executeTx(...a); // the transaction lands (nonce 1) ...
+      await landed(w);
+      throw new Error("the process died before the run manifest was written"); // ... and the run dies
+    } };
+    expect(await w.run(["--stage", "deploy"], { prove: { api: crashing, ownerSigners: PROVE_SIGNERS } })).not.toBe(0);
+    expect(manifest(w).stages[PROOF_STAGE]).toBeUndefined();
+    expect(w.safeNonce).toBe(1);
+    expect(forgeBroadcasts(w).some((c: any) => String(c.args[1]).includes("DeployTimelock"))).toBe(false);
+    const before = sends(w).length;
+    expect(await w.run(["--stage", "deploy", "--resume"])).toBe(0);
+    expect(sends(w)).toHaveLength(before); // nothing was proposed, signed or sent again
+    expect(executed(w)).toHaveLength(1);
+    expect(manifest(w).stages[PROOF_STAGE]).toMatchObject({ status: "done", adopted: true, txHash: LANDED_TX });
+    expect(w.logs().some((l) => l.event === "stage.control_proof_ok")).toBe(true);
+    expect(forgeBroadcasts(w).some((c: any) => String(c.args[1]).includes("DeployTimelock"))).toBe(true);
+  });
+
+  test("a rerun without --resume does not adopt: refused, and the message names --resume", async () => {
+    const w = world({ writeSafeManifest: true });
+    await landed(w);
+    expect(await w.run(["--stage", PROOF_STAGE])).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(lastError(w).message).toContain("--resume");
+    expect(w.landed.reads).toEqual([]);
+    expect(existsSync(manifestPath(w)) ? manifest(w).stages[PROOF_STAGE] : undefined).toBeUndefined();
+  });
+
+  const refused = async (w: ReturnType<typeof world>, reason: RegExp) => {
+    expect(await resumeProof(w)).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(lastError(w).message).toMatch(reason);
+    expect(sends(w)).toEqual([]);
+    expect(forgeBroadcasts(w)).toEqual([]);
+    expect(existsSync(manifestPath(w)) ? manifest(w).stages[PROOF_STAGE] : undefined).toBeUndefined();
+  };
+  const hostile: [string, (w: ReturnType<typeof world>) => Promise<void>, RegExp][] = [
+    ["a stranger signed in place of an owner (wrong signer set)", async (w) => landed(w, { input: await execCalldata({ signers: [PROVE_SIGNERS[0]!, PROVE_SIGNERS[1]!, STRANGER] }) }), /no valid signature over the proof hash from/],
+    ["an owner signature is missing", async (w) => landed(w, { input: await execCalldata({ signers: PROVE_SIGNERS.slice(0, 2) }) }), /no valid signature over the proof hash from/],
+    ["a repeated signer fills the missing owner's slot", async (w) => landed(w, { input: await execCalldata({ signers: [PROVE_SIGNERS[0]!, PROVE_SIGNERS[1]!, PROVE_SIGNERS[1]!] }) }), /no valid signature|repeated/],
+    ["a repeated signer on top of every owner", async (w) => landed(w, { input: await execCalldata({ signers: [...PROVE_SIGNERS, PROVE_SIGNERS[0]!] }) }), /repeated/],
+    ["a stranger signed on top of every owner", async (w) => landed(w, { input: await execCalldata({ signers: [...PROVE_SIGNERS, STRANGER] }) }), /non-owners/],
+    ["the signatures are over another Safe's hash (replay of another Safe's transaction)", async (w) => landed(w, { input: await execCalldata({ hash: localSafeTxHash(CHAIN, "0x00000000000000000000000000000000000000aa", "0x00000000000000000000000000000000000000aa", "0x", 0) }) }), /no valid signature over the proof hash from/],
+    ["the signatures are over another chain's hash", async (w) => landed(w, { input: await execCalldata({ hash: localSafeTxHash(8453, SAFE_ADDR, SAFE_ADDR, "0x", 0) }) }), /no valid signature over the proof hash from/],
+    ["the signatures are over nonce 1", async (w) => landed(w, { input: await execCalldata({ hash: localSafeTxHash(CHAIN, SAFE_ADDR, SAFE_ADDR, "0x", 1) }) }), /no valid signature over the proof hash from/],
+    ["the transaction goes to another target", async (w) => landed(w, { to: "0x00000000000000000000000000000000000000aa" }), /not the Safe/],
+    ["the Safe called another address (not a self-call)", async (w) => landed(w, { safeTxHash: localSafeTxHash(CHAIN, SAFE_ADDR, "0x00000000000000000000000000000000000000aa", "0x", 0), input: await execCalldata({ to: "0x00000000000000000000000000000000000000aa" }) }), /not the self-call/],
+    ["the Safe call carries value", async (w) => landed(w, { input: await execCalldata({ value: 1n }) }), /not a plain call/],
+    ["the outer transaction carries value", async (w) => landed(w, { value: 1n }), /carries value/],
+    ["the Safe call carries data", async (w) => landed(w, { safeTxHash: localSafeTxHash(CHAIN, SAFE_ADDR, SAFE_ADDR, "0xdeadbeef", 0), input: await execCalldata({ data: "0xdeadbeef" }) }), /not the self-call/],
+    ["the Safe call carries data and its event hash is forged to the self-call hash", async (w) => landed(w, { input: await execCalldata({ data: "0xdeadbeef" }) }), /not a plain call/],
+    ["a delegatecall (or module) operation with the self-call hash forged", async (w) => landed(w, { input: await execCalldata({ operation: 1 }) }), /not a plain call/],
+    ["the Safe call pays a gas price", async (w) => landed(w, { input: await execCalldata({ gasPrice: 1n }) }), /not a plain call/],
+    ["the Safe emitted ExecutionFailure", async (w) => landed(w, { success: false }), /ExecutionFailure/],
+    ["the transaction reverted", async (w) => landed(w, { status: "reverted" }), /did not succeed/],
+    ["the transaction cannot be read", async (w) => { await landed(w); w.landed.txs = {}; }, /cannot be read/],
+    ["the Safe nonce is 1 but no execution event exists", async (w) => { w.safeNonce = 1; }, /no execution event/],
+    ["the Safe nonce is 2 with no record", async (w) => landed(w, { nonce: 2, extra: 1 }), /nonce is 2/],
+    ["the Safe nonce is 1 but two execution events exist (two candidates)", async (w) => landed(w, { extra: 1 }), /expected exactly one/],
+    ["the Safe nonce is 3", async (w) => landed(w, { nonce: 3 }), /nonce is 3/],
+  ];
+  for (const [name, setup, reason] of hostile) {
+    test(`refused with CONTROL_NOT_PROVEN and nothing sent: ${name}`, async () => {
+      const w = world({ writeSafeManifest: true });
+      await setup(w);
+      await refused(w, reason);
+    });
+  }
+
+  test("--resume with nothing on chain does not skip the proof: stage 11 still refuses", async () => {
+    const w = world({ writeSafeManifest: true, startNonce: 0 });
+    w.safeNonce = 1;
+    expect(await w.run(["--stage", "timelock", "--resume"])).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(lastError(w).message).toContain("no finished Safe control proof");
+    expect(forgeBroadcasts(w)).toEqual([]);
+  });
+
+  test("--resume at nonce 0 (nothing landed) takes the proof normally, once", async () => {
+    const w = world({ writeSafeManifest: true });
+    expect(await resumeProof(w)).toBe(0);
+    expect(executed(w)).toHaveLength(1);
+    expect(manifest(w).stages[PROOF_STAGE].adopted).toBeUndefined();
+  });
+
+  test("an adopted proof with the safe stage block unknown is refused (no guess of block 0)", async () => {
+    const w = world({ writeSafeManifest: true });
+    writeFileSync(join(w.coreDir, "deployments", String(CHAIN), "safe.json"), JSON.stringify({ safe: SAFE_ADDR }));
+    await landed(w);
+    await refused(w, /no safe stage block/);
+  });
+});
+
+describe("the real chain reader walks the log range in windows and reads only", () => {
+  test("realProveChain.executions: windows of LOG_WINDOW, ExecutionSuccess and ExecutionFailure of the Safe address only, oldest first", async () => {
+    const { LOG_WINDOW, realProveChain } = await import("../src/prove-control.ts");
+    const calls: any[] = [];
+    const handle: any = { address: SAFE_ADDR, client: {
+      getBlockNumber: async () => 5000n,
+      getLogs: async (a: any) => { calls.push(a); return a.fromBlock === 2000n ? [{ transactionHash: LANDED_TX, blockNumber: 2100n, logIndex: 3, eventName: "ExecutionSuccess", args: { txHash: `0x${"11".repeat(32)}` } }] : []; },
+    } };
+    const out = await realProveChain.executions(handle, 0);
+    expect(calls.map((c) => [c.fromBlock, c.toBlock])).toEqual([[0n, 1999n], [2000n, 3999n], [4000n, 5000n]]);
+    expect(LOG_WINDOW).toBe(2000n);
+    expect(calls.every((c) => c.address === SAFE_ADDR && c.events.length === 2)).toBe(true);
+    expect(out).toEqual([{ txHash: LANDED_TX, safeTxHash: `0x${"11".repeat(32)}`, success: true, block: 2100, logIndex: 3 }]);
+  });
+  test("a log read that fails is refused, not treated as an empty range", async () => {
+    const { realProveChain } = await import("../src/prove-control.ts");
+    const handle: any = { address: SAFE_ADDR, client: { getBlockNumber: async () => 10n, getLogs: async () => { throw new Error("range too large"); } } };
+    await expect(realProveChain.executions(handle, 0)).rejects.toThrow(/range too large/);
   });
 });
