@@ -19,7 +19,7 @@ import { rehearsalArgs, TWIN_CHAIN_ID } from "./args.ts";
 import { assertPassword, defaultKeyNames, makeRehearsalKeys, sheetFragment } from "./keys.ts";
 import { checkEnvCredentialRule, fund, stageFunderKeystore, type Recipient } from "./fund.ts";
 import { runRehearsal } from "./run.ts";
-import { fundGas, fundRmPool, fundUsdc, httpRpc, isTwinFork, readRmPoolFacts, warpBy } from "./twin.ts";
+import { TWIN_GAS_WEI, fundGas, fundRmPool, fundUsdc, httpRpc, isTwinFork, readRmPoolFacts, warpBy } from "./twin.ts";
 import { USDC_ADDRESS } from "../usdc.ts";
 
 export function flags(argv: string[]): Record<string, string> {
@@ -87,7 +87,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     case "fund-gas": {
       const rpc = httpRpc(need(f, "rpc"));
       const wallets = sheetWallets(readFileSync(need(f, "sheet"), "utf8"));
-      await fundGas(rpc, wallets.map((w) => w.address), BigInt(f.wei ?? "20000000000000000"));
+      await fundGas(rpc, wallets.map((w) => w.address), BigInt(f.wei ?? TWIN_GAS_WEI));
       log(`gas set for ${wallets.length} wallets (${wallets.map((w) => w.name).join(", ")})`);
       return 0;
     }

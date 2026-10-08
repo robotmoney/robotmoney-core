@@ -17,6 +17,12 @@ export { BASE_CHAIN_ID };
 /** FiatTokenV2_2: `mapping(address => uint256) balanceAndBlacklistStates` is storage slot 9. Bit 255 is the blacklist flag, the rest is the balance. */
 export const USDC_BALANCE_SLOT = 9n;
 const BLACKLIST_BIT = 1n << 255n;
+/**
+ * Default gas balance `fund-gas` gives each sheet wallet on the Twin chain: 0.5 ETH. The runner pre-flight needs 3x the simulated stage
+ * cost plus the L1 allowance. The vault stage needed 0.0447 ETH at the time of core 1554 (the old 0.02 ETH default failed it once), and every
+ * stage spends from the one deployer. Do not lower it without re-measuring. Never weaken the pre-flight instead.
+ */
+export const TWIN_GAS_WEI = 5n * 10n ** 17n;
 const MAX_FUND_WEI = 10n ** 21n;   // 1000 ETH: a misread amount is refused
 
 export class TwinError extends Error {}
