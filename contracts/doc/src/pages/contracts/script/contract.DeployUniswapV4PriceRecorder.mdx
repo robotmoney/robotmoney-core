@@ -5,7 +5,7 @@ description: "Stage `recorder`: deploys the permissionless `UniswapV4PriceRecord
 
 # DeployUniswapV4PriceRecorder
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/script/DeployUniswapV4PriceRecorder.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/98c41d54be1ca347d90e42d704c530a175302344/contracts/script/DeployUniswapV4PriceRecorder.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -173,6 +173,21 @@ function _writeManifest(Deployed memory d) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
+
+<a id="_writemanifestto-deployed-string"></a>
+
+### _writeManifestTo
+
+```solidity
+function _writeManifestTo(Deployed memory d, string memory outPath) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| outPath | `string` |  |
 
 ## Structs
 

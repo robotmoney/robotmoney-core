@@ -129,7 +129,10 @@ contract DeployUniswapV4PriceRecorder is ExpectedChainGuard {
     }
 
     function _writeManifest(Deployed memory d) internal {
-        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
+        _writeManifestTo(d, _envStringRequired("DEPLOYMENT_OUT"));
+    }
+
+    function _writeManifestTo(Deployed memory d, string memory outPath) internal {
         string memory obj = "recorder_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "recorder", d.recorder);

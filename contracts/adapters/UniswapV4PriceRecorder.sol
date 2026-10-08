@@ -166,6 +166,7 @@ contract UniswapV4PriceRecorder {
                 && s.index == s.cardinality - 1)
             ? s.cardinalityNext
             : s.cardinality;
+        // slither-disable-next-line weak-prng
         uint16 indexUpdated = (s.index + 1) % cardinalityUpdated;
         observations[indexUpdated] = Observation(ts, cumulative, true);
         _state = State({
@@ -265,6 +266,7 @@ contract UniswapV4PriceRecorder {
     ///         The deploy runner reads it to wait for a full window before the vault stage (core 1676).
     function oldestObservation() external view returns (uint32) {
         State memory s = _state;
+        // slither-disable-next-line weak-prng
         Observation memory oldest = observations[(uint256(s.index) + 1) % s.cardinality];
         if (!oldest.initialized) oldest = observations[0];
         return oldest.blockTimestamp;
@@ -343,6 +345,7 @@ contract UniswapV4PriceRecorder {
             return (beforeOrAt, _transform(beforeOrAt, target, s.lastTick));
         }
         // Oldest snapshot: the slot after the newest, or slot 0 when the ring has not wrapped yet.
+        // slither-disable-next-line weak-prng
         beforeOrAt = observations[(s.index + 1) % s.cardinality];
         if (!beforeOrAt.initialized) beforeOrAt = observations[0];
         if (beforeOrAt.blockTimestamp > target) revert ObservationTooOld();
@@ -354,16 +357,19 @@ contract UniswapV4PriceRecorder {
         view
         returns (Observation memory beforeOrAt, Observation memory atOrAfter)
     {
+        // slither-disable-next-line weak-prng
         uint256 l = (uint256(s.index) + 1) % s.cardinality;
         uint256 r = l + s.cardinality - 1;
         uint256 i;
         while (true) {
             i = (l + r) / 2;
+            // slither-disable-next-line weak-prng
             beforeOrAt = observations[i % s.cardinality];
             if (!beforeOrAt.initialized) {
                 l = i + 1;
                 continue;
             }
+            // slither-disable-next-line weak-prng
             atOrAfter = observations[(i + 1) % s.cardinality];
             bool targetAtOrAfter = beforeOrAt.blockTimestamp <= target;
             if (targetAtOrAfter && target <= atOrAfter.blockTimestamp) break;

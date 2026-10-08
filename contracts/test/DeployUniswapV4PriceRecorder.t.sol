@@ -12,8 +12,8 @@ import {IPoolManagerV4} from "../interfaces/IPoolManagerV4.sol";
 import {MockV4PoolManager} from "./helpers/MockV4PoolManager.sol";
 
 contract RecorderDeployHarness is DeployUniswapV4PriceRecorder {
-    function writeManifest(Deployed memory d) external {
-        _writeManifest(d);
+    function writeManifest(Deployed memory d, string memory path) external {
+        _writeManifestTo(d, path);
     }
 }
 
@@ -124,8 +124,7 @@ contract DeployUniswapV4PriceRecorderTest is Test {
         DeployUniswapV4PriceRecorder.Deployed memory d = script.runInProcess(_shipped());
         string memory path =
             string.concat(vm.projectRoot(), "/deployments/test-recorder-manifest.json");
-        vm.setEnv("DEPLOYMENT_OUT", path);
-        script.writeManifest(d);
+        script.writeManifest(d, path);
         string memory out = vm.readFile(path);
         vm.removeFile(path);
         assertEq(out.readAddress(".recorder"), d.recorder);
