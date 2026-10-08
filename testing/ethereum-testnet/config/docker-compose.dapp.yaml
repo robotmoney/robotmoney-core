@@ -225,9 +225,9 @@ services:
       # Issue #1370: this is NOT a bare liveness ping and must not be
       # simplified into one. `/health` SELECTs from `indexer_runs`
       # (clients/explorer-api/src/routes.rs), so it cannot report healthy while
-      # the explorer schema is missing. That makes it the schema guarantee on
-      # every path where the `explorer-migrate` barrier above does not apply —
-      # notably `docker compose restart explorer-api`, which re-evaluates no
+      # the explorer schema is missing. That makes it the schema-presence guard
+      # (not a schema-version guard) on every path where the `explorer-migrate`
+      # barrier above does not apply — notably `docker compose restart explorer-api`, which re-evaluates no
       # `depends_on` condition. Removing or weakening this probe removes that
       # guarantee, and also un-gates `dapp`, which starts on
       # `explorer-api: service_healthy`.

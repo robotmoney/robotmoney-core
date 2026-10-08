@@ -279,22 +279,25 @@ cd testing/ethereum-testnet/config
 docker compose -f docker-compose.dapp.yaml restart explorer-api
 
 # Rebuild one service's image from source and recreate only that container.
-docker compose -f docker-compose.dapp.yaml up -d --build explorer-api
+docker compose -f docker-compose.dapp.yaml up -d --no-deps --build explorer-api
 
 # Follow one service's logs.
 docker compose -f docker-compose.dapp.yaml logs -f explorer-indexer
 ```
 
-Swap `explorer-indexer` for `explorer-api` to iterate on the indexer instead.
+Swap `explorer-api` for `explorer-indexer` to iterate on the indexer instead.
 The `dapp`, `postgres`, and `receipt-fixtures` containers stay up throughout.
 
 Every `docker compose` invocation — `restart` included — re-evaluates the
 compose file's `${VAR:?...}` substitutions, so the same required env vars the
 initial bring-up needed must still be exported. If the stack was launched by
 `cargo run -p smoke-test -- --full-stack`, the harness also chose the host
-ports; re-export `EXPLORER_API_PORT` / `DAPP_PORT` / `POSTGRES_PORT` to match
-the URLs it printed, or compose republishes on the defaults in the table
-above.
+ports. Pass `--no-deps` to `up`, because without it compose recreates and
+rebinds any dependency (such as `dapp-postgres`) whose interpolated published
+port differs from the running one, and the harness never prints the Postgres
+port. Re-export `EXPLORER_API_PORT` (or `DAPP_PORT`) to match the URL it
+printed for the service you recreate, or compose republishes it on the default
+in the table above.
 
 **`restart` does not re-evaluate `depends_on`.** `docker compose restart`
 restarts an existing container in place; it does not recreate it and does not
