@@ -425,6 +425,18 @@ jobs:
           bash ../../.github/scripts/cargo_test_require_executed.sh
           -p smoke-test --release --test twin_publish -- --test-threads=1 --nocapture
 
+      # Core 1619 (plan decision 22): a failed verify pauses deposits on all four vaults. The test forces a real stage 12 failure on a
+      # fresh deployment on the same Twin chain, then asserts depositsPaused on rmUSDC, rmPROTO, rmAGENT and rmRWA, the rollout report,
+      # and a redeem on every paused vault that holds shares. Real vaults, the real EMERGENCY keystore, no mock.
+      - name: Twin chain forced verify failure pauses all four vaults
+        working-directory: testing/smoke-test
+        env:
+          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-twin_pause_all.log
+          CARGO_TEST_MIN_EXECUTED: "1"
+        run: >-
+          bash ../../.github/scripts/cargo_test_require_executed.sh
+          -p smoke-test --release --test twin_pause_all -- --test-threads=1 --nocapture
+
       # Core 1488: the REAL stage outputs go through label-diff and sheet-diff. The Twin chain test
       # (twin_publish.rs) writes the verifier label file (SMOKE_TEST_VERIFY_OUT) and the run sheet
       # (SMOKE_TEST_SHEET_OUT). The other side is the input production_fixtures_dir when a caller gives
