@@ -2931,6 +2931,12 @@ impl DappStack {
             // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter
             // (issue #615); router deposits trigger fresh TVL snapshots for all registered vaults.
             ("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex().to_string()),
+            // Issue 1647: index ProposalCreated/VoteCast/ProposalExecuted from RouterGovernance, so the
+            // dapp governance e2e reads proposals the real Safe and timelock created from the real API.
+            (
+                "INDEXER_ROUTER_GOVERNANCE",
+                fixture.governance_hex().to_string(),
+            ),
             // Issue #1294: index ReceiptRecorded/ReceiptReleased events from
             // ConsensusRebalanceReceipt and verify each payload_uri's digest.
             (
@@ -3046,6 +3052,11 @@ impl DappStack {
                 "INDEXER_PORTFOLIO_ROUTER".into(),
                 fixture.router_hex().to_string(),
             ),
+            // Issue 1647: index RouterGovernance proposals and votes (see dapp_log_env above).
+            (
+                "INDEXER_ROUTER_GOVERNANCE".into(),
+                fixture.governance_hex().to_string(),
+            ),
             // Issue #1294: index ReceiptRecorded/ReceiptReleased events from
             // ConsensusRebalanceReceipt and verify each payload_uri's digest.
             (
@@ -3111,6 +3122,8 @@ impl DappStack {
             .env("INDEXER_REGISTRY", fixture.registry_hex())
             // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter (issue #615).
             .env("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex())
+            // Issue 1647: index RouterGovernance proposals and votes.
+            .env("INDEXER_ROUTER_GOVERNANCE", fixture.governance_hex())
             // Issue #1294: index ReceiptRecorded/ReceiptReleased events from
             // ConsensusRebalanceReceipt and verify each payload_uri's digest.
             .env("INDEXER_CONSENSUS_RECEIPT", fixture.consensus_receipt_hex())

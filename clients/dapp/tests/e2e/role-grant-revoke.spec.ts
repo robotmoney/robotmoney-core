@@ -25,10 +25,15 @@
  */
 import { test, expect } from "./helpers/fixtures";
 import type { Page } from "@playwright/test";
-import { encodeFunctionData, keccak256, toBytes } from "viem";
+import { decodeFunctionData, encodeFunctionData, keccak256, parseAbi, toBytes } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { openDapp, openTab, type AdminTabId } from "./helpers/wallet";
+import { openDapp, openTab, type AdminTabId, type RpcRequest } from "./helpers/wallet";
 import { DEFAULT_ADMIN_ROLE, gatewayHasRole } from "./helpers/depositor";
+import { loadOwnerKeys } from "./helpers/safeGovernance";
+
+const scheduleAbi = parseAbi([
+  "function schedule(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt, uint256 delay)",
+]);
 
 let endpoints: DevnetEndpoints;
 let ADMIN_ACCOUNT: `0x${string}`;
@@ -216,6 +221,64 @@ for (const c of cases) {
       await expect(previewWrap.getByTestId("refusal-reason")).toHaveCount(0);
       await expectRefusedForNonOwnerWallet(page, c.revokeBtnId);
     });
+
+    // Issue 1647: the proposal is a Safe -> Timelock proposal signed by a Safe OWNER, never a wallet
+    // transaction from an EOA. The spec asserts that the timelock is the Safe transaction's target,
+    // that the timelock call schedules the gateway's grantRole/revokeRole, that the Safe signs typed
+    // data (one request, eth_signTypedData_v4) and that no eth_sendTransaction ever reaches the wallet.
+    for (const fn of ["grant", "revoke"] as const) {
+      test(`${fn} ${c.label}_ROLE by a Safe owner is a Safe -> Timelock proposal, not an EOA transaction`, async ({
+        page,
+      }) => {
+        const owner = loadOwnerKeys(endpoints)[0];
+        if (!owner) throw new Error("the harness minted no Safe owner keystore");
+        const signRequests: RpcRequest[] = [];
+        await openDapp(page, endpoints, { privateKey: owner.privateKey, signRequests });
+        await openTab(page, c.tabId);
+        await page.getByTestId(c.inputId).fill(c.account());
+        const btnId = fn === "grant" ? c.grantBtnId : c.revokeBtnId;
+        const prefix = btnId.replace(/-submit$/, "");
+
+        // The panel names the REAL Safe and timelock of the devnet topology.
+        await expect(page.getByTestId(`${prefix}-safe-address`)).toHaveText(
+          new RegExp(`^${endpoints.safe_addr}$`, "i"),
+          { timeout: 90_000 },
+        );
+        await expect(page.getByTestId(`${prefix}-timelock-address`)).toHaveText(
+          new RegExp(`^${endpoints.timelock_addr}$`, "i"),
+        );
+        await expect(page.getByTestId(btnId)).toHaveText("Create Safe proposal");
+
+        // The Safe transaction calls the timelock, and the timelock schedules the role call on the gateway.
+        const typed = JSON.parse(
+          (await page.getByTestId(`${prefix}-typed-data`).textContent()) ?? "{}",
+        ) as { message: { to: string; data: `0x${string}` } };
+        expect(typed.message.to.toLowerCase()).toBe(endpoints.timelock_addr.toLowerCase());
+        const scheduled = decodeFunctionData({ abi: scheduleAbi, data: typed.message.data });
+        const [target, , inner] = scheduled.args;
+        expect(target.toLowerCase()).toBe(endpoints.gateway_addr.toLowerCase());
+        expect(inner).toBe(
+          encodeFunctionData({
+            abi: ABI,
+            functionName: fn === "grant" ? "grantRole" : "revokeRole",
+            args: [c.role, c.account()],
+          }),
+        );
+        // Rendering the proposal asks the wallet for nothing.
+        expect(signRequests).toHaveLength(0);
+
+        if (fn === "grant") {
+          const button = page.getByTestId(btnId);
+          await expect(button).toBeEnabled({ timeout: 90_000 });
+          await button.click();
+          await expect(page.getByTestId(`${prefix}-signature-count`)).toContainText("1 of 2", {
+            timeout: 60_000,
+          });
+          // One typed-data signature for the Safe; never a transaction from the wallet.
+          expect(signRequests.map((r) => r.method)).toEqual(["eth_signTypedData_v4"]);
+        }
+      });
+    }
 
     test(`${c.label}_ROLE offers no proposal button until an address is entered`, async ({
       page,

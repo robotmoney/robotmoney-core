@@ -19,4 +19,13 @@ if bash "$guard" "$tmp" >/dev/null 2>&1; then echo "FAIL: fake Safe accepted"; e
 printf 'fn t() {}\n' > "$f"
 printf 'cast --from "$FUSION_RELEASE_ADDRESS"\n' > "$tmp/scripts/fusion/devnet-acceptance.sh"
 if bash "$guard" "$tmp" >/dev/null 2>&1; then echo "FAIL: EOA release probe accepted"; exit 1; fi
+mkdir -p "$tmp/clients/dapp/tests/e2e"
+g="$tmp/clients/dapp/tests/e2e/governance.spec.ts"
+rm -f "$tmp/scripts/fusion/devnet-acceptance.sh"
+printf 'test("x", async ({ page }) => { await page.goto("/"); });\n' > "$g"
+bash "$guard" "$tmp" >/dev/null || { echo "FAIL: clean governance spec rejected"; exit 1; }
+printf 'await page.route("**/v1/governance/proposals", async (route) => { await route.fulfill({}); });\n' > "$g"
+if bash "$guard" "$tmp" >/dev/null 2>&1; then echo "FAIL: stubbed API accepted"; exit 1; fi
+printf 'test.skip(true, "panel not mounted");\n' > "$g"
+if bash "$guard" "$tmp" >/dev/null 2>&1; then echo "FAIL: skip accepted"; exit 1; fi
 echo "ok: check_governance_tests_unmocked self-test"

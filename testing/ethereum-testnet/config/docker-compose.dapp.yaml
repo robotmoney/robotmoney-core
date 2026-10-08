@@ -169,6 +169,10 @@ services:
       # this the explorer /v1/router/weights endpoint returns an empty weight list
       # even when the deploy script called setWeights() before the dapp stack booted.
       INDEXER_PORTFOLIO_ROUTER: ${INDEXER_PORTFOLIO_ROUTER:-}
+      # Issue 1647: INDEXER_ROUTER_GOVERNANCE enables ProposalCreated / VoteCast /
+      # ProposalExecuted ingestion from RouterGovernance. Without it /v1/governance/proposals
+      # stays empty however many proposals the Safe and timelock created on chain.
+      INDEXER_ROUTER_GOVERNANCE: ${INDEXER_ROUTER_GOVERNANCE:-}
       # Bit 2 (INDEXER_MULTI_VAULT_EVENTS) enables VaultRegistered /
       # VaultStatusChanged event ingestion from the VaultRegistry.  Without
       # this flag the /v1/vaults explorer endpoint returns an empty list even
