@@ -81,6 +81,35 @@ describe("no test-only code gate", () => {
     expect(r.out).toContain("contracts/test/PlantedThreshold.t.sol");
   });
 
+  test("a planted vm.prank(safe) in a governed-path forge test fails", () => {
+    const r = planted(
+      "contracts/test/PlantedPrankSafe.t.sol",
+      "contract T { function t() external { vm.prank(safe); timelock.execute(a, 0, d, 0, 0); } }\n",
+    );
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain("contracts/test/PlantedPrankSafe.t.sol:1");
+    expect(r.out).toContain("pranked Safe");
+  });
+
+  test("vm.startPrank(safe) and vm.prank(safeAddr) fail too", () => {
+    for (const body of ["vm.startPrank(safe);", "vm.prank(safeAddr);"]) {
+      const r = planted("contracts/test/PlantedPrank2.t.sol", `contract T { function t() external { ${body} } }\n`);
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain("pranked Safe");
+    }
+  });
+
+  test("the migrated governed-path tests hold no pranked Safe", () => {
+    for (const f of ["AgentTokenVault", "BasketVault", "ConsensusRecommendationReceipt", "GovernedVaultSafeTimelock"]) {
+      const r = planted(`contracts/test/${f}.t.sol`, "// vm.prank(safe) planted\ncontract T { function t() external { vm.prank(safe); } }\n");
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain(`contracts/test/${f}.t.sol:2`);
+    }
+    const clean = run();
+    expect(clean.code).toBe(0);
+    expect(clean.out + "").not.toContain("AgentTokenVault.t.sol");
+  });
+
   test("a planted chain-id branch fails", () => {
     const r = planted("contracts/script/DeployBranch.s.sol", "contract B { function f() external { if (block.chainid == 31337) {} } }\n");
     expect(r.code).not.toBe(0);

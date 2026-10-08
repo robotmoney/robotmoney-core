@@ -1,0 +1,224 @@
+---
+title: "GovernedVaultSafeTimelockTest"
+description: "The vault admin setters (retire, setFeeRecipient, addAsset, removeAsset, setExitFeeBps) on every governed vault family, driven the way production drives them: two Safe owners sign, the real SafeL2 proxy runs `execTransaction`, the timelock waits its delay, and the timelock calls the vault. Nothing pranks the Safe."
+---
+
+# GovernedVaultSafeTimelockTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/GovernedVaultSafeTimelock.t.sol)
+
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
+
+**Title:** GovernedVaultSafeTimelockTest
+
+The vault admin setters (retire, setFeeRecipient, addAsset, removeAsset,
+setExitFeeBps) on every governed vault family, driven the way production drives them:
+two Safe owners sign, the real SafeL2 proxy runs `execTransaction`, the timelock waits
+its delay, and the timelock calls the vault. Nothing pranks the Safe.
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+### DELAY
+
+```solidity
+uint256 internal constant DELAY = 2 days;
+```
+
+### POOL_FEE
+
+```solidity
+uint24 internal constant POOL_FEE = 3000;
+```
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### swapRouter
+
+```solidity
+ShortlistStubSwapRouter internal swapRouter;
+```
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### proto
+
+```solidity
+ProtocolAssetVault internal proto;
+```
+
+### rwa
+
+```solidity
+RwaBasketVault internal rwa;
+```
+
+### core
+
+```solidity
+RobotMoneyVault internal core;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### protoToken
+
+```solidity
+TestERC20 internal protoToken;
+```
+
+### protoPool
+
+```solidity
+ShortlistMockPool internal protoPool;
+```
+
+### feeRecipient
+
+```solidity
+address internal feeRecipient = makeAddr("feeRecipient");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_timelockistheonlyadminoneverygovernedvault"></a>
+
+### test_timelockIsTheOnlyAdminOnEveryGovernedVault
+
+```solidity
+function test_timelockIsTheOnlyAdminOnEveryGovernedVault() public;
+```
+
+<a id="test_protocolassetvault_setfeerecipient_viasafethentimelock"></a>
+
+### test_protocolAssetVault_setFeeRecipient_viaSafeThenTimelock
+
+```solidity
+function test_protocolAssetVault_setFeeRecipient_viaSafeThenTimelock() public;
+```
+
+<a id="test_protocolassetvault_setexitfeebps_viasafethentimelock"></a>
+
+### test_protocolAssetVault_setExitFeeBps_viaSafeThenTimelock
+
+```solidity
+function test_protocolAssetVault_setExitFeeBps_viaSafeThenTimelock() public;
+```
+
+<a id="test_protocolassetvault_addasset_viasafethentimelock"></a>
+
+### test_protocolAssetVault_addAsset_viaSafeThenTimelock
+
+```solidity
+function test_protocolAssetVault_addAsset_viaSafeThenTimelock() public;
+```
+
+<a id="test_protocolassetvault_removeasset_viasafethentimelock"></a>
+
+### test_protocolAssetVault_removeAsset_viaSafeThenTimelock
+
+```solidity
+function test_protocolAssetVault_removeAsset_viaSafeThenTimelock() public;
+```
+
+<a id="test_registryretire_viasafethentimelock_haltsthevault"></a>
+
+### test_registryRetire_viaSafeThenTimelock_haltsTheVault
+
+```solidity
+function test_registryRetire_viaSafeThenTimelock_haltsTheVault() public;
+```
+
+<a id="test_vaultretire_directcallisregistryonly"></a>
+
+### test_vaultRetire_directCallIsRegistryOnly
+
+```solidity
+function test_vaultRetire_directCallIsRegistryOnly() public;
+```
+
+<a id="test_rwabasketvault_setters_viasafethentimelock"></a>
+
+### test_rwaBasketVault_setters_viaSafeThenTimelock
+
+```solidity
+function test_rwaBasketVault_setters_viaSafeThenTimelock() public;
+```
+
+<a id="test_robotmoneyvault_setters_viasafethentimelock"></a>
+
+### test_robotMoneyVault_setters_viaSafeThenTimelock
+
+```solidity
+function test_robotMoneyVault_setters_viaSafeThenTimelock() public;
+```
+
+<a id="test_onesignature_cannotschedule_gs020"></a>
+
+### test_oneSignature_cannotSchedule_GS020
+
+```solidity
+function test_oneSignature_cannotSchedule_GS020() public;
+```
+
+<a id="test_directadmincalls_revert_foreveryrolelesscaller"></a>
+
+### test_directAdminCalls_revert_forEveryRoleLessCaller
+
+```solidity
+function test_directAdminCalls_revert_forEveryRoleLessCaller() public;
+```
+
+<a id="test_safecancel_stopsaqueuedsetter"></a>
+
+### test_safeCancel_stopsAQueuedSetter
+
+```solidity
+function test_safeCancel_stopsAQueuedSetter() public;
+```
+

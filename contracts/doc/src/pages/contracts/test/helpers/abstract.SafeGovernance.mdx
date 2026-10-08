@@ -1,0 +1,474 @@
+---
+title: "SafeGovernance"
+description: "Runs a governed call the way production does: two of the three Safe owners sign a `SafeTx`, the real SafeL2 proxy runs `execTransaction`, the Safe calls the `TimelockController`, and the timelock calls the governed contract. TEST HELPER ONLY."
+---
+
+# SafeGovernance
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/helpers/SafeGovernance.sol)
+
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
+
+**Title:** SafeGovernance
+
+Runs a governed call the way production does: two of the three Safe owners sign a
+`SafeTx`, the real SafeL2 proxy runs `execTransaction`, the Safe calls the
+`TimelockController`, and the timelock calls the governed contract. TEST HELPER ONLY.
+
+<i>
+
+Pranking the Safe address skips the quorum, so a test that uses it proves nothing about the Safe.
+Every helper here signs with the owner keys behind `SafeFixture._fixtureOwners()`
+(`makeAddr("safe-owner-N")` is `vm.addr(keccak256("safe-owner-N"))`).
+The timelock mirrors DeployTimelock: the Safe is the only proposer and so the only
+canceller (issue #1521, security-model.md line 89), EXECUTOR_ROLE is open, and the
+timelock administers itself.
+
+</i>
+
+## Constants
+
+### GS013
+
+<i>
+
+`Safe.execTransaction` reverts with this reason when the inner call fails and the
+transaction set neither `safeTxGas` nor `gasPrice`. It hides the inner error.
+
+</i>
+
+```solidity
+string internal constant GS013 = "GS013";
+```
+
+## Functions
+
+<a id="_statemask-timelockcontroller-operationstate"></a>
+
+### _stateMask
+
+<i>
+
+The timelock operation states, as a bitmap, the way TimelockController encodes the
+`expectedStates` argument of `TimelockUnexpectedOperationState`.
+
+</i>
+
+```solidity
+function _stateMask(TimelockController.OperationState s) internal pure returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `TimelockController.OperationState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_sortedownerkeys"></a>
+
+### _sortedOwnerKeys
+
+<i>
+
+The three owner keys, sorted ascending by owner address (Safe requires that order).
+
+</i>
+
+```solidity
+function _sortedOwnerKeys() internal pure returns (uint256[3] memory ks);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ks | `uint256[3]` |  |
+
+<a id="_addr-uint256"></a>
+
+### _addr
+
+```solidity
+function _addr(uint256 pk) private pure returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pk | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_sig-uint256-bytes32"></a>
+
+### _sig
+
+```solidity
+function _sig(uint256 pk, bytes32 digest) private pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pk | `uint256` |  |
+| digest | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_twoownersignatures-bytes32"></a>
+
+### _twoOwnerSignatures
+
+<i>
+
+Signatures of the two lowest-address owners: exactly the 2-of-3 quorum.
+
+</i>
+
+```solidity
+function _twoOwnerSignatures(bytes32 digest) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| digest | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_oneownersignature-bytes32"></a>
+
+### _oneOwnerSignature
+
+<i>
+
+One owner only: below the threshold.
+
+</i>
+
+```solidity
+function _oneOwnerSignature(bytes32 digest) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| digest | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_safedigest-address-address-bytes"></a>
+
+### _safeDigest
+
+```solidity
+function _safeDigest(address safe_, address to, bytes memory data)
+        internal
+        view
+        returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| to | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_safeexec-address-address-bytes"></a>
+
+### _safeExec
+
+<i>
+
+Two owners sign and the Safe runs `to.call(data)`. Reverts with GS013 when the
+inner call fails.
+
+</i>
+
+```solidity
+function _safeExec(address safe_, address to, bytes memory data) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| to | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_safeexecwith-address-address-bytes-bytes"></a>
+
+### _safeExecWith
+
+```solidity
+function _safeExecWith(address safe_, address to, bytes memory data, bytes memory signatures)
+        internal
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| to | `address` |  |
+| data | `bytes` |  |
+| signatures | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_newgovtimelock-address-uint256"></a>
+
+### _newGovTimelock
+
+<i>
+
+Builds the production timelock shape and proves who holds each role from the
+`RoleGranted` logs: the Safe is the only proposer and the only canceller, the
+executor role is open (address(0)), and the timelock alone administers itself.
+
+</i>
+
+```solidity
+function _newGovTimelock(address safe_, uint256 minDelay)
+        internal
+        returns (TimelockController tl);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| minDelay | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tl | `TimelockController` |  |
+
+<a id="_assertonly-address-address-string"></a>
+
+### _assertOnly
+
+```solidity
+function _assertOnly(address[] memory holders, address expected, string memory what)
+        private
+        pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| holders | `address[]` |  |
+| expected | `address` |  |
+| what | `string` |  |
+
+<a id="_govschedule-address-timelockcontroller-address-bytes-bytes32-uint256"></a>
+
+### _govSchedule
+
+<i>
+
+Safe -> timelock.schedule.
+
+</i>
+
+```solidity
+function _govSchedule(
+        address safe_,
+        TimelockController tl,
+        address target,
+        bytes memory data,
+        bytes32 salt,
+        uint256 delay
+    ) internal returns (bytes32 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| tl | `TimelockController` |  |
+| target | `address` |  |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+| delay | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+
+<a id="_govexecute-address-timelockcontroller-address-bytes-bytes32"></a>
+
+### _govExecute
+
+<i>
+
+Safe -> timelock.execute.
+
+</i>
+
+```solidity
+function _govExecute(
+        address safe_,
+        TimelockController tl,
+        address target,
+        bytes memory data,
+        bytes32 salt
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| tl | `TimelockController` |  |
+| target | `address` |  |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+
+<a id="_govcancel-address-timelockcontroller-bytes32"></a>
+
+### _govCancel
+
+<i>
+
+Safe -> timelock.cancel.
+
+</i>
+
+```solidity
+function _govCancel(address safe_, TimelockController tl, bytes32 id) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| tl | `TimelockController` |  |
+| id | `bytes32` |  |
+
+<a id="_govrun-address-timelockcontroller-address-bytes-bytes32-uint256"></a>
+
+### _govRun
+
+<i>
+
+Schedule through the Safe, mine the delay, execute through the Safe.
+
+</i>
+
+```solidity
+function _govRun(
+        address safe_,
+        TimelockController tl,
+        address target,
+        bytes memory data,
+        bytes32 salt,
+        uint256 delay
+    ) internal returns (bytes32 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| tl | `TimelockController` |  |
+| target | `address` |  |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+| delay | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+
+<a id="_expectexecuterefused-address-timelockcontroller-address-bytes-bytes32"></a>
+
+### _expectExecuteRefused
+
+<i>
+
+Executing an operation that is not Ready (still Waiting, or already Done after a
+replay) fails with the exact reasons on both paths. Through the Safe the
+reason is GS013. Called straight on the open-executor timelock the reason is
+`TimelockUnexpectedOperationState(id, Ready)`.
+
+</i>
+
+```solidity
+function _expectExecuteRefused(
+        address safe_,
+        TimelockController tl,
+        address target,
+        bytes memory data,
+        bytes32 salt
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| tl | `TimelockController` |  |
+| target | `address` |  |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+

@@ -27,7 +27,7 @@ import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
 import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
 import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {SafeFixture} from "./helpers/SafeFixture.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
@@ -3517,7 +3517,7 @@ contract BasketVaultVenueSelectorTest is Test {
 // for sweeps (not a settable address) — the quarantine-address setter is only on
 // RobotMoneyVault and PortfolioRouter. AC3 quarantine tests are in DeployTimelock.t.sol.
 
-contract BasketVaultTimelockTest is SafeFixture {
+contract BasketVaultTimelockTest is SafeGovernance {
     uint256 internal constant ONE_USDC = 1e6;
     uint256 internal constant MIN_DELAY = 2 days;
 
@@ -3542,12 +3542,8 @@ contract BasketVaultTimelockTest is SafeFixture {
         _installSafeSet();
         safe = _newDefaultSafe();
 
-        // Deploy a TimelockController with `safe` as proposer + executor.
-        address[] memory proposers = new address[](1);
-        proposers[0] = safe;
-        address[] memory executors = new address[](1);
-        executors[0] = safe;
-        timelock = new TimelockController(MIN_DELAY, proposers, executors, address(0));
+        // Production timelock shape: the Safe is the only proposer and canceller.
+        timelock = _newGovTimelock(safe, MIN_DELAY);
 
         // Transfer ADMIN_ROLE from admin EOA to TimelockController.
         vm.startPrank(admin);
@@ -3584,20 +3580,15 @@ contract BasketVaultTimelockTest is SafeFixture {
     function test_AC7_basket_setFeeRecipient_succeedsViaTimelock() public {
         address newRecipient = makeAddr("newFeeRecipient");
         bytes memory callData = abi.encodeCall(BasketVault.setFeeRecipient, (newRecipient));
-        bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("ac7-basket-fee-recipient");
 
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, timelock, address(vault), callData, salt, MIN_DELAY);
 
-        // Pre-delay revert.
-        vm.expectRevert();
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
+        // Pre-delay: exact reasons through the Safe (GS013) and on the timelock.
+        _expectExecuteRefused(safe, timelock, address(vault), callData, salt);
 
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
+        vm.warp(block.timestamp + MIN_DELAY);
+        _govExecute(safe, timelock, address(vault), callData, salt);
 
         assertEq(vault.feeRecipient(), newRecipient, "fee recipient must update via timelock");
     }
@@ -3606,14 +3597,12 @@ contract BasketVaultTimelockTest is SafeFixture {
     function test_AC7_basket_setExitFeeBps_succeedsViaTimelock() public {
         uint256 newFee = 50;
         bytes memory callData = abi.encodeCall(BasketVault.setExitFeeBps, (newFee));
-        bytes32 predecessor = bytes32(0);
-        bytes32 salt = keccak256("ac7-basket-exit-fee");
 
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
+        bytes32 salt = keccak256("ac7-basket-exit-fee");
+        _govRun(safe, timelock, address(vault), callData, salt, MIN_DELAY);
+
+        // Replay of the executed operation: exact reasons on both paths.
+        _expectExecuteRefused(safe, timelock, address(vault), callData, salt);
 
         assertEq(vault.exitFeeBps(), newFee, "exit fee must update via timelock");
     }
