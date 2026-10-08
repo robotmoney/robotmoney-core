@@ -119,7 +119,6 @@ const TEST_FORBIDDEN: { name: string; re: RegExp }[] = [
 export const PRANK_SAFE_RE = /\bvm\.(?:start)?[Pp]rank\(\s*safe\w*/;
 // Transitional debt, shrinking: files still to move onto helpers/SafeGovernance.sol.
 export const PRANK_SAFE_DEBT = [
-  "contracts/test/DeployTimelock.t.sol",
   "contracts/test/WeightSetterRotation.t.sol",
   "contracts/test/PortfolioRouter.t.sol",
 ];

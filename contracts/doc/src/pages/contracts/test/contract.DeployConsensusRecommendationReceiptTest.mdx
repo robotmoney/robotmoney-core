@@ -5,9 +5,9 @@ description: "AC10: the receipt contract deploys **alongside** InvestmentCommitt
 
 # DeployConsensusRecommendationReceiptTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/DeployConsensusRecommendationReceipt.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3ca473b2028cebb667ec67540037c713c43638c1/contracts/test/DeployConsensusRecommendationReceipt.t.sol)
 
-**Inherits:** Test
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
 **Title:** DeployConsensusRecommendationReceiptTest
 
@@ -37,16 +37,12 @@ address pauser = address(0xA1);
 address submitter = address(0xB1);
 ```
 
-### proposer
+### safe
+
+A real SafeL2 1.4.1 proxy: the only proposer and canceller on the timelock.
 
 ```solidity
-address proposer = address(0xC0);
-```
-
-### executor
-
-```solidity
-address executor = address(0xC1);
+address safe;
 ```
 
 ### usdc
