@@ -2,7 +2,6 @@
 // Canonical: none — Foundry unit tests for contracts/PortfolioRouter.sol
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -12,6 +11,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -195,7 +195,7 @@ contract BlacklistableVault is ERC20 {
 
 // ─── PortfolioRouterTest ──────────────────────────────────────────────────────
 
-contract PortfolioRouterTest is Test {
+contract PortfolioRouterTest is SafeGovernance {
     MockUSDC internal usdc;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
@@ -378,11 +378,20 @@ contract PortfolioRouterTest is Test {
 
     /// @notice The Safe holds no router role: it reaches the router only through the timelock.
     function test_setWeights_revertsForSafe() public {
-        address safe = makeAddr("safe");
+        _installSafeSet();
+        address safe = _newDefaultSafe();
         (address[] memory vaults, uint256[] memory bps) = _oneVault();
-        _expectWeightSetterRevert(safe);
-        vm.prank(safe);
-        router.setWeights(vaults, bps);
+        // The real Safe, as msg.sender, is refused with the exact access-control error.
+        _assertSafeCallReverts(
+            safe,
+            address(router),
+            abi.encodeCall(PortfolioRouter.setWeights, (vaults, bps)),
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                safe,
+                router.WEIGHT_SETTER_ROLE()
+            )
+        );
     }
 
     /// @notice After the deploy ceremony drops the deployer's copy, the deployer

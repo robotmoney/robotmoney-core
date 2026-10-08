@@ -41,6 +41,17 @@ interface ISafeTx {
     function nonce() external view returns (uint256);
 }
 
+/// @dev Runs one call from inside the Safe's own context (the Safe delegatecalls it through
+///      `simulateAndRevert`), so the target sees `msg.sender == the Safe` with no prank.
+contract SafeCallRelay {
+    function relay(address target, bytes calldata data)
+        external
+        returns (bool ok, bytes memory ret)
+    {
+        (ok, ret) = target.call(data);
+    }
+}
+
 /// @title SafeGovernance
 /// @notice Runs a governed call the way production does: two of the three Safe owners sign a
 ///         `SafeTx`, the real SafeL2 proxy runs `execTransaction`, the Safe calls the
@@ -237,14 +248,65 @@ abstract contract SafeGovernance is SafeFixture {
     }
 
     /// @dev A direct call from the Safe to a governed contract, with two real owner signatures,
-    ///      fails: the Safe holds no admin role on it, only the timelock does. The inner
-    ///      `AccessControlUnauthorizedAccount` is hidden by the Safe as `GS013`, so callers also
-    ///      assert `hasRole(ADMIN_ROLE, safe)` is false to pin the cause.
+    ///      fails: the Safe holds no admin role on it, only the timelock does. The Safe hides the
+    ///      inner error as `GS013`, so the exact `AccessControlUnauthorizedAccount(safe, ADMIN_ROLE)`
+    ///      is asserted by replaying the call with the Safe as `msg.sender`.
     function _expectDirectSafeCallRefused(address safe_, address target, bytes memory data)
         internal
     {
+        // The exact inner reason: replayed with the Safe as msg.sender (no prank).
+        _assertSafeCallReverts(
+            safe_,
+            target,
+            data,
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", safe_, keccak256("ADMIN_ROLE")
+            )
+        );
+        // And the real two-signature execTransaction is refused with GS013.
         bytes memory sigs = _twoOwnerSignatures(_safeDigest(safe_, target, data));
         vm.expectRevert(bytes(GS013));
         _safeExecWith(safe_, target, data, sigs);
+    }
+
+    SafeCallRelay private _relay;
+
+    /// @dev Replays `target.call(data)` with the real Safe as `msg.sender` and returns the exact
+    ///      inner result, including revert data that `execTransaction` would hide as `GS013`.
+    ///      It uses the Safe's own `simulateAndRevert` (StorageAccessible), which reverts after
+    ///      the call with `success, size, data`: no prank, and every state change is rolled
+    ///      back. It proves who the callee sees, not the signature quorum (the
+    ///      `execTransaction` helpers above prove the quorum).
+    function _callAsSafe(address safe_, address target, bytes memory data)
+        internal
+        returns (bool ok, bytes memory ret)
+    {
+        if (address(_relay) == address(0)) _relay = new SafeCallRelay();
+        (bool simulated, bytes memory out) = safe_.call(
+            abi.encodeWithSignature(
+                "simulateAndRevert(address,bytes)",
+                address(_relay),
+                abi.encodeCall(SafeCallRelay.relay, (target, data))
+            )
+        );
+        require(!simulated && out.length >= 64, "simulateAndRevert did not revert as designed");
+        bytes memory packed = new bytes(out.length - 64);
+        for (uint256 i = 0; i < packed.length; i++) {
+            packed[i] = out[i + 64];
+        }
+        (ok, ret) = abi.decode(packed, (bool, bytes));
+    }
+
+    /// @dev The Safe, called straight on `target` (no timelock), is refused with exactly
+    ///      `expectedRevert`.
+    function _assertSafeCallReverts(
+        address safe_,
+        address target,
+        bytes memory data,
+        bytes memory expectedRevert
+    ) internal {
+        (bool ok, bytes memory ret) = _callAsSafe(safe_, target, data);
+        assertFalse(ok, "the Safe call should have reverted");
+        assertEq(ret, expectedRevert, "exact inner revert");
     }
 }
