@@ -16,3 +16,12 @@ export function siblingOwnerSpecs(signerSpec: string | undefined): string[] {
   const dir = dirname(path);
   return REHEARSAL_OWNER_KEY_NAMES.map((n) => join(dir, n)).filter((p) => existsSync(p) && statSync(p).isFile()).map((p) => `keystore:${p}:${passFile}`);
 }
+
+/** The rehearsal's EMERGENCY keystore beside the DEPLOYER keystore, under the same passphrase file (pause-all after the handover). Undefined when it is not there. */
+export function siblingEmergencySpec(signerSpec: string | undefined): string | undefined {
+  if (!signerSpec?.startsWith("keystore:")) return undefined;
+  const [path, passFile] = signerSpec.slice("keystore:".length).split(":");
+  if (!path || !passFile) return undefined;
+  const p = join(dirname(path), "EMERGENCY");
+  return existsSync(p) && statSync(p).isFile() ? `keystore:${p}:${passFile}` : undefined;
+}

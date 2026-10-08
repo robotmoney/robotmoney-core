@@ -271,6 +271,11 @@ If preflight, the cutover, or postflight finds any issue:
 2. Merge the fixes to `dev`.
 3. Restart the runbook from §4.1 at the new `dev` tip.
 
+If verify (stage 12) or the postflight is what failed, the publish-contracts
+CLI has already paused deposits on all four vaults (rmUSDC, rmPROTO, rmAGENT,
+rmRWA) before you read the failure: `pause-all` (§4.6). Check the
+`rollout-report-<chain>.json` it wrote before you start the fix.
+
 There is no branch to cherry-pick onto and no rc-numbering cost — every
 contract deployment is a fresh broadcast, so "try again" is simply "deploy
 the fixed commit."
@@ -281,15 +286,29 @@ the fixed commit."
 failure's mitigation depends on how far the ceremony got:
 
 - **Before the timelock/role handover (§4.3's last step):** the deployer EOA
-  still holds `ADMIN_ROLE` and can call the `DEPOSIT_PAUSER_ROLE`-gated `pauseDeposits()`,
-  or simply abandon the deployment (it holds no real user funds yet on a
-  fresh network) and redeploy fresh addresses after the fix.
+  still holds `EMERGENCY_ROLE` on every vault and signs `pauseDeposits()`
+  (the `pause-all` command below), or you abandon the deployment (it holds
+  no real user funds yet on a fresh network) and redeploy fresh addresses
+  after the fix.
 - **After the timelock/role handover:** the deployer no longer holds admin
-  authority. Mitigation is whatever the timelock's configured emergency path
-  allows (the vault's `EMERGENCY_ROLE` deposit pause, which never blocks a redeem, per
-  `docs/operations/manual-admin-actions.md`) while a fix is prepared and a
+  authority. The EMERGENCY key signs the vault's `EMERGENCY_ROLE` deposit
+  pause (`pause-all` with `--emergency-signer`), which never blocks a redeem
+  (`docs/operations/manual-admin-actions.md`), while a fix is prepared and a
   **new** deployment (new addresses) is planned — a live vault's stored
   state cannot be transplanted onto fixed contract code.
+
+**The command.** `bun publish-contracts/src/cli.ts pause-all ...` pauses
+deposits on **all four** vaults: rmUSDC, rmPROTO, rmAGENT and rmRWA (rmUSDC
+is not special; owner decision 2026-10-07, plan decision 22). It runs by
+itself when stage 12 (verify) or the postflight fails, and the run still exits
+with the verify failure's code (13). It picks the signer by stage (deployer
+before the handover, EMERGENCY key after), reads `depositsPaused` back on
+every vault and records each vault's paused state in
+`rollout-report-<chain>.json` under the run's evidence directory. Withdrawals
+stay open. Exit 25 means a vault is not confirmed paused. rmUSDC still deploys
+open with its 1 USDC seed. Only the baskets deploy paused (`docs/prd.md`).
+Rehearsed on every pull request that touches the deploy by the Twin test
+`testing/smoke-test/tests/twin_pause_all.rs`.
 
 The rollback/mitigation procedure must be written into the per-release
 runbook and rehearsed on the Devnet at least once before a
@@ -300,7 +319,8 @@ mainnet deployment.
 After a deployment (successful or not), produce a report covering at least:
 
 - the commit SHA and target network deployed,
-- preflight and postflight results,
+- preflight and postflight results (and, when verify or the postflight
+  failed, the `pause-all` result: each vault's `depositsPaused`),
 - any issues encountered and their resolution,
 - the final version tag applied (if any — see §3),
 - operator sign-off.

@@ -9,22 +9,23 @@ import { join, resolve } from "node:path";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { exitCodeOf, isPublishError, PublishError } from "./errors.ts";
-import { assertFloors, readRpcChainId, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
+import { assertFloors, assertSignerSpec, readRpcChainId, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
 import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen } from "./counts.ts";
-import { siblingOwnerSpecs } from "./owner-signers.ts";
+import { siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
 import { publishLogger, type Logger } from "./log.ts";
 import { stagePlan } from "./plan.ts";
 import { assertReleaseGate, type CheckShaGreen } from "./release-gate.ts";
 import { DEPLOYER_STAGES, STAGE_NAMES, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
-import { finalNonceCheck, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
+import { finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
 import { callerInputs, parseSheet } from "./sheet.ts";
 import { loadCorrelatedOwners } from "./correlated-owners.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { RECEIPT_REFUSED_ON_MAINNET, RECEIPT_ROW, assertReceiptId, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
+import { pauseAll, pauseIncomplete, type PauseTrigger } from "./pause-all.ts";
 import { runProveControl, type ProveOpts } from "./prove-control.ts";
 import { startAnvil, type ChainStarter } from "./preflight.ts";
 import { USDC_ADDRESS, assertUsdcCode } from "./usdc.ts";
@@ -33,15 +34,18 @@ import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts
 
 /** The environment variable core's harness sets on the child: the directory the stage manifests are written to and read from. */
 export const MANIFEST_DIR_ENV = "PUBLISH_MANIFEST_DIR";
-export const VERBS = ["publish", "verify", "govern"] as const;
+export const VERBS = ["publish", "verify", "govern", "pause-all"] as const;
 export type Verb = (typeof VERBS)[number];
 
 export const USAGE = `publish contracts
-  VERB               optional first word: publish | verify | govern. An alias for a stage set (below). Not combined with --stage.
+  VERB               optional first word: publish | verify | govern | pause-all. An alias for a stage set (below). Not combined with --stage.
                        publish = every deployer stage up to and including timelock (the same as --stage deploy), with the prove-control step
                                  before the timelock stage: the real Safe executes one self-call signed by EVERY owner, or stage 11 refuses (exit 24)
                        verify  = the verify stage (the one verifier; a follow-on verb, so it implies --resume)
                        govern  = the govern stage (a follow-on verb, so it implies --resume)
+                       pause-all = pause deposits on ALL FOUR vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
+                                 Withdrawals stay open. The signer is the deployer before the stage 11 handover and the EMERGENCY key after it (--emergency-signer).
+                                 It also runs by itself when stage 12 (verify) or the postflight fails (the run then still exits with the verify failure's code, 13).
   --chain N          target chain id (8453 or 918453). Must equal 'cast chain-id' of the RPC.
   --rpc URL          the RPC endpoint
   --sheet FILE       the frozen sheet (parsed as data, never sourced)
@@ -69,6 +73,7 @@ export const USAGE = `publish contracts
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
                      beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453.
+  --emergency-signer S  pause-all, and the automatic pause after a failed verify: the EMERGENCY key signer spec, needed once the handover has begun. On the Twin chain with none given: the EMERGENCY keystore beside the DEPLOYER keystore. Never defaulted on mainnet.
   --compare-sheet F  a second sheet for the sheet diff in the isomorphism report
   --call-label L --call-target ADDR --call-data 0x..   govern, Twin chain 918453 only (refused on 8453): one generic Safe -> Timelock call (schedule, wait by warp, execute),
                      for test fixtures whose action is not a mainnet govern row. Not combined with --row.
@@ -109,7 +114,7 @@ export interface CliDeps {
 
 export interface Parsed {
   chain: number; rpc: string; sheet: string; signer?: string; environment: string; coreSha: string; stage?: string; resume: boolean; dryRun: boolean;
-  verb?: Verb; row?: string; coreDir?: string; correlatedOwnersFile?: string; evidence?: string; countsDir?: string; measure: boolean; ownerSigners: string[]; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
+  verb?: Verb; row?: string; coreDir?: string; correlatedOwnersFile?: string; evidence?: string; countsDir?: string; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
   /** With --row release-receipt only: the receipt to release. */
   receiptId?: string;
 }
@@ -124,7 +129,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, "correlated-owners-file": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -172,7 +177,7 @@ export function parseCli(argv: string[]): Parsed {
   return {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, correlatedOwnersFile: v["correlated-owners-file"] as string | undefined, evidence: v.evidence as string | undefined,
-    countsDir: v["counts-dir"] as string | undefined, measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], compareSheet: v["compare-sheet"] as string | undefined,
+    countsDir: v["counts-dir"] as string | undefined, measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
     maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId,
   };
 }
@@ -218,11 +223,30 @@ export function defaultCountsDir(cwd: string): string {
   return existsSync(here) ? here : resolve(import.meta.dir, "..", "..", FROZEN_DIR);
 }
 
+/**
+ * Core 1619: stage 12 (verify) or the postflight failed. Pause deposits on all four vaults, then hand back the error the run fails with:
+ * the original failure when every vault reads paused, else a PAUSE error that names the vaults still open.
+ */
+async function pauseOnFailure(ctx: RunContext, trigger: PauseTrigger, cause: unknown, emergency: () => PublishSigner | undefined): Promise<unknown> {
+  const reason = (cause as Error).message ?? String(cause);
+  ctx.log.log("error", "pause_all.auto", { trigger, reason });
+  try {
+    const manifest = loadRunManifest(ctx.evidenceDir);
+    if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}`);
+    const report = await pauseAll(ctx, manifest, { trigger, reason, emergencySigner: emergency() });
+    return report.allPaused ? cause : pauseIncomplete(report, `${reason}. `);
+  } catch (e) {
+    if (isPublishError(e, "PAUSE")) return e;
+    return new PublishError("PAUSE", `${reason}. pause-all could not run: ${(e as Error).message}. Run 'pause-all' by hand now.`);
+  }
+}
+
 export async function main(argv: string[], deps: CliDeps = {}): Promise<number> {
   const env = deps.env ?? process.env;
   const log: Logger = publishLogger(deps.logSink);
   const run = deps.run ?? spawnTool;
   let signer: PublishSigner | undefined;
+  const extraSigners: PublishSigner[] = [];
   try {
     const a = parseCli(argv);
     const cwd = deps.cwd ?? process.cwd();
@@ -254,6 +278,37 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     assertExitFeeBound(coreDir, sheet.vaults);
     // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo
     useStageTable(loadStageTable(coreDir));
+    const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
+    const buildCtx = (frozen: RunContext["frozen"], measure: boolean): RunContext => {
+      if (a.signer!.startsWith("address:") && !a.dryRun) throw new PublishError("USAGE", "an address: signer cannot sign: it is accepted with --dry-run only");
+      signer = (deps.makeSigner ?? ((s) => makeSigner(s, { env })))(a.signer!);
+      return {
+        chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
+        environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
+        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions: env.GITHUB_ACTIONS === "true", baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, coreConfigCheck: deps.coreConfigCheck,
+        manifestOut, startChain: a.dryRun ? (deps.startChain ?? startAnvil) : undefined,
+      };
+    };
+    // The EMERGENCY key (core 1619): --emergency-signer, else on the Twin chain the EMERGENCY keystore beside the DEPLOYER keystore. Never defaulted on mainnet.
+    const emergencySigner = (): PublishSigner | undefined => {
+      const spec = a.emergencySigner ?? (rpcChainId === TWIN_CHAIN_ID ? siblingEmergencySpec(a.signer) : undefined);
+      if (!spec) return undefined;
+      assertSignerSpec(spec, { rpcChainId, rpc: a.rpc, env });
+      if (spec.startsWith("address:")) throw new PublishError("SIGNER", "an address: signer cannot sign: the EMERGENCY key must be a real signer");
+      const s = (deps.makeSigner ?? ((x) => makeSigner(x, { env })))(spec);
+      extraSigners.push(s);
+      return s;
+    };
+    // pause-all by hand: nothing else of the run is needed (no frozen counts, no USDC check), so a half-finished run can still be stopped.
+    if (a.verb === "pause-all") {
+      const ctx = buildCtx(undefined, false);
+      const manifest = loadRunManifest(ctx.evidenceDir);
+      if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}: pause-all reads it to know whether the handover has begun. Pass the same --evidence directory as the run.`);
+      const report = await pauseAll(ctx, manifest, { trigger: "manual", reason: "pause-all was run by hand", emergencySigner: emergencySigner() });
+      if (!report.allPaused) throw pauseIncomplete(report);
+      log.log("info", "run.done", { ran: ["pause-all"], skipped: [] });
+      return 0;
+    }
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
     // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
     if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {
@@ -282,28 +337,31 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return 0;
     }
     const names = a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
-    if (a.signer!.startsWith("address:") && !a.dryRun) throw new PublishError("USAGE", "an address: signer cannot sign: it is accepted with --dry-run only");
-    signer = (deps.makeSigner ?? ((s) => makeSigner(s, { env })))(a.signer!);
-    const ctx: RunContext = {
-      chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir: resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`)),
-      environment: a.environment, signer, caller, frozen, measure: counts.measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
-      prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions: env.GITHUB_ACTIONS === "true", baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, coreConfigCheck: deps.coreConfigCheck,
-      manifestOut, startChain: a.dryRun ? (deps.startChain ?? startAnvil) : undefined,
-    };
+    const ctx = buildCtx(frozen, counts.measure);
     // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
     const ownerSigners = async (c: RunContext): Promise<Signer[]> => {
       const mk = deps.ownerSigner ?? ((s: string) => signerFromSpec(s));
       const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
       return Promise.all(specs.map((s) => mk(s)));
     };
-    const result = await runStages(ctx, names, {
-      prove: async (c, row, m) => { await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), ...(deps.prove ?? {}) }); },
-      verify: async (c, row, m) => { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); },
-      govern: async (c, row, m) => {
-        await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
-      },
-    });
-    await finalNonceCheck(ctx, result.manifest, result.ran);
+    // A failed verify (stage 12) or postflight pauses deposits on all four vaults (core 1619) and then fails the run as before.
+    let postflight: PauseTrigger | undefined;
+    let result: Awaited<ReturnType<typeof runStages>>;
+    try {
+      result = await runStages(ctx, names, {
+        prove: async (c, row, m) => { await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), ...(deps.prove ?? {}) }); },
+        verify: async (c, row, m) => {
+          try { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); } catch (e) { postflight = "verify"; throw e; }
+        },
+        govern: async (c, row, m) => {
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+        },
+      });
+      try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }
+    } catch (e) {
+      if (postflight && !a.dryRun) throw await pauseOnFailure(ctx, postflight, e, emergencySigner);
+      throw e;
+    }
     if (a.dryRun && counts.mode === "dry-run-measure") log.log("warn", "dry_run.counts_measured", { counts: ctx.dryCounts, note: "measured by the dry run, not frozen: nothing was written" });
     if ((a.measure || counts.mode === "twin-measure") && DEPLOYER_STAGES.every((s) => result.manifest.stages[s.name]?.status === "done")) {
       const forge = (await run("forge", ["--version"], { env: castEnv })).stdout.trim().split("\n")[0];
@@ -323,6 +381,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     return code;
   } finally {
     signer?.cleanup();
+    for (const x of extraSigners) x.cleanup();
   }
 }
 

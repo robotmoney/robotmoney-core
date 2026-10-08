@@ -778,6 +778,10 @@ impl Fixture {
         })
         .to_string()
     }
+    /// The vault addresses by name (rmUSDC, rmPROTO, rmAGENT, rmRWA), read from the manifests.
+    pub fn vault_addresses(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.topology.vaults
+    }
     /// The publish run behind this fixture (sheet, keystores, manifests).
     pub fn published(&self) -> &publish::Published {
         &self.published

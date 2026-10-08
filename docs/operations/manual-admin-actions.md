@@ -157,6 +157,27 @@ jq 'has("portfolio_router") and has("router_governance") and has("timelock_contr
   deployments/<chain>/<merged manifest>.json   # expect: true
 ```
 
+**If verify (stage 12) or the postflight fails.** The publish-contracts CLI
+pauses deposits on all four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) by itself
+and still exits with the verify failure's code (owner decision 2026-10-07, plan
+decision 22, core 1619). rmUSDC is not special. Withdrawals stay open
+(`pauseDeposits()` sets `depositsPaused` only). The same step runs by hand with
+the `pause-all` verb and the same arguments as the run (the same `--evidence`
+directory):
+
+```bash
+bun publish-contracts/src/cli.ts pause-all --chain 8453 --rpc "$BASE_RPC" --sheet "$SHEET"   --signer "$DEPLOYER_SIGNER" --emergency-signer "$EMERGENCY_SIGNER"   --core-sha "$DEPLOY_SHA" --evidence "$EVIDENCE_DIR" --correlated-owners-file "$CORRELATED_OWNERS_FILE"
+```
+
+The signer follows the stage. Before the stage 11 handover the deployer signs
+(it still holds `EMERGENCY_ROLE` on every vault). After it, the EMERGENCY key
+signs (`--emergency-signer`, never defaulted on mainnet). The CLI reads
+`depositsPaused` back on every vault and writes each vault's paused state to
+`rollout-report-<chain>.json` in the evidence directory. Exit 25 means a vault
+is not confirmed paused: pause it by hand now. Unpausing is a different
+operation (`ADMIN_ROLE` through the timelock). The fix then follows the release
+runbook fix loop: merge the fix on `dev`, redeploy to fresh addresses.
+
 ---
 
 ## 3. Bug-bounty program registration
