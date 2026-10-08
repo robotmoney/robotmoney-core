@@ -308,3 +308,39 @@ fn abort_exit_codes_match_the_documented_cli_contract() {
         EXIT_REFUSAL
     );
 }
+
+/// Issue #1431: the only broadcast in this module is the one inside
+/// `WriteSession::submit`, which holds the `AgentLock` and runs the replay
+/// cache insert / retain (AZ-RPC-1) / clear (AZ-RPC-2) sequence. A pub
+/// helper that broadcasts without those guarantees is a footgun for the next
+/// write command, and `pub` items raise no `dead_code` warning, so the
+/// property is pinned here by scanning the production source.
+#[test]
+fn submit_is_the_only_broadcast_call_site() {
+    let src = include_str!("../write_path.rs");
+    let prod = &src[..src.find("#[cfg(test)]").expect("test module marker")];
+    let calls: Vec<usize> = prod
+        .match_indices("broadcast(")
+        .filter(|(i, _)| {
+            // Ignore doc/line comments mentioning the function.
+            let line_start = prod[..*i].rfind('\n').map_or(0, |n| n + 1);
+            !prod[line_start..*i].trim_start().starts_with("//")
+        })
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(calls.len(), 1, "exactly one broadcast call site: {calls:?}");
+    let submit = prod.find("pub fn submit(").expect("WriteSession::submit");
+    assert!(calls[0] > submit, "the broadcast must be inside submit");
+    // And the replay insert must follow it in the same function.
+    let insert = prod[calls[0]..]
+        .find("replay.insert")
+        .or_else(|| prod[calls[0]..].find(".insert("));
+    assert!(
+        insert.is_some(),
+        "replay-cache insert must follow the broadcast"
+    );
+    assert!(
+        !prod.contains("pub async fn broadcast_and_confirm"),
+        "unguarded broadcast helper must stay deleted"
+    );
+}
