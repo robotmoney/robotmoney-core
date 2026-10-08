@@ -408,6 +408,66 @@ async fn a_weights_only_tamper_is_refused_and_never_drafted() {
     );
 }
 
+/// The anchored `payloadDigest` defence, exercised on its own. A resealed,
+/// internally consistent envelope whose edit `weights_recomputation` cannot
+/// detect (the judge rationale: inside the canonical bytes, outside
+/// `receipt_id` and outside every analyst signature) must be refused with
+/// `ErrReceiptDigestMismatch`, never drafted. This is the layer the weights
+/// tamper test used to reach before the recomputation guard fired first
+/// (issue #1453); no production bypass is needed to keep it covered.
+#[tokio::test]
+async fn a_resealed_edit_the_weights_guard_cannot_see_is_refused_by_the_anchored_digest() {
+    let mut server = mockito::Server::new_async().await;
+    let good = untampered_body();
+    let (receipt_id, anchored_digest) = derive(&good);
+
+    let mut env = run1_envelope();
+    env["receipt"]["judge"]["rationale"] = json!("edited after anchoring");
+    reseal(&mut env);
+    let tampered = serde_json::to_string(&env).expect("serializes");
+    let (tampered_id, tampered_digest) = derive(&tampered);
+    assert_eq!(
+        tampered_id, receipt_id,
+        "the edit is invisible to receipt_id"
+    );
+    assert_ne!(
+        tampered_digest, anchored_digest,
+        "the edit must move the digest or this test proves nothing"
+    );
+
+    let uri = format!("{}{PAYLOAD_PATH}", server.url());
+    install_chain_mocks(&mut server, receipt_id, anchored_digest, &uri, true).await;
+    server
+        .mock("GET", PAYLOAD_PATH)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(&tampered)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let fx = DraftFixture::build(&server.url());
+    let out = rmpc()
+        .args([
+            "governance",
+            "-c",
+            fx.config_path.to_str().unwrap(),
+            "draft-proposal",
+            "--receipt-id",
+            &format!("{receipt_id:#x}"),
+        ])
+        .output()
+        .expect("run rmpc");
+
+    assert_eq!(out.status.code(), Some(2), "a refusal exits EXIT_REFUSAL");
+    let v = stdout_json(&out.stdout);
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"], "ErrReceiptDigestMismatch");
+    let all = String::from_utf8_lossy(&out.stdout);
+    assert!(!all.contains("ready_for_review"), "{all}");
+    assert!(!all.contains("propose_calldata"), "{all}");
+}
+
 /// The positive control. Without it, the test above passes for a binary that
 /// refuses everything.
 #[tokio::test]

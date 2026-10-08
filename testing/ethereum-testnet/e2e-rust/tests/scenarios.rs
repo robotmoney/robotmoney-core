@@ -67,7 +67,7 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
-use rmpc_e2e::{Fixture, AGENT_PRIVATE_KEY};
+use rmpc_e2e::{require_prereqs, Fixture, AGENT_PRIVATE_KEY};
 use serde_json::Value;
 
 /// USDC has 6 decimals throughout the harness.
@@ -89,19 +89,6 @@ fn order_id(label: &str) -> String {
     use alloy_primitives::keccak256;
     let h = keccak256(format!("rmpc-e2e-{label}").as_bytes());
     format!("{h:#x}")
-}
-
-/// Print + return `true` when the harness prerequisites aren't on
-/// PATH (Docker, forge, cast).
-fn skip_if_no_prereqs(test_name: &str) -> bool {
-    if !rmpc_e2e::prerequisites_available() {
-        eprintln!(
-            "[{test_name}] docker / forge / cast not on PATH; skipping. \
-             Install Docker + Foundry to run this test."
-        );
-        return true;
-    }
-    false
 }
 
 /// Parse rmpc stdout as JSON, panicking with a helpful diagnostic on
@@ -159,9 +146,7 @@ fn deposit_args(amount: u128, oid: &str) -> [String; 6] {
 /// the canonical one in place.
 #[test]
 fn code_hash_mismatch_aborts() {
-    if skip_if_no_prereqs("code_hash_mismatch_aborts") {
-        return;
-    }
+    require_prereqs("code_hash_mismatch_aborts");
     with_fixture(|fx| {
         let original = std::fs::read_to_string(fx.config_path()).expect("read config");
         let bad_hash = bitflip_hash(fx.gateway_runtime_hash());
@@ -233,9 +218,7 @@ fn bitflip_hash(h: &str) -> String {
 /// `flock` attempt overlaps with the winner's preflight every run.
 #[test]
 fn concurrent_invocation_locked() {
-    if skip_if_no_prereqs("concurrent_invocation_locked") {
-        return;
-    }
+    require_prereqs("concurrent_invocation_locked");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT * 2)
             .expect("approve usdc");
@@ -306,9 +289,7 @@ fn concurrent_invocation_locked() {
 /// observable on-chain side effects via `rmpc status`.
 #[test]
 fn deposit_happy_path() {
-    if skip_if_no_prereqs("deposit_happy_path") {
-        return;
-    }
+    require_prereqs("deposit_happy_path");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT)
             .expect("approve usdc");
@@ -384,9 +365,7 @@ fn deposit_happy_path() {
 /// submission is attempted.
 #[test]
 fn idempotent_replay_rejected() {
-    if skip_if_no_prereqs("idempotent_replay_rejected") {
-        return;
-    }
+    require_prereqs("idempotent_replay_rejected");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT * 2)
             .expect("approve usdc");
@@ -445,9 +424,7 @@ fn idempotent_replay_rejected() {
 /// message mentioning `maxPerPayment`.
 #[test]
 fn over_per_payment_cap_rejected() {
-    if skip_if_no_prereqs("over_per_payment_cap_rejected") {
-        return;
-    }
+    require_prereqs("over_per_payment_cap_rejected");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(OVER_PAYMENT_CAP_DEPOSIT)
             .expect("approve usdc");
@@ -495,9 +472,7 @@ fn over_per_payment_cap_rejected() {
 /// subsequent tests can deposit.
 #[test]
 fn deposits_paused_blocks_deposit_not_withdraw() {
-    if skip_if_no_prereqs("deposits_paused_blocks_deposit_not_withdraw") {
-        return;
-    }
+    require_prereqs("deposits_paused_blocks_deposit_not_withdraw");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT)
             .expect("approve usdc");
@@ -591,9 +566,7 @@ fn deposits_paused_blocks_deposit_not_withdraw() {
 /// `AccessRoles` reverts with `RoleSeparationViolated()`.
 #[test]
 fn role_separation_invariant() {
-    if skip_if_no_prereqs("role_separation_invariant") {
-        return;
-    }
+    require_prereqs("role_separation_invariant");
     with_fixture(|fx| {
         // The admin is the timelock after handover. Authorizing an admin-holding
         // address as an agent goes through the real Safe and the timelock (a
@@ -625,9 +598,7 @@ fn role_separation_invariant() {
 /// exits non-zero with the right error.
 #[test]
 fn software_fallback_disabled_aborts_startup() {
-    if skip_if_no_prereqs("software_fallback_disabled_aborts_startup") {
-        return;
-    }
+    require_prereqs("software_fallback_disabled_aborts_startup");
     with_fixture(|fx| {
         let original = std::fs::read_to_string(fx.config_path()).expect("read config");
         let tweaked = original
@@ -698,9 +669,7 @@ fn software_fallback_disabled_aborts_startup() {
 /// pattern) can deposit.
 #[test]
 fn unauthorized_agent_rejected() {
-    if skip_if_no_prereqs("unauthorized_agent_rejected") {
-        return;
-    }
+    require_prereqs("unauthorized_agent_rejected");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT)
             .expect("approve usdc");

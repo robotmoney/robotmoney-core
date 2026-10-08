@@ -1,271 +1,250 @@
 /**
- * Playwright E2E — suite-10: GovernancePanel — view proposal, sign vote,
- * assert tally updated (issue #322).
+ * Playwright E2E — suite-10: GovernancePanel on the REAL governance topology (issue #322, #1647).
  *
- * Asserts:
- *   (A) The GovernancePanel renders a proposal fetched from the indexed
- *       governance API: title/description, weight vector, vote tally
- *       (votes_for / votes_against), quorum deadline block, and
- *       freshness metadata are all visible in the DOM.
- *   (B) A connected account with admin-assigned voting power sees the
- *       "Vote" button for an open proposal. After clicking, the write is
- *       handed to the injected wallet (no real on-chain vote needed — the wallet's
- *       eth_sendTransaction is intercepted by helpers/wallet.ts which
- *       signs and broadcasts with the admin private key).
- *   (C) When the explorer API returns an empty proposal list the panel
- *       renders the "No proposals found" notice without error.
+ * Nothing here is stubbed. The explorer API, the indexer and the RPC are the devnet's own, and
+ * every governance fact is created on chain through the real 2-of-3 Safe and the real
+ * TimelockController (security-model.md §16: Dapp e2e, no mocking):
  *
- * The GovernancePanel is rendered inside the dapp under the
- * "Router Governance" tab (testId `tab-router-governance`) in the
- * smoke-test devnet build. Specs that navigate to the panel intercept
- * the governance API endpoint with `page.route()` so they run without a
- * live RouterGovernance on-chain deployment. The interceptor is removed
- * before the tab-navigation assertion so that the panel's real API
- * fetch is left alone in any part of the spec that needs a live tally.
+ *   (C) No proposal exists yet: the panel renders the "No proposals found" notice from the real
+ *       explorer API, without an error.
+ *   setup  Two full Safe -> Timelock rounds (schedule, advance the clock past getMinDelay, execute),
+ *       each signed by two Safe owners through the publish-contracts Safe tool:
+ *         1. RouterGovernance.setVotingPower(connected wallet, VOTING_POWER)
+ *         2. RouterGovernance.propose(current router weights)
+ *       RouterGovernance is admin-only, and after the handover only the timelock holds ADMIN_ROLE.
+ *   (A) The panel renders the proposal the indexer read from the chain: id, proposer (the
+ *       timelock), status, deadline and tally, equal to the explorer API row.
+ *   (B) The connected wallet holds real, snapshot-checkpointed voting power, the Vote button is
+ *       enabled by the real `useSimulateContract`, the click hands `vote()` to the wallet, and
+ *       the on-chain `hasVoted` and the indexed tally move.
  *
- * NOTE: If the dapp bundle served by the devnet does not yet include the
- * GovernancePanel in its tab tree the spec checks for `governance-panel`
- * via its data-testid and calls `test.skip()` with an explanatory
- * message rather than failing hard. This allows the CI suite to remain
- * green while the feature is fully integrated.
+ * The rounds advance the Twin chain clock, so this spec runs in the `safe-governance` project,
+ * after every other spec has finished with the chain (playwright.config.ts).
  *
- * Canonical: issue #322, docs/development/smoke-test-design.md.
+ * The spec is listed in REQUIRED_SPECS (reporters/requiredCoverage.ts) and never skips: a missing
+ * panel fails the run instead of passing with zero executed tests.
+ *
+ * Canonical: issue #322, issue #1647, docs/technical/security-model.md §16,
+ * docs/development/smoke-test-design.md.
  */
 
+import {
+  createPublicClient,
+  encodeFunctionData,
+  http,
+  parseAbi,
+  type Address,
+  type Hex,
+} from "viem";
 import { test, expect } from "./helpers/fixtures";
-import type { Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";
-
-// ─── Fixtures ─────────────────────────────────────────────────────────────────
-
-function makeProposalsResponse(status: "open" | "passed" | "executed" | "expired" = "open") {
-  return {
-    proposals: [
-      {
-        chain_id: 918453,
-        proposal_id: 1,
-        proposer: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        description: "Rebalance: 60% Vault-A, 40% Vault-B",
-        created_at: 1_700_000_000,
-        deadline_block: 99999,
-        status,
-        votes_for: 5100,
-        votes_against: 900,
-        block_number: 8000,
-        indexed_at: "2026-05-10T12:00:00Z",
-      },
-    ],
-    block_number: 8001,
-    indexed_at: "2026-05-10T12:01:00Z",
-  };
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+import { runTimelockRound } from "./helpers/safeGovernance";
 
 /**
- * Navigate to the dapp and locate the GovernancePanel element.
- *
- * The GovernancePanel is accessible via the "Router Governance" tab
- * (testId `tab-router-governance`, with a legacy `tab-governance`
- * fallback). If the tab is not present in the bundle the helper returns
- * false and the calling spec skips gracefully.
+ * Raw units of admin-assigned voting power. Small on purpose: the indexer keeps tallies in a
+ * BIGINT column.
  */
-async function navigateToGovernancePanel(
-  page: import("@playwright/test").Page,
-  endpoints: DevnetEndpoints,
-): Promise<boolean> {
+const VOTING_POWER = 5100n;
+
+const governanceAbi = parseAbi([
+  "function setVotingPower(address voter, uint256 power)",
+  "function propose(address[] vaults, uint256[] bps) returns (uint256)",
+  "function currentWeights() view returns (address[] vaults, uint256[] bps)",
+  "function currentProposalId() view returns (uint256)",
+  "function votingPower(address voter) view returns (uint256)",
+  "function hasVoted(uint256 proposalId, address voter) view returns (bool)",
+]);
+
+interface ApiProposal {
+  proposal_id: number;
+  proposer: string;
+  deadline_block: number;
+  status: string | number;
+  votes_for: number;
+  votes_against: number;
+}
+
+test.describe.configure({ mode: "serial" });
+
+let endpoints: DevnetEndpoints;
+let chain: ReturnType<typeof createPublicClient>;
+let governance: Address;
+
+test.beforeAll(() => {
+  endpoints = loadEndpoints();
+  chain = createPublicClient({ transport: http(endpoints.rpc_url) });
+  governance = endpoints.governance_addr as Address;
+});
+
+/**
+ * Open the dapp with the harness wallet (`admin_*`, a funded plain EOA that holds no governance
+ * role) and the "Router Governance" tab. The tab must exist: a dropped tab fails the spec.
+ */
+async function openGovernancePanel(page: import("@playwright/test").Page): Promise<void> {
   await injectWallet(page, {
     privateKey: endpoints.admin_private_key as Hex,
     rpcUrl: endpoints.rpc_url,
     chainId: endpoints.chain_id,
   });
-
   await page.goto(endpoints.dapp_url);
   await connectInjectedWallet(page);
   await dismissOnboardingIfPresent(page);
-
-  // Click the "Router Governance" tab. The main dapp surface uses
-  // `id: "router-governance"` → testId `tab-router-governance`; the legacy
-  // `tab-governance` testid (inside AdminFlow) is tried for backwards
-  // compatibility. GovernancePanel is not behind the connect gate, so the
-  // tab is reachable on the default surface.
-  const routerGovTab = page.getByTestId("tab-router-governance");
-  const legacyGovTab = page.getByTestId("tab-governance");
-  if (await routerGovTab.isVisible({ timeout: 5_000 }).catch(() => false)) {
-    await routerGovTab.click();
-    await expect(page.getByTestId("governance-panel")).toBeVisible({ timeout: 15_000 });
-    return true;
-  }
-  if (await legacyGovTab.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await legacyGovTab.click();
-    await expect(page.getByTestId("governance-panel")).toBeVisible({ timeout: 15_000 });
-    return true;
-  }
-
-  // Panel is not in the current bundle — caller should skip.
-  return false;
+  await page.getByTestId("tab-router-governance").click();
+  await expect(page.getByTestId("governance-panel")).toBeVisible({ timeout: 15_000 });
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+/** The explorer API's own proposal list, read the way the panel reads it. */
+async function apiProposals(): Promise<ApiProposal[]> {
+  const res = await fetch(`${endpoints.explorer_api_url}/v1/governance/proposals`);
+  if (!res.ok) throw new Error(`GET /v1/governance/proposals -> ${res.status}`);
+  return ((await res.json()) as { proposals: ApiProposal[] }).proposals;
+}
 
-test.describe("suite-10: GovernancePanel E2E", () => {
-  let endpoints: DevnetEndpoints;
+test.describe("suite-10: GovernancePanel E2E on the real Safe topology", () => {
+  test("(C) no-proposal state renders gracefully from the real explorer API", async ({ page }) => {
+    // Precondition on chain and in the API, so the empty state is not vacuous.
+    expect(
+      await chain.readContract({
+        address: governance,
+        abi: governanceAbi,
+        functionName: "currentProposalId",
+      }),
+    ).toBe(0n);
+    expect(await apiProposals()).toHaveLength(0);
 
-  test.beforeAll(() => {
-    endpoints = loadEndpoints();
+    await openGovernancePanel(page);
+    await expect(page.getByTestId("governance-no-proposal")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("governance-error")).toHaveCount(0);
   });
 
-  test("(A) view open proposal — title, weights, tally, and quorum visible", async ({ page }) => {
-    // Intercept the governance API with a deterministic open proposal.
-    await page.route("**/v1/governance/proposals", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(makeProposalsResponse("open")),
-      });
+  test("setup: the Safe and the timelock grant voting power and open a proposal", async () => {
+    test.setTimeout(20 * 60 * 1000);
+    const voter = endpoints.admin_addr as Address;
+    expect(
+      await chain.readContract({
+        address: governance,
+        abi: governanceAbi,
+        functionName: "votingPower",
+        args: [voter],
+      }),
+    ).toBe(0n);
+
+    await runTimelockRound(endpoints, {
+      target: governance,
+      data: encodeFunctionData({
+        abi: governanceAbi,
+        functionName: "setVotingPower",
+        args: [voter, VOTING_POWER],
+      }),
+      label: "governance e2e: setVotingPower",
     });
+    expect(
+      await chain.readContract({
+        address: governance,
+        abi: governanceAbi,
+        functionName: "votingPower",
+        args: [voter],
+      }),
+    ).toBe(VOTING_POWER);
 
-    const found = await navigateToGovernancePanel(page, endpoints);
-    if (!found) {
-      test.skip(
-        true,
-        "GovernancePanel is not yet mounted in the dapp bundle (no tab-router-governance). " +
-          "The panel ships as a standalone component in issue #322 — " +
-          "wire it into the dapp tab tree to activate this spec.",
-      );
-      return;
-    }
+    // Re-propose the router's current weights: every vault in them is router-eligible and Active.
+    const [vaults, bps] = (await chain.readContract({
+      address: governance,
+      abi: governanceAbi,
+      functionName: "currentWeights",
+    })) as readonly [readonly Address[], readonly bigint[]];
+    await runTimelockRound(endpoints, {
+      target: governance,
+      data: encodeFunctionData({
+        abi: governanceAbi,
+        functionName: "propose",
+        args: [vaults, bps],
+      }),
+      label: "governance e2e: propose",
+    });
+    expect(
+      await chain.readContract({
+        address: governance,
+        abi: governanceAbi,
+        functionName: "currentProposalId",
+      }),
+    ).toBe(1n);
 
-    // Panel renders.
-    const panel = page.getByTestId("governance-panel");
-    await expect(panel).toBeVisible({ timeout: 15_000 });
+    // The indexer has to read the ProposalCreated event the timelock caused.
+    await expect
+      .poll(async () => (await apiProposals()).length, { timeout: 120_000, intervals: [2_000] })
+      .toBe(1);
+  });
 
-    // Freshness line.
+  test("(A) view the open proposal the indexer read from the chain", async ({ page }) => {
+    const [row] = await apiProposals();
+    expect(row, "the explorer API must list the proposal").toBeTruthy();
+    expect(row.proposal_id).toBe(1);
+    // The proposer is the timelock: RouterGovernance.propose is admin-only and the timelock is admin.
+    expect(row.proposer.toLowerCase()).toBe(endpoints.timelock_addr.toLowerCase());
+
+    await openGovernancePanel(page);
     await expect(page.getByTestId("governance-freshness")).toBeVisible();
-
-    // Proposal detail.
-    const detail = page.getByTestId("governance-proposal-detail");
-    await expect(detail).toBeVisible();
-
-    // Description / weight vector.
-    await expect(page.getByTestId("governance-proposal-description")).toContainText(
-      "Rebalance: 60% Vault-A, 40% Vault-B",
+    await expect(page.getByTestId("governance-proposal-detail")).toBeVisible();
+    await expect(page.getByTestId("governance-proposal-id")).toContainText("1");
+    await expect(page.getByTestId("governance-proposal-proposer")).toContainText(
+      new RegExp(endpoints.timelock_addr, "i"),
     );
-
-    // Tally.
-    await expect(page.getByTestId("governance-proposal-votes-for")).toContainText("5100");
-    await expect(page.getByTestId("governance-proposal-votes-against")).toContainText("900");
-
-    // Quorum / deadline.
-    await expect(page.getByTestId("governance-proposal-deadline-block")).toContainText("99999");
-
-    // Status.
     await expect(page.getByTestId("governance-proposal-status")).toContainText(
       "Open — voting in progress",
     );
-
-    // Voting prompt present for an open proposal.
+    await expect(page.getByTestId("governance-proposal-deadline-block")).toContainText(
+      String(row.deadline_block),
+    );
+    await expect(page.getByTestId("governance-proposal-votes-for")).toHaveText("0");
+    await expect(page.getByTestId("governance-proposal-votes-against")).toHaveText("0");
     await expect(page.getByTestId("governance-voting-prompt")).toBeVisible();
-
-    console.log("suite-10 (A): proposal title, tally, quorum, status all visible.");
   });
 
-  test("(B) vote button shown for open proposal; click hands call to wallet", async ({ page }) => {
-    // Intercept governance API — open proposal.
-    await page.route("**/v1/governance/proposals", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(makeProposalsResponse("open")),
-      });
-    });
+  test("(B) the wallet with real voting power votes and the tally moves", async ({
+    page,
+    browser,
+  }) => {
+    const voter = endpoints.admin_addr as Address;
+    await openGovernancePanel(page);
 
-    // eth_call for votingPower / getPastVotes — return a non-zero
-    // admin-assigned power so the connected wallet is eligible to vote.
-    await page.route(endpoints.rpc_url, async (route, request) => {
-      const body = JSON.parse(request.postData() ?? "{}") as {
-        method?: string;
-        params?: unknown[];
-      };
-      if (body.method === "eth_call") {
-        // Return 1000e18 voting power (0x3635c9adc5dea00000).
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: body,
-            result: "0x0000000000000000000000000000000000000000000000003635c9adc5dea00000",
-          }),
-        });
-        return;
-      }
-      // All other RPC calls pass through to the real devnet.
-      await route.continue();
-    });
-
-    // Also route simulate (eth_call for useSimulateContract) to succeed.
-    // The GovernancePanel's voteSim uses `useSimulateContract` which fires
-    // eth_call internally; allowing it through to the devnet is fine —
-    // RouterGovernance is not deployed, so the simulate will fail and
-    // `canVote` will be false. The spec asserts the Vote button is present
-    // (even if disabled when simulate fails), not that the tx succeeds.
-
-    const found = await navigateToGovernancePanel(page, endpoints);
-    if (!found) {
-      test.skip(true, "GovernancePanel not mounted in dapp bundle — see test (A) skip message.");
-      return;
-    }
-
-    // Vote button visible (may be disabled if simulate hasn't resolved).
+    // The real simulate enables the button: the voter's power was checkpointed before the proposal.
     const voteBtn = page.getByTestId("governance-vote-button");
     await expect(voteBtn).toBeVisible({ timeout: 15_000 });
+    await expect(voteBtn).toBeEnabled({ timeout: 60_000 });
+    await voteBtn.click();
+    await expect(page.getByTestId("governance-vote-success")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("governance-vote-error")).toHaveCount(0);
 
-    // If the button is enabled (simulate resolved in time), click it.
-    const enabled = await voteBtn.isEnabled({ timeout: 5_000 }).catch(() => false);
-    if (enabled) {
-      await voteBtn.click();
-      // The injected wallet's eth_sendTransaction handler (wallet.ts) will
-      // sign and broadcast. We wait briefly for either a success or error
-      // message — both prove the wallet handoff occurred.
-      const successOrError = page
-        .getByTestId("governance-vote-success")
-        .or(page.getByTestId("governance-vote-error"))
-        .or(page.getByRole("button", { name: "Signing…" }));
-      await expect(successOrError).toBeVisible({ timeout: 15_000 });
-      console.log("suite-10 (B): vote button clicked, wallet handoff confirmed.");
-    } else {
-      // Simulate hasn't resolved — at minimum the button is present.
-      console.log(
-        "suite-10 (B): vote button present; simulate not yet resolved (RouterGovernance " +
-          "not deployed on smoke-test devnet). Button presence is sufficient for this assertion.",
-      );
-    }
-  });
+    // On chain: the vote is recorded for this wallet.
+    await expect
+      .poll(
+        async () =>
+          chain.readContract({
+            address: governance,
+            abi: governanceAbi,
+            functionName: "hasVoted",
+            args: [1n, voter],
+          }),
+        { timeout: 60_000, intervals: [1_000] },
+      )
+      .toBe(true);
 
-  test("(C) no-proposal state renders gracefully", async ({ page }) => {
-    // Intercept the governance API with an empty proposal list.
-    await page.route("**/v1/governance/proposals", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          proposals: [],
-          block_number: 8000,
-          indexed_at: "2026-05-10T12:00:00Z",
-        }),
-      });
-    });
-
-    const found = await navigateToGovernancePanel(page, endpoints);
-    if (!found) {
-      test.skip(true, "GovernancePanel not mounted in dapp bundle — see test (A) skip message.");
-      return;
-    }
-
-    await expect(page.getByTestId("governance-no-proposal")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId("governance-error")).toHaveCount(0);
-    console.log("suite-10 (C): no-proposal state renders correctly.");
+    // In the index: the tally moved by the voter's power.
+    await expect
+      .poll(async () => (await apiProposals())[0]?.votes_for, {
+        timeout: 120_000,
+        intervals: [2_000],
+      })
+      .toBe(Number(VOTING_POWER));
+    // A fresh context (a second page in this one reconnects the wallet): the panel shows the indexed tally.
+    const ctx = await browser.newContext();
+    const fresh = await ctx.newPage();
+    await openGovernancePanel(fresh);
+    await expect(fresh.getByTestId("governance-proposal-votes-for")).toHaveText(
+      String(VOTING_POWER),
+    );
+    await ctx.close();
   });
 });

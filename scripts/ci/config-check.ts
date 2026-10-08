@@ -11,7 +11,7 @@
 //   - agent-token-shortlist.json launch list is exactly RM (live ROBOTMONEY token, code-hash pinned,
 //     owner-funded V3 pool, fee 10000) and records swapRouter02 (the script parser needs it)
 // Live rules (per asset, pinned to one block): token, pool, factory and router have code,
-//   pool fee() equals config, factory.getPool equals config, observationCardinality >= 2,
+//   pool fee() equals config, factory.getPool equals config, observationCardinality >= 901 (1800 s default TWAP window / 2 s Base blocks + 1, core 1665),
 //   liquidity() > 0, USD TVL (USDC reserve plus other side at slot0 price) >= the file's
 //   minTvlUsd floor.
 //
@@ -365,11 +365,11 @@ export async function liveFindings(rpc: Rpc, tag: string, c: Configs): Promise<{
         add(s, "pool-fee-equals-config", p.fee === a.poolFee, `live=${p.fee} config=${a.poolFee}`);
         add(s, "pool-is-token-usdc", [p.token0, p.token1].sort().join() === [a.token.toLowerCase(), f.usdc.toLowerCase()].sort().join(), `${p.token0},${p.token1}`);
         add(s, "factory-getPool-equals-config", p.factoryPool.toLowerCase() === a.pool.toLowerCase(), `factory=${p.factoryPool} config=${a.pool}`);
-        // BasketVault.addAsset needs cardinality >= 2 and liquidity >= 1e6, so an unfunded RM pool
+        // BasketVault.addAsset needs cardinality >= 901 and liquidity >= 1e6, so an unfunded RM pool
         // fails here before the deploy reverts. The TVL floor is a rwa/protocol file field only.
         // The agent pool is funded by the owner on chain before the mainnet run (core 1554, devops 72). Say so when it is not.
-        const unfunded = isAgent ? ` (RM pool ${a.pool} is not funded yet: the owner must add in-range liquidity and raise observation cardinality before the mainnet run; BasketVault.addAsset needs cardinality>=2 and liquidity>=1e6)` : "";
-        add(s, "observation-cardinality>=2", p.cardinality >= 2, `cardinality=${p.cardinality}${p.cardinality >= 2 ? "" : unfunded}`);
+        const unfunded = isAgent ? ` (RM pool ${a.pool} is not funded yet: the owner must add in-range liquidity and raise observation cardinality before the mainnet run; BasketVault.addAsset needs cardinality>=901 and liquidity>=1e6)` : "";
+        add(s, "observation-cardinality>=901", p.cardinality >= 901, `cardinality=${p.cardinality}${p.cardinality >= 901 ? "" : unfunded}`);
         add(s, "liquidity>0", p.liquidity > 0n, `liquidity=${p.liquidity}${p.liquidity > 0n ? "" : unfunded}`);
         // The addAsset liquidity floor, unrelaxed: a pool with 1..999999 would pass liquidity>0 and still revert the deploy.
         if (isAgent) add(s, "liquidity>=1000000", p.liquidity >= 1_000_000n, `liquidity=${p.liquidity}${p.liquidity >= 1_000_000n ? "" : unfunded}`);

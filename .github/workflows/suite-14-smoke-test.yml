@@ -196,6 +196,33 @@ jobs:
       - name: executed-test guard self-test (required markers, hermetic)
         run: bash .github/scripts/tests/test_cargo_test_require_executed.sh
 
+      # Issue 1436: a devnet test that prints "skipping" and returns early is recorded as PASSED.
+      # The guard fails on any skip_if_no_* helper or direct prerequisites_available() call in the
+      # smoke-test and e2e-rust test dirs (use smoke_test::require_prereqs). The self-test
+      # mutates a temp tree to prove the guard goes red.
+      - name: no silent prerequisite skip in devnet tests (guard + self-test, hermetic)
+        run: |
+          bash .github/scripts/tests/test_check_no_silent_prereq_skip.sh
+          bash .github/scripts/check_no_silent_prereq_skip.sh
+
+      # Issue 1647: the governance e2e tests run on the real Safe and timelock (security-model
+      # section 16). The guard fails if a mock RPC, a fake Safe or the approver-EOA release probe
+      # comes back. The self-test mutates a temp tree to prove the guard goes red.
+      - name: governance e2e tests stay unmocked (guard + self-test, hermetic)
+        run: |
+          bash .github/scripts/tests/test_check_governance_tests_unmocked.sh
+          bash .github/scripts/check_governance_tests_unmocked.sh
+
+      # Issue 1656: a bare `cargo test --test X` exits 0 when X collects zero tests. The guard fails
+      # on any such step in .github/workflows that skips cargo_test_require_executed.sh. Its
+      # self-test runs it on a bare and a wrapped fixture workflow. The floors test replays a stub
+      # cargo through the real wrapper at each floor, floor minus one and zero.
+      - name: every cargo test --test step is wrapped with an executed floor (guard + self-tests, hermetic)
+        run: |
+          bash .github/scripts/tests/test_check_no_bare_cargo_test.sh
+          python3 .github/scripts/check_no_bare_cargo_test.py
+          bash .github/scripts/tests/test_wrapped_step_floors.sh
+
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once. Every chain job
   # below takes it as input.
   pin:

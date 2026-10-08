@@ -5,7 +5,7 @@ description: "Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on
 
 # BasketVaultDeployBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a62b707f1cd64e98d8d714f9420d3ce1885da8d1/contracts/script/BasketVaultDeployBase.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/script/BasketVaultDeployBase.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -20,6 +20,18 @@ Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on the new vault
 deployer needs ADMIN_ROLE for `addAsset` and `setAdapterCodeHashAllowed`, and
 EMERGENCY_ROLE for `pauseDeposits()`. The timelock stage hands both roles over and revokes the
 deployer (core 1487). This script never grants a role to anyone else.
+
+## Constants
+
+### MAX_NAV_DEVIATION_BPS
+
+Hard ceiling the vault setter enforces (BasketVault.MAX_NAV_DEVIATION_BPS, 20%). Mirrored here so a sheet typo fails
+before any deploy transaction. A percent typed as bps (5 meaning 5 percent) is in range but sets a 5 bps guard, which
+fails closed (deposits revert on small drift), never open. A value above 2000 or 0 is refused.
+
+```solidity
+uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000;
+```
 
 ## Functions
 
@@ -348,19 +360,20 @@ function _addAssets(BasketVault vault, Params memory p, Cfg memory cfg, Deployed
 | cfg | `Cfg` |  |
 | d | `Deployed` |  |
 
-<a id="_checkpool-assetcfg"></a>
+<a id="_checkpool-assetcfg-uint256"></a>
 
 ### _checkPool
 
 <i>
 
-Config check on chain: pool code present and live fee equals config. Cardinality
-and liquidity floors are enforced by `addAsset` itself.
+Config check on chain: pool code present, live fee equals config and in-range liquidity
+(`IUniswapV3Pool.liquidity()`, a uint128 L, not a USDC amount) is at least the sheet floor.
+The cardinality floor and the vault's dust `MIN_POOL_LIQUIDITY` are enforced by `addAsset` itself.
 
 </i>
 
 ```solidity
-function _checkPool(AssetCfg memory a) internal view;
+function _checkPool(AssetCfg memory a, uint256 minPoolLiquidity) internal view;
 ```
 
 **Parameters**
@@ -368,6 +381,7 @@ function _checkPool(AssetCfg memory a) internal view;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | a | `AssetCfg` |  |
+| minPoolLiquidity | `uint256` |  |
 
 <a id="_registerifabsent-vaultregistry-address-address"></a>
 
@@ -458,6 +472,11 @@ struct Params {
         uint256 perDepositCap;
         uint256 exitFeeBps;
         address feeRecipient;
+        /// @dev ORA-4 deposit guard threshold in basis points, 1..MAX_NAV_DEVIATION_BPS. Never 0: 0 disables the guard (issue 1666).
+        uint256 navDeviationGuardBps;
+        /// @dev Floor for `IUniswapV3Pool.liquidity()` of every configured pool. That is the pool's in-range liquidity L, a raw uint128 of
+        ///      sqrt(token0 * token1) units, NOT a USDC amount (issue 1666). Must be above 0.
+        uint256 minPoolLiquidity;
     }
 ```
 
@@ -473,6 +492,8 @@ struct Params {
 | perDepositCap | `uint256` |  |
 | exitFeeBps | `uint256` |  |
 | feeRecipient | `address` |  |
+| navDeviationGuardBps | `uint256` |  |
+| minPoolLiquidity | `uint256` |  |
 
 ### AssetCfg
 

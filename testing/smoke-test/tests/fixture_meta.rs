@@ -11,15 +11,7 @@
 //!   cargo test -p smoke-test --release -- --test-threads=1 --nocapture
 
 use alloy_primitives::Address;
-use smoke_test::{prerequisites_available, Fixture};
-
-fn skip_if_no_prereqs(name: &str) -> bool {
-    if !prerequisites_available() {
-        eprintln!("[{name}] anvil/bun/forge/cast not on PATH; skipping.");
-        return true;
-    }
-    false
-}
+use smoke_test::{require_prereqs, Fixture};
 
 /// One shared fixture for the whole suite — booting the Twin fork and
 /// publishing four vaults is slow; paying that per test would make the suite unusable.
@@ -35,9 +27,7 @@ fn fixture() -> &'static Fixture {
 /// RPC responds and reports the expected chain id.
 #[test]
 fn rpc_is_reachable() {
-    if skip_if_no_prereqs("rpc_is_reachable") {
-        return;
-    }
+    require_prereqs("rpc_is_reachable");
     let fx = fixture();
     let chain_id = rpc_call::<String>(fx.rpc_url(), "eth_chainId", serde_json::json!([]));
     let got =
@@ -48,9 +38,7 @@ fn rpc_is_reachable() {
 /// The Twin fork has a head block. The fork is real Base state, so the head is a real Base block.
 #[test]
 fn blocks_are_being_produced() {
-    if skip_if_no_prereqs("blocks_are_being_produced") {
-        return;
-    }
+    require_prereqs("blocks_are_being_produced");
     let fx = fixture();
     let hex = rpc_call::<String>(fx.rpc_url(), "eth_blockNumber", serde_json::json!([]));
     let n = u64::from_str_radix(hex.trim_start_matches("0x"), 16).expect("eth_blockNumber is hex");
@@ -67,9 +55,7 @@ fn blocks_are_being_produced() {
 /// All deployed addresses are non-zero.
 #[test]
 fn deployed_addresses_are_non_zero() {
-    if skip_if_no_prereqs("deployed_addresses_are_non_zero") {
-        return;
-    }
+    require_prereqs("deployed_addresses_are_non_zero");
     let fx = fixture();
     assert_ne!(fx.gateway(), Address::ZERO, "gateway is zero");
     assert_ne!(fx.usdc(), Address::ZERO, "usdc is zero");
@@ -91,9 +77,7 @@ fn deployed_addresses_are_non_zero() {
 /// Gateway, USDC, vault, and adapter contracts have bytecode deployed.
 #[test]
 fn contracts_have_code() {
-    if skip_if_no_prereqs("contracts_have_code") {
-        return;
-    }
+    require_prereqs("contracts_have_code");
     let fx = fixture();
     for (name, addr) in [
         ("gateway", fx.gateway()),
@@ -115,9 +99,7 @@ fn contracts_have_code() {
 /// Issue #277: validates RobotMoneyVault on-chain state via RPC reads.
 #[test]
 fn vault_has_zero_exit_fee_and_one_active_adapter() {
-    if skip_if_no_prereqs("vault_has_zero_exit_fee_and_one_active_adapter") {
-        return;
-    }
+    require_prereqs("vault_has_zero_exit_fee_and_one_active_adapter");
     let fx = fixture();
 
     // exitFeeBps() selector: keccak256("exitFeeBps()")[0..4] = 0x57b17a52
@@ -153,9 +135,7 @@ fn vault_has_zero_exit_fee_and_one_active_adapter() {
 /// Agent and deployer EOAs have non-zero ETH balances.
 #[test]
 fn eoas_are_funded() {
-    if skip_if_no_prereqs("eoas_are_funded") {
-        return;
-    }
+    require_prereqs("eoas_are_funded");
     let fx = fixture();
     for (name, addr_hex) in [
         ("agent", format!("{:#x}", fx.agent())),
@@ -184,9 +164,7 @@ fn eoas_are_funded() {
 /// pauseDeposits → unpauseDeposits round-trips correctly.
 #[test]
 fn pause_deposits_round_trips() {
-    if skip_if_no_prereqs("pause_deposits_round_trips") {
-        return;
-    }
+    require_prereqs("pause_deposits_round_trips");
     let fx = fixture();
     fx.pause_gateway_deposits().expect("pauseDeposits()");
     assert!(
@@ -203,9 +181,7 @@ fn pause_deposits_round_trips() {
 /// revoke → reauthorize round-trips correctly.
 #[test]
 fn revoke_reauthorize_round_trips() {
-    if skip_if_no_prereqs("revoke_reauthorize_round_trips") {
-        return;
-    }
+    require_prereqs("revoke_reauthorize_round_trips");
     let fx = fixture();
     let one_usdc = 1_000_000u128;
     let cap = 10_000 * one_usdc;
@@ -219,9 +195,7 @@ fn revoke_reauthorize_round_trips() {
 /// approve_usdc_from_agent sends a tx that succeeds on-chain.
 #[test]
 fn approve_usdc_succeeds() {
-    if skip_if_no_prereqs("approve_usdc_succeeds") {
-        return;
-    }
+    require_prereqs("approve_usdc_succeeds");
     let fx = fixture();
     let tx_hash = fx
         .approve_usdc_from_agent(100 * 1_000_000)
@@ -237,9 +211,7 @@ fn approve_usdc_succeeds() {
 /// publish contracts wrote a manifest for each of the four vaults, and each has code.
 #[test]
 fn four_vault_manifests_exist_and_have_code() {
-    if skip_if_no_prereqs("four_vault_manifests_exist_and_have_code") {
-        return;
-    }
+    require_prereqs("four_vault_manifests_exist_and_have_code");
     let fx = fixture();
     for key in ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"] {
         let addr = fx.vault_by_key(key);
@@ -255,9 +227,7 @@ fn four_vault_manifests_exist_and_have_code() {
 /// timelock does. Nothing here is set by a deployer fixup.
 #[test]
 fn deployer_holds_no_admin_after_handover() {
-    if skip_if_no_prereqs("deployer_holds_no_admin_after_handover") {
-        return;
-    }
+    require_prereqs("deployer_holds_no_admin_after_handover");
     let fx = fixture();
     let deployer = fx
         .published()

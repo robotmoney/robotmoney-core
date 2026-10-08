@@ -132,6 +132,11 @@ jobs:
       - name: Fusion proposal / architecture close-out invariant (issue #1249)
         run: python3 .github/scripts/check_fusion_closeout_docs.py
 
+      - name: Governance docs drift (issue #1646)
+        # security-model section references resolve, governance-decisions keeps one
+        # voting-power model, manual-admin-actions names the IC policy, receipt and basket vaults.
+        run: python3 .github/scripts/check_governance_docs.py
+
       - name: environments.md script-paths and env-var coverage
         run: python3 .github/scripts/check_environments_doc.py
 

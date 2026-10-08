@@ -21,8 +21,9 @@ const MAX_GAS_APPROVE: u64 = 80_000;
 
 /// Conservative ceiling for the vault deposit gas. The real
 /// deposit traverses the strategy adapters and may rebalance —
-/// 700k leaves headroom over the typical observed cost.
-const MAX_GAS_DEPOSIT: u64 = 700_000;
+/// 1M leaves headroom over the observed cost. Issue 1656 made this test actually run in CI
+/// (it had silently skipped) and measured 833,900 gas on the current vault, above the old 700k.
+const MAX_GAS_DEPOSIT: u64 = 1_000_000;
 
 /// Conservative ceiling for the vault redeem gas.
 const MAX_GAS_REDEEM: u64 = 1_100_000;

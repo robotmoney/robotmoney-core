@@ -17,8 +17,21 @@ contract ZeroLiquidityPool is ConstPool {
     }
 }
 
-/// @dev A pool whose observation cardinality is 1 (below the floor of 2).
-contract CardinalityOnePool is ConstPool {
+/// @dev A pool that reports exactly `liq` of in-range liquidity.
+contract FixedLiquidityPool is ConstPool {
+    uint128 private immutable _liq;
+
+    constructor(address a, address b, uint24 fee_, uint128 liq) ConstPool(a, b, fee_) {
+        _liq = liq;
+    }
+
+    function liquidity() external view override returns (uint128) {
+        return _liq;
+    }
+}
+
+/// @dev A pool whose observation cardinality is 900, one below the 1800 s window floor of 901 (core 1665).
+contract CardinalityBelowFloorPool is ConstPool {
     constructor(address a, address b, uint24 fee_) ConstPool(a, b, fee_) {}
 
     function slot0()
@@ -27,12 +40,12 @@ contract CardinalityOnePool is ConstPool {
         override
         returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
     {
-        return (uint160(1 << 96), 0, 0, 1, 1, 0, true);
+        return (uint160(1 << 96), 0, 0, 900, 900, 0, true);
     }
 }
 
 /// @notice Core 1490 and 1492: the rmPROTO and rmRWA scripts refuse an asset whose pool has zero
-///         liquidity, too little observation history or no code. These are the same three
+///         liquidity (the sheet floor catches it before `addAsset`), too little observation history or no code. These are the same three
 ///         live-pool facts the config-check script rejects, so a pool shaped like wSOL
 ///         (empty pool) cannot reach a deployed vault through either script.
 contract DeployBasketVaultPoolGuardsTest is BasketDeployFixture {
@@ -58,32 +71,43 @@ contract DeployBasketVaultPoolGuardsTest is BasketDeployFixture {
         json = _oneAssetJson(address(new ZeroLiquidityPool(token, address(usdc), 500)), token);
     }
 
-    function _cardinalityOne() internal returns (string memory json) {
+    address internal lowPool;
+
+    function _cardinalityBelowFloor() internal returns (string memory json) {
         address token = address(new TestERC20());
-        json = _oneAssetJson(address(new CardinalityOnePool(token, address(usdc), 500)), token);
+        lowPool = address(new CardinalityBelowFloorPool(token, address(usdc), 500));
+        json = _oneAssetJson(lowPool, token);
     }
 
     function test_proto_revertsOnZeroLiquidityPool() public {
         string memory json = _zeroLiquidity();
-        vm.expectPartialRevert(BasketVault.InsufficientPoolLiquidity.selector);
+        vm.expectRevert(bytes("T0: pool liquidity is below MIN_POOL_LIQUIDITY"));
         proto.runInProcess(_params(), json);
     }
 
-    function test_proto_revertsOnCardinalityBelowTwo() public {
-        string memory json = _cardinalityOne();
-        vm.expectPartialRevert(BasketVault.InsufficientPoolCardinality.selector);
+    function test_proto_revertsOnCardinalityBelowWindowFloor() public {
+        string memory json = _cardinalityBelowFloor();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketVault.InsufficientPoolCardinality.selector, lowPool, uint16(901), uint16(900)
+            )
+        );
         proto.runInProcess(_params(), json);
     }
 
     function test_rwa_revertsOnZeroLiquidityPool() public {
         string memory json = _zeroLiquidity();
-        vm.expectPartialRevert(BasketVault.InsufficientPoolLiquidity.selector);
+        vm.expectRevert(bytes("T0: pool liquidity is below MIN_POOL_LIQUIDITY"));
         rwa.runInProcess(_params(), json);
     }
 
-    function test_rwa_revertsOnCardinalityBelowTwo() public {
-        string memory json = _cardinalityOne();
-        vm.expectPartialRevert(BasketVault.InsufficientPoolCardinality.selector);
+    function test_rwa_revertsOnCardinalityBelowWindowFloor() public {
+        string memory json = _cardinalityBelowFloor();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketVault.InsufficientPoolCardinality.selector, lowPool, uint16(901), uint16(900)
+            )
+        );
         rwa.runInProcess(_params(), json);
     }
 
@@ -101,5 +125,43 @@ contract DeployBasketVaultPoolGuardsTest is BasketDeployFixture {
         BasketVaultDeployBase.Deployed memory d = proto.runInProcess(_params(), json);
         assertEq(d.tokens.length, 1);
         assertTrue(d.paused);
+    }
+
+    // ─── Issue 1666: the sheet floor on in-range liquidity ────────────────────
+
+    uint128 internal constant FLOOR = 5e12;
+
+    function _poolWithLiquidity(uint128 liq) internal returns (string memory json) {
+        address token = address(new TestERC20());
+        json = _oneAssetJson(address(new FixedLiquidityPool(token, address(usdc), 500, liq)), token);
+    }
+
+    function _paramsWithFloor() internal view returns (BasketVaultDeployBase.Params memory p) {
+        p = _params();
+        p.minPoolLiquidity = FLOOR;
+    }
+
+    function test_proto_revertsWhenPoolLiquidityIsBelowTheSheetFloor() public {
+        string memory json = _poolWithLiquidity(FLOOR - 1);
+        vm.expectRevert(bytes("T0: pool liquidity is below MIN_POOL_LIQUIDITY"));
+        proto.runInProcess(_paramsWithFloor(), json);
+    }
+
+    function test_proto_succeedsWhenPoolLiquidityEqualsTheSheetFloor() public {
+        string memory json = _poolWithLiquidity(FLOOR);
+        BasketVaultDeployBase.Deployed memory d = proto.runInProcess(_paramsWithFloor(), json);
+        assertEq(d.tokens.length, 1);
+    }
+
+    function test_rwa_revertsWhenPoolLiquidityIsBelowTheSheetFloor() public {
+        string memory json = _poolWithLiquidity(FLOOR - 1);
+        vm.expectRevert(bytes("T0: pool liquidity is below MIN_POOL_LIQUIDITY"));
+        rwa.runInProcess(_paramsWithFloor(), json);
+    }
+
+    function test_rwa_succeedsWhenPoolLiquidityEqualsTheSheetFloor() public {
+        string memory json = _poolWithLiquidity(FLOOR);
+        BasketVaultDeployBase.Deployed memory d = rwa.runInProcess(_paramsWithFloor(), json);
+        assertEq(d.tokens.length, 1);
     }
 }

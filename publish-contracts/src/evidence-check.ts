@@ -31,6 +31,19 @@ export const BASKETS = ["PROTO", "AGENT", "RWA"] as const;
 export const GOVERN_STEPS: readonly string[] = BASKETS.map((b) => `unpause-${b}`);
 
 /**
+ * Issue 1667: a vault the tool paused (pause-all, any of the four, rmUSDC included) comes back through a Safe -> Timelock unpause round. rmUSDC ships open, so its
+ * step is optional: present only when pause-all paused it. The one call on rmUSDC the evidence accepts is unpauseDeposits(). Every unpause step may repeat as a
+ * numbered ROUND (`round`, default 1): a vault paused again after an executed unpause has a second round with its own schedule, execute and operation id.
+ */
+export const USDC_STEP = "unpause-USDC";
+export const UNPAUSE_STEPS: readonly string[] = [...GOVERN_STEPS, USDC_STEP];
+const VAULT_OF_STEP: Record<string, string> = { "unpause-USDC": "rmUSDC", "unpause-PROTO": "rmPROTO", "unpause-AGENT": "rmAGENT", "unpause-RWA": "rmRWA" };
+const UNPAUSE_ABI = parseAbi(["function unpauseDeposits()"]);
+export const unpauseCalldata = (): Hex => encodeFunctionData({ abi: UNPAUSE_ABI, functionName: "unpauseDeposits" });
+const roundOf = (g: any): number => (g?.round === undefined ? 1 : g.round);
+const stepLabel = (g: any): string => (roundOf(g) === 1 ? String(g?.step) : `${g?.step} round ${roundOf(g)}`);
+
+/**
  * The one other operation the timelock may carry on 8453 (issue 1611): a post-launch consensus receipt release, recorded under `receipt_releases` (never
  * in `govern`, so stage 13 stays the three unpauses). One entry per receipt: one schedule and one execute at least MAINNET_DELAY_FLOOR apart, the target the
  * receipt contract (`consensus_receipt.address`), the calldata releaseReceipt(receipt_id). The list is optional. Any other operation fails.
@@ -67,8 +80,18 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): s
 
   const govern: any[] = Array.isArray(ev?.govern) ? ev.govern : [];
   for (const step of GOVERN_STEPS) if (!govern.some((g) => g?.step === step)) bad(`govern step '${step}' of Stage 13 has no evidence entry`);
-  for (const g of govern) if (!GOVERN_STEPS.includes(g?.step)) bad(`govern step '${g?.step}' is not a basket unpause: on 8453 the only operation after the handover is ${GOVERN_STEPS.join(", ")} (update-delay, batch and cancel are Twin-only)`);
-  for (const step of GOVERN_STEPS) if (govern.filter((g) => g?.step === step).length > 1) bad(`govern step '${step}' has more than one evidence entry`);
+  for (const g of govern) if (!UNPAUSE_STEPS.includes(g?.step)) bad(`govern step '${g?.step}' is not a basket unpause: on 8453 the only operation after the handover is ${UNPAUSE_STEPS.join(", ")} (update-delay, batch and cancel are Twin-only)`);
+  for (const g of govern) if (g?.round !== undefined && !(Number.isInteger(g.round) && g.round >= 1)) bad(`govern ${g?.step}: round ${g.round} is not a positive integer`);
+  // one entry per (step, round); the rounds of a step are 1..n in order, and a later round is scheduled only after the earlier one executed
+  for (const step of UNPAUSE_STEPS) {
+    const entries = govern.filter((g) => g?.step === step && Number.isInteger(roundOf(g)) && roundOf(g) >= 1).sort((x, y) => roundOf(x) - roundOf(y));
+    for (const [i, g] of entries.entries()) {
+      if (i > 0 && roundOf(entries[i - 1]) === roundOf(g)) { bad(`govern step '${step}' has more than one evidence entry${roundOf(g) > 1 ? ` for round ${roundOf(g)}` : ""}`); continue; }
+      if (roundOf(g) !== i + 1) bad(`govern step '${step}': rounds must be 1 to ${entries.length} in order, found round ${roundOf(g)} at position ${i + 1}`);
+      const prev = entries[i - 1];
+      if (prev && roundOf(prev) !== roundOf(g) && !(Number(g.schedule_block_timestamp) > Number(prev.execute_block_timestamp))) bad(`govern ${stepLabel(g)}: scheduled at ${g.schedule_block_timestamp}, not after round ${roundOf(prev)} executed at ${prev.execute_block_timestamp}`);
+    }
+  }
   const releases: any[] = ev?.receipt_releases === undefined ? [] : Array.isArray(ev.receipt_releases) ? ev.receipt_releases : (bad("receipt_releases is not a list"), []);
   if (releases.length > 0 && !ADDR.test(ev?.consensus_receipt?.address ?? "")) bad("consensus_receipt.address is missing: a receipt release has no target to check");
   const seenIds = new Set<string>();
@@ -81,7 +104,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): s
     if (r?.step !== undefined && r.step !== "release-receipt") bad(`${w}: step '${r.step}' is not release-receipt`);
   }
   // one operation per unpause or release: no schedule or execute transaction, and no timelock operation id, is shared by two operations
-  const operations = [...govern, ...releases.map((r) => ({ ...r, step: releaseLabel(r) }))];
+  const operations = [...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) }))];
   for (const field of ["schedule_tx", "execute_tx", "operation_id"]) {
     const seen = new Map<string, string>();
     for (const g of operations) {
@@ -168,14 +191,22 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
 
   const ts = async (rc: { blockNumber: bigint }) => Number((await chain.getBlock({ blockNumber: rc.blockNumber })).timestamp);
   const idsByStep = new Map<string, string>();
-  const byStep = (ev.govern ?? []).slice().sort((x: any, y: any) => GOVERN_STEPS.indexOf(x?.step) - GOVERN_STEPS.indexOf(y?.step));
-  for (const g of byStep) {
-    if (!GOVERN_STEPS.includes(g?.step)) { bad(`govern ${g?.step}: not a basket unpause, no other operation may be scheduled on 8453`); continue; }
+  const byStep = (ev.govern ?? []).slice().sort((x: any, y: any) => UNPAUSE_STEPS.indexOf(x?.step) - UNPAUSE_STEPS.indexOf(y?.step) || roundOf(x) - roundOf(y));
+  for (const g0 of byStep) {
+    if (!UNPAUSE_STEPS.includes(g0?.step)) { bad(`govern ${g0?.step}: not a basket unpause, no other operation may be scheduled on 8453`); continue; }
+    const g = { ...g0, step: stepLabel(g0) };
+    const vaultAddr = ev.vaults?.[VAULT_OF_STEP[g0.step]!]?.address as string | undefined;
     const sc = await status(`govern ${g.step} schedule`, g.schedule_tx);
     if (!sc) continue;
     const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled");
     if (scheduled.length === 0) { bad(`govern ${g.step}: the schedule tx has no CallScheduled event from the timelock`); continue; }
     for (const e of scheduled) if (!(e.delay !== undefined && e.delay >= BigInt(MAINNET_DELAY_FLOOR))) bad(`govern ${g.step}: CallScheduled delay ${e.delay} is under ${MAINNET_DELAY_FLOOR} s`);
+    // an unpause round is exactly one call: unpauseDeposits() on that step's own vault. Any other call on a vault (rmUSDC included) is refused.
+    if (scheduled.length !== 1) bad(`govern ${g.step}: the schedule tx has ${scheduled.length} CallScheduled events, an unpause is exactly one call`);
+    for (const e of scheduled) {
+      if (!vaultAddr || lc(e.target) !== lc(vaultAddr)) bad(`govern ${g.step}: CallScheduled target ${e.target} is not ${VAULT_OF_STEP[g0.step]} ${vaultAddr}`);
+      else if (lc(e.data) !== lc(unpauseCalldata())) bad(`govern ${g.step}: CallScheduled calldata is not ${VAULT_OF_STEP[g0.step]}.unpauseDeposits(): the only call a govern round may make on a vault`);
+    }
     // one operation per unpause: a timelock operation id belongs to one step only
     for (const e of scheduled) {
       const other = idsByStep.get(e.id);
@@ -215,15 +246,21 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= MAINNET_DELAY_FLOOR)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${MAINNET_DELAY_FLOOR} s`);
   }
-  // The unpause govern rows and the depositsPaused() reads must tell one story: a basket vault is unpaused on chain exactly when its unpause step executed.
-  for (const b of BASKETS) {
-    const row = (ev.govern ?? []).find((g: any) => g?.step === `unpause-${b}`);
+  // The unpause govern rows and the depositsPaused() reads must tell one story: a basket vault is unpaused on chain exactly when its LATEST unpause round executed,
+  // and rmUSDC (open from launch, reopened by an unpause-USDC round after pause-all) reads unpaused whatever rounds it has.
+  for (const b of [...BASKETS, "USDC"] as const) {
+    const rows = (ev.govern ?? []).filter((g: any) => g?.step === `unpause-${b}`).sort((x: any, y: any) => roundOf(x) - roundOf(y));
+    const row = rows[rows.length - 1];
     const vault = ev.vaults?.[`rm${b}`]?.address;
     if (!vault) continue;
     let paused: unknown;
     try { paused = await chain.readContract({ address: vault, abi: PAUSED_ABI, functionName: "depositsPaused" }); }
     catch (e) { bad(`rm${b}.depositsPaused() not readable (${(e as Error).message})`); continue; }
     const executed = !!row && row.execute_status === 1 && TX.test(row.execute_tx ?? "");
+    if (b === "USDC") {
+      if (paused !== false) bad(`rmUSDC.depositsPaused() reads ${String(paused)} on chain, want false: rmUSDC ships open, so a pause needs an executed unpause-USDC round to reopen it`);
+      continue;
+    }
     if (executed && paused !== false) bad(`govern unpause-${b} executed with receipt status 1, but rm${b}.depositsPaused() reads ${String(paused)} on chain, want false`);
     if (!executed && paused === false) bad(`rm${b}.depositsPaused() reads false on chain, but govern unpause-${b} has no executed receipt`);
   }

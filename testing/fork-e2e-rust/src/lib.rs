@@ -116,6 +116,16 @@ impl HarnessError {
 macro_rules! skip_if_no_fork {
     () => {
         if !$crate::can_run() {
+            // Issue 1643: a skip is a pass with zero assertions. In CI the fork is always wired
+            // in, so its absence is a broken job and must be red. Locally (CI unset) it still
+            // skips so a contributor without a fork can run the crate.
+            if $crate::skip_is_fatal() {
+                panic!(
+                    "[fork-e2e] CI is set but no fork is available (no RMPC_TESTNET_RPC_URL and no \
+                     usable RMPC_FORK_RPC_URL with anvil). Refusing to skip: a skipped fork test \
+                     is a false green."
+                );
+            }
             eprintln!(
                 "[fork-e2e] skipping: no RMPC_TESTNET_RPC_URL and no RMPC_FORK_RPC_URL. \
                  Point RMPC_TESTNET_RPC_URL at a running Twin fork (anvil on real Base state), \
@@ -154,15 +164,9 @@ macro_rules! skip_in_testnet_mode {
 #[macro_export]
 macro_rules! skip_if_no_devnet_fork {
     () => {
-        if which::which("anvil").is_err()
-            || !std::env::var("RMPC_FORK_RPC_URL")
-                .map(|v| !v.is_empty())
-                .unwrap_or(false)
-        {
-            eprintln!(
-                "[fork-e2e] skipping: RMPC_FORK_RPC_URL not set. \
-                 This test requires a live Base archive RPC."
-            );
+        // Issue 1656: like `skip_if_no_fork!`, a missing fork is a panic when CI is set (a skip is
+        // a pass with zero assertions) and a quiet skip locally.
+        if !$crate::devnet_fork_available_or_skip() {
             return;
         }
     };
@@ -235,6 +239,52 @@ macro_rules! parameterized_e2e {
             }
         }
     };
+}
+
+/// True when `ci` (the value of the `CI` env var) marks a CI run: set and non-empty, and not a
+/// literal false. GitHub Actions sets `CI=true`.
+pub fn ci_value_is_ci(ci: Option<&str>) -> bool {
+    match ci {
+        Some(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !(v.is_empty() || v == "false" || v == "0")
+        }
+        None => false,
+    }
+}
+
+/// True when an unavailable fork must fail the test instead of skipping it (issue 1643).
+pub fn skip_is_fatal() -> bool {
+    ci_value_is_ci(std::env::var("CI").ok().as_deref())
+}
+
+/// Decision core of [`skip_if_no_devnet_fork!`] (issue 1656), split from the environment reads so
+/// it is unit-testable. `true` means run, `false` means skip, and a missing fork under CI panics.
+pub fn devnet_fork_gate(ci: Option<&str>, anvil_on_path: bool, fork_url: Option<&str>) -> bool {
+    let have_url = fork_url.map(|v| !v.is_empty()).unwrap_or(false);
+    if anvil_on_path && have_url {
+        return true;
+    }
+    if ci_value_is_ci(ci) {
+        panic!(
+            "[fork-e2e] CI is set but no devnet fork is available (needs anvil on PATH and \
+             RMPC_FORK_RPC_URL). Refusing to skip: a skipped fork test is a false green."
+        );
+    }
+    eprintln!(
+        "[fork-e2e] skipping: RMPC_FORK_RPC_URL not set. \
+         This test requires a live Base archive RPC."
+    );
+    false
+}
+
+/// Environment-reading wrapper over [`devnet_fork_gate`] used by [`skip_if_no_devnet_fork!`].
+pub fn devnet_fork_available_or_skip() -> bool {
+    devnet_fork_gate(
+        std::env::var("CI").ok().as_deref(),
+        which::which("anvil").is_ok(),
+        std::env::var("RMPC_FORK_RPC_URL").ok().as_deref(),
+    )
 }
 
 /// Returns true iff the harness can run fork-e2e tests: `RMPC_TESTNET_RPC_URL` (the shared Twin
@@ -1330,6 +1380,46 @@ fn sign_eip1559(tx: &TxEip1559, sk: &SigningKey) -> alloy_primitives::Signature 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue 1643: `CI=true` makes a missing fork fatal, an unset or false `CI` keeps the
+    /// local skip.
+    #[test]
+    fn ci_value_decides_whether_a_missing_fork_is_fatal() {
+        assert!(ci_value_is_ci(Some("true")));
+        assert!(ci_value_is_ci(Some("1")));
+        assert!(!ci_value_is_ci(Some("")));
+        assert!(!ci_value_is_ci(Some("false")));
+        assert!(!ci_value_is_ci(Some("0")));
+        assert!(!ci_value_is_ci(None));
+    }
+
+    /// Issue 1656: `skip_if_no_devnet_fork!` panics under CI when the fork is absent and still
+    /// skips locally. Removing the panic in `devnet_fork_gate` fails the `should_panic` tests.
+    #[test]
+    #[should_panic(expected = "Refusing to skip")]
+    fn devnet_fork_gate_panics_in_ci_without_url() {
+        devnet_fork_gate(Some("true"), true, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Refusing to skip")]
+    fn devnet_fork_gate_panics_in_ci_without_anvil() {
+        devnet_fork_gate(Some("true"), false, Some("http://127.0.0.1:8545"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Refusing to skip")]
+    fn devnet_fork_gate_panics_in_ci_with_empty_url() {
+        devnet_fork_gate(Some("1"), true, Some(""));
+    }
+
+    #[test]
+    fn devnet_fork_gate_skips_locally_and_runs_when_available() {
+        assert!(!devnet_fork_gate(None, true, None));
+        assert!(!devnet_fork_gate(Some("false"), false, Some("http://x")));
+        assert!(devnet_fork_gate(None, true, Some("http://x")));
+        assert!(devnet_fork_gate(Some("true"), true, Some("http://x")));
+    }
 
     /// The transient-detection predicate that gates [`Rpc::wait_for_receipt`]'s
     /// retry: it must match Geth's "indexing is in progress" message (however

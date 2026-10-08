@@ -26,7 +26,7 @@ contract ConstPool {
         return _fee;
     }
 
-    function liquidity() external pure virtual returns (uint128) {
+    function liquidity() external view virtual returns (uint128) {
         return 1e18;
     }
 
@@ -36,7 +36,7 @@ contract ConstPool {
         virtual
         returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
     {
-        return (uint160(1 << 96), 0, 0, 100, 100, 0, true);
+        return (uint160(1 << 96), 0, 0, 1000, 1000, 0, true);
     }
 
     function observe(uint32[] calldata secondsAgos)
@@ -68,6 +68,9 @@ abstract contract BasketDeployFixture is Test {
 
     uint256 internal constant TVL_CAP = 50_000 * 1e6;
     uint256 internal constant PER_DEPOSIT_CAP = 5_000 * 1e6;
+    uint256 internal constant NAV_DEVIATION_BPS = 100;
+    /// @dev Below the ConstPool double liquidity of 1e18.
+    uint256 internal constant MIN_POOL_LIQUIDITY = 1e12;
 
     function _fixtureSetUp() internal {
         usdc = new TestERC20();
@@ -83,8 +86,41 @@ abstract contract BasketDeployFixture is Test {
             tvlCap: TVL_CAP,
             perDepositCap: PER_DEPOSIT_CAP,
             exitFeeBps: 0,
-            feeRecipient: feeRecipient
+            feeRecipient: feeRecipient,
+            navDeviationGuardBps: NAV_DEVIATION_BPS,
+            minPoolLiquidity: MIN_POOL_LIQUIDITY
         });
+    }
+
+    /// @dev Sets every script env input under `prefix` except `skip` (issue 1666 tests: env vars are process-wide, so each test passes a
+    ///      prefix that no other test uses).
+    function _setSheetEnv(string memory prefix, string memory skip) internal {
+        string[9] memory names = [
+            "ADMIN_ADDRESS",
+            "SWAP_ROUTER",
+            "REGISTRY_ADDRESS",
+            "TVL_CAP",
+            "PER_DEPOSIT_CAP",
+            "FEE_RECIPIENT",
+            "EXIT_FEE_BPS",
+            "NAV_DEVIATION_BPS",
+            "MIN_POOL_LIQUIDITY"
+        ];
+        string[9] memory values = [
+            vm.toString(deployer),
+            vm.toString(router02),
+            vm.toString(address(registry)),
+            "50000000000",
+            "5000000000",
+            vm.toString(feeRecipient),
+            "0",
+            "100",
+            "1000000000000"
+        ];
+        for (uint256 i = 0; i < names.length; i++) {
+            if (keccak256(bytes(names[i])) == keccak256(bytes(skip))) continue;
+            vm.setEnv(string.concat(prefix, names[i]), values[i]);
+        }
     }
 
     /// @dev Config body with `swapRouter02` and one row per `tokens[i]`/`pools[i]`.

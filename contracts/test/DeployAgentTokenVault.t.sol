@@ -7,6 +7,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {BasketVaultDeployBase} from "../script/BasketVaultDeployBase.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {BasketVault} from "../vaults/BasketVault.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
 import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";
@@ -23,6 +24,10 @@ contract AgentDeployHarness is DeployAgentTokenVault {
 
     function manifestPath() external view returns (string memory) {
         return _manifestPath();
+    }
+
+    function readPrefixed(string memory prefix) external view returns (Params memory) {
+        return _readParamsFrom(prefix);
     }
 }
 
@@ -188,6 +193,76 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         BasketVaultDeployBase.Params memory p = _params();
         p.swapRouter = makeAddr("other");
         vm.expectRevert(bytes("SWAP_ROUTER is not SwapRouter02"));
+        script.runInProcess(p, json);
+    }
+
+    // ─── Issue 1666: the NAV deviation guard and the pool floor come from the sheet ──
+
+    function _prepare(BasketVaultDeployBase.Params memory p) internal returns (string memory json) {
+        json = _etchConfigPools("config/agent-token-shortlist.json", "shortlist");
+        p.swapRouter = _configRouter(json);
+    }
+
+    function _deployWith(BasketVaultDeployBase.Params memory p)
+        internal
+        returns (BasketVaultDeployBase.Deployed memory)
+    {
+        return script.runInProcess(p, _prepare(p));
+    }
+
+    /// @notice The vault ships with the sheet guard, not the vault default of 0 (which disables ORA-4).
+    function test_guard_navDeviationGuardBpsEqualsTheSheetValue() public {
+        BasketVaultDeployBase.Deployed memory d = _deployWith(_params());
+        assertEq(
+            BasketVault(d.vault).navDeviationGuardBps(), NAV_DEVIATION_BPS, "guard from the sheet"
+        );
+        assertGt(BasketVault(d.vault).navDeviationGuardBps(), 0, "guard above zero");
+    }
+
+    function test_guard_acceptsTheCeiling() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 2000;
+        BasketVaultDeployBase.Deployed memory d = _deployWith(p);
+        assertEq(BasketVault(d.vault).navDeviationGuardBps(), 2000);
+    }
+
+    function test_reverts_whenNavDeviationBpsUnset() public {
+        string memory prefix = "D1666AGENT_";
+        AgentDeployHarness h = new AgentDeployHarness();
+        _setSheetEnv(prefix, "NAV_DEVIATION_BPS");
+        vm.expectRevert(bytes(string.concat(prefix, "NAV_DEVIATION_BPS must be set")));
+        h.readPrefixed(prefix);
+    }
+
+    function test_reverts_whenNavDeviationBpsZero() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 0;
+        string memory json = _prepare(p);
+        vm.expectRevert(bytes("NAV_DEVIATION_BPS must be 1..2000"));
+        script.runInProcess(p, json);
+    }
+
+    function test_reverts_whenNavDeviationBpsAboveCeiling() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 2001;
+        string memory json = _prepare(p);
+        vm.expectRevert(bytes("NAV_DEVIATION_BPS must be 1..2000"));
+        script.runInProcess(p, json);
+    }
+
+    function test_reverts_whenMinPoolLiquidityUnset() public {
+        string memory prefix = "D1666LAGENT_";
+        AgentDeployHarness h = new AgentDeployHarness();
+        _setSheetEnv(prefix, "MIN_POOL_LIQUIDITY");
+        vm.expectRevert(bytes(string.concat(prefix, "MIN_POOL_LIQUIDITY must be set")));
+        h.readPrefixed(prefix);
+    }
+
+    function test_reverts_whenMinPoolLiquidityZero() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.minPoolLiquidity = 0;
+        string memory json = _prepare(p);
+        vm.expectRevert(bytes("MIN_POOL_LIQUIDITY missing from the sheet"));
         script.runInProcess(p, json);
     }
 }

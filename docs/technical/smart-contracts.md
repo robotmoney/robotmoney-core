@@ -70,6 +70,18 @@
 
 > **Retired v1, tests never read it.** The addresses in this section document the retired v1 production deployment for history only. No test, script or CI job reads the live v1 vault. Every test deploys its own vault from our scripts onto the Twin chain (a pinned lazy fork of real Base state, core 1498, 1496).
 
+> **v1 vault control status (default pending owner confirmation).** The v1
+> vault was deployed with the Safe `0x88bA…75A0` as the `_admin` constructor
+> argument (§2.4, §5 role table), so its `ADMIN_ROLE` and `EMERGENCY_ROLE` follow
+> that constructor argument, not a `TimelockController`. `DeployTimelock.s.sol`
+> hands over only the vaults listed in `VAULT_ADDRESSES` for the launch run, and
+> the launch plan (devops issue 72) deploys four new vaults (rmUSDC, rmPROTO,
+> rmAGENT, rmRWA) behind the timelock. Whether to migrate the v1 vault behind a
+> timelock or retire it is an owner decision that has **not** been made. The
+> current default is option (b): retire v1 and document its Safe-direct control
+> as legacy (see `docs/operations/retired-v1-vault-maintenance.md`). This default
+> stays until the owner confirms or changes it.
+
 ### 2.1 Core allocation and governance contracts
 
 | Contract | Address | Source file |
@@ -126,11 +138,11 @@ The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (cor
 
 | Role | Keccak | Granted at deploy | Powers |
 |---|---|---|---|
-| `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` constructor arg | Add/remove/reconfigure adapters, set caps/fees (governance-gated, INV-3: ADMIN_ROLE is held by the TimelockController in production), `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval`. **No** `rescueTokens` — arbitrary-recipient rescue is deleted (INV-1); the only token movement is the permissionless `sweepForeignToken` |
+| `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` constructor arg | Add/remove/reconfigure adapters, set caps/fees (governance-gated, INV-3: ADMIN_ROLE is held by the TimelockController on the launch vaults; the retired v1 vault is the exception, see §2), `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval`. **No** `rescueTokens` — arbitrary-recipient rescue is deleted (INV-1); the only token movement is the permissionless `sweepForeignToken` |
 | `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_admin` constructor arg | `pauseDeposits`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault`. `unpauseDeposits` is `ADMIN_ROLE` only. |
 | `KEEPER_ROLE` | `keccak256("KEEPER_ROLE")` | **Not granted at launch** | `rebalance` |
 
-`ADMIN_ROLE` is its own admin (can grant/revoke itself). In production, the constructor arg is the Safe multisig `0x88bA…75A0`.
+`ADMIN_ROLE` is its own admin (can grant/revoke itself). For the retired v1 vault, the constructor arg is the Safe multisig `0x88bA…75A0`. For the launch vaults, stage 11 moves `ADMIN_ROLE` to the timelock and `EMERGENCY_ROLE` to the independent emergency key.
 
 ### 3.3 Immutable constants (cannot be changed by any role)
 
@@ -481,7 +493,7 @@ The router maintains two weight vectors:
 
 At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the launch vector with `setWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. Because it is written with `setWeights`, `votedWeightsActive` is true from deploy. rmPROTO, rmAGENT and rmRWA are not in that vector, so each routes 0.
 
-The timelock may set default weights only. Active weights come only from RouterGovernance votes. (Not yet implemented: core #1522. `setWeights` is gated by router `ADMIN_ROLE`, which the timelock also holds after stage 11.)
+The timelock may set default weights only. Active weights come only from RouterGovernance votes: `PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE`, held by RouterGovernance, and stage 11 grants the timelock `ADMIN_ROLE` only (core 1522, `docs/technical/governance-decisions.md` §3.6).
 
 #### Routing eligibility
 
@@ -647,7 +659,7 @@ All three subclasses inherit BasketVault behavior and are configured with:
 
 ### 9.3.7 Key invariants and constraints
 
-- **NAV closure on oracle failure**: If `observe()` reverts (cardinality too low for the configured window), NAV reads fail closed and normal deposits/withdrawals revert. Emergency unwind is the only escape path (ADMIN_ROLE must have pre-configured `emergencyUnwindGuard` with a fallback floor and loss tolerance).
+- **NAV closure on oracle failure**: If `observe()` reverts (cardinality too low for the configured window), NAV reads fail closed and normal deposits/withdrawals revert. `redeemInKind(shares, receiver, owner)` is the oracle-free holder exit (core 1665): pro-rata idle USDC and active basket tokens less `exitFeeBps`, no TWAP, no swap. Emergency unwind is the only escape path (ADMIN_ROLE must have pre-configured `emergencyUnwindGuard` with a fallback floor and loss tolerance).
 - **Slippage protection**: Deposits and swaps enforce admin-set `maxSlippageBps` (max 500 BPS = 5%). ADMIN_ROLE may tighten but not exceed this hard ceiling.
 - **Proportional withdrawal**: Withdrawals pull from each active asset proportionally to balance; no rebalancing occurs on withdrawal.
 - **Equal-weight deposit split** (current): Each deposit splits equally across active assets. Future versions may allow weight vectors (not yet shipped).

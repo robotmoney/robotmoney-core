@@ -3,10 +3,11 @@
 // by the Twin fork publish (core-stages-twin-chain) and on 8453 (runbook Q2), never here.
 // Issue 1520: the only mainnet operation after the handover is the basket unpause. Everything else is deploy-time configuration.
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { decodeFunctionData, toFunctionSelector } from "viem";
-import { PublishError } from "../src/errors.ts";
-import { GOVERN_ROWS, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VAULT_ABI, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
-import { newManifest } from "../src/runner.ts";
+import { EXIT_CODES, PublishError } from "../src/errors.ts";
+import { GOVERN_ROWS, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, UNPAUSE_USDC_ROW, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
+import { beginPauseEntry, loadRunManifest, newManifest, nextManifestSeq, saveRunManifest, updatePauseEntry } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
 import { SHA, sheetText } from "./fixtures.ts";
@@ -388,11 +389,11 @@ describe("resume of a half-done step", () => {
     const manifest = newManifest(ctx, addr(0xa001));
     const go = () => run(ctx, manifest, sheet, tl, { row: "unpause-PROTO", maxWaitSeconds: 60 });
     await expect(go()).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(Object.keys((manifest.govern as any)["unpause-PROTO"])).toEqual(["scheduled"]);
+    expect(Object.keys((manifest.govern as any)["unpause-PROTO"])).toEqual(["round", "scheduled"]);
     tl.s.clock += DELAY;
     await go();
     expect(tl.s.events).toEqual(["schedule:unpause-PROTO", "execute:unpause-PROTO"]);
-    expect(Object.keys((manifest.govern as any)["unpause-PROTO"])).toEqual(["scheduled", "executed"]);
+    expect(Object.keys((manifest.govern as any)["unpause-PROTO"])).toEqual(["round", "scheduled", "executed"]);
   });
 
   test("a step executed on chain but not recorded is read back and recorded without a second execute", async () => {
@@ -624,3 +625,357 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
     expect(tl.s.events.length).toBe(0);
   });
 });
+
+
+// ---- issue 1667: unpause-USDC and numbered rounds ----
+describe("issue 1667: the on-demand unpause-USDC row and round-numbered salts", () => {
+  const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
+  const R = (ctx: any, manifest: any, sheet: any, tl: any, extra: object = {}) => run(ctx, manifest, sheet, tl, { warp: noWarp, ...extra });
+  /** A full default 8453 run: schedule, wait, execute all three baskets. */
+  async function launched() {
+    const d = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet0(d), DELAY);
+    const manifest = newManifest(d.ctx, addr(0xa001));
+    await expect(R(d.ctx, manifest, d.sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    tl.s.clock += DELAY;
+    await R(d.ctx, manifest, d.sheet, tl);
+    return { ...d, tl, manifest };
+  }
+  const sheet0 = (d: { sheet: ReturnType<typeof parseSheet> }) => d.sheet;
+
+  test("unpause-USDC is accepted by name, is not a numbered row, and is in no default run on either chain", () => {
+    expect(resolveGovernRow("unpause-USDC")).toBe(UNPAUSE_USDC_ROW);
+    expect(GOVERN_ROWS as readonly string[]).not.toContain(UNPAUSE_USDC_ROW);
+    expect([...stageRows(8453)] as string[]).not.toContain(UNPAUSE_USDC_ROW);
+    expect([...stageRows(918453)] as string[]).not.toContain(UNPAUSE_USDC_ROW);
+    expect(() => resolveGovernRow("7")).toThrow(PublishError);
+  });
+  test("its one call is unpauseDeposits() on rmUSDC, whatever GOVERN_UNPAUSE_VAULTS lists", () => {
+    for (const over of [ALL, {}]) {
+      const { ctx, sheet } = setup(over);
+      const calls = buildStepCalls(sheet, loadGovernAddrs(ctx), UNPAUSE_USDC_ROW);
+      expect(calls.map((c) => [c.target, decodeFunctionData({ abi: VAULT_ABI, data: c.data }).functionName])).toEqual([[A.vaults.USDC, "unpauseDeposits"]]);
+    }
+  });
+  test("a default run on 8453 never schedules it, even when rmUSDC reads paused", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    tl.s.paused.add(A.vaults.USDC);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await expect(R(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    expect(tl.s.events).toEqual(["schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA"]);
+    expect(Object.keys(manifest.govern!)).not.toContain(UNPAUSE_USDC_ROW);
+  });
+  test("--row unpause-USDC on 8453 after pause-all: schedules, exits GOVERN_PENDING, the resume executes and rmUSDC reads open", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    tl.s.paused.add(A.vaults.USDC);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const e = await R(ctx, manifest, sheet, tl, { row: UNPAUSE_USDC_ROW }).catch((x) => x);
+    expect(e.kind).toBe("GOVERN_PENDING");
+    expect(String(e.details.next_command)).toContain("--row unpause-USDC");
+    expect(tl.s.events).toEqual(["schedule:unpause-USDC"]);
+    expect(tl.s.scheduled.get("unpause-USDC")!.calls.map((c) => c.target)).toEqual([A.vaults.USDC]);
+    tl.s.clock += DELAY;
+    const res = await R(ctx, manifest, sheet, tl, { row: UNPAUSE_USDC_ROW });
+    expect(res.rows).toEqual([UNPAUSE_USDC_ROW]);
+    expect(tl.s.paused.has(A.vaults.USDC)).toBe(false);
+    expect(tl.s.events).toEqual(["schedule:unpause-USDC", "execute:unpause-USDC"]);
+    // a single row never completes the stage
+    expect(manifest.stages.govern).toBeUndefined();
+  });
+  test("unpause-USDC while rmUSDC is open (pause-all never paused it) schedules nothing", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await expect(R(ctx, manifest, sheet, tl, { row: UNPAUSE_USDC_ROW })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("nothing to unpause") });
+    expect(tl.s.events).toEqual([]);
+  });
+  test("a basket unpause row is held to the same rule: no round for a basket that is already open", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    tl.s.paused.delete(A.vaults.PROTO);
+    await expect(R(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "unpause-PROTO" })).rejects.toMatchObject({ kind: "GOVERN" });
+    expect(tl.s.events).toEqual([]);
+  });
+
+  test("salts are round numbered: every round of every unpause row is its own salt", () => {
+    const labels = [...UNPAUSE_ROWS, UNPAUSE_USDC_ROW].flatMap((r) => [1, 2, 3].map((n) => governSalt(SHA, 8453, roundKey(r, n))));
+    expect(new Set(labels).size).toBe(12);
+  });
+  test("after an executed unpause, a re-pause and a second govern of the same row yields a different operation id and executes", async () => {
+    const { ctx, sheet, tl, manifest } = await launched();
+    const first = tl.s.ids.get("unpause-PROTO")!;
+    expect(tl.s.paused.has(A.vaults.PROTO)).toBe(false);
+    tl.s.paused.add(A.vaults.PROTO); // pause-all
+    const e = await R(ctx, manifest, sheet, tl, { row: "unpause-PROTO" }).catch((x) => x);
+    expect(e.kind).toBe("GOVERN_PENDING");
+    const second = tl.s.ids.get("unpause-PROTO")!;
+    expect(second).not.toBe(first);
+    expect(tl.s.ops.get(second)!.pending).toBe(true);
+    tl.s.clock += DELAY;
+    const res = await R(ctx, manifest, sheet, tl, { row: "unpause-PROTO" });
+    expect(res.rows).toEqual(["unpause-PROTO"]);
+    expect(tl.s.ops.get(second)!.done).toBe(true);
+    expect(tl.s.paused.has(A.vaults.PROTO)).toBe(false);
+    // the manifest keeps both rounds: round 1 archived, round 2 current
+    const g = manifest.govern as Record<string, any>;
+    expect(g["unpause-PROTO"].round).toBe(2);
+    expect(g["unpause-PROTO"].executed.operation_id).toBe(second);
+    expect(g["unpause-PROTO:round-1"].executed.operation_id).toBe(first);
+    // the other baskets stayed at round 1
+    expect(g["unpause-AGENT"].round).toBe(1);
+    // and a third run with the vault open is a no-op: no round 3
+    const events = tl.s.events.length;
+    await R(ctx, manifest, sheet, tl, { row: "unpause-PROTO" });
+    expect(tl.s.events.length).toBe(events);
+    expect(g["unpause-PROTO:round-2"]).toBeUndefined();
+  });
+  test("a round 2 resumed after a crash between the archive and the schedule keeps round 2 and does not open round 3", async () => {
+    const { ctx, sheet, tl, manifest } = await launched();
+    tl.s.paused.add(A.vaults.PROTO);
+    // the crash: round 1 archived, round 2 opened, nothing scheduled yet
+    const g = manifest.govern as Record<string, any>;
+    g["unpause-PROTO:round-1"] = g["unpause-PROTO"];
+    g["unpause-PROTO"] = { round: 2 };
+    await expect(R(ctx, manifest, sheet, tl, { row: "unpause-PROTO" })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    expect(g["unpause-PROTO"].round).toBe(2);
+    expect(g["unpause-PROTO:round-2"]).toBeUndefined();
+  });
+  test("a default run never reopens a vault that was paused again: it refuses and names the row command, scheduling nothing", async () => {
+    const { ctx, sheet, tl, manifest } = await launched();
+    tl.s.paused.add(A.vaults.AGENT);
+    const events = tl.s.events.length;
+    const e = await R(ctx, manifest, sheet, tl).catch((x) => x);
+    expect(e).toMatchObject({ kind: "GOVERN" });
+    expect(e.message).toContain("--row unpause-AGENT");
+    expect(tl.s.events.length).toBe(events);
+  });
+  test("the round-1 operation of an unpause is not replayable: its id stays done and the second round is a different timelock operation", async () => {
+    const { ctx, sheet, tl, manifest } = await launched();
+    const first = tl.s.ids.get("unpause-RWA")!;
+    tl.s.paused.add(A.vaults.RWA);
+    await R(ctx, manifest, sheet, tl, { row: "unpause-RWA" }).catch(() => {});
+    expect(tl.s.ids.get("unpause-RWA")).not.toBe(first);
+    expect(tl.s.ops.get(first)).toMatchObject({ done: true, pending: false });
+  });
+  test("unpause-USDC has its own rounds: a second pause of rmUSDC gets round 2", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    tl.s.paused.add(A.vaults.USDC);
+    await R(ctx, manifest, sheet, tl, { row: UNPAUSE_USDC_ROW }).catch(() => {});
+    const first = tl.s.ids.get("unpause-USDC")!;
+    tl.s.clock += DELAY;
+    await R(ctx, manifest, sheet, tl, { row: UNPAUSE_USDC_ROW });
+    tl.s.paused.add(A.vaults.USDC);
+    await R(ctx, manifest, sheet, tl, { row: UNPAUSE_USDC_ROW }).catch(() => {});
+    expect(tl.s.ids.get("unpause-USDC")).not.toBe(first);
+    tl.s.clock += DELAY;
+    await R(ctx, manifest, sheet, tl, { row: UNPAUSE_USDC_ROW });
+    expect(tl.s.paused.has(A.vaults.USDC)).toBe(false);
+    expect((manifest.govern as any)["unpause-USDC"].round).toBe(2);
+  });
+});
+
+describe("issue 1686: govern refuses to execute an unpause scheduled before a pause-all", () => {
+  const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
+  const R = (ctx: any, manifest: any, sheet: any, tl: any, extra: object = {}) => run(ctx, manifest, sheet, tl, { warp: noWarp, ...extra });
+  const pauseAll = (ctx: any, trigger = "manual") => beginPauseEntry(ctx.evidenceDir, { at: new Date().toISOString(), trigger, reason: "test" })!;
+  /** The first 8453 sitting: all three unpauses scheduled, GOVERN_PENDING, the manifest saved. */
+  async function scheduled() {
+    const d = setup(ALL, 8453);
+    const tl = fakeTimelock(d.sheet, DELAY);
+    const manifest = newManifest(d.ctx, addr(0xa001));
+    await expect(R(d.ctx, manifest, d.sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    return { ...d, tl, manifest };
+  }
+  const executes = (tl: ReturnType<typeof fakeTimelock>) => tl.s.events.filter((e) => e.startsWith("execute"));
+
+  test("a pause-all newer than the schedule: the resume exits GOVERN (14), sends nothing, names the row, the pause and the operation, and prints the cancel-through-the-Safe instruction", async () => {
+    const { ctx, sheet, tl, manifest } = await scheduled();
+    const pause = pauseAll(ctx, "verify");
+    tl.s.clock += DELAY;
+    const before = JSON.stringify(manifest.govern);
+    const events = tl.s.events.length;
+    const e = await R(ctx, manifest, sheet, tl).catch((x) => x);
+    expect(e).toBeInstanceOf(PublishError);
+    expect(e.kind).toBe("GOVERN");
+    expect(e.exitCode).toBe(EXIT_CODES.GOVERN);
+    expect(EXIT_CODES.GOVERN).toBe(14);
+    expect(e.message).toContain("unpause-PROTO");
+    expect(e.message).toContain(`pause-all #${pause.seq} (verify`);
+    expect(e.message).toContain(tl.s.ids.get("unpause-PROTO")!);
+    expect(e.message).toContain("cancel the operation through the Safe on the timelock");
+    expect(e.message).toContain(`cancel(${tl.s.ids.get("unpause-PROTO")})`);
+    expect(e.message).toContain("--row unpause-PROTO");
+    expect(tl.s.events.length).toBe(events); // nothing sent
+    expect(executes(tl)).toEqual([]);
+    expect(JSON.stringify(manifest.govern)).toBe(before); // rows unchanged
+    for (const v of BASKETS) expect(tl.s.paused.has(A.vaults[v])).toBe(true);
+  });
+
+  test("no pause-all recorded: the resume executes the rounds as before", async () => {
+    const { ctx, sheet, tl, manifest } = await scheduled();
+    tl.s.clock += DELAY;
+    const res = await R(ctx, manifest, sheet, tl);
+    expect(res.rows).toEqual([...UNPAUSE_ROWS]);
+    expect(executes(tl)).toHaveLength(3);
+  });
+
+  test("a pause-all OLDER than the schedule does not block: the round scheduled after it executes", async () => {
+    const d = setup(ALL, 8453);
+    const tl = fakeTimelock(d.sheet, DELAY);
+    const manifest = newManifest(d.ctx, addr(0xa001));
+    saveRunManifest(d.ctx.evidenceDir, manifest);
+    pauseAll(d.ctx);
+    await expect(R(d.ctx, manifest, d.sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    const sched = (manifest.govern as any)["unpause-PROTO"].scheduled;
+    expect(sched.seq).toBeGreaterThan(manifest.pauses![0]!.seq);
+    tl.s.clock += DELAY;
+    const res = await R(d.ctx, manifest, d.sheet, tl);
+    expect(res.rows).toEqual([...UNPAUSE_ROWS]);
+  });
+
+  test("a pause-all that lands DURING the wait (after the first check) is caught before the first execute", async () => {
+    const { ctx, sheet, tl, manifest } = await scheduled();
+    tl.s.clock += DELAY - 100n; // inside the 3600 s an 8453 run is willing to sleep
+    const sleep = async () => { if (!manifest.pauses?.length) pauseAll(ctx, "postflight"); tl.s.clock += DELAY; };
+    const e = await R(ctx, manifest, sheet, tl, { sleep }).catch((x) => x);
+    expect(e.kind).toBe("GOVERN");
+    expect(e.message).toContain("postflight");
+    expect(executes(tl)).toEqual([]);
+  });
+
+  test("a pause-all that crashed half way (entry still `started`) blocks as well", async () => {
+    const { ctx, sheet, tl, manifest } = await scheduled();
+    const p = pauseAll(ctx);
+    expect(loadRunManifest(ctx.evidenceDir)!.pauses![0]!.status).toBe("started");
+    expect(p.status).toBe("started");
+    tl.s.clock += DELAY;
+    await expect(R(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN" });
+    expect(executes(tl)).toEqual([]);
+  });
+
+  test("a schedule adopted from the chain has no known time (seq 0): any recorded pause-all blocks it", async () => {
+    const { ctx, sheet, tl, manifest } = await scheduled();
+    pauseAll(ctx);
+    delete (manifest.govern as any)["unpause-PROTO"]; // the schedule was sent but its record was lost
+    tl.s.clock += DELAY;
+    const e = await R(ctx, manifest, sheet, tl).catch((x) => x);
+    expect(e.kind).toBe("GOVERN");
+    expect(e.message).toContain("unpause-PROTO");
+    expect((manifest.govern as any)["unpause-PROTO"].scheduled.seq).toBe(0);
+  });
+
+  test("the recovery: cancel through the Safe, then --row reschedules the SAME round (so the evidence rounds stay 1..n), gets a newer seq and executes; the other rows stay blocked", async () => {
+    const { ctx, sheet, tl, manifest } = await scheduled();
+    pauseAll(ctx);
+    tl.s.clock += DELAY;
+    await expect(R(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN" });
+    const first = tl.s.ids.get("unpause-PROTO")!;
+    tl.s.ops.delete(first); // the Safe cancelled it on the timelock
+    await expect(R(ctx, manifest, sheet, tl, { row: "unpause-PROTO" })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    const g = manifest.govern as Record<string, any>;
+    expect(g["unpause-PROTO"].round).toBe(1);
+    expect(tl.s.ids.get("unpause-PROTO")).toBe(first); // a cancelled id is free again
+    expect(g["unpause-PROTO:round-1:cancelled-1"].scheduled.operation_id).toBe(first);
+    expect(g["unpause-PROTO"].scheduled.seq).toBeGreaterThan(manifest.pauses![0]!.seq);
+    tl.s.clock += DELAY;
+    const res = await R(ctx, manifest, sheet, tl, { row: "unpause-PROTO" });
+    expect(res.rows).toEqual(["unpause-PROTO"]);
+    expect(tl.s.paused.has(A.vaults.PROTO)).toBe(false);
+    // AGENT and RWA were not cancelled: they still refuse
+    expect(tl.s.paused.has(A.vaults.AGENT)).toBe(true);
+    await expect(R(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN" });
+    expect(executes(tl)).toHaveLength(1);
+  });
+
+  test("an operation the Safe already cancelled is not refused again: the default run names the --row command that opens the fresh round", async () => {
+    const { ctx, sheet, tl, manifest } = await scheduled();
+    pauseAll(ctx);
+    tl.s.clock += DELAY;
+    for (const k of BASKETS) tl.s.ops.delete(tl.s.ids.get(`unpause-${k}`)!);
+    const e = await R(ctx, manifest, sheet, tl).catch((x) => x);
+    expect(e.kind).toBe("GOVERN");
+    expect(e.message).toContain("cancelled");
+    expect(e.message).toContain("--row unpause-PROTO");
+    expect(executes(tl)).toEqual([]);
+  });
+
+  test("a Twin-chain pause-all is recorded and blocks the same way (one code path, no Twin special case)", async () => {
+    const d = setup(ALL, 918453);
+    const tl = fakeTimelock(d.sheet, DELAY);
+    const manifest = newManifest(d.ctx, addr(0xa001));
+    await expect(run(d.ctx, manifest, d.sheet, tl, { row: "unpause-PROTO", warp: false, maxWaitSeconds: 10 })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    pauseAll(d.ctx);
+    tl.s.clock += DELAY;
+    await expect(run(d.ctx, manifest, d.sheet, tl, { row: "unpause-PROTO", warp: false })).rejects.toMatchObject({ kind: "GOVERN" });
+    expect(executes(tl)).toEqual([]);
+  });
+
+  test("other rows are not unpauses: the on-demand rmUSDC unpause and a pause-all older than it still work, and --row unpause-USDC after a pause-all schedules fresh", async () => {
+    const { ctx, sheet } = setup(ALL, 8453);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    saveRunManifest(ctx.evidenceDir, manifest);
+    tl.s.paused.add(A.vaults.USDC);
+    pauseAll(ctx);
+    await expect(R(ctx, manifest, sheet, tl, { row: UNPAUSE_USDC_ROW })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    tl.s.clock += DELAY;
+    await R(ctx, manifest, sheet, tl, { row: UNPAUSE_USDC_ROW });
+    expect(tl.s.paused.has(A.vaults.USDC)).toBe(false);
+  });
+});
+
+describe("issue 1686: pause-all and govern both rewrite publish-run.json without losing each other's change", () => {
+  test("a govern save after a pause-all keeps the pause entry (govern's in-memory copy never had it), and the stamped seqs stay above it", () => {
+    const { ctx } = setup(ALL, 8453);
+    const manifest = newManifest(ctx, addr(0xa001));
+    saveRunManifest(ctx.evidenceDir, manifest);
+    const stale = JSON.parse(JSON.stringify(manifest)); // govern loaded the manifest here
+    const p = beginPauseEntry(ctx.evidenceDir, { at: "t", trigger: "manual", reason: "r" })!;
+    stale.govern = { "unpause-PROTO": { round: 1, scheduled: { at: "t" } } };
+    saveRunManifest(ctx.evidenceDir, stale);
+    const disk = loadRunManifest(ctx.evidenceDir)!;
+    expect(disk.pauses!.map((x) => x.seq)).toEqual([p.seq]);
+    expect((disk.govern as any)["unpause-PROTO"].scheduled.seq).toBe(p.seq + 1);
+  });
+
+  test("a pause-all update after a govern save keeps govern's rows (pause-all re-reads the file just before it writes)", () => {
+    const { ctx } = setup(ALL, 8453);
+    const manifest = newManifest(ctx, addr(0xa001));
+    saveRunManifest(ctx.evidenceDir, manifest);
+    const p = beginPauseEntry(ctx.evidenceDir, { at: "t", trigger: "manual", reason: "r" })!;
+    manifest.govern = { "unpause-AGENT": { round: 1, scheduled: { at: "t" } } };
+    saveRunManifest(ctx.evidenceDir, manifest);
+    updatePauseEntry(ctx.evidenceDir, { ...p, status: "done", allPaused: true });
+    const disk = loadRunManifest(ctx.evidenceDir)!;
+    expect(Object.keys(disk.govern!)).toEqual(["unpause-AGENT"]);
+    expect(disk.pauses![0]).toMatchObject({ status: "done", allPaused: true });
+    expect(nextManifestSeq(disk)).toBe(3);
+  });
+
+  test("separate processes writing at once lose nothing: 6 pause entries and 6 govern saves from 12 processes all land with unique seqs", async () => {
+    const { ctx } = setup(ALL, 8453);
+    const manifest = newManifest(ctx, addr(0xa001));
+    saveRunManifest(ctx.evidenceDir, manifest);
+    const runner = join(import.meta.dir, "..", "src", "runner.ts");
+    const script = (i: number, kind: "pause" | "govern") => kind === "pause"
+      ? `import { beginPauseEntry } from ${JSON.stringify(runner)}; for (let k=0;k<5;k++) beginPauseEntry(${JSON.stringify(ctx.evidenceDir)}, { at: "t", trigger: "manual", reason: "p${i}" });`
+      : `import { loadRunManifest, saveRunManifest } from ${JSON.stringify(runner)}; for (let k=0;k<5;k++) { const m = loadRunManifest(${JSON.stringify(ctx.evidenceDir)})!; m.govern = { ...(m.govern ?? {}), ["row${i}-" + k]: { round: 1, scheduled: { at: "t" } } }; saveRunManifest(${JSON.stringify(ctx.evidenceDir)}, m); }`;
+    const procs = [0, 1, 2, 3, 4, 5].flatMap((i) => (["pause", "govern"] as const).map((kind) => Bun.spawn([process.execPath, "-e", script(i, kind)], { stdout: "pipe", stderr: "pipe" })));
+    for (const p of procs) expect(await p.exited).toBe(0);
+    const disk = loadRunManifest(ctx.evidenceDir)!;
+    // govern's load-modify-save is not itself serialised (it holds a snapshot for a whole run), so some of ITS rows may be overwritten by a sibling govern: the
+    // pause entries, which are the safety record, must all be there, with unique ascending seqs, and every surviving schedule seq must be unique and stamped
+    expect(disk.pauses).toHaveLength(30);
+    const seqs = disk.pauses!.map((x) => x.seq);
+    expect(new Set(seqs).size).toBe(30);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    const sched = Object.values(disk.govern ?? {}).map((r: any) => r.scheduled.seq as number);
+    expect(sched.every((n) => Number.isInteger(n) && n > 0)).toBe(true);
+    expect(new Set([...seqs, ...sched]).size).toBe(seqs.length + sched.length);
+  });
+});
+

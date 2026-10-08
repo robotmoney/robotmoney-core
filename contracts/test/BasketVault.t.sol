@@ -27,7 +27,7 @@ import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
 import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
 import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {SafeFixture} from "./helpers/SafeFixture.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
@@ -58,7 +58,7 @@ contract MockPool {
         // Tick=0 means 1:1 price (sqrtP = 2^96); arithmetic-mean tick is 0
         // when tickCumulativeRate=0. Tests override as needed.
         tickCumulativeRate = 0;
-        cardinality = 100;
+        cardinality = 50_000;
         poolLiquidity = 1e18; // large default so existing tests pass unmodified
         feeTier = 500; // matches the swapFee_ tests pass to addAsset by default
     }
@@ -187,6 +187,40 @@ contract BasketVaultHarness is BasketVault {
 
     function maxAssets() public pure override returns (uint256) {
         return 4;
+    }
+}
+
+/// @dev Basket token that calls back into the vault while the vault pays out (an ERC-777 style hook).
+///      Records the owner's share balance and the total supply at callback time, then tries to
+///      re-enter `redeemInKind`. Core 1665 reentrancy probe.
+contract ReentrantHookToken is TestERC20 {
+    BasketVault public target;
+    address public victim;
+    bool public armed;
+    bool public reentered;
+    bool public reentrySucceeded;
+    bytes4 public reentryReason;
+    uint256 public sharesAtCallback = type(uint256).max;
+    uint256 public supplyAtCallback;
+
+    function arm(BasketVault target_, address victim_) external {
+        target = target_;
+        victim = victim_;
+        armed = true;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        if (armed && from == address(target) && !reentered) {
+            reentered = true;
+            sharesAtCallback = target.balanceOf(victim);
+            supplyAtCallback = target.totalSupply();
+            try target.redeemInKind(1, victim, victim) {
+                reentrySucceeded = true;
+            } catch (bytes memory reason) {
+                reentryReason = bytes4(reason); // expected: ReentrancyGuardReentrantCall
+            }
+        }
+        super._update(from, to, value);
     }
 }
 
@@ -1455,7 +1489,7 @@ contract BasketVaultTest is Test {
             abi.encodeWithSelector(
                 BasketVault.InsufficientPoolCardinality.selector,
                 address(lowCardPool),
-                vault.MIN_POOL_CARDINALITY(),
+                uint16(901),
                 uint16(1)
             )
         );
@@ -1526,11 +1560,11 @@ contract BasketVaultTest is Test {
         assertGt(redeemed, 0, "existing holder can redeem after unwind");
     }
 
-    /// @notice addAsset() succeeds when pool cardinality equals MIN_POOL_CARDINALITY (2).
+    /// @notice addAsset() succeeds when pool cardinality equals the 1800 s window floor (901).
     function test_addAsset_succeedsWhenCardinalityMeetsMinimum() public {
         TestERC20 newAsset = new TestERC20();
         MockPool goodPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
-        goodPool.setCardinality(vault.MIN_POOL_CARDINALITY());
+        goodPool.setCardinality(901);
 
         vm.prank(admin);
         vault.addAsset(address(newAsset), address(goodPool), 500, address(0), BasketVault.Venue.V3);
@@ -1543,7 +1577,7 @@ contract BasketVaultTest is Test {
     function test_totalAssets_doesNotRevertAfterValidAddAsset() public {
         TestERC20 newAsset = new TestERC20();
         MockPool goodPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
-        goodPool.setCardinality(100);
+        goodPool.setCardinality(1000);
 
         vm.prank(admin);
         vault.addAsset(address(newAsset), address(goodPool), 500, address(0), BasketVault.Venue.V3);
@@ -1589,7 +1623,7 @@ contract BasketVaultTest is Test {
     }
 
     /// @notice Fuzz: addAsset() reverts exactly when pool cardinality is below
-    ///         MIN_POOL_CARDINALITY and succeeds at or above it.
+    ///         the window floor (901) and succeeds at or above it.
     function testFuzz_addAsset_cardinalityBoundary(uint16 cardinality_) public {
         // Use a fresh vault so we don't hit MaxAssetsReached after repeated calls.
         BasketVaultHarness freshVault = new BasketVaultHarness(
@@ -1600,7 +1634,7 @@ contract BasketVaultTest is Test {
         MockPool fuzzPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
         fuzzPool.setCardinality(cardinality_);
 
-        uint16 required = freshVault.MIN_POOL_CARDINALITY();
+        uint16 required = 901;
 
         if (cardinality_ < required) {
             vm.expectRevert(
@@ -2093,6 +2127,31 @@ contract BasketVaultTest is Test {
         assertGt(shares, 0, "ORA-4: deposit succeeds once the guard is disabled");
     }
 
+    /// @notice Issue 1666: the guard runs on deposit only. With the guard at 100 bps and spot moved past it, a deposit reverts
+    ///         `NavMarketDeviationExceeded` and an existing holder still redeems. The sheet-set guard can never trap exits.
+    function test_ORA4_guardNeverBlocksRedeem() public {
+        uint256 shares = _depositAt1to1(stranger, 1_000e6);
+        assertGt(shares, 0, "holder has shares");
+
+        vm.prank(admin);
+        vault.setNavDeviationGuardBps(100);
+        pool.setSpotTick(200); // about +2%, beyond the 1% band
+
+        usdc.mint(address(this), 1_000e6);
+        usdc.approve(address(vault), 1_000e6);
+        vm.expectPartialRevert(BasketVault.NavMarketDeviationExceeded.selector);
+        vault.deposit(1_000e6, address(this));
+
+        // The holder redeems through the same deviated spot.
+        usdc.mint(address(router), 1_000e6);
+        router.setAmountOut(1_000e6);
+        uint256 balBefore = usdc.balanceOf(stranger);
+        vm.prank(stranger);
+        uint256 out = vault.redeem(shares, stranger, stranger);
+        assertGt(out, 0, "redeem returns USDC");
+        assertEq(usdc.balanceOf(stranger) - balBefore, out, "redeem paid the holder");
+    }
+
     /// @notice ORA-4: a deposit within the deviation band settles normally — the
     ///         guard does not block ordinary, market-consistent settlement.
     function test_ORA4_withinBandSettles() public {
@@ -2264,73 +2323,168 @@ contract BasketVaultTest is Test {
         );
     }
 
-    // ─── AZ-BSK-3: deposit NAV excludes idle USDC from excluded adapters ────────
+    // ─── AZ-BSK-3 (C1-corrected): deposit mints against the FULL pre-deposit NAV ─
 
-    /// @notice AZ-BSK-3: when idle USDC is present (e.g. from an emergency-unwound
-    ///         adapter), a new deposit prices shares against the active-adapter-only
-    ///         NAV (taBefore − idleUSDC), not the full totalAssets. This prevents a
-    ///         new depositor from capturing recovery value that belongs to existing
-    ///         holders who bore the original loss.
-    ///
-    ///         Setup: seed the vault at 1:1, inject idle USDC directly to simulate
-    ///         the proceeds of an excluded adapter sitting un-deployed, then deposit
-    ///         and verify the minted shares match the eligible-NAV formula.
-    function test_AZBSK3_depositExclusionWindowUsesEligibleNAV() public {
-        // Seed vault so it has non-zero NAV and share supply.
+    /// @dev Redeem `shares` for `who`, funding the mock router with the fair USDC value
+    ///      of the redeemer's pro-rata slice of the vault's basket tokens (1:1 price).
+    function _redeemFair(address who, uint256 shares) internal returns (uint256 received) {
+        uint256 supply = vault.totalSupply();
+        uint256 tokenSlice = basketToken.balanceOf(address(vault)) * shares / supply;
+        usdc.mint(address(router), tokenSlice);
+        router.setAmountOut(tokenSlice);
+        uint256 beforeBal = usdc.balanceOf(who);
+        vm.prank(who);
+        vault.redeem(shares, who, who);
+        received = usdc.balanceOf(who) - beforeBal;
+    }
+
+    /// @notice AZ-BSK-3 (C1-corrected): with idle USDC present, deposit() mints exactly
+    ///         mulDiv(realizedDelta, supplyBefore + 1e18, taBefore + 1). The old
+    ///         `taBefore - idle + 1` denominator (a different, larger share count) is
+    ///         asserted unequal. Idle USDC backs existing shares, so it stays in the
+    ///         denominator.
+    function test_AZBSK3_depositMintsAgainstIdleInclusiveNAV() public {
         _depositAt1to1(address(this), 10_000e6);
-
-        // Simulate idle USDC from an excluded adapter (bypass emergency unwind
-        // to avoid the depositsPaused gate; the relevant invariant is the idle
-        // USDC balance, not how it arrived).
         uint256 idleUsdc = 5_000e6;
         usdc.mint(address(vault), idleUsdc);
 
-        // Snapshot pre-deposit state (mirrors what _deposit() does internally).
         uint256 supplyBefore = vault.totalSupply();
         uint256 taBefore = vault.totalAssets(); // includes idleUsdc
-        uint256 navBefore = taBefore - usdc.balanceOf(address(vault)); // active-adapter NAV only
+        uint256 idleBefore = usdc.balanceOf(address(vault));
+        assertGt(idleBefore, 0, "idle USDC must be non-zero");
+        assertEq(idleBefore, idleUsdc, "idle is the injected balance");
 
-        assertGt(idleUsdc, 0, "idle USDC must be non-zero for this test to be meaningful");
-        assertGt(navBefore, 0, "active-adapter NAV must be positive for a valid deposit");
-        assertLt(navBefore, taBefore, "eligible NAV must be less than full totalAssets");
-
-        // Configure swap: 1,000 USDC → 1,000 basket tokens (1:1).
         uint256 depositAmount = 1_000e6;
-        uint256 swapOut = depositAmount; // 1:1 execution
-        basketToken.mint(address(router), swapOut);
-        router.setAmountOut(swapOut);
-
+        basketToken.mint(address(router), depositAmount);
+        router.setAmountOut(depositAmount);
         usdc.mint(stranger, depositAmount);
         vm.startPrank(stranger);
         usdc.approve(address(vault), depositAmount);
         uint256 actualShares = vault.deposit(depositAmount, stranger);
         vm.stopPrank();
 
-        uint256 realizedDelta = vault.totalAssets() - taBefore; // delta from the swap
+        uint256 realizedDelta = vault.totalAssets() - taBefore;
+        uint256 expectedShares = Math.mulDiv(realizedDelta, supplyBefore + 1e18, taBefore + 1);
+        uint256 oldShares =
+            Math.mulDiv(realizedDelta, supplyBefore + 1e18, taBefore - idleBefore + 1);
 
-        // AZ-BSK-3: expected shares use navBefore (active-adapter NAV) in the
-        // denominator, NOT taBefore (full NAV including idle USDC).
-        // _decimalsOffset() = 18 (large virtual offset to prevent first-deposit
-        // inflation attacks; BasketVault.decimals() returns 6, offset = 18).
-        uint256 decimalsOffset = 1e18; // 10 ** _decimalsOffset()
-        uint256 expectedShares =
-            Math.mulDiv(realizedDelta, supplyBefore + decimalsOffset, navBefore + 1);
-        // OLD (vulnerable) formula would have used taBefore as denominator.
-        uint256 vulnerableShares =
-            Math.mulDiv(realizedDelta, supplyBefore + decimalsOffset, taBefore + 1);
+        assertEq(actualShares, expectedShares, "AZ-BSK-3: mint uses idle-inclusive taBefore + 1");
+        assertEq(vault.balanceOf(stranger), expectedShares, "shares minted to receiver");
+        assertTrue(actualShares != oldShares, "AZ-BSK-3: old idle-excluded denominator rejected");
+        assertLt(actualShares, oldShares, "AZ-BSK-3: old formula over-minted");
+    }
 
-        assertEq(
-            actualShares,
-            expectedShares,
-            "AZ-BSK-3: shares must use eligible-NAV denominator (active tokens only)"
+    /// @notice AZ-BSK-3 PoC regression (audit 2026-10-08 test_idleUsdcOverMint):
+    ///         emergencyUnwind -> unpauseDeposits -> deposit -> redeem must not let the
+    ///         late depositor take value from the incumbent.
+    function test_AZBSK3_emergencyUnwindThenDepositNoOverMint() public {
+        address alice = makeAddr("alice");
+        address eve = makeAddr("eve");
+
+        uint256 aliceShares = _depositAt1to1(alice, 10_000e6);
+
+        // Emergency key unwinds the whole basket to idle USDC at 1:1.
+        usdc.mint(address(router), 10_000e6);
+        router.setAmountOut(10_000e6);
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+        assertEq(basketToken.balanceOf(address(vault)), 0, "basket fully unwound");
+        assertEq(usdc.balanceOf(address(vault)), 10_000e6, "all value idle");
+        assertTrue(vault.depositsPaused(), "unwind pauses deposits");
+
+        vm.prank(admin);
+        vault.unpauseDeposits();
+
+        uint256 eveShares = _depositAt1to1(eve, 1_000e6);
+        uint256 supply = vault.totalSupply();
+
+        // eve owns at most 1000/11000 of supply, plus rounding.
+        assertLe(eveShares, supply * 1_000e6 / 11_000e6 + 1, "eve share of supply capped");
+
+        uint256 eveOut = _redeemFair(eve, eveShares);
+        assertLe(eveOut, 1_000e6, "eve cannot redeem more than she deposited");
+
+        uint256 aliceOut = _redeemFair(alice, aliceShares);
+        assertGe(aliceOut, 9_999e6, "alice keeps her value");
+    }
+
+    /// @notice AZ-BSK-3: no-profit round trip with idle USDC present. A deposit followed
+    ///         by an immediate full redeem returns at most the deposit, and the
+    ///         incumbent's previewRedeem never drops, up to a 2 wei tolerance. The
+    ///         tolerance is the 10^18 virtual-share offset: mint prices against
+    ///         (supply + 1e18) while redeem is raw pro-rata, so a donated idle balance
+    ///         lets a round trip gain sub-wei-scale dust (measured max 1 wei over 20000
+    ///         fuzz runs). That is not the over-mint fixed here (thousands of USDC).
+    function test_AZBSK3_idleDepositRoundTripNoProfit(uint256 idle, uint256 d) public {
+        idle = bound(idle, 1, 1e13);
+        d = bound(d, 1e6, vault.perDepositCap());
+
+        vm.prank(admin);
+        vault.setTvlCap(100_000_000e6); // headroom for the 1e13 idle upper bound
+        uint256 incumbentShares = _depositAt1to1(address(this), 50_000e6);
+        usdc.mint(address(vault), idle);
+        uint256 previewBefore = vault.previewRedeem(incumbentShares);
+
+        address eve = makeAddr("eveFuzz");
+        uint256 eveShares = _depositAt1to1(eve, d);
+        assertGe(
+            vault.previewRedeem(incumbentShares),
+            previewBefore - 2,
+            "incumbent previewRedeem must not drop on deposit"
         );
-        // When idle USDC > 0, the fix gives MORE shares (smaller denominator),
-        // which correctly prices the deposit against only the active-adapter NAV.
-        assertGt(
-            actualShares,
-            vulnerableShares,
-            "AZ-BSK-3: eligible-NAV formula gives more shares than full-NAV (idle USDC excluded)"
+
+        uint256 out = _redeemFair(eve, eveShares);
+        assertLe(out, d + 2, "round trip cannot profit");
+        assertGe(
+            vault.previewRedeem(incumbentShares),
+            previewBefore - 2,
+            "incumbent previewRedeem must not drop after round trip"
         );
+    }
+
+    /// @notice AZ-BSK-3 adversarial: first deposit (supply 0) with idle USDC donated
+    ///         beforehand cannot be gamed: the first depositor pays the donation into
+    ///         the denominator, never receives more than the OZ formula, and caps hold.
+    function test_AZBSK3_firstDepositWithDonatedIdleCannotOverMint() public {
+        usdc.mint(address(vault), 7_000e6); // donation before any deposit
+        assertEq(vault.totalSupply(), 0);
+
+        uint256 d = 1_000e6;
+        uint256 taBefore = vault.totalAssets();
+        uint256 shares = _depositAt1to1(stranger, d);
+        assertEq(shares, Math.mulDiv(d, 1e18, taBefore + 1), "first mint uses full NAV + 1");
+
+        // The depositor cannot extract more than deposit (donation is not recoverable
+        // as a profit for the donor-depositor).
+        uint256 out = _redeemFair(stranger, shares);
+        assertLe(out, d + 7_000e6, "redeem bounded by total vault value");
+    }
+
+    /// @notice AZ-BSK-3 adversarial: tiny deposits round down and never mint a profit;
+    ///         per-deposit cap still enforced.
+    function test_AZBSK3_tinyDepositRoundsDownAndCapStillEnforced() public {
+        _depositAt1to1(address(this), 10_000e6);
+        usdc.mint(address(vault), 1_000e6);
+        uint256 tiny = 1;
+        basketToken.mint(address(router), tiny);
+        router.setAmountOut(tiny);
+        usdc.mint(stranger, tiny);
+        uint256 taBefore = vault.totalAssets();
+        uint256 supplyBefore = vault.totalSupply();
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), tiny);
+        uint256 shares = vault.deposit(tiny, stranger);
+        vm.stopPrank();
+        assertEq(shares, Math.mulDiv(tiny, supplyBefore + 1e18, taBefore + 1));
+        assertLe(vault.previewRedeem(shares), tiny, "dust mint never redeems above deposit");
+
+        uint256 over = vault.perDepositCap() + 1;
+        usdc.mint(stranger, over);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), over);
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit: maxDeposit is capped by perDepositCap
+        vault.deposit(over, stranger);
+        vm.stopPrank();
     }
 
     /// @notice AZ-BSK-3: totalAssets() accounts for ALL vault USDC (including idle
@@ -2507,6 +2661,266 @@ contract BasketVaultTest is Test {
         );
         assertTrue(ok, "redeem with ample gas succeeds");
         assertEq(vault.balanceOf(stranger), 0, "shares burned");
+    }
+
+    // ─── Core 1665: window-derived cardinality floor ──────────────────
+
+    /// @notice The 1800 s default window needs 1800 / 2 + 1 = 901 slots: 900 reverts, 901 registers.
+    function test_addAsset_rejectsCardinalityBelowWindowFloor() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool p = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        p.setCardinality(900);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientPoolCardinality.selector,
+                address(p),
+                uint16(901),
+                uint16(900)
+            )
+        );
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(p), 500, address(0), BasketVault.Venue.V3);
+
+        p.setCardinality(901);
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(p), 500, address(0), BasketVault.Venue.V3);
+        assertEq(vault.assetCount(), 2, "registered at exactly the floor");
+    }
+
+    /// @notice A 3600 s window needs 1801 slots: 1800 reverts, 1801 is accepted.
+    function test_setTwapWindow_rejectsCardinalityBelowNewFloor() public {
+        pool.setCardinality(1_800);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientPoolCardinality.selector,
+                address(pool),
+                uint16(1_801),
+                uint16(1_800)
+            )
+        );
+        vm.prank(admin);
+        vault.setTwapWindow(address(basketToken), 3_600);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 1_800, "window unchanged");
+
+        pool.setCardinality(1_801);
+        vm.prank(admin);
+        vault.setTwapWindow(address(basketToken), 3_600);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 3_600, "window set at floor");
+    }
+
+    // ─── Core 1665: redeemInKind ──────────────────────────────────────
+
+    /// @dev Alice holds all shares of a vault with `basketToken` backing, idle USDC and a 1% exit fee.
+    function _seedInKind() internal returns (address alice, uint256 shares) {
+        alice = makeAddr("alice");
+        shares = _depositAt1to1(alice, 10_000 * ONE_USDC);
+        usdc.mint(address(vault), 777 * ONE_USDC); // idle USDC
+        vm.prank(admin);
+        vault.setExitFeeBps(100);
+    }
+
+    /// @dev Registers a second ACTIVE asset holding `amount` tokens.
+    function _addSecond(uint256 amount) internal returns (TestERC20 t2) {
+        t2 = new TestERC20();
+        MockPool p2 = new MockPool(address(t2), address(usdc), uint160(1 << 96));
+        vm.prank(admin);
+        vault.addAsset(address(t2), address(p2), 500, address(0), BasketVault.Venue.V3);
+        t2.mint(address(vault), amount);
+    }
+
+    /// @notice PoC test_redeemBlockedByOracle: with observe() reverting, redeem reverts and
+    ///         redeemInKind pays the pro-rata tokens and idle USDC minus the exit fee.
+    function test_redeemInKind_succeedsWhenObserveReverts() public {
+        (address alice, uint256 shares) = _seedInKind();
+        pool.setRevertObserve(true);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.redeem(shares / 2, alice, alice);
+
+        uint256 sup = vault.totalSupply();
+        uint256 tokBal = basketToken.balanceOf(address(vault));
+        uint256 usdcBal = usdc.balanceOf(address(vault));
+        uint256 tokAmt = tokBal * (shares / 2) / sup;
+        uint256 usdcAmt = usdcBal * (shares / 2) / sup;
+        uint256 tokFee = tokAmt * 100 / 10_000;
+        uint256 usdcFee = usdcAmt * 100 / 10_000;
+        assertGt(tokFee, 0, "fee leg exercised");
+
+        vm.prank(alice);
+        vault.redeemInKind(shares / 2, alice, alice);
+
+        assertEq(vault.balanceOf(alice), shares - shares / 2, "shares burned");
+        assertEq(basketToken.balanceOf(alice), tokAmt - tokFee, "token net of fee");
+        assertEq(usdc.balanceOf(alice), usdcAmt - usdcFee, "idle USDC net of fee");
+        assertEq(basketToken.balanceOf(admin), tokFee, "token fee to feeRecipient");
+        assertEq(usdc.balanceOf(admin), usdcFee, "usdc fee to feeRecipient");
+        assertEq(
+            basketToken.balanceOf(address(vault)), tokBal - tokAmt, "vault paid exactly pro rata"
+        );
+    }
+
+    /// @notice redeemInKind is not blocked by pause, unwind, shutdown or retire. A third party with
+    ///         allowance redeems for the owner and the allowance is spent.
+    function test_redeemInKind_neverBlocked() public {
+        (address alice, uint256 shares) = _seedInKind();
+        uint256 q = shares / 5;
+
+        vm.prank(emergencyResponder);
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused());
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        // After emergencyUnwind the basket token is USDC.
+        usdc.mint(address(router), 10_000 * ONE_USDC);
+        router.setAmountOut(9_000 * ONE_USDC);
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        vm.prank(emergencyResponder);
+        vault.shutdownVault();
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        address reg = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(reg);
+        vm.prank(reg);
+        vault.retire();
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        // Third party with allowance, receiver differs from owner.
+        address spender = makeAddr("spender");
+        address dest = makeAddr("dest");
+        vm.prank(alice);
+        vault.approve(spender, q + 5);
+        vm.prank(spender);
+        vault.redeemInKind(q, dest, alice);
+        assertEq(vault.allowance(alice, spender), 5, "allowance spent by exactly shares");
+        assertGt(usdc.balanceOf(dest), 0, "receiver paid");
+
+        // Without allowance it reverts and nothing is burned.
+        address nobody = makeAddr("nobody");
+        uint256 before_ = vault.balanceOf(alice);
+        vm.prank(nobody);
+        vm.expectRevert();
+        vault.redeemInKind(1, nobody, alice);
+        assertEq(vault.balanceOf(alice), before_, "no burn without allowance");
+    }
+
+    /// @notice Fuzz: exact floor pro-rata per ACTIVE asset, inactive assets not paid, and the remaining
+    ///         holder's per-share backing never decreases for any token or USDC.
+    function testFuzz_redeemInKind_proRataExact(uint256 shares_) public {
+        (address alice, uint256 aliceShares) = _seedInKind();
+        address bob = makeAddr("bob");
+        // Bob joins so there is a remaining holder.
+        _depositAt1to1(bob, 3_000 * ONE_USDC);
+        TestERC20 t2 = _addSecond(1_234_567);
+        // A removed (inactive) asset whose balance reappeared must not be paid.
+        TestERC20 t3 = new TestERC20();
+        MockPool p3 = new MockPool(address(t3), address(usdc), uint160(1 << 96));
+        vm.startPrank(admin);
+        vault.addAsset(address(t3), address(p3), 500, address(0), BasketVault.Venue.V3);
+        vault.removeAsset(2);
+        vm.stopPrank();
+        t3.mint(address(vault), 999_999);
+
+        shares_ = bound(shares_, 1, aliceShares);
+        uint256[4] memory pre = [
+            vault.totalSupply(),
+            basketToken.balanceOf(address(vault)),
+            t2.balanceOf(address(vault)),
+            usdc.balanceOf(address(vault))
+        ];
+        uint256 aliceUsdc0 = usdc.balanceOf(alice);
+
+        vm.prank(alice);
+        vault.redeemInKind(shares_, alice, alice);
+
+        assertEq(
+            basketToken.balanceOf(alice) + basketToken.balanceOf(admin),
+            pre[1] * shares_ / pre[0],
+            "token1 exact"
+        );
+        assertEq(
+            t2.balanceOf(alice) + t2.balanceOf(admin), pre[2] * shares_ / pre[0], "token2 exact"
+        );
+        assertEq(
+            usdc.balanceOf(alice) - aliceUsdc0 + usdc.balanceOf(admin),
+            pre[3] * shares_ / pre[0],
+            "usdc exact"
+        );
+        assertEq(t3.balanceOf(address(vault)), 999_999, "inactive asset not paid");
+        assertEq(t3.balanceOf(alice), 0, "inactive asset not paid out");
+
+        assertEq(vault.totalSupply(), pre[0] - shares_, "supply reduced by shares");
+        uint256 sup2 = vault.totalSupply();
+        assertGe(basketToken.balanceOf(address(vault)) * pre[0], pre[1] * sup2, "token1 backing");
+        assertGe(t2.balanceOf(address(vault)) * pre[0], pre[2] * sup2, "token2 backing");
+        assertGe(usdc.balanceOf(address(vault)) * pre[0], pre[3] * sup2, "usdc backing");
+    }
+
+    /// @notice A token callback cannot re-enter, and shares are already burned when the callback runs.
+    function test_redeemInKind_reentrancyBlockedAndSharesBurnedFirst() public {
+        ReentrantHookToken hook = new ReentrantHookToken();
+        MockPool hp = new MockPool(address(hook), address(usdc), uint160(1 << 96));
+        BasketVaultHarness v = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
+        );
+        vm.prank(admin);
+        v.addAsset(address(hook), address(hp), 500, address(0), BasketVault.Venue.V3);
+        address alice = makeAddr("alice");
+        // Mint shares by seeding the vault through a deposit at 1:1.
+        hook.mint(address(router), 1_000 * ONE_USDC);
+        router.setAmountOut(1_000 * ONE_USDC);
+        usdc.mint(alice, 1_000 * ONE_USDC);
+        vm.startPrank(alice);
+        usdc.approve(address(v), 1_000 * ONE_USDC);
+        uint256 sh = v.deposit(1_000 * ONE_USDC, alice);
+        vm.stopPrank();
+
+        hook.arm(v, alice);
+        vm.prank(alice);
+        v.redeemInKind(sh, alice, alice);
+
+        assertTrue(hook.reentered(), "callback ran");
+        assertFalse(hook.reentrySucceeded(), "re-entry must not succeed");
+        assertEq(
+            hook.reentryReason(),
+            bytes4(abi.encodeWithSignature("ReentrancyGuardReentrantCall()")),
+            "blocked by the reentrancy guard"
+        );
+        assertEq(hook.sharesAtCallback(), 0, "shares were burned before the first transfer");
+        assertEq(hook.supplyAtCallback(), 0, "supply already reduced at the callback");
+        assertEq(hook.balanceOf(alice), 1_000 * ONE_USDC, "paid in kind (fee is 0 on this vault)");
+    }
+
+    /// @notice redeemInKind reads no TWAP and sells nothing: it works with a router that has no
+    ///         liquidity and a pool that reverts on both observe and slot0-priced reads.
+    function test_redeemInKind_noSwapNoOracle() public {
+        (address alice, uint256 shares) = _seedInKind();
+        pool.setRevertObserve(true);
+        router.setAmountOut(0);
+        vm.prank(alice);
+        vault.redeemInKind(shares, alice, alice);
+        assertEq(vault.totalSupply(), 0);
+        assertGt(basketToken.balanceOf(alice), 0);
+    }
+
+    /// @notice The entry gas floor applies as in redeem.
+    function test_redeemInKind_revertsBelowGasFloor() public {
+        (address alice, uint256 shares) = _seedInKind();
+        vm.prank(alice);
+        (bool ok, bytes memory ret) = address(vault).call{gas: 400_000}(
+            abi.encodeCall(vault.redeemInKind, (shares, alice, alice))
+        );
+        assertFalse(ok, "low gas must revert");
+        assertEq(bytes4(ret), BasketVault.InsufficientGas.selector, "InsufficientGas");
+        assertEq(vault.balanceOf(alice), shares, "no burn");
     }
 
     function _tail(bytes memory data) internal pure returns (bytes memory out) {
@@ -2782,7 +3196,7 @@ contract MockAerodromePool {
         token0 = token0_;
         token1 = token1_;
         tickCumulativeRate = 0;
-        cardinality = 100;
+        cardinality = 1000;
     }
 
     function setTickCumulativeRate(int56 rate) external {
@@ -3517,7 +3931,7 @@ contract BasketVaultVenueSelectorTest is Test {
 // for sweeps (not a settable address) — the quarantine-address setter is only on
 // RobotMoneyVault and PortfolioRouter. AC3 quarantine tests are in DeployTimelock.t.sol.
 
-contract BasketVaultTimelockTest is SafeFixture {
+contract BasketVaultTimelockTest is SafeGovernance {
     uint256 internal constant ONE_USDC = 1e6;
     uint256 internal constant MIN_DELAY = 2 days;
 
@@ -3542,12 +3956,8 @@ contract BasketVaultTimelockTest is SafeFixture {
         _installSafeSet();
         safe = _newDefaultSafe();
 
-        // Deploy a TimelockController with `safe` as proposer + executor.
-        address[] memory proposers = new address[](1);
-        proposers[0] = safe;
-        address[] memory executors = new address[](1);
-        executors[0] = safe;
-        timelock = new TimelockController(MIN_DELAY, proposers, executors, address(0));
+        // Production timelock shape: the Safe is the only proposer and canceller.
+        timelock = _newGovTimelock(safe, MIN_DELAY);
 
         // Transfer ADMIN_ROLE from admin EOA to TimelockController.
         vm.startPrank(admin);
@@ -3584,20 +3994,15 @@ contract BasketVaultTimelockTest is SafeFixture {
     function test_AC7_basket_setFeeRecipient_succeedsViaTimelock() public {
         address newRecipient = makeAddr("newFeeRecipient");
         bytes memory callData = abi.encodeCall(BasketVault.setFeeRecipient, (newRecipient));
-        bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("ac7-basket-fee-recipient");
 
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, timelock, address(vault), callData, salt, MIN_DELAY);
 
-        // Pre-delay revert.
-        vm.expectRevert();
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
+        // Pre-delay: exact reasons through the Safe (GS013) and on the timelock.
+        _expectExecuteRefused(safe, timelock, address(vault), callData, salt);
 
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
+        vm.warp(block.timestamp + MIN_DELAY);
+        _govExecute(safe, timelock, address(vault), callData, salt);
 
         assertEq(vault.feeRecipient(), newRecipient, "fee recipient must update via timelock");
     }
@@ -3606,14 +4011,12 @@ contract BasketVaultTimelockTest is SafeFixture {
     function test_AC7_basket_setExitFeeBps_succeedsViaTimelock() public {
         uint256 newFee = 50;
         bytes memory callData = abi.encodeCall(BasketVault.setExitFeeBps, (newFee));
-        bytes32 predecessor = bytes32(0);
-        bytes32 salt = keccak256("ac7-basket-exit-fee");
 
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
+        bytes32 salt = keccak256("ac7-basket-exit-fee");
+        _govRun(safe, timelock, address(vault), callData, salt, MIN_DELAY);
+
+        // Replay of the executed operation: exact reasons on both paths.
+        _expectExecuteRefused(safe, timelock, address(vault), callData, salt);
 
         assertEq(vault.exitFeeBps(), newFee, "exit fee must update via timelock");
     }

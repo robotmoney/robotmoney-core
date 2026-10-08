@@ -58,7 +58,7 @@ operation, exactly like any other privileged role change.
 
 **How that authority is itself constrained.** Assigning or revoking voting power
 is a privileged-configuration operation and must be routed through the admin
-timelock (`docs/technical/governance-decisions.md` §3.3, `docs/technical/security-model.md` §4.5).
+timelock (`docs/technical/governance-decisions.md` §3.3, `docs/technical/security-model.md` §4).
 And critically: **no committee agent may hold voting power.** The
 `COMMITTEE_AGENT_ROLE` holder set and the non-zero-voting-power set are disjoint
 (`GovernanceSeparationInvariant.t.sol`). Granting a committee agent voting power

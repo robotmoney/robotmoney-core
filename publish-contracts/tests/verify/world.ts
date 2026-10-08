@@ -68,6 +68,10 @@ const ASSETS: Record<string, { token: Address; pool: Address; swapFee: number; a
   rmRWA: [{ token: addr(0xde5), pool: addr(0xf003), swapFee: 500, adapter: addr(0xad01) }],
 };
 
+/** Issue 1666: the guard every basket carries, and the in-range liquidity of every pool against the sheet floor. */
+export const NAV_GUARD_BPS = 100n;
+export const POOL_LIQUIDITY = 10n ** 18n;
+export const POOL_LIQUIDITY_FLOOR = 10n ** 12n;
 export const VOTER_A = addr(0xb001);
 export const VOTER_B = addr(0xb002);
 const GOV_SHEET = { voters: [VOTER_A, VOTER_B], voterPower: 1000n, quorum: 2n, votingPeriod: 3600n, executionDelay: 3600n };
@@ -257,6 +261,7 @@ export function buildWorld(chainId = 8453): World {
     ch.set(v.address, "tvlCap", caps.tvl);
     ch.set(v.address, "perDepositCap", caps.per);
     ch.set(v.address, "exitFeeBps", 10n);
+    if (v.kind !== "usdc") ch.set(v.address, "navDeviationGuardBps", NAV_GUARD_BPS);
     ch.set(v.address, "feeRecipient", SAFE);
     const paused = k !== "rmUSDC";
     ch.set(v.address, "depositsPaused", paused);
@@ -265,6 +270,7 @@ export function buildWorld(chainId = 8453): World {
       ch.set(v.address, "balanceOf", (a: any[]) => (String(a[0]).toLowerCase() === SEED_RECEIVER.toLowerCase() ? SEED_SHARES : 0n));
     }
     const assets = ASSETS[k] ?? [];
+    for (const x of assets) ch.set(x.pool, "liquidity", POOL_LIQUIDITY);
     ch.set(v.address, "assets", (a: any[]) => {
       const x = assets[Number(a[0])];
       if (!x) throw new Error("execution reverted");
@@ -272,6 +278,7 @@ export function buildWorld(chainId = 8453): World {
     });
     vsheet[k] = {
       tvlCap: caps.tvl, perDepositCap: caps.per, exitFeeBps: 10n, feeRecipient: SAFE, expectPaused: paused, routerEligible: true,
+      ...(v.kind !== "usdc" ? { navDeviationBps: NAV_GUARD_BPS, minPoolLiquidity: POOL_LIQUIDITY_FLOOR } : {}),
       assets: assets.map((x) => ({ ...x })), ...(k === "rmUSDC" ? { seed: 1_000_000n, seedShareReceiver: SEED_RECEIVER } : {}),
     };
   }

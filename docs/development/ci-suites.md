@@ -68,7 +68,7 @@ compare (it names the mismatch rather than reporting stale docs).
 2. Install Foundry toolchain
 3. Cache Foundry build artifacts (`cache/`, `out/`)
 4. `forge build`
-5. `forge test` with fuzzer enabled — invariant tests: share accounting, per-agent cap sequences, deposit monotonicity, reentrancy under malicious stub, pause invariant
+5. `forge test` with fuzzer enabled — invariant tests: share accounting, per-agent cap sequences, deposit monotonicity, reentrancy under malicious stub, pause invariant. It runs through `.github/scripts/forge_test_require_executed.sh` on `contracts/test/*Invariant*.t.sol` with `--match-test "^invariant_"`. `forge test` exits 0 when a path filter matches nothing, so the wrapper fails the job when no test passed (issue 1643). The same wrapper guards the per-file `--match-path` steps of the `unit` job. Step 6 runs its self-test, `.github/scripts/tests/test_forge_test_require_executed.sh`, which plants an empty `--match-path` and requires a red result.
 
 **Steps — `coverage` job:**
 1. Checkout repository
@@ -210,7 +210,8 @@ A `pin` job chooses ONE pinned Base block per workflow run (upstream head minus 
 |---|---|---|
 | `twin-router` | `router` | straight on the Twin fork (`RMPC_TESTNET_RPC_URL`) |
 | `twin-withdrawal-registry` | `withdrawal`, `registry` | straight on the Twin fork |
-| `twin-light` | `failure_surface_smoke`, the `rmpc_get_*` fork tests, `devnet_adapter_round_trip`, `gas_estimate_reality_check`, `landing_price_strip_fork`, `basket_vault_round_trip` | straight on the Twin fork |
+| `twin-light` | `failure_surface_smoke`, the `rmpc_get_*` fork tests | straight on the Twin fork |
+| `anvil-devnet-adapters` | `devnet_adapter_round_trip`, `gas_estimate_reality_check`, `landing_price_strip_fork`, `basket_vault_round_trip` (core 1656: `skip_if_no_devnet_fork!` needs `RMPC_FORK_RPC_URL`, so they silently skipped in `twin-light`) | each test forks the Twin |
 | `anvil-goldens` | `abi_address_sanity`, `dex_route_smoke`, `vault_deposit_redeem_smoke` | each test forks the Twin (`RMPC_FORK_RPC_URL=$TWIN_RPC_URL`, `RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK`) |
 | `anvil-governance` | `governance` | each test forks the Twin; governance scenarios warp (`evm_increaseTime`) instead of waiting |
 

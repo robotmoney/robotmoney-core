@@ -25,7 +25,7 @@ function chain(pools: Record<string, Pool>, o: { noTokenCode?: Address[]; noTime
       const p = pools[to.toLowerCase()]!;
       if (p.reverts) return { ok: false, data: "0x" as Hex, reason: "revert" };
       if (data === POOL_SELECTORS.fee) return { ok: true, data: `0x${w(p.fee ?? 500n)}` as Hex };
-      if (data === POOL_SELECTORS.slot0) return { ok: true, data: `0x${[1n, p.spot ?? 100n, 7n, p.card ?? 4n, 5n, 0n, 1n].map(w).join("")}` as Hex };
+      if (data === POOL_SELECTORS.slot0) return { ok: true, data: `0x${[1n, p.spot ?? 100n, 7n, p.card ?? 1000n, 5n, 0n, 1n].map(w).join("")}` as Hex };
       if (data === POOL_SELECTORS.liquidity) return { ok: true, data: `0x${w(p.liq ?? 10n)}` as Hex };
       if (data.startsWith(POOL_SELECTORS.observations)) return { ok: true, data: `0x${[NOW_TS - (p.lastObsAge ?? 60n), 0n, 0n, 1n].map(w).join("")}` as Hex };
       if (data.startsWith("0x883bdbfd")) {
@@ -46,13 +46,14 @@ describe("config-check", () => {
     const r = await configCheck(chain({ [key(a)]: {} }), [a]);
     expect(r.ok).toBe(true);
     expect(r.checks.map((c) => c.label.replace(/^\S+ \S+: /, ""))).toEqual([
-      "token code present", "pool code present", "pool fee equals config", "observation cardinality at least 2", "liquidity above 0",
+      "token code present", "pool code present", "pool fee equals config", "observation cardinality at least 901", "liquidity above 0",
       "oracle observation history covers the TWAP window", "oracle last observation is fresh", "oracle TWAP is within 5 percent of V3 spot",
     ]);
   });
   test.each([
     ["no code at the pool", { noCode: true }, "pool code present"],
     ["fee differs from config", { fee: 3000n }, "pool fee equals config"],
+    ["cardinality 900, one below the 1800 s window floor", { card: 900n }, "observation cardinality"],
     ["cardinality 1", { card: 1n }, "observation cardinality"],
     ["zero liquidity", { liq: 0n }, "liquidity above 0"],
     ["a revert", { reverts: true }, "pool fee equals config"],
@@ -70,6 +71,11 @@ describe("config-check", () => {
     const a = asset(2);
     expect((await configCheck(chain({ [key(a)]: { spot: -50n, twapTick: -100n } }), [a])).ok).toBe(true);
     expect(maxDeviationTicks(5)).toBe(487);
+  });
+  test("cardinality 901 passes the window floor", async () => {
+    const a = asset(7);
+    const r = await configCheck(chain({ [key(a)]: { card: 901n } }), [a]);
+    expect(r.checks.find((c) => c.label.endsWith("observation cardinality at least 901"))!.ok).toBe(true);
   });
   test("a token with no code fails", async () => {
     const a = asset(5);

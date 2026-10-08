@@ -14,7 +14,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use rmpc_e2e::Fixture;
+use rmpc_e2e::{require_prereqs, Fixture};
 use serde_json::Value;
 
 /// USDC has 6 decimals throughout the harness.
@@ -38,17 +38,6 @@ fn order_id(label: &str) -> String {
     use alloy_primitives::keccak256;
     let h = keccak256(format!("rmpc-e2e-window-cap-{label}").as_bytes());
     format!("{h:#x}")
-}
-
-fn skip_if_no_prereqs(test_name: &str) -> bool {
-    if !rmpc_e2e::prerequisites_available() {
-        eprintln!(
-            "[{test_name}] docker / forge / cast not on PATH; skipping. \
-             Install Docker + Foundry to run this test."
-        );
-        return true;
-    }
-    false
 }
 
 fn parse_json(stdout: &str, ctx: &str) -> Value {
@@ -93,9 +82,7 @@ fn deposit_args(amount: u128, oid: &str) -> [String; 6] {
 /// (preflight) or `ErrTxReverted` (gateway revert).
 #[test]
 fn over_window_cap_rejected() {
-    if skip_if_no_prereqs("over_window_cap_rejected") {
-        return;
-    }
+    require_prereqs("over_window_cap_rejected");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(CAP_TEST_FIRST_LEG + CAP_TEST_SECOND_LEG)
             .expect("approve usdc");

@@ -1768,7 +1768,7 @@ fn cast_call_raw_at(
 /// implementation of the step (the twin-publish CI action runs the same verb). Real pool, real position manager,
 /// real transactions: it gives a funder RM and USDC with the fork's balance helpers, raises the pool's
 /// observation cardinality and mints one in-range position. It asserts the `BasketVault.addAsset` floors
-/// (cardinality >= 2, liquidity >= 1e6) itself, so a failure names the pool and not a later revert.
+/// (cardinality >= 901, liquidity >= 1e6) itself, so a failure names the pool and not a later revert.
 fn fund_rm_pool(
     cfg: &publish::PublishConfig,
     rpc_url: &str,
@@ -1804,6 +1804,18 @@ pub fn prerequisites_available() -> bool {
         .iter()
         .filter(|t| !(reuses_fork && **t == "anvil"))
         .all(|t| which::which(t).is_ok())
+}
+
+/// The ONE prerequisite guard for every devnet test binary (issue 1436). Call it first in a
+/// test, before any fixture is built. A runner without the tools goes RED: a skip that returns
+/// early is recorded as PASSED by libtest and proves nothing. There is no opt-out. Do not add a
+/// local `skip_if_no_prereqs`; `.github/scripts/check_no_silent_prereq_skip.sh` fails on it.
+pub fn require_prereqs(test_name: &str) {
+    assert!(
+        prerequisites_available(),
+        "[{test_name}] anvil/bun/forge/cast not on PATH: this devnet test cannot be skipped. \
+         Install Foundry and bun to run it."
+    );
 }
 
 // -- Internal helpers -------------------------------------------------
@@ -2893,6 +2905,9 @@ fn dapp_compose_env(
         kv("INDEXER_REGISTRY", &d.registry),
         // WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter (issue #615).
         kv("INDEXER_PORTFOLIO_ROUTER", &d.router),
+        // Issue 1647: ProposalCreated/VoteCast/ProposalExecuted from RouterGovernance, so the dapp governance e2e
+        // reads proposals the real Safe and timelock created.
+        kv("INDEXER_ROUTER_GOVERNANCE", &d.governance),
         // Issue #1294: ReceiptRecorded/ReceiptReleased events from ConsensusRebalanceReceipt.
         kv("INDEXER_CONSENSUS_RECEIPT", &d.consensus_receipt),
         // Issue #1294: fixed port for the receipt-fixtures compose service.

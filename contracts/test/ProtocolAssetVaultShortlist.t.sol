@@ -20,7 +20,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 contract ShortlistMockPool {
     address public immutable token0;
     address public immutable token1;
-    uint16 public cardinality = 100;
+    uint16 public cardinality = 1000;
     uint128 public poolLiquidity = 1e18;
     uint24 public feeTier;
 
@@ -236,7 +236,7 @@ contract ProtocolAssetVaultShortlistTest is Test {
 
     /// @notice A wSOL pool with zero liquidity is rejected.
     function test_wsol_emptyPoolLiquidityIsRejected() public {
-        (bool ok, bytes memory ret) = _wsolPoolAdd(100, 0);
+        (bool ok, bytes memory ret) = _wsolPoolAdd(1000, 0);
         assertFalse(ok, "wSOL pool with zero liquidity must not be added");
         assertEq(bytes4(ret), BasketVault.InsufficientPoolLiquidity.selector);
     }

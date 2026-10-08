@@ -91,9 +91,25 @@ A non-empty result confirms the gate is in place.
 
 **What.** Deploy `PortfolioRouter`, `RouterGovernance`, and `TimelockController`
 to **Base mainnet (chain `8453`)**, record their addresses in
-the run's deploy manifests (`deployments/<chain>/`), then transfer `ADMIN_ROLE` to the
-`TimelockController` across **all five protocol contracts**: Gateway, Vault,
-VaultRegistry, PortfolioRouter, and RouterGovernance.
+the run's deploy manifests (`deployments/<chain>/`), then hand the privileged
+roles to the `TimelockController`. `DeployTimelock.s.sol` hands over:
+
+- `ADMIN_ROLE` on the five protocol contracts: Gateway, VaultRegistry,
+  PortfolioRouter, RouterGovernance, and every vault in `VAULT_ADDRESSES`.
+  The basket vaults (rmPROTO, rmAGENT, rmRWA) are in that list alongside rmUSDC.
+  The deployer's vault `EMERGENCY_ROLE` moves to the independent
+  `EMERGENCY_ADDRESS` key.
+- `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the Gateway.
+- `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the IC policy
+  (`InvestmentCommitteePolicy`, `IC_POLICY_ADDRESS`), revoked from the deployer.
+  The gateway's own `ADMIN_ROLE` on the IC policy is left in place.
+- `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the consensus receipt
+  (`ConsensusRecommendationReceipt`, `CONSENSUS_RECEIPT_ADDRESS`), revoked from
+  the address named by `RECEIPT_ADMIN_ADDRESS`.
+- Ownership of every gateway agent in `AGENT_ADDRESSES`.
+
+`IC_POLICY_ADDRESS`, `CONSENSUS_RECEIPT_ADDRESS` and `RECEIPT_ADMIN_ADDRESS` are
+required on every chain. The script reverts when one is unset.
 
 **Why.** Architecture §8 requires that `ADMIN_ROLE` on all protocol contracts be
 held by the deployed `TimelockController` in production — no EOA may hold
@@ -141,8 +157,9 @@ contract-enforced rather than operational convention.
 3. Record the resulting `portfolio_router`, `router_governance`, and
    `timelock_controller` addresses in the run's deploy manifests (`deployments/<chain>/`).
 
-**Verify.** For each of the five contracts, confirm the timelock holds
-`ADMIN_ROLE` and no EOA does:
+**Verify.** For each of the five protocol contracts, each basket vault, the IC
+policy and the consensus receipt, confirm the timelock holds `ADMIN_ROLE` and no
+EOA does:
 
 ```bash
 cast call "$CONTRACT" "hasRole(bytes32,address)(bool)" \

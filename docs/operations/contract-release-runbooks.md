@@ -224,11 +224,41 @@ adds `safe`, `prove-control` (between stages 10 and 11), `verify` and `govern`:
 | 8 `proto` | rmPROTO, paused, wETH and cbBTC, registered. |
 | 9 `agent` | rmAGENT, paused, RM (`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`) on its venue, registered. The venue is decided (owner, 2026-10-06): the existing Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), the only venue the script wires (`contracts/script/BasketVaultDeployBase.sol`). Before the mainnet run the owner funds it with in-range liquidity at market price, sized to rmAGENT's first-period cap, and raises its observation cardinality. A restored V4 swap adapter is a later option, not a launch blocker. RM is in `config/agent-token-shortlist.json` (core #1554), so the live config check and the stage's own config check fail with a message naming the pool until the owner has funded it: `BasketVault.addAsset` needs observation cardinality of at least 2 and liquidity of at least 1e6, and those floors are not relaxed. On the Twin chain the harness funds the same pool with real transactions first (`rehearsal fund-rm-pool`), so the Twin run proves rmAGENT holds RM after the deploy. |
 | 10 `rwa` | rmRWA, paused, a plain basket row: deSPXA on its Uniswap V3 fee 500 pool, no oracle. |
-| — `prove-control` | Before stage 11 the real Safe signs and executes one proof transaction: a call from the Safe to itself with value 0 and empty data. EVERY owner signs it, not only a threshold, so one run proves every key (plan decision 21, core #1618). The Safe tool checks each owner signature, and the Safe itself checks all of them, before it executes. The run manifest records the transaction hash and the signers. The first owner pays the gas, not the deployer. The proof goes straight through the Safe, never through the timelock, so the 8453 evidence check (unpause operations only) is unaffected. A signer missing for any owner stops the step with `CONTROL_NOT_PROVEN` (exit 24) before anything is sent. |
+| — `prove-control` | Before stage 11 the real Safe signs and executes one proof transaction: a call from the Safe to itself with value 0 and empty data. EVERY owner signs it, not only a threshold, so one run proves every key (plan decision 21, core #1618). The Safe tool checks each owner signature, and the Safe itself checks all of them, before it executes. The run manifest records the transaction hash and the signers. The first owner pays the gas, not the deployer. The proof goes straight through the Safe, never through the timelock, so the 8453 evidence check (unpause operations only) is unaffected. A signer missing for any owner stops the step with `CONTROL_NOT_PROVEN` (exit 24) before anything is sent. **If the run died after the proof landed** (the Safe is at nonce 1 and the run manifest has no `prove-control` record), rerun the same command with `--resume`: the tool reads the Safe's own `ExecutionSuccess`/`ExecutionFailure` events from the safe stage block, adopts the nonce-0 execution only when it is the exact self-call (value 0, empty data, a plain call to the Safe, chain and Safe bound by the Safe transaction hash) whose calldata signatures recover to exactly the current owners (every owner, no stranger, no repeat), records it with `adopted: true` and the on-chain hash, sends nothing, and goes on to stage 11. Anything else (a failed or reverted execution, another target, value or data, a missing owner, a nonce of 2 or more, two executions, no event) stops with `CONTROL_NOT_PROVEN` and the reason. Without `--resume` it never adopts. Log reads walk the range in 2000-block windows (Base RPC providers cap one `eth_getLogs` call), and a read that fails is a refusal, never an empty answer. |
 | — config | Before stage 11 the deployer sets the deploy-time configuration: setters, router eligibility, voting power, and router default weights rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps (not yet implemented: core #1520). |
 | 11 `timelock` | Refuses with `CONTROL_NOT_PROVEN` (exit 24) unless the run manifest holds the `prove-control` record on the same Safe signed by every owner and the Safe nonce is 1 or more (stage 0 asserts nonce 0). TimelockController: proposer and canceller the Safe, executor open `address(0)` (implemented: core #1521; `DeployTimelock` grants `EXECUTOR_ROLE` to `address(0)` only, and the verifier checks it), delay from the sheet with a 172800 s floor on 8453. Every role on every vault, the gateway, registry, router, governance, IC policy and receipt goes to the timelock (vault EMERGENCY_ROLE to the emergency key), and the deployer is revoked. `AGENT_ADDRESSES=none`. |
 | 12 `verify` | One verifier reads the chain and checks every postcondition, including the Safe owners and threshold, the proof transaction read back from the chain (a self-call of the Safe, signed by every owner, Safe nonce 1 or more), the delay floor, that the deployer holds no role, that the gateway has no `AgentAuthorized` or `AgentOwnershipTransferred` log up to the handover block and nobody holds `AGENT_ROLE` from an earlier grant (the deploy authorizes no agent), and the deployer nonce against the frozen per-stage counts for the release SHA (counts not yet committed: core #1524). |
 | 13 `govern` | Only `unpauseDeposits()` on each basket vault (rmPROTO, rmAGENT, rmRWA). Each is its own timelock operation, scheduled the same day through the real Safe and executed after one 48-hour delay. None is skipped on any deploy. On 8453 the CLI exits `GOVERN_PENDING` with the resume command; on the Twin chain the wait runs by time warp (not yet implemented: core #1520; `govern.ts` still runs the older per-step matrix). |
+
+**Run order: publish, verify, govern, verify (issue 1667).** The stage numbers are fixed (12 `verify`, 13 `govern`), the run order on 8453 is not
+verify once. Verify runs twice, and each run checks a different state, which the CLI reads from the run manifest and confirms against the chain:
+
+1. `publish` (stages 0 to 11).
+2. `verify`: the **pre-govern** state. No unpause row is scheduled. rmPROTO, rmAGENT and rmRWA must read `depositsPaused` true and rmUSDC must read false.
+3. `govern`: schedules the three basket unpauses through the real Safe in one sitting and exits `GOVERN_PENDING` (15). After the 48-hour delay the same
+   command executes them.
+4. `verify`: the **post-govern** state. All three unpause rows are executed and all four vaults must read `depositsPaused` false.
+
+A manifest that says one state while the chain reads the other fails verify (exit 13), and a failed verify runs `pause-all` (§4.6). A verify run while
+govern is **part-way** (some but not all basket unpause rows scheduled or executed, or an `unpause-USDC` round scheduled and not executed) is not a failed
+verify: it exits 15 (`GOVERN_PENDING`), names the govern command that finishes the work, checks nothing and pauses nothing. Run that command, then verify.
+The Twin chain rehearsal runs the same order (`twin-publish.ts`, `twin_publish.rs`). It only checks that the scripts execute in this order: the 48-hour
+delay and the Safe signers are proven on 8453 through the real Safe.
+
+**Basket sheet values (issue 1666).** Each basket (`PROTO`, `AGENT`, `RWA`, never `USDC`) carries two more
+names in the frozen sheet, read by its stage as `NAV_DEVIATION_BPS` and `MIN_POOL_LIQUIDITY`:
+
+| Sheet name | Rule |
+| --- | --- |
+| `VAULT_<KEY>_NAV_DEVIATION_BPS` | The ORA-4 deposit guard in basis points, from 1 to 2000. The vault default is 0, which disables the check, so 0 is refused. A value above 2000 is refused (the vault ceiling is 20 percent). The unit is basis points: 100 is 1 percent. The guard runs on deposit only, never on redeem. |
+| `VAULT_<KEY>_MIN_POOL_LIQUIDITY` | The floor for `IUniswapV3Pool.liquidity()` of every pool the basket lists. The unit is the pool's in-range liquidity L (a `uint128`, about sqrt(token0 x token1) in raw units), not a USDC amount. Above 0 and at most 2^128 - 1. It is checked on top of the vault's own dust constant `MIN_POOL_LIQUIDITY` (1e6), which is not changed. Read the live value with `cast call <pool> "liquidity()(uint128)"` before you pick it. |
+
+`VAULT_USDC_NAV_DEVIATION_BPS` and `VAULT_USDC_MIN_POOL_LIQUIDITY` are refused: rmUSDC has no guard and no pool.
+The 8453 values are the owner's, set in the frozen sheet. The deploy script sets the guard on the new vault before the
+timelock handover and reads it back, then refuses any pool below the floor. The verifier (stage 12) reads
+`navDeviationGuardBps` from the chain and asserts it equals the sheet and is above zero, and asserts each basket pool's
+liquidity meets the floor. Each basket stage sends one more transaction (`setNavDeviationGuardBps`), so the frozen
+per-stage counts are the ones the Twin rehearsal measures after this change.
 
 Every privileged action after stage 11 is Safe → `TimelockController` →
 target. `updateDelay`, a batch and a cancel run only as Twin-chain tests of
@@ -274,7 +304,32 @@ If preflight, the cutover, or postflight finds any issue:
 If verify (stage 12) or the postflight is what failed, the publish-contracts
 CLI has already paused deposits on all four vaults (rmUSDC, rmPROTO, rmAGENT,
 rmRWA) before you read the failure: `pause-all` (§4.6). Check the
-`rollout-report-<chain>.json` it wrote before you start the fix.
+`rollout-report-<chain>.json` it wrote before you start the fix. A vault that `pause-all` paused comes back through the Safe: `govern --row unpause-USDC`
+for rmUSDC (never part of a default run, and refused while rmUSDC reads open) and `govern --row unpause-PROTO`, `unpause-AGENT` or `unpause-RWA` for a basket
+that was already unpaused. Each opens a new numbered round (a new timelock operation id, a new 48-hour delay): the run exits `GOVERN_PENDING`, and the same
+command executes it after the delay. A default `govern` run never reopens a vault that was paused again. Record each round under `govern` in the evidence
+file with its `round` number (`unpause-USDC` is optional there, and every step may have rounds 1 to n).
+
+**Never resume `govern` after a `pause-all` without cancelling first (issue 1686).**
+If an unpause was already scheduled when `pause-all` ran (by hand, or the
+automatic one after a failed verify), the timelock would still execute it after
+its delay and reopen the vault you just paused. `pause-all` therefore records a
+`pauses` entry (sequence number, timestamp, trigger, per-vault result) in
+`publish-run.json`, and `govern` refuses before it sends anything when a pause
+entry is newer than a pending unpause's schedule: `GOVERN` (exit 14), naming
+the row, the pause entry and the operation id. The tool has no cancel on 8453,
+so the recovery is, in this order:
+
+1. Cancel the pending operation through the Safe on the timelock: a Safe
+   transaction that calls `cancel(<operation id>)` on the timelock (the id is
+   in the error and in `publish-run.json` under `govern.<row>.scheduled.operation_id`).
+2. Fix what made you pause.
+3. Run `govern --row unpause-X` (same arguments as before). It sees the
+   cancelled operation, archives it in the manifest as `<row>:round-<n>:cancelled-<k>`
+   and schedules the same round again with a fresh sequence number, a new
+   48-hour delay and the usual `GOVERN_PENDING`. The same command executes it.
+4. A pause-all older than the schedule does not block. A row whose vault was
+   paused again after it executed opens round n+1 as described above.
 
 There is no branch to cherry-pick onto and no rc-numbering cost — every
 contract deployment is a fresh broadcast, so "try again" is simply "deploy
@@ -331,7 +386,7 @@ issue is closed only after this report is filed.
 ### 4.8. Post-launch consensus receipt release
 
 Releasing a consensus receipt on 8453 is a standalone post-launch action (core 1611). It is never part of
-stage 13, which stays the three basket unpauses. Run `govern --row release-receipt --receipt-id 0x<bytes32>`
+stage 13, which stays the three basket unpauses (an `unpause-USDC` round after `pause-all` is likewise outside the default run). Run `govern --row release-receipt --receipt-id 0x<bytes32>`
 with the usual chain, RPC, sheet, signer and `--owner-signer` arguments. The real Safe schedules `releaseReceipt` on
 the timelock as its own operation and the CLI exits `GOVERN_PENDING` (exit 15) with the resume command. After the
 48-hour delay the same command makes the Safe execute it, and the CLI reads `released` back. Record the operation

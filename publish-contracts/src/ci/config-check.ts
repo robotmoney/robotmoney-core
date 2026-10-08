@@ -1,7 +1,7 @@
 // Read-only config-check of core's asset config (config/protocol-assets.json, rwa-assets.json, agent-token-shortlist.json) against the
 // live chain. It runs in the plan job before any approval and again right before each vault stage (runner.ts). It sends nothing (the
 // ChainReader surface is read-only). For every configured asset:
-//   token code present, pool code present, pool fee() equals the configured poolFee, observation cardinality at least 2, liquidity above 0,
+//   token code present, pool code present, pool fee() equals the configured poolFee, observation cardinality at least 901, liquidity above 0,
 //   and the oracle (the pool TWAP that prices the basket vault): observe() covers the TWAP window, the last observation is fresh, and the
 //   TWAP is within ORACLE_MAX_DEVIATION_PERCENT of the V3 slot0 spot.
 // Missing config is a failure, never a skip.
@@ -73,13 +73,13 @@ export async function configCheck(chain: ChainReader, assets: ConfiguredAsset[])
     });
     let spotTick: bigint | undefined;
     let obsIndex: bigint | undefined;
-    await c.run(`${p}: observation cardinality at least 2`, async () => {
+    await c.run(`${p}: observation cardinality at least 901`, async () => {
       const r = await chain.callRaw(a.pool, POOL_SELECTORS.slot0 as Hex);
       if (!r.ok) return { ok: false, detail: `slot0() reverted: ${r.reason ?? ""}` };
       spotTick = signed(word(r.data, 1));
       obsIndex = word(r.data, 2);
       const card = word(r.data, 3);
-      return { ok: card >= 2n, detail: `cardinality ${card}` };
+      return { ok: card >= 901n, detail: `cardinality ${card}` };
     });
     await c.run(`${p}: liquidity above 0`, async () => {
       const r = await chain.callRaw(a.pool, POOL_SELECTORS.liquidity as Hex);

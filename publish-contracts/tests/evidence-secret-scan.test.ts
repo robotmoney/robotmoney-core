@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { scanEvidenceFolder } from "../src/evidence-check.ts";
+import { configHashes, writeReport, type IsoReport } from "../src/isomorphism.ts";
 
 const scratch = () => mkdtempSync(join(tmpdir(), "evidence-scan-"));
 
@@ -16,6 +17,19 @@ describe("secret scan over the evidence folder", () => {
   test("a bare private key is found", () => {
     const d = scratch();
     writeFileSync(join(d, "notes.txt"), "key 0x" + "11".repeat(32) + "\n");
+    expect(scanEvidenceFolder(d).join()).toContain("64-hex");
+  });
+  test("a folder holding an isomorphism report from isomorphism.ts scans clean", () => {
+    const d = scratch();
+    const coreDir = resolve(import.meta.dir, "..", "..");
+    const hashes = configHashes(coreDir);
+    expect(Object.keys(hashes).length).toBeGreaterThan(0);
+    writeReport(join(d, "isomorphism-8453.json"), { chainId: 8453, configHashes: hashes, codehashes: { "vault[usdc]": "0x" + "cd".repeat(32) } } as unknown as IsoReport);
+    expect(scanEvidenceFolder(d)).toEqual([]);
+  });
+  test("a bare 64-hex value on a config path line still fails", () => {
+    const d = scratch();
+    writeFileSync(join(d, "isomorphism-8453.json"), JSON.stringify({ configHashes: { "config/dex-pools.json": "6b".repeat(32) } }, null, 2) + "\n");
     expect(scanEvidenceFolder(d).join()).toContain("64-hex");
   });
   test("a keystore, an assignment and a mnemonic are found", () => {

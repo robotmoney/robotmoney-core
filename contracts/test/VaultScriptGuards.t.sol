@@ -67,6 +67,8 @@ abstract contract VaultScriptGuardBase is BasketDeployFixture {
         _setIf(prefix, skip, "PER_DEPOSIT_CAP", "5000000000");
         _setIf(prefix, skip, "FEE_RECIPIENT", vm.toString(feeRecipient));
         _setIf(prefix, skip, "EXIT_FEE_BPS", "0");
+        _setIf(prefix, skip, "NAV_DEVIATION_BPS", "100");
+        _setIf(prefix, skip, "MIN_POOL_LIQUIDITY", "1000000000000");
     }
 
     function _setIf(
@@ -225,6 +227,34 @@ abstract contract VaultScriptGuardBase is BasketDeployFixture {
         BasketVaultDeployBase.Params memory p = _params();
         p.feeRecipient = address(0);
         vm.expectRevert(bytes("FEE_RECIPIENT=0"));
+        _runInProcess(p);
+    }
+
+    function test_sheet_missingNavDeviationBpsReverts() public {
+        string memory prefix = _p("nonav");
+        _setSheet(prefix, "NAV_DEVIATION_BPS");
+        vm.expectRevert(bytes(string.concat(prefix, "NAV_DEVIATION_BPS must be set")));
+        _readPrefixed(prefix);
+    }
+
+    function test_sheet_missingMinPoolLiquidityReverts() public {
+        string memory prefix = _p("nofloor");
+        _setSheet(prefix, "MIN_POOL_LIQUIDITY");
+        vm.expectRevert(bytes(string.concat(prefix, "MIN_POOL_LIQUIDITY must be set")));
+        _readPrefixed(prefix);
+    }
+
+    function test_deploy_zeroNavDeviationBpsReverts() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 0;
+        vm.expectRevert(bytes("NAV_DEVIATION_BPS must be 1..2000"));
+        _runInProcess(p);
+    }
+
+    function test_deploy_navDeviationBpsAboveCeilingReverts() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 2001;
+        vm.expectRevert(bytes("NAV_DEVIATION_BPS must be 1..2000"));
         _runInProcess(p);
     }
 

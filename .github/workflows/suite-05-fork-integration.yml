@@ -115,31 +115,53 @@ jobs:
           - group: twin-router
             cargo_tests: --test router
             mode: shared
+            min_executed: 5
           - group: twin-withdrawal-registry
             cargo_tests: --test withdrawal --test registry
             mode: shared
+            min_executed: 8
           - group: twin-light
             cargo_tests: >-
               --test failure_surface_smoke
-              --test rmpc_get_timelock_fork
               --test rmpc_get_vault_fork
               --test rmpc_get_balance_fork
               --test rmpc_get_allowance_fork
               --test rmpc_get_tx_fork
-              --test devnet_adapter_round_trip
-              --test gas_estimate_reality_check
-              --test landing_price_strip_fork
-              --test basket_vault_round_trip
             mode: shared
+            min_executed: 5
+          # Issue 1647: rmpc get-timelock on the REAL Safe topology. The smoke-test Fixture runs the one
+          # deploy driver on the shared Twin chain (real 2-of-3 Safe, timelock, handover), the Safe
+          # schedules a pending operation, and the test reads rmpc's output against on-chain state.
+          # Its own group: the topology deploy takes minutes and must not eat twin-light's budget.
+          - group: twin-governance-topology
+            cargo_tests: --test rmpc_get_timelock_fork
+            mode: shared
+            min_executed: 1
+            required_markers: |
+              [get_timelock_integration] all assertions passed
           - group: anvil-goldens
             cargo_tests: >-
               --test abi_address_sanity
               --test dex_route_smoke
               --test vault_deposit_redeem_smoke
             mode: fork
+            min_executed: 3
+          # Issue 1656: these four binaries use skip_if_no_devnet_fork!, which needs RMPC_FORK_RPC_URL
+          # and anvil. Under mode shared that variable is empty, so they silently skipped (and counted
+          # as passed) in twin-light. mode fork sets it, so they now run, and the macro panics under CI
+          # if the fork is ever absent.
+          - group: anvil-devnet-adapters
+            cargo_tests: >-
+              --test devnet_adapter_round_trip
+              --test gas_estimate_reality_check
+              --test landing_price_strip_fork
+              --test basket_vault_round_trip
+            mode: fork
+            min_executed: 5
           - group: anvil-governance
             cargo_tests: --test governance
             mode: fork
+            min_executed: 3
 
     steps:
       - uses: actions/checkout@v4
@@ -180,7 +202,14 @@ jobs:
           RMPC_TESTNET_RPC_URL: ${{ matrix.mode == 'shared' && steps.twin.outputs.rpc-url || '' }}
           RMPC_FORK_RPC_URL: ${{ matrix.mode == 'fork' && steps.twin.outputs.rpc-url || '' }}
           RMPC_FORK_BLOCK: ${{ matrix.mode == 'fork' && steps.twin.outputs.pin-block || '' }}
-        run: cargo test --release ${{ matrix.cargo_tests }} -- --test-threads=1 --nocapture
+          # Issue 1647: a group that executes zero tests is red, and a group that names markers needs
+          # each printed on a real assertion's success path (cargo_test_require_executed.sh).
+          REQUIRE_EXECUTED_MARKERS: ${{ matrix.required_markers }}
+          # Issue 1656: the floor is the executed count in a green run, so one test fewer is red.
+          CARGO_TEST_MIN_EXECUTED: ${{ matrix.min_executed }}
+        run: >-
+          bash ../../.github/scripts/cargo_test_require_executed.sh
+          --release ${{ matrix.cargo_tests }} -- --test-threads=1 --nocapture
 
       - name: Stop the Twin fork and save its RPC cache
         if: always()
@@ -219,8 +248,51 @@ jobs:
           bash .github/scripts/cargo_test_require_executed.sh \
             --manifest-path testing/fork-e2e-rust/Cargo.toml --release --lib -- --nocapture
 
-      - name: Base testnet account-funding assertion (smoke-test)
-        run: cargo test -p smoke-test --release --test base_testnet_fixture -- --nocapture
+      # Issue 1643: skip_if_no_fork! must be RED in CI when no fork is available, never a quiet pass.
+      # Runs one fork test with CI=true and both fork URLs unset and requires a non-zero exit that
+      # names the refusal. If the macro ever goes back to returning early, this step goes red.
+      - name: fork-e2e-rust refuses to skip without a fork when CI is set (issue 1643)
+        run: |
+          # bare-cargo-test-allowed: this step expects cargo test to FAIL (the skip refusal).
+          set +e
+          out="$(env -u RMPC_TESTNET_RPC_URL -u RMPC_FORK_RPC_URL CI=true \
+            cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml --release \
+            --test rmpc_get_balance_fork 2>&1)"
+          status=$?
+          set -e
+          echo "$out" | tail -25
+          [ "$status" -ne 0 ] || { echo "ERROR: fork test exited 0 with CI=true and no fork URL" >&2; exit 1; }
+          echo "$out" | grep -q "Refusing to skip" || { echo "ERROR: failure was not the skip refusal" >&2; exit 1; }
+
+      # Issue 1656: the funding assertion skips locally when the testnet secrets are absent and
+      # panics under CI. The secrets are not provisioned on every ref, so the live assertion has its
+      # own step that runs only when both are present, and the hermetic tests of the binary run
+      # always under the executed-test guard. The refusal step proves the panic with CI=true.
+      - name: Base testnet fixture hermetic tests (smoke-test)
+        run: |
+          CARGO_TEST_MIN_EXECUTED=12 bash .github/scripts/cargo_test_require_executed.sh \
+            -p smoke-test --release --test base_testnet_fixture \
+            -- --nocapture --skip base_testnet_account_funding_assertion
+
+      - name: Base testnet account-funding assertion (smoke-test, needs the testnet secrets)
+        if: ${{ env.BASE_TESTNET_RPC_URL != '' && env.BASE_TESTNET_FUNDER_ADDR != '' }}
+        run: |
+          CARGO_TEST_MIN_EXECUTED=1 bash .github/scripts/cargo_test_require_executed.sh \
+            -p smoke-test --release --test base_testnet_fixture \
+            -- --nocapture base_testnet_account_funding_assertion
+
+      - name: Funding assertion refuses to skip without testnet env when CI is set (issue 1656)
+        run: |
+          # bare-cargo-test-allowed: this step expects cargo test to FAIL (the skip refusal).
+          set +e
+          out="$(env -u BASE_TESTNET_RPC_URL -u BASE_TESTNET_FUNDER_ADDR CI=true \
+            cargo test -p smoke-test --release --test base_testnet_fixture \
+            base_testnet_account_funding_assertion 2>&1)"
+          status=$?
+          set -e
+          echo "$out" | tail -25
+          [ "$status" -ne 0 ] || { echo "ERROR: funding test exited 0 with CI=true and no testnet env" >&2; exit 1; }
+          echo "$out" | grep -q "Refusing to skip" || { echo "ERROR: failure was not the skip refusal" >&2; exit 1; }
 
       # The live third-party service legs (Aave, Uniswap, Curve) run on the Twin fork, which also
       # installs foundry (anvil) and bun. The BASE_TESTNET_* secrets drive the testnet leg.
@@ -239,7 +311,9 @@ jobs:
         working-directory: testing/fork-e2e-rust
         env:
           RMPC_TESTNET_RPC_URL: ${{ steps.twin.outputs.rpc-url }}
-        run: cargo test --release --test multi_network_adapters -- --test-threads=1 --nocapture
+        run: |
+          CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
+            --release --test multi_network_adapters -- --test-threads=1 --nocapture
 
       - name: Stop the Twin fork and save its RPC cache
         if: always()
