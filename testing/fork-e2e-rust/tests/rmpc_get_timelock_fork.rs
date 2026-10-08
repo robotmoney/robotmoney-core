@@ -250,6 +250,7 @@ fn get_timelock_integration() {
         v["block_number"].is_u64(),
         "block_number must be a u64: {v}"
     );
+    assert_eq!(v["partial"], false, "the envelope must not be partial: {v}");
     let d = &v["data"];
     assert_eq!(
         d["address"].as_str().unwrap().to_ascii_lowercase(),
