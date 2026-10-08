@@ -190,9 +190,10 @@ pub struct WriteRequest {
     /// The replay-cache and audit amount field: USDC for `deposit`,
     /// shares for `withdraw`, summed shares for `withdraw-router`.
     pub amount: U256,
-    /// Deadline stamped into the audit record at open time. `deposit` and
-    /// `withdraw` derive theirs from the block timestamp later and stamp
-    /// it then, so they pass 0 here.
+    /// Deadline stamped into the audit record at open time. Every write
+    /// command derives its deadline from the block timestamp
+    /// ([`chain_deadline`]) after the session opens and stamps it then, so
+    /// they all pass 0 here.
     pub deadline: u64,
     /// Replay-cache op-kind prefix. `None` keeps `deposit` on its
     /// pre-op-prefix key shape so existing operator caches keep matching;

@@ -109,6 +109,31 @@ async fn chain_deadline_uses_block_timestamp_not_wall_clock() {
     assert_eq!(chain_deadline(&rpc, 300).await.unwrap(), 1_688_860_140);
 }
 
+/// Issue #1432: "block time, never wall clock" holds for every write
+/// command. Each consumer must call [`chain_deadline`] and must not read
+/// the host clock, so a new command cannot silently opt out.
+#[test]
+fn every_write_command_takes_its_deadline_from_chain_deadline() {
+    let consumers = [
+        ("deposit", include_str!("../commands/deposit.rs")),
+        ("withdraw", include_str!("../commands/withdraw.rs")),
+        (
+            "withdraw_router",
+            include_str!("../commands/withdraw_router.rs"),
+        ),
+    ];
+    for (name, src) in consumers {
+        assert!(
+            src.contains("chain_deadline(&session.rpc"),
+            "{name} must derive its deadline from write_path::chain_deadline"
+        );
+        assert!(
+            !src.contains("SystemTime"),
+            "{name} must not read the host wall clock for its deadline"
+        );
+    }
+}
+
 #[tokio::test]
 async fn fee_bid_refuses_when_the_bid_exceeds_the_operator_cap() {
     let mut server = mockito::Server::new_async().await;
