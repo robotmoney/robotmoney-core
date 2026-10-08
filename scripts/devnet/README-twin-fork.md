@@ -7,7 +7,7 @@ Environment steps that may differ from production: fund gas, fund USDC, warp tim
 ## Usage
 
 ```
-bun scripts/devnet/twin-fork.ts start [--port 8545] [--host 127.0.0.1] [--block-time SECS] [--chain-id 918453] [--upstream URL]
+bun scripts/devnet/twin-fork.ts start|serve [--port 8545] [--host 127.0.0.1] [--block-time SECS] [--chain-id 918453] [--upstream URL]
     [--pin-block N|auto] [--cache-dir DIR] [--pin-file pin.json] [--state-dir DIR]
     [--repin-on-stale | --no-repin-on-stale] [--stop-timeout 90000] [--retries 10] [--fork-retry-backoff 1000] [--compute-units-per-second 50]
 bun scripts/devnet/twin-fork.ts wait-ready [--pin-block N]
@@ -18,7 +18,7 @@ bun scripts/devnet/twin-fork.ts warp <seconds>                          # refuse
 bun scripts/devnet/twin-fork.ts stop
 ```
 
-Use the same `--port` and `--state-dir` for every command of one instance. `fund-gas`, `fund-usdc`, `warp`, `status` and `wait-ready` talk to `--rpc-url` (or the env `TWIN_RPC_URL`) when given, so they can drive a fork this tool did not start. `start` and `stop` always use the local port. The state dir holds the pid file and the anvil log (default `$TMPDIR/twin-fork-<port>`).
+`serve` is `start` for a container: it stays in the foreground, stops anvil on SIGTERM or SIGINT (so anvil saves its RPC cache) and exits non-zero if anvil dies. Use the same `--port` and `--state-dir` for every command of one instance. `fund-gas`, `fund-usdc`, `warp`, `status` and `wait-ready` talk to `--rpc-url` (or the env `TWIN_RPC_URL`) when given, so they can drive a fork this tool did not start. `start` and `stop` always use the local port. The state dir holds the pid file and the anvil log (default `$TMPDIR/twin-fork-<port>`).
 
 `fund-usdc` writes the real FiatToken `balanceAndBlacklistStates[holder]` slot (mapping at storage slot 9, key `keccak256(pad32(holder) ++ pad32(9))`, balance in the low 255 bits) with `anvil_setStorageAt`, then checks `balanceOf`. Total supply is not changed. `warp` uses `evm_increaseTime` then `evm_mine`. This is how the 48h governance waits run.
 
@@ -40,7 +40,11 @@ The default upstream is `https://mainnet.base.org` (no key, no archive node, rat
 
 For a paid provider set the env `BASE_UPSTREAM_RPC` (a secret; the actions use their `upstream-secret` input, or an already-set `BASE_UPSTREAM_RPC` env when the input is empty, and never print it; set in the GitHub Environment or the credential doctor vault, see the devops credential doctor runbook). The tool logs only the host. Anvil takes the URL as a command-line argument, so on a shared host it is visible in `ps` to local users. Use a dedicated host or accept that exposure. The pinned block must still be recent enough for the provider (a non-archive node serves only recent blocks, so start soon after choosing a pin).
 
-## Stage hosts (service)
+## Stage hosts (container)
+
+The stage chain is a container (core 1549): the `twin-chain` service of `testing/ethereum-testnet/config/docker-compose.stage-chain.yaml`, built from `docker/stage-images.Dockerfile` (Foundry's image pinned by digest plus the bun binary) and run with `twin-fork.ts serve`. `core-stack chain up` starts it. Do not run a second fork on the stage host. The systemd unit and the one-liner below are for other hosts.
+
+### Other hosts (service)
 
 systemd unit (text), keeps the tool-managed fork alive. Secrets go in `/etc/twin-fork.env` (mode 0600, `BASE_UPSTREAM_RPC=...`), never in the unit:
 
