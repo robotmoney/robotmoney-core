@@ -14,7 +14,7 @@ import {
 } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, OWNERS, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
+import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
 
 const LABELS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "expected-labels.json"), "utf8")) as string[];
 const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK };
@@ -133,6 +133,10 @@ const RULES: Rule[] = [
   [/^safe: no module enabled$/, (w) => { w.chain.modules = [OTHER]; }],
   [/^safe: no guard set$/, (w) => { w.chain.storage.set(`${SAFE.toLowerCase()}|${SAFE_GUARD_SLOT}`, pad(OTHER, { size: 32 })); }],
   [/^safe: fallback handler is canonical$/, (w) => { w.chain.storage.set(`${SAFE.toLowerCase()}|${SAFE_FALLBACK_SLOT}`, pad(OTHER, { size: 32 })); }],
+  [/^safe: control proof transaction recorded$/, (w) => { w.opts.controlProof = undefined; }],
+  [/^safe: control proof transaction succeeded$/, (w) => { w.chain.txs.get(PROOF_TX.toLowerCase())!.status = "reverted"; }],
+  [/^safe: control proof is a self-call signed by every owner$/, (w) => { w.chain.txs.get(PROOF_TX.toLowerCase())!.input = proofInput(8453, OWNER_KEYS.slice(0, 2)); }],
+  [/^safe: nonce at least 1$/, (w) => w.chain.set(SAFE, "nonce", 0n)],
   [/^safe: control below-threshold signatures revert GS020$/, (w) => { w.chain.threshold = 1; }],
   [/^safe: control non-owner signature reverts GS026$/, (w) => { w.chain.owners = [...OWNERS, SAFE_PROBE_ADDRESS]; }],
   [/^safe: control non-owner pair reverts GS026$/, (w) => { w.chain.owners = [...OWNERS, SAFE_PROBE_ADDRESS_2]; }],

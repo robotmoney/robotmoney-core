@@ -232,6 +232,10 @@ safe: pauser is not an owner
 safe: no module enabled
 safe: no guard set
 safe: fallback handler is canonical
+safe: control proof transaction recorded
+safe: control proof transaction succeeded
+safe: control proof is a self-call signed by every owner
+safe: nonce at least 1
 safe: control below-threshold signatures revert GS020
 safe: control non-owner signature reverts GS026
 safe: control non-owner pair reverts GS026

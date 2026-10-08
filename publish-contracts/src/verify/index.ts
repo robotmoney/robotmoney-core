@@ -179,7 +179,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await c.runEq("timelock: admin role not held by safe", () => hasRole(chain, tl, Z32, safe), false);
 
   // ---- safe
-  await safeChecks(c, chain, safe, sheet, tlManifest.code_hashes?.safe);
+  await safeChecks(c, chain, safe, sheet, tlManifest.code_hashes?.safe, opts.controlProof);
 
   // ---- libraries recorded
   const libNames = Object.keys(man.libraries).sort();

@@ -4,7 +4,10 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeFunctionData, keccak256, toFunctionSelector, parseAbiItem, toHex, pad, type Hex as VHex } from "viem";
+import { concatHex, decodeFunctionData, encodeFunctionData, keccak256, toFunctionSelector, parseAbi, parseAbiItem, toHex, pad, type Hex as VHex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { secp256k1 } from "@noble/curves/secp256k1";
+import { localSafeTxHash } from "../../src/safe/tx.ts";
 import {
   ADMIN_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
   SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32, ZERO,
@@ -19,7 +22,22 @@ export const addr = (n: number): Address => (`0x${n.toString(16).padStart(40, "0
 export const DEPLOYER = addr(0xde9107e5);
 export const PAUSER = addr(0x9a05e5);
 export const EMERGENCY = addr(0xe3e5);
-export const OWNERS = [addr(0x0a1), addr(0x0a2), addr(0x0a3)];
+/** Real test keys: the control proof (core 1618) is signed for real and the verifier recovers the signers. Public, throwaway, never funded. */
+export const OWNER_KEYS = [toHex(0xa1, { size: 32 }), toHex(0xa2, { size: 32 }), toHex(0xa3, { size: 32 })] as const;
+export const OWNER_ACCOUNTS = OWNER_KEYS.map((k) => privateKeyToAccount(k));
+export const OWNERS = OWNER_ACCOUNTS.map((a) => a.address as Address);
+export const PROOF_TX = keccak256(toHex("robotmoney control proof tx"));
+const EXEC_ABI = parseAbi(["function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures) payable returns (bool success)"]);
+/** The execTransaction calldata of the proof: the Safe calls itself with value 0 and empty data, signed (really) by the given accounts, packed ascending by owner. */
+export function proofInput(chainId: number, keys: readonly VHex[] = OWNER_KEYS, nonce = 0): Hex {
+  const hash = localSafeTxHash(chainId, SAFE, SAFE, "0x", nonce);
+  const sigs = keys.map((k) => {
+    const sig = secp256k1.sign(hash.slice(2), k.slice(2));
+    return { owner: privateKeyToAccount(k).address.toLowerCase(), sig: concatHex([toHex(sig.r, { size: 32 }), toHex(sig.s, { size: 32 }), toHex(27 + sig.recovery, { size: 1 })]) };
+  });
+  const packed = concatHex(sigs.sort((x, y) => (x.owner < y.owner ? -1 : 1)).map((x) => x.sig));
+  return encodeFunctionData({ abi: EXEC_ABI, functionName: "execTransaction", args: [SAFE, 0n, "0x", 0, 0n, 0n, 0n, ZERO, ZERO, packed] });
+}
 export const SAFE = addr(0x5afe);
 export const TIMELOCK = addr(0x71e10c);
 export const REGISTRY = addr(0x4e6);
@@ -102,6 +120,11 @@ export class FakeChain implements ChainReader {
 
   /** When true the one-shot setRegistry no longer reverts: a negative fixture for the "a second setRegistry reverts" label. */
   setRegistryOpen = false;
+
+  /** Transactions by hash: the control proof lives here. */
+  txs = new Map<string, { to: Address | null; input: Hex; value: bigint; status: "success" | "reverted" }>();
+  async getTransaction(h: Hex) { const t = this.txs.get(h.toLowerCase()); return t ? { to: t.to, input: t.input, value: t.value } : null; }
+  async receiptStatus(h: Hex) { return this.txs.get(h.toLowerCase())?.status ?? null; }
 
   async callRaw(to: Address, data: Hex, from?: Address): Promise<RawCallResult> {
     if (data.startsWith(SET_REGISTRY_SELECTOR)) return this.setRegistryOpen ? { ok: true, data: "0x" } : { ok: false, data: "0x", reason: "already set" };
@@ -191,6 +214,7 @@ export function buildWorld(chainId = 8453): World {
   ch.storage.set(`${SAFE.toLowerCase()}|${SAFE_FALLBACK_SLOT}`, pad(SAFE_141_FALLBACK_HANDLER, { size: 32 }));
   void SAFE_GUARD_SLOT;
   ch.set(SAFE, "VERSION", "1.4.1");
+  ch.set(SAFE, "nonce", 1n);
   ch.codes.set(USDC_ADDRESS.toLowerCase(), USDC_CODE as Hex);
 
   // roles: timelock admin everywhere, emergency on vaults
@@ -276,7 +300,8 @@ export function buildWorld(chainId = 8453): World {
     governance: { ...GOV_SHEET, voters: [...GOV_SHEET.voters] },
     defaultWeights: Object.keys(VAULTS).map((vault, i) => ({ vault, bps: DEFAULT_BPS[i]! })),
   };
-  const opts: VerifyOptions = { chain: ch, manifestDir, table, sheet, fromBlock: 0n, frozenCounts, artifactsDir, retryBaseMs: 0, usdcCodeHash: keccak256(USDC_CODE) };
+  ch.txs.set(PROOF_TX.toLowerCase(), { to: SAFE, input: proofInput(chainId), value: 0n, status: "success" });
+  const opts: VerifyOptions = { chain: ch, manifestDir, table, sheet, fromBlock: 0n, frozenCounts, artifactsDir, retryBaseMs: 0, usdcCodeHash: keccak256(USDC_CODE), controlProof: { txHash: PROOF_TX, nonce: 0 } };
   return { chain: ch, dir, manifestDir, artifactsDir, sheet, opts, libraries: LIBS };
 }
 

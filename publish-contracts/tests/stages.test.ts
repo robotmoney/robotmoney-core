@@ -15,8 +15,11 @@ const table = getStageTable();
 const forge = STAGES.filter((s) => s.kind === "forge");
 
 describe("stage list built from core's stage table", () => {
-  test("the order is safe, then the table's stages in table order, then verify and govern", () => {
-    expect(STAGE_NAMES).toEqual(["safe", ...table.stages.map((s) => s.name), "verify", "govern"]);
+  test("the order is safe, then the table's stages in table order with prove-control just before the timelock stage, then verify and govern", () => {
+    const names = table.stages.map((s) => s.name);
+    const last = names.length - 1;
+    expect(names[last]).toBe("timelock");
+    expect(STAGE_NAMES).toEqual(["safe", ...names.slice(0, last), "prove-control", "timelock", "verify", "govern"]);
   });
   test("the router stage comes before the gateway and the timelock is the last deployer stage", () => {
     expect(STAGE_NAMES.indexOf("router")).toBeLessThan(STAGE_NAMES.indexOf("gateway"));
