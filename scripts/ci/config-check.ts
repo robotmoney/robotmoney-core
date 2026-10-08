@@ -367,8 +367,12 @@ export async function liveFindings(rpc: Rpc, tag: string, c: Configs): Promise<{
         add(s, "factory-getPool-equals-config", p.factoryPool.toLowerCase() === a.pool.toLowerCase(), `factory=${p.factoryPool} config=${a.pool}`);
         // BasketVault.addAsset needs cardinality >= 2 and liquidity >= 1e6, so an unfunded RM pool
         // fails here before the deploy reverts. The TVL floor is a rwa/protocol file field only.
-        add(s, "observation-cardinality>=2", p.cardinality >= 2, `cardinality=${p.cardinality}`);
-        add(s, "liquidity>0", p.liquidity > 0n, `liquidity=${p.liquidity}`);
+        // The agent pool is funded by the owner on chain before the mainnet run (core 1554, devops 72). Say so when it is not.
+        const unfunded = isAgent ? ` (RM pool ${a.pool} is not funded yet: the owner must add in-range liquidity and raise observation cardinality before the mainnet run; BasketVault.addAsset needs cardinality>=2 and liquidity>=1e6)` : "";
+        add(s, "observation-cardinality>=2", p.cardinality >= 2, `cardinality=${p.cardinality}${p.cardinality >= 2 ? "" : unfunded}`);
+        add(s, "liquidity>0", p.liquidity > 0n, `liquidity=${p.liquidity}${p.liquidity > 0n ? "" : unfunded}`);
+        // The addAsset liquidity floor, unrelaxed: a pool with 1..999999 would pass liquidity>0 and still revert the deploy.
+        if (isAgent) add(s, "liquidity>=1000000", p.liquidity >= 1_000_000n, `liquidity=${p.liquidity}${p.liquidity >= 1_000_000n ? "" : unfunded}`);
         if (!isAgent) {
           const floor = (f as AssetFile).minTvlUsd;
           add(s, `tvl-usd>=${floor}`, p.tvlUsd >= floor, `tvlUsd=${p.tvlUsd.toFixed(0)}`);

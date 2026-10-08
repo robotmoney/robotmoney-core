@@ -213,6 +213,16 @@ describe("live rules against a fake RPC", () => {
     expect(await bad({ RM: { liquidity: 0n } }, "liquidity>0", "RM")).toBe(true);
     expect(await bad({ RM: { cardinality: 1 } }, "observation-cardinality>=2", "RM")).toBe(true);
   });
+  test("RM: an unfunded pool fails with a message that names the pool and the owner action", async () => {
+    const r = await liveFindings(rpcFor({ RM: { liquidity: 0n, cardinality: 1 } }), "latest", cfg);
+    const failed = r.findings.filter((f) => !f.ok && f.scope.endsWith(":RM"));
+    expect(failed.map((f) => f.rule).sort()).toEqual(["liquidity>0", "liquidity>=1000000", "observation-cardinality>=2"]);
+    for (const f of failed) expect(f.detail).toMatch(/0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882 is not funded yet: the owner must add in-range liquidity/);
+  });
+  test("RM: liquidity under the addAsset floor of 1e6 fails even though it is above zero", async () => {
+    expect(await bad({ RM: { liquidity: 999_999n } }, "liquidity>=1000000", "RM")).toBe(true);
+    expect(await bad({ RM: { liquidity: 1_000_000n } }, "liquidity>=1000000", "RM")).toBe(false);
+  });
   test("RM: a live pool fee other than 10000 fails", async () => {
     expect(await bad({ RM: { fee: 3000 } }, "pool-fee-equals-config", "RM")).toBe(true);
   });
