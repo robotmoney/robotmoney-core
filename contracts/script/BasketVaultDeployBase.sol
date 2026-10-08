@@ -372,18 +372,18 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
     function _addAssets(BasketVault vault, Params memory p, Cfg memory cfg, Deployed memory d)
         internal
     {
-        if (cfg.assets.length == 0) return;
         address adapter = address(0);
-        if (_usesAdapter()) {
-            adapter = address(new UniswapV3SwapAdapter(p.swapRouter));
-            vault.setAdapterCodeHashAllowed(adapter.codehash, true);
-            d.adapter = adapter;
-        }
         for (uint256 i = 0; i < cfg.assets.length; i++) {
             AssetCfg memory a = cfg.assets[i];
             if (a.isV4) {
                 _addV4Asset(vault, p, a, d);
             } else {
+                // The V3 adapter is deployed with the first V3 asset (a vault whose assets are all V4 deploys none).
+                if (_usesAdapter() && adapter == address(0)) {
+                    adapter = address(new UniswapV3SwapAdapter(p.swapRouter));
+                    vault.setAdapterCodeHashAllowed(adapter.codehash, true);
+                    d.adapter = adapter;
+                }
                 _checkPool(a, p.minPoolLiquidity);
                 vault.addAsset(a.token, a.pool, a.poolFee, adapter, BasketVault.Venue.V3);
             }

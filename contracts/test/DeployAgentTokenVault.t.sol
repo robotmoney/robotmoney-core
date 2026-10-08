@@ -238,6 +238,7 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         assertEq(uint256(venue), uint256(BasketVault.Venue.V4), "venue V4");
         assertTrue(adapter != address(0), "adapter deployed");
         assertEq(adapter, d.adapterV4, "the V4 adapter is the asset adapter");
+        assertEq(d.adapter, address(0), "a vault whose assets are all V4 deploys no V3 adapter");
         assertEq(d.recorder, address(recorder));
         assertEq(address(UniswapV4SwapAdapter(adapter).RECORDER()), address(recorder));
         assertEq(address(UniswapV4SwapAdapter(adapter).POOL_MANAGER()), PM_ADDR);
