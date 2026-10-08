@@ -29,15 +29,15 @@
 #   clients/rust-payment-client/abi/TimelockController.json
 #   clients/rust-payment-client/abi/InvestmentCommitteePolicy.json
 #   clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json
+#   clients/rust-payment-client/abi/IVault.json         ← contracts/interfaces/IVault.sol (interface only, issue #1464)
 #   clients/dapp/src/lib/abi.generated.ts
 #
 # UN-GATED HAND-MAINTAINED FILES (each MUST cite an OPEN tracking issue)
-# #1346 measured all seven un-gated files against their Foundry artifacts and
-# #1362 acted on that measurement: six were regenerated and moved into the
-# drift-gated block above. Only `MockVault.json` remains, and its divergence is
-# not drift — it is an open product question that #1362 was explicitly scoped
-# not to pre-empt.
-#   clients/rust-payment-client/abi/MockVault.json — adds depositsPaused(), absent from the artifact; rmpc reads real deployed vaults through this "TEST FIXTURE only" contract's ABI (contracts/test/helpers/MockVault.sol:14). Whether the clients should instead bind to a compiler-owned contracts/interfaces/IVault.sol is #1464's Q3 (#1464 replaces #1286, deleted from GitHub), which owns the decision and the follow-on work; answering it resolves this file (tracking issue #1464)
+# None. #1346 measured the seven un-gated files, #1362 regenerated six, and
+# #1464 resolved the last (`MockVault.json`): the clients bind to the
+# compiler-owned, interface-only `contracts/interfaces/IVault.sol`, whose ABI is
+# generated below as `IVault.json`. No deployed vault inherits `IVault`, because
+# vault bytecode and inheritance are frozen.
 #
 # BOTH BASKET VAULTS ARE NOW GENERATED (issue #1364)
 # The dapp's `BASKET_VAULT_SHORTLIST_ABI` names both basket vaults, but #1346
@@ -104,6 +104,11 @@ extract_abi "$OUT/InvestmentCommitteePolicy.sol/InvestmentCommitteePolicy.json" 
                                                                  "$RUST_ABI/InvestmentCommitteePolicy.json"
 extract_abi "$OUT/ConsensusRecommendationReceipt.sol/ConsensusRecommendationReceipt.json" \
                                                                  "$RUST_ABI/ConsensusRecommendationReceipt.json"
+
+# Issue #1464: the vault read surface rmpc uses, from a compiler-owned interface
+# instead of the hand-maintained MockVault.json (a test fixture plus a
+# hand-added depositsPaused()).
+extract_abi "$OUT/IVault.sol/IVault.json"                        "$RUST_ABI/IVault.json"
 
 # ---------------------------------------------------------------------------
 # 2. TypeScript generated ABI file for the dapp (fully generated — CI drift-gated)
@@ -251,13 +256,5 @@ echo "  clients/rust-payment-client/abi/RouterGovernance.json"
 echo "  clients/rust-payment-client/abi/TimelockController.json"
 echo "  clients/rust-payment-client/abi/InvestmentCommitteePolicy.json"
 echo "  clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json"
+echo "  clients/rust-payment-client/abi/IVault.json"
 echo "  clients/dapp/src/lib/abi.generated.ts"
-echo ""
-echo "NOTE: one file under clients/rust-payment-client/abi/ is NOT regenerated"
-echo "      here — MockVault.json, which adds a depositsPaused() the artifact does not"
-echo "      have and is the ABI rmpc reads real deployed vaults through. It is"
-echo "      listed in this script's header and must cite an OPEN tracking issue;"
-echo "      the inventory is enforced by"
-echo "      .github/scripts/check_abi_binding_inventory.py in suite-16. It is"
-echo "      tracked by issue #1464 (Q3: a compiler-owned IVault.sol; #1464"
-echo "      replaces #1286, deleted from GitHub)."
