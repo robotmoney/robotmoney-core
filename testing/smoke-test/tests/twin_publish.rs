@@ -360,7 +360,11 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
         "rmAGENT asset 0 must be RM, got {first}"
     );
     assert!(
-        word(&first, 1).ends_with(&format!("{recorder:#x}").trim_start_matches("0x").to_lowercase()),
+        word(&first, 1).ends_with(
+            &format!("{recorder:#x}")
+                .trim_start_matches("0x")
+                .to_lowercase()
+        ),
         "rmAGENT asset 0 pool must be the recorder {recorder:#x}, got {first}"
     );
     assert_eq!(
@@ -372,7 +376,11 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
         word(&first, 4).ends_with(&v4_adapter.trim_start_matches("0x").to_lowercase()),
         "rmAGENT asset 0 adapter must be the V4 adapter {v4_adapter}, got {first}"
     );
-    assert_eq!(word(&first, 5).trim_start_matches('0'), "1", "venue is V4 (1)");
+    assert_eq!(
+        word(&first, 5).trim_start_matches('0'),
+        "1",
+        "venue is V4 (1)"
+    );
 
     // The depositor: a funded EOA. rmAGENT is opened through the real Safe and timelock (a generic Twin-only call).
     fx.unpause_agent_vault()
@@ -382,7 +390,8 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
     fx.fund_gas(user, 10_000_000_000_000_000_000)
         .expect("fund gas for the depositor");
     let deposit: u128 = 50_000_000; // 50 USDC, under the 100 USDC per-deposit cap
-    fx.fund_usdc(user, deposit * 4).expect("fund USDC for the depositor");
+    fx.fund_usdc(user, deposit * 4)
+        .expect("fund USDC for the depositor");
     let (vault_s, dep_s) = (format!("{agent_vault:#x}"), deposit.to_string());
     let user_s = format!("{user:#x}");
     let slot0 = |fx: &Fixture| {
@@ -401,11 +410,21 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
     };
 
     // 2. Stale after the govern warp: the deposit fails closed. (Anyone may poke the recorder: `record()` has no role.)
-    fx.cast_send(&pk, fx.usdc(), "approve(address,uint256)", &[&vault_s, &dep_s])
-        .expect("approve rmAGENT");
+    fx.cast_send(
+        &pk,
+        fx.usdc(),
+        "approve(address,uint256)",
+        &[&vault_s, &dep_s],
+    )
+    .expect("approve rmAGENT");
     assert!(
-        fx.cast_send(&pk, agent_vault, "deposit(uint256,address)", &[&dep_s, &user_s])
-            .is_err(),
+        fx.cast_send(
+            &pk,
+            agent_vault,
+            "deposit(uint256,address)",
+            &[&dep_s, &user_s]
+        )
+        .is_err(),
         "a deposit into rmAGENT must fail closed while the recorder is stale"
     );
     fx.cast_send(&pk, recorder, "record()", &[])
@@ -417,12 +436,22 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
     // 3. A deposit, one block later, routed through the real PoolManager pool.
     fx.warp(10).expect("one block later");
     let rm_before = fx.erc20_balance_of(rm, agent_vault).expect("RM balance");
-    fx.cast_send(&pk, agent_vault, "deposit(uint256,address)", &[&dep_s, &user_s])
-        .expect("the rmAGENT deposit must succeed through the V4 PoolManager");
-    let shares = fx.erc20_balance_of(agent_vault, user).expect("rmAGENT shares");
+    fx.cast_send(
+        &pk,
+        agent_vault,
+        "deposit(uint256,address)",
+        &[&dep_s, &user_s],
+    )
+    .expect("the rmAGENT deposit must succeed through the V4 PoolManager");
+    let shares = fx
+        .erc20_balance_of(agent_vault, user)
+        .expect("rmAGENT shares");
     assert!(shares > 0, "the rmAGENT deposit minted no shares");
     let rm_after = fx.erc20_balance_of(rm, agent_vault).expect("RM balance");
-    assert!(rm_after > rm_before, "rmAGENT holds no RM after the deposit");
+    assert!(
+        rm_after > rm_before,
+        "rmAGENT holds no RM after the deposit"
+    );
     assert_ne!(
         tick_of(&slot0(fx), 1),
         tick_before,
@@ -437,32 +466,60 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
     // 4. A USDC redeem returns USDC.
     let half = (shares / 2).to_string();
     let usdc_before = fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance");
-    fx.cast_send(&pk, agent_vault, "redeem(uint256,address,address)", &[&half, &user_s, &user_s])
-        .expect("the rmAGENT USDC redeem must succeed while the recorder is fresh");
+    fx.cast_send(
+        &pk,
+        agent_vault,
+        "redeem(uint256,address,address)",
+        &[&half, &user_s, &user_s],
+    )
+    .expect("the rmAGENT USDC redeem must succeed while the recorder is fresh");
     assert!(
         fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance") > usdc_before,
         "the USDC redeem returned no USDC"
     );
 
     // 5. Left unpoked for more than one window: deposits and USDC redeems fail closed, redeemInKind pays RM with no oracle read.
-    fx.warp(1900).expect("leave the recorder unpoked for more than one 1800 s window");
-    let rest = fx.erc20_balance_of(agent_vault, user).expect("rmAGENT shares");
+    fx.warp(1900)
+        .expect("leave the recorder unpoked for more than one 1800 s window");
+    let rest = fx
+        .erc20_balance_of(agent_vault, user)
+        .expect("rmAGENT shares");
     assert!(rest > 0, "no shares left for the in-kind exit");
-    fx.cast_send(&pk, fx.usdc(), "approve(address,uint256)", &[&vault_s, &dep_s])
-        .expect("approve rmAGENT");
+    fx.cast_send(
+        &pk,
+        fx.usdc(),
+        "approve(address,uint256)",
+        &[&vault_s, &dep_s],
+    )
+    .expect("approve rmAGENT");
     assert!(
-        fx.cast_send(&pk, agent_vault, "deposit(uint256,address)", &[&dep_s, &user_s])
-            .is_err(),
+        fx.cast_send(
+            &pk,
+            agent_vault,
+            "deposit(uint256,address)",
+            &[&dep_s, &user_s]
+        )
+        .is_err(),
         "a deposit must fail closed with a stale recorder"
     );
     assert!(
-        fx.cast_send(&pk, agent_vault, "redeem(uint256,address,address)", &[&rest.to_string(), &user_s, &user_s])
-            .is_err(),
+        fx.cast_send(
+            &pk,
+            agent_vault,
+            "redeem(uint256,address,address)",
+            &[&rest.to_string(), &user_s, &user_s]
+        )
+        .is_err(),
         "a USDC redeem must fail closed with a stale recorder"
     );
     let rm_user_before = fx.erc20_balance_of(rm, user).expect("RM balance");
-    fx.cast_send(&pk, agent_vault, "redeemInKind(uint256,address,address)", &[&rest.to_string(), &user_s, &user_s])
-        .expect("redeemInKind must pay with a stale recorder (withdrawals are never frozen)");
+    fx.cast_send(
+        &pk,
+        agent_vault,
+        "redeemInKind(uint256,address,address)",
+        &[&rest.to_string(), &user_s, &user_s],
+    )
+    .expect("redeemInKind must pay with a stale recorder (withdrawals are never frozen)");
     assert!(
         fx.erc20_balance_of(rm, user).expect("RM balance") > rm_user_before,
         "redeemInKind returned no RM"
