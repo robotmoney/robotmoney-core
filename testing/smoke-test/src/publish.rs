@@ -541,7 +541,12 @@ impl Published {
                 .arg(sub)
                 .args(["--rpc", &self.rpc_url, "--chain-id", &chain])
                 .args(flags)
-                .current_dir(self.cfg.publish_dir.parent().unwrap_or(&self.cfg.publish_dir))
+                .current_dir(
+                    self.cfg
+                        .publish_dir
+                        .parent()
+                        .unwrap_or(&self.cfg.publish_dir),
+                )
                 .stdin(Stdio::null());
             apply_publish_env(&mut cmd, TWIN_CHAIN_ID);
             let out = cmd.output()?;
@@ -558,8 +563,20 @@ impl Published {
         run(
             "propose",
             &[
-                "--safe", safe, "--timelock", timelock, "--action", "schedule", "--target", target,
-                "--data", data, "--salt", salt, "--out", &bundle_s,
+                "--safe",
+                safe,
+                "--timelock",
+                timelock,
+                "--action",
+                "schedule",
+                "--target",
+                target,
+                "--data",
+                data,
+                "--salt",
+                salt,
+                "--out",
+                &bundle_s,
             ],
         )?;
         for name in ["SAFE_OWNER_A", "SAFE_OWNER_B"] {
