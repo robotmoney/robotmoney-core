@@ -618,17 +618,17 @@ decoded a `VaultRegistry` shape that no longer existed (#1348).
    workflow's `git diff --exit-code`. It replaces a comment that said "known
    schema drift, tracked separately" and named no issue for four files — while
    two more had joined the directory unlisted. #1362 then regenerated six of the
-   seven un-gated files from their artifacts and moved them into gate 2. The one
-   still un-gated is `MockVault.json`, tracked by #1464 (Q3: should clients bind
-   to a compiler-owned `IVault.sol` rather than to a declared test fixture?;
-   #1464 replaces #1286, which was deleted from GitHub); closing that issue
-   without doing the work turns this suite red. Self-tested
+   seven un-gated files from their artifacts and moved them into gate 2. #1464 then
+   resolved the last, `MockVault.json`: clients bind to the compiler-owned,
+   interface-only `contracts/interfaces/IVault.sol` (generated as `IVault.json`,
+   in gate 2). No deployed vault inherits it, because vault bytecode is frozen.
+   No file is un-gated now. Self-tested
    (`--self-test`) against seven synthetic defect shapes before the real run.
 2. **Regenerate and diff.** `forge build`, then `generate_abi_bindings.sh`, then
    `git diff --exit-code` over `Erc20.json`, `RobotMoneyGateway.json`,
    `VaultRegistry.json`, `PortfolioRouter.json`, `RouterGovernance.json`,
    `TimelockController.json`, `InvestmentCommitteePolicy.json`,
-   `ConsensusRecommendationReceipt.json` and `abi.generated.ts`. Fix a failure by
+   `ConsensusRecommendationReceipt.json`, `IVault.json` and `abi.generated.ts`. Fix a failure by
    running those two commands locally and committing the result. The six added by
    #1362 were hand-trimmed excerpts; one of them, `VaultRegistry.json`, had
    drifted to a `getVault` shape no deployed contract returns, so `rmpc

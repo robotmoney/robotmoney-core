@@ -12,7 +12,7 @@ use alloy_primitives::{hex as ahex, U256};
 use alloy_sol_types::SolCall;
 use assert_cmd::Command;
 use mockito::Matcher;
-use rust_payment_client::gateway::{MockVault, RobotMoneyGateway};
+use rust_payment_client::gateway::{IVault, RobotMoneyGateway};
 use serde_json::{json, Value};
 
 fn rmpc() -> Command {
@@ -82,9 +82,9 @@ async fn get_vault_clean_envelope_with_share_price() {
     // vault.asset()
     server
         .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::assetCall,
-        >()))
+        .match_body(match_eth_call_selector(
+            &selector_hex_of::<IVault::assetCall>(),
+        ))
         .with_status(200)
         .with_body(jrpc_result(&enc_address(USDC)))
         .expect_at_least(0)
@@ -93,11 +93,11 @@ async fn get_vault_clean_envelope_with_share_price() {
     // vault.name()
     server
         .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::nameCall,
-        >()))
+        .match_body(match_eth_call_selector(
+            &selector_hex_of::<IVault::nameCall>(),
+        ))
         .with_status(200)
-        .with_body(jrpc_result(&enc_string_returns::<MockVault::nameCall>(
+        .with_body(jrpc_result(&enc_string_returns::<IVault::nameCall>(
             "Robot Money Vault",
         )))
         .expect_at_least(0)
@@ -107,10 +107,10 @@ async fn get_vault_clean_envelope_with_share_price() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::symbolCall,
+            IVault::symbolCall,
         >()))
         .with_status(200)
-        .with_body(jrpc_result(&enc_string_returns::<MockVault::symbolCall>(
+        .with_body(jrpc_result(&enc_string_returns::<IVault::symbolCall>(
             "rmUSDC",
         )))
         .expect_at_least(0)
@@ -120,7 +120,7 @@ async fn get_vault_clean_envelope_with_share_price() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::decimalsCall,
+            IVault::decimalsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u8(6)))
@@ -131,7 +131,7 @@ async fn get_vault_clean_envelope_with_share_price() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalAssetsCall,
+            IVault::totalAssetsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(2_000_000u64))))
@@ -142,7 +142,7 @@ async fn get_vault_clean_envelope_with_share_price() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalSupplyCall,
+            IVault::totalSupplyCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(1_000_000u64))))
@@ -228,9 +228,9 @@ async fn get_vault_partial_when_total_assets_reverts() {
         .await;
     server
         .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::assetCall,
-        >()))
+        .match_body(match_eth_call_selector(
+            &selector_hex_of::<IVault::assetCall>(),
+        ))
         .with_status(200)
         .with_body(jrpc_result(&enc_address(USDC)))
         .expect_at_least(0)
@@ -238,30 +238,28 @@ async fn get_vault_partial_when_total_assets_reverts() {
         .await;
     server
         .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::nameCall,
-        >()))
+        .match_body(match_eth_call_selector(
+            &selector_hex_of::<IVault::nameCall>(),
+        ))
         .with_status(200)
-        .with_body(jrpc_result(&enc_string_returns::<MockVault::nameCall>("V")))
+        .with_body(jrpc_result(&enc_string_returns::<IVault::nameCall>("V")))
         .expect_at_least(0)
         .create_async()
         .await;
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::symbolCall,
+            IVault::symbolCall,
         >()))
         .with_status(200)
-        .with_body(jrpc_result(&enc_string_returns::<MockVault::symbolCall>(
-            "V",
-        )))
+        .with_body(jrpc_result(&enc_string_returns::<IVault::symbolCall>("V")))
         .expect_at_least(0)
         .create_async()
         .await;
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::decimalsCall,
+            IVault::decimalsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u8(6)))
@@ -271,7 +269,7 @@ async fn get_vault_partial_when_total_assets_reverts() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalAssetsCall,
+            IVault::totalAssetsCall,
         >()))
         .with_status(200)
         .with_body(r#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}"#)
@@ -282,7 +280,7 @@ async fn get_vault_partial_when_total_assets_reverts() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalSupplyCall,
+            IVault::totalSupplyCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(1u64))))
@@ -353,9 +351,9 @@ async fn get_vault_partial_when_total_supply_reverts() {
         .await;
     server
         .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::assetCall,
-        >()))
+        .match_body(match_eth_call_selector(
+            &selector_hex_of::<IVault::assetCall>(),
+        ))
         .with_status(200)
         .with_body(jrpc_result(&enc_address(USDC)))
         .expect_at_least(0)
@@ -363,30 +361,28 @@ async fn get_vault_partial_when_total_supply_reverts() {
         .await;
     server
         .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::nameCall,
-        >()))
+        .match_body(match_eth_call_selector(
+            &selector_hex_of::<IVault::nameCall>(),
+        ))
         .with_status(200)
-        .with_body(jrpc_result(&enc_string_returns::<MockVault::nameCall>("V")))
+        .with_body(jrpc_result(&enc_string_returns::<IVault::nameCall>("V")))
         .expect_at_least(0)
         .create_async()
         .await;
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::symbolCall,
+            IVault::symbolCall,
         >()))
         .with_status(200)
-        .with_body(jrpc_result(&enc_string_returns::<MockVault::symbolCall>(
-            "V",
-        )))
+        .with_body(jrpc_result(&enc_string_returns::<IVault::symbolCall>("V")))
         .expect_at_least(0)
         .create_async()
         .await;
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::decimalsCall,
+            IVault::decimalsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u8(6)))
@@ -397,7 +393,7 @@ async fn get_vault_partial_when_total_supply_reverts() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalAssetsCall,
+            IVault::totalAssetsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(2_000_000u64))))
@@ -407,7 +403,7 @@ async fn get_vault_partial_when_total_supply_reverts() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalSupplyCall,
+            IVault::totalSupplyCall,
         >()))
         .with_status(200)
         .with_body(r#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}"#)
