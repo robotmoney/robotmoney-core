@@ -210,7 +210,8 @@ A `pin` job chooses ONE pinned Base block per workflow run (upstream head minus 
 |---|---|---|
 | `twin-router` | `router` | straight on the Twin fork (`RMPC_TESTNET_RPC_URL`) |
 | `twin-withdrawal-registry` | `withdrawal`, `registry` | straight on the Twin fork |
-| `twin-light` | `failure_surface_smoke`, the `rmpc_get_*` fork tests, `devnet_adapter_round_trip`, `gas_estimate_reality_check`, `landing_price_strip_fork`, `basket_vault_round_trip` | straight on the Twin fork |
+| `twin-light` | `failure_surface_smoke`, the `rmpc_get_*` fork tests | straight on the Twin fork |
+| `anvil-devnet-adapters` | `devnet_adapter_round_trip`, `gas_estimate_reality_check`, `landing_price_strip_fork`, `basket_vault_round_trip` (core 1656: `skip_if_no_devnet_fork!` needs `RMPC_FORK_RPC_URL`, so they silently skipped in `twin-light`) | each test forks the Twin |
 | `anvil-goldens` | `abi_address_sanity`, `dex_route_smoke`, `vault_deposit_redeem_smoke` | each test forks the Twin (`RMPC_FORK_RPC_URL=$TWIN_RPC_URL`, `RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK`) |
 | `anvil-governance` | `governance` | each test forks the Twin; governance scenarios warp (`evm_increaseTime`) instead of waiting |
 

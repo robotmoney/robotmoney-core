@@ -166,13 +166,19 @@ jobs:
 
 
       - name: Walkthrough parity
-        run: cargo test -p doctests --test opencode_parity -- --nocapture
+        run: |
+          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
+            -p doctests --test opencode_parity -- --nocapture
 
       - name: Config template parses
-        run: cargo test -p doctests --test opencode_config -- --nocapture
+        run: |
+          CARGO_TEST_MIN_EXECUTED=2 bash .github/scripts/cargo_test_require_executed.sh \
+            -p doctests --test opencode_config -- --nocapture
 
       - name: Refusal walkthrough (offline safety)
-        run: cargo test -p doctests --test opencode_refusal -- --nocapture
+        run: |
+          CARGO_TEST_MIN_EXECUTED=2 bash .github/scripts/cargo_test_require_executed.sh \
+            -p doctests --test opencode_refusal -- --nocapture
 
   walkthrough-fork:
     name: opencode-walkthrough-fork
@@ -195,5 +201,22 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
+      # Issue 1656: the walkthrough needs a fork to boot anvil from. Without RMPC_FORK_RPC_URL the
+      # test used to skip and still pass. The Twin chain (a pinned lazy fork of real Base state, the
+      # same one suite 5 forks again) is that fork. The test now panics under CI if it is absent.
+      - name: Start the Twin chain
+        id: twin
+        uses: ./.github/actions/twin-fork
+        with:
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
       - name: Read-only walkthrough
-        run: cargo test -p doctests --test opencode_read_only -- --nocapture
+        env:
+          RMPC_FORK_RPC_URL: ${{ steps.twin.outputs.rpc-url }}
+        run: |
+          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
+            -p doctests --test opencode_read_only -- --nocapture
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
