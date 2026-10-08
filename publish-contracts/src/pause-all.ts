@@ -3,12 +3,13 @@
 // `depositsPaused` only. No contract change: every vault already has pauseDeposits(), gated by EMERGENCY_ROLE.
 // Signer by stage: the DEPLOYER before the stage 11 handover (it holds EMERGENCY_ROLE on every vault until the timelock stage moves the role),
 // the EMERGENCY key after it. Every vault is read back (`depositsPaused`) and the result goes into the rollout report file.
+// Issue 1686: the run manifest gets a `pauses` entry BEFORE the first send (see runner.ts PauseEntry); govern's execute phase refuses an unpause scheduled before it.
 // Docs: docs/operations/contract-release-runbooks.md sections 4.5 and 4.6, docs/operations/manual-admin-actions.md, docs/prd.md.
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { keccak256, toHex } from "viem";
 import { PublishError } from "./errors.ts";
-import { castOut, childEnv, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
+import { beginPauseEntry, castOut, childEnv, readManifestField, updatePauseEntry, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
 import { VAULT_NAME, type VaultKey } from "./sheet.ts";
 import type { PublishSigner } from "./signer.ts";
 import { VAULT_STAGES, manifestRef } from "./stages.ts";
@@ -94,6 +95,15 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
   const deployerAddr = stageRole === "emergency" ? undefined : await check(deployer, ctx.sheet.admin, "deployer");
   const emergencyAddr = stageRole === "deployer" || !emergency ? undefined : await check(emergency, ctx.sheet.emergency, "emergency");
 
+  // Issue 1686: the pause entry goes into the run manifest BEFORE the first pauseDeposits() is sent, so a crash half way still leaves a record that
+  // govern's execute phase refuses on. A failure to write it is logged loudly and never stops the pause: pausing the vaults comes first.
+  const at = (ctx.now?.() ?? new Date()).toISOString();
+  let entry: PauseEntry | undefined;
+  const record = (fn: () => void): void => {
+    try { fn(); } catch (e) { ctx.log.log("error", "pause_all.manifest_record_failed", { message: (e as Error).message, note: "govern cannot see this pause-all: cancel any pending unpause through the Safe by hand" }); }
+  };
+  record(() => { entry = beginPauseEntry(ctx.evidenceDir, { at, trigger: o.trigger, reason: o.reason }); });
+  if (!entry) ctx.log.log("warn", "pause_all.no_manifest_entry", { evidence_dir: ctx.evidenceDir });
   const vaults: PauseVaultResult[] = [];
   for (const v of VAULT_STAGES) {
     const name = VAULT_NAME[v.key];
@@ -127,8 +137,10 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
     }
     ctx.log.log(res.depositsPaused ? "info" : "error", "pause_all.vault", { vault: name, address: address || undefined, signer_role: res.signerRole, tx_hash: res.txHash, deposits_paused: res.depositsPaused ?? null });
     vaults.push(res);
+    if (entry) { const e = entry; record(() => updatePauseEntry(ctx.evidenceDir, { ...e, vaults: vaults.map((x) => ({ ...x })) })); }
   }
-  const report: PauseAllReport = { trigger: o.trigger, reason: o.reason, at: (ctx.now?.() ?? new Date()).toISOString(), allPaused: vaults.every((x) => x.depositsPaused === true), vaults };
+  const report: PauseAllReport = { trigger: o.trigger, reason: o.reason, at, allPaused: vaults.every((x) => x.depositsPaused === true), vaults };
+  if (entry) { const e = entry; record(() => updatePauseEntry(ctx.evidenceDir, { ...e, status: "done", allPaused: report.allPaused, vaults: vaults.map((x) => ({ ...x })) })); }
   writeRolloutReport(ctx, report);
   ctx.log.log(report.allPaused ? "info" : "error", "pause_all.done", { all_paused: report.allPaused, trigger: o.trigger, report: rolloutReportPath(ctx) });
   return report;
