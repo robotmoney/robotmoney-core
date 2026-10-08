@@ -202,7 +202,7 @@ jobs:
           bun test scripts/ci/check-set-registry-owner.test.ts
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployTimelock.t.sol"
 
-      - name: forge test (rmAGENT on the Uniswap V4 RM/USDC pool: recorder, swap adapter, V4 venue, deploy wiring and config — core 1676)
+      - name: "forge test (rmAGENT on the Uniswap V4 RM/USDC pool: recorder, swap adapter, V4 venue, deploy wiring and config — core 1676)"
         # Owner decision 2026-10-08. Each file must execute at least one test (a path filter that matches nothing is red):
         #   - UniswapV4PriceRecorder.t.sol: one snapshot per block, the V3 reference cumulative, observe never reads spot, the clamp, stale fails closed, no admin.
         #   - UniswapV4SwapAdapter.t.sol: the PoolKey, hooks, deadline, uint128, recorder-only twapPrice, reentrancy, slippage floor.
