@@ -155,12 +155,18 @@ export const RM_POOL_USDC_UNITS = 1_000n * 10n ** 6n;
 export const ADD_ASSET_MIN_CARDINALITY = 901;
 export const ADD_ASSET_MIN_LIQUIDITY = 1_000_000n;
 
+/** Uniswap V3 slot0 packs sqrtPriceX96 (160 bits), tick (24), observationIndex (16), observationCardinality (16 at bit 200), observationCardinalityNext (16 at bit 216). */
+export function withObservationCardinality(word: Hex, n: number): Hex {
+  const mask = ((1n << 32n) - 1n) << 200n;
+  const v = (BigInt(word) & ~mask) | (BigInt(n) << 200n) | (BigInt(n) << 216n);
+  return pad(toHex(v), { size: 32 });
+}
+
 const POOL_ABI = parseAbi([
   "function token0() view returns (address)",
   "function tickSpacing() view returns (int24)",
   "function liquidity() view returns (uint128)",
   "function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)",
-  "function increaseObservationCardinalityNext(uint16 observationCardinalityNext)",
 ]);
 const ERC20_ABI = parseAbi(["function approve(address spender, uint256 amount) returns (bool)", "function balanceOf(address) view returns (uint256)"]);
 const NPM_ABI = parseAbi(["function mint((address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline)) returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)"]);
@@ -182,9 +188,9 @@ export function readRmPoolFacts(coreDir: string): RmPoolFacts {
 }
 
 /**
- * Funds the live RM/USDC V3 pool on the Twin chain so `BasketVault.addAsset` (cardinality >= 2, liquidity >= 1e6) accepts RM. Real pool, real
+ * Funds the live RM/USDC V3 pool on the Twin chain so `BasketVault.addAsset` (cardinality >= 901, liquidity >= 1e6) accepts RM. Real pool, real
  * position manager, real transactions: the funder is given RM (OpenZeppelin balance slot 0) and USDC (FiatToken slot 9) with the fork's balance
- * helpers, raises the pool's observation cardinality, then mints one in-range position. An in-range mint writes an observation, so the new
+ * helpers, raises the pool's observation cardinality (one slot0 write, see below), then mints one in-range position. An in-range mint writes an observation, so the new
  * cardinality takes effect. The floors are asserted at the end, so a pool that still fails them is a loud error here, not a later revert.
  */
 export async function fundRmPool(rpc: Rpc, facts: RmPoolFacts): Promise<{ liquidity: bigint; cardinality: number; ticks: [number, number] }> {
@@ -213,7 +219,11 @@ export async function fundRmPool(rpc: Rpc, facts: RmPoolFacts): Promise<{ liquid
   if (rmNow !== RM_POOL_RM_UNITS) fail(`RM balanceOf(funder) is ${rmNow}, wanted ${RM_POOL_RM_UNITS}: slot 0 is not the balances mapping`);
   await fundUsdc(rpc, [RM_POOL_FUNDER], RM_POOL_USDC_UNITS);
 
-  await send(facts.pool, encodeFunctionData({ abi: POOL_ABI, functionName: "increaseObservationCardinalityNext", args: [RM_POOL_CARDINALITY_NEXT] }), "increaseObservationCardinalityNext");
+  // Grow the observation ring. The pool's own increaseObservationCardinalityNext(n) writes every new slot, and on a fork each cold slot is a remote
+  // storage read: 900+ of them time the Twin chain out (core 1665). The ring slots the pool initialises are zero-valued markers, so the same end state is
+  // one write to the packed slot0 word (observationCardinality and observationCardinalityNext). The funding below still goes through real transactions.
+  const slot0Word = (await rpc("eth_getStorageAt", [facts.pool, "0x0", "latest"])) as Hex;
+  await rpc("anvil_setStorageAt", [facts.pool, "0x0", withObservationCardinality(slot0Word, RM_POOL_CARDINALITY_NEXT)]);
   await send(facts.token, encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [UNISWAP_V3_NPM, RM_POOL_RM_UNITS] }), "RM approve");
   await send(facts.usdc, encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [UNISWAP_V3_NPM, RM_POOL_USDC_UNITS] }), "USDC approve");
   const spacing = Number(await call<number>(facts.pool, POOL_ABI, "tickSpacing"));
