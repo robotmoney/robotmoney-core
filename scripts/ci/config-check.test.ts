@@ -60,6 +60,14 @@ describe("static rules", () => {
     const e = fixture((f) => { f["agent-token-shortlist.json"].shortlist = []; });
     expect(failures(e).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
   });
+  test("the committed RM entry pins the public RM code hash (the same value .gitleaks.toml allowlists)", () => {
+    const rm = loadConfigs(realDir).agent.shortlist[0];
+    expect(rm.tokenCodeHash).toBe("0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6");
+  });
+  test("an RM pool other than the owner-funded one fails", () => {
+    const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].pool = "0x" + "22".repeat(20); });
+    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+  });
   test("an RM pool fee other than 10000 fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolFee = 3000; });
     expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
