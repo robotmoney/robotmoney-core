@@ -14,6 +14,10 @@
 //   B. Every block.chainid in contracts/script matches the allowlist below.
 //   C. The deleted paths do not exist.
 //   D. No forge test defines a mock Safe or a constant-threshold Safe stub.
+//   F. No forge test pranks the Safe (`vm.prank(safe`, `vm.startPrank(safe`). A pranked Safe skips
+//      the two-signature quorum, so the test proves nothing about governance. Governed calls go
+//      through helpers/SafeGovernance.sol. PRANK_SAFE_DEBT lists files not yet migrated (core
+//      issue 1644): a hit there is a warning, and each migration PR deletes its entry.
 //   E. No file outside the history directories names a deleted contract or script.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -107,6 +111,17 @@ const TEST_FORBIDDEN: { name: string; re: RegExp }[] = [
     name: "constant-threshold Safe stub",
     re: /function\s+getThreshold\s*\(\s*\)[^{;]*\{\s*return\s+\d+\s*;/,
   },
+];
+
+// ---------------------------------------------------------------------------------------------
+// Check F: no pranked Safe in a forge test (issue 1644).
+// ---------------------------------------------------------------------------------------------
+export const PRANK_SAFE_RE = /\bvm\.(?:start)?[Pp]rank\(\s*safe\w*/;
+// Transitional debt, shrinking: files still to move onto helpers/SafeGovernance.sol.
+export const PRANK_SAFE_DEBT = [
+  "contracts/test/DeployTimelock.t.sol",
+  "contracts/test/WeightSetterRotation.t.sol",
+  "contracts/test/PortfolioRouter.t.sol",
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -243,6 +258,19 @@ for (const f of walk(join(repo, "contracts/test")).filter((p) => p.endsWith(".so
       hits.push(`${rel(f)}:${line}: ${rule.name}`);
     }
   }
+}
+
+// F
+for (const f of walk(join(repo, "contracts/test")).filter((p) => p.endsWith(".sol"))) {
+  const r = rel(f);
+  if (r.startsWith("contracts/test/vendor/")) continue;
+  readFileSync(f, "utf8")
+    .split("\n")
+    .forEach((line, i) => {
+      if (!PRANK_SAFE_RE.test(line)) return;
+      const msg = `${r}:${i + 1}: pranked Safe in a forge test (use helpers/SafeGovernance.sol): ${line.trim()}`;
+      (PRANK_SAFE_DEBT.includes(r) ? warnings : hits).push(msg);
+    });
 }
 
 // E
