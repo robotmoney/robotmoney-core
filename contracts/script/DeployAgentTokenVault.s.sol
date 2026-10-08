@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (agent-token basket)
 //            docs/prd.md §11.3 — Agent Token Vault (rmAGENT)
+//            docs/adr/ADR-0001-mvp-agent-token-shortlist.md (2026-10-08: RM on the V4 RM/USDC 2.91% pool)
 //            robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486)
 //
 // Deploys `AgentTokenVault`, pauses it and registers it. The launch shortlist is RM only (the live
-// ROBOTMONEY token on the owner-funded V3 pool, fee 10000), so the
-// vault ships with one asset. The loop below stays in place: adding a token later is one
+// ROBOTMONEY token on the Uniswap V4 RM/USDC 2.91% pool, priced by the permissionless
+// `UniswapV4PriceRecorder`), so the vault ships with one asset. The loop below stays in place: adding a token later is one
 // config entry (the loop deploys the adapter, allows its code hash, then calls `addAsset`).
 // Router eligibility is deploy-time configuration (issue 1520): after registering, the broadcast
 // path calls `registry.migrateEligibility` once when `ROUTER_DEFAULT_BPS` is a vector (it also sets
@@ -29,6 +30,7 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 ///           ADMIN_ADDRESS     the broadcaster. Holds ADMIN_ROLE and EMERGENCY_ROLE on the new
 ///                             vault and ADMIN_ROLE on the registry until the timelock stage.
 ///           SWAP_ROUTER       must equal `swapRouter02` in agent-token-shortlist.json (Uniswap V3 SwapRouter02)
+///           RECORDER_ADDRESS  the deployed `UniswapV4PriceRecorder` for the RM pool key (required for the shipped config; the `recorder` stage)
 ///           REGISTRY_ADDRESS  the vault is registered here as "Robot Money Agent Tokens"
 ///           TVL_CAP, PER_DEPOSIT_CAP   USDC caps in 6-decimal units, from the frozen sheet
 ///           FEE_RECIPIENT   recipient for exit fees (not the deployer, not the admin)
@@ -41,6 +43,10 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 contract DeployAgentTokenVault is BasketVaultDeployBase {
     string public constant VAULT_NAME = "Robot Money Agent Tokens";
     string public constant CONFIG_FILE = "config/agent-token-shortlist.json";
+
+    /// @notice RM, the live ROBOTMONEY token. Owner decision 2026-10-08: RM trades only on the Uniswap V4 RM/USDC 2.91% pool. The V3 RM
+    ///         pool has no in-range liquidity, so a config that lists RM on UniswapV3 is refused at parse.
+    address public constant RM_TOKEN = 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3;
 
     /// @notice Forge broadcast entrypoint.
     function run() external returns (Deployed memory d) {
@@ -78,6 +84,10 @@ contract DeployAgentTokenVault is BasketVaultDeployBase {
             p.admin,
             emergencyResponder
         );
+    }
+
+    function _requiredVenue(address token) internal pure override returns (string memory) {
+        return token == RM_TOKEN ? "UniswapV4" : "";
     }
 
     function _registryName() internal pure override returns (string memory) {

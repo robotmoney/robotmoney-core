@@ -7,13 +7,18 @@
 //   - every 0x string in config/ is exactly 40 hex digits (catches the 39-digit addresses)
 //   - deSPXA is listed with Uniswap V3 fee 500 and nothing else in rwa-assets.json
 //   - wSOL, BNKR and JUNO are absent; RM appears only in agent-token-shortlist.json
-//   - no Chronicle, V4, Aerodrome, mainnet or devnet key anywhere in config/
-//   - agent-token-shortlist.json launch list is exactly RM (live ROBOTMONEY token, code-hash pinned,
-//     owner-funded V3 pool, fee 10000) and records swapRouter02 (the script parser needs it)
-// Live rules (per asset, pinned to one block): token, pool, factory and router have code,
+//   - no Chronicle, Aerodrome, mainnet or devnet key anywhere in config/
+//   - agent-token-shortlist.json launch list is exactly RM (live ROBOTMONEY token, code-hash pinned) on the Uniswap V4
+//     RM/USDC 2.91% pool (owner decision 2026-10-08, core 1676): venue UniswapV4, fee 29100, tickSpacing 582, hooks 0x0,
+//     and the PoolKey hashes to pool id 0xf2e7b957...; it records swapRouter02 (the script parser needs it)
+// Live rules (per V3 asset, pinned to one block): token, pool, factory and router have code,
 //   pool fee() equals config, factory.getPool equals config, observationCardinality >= 901 (1800 s default TWAP window / 2 s Base blocks + 1, core 1665),
 //   liquidity() > 0, USD TVL (USDC reserve plus other side at slot0 price) >= the file's
 //   minTvlUsd floor.
+// Live rules (the V4 asset): the PoolManager and StateView have code; the PoolKey from config resolves, through StateView.getSlot0 on
+//   the derived pool id, to an initialized pool whose lpFee equals the config fee (V4 stores no PoolKey, only its hash, so a key whose
+//   hash resolves to a live pool is the key); StateView.getLiquidity(poolId) >= 1000000. The unit is the pool's in-range liquidity L
+//   (a raw uint128), not USDC. This rule fails while the pool is unfunded or under-funded: that is OWNER-GATED, never bypassed.
 //
 // USDC code-hash rule (live, every chain): USDC is the one canonical constant on every chain, so
 // the proxy at USDC and the implementation behind its FiatTokenProxy slot must have the code hashes
@@ -44,10 +49,22 @@ export const FORBIDDEN_SYMBOLS = ["wsol", "bnkr", "juno"];
 const AGENT_FILE = "agent-token-shortlist.json";
 export const RM = {
   token: "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
-  pool: "0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882",
-  fee: 10000,
+  venue: "UniswapV4",
+  /** Uniswap V4 PoolManager on Base. */
+  poolManager: "0x498581fF718922c3f8e6A244956aF099B2652b2b",
+  /** Uniswap V4 StateView on Base: the read-only lens over PoolManager pool state. */
+  stateView: "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71",
+  /** keccak256(abi.encode(PoolKey)) of the RM/USDC 2.91% pool (Base tx 0x4fc63a04703f60cb9164d279bb60d4b346a64413250d8dbac4feca0c63c81f75). */
+  poolId: "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391",
+  fee: 29100,
+  tickSpacing: 582,
+  hooks: "0x0000000000000000000000000000000000000000",
+  /** The vault swap bound the deploy script applies: above the 291 bps pool fee, at the vault ceiling. */
+  maxSlippageBps: 500,
 };
-const FORBIDDEN_KEY = /chronicle|v4|aerodrome|slipstream|^mainnet$|^devnet$|^wsol|^bnkr|^juno/i;
+/** The addAsset in-range liquidity floor (BasketVault.MIN_POOL_LIQUIDITY). For V4 the unit is the pool's liquidity L. */
+export const MIN_POOL_LIQUIDITY = 1_000_000n;
+const FORBIDDEN_KEY = /chronicle|aerodrome|slipstream|^mainnet$|^devnet$|^wsol|^bnkr|^juno/i;
 const HASH_RE = /^0x[0-9a-f]{64}$/;
 const META_KEYS = new Set(["description", "$schema"]);
 
@@ -59,8 +76,21 @@ export interface Asset {
   pool: string;
   poolFee: number;
 }
-export interface AgentEntry extends Asset {
+export interface PoolKey {
+  currency0: string;
+  currency1: string;
+  fee: number;
+  tickSpacing: number;
+  hooks: string;
+}
+/** An agent shortlist entry. A UniswapV3 entry carries `pool`; a UniswapV4 entry carries the PoolManager, StateView, pool id and PoolKey instead. */
+export interface AgentEntry extends Omit<Asset, "pool"> {
   tokenCodeHash: string;
+  pool?: string;
+  poolManager?: string;
+  stateView?: string;
+  poolId?: string;
+  poolKey?: PoolKey;
 }
 export interface AssetFile {
   usdc: string;
@@ -72,7 +102,7 @@ export interface AssetFile {
 export interface Configs {
   protocol: AssetFile;
   rwa: AssetFile;
-  agent: { usdc: string; uniswapV3Factory: string; swapRouter02: string; shortlist: AgentEntry[] };
+  agent: { usdc: string; uniswapV3Factory: string; swapRouter02: string; maxSlippageBps?: number; shortlist: AgentEntry[] };
   dexPools: Record<string, unknown>;
   /** Pinned USDC code hashes (config/usdc-hashes.json). null means not pinned yet: refused. */
   usdcHashes: UsdcHashes;
@@ -130,14 +160,14 @@ export function staticFindings(c: Configs): Finding[] {
       if (key && !META_KEYS.has(key) && !key.startsWith("$") && FORBIDDEN_KEY.test(key)) badKey.push(path);
       const underMeta = path.split(".").some((p) => META_KEYS.has(p) || p.startsWith("$"));
       if (typeof val === "string" && !underMeta) {
-        const isHashKey = key !== null && /CodeHash$/.test(key);
+        const isHashKey = key !== null && /CodeHash$|^poolId$/.test(key);
         if (!isHashKey && /^0x[0-9a-fA-F]*$/.test(val) && val.length > 2 && val.length !== 42) badAddr.push(`${path}=${val} (${val.length - 2} digits)`);
         const lower = val.toLowerCase();
         if (FORBIDDEN_SYMBOLS.includes(lower) || (lower === "rm" && file !== AGENT_FILE) || /wsol/.test(lower) || /chronicle|aerodrome|slipstream/.test(lower)) badSym.push(`${path}=${val}`);
       }
     });
     add(file, "address-format", badAddr.length === 0, badAddr.join("; ") || "all 0x values are 40 hex digits");
-    add(file, "forbidden-key", badKey.length === 0, badKey.join("; ") || "no Chronicle, V4, Aerodrome, mainnet or devnet key");
+    add(file, "forbidden-key", badKey.length === 0, badKey.join("; ") || "no Chronicle, Aerodrome, mainnet or devnet key");
     add(file, "forbidden-symbol", badSym.length === 0, badSym.join("; ") || "no wSOL, BNKR, JUNO, RM (outside the agent shortlist) or Chronicle/Aerodrome value");
   }
 
@@ -155,11 +185,24 @@ export function staticFindings(c: Configs): Finding[] {
   add("protocol-assets.json", "weth-cbbtc-only", JSON.stringify(protoSyms) === JSON.stringify(["cbBTC", "wETH"]), `symbols=${protoSyms.join(",")}`);
   const sl = c.agent.shortlist ?? [];
   const rm = sl[0];
+  const k = rm?.poolKey;
+  const eq = (a: string | undefined, b: string) => a?.toLowerCase() === b.toLowerCase();
   add(AGENT_FILE, "launch-list-is-rm-only",
-    sl.length === 1 && rm.symbol === "RM" && rm.token?.toLowerCase() === RM.token.toLowerCase() &&
-      rm.pool?.toLowerCase() === RM.pool.toLowerCase() && rm.poolFee === RM.fee && rm.venue === "UniswapV3" &&
+    sl.length === 1 && rm.symbol === "RM" && eq(rm.token, RM.token) && rm.venue === RM.venue && rm.poolFee === RM.fee &&
       HASH_RE.test(rm.tokenCodeHash ?? ""),
     `entries=${sl.length} ${rm ? `${rm.symbol} fee=${rm.poolFee} venue=${rm.venue}` : ""}`);
+  // Core 1676: the V4 PoolKey. Every field is pinned, and the key must hash to the configured pool id (a spoofed key cannot share the id).
+  let derived = "";
+  try { derived = k ? poolIdOfKey(k) : ""; } catch { derived = ""; }
+  add(AGENT_FILE, "rm-v4-poolkey",
+    !!k && eq(k.currency0, RM.token) && eq(k.currency1, USDC) && k.fee === RM.fee && k.tickSpacing === RM.tickSpacing && eq(k.hooks, RM.hooks) &&
+      rm.pool === undefined,
+    k ? `currency0=${k.currency0} currency1=${k.currency1} fee=${k.fee} tickSpacing=${k.tickSpacing} hooks=${k.hooks} pool=${rm.pool}` : "no poolKey");
+  add(AGENT_FILE, "rm-v4-pool-id", eq(rm?.poolId, RM.poolId) && eq(derived, RM.poolId), `configured=${rm?.poolId} hash-of-poolKey=${derived} pinned=${RM.poolId}`);
+  add(AGENT_FILE, "rm-v4-managers", eq(rm?.poolManager, RM.poolManager) && eq(rm?.stateView, RM.stateView), `poolManager=${rm?.poolManager} stateView=${rm?.stateView}`);
+  // The pool charges 291 bps. The vault swap bound must clear it and stay at or under the vault ceiling of 500.
+  const slip = c.agent.maxSlippageBps;
+  add(AGENT_FILE, "rm-v4-slippage-clears-the-pool-fee", slip === RM.maxSlippageBps, `maxSlippageBps=${slip}`);
   add("agent-token-shortlist.json", "swap-router-recorded",
     c.agent.swapRouter02?.toLowerCase() === "0x2626664c2603336e57b271c5c0b26f421741e481", `router=${c.agent.swapRouter02}`);
   for (const [name, f] of [["protocol-assets.json", c.protocol], ["rwa-assets.json", c.rwa]] as const) {
@@ -275,6 +318,10 @@ export function redactUrl(u: string): string {
   }
 }
 
+/** StateView.getSlot0(bytes32) and StateView.getLiquidity(bytes32) selectors. */
+const STATE_VIEW_GET_SLOT0 = "0xc815641c";
+const STATE_VIEW_GET_LIQUIDITY = "0xfa6793d5";
+
 const pad = (hex: string) => hex.replace(/^0x/, "").toLowerCase().padStart(64, "0");
 const word = (data: string, i: number) => data.replace(/^0x/, "").slice(i * 64, i * 64 + 64);
 const addrOf = (w: string) => "0x" + w.slice(24);
@@ -325,6 +372,42 @@ export async function readPool(rpc: Rpc, tag: string, a: Asset, f: Pick<AssetFil
   };
 }
 
+/**
+ * The V4 asset against live chain state. V4 keeps no PoolKey on chain, only its hash as the pool id, so the key from config is read through
+ * StateView by deriving the pool id from it: `getSlot0(derivedId)` returns a non-zero price only for an initialized pool with exactly that
+ * key, and its lpFee must equal the configured fee. `getLiquidity(derivedId)` is the pool's in-range liquidity L (raw uint128, not USDC) and
+ * must reach the addAsset floor. An unfunded or under-funded pool fails here, which is owner-gated: nothing bypasses it.
+ */
+async function v4Findings(
+  rpc: Rpc, tag: string, s: string, a: AgentEntry, usdc: string, hasCode: (addr: string) => Promise<boolean>,
+): Promise<{ findings: Finding[]; facts: Record<string, unknown> }> {
+  const out: Finding[] = [];
+  const add = (rule: string, ok: boolean, detail: string) => out.push({ scope: s, rule, ok, detail });
+  const k = a.poolKey;
+  const complete = !!(k && a.poolManager && a.stateView && a.poolId);
+  add("v4-config-complete", complete, complete ? `poolManager=${a.poolManager} stateView=${a.stateView}` : "poolKey, poolManager, stateView or poolId missing");
+  if (!complete) return { findings: out, facts: {} };
+  add("code:poolManager", await hasCode(a.poolManager!), a.poolManager!);
+  add("code:stateView", await hasCode(a.stateView!), a.stateView!);
+  const derived = poolIdOfKey(k!);
+  add("poolkey-hashes-to-pool-id", derived.toLowerCase() === a.poolId!.toLowerCase(), `hash(poolKey)=${derived} poolId=${a.poolId}`);
+  add("pool-is-token-usdc", [k!.currency0, k!.currency1].map((x) => x.toLowerCase()).sort().join() === [a.token, usdc].map((x) => x.toLowerCase()).sort().join(), `${k!.currency0},${k!.currency1}`);
+  const slot0 = await rpc("eth_call", [{ to: a.stateView, data: STATE_VIEW_GET_SLOT0 + derived.slice(2) }, tag]);
+  const sqrtPriceX96 = BigInt("0x" + word(slot0, 0));
+  const lpFee = Number(BigInt("0x" + word(slot0, 3)));
+  add("v4-pool-initialized", sqrtPriceX96 !== 0n, sqrtPriceX96 !== 0n ? `sqrtPriceX96=${sqrtPriceX96}` : `no initialized pool has id ${derived}: the PoolKey in config does not resolve to a live pool`);
+  add("pool-fee-equals-config", lpFee === a.poolFee, `live lpFee=${lpFee} config=${a.poolFee}`);
+  const liqW = await rpc("eth_call", [{ to: a.stateView, data: STATE_VIEW_GET_LIQUIDITY + derived.slice(2) }, tag]);
+  const liquidity = BigInt("0x" + word(liqW, 0));
+  const unfunded = ` (RM V4 pool ${a.poolId} holds liquidity L=${liquidity}, below the floor ${MIN_POOL_LIQUIDITY}: it is not funded yet. the owner must add in-range liquidity before the mainnet run. The unit is the pool's in-range liquidity L, not USDC. BasketVault.addAsset needs L>=1e6 and the sheet MIN_POOL_LIQUIDITY is a second floor)`;
+  add("liquidity>0", liquidity > 0n, `liquidity=${liquidity}${liquidity > 0n ? "" : unfunded}`);
+  add("liquidity>=1000000", liquidity >= MIN_POOL_LIQUIDITY, `liquidity=${liquidity}${liquidity >= MIN_POOL_LIQUIDITY ? "" : unfunded}`);
+  return {
+    findings: out,
+    facts: { poolId: a.poolId, derivedPoolId: derived, sqrtPriceX96: sqrtPriceX96.toString(), lpFee, liquidity: liquidity.toString() },
+  };
+}
+
 export async function liveFindings(rpc: Rpc, tag: string, c: Configs): Promise<{ findings: Finding[]; facts: Record<string, unknown> }> {
   const findings: Finding[] = [];
   const facts: Record<string, unknown> = {};
@@ -343,14 +426,24 @@ export async function liveFindings(rpc: Rpc, tag: string, c: Configs): Promise<{
     add(name, "code:factory", await hasCode(f.uniswapV3Factory), f.uniswapV3Factory);
     add(name, "code:swapRouter02", await hasCode(f.swapRouter02), f.swapRouter02);
     const isAgent = name === AGENT_FILE;
-    const assets: Asset[] = isAgent ? c.agent.shortlist : (f as AssetFile).assets;
+    const assets: Asset[] = isAgent ? (c.agent.shortlist as unknown as Asset[]) : (f as AssetFile).assets;
     for (const a of assets) {
       const s = `${name}:${a.symbol}`;
       add(s, "code:token", await hasCode(a.token), a.token);
       if (isAgent) {
-        const want = (a as AgentEntry).tokenCodeHash.toLowerCase();
+        const want = (a as unknown as AgentEntry).tokenCodeHash.toLowerCase();
         const got = keccakHex(await rpc("eth_getCode", [a.token, tag])).toLowerCase();
         add(s, "token-code-hash-pinned", got === want, `live=${got} config=${want}`);
+      }
+      if ((a as unknown as AgentEntry).venue === "UniswapV4") {
+        try {
+          const v4 = await v4Findings(rpc, tag, s, a as unknown as AgentEntry, f.usdc, hasCode);
+          findings.push(...v4.findings);
+          facts[s] = v4.facts;
+        } catch (e) {
+          add(s, "pool-read", false, String(e));
+        }
+        continue;
       }
       const poolCode = await hasCode(a.pool);
       add(s, "code:pool", poolCode, a.pool);
@@ -441,6 +534,15 @@ export function keccakHex(hex: string): string {
   const bytes = new Uint8Array(h.length / 2);
   for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
   return keccak256(bytes);
+}
+
+// ---- Uniswap V4 pool id ---------------------------------------------------------------
+
+const word32 = (v: bigint): string => BigInt.asUintN(256, v).toString(16).padStart(64, "0");
+/** keccak256(abi.encode(PoolKey)): the V4 pool id. Each field is one 32-byte word (int24 is sign-extended). */
+export function poolIdOfKey(k: PoolKey): string {
+  const hex = word32(BigInt(k.currency0)) + word32(BigInt(k.currency1)) + word32(BigInt(k.fee)) + word32(BigInt(k.tickSpacing)) + word32(BigInt(k.hooks));
+  return keccakHex("0x" + hex);
 }
 
 // ---- USDC code-hash check --------------------------------------------------------------

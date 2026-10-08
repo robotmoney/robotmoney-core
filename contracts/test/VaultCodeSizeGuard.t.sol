@@ -88,4 +88,28 @@ contract VaultCodeSizeGuard is Test {
     function test_AerodromeSwapAdapter_underEip170() public {
         _assertUnderLimit("AerodromeSwapAdapter.sol:AerodromeSwapAdapter");
     }
+
+    // Core 1676: the Uniswap V4 swap adapter and the permissionless price recorder are direct on-chain deployments.
+
+    function test_UniswapV4SwapAdapter_underEip170() public {
+        _assertUnderLimit("UniswapV4SwapAdapter.sol:UniswapV4SwapAdapter");
+    }
+
+    function test_UniswapV4PriceRecorder_underEip170() public {
+        _assertUnderLimit("UniswapV4PriceRecorder.sol:UniswapV4PriceRecorder");
+    }
+
+    /// @notice Core 1676 changes no vault logic: the vault family keeps its recorded headroom. The headroom floors are
+    ///         the measured sizes after core 1673 and 1666 (AgentTokenVault 65 bytes, ProtocolAssetVault and
+    ///         RwaBasketVault 107 bytes). A change that eats them fails here before it fails an EIP-170 deploy.
+    function test_vaultFamily_keepsItsMeasuredHeadroom() public {
+        assertGe(
+            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 65
+        );
+        assertGe(
+            EIP170_LIMIT - vm.getDeployedCode("ProtocolAssetVault.sol:ProtocolAssetVault").length,
+            107
+        );
+        assertGe(EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 107);
+    }
 }

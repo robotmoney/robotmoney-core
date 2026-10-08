@@ -16,6 +16,21 @@
       "vault": null
     },
     {
+      "name": "recorder",
+      "kind": "forge",
+      "script": "contracts/script/DeployUniswapV4PriceRecorder.s.sol:DeployUniswapV4PriceRecorder",
+      "requiredEnv": [
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/recorder.json",
+      "manifestNotes": "The permissionless Uniswap V4 price recorder for the RM/USDC pool (core 1676). It runs right after libs so the 1800 s price history accumulates while the other stages run. The runner waits for a full window of history before the agent stage. No role is involved.",
+      "libraries": [],
+      "vault": null
+    },
+    {
       "name": "vault",
       "kind": "forge",
       "script": "contracts/script/DeployVault.s.sol:DeployVault",
@@ -161,6 +176,7 @@
       "requiredEnv": [
         "ADMIN_ADDRESS",
         "SWAP_ROUTER",
+        "RECORDER_ADDRESS",
         "REGISTRY_ADDRESS",
         "TVL_CAP",
         "PER_DEPOSIT_CAP",

@@ -18,7 +18,7 @@ function scriptSource(path: string): string {
   return own + extra + read(`${base}ExpectedChainGuard.sol`);
 }
 
-const EXPECTED = ["libs", "vault", "registry", "router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa", "timelock"];
+const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa", "timelock"];
 
 describe("stage-table.json", () => {
   test("version 1 with every stage, in deploy order", () => {

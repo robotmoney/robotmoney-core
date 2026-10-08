@@ -88,7 +88,8 @@ abstract contract BasketDeployFixture is Test {
             exitFeeBps: 0,
             feeRecipient: feeRecipient,
             navDeviationGuardBps: NAV_DEVIATION_BPS,
-            minPoolLiquidity: MIN_POOL_LIQUIDITY
+            minPoolLiquidity: MIN_POOL_LIQUIDITY,
+            recorder: address(0)
         });
     }
 

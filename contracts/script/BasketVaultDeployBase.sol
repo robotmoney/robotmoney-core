@@ -14,8 +14,11 @@ import {console2} from "forge-std/console2.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
+import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
 import {TickMath} from "../lib/TickMath.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
+import {IPoolManagerV4} from "../interfaces/IPoolManagerV4.sol";
+import {IUniswapV4PriceRecorder} from "../interfaces/IUniswapV4PriceRecorder.sol";
 
 /// @dev Shared flow: validate sheet inputs, deploy the vault, check each configured pool,
 ///      add each configured asset, pause, register, write the manifest.
@@ -40,8 +43,12 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         /// @dev ORA-4 deposit guard threshold in basis points, 1..MAX_NAV_DEVIATION_BPS. Never 0: 0 disables the guard (issue 1666).
         uint256 navDeviationGuardBps;
         /// @dev Floor for `IUniswapV3Pool.liquidity()` of every configured pool. That is the pool's in-range liquidity L, a raw uint128 of
-        ///      sqrt(token0 * token1) units, NOT a USDC amount (issue 1666). Must be above 0.
+        ///      sqrt(token0 * token1) units, NOT a USDC amount (issue 1666). Must be above 0. For a Uniswap V4 asset the same unit applies:
+        ///      the V4 pool's liquidity L (`StateView.getLiquidity(poolId)`), read here through the recorder facade (issue 1676).
         uint256 minPoolLiquidity;
+        /// @dev `RECORDER_ADDRESS`: the deployed `UniswapV4PriceRecorder`. Required (non zero) when the config lists a UniswapV4 asset, otherwise
+        ///      ignored. Read from the environment with a zero default because V3-only vaults have no recorder (issue 1676).
+        address recorder;
     }
 
     /// @notice Hard ceiling the vault setter enforces (BasketVault.MAX_NAV_DEVIATION_BPS, 20%). Mirrored here so a sheet typo fails
@@ -53,14 +60,22 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
     struct AssetCfg {
         string symbol;
         address token;
+        /// @dev The V3 pool address. Zero for a V4 asset: the vault registers the price recorder as the pool.
         address pool;
         uint24 poolFee;
+        bool isV4;
+        /// @dev V4 only: the PoolManager, the pool id and the full PoolKey from the config. `key` hashes to `poolId` (checked at parse).
+        address poolManager;
+        bytes32 poolId;
+        IPoolManagerV4.PoolKey key;
     }
 
     /// @notice A parsed config file.
     struct Cfg {
         address swapRouter02;
         AssetCfg[] assets;
+        /// @dev Optional root `maxSlippageBps`. Zero keeps the vault default. Applied through the vault setter before the handover.
+        uint256 maxSlippageBps;
     }
 
     /// @notice Result returned to in-process callers (forge tests, stage driver).
@@ -68,6 +83,10 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         address vault;
         address registry;
         address adapter;
+        /// @dev The V4 swap adapter, zero when the config lists no V4 asset (issue 1676).
+        address adapterV4;
+        /// @dev The price recorder the V4 asset is registered with, zero when the config lists no V4 asset.
+        address recorder;
         address[] tokens;
         bool registered;
         bool paused;
@@ -111,6 +130,7 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT"));
         p.navDeviationGuardBps = _envUintRequired(string.concat(prefix, "NAV_DEVIATION_BPS"));
         p.minPoolLiquidity = _envUintRequired(string.concat(prefix, "MIN_POOL_LIQUIDITY"));
+        p.recorder = vm.envOr(string.concat(prefix, "RECORDER_ADDRESS"), address(0));
     }
 
     /// @dev The broadcast entrypoint shared by the three scripts. The chain guard is the first
@@ -187,6 +207,11 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
 
     // ─── Config parsing ───────────────────────────────────────────────────────
 
+    /// @dev Hook: the venue an asset must use, or "" for either. The agent script pins RM to UniswapV4.
+    function _requiredVenue(address) internal pure virtual returns (string memory) {
+        return "";
+    }
+
     /// @dev Parse a config file body. `arrayKey` is "assets" or "shortlist".
     function _parseCfg(string memory json, string memory arrayKey)
         internal
@@ -194,6 +219,9 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         returns (Cfg memory cfg)
     {
         cfg.swapRouter02 = json.readAddress(".swapRouter02");
+        if (vm.keyExistsJson(json, ".maxSlippageBps")) {
+            cfg.maxSlippageBps = json.readUint(".maxSlippageBps");
+        }
         string memory root = string.concat(".", arrayKey);
         uint256 n;
         while (vm.keyExistsJson(json, string.concat(root, "[", vm.toString(n), "]"))) n++;
@@ -203,21 +231,63 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         }
         cfg.assets = new AssetCfg[](symbols.length);
         for (uint256 i = 0; i < symbols.length; i++) {
-            string memory base = string.concat(root, "[", vm.toString(i), "]");
-            AssetCfg memory a = cfg.assets[i];
-            a.symbol = symbols[i];
-            a.token = json.readAddress(string.concat(base, ".token"));
-            a.pool = json.readAddress(string.concat(base, ".pool"));
-            a.poolFee = uint24(json.readUint(string.concat(base, ".poolFee")));
-            require(
-                keccak256(bytes(json.readString(string.concat(base, ".venue"))))
-                    == keccak256("UniswapV3"),
-                "unsupported venue: only UniswapV3"
-            );
-            require(a.token != address(0), "config token unset");
-            require(a.pool != address(0), "config pool unset");
-            require(a.poolFee != 0, "config poolFee unset");
+            cfg.assets[i] =
+                _parseAsset(json, string.concat(root, "[", vm.toString(i), "]"), symbols[i]);
         }
+    }
+
+    function _parseAsset(string memory json, string memory base, string memory symbol)
+        private
+        view
+        returns (AssetCfg memory a)
+    {
+        a.symbol = symbol;
+        a.token = json.readAddress(string.concat(base, ".token"));
+        a.poolFee = uint24(json.readUint(string.concat(base, ".poolFee")));
+        bytes32 venue = keccak256(bytes(json.readString(string.concat(base, ".venue"))));
+        require(a.token != address(0), "config token unset");
+        require(a.poolFee != 0, "config poolFee unset");
+        string memory required = _requiredVenue(a.token);
+        if (bytes(required).length != 0) {
+            require(
+                venue == keccak256(bytes(required)),
+                string.concat(symbol, ": venue must be ", required)
+            );
+        }
+        if (venue == keccak256("UniswapV3")) {
+            a.pool = json.readAddress(string.concat(base, ".pool"));
+            require(a.pool != address(0), "config pool unset");
+        } else if (venue == keccak256("UniswapV4")) {
+            _parseV4(json, base, a);
+        } else {
+            revert("unsupported venue: only UniswapV3 and UniswapV4");
+        }
+    }
+
+    /// @dev The V4 entry carries the PoolManager, the pool id and the full PoolKey. The key must hash to the id, be hookless and sorted,
+    ///      and its fee must equal `poolFee`. The pool tickSpacing is read from the key, never derived from the fee.
+    function _parseV4(string memory json, string memory base, AssetCfg memory a) private view {
+        a.isV4 = true;
+        a.poolManager = json.readAddress(string.concat(base, ".poolManager"));
+        a.poolId = json.readBytes32(string.concat(base, ".poolId"));
+        string memory k = string.concat(base, ".poolKey");
+        a.key = IPoolManagerV4.PoolKey({
+            currency0: json.readAddress(string.concat(k, ".currency0")),
+            currency1: json.readAddress(string.concat(k, ".currency1")),
+            fee: uint24(json.readUint(string.concat(k, ".fee"))),
+            tickSpacing: int24(json.readInt(string.concat(k, ".tickSpacing"))),
+            hooks: json.readAddress(string.concat(k, ".hooks"))
+        });
+        require(a.poolManager != address(0), "config poolManager unset");
+        require(a.key.hooks == address(0), "config poolKey hooks must be zero");
+        require(a.key.currency0 < a.key.currency1, "config poolKey currencies are not sorted");
+        require(
+            a.key.currency0 == a.token || a.key.currency1 == a.token,
+            "config poolKey does not hold the token"
+        );
+        require(a.key.fee == a.poolFee, "config poolKey fee does not equal poolFee");
+        require(a.key.tickSpacing > 0, "config poolKey tickSpacing unset");
+        require(keccak256(abi.encode(a.key)) == a.poolId, "config poolKey does not hash to poolId");
     }
 
     // ─── Core flow ────────────────────────────────────────────────────────────
@@ -258,6 +328,16 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
             vault.navDeviationGuardBps() == p.navDeviationGuardBps,
             "navDeviationGuardBps readback differs from the sheet"
         );
+
+        // Issue 1676: a config `maxSlippageBps` raises the swap bound before the handover. The V4 RM pool charges 2.91 percent, so the
+        // vault default of 300 bps leaves 9 bps for price impact. The vault setter bounds it to 500. Read back to fail on a no-op.
+        if (cfg.maxSlippageBps != 0) {
+            vault.setMaxSlippageBps(cfg.maxSlippageBps);
+            require(
+                vault.maxSlippageBps() == cfg.maxSlippageBps,
+                "maxSlippageBps readback differs from config"
+            );
+        }
 
         // Deployed paused. The govern stage unpauses after the checks pass.
         vault.pauseDeposits();
@@ -301,10 +381,75 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         }
         for (uint256 i = 0; i < cfg.assets.length; i++) {
             AssetCfg memory a = cfg.assets[i];
-            _checkPool(a, p.minPoolLiquidity);
-            vault.addAsset(a.token, a.pool, a.poolFee, adapter, BasketVault.Venue.V3);
+            if (a.isV4) {
+                _addV4Asset(vault, p, a, d);
+            } else {
+                _checkPool(a, p.minPoolLiquidity);
+                vault.addAsset(a.token, a.pool, a.poolFee, adapter, BasketVault.Venue.V3);
+            }
             d.tokens[i] = a.token;
         }
+    }
+
+    /// @dev Uniswap V4 asset (issue 1676, owner decision 2026-10-08). The vault registers the price RECORDER as the asset's pool and the
+    ///      `UniswapV4SwapAdapter` as its adapter, venue V4, swap fee = the pool fee. Checks, in order: the recorder is the one for this exact
+    ///      PoolKey and PoolManager, the pool holds at least the sheet liquidity floor (read from the PoolManager with the config pool id,
+    ///      independent of the recorder), then the adapter is deployed, its codehash allowed and the asset added. `addAsset` itself enforces
+    ///      the recorder's ring (901 slots) and 1800 s of history. One V4 asset per run: one recorder.
+    function _addV4Asset(BasketVault vault, Params memory p, AssetCfg memory a, Deployed memory d)
+        internal
+    {
+        require(d.recorder == address(0), "only one UniswapV4 asset per run");
+        require(p.recorder != address(0), "RECORDER_ADDRESS is required for a UniswapV4 asset");
+        require(p.recorder.code.length != 0, "RECORDER_ADDRESS has no code");
+        _checkRecorder(a, IUniswapV4PriceRecorder(p.recorder));
+        _checkPoolV4(a, p.minPoolLiquidity);
+        // Poke so the recorder is fresh for addAsset's observe([1800, 0]). Permissionless and a no-op in the same block.
+        IUniswapV4PriceRecorder(p.recorder).record();
+
+        address adapterV4 =
+            address(new UniswapV4SwapAdapter(a.poolManager, a.key, p.recorder, p.usdc));
+        vault.setAdapterCodeHashAllowed(adapterV4.codehash, true);
+        vault.addAsset(a.token, p.recorder, a.poolFee, adapterV4, BasketVault.Venue.V4);
+        d.adapterV4 = adapterV4;
+        d.recorder = p.recorder;
+    }
+
+    /// @dev The recorder is bound to the config PoolKey: PoolManager, pool id (the hash of the key) and every key field.
+    function _checkRecorder(AssetCfg memory a, IUniswapV4PriceRecorder rec) internal view {
+        require(
+            address(rec.POOL_MANAGER()) == a.poolManager,
+            string.concat(a.symbol, ": recorder PoolManager differs from config")
+        );
+        require(
+            rec.POOL_ID() == a.poolId,
+            string.concat(a.symbol, ": recorder pool id differs from config")
+        );
+        require(
+            rec.token0() == a.key.currency0 && rec.token1() == a.key.currency1
+                && rec.fee() == a.key.fee && rec.tickSpacing() == a.key.tickSpacing
+                && rec.hooks() == a.key.hooks,
+            string.concat(a.symbol, ": recorder PoolKey differs from config")
+        );
+    }
+
+    /// @dev V4 liquidity floor. The unit is the pool's in-range liquidity L (`Pool.State.liquidity`, a uint128 of
+    ///      sqrt(token0 * token1) units), the same unit `StateView.getLiquidity(poolId)` returns and the same unit as the V3 floor.
+    ///      Read with `extsload` at `keccak256(abi.encode(poolId, 6)) + 3` (PoolManager `_pools` slot 6, `liquidity` field offset 3).
+    function _checkPoolV4(AssetCfg memory a, uint256 minPoolLiquidity) internal view {
+        require(
+            a.poolManager.code.length != 0, string.concat(a.symbol, ": PoolManager has no code")
+        );
+        bytes32 stateSlot = keccak256(abi.encode(a.poolId, uint256(6)));
+        uint256 slot0 = uint256(IPoolManagerV4(a.poolManager).extsload(stateSlot));
+        require(uint160(slot0) != 0, string.concat(a.symbol, ": V4 pool is not initialized"));
+        uint128 liquidity = uint128(
+            uint256(IPoolManagerV4(a.poolManager).extsload(bytes32(uint256(stateSlot) + 3)))
+        );
+        require(
+            liquidity >= minPoolLiquidity,
+            string.concat(a.symbol, ": pool liquidity is below MIN_POOL_LIQUIDITY")
+        );
     }
 
     /// @dev Config check on chain: pool code present, live fee equals config and in-range liquidity
@@ -349,16 +494,21 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
     function _writeManifestTo(string memory outPath, Deployed memory d, Cfg memory cfg) internal {
         string memory assetsJson = "[";
         for (uint256 i = 0; i < cfg.assets.length; i++) {
+            AssetCfg memory a = cfg.assets[i];
             string memory item = string.concat(
                 '{"symbol":"',
-                cfg.assets[i].symbol,
+                a.symbol,
                 '","token":"',
-                vm.toString(cfg.assets[i].token),
+                vm.toString(a.token),
                 '","pool":"',
-                vm.toString(cfg.assets[i].pool),
+                vm.toString(a.isV4 ? d.recorder : a.pool),
                 '","pool_fee":',
-                vm.toString(uint256(cfg.assets[i].poolFee)),
-                "}"
+                vm.toString(uint256(a.poolFee)),
+                ',"venue":"',
+                a.isV4 ? "UniswapV4" : "UniswapV3",
+                '","pool_id":"',
+                vm.toString(a.poolId),
+                '"}'
             );
             assetsJson = string.concat(assetsJson, i == 0 ? "" : ",", item);
         }
@@ -372,6 +522,10 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
             vm.toString(d.registry),
             '","adapter":"',
             vm.toString(d.adapter),
+            '","adapter_v4":"',
+            vm.toString(d.adapterV4),
+            '","recorder":"',
+            vm.toString(d.recorder),
             '","registered":',
             d.registered ? "true" : "false",
             ',"paused":',

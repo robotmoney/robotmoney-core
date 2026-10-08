@@ -213,7 +213,7 @@ done <<< "${SHIPPED}"
 # The retired Chronicle-priced RWA vault and its adapters are deleted. The audit-scope
 # ledger table must carry no row for them, and no shipped source may name them in a
 # comment. The finding register keeps them as history, so it is not scanned.
-DELETED_NAMES_RE='(RwaVault|ChronicleOracleAdapter|DeSpxaAssetPositionAdapter|UniswapV4[A-Za-z]*Adapter|IPositionAdapter)\b'
+DELETED_NAMES_RE='(RwaVault|ChronicleOracleAdapter|DeSpxaAssetPositionAdapter|UniswapV4Asset[A-Za-z]*Adapter|IPositionAdapter)\b'
 LEDGER_TABLE="$(awk '/^## Audit-scope ledger/ { on = 1; next } /^## / { on = 0 } on && /^\|/' "${AUDITS_DOC}")"
 if printf '%s\n' "${LEDGER_TABLE}" | grep -qE "${DELETED_NAMES_RE}"; then
   printf '%s\n' "${LEDGER_TABLE}" | grep -E "${DELETED_NAMES_RE}" | sed 's/^/  ledger row names deleted code: /' >&2
