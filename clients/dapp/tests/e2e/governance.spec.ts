@@ -202,7 +202,10 @@ test.describe("suite-10: GovernancePanel E2E on the real Safe topology", () => {
     await expect(page.getByTestId("governance-voting-prompt")).toBeVisible();
   });
 
-  test("(B) the wallet with real voting power votes and the tally moves", async ({ page }) => {
+  test("(B) the wallet with real voting power votes and the tally moves", async ({
+    page,
+    browser,
+  }) => {
     const voter = endpoints.admin_addr as Address;
     await openGovernancePanel(page);
 
@@ -235,11 +238,13 @@ test.describe("suite-10: GovernancePanel E2E on the real Safe topology", () => {
         intervals: [2_000],
       })
       .toBe(Number(VOTING_POWER));
-    // A fresh page (a reload lands on the default tab): the panel shows the indexed tally.
-    const fresh = await page.context().newPage();
+    // A fresh context (a second page in this one reconnects the wallet): the panel shows the indexed tally.
+    const ctx = await browser.newContext();
+    const fresh = await ctx.newPage();
     await openGovernancePanel(fresh);
     await expect(fresh.getByTestId("governance-proposal-votes-for")).toHaveText(
       String(VOTING_POWER),
     );
+    await ctx.close();
   });
 });
