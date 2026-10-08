@@ -24,22 +24,11 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use rmpc_e2e::Fixture;
+use rmpc_e2e::{require_prereqs, Fixture};
 use serde_json::Value;
 
 /// USDC/share units (6 decimals) used throughout the suite.
 const ONE_SHARE: u128 = 1_000_000;
-
-fn skip_if_no_prereqs(test_name: &str) -> bool {
-    if !rmpc_e2e::prerequisites_available() {
-        eprintln!(
-            "[{test_name}] docker / forge / cast not on PATH; skipping. \
-             Install Docker + Foundry to run this test."
-        );
-        return true;
-    }
-    false
-}
 
 fn parse_json(stdout: &str, ctx: &str) -> Value {
     serde_json::from_str(stdout)
@@ -95,9 +84,7 @@ fn withdraw_args(shares: u128, vault_hex: &str, oid: &str) -> Vec<String> {
 /// preflight surfaces an `ErrRpcServer` or `ErrRpcDecode` refusal.
 #[test]
 fn withdraw_non_vault_source_refuses() {
-    if skip_if_no_prereqs("withdraw_non_vault_source_refuses") {
-        return;
-    }
+    require_prereqs("withdraw_non_vault_source_refuses");
     with_fixture(|fx| {
         // The gateway does not implement the share reads; calling them
         // causes the vault preflight to fail (RPC error or decode error),
@@ -135,9 +122,7 @@ fn withdraw_non_vault_source_refuses() {
 /// is "refused".
 #[test]
 fn withdraw_allowance_insufficient_refuses() {
-    if skip_if_no_prereqs("withdraw_allowance_insufficient_refuses") {
-        return;
-    }
+    require_prereqs("withdraw_allowance_insufficient_refuses");
     with_fixture(|fx| {
         let vault_hex = format!("{:#x}", fx.vault());
         let oid = order_id("allowance_insufficient_refuses");
@@ -179,9 +164,7 @@ fn withdraw_allowance_insufficient_refuses() {
 /// so the balance check fails.
 #[test]
 fn withdraw_balance_insufficient_refuses() {
-    if skip_if_no_prereqs("withdraw_balance_insufficient_refuses") {
-        return;
-    }
+    require_prereqs("withdraw_balance_insufficient_refuses");
     with_fixture(|fx| {
         // Approve shares from agent to gateway to pass the allowance check.
         // The vault token address is the vault itself (ERC-4626 shares).
@@ -239,9 +222,7 @@ fn withdraw_balance_insufficient_refuses() {
 /// must be refused by the gateway preflight (`ErrConfig`).
 #[test]
 fn withdraw_over_per_payment_cap_refuses() {
-    if skip_if_no_prereqs("withdraw_over_per_payment_cap_refuses") {
-        return;
-    }
+    require_prereqs("withdraw_over_per_payment_cap_refuses");
     with_fixture(|fx| {
         let vault_hex = format!("{:#x}", fx.vault());
         let oid = order_id("over_per_payment_cap_refuses");

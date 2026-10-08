@@ -18,7 +18,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use smoke_test::{locate_repo_root, prerequisites_available};
+use smoke_test::{locate_repo_root, require_prereqs};
 use test_utils::pick_free_port;
 
 // The Twin fork is ready in about a minute once the upstream answers. The dapp stack image build
@@ -29,10 +29,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[test]
 fn full_stack_cli_boots_and_tears_down() {
-    if !prerequisites_available() {
-        eprintln!("[cli_meta] anvil/bun/forge/cast not on PATH; skipping.");
-        return;
-    }
+    require_prereqs("full_stack_cli_boots_and_tears_down");
 
     let repo_root = locate_repo_root().expect("locate repo root");
     let log_dir = tempfile::tempdir().expect("create log dir");

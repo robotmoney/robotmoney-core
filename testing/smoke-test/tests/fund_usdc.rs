@@ -15,15 +15,7 @@
 //!   cargo test -p smoke-test --release --test fund_usdc -- --test-threads=1 --nocapture
 
 use alloy_primitives::{Address, U256};
-use smoke_test::{prerequisites_available, Fixture};
-
-fn skip_if_no_prereqs(name: &str) -> bool {
-    if !prerequisites_available() {
-        eprintln!("[{name}] anvil/bun/forge/cast not on PATH; skipping.");
-        return true;
-    }
-    false
-}
+use smoke_test::{require_prereqs, Fixture};
 
 fn fixture() -> &'static Fixture {
     use std::sync::OnceLock;
@@ -33,9 +25,7 @@ fn fixture() -> &'static Fixture {
 
 #[test]
 fn fund_usdc_increases_recipient_balance_by_the_exact_amount() {
-    if skip_if_no_prereqs("fund_usdc_increases_recipient_balance_by_the_exact_amount") {
-        return;
-    }
+    require_prereqs("fund_usdc_increases_recipient_balance_by_the_exact_amount");
     let fx = fixture();
     let recipient = fx.agent();
     let amount: u128 = 12_345_678; // 12.345678 USDC (6-dp)
@@ -57,9 +47,7 @@ fn fund_usdc_increases_recipient_balance_by_the_exact_amount() {
 
 #[test]
 fn funded_usdc_spends_through_the_real_token_transfer() {
-    if skip_if_no_prereqs("funded_usdc_spends_through_the_real_token_transfer") {
-        return;
-    }
+    require_prereqs("funded_usdc_spends_through_the_real_token_transfer");
     let fx = fixture();
     let to: Address = "0x00000000000000000000000000000000000000a1"
         .parse()
@@ -80,9 +68,7 @@ fn funded_usdc_spends_through_the_real_token_transfer() {
 
 #[test]
 fn fund_gas_sets_the_native_balance_exactly() {
-    if skip_if_no_prereqs("fund_gas_sets_the_native_balance_exactly") {
-        return;
-    }
+    require_prereqs("fund_gas_sets_the_native_balance_exactly");
     let fx = fixture();
     let who: Address = "0x00000000000000000000000000000000000000b2"
         .parse()
@@ -102,9 +88,7 @@ fn fund_gas_sets_the_native_balance_exactly() {
 
 #[test]
 fn chain_is_the_twin_fork_not_base_mainnet() {
-    if skip_if_no_prereqs("chain_is_the_twin_fork_not_base_mainnet") {
-        return;
-    }
+    require_prereqs("chain_is_the_twin_fork_not_base_mainnet");
     let fx = fixture();
     let id: String = rpc_call(fx.rpc_url(), "eth_chainId", serde_json::json!([]));
     assert_eq!(
@@ -130,9 +114,7 @@ fn chain_is_the_twin_fork_not_base_mainnet() {
 
 #[test]
 fn warp_moves_block_time_without_waiting() {
-    if skip_if_no_prereqs("warp_moves_block_time_without_waiting") {
-        return;
-    }
+    require_prereqs("warp_moves_block_time_without_waiting");
     let fx = fixture();
     let t0 = head_timestamp(fx);
     let started = std::time::Instant::now();

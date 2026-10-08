@@ -1760,6 +1760,18 @@ pub fn prerequisites_available() -> bool {
         .all(|t| which::which(t).is_ok())
 }
 
+/// The ONE prerequisite guard for every devnet test binary (issue 1436). Call it first in a
+/// test, before any fixture is built. A runner without the tools goes RED: a skip that returns
+/// early is recorded as PASSED by libtest and proves nothing. There is no opt-out. Do not add a
+/// local `skip_if_no_prereqs`; `.github/scripts/check_no_silent_prereq_skip.sh` fails on it.
+pub fn require_prereqs(test_name: &str) {
+    assert!(
+        prerequisites_available(),
+        "[{test_name}] anvil/bun/forge/cast not on PATH: this devnet test cannot be skipped. \
+         Install Foundry and bun to run it."
+    );
+}
+
 // -- Internal helpers -------------------------------------------------
 
 /// Parse a `0x`-prefixed (or bare) 32-byte hex private key into raw bytes.
