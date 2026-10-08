@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // The step script of the twin-publish action (core 1488, 1523), in TypeScript because no shell file may orchestrate the deploy driver.
 // Environment in: RPC_URL, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, GITHUB_WORKSPACE, GITHUB_ENV.
+// The order is publish, verify, govern, verify (issue 1667): the second verify runs only with both VERIFY_IN and GOVERN_IN.
 // Tests replace the tools with stubs: TWIN_CLI (default src/cli.ts), TWIN_REHEARSAL_CLI (src/rehearsal/cli.ts), TWIN_MERGE_SHEET (src/ci/merge-sheet.ts), CAST (cast).
 // Any tool that exits non-zero fails this script. The only Twin environment steps are fund-gas, fund-usdc and fund-rm-pool; the govern time warp is inside the CLI.
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -74,4 +75,10 @@ if (env("GOVERN_IN") === "true") {
   // Stage 13 (the basket unpauses through the real Safe and timelock). On the Twin fork the 48 hour wait is one time warp.
   stage("govern", join(rh, "govern-rows.txt"));
   exportVar("TWIN_GOVERN_ROWS", join(rh, "govern-rows.txt"));
+  // Issue 1667: verify, govern, verify. The second verify reads the post-govern state (the unpaused baskets). The Twin run only proves the scripts execute in this
+  // order: the 48 hour delay and the Safe signers are proven on 8453 through the real Safe.
+  if (env("VERIFY_IN") === "true") {
+    stage("verify", join(rh, "verify-labels-post-govern.txt"));
+    exportVar("TWIN_VERIFY_LABELS_POST_GOVERN", join(rh, "verify-labels-post-govern.txt"));
+  }
 }

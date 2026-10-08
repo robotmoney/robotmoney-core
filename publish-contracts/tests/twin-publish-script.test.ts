@@ -17,7 +17,8 @@ function stubs(): Record<string, string> {
       const { appendFileSync, writeFileSync } = require("node:fs");
       const a = process.argv.slice(2), verb = a[0];
       appendFileSync(process.env.STUB_LOG, "cli " + verb + "\\n");
-      if (process.env.STUB_FAIL === verb) { console.error("stub: " + verb + " failed"); process.exit(3); }
+      const n = require("node:fs").readFileSync(process.env.STUB_LOG, "utf8").split("\\n").filter((l) => l === "cli " + verb).length;
+      if (process.env.STUB_FAIL === verb || process.env.STUB_FAIL === verb + ":" + n) { console.error("stub: " + verb + " failed"); process.exit(3); }
       if (verb === "publish") {
         const v = (k) => a[a.indexOf(k) + 1];
         writeFileSync(v("--counts-dir") + "/" + v("--core-sha") + ".json", JSON.stringify({ deploySha: v("--core-sha"), measured: { chainId: 918453, at: "now" }, counts: JSON.parse(process.env.STUB_COUNTS) }));
@@ -44,25 +45,31 @@ function runScript(env: Record<string, string>) {
 }
 
 describe("twin-publish step script", () => {
-  test("a green run does publish, verify and govern in that order and writes a counts.json that passes the check", () => {
+  test("a green run does publish, verify, govern and verify again in that order and writes a counts.json that passes the check", () => {
     const r = runScript({});
     expect(r.err).toBe("");
     expect(r.code).toBe(0);
-    expect(r.verbs).toEqual(["publish", "verify", "govern"]);
+    expect(r.verbs).toEqual(["publish", "verify", "govern", "verify"]);
+    expect(existsSync(r.exported.TWIN_VERIFY_LABELS!)).toBe(true);
+    expect(existsSync(r.exported.TWIN_VERIFY_LABELS_POST_GOVERN!)).toBe(true);
     const j = JSON.parse(readFileSync(r.exported.TWIN_COUNTS_JSON!, "utf8"));
     expect(j.counts).toEqual(COUNTS);
     expect(j.deployerNonce).toBe(sum);
     expect(existsSync(r.exported.TWIN_GOVERN_ROWS!)).toBe(true);
   });
-  for (const stage of ["publish", "verify", "govern"]) {
-    test(`a failing ${stage} makes the script exit non-zero and later stages do not run`, () => {
-      const r = runScript({ STUB_FAIL: stage });
+  for (const [fail, verbs] of [["publish", ["publish"]], ["verify", ["publish", "verify"]], ["govern", ["publish", "verify", "govern"]], ["verify:2", ["publish", "verify", "govern", "verify"]]] as const) {
+    test(`a failing ${fail} makes the script exit non-zero and later stages do not run`, () => {
+      const r = runScript({ STUB_FAIL: fail });
       expect(r.code).not.toBe(0);
-      expect(r.err).toContain(`stub: ${stage} failed`);
-      const order = ["publish", "verify", "govern"];
-      expect(r.verbs).toEqual(order.slice(0, order.indexOf(stage) + 1));
+      expect(r.err).toContain(`stub: ${fail.split(":")[0]} failed`);
+      expect(r.verbs).toEqual([...verbs]);
     });
   }
+  test("the second verify only runs when govern ran: verify without govern is one verify", () => {
+    const r = runScript({ GOVERN_IN: "false" });
+    expect(r.verbs).toEqual(["publish", "verify"]);
+    expect(r.exported.TWIN_VERIFY_LABELS_POST_GOVERN).toBeUndefined();
+  });
   test("a deployer nonce that is not the sum of the counts fails the run", () => {
     const r = runScript({ STUB_NONCE: String(sum + 1) });
     expect(r.code).not.toBe(0);

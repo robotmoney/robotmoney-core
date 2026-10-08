@@ -6,6 +6,7 @@
 // deployer sets before the handover (the governance and basket vault stages), and the verify stage asserts them against the sheet.
 // The rows (GOVERN_ROWS):
 //   unpause-PROTO, unpause-AGENT, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting
+//   unpause-USDC                                on demand (issue 1667): reopens rmUSDC after pause-all paused it. Never part of a default run.
 //   update-delay, batch, cancel                 Twin-only demonstrations of the Safe tool. Refused with USAGE on 8453.
 // A run schedules every unpause the sheet asks for (GOVERN_UNPAUSE_VAULTS), waits ONE timelock delay, then executes each and reads depositsPaused() back.
 // An operation declared dependent on another carries that operation's id as the timelock predecessor and runs in the same resume (no second wait).
@@ -15,6 +16,10 @@
 // Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
 // timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the three unpauses). The first run schedules and exits
 // GOVERN_PENDING with the resume command, the resume after the delay executes and reads isReleased back. Its run-manifest key and salt are `release-receipt-<receiptId>`.
+// ROUNDS (issue 1667): every unpause row is a numbered round. The salt carries the round, so a vault that is paused again after an executed unpause
+// gets a NEW timelock operation id on its next `--row unpause-X` run, instead of re-hitting the operation that is already done. The earlier round's
+// record is kept in the run manifest under `<row>:round-<n>`. Only an explicit `--row` opens a new round: a default run that finds an executed row
+// whose vault reads paused again refuses (GOVERN) and names the row command, so a script can never reopen a vault the operators paused.
 // A basket the sheet does not list in GOVERN_UNPAUSE_VAULTS is recorded as skipped (it stays paused). This module decides nothing about pause semantics.
 // The wait is the timelock's real delay. On a Twin fork (chain id is not 8453 and the RPC answers anvil_nodeInfo) it runs by ONE time warp to one second
 // past the latest ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING once, with the ready time and the exact next
@@ -66,6 +71,13 @@ export const TWIN_ONLY_ROWS = ["update-delay", "batch", "cancel"] as const;
 /** The govern rows in run order: the unpauses, then the Twin-only demonstrations. `--row` takes the 1-based number or the name. */
 export const GOVERN_ROWS = [...UNPAUSE_ROWS, ...TWIN_ONLY_ROWS] as const;
 export type GovernRowName = (typeof GOVERN_ROWS)[number];
+/**
+ * The on-demand row that reopens rmUSDC (issue 1667). It is not in GOVERN_ROWS, so no default run, stage run or numbered `--row` reaches it: rmUSDC
+ * ships open and only pause-all pauses it. It is accepted by name on 8453 and on a Twin fork. It schedules unpauseDeposits() on rmUSDC and nothing else.
+ */
+export const UNPAUSE_USDC_ROW = "unpause-USDC";
+/** A row that runGovern can plan: the matrix rows and the on-demand rmUSDC unpause. */
+export type PlannedRow = GovernRowName | typeof UNPAUSE_USDC_ROW;
 export const governRowNames = (): readonly string[] => GOVERN_ROWS;
 export const isTwinOnlyRow = (row: string): boolean => (TWIN_ONLY_ROWS as readonly string[]).includes(row);
 /** The rows a stage run needs on a chain: the unpauses on 8453, every row elsewhere. */
@@ -101,7 +113,8 @@ export function buildReleaseCall(receipt: Address, receiptId: Hex): LabelledCall
 export const loadReceiptAddr = (ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): Address => readManifestField(ctx, manifestRef("ic-policy", "consensus_receipt")) as Address;
 
 /** `--row` value to a row name: a 1-based number or a name. Anything else is a usage error. */
-export function resolveGovernRow(row: string): GovernRowName {
+export function resolveGovernRow(row: string): PlannedRow {
+  if (row === UNPAUSE_USDC_ROW) return UNPAUSE_USDC_ROW;
   if (row === RECEIPT_ROW) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} is the on-demand receipt release: it needs --receipt-id 0x<bytes32>`);
   if (/^[0-9]+$/.test(row)) {
     const n = Number(row);
@@ -110,13 +123,14 @@ export function resolveGovernRow(row: string): GovernRowName {
     return name;
   }
   if ((GOVERN_ROWS as readonly string[]).includes(row)) return row as GovernRowName;
-  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${RECEIPT_ROW} --receipt-id 0x<bytes32>)`);
+  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${UNPAUSE_USDC_ROW}, ${RECEIPT_ROW} --receipt-id 0x<bytes32>)`);
 }
 
 /** The calls of one unpause row. Empty means the sheet does not ask for it (the basket stays paused): the row is skipped. */
-export function buildStepCalls(sheet: Sheet, a: GovernAddrs, row: GovernRowName): LabelledCall[] {
+export function buildStepCalls(sheet: Sheet, a: GovernAddrs, row: PlannedRow): LabelledCall[] {
   const calls: LabelledCall[] = [];
-  if (row.startsWith("unpause-")) {
+  if (row === UNPAUSE_USDC_ROW) calls.push({ label: `${VAULT_NAME.USDC}.unpauseDeposits`, target: a.vaults.USDC, data: encodeFunctionData({ abi: VAULT_ABI, functionName: "unpauseDeposits" }) });
+  else if (row.startsWith("unpause-")) {
     const k = row.slice("unpause-".length) as VaultKey;
     if (sheet.govern.unpauseVaults.includes(k)) calls.push({ label: `${VAULT_NAME[k]}.unpauseDeposits`, target: a.vaults[k], data: encodeFunctionData({ abi: VAULT_ABI, functionName: "unpauseDeposits" }) });
   }
@@ -124,6 +138,9 @@ export function buildStepCalls(sheet: Sheet, a: GovernAddrs, row: GovernRowName)
 }
 
 export const governSalt = (coreSha: string, chainId: number, label: string): Hex => keccak256(toBytes(`publish-contracts:govern:${coreSha}:${chainId}:${label}`));
+
+/** The salt label and manifest archive key of round `round` of an unpause row. Round 1 and round 2 are two different timelock operations. */
+export const roundKey = (row: string, round: number): string => `${row}:round-${round}`;
 
 // ---- Safe API (injectable) ------------------------------------------------------------------------------------------------
 
@@ -182,7 +199,7 @@ export interface TwinCall { label: string; target: Address; data: Hex }
 
 interface PhaseRecord { tx_hash?: string; safe_tx_hash?: string; status?: number; at: string; operation_id?: string; ready_at?: string; note?: string; [k: string]: unknown }
 /** What the run manifest keeps per row. A row is complete when it is skipped, executed or (for cancel) cancelled. */
-export interface RowRecord { skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
+export interface RowRecord { round?: number; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
 type GovernState = Record<string, RowRecord>;
 
 const rowComplete = (r: RowRecord | undefined): boolean => !!r && !!(r.skipped || r.executed || r.cancelled);
@@ -275,7 +292,7 @@ const reader = (handle: SafeHandle): Rd => (address, abi, functionName, args = [
   handle.client.readContract({ address, abi: abi as never, functionName: functionName as never, args: args as never }) as Promise<never>;
 
 /** Read-back of one unpause row: the problems found on chain after the round executed. An empty list is a pass. */
-export async function readBackStep(handle: SafeHandle, a: GovernAddrs, row: GovernRowName): Promise<string[]> {
+export async function readBackStep(handle: SafeHandle, a: GovernAddrs, row: PlannedRow): Promise<string[]> {
   const bad: string[] = [];
   const rd = reader(handle);
   if (row.startsWith("unpause-")) {
@@ -308,7 +325,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   if (o.receiptId !== undefined && o.row !== RECEIPT_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only`);
   if (o.call && o.receiptId !== undefined) throw new PublishError("USAGE", "a generic timelock call and --receipt-id are mutually exclusive");
   const releasing = o.row === RECEIPT_ROW;
-  const selected: GovernRowName | undefined = o.row === undefined || releasing ? undefined : resolveGovernRow(o.row);
+  const selected: PlannedRow | undefined = o.row === undefined || releasing ? undefined : resolveGovernRow(o.row);
   if (selected !== undefined && isTwinOnlyRow(selected) && ctx.chainId === BASE_CHAIN_ID) {
     throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the basket unpause; the one other mainnet action is --row ${RECEIPT_ROW})`);
   }
@@ -330,8 +347,11 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     if (di < 0 || pi < 0 || pi >= di) throw new PublishError("USAGE", `row ${dep} cannot follow ${pre}: both must be govern rows and the predecessor comes first`, { dep, pre });
   }
 
+  /** The salt label of a row's current round: round 1 until the row's record says otherwise. */
+  const labelOf = (name: string): string => roundKey(name, state[name]?.round ?? 1);
+
   /** The plan of a row, or a reason to skip it. A declared predecessor must be a row of this run with an operation id. */
-  async function plan(name: GovernRowName): Promise<RoundPlan | string> {
+  async function plan(name: PlannedRow): Promise<RoundPlan | string> {
     const pre = dependsOn[name];
     let predecessor: Hex | undefined;
     if (pre !== undefined) {
@@ -386,13 +406,13 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     }
     const calls = buildStepCalls(sheet, a, name);
     if (calls.length === 0) return `${name.slice("unpause-".length)} is not in GOVERN_UNPAUSE_VAULTS: it stays paused`;
-    return orderedPlan(calls, name, () => readBackStep(handle, a, name), `${calls.length} call(s)`);
+    return orderedPlan(calls, labelOf(name), () => readBackStep(handle, a, name), `${calls.length} call(s)`);
   }
 
   /** Phase 1 of a round: schedule (or, for an operation already on the timelock, adopt it). `emitAs` is the `row` of the printed lines. */
   async function schedulePhase(name: string, p: RoundPlan, emitAs: string = name): Promise<void> {
     opIds[name] = p.id;
-    const rec: RowRecord = state[name] ?? {};
+    const rec: RowRecord = state[name] ?? { round: 1 };
     if (rec.scheduled) {
       ctx.log.log("info", "govern.phase_skipped", { row: name, phase: "scheduled" });
       emitPhase(o, emitAs, "scheduled", rec.scheduled);
@@ -471,15 +491,27 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
    * The unpause rows as one set: every operation scheduled in one sitting (each its own timelock operation and its own Safe transaction), ONE wait
    * for the latest ready time, then each executed in order and read back. A resume finds the schedules recorded and goes straight to the wait.
    */
-  async function runSet(names: readonly GovernRowName[], resumeRow?: string): Promise<void> {
-    const live: { name: GovernRowName; p: RoundPlan }[] = [];
+  async function runSet(names: readonly PlannedRow[], resumeRow?: string): Promise<void> {
+    const live: { name: PlannedRow; p: RoundPlan }[] = [];
+    const pausedNow = async (name: PlannedRow): Promise<boolean> => reader(handle)<boolean>(a.vaults[name.slice("unpause-".length) as VaultKey], VAULT_ABI, "depositsPaused");
     for (const name of names) {
       if (rowComplete(state[name])) {
-        ctx.log.log("info", "govern.row_complete", { row: name });
-        const doneId = state[name]!.scheduled?.operation_id;
-        if (doneId) opIds[name] = doneId as Hex; // a dependent row of this run still needs its predecessor's id
-        reprint(name);
-        continue;
+        const prev = state[name]!;
+        // An executed round whose vault reads paused again (pause-all ran after it) needs a NEW round, and only a named row opens one.
+        if (prev.executed && (await pausedNow(name))) {
+          if (selected !== name) throw new PublishError("GOVERN", `govern row ${name} executed in round ${prev.round ?? 1}, but ${VAULT_NAME[name.slice("unpause-".length) as VaultKey]} reads depositsPaused true again. A default run never reopens a paused vault: to open round ${(prev.round ?? 1) + 1} run ${resumeCommand(ctx, name)}`, { row: name, round: prev.round ?? 1, next_command: resumeCommand(ctx, name) });
+          const done = prev.round ?? 1;
+          state[roundKey(name, done)] = prev;
+          state[name] = { round: done + 1 };
+          save();
+          ctx.log.log("info", "govern.round_opened", { row: name, round: done + 1 });
+        } else {
+          ctx.log.log("info", "govern.row_complete", { row: name });
+          const doneId = prev.scheduled?.operation_id;
+          if (doneId) opIds[name] = doneId as Hex; // a dependent row of this run still needs its predecessor's id
+          reprint(name);
+          continue;
+        }
       }
       const p = await plan(name);
       if (typeof p === "string") {
@@ -488,6 +520,10 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         skipped.push(name);
         ctx.log.log("info", "govern.row_skipped", { row: name, reason: p });
         continue;
+      }
+      // Nothing of this round is on the timelock yet: refuse to schedule an unpause for a vault that is already open (nothing to reopen).
+      if (state[name]?.scheduled === undefined && !(await api.operationState(handle, a.timelock, p.id)).exists && !(await pausedNow(name))) {
+        throw new PublishError("GOVERN", `govern row ${name}: ${VAULT_NAME[name.slice("unpause-".length) as VaultKey]} already reads depositsPaused false: there is nothing to unpause, so no round is scheduled`, { row: name });
       }
       await schedulePhase(name, p);
       live.push({ name, p });
@@ -561,13 +597,13 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   }
 
   // The unpauses are one set: they have no order among themselves. A single --row unpause-X is the set of one.
-  const wanted = selected === undefined ? stageRows(ctx.chainId) : [selected];
+  const wanted: readonly PlannedRow[] = selected === undefined ? stageRows(ctx.chainId) : [selected];
   const unpauses = wanted.filter((n) => !isTwinOnlyRow(n));
   if (unpauses.length) await runSet(unpauses, selected);
   // The Twin-only demonstrations run one round at a time, in order, after every unpause is complete.
   for (const name of wanted.filter((n) => isTwinOnlyRow(n))) {
     if (rowComplete(state[name])) { ctx.log.log("info", "govern.row_complete", { row: name }); reprint(name); continue; }
-    const idx = GOVERN_ROWS.indexOf(name);
+    const idx = GOVERN_ROWS.indexOf(name as GovernRowName);
     const open = GOVERN_ROWS.slice(0, idx).find((n) => !rowComplete(state[n]));
     if (open) throw new PublishError("GOVERN", `govern row ${name} cannot start: row ${open} is not complete. The Twin-only rows run one round at a time, after the unpauses. Run ${open} first.`, { row: name, blocked_by: open });
     const p = await plan(name);

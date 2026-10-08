@@ -57,6 +57,8 @@ export const USAGE = `publish contracts
                      Rows: unpause-PROTO, unpause-AGENT, unpause-RWA (the only mainnet operation after the handover), then the Twin-only
                      demonstrations update-delay, batch, cancel (refused with USAGE on 8453). Without --row, every unpause the sheet asks for is
                      scheduled in one sitting, then one wait, then executed (on 8453 only the unpauses run).
+                     On demand: --row unpause-USDC reopens rmUSDC after pause-all paused it (never part of a default run). Naming an unpause row whose
+                     vault was paused again after an executed round opens a new numbered round: a new timelock operation, a new 48 hour delay.
                      On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) once, with the ready time and the command to run again.
                      On demand, outside the ordered rows: --row release-receipt --receipt-id 0x<bytes32> releases one recorded consensus receipt
                      (ConsensusRecommendationReceipt.releaseReceipt) as its own Safe -> Timelock round, on 918453 and on 8453 (post-launch, never part of stage 13:
@@ -99,6 +101,8 @@ export interface CliDeps {
   prove?: Partial<ProveOpts>;
   /** Test seam: the verifier behind the verify stage (default: the real one, labels on stdout). */
   verify?: Partial<VerifyDeps>;
+  /** Test seam: the pause-all behind the automatic pause on a failed verify and the pause-all verb (default: the real one). */
+  pauseAll?: typeof pauseAll;
   /** Test seam: the read-only chain reader behind the config-check that runs before each vault stage. */
   chainReader?: RunContext["chainReader"];
   /** Test seam: core's own config-check (bun scripts/ci/config-check.ts, read-only against live Base). Default: the real spawn. */
@@ -227,13 +231,13 @@ export function defaultCountsDir(cwd: string): string {
  * Core 1619: stage 12 (verify) or the postflight failed. Pause deposits on all four vaults, then hand back the error the run fails with:
  * the original failure when every vault reads paused, else a PAUSE error that names the vaults still open.
  */
-async function pauseOnFailure(ctx: RunContext, trigger: PauseTrigger, cause: unknown, emergency: () => PublishSigner | undefined): Promise<unknown> {
+async function pauseOnFailure(ctx: RunContext, trigger: PauseTrigger, cause: unknown, emergency: () => PublishSigner | undefined, pause: typeof pauseAll = pauseAll): Promise<unknown> {
   const reason = (cause as Error).message ?? String(cause);
   ctx.log.log("error", "pause_all.auto", { trigger, reason });
   try {
     const manifest = loadRunManifest(ctx.evidenceDir);
     if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}`);
-    const report = await pauseAll(ctx, manifest, { trigger, reason, emergencySigner: emergency() });
+    const report = await pause(ctx, manifest, { trigger, reason, emergencySigner: emergency() });
     return report.allPaused ? cause : pauseIncomplete(report, `${reason}. `);
   } catch (e) {
     if (isPublishError(e, "PAUSE")) return e;
@@ -304,7 +308,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       const ctx = buildCtx(undefined, false);
       const manifest = loadRunManifest(ctx.evidenceDir);
       if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}: pause-all reads it to know whether the handover has begun. Pass the same --evidence directory as the run.`);
-      const report = await pauseAll(ctx, manifest, { trigger: "manual", reason: "pause-all was run by hand", emergencySigner: emergencySigner() });
+      const report = await (deps.pauseAll ?? pauseAll)(ctx, manifest, { trigger: "manual", reason: "pause-all was run by hand", emergencySigner: emergencySigner() });
       if (!report.allPaused) throw pauseIncomplete(report);
       log.log("info", "run.done", { ran: ["pause-all"], skipped: [] });
       return 0;
@@ -351,7 +355,11 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       result = await runStages(ctx, names, {
         prove: async (c, row, m) => { await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), ...(deps.prove ?? {}) }); },
         verify: async (c, row, m) => {
-          try { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); } catch (e) { postflight = "verify"; throw e; }
+          try { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); } catch (e) {
+            // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused.
+            if (!isPublishError(e, "GOVERN_PENDING")) postflight = "verify";
+            throw e;
+          }
         },
         govern: async (c, row, m) => {
           await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
@@ -359,7 +367,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }
     } catch (e) {
-      if (postflight && !a.dryRun) throw await pauseOnFailure(ctx, postflight, e, emergencySigner);
+      if (postflight && !a.dryRun) throw await pauseOnFailure(ctx, postflight, e, emergencySigner, deps.pauseAll);
       throw e;
     }
     if (a.dryRun && counts.mode === "dry-run-measure") log.log("warn", "dry_run.counts_measured", { counts: ctx.dryCounts, note: "measured by the dry run, not frozen: nothing was written" });
