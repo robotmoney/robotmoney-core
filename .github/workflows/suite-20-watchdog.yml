@@ -170,22 +170,42 @@ jobs:
         run: cargo test --no-run
 
       - name: Alert webhook integration test
-        working-directory: services/watchdog
-        run: cargo test --test alert_webhook -- --nocapture
+        env:
+          # Floor = the executed count in the last green dev run (7).
+          CARGO_TEST_MIN_EXECUTED: 7
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p watchdog \
+            --test alert_webhook -- --nocapture
 
       - name: Threshold breach integration test
-        working-directory: services/watchdog
-        run: cargo test --test threshold_breach -- --nocapture
+        env:
+          # Floor = the executed count in the last green dev run (4).
+          CARGO_TEST_MIN_EXECUTED: 4
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p watchdog \
+            --test threshold_breach -- --nocapture
 
       # Two more targets that landed on fusion/deployment-workflow with no job
       # naming them — same cause as the indexer pair above.
       - name: Governance quorum RPC integration test
-        working-directory: services/watchdog
-        run: cargo test --test governance_quorum_rpc -- --nocapture
+        env:
+          # Floor = the executed count in the last green dev run (4).
+          CARGO_TEST_MIN_EXECUTED: 4
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p watchdog \
+            --test governance_quorum_rpc -- --nocapture
 
       - name: Watchdog profiles integration test
-        working-directory: services/watchdog
-        run: cargo test --test profiles -- --nocapture
+        env:
+          # Floor = the executed count in the last green dev run (5).
+          CARGO_TEST_MIN_EXECUTED: 5
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p watchdog \
+            --test profiles -- --nocapture
 
       # THE THIRD WATCHDOG TARGET NOTHING EXECUTED (issue #1282)
       # tests/cursor_and_volume.rs is 569 lines and the largest test file in the
