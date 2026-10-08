@@ -286,6 +286,46 @@ impl TwinFork {
         Ok(())
     }
 
+    /// Set the ERC-20 balance of `holder` on `token` to `units`, for a plain OpenZeppelin-layout token whose
+    /// `_balances` mapping sits at storage slot 0 (the live RM token). The slot is `keccak256(holder . 0)`,
+    /// derived with `cast index`. Verifies with `balanceOf`, so a token with another layout fails loudly.
+    /// Total supply is not changed. Like `set_usdc_balance`, this is a Twin chain environment step.
+    pub fn set_slot0_erc20_balance(
+        &self,
+        token: &str,
+        holder: &str,
+        units: u128,
+    ) -> Result<(), HarnessError> {
+        let idx = Command::new("cast")
+            .args(["index", "address", holder, "0"])
+            .output()?;
+        if !idx.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast index failed: {}",
+                String::from_utf8_lossy(&idx.stderr)
+            )));
+        }
+        let slot = String::from_utf8_lossy(&idx.stdout).trim().to_string();
+        let word = format!("0x{units:064x}");
+        self.rpc("anvil_setStorageAt", serde_json::json!([token, slot, word]))?;
+        let data = format!(
+            "0x70a08231{:0>64}",
+            holder.trim_start_matches("0x").to_lowercase()
+        );
+        let v = self.rpc(
+            "eth_call",
+            serde_json::json!([{"to": token, "data": data}, "latest"]),
+        )?;
+        let got = U256::from_str_radix(v.as_str().unwrap_or("0x0").trim_start_matches("0x"), 16)
+            .map_err(|e| HarnessError::other(format!("balanceOf parse: {e}")))?;
+        if got != U256::from(units) {
+            return Err(HarnessError::other(format!(
+                "{token} balanceOf({holder}) is {got}, wanted {units}: storage slot 0 is not its balances mapping"
+            )));
+        }
+        Ok(())
+    }
+
     /// USDC balance of `address` by a plain `eth_call` to the real token.
     pub fn usdc_balance(&self, address: &str) -> Result<u128, HarnessError> {
         let v = self.rpc(
