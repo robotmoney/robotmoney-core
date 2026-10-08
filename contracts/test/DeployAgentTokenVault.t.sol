@@ -26,7 +26,8 @@ contract AgentDeployHarness is DeployAgentTokenVault {
     }
 }
 
-/// @notice rmAGENT script: empty, paused and registered at launch. The same script adds an asset
+/// @notice rmAGENT script: paused and registered at launch, holding RM on the shipped config
+///         (an empty list is also supported). The same script adds an asset
 ///         from one config entry (adapter deployed, code hash allowed, `addAsset` called).
 contract DeployAgentTokenVaultTest is BasketDeployFixture {
     using stdJson for string;

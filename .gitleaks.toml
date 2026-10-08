@@ -42,8 +42,9 @@ regexes = [
   # addresses. Capped at 40 so 64-hex private keys are NOT covered.
   '''\b0x[a-fA-F0-9]{38,40}\b''',
   # keccak256 code hash of the live ROBOTMONEY (RM) token, a public on-chain value, never a
-  # secret. It was committed in config/agent-token-shortlist.json (commit b4e6476d, since
-  # reverted) and gitleaks scans the whole PR commit range. Delete this entry with the history.
+  # secret. It is committed in config/agent-token-shortlist.json (first added in commit
+  # b4e6476d) and gitleaks scans the whole PR commit range. Delete this entry only once no
+  # scanned commit carries the hash.
   '''0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6''',
 ]
 
