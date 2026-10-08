@@ -106,4 +106,14 @@ describe("sheet json", () => {
     expect(s.vaults.rmUSDC.seed).toBe(1000000n);
     expect(s.vaults.rmUSDC.assets).toEqual([]);
   });
+
+  test("converts the basket guard and pool floor to bigint and leaves rmUSDC without them (issue 1666)", () => {
+    const s = parseSheetJson(JSON.stringify({ chainId: 1, vaults: {
+      rmUSDC: { tvlCap: "5", perDepositCap: "2", exitFeeBps: "10" },
+      rmPROTO: { tvlCap: "5", perDepositCap: "2", exitFeeBps: "10", navDeviationBps: "100", minPoolLiquidity: "1000000000000" },
+    } }));
+    expect(s.vaults.rmPROTO.navDeviationBps).toBe(100n);
+    expect(s.vaults.rmPROTO.minPoolLiquidity).toBe(1000000000000n);
+    expect(s.vaults.rmUSDC.navDeviationBps).toBeUndefined();
+  });
 });

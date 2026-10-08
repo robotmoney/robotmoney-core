@@ -63,6 +63,21 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             "the verifier output lacks the label '{label}'"
         );
     }
+    // Issue 1666: every basket ships with a nonzero NAV deviation guard from the sheet and sits on pools at or above the sheet liquidity
+    // floor. The verifier read both back from the chain; `verify()` above would have failed on any of these labels failing.
+    for vault in ["rmPROTO", "rmAGENT", "rmRWA"] {
+        for what in [
+            "navDeviationGuardBps equals sheet",
+            "navDeviationGuardBps above zero",
+            "pool liquidity meets the sheet floor",
+        ] {
+            let label = format!("vault[{vault}]: {what}");
+            assert!(
+                verified.lines().any(|l| l.trim() == label),
+                "the verifier output lacks the label '{label}'"
+            );
+        }
+    }
     let run_manifest_path = dir
         .parent()
         .unwrap_or(dir)

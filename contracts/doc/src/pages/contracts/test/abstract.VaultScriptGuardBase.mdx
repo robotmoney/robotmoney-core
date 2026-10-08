@@ -5,7 +5,7 @@ description: "Shared guard and sheet-input cases for the three basket vault scri
 
 # VaultScriptGuardBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/VaultScriptGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/VaultScriptGuards.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -300,6 +300,38 @@ function test_deploy_perDepositAboveTvlReverts() public;
 
 ```solidity
 function test_deploy_zeroFeeRecipientReverts() public;
+```
+
+<a id="test_sheet_missingnavdeviationbpsreverts"></a>
+
+### test_sheet_missingNavDeviationBpsReverts
+
+```solidity
+function test_sheet_missingNavDeviationBpsReverts() public;
+```
+
+<a id="test_sheet_missingminpoolliquidityreverts"></a>
+
+### test_sheet_missingMinPoolLiquidityReverts
+
+```solidity
+function test_sheet_missingMinPoolLiquidityReverts() public;
+```
+
+<a id="test_deploy_zeronavdeviationbpsreverts"></a>
+
+### test_deploy_zeroNavDeviationBpsReverts
+
+```solidity
+function test_deploy_zeroNavDeviationBpsReverts() public;
+```
+
+<a id="test_deploy_navdeviationbpsaboveceilingreverts"></a>
+
+### test_deploy_navDeviationBpsAboveCeilingReverts
+
+```solidity
+function test_deploy_navDeviationBpsAboveCeilingReverts() public;
 ```
 
 <a id="_emptyjson-string"></a>

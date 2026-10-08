@@ -37,7 +37,17 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         uint256 perDepositCap;
         uint256 exitFeeBps;
         address feeRecipient;
+        /// @dev ORA-4 deposit guard threshold in basis points, 1..MAX_NAV_DEVIATION_BPS. Never 0: 0 disables the guard (issue 1666).
+        uint256 navDeviationGuardBps;
+        /// @dev Floor for `IUniswapV3Pool.liquidity()` of every configured pool. That is the pool's in-range liquidity L, a raw uint128 of
+        ///      sqrt(token0 * token1) units, NOT a USDC amount (issue 1666). Must be above 0.
+        uint256 minPoolLiquidity;
     }
+
+    /// @notice Hard ceiling the vault setter enforces (BasketVault.MAX_NAV_DEVIATION_BPS, 20%). Mirrored here so a sheet typo fails
+    ///         before any deploy transaction. A percent typed as bps (5 meaning 5 percent) is in range but sets a 5 bps guard, which
+    ///         fails closed (deposits revert on small drift), never open. A value above 2000 or 0 is refused.
+    uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000;
 
     /// @notice One configured basket row, read from a config file.
     struct AssetCfg {
@@ -99,6 +109,8 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         p.perDepositCap = _envUintRequired(string.concat(prefix, "PER_DEPOSIT_CAP"));
         p.exitFeeBps = _envUintRequired(string.concat(prefix, "EXIT_FEE_BPS"));
         p.feeRecipient = _envAddressRequired(string.concat(prefix, "FEE_RECIPIENT"));
+        p.navDeviationGuardBps = _envUintRequired(string.concat(prefix, "NAV_DEVIATION_BPS"));
+        p.minPoolLiquidity = _envUintRequired(string.concat(prefix, "MIN_POOL_LIQUIDITY"));
     }
 
     /// @dev The broadcast entrypoint shared by the three scripts. The chain guard is the first
@@ -223,6 +235,12 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         require(p.tvlCap != 0, "TVL_CAP missing from the sheet");
         require(p.perDepositCap != 0, "PER_DEPOSIT_CAP missing from the sheet");
         require(p.perDepositCap <= p.tvlCap, "PER_DEPOSIT_CAP exceeds TVL_CAP");
+        require(
+            p.navDeviationGuardBps != 0 && p.navDeviationGuardBps <= MAX_NAV_DEVIATION_BPS,
+            "NAV_DEVIATION_BPS must be 1..2000"
+        );
+        require(p.minPoolLiquidity != 0, "MIN_POOL_LIQUIDITY missing from the sheet");
+        require(p.minPoolLiquidity <= type(uint128).max, "MIN_POOL_LIQUIDITY exceeds uint128");
         require(cfg.swapRouter02 != address(0), "config swapRouter02 unset");
         require(p.swapRouter == cfg.swapRouter02, "SWAP_ROUTER is not SwapRouter02");
 
@@ -232,6 +250,14 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         d.tokens = new address[](cfg.assets.length);
 
         _addAssets(vault, p, cfg, d);
+
+        // Issue 1666: the ORA-4 deposit guard is nonzero before the timelock handover, on every chain. The vault default is 0, which
+        // disables the check. The vault is always new here (no adopt path), so the setter always runs. Read back to fail on a no-op.
+        vault.setNavDeviationGuardBps(p.navDeviationGuardBps);
+        require(
+            vault.navDeviationGuardBps() == p.navDeviationGuardBps,
+            "navDeviationGuardBps readback differs from the sheet"
+        );
 
         // Deployed paused. The govern stage unpauses after the checks pass.
         vault.pauseDeposits();
@@ -275,19 +301,24 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         }
         for (uint256 i = 0; i < cfg.assets.length; i++) {
             AssetCfg memory a = cfg.assets[i];
-            _checkPool(a);
+            _checkPool(a, p.minPoolLiquidity);
             vault.addAsset(a.token, a.pool, a.poolFee, adapter, BasketVault.Venue.V3);
             d.tokens[i] = a.token;
         }
     }
 
-    /// @dev Config check on chain: pool code present and live fee equals config. Cardinality
-    ///      and liquidity floors are enforced by `addAsset` itself.
-    function _checkPool(AssetCfg memory a) internal view {
+    /// @dev Config check on chain: pool code present, live fee equals config and in-range liquidity
+    ///      (`IUniswapV3Pool.liquidity()`, a uint128 L, not a USDC amount) is at least the sheet floor.
+    ///      The cardinality floor and the vault's dust `MIN_POOL_LIQUIDITY` are enforced by `addAsset` itself.
+    function _checkPool(AssetCfg memory a, uint256 minPoolLiquidity) internal view {
         require(a.pool.code.length != 0, string.concat(a.symbol, ": pool has no code"));
         require(
             IUniswapV3Pool(a.pool).fee() == a.poolFee,
             string.concat(a.symbol, ": pool fee does not equal config")
+        );
+        require(
+            IUniswapV3Pool(a.pool).liquidity() >= minPoolLiquidity,
+            string.concat(a.symbol, ": pool liquidity is below MIN_POOL_LIQUIDITY")
         );
     }
 

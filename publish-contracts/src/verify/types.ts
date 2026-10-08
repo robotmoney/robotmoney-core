@@ -36,6 +36,10 @@ export interface VaultSheet {
   tvlCap: bigint;
   perDepositCap: bigint;
   exitFeeBps: bigint;
+  /** Baskets only (issue 1666): the ORA-4 guard the deployer set, in bps. Required for kind basket and agent: a missing value fails the label. */
+  navDeviationBps?: bigint;
+  /** Baskets only (issue 1666): floor for `liquidity()` (uint128 L, not USDC) of every asset pool. Required for kind basket and agent. */
+  minPoolLiquidity?: bigint;
   feeRecipient: Address;
   /** True for vaults that ship paused (rmAGENT and the basket vaults until stage 13). */
   expectPaused: boolean;

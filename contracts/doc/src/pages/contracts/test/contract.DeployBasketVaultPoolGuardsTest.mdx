@@ -1,18 +1,26 @@
 ---
 title: "DeployBasketVaultPoolGuardsTest"
-description: "Core 1490 and 1492: the rmPROTO and rmRWA scripts refuse an asset whose pool has zero liquidity, too little observation history or no code. These are the same three live-pool facts the config-check script rejects, so a pool shaped like wSOL (empty pool) cannot reach a deployed vault through either script."
+description: "Core 1490 and 1492: the rmPROTO and rmRWA scripts refuse an asset whose pool has zero liquidity (the sheet floor catches it before `addAsset`), too little observation history or no code. These are the same three live-pool facts the config-check script rejects, so a pool shaped like wSOL (empty pool) cannot reach a deployed vault through either script."
 ---
 
 # DeployBasketVaultPoolGuardsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/test/DeployBasketVaultPoolGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/DeployBasketVaultPoolGuards.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
 Core 1490 and 1492: the rmPROTO and rmRWA scripts refuse an asset whose pool has zero
-liquidity, too little observation history or no code. These are the same three
+liquidity (the sheet floor catches it before `addAsset`), too little observation history or no code. These are the same three
 live-pool facts the config-check script rejects, so a pool shaped like wSOL
 (empty pool) cannot reach a deployed vault through either script.
+
+## Constants
+
+### FLOOR
+
+```solidity
+uint128 internal constant FLOOR = 5e12;
+```
 
 ## State Variables
 
@@ -142,5 +150,71 @@ above are caused by the pool facts and not by the harness.
 
 ```solidity
 function test_proto_controlUsablePoolDeploys() public;
+```
+
+<a id="_poolwithliquidity-uint128"></a>
+
+### _poolWithLiquidity
+
+```solidity
+function _poolWithLiquidity(uint128 liq) internal returns (string memory json);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| liq | `uint128` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+<a id="_paramswithfloor"></a>
+
+### _paramsWithFloor
+
+```solidity
+function _paramsWithFloor() internal view returns (BasketVaultDeployBase.Params memory p);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `BasketVaultDeployBase.Params` |  |
+
+<a id="test_proto_revertswhenpoolliquidityisbelowthesheetfloor"></a>
+
+### test_proto_revertsWhenPoolLiquidityIsBelowTheSheetFloor
+
+```solidity
+function test_proto_revertsWhenPoolLiquidityIsBelowTheSheetFloor() public;
+```
+
+<a id="test_proto_succeedswhenpoolliquidityequalsthesheetfloor"></a>
+
+### test_proto_succeedsWhenPoolLiquidityEqualsTheSheetFloor
+
+```solidity
+function test_proto_succeedsWhenPoolLiquidityEqualsTheSheetFloor() public;
+```
+
+<a id="test_rwa_revertswhenpoolliquidityisbelowthesheetfloor"></a>
+
+### test_rwa_revertsWhenPoolLiquidityIsBelowTheSheetFloor
+
+```solidity
+function test_rwa_revertsWhenPoolLiquidityIsBelowTheSheetFloor() public;
+```
+
+<a id="test_rwa_succeedswhenpoolliquidityequalsthesheetfloor"></a>
+
+### test_rwa_succeedsWhenPoolLiquidityEqualsTheSheetFloor
+
+```solidity
+function test_rwa_succeedsWhenPoolLiquidityEqualsTheSheetFloor() public;
 ```
 

@@ -261,7 +261,7 @@ async function vaultChecks(
   });
   if (!vs) {
     for (const l of ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
-    if (v.kind !== "usdc") c.fail(`${p}: asset config equals sheet`, "no sheet entry for this vault");
+    if (v.kind !== "usdc") for (const l of ["asset config equals sheet", ...BASKET_GUARD_LABELS]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
     else { for (const l of ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault"); }
     return;
   }
@@ -284,9 +284,39 @@ async function vaultChecks(
     await seedShareChecks(c, chain, v, D, vs.seedShareReceiver);
   } else {
     await c.run(`${p}: asset config equals sheet`, async () => assetReadBack(chain, a, vs.assets));
+    await basketGuardChecks(c, chain, a, p, vs);
     // rmAGENT launches holding RM only (core 1554). "asset config equals sheet" ties the chain to the sheet, so this ties the sheet to RM.
     if (v.kind === "agent") await c.run(`${p}: holds RM as its one asset`, async () => ({ ok: vs.assets.length === 1 && lc(vs.assets[0]!.token) === lc(RM_TOKEN), detail: `sheet lists [${vs.assets.map((a) => a.token).join(", ")}], expected only ${RM_TOKEN}` }));
   }
+}
+
+/** The labels basketGuardChecks pushes (a vault with no sheet entry fails them by name). */
+const BASKET_GUARD_LABELS = ["navDeviationGuardBps equals sheet", "navDeviationGuardBps above zero", "pool liquidity meets the sheet floor"];
+
+/**
+ * Issue 1666. A basket ships with the ORA-4 deposit guard set (the vault default 0 disables it) and only on pools whose in-range
+ * liquidity meets the sheet floor. Both are read from the chain: the guard from the vault, the liquidity from each asset pool
+ * (`IUniswapV3Pool.liquidity()`, a uint128 L). The guard is checked against the sheet AND against zero: a sheet that says 0 cannot pass.
+ */
+async function basketGuardChecks(c: Collector, chain: ChainReader, vault: Address, p: string, vs: VaultSheet): Promise<void> {
+  const read = () => chain.read(vault, "function navDeviationGuardBps() view returns (uint256)");
+  if (vs.navDeviationBps === undefined) c.fail(`${p}: ${BASKET_GUARD_LABELS[0]}`, "the sheet has no navDeviationBps for this vault");
+  else await c.runEq(`${p}: ${BASKET_GUARD_LABELS[0]}`, read, vs.navDeviationBps);
+  await c.run(`${p}: ${BASKET_GUARD_LABELS[1]}`, async () => {
+    const got = BigInt((await read()) as bigint);
+    return { ok: got > 0n, detail: `navDeviationGuardBps ${got}` };
+  });
+  await c.run(`${p}: ${BASKET_GUARD_LABELS[2]}`, async () => {
+    const floor = vs.minPoolLiquidity;
+    if (floor === undefined || floor <= 0n) return { ok: false, detail: `the sheet has no pool liquidity floor above zero for this vault (${String(floor)})` };
+    if (vs.assets.length === 0) return { ok: false, detail: "the sheet lists no asset pool to check" };
+    const short: string[] = [];
+    for (const asset of vs.assets) {
+      const liq = BigInt((await chain.read(asset.pool, "function liquidity() view returns (uint128)")) as bigint);
+      if (liq < floor) short.push(`${asset.pool} has ${liq}`);
+    }
+    return { ok: short.length === 0, detail: short.length ? `below the floor ${floor}: ${short.join(", ")}` : `${vs.assets.length} pools at or above ${floor}` };
+  });
 }
 
 /** rmUSDC seed shares: the deployer ends with none and the seed share receiver holds them (stage 12, core's stage table note). */

@@ -4,7 +4,7 @@ title: "BasketVaultTest"
 
 # BasketVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/BasketVault.t.sol)
 
 **Inherits:** Test
 
@@ -1056,6 +1056,17 @@ deposit succeeds — proving the guard, not some other check, blocks.
 
 ```solidity
 function test_ORA4_deviationGuardBlocksSettlement() public;
+```
+
+<a id="test_ora4_guardneverblocksredeem"></a>
+
+### test_ORA4_guardNeverBlocksRedeem
+
+Issue 1666: the guard runs on deposit only. With the guard at 100 bps and spot moved past it, a deposit reverts
+`NavMarketDeviationExceeded` and an existing holder still redeems. The sheet-set guard can never trap exits.
+
+```solidity
+function test_ORA4_guardNeverBlocksRedeem() public;
 ```
 
 <a id="test_ora4_withinbandsettles"></a>

@@ -60,6 +60,7 @@ export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "ch
     const v = s.vaults[k];
     vaults[VAULT_NAME[k]] = {
       tvlCap: v.tvlCap, perDepositCap: v.perDepositCap, exitFeeBps: v.exitFeeBps,
+      ...(k !== "USDC" ? { navDeviationBps: v.navDeviationBps, minPoolLiquidity: v.minPoolLiquidity } : {}),
       feeRecipient: (s.feeRecipient === "@safe" ? safeAddress : s.feeRecipient) as `0x${string}`,
       expectPaused: k !== "USDC" && !unpaused.includes(k),
       routerEligible: k === "USDC" || s.eligibleVaults.includes(k),
