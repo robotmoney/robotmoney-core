@@ -270,6 +270,8 @@ contract UniswapV4PriceRecorderTest is Test {
         (,,, uint16 card, uint16 next) = rec.latest();
         assertEq(card, 1, "ring widens at the next record");
         assertEq(next, 901);
+        (,,, uint16 liveCard) = rec.slot0();
+        assertEq(liveCard, 1, "slot0 reports the live ring, not the grown target");
         _advance(2);
         rec.record();
         (,,, card, next) = rec.latest();

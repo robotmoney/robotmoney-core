@@ -4,7 +4,7 @@ title: "DeployUniswapV4PriceRecorderTest"
 
 # DeployUniswapV4PriceRecorderTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/DeployUniswapV4PriceRecorder.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2ba0f2a5c421c5a5252db5748fb869e29cc59c57/contracts/test/DeployUniswapV4PriceRecorder.t.sol)
 
 **Inherits:** Test
 
@@ -83,6 +83,26 @@ The first record after the grow widens the live ring once a later block exists.
 
 ```solidity
 function test_aLaterRecordWidensTheLiveRing() public;
+```
+
+<a id="test_thegrowchunkkeepseverygrowtransactionfarunderablockgaslimit"></a>
+
+### test_theGrowChunkKeepsEveryGrowTransactionFarUnderABlockGasLimit
+
+One grow transaction costs about 22,000 gas per slot: a chunk must stay far under a block gas limit.
+
+```solidity
+function test_theGrowChunkKeepsEveryGrowTransactionFarUnderABlockGasLimit() public view;
+```
+
+<a id="test_thefirstrecordiscalledwiththefixedgas"></a>
+
+### test_theFirstRecordIsCalledWithTheFixedGas
+
+The first record runs under a fixed gas limit, not forge's same-block estimate (about 38,000 gas, too low for a real chain).
+
+```solidity
+function test_theFirstRecordIsCalledWithTheFixedGas() public;
 ```
 
 <a id="test_noroleisleftontherecorder"></a>

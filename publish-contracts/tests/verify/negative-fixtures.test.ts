@@ -182,6 +182,16 @@ describe("negative fixture for every verifier label", () => {
     expect(failed(await verifyDeployment(buildWorld().opts))).toEqual([]);
   });
 
+  test("rmAGENT asset row on the wrong venue (V3, not V4) fails the V4 asset-row label even with the recorder pool and fee right", async () => {
+    const label = "vault[rmAGENT]: asset row is venue V4 with the price recorder as its pool";
+    const w = buildWorld(8453);
+    w.chain.set(VAULTS.rmAGENT.address, "assets", (a: any[]) => {
+      if (Number(a[0]) !== 0) throw new Error("execution reverted");
+      return [w.sheet.vaults.rmAGENT.assets[0]!.token, RECORDER, 29100, true, V4_ADAPTER, 0];
+    });
+    expect(failed(await verifyDeployment(w.opts))).toContain(label);
+  });
+
   test.each(LABELS)("%s fails when its fault is planted", async (label) => {
     const w = buildWorld(8453);
     plant(w, label);

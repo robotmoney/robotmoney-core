@@ -65,6 +65,24 @@ contract DeployUniswapV4PriceRecorderTest is Test {
         assertEq(card, 901);
     }
 
+    /// @notice One grow transaction costs about 22,000 gas per slot: a chunk must stay far under a block gas limit.
+    function test_theGrowChunkKeepsEveryGrowTransactionFarUnderABlockGasLimit() public view {
+        assertLe(uint256(script.GROW_CHUNK()) * 25_000, 10_000_000);
+        assertGe(script.GROW_CHUNK(), 1);
+    }
+
+    /// @notice The first record runs under a fixed gas limit, not forge's same-block estimate (about 38,000 gas, too low for a real chain).
+    function test_theFirstRecordIsCalledWithTheFixedGas() public {
+        address predicted = vm.computeCreateAddress(address(script), vm.getNonce(address(script)));
+        vm.expectCall(
+            predicted,
+            0,
+            uint64(script.RECORD_GAS()),
+            abi.encodeWithSelector(UniswapV4PriceRecorder.record.selector)
+        );
+        script.runInProcess(_shipped());
+    }
+
     function test_noRoleIsLeftOnTheRecorder() public {
         DeployUniswapV4PriceRecorder.Deployed memory d = script.runInProcess(_shipped());
         (bool ok,) = d.recorder.call(abi.encodeWithSignature("owner()"));
