@@ -207,6 +207,13 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
+      # The crate's #[cfg(test)] unit tests (src/**) are hermetic (no chain) and were never run by
+      # the per-binary `--test` invocations (issue #1471). The wrapper fails RED if zero tests ran.
+      - name: fork-e2e-rust lib unit tests (cargo test --lib)
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            --manifest-path testing/fork-e2e-rust/Cargo.toml --release --lib -- --nocapture
+
       - name: Base testnet account-funding assertion (smoke-test)
         run: cargo test -p smoke-test --release --test base_testnet_fixture -- --nocapture
 
