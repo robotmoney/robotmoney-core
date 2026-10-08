@@ -38,10 +38,13 @@ export const REQUIRED_SPECS: readonly string[] = [
   // `safe-governance` Playwright project against the real 2-of-3 SafeL2 and timelock. A skipped
   // or missing run fails suite-10 rather than letting the gap pass quietly.
   "safe-proposal-role-grant.spec.ts",
-  // Issue 1643: the GovernancePanel proposal list, vote handoff and empty state. Every test in it
-  // calls test.skip() when the panel is not mounted, so without this entry a dropped tab would
-  // leave the spec "green" with zero executed tests.
+  // Issues 1643, 1647: the GovernancePanel empty state, proposal view and vote, on proposals the
+  // real Safe and timelock created (no stubbed API or RPC). Runs in the `safe-governance`
+  // project. A dropped tab or a skipped spec fails suite-10 rather than passing with zero tests.
   "governance.spec.ts",
+  // Issue 1647: the admin role tabs build a Safe -> Timelock proposal, never a wallet transaction.
+  // The spec asserts the proposal's target is the timelock and that an EOA wallet is refused.
+  "role-grant-revoke.spec.ts",
 ];
 
 /** How many tests of each kind a single spec file contributed to a run. */

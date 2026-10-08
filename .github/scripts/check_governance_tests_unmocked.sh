@@ -15,6 +15,7 @@ root="${1:-$(git rev-parse --show-toplevel)}"
 rules=(
   'clients/rust-payment-client/tests/cli_get_timelock.rs::mockito|5afe::a mock JSON-RPC server or a fake Safe (the data path runs in testing/fork-e2e-rust/tests/rmpc_get_timelock_fork.rs)'
   'testing/fork-e2e-rust/tests/rmpc_get_timelock_fork.rs::skip_if_no_fork::the EOA proposer or a fork-skip: use the smoke-test Fixture (real Safe + timelock) and require_prereqs'
+  'clients/dapp/tests/e2e/governance.spec.ts::page\.route\(|route\.fulfill|makeProposalsResponse|test\.skip\(::a stubbed explorer API or RPC, or a skip (the panel data comes from proposals the real Safe and timelock create)'
   'scripts/fusion/devnet-acceptance.sh::FUSION_RELEASE_ADDRESS::the approver EOA as the duplicate-release sender: it hits AccessControlUnauthorizedAccount before ReceiptAlreadyReleased, send the probe from FUSION_TIMELOCK_ADDRESS'
 )
 

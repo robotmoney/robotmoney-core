@@ -11,6 +11,7 @@
 import { spawnSync } from "node:child_process";
 import { createDecipheriv, scryptSync, pbkdf2Sync } from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { keccak256, type Address, type Hex } from "viem";
@@ -149,4 +150,73 @@ export async function warpChain(rpcUrl: string, seconds: number): Promise<void> 
     const j = (await res.json()) as { error?: { message: string } };
     if (j.error) throw new Error(`${method} failed: ${j.error.message}`);
   }
+}
+
+/**
+ * One full Safe -> Timelock round through the publish-contracts Safe tool, on the real 2-of-3 Safe and
+ * the real TimelockController: schedule (two owner signatures, a third owner pays gas), advance the
+ * Twin clock past `getMinDelay`, then execute (two owner signatures again). No wallet, no mock, no EOA
+ * governor: the timelock only accepts both calls from the Safe. Returns the timelock operation id.
+ * Advances the chain clock, so a spec that calls it belongs in the `safe-governance` project.
+ */
+export async function runTimelockRound(
+  endpoints: DevnetEndpoints,
+  opts: { target: Address; data: Hex; label: string },
+): Promise<Hex> {
+  const owners = loadOwnerKeys(endpoints);
+  const [a, b, c] = owners;
+  if (!a || !b || !c) throw new Error("the harness minted fewer than three Safe owner keystores");
+  const salt = keccak256(`0x${Buffer.from(`${opts.label}:${Date.now()}`).toString("hex")}`);
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "timelock-round-"));
+  const common = [
+    "--safe",
+    endpoints.safe_addr,
+    "--timelock",
+    endpoints.timelock_addr,
+    "--target",
+    opts.target,
+    "--data",
+    opts.data,
+    "--salt",
+    salt,
+  ];
+  const round = (action: "schedule" | "execute"): Hex | undefined => {
+    const bundle = path.join(work, `${action}.json`);
+    runSafeCli(endpoints, "propose", [
+      ...common,
+      "--action",
+      action,
+      "--description",
+      `${opts.label} (${action})`,
+      "--out",
+      bundle,
+    ]);
+    runSafeCli(endpoints, "sign", ["--bundle", bundle, "--signer", a.signerSpec]);
+    runSafeCli(endpoints, "sign", ["--bundle", bundle, "--signer", b.signerSpec]);
+    runSafeCli(endpoints, "execute", ["--bundle", bundle, "--signer", c.signerSpec]);
+    const done = JSON.parse(fs.readFileSync(bundle, "utf8")) as { timelock_operation_id?: Hex };
+    return done.timelock_operation_id;
+  };
+  const operationId = round("schedule");
+  const minDelay = await readMinDelay(endpoints);
+  await warpChain(endpoints.rpc_url, Number(minDelay) + 5);
+  round("execute");
+  if (!operationId) throw new Error("the Safe tool wrote no timelock operation id");
+  return operationId;
+}
+
+async function readMinDelay(endpoints: DevnetEndpoints): Promise<bigint> {
+  const res = await fetch(endpoints.rpc_url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "eth_call",
+      params: [{ to: endpoints.timelock_addr, data: "0xf27a0c92" }, "latest"],
+    }),
+  });
+  const j = (await res.json()) as { result?: Hex; error?: { message: string } };
+  if (!j.result) throw new Error(`getMinDelay failed: ${j.error?.message ?? "no result"}`);
+  return BigInt(j.result);
 }
