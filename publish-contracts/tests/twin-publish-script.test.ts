@@ -81,6 +81,6 @@ describe("the rehearsal uses only the allowed Twin environment steps", () => {
     const files = [join(ACTION, "action.yml"), script, join(REPO_ROOT, ".github/workflows/suite-28-core-stages.yml")];
     for (const f of files) expect(readFileSync(f, "utf8")).not.toMatch(/\b(anvil|evm)_[a-zA-Z]+/);
     const steps = [...readFileSync(script, "utf8").matchAll(/run\(\[bun, rehearsal, "([a-z-]+)"/g)].map((m) => m[1]).filter((x) => x !== "keys");
-    expect(steps).toEqual(["fund-gas", "fund-usdc"]);
+    expect(steps).toEqual(["fund-gas", "fund-usdc", "fund-rm-pool"]);
   });
 });

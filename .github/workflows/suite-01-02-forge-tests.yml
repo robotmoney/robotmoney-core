@@ -186,7 +186,7 @@ jobs:
         # Explicit, named guard for the three basket vault scripts (one deployment scheme):
         #   - DeployProtocolAssetVault.t.sol: rmPROTO paused with exactly wETH and cbBTC,
         #     asset config read back equals config/protocol-assets.json.
-        #   - DeployAgentTokenVault.t.sol: rmAGENT empty, paused, registered.
+        #   - DeployAgentTokenVault.t.sol: rmAGENT holds RM (added through the V3 pool floors), paused, registered.
         #   - DeployBasketVaultRwa.t.sol: rmRWA is a plain BasketVault row for deSPXA through
         #     the UniswapV3SwapAdapter on the fee 500 pool.
         #   - ActivateBasketVaultEligibility.t.sol: atomic migrateEligibility per basket.

@@ -29,7 +29,7 @@ Stage is the same deployment as mainnet. Only parameters differ. There is one ru
 
 ## Vaults
 
-All four vaults ship with assets that have usable pools: rmUSDC, rmPROTO (wETH and cbBTC), rmAGENT (empty and paused) and rmRWA (deSPXA only, plain basket row, no oracle). Coinbase stocks are phase two.
+All four vaults ship with assets that have usable pools: rmUSDC, rmPROTO (wETH and cbBTC), rmAGENT (paused, holding RM on the owner-funded V3 pool; the Twin chain run funds that pool first with `rehearsal fund-rm-pool`) and rmRWA (deSPXA only, plain basket row, no oracle). Coinbase stocks are phase two.
 
 ## What is not here
 

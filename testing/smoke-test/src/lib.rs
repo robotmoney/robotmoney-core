@@ -571,7 +571,7 @@ impl Fixture {
         // Issue 1554: rmAGENT launches holding RM, and `BasketVault.addAsset` needs the RM/USDC pool to have
         // liquidity and observation history. The live pool is unfunded until the owner funds it, so the Twin
         // chain funds the same pool with real transactions first. The addAsset floors are not relaxed.
-        fund_rm_pool(&twin, &nonce_tracker, &repo_root).inspect_err(|err| {
+        fund_rm_pool(&publish_cfg, twin.rpc_url(), &repo_root).inspect_err(|err| {
             logging::error("smoke-test", format!("funding the RM pool failed: {err}"));
         })?;
 
@@ -1722,143 +1722,32 @@ fn cast_call_raw_at(
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_lowercase())
 }
 
-/// Decode a 32-byte ABI word that holds a signed int24 (the pool tick) from `cast call` output.
-fn decode_int24_word(word: &str) -> Result<i32, HarnessError> {
-    let h = word.trim_start_matches("0x");
-    if h.len() < 64 {
-        return Err(HarnessError::other(format!("not a 32-byte word: {word}")));
-    }
-    let low = u32::from_str_radix(&h[h.len() - 6..], 16)
-        .map_err(|e| HarnessError::other(format!("int24 parse {word}: {e}")))?;
-    Ok(if low & 0x80_0000 != 0 {
-        low as i32 - 0x100_0000
-    } else {
-        low as i32
-    })
-}
-
-/// The tick range `[lower, lower + spacing]` that contains `tick`, aligned to `spacing`. Floors toward
-/// negative infinity, so negative ticks (the RM/USDC pool sits near -389201) land in the right bucket.
-fn tick_range_around(tick: i32, spacing: i32) -> (i32, i32) {
-    let lower = tick.div_euclid(spacing) * spacing;
-    (lower, lower + spacing)
-}
-
-/// Uniswap V3 NonfungiblePositionManager on Base (real Base state on the Twin chain).
-const UNISWAP_V3_NPM: &str = "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1";
-/// Observation cardinality the Twin chain asks of the RM pool (the floor in `addAsset` is 2).
-const RM_POOL_CARDINALITY_NEXT: &str = "10";
-/// RM and USDC the position is minted with (RM 18 decimals, USDC 6 decimals).
-const RM_POOL_RM_UNITS: u128 = 1_000_000 * 1_000_000_000_000_000_000;
-const RM_POOL_USDC_UNITS: u128 = 1_000 * 1_000_000;
-
-/// Fund the live RM/USDC Uniswap V3 pool named by `config/agent-token-shortlist.json` on the Twin chain
-/// (issue 1554). Real pool, real position manager, real transactions: the harness holder is given RM and
-/// USDC with the fork's balance helpers, raises the pool's observation cardinality, then mints one
-/// in-range position. An in-range mint writes an observation, so the cardinality takes effect. Asserts
-/// the pool now clears the `BasketVault.addAsset` floors (cardinality >= 2, liquidity >= 1e6) before
-/// publish runs, so a failure here names the pool and not a later revert.
+/// Fund the live RM/USDC Uniswap V3 pool on the Twin chain (issue 1554) with `rehearsal fund-rm-pool`, the one
+/// implementation of the step (the twin-publish CI action runs the same verb). Real pool, real position manager,
+/// real transactions: it gives a funder RM and USDC with the fork's balance helpers, raises the pool's
+/// observation cardinality and mints one in-range position. It asserts the `BasketVault.addAsset` floors
+/// (cardinality >= 2, liquidity >= 1e6) itself, so a failure names the pool and not a later revert.
 fn fund_rm_pool(
-    twin: &twin_fork::TwinFork,
-    tracker: &NonceTracker,
+    cfg: &publish::PublishConfig,
+    rpc_url: &str,
     repo_root: &Path,
 ) -> Result<(), HarnessError> {
-    let cfg_path = repo_root.join("config/agent-token-shortlist.json");
-    let cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&cfg_path)?)
-        .map_err(|e| HarnessError::other(format!("{}: {e}", cfg_path.display())))?;
-    let usdc = cfg["usdc"].as_str().unwrap_or_default().to_string();
-    let rm = &cfg["shortlist"][0];
-    let (token, pool) = (
-        rm["token"].as_str().unwrap_or_default().to_string(),
-        rm["pool"].as_str().unwrap_or_default().to_string(),
-    );
-    let fee = rm["poolFee"].as_u64().unwrap_or(0).to_string();
-    if usdc.is_empty() || token.is_empty() || pool.is_empty() || fee == "0" {
+    let out = Command::new("bun")
+        .arg(cfg.rehearsal_cli())
+        .args(["fund-rm-pool", "--rpc", rpc_url, "--core-dir"])
+        .arg(repo_root)
+        .stdin(Stdio::null())
+        .output()?;
+    if !out.status.success() {
         return Err(HarnessError::other(format!(
-            "{} has no RM shortlist entry to fund",
-            cfg_path.display()
-        )));
-    }
-    let rpc = twin.rpc_url();
-    let pk = HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX;
-    let holder = HARNESS_USDC_HOLDER_ADDRESS_HEX;
-    // RM is token0 and USDC token1 on the live pool (RM sorts below USDC). Assert it, because the
-    // mint call below orders its arguments the same way.
-    let token0 = cast_call_raw_at(rpc, &pool, "token0()", &[])?;
-    if !token0.ends_with(&token.trim_start_matches("0x").to_lowercase()) {
-        return Err(HarnessError::other(format!(
-            "pool {pool} token0 is {token0}, expected RM {token}"
-        )));
-    }
-    twin.set_slot0_erc20_balance(&token, holder, RM_POOL_RM_UNITS)?;
-    // A grant on top of the faucet reserve, never an overwrite of it.
-    let reserve = twin.usdc_balance(holder)?;
-    twin.set_usdc_balance(holder, reserve + RM_POOL_USDC_UNITS)?;
-
-    let send = |label: &str, to: &str, sig: &str, args: &[&str]| -> Result<(), HarnessError> {
-        let mut a: Vec<&str> = vec![to, sig];
-        a.extend_from_slice(args);
-        pinned_cast_send(tracker, label, pk, &a).map(|_| ())
-    };
-    send(
-        "rm pool cardinality",
-        &pool,
-        "increaseObservationCardinalityNext(uint16)",
-        &[RM_POOL_CARDINALITY_NEXT],
-    )?;
-    let (rm_s, usdc_s) = (RM_POOL_RM_UNITS.to_string(), RM_POOL_USDC_UNITS.to_string());
-    send(
-        "rm approve",
-        &token,
-        "approve(address,uint256)",
-        &[UNISWAP_V3_NPM, &rm_s],
-    )?;
-    send(
-        "usdc approve",
-        &usdc,
-        "approve(address,uint256)",
-        &[UNISWAP_V3_NPM, &usdc_s],
-    )?;
-
-    let spacing = decode_int24_word(&cast_call_raw_at(rpc, &pool, "tickSpacing()", &[])?)?;
-    // slot0 word 1 is the current tick.
-    let slot0 = cast_call_raw_at(rpc, &pool, "slot0()", &[])?;
-    let tick_word = slot0
-        .trim_start_matches("0x")
-        .get(64..128)
-        .ok_or_else(|| HarnessError::other(format!("short slot0 return: {slot0}")))?;
-    let tick = decode_int24_word(tick_word)?;
-    let (lower, upper) = tick_range_around(tick, spacing);
-    let params =
-        format!("({token},{usdc},{fee},{lower},{upper},{rm_s},{usdc_s},0,0,{holder},99999999999)");
-    send(
-        "rm pool mint",
-        UNISWAP_V3_NPM,
-        "mint((address,address,uint24,int24,int24,uint256,uint256,uint256,uint256,address,uint256))",
-        &[&params],
-    )?;
-
-    let liquidity = cast_call_raw_at(rpc, &pool, "liquidity()", &[])?;
-    let liq = u128::from_str_radix(liquidity.trim_start_matches("0x"), 16)
-        .map_err(|e| HarnessError::other(format!("liquidity parse {liquidity}: {e}")))?;
-    let slot0 = cast_call_raw_at(rpc, &pool, "slot0()", &[])?;
-    let cardinality = u32::from_str_radix(
-        slot0
-            .trim_start_matches("0x")
-            .get(192..256)
-            .unwrap_or("0")
-            .trim_start_matches('0'),
-        16,
-    )
-    .unwrap_or(0);
-    if liq < 1_000_000 || cardinality < 2 {
-        return Err(HarnessError::other(format!(
-            "RM pool {pool} still fails the addAsset floors after funding: liquidity {liq}, cardinality {cardinality}"
+            "rehearsal fund-rm-pool failed: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
         )));
     }
     logging::info(
         "smoke-test",
-        format!("RM pool {pool} funded: liquidity {liq}, observation cardinality {cardinality}, ticks [{lower}, {upper}]"),
+        String::from_utf8_lossy(&out.stderr).trim().to_string(),
     );
     Ok(())
 }
@@ -3576,27 +3465,6 @@ fn wait_for_http_ok_with_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn int24_word_decodes_the_live_rm_pool_tick_and_positive_ticks() {
-        // -389201 as a sign-extended 32-byte word
-        let word = format!(
-            "0x{}{:06x}",
-            "f".repeat(58),
-            (-389_201i32) as u32 & 0xff_ffff
-        );
-        assert_eq!(decode_int24_word(&word).unwrap(), -389_201);
-        let pos = format!("0x{:064x}", 200);
-        assert_eq!(decode_int24_word(&pos).unwrap(), 200);
-        assert!(decode_int24_word("0x12").is_err());
-    }
-
-    #[test]
-    fn tick_range_floors_negative_ticks_to_the_spacing_bucket() {
-        assert_eq!(tick_range_around(-389_201, 200), (-389_400, -389_200));
-        assert_eq!(tick_range_around(-389_200, 200), (-389_200, -389_000));
-        assert_eq!(tick_range_around(150, 200), (0, 200));
-    }
 
     /// The depositor key must derive the share receiver address the sheet names, or the depositor's
     /// commit and reveal would be signed by a different account than the policy's share receiver.

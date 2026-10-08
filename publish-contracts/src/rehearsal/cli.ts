@@ -5,6 +5,7 @@
  *   fund  --rpc R --chain-id C --sheet S [--eth-wei N] [--usdc A --usdc-units N]      needs CHAIN_FUNDER_KEYSTORE and CHAIN_FUNDER_PASSWORD from the caller's credential tool
  *   fund-gas  --rpc R --sheet S [--wei N]     Twin fork only (anvil_setBalance): sets the gas balance of the deployer, pauser, emergency key and Safe owners
  *   fund-usdc --rpc R --sheet S --usdc-units N  Twin fork only: sets the real FiatToken balance of the deployer through its balance storage slot
+ *   fund-rm-pool --rpc R --core-dir D        Twin fork only: real liquidity and observation cardinality on the live RM/USDC pool (core 1554)
  *   warp  --rpc R --seconds N                  Twin fork only: moves chain time forward (evm_increaseTime + evm_mine)
  *   args  --rpc R [--sheet S --signer X --environment E --core-sha H]               prints the publish-contracts arguments
  *   run   --rpc R --dir D --password-file F --sheet S                                 publish, then sweep to the funder
@@ -18,7 +19,7 @@ import { rehearsalArgs, TWIN_CHAIN_ID } from "./args.ts";
 import { assertPassword, defaultKeyNames, makeRehearsalKeys, sheetFragment } from "./keys.ts";
 import { checkEnvCredentialRule, fund, stageFunderKeystore, type Recipient } from "./fund.ts";
 import { runRehearsal } from "./run.ts";
-import { fundGas, fundUsdc, httpRpc, isTwinFork, warpBy } from "./twin.ts";
+import { fundGas, fundRmPool, fundUsdc, httpRpc, isTwinFork, readRmPoolFacts, warpBy } from "./twin.ts";
 import { USDC_ADDRESS } from "../usdc.ts";
 
 export function flags(argv: string[]): Record<string, string> {
@@ -98,6 +99,12 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       log(`USDC set to ${units} units for the ${deployer.name}`);
       return 0;
     }
+    case "fund-rm-pool": {
+      // Twin fork only (core 1554): real liquidity and observation history on the live RM/USDC pool, so the rmAGENT deploy can add RM.
+      const r = await fundRmPool(httpRpc(need(f, "rpc")), readRmPoolFacts(need(f, "core-dir")));
+      log(`RM pool funded: liquidity ${r.liquidity}, observation cardinality ${r.cardinality}, ticks [${r.ticks[0]}, ${r.ticks[1]}]`);
+      return 0;
+    }
     case "warp": {
       const t = await warpBy(httpRpc(need(f, "rpc")), BigInt(need(f, "seconds")));
       log(`chain time is now ${t}`);
@@ -122,7 +129,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return r.exitCode;
     }
     default:
-      console.error("usage: rehearsal <keys|fund|fund-gas|fund-usdc|warp|args|run> ...");
+      console.error("usage: rehearsal <keys|fund|fund-gas|fund-usdc|fund-rm-pool|warp|args|run> ...");
       return 2;
   }
 }
