@@ -347,6 +347,10 @@ fn run_cli_raw(
 ) -> Result<CliRun, HarnessError> {
     let signer = signer_spec(&p.keys);
     let mut args = publish_args(verb, &p.rpc_url, &p.sheet_path, &signer, &cfg.core_sha);
+    if verb.is_empty() {
+        // no verb: the caller names a `--stage` (the CLI refuses a verb and a stage together)
+        args.remove(0);
+    }
     args.extend(run_dir_args(&p.manifest_dir));
     args.extend(extra.iter().cloned());
     let mut cmd = Command::new("bun");
@@ -605,10 +609,10 @@ impl Published {
         run_cli_raw(&self.cfg, &p, "verify", &[])
     }
 
-    /// Issue 1670: one publish verb run with extra arguments, returning the raw outcome. The exit code is the thing under test.
-    pub fn publish_raw(&self, extra: &[&str]) -> Result<CliRun, HarnessError> {
+    /// Issue 1670: one `--stage` run (no verb) with extra arguments, returning the raw outcome. The exit code is the thing under test.
+    pub fn stage_raw(&self, extra: &[&str]) -> Result<CliRun, HarnessError> {
         let extra: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
-        run_cli_raw(&self.cfg, self, "publish", &extra)
+        run_cli_raw(&self.cfg, self, "", &extra)
     }
 
     /// Core 1619: `pause-all` by hand. Fails on a non-zero exit (a vault not confirmed paused is exit 25).

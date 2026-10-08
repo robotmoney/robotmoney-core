@@ -102,7 +102,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "the prove-control record must name all three Safe owners"
     );
     // Issue 1670: the run crashed AFTER the proof landed on the real Safe but before the run manifest was written. Simulated by removing the record
-    // (the Safe is at nonce 1, as it is now). Without --resume the rerun refuses (exit 24). With --resume the tool finds the nonce-0 execution on the
+    // (the Safe is at nonce 1, as it is now). Without --resume the rerun refuses (exit 16, RESUME). With --resume the tool finds the nonce-0 execution on the
     // real chain (the Safe's own ExecutionSuccess event), recovers the owner signatures from the real calldata, adopts it with the SAME on-chain
     // hash and sends nothing.
     {
@@ -119,16 +119,18 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .expect("write the crashed run manifest");
         let refused = fx
             .published()
-            .publish_raw(&["--stage", "prove-control"])
+            .stage_raw(&["--stage", "prove-control"])
             .expect("run the prove-control rerun");
+        // The run manifest has earlier stages, so a rerun without --resume stops at RESUME (exit 16) before any stage runs. The
+        // refusal to adopt without --resume on a manifest with no other stages (exit 24) is asserted in prove-control.test.ts.
         assert_eq!(
-            refused.code, 24,
+            refused.code, 16,
             "a rerun without --resume must refuse: {}{}",
             refused.stdout, refused.stderr
         );
         let adopted = fx
             .published()
-            .publish_raw(&["--stage", "prove-control", "--resume"])
+            .stage_raw(&["--stage", "prove-control", "--resume"])
             .expect("run the prove-control resume");
         assert_eq!(
             adopted.code, 0,
