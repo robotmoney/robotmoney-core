@@ -2264,73 +2264,168 @@ contract BasketVaultTest is Test {
         );
     }
 
-    // ─── AZ-BSK-3: deposit NAV excludes idle USDC from excluded adapters ────────
+    // ─── AZ-BSK-3 (C1-corrected): deposit mints against the FULL pre-deposit NAV ─
 
-    /// @notice AZ-BSK-3: when idle USDC is present (e.g. from an emergency-unwound
-    ///         adapter), a new deposit prices shares against the active-adapter-only
-    ///         NAV (taBefore − idleUSDC), not the full totalAssets. This prevents a
-    ///         new depositor from capturing recovery value that belongs to existing
-    ///         holders who bore the original loss.
-    ///
-    ///         Setup: seed the vault at 1:1, inject idle USDC directly to simulate
-    ///         the proceeds of an excluded adapter sitting un-deployed, then deposit
-    ///         and verify the minted shares match the eligible-NAV formula.
-    function test_AZBSK3_depositExclusionWindowUsesEligibleNAV() public {
-        // Seed vault so it has non-zero NAV and share supply.
+    /// @dev Redeem `shares` for `who`, funding the mock router with the fair USDC value
+    ///      of the redeemer's pro-rata slice of the vault's basket tokens (1:1 price).
+    function _redeemFair(address who, uint256 shares) internal returns (uint256 received) {
+        uint256 supply = vault.totalSupply();
+        uint256 tokenSlice = basketToken.balanceOf(address(vault)) * shares / supply;
+        usdc.mint(address(router), tokenSlice);
+        router.setAmountOut(tokenSlice);
+        uint256 beforeBal = usdc.balanceOf(who);
+        vm.prank(who);
+        vault.redeem(shares, who, who);
+        received = usdc.balanceOf(who) - beforeBal;
+    }
+
+    /// @notice AZ-BSK-3 (C1-corrected): with idle USDC present, deposit() mints exactly
+    ///         mulDiv(realizedDelta, supplyBefore + 1e18, taBefore + 1). The old
+    ///         `taBefore - idle + 1` denominator (a different, larger share count) is
+    ///         asserted unequal. Idle USDC backs existing shares, so it stays in the
+    ///         denominator.
+    function test_AZBSK3_depositMintsAgainstIdleInclusiveNAV() public {
         _depositAt1to1(address(this), 10_000e6);
-
-        // Simulate idle USDC from an excluded adapter (bypass emergency unwind
-        // to avoid the depositsPaused gate; the relevant invariant is the idle
-        // USDC balance, not how it arrived).
         uint256 idleUsdc = 5_000e6;
         usdc.mint(address(vault), idleUsdc);
 
-        // Snapshot pre-deposit state (mirrors what _deposit() does internally).
         uint256 supplyBefore = vault.totalSupply();
         uint256 taBefore = vault.totalAssets(); // includes idleUsdc
-        uint256 navBefore = taBefore - usdc.balanceOf(address(vault)); // active-adapter NAV only
+        uint256 idleBefore = usdc.balanceOf(address(vault));
+        assertGt(idleBefore, 0, "idle USDC must be non-zero");
+        assertEq(idleBefore, idleUsdc, "idle is the injected balance");
 
-        assertGt(idleUsdc, 0, "idle USDC must be non-zero for this test to be meaningful");
-        assertGt(navBefore, 0, "active-adapter NAV must be positive for a valid deposit");
-        assertLt(navBefore, taBefore, "eligible NAV must be less than full totalAssets");
-
-        // Configure swap: 1,000 USDC → 1,000 basket tokens (1:1).
         uint256 depositAmount = 1_000e6;
-        uint256 swapOut = depositAmount; // 1:1 execution
-        basketToken.mint(address(router), swapOut);
-        router.setAmountOut(swapOut);
-
+        basketToken.mint(address(router), depositAmount);
+        router.setAmountOut(depositAmount);
         usdc.mint(stranger, depositAmount);
         vm.startPrank(stranger);
         usdc.approve(address(vault), depositAmount);
         uint256 actualShares = vault.deposit(depositAmount, stranger);
         vm.stopPrank();
 
-        uint256 realizedDelta = vault.totalAssets() - taBefore; // delta from the swap
+        uint256 realizedDelta = vault.totalAssets() - taBefore;
+        uint256 expectedShares = Math.mulDiv(realizedDelta, supplyBefore + 1e18, taBefore + 1);
+        uint256 oldShares =
+            Math.mulDiv(realizedDelta, supplyBefore + 1e18, taBefore - idleBefore + 1);
 
-        // AZ-BSK-3: expected shares use navBefore (active-adapter NAV) in the
-        // denominator, NOT taBefore (full NAV including idle USDC).
-        // _decimalsOffset() = 18 (large virtual offset to prevent first-deposit
-        // inflation attacks; BasketVault.decimals() returns 6, offset = 18).
-        uint256 decimalsOffset = 1e18; // 10 ** _decimalsOffset()
-        uint256 expectedShares =
-            Math.mulDiv(realizedDelta, supplyBefore + decimalsOffset, navBefore + 1);
-        // OLD (vulnerable) formula would have used taBefore as denominator.
-        uint256 vulnerableShares =
-            Math.mulDiv(realizedDelta, supplyBefore + decimalsOffset, taBefore + 1);
+        assertEq(actualShares, expectedShares, "AZ-BSK-3: mint uses idle-inclusive taBefore + 1");
+        assertEq(vault.balanceOf(stranger), expectedShares, "shares minted to receiver");
+        assertTrue(actualShares != oldShares, "AZ-BSK-3: old idle-excluded denominator rejected");
+        assertLt(actualShares, oldShares, "AZ-BSK-3: old formula over-minted");
+    }
 
-        assertEq(
-            actualShares,
-            expectedShares,
-            "AZ-BSK-3: shares must use eligible-NAV denominator (active tokens only)"
+    /// @notice AZ-BSK-3 PoC regression (audit 2026-10-08 test_idleUsdcOverMint):
+    ///         emergencyUnwind -> unpauseDeposits -> deposit -> redeem must not let the
+    ///         late depositor take value from the incumbent.
+    function test_AZBSK3_emergencyUnwindThenDepositNoOverMint() public {
+        address alice = makeAddr("alice");
+        address eve = makeAddr("eve");
+
+        uint256 aliceShares = _depositAt1to1(alice, 10_000e6);
+
+        // Emergency key unwinds the whole basket to idle USDC at 1:1.
+        usdc.mint(address(router), 10_000e6);
+        router.setAmountOut(10_000e6);
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+        assertEq(basketToken.balanceOf(address(vault)), 0, "basket fully unwound");
+        assertEq(usdc.balanceOf(address(vault)), 10_000e6, "all value idle");
+        assertTrue(vault.depositsPaused(), "unwind pauses deposits");
+
+        vm.prank(admin);
+        vault.unpauseDeposits();
+
+        uint256 eveShares = _depositAt1to1(eve, 1_000e6);
+        uint256 supply = vault.totalSupply();
+
+        // eve owns at most 1000/11000 of supply, plus rounding.
+        assertLe(eveShares, supply * 1_000e6 / 11_000e6 + 1, "eve share of supply capped");
+
+        uint256 eveOut = _redeemFair(eve, eveShares);
+        assertLe(eveOut, 1_000e6, "eve cannot redeem more than she deposited");
+
+        uint256 aliceOut = _redeemFair(alice, aliceShares);
+        assertGe(aliceOut, 9_999e6, "alice keeps her value");
+    }
+
+    /// @notice AZ-BSK-3: no-profit round trip with idle USDC present. A deposit followed
+    ///         by an immediate full redeem returns at most the deposit, and the
+    ///         incumbent's previewRedeem never drops, up to a 2 wei tolerance. The
+    ///         tolerance is the 10^18 virtual-share offset: mint prices against
+    ///         (supply + 1e18) while redeem is raw pro-rata, so a donated idle balance
+    ///         lets a round trip gain sub-wei-scale dust (measured max 1 wei over 20000
+    ///         fuzz runs). That is not the over-mint fixed here (thousands of USDC).
+    function test_AZBSK3_idleDepositRoundTripNoProfit(uint256 idle, uint256 d) public {
+        idle = bound(idle, 1, 1e13);
+        d = bound(d, 1e6, vault.perDepositCap());
+
+        vm.prank(admin);
+        vault.setTvlCap(100_000_000e6); // headroom for the 1e13 idle upper bound
+        uint256 incumbentShares = _depositAt1to1(address(this), 50_000e6);
+        usdc.mint(address(vault), idle);
+        uint256 previewBefore = vault.previewRedeem(incumbentShares);
+
+        address eve = makeAddr("eveFuzz");
+        uint256 eveShares = _depositAt1to1(eve, d);
+        assertGe(
+            vault.previewRedeem(incumbentShares),
+            previewBefore - 2,
+            "incumbent previewRedeem must not drop on deposit"
         );
-        // When idle USDC > 0, the fix gives MORE shares (smaller denominator),
-        // which correctly prices the deposit against only the active-adapter NAV.
-        assertGt(
-            actualShares,
-            vulnerableShares,
-            "AZ-BSK-3: eligible-NAV formula gives more shares than full-NAV (idle USDC excluded)"
+
+        uint256 out = _redeemFair(eve, eveShares);
+        assertLe(out, d + 2, "round trip cannot profit");
+        assertGe(
+            vault.previewRedeem(incumbentShares),
+            previewBefore - 2,
+            "incumbent previewRedeem must not drop after round trip"
         );
+    }
+
+    /// @notice AZ-BSK-3 adversarial: first deposit (supply 0) with idle USDC donated
+    ///         beforehand cannot be gamed: the first depositor pays the donation into
+    ///         the denominator, never receives more than the OZ formula, and caps hold.
+    function test_AZBSK3_firstDepositWithDonatedIdleCannotOverMint() public {
+        usdc.mint(address(vault), 7_000e6); // donation before any deposit
+        assertEq(vault.totalSupply(), 0);
+
+        uint256 d = 1_000e6;
+        uint256 taBefore = vault.totalAssets();
+        uint256 shares = _depositAt1to1(stranger, d);
+        assertEq(shares, Math.mulDiv(d, 1e18, taBefore + 1), "first mint uses full NAV + 1");
+
+        // The depositor cannot extract more than deposit (donation is not recoverable
+        // as a profit for the donor-depositor).
+        uint256 out = _redeemFair(stranger, shares);
+        assertLe(out, d + 7_000e6, "redeem bounded by total vault value");
+    }
+
+    /// @notice AZ-BSK-3 adversarial: tiny deposits round down and never mint a profit;
+    ///         per-deposit cap still enforced.
+    function test_AZBSK3_tinyDepositRoundsDownAndCapStillEnforced() public {
+        _depositAt1to1(address(this), 10_000e6);
+        usdc.mint(address(vault), 1_000e6);
+        uint256 tiny = 1;
+        basketToken.mint(address(router), tiny);
+        router.setAmountOut(tiny);
+        usdc.mint(stranger, tiny);
+        uint256 taBefore = vault.totalAssets();
+        uint256 supplyBefore = vault.totalSupply();
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), tiny);
+        uint256 shares = vault.deposit(tiny, stranger);
+        vm.stopPrank();
+        assertEq(shares, Math.mulDiv(tiny, supplyBefore + 1e18, taBefore + 1));
+        assertLe(vault.previewRedeem(shares), tiny, "dust mint never redeems above deposit");
+
+        uint256 over = vault.perDepositCap() + 1;
+        usdc.mint(stranger, over);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), over);
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit: maxDeposit is capped by perDepositCap
+        vault.deposit(over, stranger);
+        vm.stopPrank();
     }
 
     /// @notice AZ-BSK-3: totalAssets() accounts for ALL vault USDC (including idle

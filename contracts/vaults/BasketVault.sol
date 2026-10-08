@@ -582,11 +582,11 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         // Snapshot pre-deposit state so shares are minted against the value the
         // pool held BEFORE this deposit's tokens landed. Reuse `taBefore` for the
         // TVL-cap check (pre-swap; post-swap NAV may differ slightly by slippage).
-        // AZ-BSK-3: the share-price denominator uses eligible NAV = taBefore minus
-        // idle USDC (active-adapter tokens only). Idle USDC from an excluded adapter
-        // is counted toward the TVL cap but NOT the denominator, so excluded-adapter
-        // recoveries stay with existing holders. realizedDelta uses taBefore directly
-        // (algebraically identical to the eligible-NAV delta; idle USDC cancels out).
+        // AZ-BSK-3 (C1-corrected): the share-price denominator is the FULL
+        // pre-deposit NAV `taBefore` (adapter-free basket token value PLUS every
+        // idle USDC dollar), the exact OZ mint denominator. Idle USDC backs
+        // existing shares, so it must never be subtracted: leaving it out
+        // over-mints to a depositor after emergencyUnwind + unpauseDeposits.
         uint256 supplyBefore = totalSupply();
         uint256 taBefore = totalAssets();
         if (taBefore + usdcAmount > tvlCap) revert TVLCapExceeded();
@@ -614,11 +614,9 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         if (realizedDelta < slippageFloor) {
             revert DepositBelowSlippageFloor(realizedDelta, slippageFloor);
         }
-        // AZ-BSK-3: denominator = eligible NAV = taBefore - idle USDC.
+        // AZ-BSK-3 (C1-corrected): denominator = full pre-deposit NAV + 1.
         uint256 mintShares = realizedDelta.mulDiv(
-            supplyBefore + 10 ** _decimalsOffset(),
-            taBefore - _USDC.balanceOf(address(this)) + 1,
-            Math.Rounding.Floor
+            supplyBefore + 10 ** _decimalsOffset(), taBefore + 1, Math.Rounding.Floor
         );
 
         _mint(receiver, mintShares);
