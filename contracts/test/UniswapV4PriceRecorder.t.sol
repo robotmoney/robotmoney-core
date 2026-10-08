@@ -246,6 +246,23 @@ contract UniswapV4PriceRecorderTest is Test {
         );
     }
 
+    /// @notice The ring is not full yet: the slot after the newest is a placeholder, so the oldest snapshot is slot 0, not that slot.
+    function test_oldestObservation_fallsBackToSlotZeroWhileTheRingIsStillFilling() public {
+        uint32 t0 = uint32(block.timestamp);
+        rec.grow(10);
+        for (uint256 i = 0; i < 3; i++) {
+            _advance(10);
+            rec.record();
+        }
+        (,, uint16 index, uint16 card,) = rec.latest();
+        assertEq(card, 10, "the ring widened to 10 slots");
+        assertEq(index, 3);
+        (uint32 nextSlotTs,, bool nextInit) = rec.observations(4);
+        assertEq(nextSlotTs, 1, "the next slot is the grow placeholder");
+        assertFalse(nextInit);
+        assertEq(rec.oldestObservation(), t0, "the oldest snapshot is slot 0");
+    }
+
     // ─── grow ────────────────────────────────────────────────────────
 
     function test_grow_raisesCardinalityNextThenTheRingWidensAtTheNextRecord() public {

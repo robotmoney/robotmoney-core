@@ -405,7 +405,8 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         _checkRecorder(a, IUniswapV4PriceRecorder(p.recorder));
         _checkPoolV4(a, p.minPoolLiquidity);
         // Poke so the recorder is fresh for addAsset's observe([1800, 0]). Permissionless and a no-op in the same block.
-        IUniswapV4PriceRecorder(p.recorder).record();
+        // Fixed gas: forge estimates from a simulation in which a same-block `record()` returns early (cheap), and the transaction can land in a later block.
+        IUniswapV4PriceRecorder(p.recorder).record{gas: 300_000}();
 
         address adapterV4 =
             address(new UniswapV4SwapAdapter(a.poolManager, a.key, p.recorder, p.usdc));

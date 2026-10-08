@@ -34,6 +34,10 @@ contract DeployUniswapV4PriceRecorder is ExpectedChainGuard {
     uint16 public constant RING_SLOTS = 901;
     /// @notice Slots grown per transaction.
     uint16 public constant GROW_CHUNK = 250;
+    /// @notice Fixed gas for the first `record()` transaction. forge estimates a call from a simulation that runs in the SAME block as the
+    ///         constructor, where `record()` returns early (about 38,000 gas). On a real chain the call lands in a later block and writes a
+    ///         snapshot (about 70,000 gas), so the estimate would run out of gas. A fixed limit avoids the mismatch.
+    uint256 public constant RECORD_GAS = 300_000;
 
     struct Deployed {
         address recorder;
@@ -112,7 +116,7 @@ contract DeployUniswapV4PriceRecorder is ExpectedChainGuard {
         // The first record after the ring is raised widens the live ring to RING_SLOTS (V3 ring rule). It writes only in a later block than
         // the constructor's, which a real chain gives and a single simulated block does not: the return value is not asserted. The `agent`
         // stage pokes the recorder again before `addAsset`, so a record that landed in the constructor's block cannot leave the ring narrow.
-        rec.record();
+        rec.record{gas: RECORD_GAS}();
         (,,,, uint16 cardinalityNext) = rec.latest();
         require(cardinalityNext == RING_SLOTS, "recorder ring target is not 901 slots");
         d = Deployed({
