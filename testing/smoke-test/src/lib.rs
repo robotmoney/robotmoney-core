@@ -1745,10 +1745,7 @@ fn fund_rm_pool(
             String::from_utf8_lossy(&out.stderr)
         )));
     }
-    logging::info(
-        "smoke-test",
-        String::from_utf8_lossy(&out.stderr).trim().to_string(),
-    );
+    logging::info("smoke-test", String::from_utf8_lossy(&out.stderr).trim());
     Ok(())
 }
 
