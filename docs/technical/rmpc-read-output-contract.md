@@ -61,7 +61,12 @@ The deferred existing `rmpc status` (issue #15) command predates §9 and emits a
 - **Rationale.** A fabricated numeric default is data that a consumer can
   mistake for a successful answer. JSON `null` matches the existing
   `share_price` convention for "no answer" and is distinguishable from every
-  successful `totalAssets()` result, including an empty vault.
+  successful result, including an empty vault.
+- **Applies to.** Both `total_assets` (`totalAssets()`) and `total_supply`
+  (`totalSupply()`) on `get-vault` and `get-vaults`. A failed `totalSupply()`
+  renders `null`; a vault with genuinely zero shares renders `"0"`. Consumers
+  that parse these fields must treat `null` as "unknown" and fail loudly, never
+  coerce it to zero.
 
 ### 3.7 Snapshot-test placement is per-command, not per-envelope
 

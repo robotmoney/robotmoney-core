@@ -454,3 +454,76 @@ async fn get_vault_partial_when_total_supply_reverts() {
     // share_price uncomputable when the total_supply read failed.
     assert!(d["share_price"].is_null());
 }
+
+/// Pairing for [`get_vault_partial_when_total_supply_reverts`] (issue #1442):
+/// a vault whose `totalSupply()` genuinely returns zero must still render the
+/// decimal string `"0"` with `partial: false` and no `errors[]`. Without this
+/// pairing `null` would not be distinguishable from a fabricated default.
+#[tokio::test]
+async fn get_vault_genuine_zero_supply_renders_zero_not_null() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{chain_id:x}")))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
+        .with_status(200)
+        .with_body(jrpc_result("0x55"))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    let calls: Vec<(String, String)> = vec![
+        (
+            selector_hex_of::<RobotMoneyGateway::vaultCall>(),
+            enc_address(VAULT),
+        ),
+        (selector_hex_of::<IVault::assetCall>(), enc_address(USDC)),
+        (
+            selector_hex_of::<IVault::nameCall>(),
+            enc_string_returns::<IVault::nameCall>("V"),
+        ),
+        (
+            selector_hex_of::<IVault::symbolCall>(),
+            enc_string_returns::<IVault::symbolCall>("V"),
+        ),
+        (selector_hex_of::<IVault::decimalsCall>(), enc_u8(6)),
+        (
+            selector_hex_of::<IVault::totalAssetsCall>(),
+            enc_u256(U256::ZERO),
+        ),
+        (
+            selector_hex_of::<IVault::totalSupplyCall>(),
+            enc_u256(U256::ZERO),
+        ),
+    ];
+    for (selector, body) in calls {
+        server
+            .mock("POST", "/")
+            .match_body(match_eth_call_selector(&selector))
+            .with_status(200)
+            .with_body(jrpc_result(&body))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let out = rmpc()
+        .args(["get-vault", "--config", fix.config_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["partial"], false);
+    assert_eq!(v["data"]["total_supply"], "0");
+    assert_eq!(v["data"]["total_assets"], "0");
+    assert!(v["data"]["share_price"].is_null());
+}
