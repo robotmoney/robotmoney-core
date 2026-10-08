@@ -42,7 +42,7 @@ command -v python3 >/dev/null 2>&1 || {
 # so the count of assertions actually executed is asserted too. Raise this
 # together with any case you add; lowering it is how coverage disappears
 # quietly.
-MIN_EXPECTED_ASSERTIONS=20
+MIN_EXPECTED_ASSERTIONS=26
 
 PASS=0
 FAIL=0
@@ -175,6 +175,14 @@ elif mutation == "remove-writer-permissions":
     if perm_start is None:
         sys.exit("job %r has no permissions: block to remove — anchor moved" % job)
     del lines[perm_start:perm_end]
+
+elif mutation == "drop-top-permissions":
+    # Removes the workflow-scope permissions: block (issue #1428).
+    i = find_exact("permissions:")
+    j = i + 1
+    while j < len(lines) and (not lines[j].strip() or lines[j].startswith((" ", "#"))):
+        j += 1
+    del lines[i:j]
 
 elif mutation == "run-splice-input":
     for i, line in enumerate(lines):
@@ -318,6 +326,41 @@ if [[ $GOOD_PRE_EXIT -eq 0 ]]; then
 else
   fail "the extracted shape-check rejected a legitimate prerelease tag '${GOOD_PRERELEASE}' (output: $GOOD_PRE_OUT)"
 fi
+
+# ---------- --workflow-scope-only: the floor CI applies to EVERY workflow (issue #1428) ----------
+echo ""
+echo "--- selftest: --workflow-scope-only is clean on real files and catches a dropped or write-all top-level block ---"
+
+scope_only() { python3 "$AUDITOR" "$1" --workflow-scope-only; }
+
+for wf in "$DAPP_WORKFLOW" "$RMPC_WORKFLOW"; do
+  label="$(basename "$wf")"
+  OUT="$(scope_only "$wf")"
+  if [[ -z "$OUT" ]]; then
+    pass "$label: --workflow-scope-only is clean on the real file"
+  else
+    fail "$label: --workflow-scope-only is not clean: $OUT"
+  fi
+
+  mkdir -p "$WORKDIR/scope/$label"
+  if python3 "$MUTATOR_PY" "$wf" "$WORKDIR/scope/$label/drop.yml" drop-top-permissions; then
+    OUT="$(scope_only "$WORKDIR/scope/$label/drop.yml")"
+    if grep -q '^perms-default:' <<<"$OUT"; then
+      pass "$label: a workflow with no top-level permissions: block is caught by --workflow-scope-only"
+    else
+      fail "$label: a dropped top-level permissions: block was accepted (findings: ${OUT:-<none>})"
+    fi
+  else
+    fail "$label: drop-top-permissions fixture did not build"
+  fi
+
+  OUT="$(python3 "$MUTATOR_PY" "$wf" "$WORKDIR/scope/$label/w.yml" default-write && scope_only "$WORKDIR/scope/$label/w.yml")"
+  if grep -q '^perms-default:' <<<"$OUT"; then
+    pass "$label: top-level contents: write is caught by --workflow-scope-only"
+  else
+    fail "$label: top-level contents: write was accepted by --workflow-scope-only (findings: ${OUT:-<none>})"
+  fi
+done
 
 TOTAL=$((PASS + FAIL))
 echo ""

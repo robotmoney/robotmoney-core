@@ -129,9 +129,19 @@ concurrency:
 env:
   CI_CLASS: feature-correctness
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   abi-drift:
     name: abi-drift-gate
+    # The binding-inventory check reads issue state through `gh issue view` with
+    # GH_TOKEN (issue #1428): the one job-level scope beyond the contents: read floor.
+    permissions:
+      contents: read
+      issues: read
     runs-on: ubuntu-latest
     # 30 (was 15): issue #1346 added a Rust build of explorer-indexer so the
     # topic-0 cross-check can run against the artifacts this job already builds.

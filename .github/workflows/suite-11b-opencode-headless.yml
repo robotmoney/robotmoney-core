@@ -76,6 +76,11 @@ on:
       - "clients/rust-payment-client/src/bin/rmpc_keystore_import.rs"
       - "clients/rust-payment-client/Cargo.toml"
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
   pin:

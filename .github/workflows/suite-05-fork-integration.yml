@@ -75,6 +75,11 @@ concurrency:
   group: ${{ github.workflow }}-suite05-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   # ONE pin per workflow run (core 1498, 1496): the upstream head at the start of the run minus 2,
   # chosen here and handed to every slot below.
