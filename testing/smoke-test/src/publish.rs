@@ -510,6 +510,68 @@ impl Published {
         Ok(rows)
     }
 
+    /// Schedule one Safe -> Timelock operation through the publish-contracts Safe tool and leave it PENDING
+    /// (no delay warp, no execute): `propose`, then two owner `sign`s (the 2-of-3 quorum), then `execute` of
+    /// the Safe transaction by the deployer as gas payer. The real Safe proxy holds PROPOSER_ROLE, so the
+    /// timelock only accepts this when the real quorum signed. Returns nothing: read the operation from
+    /// the timelock (`hashOperation`, `isOperationPending`).
+    pub fn schedule_pending_op(
+        &self,
+        safe: &str,
+        timelock: &str,
+        target: &str,
+        data: &str,
+        salt: &str,
+    ) -> Result<(), HarnessError> {
+        let cli = self.cfg.publish_dir.join("src/safe/cli.ts");
+        let work = tempfile::tempdir()?;
+        let bundle = work.path().join("bundle.json");
+        let owner = |name: &str| {
+            format!(
+                "keystore:{}:{}",
+                self.keys.key_dir.join(name).display(),
+                self.keys.password_file.display()
+            )
+        };
+        let chain = TWIN_CHAIN_ID.to_string();
+        let bundle_s = bundle.display().to_string();
+        let run = |sub: &str, flags: &[&str]| -> Result<String, HarnessError> {
+            let mut cmd = Command::new("bun");
+            cmd.arg(&cli)
+                .arg(sub)
+                .args(["--rpc", &self.rpc_url, "--chain-id", &chain])
+                .args(flags)
+                .current_dir(self.cfg.publish_dir.parent().unwrap_or(&self.cfg.publish_dir))
+                .stdin(Stdio::null());
+            apply_publish_env(&mut cmd, TWIN_CHAIN_ID);
+            let out = cmd.output()?;
+            if !out.status.success() {
+                return Err(HarnessError::DeployFailed(format!(
+                    "safe tool `{sub}` exited {:?}: {}{}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                )));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        };
+        run(
+            "propose",
+            &[
+                "--safe", safe, "--timelock", timelock, "--action", "schedule", "--target", target,
+                "--data", data, "--salt", salt, "--out", &bundle_s,
+            ],
+        )?;
+        for name in ["SAFE_OWNER_A", "SAFE_OWNER_B"] {
+            run("sign", &["--bundle", &bundle_s, "--signer", &owner(name)])?;
+        }
+        run(
+            "execute",
+            &["--bundle", &bundle_s, "--signer", &signer_spec(&self.keys)],
+        )?;
+        Ok(())
+    }
+
     /// Run the one verifier. Exits non-zero (an Err here) unless every label passes.
     /// Returns the verifier's output so a caller can diff its labels against mainnet's.
     pub fn verify(&self) -> Result<String, HarnessError> {
