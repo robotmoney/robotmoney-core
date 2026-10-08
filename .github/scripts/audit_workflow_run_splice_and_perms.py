@@ -121,7 +121,7 @@ def job_permissions(lines, job):
     return perms, line_of
 
 
-def audit(lines, may_write_contents):
+def audit(lines, may_write_contents, workflow_scope_only=False):
     findings = []
 
     # ---- workflow-scope permissions ----------------------------------------
@@ -144,6 +144,17 @@ def audit(lines, may_write_contents):
             "contents: write, which every job inherits — including any job "
             "added to this file later that never asked for it"
         )
+
+    if workflow_scope_only:
+        # Issue #1428: the floor applied to EVERY workflow file. Only the
+        # workflow-scope check above runs; per-job blocks, writer jobs and
+        # run-splice are the strict mode's business (release workflows).
+        if not any(line == "jobs:" for line in lines):
+            findings.append(
+                "anchor: no top-level 'jobs:' key — this is not a workflow "
+                "the audit can vouch for"
+            )
+        return findings
 
     # ---- per-job permissions ------------------------------------------------
     jobs_at = [i for i, line in enumerate(lines) if line == "jobs:"]
@@ -326,6 +337,14 @@ def main():
         help="job name allowed to declare contents: write (repeatable)",
     )
     parser.add_argument(
+        "--workflow-scope-only",
+        action="store_true",
+        dest="workflow_scope_only",
+        help="run only the perms-default check (top-level permissions: "
+        "present and not contents: write); the floor CI applies to every "
+        "workflow file (issue #1428)",
+    )
+    parser.add_argument(
         "--extract-step",
         dest="extract_step",
         default=None,
@@ -341,7 +360,7 @@ def main():
         sys.stdout.write(extract_step(lines, args.extract_step))
         return 0
 
-    findings = audit(lines, set(args.writer_jobs))
+    findings = audit(lines, set(args.writer_jobs), args.workflow_scope_only)
     sys.stdout.write("".join(f + "\n" for f in findings))
     return 0
 

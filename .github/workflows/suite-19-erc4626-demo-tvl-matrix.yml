@@ -44,6 +44,11 @@ concurrency:
 env:
   CI_CLASS: feature-correctness
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   # ── ERC-4626 precondition checks ───────────────────────────────────────────
   # Activated in issue #814: contracts/test/ERC4626PreconditionChecks.t.sol asserts
