@@ -89,7 +89,13 @@ fn cast(rpc: &str, args: &[&str]) -> String {
 fn has_role(rpc: &str, timelock: &str, role: &str, who: &str) -> bool {
     cast(
         rpc,
-        &["call", timelock, "hasRole(bytes32,address)(bool)", role, who],
+        &[
+            "call",
+            timelock,
+            "hasRole(bytes32,address)(bool)",
+            role,
+            who,
+        ],
     ) == "true"
 }
 
@@ -190,7 +196,10 @@ fn get_timelock_integration() {
     );
     let owners = cast(&rpc, &["call", &safe, "getOwners()(address[])"]);
     assert_eq!(
-        owners.trim_matches(|c| c == '[' || c == ']').split(',').count(),
+        owners
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .count(),
         3,
         "the Safe must have 3 owners: {owners}"
     );
@@ -237,7 +246,10 @@ fn get_timelock_integration() {
     eprintln!("[get_timelock_integration] rmpc output:\n{v:#}");
     assert_eq!(v["chain_id"].as_u64().unwrap_or(0), fx.chain_id(), "{v}");
     assert_eq!(v["source"], "json_rpc", "source must be json_rpc: {v}");
-    assert!(v["block_number"].is_u64(), "block_number must be a u64: {v}");
+    assert!(
+        v["block_number"].is_u64(),
+        "block_number must be a u64: {v}"
+    );
     let d = &v["data"];
     assert_eq!(
         d["address"].as_str().unwrap().to_ascii_lowercase(),
@@ -278,14 +290,16 @@ fn get_timelock_integration() {
     // ── 2. The real Safe schedules an operation and leaves it pending ─────────────────────────
     let target = fx.consensus_receipt_hex().to_string();
     // releaseReceipt(bytes32 0x..01): the call is scheduled, never executed.
-    let data = cast(
-        &rpc,
-        &[
+    let calldata = Command::new("cast")
+        .args([
             "calldata",
             "releaseReceipt(bytes32)",
             "0x0000000000000000000000000000000000000000000000000000000000000001",
-        ],
-    );
+        ])
+        .output()
+        .expect("spawn cast calldata");
+    assert!(calldata.status.success(), "cast calldata failed");
+    let data = String::from_utf8_lossy(&calldata.stdout).trim().to_string();
     let salt = "0x1647000000000000000000000000000000000000000000000000000000000001";
     fx.published()
         .schedule_pending_op(&safe, &timelock, &target, &data, salt)
@@ -306,7 +320,12 @@ fn get_timelock_integration() {
     assert_eq!(
         cast(
             &rpc,
-            &["call", &timelock, "isOperationPending(bytes32)(bool)", &op_id]
+            &[
+                "call",
+                &timelock,
+                "isOperationPending(bytes32)(bool)",
+                &op_id
+            ]
         ),
         "true",
         "the Safe-scheduled operation must be pending on chain"
@@ -326,7 +345,10 @@ fn get_timelock_integration() {
     let ops = v["data"]["pending_ops"].as_array().unwrap();
     assert_eq!(ops.len(), 1, "exactly one pending op expected: {v}");
     assert_eq!(
-        ops[0]["operation_id"].as_str().unwrap().to_ascii_lowercase(),
+        ops[0]["operation_id"]
+            .as_str()
+            .unwrap()
+            .to_ascii_lowercase(),
         op_id.to_ascii_lowercase(),
         "pending op id must be the operation the Safe scheduled"
     );
