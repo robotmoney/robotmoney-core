@@ -89,7 +89,9 @@ There is no release keystore. After handover only the `TimelockController`
 holds the receipt contract's `ADMIN_ROLE`, so a receipt is released only by the
 `release-receipt` govern row (the real Safe schedules and executes
 `releaseReceipt` through the timelock). A `releaseReceipt` sent from any EOA
-reverts on authority. This is the same on the Twin chain and on Base mainnet.
+reverts on authority. This is the same on the Twin chain and on Base mainnet. On Base mainnet the row is a
+standalone post-launch action (issue 1611): the first run exits `GOVERN_PENDING` after the schedule, and the same
+command executes it after the 48-hour delay.
 
 **Rules.**
 

@@ -12,8 +12,9 @@
 // On demand, outside the matrix (it never blocks or completes the govern stage):
 //   release-receipt              ConsensusRecommendationReceipt.releaseReceipt(receiptId), one round per receipt id (--receipt-id)
 // The receipt contract's ADMIN_ROLE is held by the TimelockController after the timelock stage (INV-3), so the release is the same Safe ->
-// Timelock round as every other row. It runs on the Twin chain only: on 8453 the only operation after the handover is the basket unpause, so the
-// row is refused with USAGE (RECEIPT_REFUSED_ON_MAINNET) at CLI parse and in runGovern (issue 1579). Its run-manifest key and salt are `release-receipt-<receiptId>`.
+// Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
+// timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the three unpauses). The first run schedules and exits
+// GOVERN_PENDING with the resume command, the resume after the delay executes and reads isReleased back. Its run-manifest key and salt are `release-receipt-<receiptId>`.
 // A basket the sheet does not list in GOVERN_UNPAUSE_VAULTS is recorded as skipped (it stays paused). This module decides nothing about pause semantics.
 // The wait is the timelock's real delay. On a Twin fork (chain id is not 8453 and the RPC answers anvil_nodeInfo) it runs by ONE time warp to one second
 // past the latest ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING once, with the ready time and the exact next
@@ -80,8 +81,6 @@ export const GOVERN_DEPENDENCIES: Readonly<Record<string, string>> = {};
  * (once per receipt), and neither waits for nor completes the matrix. It is still one round through the real Safe and the real timelock.
  */
 export const RECEIPT_ROW = "release-receipt";
-/** The named refusal of the on-demand receipt release on chain 8453: the mainnet govern stage is the three basket unpauses only. */
-export const RECEIPT_REFUSED_ON_MAINNET = `--row ${RECEIPT_ROW} is the on-demand receipt release: it runs on a Twin fork only and is refused on chain ${BASE_CHAIN_ID} (the only mainnet operation after the handover is the basket unpause)`;
 const RECEIPT_ID = /^0x[0-9a-fA-F]{64}$/;
 
 /** `--receipt-id` value check: a 0x-prefixed bytes32. */
@@ -309,10 +308,9 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   if (o.receiptId !== undefined && o.row !== RECEIPT_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only`);
   if (o.call && o.receiptId !== undefined) throw new PublishError("USAGE", "a generic timelock call and --receipt-id are mutually exclusive");
   const releasing = o.row === RECEIPT_ROW;
-  if (releasing && ctx.chainId === BASE_CHAIN_ID) throw new PublishError("USAGE", RECEIPT_REFUSED_ON_MAINNET);
   const selected: GovernRowName | undefined = o.row === undefined || releasing ? undefined : resolveGovernRow(o.row);
   if (selected !== undefined && isTwinOnlyRow(selected) && ctx.chainId === BASE_CHAIN_ID) {
-    throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet operation after the handover is the basket unpause)`);
+    throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the basket unpause; the one other mainnet action is --row ${RECEIPT_ROW})`);
   }
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;

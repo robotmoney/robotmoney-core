@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
+import { releaseCalldata } from "../src/evidence-check.ts";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
 const a = (n: number) => "0x" + n.toString(16).padStart(40, "0");
@@ -74,13 +75,13 @@ const EV = parseAbi([
 ]);
 const tl = a(9);
 const id32 = (n: number) => h(n);
-const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: number, delay = 172800n) => {
+const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: number, delay = 172800n, target: string = a(1), calldata: string = "0x") => {
   const topics = encodeEventTopics({ abi: EV, eventName, args: eventName === "Cancelled" ? { id: id32(n) as Hex } : { id: id32(n) as Hex, index: 0n } } as any);
-  const data = eventName === "CallScheduled" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [a(1) as Hex, 0n, "0x", h(0) as Hex, delay])
-    : eventName === "CallExecuted" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [a(1) as Hex, 0n, "0x"]) : "0x";
+  const data = eventName === "CallScheduled" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [target as Hex, 0n, calldata as Hex, h(0) as Hex, delay])
+    : eventName === "CallExecuted" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [target as Hex, 0n, calldata as Hex]) : "0x";
   return { address: tl, topics: topics as Hex[], data: data as Hex };
 };
-interface Opts { sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
+interface Opts { relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
 function stub(ev: any, o: Opts = {}): ChainReader {
   const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
   const add = (hash: string, logs: any[], ts: number) => { receipts.set(hash, { status: o.failed === hash ? "reverted" : "success", blockNumber: bn, logs }); blocks.set(bn++, ts); };
@@ -92,6 +93,14 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     add(g.schedule_tx, [log("CallScheduled", id, o.delay)], t0);
     add(g.execute_tx, [log("CallExecuted", id)], t0 + (o.gap ?? 172800));
   });
+  (ev.receipt_releases ?? []).forEach((r: any, i: number) => {
+    const id = 50 + i;
+    const t0 = T0 + 10 + i;
+    const sched = [log("CallScheduled", id, o.relDelay, o.relTarget ?? RCPT, o.relData ?? releaseCalldata(r.receipt_id))];
+    if (o.relExtraCall) sched.push(log("CallScheduled", id, o.relDelay, o.relTarget ?? RCPT, o.relData ?? releaseCalldata(r.receipt_id)));
+    add(r.schedule_tx, sched, t0);
+    add(r.execute_tx, [log("CallExecuted", id, 0n, o.relTarget ?? RCPT, o.relData ?? releaseCalldata(r.receipt_id))], t0 + (o.relGap ?? 172800));
+  });
   return {
     getChainId: async () => o.chainId ?? 8453,
     getTransactionCount: async () => o.nonce ?? 2,
@@ -100,6 +109,12 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     readContract: async ({ functionName }) => (functionName === "depositsPaused" ? (o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
   };
 }
+const RCPT = a(30);
+const RID = h(0xabc);
+const withRelease = (e: any) => {
+  e.consensus_receipt = { address: RCPT };
+  e.receipt_releases = [{ receipt_id: RID, target: RCPT, operation_id: h(950), schedule_tx: h(600), schedule_status: 1, schedule_block_timestamp: T0 + 10, execute_tx: h(601), execute_status: 1, execute_block_timestamp: T0 + 10 + 172800 }];
+};
 const online = (o: Opts = {}, mutate: (e: any) => void = () => {}) => { const e = good(); const chain = stub(e, o); mutate(e); return checkEvidenceOnChain(e, chain, { safe: 2 }); };
 
 describe("evidence check reading the chain (stub RPC)", () => {
@@ -118,6 +133,48 @@ describe("evidence check reading the chain (stub RPC)", () => {
     expect((await checkEvidenceOnChain(e, stub(e), { safe: 2 })).join()).toContain("not a basket unpause");
   });
   test("another chain id is rejected", async () => expect((await online({ chainId: 918453 })).join()).toContain("RPC reports chain"));
+});
+
+describe("a post-launch consensus receipt release on 8453 (issue 1611)", () => {
+  const rel = (f: (e: any) => void = () => {}) => { const e = good(); withRelease(e); f(e); return e; };
+  const offline = (f: (e: any) => void = () => {}) => checkEvidence(rel(f)).join("\n");
+  const chain = (o: Opts = {}, f: (e: any) => void = () => {}) => { const e = rel(); const c = stub(e, o); f(e); return checkEvidenceOnChain(e, c, { safe: 2 }).then((p) => p.join("\n")); };
+
+  test("a correct release passes offline and on chain", async () => {
+    expect(offline()).toBe("");
+    expect(await chain()).toBe("");
+  });
+  test("a release in the govern list is still refused: only receipt_releases may carry it", () => {
+    expect(mut((e) => { e.govern.push({ ...e.govern[0], step: "release-receipt", schedule_tx: h(700), execute_tx: h(701), operation_id: h(702) }); })).toContain("is not a basket unpause");
+  });
+  test("the receipt contract address is required when a release is recorded", () => expect(offline((e) => { delete e.consensus_receipt; })).toContain("consensus_receipt.address is missing"));
+  test("a recorded target that is not the receipt contract is rejected", () => expect(offline((e) => { e.receipt_releases[0].target = a(31); })).toContain("is not the receipt contract"));
+  test("a malformed receipt id and a repeated receipt id are rejected", () => {
+    expect(offline((e) => { e.receipt_releases[0].receipt_id = "0x12"; })).toContain("receipt_id is not a bytes32");
+    expect(offline((e) => { e.receipt_releases.push({ ...e.receipt_releases[0], schedule_tx: h(610), execute_tx: h(611), operation_id: h(951) }); })).toContain("more than one evidence entry");
+  });
+  test("a recorded gap under 172800 s is rejected", () => expect(offline((e) => { e.receipt_releases[0].execute_block_timestamp = T0 + 10 + 172799; })).toContain("gap"));
+  test("a release sharing a transaction or an operation id with an unpause is rejected", () => {
+    expect(offline((e) => { e.receipt_releases[0].schedule_tx = e.govern[0].schedule_tx; })).toContain("none shared");
+    expect(offline((e) => { e.receipt_releases[0].operation_id = e.govern[0].operation_id; })).toContain("operation_id is also");
+  });
+  test("a wrong target on chain is rejected", async () => expect(await chain({ relTarget: a(31) })).toContain("is not the receipt contract"));
+  test("a wrong receipt id on chain is rejected", async () => expect(await chain({}, (e) => { e.receipt_releases[0].receipt_id = h(0xdef); })).toContain("calldata is not releaseReceipt"));
+  test("a delay under 172800 s on chain is rejected: the event delay and the block gap", async () => {
+    expect(await chain({ relDelay: 60n })).toContain("CallScheduled delay");
+    expect(await chain({ relGap: 172799 })).toContain("on-chain schedule-to-execute gap");
+  });
+  test("a schedule with more than one call is rejected", async () => expect(await chain({ relExtraCall: true })).toContain("exactly one call"));
+  test("any other operation on 8453 still fails", async () => {
+    expect(await chain({ relData: "0x12345678" })).toContain("calldata is not releaseReceipt");
+    const e = rel(); e.govern.push({ ...e.govern[0], step: "update-delay", schedule_tx: h(500), execute_tx: h(501) });
+    expect((await checkEvidenceOnChain(e, stub(e), { safe: 2 })).join()).toContain("not a basket unpause");
+  });
+  test("the template lists the release block and an empty list passes", () => {
+    const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
+    expect(tpl.receipt_releases).toEqual([]);
+    expect(checkEvidence({ ...good(), receipt_releases: [] })).toEqual([]);
+  });
 });
 
 describe("owner exceptions before plan approval", () => {
