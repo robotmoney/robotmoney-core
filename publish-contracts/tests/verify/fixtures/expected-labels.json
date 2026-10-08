@@ -174,7 +174,7 @@
   "vault[rmAGENT]: paused state equals sheet",
   "vault[rmAGENT]: router eligibility equals sheet",
   "vault[rmAGENT]: asset config equals sheet",
-  "vault[rmAGENT]: ships with no assets",
+  "vault[rmAGENT]: holds RM as its one asset",
   "vault[rmRWA]: ADMIN_ROLE held by timelock",
   "vault[rmRWA]: ADMIN_ROLE not held by deployer",
   "vault[rmRWA]: DEFAULT_ADMIN not held by deployer",

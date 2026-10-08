@@ -10,7 +10,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { localSafeTxHash } from "../../src/safe/tx.ts";
 import {
   ADMIN_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
-  SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32, ZERO,
+  RM_TOKEN, SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { getStageTable } from "../../src/stages.ts";
 import { basename } from "node:path";
@@ -64,7 +64,7 @@ const ASSETS: Record<string, { token: Address; pool: Address; swapFee: number; a
     { token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) },
     { token: addr(0xcb), pool: addr(0xf002), swapFee: 500, adapter: addr(0xad01) },
   ],
-  rmAGENT: [],
+  rmAGENT: [{ token: RM_TOKEN, pool: addr(0xf004), swapFee: 10000, adapter: addr(0xad01) }],
   rmRWA: [{ token: addr(0xde5), pool: addr(0xf003), swapFee: 500, adapter: addr(0xad01) }],
 };
 

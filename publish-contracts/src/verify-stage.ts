@@ -16,7 +16,7 @@ import { contractsFromManifests } from "./verify/sources.ts";
 
 /**
  * The expected asset config of one vault: core's config files (poolFee becomes swapFee) with the adapter this run deployed, read from the
- * vault manifest. rmUSDC holds no basket assets and rmAGENT ships empty.
+ * vault manifest. rmUSDC holds no basket assets and rmAGENT launches with RM only.
  */
 export function loadExpectedAssets(ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">, key: VaultKey): VaultSheet["assets"] {
   const configured = loadConfigAssets(ctx.coreDir, key);
