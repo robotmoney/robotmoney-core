@@ -100,7 +100,7 @@ describe("no test-only code gate", () => {
   });
 
   test("the migrated governed-path tests hold no pranked Safe", () => {
-    for (const f of ["AgentTokenVault", "BasketVault", "ConsensusRecommendationReceipt", "GovernedVaultSafeTimelock"]) {
+    for (const f of ["AgentTokenVault", "BasketVault", "ConsensusRecommendationReceipt", "GovernedVaultSafeTimelock", "DeployTimelock"]) {
       const r = planted(`contracts/test/${f}.t.sol`, "// vm.prank(safe) planted\ncontract T { function t() external { vm.prank(safe); } }\n");
       expect(r.code).not.toBe(0);
       expect(r.out).toContain(`contracts/test/${f}.t.sol:2`);

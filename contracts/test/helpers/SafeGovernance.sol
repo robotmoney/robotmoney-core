@@ -235,4 +235,16 @@ abstract contract SafeGovernance is SafeFixture {
         vm.expectRevert(bytes(GS013));
         _safeExecWith(safe_, address(tl), exec, sigs);
     }
+
+    /// @dev A direct call from the Safe to a governed contract, with two real owner signatures,
+    ///      fails: the Safe holds no admin role on it, only the timelock does. The inner
+    ///      `AccessControlUnauthorizedAccount` is hidden by the Safe as `GS013`, so callers also
+    ///      assert `hasRole(ADMIN_ROLE, safe)` is false to pin the cause.
+    function _expectDirectSafeCallRefused(address safe_, address target, bytes memory data)
+        internal
+    {
+        bytes memory sigs = _twoOwnerSignatures(_safeDigest(safe_, target, data));
+        vm.expectRevert(bytes(GS013));
+        _safeExecWith(safe_, target, data, sigs);
+    }
 }
