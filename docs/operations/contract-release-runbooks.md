@@ -328,6 +328,15 @@ After a deployment (successful or not), produce a report covering at least:
 The report is the closing artifact of the release. The release tracking
 issue is closed only after this report is filed.
 
+### 4.8. Post-launch consensus receipt release
+
+Releasing a consensus receipt on 8453 is a standalone post-launch action (core 1611). It is never part of
+stage 13, which stays the three basket unpauses. Run `govern --row release-receipt --receipt-id 0x<bytes32>`
+with the usual chain, RPC, sheet, signer and `--owner-signer` arguments. The real Safe schedules `releaseReceipt` on
+the timelock as its own operation and the CLI exits `GOVERN_PENDING` (exit 15) with the resume command. After the
+48-hour delay the same command makes the Safe execute it, and the CLI reads `released` back. Record the operation
+under `receipt_releases` in the evidence file. `update-delay`, `batch` and `cancel` stay Twin-only.
+
 ## 5. Per-release runbook format
 
 Each release has an operator runbook committed under `docs/runbooks/`. The

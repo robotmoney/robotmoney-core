@@ -138,6 +138,43 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .expect("the govern matrix must pass through the real Safe");
     assert!(!rows.is_empty(), "the govern matrix ran no rows");
 
+    // Core 1611: one consensus receipt is released end to end through the REAL Safe and the REAL timelock on the fork. The seed records two
+    // receipts (the gateway committee registration is itself a Safe -> Timelock call), then `govern --row release-receipt` schedules
+    // `releaseReceipt` through the Safe, waits the real timelock delay (one time warp on the fork) and executes it. The CLI reads `released`
+    // back, and this test reads it again from the chain: A is released, B (recorded, never released) is not.
+    fx.seed_consensus_receipts()
+        .expect("record two receipts and release one through the real Safe and timelock");
+    let receipt = format!("{:#x}", fx.consensus_receipt());
+    let is_released = |file: &str| -> bool {
+        let r = smoke_test::load_fixture_receipt(fx.repo_root(), file).expect("fixture receipt");
+        let id = format!("0x{}", hex::encode(r.receipt_id));
+        let out = Command::new("cast")
+            .args([
+                "call",
+                "--rpc-url",
+                fx.rpc_url(),
+                &receipt,
+                "isReleased(bytes32)(bool)",
+                &id,
+            ])
+            .output()
+            .expect("cast on PATH");
+        assert!(
+            out.status.success(),
+            "cast call isReleased failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim() == "true"
+    };
+    assert!(
+        is_released("receipt-a.json"),
+        "receipt A must read released after the Safe -> Timelock release round"
+    );
+    assert!(
+        !is_released("receipt-b.json"),
+        "receipt B was recorded only: it must not read released"
+    );
+
     // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain
     // after the full publish and govern run. `cast_send` fails on a reverted receipt.
     let user = fx.agent();

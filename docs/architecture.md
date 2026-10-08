@@ -723,9 +723,16 @@ Operators release a receipt with the publish-contracts govern row
 release-receipt --receipt-id 0x<bytes32> ...`, wrapped by `bun
 scripts/stage/core-stack.ts governance release --receipt-id ID`): the real Safe
 schedules `releaseReceipt` on the timelock, the delay passes, and the Safe
-executes it. That path runs on the Twin chain only: the row is refused with USAGE on Base
-mainnet (8453), where govern is the three basket unpauses. No
-EOA can release a receipt after handover.
+executes it. The same row runs on Base mainnet (8453) as a standalone
+post-launch action (issue 1611): its own timelock operation with its own
+48-hour delay, never part of stage 13, which stays the three basket
+unpauses. The first run schedules and exits `GOVERN_PENDING` with the resume
+command. After the delay the Safe executes it and the CLI reads `isReleased`
+back. `update-delay`, `batch` and `cancel` stay Twin-only. The mainnet evidence
+check (`evidence-check.ts`) accepts a release only under `receipt_releases`:
+one schedule and one execute at least 172800 s apart, target the receipt
+contract, calldata `releaseReceipt(receiptId)`. No EOA can release a
+receipt after handover.
 
 **Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,
 no ERC-20 surface, no call into any vault, `PortfolioRouter`, or
