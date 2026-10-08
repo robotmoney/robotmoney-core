@@ -153,10 +153,10 @@ other_workspace_crate_recompiled() {
     | grep -vqE '^[[:space:]]*Compiling explorer-indexer v'
 }
 
-# Every parity run must execute both tests: a run that collected zero tests
+# Every parity run must execute all four tests: a run that collected zero tests
 # would otherwise read as green.
 parity_green() {
-  grep -qE '^test result: ok\. 2 passed; 0 failed' "$LOG"
+  grep -qE '^test result: ok\. 4 passed; 0 failed' "$LOG"
 }
 
 expect_rebuild_and_green() {
@@ -167,7 +167,7 @@ expect_rebuild_and_green() {
   [[ "$BUILD_SCRIPT_RAN" == yes ]] \
     || fail "$label: explorer-indexer's build script did NOT re-run after a migrations-only change (is build.rs still emitting cargo:rerun-if-changed=migrations?)"
   recompiled || fail "$label: cargo did NOT recompile explorer-indexer after a migrations-only change"
-  parity_green || fail "$label: parity target did not report 2 passed"
+  parity_green || fail "$label: parity target did not report 4 passed"
 }
 
 echo "=== STEP 1: warm baseline ==="
@@ -182,7 +182,7 @@ run_parity || fail "control: parity target failed on an unchanged tree"
 if recompiled && ! other_workspace_crate_recompiled; then
   fail "control: explorer-indexer recompiled with nothing changed and no dependency rebuilt"
 fi
-parity_green || fail "control: parity target did not report 2 passed"
+parity_green || fail "control: parity target did not report 4 passed"
 
 echo "=== STEP 2: ADD a migration, no .rs change ==="
 printf -- '-- issue #1416 rebuild-trigger probe. Never applied to a database.\nSELECT 1;\n' >"$PROBE"
@@ -219,7 +219,7 @@ mv "$MOVED" "$MIGRATIONS"
 
 echo "=== STEP 8: restored tree is green ==="
 run_parity || fail "restore: parity target failed after restoring migrations/"
-parity_green || fail "restore: parity target did not report 2 passed"
+parity_green || fail "restore: parity target did not report 4 passed"
 
 if [[ $FAILURES -ne 0 ]]; then
   echo "test_indexer_migration_rebuild_trigger: ${FAILURES} failure(s)" >&2
