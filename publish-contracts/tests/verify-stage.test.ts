@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { RM_TOKEN } from "../src/verify/constants.ts";
 import { join } from "node:path";
 import { PublishError } from "../src/errors.ts";
 import { publishLogger } from "../src/log.ts";
@@ -78,10 +79,19 @@ describe("stage 12: the one verifier", () => {
     expect(() => loadExpectedAssets(none, "PROTO")).toThrow(/manifest .* is missing|has no adapter/);
   });
 
-  test("rmAGENT ships empty and needs no adapter", () => {
+  test("an empty agent list needs no adapter, and rmUSDC holds no basket assets", () => {
     const { ctx } = setup({}, { adapters: false });
     expect(loadExpectedAssets(ctx, "AGENT")).toEqual([]);
     expect(loadExpectedAssets(ctx, "USDC")).toEqual([]);
+  });
+
+  test("the committed agent shortlist expects RM as rmAGENT's one asset, on the V3 pool at fee 10000, with the run's adapter (core 1554)", () => {
+    const { ctx } = setup({}, {});
+    copyFileSync(join(import.meta.dir, "..", "..", "config", "agent-token-shortlist.json"), join(ctx.coreDir, "config", "agent-token-shortlist.json"));
+    const want = loadExpectedAssets(ctx, "AGENT");
+    expect(want.map((a) => [a.token.toLowerCase(), a.pool.toLowerCase(), a.swapFee, a.adapter])).toEqual([
+      [RM_TOKEN.toLowerCase(), "0x8cd8c7015b6a8f8310c15ccc8aa3d200d9c74882", 10000, MANIFEST_ADAPTER],
+    ]);
   });
 
   test("a failing check fails the stage with the VERIFY exit class", async () => {

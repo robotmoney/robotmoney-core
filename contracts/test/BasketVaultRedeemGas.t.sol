@@ -54,7 +54,7 @@ contract BasketVaultRedeemGasForkTest is Test {
         return BasketVault(new DeployProtocolAssetVault().runInProcess(_params(), cfg).vault);
     }
 
-    /// @dev rmAGENT ships with an empty shortlist, so the fork test gives it the real wETH and
+    /// @dev rmAGENT ships holding only RM, so the fork test gives it the real wETH and
     ///      cbBTC pools to make the redeem sell through Uniswap.
     function _agent() internal returns (BasketVault) {
         return BasketVault(new DeployAgentTokenVault().runInProcess(_params(), _agentCfg()).vault);

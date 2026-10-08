@@ -130,10 +130,13 @@ describe.skipIf(!coreAvailable())(`core parity: the real core config files in ${
       expect(a.venue).toBe(0);
     }
   });
-  test("rmPROTO lists wETH and cbBTC, rmRWA lists deSPXA only, rmAGENT ships empty", () => {
+  test("rmPROTO lists wETH and cbBTC, rmRWA lists deSPXA only, rmAGENT lists RM only", () => {
     expect(loadVaultConfiguredAssets(REPO_ROOT, "PROTO").map((a) => a.symbol)).toEqual(["wETH", "cbBTC"]);
     expect(loadVaultConfiguredAssets(REPO_ROOT, "RWA").map((a) => a.symbol)).toEqual(["deSPXA"]);
-    expect(loadVaultConfiguredAssets(REPO_ROOT, "AGENT")).toEqual([]);
+    const agent = loadVaultConfiguredAssets(REPO_ROOT, "AGENT");
+    expect(agent.map((a) => a.symbol)).toEqual(["RM"]);
+    expect(agent[0].token.toLowerCase()).toBe("0x65021a79aeef22b17cdc1b768f5e79a8618beba3");
+    expect(agent[0].swapFee).toBe(10000);
   });
   test("every basket and agent vault of the stage table has a config file mapping", () => {
     const table = loadStageTable(REPO_ROOT);

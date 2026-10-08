@@ -84,7 +84,7 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
     }
     assert!(
         deposits_paused(&rpc, &vaults["rmAGENT"]),
-        "rmAGENT ships empty and stays paused"
+        "rmAGENT holds RM but the default sheet never unpauses it: it stays paused"
     );
 
     // A real depositor puts USDC straight into each open vault: shares in rmUSDC, rmPROTO and rmRWA.
@@ -234,7 +234,7 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
             "{name} must still be paused"
         );
     }
-    // rmAGENT ships with no assets: nobody can hold its shares, so there is nothing to redeem there.
+    // rmAGENT holds RM and stays paused (the default sheet never unpauses it): the test deposits nothing there, so there are no shares to redeem.
     assert_eq!(
         before
             .iter()

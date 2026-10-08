@@ -285,7 +285,7 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
 
   // Four-vault conformance (core 1488, one deployment scheme): the landing
   // VaultCards render one tile per registered vault. All four vaults ship
-  // (rmUSDC, rmPROTO, rmAGENT, rmRWA); rmAGENT is deployed empty and paused, so
+  // (rmUSDC, rmPROTO, rmAGENT, rmRWA); rmAGENT is deployed holding RM and paused, so
   // this test no longer asserts that every tile is Active.
   test("landing renders a tile per registered vault", async ({ page }) => {
     // Ground truth: the chain-registered vault set.

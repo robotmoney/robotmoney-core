@@ -568,6 +568,13 @@ impl Fixture {
             logging::error("smoke-test", format!("funding keys failed: {err}"));
         })?;
 
+        // Issue 1554: rmAGENT launches holding RM, and `BasketVault.addAsset` needs the RM/USDC pool to have
+        // liquidity and observation history. The live pool is unfunded until the owner funds it, so the Twin
+        // chain funds the same pool with real transactions first. The addAsset floors are not relaxed.
+        fund_rm_pool(&publish_cfg, twin.rpc_url(), &repo_root).inspect_err(|err| {
+            logging::error("smoke-test", format!("funding the RM pool failed: {err}"));
+        })?;
+
         // Identity lines are addresses only. The agent and the pauser are the
         // harness's own known keys, so the e2e suites can sign as them.
         let mut identity = keys.fragment.clone();
@@ -759,7 +766,7 @@ impl Fixture {
     pub fn proto_vault(&self) -> Address {
         self.vault_by_key("rmPROTO")
     }
-    /// rmAGENT (AgentTokenVault: deployed empty and paused).
+    /// rmAGENT (AgentTokenVault: deployed paused, holding RM as its one asset).
     pub fn agent_vault(&self) -> Address {
         self.vault_by_key("rmAGENT")
     }
@@ -1285,6 +1292,17 @@ impl Fixture {
         }
     }
 
+    /// Raw `eth_call` of `sig` (for example `assets(uint256)`) with `args` on `to`: the undecoded
+    /// return data as a lowercase 0x hex string. Read-only, no signing.
+    pub fn cast_call_raw(
+        &self,
+        to: Address,
+        sig: &str,
+        args: &[&str],
+    ) -> Result<String, HarnessError> {
+        cast_call_raw_at(&self.rpc_url, &format!("{to:#x}"), sig, args)
+    }
+
     /// Read `token.balanceOf(owner)` via a plain `eth_call` (`cast call`).
     /// Used to verify deposits actually minted shares to the recipient. No
     /// signing, no impersonation — a read-only query against the live chain.
@@ -1682,6 +1700,53 @@ impl Fixture {
             .unwrap_or("")
             .to_string())
     }
+}
+
+/// Raw `cast call` of `sig` on `to` at `rpc_url`: lowercase 0x hex return data. Read-only.
+fn cast_call_raw_at(
+    rpc_url: &str,
+    to: &str,
+    sig: &str,
+    args: &[&str],
+) -> Result<String, HarnessError> {
+    let mut cmd = Command::new("cast");
+    cmd.args(["call", "--rpc-url", rpc_url, to, sig]);
+    cmd.args(args);
+    let out = cmd.output()?;
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "cast call {sig} on {to} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_lowercase())
+}
+
+/// Fund the live RM/USDC Uniswap V3 pool on the Twin chain (issue 1554) with `rehearsal fund-rm-pool`, the one
+/// implementation of the step (the twin-publish CI action runs the same verb). Real pool, real position manager,
+/// real transactions: it gives a funder RM and USDC with the fork's balance helpers, raises the pool's
+/// observation cardinality and mints one in-range position. It asserts the `BasketVault.addAsset` floors
+/// (cardinality >= 2, liquidity >= 1e6) itself, so a failure names the pool and not a later revert.
+fn fund_rm_pool(
+    cfg: &publish::PublishConfig,
+    rpc_url: &str,
+    repo_root: &Path,
+) -> Result<(), HarnessError> {
+    let out = Command::new("bun")
+        .arg(cfg.rehearsal_cli())
+        .args(["fund-rm-pool", "--rpc", rpc_url, "--core-dir"])
+        .arg(repo_root)
+        .stdin(Stdio::null())
+        .output()?;
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "rehearsal fund-rm-pool failed: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    logging::info("smoke-test", String::from_utf8_lossy(&out.stderr).trim());
+    Ok(())
 }
 
 // -- Public helpers ---------------------------------------------------

@@ -29,7 +29,7 @@ Stage is the same deployment as mainnet. Only parameters differ. There is one ru
 
 ## Vaults
 
-All four vaults ship with assets that have usable pools: rmUSDC, rmPROTO (wETH and cbBTC), rmAGENT (empty and paused) and rmRWA (deSPXA only, plain basket row, no oracle). Coinbase stocks are phase two.
+All four vaults ship with assets that have usable pools: rmUSDC, rmPROTO (wETH and cbBTC), rmAGENT (paused, holding RM on the owner-funded V3 pool; the Twin chain run funds that pool first with `rehearsal fund-rm-pool`) and rmRWA (deSPXA only, plain basket row, no oracle). Coinbase stocks are phase two.
 
 ## What is not here
 
@@ -84,7 +84,7 @@ Every line above is required. No script has a default for it (`scripts/deploy/RE
 | Four vault manifests after a publish run | `core-stack publish run` (exit 66 on a short count) |
 | Verifier labels on stage equal the mainnet label set | `scripts/stage/parity.ts` runs `label-diff.ts` on the verifier output the Twin chain smoke job saved (`SMOKE_TEST_VERIFY_OUT`) |
 | Stage sheet versus production sheet differ only in parameter lines | `scripts/stage/parity.ts` runs `sheet-diff.ts` on the run sheet the smoke job saved (`SMOKE_TEST_SHEET_OUT`) |
-| Router, basket vault and timelock role proofs | Labels of the one verifier (`publish-contracts/src/verify`): `gateway: router() equals the deployed router`, `registry: router() equals the deployed router`, `vault[KEY]: a second setRegistry reverts`, the role matrix, the asset config and `vault[rmAGENT]: ships with no assets` |
+| Router, basket vault and timelock role proofs | Labels of the one verifier (`publish-contracts/src/verify`): `gateway: router() equals the deployed router`, `registry: router() equals the deployed router`, `vault[KEY]: a second setRegistry reverts`, the role matrix, the asset config and `vault[rmAGENT]: holds RM as its one asset` |
 | Every govern row has a tx hash and receipt status 1 | `scripts/stage/govern-rows.ts` |
 | Deleted paths stay deleted | `scripts/stage/check-deleted-stage-scripts.ts` |
 

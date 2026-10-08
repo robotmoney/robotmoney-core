@@ -406,7 +406,7 @@ function estimatedEthFrom(stdout: string): number | undefined {
 
 /**
  * Before each vault stage the config-check runs again against the live RPC (the target chain, also in a dry run: it only reads) and the
- * stage fails on any failed row. A vault with no configured assets (rmAGENT ships empty, rmUSDC holds no basket assets) has nothing to check.
+ * stage fails on any failed row. A vault with no configured assets (rmUSDC holds no basket assets, and an agent list emptied through the timelock holds none) has nothing to check.
  */
 export async function vaultConfigGate(ctx: RunContext, row: StageRow): Promise<void> {
   if (!row.vault) return;

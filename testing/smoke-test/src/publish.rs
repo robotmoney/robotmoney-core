@@ -90,7 +90,7 @@ impl PublishConfig {
         self.publish_dir.join("src/cli.ts")
     }
 
-    fn rehearsal_cli(&self) -> PathBuf {
+    pub(crate) fn rehearsal_cli(&self) -> PathBuf {
         self.publish_dir.join("src/rehearsal/cli.ts")
     }
 }

@@ -59,7 +59,7 @@ compare (it names the mismatch rather than reporting stale docs).
 7. `forge test` (four-vault real-TVL pyramid, issue #592) — a dedicated, named
    step guards the real four-vault end state so it cannot silently regress:
    the basket vault script suites assert all four PRD §11 vaults deploy
-   registered, paused and with config-equal assets (rmAGENT empty); `DeployBasketVaultRwa.t.sol` and
+   registered, paused and with config-equal assets (rmAGENT holds RM); `DeployBasketVaultRwa.t.sol` and
    `RwaBasketVaultFork.t.sol` cover the deSPXA basket row and its NAV against the pool TWAP; the
    `BasketVault`/`AgentTokenVault` suites pin per-vault basket composition.
 

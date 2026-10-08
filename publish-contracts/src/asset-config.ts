@@ -12,7 +12,7 @@ export interface ConfigAsset { symbol?: string; token: Address; pool: Address; s
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 
-/** The configured assets of one vault. USDC holds none. AGENT may be empty (it ships empty and paused), PROTO and RWA may not. */
+/** The configured assets of one vault. USDC holds none. AGENT lists RM only at launch (core 1554), and its list may be empty (tokens are added through the timelock), PROTO and RWA may not. */
 export function loadConfigAssets(coreDir: string, key: VaultKey): ConfigAsset[] {
   const spec = ASSET_CONFIG_FILES[key];
   if (!spec) return [];

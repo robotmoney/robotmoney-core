@@ -38,7 +38,7 @@ export function loadConfiguredAssets(coreDir: string): ConfiguredAsset[] {
   return out;
 }
 
-/** The configured assets of one vault (rmUSDC and an empty rmAGENT shortlist give none). */
+/** The configured assets of one vault (rmUSDC gives none). */
 export function loadVaultConfiguredAssets(coreDir: string, key: VaultKey): ConfiguredAsset[] {
   return loadConfigAssets(coreDir, key).map((a) => ({ ...a, vault: VAULT_NAME[key] }));
 }

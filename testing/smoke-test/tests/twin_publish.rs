@@ -175,6 +175,27 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "receipt B was recorded only: it must not read released"
     );
 
+    // Issue 1554: rmAGENT launches paused and holding RM. Its one asset is the live RM token,
+    // read back from the deployed vault (`assetCount()` is 1, `assets(0)` word 0 is the token).
+    let agent = fx.agent_vault();
+    let count = fx
+        .cast_call_raw(agent, "assetCount()", &[])
+        .expect("read rmAGENT assetCount");
+    assert_eq!(
+        count.trim_start_matches("0x").trim_start_matches('0'),
+        "1",
+        "rmAGENT must hold exactly one asset, RM (assetCount raw {count})"
+    );
+    let first = fx
+        .cast_call_raw(agent, "assets(uint256)", &["0"])
+        .expect("read rmAGENT assets(0)");
+    assert!(
+        first
+            .trim_start_matches("0x")
+            .starts_with("00000000000000000000000065021a79aeef22b17cdc1b768f5e79a8618beba3"),
+        "rmAGENT asset 0 must be RM 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3, got {first}"
+    );
+
     // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain
     // after the full publish and govern run. `cast_send` fails on a reverted receipt.
     let user = fx.agent();

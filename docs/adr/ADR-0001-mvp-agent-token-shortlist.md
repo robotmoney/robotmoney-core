@@ -118,7 +118,7 @@ replace the 2026-06-15 three-token shortlist for the Base mainnet launch:
   as a stand-in `DemoBasketToken` and that the live address is a `TODO`.
 - **Branch state when this amendment was written** (`impl/core-contracts`,
   core PR 1505): `config/agent-token-shortlist.json` still carries an
-  empty `shortlist`, so the RM entry is not yet added (core 1491).
+  empty `shortlist`, so the RM entry is not yet added (core 1491). Core 1554 added it: the file now lists RM only.
   `contracts/script/DeployRmToken.s.sol` is already deleted and is listed
   as forbidden in `scripts/ci/check-no-test-only-code.ts`.
   `contracts/RmToken.sol` is also deleted (core 1489, 2026-10-05) and is

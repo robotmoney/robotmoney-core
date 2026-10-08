@@ -39,7 +39,7 @@ export interface VaultSheet {
   feeRecipient: Address;
   /** True for vaults that ship paused (rmAGENT and the basket vaults until stage 13). */
   expectPaused: boolean;
-  /** Basket and agent vaults: the exact asset set. rmAGENT is an empty list. Ignored for kind usdc. */
+  /** Basket and agent vaults: the exact asset set. rmAGENT is the single RM asset. Ignored for kind usdc. */
   assets: ExpectedAsset[];
   /** rmUSDC only: the frozen seed in 6-decimal units. */
   seed?: bigint;

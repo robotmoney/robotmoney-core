@@ -1,7 +1,7 @@
 // Canonical: core issue 1499, core S2 (issue 1484).
 // Process-level test of scripts/ci/config-check.ts against a local fake JSON-RPC server.
 // It proves the CLI contract the issue states: exit 0 when live facts match for wETH, cbBTC and
-// deSPXA, non-zero when a pool address or fee is altered, and an output file named with the block.
+// deSPXA and RM, non-zero when a pool address or fee is altered, and an output file named with the block.
 // Run: bun test scripts/ci/config-check-cli.test.ts --timeout 60000
 // Live run (needs the network, no secret; run later in the config-check CI job):
 //   bun scripts/ci/config-check.ts --rpc https://mainnet.base.org --out-dir config-check-output
@@ -21,7 +21,7 @@ const a = (x: string) => x.replace(/^0x/, "").toLowerCase().padStart(64, "0");
 // The fake chain serves the code 0x6001 everywhere, so its hash is the USDC pin.
 const FAKE_HASH = keccakHex("0x6001");
 const base = loadConfigs(realDir);
-const all = [...base.protocol.assets, ...base.rwa.assets];
+const all = [...base.protocol.assets, ...base.rwa.assets, ...base.agent.shortlist];
 const FACTORY = base.rwa.uniswapV3Factory.toLowerCase();
 
 /** The live pool fee the fake chain reports for a symbol (default: the committed fee). */
@@ -73,6 +73,8 @@ function configDir(mutate: (files: Record<string, any>) => void = () => {}): str
   const files: Record<string, any> = {};
   for (const n of readdirSync(dir)) if (n.endsWith(".json")) files[n] = JSON.parse(readFileSync(join(dir, n), "utf8"));
   files["usdc-hashes.json"] = { ...files["usdc-hashes.json"], proxyCodeHash: FAKE_HASH, implementationCodeHash: FAKE_HASH };
+  // RM is pinned by token code hash like USDC, so the fake chain's code hash is its pin too.
+  for (const e of files["agent-token-shortlist.json"].shortlist) e.tokenCodeHash = FAKE_HASH;
   mutate(files);
   for (const [n, j] of Object.entries(files)) writeFileSync(join(dir, n), JSON.stringify(j, null, 2));
   return dir;
