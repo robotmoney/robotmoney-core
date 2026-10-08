@@ -215,14 +215,18 @@ test.describe("suite-10: GovernancePanel E2E on the real Safe topology", () => {
     await expect(page.getByTestId("governance-vote-error")).toHaveCount(0);
 
     // On chain: the vote is recorded for this wallet.
-    expect(
-      await chain.readContract({
-        address: governance,
-        abi: governanceAbi,
-        functionName: "hasVoted",
-        args: [1n, voter],
-      }),
-    ).toBe(true);
+    await expect
+      .poll(
+        async () =>
+          chain.readContract({
+            address: governance,
+            abi: governanceAbi,
+            functionName: "hasVoted",
+            args: [1n, voter],
+          }),
+        { timeout: 60_000, intervals: [1_000] },
+      )
+      .toBe(true);
 
     // In the index: the tally moved by the voter's power.
     await expect
