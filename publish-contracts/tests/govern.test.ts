@@ -3,7 +3,7 @@
 // by the Twin fork publish (core-stages-twin-chain) and on 8453 (runbook Q2), never here.
 // Issue 1520: the only mainnet operation after the handover is the basket unpause. Everything else is deploy-time configuration.
 import { describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { decodeFunctionData, keccak256, toBytes, toFunctionSelector } from "viem";
 import { APPLY_ROW, GOVERNANCE_WEIGHTS_ABI, applyRecordKey } from "../src/apply-receipt.ts";
@@ -12,7 +12,7 @@ import { GOVERN_ROWS, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, UN
 import { beginPauseEntry, loadRunManifest, newManifest, nextManifestSeq, reserveManifestSeq, saveRunManifest, updatePauseEntry } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
-import { SHA, sheetText } from "./fixtures.ts";
+import { REPO, SHA, sheetText } from "./fixtures.ts";
 import { A, addr, fakeTimelock, sender, setup, signers } from "./govern-world.ts";
 
 const ALL = {
@@ -48,6 +48,19 @@ describe("the govern rows: the basket unpauses plus the Twin-only demonstrations
   });
 });
 
+describe("the committed Twin stage sheet plans the three basket unpauses (core 1703)", () => {
+  const twinSheet = parseSheet(readFileSync(join(REPO, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
+  test("GOVERN_UNPAUSE_VAULTS is PROTO,AGENT,RWA: a rehearsal differs from production only in arguments", () => {
+    expect(twinSheet.govern.unpauseVaults).toEqual(["PROTO", "AGENT", "RWA"]);
+  });
+  test("each unpause row builds exactly one unpauseDeposits call from that sheet", () => {
+    const { ctx } = setup();
+    const a = loadGovernAddrs(ctx);
+    const calls = UNPAUSE_ROWS.map((r) => buildStepCalls(twinSheet, a, r).length);
+    expect(calls).toEqual([1, 1, 1]);
+  });
+});
+
 describe("step calldata: an unpause is one unpause call on that basket vault", () => {
   const { ctx, sheet } = setup(ALL);
   const a = loadGovernAddrs(ctx);
@@ -58,7 +71,7 @@ describe("step calldata: an unpause is one unpause call on that basket vault", (
     }
   });
   test("a basket the sheet does not list builds no call: it stays paused", () => {
-    const d = setup();
+    const d = setup({ GOVERN_UNPAUSE_VAULTS: "PROTO,RWA" });
     expect(buildStepCalls(d.sheet, loadGovernAddrs(d.ctx), "unpause-AGENT")).toEqual([]);
   });
   test("salts are deterministic per SHA, chain and row, and differ between rows", () => {
@@ -292,8 +305,8 @@ describe("a Twin fork: one sitting, ONE warp, then the Twin-only rows one round 
     await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { maxWaitSeconds: 60 })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
   });
 
-  test("a default sheet skips the baskets it does not unpause and says why", async () => {
-    const { ctx, sheet } = setup();
+  test("a sheet that omits a basket skips it and says why", async () => {
+    const { ctx, sheet } = setup({ GOVERN_UNPAUSE_VAULTS: "PROTO,RWA" });
     const tl = fakeTimelock(sheet, DELAY);
     const manifest = newManifest(ctx, addr(0xa001));
     const res = await run(ctx, manifest, sheet, tl, { warp: warpTo(tl) });

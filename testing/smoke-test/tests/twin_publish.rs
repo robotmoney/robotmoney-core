@@ -533,9 +533,7 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
         "venue is V4 (1)"
     );
 
-    // The depositor: a funded EOA. rmAGENT is opened through the real Safe and timelock (a generic Twin-only call).
-    fx.unpause_agent_vault()
-        .expect("open rmAGENT deposits through the real Safe and timelock");
+    // The depositor: a funded EOA. rmAGENT is already open: the govern matrix above unpaused it through the real Safe and timelock.
     let user = fx.agent();
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     fx.fund_gas(user, 10_000_000_000_000_000_000)

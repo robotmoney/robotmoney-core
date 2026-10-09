@@ -176,7 +176,7 @@ describe("govern warps the timelock waits on a Twin fork only", () => {
     const manifest = newManifest(ctx, addr(0xa001));
     await runGovern(ctx, stageByName("govern"), manifest, base(sheet, tl, { warp: async (s: bigint) => { warps.push(s); tl.s.clock += s; } }) as never);
     expect(manifest.stages.govern!.status).toBe("done");
-    expect(warps.length).toBe(3);                 // one wait for every unpause (the default sheet skips rmAGENT), one for update-delay, one for batch; the cancel round has none
+    expect(warps.length).toBe(3);                 // one wait for all three unpauses, one for update-delay, one for batch; the cancel round has none
     // the unpauses and update-delay wait the real 172800 s delay; the batch round runs after update-delay, at the new delay (the sheet's GOVERN_NEW_DELAY)
     expect(warps.slice(0, 2)).toEqual([172_801n, 172_801n]);
     expect(warps[2]).toBe(sheet.govern.newDelay + 1n);

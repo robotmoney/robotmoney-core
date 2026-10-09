@@ -1533,17 +1533,6 @@ impl Fixture {
         )
     }
 
-    /// Open rmAGENT deposits through the real Safe and the real timelock (core 1676). The default Twin sheet never unpauses rmAGENT, so the
-    /// V4 deposit test opens it with a generic Twin-only call, the way the gateway is reopened above.
-    pub fn unpause_agent_vault(&self) -> Result<String, HarnessError> {
-        self.timelock_call(
-            "agent-unpause-deposits",
-            self.agent_vault(),
-            "unpauseDeposits()",
-            &[],
-        )
-    }
-
     /// Revoke the agent as its owner, the test depositor (`revokeAgent` requires the recorded owner).
     pub fn revoke_agent(&self) -> Result<String, HarnessError> {
         let agent = format!("{:#x}", self.agent());
