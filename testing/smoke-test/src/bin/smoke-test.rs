@@ -96,6 +96,22 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     no_receipt_fixtures: bool,
 
+    /// The stage deploy job: boot or reuse the Twin chain (`TWIN_RPC_URL`), run the whole ceremony (fund, publish
+    /// contracts through the real Safe handover, depositor authorization), write the dapp compose environment to
+    /// `--dapp-env-out`, print the endpoint summary and EXIT, leaving the keystores and manifests in
+    /// `SMOKE_TEST_WORK_DIR`. It starts no container and owns nothing afterwards: `scripts/stage/core-stack.ts`
+    /// brings the dapp stack up from the JSON. Needs `--dapp-port`, `--explorer-port` and `--dapp-env-out`.
+    #[arg(long, default_value_t = false)]
+    deploy_only: bool,
+
+    /// With `--deploy-only`: write the endpoint summary to this file instead of stdout.
+    #[arg(long, value_name = "PATH")]
+    summary_out: Option<PathBuf>,
+
+    /// With `--deploy-only`: where to write the dapp compose environment (a JSON object).
+    #[arg(long, value_name = "PATH")]
+    dapp_env_out: Option<PathBuf>,
+
     /// Rotate the unified log file after it grows beyond this many bytes.
     /// Defaults to 10 MiB.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
@@ -111,6 +127,20 @@ fn main() {
 
 fn run() -> i32 {
     let cli = Cli::parse();
+    if cli.deploy_only && (cli.full_stack || cli.tunnel) {
+        eprintln!(
+            "smoke-test: --deploy-only starts no stack: it excludes --full-stack and --tunnel."
+        );
+        return 2;
+    }
+    if cli.deploy_only
+        && (cli.dapp_env_out.is_none() || cli.dapp_port.is_none() || cli.explorer_port.is_none())
+    {
+        eprintln!(
+            "smoke-test: --deploy-only needs --dapp-env-out, --dapp-port and --explorer-port."
+        );
+        return 2;
+    }
     if cli.tunnel && !cli.full_stack {
         eprintln!("smoke-test: --tunnel requires --full-stack.");
         return 2;
@@ -135,10 +165,26 @@ fn run() -> i32 {
         eprintln!("smoke-test: --tunnel is incompatible with --public-*-url flags.");
         return 2;
     }
-    if use_named && !cli.full_stack {
+    if use_named && !cli.full_stack && !cli.deploy_only {
         eprintln!("smoke-test: --public-*-url flags require --full-stack.");
         return 2;
     }
+    let deploy_args = DeployArgs {
+        dapp_env_out: cli.dapp_env_out.clone(),
+        summary_out: cli.summary_out.clone(),
+        dapp_port: cli.dapp_port,
+        explorer_port: cli.explorer_port,
+        print_test_keys: cli.print_test_keys,
+        public: if use_named {
+            Some(smoke_test::DappPublicUrls {
+                rpc: cli.public_rpc_url.clone().unwrap(),
+                dapp: cli.public_dapp_url.clone().unwrap(),
+                explorer_api: cli.public_explorer_url.clone().unwrap(),
+            })
+        } else {
+            None
+        },
+    };
     if let Some(rpc_port) = cli.rpc_port {
         std::env::set_var("SMOKE_TEST_RPC_PORT", rpc_port.to_string());
     }
@@ -170,8 +216,8 @@ fn run() -> i32 {
 
     if !smoke_test::prerequisites_available() {
         eprintln!(
-            "smoke-test: anvil / bun / forge / cast not on PATH. \
-             Install Foundry and Bun to run the Twin chain."
+            "smoke-test: anvil / bun / forge / cast not on PATH (anvil is not needed when TWIN_RPC_URL names a \
+             running fork). Install Foundry and Bun to run the Twin chain."
         );
         smoke_test::logging::error(
             "smoke-test",
@@ -222,6 +268,10 @@ fn run() -> i32 {
     println!("agent_addr={:#x}", fixture.agent());
     println!("gateway_runtime_hash={}", fixture.gateway_runtime_hash());
 
+    if cli.deploy_only {
+        return finish_deploy_only(fixture, deploy_args);
+    }
+
     // Hold the DappStack alive until the end of main so its Drop tears
     // down the compose stack together with the chain fixture.
     let _dapp_stack: Option<smoke_test::DappStack> = if cli.full_stack {
@@ -264,89 +314,12 @@ fn run() -> i32 {
         // With --print-test-keys it also carries the deterministic test-EOA
         // private keys, so the Playwright harness can inject a window.ethereum
         // provider without re-deriving them.
-        println!("--- endpoint summary ---");
-        println!("rpc_url={}", stack.endpoints.rpc_url);
-        println!("dapp_url={}", stack.endpoints.dapp_url);
-        println!("explorer_api_url={}", stack.endpoints.explorer_api_url);
-        println!("chain_id={}", fixture.chain_id());
-        println!("gateway_addr={:#x}", fixture.gateway());
-        println!("vault_addr={:#x}", fixture.vault());
-        println!("usdc_addr={:#x}", fixture.usdc());
-        println!("agent_addr={:#x}", fixture.agent());
-        // The deployer is a fresh rehearsal keystore. After handover it holds
-        // nothing: the Safe and the timelock are the admin.
-        println!(
-            "deployer_addr={}",
-            fixture
-                .published()
-                .keys
-                .address("ADMIN_ADDRESS")
-                .unwrap_or("unknown")
+        print_endpoint_summary(
+            &fixture,
+            &stack.endpoints,
+            cli.print_test_keys,
+            &mut std::io::stdout(),
         );
-        println!("safe_addr={:#x}", fixture.safe());
-        println!("timelock_addr={:#x}", fixture.timelock());
-        println!("manifest_dir={}", fixture.manifest_dir().display());
-        println!("sheet_path={}", fixture.published().sheet_path.display());
-        // Paths only, never secrets: the keystore directory and the 0600 passphrase file.
-        println!("key_dir={}", fixture.published().keys.key_dir.display());
-        println!(
-            "password_file={}",
-            fixture.published().keys.password_file.display()
-        );
-        println!("core_sha={}", fixture.published().cfg.core_sha);
-        println!("pauser_addr={}", smoke_test::PAUSER_ADDRESS_HEX);
-        println!(
-            "share_receiver_addr={}",
-            smoke_test::SHARE_RECEIVER_ADDRESS_HEX
-        );
-        if cli.print_test_keys {
-            println!("pauser_private_key={}", smoke_test::PAUSER_PRIVATE_KEY_HEX);
-            println!(
-                "agent_private_key=0x{}",
-                hex::encode(smoke_test::AGENT_PRIVATE_KEY)
-            );
-        }
-        println!("gateway_runtime_hash={}", fixture.gateway_runtime_hash());
-        // Issue #320: surface registry and router addresses so dapp e2e
-        // tests can drive the vault-selector and router deposit flow.
-        println!("registry_addr={:#x}", fixture.registry());
-        println!("router_addr={:#x}", fixture.router());
-        // Issue #477: surface the governance address so the dapp E2E specs
-        // can locate RouterGovernance without hard-coding it.
-        println!("governance_addr={:#x}", fixture.governance());
-        // Issue #1294: surface the IC policy + consensus receipt addresses so
-        // the dapp e2e consensus-receipts spec can locate them without
-        // hard-coding devnet addresses.
-        println!("ic_policy_addr={:#x}", fixture.ic_policy());
-        println!("consensus_receipt_addr={:#x}", fixture.consensus_receipt());
-        println!("vault_addresses_json={}", fixture.vault_address_map_json());
-        // Issue #363: surface real adapter addresses for dapp e2e tests.
-        println!("aave_adapter_addr={:#x}", fixture.aave_adapter());
-        println!("compound_adapter_addr={:#x}", fixture.compound_adapter());
-        println!(
-            "moonwell_flagship_adapter_addr={:#x}",
-            fixture.moonwell_flagship_adapter()
-        );
-        // Issue #261: surface the harness USDC holder so dapp e2e tests
-        // can verify the testnet faucet path drips from the same EOA the
-        // Rust `Fixture::fund_usdc` helper uses. The private key is consumed
-        // only by the LOCAL Playwright harness over a captured stdout pipe
-        // (clients/dapp/tests/e2e/devnet-global-setup.ts) — it is never written
-        // to the cloudflared tunnel surface, which only publishes the
-        // rpc/dapp/explorer URLs (see Tunnels::start). HARN-2's public-surface
-        // exposure (issue #1026) is the dapp Vite BUNDLE / build arg, tracked
-        // separately; this local pipe is required by the e2e harness.
-        println!(
-            "harness_usdc_holder_addr={}",
-            smoke_test::HARNESS_USDC_HOLDER_ADDRESS_HEX
-        );
-        if cli.print_test_keys {
-            println!(
-                "harness_usdc_holder_private_key={}",
-                smoke_test::HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX
-            );
-        }
-        println!("--- end endpoint summary ---");
 
         Some(stack)
     } else {
@@ -404,6 +377,206 @@ fn run() -> i32 {
     // _dapp_stack drops here first → docker compose down dapp stack
     // fixture drops next → the Twin fork this process started is stopped
     0
+}
+
+/// Everything the stage deploy job needs from its command line.
+struct DeployArgs {
+    dapp_env_out: Option<PathBuf>,
+    summary_out: Option<PathBuf>,
+    dapp_port: Option<u16>,
+    explorer_port: Option<u16>,
+    print_test_keys: bool,
+    public: Option<smoke_test::DappPublicUrls>,
+}
+
+/// `--deploy-only`: write the dapp compose environment, print the summary, keep the work directory, exit.
+fn finish_deploy_only(mut fixture: smoke_test::Fixture, args: DeployArgs) -> i32 {
+    let public_endpoints = match args.public {
+        Some(u) => smoke_test::PublicEndpoints::Named {
+            rpc_url: u.rpc,
+            dapp_url: u.dapp,
+            explorer_api_url: u.explorer_api,
+        },
+        None => smoke_test::PublicEndpoints::Local,
+    };
+    let opts = smoke_test::DappStackOptions {
+        dapp_port: args.dapp_port,
+        explorer_api_port: args.explorer_port,
+        public_endpoints,
+    };
+    let out = match smoke_test::stage_deploy_output(&fixture, &opts) {
+        Ok(out) => out,
+        Err(err) => {
+            smoke_test::logging::error("smoke-test", format!("stage deploy output failed: {err}"));
+            eprintln!("smoke-test: stage deploy output failed: {err}");
+            return 1;
+        }
+    };
+    let Some(path) = args.dapp_env_out else {
+        return 2;
+    };
+    if let Err(err) = std::fs::write(&path, format!("{}\n", out.dapp_env_json)) {
+        eprintln!("smoke-test: cannot write {}: {err}", path.display());
+        return 1;
+    }
+    let endpoints = smoke_test::DappEndpoints {
+        rpc_url: out.urls.rpc,
+        dapp_url: out.urls.dapp,
+        explorer_api_url: out.urls.explorer_api,
+    };
+    let summary: Result<(), std::io::Error> = match &args.summary_out {
+        Some(path) => std::fs::File::create(path).map(|mut f| {
+            print_endpoint_summary(&fixture, &endpoints, args.print_test_keys, &mut f)
+        }),
+        None => {
+            print_endpoint_summary(
+                &fixture,
+                &endpoints,
+                args.print_test_keys,
+                &mut std::io::stdout(),
+            );
+            Ok(())
+        }
+    };
+    if let Err(err) = summary {
+        eprintln!("smoke-test: cannot write the endpoint summary: {err}");
+        return 1;
+    }
+    let work = fixture.keep_work_dir();
+    smoke_test::logging::info(
+        "smoke-test",
+        format!("deploy job done; work dir kept at {}", work.display()),
+    );
+    0
+}
+
+/// The structured endpoint summary: printed once every service is healthy (`--full-stack`) or once the deploy
+/// is done (`--deploy-only`). With `print_test_keys` it also carries the deterministic test-EOA private keys, so
+/// the Playwright harness can inject a window.ethereum provider without re-deriving them.
+fn print_endpoint_summary(
+    fixture: &smoke_test::Fixture,
+    endpoints: &smoke_test::DappEndpoints,
+    print_test_keys: bool,
+    out: &mut dyn std::io::Write,
+) {
+    let _ = writeln!(out, "--- endpoint summary ---");
+    let _ = writeln!(out, "rpc_url={}", endpoints.rpc_url);
+    let _ = writeln!(out, "dapp_url={}", endpoints.dapp_url);
+    let _ = writeln!(out, "explorer_api_url={}", endpoints.explorer_api_url);
+    let _ = writeln!(out, "chain_id={}", fixture.chain_id());
+    let _ = writeln!(out, "gateway_addr={:#x}", fixture.gateway());
+    let _ = writeln!(out, "vault_addr={:#x}", fixture.vault());
+    let _ = writeln!(out, "usdc_addr={:#x}", fixture.usdc());
+    let _ = writeln!(out, "agent_addr={:#x}", fixture.agent());
+    // The deployer is a fresh rehearsal keystore. After handover it holds
+    // nothing: the Safe and the timelock are the admin.
+    let _ = writeln!(
+        out,
+        "deployer_addr={}",
+        fixture
+            .published()
+            .keys
+            .address("ADMIN_ADDRESS")
+            .unwrap_or("unknown")
+    );
+    let _ = writeln!(out, "safe_addr={:#x}", fixture.safe());
+    let _ = writeln!(out, "timelock_addr={:#x}", fixture.timelock());
+    let _ = writeln!(out, "manifest_dir={}", fixture.manifest_dir().display());
+    let _ = writeln!(
+        out,
+        "sheet_path={}",
+        fixture.published().sheet_path.display()
+    );
+    // Paths only, never secrets: the keystore directory and the 0600 passphrase file.
+    let _ = writeln!(
+        out,
+        "key_dir={}",
+        fixture.published().keys.key_dir.display()
+    );
+    let _ = writeln!(
+        out,
+        "password_file={}",
+        fixture.published().keys.password_file.display()
+    );
+    let _ = writeln!(out, "core_sha={}", fixture.published().cfg.core_sha);
+    let _ = writeln!(out, "pauser_addr={}", smoke_test::PAUSER_ADDRESS_HEX);
+    let _ = writeln!(
+        out,
+        "share_receiver_addr={}",
+        smoke_test::SHARE_RECEIVER_ADDRESS_HEX
+    );
+    if print_test_keys {
+        let _ = writeln!(
+            out,
+            "pauser_private_key={}",
+            smoke_test::PAUSER_PRIVATE_KEY_HEX
+        );
+        let _ = writeln!(
+            out,
+            "agent_private_key=0x{}",
+            hex::encode(smoke_test::AGENT_PRIVATE_KEY)
+        );
+    }
+    let _ = writeln!(
+        out,
+        "gateway_runtime_hash={}",
+        fixture.gateway_runtime_hash()
+    );
+    // Issue #320: surface registry and router addresses so dapp e2e
+    // tests can drive the vault-selector and router deposit flow.
+    let _ = writeln!(out, "registry_addr={:#x}", fixture.registry());
+    let _ = writeln!(out, "router_addr={:#x}", fixture.router());
+    // Issue #477: surface the governance address so the dapp E2E specs
+    // can locate RouterGovernance without hard-coding it.
+    let _ = writeln!(out, "governance_addr={:#x}", fixture.governance());
+    // Issue #1294: surface the IC policy + consensus receipt addresses so
+    // the dapp e2e consensus-receipts spec can locate them without
+    // hard-coding devnet addresses.
+    let _ = writeln!(out, "ic_policy_addr={:#x}", fixture.ic_policy());
+    let _ = writeln!(
+        out,
+        "consensus_receipt_addr={:#x}",
+        fixture.consensus_receipt()
+    );
+    let _ = writeln!(
+        out,
+        "vault_addresses_json={}",
+        fixture.vault_address_map_json()
+    );
+    // Issue #363: surface real adapter addresses for dapp e2e tests.
+    let _ = writeln!(out, "aave_adapter_addr={:#x}", fixture.aave_adapter());
+    let _ = writeln!(
+        out,
+        "compound_adapter_addr={:#x}",
+        fixture.compound_adapter()
+    );
+    let _ = writeln!(
+        out,
+        "moonwell_flagship_adapter_addr={:#x}",
+        fixture.moonwell_flagship_adapter()
+    );
+    // Issue #261: surface the harness USDC holder so dapp e2e tests
+    // can verify the testnet faucet path drips from the same EOA the
+    // Rust `Fixture::fund_usdc` helper uses. The private key is consumed
+    // only by the LOCAL Playwright harness over a captured stdout pipe
+    // (clients/dapp/tests/e2e/devnet-global-setup.ts) — it is never written
+    // to the cloudflared tunnel surface, which only publishes the
+    // rpc/dapp/explorer URLs (see Tunnels::start). HARN-2's public-surface
+    // exposure (issue #1026) is the dapp Vite BUNDLE / build arg, tracked
+    // separately; this local pipe is required by the e2e harness.
+    let _ = writeln!(
+        out,
+        "harness_usdc_holder_addr={}",
+        smoke_test::HARNESS_USDC_HOLDER_ADDRESS_HEX
+    );
+    if print_test_keys {
+        let _ = writeln!(
+            out,
+            "harness_usdc_holder_private_key={}",
+            smoke_test::HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX
+        );
+    }
+    let _ = writeln!(out, "--- end endpoint summary ---");
 }
 
 const CHAIN_HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(3);

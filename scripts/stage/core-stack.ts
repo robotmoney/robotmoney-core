@@ -8,12 +8,20 @@
 //   --chain 918453 --rpc <twin rpc> --sheet <stage sheet> \
 //   --signer keystore:<key dir>/DEPLOYER:<passphrase file> --environment stage --core-sha <sha>
 //
-// The smoke harness (`cargo run -p smoke-test -- --full-stack`) boots the Twin chain, mints a fresh
-// keystore set on every boot (a redeploy from a new SHA never reuses a deployer), funds it and calls
-// publish contracts. The deploy, the real Safe handover, the verifier and the stage 13 govern matrix
-// all run through publish contracts and the Safe SDK tool. Voting power, quorum, agent registration
-// and weights are govern rows executed through the real Safe and the timelock, never set by a
-// deployer. The passphrase stays in a 0600 file: only its PATH is passed, never its content.
+// Every stage service runs in a container (core 1549) and this tool only calls `docker compose`. It starts no
+// host process and mounts no Docker socket anywhere:
+//   - the Twin chain (918453, the pinned lazy anvil fork of real Base) is the `twin-chain` service of
+//     testing/ethereum-testnet/config/docker-compose.stage-chain.yaml (project robotmoney-stage-chain),
+//   - the deploy job is the one-shot `stage-harness` service of the same file: `smoke-test --deploy-only` mints a
+//     fresh keystore set on every boot (a redeploy from a new SHA never reuses a deployer), funds it and calls
+//     publish contracts, then exits and leaves the keystores and manifests in the work
+//     directory (/tmp/robotmoney-stage-work, STAGE_WORK_DIR overrides),
+//   - the dapp stack is docker-compose.dapp.yaml plus docker-compose.dapp.stage.yaml (project robotmoney-dapp),
+//     started from the environment the deploy job wrote.
+// The deploy, the real Safe handover, the verifier and the stage 13 govern matrix all run through publish
+// contracts and the Safe SDK tool. Voting power, quorum, agent registration and weights are govern rows executed
+// through the real Safe and the timelock, never set by a deployer. The passphrase stays in a 0600 file: only its
+// PATH is passed, never its content.
 //
 // Usage (from the repo root on the stage host):
 //   core-stack chain up        [--ref REF] [--timeout SECS] [--out-dir DIR]
@@ -35,7 +43,6 @@
 // Exit codes: 0 ok; 1 not satisfied (a status or check verb's honest "no"); 3 required tool missing;
 // 64 usage; 65 bad input (record, summary, ref); 66 an action failed. Codes from publish contracts
 // pass through unchanged.
-import { spawn } from "node:child_process";
 import {
   closeSync,
   existsSync,
@@ -43,6 +50,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -61,8 +69,18 @@ export const CHAIN_ID_HEX = "0xe03b5";
 export const DEPLOYER_KEY_NAME = "DEPLOYER";
 export const DEFAULT_OUT_DIR = "/opt/fusion-stage";
 export const DEFAULT_RPC_URL = "http://127.0.0.1:18545";
+export const DEFAULT_WORK_DIR = "/tmp/robotmoney-stage-work";
 export const DAPP_PROJECT = "robotmoney-dapp";
 export const TESTNET_LABEL = "com.robotmoney.testnet=1";
+/** The stage chain project: the Twin chain container and the one-shot deploy job. */
+export const STAGE_CHAIN_PROJECT = "robotmoney-stage-chain";
+export const STAGE_CHAIN_LABEL = "com.robotmoney.stage-chain=1";
+const STAGE_CHAIN_COMPOSE_REL = "testing/ethereum-testnet/config/docker-compose.stage-chain.yaml";
+const DAPP_COMPOSE_REL = "testing/ethereum-testnet/config/docker-compose.dapp.yaml";
+const DAPP_STAGE_OVERLAY_REL = "testing/ethereum-testnet/config/docker-compose.dapp.stage.yaml";
+/** The public URLs and fixed host ports of the stage stack. They do not change with the containers. */
+const STAGE_PUBLIC = { rpc: "https://stage-rpc.robotmoney-labs.dev", explorer: "https://stage-explorer.robotmoney-labs.dev", dapp: "https://stage-dapp.robotmoney-labs.dev" } as const;
+const STAGE_PORTS = { explorer: 18546, dapp: 5173 } as const;
 export const SUMMARY_END = "--- end endpoint summary ---";
 /** The one deploy driver, relative to the repo root. */
 const PUBLISH_CLI_REL = "publish-contracts/src/cli.ts";
@@ -127,8 +145,6 @@ export interface RunOpts {
 }
 export interface Deps {
   run(cmd: string[], opts?: RunOpts): Promise<RunResult>;
-  /** Start a detached process in its own process group, output appended to `logPath`. Returns its pid. */
-  spawnDetached(cmd: string[], logPath: string, cwd: string): number;
   has(tool: string): boolean;
   out(s: string): void;
   err(s: string): void;
@@ -139,12 +155,8 @@ export interface Deps {
   /** eth_chainId result, or "" when nothing answers. */
   rpcChainId(url: string): Promise<string>;
   httpOk(url: string): Promise<boolean>;
-  /** /proc start time of a live (non-zombie) process, or undefined. */
+  /** /proc start time of a live (non-zombie) process, or undefined. Names the holder of the one-writer lock. */
   procStart(pid: number): string | undefined;
-  procCmdline(pid: number): string;
-  procGroup(pid: number): number | undefined;
-  /** kill(2). Negative pid signals a process group. True when the signal was delivered. */
-  signal(pid: number, sig: "SIGINT" | "SIGTERM" | 0): boolean;
 }
 
 export function realDeps(repoRoot: string): Deps {
@@ -172,16 +184,6 @@ export function realDeps(repoRoot: string): Deps {
         p.exited,
       ]);
       return { code, stdout, stderr };
-    },
-    spawnDetached(cmd, logPath, cwd) {
-      const fd = openSync(logPath, "a");
-      try {
-        const child = spawn(cmd[0]!, cmd.slice(1), { cwd, detached: true, stdio: ["ignore", fd, fd] });
-        child.unref();
-        return child.pid ?? -1;
-      } finally {
-        closeSync(fd);
-      }
     },
     has: (tool) => Bun.which(tool) !== null,
     out: (s) => process.stdout.write(s),
@@ -213,25 +215,6 @@ export function realDeps(repoRoot: string): Deps {
       }
     },
     procStart: (pid) => stat(pid)?.[19],
-    procCmdline(pid) {
-      try {
-        return readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " ");
-      } catch {
-        return "";
-      }
-    },
-    procGroup: (pid) => {
-      const s = stat(pid);
-      return s ? Number(s[1]) : undefined;
-    },
-    signal(pid, sig) {
-      try {
-        process.kill(pid, sig);
-        return true;
-      } catch {
-        return false;
-      }
-    },
   };
 }
 
@@ -294,7 +277,7 @@ export function parseCli(argv: string[]): Parsed {
     opts: {
       ref: str(v.ref),
       record: str(v.record),
-      outDir: v["out-dir"] ?? DEFAULT_OUT_DIR,
+      outDir: resolve(v["out-dir"] ?? DEFAULT_OUT_DIR),
       timeoutSecs,
       receiptId: str(v["receipt-id"]),
       mainnet: str(v.mainnet),
@@ -309,26 +292,34 @@ export function parseCli(argv: string[]): Parsed {
 // ─── the stack: context plus helpers ─────────────────────────────────────────
 export class Stack {
   readonly summaryPath: string;
-  readonly pidFile: string;
+  /** Refuses a work directory `chain up` and `chain down` must never delete: too shallow, or the checkout or out dir itself. */
+  assertWorkDirSafe(): void {
+    const depth = this.workDir.split("/").filter(Boolean).length;
+    if (depth < 2 || this.workDir === this.deps.repoRoot || this.workDir === this.opts.outDir) {
+      throw fail(`STAGE_WORK_DIR ${this.workDir} is too shallow or is the checkout or the out dir: it is deleted on chain down`, EXIT.INPUT);
+    }
+  }
+  /** The deploy job's work directory: its keystores, sheet and manifests, and the dapp environment it wrote. */
+  readonly workDir: string;
   readonly stampPath: string;
   readonly lockPath: string;
   readonly recordPath: string;
-  /** The Twin chain RPC: the fork named by TWIN_RPC_URL (a service on the stage host), else the one the harness starts on DEFAULT_RPC_URL. */
+  /** The Twin chain RPC: DEFAULT_RPC_URL, where the chain container publishes it. `chain up` refuses any other TWIN_RPC_URL. */
   readonly rpcUrl: string;
   readonly rmpc: string;
   readonly rmpcImport: string;
   readonly bun: string;
   readonly cast: string;
   readonly pollMs: number;
-  readonly intGraceSecs: number;
-  readonly termGraceSecs: number;
 
   constructor(
     readonly deps: Deps,
     readonly opts: Opts,
   ) {
     this.summaryPath = join(opts.outDir, "core-smoke.log");
-    this.pidFile = join(opts.outDir, "core-smoke.pid");
+    // Under /tmp by default: forge only lets a script write the manifests where foundry.toml's fs_permissions say
+    // (./deployments and /tmp), and the deploy job's manifest directory is in here. STAGE_WORK_DIR overrides it.
+    this.workDir = resolve(deps.env.STAGE_WORK_DIR || DEFAULT_WORK_DIR);
     this.stampPath = join(opts.outDir, "core-stack.stamp");
     this.lockPath = join(opts.outDir, ".core-stack.lock");
     this.recordPath = opts.record || join(opts.outDir, "fusion-stage-record.json");
@@ -339,8 +330,6 @@ export class Stack {
     this.rpcUrl = (deps.env.TWIN_RPC_URL ?? "").trim().replace(/\/+$/, "") || DEFAULT_RPC_URL;
     const poll = Number(deps.env.CORE_STACK_POLL_SECS);
     this.pollMs = (Number.isInteger(poll) && poll > 0 ? poll : 3) * 1000;
-    this.intGraceSecs = Number(deps.env.SMOKE_INT_GRACE_SECS) > 0 ? Number(deps.env.SMOKE_INT_GRACE_SECS) : 60;
-    this.termGraceSecs = Number(deps.env.SMOKE_TERM_GRACE_SECS) > 0 ? Number(deps.env.SMOKE_TERM_GRACE_SECS) : 30;
   }
 
   /** One structured log line on stderr. */
@@ -444,22 +433,26 @@ export class Stack {
     if (r.code !== 0) throw fail("rmpc rebuild failed; refusing to run against whatever binary was already there");
   }
 
-  // ── process bookkeeping ──
-  /** The pid of the live harness the pid file names, or undefined. */
-  harnessPid(): number | undefined {
-    let text: string;
-    try {
-      text = readFileSync(this.pidFile, "utf8");
-    } catch {
-      return undefined;
-    }
-    const [pidS, start] = text.trim().split(/\s+/);
-    const pid = Number(pidS);
-    if (!Number.isInteger(pid) || pid <= 0) return undefined;
-    const now = this.deps.procStart(pid);
-    if (now === undefined) return undefined;
-    if (start) return now === start ? pid : undefined;
-    return /smoke-test/.test(this.deps.procCmdline(pid)) ? pid : undefined;
+  // ── docker compose: the only way this tool starts or stops anything ──
+  chainComposeFile(): string {
+    return join(this.deps.repoRoot, STAGE_CHAIN_COMPOSE_REL);
+  }
+  /** The variables the chain compose file interpolates. They are mandatory (`:?`), even for `down`. */
+  chainEnv(): Record<string, string> {
+    const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+    const gid = typeof process.getgid === "function" ? process.getgid() : 0;
+    return { STAGE_UID: String(uid), STAGE_GID: String(gid), STAGE_REPO: this.deps.repoRoot, STAGE_WORK_DIR: this.workDir };
+  }
+  chainCompose(args: string[]): string[] {
+    return ["docker", "compose", "--project-name", STAGE_CHAIN_PROJECT, "-f", this.chainComposeFile(), "--profile", "deploy", ...args];
+  }
+  dappCompose(args: string[]): string[] {
+    return ["docker", "compose", "--project-name", DAPP_PROJECT, "-f", join(this.deps.repoRoot, DAPP_COMPOSE_REL), "-f", join(this.deps.repoRoot, DAPP_STAGE_OVERLAY_REL), ...args];
+  }
+  /** Number of running containers of the stage chain project (the Twin chain). */
+  async chainContainers(): Promise<number> {
+    const ps = await this.deps.run(["docker", "ps", "--filter", "status=running", "--filter", `label=com.docker.compose.project=${STAGE_CHAIN_PROJECT}`, "--filter", `label=${STAGE_CHAIN_LABEL}`, "--format", "{{.Names}}"]);
+    return ps.code === 0 ? ps.stdout.split("\n").filter((l) => l.trim()).length : 0;
   }
 
   /** One writer at a time per out dir. Returns the release function. */
@@ -537,26 +530,28 @@ async function chainFactsLine(s: Stack, want: string): Promise<Line> {
 /**
  * boot-mismatch is a CHAIN fact (the running chain was booted from another commit: `chain down`
  * then `chain up`). candidate-mismatch is a BUILD-ARTIFACT fact (rmpc was rebuilt for something
- * else since): rebuild rmpc only.
+ * else since): rebuild rmpc only. harness-gone: the chain container that this stamp vouches for
+ * (the owner of the stage stack, since the harness no longer outlives its deploy job) is not running.
  */
-function stampLine(s: Stack, want: string): Line {
+async function stampLine(s: Stack, want: string): Promise<Line> {
   if (!isFile(s.stampPath)) return { ok: false, line: `not-booted: no completed \`chain up\` stamp at ${s.stampPath}` };
-  let st: { commit?: string; pid?: number; start_time?: string } = {};
+  let st: { commit?: string; chain_project?: string } = {};
   try {
     st = JSON.parse(readFileSync(s.stampPath, "utf8"));
   } catch {
     /* malformed */
   }
   if (st.commit !== want) return { ok: false, line: `boot-mismatch: the running chain was booted from '${st.commit ?? "unknown"}', candidate is ${want}` };
-  if (!Number.isInteger(st.pid) || !st.start_time) return { ok: false, line: `not-booted: ${s.stampPath} is malformed` };
-  if (s.deps.procStart(st.pid!) !== st.start_time) return { ok: false, line: `harness-gone: the harness that booted this chain (pid ${st.pid}) is no longer running` };
-  return { ok: true, line: `ok: booted from ${want} by harness pid ${st.pid}` };
+  if (st.chain_project !== STAGE_CHAIN_PROJECT) return { ok: false, line: `not-booted: ${s.stampPath} is malformed` };
+  const n = await s.chainContainers();
+  if (n < 1) return { ok: false, line: `harness-gone: the chain container of compose project ${STAGE_CHAIN_PROJECT} that booted this chain is no longer running` };
+  return { ok: true, line: `ok: booted from ${want} by compose project ${STAGE_CHAIN_PROJECT}` };
 }
 
 async function chainStatusLine(s: Stack): Promise<Line> {
   const want = await s.candidateCommit();
   if (!want) return { ok: false, line: `ref-unresolved: '${s.opts.ref || "HEAD"}' is not a branch, tag or commit in this checkout` };
-  const st = stampLine(s, want);
+  const st = await stampLine(s, want);
   if (!st.ok) return st;
   return chainFactsLine(s, want);
 }
@@ -568,8 +563,8 @@ async function chainStatus(s: Stack): Promise<void> {
   if (!l.ok) throw new StackExit(EXIT.NO, l.line);
 }
 
-function writeStamp(s: Stack, commit: string, pid: number, start: string): void {
-  const body = { commit, pid, start_time: start, booted_at: new Date(s.deps.nowMs()).toISOString() };
+function writeStamp(s: Stack, commit: string): void {
+  const body = { commit, chain_project: STAGE_CHAIN_PROJECT, booted_at: new Date(s.deps.nowMs()).toISOString() };
   writeFileSync(`${s.stampPath}.tmp`, `${JSON.stringify(body)}\n`);
   renameSync(`${s.stampPath}.tmp`, s.stampPath);
 }
@@ -582,17 +577,39 @@ function tailLog(s: Stack, n = 150): void {
   }
 }
 
+/** The compose environment the deploy job wrote: a flat JSON object of strings. */
+function readDappEnv(s: Stack): Record<string, string> {
+  const path = join(s.workDir, "dapp-env.json");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    throw fail(`the deploy job wrote no readable dapp environment at ${path} (${(e as Error).message})`);
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw) || !Object.values(raw).every((v) => typeof v === "string")) {
+    throw fail(`${path} is not a flat JSON object of strings`);
+  }
+  return raw as Record<string, string>;
+}
+
+/** Seconds left of the whole `chain up` budget, never below one. */
+const secsLeft = (s: Stack, deadline: number): number => Math.max(1, Math.floor((deadline - s.deps.nowMs()) / 1000));
+
 async function chainUp(s: Stack): Promise<void> {
   s.need("docker");
   const cli = join(s.deps.repoRoot, PUBLISH_CLI_REL);
   if (!existsSync(cli)) throw fail(`${cli} not found: run from a core checkout that holds publish-contracts/`, EXIT.INPUT);
   const sheetIn = stageSheetPath(s);
   if (!isFile(sheetIn)) throw fail(`the stage sheet ${sheetIn} does not exist (STAGE_SHEET overrides the committed ${STAGE_SHEET_REL})`, EXIT.INPUT);
+  if (s.rpcUrl !== DEFAULT_RPC_URL) {
+    throw fail(`TWIN_RPC_URL names ${s.rpcUrl}, but the stage chain is the container this tool starts, on ${DEFAULT_RPC_URL}: unset TWIN_RPC_URL`, EXIT.INPUT);
+  }
   const want = await s.candidateCommit();
   if (!want) throw fail(`--ref '${s.opts.ref || "HEAD"}' is not a branch, tag or commit in this checkout`, EXIT.INPUT);
   const headR = await s.deps.run(["git", "rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
   const head = headR.code === 0 ? headR.stdout.trim() : "";
   if (want !== head) throw fail(`--ref '${s.opts.ref || "HEAD"}' is ${want}, but this checkout is at ${head || "nothing"}: check the ref out first`, EXIT.INPUT);
+  s.assertWorkDirSafe();
   const release = s.takeLock();
   try {
     const cur = await chainStatusLine(s);
@@ -601,54 +618,69 @@ async function chainUp(s: Stack): Promise<void> {
       s.deps.out(`${cur.line}\n`);
       return;
     }
-    const live = s.harnessPid();
-    if (live !== undefined) throw fail(`an earlier harness (pid ${live}) is still running but is not the healthy candidate; run \`core-stack chain down\` first`);
-    for (const f of [s.stampPath, s.pidFile]) rmQuiet(f);
-    // Truncated before the harness exists; the harness only appends.
+    const running = await s.chainContainers();
+    if (running > 0) throw fail(`an earlier stage chain is still running but is not the healthy candidate; run \`core-stack chain down\` first`);
+    rmQuiet(s.stampPath);
+    // Truncated before the deploy job exists; only the summary it wrote is copied in afterwards.
     writeFileSync(s.summaryPath, "");
     await s.rebuildRmpc();
-    // The Twin chain (918453) is a pinned lazy anvil fork of real Base state. The harness reuses the fork named by
-    // TWIN_RPC_URL (the stage host service, see scripts/devnet/README-twin-fork.md) or starts its own on --rpc-port
-    // with scripts/devnet/twin-fork.ts and stops it when the harness exits. BASE_UPSTREAM_RPC and TWIN_PIN_BLOCK pass
-    // through the environment and are never logged.
-    const pid = s.deps.spawnDetached(
-      ["stdbuf", "-oL", "-eL", "cargo", "run", "-p", "smoke-test", "--", "--full-stack", "--rpc-port", "18545", "--explorer-port", "18546", "--dapp-port", "5173",
-        "--public-rpc-url", "https://stage-rpc.robotmoney-labs.dev", "--public-explorer-url", "https://stage-explorer.robotmoney-labs.dev",
-        "--public-dapp-url", "https://stage-dapp.robotmoney-labs.dev", "--no-receipt-fixtures"],
-      s.summaryPath,
-      s.deps.repoRoot,
-    );
-    const start = pid > 0 ? s.deps.procStart(pid) : undefined;
-    if (start === undefined) {
-      tailLog(s);
-      throw fail("the harness exited as soon as it started");
-    }
-    writeFileSync(s.pidFile, `${pid} ${start}\n`);
-    s.log("harness started", { pid, log: s.summaryPath, timeoutSecs: s.opts.timeoutSecs });
     const deadline = s.deps.nowMs() + s.opts.timeoutSecs * 1000;
-    while (s.deps.nowMs() < deadline) {
-      if (s.harnessPid() === undefined) {
-        rmQuiet(s.pidFile);
-        tailLog(s);
-        throw fail("the harness exited before printing its endpoint summary");
-      }
-      if (s.summaryComplete()) {
-        s.log("endpoint summary printed");
-        const facts = await chainFactsLine(s, want);
-        if (!facts.ok) throw fail(`the harness printed its summary but the stack is not the healthy candidate: ${facts.line}`);
-        writeStamp(s, want, pid, start);
-        const st = await chainStatusLine(s);
-        if (!st.ok) {
-          rmQuiet(s.stampPath);
-          throw fail(`the harness printed its summary but the stack is not the healthy candidate: ${st.line}`);
-        }
-        s.deps.out(`${st.line}\n`);
-        return;
-      }
-      await s.deps.sleep(s.pollMs);
+    // A fresh work directory: the keystores of the last boot are gone (a redeploy never reuses a deployer).
+    rmSync(s.workDir, { recursive: true, force: true });
+    mkdirSync(join(s.workDir, "home"), { recursive: true, mode: 0o700 });
+    const env = s.chainEnv();
+
+    // 1. The Twin chain: the pinned lazy anvil fork, in its own container. BASE_UPSTREAM_RPC and TWIN_PIN_BLOCK pass
+    //    through this process's environment and are never logged.
+    s.log("starting the Twin chain container", { project: STAGE_CHAIN_PROJECT });
+    const up = await s.deps.run(s.chainCompose(["up", "--detach", "--build", "--wait", "--wait-timeout", String(secsLeft(s, deadline)), "twin-chain"]), { env, stream: true });
+    if (up.code !== 0) throw fail("the Twin chain container did not become healthy; \`core-stack chain down\` removes it");
+
+    // 2. The deploy job: the real ceremony against that chain, then it exits. It leaves the keystores and manifests in
+    //    the work directory and writes the dapp environment and the endpoint summary there.
+    const dappEnvOut = join(s.workDir, "dapp-env.json");
+    const summaryOut = join(s.workDir, "summary.txt");
+    s.log("running the deploy job", { work: s.workDir });
+    const built = await s.deps.run(s.chainCompose(["build", "stage-harness"]), { env, stream: true });
+    if (built.code !== 0) throw fail("the deploy job image did not build");
+    const job = await s.deps.run(
+      s.chainCompose([
+        "run", "--rm", "--no-deps", "-T", "stage-harness",
+        "--deploy-only", "--explorer-port", String(STAGE_PORTS.explorer), "--dapp-port", String(STAGE_PORTS.dapp),
+        "--public-rpc-url", STAGE_PUBLIC.rpc, "--public-explorer-url", STAGE_PUBLIC.explorer, "--public-dapp-url", STAGE_PUBLIC.dapp,
+        "--no-receipt-fixtures", "--dapp-env-out", dappEnvOut, "--summary-out", summaryOut,
+      ]),
+      { env, stream: true },
+    );
+    if (job.code !== 0) throw fail(`the deploy job exited ${job.code}; see its output above. \`core-stack chain down\` removes the chain and the work directory`);
+    let summaryText = "";
+    try {
+      summaryText = readFileSync(summaryOut, "utf8");
+    } catch {
+      /* checked below */
     }
-    tailLog(s);
-    throw fail(`no endpoint summary within ${s.opts.timeoutSecs}s; the harness (pid ${pid}) is still running: \`core-stack chain down\` stops it`);
+    if (!summaryText.includes(SUMMARY_END)) throw fail(`the deploy job printed no endpoint summary (${summaryOut})`);
+    writeFileSync(s.summaryPath, summaryText);
+    s.log("endpoint summary written", { summary: s.summaryPath });
+
+    // 3. The dapp stack, from the environment the deploy job wrote. The indexer dials the chain container by name.
+    const dappEnv = readDappEnv(s);
+    s.log("starting the dapp stack", { project: DAPP_PROJECT });
+    const dapp = await s.deps.run(s.dappCompose(["up", "--detach", "--build", "--wait", "--wait-timeout", String(secsLeft(s, deadline))]), { env: dappEnv, stream: true });
+    if (dapp.code !== 0) {
+      tailLog(s);
+      throw fail("the dapp stack did not become healthy; `core-stack chain down` removes it");
+    }
+
+    const facts = await chainFactsLine(s, want);
+    if (!facts.ok) throw fail(`the stack came up but is not the healthy candidate: ${facts.line}`);
+    writeStamp(s, want);
+    const st = await chainStatusLine(s);
+    if (!st.ok) {
+      rmQuiet(s.stampPath);
+      throw fail(`the stack came up but is not the healthy candidate: ${st.line}`);
+    }
+    s.deps.out(`${st.line}\n`);
   } finally {
     release();
   }
@@ -662,56 +694,21 @@ function rmQuiet(p: string): void {
   }
 }
 
-/** True once nothing in `target` is left. */
-async function signalAndWait(s: Stack, sig: "SIGINT" | "SIGTERM", secs: number, target: number): Promise<boolean> {
-  s.deps.signal(target, sig);
-  for (let i = 0; i < secs; i++) {
-    if (!s.deps.signal(target, 0)) return true;
-    await s.deps.sleep(1000);
-  }
-  return !s.deps.signal(target, 0);
-}
-
-async function stopHarness(s: Stack): Promise<void> {
-  if (!isFile(s.pidFile)) return;
-  const [pidS, start] = readFileSync(s.pidFile, "utf8").trim().split(/\s+/);
-  const pid = Number(pidS);
-  const liveStart = Number.isInteger(pid) && pid > 0 ? s.deps.procStart(pid) : undefined;
-  if (liveStart === undefined) {
-    s.log("pid file names no running process; clearing it");
-    rmQuiet(s.pidFile);
-    return;
-  }
-  if (start && start !== liveStart) {
-    s.log("pid now belongs to another process; not signalling it", { pid });
-    rmQuiet(s.pidFile);
-    return;
-  }
-  if (!start && !/smoke-test/.test(s.deps.procCmdline(pid))) {
-    s.log("pid is not the smoke harness; not signalling it", { pid });
-    rmQuiet(s.pidFile);
-    return;
-  }
-  const target = s.deps.procGroup(pid) === pid ? -pid : pid;
-  s.log("stopping the smoke harness", { pid, target });
-  if (!(await signalAndWait(s, "SIGINT", s.intGraceSecs, target))) {
-    s.log(`the harness ignored SIGINT for ${s.intGraceSecs}s; sending SIGTERM`, {}, "warn");
-    if (!(await signalAndWait(s, "SIGTERM", s.termGraceSecs, target))) throw fail(`core smoke harness (pid ${pid}) survived SIGINT and SIGTERM`);
-  }
-  rmQuiet(s.pidFile);
-}
-
 async function chainDown(s: Stack): Promise<void> {
+  s.assertWorkDirSafe();
   const release = s.takeLock();
   try {
     // The stamp goes first: from here on nothing vouches for the running chain.
     rmQuiet(s.stampPath);
-    await stopHarness(s);
-    // The compose file's `:?` guards interpolate even for `down`.
-    const compose = join(s.deps.repoRoot, "testing/ethereum-testnet/config/docker-compose.dapp.yaml");
-    const env = { INDEXER_GATEWAY: "teardown", INDEXER_VAULT: "teardown", VITE_GATEWAY_ADDRESS: "teardown", VITE_VAULT_ADDRESS: "teardown", VITE_GATEWAY_EXPECTED_CODE_HASH: "teardown", COMPOSE_PROFILES: "receipt-fixtures" };
-    const r = await s.deps.run(["docker", "compose", "--project-name", DAPP_PROJECT, "-f", compose, "down"], { env });
-    if (r.code !== 0) throw fail("dapp stack down failed");
+    // The compose files' `:?` guards interpolate even for `down`.
+    const teardown = { INDEXER_GATEWAY: "teardown", INDEXER_VAULT: "teardown", VITE_GATEWAY_ADDRESS: "teardown", VITE_VAULT_ADDRESS: "teardown", VITE_GATEWAY_EXPECTED_CODE_HASH: "teardown", COMPOSE_PROFILES: "receipt-fixtures" };
+    const dapp = await s.deps.run(s.dappCompose(["down", "--remove-orphans"]), { env: teardown });
+    if (dapp.code !== 0) throw fail("dapp stack down failed");
+    // The chain container stops gracefully (anvil saves its RPC cache), the deploy job image stays for the next boot.
+    const chain = await s.deps.run(s.chainCompose(["down", "--remove-orphans"]), { env: s.chainEnv() });
+    if (chain.code !== 0) throw fail("stage chain down failed");
+    // The rehearsal keystores live as long as the stack.
+    rmSync(s.workDir, { recursive: true, force: true });
     s.log("down done");
   } finally {
     release();
