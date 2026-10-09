@@ -308,7 +308,26 @@ pub fn deploy_own_vault(fx: &ForkFixture) -> Result<DeployedVault, HarnessError>
     let out = mdir.join("vault.json");
     let text = std::fs::read_to_string(&out)?;
     // Keep the manifest path for the record; the tempdir (keystores included) drops with this call.
-    parse_manifest(&text, out)
+    let vault = parse_manifest(&text, out)?;
+    // Core 1710: the vault stage leaves rmUSDC paused. A vault-only run has no timelock, so the deployer still holds
+    // ADMIN_ROLE: it opens the vault with the same keystore, the way stage 13 does through the Safe in a full run.
+    let opened = Command::new("cast")
+        .args(["send", "--rpc-url", &fx.rpc_url, "--keystore"])
+        .arg(keys.join("DEPLOYER"))
+        .arg("--password-file")
+        .arg(&pw)
+        .arg(format!("{:#x}", vault.vault))
+        .arg("unpauseDeposits()")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| HarnessError::Rpc(format!("spawn cast send unpauseDeposits: {e}")))?;
+    if !opened.status.success() {
+        return Err(HarnessError::Rpc(format!(
+            "opening the deployed rmUSDC failed: {}",
+            String::from_utf8_lossy(&opened.stderr)
+        )));
+    }
+    Ok(vault)
 }
 
 #[cfg(test)]
