@@ -458,8 +458,7 @@ fn tick_of(raw: &str, i: usize) -> i32 {
 }
 
 /// Core 1676. rmAGENT holds RM through the REAL Uniswap V4 PoolManager pool `0xf2e7b957...`, priced by the REAL recorder, on the Twin chain
-/// after the full publish and govern run. Nothing is mocked: the pool is real Base state (funded through the real PositionManager by
-/// `rehearsal fund-rm-pool`), the vault is opened by the real Safe and timelock, and every swap goes through the real PoolManager.
+/// after the full publish and govern run. Nothing is mocked: the pool is real Base state (the live pool, never funded), the vault is opened by the real Safe and timelock, and every swap goes through the real PoolManager.
 ///  1. the asset row is RM, venue V4, pool = the recorder, adapter = the V4 adapter the vault manifest names;
 ///  2. after the 48 hour govern warp the recorder is stale: a deposit fails closed until someone pokes it (permissionless);
 ///  3. a deposit swaps USDC to RM through the PoolManager (the pool tick moves) and the swap pokes the recorder (its index advances);
@@ -541,7 +540,7 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     fx.fund_gas(user, 10_000_000_000_000_000_000)
         .expect("fund gas for the depositor");
-    let deposit: u128 = 50_000_000; // 50 USDC, under the 100 USDC per-deposit cap
+    let deposit: u128 = 10_000_000; // 10 USDC: the live pool is unfunded (owner 2026-10-09), one swap above about 18 USDC exceeds the 209 bps margin
     fx.fund_usdc(user, deposit * 4)
         .expect("fund USDC for the depositor");
     let (vault_s, dep_s) = (format!("{agent_vault:#x}"), deposit.to_string());

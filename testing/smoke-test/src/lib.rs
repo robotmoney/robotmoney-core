@@ -600,13 +600,6 @@ impl Fixture {
             logging::error("smoke-test", format!("funding keys failed: {err}"));
         })?;
 
-        // Issue 1554: rmAGENT launches holding RM, and `BasketVault.addAsset` needs the RM/USDC pool to have
-        // liquidity and observation history. The live pool is unfunded until the owner funds it, so the Twin
-        // chain funds the same pool with real transactions first. The addAsset floors are not relaxed.
-        fund_rm_pool(&publish_cfg, twin.rpc_url(), &repo_root).inspect_err(|err| {
-            logging::error("smoke-test", format!("funding the RM pool failed: {err}"));
-        })?;
-
         // Identity lines are addresses only. The agent and the pauser are the
         // harness's own known keys, so the e2e suites can sign as them.
         let mut identity = keys.fragment.clone();
@@ -1806,33 +1799,6 @@ fn cast_call_raw_at(
         )));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_lowercase())
-}
-
-/// Fund the live RM/USDC Uniswap V4 pool on the Twin chain (issues 1554, 1676) with `rehearsal fund-rm-pool`, the one
-/// implementation of the step (the twin-publish CI action runs the same verb). Real pool, real V4 PositionManager
-/// (Permit2), real transactions: it gives a funder RM and USDC with the fork's balance helpers and mints one in-range
-/// position. It asserts the pool took the liquidity and clears the `BasketVault.addAsset` floor (liquidity >= 1e6)
-/// itself, so a failure names the pool and not a later revert.
-fn fund_rm_pool(
-    cfg: &publish::PublishConfig,
-    rpc_url: &str,
-    repo_root: &Path,
-) -> Result<(), HarnessError> {
-    let out = Command::new("bun")
-        .arg(cfg.rehearsal_cli())
-        .args(["fund-rm-pool", "--rpc", rpc_url, "--core-dir"])
-        .arg(repo_root)
-        .stdin(Stdio::null())
-        .output()?;
-    if !out.status.success() {
-        return Err(HarnessError::other(format!(
-            "rehearsal fund-rm-pool failed: {}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    logging::info("smoke-test", String::from_utf8_lossy(&out.stderr).trim());
-    Ok(())
 }
 
 // -- Public helpers ---------------------------------------------------
