@@ -9,7 +9,8 @@ import { encodeFunctionData, keccak256, parseAbi, toHex, type Address, type Hex 
 import { assertControlProven, inspectProofTx, PROOF_STAGE } from "../src/control-proof.ts";
 import { EXIT_CODES } from "../src/errors.ts";
 import { assertEveryOwnerSigned } from "../src/prove-control.ts";
-import { localSafeTxHash, signTx, type SafeTxBundle } from "../src/safe/index.ts";
+import { localSafeTxHash, ownerHardwareSigner, signTx, type SafeTxBundle } from "../src/safe/index.ts";
+import { privateKeyToAccount } from "viem/accounts";
 import { PROVE_OWNERS, PROVE_SIGNERS, fakeProveApi, keySigner, world } from "./harness.ts";
 import { OWNERS, OWNER_KEYS, SAFE, buildWorld, failed, proofInput } from "./verify/world.ts";
 import { verifyDeployment } from "../src/verify/index.ts";
@@ -347,6 +348,54 @@ describe("prove-control adopts a proof that landed before the run died", () => {
     writeFileSync(join(w.coreDir, "deployments", String(CHAIN), "safe.json"), JSON.stringify({ safe: SAFE_ADDR }));
     await landed(w);
     await refused(w, /no safe stage block/);
+  });
+});
+
+describe("hardware owner signers in prove-control (a simulated cast, no device)", () => {
+  const KEYS = [toHex(0xb1, { size: 32 }), toHex(0xb2, { size: 32 }), toHex(0xb3, { size: 32 })] as const;
+  const accts = KEYS.map((k) => privateKeyToAccount(k));
+  const path = (i: number) => `m/44'/60'/${i}'/0/0`;
+  /** attached[i] is the account the device at path i reports. The event log records every prompt and every cast call in order. */
+  function rig(attached: () => number[]) {
+    const events: string[] = [];
+    const runner = async (args: string[]) => {
+      const i = Number(/m\/44'\/60'\/(\d)'/.exec(args[args.indexOf("--mnemonic-derivation-path") + 1]!)![1]);
+      const a = accts[attached()[i]!]!;
+      events.push(`cast:${args[1]}:${i}`);
+      if (args[1] === "address") return { code: 0, stdout: a.address, stderr: "" };
+      return { code: 0, stdout: await a.signMessage({ message: { raw: args[args.length - 1] as Hex } }), stderr: "" };
+    };
+    const prompt = async (r: { owner: string; phase: string }) => { events.push(`prompt:${r.phase}:${accts.findIndex((a) => a.address === r.owner)}`); };
+    const signers = (claimed: number[]) => claimed.map((c, i) => ownerHardwareSigner(`ledger:${path(i)}@${accts[c]!.address}`, { runner, prompt }));
+    return { events, signers };
+  }
+
+  test("a prompt before each address read and before each signature, in owner order, and the proof lands", async () => {
+    const w = world({ writeSafeManifest: true });
+    const r = rig(() => [0, 1, 2]);
+    expect(await w.run(["--stage", PROOF_STAGE], { prove: { api: fakeProveApi(w), ownerSigners: r.signers([0, 1, 2]) } })).toBe(0);
+    const prompts = r.events.filter((e) => e.startsWith("prompt:"));
+    expect(prompts).toEqual(["prompt:address:0", "prompt:address:1", "prompt:address:2", "prompt:sign:0", "prompt:sign:1", "prompt:sign:2"]);
+    // each prompt is immediately followed by its own device read or signature
+    expect(r.events.slice(0, 4)).toEqual(["prompt:address:0", "cast:address:0", "prompt:address:1", "cast:address:1"]);
+    expect(r.events.indexOf("prompt:sign:0")).toBe(r.events.indexOf("cast:sign:0") - 2);
+  });
+
+  test("a device that reports another address than its named owner is refused and nothing is proposed", async () => {
+    const w = world({ writeSafeManifest: true });
+    const r = rig(() => [0, 2, 2]);
+    expect(await w.run(["--stage", PROOF_STAGE], { prove: { api: fakeProveApi(w), ownerSigners: r.signers([0, 1, 2]) } })).not.toBe(0);
+    expect(lastError(w).message).toContain("HARDWARE_ADDRESS_MISMATCH");
+    expect(w.safeCalls).not.toContain("proposeTx");
+    expect(executed(w)).toEqual([]);
+  });
+
+  test("two specs that resolve to the same address are refused before any proposal", async () => {
+    const w = world({ writeSafeManifest: true });
+    const r = rig(() => [0, 0, 2]);
+    expect(await w.run(["--stage", PROOF_STAGE], { prove: { api: fakeProveApi(w), ownerSigners: r.signers([0, 0, 2]) } })).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(lastError(w).message).toContain("same address");
+    expect(w.safeCalls).not.toContain("proposeTx");
   });
 });
 

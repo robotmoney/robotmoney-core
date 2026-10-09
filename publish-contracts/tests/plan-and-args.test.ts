@@ -108,3 +108,17 @@ describe("rehearsal and production differ only in the arguments", () => {
     expect(() => selectStages("bogus")).toThrow("unknown stage");
   });
 });
+
+describe("--owner-signer grammar", () => {
+  const base = ["--chain", "8453", "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
+  const OWNER = `0x${"ab".repeat(20)}`;
+  test("ledger:PATH@0xOWNER and trezor:PATH@0xOWNER are accepted, keystore specs pass through", () => {
+    const specs = [`ledger:m/44'/60'/0'/0/0@${OWNER}`, `trezor:m/44'/60'/1'/0/0@${OWNER}`, "keystore:/k/a"];
+    expect(parseCli([...base, ...specs.flatMap((s) => ["--owner-signer", s])]).ownerSigners).toEqual(specs);
+  });
+  test("malformed hardware owner specs are refused with USAGE", () => {
+    for (const bad of ["ledger", "trezor", `ledger:m/44'/60'/0'/0/0`, `ledger:@${OWNER}`, `ledger:44/60@${OWNER}`, `ledger:m/44'/60'/0'/0/0@0x12`, `ledger:m/44'/60'/0'/0/0@${OWNER}x`]) {
+      expect(() => parseCli([...base, "--owner-signer", bad])).toThrow("bad --owner-signer");
+    }
+  });
+});
