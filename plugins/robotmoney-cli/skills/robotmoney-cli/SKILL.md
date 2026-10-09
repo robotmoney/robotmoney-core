@@ -35,7 +35,7 @@ Exit code 0 means success; non-zero means a named, structured error. Add
   `get-vault`,
   `get-vaults`, `get-router`, `get-governance`, `get-timelock`, `get-gateway`,
   `get-agent`, `get-roles`, `get-balance`, `get-allowance`, `get-deposit`,
-  `get-tx`, `vote`, `committee`, `receipt`, `committee-identity`.
+  `get-tx`, `committee`, `receipt`, `committee-identity`.
 
 ## Command surface
 

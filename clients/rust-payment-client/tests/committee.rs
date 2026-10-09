@@ -666,7 +666,7 @@ async fn test_committee_vote_submit_refuses_a_reverted_transaction() {
 
 // ─── rmpc is not a governance signer (issue #1447, workstream K) ──────────────
 
-/// `committee register` and `propose` signed as an EOA against
+/// `committee register`, `propose` and `vote` signed as an EOA against
 /// `onlyRole(ADMIN_ROLE)` / governance entry points that belong to the Safe
 /// after handover. They must not exist, so no operator reaches for them.
 #[test]
@@ -674,6 +674,7 @@ fn test_rmpc_has_no_governance_signing_commands() {
     for argv in [
         vec!["committee", "--config", "x.toml", "register"],
         vec!["propose", "--config", "x.toml"],
+        vec!["vote", "--config", "x.toml"],
     ] {
         let output = rmpc().args(&argv).output().expect("rmpc ran");
         assert!(
