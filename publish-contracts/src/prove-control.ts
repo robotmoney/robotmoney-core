@@ -106,7 +106,11 @@ export async function runProveControl(ctx: RunContext, row: StageRow, manifest: 
   }
   // A signer for every owner, named before anything is proposed, signed or sent.
   const byOwner = new Map<string, Signer>();
-  for (const s of o.ownerSigners) byOwner.set(lc(await s.address()), s);
+  for (const s of o.ownerSigners) {
+    const a = lc(await s.address());
+    if (byOwner.has(a)) throw controlNotProven(`two owner signers resolve to the same address ${a}: each Safe owner needs its own device`, { address: a });
+    byOwner.set(a, s);
+  }
   const missing = handle.owners.filter((x) => !byOwner.has(lc(x)));
   if (missing.length > 0) {
     throw controlNotProven(`no owner signer for ${missing.join(", ")}: the proof needs a signature from every one of the ${handle.owners.length} owners (pass --owner-signer for each)`, { missing });

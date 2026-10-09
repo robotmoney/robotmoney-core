@@ -137,11 +137,36 @@ export const runCast: CastRunner = async (args) => {
   return { code, stdout: stdout.trim(), stderr: stderr.trim() };
 };
 
-function hardwareSigner(kind: "ledger" | "trezor", opts: { hdPath?: string; runner?: CastRunner }): Signer {
+/** What the operator is asked to do before a device is read or used: attach the device that holds this owner's key. */
+export interface DevicePromptRequest { kind: "ledger" | "trezor"; owner: Address; hdPath: string; phase: "address" | "sign" | "send" }
+export type DevicePrompt = (req: DevicePromptRequest) => Promise<unknown>;
+
+/** A Safe owner on a hardware wallet: `ledger:PATH@0xOWNER` or `trezor:PATH@0xOWNER` (PATH like m/44'/60'/0'/0/1). */
+const OWNER_HARDWARE_SPEC = /^(ledger|trezor):(m(?:\/[0-9]+'?)+)@(0x[0-9a-fA-F]{40})$/;
+export interface OwnerHardwareSpec { kind: "ledger" | "trezor"; hdPath: string; owner: Address }
+export function parseOwnerHardwareSpec(spec: string): OwnerHardwareSpec | undefined {
+  const m = OWNER_HARDWARE_SPEC.exec(spec);
+  return m ? { kind: m[1] as "ledger" | "trezor", hdPath: m[2]!, owner: m[3] as Address } : undefined;
+}
+/** True for any spec that names a hardware wallet, well formed or not (`ledger`, `ledger:...`). */
+export const isHardwareSpecLike = (spec: string): boolean => /^(ledger|trezor)(:|$)/.test(spec);
+
+function hardwareSigner(kind: "ledger" | "trezor", opts: { hdPath?: string; runner?: CastRunner; owner?: Address; prompt?: DevicePrompt }): Signer {
   const run = opts.runner ?? runCast;
   const flag = kind === "ledger" ? "--ledger" : "--trezor";
   const hd = opts.hdPath ? ["--mnemonic-derivation-path", opts.hdPath] : [];
   let cached: Address | undefined;
+  // An owner signer is bound to one named owner: each use asks the operator for the device, reads its address and refuses any other.
+  const checkOwner = async (phase: DevicePromptRequest["phase"]): Promise<Address> => {
+    const owner = opts.owner!;
+    await opts.prompt!({ kind, owner, hdPath: opts.hdPath!, phase });
+    const out = await call(["wallet", "address", flag, ...hd], "address lookup");
+    if (!/^0x[0-9a-fA-F]{40}$/.test(out)) throw new SafeToolError("HARDWARE_FAILED", `${kind} returned an unexpected address`);
+    if (out.toLowerCase() !== owner.toLowerCase()) {
+      throw new SafeToolError("HARDWARE_ADDRESS_MISMATCH", `HARDWARE_ADDRESS_MISMATCH: the attached ${kind} reports ${out} at ${opts.hdPath}, not the Safe owner ${owner}. Attach the device that holds ${owner}.`);
+    }
+    return owner;
+  };
   const call = async (args: string[], what: string): Promise<string> => {
     const r = await run(args);
     if (r.code !== 0) throw new SafeToolError("HARDWARE_FAILED", `${kind} ${what} failed: ${r.stderr.split("\n").slice(-1)[0] || "no output"}`);
@@ -151,6 +176,7 @@ function hardwareSigner(kind: "ledger" | "trezor", opts: { hdPath?: string; runn
     kind,
     modes: ["eth_sign"],
     async address() {
+      if (opts.owner) return (cached ??= await checkOwner("address"));
       if (!cached) {
         const out = await call(["wallet", "address", flag, ...hd], "address lookup");
         if (!/^0x[0-9a-fA-F]{40}$/.test(out)) throw new SafeToolError("HARDWARE_FAILED", `${kind} returned an unexpected address`);
@@ -160,11 +186,13 @@ function hardwareSigner(kind: "ledger" | "trezor", opts: { hdPath?: string; runn
     },
     async signSafeHash(hash, mode) {
       if (mode !== "eth_sign") throw new SafeToolError("UNSUPPORTED_SIGN_MODE", `a ${kind} signs a prefixed message: use mode eth_sign`);
+      if (opts.owner) await checkOwner("sign");
       // The device signs the 32 hash bytes as a personal message. Safe reads v + 4 as that prefixed path.
       const out = await call(["wallet", "sign", flag, ...hd, hash], "signing");
       return toSafeSignature(out, "eth_sign");
     },
     async send(req, chain) {
+      if (opts.owner) await checkOwner("send");
       const args = ["send", flag, ...hd, "--rpc-url", chain.rpcUrl, "--chain", String(chain.chainId), "--json", req.to, req.data];
       if (req.value) args.push("--value", req.value.toString());
       const out = await call(args, "send");
@@ -176,6 +204,13 @@ function hardwareSigner(kind: "ledger" | "trezor", opts: { hdPath?: string; runn
 
 export const ledgerSigner = (opts: { hdPath?: string; runner?: CastRunner } = {}): Signer => hardwareSigner("ledger", opts);
 export const trezorSigner = (opts: { hdPath?: string; runner?: CastRunner } = {}): Signer => hardwareSigner("trezor", opts);
+
+/** An owner signer from `ledger:PATH@0xOWNER` / `trezor:PATH@0xOWNER`. Its own cast calls, its own cache, its own device prompts. */
+export function ownerHardwareSigner(spec: string, opts: { prompt: DevicePrompt; runner?: CastRunner }): Signer {
+  const p = parseOwnerHardwareSpec(spec);
+  if (!p) throw new SafeToolError("BAD_INPUT", `bad owner signer '${spec}': a hardware owner is ledger:PATH@0xOWNER or trezor:PATH@0xOWNER, PATH like m/44'/60'/0'/0/0`);
+  return hardwareSigner(p.kind, { hdPath: p.hdPath, owner: p.owner, runner: opts.runner, prompt: opts.prompt });
+}
 
 /** Build a signer from a CLI-style spec: "ledger", "trezor", "keystore:PATH[:passfile]", "env:signer", "env:funder". */
 export async function signerFromSpec(spec: string, hdPath?: string): Promise<Signer> {

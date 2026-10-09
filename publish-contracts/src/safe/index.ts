@@ -5,8 +5,8 @@ export * from "./log.ts";
 export { assertChainAllowed, chainGuard, isLoopbackRpc, publicClientFor, rpcHost, type ChainOpts } from "./chain.ts";
 export { modeOf, recoverSafeSigner, splitSignature, toSafeSignature, verifySafeSignature, type SignMode } from "./sig.ts";
 export {
-  addressOnlySigner, impersonatedSender, decryptKeystoreJson, keystoreSigner, keystoreSignerFromEnv, ledgerSigner, loopbackKeySigner, readPassphraseFile, resolvePassphrase,
-  signerFromSpec, trezorSigner, type CastRunner, type KeystoreSignerOpts, type PassphraseSource, type SendRequest, type Signer,
+  addressOnlySigner, impersonatedSender, decryptKeystoreJson, keystoreSigner, keystoreSignerFromEnv, isHardwareSpecLike, ledgerSigner, ownerHardwareSigner, parseOwnerHardwareSpec, loopbackKeySigner, readPassphraseFile, resolvePassphrase,
+  signerFromSpec, trezorSigner, type CastRunner, type DevicePrompt, type DevicePromptRequest, type KeystoreSignerOpts, type PassphraseSource, type SendRequest, type Signer,
 } from "./signers.ts";
 export {
   PRODUCTION_ROSTER, connectSafe, contractNetworksFor, createSafe, defaultSaltNonce, validateRoster, verifyCreatedSafe,
