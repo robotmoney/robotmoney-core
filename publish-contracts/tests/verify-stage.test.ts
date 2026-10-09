@@ -79,9 +79,9 @@ describe("stage 12: the one verifier", () => {
     const { ctx, sheet } = setup();
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe");
     expect(v.governance).toEqual({ voters: sheet.voters, voterPower: sheet.voterPower, quorum: sheet.quorum, votingPeriod: sheet.votingPeriod, executionDelay: sheet.executionDelay });
-    // the example sheet makes PROTO and RWA eligible: rmUSDC always is, rmAGENT is not
-    expect(Object.fromEntries(Object.entries(v.vaults).map(([k, x]) => [k, x.routerEligible]))).toEqual({ rmUSDC: true, rmPROTO: true, rmAGENT: false, rmRWA: true });
-    expect(v.defaultWeights).toEqual([{ vault: "rmUSDC", bps: 6000 }, { vault: "rmPROTO", bps: 2500 }, { vault: "rmRWA", bps: 1500 }]);
+    // the example sheet makes PROTO, AGENT and RWA eligible: rmUSDC always is
+    expect(Object.fromEntries(Object.entries(v.vaults).map(([k, x]) => [k, x.routerEligible]))).toEqual({ rmUSDC: true, rmPROTO: true, rmAGENT: true, rmRWA: true });
+    expect(v.defaultWeights).toEqual([{ vault: "rmUSDC", bps: 9500 }, { vault: "rmPROTO", bps: 500 }, { vault: "rmAGENT", bps: 0 }, { vault: "rmRWA", bps: 0 }]);
   });
 
   test("a missing asset config is an error, not a silent skip", () => {

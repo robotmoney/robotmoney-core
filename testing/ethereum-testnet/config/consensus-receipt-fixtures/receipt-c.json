@@ -19,7 +19,7 @@
     "bullish": 0
   },
   "judge": {
-    "rationale": "Seeded Twin rehearsal fixture: the allocation the Safe applies through the timelock (rmUSDC 5000, rmPROTO 3000, rmRWA 2000 bps), unlike the allocation the deployer left on the router.",
+    "rationale": "Seeded Twin rehearsal fixture: the allocation the Safe applies through the timelock (rmUSDC 5000, rmPROTO 3000, rmAGENT 0, rmRWA 2000 bps), unlike the allocation the deployer left on the router.",
     "disagreements": [],
     "release_safety": {
       "release": "safe",
@@ -49,16 +49,16 @@
   ],
   "weights": [
     {
-      "bucket": "agent_tokens",
-      "weight_bps": 0
-    },
-    {
       "bucket": "conservative_defi_yield",
       "weight_bps": 5000
     },
     {
       "bucket": "protocol_tokens",
       "weight_bps": 3000
+    },
+    {
+      "bucket": "agent_tokens",
+      "weight_bps": 0
     },
     {
       "bucket": "real_world_assets",

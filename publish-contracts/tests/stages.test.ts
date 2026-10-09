@@ -144,10 +144,10 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
     expect(gov.VOTER_ADDRESSES.toLowerCase()).toBe(sheet.voters.join(",").toLowerCase());
     expect(gov.VOTER_POWER).toBe(sheet.voterPower.toString());
     expect(gov.QUORUM_THRESHOLD).toBe(sheet.quorum.toString());
-    // the example sheet makes PROTO and RWA eligible with USDC 6000, PROTO 2500, RWA 1500
-    expect(stageEnv(ctx, stage("proto")).ROUTER_DEFAULT_BPS).toBe("7059,2941");
-    expect(stageEnv(ctx, stage("agent")).ROUTER_DEFAULT_BPS).toBe("none");
-    expect(stageEnv(ctx, stage("rwa")).ROUTER_DEFAULT_BPS).toBe("6000,2500,1500");
+    // the example sheet makes PROTO, AGENT and RWA eligible with the launch vector USDC 9500, PROTO 500, AGENT 0, RWA 0
+    expect(stageEnv(ctx, stage("proto")).ROUTER_DEFAULT_BPS).toBe("9500,500");
+    expect(stageEnv(ctx, stage("agent")).ROUTER_DEFAULT_BPS).toBe("9500,500,0");
+    expect(stageEnv(ctx, stage("rwa")).ROUTER_DEFAULT_BPS).toBe("9500,500,0,0");
     expect(stageEnv(ctx, stage("rwa")).TVL_CAP).toBe(sheet.vaults.RWA.tvlCap.toString());
     expect(stageEnv(ctx, stage("vault")).ROUTER_DEFAULT_BPS).toBeUndefined();
   });

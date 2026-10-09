@@ -285,17 +285,27 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     };
     assert!(!c_released(&fx), "receipt C is recorded, not released");
     let before = router_weights(&fx);
-    let want_vaults: Vec<String> = [fx.vault(), fx.proto_vault(), fx.rwa_vault()]
-        .iter()
-        .map(|a| format!("{a:#x}"))
-        .collect();
+    let want_vaults: Vec<String> = [
+        fx.vault(),
+        fx.proto_vault(),
+        fx.agent_vault(),
+        fx.rwa_vault(),
+    ]
+    .iter()
+    .map(|a| format!("{a:#x}"))
+    .collect();
     assert_eq!(
         before.0, want_vaults,
         "the router lists the eligible vaults in registry order"
     );
+    assert_eq!(
+        before.1,
+        vec![9500, 500, 0, 0],
+        "the deployer left the 8453 launch vector on the router (rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0)"
+    );
     assert_ne!(
         before.1,
-        vec![5000, 3000, 2000],
+        vec![5000, 3000, 0, 2000],
         "the router must not already hold receipt C's vector"
     );
     let applied = fx
@@ -314,7 +324,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     assert_eq!(after.0, want_vaults, "the vault list is unchanged");
     assert_eq!(
         after.1,
-        vec![5000, 3000, 2000],
+        vec![5000, 3000, 0, 2000],
         "the router holds receipt C's vector after the batch"
     );
     // The rehearsal evidence: the run manifest records the round under receipt_applications and evidence-check asserts it against the chain

@@ -44,6 +44,13 @@ describe("whitelist parser", () => {
     expect(parseSheet(text).chainId).toBe(918453);
   });
 
+  test("the Twin stage sheet carries the 8453 launch router values: governance isomorphism section 1.1 lets only chain, keys, custody and delay differ (core 1708)", () => {
+    const s = parseSheet(readFileSync(join(REPO, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
+    expect(s.eligibleVaults).toEqual(["PROTO", "AGENT", "RWA"]);
+    expect(s.weights).toEqual([{ key: "USDC", bps: 9500 }, { key: "PROTO", bps: 500 }, { key: "AGENT", bps: 0 }, { key: "RWA", bps: 0 }]);
+    expect(eligibilityBps(s, "AGENT")).toEqual([9500, 500, 0]);
+  });
+
   test("REHEARSAL=1 is refused", () => {
     expect(refused(sheetText({}, ["REHEARSAL=1"])).message).toContain("REHEARSAL");
     expect(refused(sheetText({}, ["export REHEARSAL=1"])).message).toContain("deleted");
@@ -211,8 +218,8 @@ describe("govern carries the basket unpauses only; the rest is deploy-time confi
   test("the govern block holds the unpauses and the Twin-only delay and nothing else; eligibility and weights are deploy-time fields", () => {
     const s = parseSheet(exampleText());
     expect(Object.keys(s.govern).sort()).toEqual(["newDelay", "unpauseVaults"]);
-    expect(s.eligibleVaults).toEqual(["PROTO", "RWA"]);
-    expect(s.weights).toEqual([{ key: "USDC", bps: 6000 }, { key: "PROTO", bps: 2500 }, { key: "RWA", bps: 1500 }]);
+    expect(s.eligibleVaults).toEqual(["PROTO", "AGENT", "RWA"]);
+    expect(s.weights).toEqual([{ key: "USDC", bps: 9500 }, { key: "PROTO", bps: 500 }, { key: "AGENT", bps: 0 }, { key: "RWA", bps: 0 }]);
     expect(s.values.GOVERN_ELIGIBLE_VAULTS).toBeUndefined();
   });
   test("ELIGIBLE_VAULTS is required, lists baskets only, and has no repeat", () => {
@@ -228,10 +235,13 @@ describe("govern carries the basket unpauses only; the rest is deploy-time confi
   });
   test("eligibilityBps: the last eligible basket leaves exactly the sheet weights, earlier flips are scaled to 10000, an ineligible basket has none", () => {
     const s = parseSheet(exampleText());
-    expect(eligibleInOrder(s)).toEqual(["PROTO", "RWA"]);
-    expect(eligibilityBps(s, "PROTO")).toEqual([7059, 2941]);
-    expect(eligibilityBps(s, "RWA")).toEqual([6000, 2500, 1500]);
-    expect(eligibilityBps(s, "AGENT")).toBeUndefined();
+    expect(eligibleInOrder(s)).toEqual(["PROTO", "AGENT", "RWA"]);
+    expect(eligibilityBps(s, "PROTO")).toEqual([9500, 500]);
+    expect(eligibilityBps(s, "RWA")).toEqual([9500, 500, 0, 0]);
+    const noAgent = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:6000,PROTO:2500,RWA:1500" }));
+    expect(eligibilityBps(noAgent, "PROTO")).toEqual([7059, 2941]);
+    expect(eligibilityBps(noAgent, "RWA")).toEqual([6000, 2500, 1500]);
+    expect(eligibilityBps(noAgent, "AGENT")).toBeUndefined();
     const launch = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0" }));
     expect(eligibilityBps(launch, "PROTO")).toEqual([9500, 500]);
     expect(eligibilityBps(launch, "AGENT")).toEqual([9500, 500, 0]);
