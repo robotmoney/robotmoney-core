@@ -8,7 +8,7 @@ import { encodeFunctionData, keccak256, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import {
   PRODUCTION_ROSTER, SAFE_141, SafeRevertError, SafeToolError, TIMELOCK_ABI, ZERO_BYTES32, addSignature, defaultSaltNonce, describeCalldata, importSignatureBundle,
-  isLoopbackRpc, jsonLogger, keystoreSigner, ledgerSigner, localSafeTxHash, loopbackKeySigner, modeOf, packSignatures, readPassphraseFile, recoverSafeSigner,
+  isLoopbackRpc, jsonLogger, ownerHardwareSigner, keystoreSigner, ledgerSigner, localSafeTxHash, loopbackKeySigner, modeOf, packSignatures, readPassphraseFile, recoverSafeSigner,
   redact, toSafeSignature, validateRoster, verifySafeSignature, type SafeTxBundle,
 } from "./index.ts";
 import { proxyRuntimeCodeOf } from "./safe.ts";
@@ -183,5 +183,55 @@ describe("proxyRuntimeCodeOf (the 1.4.1 factory has no proxyRuntimeCode())", () 
   test("empty runtime code is INFRA_MISSING", async () => {
     const client = { readContract: async () => "0xaabb" as Hex, call: async () => ({ data: undefined }) };
     await expect(proxyRuntimeCodeOf(client as never, SAFE_141.proxyFactory, SAFE_141.singletonL2)).rejects.toMatchObject({ code: "INFRA_MISSING" });
+  });
+});
+
+describe("hardware owner signers: one device per owner, each checked against its named owner", () => {
+  const accts = [privateKeyToAccount(generatePrivateKey()), privateKeyToAccount(generatePrivateKey())];
+  const paths = ["m/44'/60'/0'/0/0", "m/44'/60'/1'/0/0"];
+  /** A simulated cast: the device attached at each derivation path reports and signs as the account listed for it. */
+  const fakeCast = (attached: () => (typeof accts)[number][]) => {
+    const calls: string[][] = [];
+    const runner = async (args: string[]) => {
+      calls.push(args);
+      const i = paths.indexOf(args[args.indexOf("--mnemonic-derivation-path") + 1]!);
+      const a = attached()[i]!;
+      if (args[1] === "address") return { code: 0, stdout: a.address, stderr: "" };
+      return { code: 0, stdout: await a.signMessage({ message: { raw: args[args.length - 1] as Hex } }), stderr: "" };
+    };
+    return { calls, runner };
+  };
+  const prompts: unknown[] = [];
+
+  test("two specs with different derivation paths resolve to two owners, each cast call with its own path", async () => {
+    const { calls, runner } = fakeCast(() => accts);
+    const s = accts.map((a, i) => ownerHardwareSigner(`ledger:${paths[i]}@${a.address}`, { runner, prompt: async (r) => { prompts.push(r); } }));
+    expect(await s[0]!.address()).toBe(accts[0]!.address);
+    expect(await s[1]!.address()).toBe(accts[1]!.address);
+    expect(calls.map((c) => c[c.indexOf("--mnemonic-derivation-path") + 1])).toEqual(paths);
+    expect(calls.every((c) => c.includes("--ledger"))).toBe(true);
+    expect(prompts).toHaveLength(2);
+  });
+
+  test("a device that reports another address than the named owner is refused with HARDWARE_ADDRESS_MISMATCH", async () => {
+    const { runner } = fakeCast(() => [accts[1]!, accts[1]!]);
+    const s = ownerHardwareSigner(`trezor:${paths[0]}@${accts[0]!.address}`, { runner, prompt: async () => {} });
+    await expect(s.address()).rejects.toMatchObject({ code: "HARDWARE_ADDRESS_MISMATCH" });
+  });
+
+  test("a wrong owner attached between resolve and sign is refused before the device signs", async () => {
+    let swapped = false;
+    const { calls, runner } = fakeCast(() => (swapped ? [accts[1]!, accts[1]!] : accts));
+    const s = ownerHardwareSigner(`ledger:${paths[0]}@${accts[0]!.address}`, { runner, prompt: async () => {} });
+    await s.address();
+    swapped = true;
+    await expect(s.signSafeHash(HASH, "eth_sign")).rejects.toMatchObject({ code: "HARDWARE_ADDRESS_MISMATCH" });
+    expect(calls.some((c) => c[1] === "sign")).toBe(false);
+  });
+
+  test("a malformed hardware owner spec is refused", () => {
+    for (const bad of ["ledger", "ledger:m/44'/60'/0'/0/0", "ledger:@0x1", `ledger:44/60@${A(1)}`, `ledger:m/44'/60'/0'/0/0@0x12`, `keystore:x@${A(1)}`]) {
+      expect(() => ownerHardwareSigner(bad, { prompt: async () => {} })).toThrow(SafeToolError);
+    }
   });
 });
