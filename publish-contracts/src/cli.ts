@@ -25,7 +25,7 @@ import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { RECEIPT_ROW, assertReceiptId, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
-import { pauseAll, pauseIncomplete, type PauseTrigger } from "./pause-all.ts";
+import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
 import { runProveControl, type ProveOpts } from "./prove-control.ts";
 import { startAnvil, type ChainStarter } from "./preflight.ts";
 import { USDC_ADDRESS, assertUsdcCode } from "./usdc.ts";
@@ -238,6 +238,7 @@ async function pauseOnFailure(ctx: RunContext, trigger: PauseTrigger, cause: unk
     const manifest = loadRunManifest(ctx.evidenceDir);
     if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}`);
     const report = await pause(ctx, manifest, { trigger, reason, emergencySigner: emergency() });
+    if (report.allPaused && report.manifestRecorded === false) return pauseUnrecorded(report, `${reason}. `);
     return report.allPaused ? cause : pauseIncomplete(report, `${reason}. `);
   } catch (e) {
     if (isPublishError(e, "PAUSE")) return e;
@@ -310,6 +311,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}: pause-all reads it to know whether the handover has begun. Pass the same --evidence directory as the run.`);
       const report = await (deps.pauseAll ?? pauseAll)(ctx, manifest, { trigger: "manual", reason: "pause-all was run by hand", emergencySigner: emergencySigner() });
       if (!report.allPaused) throw pauseIncomplete(report);
+      if (report.manifestRecorded === false) throw pauseUnrecorded(report);
       log.log("info", "run.done", { ran: ["pause-all"], skipped: [] });
       return 0;
     }

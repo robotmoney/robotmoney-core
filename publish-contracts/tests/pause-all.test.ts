@@ -293,5 +293,33 @@ describe("issue 1686: pause-all records a pause entry in the run manifest", () =
     expect(manifestOf(w).pauses).toHaveLength(1);
     expect(existsSync(lock)).toBe(false);
   });
+
+  test("issue 1688: a pause entry that cannot be written does NOT stop the pause (all four vaults are paused), is reported unrecorded, and the manual verb exits PAUSE", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    mkdirSync(join(w.evidence, `publish-run.json.${process.pid}.tmp`)); // every manifest write fails: the temp file name is a directory
+    const code = await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c));
+    expect(c.sends).toHaveLength(4);
+    expect(code).toBe(EXIT_CODES.PAUSE);
+    expect(lastError(w).message).toContain("could NOT be recorded");
+    expect(lastError(w).message).toContain("Cancel every pending unpause");
+    expect(report(w).pauseAll).toMatchObject({ allPaused: true, manifestRecorded: false });
+  });
+
+  test("issue 1688: the automatic pause after a failed verify, with the entry unwritable, still pauses all four and fails with the PAUSE error (not the bare verify error)", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, BEFORE_HANDOVER);
+    mkdirSync(join(w.evidence, `publish-run.json.${process.pid}.tmp`));
+    expect(await w.run(["verify"], { ...deps(c), verify: failingVerifier })).toBe(EXIT_CODES.PAUSE);
+    expect(c.sends).toHaveLength(4);
+    expect(lastError(w).message).toContain("could NOT be recorded");
+  });
+
+  test("issue 1688: a recorded pause-all reports manifestRecorded true and exits 0", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
+    expect(report(w).pauseAll).toMatchObject({ allPaused: true, manifestRecorded: true });
+  });
 });
 

@@ -331,6 +331,17 @@ so the recovery is, in this order:
 4. A pause-all older than the schedule does not block. A row whose vault was
    paused again after it executed opens round n+1 as described above.
 
+Ordering details (issue 1688). `govern` reserves the schedule's sequence number
+in `publish-run.json` (`seqHigh`) BEFORE it sends the schedule, so a pause-all
+that begins after the send is always newer than the schedule. A record with no
+`seq` (written by an older tool, or adopted from the chain) is never given one
+by a later save: it counts as older than every pause entry. If `pause-all`
+cannot write its entry (the manifest is unwritable or missing), it still pauses
+all four vaults, because an emergency pause must not wait on bookkeeping. It
+then exits `PAUSE` (25) and says the pause was not recorded: `govern` cannot
+see it, so cancel every pending unpause through the Safe by hand. The rollout
+report has `manifestRecorded: false` in that case.
+
 There is no branch to cherry-pick onto and no rc-numbering cost — every
 contract deployment is a fresh broadcast, so "try again" is simply "deploy
 the fixed commit."

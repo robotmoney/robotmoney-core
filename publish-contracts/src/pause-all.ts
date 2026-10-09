@@ -50,6 +50,8 @@ export interface PauseAllReport {
   reason: string;
   at: string;
   allPaused: boolean;
+  /** Issue 1688: false when the pause entry could not be written to the run manifest, so govern cannot see this pause-all. */
+  manifestRecorded: boolean;
   vaults: PauseVaultResult[];
 }
 
@@ -96,7 +98,8 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
   const emergencyAddr = stageRole === "deployer" || !emergency ? undefined : await check(emergency, ctx.sheet.emergency, "emergency");
 
   // Issue 1686: the pause entry goes into the run manifest BEFORE the first pauseDeposits() is sent, so a crash half way still leaves a record that
-  // govern's execute phase refuses on. A failure to write it is logged loudly and never stops the pause: pausing the vaults comes first.
+  // govern's execute phase refuses on. Decision (issue 1688): a failure to write it NEVER stops the pause (pausing the vaults comes first, an emergency must not wait on bookkeeping),
+  // but it is never quiet: it is logged at error level, `manifestRecorded` is false in the report, and the caller turns that into a PAUSE error (pauseUnrecorded).
   const at = (ctx.now?.() ?? new Date()).toISOString();
   let entry: PauseEntry | undefined;
   const record = (fn: () => void): void => {
@@ -139,7 +142,7 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
     vaults.push(res);
     if (entry) { const e = entry; record(() => updatePauseEntry(ctx.evidenceDir, { ...e, vaults: vaults.map((x) => ({ ...x })) })); }
   }
-  const report: PauseAllReport = { trigger: o.trigger, reason: o.reason, at, allPaused: vaults.every((x) => x.depositsPaused === true), vaults };
+  const report: PauseAllReport = { trigger: o.trigger, reason: o.reason, at, allPaused: vaults.every((x) => x.depositsPaused === true), manifestRecorded: entry !== undefined, vaults };
   if (entry) { const e = entry; record(() => updatePauseEntry(ctx.evidenceDir, { ...e, status: "done", allPaused: report.allPaused, vaults: vaults.map((x) => ({ ...x })) })); }
   writeRolloutReport(ctx, report);
   ctx.log.log(report.allPaused ? "info" : "error", "pause_all.done", { all_paused: report.allPaused, trigger: o.trigger, report: rolloutReportPath(ctx) });
@@ -154,6 +157,11 @@ export function writeRolloutReport(ctx: Pick<RunContext, "evidenceDir" | "chainI
   writeFileSync(tmp, JSON.stringify({ chainId: ctx.chainId, coreSha: ctx.coreSha, environment: ctx.environment, pauseAll: pause }, null, 2) + "\n", { mode: 0o644 });
   renameSync(tmp, p);
   return p;
+}
+
+/** Issue 1688: the error for a pause-all that paused the vaults but could not record itself in the run manifest: govern cannot see it. */
+export function pauseUnrecorded(report: PauseAllReport, prefix = ""): PublishError {
+  return new PublishError("PAUSE", `${prefix}pause-all paused the vaults, but it could NOT be recorded in the run manifest, so govern will not refuse an unpause scheduled before it. Cancel every pending unpause operation through the Safe by hand now.`, { manifest_recorded: false, trigger: report.trigger });
 }
 
 /** The error for a pause-all that did not leave all four vaults paused. */
