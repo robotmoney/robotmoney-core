@@ -16,6 +16,11 @@
 // Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
 // timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the three unpauses). The first run schedules and exits
 // GOVERN_PENDING with the resume command, the resume after the delay executes and reads isReleased back. Its run-manifest key and salt are `release-receipt-<receiptId>`.
+//   apply-receipt                the Twin rehearsal's rebalance (issue 1696): ONE timelock batch, releaseReceipt(receiptId) plus the router weight change for the
+// receipt's vector (--receipt-id, --payload FILE). Before anything is sent it checks: the receipt is recorded, its stored digest equals keccak256 of the payload bytes, the
+// vector sums to 10000 bps and lists exactly the registry's router-eligible vaults in registry order, and the receipt is not released. After the real delay the Safe executes
+// the batch and the tool reads isReleased and the router weights back. No vote. Never part of stage 13: on 8453 only `--row apply-receipt` names it (own 172800 s delay).
+// Its run-manifest key and salt are `apply-receipt-<receiptId>`. A Twin run proves the row executes on the real contracts, not that mainnet governance works.
 // ROUNDS (issue 1667): every unpause row is a numbered round. The salt carries the round, so a vault that is paused again after an executed unpause
 // gets a NEW timelock operation id on its next `--row unpause-X` run, instead of re-hitting the operation that is already done. The earlier round's
 // record is kept in the run manifest under `<row>:round-<n>`. Only an explicit `--row` opens a new round: a default run that finds an executed row
@@ -28,7 +33,9 @@
 // The wait is the timelock's real delay. On a Twin fork (chain id is not 8453 and the RPC answers anvil_nodeInfo) it runs by ONE time warp to one second
 // past the latest ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING once, with the ready time and the exact next
 // command, and the same command resumes the stage.
+import { readFileSync } from "node:fs";
 import { encodeFunctionData, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
+import { APPLY_ROW, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCalls, planApply } from "./apply-receipt.ts";
 import { PublishError } from "./errors.ts";
 import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import { loadRunManifest, readManifestField, reserveManifestSeq, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
@@ -53,7 +60,7 @@ export const RECEIPT_ABI = parseAbi([
 const TL_ABI = parseAbi(["function updateDelay(uint256 newDelay)"]);
 
 export interface GovernAddrs {
-  timelock: Address; safe: Address;
+  timelock: Address; safe: Address; registry: Address; router: Address; governance: Address;
   vaults: Record<VaultKey, Address>;
 }
 
@@ -61,6 +68,7 @@ export function loadGovernAddrs(ctx: Pick<RunContext, "coreDir" | "chainId" | "m
   const r = (ref: string) => readManifestField(ctx, ref) as Address;
   return {
     timelock: r(manifestRef("timelock", "timelock")), safe: r(manifestRef("safe", "safe")),
+    registry: r(manifestRef("registry", "registry")), router: r(manifestRef("router", "router")), governance: r(manifestRef("governance", "governance")),
     vaults: Object.fromEntries(VAULT_STAGES.map((v) => [v.key, r(manifestRef(v.stage, "vault"))])) as Record<VaultKey, Address>,
   };
 }
@@ -120,6 +128,7 @@ export const loadReceiptAddr = (ctx: Pick<RunContext, "coreDir" | "chainId" | "m
 export function resolveGovernRow(row: string): PlannedRow {
   if (row === UNPAUSE_USDC_ROW) return UNPAUSE_USDC_ROW;
   if (row === RECEIPT_ROW) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} is the on-demand receipt release: it needs --receipt-id 0x<bytes32>`);
+  if (row === APPLY_ROW) throw new PublishError("USAGE", `--row ${APPLY_ROW} is the on-demand receipt application: it needs --receipt-id 0x<bytes32> and --payload FILE`);
   if (/^[0-9]+$/.test(row)) {
     const n = Number(row);
     const name = GOVERN_ROWS[n - 1];
@@ -127,7 +136,7 @@ export function resolveGovernRow(row: string): PlannedRow {
     return name;
   }
   if ((GOVERN_ROWS as readonly string[]).includes(row)) return row as GovernRowName;
-  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${UNPAUSE_USDC_ROW}, ${RECEIPT_ROW} --receipt-id 0x<bytes32>)`);
+  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${UNPAUSE_USDC_ROW}, ${RECEIPT_ROW} --receipt-id 0x<bytes32>, ${APPLY_ROW} --receipt-id 0x<bytes32> --payload FILE)`);
 }
 
 /** The calls of one unpause row. Empty means the sheet does not ask for it (the basket stays paused): the row is skipped. */
@@ -183,12 +192,14 @@ export interface GovernOpts {
    * `false` turns the warp off (tests with a stub chain).
    */
   warp?: ((seconds: bigint) => Promise<void>) | false;
-  /** Run one row only, by number or name. A Twin-only row needs the rows before it done first. `release-receipt` (with `receiptId`) is on demand. */
+  /** Run one row only, by number or name. A Twin-only row needs the rows before it done first. `release-receipt` and `apply-receipt` (with `receiptId`) are on demand. */
   row?: string;
   /** Declared dependencies (row to the row it follows), default GOVERN_DEPENDENCIES. The dependent carries the other's operation id as predecessor. */
   dependsOn?: Readonly<Record<string, string>>;
-  /** With row `release-receipt` only: the bytes32 receipt id to release. */
+  /** With row `release-receipt` or `apply-receipt`: the bytes32 receipt id. */
   receiptId?: string;
+  /** With row `apply-receipt` only: the receipt payload file. Its keccak256 must equal the digest the receipt stored on chain. */
+  payload?: string;
   /** Where a row line goes. Default: stdout (console.log). */
   emit?: (line: string) => void;
   /**
@@ -203,7 +214,7 @@ export interface TwinCall { label: string; target: Address; data: Hex }
 
 interface PhaseRecord { seq?: number; tx_hash?: string; safe_tx_hash?: string; status?: number; at: string; operation_id?: string; ready_at?: string; note?: string; [k: string]: unknown }
 /** What the run manifest keeps per row. A row is complete when it is skipped, executed or (for cancel) cancelled. */
-export interface RowRecord { round?: number; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
+export interface RowRecord { round?: number; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
 type GovernState = Record<string, RowRecord>;
 
 const rowComplete = (r: RowRecord | undefined): boolean => !!r && !!(r.skipped || r.executed || r.cancelled);
@@ -242,8 +253,9 @@ async function warpFor(ctx: RunContext, o: GovernOpts): Promise<((seconds: bigin
 const detected = new WeakMap<object, boolean>();
 
 /** The exact command that resumes a pending run. Arguments that carry no secret are spelled out, the rest are the same as this run's. No row: the whole stage. */
-export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?: string): string {
+export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?: string, payload?: string): string {
   if (row?.startsWith(`${RECEIPT_ROW}-`)) row = `${RECEIPT_ROW} --receipt-id ${row.slice(RECEIPT_ROW.length + 1)}`;
+  else if (row?.startsWith(`${APPLY_ROW}-`)) row = `${APPLY_ROW} --receipt-id ${row.slice(APPLY_ROW.length + 1)}${payload === undefined ? " --payload FILE" : ` --payload ${payload}`}`;
   return `bun publish-contracts/src/cli.ts govern${row === undefined ? "" : ` --row ${row}`} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same --rpc, --sheet, --signer, --environment and --owner-signer arguments as this run)`;
 }
 
@@ -251,7 +263,7 @@ export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?
  * Waits until every operation is ready (or done), with ONE wait for the whole set: on a Twin fork one warp to one second past the latest ready
  * time, on 8453 the run exits GOVERN_PENDING once with that latest ready time. `resumeRow` is the `--row` of the resume command (none: the stage).
  */
-async function waitReady(ctx: RunContext, o: GovernOpts, api: GovernApi, handle: SafeHandle, timelock: Address, ops: { id: Hex; row: string }[], resumeRow?: string): Promise<void> {
+async function waitReady(ctx: RunContext, o: GovernOpts, api: GovernApi, handle: SafeHandle, timelock: Address, ops: { id: Hex; row: string }[], resumeRow?: string, resumePayload?: string): Promise<void> {
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const maxWait = ctx.chainId === BASE_CHAIN_ID ? Math.min(o.maxWaitSeconds ?? 3600, 3600) : (o.maxWaitSeconds ?? 3600);
   for (;;) {
@@ -273,7 +285,7 @@ async function waitReady(ctx: RunContext, o: GovernOpts, api: GovernApi, handle:
       continue;
     }
     if (remaining > maxWait) {
-      const next = resumeCommand(ctx, resumeRow);
+      const next = resumeCommand(ctx, resumeRow, resumePayload);
       const what = rows.length === 1 ? `govern row ${rows[0]} is scheduled` : `govern rows ${rows.join(", ")} are scheduled`;
       throw new PublishError("GOVERN_PENDING", `${what} and become${rows.length === 1 ? "s" : ""} ready at ${latest} (${new Date(Number(latest) * 1000).toISOString()}, in about ${remaining} s). After that time run: ${next}`,
         { ids: ops.map((x) => x.id), row: rows[0], rows, ready_at: latest.toString(), remaining, next_command: next });
@@ -326,12 +338,15 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   // Usage errors first, before the Safe is read or anything is sent.
   if (o.call && ctx.chainId === BASE_CHAIN_ID) throw new PublishError("USAGE", "a generic timelock call is a Twin-chain test verb: it is refused on chain 8453");
   if (o.call && o.row !== undefined) throw new PublishError("USAGE", "a generic timelock call and --row are mutually exclusive");
-  if (o.receiptId !== undefined && o.row !== RECEIPT_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only`);
+  if (o.receiptId !== undefined && o.row !== RECEIPT_ROW && o.row !== APPLY_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only (or --row ${APPLY_ROW})`);
+  if (o.payload !== undefined && o.row !== APPLY_ROW) throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} only`);
+  if (o.call && o.payload !== undefined) throw new PublishError("USAGE", "a generic timelock call and --payload are mutually exclusive");
   if (o.call && o.receiptId !== undefined) throw new PublishError("USAGE", "a generic timelock call and --receipt-id are mutually exclusive");
   const releasing = o.row === RECEIPT_ROW;
-  const selected: PlannedRow | undefined = o.row === undefined || releasing ? undefined : resolveGovernRow(o.row);
+  const applying = o.row === APPLY_ROW;
+  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying ? undefined : resolveGovernRow(o.row);
   if (selected !== undefined && isTwinOnlyRow(selected) && ctx.chainId === BASE_CHAIN_ID) {
-    throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the basket unpause; the one other mainnet action is --row ${RECEIPT_ROW})`);
+    throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the basket unpause; the other mainnet actions are --row ${RECEIPT_ROW} and --row ${APPLY_ROW})`);
   }
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;
@@ -508,7 +523,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     await schedulePhase(name, p, emitAs);
     if (p.cancel) return cancelPhase(name, p, emitAs);
     if (state[name]!.executed) return executePhase(name, p, emitAs);
-    await waitReady(ctx, o, api, handle, a.timelock, [{ id: p.id, row: name }], name);
+    await waitReady(ctx, o, api, handle, a.timelock, [{ id: p.id, row: name }], name, o.payload);
     await executePhase(name, p, emitAs);
   }
 
@@ -585,6 +600,86 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     }
   }
 
+  if (applying) {
+    // Issue 1696: ONE timelock batch, releaseReceipt + the router weight change. Never part of the matrix, on 8453 only when named with a receipt id and a payload.
+    if (o.receiptId === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --receipt-id 0x<bytes32>`);
+    if (o.payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE (the receipt payload, whose keccak256 is the digest the receipt stored)`);
+    const receiptId = assertReceiptId(o.receiptId);
+    let payload: Uint8Array;
+    try { payload = new Uint8Array(readFileSync(o.payload)); } catch (e) { throw new PublishError("USAGE", `--payload ${o.payload} is not readable: ${(e as Error).message}`); }
+    const receipt = loadReceiptAddr(ctx);
+    const governance = a.governance;
+    const name = applyRecordKey(receiptId);
+    // The operator cancelled this round's operation through the Safe and named the row again: the same round is scheduled again (a cancelled id is free), with a newer seq.
+    const cur = state[name];
+    if (cur?.scheduled?.operation_id && !rowComplete(cur)) {
+      const st = await api.operationState(handle, a.timelock, cur.scheduled.operation_id as Hex);
+      if (!st.exists && !st.done) {
+        let k = 1;
+        while (state[`${name}:cancelled-${k}`]) k++;
+        state[`${name}:cancelled-${k}`] = cur;
+        state[name] = { round: cur.round ?? 1 };
+        save();
+        ctx.log.log("info", "govern.round_rescheduled", { row: APPLY_ROW, receipt_id: receiptId, cancelled_operation: cur.scheduled.operation_id });
+      }
+    }
+    const rd = reader(handle);
+    if (!rowComplete(state[name])) {
+      const recorded = await rd<boolean>(receipt, RECEIPT_ABI, "isRecorded", [receiptId]);
+      const released = recorded ? await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId]) : false;
+      const stored = recorded ? (await rd<{ payloadDigest: Hex }>(receipt, RECEIPT_RECORD_ABI, "getReceiptById", [receiptId])).payloadDigest : undefined;
+      const listed = await rd<Address[]>(a.registry, REGISTRY_ELIGIBLE_ABI, "listVaults");
+      const eligible: Address[] = [];
+      for (const v of listed) if (await rd<boolean>(a.registry, REGISTRY_ELIGIBLE_ABI, "isRouterEligible", [v])) eligible.push(v);
+      const vec = planApply({ receiptId, payload, recorded, released, storedDigest: stored, eligible, vaultOf: a.vaults, inFlight: state[name]?.scheduled !== undefined });
+      const calls = buildApplyCalls(receipt, governance, receiptId, vec);
+      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(name), form: "batch" as const };
+      const id = await api.operationId(handle, p);
+      const prior = state[name]?.scheduled?.operation_id;
+      if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: APPLY_ROW, receipt_id: receiptId, prior, id });
+      const readBack = async () => {
+        const [rv, rb] = await rd<[Address[], bigint[]]>(a.router, ROUTER_WEIGHTS_ABI, "getDefaultWeights");
+        return applyReadBackProblems(receiptId, await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId]), rv, rb, vec);
+      };
+      state[name] = { ...(state[name] ?? { round: 1 }), apply: { vaults: vec.vaults, bps: vec.bps, payload_digest: keccak256(payload) } };
+      await round(name, {
+        id, description: `apply receipt ${receiptId}`, readBack,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${APPLY_ROW}: ${calls.map((c) => c.label).join("; ")}` }),
+        execute: () => api.executeOnTimelock(handle, { ...p, description: `${APPLY_ROW} execute` }),
+      }, APPLY_ROW);
+    } else {
+      const r = state[name]!;
+      if (r.scheduled) emitPhase(o, APPLY_ROW, "scheduled", r.scheduled);
+      if (r.executed) emitPhase(o, APPLY_ROW, "executed", r.executed);
+    }
+    await recordApplication(name, receiptId, receipt, governance);
+    save();
+    ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: APPLY_ROW, receipt_id: receiptId });
+    return { rows: [name], skipped: [], opIds };
+  }
+
+  /**
+   * The evidence entry of an executed apply round (`receipt_applications` of the run manifest, checked by evidence-check). The block timestamps are read from
+   * the chain, from the receipt of each Safe transaction. A round adopted from the chain with no transaction of its own writes no entry.
+   */
+  async function recordApplication(name: string, receiptId: Hex, receipt: Address, governance: Address): Promise<void> {
+    const r = state[name]!;
+    if (!r.executed?.tx_hash || !r.scheduled?.tx_hash || !r.apply) return;
+    const at = async (hash: string): Promise<number> => {
+      const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
+      return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+    };
+    const entry = {
+      step: APPLY_ROW, receipt_id: receiptId, target: receipt, governance, vaults: r.apply.vaults, bps: r.apply.bps, payload_digest: r.apply.payload_digest,
+      operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
+      execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
+    };
+    const list = ((manifest as { receipt_applications?: { receipt_id?: string }[] }).receipt_applications ??= []);
+    const i = list.findIndex((x) => x.receipt_id?.toLowerCase() === receiptId.toLowerCase());
+    if (i >= 0) list[i] = entry; else list.push(entry);
+    save();
+  }
+
   if (releasing) {
     if (o.receiptId === undefined) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} needs --receipt-id 0x<bytes32>`);
     const receiptId = assertReceiptId(o.receiptId);
@@ -622,7 +717,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
 
   if (o.call) {
     const { label, target, data } = o.call;
-    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
+    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW || label === APPLY_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
     const name = `call-${label}`;
     const p = { timelock: a.timelock, calls: [{ target, data }], salt: salt(name), form: "single" as const };
     const id = await api.operationId(handle, p);

@@ -122,6 +122,15 @@ export function controlProofOf(manifest: Pick<RunManifest, "stages">): { txHash:
   return r?.status === "done" && typeof r.txHash === "string" && Number.isInteger(r.nonce) ? { txHash: r.txHash as `0x${string}`, nonce: r.nonce as number } : undefined;
 }
 
+/** The last receipt `govern --row apply-receipt` applied (issue 1696): its id and vector, from the run manifest's `receipt_applications`. */
+export function appliedReceiptOf(manifest: Pick<RunManifest, "receipt_applications">): VerifyOptions["appliedReceipt"] {
+  const last = (manifest.receipt_applications ?? []).filter((x): x is { receipt_id: `0x${string}`; vaults: `0x${string}`[]; bps: number[] } => {
+    const e = x as { receipt_id?: unknown; vaults?: unknown; bps?: unknown } | undefined;
+    return typeof e?.receipt_id === "string" && Array.isArray(e.vaults) && Array.isArray(e.bps) && e.vaults.length === e.bps.length;
+  }).pop();
+  return last ? { receiptId: last.receipt_id, vaults: last.vaults, bps: last.bps } : undefined;
+}
+
 export interface VerifyDeps {
   verifyDeployment: (o: VerifyOptions) => Promise<VerifyReport>;
   verifySources: typeof verifySources;
@@ -163,6 +172,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
     handoverBlock: handoverBlock(manifest),
     controlProof: controlProofOf(manifest),
+    appliedReceipt: appliedReceiptOf(manifest),
   });
   if (mainnet) {
     // The mode came from the manifest, which an operator can edit or lose: read depositsPaused of all four vaults and fail on any disagreement with it.

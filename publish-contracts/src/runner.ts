@@ -81,6 +81,8 @@ export interface RunManifest {
   firstBlock?: number;
   stages: Record<string, StageRecord>;
   govern?: Record<string, unknown>;
+  /** One entry per executed `govern --row apply-receipt` round (issue 1696): the evidence-check `receipt_applications` shape. */
+  receipt_applications?: unknown[];
   /** Every pause-all that ran against this run, oldest first (issue 1686). Written by pause-all only, merged on every save. */
   pauses?: PauseEntry[];
   /** The highest manifest sequence number handed out by reserveManifestSeq (issue 1688). Merged by max on every save, so it only grows. */

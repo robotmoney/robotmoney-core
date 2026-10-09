@@ -11,6 +11,7 @@ import { manifestBase } from "../src/stage-table.ts";
 import { stageManifestName } from "../src/verify/constants.ts";
 import type { Signer } from "../src/safe/index.ts";
 import { RECEIPT_ABI, VAULT_ABI, type GovernApi } from "../src/govern.ts";
+import { GOVERNANCE_WEIGHTS_ABI } from "../src/apply-receipt.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
@@ -55,13 +56,20 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     recorded: new Set<string>(), released: new Set<string>(),
     /** The vaults that read depositsPaused true. The three baskets ship paused and rmUSDC open; an executed unpauseDeposits opens a vault, a test pauses one by adding it. */
     paused: new Set<string>([A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA]),
+    /** Registry order, the vaults that are NOT router-eligible, the digest each recorded receipt stored, and the router's default weights (an executed setDefaultWeights sets them). */
+    listed: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA] as Address[], ineligible: new Set<string>(),
+    digests: new Map<string, Hex>(),
+    weights: { vaults: [] as Address[], bps: [] as bigint[] },
+    /** The chain clock at each Safe transaction hash: getTransactionReceipt answers with it as the block number, getBlock({blockNumber}) as the timestamp. */
+    txClock: new Map<string, bigint>(),
   };
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
   const idOf = (p: { calls: { target: string; data: string }[]; salt: string; form?: string; predecessor?: string }): Hex => keccak256(toBytes(JSON.stringify([p.calls.map((c) => [c.target, c.data]), p.salt, p.form ?? "batch", p.predecessor ?? null])));
   const handle: any = {
     address: A.safe, owners: sheet.safeOwners, threshold: sheet.safeThreshold, chain: { rpcUrl: "x", chainId: 918453 },
     client: {
-      getBlock: async () => ({ timestamp: s.clock }),
+      getBlock: async (a?: { blockNumber?: bigint }) => ({ timestamp: a?.blockNumber ?? s.clock }),
+      getTransactionReceipt: async ({ hash }: { hash: string }) => ({ blockNumber: s.txClock.get(hash) ?? s.clock, status: "success" }),
       readContract: async ({ address, functionName, args }: { address: Address; functionName: string; args?: unknown[] }) => {
         const key = Object.entries(A.vaults).find(([, v]) => v === address)?.[0] as "USDC" | undefined;
         if (functionName in s.reads) return s.reads[functionName];
@@ -71,7 +79,10 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "tvlCap": return sheet.vaults[key!].tvlCap;
           case "perDepositCap": return sheet.vaults[key!].perDepositCap;
           case "exitFeeBps": return sheet.vaults[key!].exitFeeBps;
-          case "isRouterEligible": return true;
+          case "isRouterEligible": return !s.ineligible.has(String(args?.[0]));
+          case "listVaults": return s.listed;
+          case "getReceiptById": return { payloadDigest: s.digests.get(String(args?.[0]).toLowerCase()) };
+          case "getDefaultWeights": return [s.weights.vaults, s.weights.bps];
           case "depositsPaused": return s.paused.has(address);
           case "votingPeriod": return sheet.votingPeriod;
           case "executionDelay": return sheet.executionDelay;
@@ -119,6 +130,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
         if (b.predecessor && !s.ops.get(b.predecessor)?.done) throw new Error("TimelockController: missing dependency");
         s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n });
         for (const c of (b.calls ?? []) as { target: string; data: Hex }[]) {
+          if (c.target === A.governance) {
+            const w = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: c.data });
+            s.weights = { vaults: [...(w.args[0] as Address[])], bps: [...(w.args[1] as bigint[])] };
+            continue;
+          }
           if (c.target !== A.receipt) {
             if (Object.values(A.vaults).includes(c.target as Address) && decodeFunctionData({ abi: VAULT_ABI, data: c.data }).functionName === "unpauseDeposits") s.paused.delete(c.target);
             continue;
@@ -131,6 +147,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       else if (b.action === "updateDelay.execute") { s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n }); s.minDelay = b.newDelay; }
       s.nonce++;
       const hash = `0x${s.nonce.toString(16).padStart(64, "0")}`;
+      s.txClock.set(hash, s.clock);
       s.safeTxs.set(id, [...(s.safeTxs.get(id) ?? []), hash]);
       return { txHash: `0x${s.nonce.toString(16).padStart(64, "0")}` as Hex, bundle: { ...b, executed: { tx_hash: `0x${s.nonce.toString(16).padStart(64, "0")}`, status: 1 } } };
     }) as never,
