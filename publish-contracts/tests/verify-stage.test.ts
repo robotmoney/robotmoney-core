@@ -184,7 +184,7 @@ describe("stage 12 after govern: the unpause rows are linked to the paused reads
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe", unpaused);
     expect(v.vaults.rmUSDC!.expectPaused).toBe(false);
     for (const [k, name] of [["PROTO", "rmPROTO"], ["AGENT", "rmAGENT"], ["RWA", "rmRWA"]] as const) expect(v.vaults[name]!.expectPaused).toBe(!unpaused.includes(k));
-    // rmAGENT stays paused unless the sheet lists it: pause semantics are sheet data
+    // rmAGENT is expected paused only when the sheet does not list it: pause semantics are sheet data
     expect(v.vaults.rmAGENT!.expectPaused).toBe(!sheet.govern.unpauseVaults.includes("AGENT"));
   });
 

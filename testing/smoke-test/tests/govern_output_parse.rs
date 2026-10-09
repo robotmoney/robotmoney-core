@@ -9,12 +9,14 @@ use smoke_test::publish::{check_govern_rows, parse_govern_output};
 
 const SAMPLE: &str = include_str!("fixtures/govern-stdout.jsonl");
 
-// One entry per round event, in the order the CLI prints them. The default stage sheet unpauses PROTO and RWA: both unpauses are scheduled in one
-// sitting (both `scheduled` lines first), then both `executed` lines, then the Twin-only rounds one at a time (`scheduled`, then `executed` or `cancelled`).
-const ROWS: [&str; 10] = [
+// One entry per round event, in the order the CLI prints them. The default stage sheet unpauses PROTO, AGENT and RWA: the three unpauses are scheduled in one
+// sitting (all `scheduled` lines first), then all `executed` lines, then the Twin-only rounds one at a time (`scheduled`, then `executed` or `cancelled`).
+const ROWS: [&str; 12] = [
     "unpause-PROTO",
+    "unpause-AGENT",
     "unpause-RWA",
     "unpause-PROTO",
+    "unpause-AGENT",
     "unpause-RWA",
     "update-delay",
     "update-delay",

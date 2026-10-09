@@ -72,20 +72,16 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
         assert!(deposits_paused(&rpc, &vaults[n]), "{n} must deploy paused");
     }
 
-    // Stage 13 through the real Safe and timelock opens the baskets the sheet names (rmPROTO and rmRWA).
+    // Stage 13 through the real Safe and timelock opens the three baskets the sheet names (rmPROTO, rmAGENT and rmRWA).
     published
         .govern_matrix()
         .expect("the govern matrix must pass through the real Safe");
-    for n in ["rmUSDC", "rmPROTO", "rmRWA"] {
+    for n in ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"] {
         assert!(
             !deposits_paused(&rpc, &vaults[n]),
             "{n} must be open after stage 13"
         );
     }
-    assert!(
-        deposits_paused(&rpc, &vaults["rmAGENT"]),
-        "rmAGENT holds RM but the default sheet never unpauses it: it stays paused"
-    );
 
     // A real depositor puts USDC straight into each open vault: shares in rmUSDC, rmPROTO and rmRWA.
     let user = fx.agent();
@@ -234,7 +230,7 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
             "{name} must still be paused"
         );
     }
-    // rmAGENT holds RM and stays paused (the default sheet never unpauses it): the test deposits nothing there, so there are no shares to redeem.
+    // rmAGENT holds RM and the test deposits nothing there (a deposit needs a V4 swap): there are no shares to redeem.
     assert_eq!(
         before
             .iter()
