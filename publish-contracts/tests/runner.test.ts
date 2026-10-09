@@ -23,7 +23,7 @@ describe("the stage runner on stub forge and cast", () => {
     const code = await w.run(["--stage", "deploy"]);
     expect(lastError(w)).toBeUndefined();
     expect(code).toBe(0);
-    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.vault, SCRIPT.registry, SCRIPT.router, SCRIPT.gateway,
+    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.vault, SCRIPT.registry, SCRIPT.router, SCRIPT.gateway,
       SCRIPT.governance, SCRIPT["ic-policy"], SCRIPT.proto, SCRIPT.agent, SCRIPT.rwa, SCRIPT.timelock]);
     expect(w.safeCalls[0]).toBe("createSafe");
     const m = manifest(w);
@@ -93,7 +93,7 @@ describe("the stage runner on stub forge and cast", () => {
     const code = await w.run(["--stage", "deploy"]);
     expect(code).toBe(EXIT_CODES.SIMULATION);
     expect(code).not.toBe(0);
-    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.vault]);
+    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.vault]);
     expect(lastError(w).kind).toBe("SIMULATION");
     expect(forgeScripts(w).some((c: any) => c.args[1].includes(SCRIPT.router.replace(".s.sol", "")))).toBe(false);
   });
@@ -112,7 +112,7 @@ describe("the stage runner on stub forge and cast", () => {
     w.cfg.counts[SCRIPT.vault] = COUNTS.vault! + 2;
     const code = await w.run(["--stage", "deploy"]);
     expect(code).toBe(EXIT_CODES.COUNT_MISMATCH);
-    expect(broadcasts(w)).toEqual([SCRIPT.libs]);
+    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder]);
   });
 
   test("a missing frozen file on 8453 fails before any chain work (hard error)", async () => {
@@ -164,7 +164,7 @@ describe("the stage runner on stub forge and cast", () => {
     const code = await w.run(["--stage", "deploy", "--dry-run"]);
     expect(code).toBe(0);
     expect(targetBroadcasts(w)).toEqual([]);
-    expect(simulations(w).length).toBe(11);
+    expect(simulations(w).length).toBe(12);
     // only the control proof is skipped (a real Safe transaction signed by every owner), loudly, and the stage 11 gate with it
     expect(w.logs().filter((l) => l.event === "stage.dry_run_skipped").map((l) => l.stage)).toEqual(["prove-control"]);
     expect(w.logs().some((l) => l.event === "stage.control_proof_skipped")).toBe(true);
@@ -185,7 +185,7 @@ describe("the stage runner on stub forge and cast", () => {
     w.safeCalls.length = 0;
     expect(await w.run(["--stage", "deploy", "--resume"])).toBe(0);
     expect(w.safeCalls.filter((c) => c === "createSafe" || c === "verifyCreatedSafe")).toEqual([]);
-    expect(w.logs().filter((l) => l.event === "stage.skipped").map((l) => l.stage)).toEqual(["safe", "libs"]);
+    expect(w.logs().filter((l) => l.event === "stage.skipped").map((l) => l.stage)).toEqual(["safe", "libs", "recorder"]);
     const resumed = forgeScripts(w).filter((c: any) => c.args.includes("--resume")).map((c: any) => c.args[1].split(":")[0].split("/").pop());
     expect(resumed).toEqual([SCRIPT.vault]);
     expect(w.state().nonces["0x000000000000000000000000000000000000a001"]).toBe(Object.values(COUNTS).reduce((a, b) => a + b, 0));

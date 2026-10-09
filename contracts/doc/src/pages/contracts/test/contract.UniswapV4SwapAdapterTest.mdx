@@ -1,0 +1,413 @@
+---
+title: "UniswapV4SwapAdapterTest"
+---
+
+# UniswapV4SwapAdapterTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/UniswapV4SwapAdapter.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### FEE
+
+```solidity
+uint24 internal constant FEE = 29100;
+```
+
+### SPACING
+
+```solidity
+int24 internal constant SPACING = 582;
+```
+
+### TICK
+
+```solidity
+int24 internal constant TICK = -100;
+```
+
+## State Variables
+
+### pm
+
+```solidity
+MockV4PoolManager internal pm;
+```
+
+### rec
+
+```solidity
+UniswapV4PriceRecorder internal rec;
+```
+
+### adapter
+
+```solidity
+UniswapV4SwapAdapter internal adapter;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### rm
+
+```solidity
+TestERC20 internal rm;
+```
+
+### c0
+
+```solidity
+address internal c0;
+```
+
+### c1
+
+```solidity
+address internal c1;
+```
+
+### poolId
+
+```solidity
+bytes32 internal poolId;
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_key"></a>
+
+### _key
+
+```solidity
+function _key() internal view returns (IPoolManagerV4.PoolKey memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IPoolManagerV4.PoolKey` |  |
+
+<a id="_swap-address-address-address-uint256-uint256-address"></a>
+
+### _swap
+
+```solidity
+function _swap(address from, address tin, address tout, uint256 amt, uint256 minOut, address to)
+        internal
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| tin | `address` |  |
+| tout | `address` |  |
+| amt | `uint256` |  |
+| minOut | `uint256` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="test_constructor_bindsthekeyandrecorder"></a>
+
+### test_constructor_bindsTheKeyAndRecorder
+
+```solidity
+function test_constructor_bindsTheKeyAndRecorder() public view;
+```
+
+<a id="test_constructor_refusesakeythatdoesnotpairthequotetokenwithanother"></a>
+
+### test_constructor_refusesAKeyThatDoesNotPairTheQuoteTokenWithAnother
+
+```solidity
+function test_constructor_refusesAKeyThatDoesNotPairTheQuoteTokenWithAnother() public;
+```
+
+<a id="test_constructor_refusesanonzerohooksaddress"></a>
+
+### test_constructor_refusesANonZeroHooksAddress
+
+```solidity
+function test_constructor_refusesANonZeroHooksAddress() public;
+```
+
+<a id="test_constructor_refusesanunsortedkey"></a>
+
+### test_constructor_refusesAnUnsortedKey
+
+```solidity
+function test_constructor_refusesAnUnsortedKey() public;
+```
+
+<a id="test_constructor_refusesakeywhosehashisnottherecorderspoolid"></a>
+
+### test_constructor_refusesAKeyWhoseHashIsNotTheRecordersPoolId
+
+PoolKey spoofing: a key whose hash differs from the recorder's pool id is refused, field by field.
+
+```solidity
+function test_constructor_refusesAKeyWhoseHashIsNotTheRecordersPoolId() public;
+```
+
+<a id="test_constructor_refusesarecorderonanotherpoolmanager"></a>
+
+### test_constructor_refusesARecorderOnAnotherPoolManager
+
+```solidity
+function test_constructor_refusesARecorderOnAnotherPoolManager() public;
+```
+
+<a id="test_constructor_refuseszeroaddresses"></a>
+
+### test_constructor_refusesZeroAddresses
+
+```solidity
+function test_constructor_refusesZeroAddresses() public;
+```
+
+<a id="test_swap_usdctorm_paystherecipientandleavesnothingbehind"></a>
+
+### test_swap_usdcToRm_paysTheRecipientAndLeavesNothingBehind
+
+```solidity
+function test_swap_usdcToRm_paysTheRecipientAndLeavesNothingBehind() public;
+```
+
+<a id="test_swap_rmtousdc_otherdirection"></a>
+
+### test_swap_rmToUsdc_otherDirection
+
+```solidity
+function test_swap_rmToUsdc_otherDirection() public;
+```
+
+<a id="test_swap_pullsonlyfromthecallerandonlytheexactamount"></a>
+
+### test_swap_pullsOnlyFromTheCallerAndOnlyTheExactAmount
+
+```solidity
+function test_swap_pullsOnlyFromTheCallerAndOnlyTheExactAmount() public;
+```
+
+<a id="test_swap_astrangercanonlyspendtheirowntokens"></a>
+
+### test_swap_aStrangerCanOnlySpendTheirOwnTokens
+
+```solidity
+function test_swap_aStrangerCanOnlySpendTheirOwnTokens() public;
+```
+
+<a id="test_swap_pokestherecorderbeforethetrade"></a>
+
+### test_swap_pokesTheRecorderBeforeTheTrade
+
+```solidity
+function test_swap_pokesTheRecorderBeforeTheTrade() public;
+```
+
+<a id="test_swap_asecondswapinthesameblockwritesnosecondsnapshot"></a>
+
+### test_swap_aSecondSwapInTheSameBlockWritesNoSecondSnapshot
+
+```solidity
+function test_swap_aSecondSwapInTheSameBlockWritesNoSecondSnapshot() public;
+```
+
+<a id="test_swap_zeroamountreturnszeroandmovesnothing"></a>
+
+### test_swap_zeroAmountReturnsZeroAndMovesNothing
+
+```solidity
+function test_swap_zeroAmountReturnsZeroAndMovesNothing() public;
+```
+
+<a id="test_swap_refusesanexpireddeadline"></a>
+
+### test_swap_refusesAnExpiredDeadline
+
+```solidity
+function test_swap_refusesAnExpiredDeadline() public;
+```
+
+<a id="test_swap_acceptsadeadlineequaltonow"></a>
+
+### test_swap_acceptsADeadlineEqualToNow
+
+```solidity
+function test_swap_acceptsADeadlineEqualToNow() public;
+```
+
+<a id="test_swap_refusesanamountinaboveuint128"></a>
+
+### test_swap_refusesAnAmountInAboveUint128
+
+```solidity
+function test_swap_refusesAnAmountInAboveUint128() public;
+```
+
+<a id="test_swap_refusesaminamountoutaboveuint128"></a>
+
+### test_swap_refusesAMinAmountOutAboveUint128
+
+```solidity
+function test_swap_refusesAMinAmountOutAboveUint128() public;
+```
+
+<a id="test_swap_refusesatokenpairthatisnotthepool"></a>
+
+### test_swap_refusesATokenPairThatIsNotThePool
+
+```solidity
+function test_swap_refusesATokenPairThatIsNotThePool() public;
+```
+
+<a id="test_swap_refusesafeethatisnotthepoolfee"></a>
+
+### test_swap_refusesAFeeThatIsNotThePoolFee
+
+```solidity
+function test_swap_refusesAFeeThatIsNotThePoolFee() public;
+```
+
+<a id="test_swap_refusesazerorecipientandzerotokens"></a>
+
+### test_swap_refusesAZeroRecipientAndZeroTokens
+
+```solidity
+function test_swap_refusesAZeroRecipientAndZeroTokens() public;
+```
+
+<a id="test_swap_revertsbelowthefloorandrollseverythingback"></a>
+
+### test_swap_revertsBelowTheFloorAndRollsEverythingBack
+
+The slippage floor is enforced and a failed swap leaves no state behind.
+
+```solidity
+function test_swap_revertsBelowTheFloorAndRollsEverythingBack() public;
+```
+
+<a id="test_swap_floorisinclusive"></a>
+
+### test_swap_floorIsInclusive
+
+```solidity
+function test_swap_floorIsInclusive() public;
+```
+
+<a id="test_swap_refusesapartialfill"></a>
+
+### test_swap_refusesAPartialFill
+
+A fill that does not consume the whole exact input (a price limit stopped it) is refused, not settled short.
+
+```solidity
+function test_swap_refusesAPartialFill() public;
+```
+
+<a id="test_unlockcallback_rejectsanycallerbutthepoolmanager"></a>
+
+### test_unlockCallback_rejectsAnyCallerButThePoolManager
+
+```solidity
+function test_unlockCallback_rejectsAnyCallerButThePoolManager() public;
+```
+
+<a id="test_unlockcallback_rejectsthepoolmanagerwhennoswapisopen"></a>
+
+### test_unlockCallback_rejectsThePoolManagerWhenNoSwapIsOpen
+
+```solidity
+function test_unlockCallback_rejectsThePoolManagerWhenNoSwapIsOpen() public;
+```
+
+<a id="test_swap_isnotreentrant"></a>
+
+### test_swap_isNotReentrant
+
+```solidity
+function test_swap_isNotReentrant() public;
+```
+
+<a id="_warm"></a>
+
+### _warm
+
+```solidity
+function _warm() internal;
+```
+
+<a id="test_twapprice_priceistherecordersmeantick"></a>
+
+### test_twapPrice_priceIsTheRecordersMeanTick
+
+```solidity
+function test_twapPrice_priceIsTheRecordersMeanTick() public;
+```
+
+<a id="test_twapprice_refusesapoolthatisnottherecorder"></a>
+
+### test_twapPrice_refusesAPoolThatIsNotTheRecorder
+
+```solidity
+function test_twapPrice_refusesAPoolThatIsNotTheRecorder() public;
+```
+
+<a id="test_twapprice_refuseswrongpairandzerowindowandzeroaddress"></a>
+
+### test_twapPrice_refusesWrongPairAndZeroWindowAndZeroAddress
+
+```solidity
+function test_twapPrice_refusesWrongPairAndZeroWindowAndZeroAddress() public;
+```
+
+<a id="test_twapprice_revertswhiletherecorderisstaleandwhenhistoryisshort"></a>
+
+### test_twapPrice_revertsWhileTheRecorderIsStaleAndWhenHistoryIsShort
+
+```solidity
+function test_twapPrice_revertsWhileTheRecorderIsStaleAndWhenHistoryIsShort() public;
+```
+
+<a id="test_twapprice_ignoreslivespot"></a>
+
+### test_twapPrice_ignoresLiveSpot
+
+```solidity
+function test_twapPrice_ignoresLiveSpot() public;
+```
+

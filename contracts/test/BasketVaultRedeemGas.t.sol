@@ -47,7 +47,8 @@ contract BasketVaultRedeemGasForkTest is Test {
             exitFeeBps: 25,
             feeRecipient: makeAddr("feeRecipient"),
             navDeviationGuardBps: 2000,
-            minPoolLiquidity: 1e6
+            minPoolLiquidity: 1e6,
+            recorder: address(0)
         });
     }
 

@@ -105,7 +105,9 @@ exists. Test-only contracts live under `contracts/test/` and are not shipped to 
 | `adapters/CompoundV3Adapter.sol` | VA-0609, HR-0618, FS-0619, SR-0612 | Audited | — |
 | `adapters/MorphoAdapter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612 | Audited | — |
 | `adapters/AerodromeSwapAdapter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612 | Audited | — |
-| `adapters/UniswapV3SwapAdapter.sol` | none | Not separately audited | Used by rmAGENT (RM on the V3 RM/USDC pool), rmRWA, and any later basket asset that routes through an adapter. Launch exception B2 granted 2026-10-06 by the owner (plan decision 5) |
+| `adapters/UniswapV3SwapAdapter.sol` | none | Not separately audited | Used by rmRWA and any later basket asset that routes through a V3 adapter. rmAGENT no longer uses it for RM (owner decision 2026-10-08: RM trades on the Uniswap V4 pool through `UniswapV4SwapAdapter`). Launch exception B2 granted 2026-10-06 by the owner (plan decision 5) |
+| `adapters/UniswapV4SwapAdapter.sol` | none | Not separately audited | Uniswap V4 venue executor for rmAGENT (RM on the V4 RM/USDC 2.91% pool), written against the real Base PoolManager (`unlock` callback, full PoolKey, hooks zero). Core 1676. Owner decision 2026-10-08: sufficient for the Base mainnet TEST, not the final deployment. Needs an external audit before the final deployment |
+| `adapters/UniswapV4PriceRecorder.sol` | none | Not separately audited | Permissionless, admin-free tick recorder and V3-shaped `observe()` facade for the hookless V4 RM/USDC pool (a hookless V4 pool keeps no observations). Core 1676. Owner decision 2026-10-08: sufficient for the Base mainnet TEST, not the final deployment (a stronger source, such as a hooked oracle pool, is a later decision). The security bound is the pool depth: `perDepositCap` and `tvlCap` must stay below it. Needs an external audit before the final deployment |
 | `lib/TickMath.sol` | HR-0618 | Audited | Externalized library (HR-0618 L3-D1); `pure` math, byte-identical, mis-link operational risk noted |
 | `lib/TwapTickMath.sol` | HR-0618 (via BasketVault TWAP path) | Audited | TWAP helper exercised through BasketVault NAV review |
 | `lib/AdminFloorAccessControl.sol` | MC-0619 (via F-06 admin-floor remediation) | Audited | Admin-floor mixin introduced by the F-06 remediation |
@@ -116,8 +118,9 @@ exists. Test-only contracts live under `contracts/test/` and are not shipped to 
 | `lib/ForeignTokenQuarantine.sol` | HR-0618 (via reabsorb/quarantine path) | Audited | Quarantine/reabsorb path reviewed under MC-0619 F-17 / HR-0618 |
 
 > The Chronicle-priced RWA vault, its Chronicle adapter, the deSPXA position adapter and the
-> Uniswap V4 adapters are deleted (core 1492, plan decisions 8 and 9). Findings that named them stay
-> in the register below as history.
+> original Uniswap V4 adapters are deleted (core 1492, plan decisions 8 and 9). Findings that named them stay
+> in the register below as history. The Uniswap V4 swap adapter was rewritten and restored on 2026-10-08
+> (core 1676) for rmAGENT; the V4 asset position adapter stays deleted (core 1677 defers it to the final deployment).
 >
 > The RM test token contract (formerly audited under VA-0609 and HR-0618) was retired on 2026-10-05
 > and deleted under core 1489. RM is the live ROBOTMONEY token on Base
@@ -128,8 +131,8 @@ exists. Test-only contracts live under `contracts/test/` and are not shipped to 
 > gate, and the not-separately-audited gateway and swap-adapter rows) are
 > the documented, team-approved carve-outs required by §14. The owner granted
 > launch exception B2 on 2026-10-06: rmPROTO, rmAGENT and rmRWA, the IC policy,
-> the consensus receipt and `UniswapV3SwapAdapter` may launch before their
-> economic audit closes.
+> the consensus receipt, `UniswapV3SwapAdapter`, `UniswapV4SwapAdapter` and
+> `UniswapV4PriceRecorder` may launch before their economic audit closes.
 
 ## Finding register
 
@@ -225,7 +228,7 @@ merged remediation PRs rather than the stale accepted dispositions.
 | FS-VLT-14 | FS-0619 | Medium→Info | dismissed-with-rationale | retired RWA vault, retired Chronicle adapter | — | RWA freshness `latestTimestamp()` "noncanonical" refuted; own the retired Chronicle interface |
 | FS-VLT-15 | FS-0619 | Medium→down | fixed | RobotMoneyVault | #200 | Receipt-token donation inflation mitigated by 1e18 `_decimalsOffset` (mitigation pre-dates the scan) |
 | FS-VLT-16 | FS-0619 | Medium→Info | dismissed-with-rationale | retired V4 adapter | — | "Noncanonical router ABI" refuted; own shim |
-| FS-VLT-17 | FS-0619 | Medium→down | accepted-with-rationale | retired V4 adapter | #1186 | Router-eligibility now proven end-to-end (`the retired V4 router integration test`: real Vault + VaultRegistry + PortfolioRouter, deposit drives adapter.deploy()); V4 pricing still assumes a V3-shaped observe() pool rather than real v4-core's PoolManager singleton — that half remains accepted-with-rationale, unchanged |
+| FS-VLT-17 | FS-0619 | Medium→down | accepted-with-rationale | retired V4 adapter | #1186 | Router-eligibility now proven end-to-end (`the retired V4 router integration test`: real Vault + VaultRegistry + PortfolioRouter, deposit drives adapter.deploy()); V4 pricing still assumes a V3-shaped observe() pool rather than real v4-core's PoolManager singleton — that half remains accepted-with-rationale, unchanged. Update 2026-10-08 (core 1676): the retired adapter is gone. The restored `UniswapV4SwapAdapter` swaps through the real PoolManager (unlock callback, full PoolKey), and prices through the V3-shaped `UniswapV4PriceRecorder` facade, which reads the pool tick through the PoolManager `extsload` and records it itself, so no pricing path assumes a V4 pool address with `observe()`. Accepted-with-rationale for the mainnet TEST only: the recorder's security bound is the pool depth, and a stronger source is a later decision |
 | FS-VLT-18 | FS-0619 | Medium | fixed | VaultRegistry, RobotMoneyVault | #959 | Retire left router-eligibility state stale; unified registry-driven `retire()`/`unretire()` on the base vault |
 | FS-VLT-19 | FS-0619 | Medium | fixed | VaultRegistry, BasketVault | #1092 | Registry retire() reverted on basket subclasses; `BasketVault` now implements matching-selector `retire()`/`unretire()` so `vaults/` subclasses dispatch correctly, registry-side calls no longer try/catch the hook |
 | FS-VLT-20 | FS-0619 | Medium→down | accepted-with-rationale | BasketVault | — | Withdrawals/rebalance push adapters above caps; by design, re-converges |

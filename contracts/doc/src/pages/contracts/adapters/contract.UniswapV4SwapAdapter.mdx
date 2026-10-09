@@ -1,0 +1,411 @@
+---
+title: "UniswapV4SwapAdapter"
+description: "BasketVault swap adapter for ONE hookless Uniswap V4 pool, bound at construction to the pool's full `PoolKey` and to its price recorder."
+---
+
+# UniswapV4SwapAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/adapters/UniswapV4SwapAdapter.sol)
+
+**Inherits:** [IBasketSwapAdapter](/contracts/interfaces/interface.IBasketSwapAdapter), [IUnlockCallbackV4](/contracts/interfaces/interface.IUnlockCallbackV4)
+
+**Title:** UniswapV4SwapAdapter
+
+BasketVault swap adapter for ONE hookless Uniswap V4 pool, bound at construction to the pool's full
+`PoolKey` and to its price recorder.
+
+<i>
+
+TRUST AND AUTHORITY
+- The adapter holds no balance between calls and has no owner or setter. Any caller may call `swap`:
+it pulls `amountIn` from `msg.sender` and pays `recipient`, so a stranger can only spend their own
+tokens. The vault pins the pool, the fee and the codehash (ADP-2).
+- `unlockCallback` answers only the PoolManager, and only while a `swap` of this adapter is open
+(`_open`). `swap` is non-reentrant. A token that calls back into `swap` mid-settle reverts.
+- The PoolKey is explicit and immutable: tokens sorted, hooks zero, the pool id equal to the
+recorder's `POOL_ID` (the hash of that very key), the recorder on the same PoolManager. A caller
+cannot supply a different key, fee or tick spacing: `swap` accepts only the configured pair and fee.
+
+</i>
+
+SWAP FLOW. `swap` pulls `amountIn`, pokes the recorder (`record()`, before the trade so the pool tick
+the trade moves is not the one recorded), opens `PoolManager.unlock`, and in the callback runs an
+exact-input `PoolManager.swap` with a price limit at the pool edge (the `minAmountOut` floor is the real
+slippage bound), `sync`s the input currency, transfers the input to the PoolManager, `settle`s, then
+`take`s the output to `recipient`. The PoolManager reverts the unlock if any delta is left non-zero.
+
+PRICE. `twapPrice` accepts only `pool == RECORDER` and returns the recorder's time-weighted tick
+price (the recorder reverts when stale: deposits and USDC redeems fail closed, `redeemInKind` needs no
+price). `amountIn` and `minAmountOut` above uint128 revert (audit 2026-06-09, L-6).
+
+## Constants
+
+### POOL_MANAGER
+
+Uniswap V4 PoolManager (Base: 0x498581fF718922c3f8e6A244956aF099B2652b2b).
+
+```solidity
+IPoolManagerV4 public immutable POOL_MANAGER;
+```
+
+### RECORDER
+
+The price recorder for the same pool. The only `pool` `twapPrice` accepts.
+
+```solidity
+IUniswapV4PriceRecorder public immutable RECORDER;
+```
+
+### CURRENCY0
+
+```solidity
+address public immutable CURRENCY0;
+```
+
+### CURRENCY1
+
+```solidity
+address public immutable CURRENCY1;
+```
+
+### POOL_FEE
+
+```solidity
+uint24 public immutable POOL_FEE;
+```
+
+### TICK_SPACING
+
+```solidity
+int24 public immutable TICK_SPACING;
+```
+
+### POOL_ID
+
+The pool id: `keccak256(abi.encode(poolKey))`.
+
+```solidity
+bytes32 public immutable POOL_ID;
+```
+
+### MIN_SQRT_PRICE_LIMIT
+
+<i>
+
+V4 `TickMath.MIN_SQRT_PRICE + 1` and `MAX_SQRT_PRICE - 1`: the widest legal price limits.
+
+</i>
+
+```solidity
+uint160 private constant MIN_SQRT_PRICE_LIMIT = 4_295_128_739 + 1;
+```
+
+### MAX_SQRT_PRICE_LIMIT
+
+```solidity
+uint160 private constant MAX_SQRT_PRICE_LIMIT =
+        1_461_446_703_485_210_103_287_273_052_203_988_822_378_723_970_342 - 1;
+```
+
+## State Variables
+
+### _open
+
+<i>
+
+1 idle, 2 inside `swap`. Guards re-entry and the callback.
+
+</i>
+
+```solidity
+uint256 private _open = 1;
+```
+
+## Functions
+
+<a id="constructor-address-ipoolmanagerv4-poolkey-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(
+        address poolManager_,
+        IPoolManagerV4.PoolKey memory key_,
+        address recorder_,
+        address quote_
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| poolManager_ | `address` | Uniswap V4 PoolManager. |
+| key_ | `IPoolManagerV4.PoolKey` | The pool's full PoolKey. `hooks` must be zero and the currencies sorted. |
+| recorder_ | `address` | `UniswapV4PriceRecorder` for the same key. Its pool id, PoolManager and tokens must equal the key's. |
+| quote_ | `address` | The quote token (USDC). One side of the key must be it. |
+
+<a id="swap-address-address-uint24-uint256-uint256-address-uint256"></a>
+
+### swap
+
+Execute a single-hop swap.
+
+<i>
+
+`fee` must equal the configured pool fee (the vault passes its registered `swapFee`). Tokens are pulled
+from `msg.sender` (BasketVault approves exactly `amountIn` first and clears the approval after, ADP-5).
+The caller-chosen `deadline` is enforced here because V4 swap params carry none (audit 2026-06-09, L-5).
+
+</i>
+
+```solidity
+function swap(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint256 deadline
+    ) external returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` | Address of the token to sell. |
+| tokenOut | `address` | Address of the token to buy. |
+| fee | `uint24` | Venue-specific fee parameter (fee tier for Uniswap V3,<br/>ignored for Aerodrome which derives fee from pool config). |
+| amountIn | `uint256` | Exact amount of `tokenIn` to sell. |
+| minAmountOut | `uint256` | Minimum amount of `tokenOut` required; reverts if not met. |
+| recipient | `address` | Recipient of `tokenOut`. |
+| deadline | `uint256` | Unix timestamp after which the swap must revert. Chosen<br/>by the caller — adapters must not substitute<br/>`block.timestamp` (audit 2026-06-09, L-5). Callers that<br/>execute synchronously within their own transaction (e.g.<br/>BasketVault) may pass `block.timestamp`. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` | Actual amount of `tokenOut` received. |
+
+<a id="unlockcallback-bytes"></a>
+
+### unlockCallback
+
+```solidity
+function unlockCallback(bytes calldata data) external returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="twapprice-address-address-address-uint256-uint32"></a>
+
+### twapPrice
+
+Compute a TWAP-based price quote: how many `quoteToken` for `baseAmount`
+of `baseToken`, reading the oracle from `pool` over `window` seconds.
+
+<i>
+
+`pool` must be the recorder. Arithmetic-mean tick over `[window, 0]` from the recorder's snapshots
+(never live spot), converted to an amount by the shared `TwapTickMath`. Reverts when the recorder is
+stale or holds less than `window` seconds of history.
+
+</i>
+
+```solidity
+function twapPrice(
+        address pool,
+        address baseToken,
+        address quoteToken,
+        uint256 baseAmount,
+        uint32 window
+    ) external view returns (uint256 quoteAmount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` | Venue-specific pool address pairing `baseToken` with `quoteToken`. |
+| baseToken | `address` | Token whose amount is the input to the quote. |
+| quoteToken | `address` | Token whose amount is the output of the quote. |
+| baseAmount | `uint256` | Amount of `baseToken` to price. |
+| window | `uint32` | TWAP lookback window in seconds. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| quoteAmount | `uint256` | Estimated amount of `quoteToken` for `baseAmount` of `baseToken`. |
+
+<a id="_direction-address-address"></a>
+
+### _direction
+
+<i>
+
+Require `tokenIn, tokenOut` to be exactly the pool's two currencies. Returns zeroForOne.
+
+</i>
+
+```solidity
+function _direction(address tokenIn, address tokenOut) private view returns (bool zeroForOne);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| zeroForOne | `bool` |  |
+
+## Errors
+
+### ZeroAddress
+
+```solidity
+error ZeroAddress();
+```
+
+### ZeroWindow
+
+```solidity
+error ZeroWindow();
+```
+
+### InvalidPoolKey
+
+<i>
+
+The PoolKey given to the constructor is not a hookless, sorted key for the recorder's pool.
+
+</i>
+
+```solidity
+error InvalidPoolKey();
+```
+
+### PoolKeyDoesNotPairQuote
+
+<i>
+
+The key does not pair the expected quote token (USDC) with a second token.
+
+</i>
+
+```solidity
+error PoolKeyDoesNotPairQuote(address quote);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| quote | `address` |  |
+
+### PoolTokenMismatch
+
+<i>
+
+`tokenIn` / `tokenOut` / `fee` / `pool` is not the configured pool.
+
+</i>
+
+```solidity
+error PoolTokenMismatch();
+```
+
+### FeeMismatch
+
+```solidity
+error FeeMismatch(uint24 given, uint24 configured);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| given | `uint24` |  |
+| configured | `uint24` |  |
+
+### PoolIsNotRecorder
+
+```solidity
+error PoolIsNotRecorder(address pool, address recorder);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| recorder | `address` |  |
+
+### DeadlineExpired
+
+```solidity
+error DeadlineExpired(uint256 deadline, uint256 nowTs);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| deadline | `uint256` |  |
+| nowTs | `uint256` |  |
+
+### SlippageExceeded
+
+<i>
+
+Output below the caller's floor.
+
+</i>
+
+```solidity
+error SlippageExceeded(uint256 amountOut, uint256 minAmountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+| minAmountOut | `uint256` |  |
+
+### NotPoolManager
+
+```solidity
+error NotPoolManager();
+```
+
+### NotOpen
+
+```solidity
+error NotOpen();
+```
+
+### Reentrant
+
+```solidity
+error Reentrant();
+```
+

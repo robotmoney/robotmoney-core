@@ -130,12 +130,12 @@ replace the 2026-06-15 three-token shortlist for the Base mainnet launch:
   | RM pool | Approx. value | Note |
   |---|---|---|
   | Uniswap V4 RM/WETH | ~$170k | Deepest RM pool. Not usable: `addAsset` accepts only a token/USDC pool on every venue (see the [ADR-0005](ADR-0005-basketvault-multi-dex-routing.md) amendment). |
-  | Uniswap V4 RM/USDC, fee 2.91% | ~$809 | Deepest RM/USDC pool. Needs the restored V4 adapter. |
+  | Uniswap V4 RM/USDC, fee 2.91%, id `0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391` | ~$809 on 2026-10-05; in-range liquidity L 9.83e17 on 2026-10-08 | Deepest RM/USDC pool. rmAGENT's venue from 2026-10-08 (see the amendment below), through the restored V4 adapter. |
   | Uniswap V3 RM/USDC, fee 10000, `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` | — | In-range liquidity 0, observation cardinality 1. `addAsset` refuses it today (`MIN_POOL_CARDINALITY` 2, `MIN_POOL_LIQUIDITY` 1e6). |
   | Aerodrome Slipstream RM/USDC, `0x0992af1070f7fe4654a033fec8f153a6991465a8` | ~$8 | No deploy script registers the Aerodrome adapter. |
 
-- **RM's venue is decided (owner, 2026-10-06; mainnet plan §2.6
-  item 2).** rmAGENT launches on the existing Uniswap V3 RM/USDC pool
+- **RM's venue was decided on 2026-10-06 (owner; mainnet plan §2.6
+  item 2). SUPERSEDED on 2026-10-08, see the next bullet.** rmAGENT was to launch on the existing Uniswap V3 RM/USDC pool
   above (`0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882`, fee 10000), the
   only venue the deploy script wires; no code change. The owner funds it
   with in-range liquidity at market price before the mainnet run, sized
@@ -143,6 +143,18 @@ replace the 2026-06-15 three-token shortlist for the Base mainnet launch:
   Restoring the Uniswap V4 swap adapter is a later option, not a launch
   blocker (see the ADR-0005 amendment for what the restore must first
   prove). No route goes through WETH.
+- **RM's venue is the Uniswap V4 RM/USDC 2.91% pool (owner, 2026-10-08, core 1676; supersedes the 2026-10-06 V3 decision).**
+  The V3 pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` has zero in-range liquidity (`liquidity()` returned 0 on 2026-10-08) and its
+  owner funding is not under the protocol's control. rmAGENT therefore trades RM on the Uniswap V4 RM/USDC pool with fee 29100,
+  tickSpacing 582, hooks `0x0` and pool id `0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391` (its PoolManager
+  `Initialize` event is Base tx `0x4fc63a04703f60cb9164d279bb60d4b346a64413250d8dbac4feca0c63c81f75`). The pool is hookless, so V4 records no
+  observations for it. The vault prices RM from `UniswapV4PriceRecorder`, a permissionless, admin-free recorder in this repo (see the
+  [ADR-0005](ADR-0005-basketvault-multi-dex-routing.md) 2026-10-08 amendment), and swaps through `UniswapV4SwapAdapter`. **Scope: a contained
+  mainnet TEST, not the final deployment.** The owner's words: "It's sufficient for a test on mainnet, not the final deployment. We have yet to
+  make a successful test." The first Base mainnet run keeps the containment of the devops plan (1 USDC seed, low `tvlCap` and `perDepositCap`,
+  nonzero NAV deviation guard, pause available, no announcement). A stronger RM price source, such as a hooked oracle pool, is a later,
+  separate owner decision before the final deployment. The V4 asset position adapter (core 1677) is deferred to the final deployment.
+  Funding or deepening the pool, and the 8453 cap values, are owner actions.
 
 Unchanged by this amendment: the hand-picked-not-quant-filtered method,
 the equal-weight allocation, the admin-curation path (now as amended in
@@ -151,6 +163,8 @@ ADR-0004), and the absence of any RM-specific guard in code.
 2026-10-06: no token-based governance is foreseen; considered alternatives that mention token voting are historical only.
 
 2026-10-06: the owner decided RM's venue: the existing Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), funded by the owner before the mainnet run. The V4 adapter restore is a later option, not a launch blocker.
+
+2026-10-08: the owner superseded that decision. RM trades on the Uniswap V4 RM/USDC fee 2.91% pool `0xf2e7b957...2391` through the restored V4 swap adapter, priced by the in-protocol observation recorder. "It's sufficient for a test on mainnet, not the final deployment. We have yet to make a successful test." The first Base mainnet run is a contained test (devops rule b), not the final deployment.
 
 ## Consequences
 

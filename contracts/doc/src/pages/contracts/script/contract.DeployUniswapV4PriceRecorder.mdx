@@ -1,0 +1,213 @@
+---
+title: "DeployUniswapV4PriceRecorder"
+description: "Stage `recorder`: deploys the permissionless `UniswapV4PriceRecorder` for the Uniswap V4 pool named by the rmAGENT config (`config/agent-token-shortlist.json`, the entry with venue UniswapV4), grows its observation ring to the 901-slot floor (1800 s window / 2 s Base block + 1) and records the first snapshot."
+---
+
+# DeployUniswapV4PriceRecorder
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/98c41d54be1ca347d90e42d704c530a175302344/contracts/script/DeployUniswapV4PriceRecorder.s.sol)
+
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+
+**Title:** DeployUniswapV4PriceRecorder
+
+Stage `recorder`: deploys the permissionless `UniswapV4PriceRecorder` for the Uniswap V4 pool named by the
+rmAGENT config (`config/agent-token-shortlist.json`, the entry with venue UniswapV4), grows its observation
+ring to the 901-slot floor (1800 s window / 2 s Base block + 1) and records the first snapshot.
+
+It runs EARLY (right after `libs`) so the 30 minute price history accumulates while the other stages run.
+The runner then waits until the recorder holds a full window of history before it lets the `agent` stage run
+(`addAsset` reverts `InsufficientObservationHistory` otherwise).
+
+No role is involved: the recorder has no owner, and every call here is one anyone could make. The deployer
+holds nothing on it afterwards. The ring grows in chunks of `GROW_CHUNK` slots, one transaction each, so no
+transaction nears a block gas limit (about 22,000 gas per slot).
+
+Required env vars: DEPLOYMENT_OUT (manifest path). Optional: EXPECTED_CHAIN_ID (mandatory and 8453 on Base mainnet).
+
+## Constants
+
+### MANIFEST_FILE
+
+```solidity
+string public constant MANIFEST_FILE = "recorder.json";
+```
+
+### CONFIG_FILE
+
+```solidity
+string public constant CONFIG_FILE = "config/agent-token-shortlist.json";
+```
+
+### RING_SLOTS
+
+Ring floor for the 1800 s window: window / 2 s + 1 (BasketAssetConfigGuard.requireObservationHistory).
+
+```solidity
+uint16 public constant RING_SLOTS = 901;
+```
+
+### GROW_CHUNK
+
+Slots grown per transaction.
+
+```solidity
+uint16 public constant GROW_CHUNK = 250;
+```
+
+### RECORD_GAS
+
+Fixed gas for the first `record()` transaction. forge estimates a call from a simulation that runs in the SAME block as the
+constructor, where `record()` returns early (about 38,000 gas). On a real chain the call lands in a later block and writes a
+snapshot (about 70,000 gas), so the estimate would run out of gas. A fixed limit avoids the mismatch.
+
+```solidity
+uint256 public constant RECORD_GAS = 300_000;
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="runinprocess-string"></a>
+
+### runInProcess
+
+In-process variant for forge tests. No broadcast, no manifest.
+
+```solidity
+function runInProcess(string memory json) external returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_readv4entry-string"></a>
+
+### _readV4Entry
+
+<i>
+
+The one UniswapV4 entry of the config. Fails closed on none or on a key that does not hash to its id.
+
+</i>
+
+```solidity
+function _readV4Entry(string memory json)
+        internal
+        view
+        returns (address poolManager, IPoolManagerV4.PoolKey memory key, bytes32 poolId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| poolManager | `address` |  |
+| key | `IPoolManagerV4.PoolKey` |  |
+| poolId | `bytes32` |  |
+
+<a id="_deploy-address-ipoolmanagerv4-poolkey-bytes32"></a>
+
+### _deploy
+
+```solidity
+function _deploy(address poolManager, IPoolManagerV4.PoolKey memory key, bytes32 poolId)
+        internal
+        returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| poolManager | `address` |  |
+| key | `IPoolManagerV4.PoolKey` |  |
+| poolId | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_writemanifest-deployed"></a>
+
+### _writeManifest
+
+```solidity
+function _writeManifest(Deployed memory d) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_writemanifestto-deployed-string"></a>
+
+### _writeManifestTo
+
+```solidity
+function _writeManifestTo(Deployed memory d, string memory outPath) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| outPath | `string` |  |
+
+## Structs
+
+### Deployed
+
+```solidity
+struct Deployed {
+        address recorder;
+        address poolManager;
+        bytes32 poolId;
+        uint16 cardinalityNext;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| recorder | `address` |  |
+| poolManager | `address` |  |
+| poolId | `bytes32` |  |
+| cardinalityNext | `uint16` |  |
+

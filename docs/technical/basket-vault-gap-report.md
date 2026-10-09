@@ -13,10 +13,9 @@
 > Mainnet plan (2026-10-05): launch assets are wETH and cbBTC in rmPROTO, RM in
 > rmAGENT, and deSPXA in rmRWA. RM is the live ROBOTMONEY token
 > `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`; nothing deploys an RM mock. RM's
-> venue is decided (owner, 2026-10-06): the existing Uniswap V3 RM/USDC pool
-> `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), funded by the owner before the
-> mainnet run; a restored V4 swap adapter is a later option, not a launch blocker
-> (RM not yet in config: core #1491). deSPXA is a plain basket row priced from its
+> venue is decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC 2.91% pool,
+> traded through the restored V4 swap adapter and priced by the permissionless price recorder (sufficient for
+> the Base mainnet test, not the final deployment; core 1676). deSPXA is a plain basket row priced from its
 > Uniswap V3 pool, with no Chronicle oracle. BNKR and JUNO are added later through
 > the timelock. There is no protocol agent key, so Appendix C option D has no
 > holder: agents belong to depositors, who authorize them.

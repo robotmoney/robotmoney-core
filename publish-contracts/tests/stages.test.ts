@@ -91,7 +91,8 @@ describe("stage list built from core's stage table", () => {
   test("start nonces are the running sum of the frozen counts", () => {
     expect(expectedStartNonce("safe", COUNTS)).toBe(0);
     expect(expectedStartNonce("libs", COUNTS)).toBe(1);
-    expect(expectedStartNonce("vault", COUNTS)).toBe(5);
+    expect(expectedStartNonce("recorder", COUNTS)).toBe(5);
+    expect(expectedStartNonce("vault", COUNTS)).toBe(5 + COUNTS.recorder!);
     const plan = stagePlan(COUNTS);
     expect(plan.map((p) => p.stage)).toEqual(STAGE_NAMES);
     const last = plan.find((p) => p.stage === "timelock")!;

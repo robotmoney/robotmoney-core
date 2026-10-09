@@ -51,7 +51,7 @@ x-testnet-labels: &testnet-labels
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     container_name: dapp-postgres
     labels: *testnet-labels
     restart: unless-stopped
@@ -321,7 +321,7 @@ services:
   # handling beyond serving files from disk.
   receipt-fixtures:
     profiles: ["receipt-fixtures"]
-    image: python:3-alpine
+    image: python:3-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
     container_name: dapp-receipt-fixtures
     labels: *testnet-labels
     restart: unless-stopped

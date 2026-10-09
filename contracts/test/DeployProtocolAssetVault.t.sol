@@ -206,8 +206,8 @@ contract DeployProtocolAssetVaultTest is BasketDeployFixture {
     function test_reverts_whenVenueUnsupported() public {
         (string memory json,) = _twoAssets();
         // Swap the venue string for an unsupported one.
-        string memory bad = vm.replace(json, "UniswapV3", "UniswapV4");
-        vm.expectRevert(bytes("unsupported venue: only UniswapV3"));
+        string memory bad = vm.replace(json, "UniswapV3", "Curve");
+        vm.expectRevert(bytes("unsupported venue: only UniswapV3 and UniswapV4"));
         _run(bad);
     }
 

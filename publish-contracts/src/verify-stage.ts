@@ -7,7 +7,7 @@ import { resumeCommand, UNPAUSE_USDC_ROW } from "./govern.ts";
 import { MAINNET_CHAIN_ID } from "./floors.ts";
 import { governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
 import { VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
-import { VAULT_ADAPTER_FIELD } from "./core-wiring.ts";
+import { RECORDER_STAGE, VAULT_RECORDER_FIELD, VENUE_V4, adapterFieldFor } from "./core-wiring.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
 import { loadConfigAssets } from "./asset-config.ts";
 import { manifestBase } from "./stage-table.ts";
@@ -24,8 +24,13 @@ export function loadExpectedAssets(ctx: Pick<RunContext, "coreDir" | "chainId" |
   const configured = loadConfigAssets(ctx.coreDir, key);
   if (configured.length === 0) return [];
   const vaultStage = getStageTable().vaults.find((v) => v.key === key)!.stage;
-  const adapter = readManifestField(ctx, `${manifestBase(getStageTable().stages.find((s) => s.name === vaultStage)!.manifest)}:${VAULT_ADAPTER_FIELD}`) as `0x${string}`;
-  return configured.map((a) => ({ token: a.token, pool: a.pool, swapFee: a.swapFee, adapter, venue: a.venue }));
+  const vaultManifest = manifestBase(getStageTable().stages.find((s) => s.name === vaultStage)!.manifest);
+  return configured.map((a) => {
+    // A UniswapV4 asset is registered with the price recorder as its pool (V4 has no pool address) and the V4 adapter the vault stage deployed.
+    const adapter = readManifestField(ctx, `${vaultManifest}:${adapterFieldFor(a.venue)}`) as `0x${string}`;
+    const pool = a.venue === VENUE_V4 ? (readManifestField(ctx, `${manifestBase(getStageTable().stages.find((s) => s.name === RECORDER_STAGE)!.manifest)}:${VAULT_RECORDER_FIELD}`) as `0x${string}`) : a.pool;
+    return { token: a.token, pool, swapFee: a.swapFee, adapter, venue: a.venue, ...(a.v4 ? { v4: a.v4 } : {}) };
+  });
 }
 
 /**

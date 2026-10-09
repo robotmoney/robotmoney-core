@@ -195,14 +195,16 @@ flag's value differs across environments. See
 
 At launch rmAGENT (`AgentTokenVault`) holds RM, the existing Base token at
 `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`. Nothing deploys RM in
-production. RM's venue is decided (owner, 2026-10-06): the existing
-Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000).
-It is the only venue the deploy script wires (`contracts/script/BasketVaultDeployBase.sol`).
-The owner funds it with in-range liquidity at market price before the
-mainnet run, sized to rmAGENT's first-period cap, and raises its
-observation cardinality. Restoring the Uniswap V4 swap adapter is a later
-option, not a launch blocker. `config/agent-token-shortlist.json` does
-not list RM yet (not yet implemented: core #1491).
+production. RM's venue is decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool
+with fee 2.91% (id `0xf2e7b957...2391`, tickSpacing 582, hooks zero). `UniswapV4SwapAdapter` swaps through the real
+PoolManager (unlock callback, full PoolKey). Because a hookless V4 pool records no observations, rmAGENT registers
+`UniswapV4PriceRecorder` as RM's pool: a permissionless, admin-free recorder that stores the pool tick in a V3-style
+ring (one snapshot per block, lagged tick, clamp of 10 ticks per second) and answers `observe()` for the unchanged
+`BasketVault` TWAP math. This is sufficient for the Base mainnet test, not the final deployment; its security bound
+is the pool depth, so `perDepositCap` and `tvlCap` stay below it. The recorder stage (`recorder`, right after `libs`)
+deploys it, and the runner waits for a full window of history before the `agent` stage. A stale recorder (no record for
+over 1800 s) fails deposits and USDC redeems closed, and `redeemInKind` needs no oracle. `config/agent-token-shortlist.json`
+lists RM with its PoolKey (core 1676).
 
 The source tree also contains `RwaBasketVault`, the rmRWA vault. rmRWA is
 a plain basket row: it holds deSPXA (Centrifuge / Janus Henderson / Anemoy
@@ -357,6 +359,9 @@ Current basket-vault swap adapters (implement `IBasketSwapAdapter` for
 
 - `UniswapV3SwapAdapter` routes USDC↔asset swaps through Uniswap V3 and
   prices NAV and slippage floors via the pool TWAP.
+- `UniswapV4SwapAdapter` routes USDC↔asset swaps through the Uniswap V4
+  PoolManager (`unlock`, then `swap` with a full PoolKey, hooks zero) and prices NAV and slippage floors from
+  `UniswapV4PriceRecorder`, a permissionless tick recorder with a V3-shaped `observe()` (core 1676).
 - `AerodromeSwapAdapter` routes USDC↔asset swaps through the Aerodrome
   Finance Router on Base (concentrated-liquidity CL pools). NAV and
   slippage floors are priced via an Aerodrome CL pool TWAP (arithmetic-mean
@@ -369,7 +374,7 @@ Current basket-vault swap adapters (implement `IBasketSwapAdapter` for
 The adapter seam stays split. Lending positions use `IStrategyAdapter`
 (`AaveV3Adapter`, `MorphoAdapter`, `CompoundV3Adapter`, held by
 `RobotMoneyVault`). Basket assets use `IBasketSwapAdapter`
-(`AerodromeSwapAdapter`, `UniswapV3SwapAdapter`, held by the basket
+(`AerodromeSwapAdapter`, `UniswapV3SwapAdapter`, `UniswapV4SwapAdapter`, held by the basket
 vaults). There is no position-adapter interface and no asset-position adapter.
 
 ### 4.4 Synchronous Redemption
@@ -1479,6 +1484,13 @@ out core. Rehearsals run on the Twin chain (918453), a pinned lazy anvil
 fork of real Base at the upstream head minus 2, pinned once per CI run.
 Tests deploy their own vault every time (clean room). The stage sequence
 is in `docs/operations/contract-release-runbooks.md` §4.3.
+
+On the stage host every service runs in a container (core 1549): the Twin chain
+(the pinned lazy fork), the one-shot deploy job that runs the same publish
+contracts ceremony against it, and the dapp stack. `scripts/stage/core-stack.ts`
+only calls `docker compose`, no stage process runs on the host, and no
+container mounts the Docker socket. Images are pinned by digest and built with
+`--locked` (`docs/development/stage-deployment.md`).
 
 The `rmpc` rule (one client, no env-specific behavior, never spoof
 users) is the same principle applied to the daemon. The detailed

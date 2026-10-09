@@ -1,0 +1,382 @@
+---
+title: "UniswapV4PriceRecorderTest"
+---
+
+# UniswapV4PriceRecorderTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/UniswapV4PriceRecorder.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### FEE
+
+```solidity
+uint24 internal constant FEE = 29100;
+```
+
+### SPACING
+
+```solidity
+int24 internal constant SPACING = 582;
+```
+
+### START_TICK
+
+```solidity
+int24 internal constant START_TICK = -403009;
+```
+
+## State Variables
+
+### pm
+
+```solidity
+MockV4PoolManager internal pm;
+```
+
+### rec
+
+```solidity
+UniswapV4PriceRecorder internal rec;
+```
+
+### c0
+
+```solidity
+address internal c0;
+```
+
+### c1
+
+```solidity
+address internal c1;
+```
+
+### poolId
+
+```solidity
+bytes32 internal poolId;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_key"></a>
+
+### _key
+
+```solidity
+function _key() internal view returns (IPoolManagerV4.PoolKey memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IPoolManagerV4.PoolKey` |  |
+
+<a id="_obs-uint32"></a>
+
+### _obs
+
+```solidity
+function _obs(uint32 s) internal view returns (int56);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int56` |  |
+
+<a id="_advance-uint256"></a>
+
+### _advance
+
+```solidity
+function _advance(uint256 s) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `uint256` |  |
+
+<a id="test_constructor_firstrecordholdsthelivetickwithcumulativezero"></a>
+
+### test_constructor_firstRecordHoldsTheLiveTickWithCumulativeZero
+
+```solidity
+function test_constructor_firstRecordHoldsTheLiveTickWithCumulativeZero() public view;
+```
+
+<a id="test_constructor_bindsthepoolidtothefullkey"></a>
+
+### test_constructor_bindsThePoolIdToTheFullKey
+
+```solidity
+function test_constructor_bindsThePoolIdToTheFullKey() public view;
+```
+
+<a id="test_constructor_revertsonanuninitialisedpool"></a>
+
+### test_constructor_revertsOnAnUninitialisedPool
+
+```solidity
+function test_constructor_revertsOnAnUninitialisedPool() public;
+```
+
+<a id="test_constructor_revertsonahookaddress"></a>
+
+### test_constructor_revertsOnAHookAddress
+
+```solidity
+function test_constructor_revertsOnAHookAddress() public;
+```
+
+<a id="test_constructor_revertsonunsortedorzerocurrencies"></a>
+
+### test_constructor_revertsOnUnsortedOrZeroCurrencies
+
+```solidity
+function test_constructor_revertsOnUnsortedOrZeroCurrencies() public;
+```
+
+<a id="test_constructor_revertsonapoolmanagerwithoutcode"></a>
+
+### test_constructor_revertsOnAPoolManagerWithoutCode
+
+```solidity
+function test_constructor_revertsOnAPoolManagerWithoutCode() public;
+```
+
+<a id="test_constructor_awrongfeereadsadifferentpoolandreverts"></a>
+
+### test_constructor_aWrongFeeReadsADifferentPoolAndReverts
+
+A recorder built for a different fee reads a different pool id: it cannot be pointed at this pool.
+
+```solidity
+function test_constructor_aWrongFeeReadsADifferentPoolAndReverts() public;
+```
+
+<a id="test_record_asecondpokeinthesameblockwritesnosnapshot"></a>
+
+### test_record_aSecondPokeInTheSameBlockWritesNoSnapshot
+
+```solidity
+function test_record_aSecondPokeInTheSameBlockWritesNoSnapshot() public;
+```
+
+<a id="test_record_cumulativeequalsthev3referenceafterapokesequence"></a>
+
+### test_record_cumulativeEqualsTheV3ReferenceAfterAPokeSequence
+
+Reference model: a V3 oracle extends each interval with the tick recorded at the interval's start.
+
+```solidity
+function test_record_cumulativeEqualsTheV3ReferenceAfterAPokeSequence() public;
+```
+
+<a id="test_observe_interpolateslikev3betweensnapshots"></a>
+
+### test_observe_interpolatesLikeV3BetweenSnapshots
+
+```solidity
+function test_observe_interpolatesLikeV3BetweenSnapshots() public;
+```
+
+<a id="test_observe_meantickmatchestherecordedpaththroughtwaptickmath"></a>
+
+### test_observe_meanTickMatchesTheRecordedPathThroughTwapTickMath
+
+```solidity
+function test_observe_meanTickMatchesTheRecordedPathThroughTwapTickMath() public;
+```
+
+<a id="test_observe_zeroafterspotmoveswithoutapokereturnsthelastrecordedticknotspot"></a>
+
+### test_observe_zeroAfterSpotMovesWithoutAPokeReturnsTheLastRecordedTickNotSpot
+
+```solidity
+function test_observe_zeroAfterSpotMovesWithoutAPokeReturnsTheLastRecordedTickNotSpot() public;
+```
+
+<a id="test_observe_beyondtheoldestsnapshotreverts"></a>
+
+### test_observe_beyondTheOldestSnapshotReverts
+
+```solidity
+function test_observe_beyondTheOldestSnapshotReverts() public;
+```
+
+<a id="test_observe_aftertheringwrapstheoldestsnapshotmovesforward"></a>
+
+### test_observe_afterTheRingWrapsTheOldestSnapshotMovesForward
+
+```solidity
+function test_observe_afterTheRingWrapsTheOldestSnapshotMovesForward() public;
+```
+
+<a id="test_observe_secondsagolargerthantheclockreverts"></a>
+
+### test_observe_secondsAgoLargerThanTheClockReverts
+
+```solidity
+function test_observe_secondsAgoLargerThanTheClockReverts() public;
+```
+
+<a id="obsexternal-uint32"></a>
+
+### obsExternal
+
+```solidity
+function obsExternal(uint32 s) external view returns (int56);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int56` |  |
+
+<a id="test_oldestobservation_istheconstructorsnapshotuntiltheringwraps"></a>
+
+### test_oldestObservation_isTheConstructorSnapshotUntilTheRingWraps
+
+```solidity
+function test_oldestObservation_isTheConstructorSnapshotUntilTheRingWraps() public;
+```
+
+<a id="test_oldestobservation_fallsbacktoslotzerowhiletheringisstillfilling"></a>
+
+### test_oldestObservation_fallsBackToSlotZeroWhileTheRingIsStillFilling
+
+The ring is not full yet: the slot after the newest is a placeholder, so the oldest snapshot is slot 0, not that slot.
+
+```solidity
+function test_oldestObservation_fallsBackToSlotZeroWhileTheRingIsStillFilling() public;
+```
+
+<a id="test_grow_raisescardinalitynextthentheringwidensatthenextrecord"></a>
+
+### test_grow_raisesCardinalityNextThenTheRingWidensAtTheNextRecord
+
+```solidity
+function test_grow_raisesCardinalityNextThenTheRingWidensAtTheNextRecord() public;
+```
+
+<a id="test_grow_ispermissionlessandnevershrinks"></a>
+
+### test_grow_isPermissionlessAndNeverShrinks
+
+```solidity
+function test_grow_isPermissionlessAndNeverShrinks() public;
+```
+
+<a id="test_clamp_onerecordmovesthetickbyatmosttenpersecond"></a>
+
+### test_clamp_oneRecordMovesTheTickByAtMostTenPerSecond
+
+```solidity
+function test_clamp_oneRecordMovesTheTickByAtMostTenPerSecond() public;
+```
+
+<a id="test_clamp_alonggapdoesnotwidenthestepbeyond600ticks"></a>
+
+### test_clamp_aLongGapDoesNotWidenTheStepBeyond600Ticks
+
+```solidity
+function test_clamp_aLongGapDoesNotWidenTheStepBeyond600Ticks() public;
+```
+
+<a id="test_clamp_asmallmoveisrecordedexactly"></a>
+
+### test_clamp_aSmallMoveIsRecordedExactly
+
+```solidity
+function test_clamp_aSmallMoveIsRecordedExactly() public;
+```
+
+<a id="test_flashmanipulation_swapthenpokecannotpoisontheinterval"></a>
+
+### test_flashManipulation_swapThenPokeCannotPoisonTheInterval
+
+Flash loan then poke: the pool is pushed 50_000 ticks and recorded in block N. The interval ending at
+block N is weighted by the PREVIOUS tick (lag), and the recorded tick moves by at most 20.
+
+```solidity
+function test_flashManipulation_swapThenPokeCannotPoisonTheInterval() public;
+```
+
+<a id="test_clamp_aheldmanipulationmovestherecordattheclamprate"></a>
+
+### test_clamp_aHeldManipulationMovesTheRecordAtTheClampRate
+
+Holding a manipulated tick across blocks drags the record at 10 ticks per second, no faster.
+
+```solidity
+function test_clamp_aHeldManipulationMovesTheRecordAtTheClampRate() public;
+```
+
+<a id="test_stale_observerevertsbeyondonewindowandrecoversonrecord"></a>
+
+### test_stale_observeRevertsBeyondOneWindowAndRecoversOnRecord
+
+```solidity
+function test_stale_observeRevertsBeyondOneWindowAndRecoversOnRecord() public;
+```
+
+<a id="test_slot0_andliquidityreadthelivepoolthroughextsload"></a>
+
+### test_slot0_andLiquidityReadTheLivePoolThroughExtsload
+
+```solidity
+function test_slot0_andLiquidityReadTheLivePoolThroughExtsload() public;
+```
+
+<a id="test_noownerroleorsetter"></a>
+
+### test_noOwnerRoleOrSetter
+
+```solidity
+function test_noOwnerRoleOrSetter() public;
+```
+
+<a id="testfuzz_cumulativematchesreferenceunderrandommoves-uint8-uint256"></a>
+
+### testFuzz_cumulativeMatchesReferenceUnderRandomMoves
+
+```solidity
+function testFuzz_cumulativeMatchesReferenceUnderRandomMoves(uint8 n, uint256 seed) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint8` |  |
+| seed | `uint256` |  |
+

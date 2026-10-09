@@ -46,8 +46,13 @@ impl StageTable {
         Self::parse(&text).map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e))
     }
 
+    /// The table of the checkout the harness runs in (the working directory's repo root), else the one this crate
+    /// was built from. A binary built in an image runs against a mounted checkout, so the build path is not enough.
     pub fn load_default() -> Result<Self, HarnessError> {
-        Self::load(&default_table_path())
+        match test_utils::find_workspace_root() {
+            Some(root) => Self::load(&root.join("scripts/deploy/stage-table.json")),
+            None => Self::load(&default_table_path()),
+        }
     }
 
     pub fn parse(text: &str) -> Result<Self, String> {
