@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * rehearsal helpers.
- *   keys  --dir D (--password-file F | prompts hidden) [--voters N] [--chain-id C]   makes keystores, prints the sheet fragment
+ *   keys  --dir D (--password-file F | prompts hidden, kept in memory only: no passphrase file) [--voters N] [--chain-id C]   makes keystores, prints the sheet fragment
  *   fund  --rpc R --chain-id C --sheet S [--eth-wei N] [--usdc A --usdc-units N]      needs CHAIN_FUNDER_KEYSTORE and CHAIN_FUNDER_PASSWORD from the caller's credential tool
  *   fund-gas  --rpc R --sheet S [--wei N]     Twin fork only (anvil_setBalance): sets the gas balance of the deployer, pauser, emergency key and Safe owners
  *   fund-usdc --rpc R --sheet S --usdc-units N  Twin fork only: sets the real FiatToken balance of the deployer through its balance storage slot
@@ -11,7 +11,7 @@
  *   run   --rpc R --dir D --password-file F --sheet S                                 publish, then sweep to the funder
  * Nothing secret is ever an argument or output.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hidden } from "../keystore/prompt.ts";
 import { realCast } from "./cast.ts";
@@ -45,24 +45,19 @@ function sheetWallets(sheet: string): { name: string; address: string }[] {
   return out;
 }
 
-export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
+/** `hidden` is the passphrase reader of the `keys` command (injected by tests, the terminal prompt by default). */
+export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env, io: { hidden?: (question: string) => Promise<string> } = {}): Promise<number> {
   const [cmd, ...rest] = argv;
   const f = flags(rest);
   const log = (s: string) => console.error(`[rehearsal] ${s}`);
   switch (cmd) {
     case "keys": {
       const dir = need(f, "dir");
-      let pwFile = f["password-file"];
-      if (!pwFile) {
-        // hidden prompt: the passphrase goes to a 0600 file beside the keys directory, never to an argument
-        const pw = await hidden("Rehearsal key passphrase (16+ chars): ");
-        assertPassword(pw);
-        pwFile = `${dir.replace(/\/$/, "")}.pw`;
-        if (existsSync(pwFile)) throw new Error(`${pwFile} already exists`);
-        writeFileSync(pwFile, pw, { mode: 0o600 }); chmodSync(pwFile, 0o600);
-        log(`passphrase file written (mode 0600): ${pwFile}`);
-      }
-      const keys = makeRehearsalKeys({ dir, passwordFile: pwFile, voters: f.voters ? Number(f.voters) : undefined });
+      const pwFile = f["password-file"];
+      // Hidden prompt (the owner path): the passphrase stays in memory. It is never an argument, never in the environment and never written to a file.
+      let password: string | undefined;
+      if (!pwFile) { password = await (io.hidden ?? hidden)("Rehearsal key passphrase (16+ chars): "); assertPassword(password); }
+      const keys = makeRehearsalKeys({ dir, ...(pwFile ? { passwordFile: pwFile } : { password }), voters: f.voters ? Number(f.voters) : undefined });
       process.stdout.write(sheetFragment(keys, f["chain-id"] ? Number(f["chain-id"]) : undefined));
       return 0;
     }

@@ -281,7 +281,8 @@ async function vaultChecks(
   if (!vs) {
     for (const l of ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
     if (v.kind !== "usdc") for (const l of ["asset config equals sheet", ...BASKET_GUARD_LABELS]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
-    else { for (const l of ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault"); }
+    if (v.kind === "agent") c.fail(`${p}: ${AGENT_SLIPPAGE_LABEL}`, "no sheet entry for this vault");
+    if (v.kind === "usdc") { for (const l of ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault"); }
     return;
   }
   await c.runEq(`${p}: tvlCap equals sheet`, () => chain.read(a, "function tvlCap() view returns (uint256)"), vs.tvlCap);
@@ -308,8 +309,14 @@ async function vaultChecks(
     if (v.kind === "agent") await c.run(`${p}: holds RM as its one asset`, async () => ({ ok: vs.assets.length === 1 && lc(vs.assets[0]!.token) === lc(RM_TOKEN), detail: `sheet lists [${vs.assets.map((a) => a.token).join(", ")}], expected only ${RM_TOKEN}` }));
     // core 1676: every UniswapV4 asset is wired to the permissionless price recorder, the V4 adapter and the configured PoolKey.
     for (const asset of vs.assets.filter((x) => x.venue === VENUE_V4)) await v4AssetChecks(c, chain, v, asset, ctx);
+    // core 1695: the V4 swap bound is read back from the rmAGENT vault itself (the pool fee alone is 291 bps, so the vault bound must be the launch 500).
+    if (v.kind === "agent") await c.runEq(`${p}: ${AGENT_SLIPPAGE_LABEL}`, () => chain.read(a, "function maxSlippageBps() view returns (uint256)"), AGENT_MAX_SLIPPAGE_BPS);
   }
 }
+
+/** The rmAGENT maxSlippageBps the deploy applies from the config (core 1676, 1695). */
+const AGENT_MAX_SLIPPAGE_BPS = 500n;
+const AGENT_SLIPPAGE_LABEL = `maxSlippageBps equals ${AGENT_MAX_SLIPPAGE_BPS}`;
 
 /** The labels v4AssetChecks pushes. A vault whose sheet lists a V4 asset must pass every one. */
 const V4_LABELS = [

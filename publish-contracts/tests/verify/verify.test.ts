@@ -25,7 +25,7 @@ describe("healthy deployment", () => {
     const r = await verifyDeployment(buildWorld().opts);
     const labels = r.checks.map((c) => c.label);
     expect(new Set(labels).size).toBe(labels.length);
-    for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "")).not.toMatch(/\d{3,}/); }
+    for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "").replace("maxSlippageBps equals 500", "")).not.toMatch(/\d{3,}/); }
   });
 });
 
@@ -198,6 +198,37 @@ describe("mutations fail with the expected label", () => {
     const w = buildWorld();
     w.sheet.vaults.rmRWA.assets[0].swapFee = 100;
     expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: asset config equals sheet"]);
+  });
+
+  test("rmAGENT maxSlippageBps read back on chain: 500 passes, any other value fails (core 1695)", async () => {
+    const L = "vault[rmAGENT]: maxSlippageBps equals 500";
+    const ok = await verifyDeployment(buildWorld().opts);
+    expect(ok.checks.find((c) => c.label === L)).toMatchObject({ ok: true });
+    for (const bad of [499n, 501n, 291n, 0n]) {
+      const w = buildWorld();
+      w.chain.set(VAULTS.rmAGENT.address, "maxSlippageBps", bad);
+      expect(failed(await verifyDeployment(w.opts))).toEqual([L]);
+    }
+    // the other vaults are not asked for it
+    expect(ok.checks.filter((c) => c.label.endsWith("maxSlippageBps equals 500")).map((c) => c.label)).toEqual([L]);
+  });
+
+  test("a missing sheet entry fails exactly the labels that vault kind owns (core 1695)", async () => {
+    const common = ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"];
+    const basket = ["asset config equals sheet", "navDeviationGuardBps equals sheet", "navDeviationGuardBps above zero", "pool liquidity meets the sheet floor"];
+    const usdc = ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"];
+    const want: Record<string, string[]> = {
+      rmUSDC: [...common, ...usdc],
+      rmPROTO: [...common, ...basket],
+      rmAGENT: [...common, ...basket, "maxSlippageBps equals 500"],
+      rmRWA: [...common, ...basket],
+    };
+    for (const key of Object.keys(want)) {
+      const w = buildWorld();
+      delete (w.opts.sheet.vaults as any)[key];
+      const got = failed(await verifyDeployment(w.opts)).filter((l) => l.startsWith(`vault[${key}]: `)).map((l) => l.slice(`vault[${key}]: `.length));
+      expect(got.sort()).toEqual([...want[key]!].sort());
+    }
   });
 
   test("rmAGENT must be paused", async () => {

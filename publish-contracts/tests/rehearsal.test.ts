@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { main as rehearsalMain } from "../src/rehearsal/cli.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -69,6 +70,56 @@ describe("keys", () => {
     const bad = spawnSync("bun", [join(import.meta.dir, "../src/rehearsal/cli.ts"), "keys", "--dir", dir + "2", "--password", PW], { encoding: "utf8" });
     expect(bad.status).not.toBe(0);
   }, 120_000);
+});
+
+describe("keys on the hidden-prompt path keep the passphrase in memory only (core 1695)", () => {
+  const HPW = "owner-typed-passphrase-9876";
+  /** Every file under a directory, recursively, with its bytes. */
+  const walk = (d: string): { path: string; bytes: Buffer }[] => readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(join(d, e.name)) : [{ path: join(d, e.name), bytes: readFileSync(join(d, e.name)) }]);
+  /** Runs `keys` with an injected prompt reader, capturing what the command prints. */
+  async function runHidden(argv: string[], typed: string): Promise<{ code: number; out: string; err: string; asked: string[] }> {
+    const out: string[] = [], err: string[] = [], asked: string[] = [];
+    const w = process.stdout.write.bind(process.stdout), e = console.error;
+    process.stdout.write = ((c: any) => { out.push(String(c)); return true; }) as any;
+    console.error = (...a: any[]) => { err.push(a.join(" ")); };
+    try { return { code: await rehearsalMain(["keys", ...argv], {}, { hidden: async (q) => { asked.push(q); return typed; } }), out: out.join(""), err: err.join("\n"), asked }; }
+    finally { process.stdout.write = w as any; console.error = e; }
+  }
+  test("no <dir>.pw and no file anywhere holds the passphrase, and nothing printed carries it", async () => {
+    const d = mkdtempSync(join(tmpdir(), "rehearsal-hidden-"));
+    const dir = join(d, "keys");
+    const r = await runHidden(["--dir", dir, "--voters", "0", "--chain-id", "8453"], HPW);
+    expect(r.code).toBe(0);
+    expect(r.asked.length).toBe(1);
+    expect(readdirSync(d)).toEqual(["keys"]); // no keys.pw beside the folder
+    const files = walk(d);
+    expect(files.map((f) => f.path.slice(d.length + 1)).sort()).toEqual(["keys/DEPLOYER", "keys/EMERGENCY", "keys/PAUSER", "keys/SAFE_OWNER_A", "keys/SAFE_OWNER_B", "keys/SAFE_OWNER_C"]);
+    for (const f of files) expect(f.bytes.includes(Buffer.from(HPW))).toBe(false);
+    expect(r.out + r.err).not.toContain(HPW);
+    expect(r.out).toMatch(/CHAIN_ID=8453/);
+    expect(r.out).toMatch(/VOTER_ADDRESSES=\n/);
+    // the keystores open under the typed passphrase (so the passphrase really was used) and under no other
+    expect(decryptKeystore(readFileSync(join(dir, "DEPLOYER"), "utf8"), HPW).length).toBe(32);
+    expect(() => decryptKeystore(readFileSync(join(dir, "DEPLOYER"), "utf8"), HPW + "x")).toThrow();
+  });
+  test("a short typed passphrase is refused before any key or file exists", async () => {
+    const d = mkdtempSync(join(tmpdir(), "rehearsal-hidden-"));
+    await expect(runHidden(["--dir", join(d, "keys")], "short")).rejects.toThrow(/16 characters/);
+    expect(readdirSync(d)).toEqual([]);
+  });
+  test("the password-file path (CI) still works and is not given a prompt", async () => {
+    const { d, dir, pwf } = setup();
+    const r = await runHidden(["--dir", dir, "--password-file", pwf], "never-asked-passphrase-1");
+    expect(r.code).toBe(0);
+    expect(r.asked).toEqual([]);
+    expect(readdirSync(d).sort()).toEqual(["keys", "pw"]);
+  });
+  test("makeRehearsalKeys takes exactly one passphrase source", () => {
+    const { dir, pwf } = setup();
+    expect(() => makeRehearsalKeys({ dir, names: ["A"] })).toThrow(/exactly one/);
+    expect(() => makeRehearsalKeys({ dir, names: ["A"], passwordFile: pwf, password: HPW })).toThrow(/exactly one/);
+  });
 });
 
 describe("args", () => {
