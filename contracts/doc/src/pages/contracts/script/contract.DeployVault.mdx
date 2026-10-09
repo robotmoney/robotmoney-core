@@ -1,11 +1,11 @@
 ---
 title: "DeployVault"
-description: "Stage 2 of the core deploy (libs, vault, registry, router, gateway). Deploys RobotMoneyVault (rmUSDC) with its three real strategy adapters (Aave V3, Compound V3, Moonwell Flagship USDC through the ERC-4626 `MorphoAdapter`), allows the adapters, registers them with 3334 / 3333 / 3333 bps caps, and makes the seed deposit that anchors the share price before the vault is opened."
+description: "Stage 2 of the core deploy (libs, vault, registry, router, gateway). Deploys RobotMoneyVault (rmUSDC) with its three real strategy adapters (Aave V3, Compound V3, Moonwell Flagship USDC through the ERC-4626 `MorphoAdapter`), allows the adapters, registers them with 3334 / 3333 / 3333 bps caps, and makes the seed deposit that anchors the share price. The vault is deployed paused (core 1710): `pauseDeposits()` runs right after the seed deposit, and the govern stage opens it through the Safe and the timelock like the three basket vaults."
 ---
 
 # DeployVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/script/DeployVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f17dc454551bd2a41cf6b3f2185df435b5d543da/contracts/script/DeployVault.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -15,7 +15,9 @@ Stage 2 of the core deploy (libs, vault, registry, router, gateway).
 Deploys RobotMoneyVault (rmUSDC) with its three real strategy adapters (Aave V3,
 Compound V3, Moonwell Flagship USDC through the ERC-4626 `MorphoAdapter`), allows
 the adapters, registers them with 3334 / 3333 / 3333 bps caps, and makes the
-seed deposit that anchors the share price before the vault is opened.
+seed deposit that anchors the share price. The vault is deployed paused (core 1710):
+`pauseDeposits()` runs right after the seed deposit, and the govern stage opens it
+through the Safe and the timelock like the three basket vaults.
 
 The gateway, router and registry are NOT deployed here: the registry, router and
 gateway stages follow. The old single script deployed the gateway with a zero
@@ -277,7 +279,9 @@ function runInProcessWithParams(Params memory p) external returns (Deployed memo
 
 The seed step itself, shared by the broadcast run and the in-process seeded run.
 Refuses an unset (zero) or deployer receiver, deposits the seed for the receiver and
-asserts the deployer holds no shares afterwards. The caller must be the deployer.
+asserts the deployer holds no shares afterwards, then pauses deposits (core 1710: all
+four vaults deploy paused, the govern stage unpauses them). The caller must be the
+deployer, who holds EMERGENCY_ROLE until the timelock stage.
 
 </i>
 

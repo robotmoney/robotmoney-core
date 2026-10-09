@@ -5,7 +5,7 @@ description: "Fork test asserting that after running the deploy script the vault
 
 # DeploySeedDeposit
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/DeploySeedDeposit.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f17dc454551bd2a41cf6b3f2185df435b5d543da/contracts/test/DeploySeedDeposit.t.sol)
 
 **Inherits:** Test
 
@@ -183,6 +183,18 @@ seed the vault before it is opened to the public
 
 ```solidity
 function test_fork_deploySeed_totalAssetsAtLeastMinSeed() public;
+```
+
+<a id="test_fork_deployseed_vaultdeployspaused"></a>
+
+### test_fork_deploySeed_vaultDeploysPaused
+
+core 1710: the deploy pauses deposits right after the seed deposit. The seed
+shares exist, a public deposit reverts, and only ADMIN_ROLE (the timelock after the
+handover) can open the vault.
+
+```solidity
+function test_fork_deploySeed_vaultDeploysPaused() public;
 ```
 
 <a id="test_fork_deployseed_totalsupplypositive"></a>
