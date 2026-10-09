@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PublishError } from "../src/errors.ts";
-import { assertSha, checkNonce, countFor, frozenPath, loadFrozen, resolveCounts, sumCounts, writeFrozen } from "../src/counts.ts";
+import { PROOF_TX_NONCES, assertSha, checkNonce, countFor, frozenPath, loadFrozen, resolveCounts, sumCounts, writeFrozen } from "../src/counts.ts";
 import { freezeCounts } from "../scripts/freeze-counts.ts";
 import { COUNTS, SHA, SHA2, tmp, writeCounts } from "./fixtures.ts";
 
@@ -12,12 +12,15 @@ describe("frozen counts keyed by DEPLOY_SHA", () => {
   test("the nonce check passes when it equals the summed frozen counts", () => {
     const sum = sumCounts(COUNTS);
     expect(sum).toBe(1 + 4 + 6 + 18 + 2 + 3 + 3 + 2 + 5 + 6 + 6 + 6 + 25);
-    expect(kind(() => checkNonce(sum, COUNTS))).toBeUndefined();
+    expect(kind(() => checkNonce(sum + PROOF_TX_NONCES, COUNTS))).toBeUndefined();
+    expect(kind(() => checkNonce(sum, COUNTS))).toBe("NONCE"); // the deployer also sent the prove-control transaction (core 1712)
+    expect(kind(() => checkNonce(sum, COUNTS, Object.keys(COUNTS)))).toBeUndefined(); // a named subset of stages is just their sum
   });
   test("the nonce check fails on a mismatch, in either direction", () => {
     const sum = sumCounts(COUNTS);
-    expect(kind(() => checkNonce(sum - 1, COUNTS))).toBe("NONCE");
-    expect(kind(() => checkNonce(sum + 1, COUNTS))).toBe("NONCE");
+    expect(kind(() => checkNonce(sum, COUNTS))).toBe("NONCE");
+    expect(kind(() => checkNonce(sum + PROOF_TX_NONCES - 1, COUNTS))).toBe("NONCE");
+    expect(kind(() => checkNonce(sum + PROOF_TX_NONCES + 1, COUNTS))).toBe("NONCE");
     expect(kind(() => checkNonce(56, COUNTS))).toBe("NONCE"); // no hand-typed 56
   });
   test("the nonce check fails on a missing SHA", () => {
@@ -73,7 +76,7 @@ describe("frozen counts keyed by DEPLOY_SHA", () => {
 describe("freeze-counts (core 1524)", () => {
   const counts = (over: Record<string, unknown> = {}): string => {
     const p = join(tmp(), "counts.json");
-    writeFileSync(p, JSON.stringify({ deploySha: SHA, chainId: 918453, counts: COUNTS, deployerNonce: sumCounts(COUNTS), rehearsal: { conclusion: "success" }, ...over }));
+    writeFileSync(p, JSON.stringify({ deploySha: SHA, chainId: 918453, counts: COUNTS, deployerNonce: sumCounts(COUNTS) + PROOF_TX_NONCES, rehearsal: { conclusion: "success" }, ...over }));
     return p;
   };
   test("writes the frozen file from a counts.json fixture", () => {
@@ -94,7 +97,7 @@ describe("freeze-counts (core 1524)", () => {
     const p = freezeCounts(counts(), dir);
     const before = readFileSync(p, "utf8");
     const other = { ...COUNTS, vault: 19 };
-    expect(kind(() => freezeCounts(counts({ counts: other, deployerNonce: sumCounts(other) }), dir))).toBe("COUNT_MISMATCH");
+    expect(kind(() => freezeCounts(counts({ counts: other, deployerNonce: sumCounts(other) + PROOF_TX_NONCES }), dir))).toBe("COUNT_MISMATCH");
     expect(readFileSync(p, "utf8")).toBe(before);
   });
   test("the CLI exits 10 (COUNT_MISMATCH) on a differing rerun", () => {
@@ -102,7 +105,7 @@ describe("freeze-counts (core 1524)", () => {
     const run = (f: string) => Bun.spawnSync(["bun", join(import.meta.dir, "..", "scripts", "freeze-counts.ts"), "--counts", f, "--counts-dir", dir], { stdout: "pipe", stderr: "pipe" });
     expect(run(counts()).exitCode).toBe(0);
     const other = { ...COUNTS, vault: 19 };
-    expect(run(counts({ counts: other, deployerNonce: sumCounts(other) })).exitCode).toBe(10);
+    expect(run(counts({ counts: other, deployerNonce: sumCounts(other) + PROOF_TX_NONCES })).exitCode).toBe(10);
   });
   test("a counts.json from a rehearsal that did not conclude success, or that records no conclusion, is refused and writes nothing", () => {
     const dir = tmp();

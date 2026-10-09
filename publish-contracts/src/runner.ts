@@ -12,7 +12,7 @@ import { countFor, sumCounts, checkNonce, type FrozenCounts } from "./counts.ts"
 import type { Logger } from "./log.ts";
 import { DryRunFiles, type ChainStarter } from "./preflight.ts";
 import type { PublishSigner } from "./signer.ts";
-import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, manifestRef, stageByName, type StageRow } from "./stages.ts";
+import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, proofNoncesBefore, manifestRef, stageByName, type StageRow } from "./stages.ts";
 import { PROOF_STAGE, assertControlProven } from "./control-proof.ts";
 import { LIBS_STAGE, RECORDER_STAGE, VAULT_KIND, VENUE_V4, resolveEnv } from "./core-wiring.ts";
 import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts";
@@ -649,7 +649,7 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
 
   // start nonce: exactly where the frozen counts say. Measure mode learns the start from earlier records.
   const nonce0 = await deployerNonce(ctx, deployer);
-  const wantStart = counts ? expectedStartNonce(row.name, counts) : DEPLOYER_STAGES.slice(0, DEPLOYER_STAGES.findIndex((s) => s.name === row.name)).reduce((a, s) => a + (manifest.stages[s.name]?.count ?? 0), 0);
+  const wantStart = counts ? expectedStartNonce(row.name, counts) : DEPLOYER_STAGES.slice(0, DEPLOYER_STAGES.findIndex((s) => s.name === row.name)).reduce((a, s) => a + (manifest.stages[s.name]?.count ?? 0), 0) + proofNoncesBefore(row.name);
   let resuming = false;
   if (nonce0 !== wantStart) {
     const upper = wantStart + (expectedCount ?? Number.MAX_SAFE_INTEGER);
@@ -934,7 +934,7 @@ export type NonceCheckOutcome =
   | { checked: false; reason: "dry-run" | "govern-started" | "deployer-stages-incomplete" | "no-deployer-stage-ran" };
 
 /**
- * The end-of-deploy nonce check: the deployer nonce must equal the summed frozen counts. It is a stage-12 check, so it runs only when
+ * The end-of-deploy nonce check: the deployer nonce must equal the summed frozen counts plus the one prove-control transaction (core 1712). It is a stage-12 check, so it runs only when
  * EVERY deployer stage is done in the run manifest and this run executed at least one of them (a partial run, a run of other stages and a
  * dry run do not run it). After govern started the deployer nonce includes the Safe execTransaction gas, so it is skipped there and the
  * verifier compares its recorded end-of-deploy nonce instead. The outcome names the reason whenever it did not run.

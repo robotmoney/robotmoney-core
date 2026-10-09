@@ -36,7 +36,7 @@ describe.skipIf(!ready)(`Twin chain runs (${needs})`, () => {
     expect(sum).toBeGreaterThan(0);
     const deployer = process.env.DEPLOYER_ADDRESS;
     expect(deployer, "set DEPLOYER_ADDRESS to the run's deployer address (public)").toBeTruthy();
-    expect(Number(await cast(["nonce", deployer!]))).toBe(sum);
+    expect(Number(await cast(["nonce", deployer!]))).toBe(sum + 1); // the stage counts plus the deployer's one prove-control transaction (core 1712)
   });
 
   test("devops 56 and 58: the rehearsal workflow's run verified every expected label", async () => {

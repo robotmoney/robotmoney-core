@@ -33,6 +33,15 @@ export function loadFrozen(dir: string, sha: string): FrozenFile {
 
 export const sumCounts = (c: FrozenCounts, stages?: string[]): number => (stages ?? Object.keys(c)).reduce((a, s) => a + (c[s] ?? 0), 0);
 
+/**
+ * The deployer sends the prove-control transaction (the Safe execTransaction, core 1712) between stage 10 and the stage 11 handover. It is one
+ * transaction outside every stage count, so every nonce at or after the handover is the summed frozen counts plus this.
+ */
+export const PROOF_TX_NONCES = 1;
+
+/** The deployer nonce at the end of the deploy stages: the summed frozen counts plus the one prove-control transaction. */
+export const finalDeployerNonce = (c: FrozenCounts): number => sumCounts(c) + PROOF_TX_NONCES;
+
 /** The count of one stage. A stage with no frozen entry fails: nothing is guessed. */
 export function countFor(c: FrozenCounts, stage: string): number {
   const n = c[stage];
@@ -40,10 +49,10 @@ export function countFor(c: FrozenCounts, stage: string): number {
   return n;
 }
 
-/** The deployer nonce must equal the summed frozen counts. Any difference fails. */
+/** The deployer nonce must equal the summed frozen counts plus the prove-control transaction (or, for a named subset of stages, their sum). Any difference fails. */
 export function checkNonce(actual: number, c: FrozenCounts, stages?: string[]): void {
-  const want = sumCounts(c, stages);
-  if (actual !== want) throw new PublishError("NONCE", `the deployer nonce is ${actual}, the summed frozen counts say ${want}`, { actual, want });
+  const want = stages ? sumCounts(c, stages) : finalDeployerNonce(c);
+  if (actual !== want) throw new PublishError("NONCE", `the deployer nonce is ${actual}, the summed frozen counts say ${want}${stages ? "" : ` (${PROOF_TX_NONCES} of them is the prove-control transaction)`}`, { actual, want });
 }
 
 /** Writes a measured counts file. Refuses to change an existing file: a frozen file is reviewed data. */

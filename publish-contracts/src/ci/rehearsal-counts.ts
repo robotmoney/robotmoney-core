@@ -6,7 +6,7 @@
 // counts.json: { deploySha, chainId, counts: { <stage>: n }, deployerNonce }. The release procedure copies `counts` into deployments/frozen-counts/<sha>.json.
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { loadFrozen } from "../counts.ts";
+import { PROOF_TX_NONCES, loadFrozen } from "../counts.ts";
 import { loadStageTable } from "../stage-table.ts";
 import { useStageTable, DEPLOYER_STAGES } from "../stages.ts";
 
@@ -17,7 +17,7 @@ export function buildCountsJson(countsDir: string, sha: string, nonce: number): 
   return { deploySha: sha, chainId: f.measured.chainId, counts: f.counts, deployerNonce: nonce };
 }
 
-/** Returns the problems of a counts.json: the keys must equal the deployer stage names and the nonce the sum of the counts. */
+/** Returns the problems of a counts.json: the keys must equal the deployer stage names and the nonce the sum of the counts plus the prove-control transaction. */
 export function checkCountsJson(j: CountsJson, stageKeys: string[]): string[] {
   const errs: string[] = [];
   const have = Object.keys(j.counts ?? {}).sort();
@@ -26,7 +26,7 @@ export function checkCountsJson(j: CountsJson, stageKeys: string[]): string[] {
   for (const k of have) if (!want.includes(k)) errs.push(`counts has an entry for ${k}, which is not a stage`);
   for (const [k, v] of Object.entries(j.counts ?? {})) if (!Number.isInteger(v) || v < 0) errs.push(`count of ${k} is not a non-negative integer`);
   const sum = Object.values(j.counts ?? {}).reduce((a, b) => a + b, 0);
-  if (j.deployerNonce !== sum) errs.push(`deployerNonce ${j.deployerNonce} differs from the sum of counts ${sum}`);
+  if (j.deployerNonce !== sum + PROOF_TX_NONCES) errs.push(`deployerNonce ${j.deployerNonce} differs from the sum of counts ${sum} plus the prove-control transaction (${PROOF_TX_NONCES})`);
   return errs;
 }
 

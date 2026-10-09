@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR } from "./floors.ts";
 import { assertOwnerExceptions } from "./plan.ts";
-import { sumCounts } from "./counts.ts";
+import { finalDeployerNonce } from "./counts.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -178,7 +178,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): s
   if (!ADDR.test(ev?.deployer ?? "")) bad("deployer address is missing");
   if (!ADDR.test(ev?.registry?.address ?? "")) bad("registry address is missing");
   if (!Number.isInteger(ev?.deployer_nonce_final)) bad("deployer_nonce_final is missing");
-  if (frozenCounts && ev?.deployer_nonce_final !== sumCounts(frozenCounts)) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from the summed frozen counts ${sumCounts(frozenCounts)}`);
+  if (frozenCounts && ev?.deployer_nonce_final !== finalDeployerNonce(frozenCounts)) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from the summed frozen counts plus the prove-control transaction ${finalDeployerNonce(frozenCounts)}`);
   if (ev?.verifier?.exit_code !== 0) bad("the verifier did not exit 0");
   if (ev?.verifier?.registry_list_vaults_equals_manifests !== true) bad("registry listVaults was not shown equal to the manifests");
   if (ev?.sources?.blockscout_all_verified !== true || ev?.sources?.sourcify_all_exact !== true) bad("source verification is not complete");
@@ -221,9 +221,9 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   const bad = (m: string) => p.push(m);
   const id = await chain.getChainId();
   if (id !== MAINNET_CHAIN_ID) { bad(`the RPC reports chain ${id}, evidence is read on ${MAINNET_CHAIN_ID}`); return p; }
-  const want = sumCounts(frozenCounts);
+  const want = finalDeployerNonce(frozenCounts);
   const nonce = await chain.getTransactionCount({ address: ev.deployer });
-  if (nonce !== want) bad(`deployer nonce on chain is ${nonce}, the summed frozen counts say ${want}`);
+  if (nonce !== want) bad(`deployer nonce on chain is ${nonce}, the summed frozen counts plus the prove-control transaction say ${want}`);
 
   const status = async (what: string, hash: string) => {
     try {

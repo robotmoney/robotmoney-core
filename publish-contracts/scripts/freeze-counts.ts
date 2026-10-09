@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { TWIN_CHAIN_ID } from "../src/chains.ts";
-import { FROZEN_DIR, assertSha, validateCounts, writeFrozen } from "../src/counts.ts";
+import { FROZEN_DIR, PROOF_TX_NONCES, assertSha, validateCounts, writeFrozen } from "../src/counts.ts";
 import { PublishError, exitCodeOf } from "../src/errors.ts";
 
 export function freezeCounts(countsJsonPath: string, countsDir: string): string {
@@ -17,7 +17,7 @@ export function freezeCounts(countsJsonPath: string, countsDir: string): string 
   const sha = assertSha(String(j.deploySha));
   const counts = validateCounts(j.counts);
   const sum = Object.values(counts).reduce((a, b) => a + b, 0);
-  if (j.deployerNonce !== sum) throw new PublishError("USAGE", `${countsJsonPath}: deployerNonce ${j.deployerNonce} differs from the sum of counts ${sum}`);
+  if (j.deployerNonce !== sum + PROOF_TX_NONCES) throw new PublishError("USAGE", `${countsJsonPath}: deployerNonce ${j.deployerNonce} differs from the sum of counts ${sum} plus the prove-control transaction (${PROOF_TX_NONCES})`);
   if (j.chainId !== TWIN_CHAIN_ID) throw new PublishError("USAGE", `${countsJsonPath}: counts are frozen from a Twin chain (918453) rehearsal, not chain ${j.chainId}`);
   return writeFrozen(countsDir, sha, counts, { chainId: j.chainId, at: new Date().toISOString() });
 }

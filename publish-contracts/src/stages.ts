@@ -2,6 +2,7 @@
 // The forge rows (script, env, manifest, libraries, vault) come from the table. This file adds only the four orchestration rows that
 // run no core script: safe (the real Safe through the Safe tool), prove-control (the Safe signs once, before the handover), verify and govern. One loop runs every stage on every chain.
 // The expected tx count of a row is never typed here: it is read from deployments/frozen-counts/<sha>.json.
+import { PROOF_TX_NONCES } from "./counts.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
 import { PublishError } from "./errors.ts";
 import { SAFE_MANIFEST, isVaultKey } from "./core-wiring.ts";
@@ -85,12 +86,18 @@ export const manifestRef = (stage: string, field: string): string => {
   return `${m.replace(/\.json$/, "")}:${field}`;
 };
 
-/** The deployer nonce a stage starts at: the frozen counts of every deployer stage before it. */
+/** The deployer transactions outside every stage count that precede a stage: the prove-control transaction, for every stage after it (core 1712). */
+export function proofNoncesBefore(stage: string): number {
+  const at = STAGE_NAMES.indexOf(stage);
+  return at > STAGE_NAMES.indexOf(PROOF_STAGE) ? PROOF_TX_NONCES : 0;
+}
+
+/** The deployer nonce a stage starts at: the frozen counts of every deployer stage before it, plus the prove-control transaction once it has been sent. */
 export function expectedStartNonce(stage: string, counts: Record<string, number>): number {
   let n = 0;
   for (const s of DEPLOYER_STAGES) {
-    if (s.name === stage) return n;
+    if (s.name === stage) return n + proofNoncesBefore(stage);
     n += counts[s.countKey!] ?? 0;
   }
-  return n;
+  return n + PROOF_TX_NONCES;
 }

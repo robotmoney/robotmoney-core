@@ -183,7 +183,7 @@ the `pause-all` verb and the same arguments as the run (the same `--evidence`
 directory):
 
 ```bash
-bun publish-contracts/src/cli.ts pause-all --chain 8453 --rpc "$BASE_RPC" --sheet "$SHEET"   --signer "$DEPLOYER_SIGNER" --emergency-signer "$EMERGENCY_SIGNER"   --core-sha "$DEPLOY_SHA" --evidence "$EVIDENCE_DIR" --correlated-owners-file "$CORRELATED_OWNERS_FILE"
+bun publish-contracts/src/cli.ts pause-all --chain 8453 --rpc "$BASE_RPC" --sheet "$SHEET"   --signer "$DEPLOYER_SIGNER" --emergency-signer "$EMERGENCY_SIGNER"   --core-sha "$DEPLOY_SHA" --evidence "$EVIDENCE_DIR"
 ```
 
 The signer follows the stage. Before the stage 11 handover the deployer signs
@@ -191,7 +191,10 @@ The signer follows the stage. Before the stage 11 handover the deployer signs
 signs (`--emergency-signer`, never defaulted on mainnet). The CLI reads
 `depositsPaused` back on every vault and writes each vault's paused state to
 `rollout-report-<chain>.json` in the evidence directory. Exit 25 means a vault
-is not confirmed paused: pause it by hand now. Unpausing is a different
+is not confirmed paused: pause it by hand now. Only the deployer is funded,
+so fund the emergency key when you need to pause: if the key that must send
+holds no ETH, `pause-all` stops before the first send, exits 25 and names the
+address to fund (then run it again). Unpausing is a different
 operation (`ADMIN_ROLE` through the timelock). The fix then follows the release
 runbook fix loop: merge the fix on `dev`, redeploy to fresh addresses.
 

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { FALLBACK_MAX_EXIT_FEE_BPS, assertExitFeeBound, readMaxExitFeeBps } from "../src/asset-config.ts";
 import { CORE_CONFIG_CHECK_SCRIPT, coreCheckEnv, runCoreConfigCheck } from "../src/core-config-check.ts";
-import { loadFrozen } from "../src/counts.ts";
+import { PROOF_TX_NONCES, loadFrozen } from "../src/counts.ts";
 import { parseCli } from "../src/cli.ts";
 import { finalNonceCheck, isReadOnlyGitStatus, spawnTool } from "../src/runner.ts";
 import { DEPLOYER_STAGES, VAULT_STAGES } from "../src/stages.ts";
@@ -103,7 +103,7 @@ describe("finalNonceCheck is a stage 12 check with named outcomes", () => {
     return {
       logs,
       ctx: {
-        dryRun: false, chainId: 918453, rpc: "http://x", baseEnv: {}, frozen: Object.fromEntries(DEPLOYER_STAGES.map((s, i) => [s.countKey!, i === 0 ? got - (DEPLOYER_STAGES.length - 1) : 1])),
+        dryRun: false, chainId: 918453, rpc: "http://x", baseEnv: {}, frozen: Object.fromEntries(DEPLOYER_STAGES.map((s, i) => [s.countKey!, i === 0 ? got - PROOF_TX_NONCES - (DEPLOYER_STAGES.length - 1) : 1])),
         signer: { address: async () => ADDR(1) }, log: { log: (_l: string, e: string, f: unknown) => logs.push({ event: e, ...(f as object) }) },
         run: async () => ({ code: 0, stdout: String(nonce), stderr: "" }), ...over,
       } as never,
@@ -116,7 +116,7 @@ describe("finalNonceCheck is a stage 12 check with named outcomes", () => {
 
   test("all deployer stages done and run: it checks and passes on the exact sum", async () => {
     const { ctx: c, logs } = ctx();
-    expect(await finalNonceCheck(c, manifest(true), names)).toEqual({ checked: true, nonce, sum: nonce });
+    expect(await finalNonceCheck(c, manifest(true), names)).toEqual({ checked: true, nonce, sum: nonce - PROOF_TX_NONCES }); // the stage counts plus the deployer's one prove-control transaction (core 1712)
     expect(logs.some((l) => l.event === "run.nonce_ok")).toBe(true);
   });
   test("all done and a wrong nonce is a NONCE error", async () => {

@@ -59,7 +59,7 @@ const stage = (verb: string, stdoutTo?: string) => run([bun, cli, verb, "--chain
 
 // No frozen file in the empty counts dir: the Twin chain publish measures the per-stage counts and writes <counts-dir>/<sha>.json.
 stage("publish");
-// counts.json: the measured counts and the real deployer nonce, read after publish (verify and govern send nothing from the deployer).
+// counts.json: the measured counts and the real deployer nonce, read after publish (it includes the one prove-control transaction; verify and govern run after it).
 const nonce = run([env("CAST", "cast"), "nonce", admin, "--rpc-url", rpc]).trim();
 const countsJson = join(rh, "counts.json");
 run([bun, "src/ci/rehearsal-counts.ts", "build", "--counts-dir", join(rh, "counts"), "--sha", sha, "--nonce", nonce, "--out", countsJson], { cwd: pc });

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { PROOF_TX_NONCES } from "../src/counts.ts";
 import { checkCountsJson, buildCountsJson } from "../src/ci/rehearsal-counts.ts";
 import { driftErrors } from "../src/counts-drift.ts";
 import { DEPLOYER_STAGES } from "../src/stages.ts";
@@ -11,7 +12,7 @@ const run = (countsFile: string, frozenDir: string) => {
   const r = Bun.spawnSync(["bun", join(import.meta.dir, "../src/counts-drift.ts"), "--counts", countsFile, "--frozen-dir", frozenDir], { stdout: "pipe", stderr: "pipe" });
   return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString() };
 };
-const measured = (counts = COUNTS, dir = tmp()) => { const p = join(dir, "counts.json"); writeFileSync(p, JSON.stringify({ deploySha: SHA, chainId: 918453, counts, deployerNonce: sum })); return p; };
+const measured = (counts = COUNTS, dir = tmp()) => { const p = join(dir, "counts.json"); writeFileSync(p, JSON.stringify({ deploySha: SHA, chainId: 918453, counts, deployerNonce: sum + PROOF_TX_NONCES })); return p; };
 
 describe("counts-drift.ts", () => {
   test("exits 0 when no frozen file exists for the SHA", () => {
@@ -47,12 +48,13 @@ describe("rehearsal counts.json", () => {
     expect(keys().sort()).toEqual(Object.keys(COUNTS).sort());
     const dir = tmp();
     writeCounts(dir, SHA);
-    expect(checkCountsJson(buildCountsJson(dir, SHA, sum), keys())).toEqual([]);
+    expect(checkCountsJson(buildCountsJson(dir, SHA, sum + PROOF_TX_NONCES), keys())).toEqual([]);
   });
-  test("a nonce that is not the sum of counts fails", () => {
+  test("a nonce that is not the sum of counts plus the prove-control transaction fails, the bare sum included", () => {
     const dir = tmp();
     writeCounts(dir, SHA);
-    expect(checkCountsJson(buildCountsJson(dir, SHA, sum + 1), keys()).join()).toContain("deployerNonce");
+    expect(checkCountsJson(buildCountsJson(dir, SHA, sum), keys()).join()).toContain("deployerNonce");
+    expect(checkCountsJson(buildCountsJson(dir, SHA, sum + PROOF_TX_NONCES + 1), keys()).join()).toContain("deployerNonce");
   });
   test("a missing or extra stage key fails", () => {
     const { rwa: _r, ...rest } = COUNTS;

@@ -20,7 +20,7 @@ const good = () => ({
   vaults: { rmUSDC: { address: a(5) }, rmPROTO: { address: a(6) }, rmAGENT: { address: a(7) }, rmRWA: { address: a(8) } },
   timelock: { address: a(9), min_delay: 172800 },
   verifier: { exit_code: 0, registry_list_vaults_equals_manifests: true },
-  deployer: a(20), deployer_nonce_final: 2, registry: { address: a(21) },
+  deployer: a(20), deployer_nonce_final: 3, registry: { address: a(21) },
   govern: GOVERN_STEPS.map((step, i) => ({ step, operation_id: h(900 + i), schedule_tx: h(100 + i * 3), schedule_block_timestamp: T0 + i, execute_tx: h(101 + i * 3), execute_block_timestamp: T0 + i + 172800, schedule_status: 1, execute_status: 1 })),
   sources: { blockscout_all_verified: true, sourcify_all_exact: true },
 });
@@ -64,7 +64,7 @@ describe("evidence check, more negatives", () => {
   test("two steps sharing a timelock operation id are rejected", () => expect(mut((e) => { e.govern[1].operation_id = e.govern[0].operation_id; })).toContain("operation_id is also"));
   test("a step listed twice is rejected", () => expect(mut((e) => { e.govern.push({ ...e.govern[2] }); })).toContain("more than one evidence entry"));
   test("the unpauses may all be scheduled before the first executes (one sitting): no ordering rule between them", () => expect(checkEvidence(good())).toEqual([]));
-  test("a nonce that differs from the frozen sum is rejected", () => expect(checkEvidence(good(), { safe: 2, vault: 1 }).join()).toContain("deployer_nonce_final"));
+  test("a nonce that differs from the frozen sum plus the prove-control transaction is rejected (the bare sum is too low)", () => expect(checkEvidence(good(), { safe: 2, vault: 1 }).join()).toContain("deployer_nonce_final"));
 });
 
 // ---- online mode with a stub RPC ----
@@ -114,7 +114,7 @@ function stub(ev: any, o: Opts = {}): ChainReader {
   });
   return {
     getChainId: async () => o.chainId ?? 8453,
-    getTransactionCount: async () => o.nonce ?? 2,
+    getTransactionCount: async () => o.nonce ?? 3,
     getTransactionReceipt: async ({ hash }) => { const r = receipts.get(hash); if (!r) throw new Error("not found"); return r; },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(blocks.get(blockNumber)!) }),
     readContract: async ({ address, functionName }) => (functionName === "depositsPaused" ? (o.pausedBy?.[address] ?? o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
@@ -132,7 +132,7 @@ const online = (o: Opts = {}, mutate: (e: any) => void = () => {}) => { const e 
 
 describe("evidence check reading the chain (stub RPC)", () => {
   test("a consistent chain passes", async () => expect(await online()).toEqual([]));
-  test("a deployer nonce off the frozen sum is rejected", async () => expect((await online({ nonce: 3 })).join()).toContain("deployer nonce on chain"));
+  test("a deployer nonce off the frozen sum is rejected", async () => expect((await online({ nonce: 4 })).join()).toContain("deployer nonce on chain"));
   test("a registry vault set that differs from the manifests is rejected", async () => expect((await online({ listed: [a(5), a(6), a(7)] })).join()).toContain("listVaults"));
   test("a reverted stage receipt is rejected even if the JSON says 1", async () => expect((await online({ failed: h(1) })).join()).toContain("reverted"));
   test("a reverted govern execute is rejected", async () => expect((await online({ failed: h(104) })).join()).toContain("reverted"));
@@ -328,7 +328,7 @@ describe("recorded chain fixture (offline mode of the same chain checks)", () =>
   });
   test("criterion 2: a nonce off the frozen sum fails in the fixture", async () => {
     const { e, fixture } = await record();
-    fixture.nonces[e.deployer.toLowerCase()] = 3;
+    fixture.nonces[e.deployer.toLowerCase()] = 4;
     expect((await checkEvidenceOnChain(e, chainReaderFromFixture(fixture), frozen)).join()).toContain("deployer nonce on chain");
   });
   test("criterion 3: a reverted govern receipt and a short gap fail in the fixture", async () => {
