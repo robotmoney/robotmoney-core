@@ -3,11 +3,12 @@
 // publish contracts call is a fake runner that records argv. Checked: the exact argument list, the
 // keystore signer string, exit-code passthrough, the govern row gate, the usage errors, the record
 // contract with its schema drift guard, parity, and that a redeploy from a new SHA mints a fresh
-// keystore set. No network, no docker, no chain.
+// keystore set. The chain up, chain down, chain status and dapp status verbs run against a fake `docker compose`
+// (core 1549): every stage service is a container, so the tool starts no host process. No network, no docker, no chain.
 import { allManifests, expectedManifestCount } from "../stage-manifests.ts";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CORE_STACK_FORBIDDEN } from "../check-deleted-stage-scripts.ts";
@@ -38,6 +39,10 @@ let nextResult: RunResult;
 let out: string;
 let err: string;
 let env: Record<string, string>;
+/** Answers a command instead of the default fake. Return undefined to fall through. */
+let handler: ((cmd: string[], opts?: RunOpts) => RunResult | undefined) | undefined;
+let rpcAnswer: string;
+let httpAnswers: Record<string, boolean>;
 
 function summary(extra: Record<string, string> = {}): string {
   const base = {
@@ -64,9 +69,8 @@ function fakeDeps(): Deps {
         }
       }
       calls.cmds.push({ cmd, opts });
-      return nextResult;
+      return handler?.(cmd, opts) ?? nextResult;
     },
-    spawnDetached: () => -1,
     has: () => true,
     out: (s) => void (out += s),
     err: (s) => void (err += s),
@@ -74,12 +78,9 @@ function fakeDeps(): Deps {
     sleep: async () => {},
     env,
     repoRoot: REPO,
-    rpcChainId: async () => "0xe03b5",
-    httpOk: async () => true,
+    rpcChainId: async () => rpcAnswer,
+    httpOk: async (url) => httpAnswers[url] ?? true,
     procStart: () => undefined,
-    procCmdline: () => "",
-    procGroup: () => undefined,
-    signal: () => false,
   };
 }
 
@@ -101,6 +102,9 @@ beforeEach(() => {
   writeFileSync(join(OUT, "core-smoke.log"), summary());
   calls = { cmds: [] };
   nextResult = { code: 0, stdout: "", stderr: "" };
+  handler = undefined;
+  rpcAnswer = "0xe03b5";
+  httpAnswers = {};
   mkdirSync(join(REPO, "publish-contracts/src"), { recursive: true });
   writeFileSync(join(REPO, "publish-contracts/src/cli.ts"), "");
   env = { BUN: "bun-fake" };
@@ -398,4 +402,400 @@ describe("the tool holds no deploy or ceremony logic", () => {
       test(`${file} does not match ${re}`, () => expect(re.test(code)).toBe(false));
     }
   }
+});
+
+// ─── the stage stack in containers (core 1549) ───────────────────────────────
+// A fake `docker`: the chain container, the one-shot deploy job and the dapp stack are compose projects whose state
+// this test models. Nothing here may start a host process: every command is git, cargo (rmpc), docker or rmpc itself.
+const head = () => git("rev-parse", "HEAD");
+const STAMP = () => join(OUT, "core-stack.stamp");
+const WORKDIR = () => join(OUT, "work");
+const stampBody = (extra: Record<string, unknown> = {}) => JSON.stringify({ commit: head(), chain_project: "robotmoney-stage-chain", ...extra });
+
+interface World {
+  chainRunning: boolean;
+  dappHealthy: number;
+  chainUpExit: number;
+  deployExit: number;
+  writeSummary: boolean;
+  dappUpExit: number;
+  rmpcCommit: string;
+}
+let world: World;
+const ok = (stdout = ""): RunResult => ({ code: 0, stdout, stderr: "" });
+
+function dockerWorld(cmd: string[]): RunResult | undefined {
+  if (cmd[0]?.endsWith("target/debug/rmpc") && cmd[1] === "build-info") return ok(JSON.stringify({ commit: world.rmpcCommit }));
+  if (cmd[0] === "cargo") return ok();
+  if (cmd[0] !== "docker") return undefined;
+  const line = cmd.join(" ");
+  if (cmd[1] === "ps") {
+    if (line.includes("label=com.docker.compose.project=robotmoney-stage-chain")) return ok(world.chainRunning ? "stage-twin-chain\n" : "");
+    if (line.includes("health=healthy")) return ok("dapp-frontend\n".repeat(world.dappHealthy));
+    return ok();
+  }
+  if (cmd[1] !== "compose") return undefined;
+  const project = cmd[cmd.indexOf("--project-name") + 1];
+  const verb = cmd.find((c, i) => i > 3 && ["up", "run", "down", "build"].includes(c) && cmd[i - 1] !== "-f");
+  if (project === "robotmoney-stage-chain") {
+    if (verb === "up") {
+      if (world.chainUpExit === 0) world.chainRunning = true;
+      return { code: world.chainUpExit, stdout: "", stderr: "" };
+    }
+    if (verb === "run") {
+      if (world.deployExit === 0) {
+        const out = cmd[cmd.indexOf("--dapp-env-out") + 1]!;
+        const sum = cmd[cmd.indexOf("--summary-out") + 1]!;
+        mkdirSync(join(out, ".."), { recursive: true });
+        writeFileSync(out, JSON.stringify({ DAPP_PORT: "5173", INDEXER_RPC_URL: "http://twin-chain:8545", COMPOSE_PROFILES: "" }));
+        if (world.writeSummary) writeFileSync(sum, summary());
+      }
+      return { code: world.deployExit, stdout: "", stderr: "" };
+    }
+    if (verb === "down") {
+      world.chainRunning = false;
+      return ok();
+    }
+    return ok();
+  }
+  if (project === "robotmoney-dapp") {
+    if (verb === "up") {
+      if (world.dappUpExit === 0) world.dappHealthy = 1;
+      return { code: world.dappUpExit, stdout: "", stderr: "" };
+    }
+    if (verb === "down") {
+      world.dappHealthy = 0;
+      return ok();
+    }
+  }
+  return ok();
+}
+
+function containerWorld(): void {
+  world = { chainRunning: false, dappHealthy: 0, chainUpExit: 0, deployExit: 0, writeSummary: true, dappUpExit: 0, rmpcCommit: head() };
+  handler = (cmd) => dockerWorld(cmd);
+  env.STAGE_WORK_DIR = WORKDIR();
+  mkdirSync(join(REPO, "target/debug"), { recursive: true });
+  writeFileSync(join(REPO, "target/debug/rmpc"), "");
+  mkdirSync(join(REPO, "deployments/twin-918453"), { recursive: true });
+  writeFileSync(join(REPO, "deployments/twin-918453/stage-sheet.env"), "");
+  rmSync(join(OUT, "core-smoke.log"), { force: true });
+}
+
+const compose = () => calls.cmds.filter((c) => c.cmd[0] === "docker" && c.cmd[1] === "compose");
+const verbOf = (c: string[]) => c.find((x, i) => i > 3 && ["up", "run", "down", "build"].includes(x) && c[i - 1] !== "-f")!;
+const OK_LINE = new RegExp(`^ok: chain 0xe03b5, 1 healthy robotmoney-dapp container\\(s\\), rmpc built from ${"[0-9a-f]{40}"}$`);
+
+describe("chain up in containers", () => {
+  beforeEach(containerWorld);
+
+  test("starts the chain container, runs the deploy job, then starts the dapp stack, in that order, and exits 0", async () => {
+    const r = await run("chain", "up");
+    expect(r.code).toBe(0);
+    const seq = compose().map((c) => `${c.cmd[c.cmd.indexOf("--project-name") + 1]}:${verbOf(c.cmd)}`);
+    expect(seq).toEqual(["robotmoney-stage-chain:up", "robotmoney-stage-chain:build", "robotmoney-stage-chain:run", "robotmoney-dapp:up"]);
+  });
+
+  test("starts no host process: every command is git, cargo for rmpc, docker or rmpc", async () => {
+    await run("chain", "up");
+    const tools = new Set(calls.cmds.map((c) => c.cmd[0]!.split("/").pop()));
+    expect([...tools].sort()).toEqual(["cargo", "docker", "rmpc"]);
+    const flat = calls.cmds.map((c) => c.cmd.join(" ")).join("\n");
+    expect(flat).not.toMatch(/anvil|stdbuf|twin-fork\.ts|cargo run|-p smoke-test|bun /);
+  });
+
+  test("prints the unchanged status line and no other line on stdout", async () => {
+    const r = await run("chain", "up");
+    expect(r.out.trimEnd().split("\n")).toHaveLength(1);
+    expect(r.out.trimEnd()).toMatch(OK_LINE);
+  });
+
+  test("the chain container is built and waited for, healthy, before the deploy job runs", async () => {
+    await run("chain", "up");
+    const up = compose()[0]!.cmd;
+    expect(up).toContain("--wait");
+    expect(up).toContain("--build");
+    expect(up[up.length - 1]).toBe("twin-chain");
+    expect(up).toContain("--profile");
+  });
+
+  test("the deploy job is the real ceremony against the chain: --deploy-only with the stage ports and the public urls", async () => {
+    await run("chain", "up");
+    const job = compose().find((c) => verbOf(c.cmd) === "run")!.cmd;
+    const tail = job.slice(job.indexOf("stage-harness") + 1);
+    expect(tail.slice(0, 1)).toEqual(["--deploy-only"]);
+    const flag = (name: string) => tail[tail.indexOf(name) + 1];
+    expect(flag("--explorer-port")).toBe("18546");
+    expect(flag("--dapp-port")).toBe("5173");
+    expect(flag("--public-rpc-url")).toBe("https://stage-rpc.robotmoney-labs.dev");
+    expect(flag("--public-explorer-url")).toBe("https://stage-explorer.robotmoney-labs.dev");
+    expect(flag("--public-dapp-url")).toBe("https://stage-dapp.robotmoney-labs.dev");
+    expect(tail).toContain("--no-receipt-fixtures");
+    expect(flag("--dapp-env-out")).toBe(join(WORKDIR(), "dapp-env.json"));
+    expect(job).toContain("--rm");
+    expect(job).toContain("--no-deps");
+  });
+
+  test("the compose projects get the invoking user, the checkout and the work directory", async () => {
+    await run("chain", "up");
+    const envOf = compose().find((c) => verbOf(c.cmd) === "run")!.opts!.env!;
+    expect(envOf.STAGE_REPO).toBe(REPO);
+    expect(envOf.STAGE_WORK_DIR).toBe(WORKDIR());
+    expect(envOf.STAGE_UID).toBe(String(process.getuid!()));
+    expect(envOf.STAGE_GID).toBe(String(process.getgid!()));
+  });
+
+  test("the dapp stack starts from the environment the deploy job wrote, with the stage overlay", async () => {
+    await run("chain", "up");
+    const dapp = compose().find((c) => c.cmd.includes("robotmoney-dapp") && verbOf(c.cmd) === "up")!;
+    expect(dapp.opts!.env).toEqual({ DAPP_PORT: "5173", INDEXER_RPC_URL: "http://twin-chain:8545", COMPOSE_PROFILES: "" });
+    expect(dapp.cmd.filter((x) => x.endsWith(".yaml")).map((x) => x.split("/").pop())).toEqual(["docker-compose.dapp.yaml", "docker-compose.dapp.stage.yaml"]);
+    expect(dapp.cmd).toContain("--wait");
+  });
+
+  test("the endpoint summary the deploy job wrote becomes the summary every later verb reads", async () => {
+    await run("chain", "up");
+    expect(readFileSync(join(OUT, "core-smoke.log"), "utf8")).toBe(summary());
+    const r = await run("publish", "args");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(`keystore:${join(OUT, "keys")}/DEPLOYER:${join(OUT, "pw")}`);
+  });
+
+  test("writes a stamp that names the commit and the chain project, and no pid", async () => {
+    await run("chain", "up");
+    const st = JSON.parse(readFileSync(STAMP(), "utf8"));
+    expect(st.commit).toBe(head());
+    expect(st.chain_project).toBe("robotmoney-stage-chain");
+    expect(st.pid).toBeUndefined();
+  });
+
+  test("a second chain up on the healthy candidate starts nothing", async () => {
+    await run("chain", "up");
+    calls.cmds = [];
+    const r = await run("chain", "up");
+    expect(r.code).toBe(0);
+    expect(r.out.trimEnd()).toMatch(OK_LINE);
+    expect(compose()).toHaveLength(0);
+  });
+
+  test("a TWIN_RPC_URL that names another chain is refused (65) before any docker command", async () => {
+    env.TWIN_RPC_URL = "http://10.0.0.5:8545";
+    const r = await run("chain", "up");
+    expect(r.code).toBe(65);
+    expect(r.err).toContain("unset TWIN_RPC_URL");
+    expect(calls.cmds.filter((c) => c.cmd[0] === "docker")).toHaveLength(0);
+  });
+
+  test("TWIN_RPC_URL set to the container's own address is allowed", async () => {
+    env.TWIN_RPC_URL = "http://127.0.0.1:18545/";
+    expect((await run("chain", "up")).code).toBe(0);
+  });
+
+  test("a chain container that is running but is not the healthy candidate must be taken down first (66)", async () => {
+    world.chainRunning = true;
+    const r = await run("chain", "up");
+    expect(r.code).toBe(66);
+    expect(r.err).toContain("chain down");
+    expect(compose()).toHaveLength(0);
+  });
+
+  test("a chain container that never becomes healthy fails chain up (66) and runs no deploy job", async () => {
+    world.chainUpExit = 1;
+    const r = await run("chain", "up");
+    expect(r.code).toBe(66);
+    expect(compose().map((c) => verbOf(c.cmd))).toEqual(["up"]);
+  });
+
+  test("a failing deploy job fails chain up (66), starts no dapp stack and writes no stamp", async () => {
+    world.deployExit = 3;
+    const r = await run("chain", "up");
+    expect(r.code).toBe(66);
+    expect(r.err).toContain("deploy job exited 3");
+    expect(compose().some((c) => c.cmd.includes("robotmoney-dapp"))).toBe(false);
+    expect(existsSync(STAMP())).toBe(false);
+  });
+
+  test("a deploy job that printed no endpoint summary fails chain up (66)", async () => {
+    world.writeSummary = false;
+    const r = await run("chain", "up");
+    expect(r.code).toBe(66);
+    expect(r.err).toContain("printed no endpoint summary");
+    expect(existsSync(STAMP())).toBe(false);
+  });
+
+  test("a dapp stack that never becomes healthy fails chain up (66) and writes no stamp", async () => {
+    world.dappUpExit = 1;
+    const r = await run("chain", "up");
+    expect(r.code).toBe(66);
+    expect(existsSync(STAMP())).toBe(false);
+  });
+
+  test("a stack whose rmpc was built from another commit is not the candidate: chain up fails (66)", async () => {
+    world.rmpcCommit = "f".repeat(40);
+    const r = await run("chain", "up");
+    expect(r.code).toBe(66);
+    expect(r.err).toContain("candidate-mismatch");
+  });
+
+  test("a work directory that is too shallow or is the checkout is refused (65) before anything runs or is deleted", async () => {
+    for (const bad of ["/", "/tmp", REPO, OUT]) {
+      env.STAGE_WORK_DIR = bad;
+      expect((await run("chain", "up")).code).toBe(65);
+      expect((await run("chain", "down")).code).toBe(65);
+    }
+    expect(calls.cmds.filter((c) => c.cmd[0] === "docker")).toHaveLength(0);
+  });
+
+  test("the keystore set of the last boot is gone before the deploy job runs (a redeploy never reuses a deployer)", async () => {
+    mkdirSync(WORKDIR(), { recursive: true });
+    writeFileSync(join(WORKDIR(), "stale-keystore"), "old");
+    await run("chain", "up");
+    expect(existsSync(join(WORKDIR(), "stale-keystore"))).toBe(false);
+  });
+});
+
+describe("chain down in containers", () => {
+  beforeEach(containerWorld);
+
+  test("removes the dapp project and the chain project, the stamp and the work directory", async () => {
+    await run("chain", "up");
+    expect(existsSync(STAMP())).toBe(true);
+    calls.cmds = [];
+    const r = await run("chain", "down");
+    expect(r.code).toBe(0);
+    const seq = compose().map((c) => `${c.cmd[c.cmd.indexOf("--project-name") + 1]}:${verbOf(c.cmd)}`);
+    expect(seq).toEqual(["robotmoney-dapp:down", "robotmoney-stage-chain:down"]);
+    expect(existsSync(STAMP())).toBe(false);
+    expect(existsSync(WORKDIR())).toBe(false);
+  });
+
+  test("chain status exits 1 with not-booted afterwards", async () => {
+    await run("chain", "up");
+    await run("chain", "down");
+    const r = await run("chain", "status");
+    expect(r.code).toBe(1);
+    expect(r.out.trimEnd()).toBe(`not-booted: no completed \`chain up\` stamp at ${STAMP()}`);
+  });
+
+  test("a compose down that fails fails chain down (66) and keeps the lock free", async () => {
+    handler = (cmd) => (cmd[0] === "docker" && cmd.includes("down") ? { code: 1, stdout: "", stderr: "boom" } : undefined);
+    expect((await run("chain", "down")).code).toBe(66);
+    expect(existsSync(join(OUT, ".core-stack.lock"))).toBe(false);
+  });
+
+  test("starts no host process and signals nothing", async () => {
+    await run("chain", "down");
+    expect(new Set(calls.cmds.map((c) => c.cmd[0]))).toEqual(new Set(["docker"]));
+  });
+
+  test("the teardown env satisfies the compose files' mandatory variables", async () => {
+    await run("chain", "down");
+    const dapp = compose().find((c) => c.cmd.includes("robotmoney-dapp"))!;
+    for (const k of ["INDEXER_GATEWAY", "INDEXER_VAULT", "VITE_GATEWAY_ADDRESS", "VITE_VAULT_ADDRESS", "VITE_GATEWAY_EXPECTED_CODE_HASH"]) expect(dapp.opts!.env![k]).toBeDefined();
+    const chain = compose().find((c) => c.cmd.includes("robotmoney-stage-chain"))!;
+    for (const k of ["STAGE_UID", "STAGE_GID", "STAGE_REPO", "STAGE_WORK_DIR"]) expect(chain.opts!.env![k]).toBeDefined();
+  });
+});
+
+describe("chain status and dapp status keep their lines and exit codes", () => {
+  beforeEach(() => {
+    containerWorld();
+    world.chainRunning = true;
+    world.dappHealthy = 1;
+    writeFileSync(STAMP(), stampBody());
+  });
+  const status = async () => (await run("chain", "status"));
+
+  test("ok: the booted candidate prints one ok line and exits 0", async () => {
+    const r = await status();
+    expect(r.code).toBe(0);
+    expect(r.out.trimEnd()).toMatch(OK_LINE);
+  });
+  test("not-booted: no stamp", async () => {
+    rmSync(STAMP());
+    const r = await status();
+    expect([r.code, r.out.trimEnd()]).toEqual([1, `not-booted: no completed \`chain up\` stamp at ${STAMP()}`]);
+  });
+  test("not-booted: the host-process era stamp (a pid, no chain project) is refused as malformed", async () => {
+    writeFileSync(STAMP(), JSON.stringify({ commit: head(), pid: 123, start_time: "9" }));
+    const r = await status();
+    expect([r.code, r.out.trimEnd()]).toEqual([1, `not-booted: ${STAMP()} is malformed`]);
+  });
+  test("boot-mismatch: a stamp that is not JSON names no commit", async () => {
+    writeFileSync(STAMP(), "{");
+    const r = await status();
+    expect([r.code, r.out.trimEnd()]).toEqual([1, `boot-mismatch: the running chain was booted from 'unknown', candidate is ${head()}`]);
+  });
+  test("boot-mismatch: the stack was booted from another commit", async () => {
+    writeFileSync(STAMP(), stampBody({ commit: "a".repeat(40) }));
+    const r = await status();
+    expect([r.code, r.out.trimEnd()]).toEqual([1, `boot-mismatch: the running chain was booted from '${"a".repeat(40)}', candidate is ${head()}`]);
+  });
+  test("harness-gone: the chain container is not running", async () => {
+    world.chainRunning = false;
+    const r = await status();
+    expect(r.code).toBe(1);
+    expect(r.out.trimEnd()).toBe("harness-gone: the chain container of compose project robotmoney-stage-chain that booted this chain is no longer running");
+  });
+  test("rpc-unreachable: nothing answers eth_chainId", async () => {
+    rpcAnswer = "";
+    const r = await status();
+    expect([r.code, r.out.trimEnd()]).toEqual([1, "rpc-unreachable: nothing answering eth_chainId at http://127.0.0.1:18545"]);
+  });
+  test("wrong-chain: the rpc answers another chain id", async () => {
+    rpcAnswer = "0x2105";
+    const r = await status();
+    expect([r.code, r.out.trimEnd()]).toEqual([1, "wrong-chain: http://127.0.0.1:18545 answers 0x2105, want 0xe03b5"]);
+  });
+  test("no-healthy-container: the dapp project has no healthy container", async () => {
+    world.dappHealthy = 0;
+    const r = await status();
+    expect([r.code, r.out.trimEnd()]).toEqual([1, "no-healthy-container: no healthy container in compose project robotmoney-dapp"]);
+  });
+  test("rmpc-missing: the binary is not there", async () => {
+    rmSync(join(REPO, "target/debug/rmpc"));
+    const r = await status();
+    expect([r.code, r.out.trimEnd()]).toEqual([1, `rmpc-missing: ${join(REPO, "target/debug/rmpc")}`]);
+  });
+  test("candidate-mismatch: rmpc was built from another commit", async () => {
+    world.rmpcCommit = "b".repeat(40);
+    const r = await status();
+    expect([r.code, r.out.trimEnd()]).toEqual([1, `candidate-mismatch: rmpc built from '${"b".repeat(40)}', candidate is ${head()}`]);
+  });
+  test("ref-unresolved: a ref this checkout does not know", async () => {
+    const r = await run("chain", "status", "--ref", "no-such-ref");
+    expect([r.code, r.out.trimEnd()]).toEqual([1, "ref-unresolved: 'no-such-ref' is not a branch, tag or commit in this checkout"]);
+  });
+  test("status reads state and starts nothing", async () => {
+    await status();
+    expect(compose()).toHaveLength(0);
+  });
+
+  test("dapp status: ok when the rpc, the explorer-api and the dapp answer", async () => {
+    const r = await run("dapp", "status");
+    expect([r.code, r.out.trimEnd()]).toEqual([0, "ok: rpc, explorer-api and dapp all answer"]);
+  });
+  test("dapp status: rpc-unready, explorer-unready and dapp-unready each exit 1 with their class", async () => {
+    rpcAnswer = "";
+    expect(await run("dapp", "status")).toMatchObject({ code: 1, out: "rpc-unready: http://127.0.0.1:18545 answers 'nothing', want 0xe03b5\n" });
+    rpcAnswer = "0xe03b5";
+    httpAnswers = { "http://127.0.0.1:18546/health": false };
+    expect(await run("dapp", "status")).toMatchObject({ code: 1, out: "explorer-unready: explorer-api /health on 18546 does not answer\n" });
+    httpAnswers = { "http://127.0.0.1:5173/": false };
+    expect(await run("dapp", "status")).toMatchObject({ code: 1, out: "dapp-unready: the dapp on 5173 does not answer\n" });
+  });
+  test("dapp up stays gone", async () => expect((await run("dapp", "up")).code).toBe(64));
+});
+
+describe("core-stack holds no host process machinery", () => {
+  const code = readFileSync(join(HERE, "..", "core-stack.ts"), "utf8")
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("//"))
+    .join("\n");
+  for (const re of [/spawnDetached/, /node:child_process/, /stdbuf/, /cargo", "run"/, /smoke-test", "--full-stack"/, /twin-fork\.ts/, /\banvil\b/, /docker\.sock/]) {
+    test(`core-stack.ts does not match ${re}`, () => expect(re.test(code)).toBe(false));
+  }
+  test("the Deps interface has no process-control member left", () => {
+    for (const member of ["spawnDetached", "procCmdline", "procGroup", "signal("]) expect(code).not.toContain(member);
+  });
 });

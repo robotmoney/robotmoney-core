@@ -259,6 +259,23 @@ export async function waitReady(url: string, pinBlock: number, timeoutMs: number
   throw new Error(`not ready within ${timeoutMs} ms (last: ${last}; want chain ${chainId}, block ${pinBlock})`);
 }
 
+/**
+ * The `serve` supervisor loop (a container's foreground process): polls `alive` every `pollMs` until the child dies
+ * ("died") or a stop signal arrives ("stopped"). Pure apart from the injected clock, so it is unit tested.
+ */
+export async function superviseUntil(
+  alive: () => boolean,
+  stopRequested: () => boolean,
+  pollMs: number,
+  sleepFn: (ms: number) => Promise<void> = sleep,
+): Promise<"stopped" | "died"> {
+  for (;;) {
+    if (stopRequested()) return "stopped";
+    if (!alive()) return "died";
+    await sleepFn(pollMs);
+  }
+}
+
 export function spawnAnvilDetached(argv: string[], env: Record<string, string>, logPath: string): number {
   const fs = require("node:fs");
   const fd = fs.openSync(logPath, "a", 0o600);

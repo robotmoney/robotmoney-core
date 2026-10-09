@@ -1,0 +1,112 @@
+# The stage chain and the deploy job, in containers (core issue 1549).
+#
+# Canonical: docs/development/smoke-test-design.md (Stage stack in containers), docs/development/stage-deployment.md.
+# Driven by: scripts/stage/core-stack.ts (`chain up`, `chain down`). Nothing here mounts the Docker socket.
+#
+# Two services, one project (robotmoney-stage-chain):
+#
+#   twin-chain     The Twin chain (918453): the pinned lazy anvil fork of real Base state, in the foreground
+#                  (`scripts/devnet/twin-fork.ts serve`). Published on 127.0.0.1:18545 (the stage reverse proxy and
+#                  the host tools dial it there) and on the chain network as `twin-chain:8545` (the dapp stack's
+#                  indexer and the deploy job dial it there). `BASE_UPSTREAM_RPC` (a secret, optional) and
+#                  `TWIN_PIN_BLOCK` pass through the environment. The anvil RPC cache lives in a named volume.
+#   stage-harness  The deploy job, a one-shot (profile `deploy`, never started by `up`): `smoke-test --deploy-only`
+#                  runs the real ceremony against twin-chain (publish contracts through the real Safe handover),
+#                  leaves the keystores and manifests in the work directory and exits. It runs as the invoking user
+#                  against the mounted checkout, at the same path as on the host, so the paths it prints are valid
+#                  on the host too.
+#
+# The dapp stack (postgres, explorer, dapp) is docker-compose.dapp.yaml plus docker-compose.dapp.stage.yaml.
+
+name: robotmoney-stage-chain
+
+x-stage-labels: &stage-labels
+  com.robotmoney.stage-chain: "1"
+
+networks:
+  chain-net:
+    name: ${CHAIN_NET_NAME:-robotmoney-chain-net}
+
+volumes:
+  twin-cache:
+
+services:
+  twin-chain:
+    image: robotmoney-twin-chain:stage
+    build:
+      context: ../../..
+      dockerfile: docker/stage-images.Dockerfile
+      target: twin-chain
+    container_name: stage-twin-chain
+    labels: *stage-labels
+    # tini reaps anvil if it dies, so `serve` sees the death and the container restarts.
+    init: true
+    restart: unless-stopped
+    # anvil writes its RPC cache on a graceful exit: give the stop time to finish.
+    stop_grace_period: 90s
+    command:
+      - "--port"
+      - "8545"
+      - "--host"
+      - "0.0.0.0"
+      - "--block-time"
+      - "1"
+      - "--pin-block"
+      - "${TWIN_PIN_BLOCK:-auto}"
+      - "--state-dir"
+      - "/state"
+      - "--pin-file"
+      - "/state/pin.json"
+      - "--cache-dir"
+      - "/cache"
+    environment:
+      BASE_UPSTREAM_RPC: ${BASE_UPSTREAM_RPC:-}
+    volumes:
+      - twin-cache:/cache
+    ports:
+      - "127.0.0.1:${TWIN_RPC_PORT:-18545}:8545"
+    networks:
+      chain-net:
+        aliases:
+          - twin-chain
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # status exits 1 unless anvil runs and answers the configured chain id.
+      test: ["CMD", "bun", "scripts/devnet/twin-fork.ts", "status", "--port", "8545", "--state-dir", "/state", "--rpc-url", "http://127.0.0.1:8545"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 20s
+
+  stage-harness:
+    profiles: ["deploy"]
+    image: robotmoney-stage-harness:stage
+    build:
+      context: ../../..
+      dockerfile: docker/stage-images.Dockerfile
+      target: stage-harness
+    labels: *stage-labels
+    # The invoking user, so the keystores the job writes are the host user's.
+    user: "${STAGE_UID:?STAGE_UID must be set}:${STAGE_GID:?STAGE_GID must be set}"
+    working_dir: ${STAGE_REPO:?STAGE_REPO must be set}
+    environment:
+      TWIN_RPC_URL: http://twin-chain:8545
+      SMOKE_TEST_INDEXER_RPC_URL: http://twin-chain:8545
+      SMOKE_TEST_WORK_DIR: ${STAGE_WORK_DIR:?STAGE_WORK_DIR must be set}
+      # foundry downloads solc into HOME on first use.
+      HOME: ${STAGE_WORK_DIR}/home
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: ${STAGE_REPO}
+    volumes:
+      - ${STAGE_REPO}:${STAGE_REPO}
+      - ${STAGE_WORK_DIR}:${STAGE_WORK_DIR}
+    networks:
+      - chain-net
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

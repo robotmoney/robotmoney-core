@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 // Canonical: core issues 1498, 1496. Twin chain (id 918453) = pinned lazy fork of real Base state.
-// Usage: bun scripts/devnet/twin-fork.ts <start|wait-ready|stop|status|fund-gas|fund-usdc|warp> [...]
+// Usage: bun scripts/devnet/twin-fork.ts <start|serve|wait-ready|stop|status|fund-gas|fund-usdc|warp> [...]
+// `serve` is `start` for a container: it stays in the foreground, stops anvil on SIGTERM or SIGINT (so anvil saves its RPC
+// cache) and exits non-zero if anvil dies. Core issue 1549 (the stage chain runs in a container).
 // See scripts/devnet/README-twin-fork.md. Logs show the upstream host only, never a URL.
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
@@ -8,7 +10,7 @@ import { tmpdir } from "node:os";
 import { parseArgs } from "node:util";
 import {
   DEFAULT_UPSTREAM, resolveUpstream, TWIN_CHAIN_ID, buildAnvilArgv, fundGas, fundUsdc, redact, redactArgv, rpc,
-  isStalePinText, repinIfStale, selectPin, spawnAnvilDetached, urlHost, usdcBalanceOf, waitReady, warp,
+  isStalePinText, repinIfStale, selectPin, spawnAnvilDetached, superviseUntil, urlHost, usdcBalanceOf, waitReady, warp,
 } from "./twin-fork-lib.ts";
 
 const opts = {
@@ -125,16 +127,30 @@ async function stop() {
   log(`stopped pid ${st.pid}`);
 }
 
+async function serve() {
+  await start();
+  let stopRequested = false;
+  for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopRequested = true; });
+  const st = readState();
+  if (!st) throw new Error("serve: no tool state after start");
+  const how = await superviseUntil(() => alive(st.pid), () => stopRequested, 1000);
+  if (how === "stopped") { await stop(); return; }
+  throw new Error(`anvil (pid ${st.pid}) exited; the container ends so its restart policy applies`);
+}
+
 async function status() {
   const st = readState();
   if (!st || !alive(st.pid)) { log("status: stopped"); process.exitCode = 1; return; }
   const [id, n] = [await rpc(rpcUrl, "eth_chainId", [], { retries: 1 }), await rpc(rpcUrl, "eth_blockNumber", [], { retries: 1 })];
+  // A container healthcheck relies on the exit code: a node answering with another chain id is not this chain.
+  if (parseInt(id, 16) !== Number(v["chain-id"])) process.exitCode = 1;
   log(`status: running pid ${st.pid} chain ${parseInt(id, 16)} head ${parseInt(n, 16)} pin ${st.pin.block} upstream ${st.pin.upstreamHost}`);
 }
 
 async function main() {
   switch (cmd) {
     case "start": return start();
+    case "serve": return serve();
     case "wait-ready": {
       const st = readState();
       const pin = v["pin-block"] !== "auto" ? Number(v["pin-block"]) : st?.pin.block;
@@ -161,7 +177,7 @@ async function main() {
     }
     case "balance-usdc": return log(String(await usdcBalanceOf(rpcUrl, rest[0])));
     default:
-      throw new Error("usage: twin-fork.ts <start|wait-ready|stop|status|fund-gas|fund-usdc|warp> [flags]");
+      throw new Error("usage: twin-fork.ts <start|serve|wait-ready|stop|status|fund-gas|fund-usdc|warp> [flags]");
   }
 }
 main().catch((e) => { console.error(redact(String(e?.message ?? e), secrets)); process.exit(1); });

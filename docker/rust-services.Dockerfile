@@ -34,7 +34,8 @@
 # would stop at the last stage and silently produce the explorer-api image.
 # Every consumer names its target explicitly (see docker-compose.dapp.yaml).
 
-FROM rust:1-bookworm AS builder
+# Base images are pinned by digest and the build is --locked (core 1549: reproducible stage images).
+FROM rust:1-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS builder
 WORKDIR /build
 
 RUN apt-get update \
@@ -42,11 +43,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
-RUN cargo build --release --bin indexer --bin explorer-api
+RUN cargo build --release --locked --bin indexer --bin explorer-api
 
 # Runtime deps shared by both binaries.
 # ca-certificates + libssl3: TLS for both binaries' RPC/DB clients.
-FROM debian:bookworm-slim AS runtime-base
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS runtime-base
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libssl3 \
     && rm -rf /var/lib/apt/lists/*

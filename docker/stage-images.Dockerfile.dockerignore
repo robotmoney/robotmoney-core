@@ -1,0 +1,14 @@
+# Build context of docker/stage-images.Dockerfile. The cargo build needs the whole workspace and the bun install
+# needs publish-contracts. The checkout the deploy job runs against is mounted at run time, not baked in.
+**/target
+.git
+**/node_modules
+.pnpm-store
+contracts/out
+contracts/cache
+contracts/doc
+out
+cache
+broadcast
+.agents
+artifacts

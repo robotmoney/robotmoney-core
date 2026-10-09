@@ -6,19 +6,22 @@ Stage is the same deployment as mainnet. Only parameters differ. There is one ru
 
 ## What runs on stage
 
-1. `bun scripts/stage/core-stack.ts chain up` rebuilds `rmpc` from this checkout and boots the smoke harness (`cargo run -p smoke-test -- --full-stack`).
-2. The harness boots the Twin chain. It does not use a fork and does not use a lazy anvil.
-3. The harness mints a **fresh keystore set** with the rehearsal key helper (`publish-contracts/src/rehearsal`). Every boot gets new keys, so a redeploy from a new SHA never reuses a deployer. The keystores are encrypted. The passphrase is random, lives in a 0600 file, and is never an argument or an exported variable.
-4. The harness funds the keys, then calls publish contracts:
+Every stage service runs in a container (core 1549). `core-stack.ts` only calls `docker compose`: it starts no host process and no container mounts the Docker socket.
+
+1. `bun scripts/stage/core-stack.ts chain up` rebuilds `rmpc` from this checkout (a build artifact the status checks compare, not a service), then starts the **Twin chain container**: the `twin-chain` service of `testing/ethereum-testnet/config/docker-compose.stage-chain.yaml` (project `robotmoney-stage-chain`). It is the pinned lazy anvil fork of real Base state (`scripts/devnet/twin-fork.ts serve`, chain id 918453, one block per second), published on `127.0.0.1:18545` and on the chain network as `twin-chain:8545`. `BASE_UPSTREAM_RPC` (optional secret) and `TWIN_PIN_BLOCK` pass through the environment. `chain up` refuses a `TWIN_RPC_URL` that names any other chain.
+2. `chain up` then runs the **deploy job**, the one-shot `stage-harness` service (`smoke-test --deploy-only`, image built from this ref by `docker/stage-images.Dockerfile`). It runs as the invoking user against the mounted checkout and the chain container. The job mints a **fresh keystore set** with the rehearsal key helper (`publish-contracts/src/rehearsal`). Every boot gets new keys, so a redeploy from a new SHA never reuses a deployer. The keystores are encrypted. The passphrase is random, lives in a 0600 file, and is never an argument or an exported variable. They live in the work directory (`/tmp/robotmoney-stage-work`, `STAGE_WORK_DIR` overrides it), because forge only lets a script write manifests under `/tmp` or `./deployments`. `chain down` deletes the directory.
+3. The job funds the keys, then calls publish contracts:
 
    ```
    --chain 918453 --rpc <twin rpc> --sheet <stage sheet> \
    --signer keystore:<key dir>/DEPLOYER:<passphrase file> --environment stage --core-sha <sha>
    ```
 
-   Publish contracts deploys all four vaults, creates the real Safe (Safe SDK, `@safe-global/protocol-kit`), hands over to the Safe and the timelock, and verifies.
-5. The harness reads the manifests (`core.json`, `registry.json`, `router.json`, `governance.json`, `ic-policy.json`, `timelock.json`, `safe.json`, `libraries.json`, `vault-<key>.json`) and starts the dapp stack with those addresses.
+   Publish contracts deploys all four vaults, creates the real Safe (Safe SDK, `@safe-global/protocol-kit`), hands over to the Safe and the timelock, and verifies. It refuses a checkout that is not the DEPLOY_SHA or has uncommitted changes, so the stage host checkout must be a normal clone (not a git worktree) at the ref.
+4. The job reads the manifests (`core.json`, `registry.json`, `router.json`, `governance.json`, `ic-policy.json`, `timelock.json`, `safe.json`, `libraries.json`, `vault-<key>.json`), writes the endpoint summary and the dapp compose environment (`dapp-env.json`) to the work directory, and **exits**. It owns nothing afterwards.
    The signer is the string publish contracts accepts, `keystore:PATH:PASSFILE`. Only paths are passed. The passphrase stays in its 0600 file.
+5. `chain up` starts the **dapp stack** from that environment: `docker-compose.dapp.yaml` plus `docker-compose.dapp.stage.yaml` (project `robotmoney-dapp`). The overlay joins the indexer to the chain network (it dials `twin-chain:8545`) and publishes no postgres host port. Ports (`18545`, `18546`, `5173`) and the public stage URLs are unchanged.
+   `chain status` checks the stamp, that the chain container runs, `eth_chainId` on 18545, a healthy `robotmoney-dapp` container and the rmpc build commit. A stamp from the host-process era (it names a pid) reads as `not-booted`: run `chain down` and `chain up` once on the new ref. There is no data to migrate.
 6. `core-stack.ts governance ensure` runs stage 13 through the real Safe and the timelock: the basket unpauses (one timelock operation each, all scheduled in one sitting, one wait). The unpauses are the same on stage and mainnet. On the Twin chain the Twin-only rows (`update-delay`, `batch`, `cancel`) follow. Every row prints a tx hash and a receipt status. `scripts/stage/govern-rows.ts` fails the verb unless every row has both and status 1.
 
 ## Environment
@@ -26,6 +29,9 @@ Stage is the same deployment as mainnet. Only parameters differ. There is one ru
 | Variable | Meaning |
 | --- | --- |
 | `STAGE_SHEET` | Optional. An alternative stage sheet. Parameter lines only. Default: the committed `deployments/twin-918453/stage-sheet.env`. |
+| `STAGE_WORK_DIR` | Optional. The deploy job's work directory (keystores, manifests). Default `/tmp/robotmoney-stage-work`. Deleted on `chain down`. |
+| `BASE_UPSTREAM_RPC` | Optional secret. A paid Base RPC for the Twin chain container. Default: the public endpoint. Never logged. |
+| `TWIN_PIN_BLOCK` | Optional. The Base block the chain container pins. Default: the upstream head minus 2. |
 
 ## Vaults
 
@@ -36,7 +42,8 @@ All four vaults ship with assets that have usable pools: rmUSDC, rmPROTO (wETH a
 Stage has no second deployment path. These do not exist and a CI gate keeps them gone:
 
 - a stage ceremony shell and a stage deploy shell. Publish contracts deploys, hands over to the Safe and verifies.
-- a Rust harness deployment of core, registry, router, governance and the IC policy. The harness boots the Twin chain and calls publish contracts.
+- a Rust harness deployment of core, registry, router, governance and the IC policy. The deploy job calls publish contracts.
+- a stage service that runs as a host process, or any container that mounts the Docker socket. `scripts/ci/check-stage-containers.ts` (suite 28) keeps that true, with digest-pinned base images and `--locked` builds.
 - demo vaults, stub pools, demo depositor seeding and dapp faucet funding.
 - a deploy workflow. Deploys are the publish contracts runbook.
 - a single-key release in the Fusion acceptance script. The release is a govern row.
