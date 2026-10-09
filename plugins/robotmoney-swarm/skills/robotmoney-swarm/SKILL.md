@@ -173,5 +173,5 @@ All abort paths exit non-zero and print a named error code to stderr.
 - Proprietary allocation methods (the published surface specifies output shape only)
 - IC policy contract or gateway changes
 - Explorer or dapp surfaces
-- Registering committee agents (an ADMIN_ROLE Safe action; rmpc has no `committee register`)
+- Committee agent registration (a one-time Safe and timelock action: rmpc does not register committee agents)
 - RouterGovernance proposals (signed by the Safe, not rmpc) and votes (robotmoney-analyst `vote`)
