@@ -55,10 +55,10 @@ export const USAGE = `publish contracts
   --environment NAME the GitHub Environment (or 'local' on a rehearsal)
   --core-sha SHA     the core DEPLOY_SHA (40 hex). The core checkout HEAD must equal it.
   --row R            govern only: run one govern row, by 1-based number or by name.
-                     Rows: unpause-PROTO, unpause-AGENT, unpause-RWA (the only mainnet operation after the handover), then the Twin-only
+                     Rows: unpause-USDC, unpause-PROTO, unpause-AGENT, unpause-RWA (all four vaults deploy paused; the only mainnet operation after the handover), then the Twin-only
                      demonstrations update-delay, batch, cancel (refused with USAGE on 8453). Without --row, every unpause the sheet asks for is
                      scheduled in one sitting, then one wait, then executed (on 8453 only the unpauses run).
-                     On demand: --row unpause-USDC reopens rmUSDC after pause-all paused it (never part of a default run). Naming an unpause row whose
+                     Naming an unpause row whose
                      vault was paused again after an executed round opens a new numbered round: a new timelock operation, a new 48 hour delay.
                      On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) once, with the ready time and the command to run again.
                      On demand, outside the ordered rows: --row release-receipt --receipt-id 0x<bytes32> releases one recorded consensus receipt

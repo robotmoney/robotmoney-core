@@ -108,12 +108,12 @@ describe("stage-table.json", () => {
     expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "recorder", "registry", "router", "timelock", "v4Adapter"]);
   });
 
-  test("stage 13 is the basket unpauses only, with the deploy-time configuration set in stages 4 to 10 (issue 1520)", () => {
+  test("stage 13 is the four vault unpauses only, with the deploy-time configuration set in stages 4 to 10 (issue 1520)", () => {
     const g = (table as unknown as { govern: { stage: number; description: string; mainnetRows: string[]; twinOnlyRows: string[] } }).govern;
     expect(g.stage).toBe(13);
-    expect(g.mainnetRows).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
+    expect(g.mainnetRows).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
     expect(g.twinOnlyRows).toEqual(["update-delay", "batch", "cancel"]);
-    expect(g.description).toContain("only mainnet operation is the unpause of each basket vault");
+    expect(g.description).toContain("only mainnet operation is the unpause of each of the four vaults");
     expect(g.description).toContain("deploy-time configuration set by the deployer in stages 4 to 10");
     expect(g.description).toContain("Twin-only");
     // no 13-row list survives: none of the old matrix rows is named

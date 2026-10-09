@@ -9,12 +9,14 @@ use smoke_test::publish::{check_govern_rows, parse_govern_output};
 
 const SAMPLE: &str = include_str!("fixtures/govern-stdout.jsonl");
 
-// One entry per round event, in the order the CLI prints them. The default stage sheet unpauses PROTO, AGENT and RWA: the three unpauses are scheduled in one
+// One entry per round event, in the order the CLI prints them. The default stage sheet unpauses USDC, PROTO, AGENT and RWA: the four unpauses are scheduled in one
 // sitting (all `scheduled` lines first), then all `executed` lines, then the Twin-only rounds one at a time (`scheduled`, then `executed` or `cancelled`).
-const ROWS: [&str; 12] = [
+const ROWS: [&str; 14] = [
+    "unpause-USDC",
     "unpause-PROTO",
     "unpause-AGENT",
     "unpause-RWA",
+    "unpause-USDC",
     "unpause-PROTO",
     "unpause-AGENT",
     "unpause-RWA",
@@ -55,7 +57,7 @@ fn a_reverted_row_fails_the_check_and_names_the_row() {
     let bad = SAMPLE.replacen("\"status\":1", "\"status\":0", 1);
     let rows = parse_govern_output(&bad).unwrap();
     let err = check_govern_rows(&rows).unwrap_err().to_string();
-    assert!(err.contains("unpause-PROTO"), "{err}");
+    assert!(err.contains("unpause-USDC"), "{err}");
     assert!(err.contains("status is 0"), "{err}");
 }
 

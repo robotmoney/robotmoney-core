@@ -430,11 +430,12 @@ Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply 
    ```
 4. Call `vault.deposit(1_000_000, seedShareReceiver)` from the deployer account, so the shares are minted to `SEED_SHARE_RECEIVER`.
 5. Verify `vault.totalAssets() >= 1_000_000 * 9_999 / 10_000`, `vault.totalSupply() > 0`, and `vault.balanceOf(deployer) == 0`.
-6. Only after steps 1–5 are confirmed: open the vault to the public (e.g. increase `tvlCap`, publish the vault address). The deploy authorizes no agent: each depositor authorizes its own.
+6. Call `vault.pauseDeposits()` right after the seed (core 1710): rmUSDC deploys paused like the three basket vaults. The stage 13 `unpause-USDC` row, a Safe operation through the timelock, opens it.
+7. Only after steps 1–6 are confirmed and stage 13 has run: the vault is open to the public (publish the vault address). The deploy authorizes no agent: each depositor authorizes its own.
 
 The seed deposit is not recoverable through normal channels (it is locked as vault shares). Consider it a permanent operational cost of the deployment. The seed share receiver holds the rmUSDC shares minted for the seed and can participate in future withdrawals.
 
-**CI enforcement:** `contracts/script/DeployVault.s.sol` (the vault stage) encodes this runbook step as code: the `run()` (broadcast) entrypoint performs the seed deposit inline after adapter registration, and the new `runInProcessWithSeed()` variant does the same for fork tests. `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) is the fork-level CI gate — it asserts `vault.totalAssets()` keeps at least 99.99% of the seed, `vault.totalSupply() > 0`, that the receiver holds the seed shares and the deployer holds none, before any public deposit and is wired into the `forge-fork-vault-regressions` job in `.github/workflows/suite-01-02-forge-tests.yml`. (This is the fork gate: the job runs on the Twin chain, a pinned lazy fork of real Base state; ADR-0011 is superseded by the Twin chain, core 1498.)
+**CI enforcement:** `contracts/script/DeployVault.s.sol` (the vault stage) encodes this runbook step as code: the `run()` (broadcast) entrypoint performs the seed deposit inline after adapter registration, and the new `runInProcessWithSeed()` variant does the same for fork tests. `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) is the fork-level CI gate — it asserts `vault.totalAssets()` keeps at least 99.99% of the seed, `vault.totalSupply() > 0`, that the receiver holds the seed shares and the deployer holds none, before any public deposit, and that the vault reads paused after the seed (core 1710). It is wired into the `forge-fork-vault-regressions` job in `.github/workflows/suite-01-02-forge-tests.yml`. (This is the fork gate: the job runs on the Twin chain, a pinned lazy fork of real Base state; ADR-0011 is superseded by the Twin chain, core 1498.)
 
 ---
 

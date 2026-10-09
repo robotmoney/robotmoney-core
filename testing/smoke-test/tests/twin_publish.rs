@@ -37,7 +37,7 @@ fn run_bun(repo_root: &Path, args: &[String]) {
 #[test]
 fn twin_chain_publish_verify_and_govern_matrix() {
     require_prereqs("twin_chain_publish_verify_and_govern_matrix");
-    let fx = Fixture::new().expect("smoke-test fixture boot failed");
+    let fx = Fixture::new_closed().expect("smoke-test fixture boot failed");
     let dir = fx.manifest_dir();
     let table = smoke_test::stage_table::StageTable::load_default().expect("read the stage table");
     let missing = table.missing(dir);
@@ -46,6 +46,21 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "manifests the stage table names are missing in {}: {missing:?}",
         dir.display()
     );
+    // Core 1710: all four vaults deploy paused, rmUSDC included. The verifier below expects exactly that before stage 13.
+    let deposits_paused = |vault: alloy_primitives::Address| -> bool {
+        fx.cast_call_raw(vault, "depositsPaused()", &[])
+            .expect("read depositsPaused")
+            .ends_with('1')
+    };
+    let four_vaults = [
+        ("rmUSDC", fx.vault()),
+        ("rmPROTO", fx.proto_vault()),
+        ("rmAGENT", fx.agent_vault()),
+        ("rmRWA", fx.rwa_vault()),
+    ];
+    for (name, vault) in four_vaults {
+        assert!(deposits_paused(vault), "{name} must deploy paused");
+    }
     let verified = fx
         .published()
         .verify()
@@ -202,8 +217,27 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .govern_matrix()
         .expect("the govern matrix must pass through the real Safe");
     assert!(!rows.is_empty(), "the govern matrix ran no rows");
+    // Core 1710: stage 13 is four unpauses, rmUSDC first. Each is its own scheduled and executed line, and each vault reads open afterwards.
+    for row in [
+        "unpause-USDC",
+        "unpause-PROTO",
+        "unpause-AGENT",
+        "unpause-RWA",
+    ] {
+        assert_eq!(
+            rows.iter().filter(|r| r.row == row).count(),
+            2,
+            "the govern matrix must print one scheduled and one executed line for {row}"
+        );
+    }
+    for (name, vault) in four_vaults {
+        assert!(
+            !deposits_paused(vault),
+            "{name} must read open after stage 13"
+        );
+    }
 
-    // Issue 1667: the order is publish, verify, govern, verify. The first verify above passed before govern (the baskets paused). This second verify reads the
+    // Issue 1667: the order is publish, verify, govern, verify. The first verify above passed before govern (all four vaults paused). This second verify reads the
     // post-govern state: the unpause rows are executed, so the verifier expects those vaults open. The Twin run only checks that the scripts execute in this
     // order. The 48 hour delay and the Safe signers are proven on chain 8453 through the real Safe.
     let verified_after = fx
@@ -322,6 +356,11 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     );
     let after = router_weights(&fx);
     assert_eq!(after.0, want_vaults, "the vault list is unchanged");
+    // Core 1710: the Safe operation CHANGES the router split. The read-back differs from what the router held before the batch.
+    assert_ne!(
+        after.1, before.1,
+        "apply-receipt must change the router weights from the launch vector"
+    );
     assert_eq!(
         after.1,
         vec![5000, 3000, 0, 2000],

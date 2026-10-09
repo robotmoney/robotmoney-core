@@ -54,8 +54,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     reads: {} as Record<string, unknown>,
     /** Receipt ids recordReceipt has anchored (the test seeds it) and releaseReceipt has released (an executed timelock call adds to it). */
     recorded: new Set<string>(), released: new Set<string>(),
-    /** The vaults that read depositsPaused true. The three baskets ship paused and rmUSDC open; an executed unpauseDeposits opens a vault, a test pauses one by adding it. */
-    paused: new Set<string>([A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA]),
+    /** The vaults that read depositsPaused true. All four vaults deploy paused (issue 1710); an executed unpauseDeposits opens a vault, a test pauses one by adding it. */
+    paused: new Set<string>([A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA]),
     /** Registry order, the vaults that are NOT router-eligible, the digest each recorded receipt stored, and the router's default weights (an executed setDefaultWeights sets them). */
     listed: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA] as Address[], ineligible: new Set<string>(),
     digests: new Map<string, Hex>(),

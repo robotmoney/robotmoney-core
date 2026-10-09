@@ -61,7 +61,7 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   // deploy-time router configuration, set by the deployer in the basket vault stages (before the timelock handover). Lists of vault keys, or the word none.
   ELIGIBLE_VAULTS: { kind: "string" },
   ROUTER_WEIGHTS: { kind: "string" },
-  // govern stage (stage 13): the basket unpauses are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
+  // govern stage (stage 13): the unpauses of the four vaults are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
   GOVERN_UNPAUSE_VAULTS: { kind: "string" },
   GOVERN_NEW_DELAY: { kind: "uint" },
 };
@@ -80,7 +80,7 @@ const REFUSED: [RegExp, string][] = [
   [/^(PRIVATE_KEY|ETH_PRIVATE_KEY|MNEMONIC|ETH_MNEMONIC|ETH_PASSWORD|CHAIN_SIGNER_KEYSTORE|CHAIN_SIGNER_PASSWORD|[A-Z_]*(PRIVATE_KEY|PASSWORD|PASSPHRASE|SECRET|MNEMONIC)[A-Z_]*)$/, "a secret never goes in a sheet: use the credential engine, a hardware wallet or an encrypted keystore"],
   [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|IC_POLICY_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
-  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the basket unpauses only. Voting power, quorum, voting period, execution delay, agents, vault setters, eligibility and router weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VOTER_*, QUORUM_THRESHOLD, VAULT_<KEY>_*)"],
+  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Voting power, quorum, voting period, execution delay, agents, vault setters, eligibility and router weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VOTER_*, QUORUM_THRESHOLD, VAULT_<KEY>_*)"],
   [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
   [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO, AGENT or RWA), for example VAULT_AGENT_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
 ];
@@ -123,7 +123,7 @@ export interface Sheet {
   /** The router default weights the deployer leaves in place: rmUSDC and each eligible basket. */
   weights: { key: VaultKey; bps: number }[];
   govern: {
-    /** The only mainnet govern rows: one timelock unpause per basket listed here. */
+    /** The only mainnet govern rows: one timelock unpause per vault listed here. */
     unpauseVaults: VaultKey[];
     /** Twin-only update-delay demonstration target. */
     newDelay: bigint;
@@ -299,10 +299,10 @@ export function parseSheet(text: string): Sheet {
   if (eligibleVaults.includes("USDC")) throw err("ELIGIBLE_VAULTS lists baskets only: rmUSDC is eligible from the router stage");
   // govern matrix inputs
   const unpauseVaults = asVaultKeys("GOVERN_UNPAUSE_VAULTS", v.GOVERN_UNPAUSE_VAULTS!);
-  // issue 1520 (amended 2026-10-06): no stage 13 step may be skipped on a mainnet deploy. A basket left out would stay paused and verify green.
+  // issue 1520 (amended 2026-10-06, rmUSDC added 2026-10-09 by issue 1710): no stage 13 step may be skipped on a mainnet deploy. A vault left out would stay paused.
   if (chainId === MAINNET_CHAIN_ID) {
-    const missing = (["PROTO", "AGENT", "RWA"] as const).filter((k) => !unpauseVaults.includes(k));
-    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list PROTO, AGENT and RWA on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
+    const missing = (["USDC", "PROTO", "AGENT", "RWA"] as const).filter((k) => !unpauseVaults.includes(k));
+    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list USDC, PROTO, AGENT and RWA on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
   }
   const weights = parseWeights(v.ROUTER_WEIGHTS!);
   const weightKeys = weights.map((w) => w.key).sort().join(",");

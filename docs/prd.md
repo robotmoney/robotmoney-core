@@ -465,9 +465,10 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Status | Deployed on Base mainnet |
 
 All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) open deposits on day 2
-of the mainnet launch. The three basket vaults are deployed paused and are
-unpaused only by Safe → Timelock governance, one timelock operation per
-vault, executed after the timelock delay (not yet implemented: core #1520).
+of the mainnet launch. All four vaults are deployed paused (rmUSDC pauses
+right after its seed deposit) and are unpaused only by Safe → Timelock
+governance, one timelock operation per vault, executed after the timelock
+delay (stage 13: four unpause rows, core #1710).
 The timelock's proposer and canceller is the Safe (2-of-3), any address may
 execute a ready operation after the delay, and the delay floor on Base is
 48 hours (open executor not yet implemented: core #1521). All products are

@@ -1,12 +1,13 @@
 // Stage 13 govern: the post-handover operations through the REAL Safe and the REAL timelock, with the Safe tool (src/safe).
 // After the timelock stage the deployer holds no role. Everything here is a Safe transaction that schedules, executes or cancels a timelock operation.
-// ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520): the unpause of each basket vault. The docs put exactly this
+// ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520; extended to rmUSDC 2026-10-09, issue 1710): the unpause of each of the four vaults. The docs put exactly this
 // there: unpause needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). Voting power,
 // quorum, voting period, execution delay, the vault setters, router eligibility and the router default weights are DEPLOY-TIME configuration the
 // deployer sets before the handover (the governance and basket vault stages), and the verify stage asserts them against the sheet.
 // The rows (GOVERN_ROWS):
-//   unpause-PROTO, unpause-AGENT, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting
-//   unpause-USDC                                on demand (issue 1667): reopens rmUSDC after pause-all paused it. Never part of a default run.
+//   unpause-USDC, unpause-PROTO, unpause-AGENT, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting.
+//                                               All four vaults deploy paused (issue 1710), so stage 13 opens all four. After a pause-all the same rows reopen a vault
+//                                               on demand (`--row unpause-X`, a new numbered round, issue 1667).
 //   update-delay, batch, cancel                 Twin-only demonstrations of the Safe tool. Refused with USAGE on 8453.
 // A run schedules every unpause the sheet asks for (GOVERN_UNPAUSE_VAULTS), waits ONE timelock delay, then executes each and reads depositsPaused() back.
 // An operation declared dependent on another carries that operation's id as the timelock predecessor and runs in the same resume (no second wait).
@@ -14,7 +15,7 @@
 //   release-receipt              ConsensusRecommendationReceipt.releaseReceipt(receiptId), one round per receipt id (--receipt-id)
 // The receipt contract's ADMIN_ROLE is held by the TimelockController after the timelock stage (INV-3), so the release is the same Safe ->
 // Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
-// timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the three unpauses). The first run schedules and exits
+// timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the four unpauses). The first run schedules and exits
 // GOVERN_PENDING with the resume command, the resume after the delay executes and reads isReleased back. Its run-manifest key and salt are `release-receipt-<receiptId>`.
 //   apply-receipt                the Twin rehearsal's rebalance (issue 1696): ONE timelock batch, releaseReceipt(receiptId) plus the router weight change for the
 // receipt's vector (--receipt-id, --payload FILE). Before anything is sent it checks: the receipt is recorded, its stored digest equals keccak256 of the payload bytes, the
@@ -29,7 +30,7 @@
 // counter. The execute phase of an unpause refuses (GOVERN, exit 14) before it sends anything when a pause entry has a higher seq than the round's schedule,
 // and prints the cancel-through-the-Safe instruction. There is no tool cancel on 8453: the operator cancels the operation through the Safe on the timelock, then
 // `--row unpause-X` finds the cancelled operation and schedules the same round again (a cancelled id may be scheduled again), which gets a newer seq and executes.
-// A basket the sheet does not list in GOVERN_UNPAUSE_VAULTS is recorded as skipped (it stays paused). This module decides nothing about pause semantics.
+// A vault the sheet does not list in GOVERN_UNPAUSE_VAULTS is recorded as skipped (it stays paused). This module decides nothing about pause semantics.
 // The wait is the timelock's real delay. On a Twin fork (chain id is not 8453 and the RPC answers anvil_nodeInfo) it runs by ONE time warp to one second
 // past the latest ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING once, with the ready time and the exact next
 // command, and the same command resumes the stage.
@@ -75,28 +76,25 @@ export function loadGovernAddrs(ctx: Pick<RunContext, "coreDir" | "chainId" | "m
 
 export interface LabelledCall extends TimelockCall { label: string }
 
-/** The mainnet rows: one unpause per basket vault. Each is its own timelock operation, all scheduled in one sitting. */
+/** The mainnet rows: one unpause per vault (rmUSDC and the three baskets, issue 1710). Each is its own timelock operation, all scheduled in one sitting. */
 export { BASKET_KEYS };
-export const UNPAUSE_ROWS = ["unpause-PROTO", "unpause-AGENT", "unpause-RWA"] as const;
+export const UNPAUSE_ROWS = ["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA"] as const;
 /** Demonstrations of the Safe tool. They exist only as Twin-fork runs and are refused with USAGE on 8453. */
 export const TWIN_ONLY_ROWS = ["update-delay", "batch", "cancel"] as const;
 /** The govern rows in run order: the unpauses, then the Twin-only demonstrations. `--row` takes the 1-based number or the name. */
 export const GOVERN_ROWS = [...UNPAUSE_ROWS, ...TWIN_ONLY_ROWS] as const;
 export type GovernRowName = (typeof GOVERN_ROWS)[number];
-/**
- * The on-demand row that reopens rmUSDC (issue 1667). It is not in GOVERN_ROWS, so no default run, stage run or numbered `--row` reaches it: rmUSDC
- * ships open and only pause-all pauses it. It is accepted by name on 8453 and on a Twin fork. It schedules unpauseDeposits() on rmUSDC and nothing else.
- */
+/** The rmUSDC unpause row. Since issue 1710 rmUSDC deploys paused, so this is a stage 13 row like the other three (and the reopen row after a pause-all). */
 export const UNPAUSE_USDC_ROW = "unpause-USDC";
-/** A row that runGovern can plan: the matrix rows and the on-demand rmUSDC unpause. */
-export type PlannedRow = GovernRowName | typeof UNPAUSE_USDC_ROW;
+/** A row that runGovern can plan: every matrix row. */
+export type PlannedRow = GovernRowName;
 export const governRowNames = (): readonly string[] => GOVERN_ROWS;
 export const isTwinOnlyRow = (row: string): boolean => (TWIN_ONLY_ROWS as readonly string[]).includes(row);
 /** The rows a stage run needs on a chain: the unpauses on 8453, every row elsewhere. */
 export const stageRows = (chainId: number): readonly GovernRowName[] => (chainId === BASE_CHAIN_ID ? UNPAUSE_ROWS : GOVERN_ROWS);
 /**
  * Declared dependencies between rows (row to the row it must follow). The dependent operation carries the other's operation id as the timelock
- * predecessor, so both run in the same resume with no second wait. The basket unpauses are independent: none is declared.
+ * predecessor, so both run in the same resume with no second wait. The unpauses are independent: none is declared.
  */
 export const GOVERN_DEPENDENCIES: Readonly<Record<string, string>> = {};
 
@@ -126,7 +124,6 @@ export const loadReceiptAddr = (ctx: Pick<RunContext, "coreDir" | "chainId" | "m
 
 /** `--row` value to a row name: a 1-based number or a name. Anything else is a usage error. */
 export function resolveGovernRow(row: string): PlannedRow {
-  if (row === UNPAUSE_USDC_ROW) return UNPAUSE_USDC_ROW;
   if (row === RECEIPT_ROW) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} is the on-demand receipt release: it needs --receipt-id 0x<bytes32>`);
   if (row === APPLY_ROW) throw new PublishError("USAGE", `--row ${APPLY_ROW} is the on-demand receipt application: it needs --receipt-id 0x<bytes32> and --payload FILE`);
   if (/^[0-9]+$/.test(row)) {
@@ -136,14 +133,13 @@ export function resolveGovernRow(row: string): PlannedRow {
     return name;
   }
   if ((GOVERN_ROWS as readonly string[]).includes(row)) return row as GovernRowName;
-  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${UNPAUSE_USDC_ROW}, ${RECEIPT_ROW} --receipt-id 0x<bytes32>, ${APPLY_ROW} --receipt-id 0x<bytes32> --payload FILE)`);
+  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${RECEIPT_ROW} --receipt-id 0x<bytes32>, ${APPLY_ROW} --receipt-id 0x<bytes32> --payload FILE)`);
 }
 
-/** The calls of one unpause row. Empty means the sheet does not ask for it (the basket stays paused): the row is skipped. */
+/** The calls of one unpause row. Empty means the sheet does not ask for it (the vault stays paused): the row is skipped. */
 export function buildStepCalls(sheet: Sheet, a: GovernAddrs, row: PlannedRow): LabelledCall[] {
   const calls: LabelledCall[] = [];
-  if (row === UNPAUSE_USDC_ROW) calls.push({ label: `${VAULT_NAME.USDC}.unpauseDeposits`, target: a.vaults.USDC, data: encodeFunctionData({ abi: VAULT_ABI, functionName: "unpauseDeposits" }) });
-  else if (row.startsWith("unpause-")) {
+  if (row.startsWith("unpause-")) {
     const k = row.slice("unpause-".length) as VaultKey;
     if (sheet.govern.unpauseVaults.includes(k)) calls.push({ label: `${VAULT_NAME[k]}.unpauseDeposits`, target: a.vaults[k], data: encodeFunctionData({ abi: VAULT_ABI, functionName: "unpauseDeposits" }) });
   }
@@ -346,7 +342,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const applying = o.row === APPLY_ROW;
   const selected: PlannedRow | undefined = o.row === undefined || releasing || applying ? undefined : resolveGovernRow(o.row);
   if (selected !== undefined && isTwinOnlyRow(selected) && ctx.chainId === BASE_CHAIN_ID) {
-    throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the basket unpause; the other mainnet actions are --row ${RECEIPT_ROW} and --row ${APPLY_ROW})`);
+    throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the vault unpause; the other mainnet actions are --row ${RECEIPT_ROW} and --row ${APPLY_ROW})`);
   }
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;

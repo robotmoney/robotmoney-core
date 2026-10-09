@@ -116,6 +116,30 @@ contract DeploySeedDeposit is Test {
         );
     }
 
+    /// @notice core 1710: the deploy pauses deposits right after the seed deposit. The seed
+    ///         shares exist, a public deposit reverts, and only ADMIN_ROLE (the timelock after the
+    ///         handover) can open the vault.
+    function test_fork_deploySeed_vaultDeploysPaused() public {
+        _setUp();
+
+        DeployVault.Deployed memory d = _runDeploy();
+
+        assertTrue(d.vault.depositsPaused(), "rmUSDC must deploy paused");
+        assertGt(d.vault.totalSupply(), 0, "the seed landed before the pause");
+
+        address publicUser = makeAddr("pausedUser");
+        deal(BASE_USDC, publicUser, 1_000 * 1e6);
+        vm.startPrank(publicUser);
+        IERC20(BASE_USDC).approve(address(d.vault), 1_000 * 1e6);
+        vm.expectRevert();
+        d.vault.deposit(1_000 * 1e6, publicUser);
+        vm.stopPrank();
+
+        vm.prank(admin);
+        d.vault.unpauseDeposits();
+        assertFalse(d.vault.depositsPaused(), "the admin can open it");
+    }
+
     /// @notice After deploy, vault.totalSupply() > 0.
     ///
     ///         A zero totalSupply before the first public deposit would leave
@@ -217,6 +241,9 @@ contract DeploySeedDeposit is Test {
         _setUp();
 
         DeployVault.Deployed memory d = _runDeploy();
+        // core 1710: rmUSDC deploys paused, the govern stage opens it. The admin stands in for that unpause here.
+        vm.prank(admin);
+        d.vault.unpauseDeposits();
 
         address publicUser = makeAddr("publicUser");
         uint256 publicDeposit = 1_000 * 1e6; // 1,000 USDC

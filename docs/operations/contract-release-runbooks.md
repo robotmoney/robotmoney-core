@@ -229,19 +229,19 @@ adds `safe`, `prove-control` (between stages 10 and 11), `verify` and `govern`:
 | — config | Before stage 11 the deployer sets the deploy-time configuration: setters, router eligibility, voting power, and router default weights rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps (not yet implemented: core #1520). |
 | 11 `timelock` | Refuses with `CONTROL_NOT_PROVEN` (exit 24) unless the run manifest holds the `prove-control` record on the same Safe signed by every owner and the Safe nonce is 1 or more (stage 0 asserts nonce 0). TimelockController: proposer and canceller the Safe, executor open `address(0)` (implemented: core #1521; `DeployTimelock` grants `EXECUTOR_ROLE` to `address(0)` only, and the verifier checks it), delay from the sheet with a 172800 s floor on 8453. Every role on every vault, the gateway, registry, router, governance, IC policy and receipt goes to the timelock (vault EMERGENCY_ROLE to the emergency key), and the deployer is revoked. `AGENT_ADDRESSES=none`. |
 | 12 `verify` | One verifier reads the chain and checks every postcondition, including the Safe owners and threshold, the proof transaction read back from the chain (a self-call of the Safe, signed by every owner, Safe nonce 1 or more), the delay floor, that the deployer holds no role, that the gateway has no `AgentAuthorized` or `AgentOwnershipTransferred` log up to the handover block and nobody holds `AGENT_ROLE` from an earlier grant (the deploy authorizes no agent), and the deployer nonce against the frozen per-stage counts for the release SHA (counts not yet committed: core #1524). |
-| 13 `govern` | Only `unpauseDeposits()` on each basket vault (rmPROTO, rmAGENT, rmRWA). Each is its own timelock operation, scheduled the same day through the real Safe and executed after one 48-hour delay. None is skipped on any deploy. On 8453 the CLI exits `GOVERN_PENDING` with the resume command; on the Twin chain the wait runs by time warp (not yet implemented: core #1520; `govern.ts` still runs the older per-step matrix). |
+| 13 `govern` | Only `unpauseDeposits()` on each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all deployed paused. Each is its own timelock operation, scheduled the same day through the real Safe and executed after one 48-hour delay. None is skipped on any deploy. On 8453 the CLI exits `GOVERN_PENDING` with the resume command; on the Twin chain the wait runs by time warp (not yet implemented: core #1520; `govern.ts` still runs the older per-step matrix). |
 
 **Run order: publish, verify, govern, verify (issue 1667).** The stage numbers are fixed (12 `verify`, 13 `govern`), the run order on 8453 is not
 verify once. Verify runs twice, and each run checks a different state, which the CLI reads from the run manifest and confirms against the chain:
 
 1. `publish` (stages 0 to 11).
-2. `verify`: the **pre-govern** state. No unpause row is scheduled. rmPROTO, rmAGENT and rmRWA must read `depositsPaused` true and rmUSDC must read false.
-3. `govern`: schedules the three basket unpauses through the real Safe in one sitting and exits `GOVERN_PENDING` (15). After the 48-hour delay the same
+2. `verify`: the **pre-govern** state. No unpause row is scheduled. All four vaults (rmUSDC, rmPROTO, rmAGENT and rmRWA) must read `depositsPaused` true: every vault deploys paused, rmUSDC right after its seed deposit.
+3. `govern`: schedules the four unpauses (rmUSDC, rmPROTO, rmAGENT, rmRWA) through the real Safe in one sitting and exits `GOVERN_PENDING` (15). After the 48-hour delay the same
    command executes them.
-4. `verify`: the **post-govern** state. All three unpause rows are executed and all four vaults must read `depositsPaused` false.
+4. `verify`: the **post-govern** state. All four unpause rows are executed and all four vaults must read `depositsPaused` false.
 
 A manifest that says one state while the chain reads the other fails verify (exit 13), and a failed verify runs `pause-all` (§4.6). A verify run while
-govern is **part-way** (some but not all basket unpause rows scheduled or executed, or an `unpause-USDC` round scheduled and not executed) is not a failed
+govern is **part-way** (some but not all of the four unpause rows scheduled or executed) is not a failed
 verify: it exits 15 (`GOVERN_PENDING`), names the govern command that finishes the work, checks nothing and pauses nothing. Run that command, then verify.
 The Twin chain rehearsal runs the same order (`twin-publish.ts`, `twin_publish.rs`). It only checks that the scripts execute in this order: the 48-hour
 delay and the Safe signers are proven on 8453 through the real Safe.
@@ -306,10 +306,10 @@ If verify (stage 12) or the postflight is what failed, the publish-contracts
 CLI has already paused deposits on all four vaults (rmUSDC, rmPROTO, rmAGENT,
 rmRWA) before you read the failure: `pause-all` (§4.6). Check the
 `rollout-report-<chain>.json` it wrote before you start the fix. A vault that `pause-all` paused comes back through the Safe: `govern --row unpause-USDC`
-for rmUSDC (never part of a default run, and refused while rmUSDC reads open) and `govern --row unpause-PROTO`, `unpause-AGENT` or `unpause-RWA` for a basket
-that was already unpaused. Each opens a new numbered round (a new timelock operation id, a new 48-hour delay): the run exits `GOVERN_PENDING`, and the same
+for rmUSDC and `govern --row unpause-PROTO`, `unpause-AGENT` or `unpause-RWA` for a basket
+that was already unpaused (every row is refused while its vault reads open). Each opens a new numbered round (a new timelock operation id, a new 48-hour delay): the run exits `GOVERN_PENDING`, and the same
 command executes it after the delay. A default `govern` run never reopens a vault that was paused again. Record each round under `govern` in the evidence
-file with its `round` number (`unpause-USDC` is optional there, and every step may have rounds 1 to n).
+file with its `round` number (all four steps are required, and every step may have rounds 1 to n).
 
 **Never resume `govern` after a `pause-all` without cancelling first (issue 1686).**
 If an unpause was already scheduled when `pause-all` ran (by hand, or the
@@ -398,7 +398,7 @@ issue is closed only after this report is filed.
 ### 4.8. Post-launch consensus receipt release
 
 Releasing a consensus receipt on 8453 is a standalone post-launch action (core 1611). It is never part of
-stage 13, which stays the three basket unpauses (an `unpause-USDC` round after `pause-all` is likewise outside the default run). Run `govern --row release-receipt --receipt-id 0x<bytes32>`
+stage 13, which stays the four vault unpauses. Run `govern --row release-receipt --receipt-id 0x<bytes32>`
 with the usual chain, RPC, sheet, signer and `--owner-signer` arguments. The real Safe schedules `releaseReceipt` on
 the timelock as its own operation and the CLI exits `GOVERN_PENDING` (exit 15) with the resume command. After the
 48-hour delay the same command makes the Safe execute it, and the CLI reads `released` back. Record the operation
@@ -418,7 +418,7 @@ Refusals. Each exits `USAGE` (exit 2) before anything is sent, so no delay is sp
 - the vector does not list exactly the registry's router-eligible vaults (a missing vault, a vault that is not eligible and carries weight, an unknown or repeated bucket);
 - the vault order differs from the registry order.
 
-Never part of stage 13, which stays the three basket unpauses: no default run, stage run or numbered `--row` reaches it. On 8453 it runs only when named with `--row apply-receipt`, a receipt id and a payload, as a post-launch action with its own 172800 s delay: the first run schedules and exits `GOVERN_PENDING` (exit 15) with the resume command, the same command after the delay executes it. An operation the operator cancelled through the Safe is scheduled again by the same command, with a newer sequence number. Record the operation under `receipt_applications` in the evidence file (with `governance.address`): `evidence-check` accepts it only as one batch of exactly the release and the weight change, one delay apart. Whether the mainnet test deployment runs this row after the unpause round is an open owner decision, default: no.
+Never part of stage 13, which stays the four vault unpauses: no default run, stage run or numbered `--row` reaches it. On 8453 it runs only when named with `--row apply-receipt`, a receipt id and a payload, as a post-launch action with its own 172800 s delay: the first run schedules and exits `GOVERN_PENDING` (exit 15) with the resume command, the same command after the delay executes it. An operation the operator cancelled through the Safe is scheduled again by the same command, with a newer sequence number. Record the operation under `receipt_applications` in the evidence file (with `governance.address`): `evidence-check` accepts it only as one batch of exactly the release and the weight change, one delay apart. Whether the mainnet test deployment runs this row after the unpause round is an open owner decision, default: no.
 
 The Twin rehearsal runs the row after the unpause rows (and checks `receipt_applications` of its run manifest with `evidence-check --receipt-applications`). The Twin proves execution only: that the row executes on the real contracts through the real Safe and timelock. It is not evidence that mainnet governance works (rule b).
 

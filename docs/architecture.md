@@ -730,7 +730,7 @@ scripts/stage/core-stack.ts governance release --receipt-id ID`): the real Safe
 schedules `releaseReceipt` on the timelock, the delay passes, and the Safe
 executes it. The same row runs on Base mainnet (8453) as a standalone
 post-launch action (issue 1611): its own timelock operation with its own
-48-hour delay, never part of stage 13, which stays the three basket
+48-hour delay, never part of stage 13, which stays the four vault
 unpauses. The first run schedules and exits `GOVERN_PENDING` with the resume
 command. After the delay the Safe executes it and the CLI reads `isReleased`
 back. `update-delay`, `batch` and `cancel` stay Twin-only. The mainnet evidence

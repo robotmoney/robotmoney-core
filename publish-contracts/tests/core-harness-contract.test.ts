@@ -106,7 +106,7 @@ describe("core harness contract: the argument vector and environment core builds
     if (r.code !== 0) console.error(r.stderr.split("\n").slice(-8).join("\n"));
     expect(r.code).toBe(0);
     const rows = parseGovernOutput(r.stdout);
-    // the default sheet unpauses all three baskets. The unpauses are scheduled in one sitting (all scheduled lines first), then executed; the Twin-only rows follow, one round each
+    // the default sheet unpauses all four vaults (rmUSDC and the three baskets). The unpauses are scheduled in one sitting (all scheduled lines first), then executed; the Twin-only rows follow, one round each
     const unpauses = [...UNPAUSE_ROWS];
     const twinOnly = TWIN_ONLY_ROWS;
     expect(GOVERN_ROWS.length as number).toBe(UNPAUSE_ROWS.length + twinOnly.length);
@@ -124,12 +124,12 @@ describe("core harness contract: the argument vector and environment core builds
   });
 
   test("govern --row by name and by number runs one round and prints its two lines", async () => {
-    for (const row of ["unpause-PROTO", "1"]) {
+    for (const row of ["unpause-USDC", "1"]) {
       const c = boot();
       writeGovernManifests(c.manifestDir);
       const r = await runCli(c, "govern", ["--row", row]);
       expect(r.code).toBe(0);
-      expect(parseGovernOutput(r.stdout).map((x) => x.row)).toEqual(["unpause-PROTO", "unpause-PROTO"]);
+      expect(parseGovernOutput(r.stdout).map((x) => x.row)).toEqual(["unpause-USDC", "unpause-USDC"]);
       expect(r.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l).phase)).toEqual(["scheduled", "executed"]);
     }
   });
@@ -154,7 +154,7 @@ describe("core harness contract: the argument vector and environment core builds
     expect((await runCli(c, "publish", ["--stage", "libs"])).code).toBe(EXIT_CODES.USAGE);
     expect((await runCli(c, "publish", ["--row", "1"])).code).toBe(EXIT_CODES.USAGE);
     expect((await runCli(c, "govern", ["--row", "nope"])).code).toBe(EXIT_CODES.USAGE);
-    expect((await runCli(c, "govern", ["--row", "7"])).code).toBe(EXIT_CODES.USAGE);
+    expect((await runCli(c, "govern", ["--row", "8"])).code).toBe(EXIT_CODES.USAGE);
   });
 });
 

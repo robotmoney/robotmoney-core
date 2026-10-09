@@ -487,7 +487,21 @@ impl Fixture {
     /// Used to override deploy-time parameters. `AGENT_MAX_PER_PAYMENT` and `AGENT_MAX_PER_WINDOW` are not
     /// sheet keys (the deploy authorizes no agent): they set the caps of the policy the test depositor
     /// authorizes for the harness agent after the deploy.
+    ///
+    /// All four vaults deploy paused (core 1710). The other suites test what happens in an open vault, so this
+    /// constructor opens rmUSDC the way production does: `govern --row unpause-USDC` through the real Safe and
+    /// timelock (one time warp on the fork). [`Self::new_closed`] keeps the vaults as the deploy left them.
     pub fn with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
+        Self::boot(extra_deploy_env, true)
+    }
+
+    /// The fixture exactly as the deploy leaves it: rmUSDC, rmPROTO, rmAGENT and rmRWA all paused, stage 13 not run
+    /// (core 1710). The rehearsal tests that prove the verifier and the govern stage start here.
+    pub fn new_closed() -> Result<Self, HarnessError> {
+        Self::boot(&[], false)
+    }
+
+    fn boot(extra_deploy_env: &[(&str, &str)], open_usdc: bool) -> Result<Self, HarnessError> {
         let cap = |name: &str, default: u128| -> Result<u128, HarnessError> {
             match extra_deploy_env.iter().find(|(k, _)| *k == name) {
                 Some((_, v)) => v
@@ -658,6 +672,12 @@ impl Fixture {
             .inspect_err(|err| {
                 logging::error("smoke-test", format!("funding USDC failed: {err}"));
             })?;
+
+        if open_usdc {
+            fx.govern("unpause-USDC", &[]).inspect_err(|err| {
+                logging::error("smoke-test", format!("opening rmUSDC failed: {err}"));
+            })?;
+        }
 
         Ok(fx)
     }
