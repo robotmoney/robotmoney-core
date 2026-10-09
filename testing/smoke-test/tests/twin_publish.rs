@@ -458,8 +458,7 @@ fn tick_of(raw: &str, i: usize) -> i32 {
 }
 
 /// Core 1676. rmAGENT holds RM through the REAL Uniswap V4 PoolManager pool `0xf2e7b957...`, priced by the REAL recorder, on the Twin chain
-/// after the full publish and govern run. Nothing is mocked: the pool is real Base state (funded through the real PositionManager by
-/// `rehearsal fund-rm-pool`), the vault is opened by the real Safe and timelock, and every swap goes through the real PoolManager.
+/// after the full publish and govern run. Nothing is mocked: the pool is real Base state (the live pool, never funded), the vault is opened by the real Safe and timelock, and every swap goes through the real PoolManager.
 ///  1. the asset row is RM, venue V4, pool = the recorder, adapter = the V4 adapter the vault manifest names;
 ///  2. after the 48 hour govern warp the recorder is stale: a deposit fails closed until someone pokes it (permissionless);
 ///  3. a deposit swaps USDC to RM through the PoolManager (the pool tick moves) and the swap pokes the recorder (its index advances);

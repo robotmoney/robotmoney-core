@@ -376,7 +376,7 @@ export async function readPool(rpc: Rpc, tag: string, a: Asset, f: Pick<AssetFil
  * The V4 asset against live chain state. V4 keeps no PoolKey on chain, only its hash as the pool id, so the key from config is read through
  * StateView by deriving the pool id from it: `getSlot0(derivedId)` returns a non-zero price only for an initialized pool with exactly that
  * key, and its lpFee must equal the configured fee. `getLiquidity(derivedId)` is the pool's in-range liquidity L (raw uint128, not USDC) and
- * must reach the addAsset floor. An unfunded or under-funded pool fails here, which is owner-gated: nothing bypasses it.
+ * must reach the addAsset floor. A pool below the floor fails here: nothing bypasses it and no one funds the pool (owner decision 2026-10-09).
  */
 async function v4Findings(
   rpc: Rpc, tag: string, s: string, a: AgentEntry, usdc: string, hasCode: (addr: string) => Promise<boolean>,

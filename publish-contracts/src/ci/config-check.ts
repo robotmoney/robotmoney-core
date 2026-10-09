@@ -130,7 +130,7 @@ export type { Address };
  * The Uniswap V4 asset (core 1676). V4 keeps no PoolKey on chain, only its hash as the pool id, so the key from config is read through
  * StateView by deriving the pool id: `getSlot0(derivedId)` gives a non-zero price only for an initialized pool with exactly that key, and
  * its lpFee must equal the configured fee. `getLiquidity` is the pool's in-range liquidity L (a raw uint128, not USDC) and must reach the
- * addAsset floor. An unfunded or under-funded pool fails here: the owner funds it, nothing bypasses it.
+ * addAsset floor. A pool below the floor fails here: nothing bypasses it and no one funds the pool (owner decision 2026-10-09).
  */
 async function v4Checks(c: Collector, chain: ChainReader, a: ConfiguredAsset, p: string): Promise<void> {
   const x = a.v4;
