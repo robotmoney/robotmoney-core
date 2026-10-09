@@ -20,11 +20,15 @@ description: >
 > preflight guard fails.
 
 > **A note on names.** The product surface is the **Swarm** (this skill, this
-> plugin). "Investment Committee" is the on-chain governance body the swarm's
-> votes land in, so it survives unchanged in the `rmpc` subcommand names
+> plugin). "Investment Committee" is the on-chain policy contract the swarm's
+> tilts land in, so it survives unchanged in the `rmpc` subcommand names
 > (`rmpc committee vote-submit`), the policy contract
-> (`InvestmentCommitteePolicy`), and the vote schema
-> (`schemas/committee-vote.json`). Type those exactly as written.
+> (`InvestmentCommitteePolicy`), and the tilt schema
+> (`schemas/committee-vote.json`). Type those exactly as written. A committee
+> "vote" is a signed per-vault tilt. It is not a vote on anything: the
+> committee does not govern, and router weights change only when
+> `WEIGHT_SETTER_ROLE` applies the committee's consensus receipt through the
+> Safe and the timelock.
 
 Canonical docs: `docs/architecture.md §5.5`, `docs/prd.md §Committee`,
 vote schema: `schemas/committee-vote.json`.
@@ -40,8 +44,9 @@ Invoke this skill when:
 Do **not** invoke this skill when:
 
 - The operator only wants to read the regime (use `robotmoney-analyst` instead).
-- The operator wants to submit a RouterGovernance vote (the `vote`
-  command on the analyst skill covers that flow; proposals are signed by the Safe, not rmpc).
+- The operator wants to change router weights. There is no voting by anyone:
+  `WEIGHT_SETTER_ROLE` applies the committee's consensus receipt through the
+  Safe and the timelock, and rmpc has no governance write command.
 - `ic_contract_address` is absent from the rmpc config — surface the
   `MissingICConfig` error instead.
 
@@ -174,4 +179,4 @@ All abort paths exit non-zero and print a named error code to stderr.
 - IC policy contract or gateway changes
 - Explorer or dapp surfaces
 - Committee agent registration (a one-time Safe and timelock action: rmpc does not register committee agents)
-- RouterGovernance proposals (signed by the Safe, not rmpc) and votes (robotmoney-analyst `vote`)
+- Router-weight changes (the Safe applies the consensus receipt through the timelock; rmpc has no governance write command)
