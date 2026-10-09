@@ -275,7 +275,7 @@ describe("a dependent operation carries its predecessor and runs in the same res
 });
 
 describe("a Twin fork: one sitting, ONE warp, then the Twin-only rows one round each", () => {
-  test("a full run schedules the three unpauses, warps once, executes them, then the Twin-only rounds, in order", async () => {
+  test("a full run schedules the four unpauses, warps once, executes them, then the Twin-only rounds, in order", async () => {
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
     const manifest = newManifest(ctx, addr(0xa001));
@@ -1238,7 +1238,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
   });
 
   test("apply-receipt on 8453 only when named: no default run, stage run or numbered --row reaches it", async () => {
-    // a default run on 8453 schedules the three unpauses and nothing else
+    // a default run on 8453 schedules the four unpauses and nothing else
     const w = world(8453);
     await expect(runGovern(w.ctx, stageByName("govern"), w.manifest, opts(w.sheet, w.tl, { warp: noWarp }))).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
     expect(w.tl.s.events).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA"]);

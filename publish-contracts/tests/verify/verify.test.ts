@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
+import { PROOF_TX_NONCES } from "../../src/counts.ts";
 import { getStageTable } from "../../src/stages.ts";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import { keccak256, toHex } from "viem";
@@ -218,6 +219,12 @@ describe("mutations fail with the expected label", () => {
     expect(f).toContain("vault[rmPROTO]: feeRecipient is not deployer");
   });
 
+  test("the bare frozen sum is not enough: the deployer also sent the prove-control transaction (core 1712)", async () => {
+    const w = buildWorld();
+    w.chain.noncesMap.set(DEPLOYER.toLowerCase(), Object.values(w.opts.frozenCounts).reduce((a, b) => a + b, 0));
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["deployer: nonce equals sum of frozen counts"]);
+  });
+
   test("deployer nonce differs from the frozen sum", async () => {
     const w = buildWorld();
     w.chain.noncesMap.set(DEPLOYER.toLowerCase(), 56);
@@ -333,14 +340,14 @@ describe("rmUSDC seed shares: the deployer ends with none and the receiver holds
 describe("deployer nonce after govern", () => {
   test("with the recorded end-of-deploy nonce, govern gas above the frozen sum passes", async () => {
     const w = buildWorld();
-    const sum = Object.values(w.opts.frozenCounts).reduce((a, b) => a + b, 0);
+    const sum = Object.values(w.opts.frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES;
     w.chain.noncesMap.set(DEPLOYER.toLowerCase(), sum + 7);
     expect(failed(await verifyDeployment(w.opts))).toEqual(["deployer: nonce equals sum of frozen counts"]);
     expect(failed(await verifyDeployment({ ...w.opts, deployerNonceAtDeployEnd: sum }))).toEqual([]);
   });
   test("a recorded nonce that is not the frozen sum fails, and a live nonce below the record fails", async () => {
     const w = buildWorld();
-    const sum = Object.values(w.opts.frozenCounts).reduce((a, b) => a + b, 0);
+    const sum = Object.values(w.opts.frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES;
     expect(failed(await verifyDeployment({ ...w.opts, deployerNonceAtDeployEnd: sum + 1 }))).toEqual(["deployer: nonce equals sum of frozen counts"]);
     w.chain.noncesMap.set(DEPLOYER.toLowerCase(), sum - 1);
     expect(failed(await verifyDeployment({ ...w.opts, deployerNonceAtDeployEnd: sum }))).toEqual(["deployer: nonce equals sum of frozen counts"]);

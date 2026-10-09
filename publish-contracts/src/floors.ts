@@ -57,21 +57,7 @@ export interface FloorInput {
   githubActions?: boolean;
   /** Frozen counts are being measured (rehearsal only). */
   measure?: boolean;
-  /**
-   * Public addresses that share one root of trust, read from the file named by --correlated-owners-file (loadCorrelatedOwners). Addresses only, never keys.
-   * REQUIRED on 8453: the floor is on by default, so an unloaded list is refused rather than skipped.
-   */
-  correlatedOwners?: string[];
 }
-
-/** Pull every 20-byte address out of text (a file of addresses). */
-export const parseCorrelatedOwners = (text: string): string[] => [...new Set((text.match(/0x[0-9a-fA-F]{40}/g) ?? []).map((a) => a.toLowerCase()))];
-
-/** Safe owners listed as correlated (one root of trust). Two or more of them on 8453 means one secret holds the quorum. */
-export const correlatedOwnersIn = (owners: string[], personas: string[] = []): string[] => {
-  const set = new Set(personas.map((a) => a.toLowerCase()));
-  return owners.filter((o) => set.has(o.toLowerCase()));
-};
 
 const floor = (message: string, details: Record<string, unknown> = {}) => new PublishError("FLOOR", message, details);
 
@@ -97,9 +83,6 @@ export function assertFloors(i: FloorInput): void {
   if (isMainnet(chainId)) {
     if (i.caller.yes) throw floor("YES=1 is refused on chain 8453: the real deployment has a human in the loop (typed confirmation, or CONFIRM=environment behind required reviewers)");
     if (i.measure) throw floor("--measure is refused on chain 8453: counts are measured on a rehearsal and frozen in a reviewed file");
-    if (i.correlatedOwners === undefined) throw floor("the correlated-owners floor could not run on chain 8453: the correlated-owners file was not loaded (--correlated-owners-file)");
-    const shared = correlatedOwnersIn(i.sheet.safeOwners, i.correlatedOwners);
-    if (shared.length >= 2) throw floor(`${shared.length} SAFE_OWNERS are listed as correlated owners (${shared.join(", ")}): on chain 8453 the owners are independent hardware wallets, never keys that share one root of trust`, { owners: shared });
     const why = plaintextSignerReason(i.signerSpec ?? "", i.env ?? {});
     if (why) throw floor(`plaintext signing is refused on chain 8453: ${why}`);
     if (i.caller.confirm === "environment") {

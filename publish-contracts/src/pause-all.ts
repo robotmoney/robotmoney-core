@@ -52,6 +52,8 @@ export interface PauseAllReport {
   allPaused: boolean;
   /** Issue 1688: false when the pause entry could not be written to the run manifest, so govern cannot see this pause-all. */
   manifestRecorded: boolean;
+  /** Issue 1712: set when nothing was sent because a signer that had to pay holds no ETH. The text names the address and asks for funding. */
+  blocked?: string;
   vaults: PauseVaultResult[];
 }
 
@@ -69,6 +71,23 @@ const lc = (a: string): string => a.toLowerCase();
 /** cast send takes the signer flags forge takes, except the sender is named --from. */
 async function castSignerArgs(s: PublishSigner): Promise<string[]> {
   return (await s.forgeArgs()).map((a) => (a === "--sender" ? "--from" : a));
+}
+
+/**
+ * Issue 1712: only the deployer is funded, so the EMERGENCY key usually holds no ETH on 8453 until the owner funds it. A send from an unfunded key
+ * fails, and a pause that starts on four vaults must not fail half way for that reason. The check is `balance == 0`, read before the first send:
+ * it needs no gas estimate (an estimate is one more RPC call that can fail or disagree with the send), and a key with any ETH is never blocked,
+ * because a pauseDeposits() on Base costs a fraction of a cent and a higher threshold could stop a pause that would have gone out. A key with some
+ * ETH but not enough still fails at the send, per vault, as before. A balance that cannot be read does not block either.
+ */
+async function unfundedSigner(ctx: RunContext, who: string, label: string): Promise<string | undefined> {
+  let balance: bigint;
+  try { balance = BigInt((await castOut(ctx, ["balance", who])).trim()); } catch (e) {
+    ctx.log.log("warn", "pause_all.balance_unread", { signer: who, label, message: (e as Error).message });
+    return undefined;
+  }
+  if (balance > 0n) return undefined;
+  return `the ${label} signer ${who} holds no ETH on chain ${ctx.chainId}, so it cannot pay for pauseDeposits(). Nothing was sent. Fund ${who} (only the deployer is funded: fund the emergency key when you need to pause), then run pause-all again.`;
 }
 
 const sentOk = (receipt: Record<string, unknown>): boolean => ["0x1", "1", "success"].includes(String(receipt.status).toLowerCase()) || receipt.status === 1;
@@ -107,8 +126,19 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
   };
   record(() => { entry = beginPauseEntry(ctx.evidenceDir, { at, trigger: o.trigger, reason: o.reason }); });
   if (!entry) ctx.log.log("warn", "pause_all.no_manifest_entry", { evidence_dir: ctx.evidenceDir });
-  const vaults: PauseVaultResult[] = [];
+  // Issue 1712: every signer that has to pay must hold ETH before the first send, so the pause cannot start and fail half way. The EMERGENCY key
+  // is named in the message. In the `unsure` case the signer of each vault is read now (reads only) and only the keys that will send are checked.
+  const roles: (PauseSignerRole | undefined)[] = [];
   for (const v of VAULT_STAGES) {
+    if (stageRole !== "unsure") { roles.push(stageRole); continue; }
+    try { roles.push((await hasEmergencyRole(ctx, readManifestField(ctx, manifestRef(v.stage, VAULT_ADDRESS_FIELD)), deployerAddr!)) ? "deployer" : "emergency"); } catch { roles.push(undefined); }
+  }
+  let blocked: string | undefined;
+  if (roles.includes("deployer")) blocked = await unfundedSigner(ctx, deployerAddr!, "deployer");
+  if (!blocked && roles.includes("emergency")) blocked = await unfundedSigner(ctx, emergencyAddr!, "EMERGENCY");
+  if (blocked) ctx.log.log("error", "pause_all.blocked", { reason: blocked });
+  const vaults: PauseVaultResult[] = [];
+  for (const [i, v] of VAULT_STAGES.entries()) {
     const name = VAULT_NAME[v.key];
     let address = "";
     let role: PauseSignerRole = stageRole === "unsure" ? "deployer" : stageRole;
@@ -116,10 +146,11 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
     try {
       address = readManifestField(ctx, manifestRef(v.stage, VAULT_ADDRESS_FIELD));
       res.address = address;
-      if (stageRole === "unsure") role = (await hasEmergencyRole(ctx, address, deployerAddr!)) ? "deployer" : "emergency";
+      if (stageRole === "unsure") role = roles[i] ?? ((await hasEmergencyRole(ctx, address, deployerAddr!)) ? "deployer" : "emergency");
       res.signerRole = role;
       const signer = role === "deployer" ? deployer : emergency!;
       res.signer = role === "deployer" ? deployerAddr! : emergencyAddr!;
+      if (blocked) throw new PublishError("PAUSE", blocked);
       const r = await ctx.run("cast", ["send", address, "pauseDeposits()", "--json", ...(await castSignerArgs(signer))], { env: childEnv(ctx), interactive: true });
       if (r.code !== 0) throw new PublishError("TOOL", `cast send pauseDeposits() on ${name} failed: ${r.stderr.trim().split("\n").slice(-2).join(" ")}`);
       let receipt: Record<string, unknown> = {};
@@ -128,7 +159,7 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
       if (receipt.status !== undefined && !sentOk(receipt)) throw new PublishError("BROADCAST", `pauseDeposits() on ${name} was mined and reverted (${String(receipt.transactionHash)})`);
     } catch (e) {
       res.error = (e as Error).message;
-      ctx.log.log("error", "pause_all.send_failed", { vault: name, address: address || undefined, message: res.error });
+      if (!blocked) ctx.log.log("error", "pause_all.send_failed", { vault: name, address: address || undefined, message: res.error });
     }
     // the read-back runs whether or not the send worked: the state on chain is the answer
     if (address) {
@@ -136,13 +167,14 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
         const out = (await castOut(ctx, ["call", address, "depositsPaused()(bool)"])).trim();
         if (out !== "true" && out !== "false") throw new PublishError("TOOL", `depositsPaused() on ${name} returned '${out}'`);
         res.depositsPaused = out === "true";
+        if (blocked && res.depositsPaused) delete res.error; // already paused: nothing needed to be sent
       } catch (e) { res.error ??= (e as Error).message; }
     }
     ctx.log.log(res.depositsPaused ? "info" : "error", "pause_all.vault", { vault: name, address: address || undefined, signer_role: res.signerRole, tx_hash: res.txHash, deposits_paused: res.depositsPaused ?? null });
     vaults.push(res);
     if (entry) { const e = entry; record(() => updatePauseEntry(ctx.evidenceDir, { ...e, vaults: vaults.map((x) => ({ ...x })) })); }
   }
-  const report: PauseAllReport = { trigger: o.trigger, reason: o.reason, at, allPaused: vaults.every((x) => x.depositsPaused === true), manifestRecorded: entry !== undefined, vaults };
+  const report: PauseAllReport = { trigger: o.trigger, reason: o.reason, at, allPaused: vaults.every((x) => x.depositsPaused === true), manifestRecorded: entry !== undefined, ...(blocked ? { blocked } : {}), vaults };
   if (entry) { const e = entry; record(() => updatePauseEntry(ctx.evidenceDir, { ...e, status: "done", allPaused: report.allPaused, vaults: vaults.map((x) => ({ ...x })) })); }
   writeRolloutReport(ctx, report);
   ctx.log.log(report.allPaused ? "info" : "error", "pause_all.done", { all_paused: report.allPaused, trigger: o.trigger, report: rolloutReportPath(ctx) });
@@ -166,6 +198,7 @@ export function pauseUnrecorded(report: PauseAllReport, prefix = ""): PublishErr
 
 /** The error for a pause-all that did not leave all four vaults paused. */
 export function pauseIncomplete(report: PauseAllReport, prefix = ""): PublishError {
+  if (report.blocked) return new PublishError("PAUSE", `${prefix}pause-all could not send: ${report.blocked}`, { unpaused: report.vaults.filter((v) => v.depositsPaused !== true).map((v) => v.vault), blocked: true });
   const bad = report.vaults.filter((v) => v.depositsPaused !== true);
   return new PublishError("PAUSE", `${prefix}pause-all left ${bad.length} of ${report.vaults.length} vaults NOT confirmed paused: ${bad.map((v) => `${v.vault}${v.error ? ` (${v.error})` : ""}`).join(", ")}. Pause them by hand now.`, { unpaused: bad.map((v) => v.vault) });
 }

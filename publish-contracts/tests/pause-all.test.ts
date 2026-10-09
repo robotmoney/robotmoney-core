@@ -32,8 +32,8 @@ function signerFor(spec: string): PublishSigner {
 }
 
 interface Send { to: string; keystore?: string; from?: string }
-interface Chain { paused: Record<string, boolean>; sends: Send[]; failSendTo?: string; emergencyHolds: Set<string> }
-const newChain = (): Chain => ({ paused: {}, sends: [], emergencyHolds: new Set() });
+interface Chain { paused: Record<string, boolean>; sends: Send[]; failSendTo?: string; emergencyHolds: Set<string>; balances: Record<string, string>; balanceReads: string[] }
+const newChain = (): Chain => ({ paused: {}, sends: [], emergencyHolds: new Set(), balances: {}, balanceReads: [] });
 
 /** `cast send pauseDeposits()` flips the flag and records its signer flags, `cast call` reads it. Every other tool call goes to the stubs on PATH. */
 function chainRunner(c: Chain): ProcessRunner {
@@ -45,6 +45,10 @@ function chainRunner(c: Chain): ProcessRunner {
       if (c.failSendTo === to) return { code: 1, stdout: "", stderr: "Error: execution reverted: AccessControl" };
       c.paused[to] = true;
       return { code: 0, stdout: JSON.stringify({ status: "0x1", transactionHash: `0x${"ab".repeat(32)}` }) + "\n", stderr: "" };
+    }
+    if (tool === "cast" && args[0] === "balance") {
+      c.balanceReads.push(args[1]!.toLowerCase());
+      return { code: 0, stdout: `${c.balances[args[1]!.toLowerCase()] ?? "10000000000000000000"}\n`, stderr: "" };
     }
     if (tool === "cast" && args[0] === "call" && args[2] === "depositsPaused()(bool)") return { code: 0, stdout: `${c.paused[args[1]!] === true}\n`, stderr: "" };
     if (tool === "cast" && args[0] === "call" && args[2] === "hasRole(bytes32,address)(bool)") {
@@ -323,3 +327,128 @@ describe("issue 1686: pause-all records a pause entry in the run manifest", () =
   });
 });
 
+
+describe("issue 1712: an unfunded signer stops pause-all BEFORE the first send", () => {
+  const manifestOf = (w: ReturnType<typeof world>) => JSON.parse(readFileSync(join(w.evidence, "publish-run.json"), "utf8"));
+  const unfundEmergency = (c: Chain) => { c.balances[EMERGENCY.toLowerCase()] = "0"; };
+
+  test("the manual verb: an EMERGENCY key with zero ETH exits PAUSE (25), sends nothing, and names the EMERGENCY address and what to do", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    unfundEmergency(c);
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(EXIT_CODES.PAUSE);
+    expect(c.sends).toEqual([]);
+    const msg = lastError(w).message as string;
+    expect(msg).toContain(EMERGENCY);
+    expect(msg).toContain("EMERGENCY");
+    expect(msg).toContain("Fund");
+    expect(msg).toContain("only the deployer is funded");
+    expect(msg).toContain("Nothing was sent");
+    expect(c.balanceReads).toEqual([EMERGENCY.toLowerCase()]); // only the key that would send is checked
+    expect(report(w).pauseAll).toMatchObject({ trigger: "manual", allPaused: false });
+    expect(report(w).pauseAll.blocked).toContain(EMERGENCY);
+  });
+
+  test("the pause entry is still written first (PR 1694): it exists, with the next seq, when the check runs and after it stops the pause", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    unfundEmergency(c);
+    const run = chainRunner(c);
+    const atCheck: unknown[] = [];
+    const first = await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], { run: async (t, a, o) => {
+      if (t === "cast" && a[0] === "balance") atCheck.push(manifestOf(w).pauses?.[0]);
+      return run(t, a, o);
+    }, makeSigner: signerFor });
+    expect(first).toBe(EXIT_CODES.PAUSE);
+    expect(atCheck).toHaveLength(1);
+    expect(atCheck[0]).toMatchObject({ seq: 1, trigger: "manual", status: "started" }); // written before the balance check, so before any send
+    expect(manifestOf(w).pauses[0]).toMatchObject({ seq: 1, status: "done", allPaused: false });
+    // the owner funds the key and runs it again: the pause goes out and takes the next seq
+    c.balances[EMERGENCY.toLowerCase()] = "1";
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
+    expect(c.sends).toHaveLength(4);
+    expect(manifestOf(w).pauses.map((p: any) => [p.seq, p.allPaused])).toEqual([[1, false], [2, true]]);
+  });
+
+  test("the automatic pause after a failed verify: zero ETH on the EMERGENCY key exits PAUSE (25), sends nothing, and keeps the verify failure in the message", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    unfundEmergency(c);
+    expect(await w.run(["verify", "--emergency-signer", EMERGENCY_SPEC], { ...deps(c), verify: failingVerifier })).toBe(EXIT_CODES.PAUSE);
+    expect(c.sends).toEqual([]);
+    const msg = lastError(w).message as string;
+    expect(msg).toContain("safe: nonce at least 1"); // the original failure
+    expect(msg).toContain(EMERGENCY);
+    expect(msg).toContain("Fund");
+    expect(manifestOf(w).pauses[0]).toMatchObject({ seq: 1, trigger: "verify", status: "done", allPaused: false });
+  });
+
+  test("the automatic pause after a failed postflight (the end-of-deploy nonce check) is stopped the same way", async () => {
+    const w = world({ startNonce: 0 }), c = newChain();
+    unfundEmergency(c);
+    const stray = { verifyDeployment: (async () => { w.setNonce(w.state().nonces[ADMIN.toLowerCase()] + 3); return { ok: true, checks: [{ label: "chain: id equals sheet", ok: true, detail: "" }] }; }) as never };
+    expect(await w.run(["--emergency-signer", EMERGENCY_SPEC], { ...deps(c), verify: stray })).toBe(EXIT_CODES.PAUSE);
+    expect(c.sends).toEqual([]);
+    const msg = lastError(w).message as string;
+    expect(msg).toContain("nonce"); // the postflight failure
+    expect(msg).toContain(EMERGENCY);
+    expect(manifestOf(w).pauses[0]).toMatchObject({ trigger: "postflight", status: "done", allPaused: false });
+  });
+
+  test("a key with ANY ETH is never blocked: 1 wei goes out to the sends, and the failure (if any) is the send's own", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    c.balances[EMERGENCY.toLowerCase()] = "1";
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
+    expect(c.sends).toHaveLength(4);
+    expect(report(w).pauseAll.blocked).toBeUndefined();
+  });
+
+  test("a balance that cannot be read does not stop a pause", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    const run = chainRunner(c);
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], { run: async (t, a, o) => (t === "cast" && a[0] === "balance" ? { code: 1, stdout: "", stderr: "rpc down" } : run(t, a, o)), makeSigner: signerFor })).toBe(0);
+    expect(c.sends).toHaveLength(4);
+    expect(w.logs().some((l) => l.event === "pause_all.balance_unread")).toBe(true);
+  });
+
+  test("before the handover the DEPLOYER pays: zero ETH on it stops the pause and names the deployer; the EMERGENCY balance is not read", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, BEFORE_HANDOVER);
+    c.balances[ADMIN] = "0";
+    expect(await w.run(["pause-all"], deps(c))).toBe(EXIT_CODES.PAUSE);
+    expect(c.sends).toEqual([]);
+    expect(lastError(w).message).toContain(`deployer signer ${ADMIN}`);
+    expect(c.balanceReads).toEqual([ADMIN]);
+  });
+
+  test("a handover that started: one unfunded key that has to send stops ALL four vaults (no partial pause), the funded key's vaults included", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, { ...BEFORE_HANDOVER, timelock: rec("started") });
+    c.emergencyHolds.add(vaultAddr(0)); // rmUSDC already moved to the EMERGENCY key, the other three still hold the deployer
+    unfundEmergency(c);
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(EXIT_CODES.PAUSE);
+    expect(c.sends).toEqual([]);
+    expect(lastError(w).message).toContain(EMERGENCY);
+  });
+
+  test("a handover that started with the unfunded key holding no vault: only the deployer is needed and the pause goes out", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, { ...BEFORE_HANDOVER, timelock: rec("started") });
+    unfundEmergency(c); // the deployer still holds EMERGENCY_ROLE on all four: the EMERGENCY key sends nothing
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
+    expect(c.sends).toHaveLength(4);
+    expect(c.balanceReads).toEqual([ADMIN]);
+  });
+
+  test("zero ETH on the EMERGENCY key does not fail a pause that has nothing left to send: every vault already reads paused", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    unfundEmergency(c);
+    for (let i = 0; i < VAULTS.length; i++) c.paused[vaultAddr(i)] = true;
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
+    expect(c.sends).toEqual([]);
+    expect(report(w).pauseAll).toMatchObject({ allPaused: true });
+  });
+});

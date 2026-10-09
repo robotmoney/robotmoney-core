@@ -36,7 +36,7 @@ function runScript(env: Record<string, string>) {
   const log = join(work, "log"), ghEnv = join(work, "env");
   writeFileSync(log, ""); writeFileSync(ghEnv, "");
   const r = Bun.spawnSync([process.execPath, join(REPO_ROOT, "publish-contracts/src/ci/twin-publish.ts")], {
-    env: { ...process.env, ...stubs(), STUB_LOG: log, STUB_COUNTS: JSON.stringify(COUNTS), STUB_NONCE: String(sum), STUB_FAIL: "",
+    env: { ...process.env, ...stubs(), STUB_LOG: log, STUB_COUNTS: JSON.stringify(COUNTS), STUB_NONCE: String(sum + 1), STUB_FAIL: "",
       GITHUB_WORKSPACE: REPO_ROOT, GITHUB_ENV: ghEnv, RPC_URL: "http://127.0.0.1:1", SHARE_RECEIVER_IN: "", VERIFY_IN: "true", GOVERN_IN: "true", ...env },
     stdout: "pipe", stderr: "pipe",
   });
@@ -54,7 +54,7 @@ describe("twin-publish step script", () => {
     expect(existsSync(r.exported.TWIN_VERIFY_LABELS_POST_GOVERN!)).toBe(true);
     const j = JSON.parse(readFileSync(r.exported.TWIN_COUNTS_JSON!, "utf8"));
     expect(j.counts).toEqual(COUNTS);
-    expect(j.deployerNonce).toBe(sum);
+    expect(j.deployerNonce).toBe(sum + 1); // the sum of the counts plus the deployer's prove-control transaction (core 1712)
     expect(existsSync(r.exported.TWIN_GOVERN_ROWS!)).toBe(true);
   });
   for (const [fail, verbs] of [["publish", ["publish"]], ["verify", ["publish", "verify"]], ["govern", ["publish", "verify", "govern"]], ["verify:2", ["publish", "verify", "govern", "verify"]]] as const) {
@@ -70,8 +70,8 @@ describe("twin-publish step script", () => {
     expect(r.verbs).toEqual(["publish", "verify"]);
     expect(r.exported.TWIN_VERIFY_LABELS_POST_GOVERN).toBeUndefined();
   });
-  test("a deployer nonce that is not the sum of the counts fails the run", () => {
-    const r = runScript({ STUB_NONCE: String(sum + 1) });
+  test("a deployer nonce that is not the sum of the counts plus the prove-control transaction fails the run (the bare sum too)", () => {
+    const r = runScript({ STUB_NONCE: String(sum) });
     expect(r.code).not.toBe(0);
     expect(r.err).toContain("deployerNonce");
   });

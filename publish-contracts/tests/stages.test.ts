@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SHEET_SPEC, VAULT_KEYS } from "../src/sheet.ts";
-import { DEPLOYER_STAGES, STAGES, STAGE_NAMES, VAULT_STAGES, buildStages, expectedStartNonce, getStageTable, manifestRef } from "../src/stages.ts";
+import { DEPLOYER_STAGES, STAGES, STAGE_NAMES, VAULT_STAGES, buildStages, expectedStartNonce, getStageTable, manifestRef, proofNoncesBefore } from "../src/stages.ts";
 import { LIBS_STAGE, MANIFEST_ENV, SHEET_RENAMES, requiredSheetNames, resolveEnv } from "../src/core-wiring.ts";
 import { manifestBase, parseStageTable } from "../src/stage-table.ts";
 import { stagePlan } from "../src/plan.ts";
@@ -96,7 +96,11 @@ describe("stage list built from core's stage table", () => {
     const plan = stagePlan(COUNTS);
     expect(plan.map((p) => p.stage)).toEqual(STAGE_NAMES);
     const last = plan.find((p) => p.stage === "timelock")!;
-    expect(last.startNonce! + last.expectedCount!).toBe(Object.values(COUNTS).reduce((a, b) => a + b, 0));
+    // the deployer also sends the prove-control transaction before the handover (core 1712): it moves the handover start and the end by one
+    expect(last.startNonce! + last.expectedCount!).toBe(Object.values(COUNTS).reduce((a, b) => a + b, 0) + 1);
+    expect(proofNoncesBefore("timelock")).toBe(1);
+    expect(proofNoncesBefore("vault")).toBe(0);
+    expect(proofNoncesBefore("safe")).toBe(0);
     expect(plan.find((p) => p.stage === "verify")!.expectedCount).toBeNull();
   });
   test("rmRWA is a plain basket row: no oracle name anywhere in its row", () => {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { encodeErrorResult, encodeFunctionData, parseAbi } from "viem";
 import { basename, join } from "node:path";
+import { PROOF_TX_NONCES } from "../src/counts.ts";
 import { EXIT_CODES } from "../src/errors.ts";
 import { STAGE_NAMES, getStageTable } from "../src/stages.ts";
 import { COUNTS, exampleText } from "./fixtures.ts";
@@ -28,13 +29,14 @@ describe("the stage runner on stub forge and cast", () => {
     expect(w.safeCalls[0]).toBe("createSafe");
     const m = manifest(w);
     expect(Object.keys(m.stages)).toEqual(DEPLOY);
-    // the Safe control proof (core 1618) sits between stage 10 and the timelock stage, and sends nothing from the deployer
+    // the Safe control proof (core 1618) sits between stage 10 and the timelock stage; the deployer submits it (core 1712), one nonce outside every count
     expect(DEPLOY.slice(-2)).toEqual(["prove-control", "timelock"]);
     expect(m.stages["prove-control"]).toMatchObject({ status: "done", nonce: 0, txHash: `0x${"ee".repeat(32)}` });
     expect(m.stages["prove-control"].signers).toHaveLength(3);
     let n = 0;
     for (const s of DEPLOY.filter((x) => x !== "prove-control")) {
       const key = s;
+      if (s === "timelock") n += PROOF_TX_NONCES;
       expect(m.stages[s].startNonce).toBe(n);
       expect(m.stages[s].count).toBe(COUNTS[key]!);
       expect(m.stages[s].dryRunCount).toBe(COUNTS[key]!);
@@ -188,7 +190,7 @@ describe("the stage runner on stub forge and cast", () => {
     expect(w.logs().filter((l) => l.event === "stage.skipped").map((l) => l.stage)).toEqual(["safe", "libs", "recorder"]);
     const resumed = forgeScripts(w).filter((c: any) => c.args.includes("--resume")).map((c: any) => c.args[1].split(":")[0].split("/").pop());
     expect(resumed).toEqual([SCRIPT.vault]);
-    expect(w.state().nonces["0x000000000000000000000000000000000000a001"]).toBe(Object.values(COUNTS).reduce((a, b) => a + b, 0));
+    expect(w.state().nonces["0x000000000000000000000000000000000000a001"]).toBe(Object.values(COUNTS).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES);
   });
 
   test("resume adopts a Safe created before the run died", async () => {

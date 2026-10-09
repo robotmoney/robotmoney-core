@@ -3,6 +3,7 @@
 // Read-only: it sends nothing.
 import { encodeAbiParameters, encodeFunctionData, keccak256, parseAbiItem, toFunctionSelector, toHex } from "viem";
 import { Collector } from "./collector.ts";
+import { PROOF_TX_NONCES } from "../counts.ts";
 import { compareCode, loadArtifact } from "./codehash.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
@@ -205,14 +206,15 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
 
   // ---- deployer nonce equals the sum of the frozen counts
   await c.run("deployer: nonce equals sum of frozen counts", async () => {
-    const want = Object.values(opts.frozenCounts).reduce((a, b) => a + b, 0);
+    // the deployer also sent the one prove-control transaction (core 1712), which is outside every stage count
+    const want = Object.values(opts.frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES;
     const got = await chain.nonce(D);
     const frozen = Object.keys(opts.frozenCounts).length > 0;
     // After govern the deployer has paid Safe execTransaction gas, so the live nonce is above the sum. The runner's own record of the nonce
     // at the end of the deploy stages stands in for it, and the live nonce may only be at or above that record.
     const rec = opts.deployerNonceAtDeployEnd;
-    if (rec !== undefined) return { ok: frozen && rec === want && got >= rec, detail: `recorded nonce at deploy end ${rec}, frozen sum ${want}, live nonce ${got} (govern ran)` };
-    return { ok: frozen && got === want, detail: `nonce ${got}, frozen sum ${want}` };
+    if (rec !== undefined) return { ok: frozen && rec === want && got >= rec, detail: `recorded nonce at deploy end ${rec}, frozen sum plus the prove-control transaction ${want}, live nonce ${got} (govern ran)` };
+    return { ok: frozen && got === want, detail: `nonce ${got}, frozen sum plus the prove-control transaction ${want}` };
   });
 
   return c.report();

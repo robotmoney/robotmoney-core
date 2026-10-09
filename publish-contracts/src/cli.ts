@@ -20,7 +20,6 @@ import { DEPLOYER_STAGES, STAGE_NAMES, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
 import { finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
 import { callerInputs, parseSheet } from "./sheet.ts";
-import { loadCorrelatedOwners } from "./correlated-owners.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { APPLY_ROW } from "./apply-receipt.ts";
@@ -76,7 +75,6 @@ export const USAGE = `publish contracts
   --dry-run          the preflight: run every check and simulate EVERY deployer stage in order on a blank local anvil it starts itself
                      (no fork). Nothing is broadcast, nothing is sent to --rpc, the checkout is left as found.
   --core-dir DIR     core checkout (default: the repo root that holds scripts/deploy/stage-table.json, found by walking up; use it only for a checkout elsewhere)
-  --correlated-owners-file F   chain 8453: REQUIRED (or env CORRELATED_OWNERS_FILE). A file of addresses that share one root of trust. Two or more of them in SAFE_OWNERS is refused.
   --evidence DIR     evidence directory (run manifest, isomorphism report)
   --counts-dir DIR   frozen counts directory (default: deployments/frozen-counts in the working directory if present, else this repo's)
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
@@ -98,8 +96,6 @@ export interface CliDeps {
   prompt?: (q: string) => Promise<string>;
   cwd?: string;
   makeSigner?: (spec: string) => PublishSigner;
-  /** Test seam: replaces the read of the correlated-owners file (used on chain 8453 only). */
-  correlatedOwners?: () => string[] | Promise<string[]>;
   ownerSigner?: (spec: string) => Promise<Signer>;
   safeApi?: RunContext["safeApi"];
   govern?: Partial<GovernOpts>;
@@ -127,7 +123,7 @@ export interface CliDeps {
 
 export interface Parsed {
   chain: number; rpc: string; sheet: string; signer?: string; environment: string; coreSha: string; stage?: string; resume: boolean; dryRun: boolean;
-  verb?: Verb; row?: string; coreDir?: string; correlatedOwnersFile?: string; evidence?: string; countsDir?: string; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
+  verb?: Verb; row?: string; coreDir?: string; evidence?: string; countsDir?: string; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
   /** With --row release-receipt or --row apply-receipt: the receipt. */
   receiptId?: string;
   /** With --row apply-receipt only: the receipt payload file. */
@@ -143,7 +139,7 @@ export function parseCli(argv: string[]): Parsed {
       options: {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
-        resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, "correlated-owners-file": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" },
+        resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" },
         measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, help: { type: "boolean" },
       },
     }));
@@ -194,7 +190,7 @@ export function parseCli(argv: string[]): Parsed {
   if (!/^https?:\/\//.test(v.rpc as string)) throw new PublishError("USAGE", "--rpc must be an http(s) URL");
   return {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
-    coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, correlatedOwnersFile: v["correlated-owners-file"] as string | undefined, evidence: v.evidence as string | undefined,
+    coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
     maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId, payload,
   };
@@ -279,9 +275,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return r.stdout;
     });
     if (rpcChainId !== MAINNET_CHAIN_ID && rpcChainId !== TWIN_CHAIN_ID) throw new PublishError("CHAIN", `chain ${rpcChainId} is not supported: publish contracts runs on ${TWIN_CHAIN_ID} (rehearsal) and ${MAINNET_CHAIN_ID} (mainnet)`);
-    // The correlated-owners floor is on by default on 8453 and its file is required: the caller (devops) supplies it.
-    const correlatedOwners = rpcChainId === MAINNET_CHAIN_ID ? await (deps.correlatedOwners ?? (() => loadCorrelatedOwners({ file: a.correlatedOwnersFile, env, cwd })))() : undefined;
-    assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions: env.GITHUB_ACTIONS === "true", measure: a.measure, correlatedOwners });
+    assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions: env.GITHUB_ACTIONS === "true", measure: a.measure });
     log.log("info", "run.checks_ok", { chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
     const coreDir = a.coreDir ? resolve(cwd, a.coreDir) : defaultCoreDir(cwd);
@@ -369,7 +363,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     let result: Awaited<ReturnType<typeof runStages>>;
     try {
       result = await runStages(ctx, names, {
-        prove: async (c, row, m) => { await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), ...(deps.prove ?? {}) }); },
+        prove: async (c, row, m) => { await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), ...(deps.prove ?? {}) }); },
         verify: async (c, row, m) => {
           try { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); } catch (e) {
             // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused.

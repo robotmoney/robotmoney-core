@@ -42,6 +42,8 @@ export interface World {
   deps(over?: Partial<CliDeps>): CliDeps;
   logs(): any[];
   safeCalls: string[];
+  /** The address that sent each fake prove-control execTransaction, in order (core 1712: the deployer, never an owner). */
+  proofSenders: string[];
   /** The live nonce of the fake Safe: 0 until the fake prove-control execution moves it to 1. */
   safeNonce: number;
   /** What the fake chain holds for the adoption of a landed proof (prove-control.ts adoptLandedProof): the Safe's execution events and the transactions. Empty: nothing landed. */
@@ -97,14 +99,14 @@ export function world(o: WorldOpts = {}): World {
   const write = () => writeFileSync(cfgPath, JSON.stringify(cfg));
   write();
   const w: World = {
-    dir, coreDir, sheetPath, countsDir, evidence: join(dir, "evidence"), statePath, cfgPath, lines: [], cfg, safeCalls: [], safeNonce: 0, landed: { executions: [], txs: {}, reads: [] }, chainEvents: [], forkUrls: [], coreChecks: [], coreCheckCode: 0,
+    dir, coreDir, sheetPath, countsDir, evidence: join(dir, "evidence"), statePath, cfgPath, lines: [], cfg, safeCalls: [], proofSenders: [], safeNonce: 0, landed: { executions: [], txs: {}, reads: [] }, chainEvents: [], forkUrls: [], coreChecks: [], coreCheckCode: 0,
     state() { try { return JSON.parse(readFileSync(statePath, "utf8")); } catch { return { nonces: {}, calls: [] }; } },
     setNonce(n) { const s = w.state(); s.nonces = { ...(s.nonces ?? {}), [ADMIN.toLowerCase()]: n }; s.calls ??= []; writeFileSync(statePath, JSON.stringify(s)); },
     logs() { return w.lines.map((l) => JSON.parse(l)); },
     deps(over = {}) {
       return {
         cwd: dir, logSink: (l) => w.lines.push(l), prompt: typedPrompt(), prove: { api: fakeProveApi(w), ownerSigners: PROVE_SIGNERS },
-        makeSigner: () => fakeSigner(), coreConfigCheck: async (i) => { w.coreChecks.push({ outDir: i.outDir, rpc: i.rpc, chainId: i.chainId }); return w.coreCheckCode === 0 ? { code: 0, output: "PASS  fixture\nconfig-check: ok" } : { code: w.coreCheckCode, output: "FAIL  fixture  pool-fee-equals-config\nconfig-check: 1 failure(s)" }; }, chainReader: () => healthyPoolReader(), releaseTag: async () => "release/1.0.0", remoteTag: async () => {}, checkShaGreen: async () => ({ code: 0, output: "GREEN" }), usdcCodeHash: keccak256(STUB_CODE as `0x${string}`), correlatedOwners: async () => [], safeApi: fakeSafeApi(w), startChain: fakeChain(w), ...over,
+        makeSigner: () => fakeSigner(), coreConfigCheck: async (i) => { w.coreChecks.push({ outDir: i.outDir, rpc: i.rpc, chainId: i.chainId }); return w.coreCheckCode === 0 ? { code: 0, output: "PASS  fixture\nconfig-check: ok" } : { code: w.coreCheckCode, output: "FAIL  fixture  pool-fee-equals-config\nconfig-check: 1 failure(s)" }; }, chainReader: () => healthyPoolReader(), releaseTag: async () => "release/1.0.0", remoteTag: async () => {}, checkShaGreen: async () => ({ code: 0, output: "GREEN" }), usdcCodeHash: keccak256(STUB_CODE as `0x${string}`), safeApi: fakeSafeApi(w), startChain: fakeChain(w), ...over,
       };
     },
     async run(extra = [], overAll = {}) {
@@ -182,6 +184,10 @@ export function fakeProveApi(w: World): ProveApi {
     async executeTx(_handle, bundle, sender, opts) {
       w.safeCalls.push(`executeTx:${bundle.signatures.length}${opts?.allSignatures ? ":all" : ""}`);
       w.safeNonce = 1;
+      // like the chain: the sender's nonce moves by one (the deployer's, when the deployer sends)
+      const from = (await sender.address()).toLowerCase();
+      w.proofSenders.push(from);
+      const st = w.state(); st.nonces[from] = (st.nonces[from] ?? 0) + 1; writeFileSync(w.statePath, JSON.stringify(st));
       const txHash = `0x${"ee".repeat(32)}` as Hex;
       return { txHash, block: 8, sentBy: await sender.address(), nonceBefore: 0, nonceAfter: 1, bundle: { ...bundle, executed: { tx_hash: txHash, block: 8, sent_by: await sender.address(), status: 1 } }, simulated: false };
     },
