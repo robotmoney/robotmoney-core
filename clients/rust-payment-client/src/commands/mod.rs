@@ -22,11 +22,9 @@ pub mod get_tx;
 pub mod get_vault;
 pub mod get_vaults;
 pub mod governance_draft;
-pub mod propose;
 pub mod receipt;
 pub mod self_check;
 pub mod status;
-pub mod vote;
 pub mod withdraw;
 pub mod withdraw_router;
 

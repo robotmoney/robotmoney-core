@@ -11,7 +11,7 @@ consult before creating or evaluating a governance proposal.
 
 The regime page is the canonical source for the current Robot Money macro and
 on-chain risk regime classification. Agents must fetch this source before
-creating a `propose` transaction so that the proposal rationale is grounded in
+drafting a weight-change proposal so that the proposal rationale is grounded in
 the current regime signal rather than stale assumptions.
 
 ### Stability
@@ -63,7 +63,7 @@ weight change.
 
 ### When to consult
 
-- **Before every `propose` transaction.** The regime bucket and composite score
+- **Before every proposal draft.** The regime bucket and composite score
   must appear verbatim in the proposal rationale.
 - When the user asks about current market conditions or whether a weight
   rebalance is appropriate.
@@ -78,7 +78,7 @@ weight change.
 
 The analytics projects page documents active and completed research threads,
 methodology notes, and signal analyses that inform governance decisions. Agents
-must check this source before creating a `propose` transaction to identify
+must check this source before drafting a weight-change proposal to identify
 whether any open research thread directly addresses the vaults or signals
 involved in the proposed weight change.
 
@@ -121,7 +121,7 @@ Each research project entry on the page contains the following logical fields:
 
 ### When to consult
 
-- **Before every `propose` transaction.** Check for active research threads
+- **Before every proposal draft.** Check for active research threads
   relevant to the vaults or factors covered by the proposal.
 - When the user asks about the analytical basis for a past or proposed weight
   change.

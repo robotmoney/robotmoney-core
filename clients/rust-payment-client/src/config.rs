@@ -116,8 +116,8 @@ pub struct Config {
     #[serde(default)]
     pub gateway_from_block: Option<u64>,
     /// `InvestmentCommitteePolicy` contract address (0x-prefixed hex). Optional —
-    /// only required for `rmpc committee register` and `rmpc committee vote-submit`.
-    /// When absent those subcommands exit with `EXIT_STARTUP_FAIL`.
+    /// only required for `rmpc committee vote-submit`.
+    /// When absent that subcommand exits with `EXIT_STARTUP_FAIL`.
     #[serde(default)]
     pub ic_policy_address: Option<String>,
     /// `ConsensusRecommendationReceipt` contract address (0x-prefixed hex). Optional —

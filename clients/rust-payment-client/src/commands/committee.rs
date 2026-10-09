@@ -1,19 +1,28 @@
 //! Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §3
 //! Implements: issue #1044 — Investment Committee v0
 //!
-//! `rmpc committee` — register a committee agent or submit a signed
-//! allocation vote through the `InvestmentCommitteePolicy` contract,
-//! routed via `RobotMoneyGateway`.
+//! `rmpc committee` — submit a signed allocation vote through
+//! `RobotMoneyGateway.committeeVoteSubmit`, which forwards it to the
+//! `InvestmentCommitteePolicy` contract.
 //!
-//! Subcommands:
-//! - `register`     — ADMIN_ROLE: allowlist a new committee agent address.
-//! - `vote-submit`  — COMMITTEE_AGENT_ROLE: submit a signed allocation vote.
+//! Subcommand:
+//! - `vote-submit` — submit a signed allocation vote. The caller needs
+//!   `AGENT_ROLE` on the gateway and `COMMITTEE_AGENT_ROLE` on the IC policy.
 //!
-//! `register` encodes `registerAgent` against the IC policy ABI and sends it
-//! to the IC policy contract. `vote-submit` encodes
-//! `RobotMoneyGateway.committeeVoteSubmit` and sends it to the gateway
-//! (`gateway_address`), because the policy's `submitVote` is `onlyGateway`
-//! and the gateway gates the call on its `AGENT_ROLE` (issue #1511).
+//! rmpc is not a governance signer. Registering a committee agent
+//! (`gateway.committeeRegister`) is an `onlyRole(ADMIN_ROLE)` call, and
+//! ADMIN_ROLE belongs to the Safe and timelock after handover, so rmpc has no
+//! `register` command. Register agents through the Safe and the timelock's
+//! schedule → delay → execute path, as described in
+//! `docs/technical/consensus-receipt-submitter-runbook.md` §3.
+//!
+//! `vote-submit` encodes `committeeVoteSubmit(VoteParams)` against the gateway
+//! ABI and sends it to `cfg.gateway_address`. It never calls the policy
+//! directly: the policy's `submitVote` is `onlyGateway` and reverts with
+//! `CallerNotGateway` for any other sender (issue #1511). The transaction
+//! sender is the allowlisted committee agent; the agent role is an operating
+//! role, not a governance role. `ic_policy_address` is still required so the
+//! command fails closed before signing when the committee is not configured.
 //!
 //! Exit codes:
 //! - 0 — success.
@@ -31,7 +40,7 @@ use serde::Serialize;
 use crate::config::Config;
 use crate::errors::RmpcError;
 use crate::fees::{compute_fees, FeeBid};
-use crate::gateway::{GatewayVoteParams, InvestmentCommitteePolicy, RobotMoneyGateway};
+use crate::gateway::{GatewayVoteParams, RobotMoneyGateway};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
@@ -88,20 +97,6 @@ impl Stance {
 
 // ─── Args ────────────────────────────────────────────────────────────────────
 
-/// Args for `rmpc committee register`.
-#[derive(Debug, Clone)]
-pub struct RegisterArgs {
-    pub config_path: PathBuf,
-    pub agent: String,
-    pub agent_id: String,
-    pub order_id: String,
-    pub deadline_secs: u64,
-    pub receipt_timeout_secs: u64,
-    pub gas_limit: u64,
-    pub fee_cap_wei: Option<u64>,
-    pub pretty: bool,
-}
-
 /// Args for `rmpc committee vote-submit`.
 #[derive(Debug, Clone)]
 pub struct VoteSubmitArgs {
@@ -153,196 +148,6 @@ pub struct CommitteeFailure {
 
 // ─── Public entry points ─────────────────────────────────────────────────────
 
-/// Run `rmpc committee register`. Returns the process exit code.
-pub fn run_register(args: RegisterArgs) -> i32 {
-    let cfg = match Config::from_path(&args.config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("rmpc committee register: failed to load config: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-
-    let ic_addr = match resolve_ic_address(&cfg, "register", args.pretty) {
-        Ok(a) => a,
-        Err(code) => return code,
-    };
-
-    let agent_addr = match parse_address(&args.agent, "rmpc committee register", "--agent") {
-        Ok(a) => a,
-        Err(code) => return code,
-    };
-
-    let signer = match load_signer(&cfg, "register", args.pretty) {
-        Ok(s) => s,
-        Err(code) => return code,
-    };
-    let caller = signer.public_address();
-
-    let network_env = NetworkEnv::from_chain_id(cfg.chain_id);
-    log::info!(
-        "rmpc committee register: caller={caller:#x} ic={ic_addr:#x} agent={agent_addr:#x} chain_id={} env={}",
-        cfg.chain_id,
-        network_env.as_str()
-    );
-
-    let state_dir = match cfg.resolve_state_dir() {
-        Ok(p) => p,
-        Err(e) => {
-            log::error!("rmpc committee register: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-    let _lock = match AgentLock::acquire(&state_dir, &caller) {
-        Ok(l) => l,
-        Err(RmpcError::ErrConcurrentInvocation) => {
-            emit_failure(
-                &CommitteeFailure {
-                    ok: false,
-                    error: "ErrConcurrentInvocation".to_string(),
-                    message: Some(format!(
-                        "another rmpc invocation already holds the lock for {caller:#x}"
-                    )),
-                    tx_hash: None,
-                },
-                args.pretty,
-            );
-            return EXIT_REFUSAL;
-        }
-        Err(e) => {
-            log::error!("rmpc committee register: lock acquire failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-
-    let rt = match build_rt("register") {
-        Ok(rt) => rt,
-        Err(code) => return code,
-    };
-    let rpc = match cfg.rpc_client() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("rmpc committee register: rpc client init failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-
-    let fees = match fetch_fees(&rt, &rpc, &cfg, args.fee_cap_wei, args.pretty, "register") {
-        Ok(f) => f,
-        Err(code) => return code,
-    };
-
-    let nonce =
-        match rt.block_on(async { rpc.get_transaction_count(caller, Some("pending")).await }) {
-            Ok(n) => n,
-            Err(e) => {
-                log::error!("rmpc committee register: eth_getTransactionCount failed: {e}");
-                return EXIT_STARTUP_FAIL;
-            }
-        };
-
-    // Encode `InvestmentCommitteePolicy.registerAgent(agent, agentId)`.
-    let calldata = InvestmentCommitteePolicy::registerAgentCall {
-        agent: agent_addr,
-        agentId_: args.agent_id.clone(),
-    }
-    .abi_encode();
-
-    let tx = build_eip1559(Eip1559Inputs {
-        chain_id: cfg.chain_id,
-        nonce,
-        to: ic_addr,
-        gas_limit: args.gas_limit,
-        fees,
-        value: U256::ZERO,
-        input: Bytes::from(calldata),
-    });
-
-    let hash = signing_hash(&tx);
-    let mut hash_bytes = [0u8; 32];
-    hash_bytes.copy_from_slice(hash.as_slice());
-    let alloy_sig = match signer.sign_eip1559_hash(&hash_bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("rmpc committee register: envelope signing failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-    let raw = encode_signed(tx, alloy_sig);
-
-    let tx_hash = match rt.block_on(async { broadcast(&rpc, &raw).await }) {
-        Ok(h) => h,
-        Err(e) => {
-            log::error!("rmpc committee register: broadcast failed: {e}");
-            emit_failure(
-                &CommitteeFailure {
-                    ok: false,
-                    error: "ErrBroadcastFailed".to_string(),
-                    message: Some(format!("{e}")),
-                    tx_hash: None,
-                },
-                args.pretty,
-            );
-            return EXIT_REFUSAL;
-        }
-    };
-
-    let max_attempts = args.receipt_timeout_secs.min(u32::MAX as u64) as u32;
-    // T23 / R9: THE TWO WRITE PATHS THAT HAD NO STATUS CHECK AT ALL. §E.4
-    // recorded this file as the symptom — `register` and `vote-submit` both
-    // printed `{"ok":true, tx_hash, block_number}` and exited 0 for a
-    // transaction the node mined and the EVM reverted, which is precisely what
-    // an agent without `COMMITTEE_AGENT_ROLE` produces. Both now go through the
-    // shared write seam, so the refusal is `ErrTxReverted` with the tx_hash an
-    // operator has to inspect, and a genuine receipt-poll timeout keeps its own
-    // `ErrReceiptTimeout` code: they are different facts and the agent-visible
-    // contract distinguishes them.
-    let receipt = match rt.block_on(async {
-        wait_for_successful_receipt(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1))
-            .await
-    }) {
-        Ok(r) => r,
-        Err(err @ RmpcError::ErrTxReverted { .. }) => {
-            emit_failure(
-                &CommitteeFailure {
-                    ok: false,
-                    error: err.name().to_string(),
-                    message: Some(format!("{err}")),
-                    tx_hash: Some(format!("{tx_hash:#x}")),
-                },
-                args.pretty,
-            );
-            return EXIT_REFUSAL;
-        }
-        Err(e) => {
-            emit_failure(
-                &CommitteeFailure {
-                    ok: false,
-                    error: "ErrReceiptTimeout".to_string(),
-                    message: Some(format!("{e}")),
-                    tx_hash: Some(format!("{tx_hash:#x}")),
-                },
-                args.pretty,
-            );
-            return EXIT_REFUSAL;
-        }
-    };
-
-    let block_number = receipt.block_number.unwrap_or(0);
-    log::info!("rmpc committee register: ok tx_hash={tx_hash:#x} block={block_number}");
-    emit_output(
-        &CommitteeOutput {
-            ok: true,
-            action: "register".to_string(),
-            tx_hash: format!("{tx_hash:#x}"),
-            block_number,
-            vote_id: None,
-        },
-        args.pretty,
-    );
-    EXIT_OK
-}
-
 /// Run `rmpc committee vote-submit`. Returns the process exit code.
 pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
     let cfg = match Config::from_path(&args.config_path) {
@@ -353,15 +158,19 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         }
     };
 
-    // `InvestmentCommitteePolicy.submitVote` is `onlyGateway`, so the vote goes
-    // to `RobotMoneyGateway.committeeVoteSubmit` (gated by the gateway's
-    // `AGENT_ROLE`), never to the policy contract directly (issue #1511).
-    let gateway_addr = match Address::from_str(&cfg.gateway_address) {
+    // Fail closed before signing when the committee is not configured.
+    let ic_addr = match resolve_ic_address(&cfg, "vote-submit", args.pretty) {
         Ok(a) => a,
-        Err(e) => {
-            log::error!("rmpc committee vote-submit: gateway_address parse error: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
+        Err(code) => return code,
+    };
+    // The vote goes to the GATEWAY (issue #1511): the policy is onlyGateway.
+    let gateway_addr = match parse_address(
+        &cfg.gateway_address,
+        "rmpc committee vote-submit",
+        "gateway_address",
+    ) {
+        Ok(a) => a,
+        Err(code) => return code,
     };
 
     let vault_addr = match parse_address(&args.vault, "rmpc committee vote-submit", "--vault") {
@@ -404,7 +213,7 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
 
     let network_env = NetworkEnv::from_chain_id(cfg.chain_id);
     log::info!(
-        "rmpc committee vote-submit: caller={caller:#x} gateway={gateway_addr:#x} vault={vault_addr:#x} stance={} chain_id={} env={}",
+        "rmpc committee vote-submit: caller={caller:#x} gateway={gateway_addr:#x} ic={ic_addr:#x} vault={vault_addr:#x} stance={} chain_id={} env={}",
         args.stance.as_str(),
         cfg.chain_id,
         network_env.as_str()
