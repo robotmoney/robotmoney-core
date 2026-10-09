@@ -224,9 +224,13 @@ describe("frozen counts: nothing is committed, a missing file is a named error",
     expect(err!.message).toContain("918453");
     expect(err!.message).toContain(`${SHA}.json`);
   });
-  test("the repository commits no frozen counts file", async () => {
-    const { existsSync, readdirSync } = await import("node:fs");
+  test("every committed frozen counts file is named by its own 40-hex deploySha", async () => {
+    const { existsSync, readdirSync, readFileSync } = await import("node:fs");
     const d = join(import.meta.dir, "..", "..", "deployments", "frozen-counts");
-    expect(existsSync(d) ? readdirSync(d).filter((f) => f.endsWith(".json")) : []).toEqual([]);
+    const files = existsSync(d) ? readdirSync(d).filter((f) => f.endsWith(".json")) : [];
+    for (const f of files) {
+      expect(f).toMatch(/^[0-9a-f]{40}\.json$/);
+      expect(JSON.parse(readFileSync(join(d, f), "utf8")).deploySha).toBe(f.slice(0, -".json".length));
+    }
   });
 });
