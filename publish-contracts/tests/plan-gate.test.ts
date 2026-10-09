@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../src/chains.ts";
 import { world } from "./harness.ts";
+import { assertCountsTracked } from "../src/release-gate.ts";
 
 async function plan(w: ReturnType<typeof world>, over: Record<string, unknown> = {}): Promise<{ code: number; signerMade: boolean; forgeCalls: number }> {
   const real = console.log;
@@ -113,5 +114,78 @@ describe("plan gate", () => {
     expect(r.code).not.toBe(EXIT_CODES.CI_NOT_GREEN);
     expect(tagRead).toBe(false);
     expect(greenRan).toBe(false);
+  });
+});
+
+// core 1668: every run that broadcasts on 8453 passes the release gate before any signer exists. pause-all never does.
+describe("release gate on every broadcasting run on 8453", () => {
+  const quiet = async (f: () => Promise<number>): Promise<number> => { const l = console.log; console.log = () => {}; try { return await f(); } finally { console.log = l; } };
+  const noSigner = () => { throw new Error("the gate must refuse before a signer is built"); };
+  const runs: Array<[string, string[]]> = [["publish", ["publish"]], ["govern", ["govern"]], ["stage prove-control", ["--stage", "prove-control"]], ["stage deploy", ["--stage", "deploy"]]];
+
+  for (const [name, args] of runs) {
+    test(`${name}: an untagged SHA is RELEASE_SHA_UNTAGGED, with no signer`, async () => {
+      let signerMade = false;
+      const w = world({ chainId: 8453 });
+      expect(await quiet(() => w.run([...args, "--environment", "base-mainnet"], { releaseTag: async () => null, makeSigner: () => { signerMade = true; return noSigner(); } }))).toBe(EXIT_CODES.RELEASE_SHA_UNTAGGED);
+      expect(signerMade).toBe(false);
+    });
+    test(`${name}: red CI is CI_NOT_GREEN, with no signer`, async () => {
+      let signerMade = false;
+      const w = world({ chainId: 8453 });
+      expect(await quiet(() => w.run([...args, "--environment", "base-mainnet"], { checkShaGreen: async () => ({ code: 1, output: "RED" }), makeSigner: () => { signerMade = true; return noSigner(); } }))).toBe(EXIT_CODES.CI_NOT_GREEN);
+      expect(signerMade).toBe(false);
+    });
+    test(`${name}: a missing counts file is COUNTS_MISSING, with no signer`, async () => {
+      let signerMade = false;
+      const w = world({ chainId: 8453, writeFrozen: false });
+      expect(await quiet(() => w.run([...args, "--environment", "base-mainnet"], { makeSigner: () => { signerMade = true; return noSigner(); } }))).toBe(EXIT_CODES.COUNTS_MISSING);
+      expect(signerMade).toBe(false);
+    });
+  }
+
+  test("pause-all runs on 8453 with an untagged SHA and red CI: neither check is read", async () => {
+    let tagRead = false, greenRan = false;
+    const w = world({ chainId: 8453 });
+    const code = await quiet(() => w.run(["pause-all", "--environment", "base-mainnet"], { releaseTag: async () => { tagRead = true; return null; }, checkShaGreen: async () => { greenRan = true; return { code: 1, output: "RED" }; } }));
+    expect(code).toBe(EXIT_CODES.RESUME); // it got as far as reading the run manifest, which this world has none of
+    expect(tagRead).toBe(false);
+    expect(greenRan).toBe(false);
+  });
+
+  test("a dry run on 8453 broadcasts nothing, so it is not gated", async () => {
+    let tagRead = false;
+    const w = world({ chainId: 8453 });
+    await quiet(() => w.run(["publish", "--dry-run", "--environment", "base-mainnet"], { releaseTag: async () => { tagRead = true; return null; } }));
+    expect(tagRead).toBe(false);
+  });
+
+  describe("the frozen counts file must be committed and clean in its git work tree", () => {
+    const dirt: Array<[string, string[]]> = [["untracked", ["?? deployments/frozen-counts/x.json"]], ["modified", [" M deployments/frozen-counts/x.json"]], ["ignored", ["!! deployments/frozen-counts/x.json"]]];
+    for (const [kind, lines] of dirt) {
+      test(`${kind}: refused on 8453 with COUNTS_UNTRACKED, for the plan and for publish, before a signer`, async () => {
+        for (const args of [["--stage", "plan"], ["publish"]]) {
+          let signerMade = false;
+          const w = world({ chainId: 8453 });
+          w.cfg.gitCountsDirty = lines;
+          expect(await quiet(() => w.run([...args, "--environment", "base-mainnet"], { makeSigner: () => { signerMade = true; return noSigner(); } }))).toBe(EXIT_CODES.COUNTS_UNTRACKED);
+          expect(signerMade).toBe(false);
+        }
+      });
+    }
+    test("a git failure on the counts file is refused, never read as clean", async () => {
+      const failing = async () => ({ code: 128, stdout: "", stderr: "fatal: not a git repository" });
+      await expect(assertCountsTracked(failing, "/x", "a".repeat(40))).rejects.toMatchObject({ kind: "COUNTS_UNTRACKED" });
+      await expect(assertCountsTracked(async () => ({ code: 0, stdout: "", stderr: "" }), "/x", "a".repeat(40))).resolves.toBeUndefined();
+    });
+    test("the same dirty file is accepted on 918453", async () => {
+      const w = world({ chainId: 918453 });
+      w.cfg.gitCountsDirty = ["?? deployments/frozen-counts/x.json"];
+      expect(await quiet(() => w.run(["--stage", "plan"]))).toBe(0);
+    });
+    test("a committed clean file passes the gate", async () => {
+      const w = world({ chainId: 8453 });
+      expect(await quiet(() => w.run(["--stage", "plan", "--environment", "base-mainnet"]))).toBe(0);
+    });
   });
 });

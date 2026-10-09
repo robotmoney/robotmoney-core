@@ -124,6 +124,7 @@ const RULES: Rule[] = [
   [/^agents: manifest lists zero agents$/, (w) => editManifest(w, timelockFile(), (o) => { o.roles.gateway_agents_listed_count = 1; })],
   [/^agents: no address holds AGENT_ROLE after handover$/, (w) => { w.chain.roleGrantedLog(GATEWAY, AGENT_ROLE, OTHER, 300n); w.chain.grant(GATEWAY, AGENT_ROLE, OTHER); }],
   [/^agents: manifest says deployer owns no listed agent$/, (w) => editManifest(w, timelockFile(), (o) => { o.roles.deployer_owns_a_listed_gateway_agent = true; })],
+  [/^roles: every holder of every role on every governed contract is an expected account \(log scan\)$/, (w) => { w.chain.grant(VAULTS.rmPROTO.address, ADMIN_ROLE, OTHER); w.chain.roleGrantedLog(VAULTS.rmPROTO.address, ADMIN_ROLE, OTHER, 400n); }],
   [/^deployer: holds no role on any contract \(log scan\)$/, (w) => w.chain.grant(TIMELOCK, ADMIN_ROLE, DEPLOYER)],
   // the Safe
   [/^safe: singleton is SafeL2 1\.4\.1$/, (w) => { w.chain.storage.set(`${SAFE.toLowerCase()}|${Z32}`, pad(OTHER, { size: 32 })); }],
@@ -174,5 +175,32 @@ describe("negative fixture for every verifier label", () => {
     const r = await verifyDeployment(w.opts);
     expect(r.ok).toBe(false);
     expect(failed(r)).toContain(label);
+  });
+});
+
+describe("role-holder enumeration names the planted holder (core 1668)", () => {
+  const label = "roles: every holder of every role on every governed contract is an expected account (log scan)";
+  const detailOf = (r: Awaited<ReturnType<typeof verifyDeployment>>) => r.checks.find((x) => x.label === label)?.detail ?? "";
+  test("a healthy world passes the label", async () => {
+    const r = await verifyDeployment(buildWorld(8453).opts);
+    expect(r.checks.find((x) => x.label === label)?.ok).toBe(true);
+  });
+  test.each([["ADMIN_ROLE", ADMIN_ROLE], ["EMERGENCY_ROLE", EMERGENCY_ROLE]])("an extra %s holder on a vault fails the label and is named", async (_n, role) => {
+    const w = buildWorld(8453);
+    w.chain.grant(VAULTS.rmUSDC.address, role, OTHER);
+    w.chain.roleGrantedLog(VAULTS.rmUSDC.address, role, OTHER, 400n);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toContain(label);
+    expect(detailOf(r).toLowerCase()).toContain(OTHER.toLowerCase());
+  });
+  test("a grant that was revoked is not a holder", async () => {
+    const w = buildWorld(8453);
+    w.chain.roleGrantedLog(VAULTS.rmUSDC.address, ADMIN_ROLE, OTHER, 400n);
+    expect(failed(await verifyDeployment(w.opts))).not.toContain(label);
+  });
+  test("an unreadable block number fails the label", async () => {
+    const w = buildWorld(8453);
+    w.chain.blockNumber = async () => { throw new Error("rpc down"); };
+    expect(failed(await verifyDeployment(w.opts))).toContain(label);
   });
 });

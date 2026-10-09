@@ -31,7 +31,9 @@ describe("what the CLI spawns: forge, cast and the read-only git status, nothing
   });
   test("the spawner allows git status only", async () => {
     expect(isReadOnlyGitStatus(["-C", "/x", "status", "--porcelain", "--untracked-files=all"])).toBe(true);
-    for (const bad of [["status"], ["-C", "/x", "push"], ["-C", "/x", "status", "--porcelain", "--ignored"], ["-C", "/x", "checkout", "."], ["-C", "/x", "status", "-s"]]) {
+    // the frozen counts check (core 1668): one path, ignored files shown
+    expect(isReadOnlyGitStatus(["-C", "/x", "status", "--porcelain", "--untracked-files=all", "--ignored", "--", "/x/f.json"])).toBe(true);
+    for (const bad of [["status"], ["-C", "/x", "push"], ["-C", "/x", "status", "--porcelain", "--ignore-submodules"], ["-C", "/x", "status", "--porcelain", "--", "a", "b"], ["-C", "/x", "checkout", "."], ["-C", "/x", "status", "-s"]]) {
       expect(isReadOnlyGitStatus(bad)).toBe(false);
       await expect(spawnTool("git", bad, { env: {} })).rejects.toThrow("read-only 'git -C DIR status --porcelain'");
     }

@@ -42,6 +42,18 @@ export function assertSignerSpec(spec: string, i: { rpcChainId: number; rpc: str
   }
 }
 
+/**
+ * A Safe owner signer spec (--owner-signer). The signer-spec floors apply, and on 8453 the owner must be a hardware wallet: a
+ * software keystore (with or without a passphrase file) and env:signer are refused (OWNER_SIGNER_NOT_HARDWARE).
+ */
+export function assertOwnerSignerSpec(spec: string, i: { rpcChainId: number; rpc: string; env?: Record<string, string | undefined> }): void {
+  if (isMainnet(i.rpcChainId) && spec !== "ledger" && spec !== "trezor") {
+    const kind = /^(keystore|env|plaintext|private-key|key|loopback-key|address)(:|$)/.exec(spec)?.[1] ?? "an unrecognised spec"; // never echo a spec that may be key material
+    throw new PublishError("OWNER_SIGNER_NOT_HARDWARE", `owner signer '${kind}' is not a hardware wallet: on chain ${MAINNET_CHAIN_ID} every Safe owner signs with ledger or trezor`, { kind });
+  }
+  assertSignerSpec(spec, i);
+}
+
 export interface FloorInput {
   /** Chain id read from the RPC (cast chain-id). */
   rpcChainId: number;

@@ -12,6 +12,7 @@ interface Cfg {
   castReplies?: Record<string, { stdout?: string; stderr?: string; code?: number }>; // cast subcommand -> its canned reply (receipt, call)
   simFails?: string;                       // script file whose simulation fails
   chainId: number;
+  gitCountsDirty?: string[];               // `git status --porcelain` lines the stub git prints for the path-limited frozen counts check (default: committed and clean)
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
 }
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
@@ -33,7 +34,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   if (tool === "git") {
     // only the read-only status of the core checkout is ever asked: anything else is an error the test sees
     if (args[0] !== "-C" || args[2] !== "status" || args[3] !== "--porcelain") out(`stub git: unsupported ${args.join(" ")}`, 1);
-    out((cfg.gitDirty ?? []).join("\n"));
+    out(((args.includes("--") ? cfg.gitCountsDirty : cfg.gitDirty) ?? []).join("\n"));
   }
 
   if (tool === "cast") {

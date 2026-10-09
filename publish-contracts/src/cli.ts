@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { exitCodeOf, isPublishError, PublishError } from "./errors.ts";
-import { assertFloors, assertSignerSpec, readRpcChainId, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
+import { assertFloors, assertOwnerSignerSpec, assertSignerSpec, readRpcChainId, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
 import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen } from "./counts.ts";
 import { siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
@@ -266,6 +266,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     if (rpcChainId !== MAINNET_CHAIN_ID && rpcChainId !== TWIN_CHAIN_ID) throw new PublishError("CHAIN", `chain ${rpcChainId} is not supported: publish contracts runs on ${TWIN_CHAIN_ID} (rehearsal) and ${MAINNET_CHAIN_ID} (mainnet)`);
     // The correlated-owners floor is on by default on 8453 and its file is required: the caller (devops) supplies it.
     const correlatedOwners = rpcChainId === MAINNET_CHAIN_ID ? await (deps.correlatedOwners ?? (() => loadCorrelatedOwners({ file: a.correlatedOwnersFile, env, cwd })))() : undefined;
+    for (const spec of a.ownerSigners) assertOwnerSignerSpec(spec, { rpcChainId, rpc: a.rpc, env });
     assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions: env.GITHUB_ACTIONS === "true", measure: a.measure, correlatedOwners });
     log.log("info", "run.checks_ok", { chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
@@ -314,10 +315,13 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return 0;
     }
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
-    // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
-    if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {
-      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, releaseTag: deps.releaseTag, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
-      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha });
+    // the contracts-freeze gate (core 1524, 1668): on 8453 the plan and every run that broadcasts (publish, prove-control, govern, any stage but verify)
+    // run only at a release-tagged SHA with committed, clean counts and green CI. No signer exists yet. pause-all returned above and is never gated.
+    const names = a.stage === "plan" ? [] : a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
+    const broadcasts = names.some((n) => n !== "verify");
+    if (rpcChainId === MAINNET_CHAIN_ID && !a.measure && (a.stage === "plan" || (broadcasts && !a.dryRun))) {
+      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, run, runEnv: castEnv, releaseTag: deps.releaseTag, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
+      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha, stage: a.stage ?? a.verb ?? "default" });
     }
     // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts.
     const counts = a.stage === "plan"
@@ -340,7 +344,6 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       console.log(JSON.stringify({ chainId: rpcChainId, coreSha: a.coreSha, plan }));
       return 0;
     }
-    const names = a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
     const ctx = buildCtx(frozen, counts.measure);
     // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
     const ownerSigners = async (c: RunContext): Promise<Signer[]> => {

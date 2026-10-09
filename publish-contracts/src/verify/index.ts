@@ -150,9 +150,13 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   if (head === undefined) {
     for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
     c.fail("deployer: holds no role on any contract (log scan)", "block number unreadable");
+    c.fail(ROLE_HOLDERS_LABEL, "block number unreadable");
   } else {
     await agentChecks(c, chain, gateway, tlManifest, { fromBlock: opts.fromBlock, head: opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head, chunk, retryBaseMs });
     await roleScan(c, chain, D, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
+    await roleHolderEnumeration(c, chain, [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))], {
+      timelock: tl, accounts: [tl, safe, byName.governance!, sheet.emergency, sheet.pauser], icPolicy: byName.icpolicy!, gateway, router,
+    }, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
   }
 
   // ---- timelock
@@ -417,6 +421,46 @@ async function timelockHolderScan(c: Collector, chain: ChainReader, tl: Address,
     c.push(label, bad.length === 0, bad.length ? bad.join(", ") : `${pairs.size} grants scanned, holders are the safe and the open executor`);
   } catch (e: any) {
     c.fail(label, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`);
+  }
+}
+
+const ROLE_HOLDERS_LABEL = "roles: every holder of every role on every governed contract is an expected account (log scan)";
+
+/**
+ * Core 1668. The named checks above ask about the accounts we expect to hold (or not hold) a role, so a fourth holder passes them.
+ * This lists every account that was ever granted any role on a governed contract (RoleGranted), keeps those that hold it now, and
+ * fails naming each one that is not the timelock, the Safe, RouterGovernance, the emergency key or the pauser. The open executor
+ * (address zero) is expected on the timelock's EXECUTOR_ROLE only. The gateway holds ADMIN_ROLE on the IC policy by design (the
+ * IC deploy script grants it so committeeRegister can call registerAgent): that one pair is expected.
+ */
+async function roleHolderEnumeration(
+  c: Collector, chain: ChainReader, governed: { name: string; address: Address }[],
+  expect: { timelock: Address; accounts: Address[]; icPolicy: Address; gateway: Address; router: Address },
+  s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number },
+): Promise<void> {
+  try {
+    const sig = keccak256(toHex(SIG_ROLE_GRANTED));
+    const ok = new Set(expect.accounts.map(lc));
+    const bad: string[] = [];
+    let grants = 0;
+    for (const g of governed) {
+      const logs = await scanLogs(chain, { address: g.address, topics: [sig], fromBlock: s.fromBlock, toBlock: s.head, chunk: s.chunk, retryBaseMs: s.retryBaseMs });
+      const pairs = new Map<string, { role: Hex; who: Address }>();
+      for (const l of logs) { const who = topicToAddress(l.topics[2]); pairs.set(`${l.topics[1]}:${lc(who)}`, { role: l.topics[1], who }); }
+      grants += logs.length;
+      for (const { role, who } of pairs.values()) {
+        if (!(await hasRole(chain, g.address, role, who))) continue;
+        // The router's weight setter is rotatable (core 1616): its single holder is checked by "WEIGHT_SETTER_ROLE has exactly one holder", so a rotated holder is not unexpected here.
+        if (lc(g.address) === lc(expect.router) && role === WEIGHT_SETTER_ROLE) continue;
+        const expected = ok.has(lc(who))
+          || (lc(g.address) === lc(expect.timelock) && role === EXECUTOR_ROLE && lc(who) === lc(ZERO))
+          || (lc(g.address) === lc(expect.icPolicy) && role === ADMIN_ROLE && lc(who) === lc(expect.gateway));
+        if (!expected) bad.push(`${who} holds ${role} on ${g.name}`);
+      }
+    }
+    c.push(ROLE_HOLDERS_LABEL, bad.length === 0, bad.length ? `unexpected holders: ${bad.join(", ")}` : `${grants} grants scanned on ${governed.length} contracts, every holder is expected`);
+  } catch (e: any) {
+    c.fail(ROLE_HOLDERS_LABEL, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`);
   }
 }
 

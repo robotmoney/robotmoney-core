@@ -31,9 +31,18 @@ export interface SpawnOpts { env: Record<string, string>; cwd?: string; interact
 export interface SpawnResult { code: number; stdout: string; stderr: string }
 export type ProcessRunner = (tool: Tool, args: string[], opts: SpawnOpts) => Promise<SpawnResult>;
 
-/** The one allowed git spawn: `git -C DIR status --porcelain [--untracked-files=all]`, a read of the core checkout. Nothing else of git runs. */
-export const isReadOnlyGitStatus = (args: string[]): boolean =>
-  args.length >= 4 && args[0] === "-C" && args[2] === "status" && args[3] === "--porcelain" && args.slice(4).every((a) => a === "--untracked-files=all");
+/**
+ * The one allowed git spawn: `git -C DIR status --porcelain [--untracked-files=all] [--ignored] [-- PATH]`, a read of the core checkout
+ * or of the frozen counts file (core 1668). Nothing else of git runs.
+ */
+export const isReadOnlyGitStatus = (args: string[]): boolean => {
+  if (!(args.length >= 4 && args[0] === "-C" && args[2] === "status" && args[3] === "--porcelain")) return false;
+  const rest = args.slice(4);
+  const sep = rest.indexOf("--");
+  const flags = sep < 0 ? rest : rest.slice(0, sep);
+  const paths = sep < 0 ? [] : rest.slice(sep + 1);
+  return flags.every((a) => a === "--untracked-files=all" || a === "--ignored") && paths.length <= 1;
+};
 
 /** The real runner. Anything but forge, cast and the read-only git status is refused before a process starts. */
 export const spawnTool: ProcessRunner = async (tool, args, opts) => {

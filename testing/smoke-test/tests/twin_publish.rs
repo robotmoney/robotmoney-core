@@ -79,6 +79,15 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             );
         }
     }
+    // Issue 1668: the verifier lists every holder of every role on every governed contract from the chain's RoleGranted logs.
+    // `verify()` above would have failed had any holder been unexpected.
+    {
+        let label = "roles: every holder of every role on every governed contract is an expected account (log scan)";
+        assert!(
+            verified.lines().any(|l| l.trim() == label),
+            "the verifier output lacks the label '{label}'"
+        );
+    }
     let run_manifest_path = dir
         .parent()
         .unwrap_or(dir)
