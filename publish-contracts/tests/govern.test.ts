@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { decodeFunctionData, toFunctionSelector } from "viem";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { GOVERN_ROWS, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, UNPAUSE_USDC_ROW, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
-import { beginPauseEntry, loadRunManifest, newManifest, nextManifestSeq, saveRunManifest, updatePauseEntry } from "../src/runner.ts";
+import { beginPauseEntry, loadRunManifest, newManifest, nextManifestSeq, reserveManifestSeq, saveRunManifest, updatePauseEntry } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
 import { SHA, sheetText } from "./fixtures.ts";
@@ -929,7 +929,7 @@ describe("issue 1686: govern refuses to execute an unpause scheduled before a pa
 });
 
 describe("issue 1686: pause-all and govern both rewrite publish-run.json without losing each other's change", () => {
-  test("a govern save after a pause-all keeps the pause entry (govern's in-memory copy never had it), and the stamped seqs stay above it", () => {
+  test("a govern save after a pause-all keeps the pause entry (govern's in-memory copy never had it), and a plain save stamps no seq on a record that has none (issue 1688)", () => {
     const { ctx } = setup(ALL, 8453);
     const manifest = newManifest(ctx, addr(0xa001));
     saveRunManifest(ctx.evidenceDir, manifest);
@@ -939,7 +939,7 @@ describe("issue 1686: pause-all and govern both rewrite publish-run.json without
     saveRunManifest(ctx.evidenceDir, stale);
     const disk = loadRunManifest(ctx.evidenceDir)!;
     expect(disk.pauses!.map((x) => x.seq)).toEqual([p.seq]);
-    expect((disk.govern as any)["unpause-PROTO"].scheduled.seq).toBe(p.seq + 1);
+    expect((disk.govern as any)["unpause-PROTO"].scheduled.seq).toBeUndefined();
   });
 
   test("a pause-all update after a govern save keeps govern's rows (pause-all re-reads the file just before it writes)", () => {
@@ -953,7 +953,7 @@ describe("issue 1686: pause-all and govern both rewrite publish-run.json without
     const disk = loadRunManifest(ctx.evidenceDir)!;
     expect(Object.keys(disk.govern!)).toEqual(["unpause-AGENT"]);
     expect(disk.pauses![0]).toMatchObject({ status: "done", allPaused: true });
-    expect(nextManifestSeq(disk)).toBe(3);
+    expect(nextManifestSeq(disk)).toBe(2);
   });
 
   test("separate processes writing at once lose nothing: 6 pause entries and 6 govern saves from 12 processes all land with unique seqs", async () => {
@@ -963,7 +963,7 @@ describe("issue 1686: pause-all and govern both rewrite publish-run.json without
     const runner = join(import.meta.dir, "..", "src", "runner.ts");
     const script = (i: number, kind: "pause" | "govern") => kind === "pause"
       ? `import { beginPauseEntry } from ${JSON.stringify(runner)}; for (let k=0;k<5;k++) beginPauseEntry(${JSON.stringify(ctx.evidenceDir)}, { at: "t", trigger: "manual", reason: "p${i}" });`
-      : `import { loadRunManifest, saveRunManifest } from ${JSON.stringify(runner)}; for (let k=0;k<5;k++) { const m = loadRunManifest(${JSON.stringify(ctx.evidenceDir)})!; m.govern = { ...(m.govern ?? {}), ["row${i}-" + k]: { round: 1, scheduled: { at: "t" } } }; saveRunManifest(${JSON.stringify(ctx.evidenceDir)}, m); }`;
+      : `import { loadRunManifest, reserveManifestSeq, saveRunManifest } from ${JSON.stringify(runner)}; for (let k=0;k<5;k++) { const m = loadRunManifest(${JSON.stringify(ctx.evidenceDir)})!; const seq = reserveManifestSeq(${JSON.stringify(ctx.evidenceDir)}, m); m.govern = { ...(m.govern ?? {}), ["row${i}-" + k]: { round: 1, scheduled: { at: "t", seq } } }; saveRunManifest(${JSON.stringify(ctx.evidenceDir)}, m); }`;
     const procs = [0, 1, 2, 3, 4, 5].flatMap((i) => (["pause", "govern"] as const).map((kind) => Bun.spawn([process.execPath, "-e", script(i, kind)], { stdout: "pipe", stderr: "pipe" })));
     for (const p of procs) expect(await p.exited).toBe(0);
     const disk = loadRunManifest(ctx.evidenceDir)!;
@@ -976,6 +976,98 @@ describe("issue 1686: pause-all and govern both rewrite publish-run.json without
     const sched = Object.values(disk.govern ?? {}).map((r: any) => r.scheduled.seq as number);
     expect(sched.every((n) => Number.isInteger(n) && n > 0)).toBe(true);
     expect(new Set([...seqs, ...sched]).size).toBe(seqs.length + sched.length);
+    expect(disk.seqHigh).toBeGreaterThanOrEqual(Math.max(...seqs, ...sched));
   });
 });
 
+
+describe("issue 1688: the unpause ordering cannot be bypassed by a legacy record or by a pause landing before the first save", () => {
+  const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
+  const R = (ctx: any, manifest: any, sheet: any, tl: any, extra: object = {}) => run(ctx, manifest, sheet, tl, { warp: noWarp, ...extra });
+  const pauseAll = (ctx: any) => beginPauseEntry(ctx.evidenceDir, { at: new Date().toISOString(), trigger: "verify", reason: "test" })!;
+  const executes = (tl: ReturnType<typeof fakeTimelock>) => tl.s.events.filter((e) => e.startsWith("execute"));
+  async function scheduled() {
+    const d = setup(ALL, 8453);
+    const tl = fakeTimelock(d.sheet, DELAY);
+    const manifest = newManifest(d.ctx, addr(0xa001));
+    await expect(R(d.ctx, manifest, d.sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    return { ...d, tl, manifest };
+  }
+  /** Strips the seq the way a manifest written before issue 1686 looks. */
+  const makeLegacy = (manifest: any) => { for (const r of Object.values(manifest.govern as Record<string, any>)) delete r.scheduled.seq; };
+
+  test("a legacy scheduled record (no seq) is still refused after an unrelated save when a pause entry exists", async () => {
+    const { ctx, sheet, tl, manifest } = await scheduled();
+    makeLegacy(manifest);
+    pauseAll(ctx);
+    manifest.startedAt = "unrelated change";
+    saveRunManifest(ctx.evidenceDir, manifest); // the unrelated save that used to stamp a fresh seq above the pause
+    for (const r of Object.values(loadRunManifest(ctx.evidenceDir)!.govern as Record<string, any>)) expect(r.scheduled.seq).toBeUndefined();
+    for (const r of Object.values(manifest.govern as Record<string, any>)) expect(r.scheduled.seq).toBeUndefined();
+    tl.s.clock += DELAY;
+    const e = await R(ctx, manifest, sheet, tl).catch((x) => x);
+    expect(e.kind).toBe("GOVERN");
+    expect(e.message).toContain("will NOT execute");
+    expect(executes(tl)).toEqual([]);
+  });
+
+  test("a legacy record with no pause entry at all still executes (the refusal needs a pause)", async () => {
+    const { ctx, sheet, tl, manifest } = await scheduled();
+    makeLegacy(manifest);
+    saveRunManifest(ctx.evidenceDir, manifest);
+    tl.s.clock += DELAY;
+    expect((await R(ctx, manifest, sheet, tl)).rows).toEqual([...UNPAUSE_ROWS]);
+  });
+
+  test("the schedule seq is reserved on disk BEFORE the schedule transaction is sent", async () => {
+    const d = setup(ALL, 8453);
+    const tl = fakeTimelock(d.sheet, DELAY);
+    const manifest = newManifest(d.ctx, addr(0xa001));
+    const orig = tl.api.scheduleOnTimelock;
+    const seenAtSend: (number | undefined)[] = [];
+    (tl.api as any).scheduleOnTimelock = async (...a: any[]) => { seenAtSend.push(loadRunManifest(d.ctx.evidenceDir)?.seqHigh); return (orig as any)(...a); };
+    await expect(R(d.ctx, manifest, d.sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    expect(seenAtSend).toEqual([1, 2, 3]);
+    expect(Object.values(manifest.govern as Record<string, any>).map((r) => r.scheduled.seq)).toEqual([1, 2, 3]);
+  });
+
+  test("a pause-all that lands between the schedule send and the first save orders AFTER the schedule, so the unpause is refused", async () => {
+    const d = setup(ALL, 8453);
+    const tl = fakeTimelock(d.sheet, DELAY);
+    const manifest = newManifest(d.ctx, addr(0xa001));
+    const orig = tl.api.scheduleOnTimelock;
+    let pause: { seq: number } | undefined;
+    (tl.api as any).scheduleOnTimelock = async (...a: any[]) => { const r = await (orig as any)(...a); pause ??= pauseAll(d.ctx); return r; }; // lands after the send, before the save
+    const e = await R(d.ctx, manifest, d.sheet, tl).catch((x) => x); // refused in the same run, before the wait
+    const first = (manifest.govern as any)["unpause-PROTO"].scheduled.seq as number;
+    expect(pause!.seq).toBeGreaterThan(first);
+    expect(e.kind).toBe("GOVERN");
+    expect(e.message).toContain(`pause-all #${pause!.seq}`);
+    expect(e.message).toContain("unpause-PROTO");
+    expect(executes(tl)).toEqual([]);
+  });
+
+  test("a pause-all that finished BEFORE the schedule was sent is older: the schedule executes", async () => {
+    const d = setup(ALL, 8453);
+    const tl = fakeTimelock(d.sheet, DELAY);
+    const manifest = newManifest(d.ctx, addr(0xa001));
+    saveRunManifest(d.ctx.evidenceDir, manifest);
+    const p = pauseAll(d.ctx);
+    await expect(R(d.ctx, manifest, d.sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    expect((manifest.govern as any)["unpause-PROTO"].scheduled.seq).toBeGreaterThan(p.seq);
+    tl.s.clock += DELAY;
+    expect((await R(d.ctx, manifest, d.sheet, tl)).rows).toEqual([...UNPAUSE_ROWS]);
+  });
+
+  test("reserved numbers only grow: a save with a stale copy never lowers seqHigh", () => {
+    const { ctx } = setup(ALL, 8453);
+    const manifest = newManifest(ctx, addr(0xa001));
+    saveRunManifest(ctx.evidenceDir, manifest);
+    const stale = JSON.parse(JSON.stringify(manifest));
+    expect(reserveManifestSeq(ctx.evidenceDir, manifest)).toBe(1);
+    expect(reserveManifestSeq(ctx.evidenceDir, manifest)).toBe(2);
+    saveRunManifest(ctx.evidenceDir, stale);
+    expect(loadRunManifest(ctx.evidenceDir)!.seqHigh).toBe(2);
+    expect(reserveManifestSeq(ctx.evidenceDir, stale)).toBe(3);
+  });
+});

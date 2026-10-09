@@ -31,7 +31,7 @@
 import { encodeFunctionData, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
 import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
-import { loadRunManifest, readManifestField, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
+import { loadRunManifest, readManifestField, reserveManifestSeq, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
 import { BASKET_KEYS, VAULT_NAME, type Sheet, type VaultKey } from "./sheet.ts";
 import { VAULT_STAGES, manifestRef, type StageRow } from "./stages.ts";
 import {
@@ -426,9 +426,10 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     let sched: PhaseRecord;
     if (st.exists) sched = { at: new Date().toISOString(), operation_id: p.id, ready_at: st.readyAt.toString(), note: "already scheduled by an earlier run", seq: 0 }; // seq 0: the schedule time is unknown, so ANY recorded pause-all is newer (issue 1686)
     else {
+      const seq = reserveManifestSeq(ctx.evidenceDir, manifest); // issue 1688: fixed BEFORE the send, so a pause-all landing before the next save still orders correctly
       const done = await signAndExecute(ctx, o, api, handle, await p.schedule());
       const after = await api.operationState(handle, a.timelock, p.id);
-      sched = { at: new Date().toISOString(), operation_id: p.id, ready_at: after.readyAt.toString(), ...note(done) };
+      sched = { at: new Date().toISOString(), operation_id: p.id, ready_at: after.readyAt.toString(), seq, ...note(done) };
     }
     rec.scheduled = sched;
     state[name] = rec;

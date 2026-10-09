@@ -83,6 +83,8 @@ export interface RunManifest {
   govern?: Record<string, unknown>;
   /** Every pause-all that ran against this run, oldest first (issue 1686). Written by pause-all only, merged on every save. */
   pauses?: PauseEntry[];
+  /** The highest manifest sequence number handed out by reserveManifestSeq (issue 1688). Merged by max on every save, so it only grows. */
+  seqHigh?: number;
 }
 
 /**
@@ -139,25 +141,48 @@ function writeManifestFile(evidenceDir: string, m: RunManifest): void {
 const governScheduled = (m: Pick<RunManifest, "govern">): { seq?: number }[] =>
   Object.values(m.govern ?? {}).map((r) => (r as { scheduled?: { seq?: number } } | undefined)?.scheduled).filter((x): x is { seq?: number } => !!x);
 
-/** The next manifest sequence number: above every pause entry and every stamped govern schedule. */
-export const nextManifestSeq = (m: Pick<RunManifest, "govern" | "pauses">): number =>
-  1 + Math.max(0, ...(m.pauses ?? []).map((p) => p.seq), ...governScheduled(m).map((x) => x.seq ?? 0));
+/** The next manifest sequence number: above every pause entry, every stamped govern schedule and every reserved number. */
+export const nextManifestSeq = (m: Pick<RunManifest, "govern" | "pauses" | "seqHigh">): number =>
+  1 + Math.max(0, m.seqHigh ?? 0, ...(m.pauses ?? []).map((p) => p.seq), ...governScheduled(m).map((x) => x.seq ?? 0));
+
+/** Merges what pause-all wrote on disk into `m` (the disk copy of a pause entry wins) and keeps the larger reserved number. Call under the lock. */
+function mergeDisk(m: RunManifest, disk: RunManifest | undefined): void {
+  const bySeq = new Map<number, PauseEntry>();
+  for (const e of m.pauses ?? []) bySeq.set(e.seq, e);
+  for (const e of disk?.pauses ?? []) bySeq.set(e.seq, e);
+  if (bySeq.size) m.pauses = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+  const high = Math.max(m.seqHigh ?? 0, disk?.seqHigh ?? 0);
+  if (high > 0) m.seqHigh = high;
+}
+
+function readDisk(evidenceDir: string): RunManifest | undefined {
+  try { return loadRunManifest(evidenceDir); } catch { return undefined; /* a damaged file is overwritten, as before */ }
+}
 
 /**
  * Saves the manifest under the write lock without dropping a concurrent pause-all: the pause entries on disk are merged in first (pause-all owns them,
- * the disk copy wins), then each govern `scheduled` record that has no `seq` yet is stamped with the next sequence number. The merge and the stamp
- * mutate `m`, so the caller's in-memory copy sees them.
+ * the disk copy wins). The merge mutates `m`, so the caller's in-memory copy sees it. A govern `scheduled` record WITHOUT a `seq` (written before issue
+ * 1688, or adopted from the chain) is never given one here: a plain save has no idea when that schedule happened, so it stays older than any pause entry.
  */
 export function saveRunManifest(evidenceDir: string, m: RunManifest): void {
   withManifestLock(evidenceDir, () => {
-    let disk: RunManifest | undefined;
-    try { disk = loadRunManifest(evidenceDir); } catch { /* a damaged file is overwritten, as before */ }
-    const bySeq = new Map<number, PauseEntry>();
-    for (const e of m.pauses ?? []) bySeq.set(e.seq, e);
-    for (const e of disk?.pauses ?? []) bySeq.set(e.seq, e);
-    if (bySeq.size) m.pauses = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
-    for (const sc of governScheduled(m)) if (sc.seq === undefined) sc.seq = nextManifestSeq(m);
+    mergeDisk(m, readDisk(evidenceDir));
     writeManifestFile(evidenceDir, m);
+  });
+}
+
+/**
+ * Issue 1688: reserves the next sequence number BEFORE the schedule transaction is sent, and saves `m` with the reservation. A pause-all that begins
+ * after this call gets a higher number than the schedule, one that began before gets a lower one: the order is fixed at send time, not at the first
+ * save after the send.
+ */
+export function reserveManifestSeq(evidenceDir: string, m: RunManifest): number {
+  return withManifestLock(evidenceDir, () => {
+    mergeDisk(m, readDisk(evidenceDir));
+    const seq = nextManifestSeq(m);
+    m.seqHigh = seq;
+    writeManifestFile(evidenceDir, m);
+    return seq;
   });
 }
 
@@ -171,6 +196,7 @@ export function beginPauseEntry(evidenceDir: string, e: Omit<PauseEntry, "seq" |
     if (!disk) return undefined;
     const entry: PauseEntry = { ...e, seq: nextManifestSeq(disk), status: "started", vaults: [] };
     disk.pauses = [...(disk.pauses ?? []), entry];
+    disk.seqHigh = entry.seq;
     writeManifestFile(evidenceDir, disk);
     return entry;
   });
