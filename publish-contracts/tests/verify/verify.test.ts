@@ -213,6 +213,24 @@ describe("mutations fail with the expected label", () => {
     expect(ok.checks.filter((c) => c.label.endsWith("maxSlippageBps equals 500")).map((c) => c.label)).toEqual([L]);
   });
 
+  test("a missing sheet entry fails exactly the labels that vault kind owns (core 1695)", async () => {
+    const common = ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"];
+    const basket = ["asset config equals sheet", "navDeviationGuardBps equals sheet", "navDeviationGuardBps above zero", "pool liquidity meets the sheet floor"];
+    const usdc = ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"];
+    const want: Record<string, string[]> = {
+      rmUSDC: [...common, ...usdc],
+      rmPROTO: [...common, ...basket],
+      rmAGENT: [...common, ...basket, "maxSlippageBps equals 500"],
+      rmRWA: [...common, ...basket],
+    };
+    for (const key of Object.keys(want)) {
+      const w = buildWorld();
+      delete (w.opts.sheet.vaults as any)[key];
+      const got = failed(await verifyDeployment(w.opts)).filter((l) => l.startsWith(`vault[${key}]: `)).map((l) => l.slice(`vault[${key}]: `.length));
+      expect(got.sort()).toEqual([...want[key]!].sort());
+    }
+  });
+
   test("rmAGENT must be paused", async () => {
     const w = buildWorld();
     w.chain.set(VAULTS.rmAGENT.address, "depositsPaused", false);
