@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
-import { assertFloors, passphraseFileReason, plaintextKeyReason, plaintextSignerReason } from "../src/floors.ts";
+import { assertFloors, assertOwnerSignerSpec, passphraseFileReason, plaintextKeyReason, plaintextSignerReason } from "../src/floors.ts";
 import { loadCorrelatedOwners } from "../src/correlated-owners.ts";
 import { callerInputs, parseSheet } from "../src/sheet.ts";
 import { sheetText, tmp } from "./fixtures.ts";
@@ -118,5 +118,34 @@ describe("plaintext refusal through the CLI (main)", () => {
     writeFileSync(two, `${owners[0]}\n${owners[1]}\n`); writeFileSync(one, `${owners[0]}\n`);
     expect(await quiet(() => w.run(["--stage", "plan", "--environment", "base-mainnet", "--correlated-owners-file", two], { correlatedOwners: undefined }))).toBe(EXIT_CODES.FLOOR);
     expect(await quiet(() => w.run(["--stage", "plan", "--environment", "base-mainnet", "--correlated-owners-file", one], { correlatedOwners: undefined }))).not.toBe(EXIT_CODES.FLOOR);
+  });
+});
+
+describe("Safe owner signers must be hardware on 8453 (core 1668)", () => {
+  const owner = (spec: string, chain = 8453, rpc = "https://mainnet.base.org") => refusal(() => assertOwnerSignerSpec(spec, { rpcChainId: chain, rpc, env: {} }));
+  test("a software keystore, with or without a passphrase file, and env:signer are refused with OWNER_SIGNER_NOT_HARDWARE", () => {
+    for (const spec of ["keystore:/k/OWNER", "keystore:/k/OWNER:/k/pw", "env:signer"]) {
+      expect(() => assertOwnerSignerSpec(spec, { rpcChainId: 8453, rpc: "https://mainnet.base.org", env: {} })).toThrow(expect.objectContaining({ kind: "OWNER_SIGNER_NOT_HARDWARE" }));
+    }
+  });
+  test("ledger and trezor are accepted on 8453", () => {
+    expect(owner("ledger")).toBeUndefined();
+    expect(owner("trezor")).toBeUndefined();
+  });
+  test("a plaintext owner spec is refused on both chains", () => {
+    expect(owner("plaintext:KEY", 918453, "https://twin.example")).toContain("plaintext");
+    expect(owner("plaintext:KEY")).toContain("OWNER_SIGNER_NOT_HARDWARE");
+  });
+  test("software owners stay allowed on the Twin chain", () => {
+    for (const spec of ["keystore:/k/OWNER", "keystore:/k/OWNER:/k/pw", "env:signer", "ledger"]) expect(owner(spec, 918453, "https://twin.example")).toBeUndefined();
+  });
+  test("through main(): a keystore owner on 8453 exits OWNER_SIGNER_NOT_HARDWARE before a signer is built", async () => {
+    let signerMade = false;
+    const l = console.log; console.log = () => {};
+    try {
+      const code = await world({ chainId: 8453 }).run(["govern", "--environment", "base-mainnet", "--owner-signer", "keystore:/k/OWNER"], { makeSigner: () => { signerMade = true; throw new Error("no signer"); } });
+      expect(code).toBe(EXIT_CODES.OWNER_SIGNER_NOT_HARDWARE);
+    } finally { console.log = l; }
+    expect(signerMade).toBe(false);
   });
 });
