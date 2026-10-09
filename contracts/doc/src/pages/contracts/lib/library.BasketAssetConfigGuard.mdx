@@ -1,29 +1,43 @@
 ---
 title: "BasketAssetConfigGuard"
-description: "The config-validation interface the 2026-06-19 audit recommended for `BasketVault.addAsset`: it enforces the ADP-2 adapter codehash allowlist and the ORA-3 execution-pool == TWAP-pool equality (F-09)."
 ---
 
 # BasketAssetConfigGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/lib/BasketAssetConfigGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/lib/BasketAssetConfigGuard.sol)
 
-**Title:** BasketAssetConfigGuard
+## Constants
 
-The config-validation interface the 2026-06-19 audit recommended for
-`BasketVault.addAsset`: it enforces the ADP-2 adapter codehash
-allowlist and the ORA-3 execution-pool == TWAP-pool equality (F-09).
+### B20_PRECOMPILE_CODEHASH
 
 <i>
 
-Declared `public` (external, DELEGATECALL-linked) so the checks live in a
-single deployed library instead of being inlined into every vault in the
-already-EIP-170-tight basket family.
+Code hash of the single byte `0xef`. Coinbase B20 tokenized stocks are protocol
+precompiles: the account code on Base is exactly `0xef`, so a plain "has code"
+check would be the only thing standing between a typo and a codeless token. This
+is the one explicit code-hash allowance for tokens with a 1-byte code (core 1500).
 
 </i>
 
+```solidity
+bytes32 internal constant B20_PRECOMPILE_CODEHASH = keccak256(hex"ef");
+```
+
+### BASE_BLOCK_SECONDS
+
+<i>
+
+Base block time in seconds, the cadence the cardinality floor is derived from.
+
+</i>
+
+```solidity
+uint32 internal constant BASE_BLOCK_SECONDS = 2;
+```
+
 ## Functions
 
-<a id="requirepoolusable-address-address-address-uint32-uint16-uint128"></a>
+<a id="requirepoolusable-address-address-address-uint32-uint128"></a>
 
 ### requirePoolUsable
 
@@ -40,7 +54,6 @@ function requirePoolUsable(
         address token,
         address usdc,
         uint32 twapWindow,
-        uint16 minCardinality,
         uint128 minLiquidity
     ) public view;
 ```
@@ -53,8 +66,29 @@ function requirePoolUsable(
 | token | `address` |  |
 | usdc | `address` |  |
 | twapWindow | `uint32` |  |
-| minCardinality | `uint16` |  |
 | minLiquidity | `uint128` |  |
+
+<a id="requireobservationhistory-address-uint32"></a>
+
+### requireObservationHistory
+
+Assert `pool` holds enough observation history to serve a
+`twapWindow`-second TWAP right now: `observe([twapWindow, 0])` must
+not revert. Used by `addAsset` (via `requirePoolUsable`) and by
+`setTwapWindow`, so governance can never set a window the pool's
+oldest observation does not reach. Such a window would make every
+NAV read revert ("OLD") and block every redeem (core 1494).
+
+```solidity
+function requireObservationHistory(address pool, uint32 twapWindow) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| twapWindow | `uint32` |  |
 
 <a id="reuseorrejectduplicate-assetinfo-address-address-uint24-address-venue"></a>
 
@@ -120,7 +154,8 @@ function requireAllowedAdapter(address adapter, bool allowed) public pure;
 Assert the execution pool resolved from `swapFee` is the SAME pool
 the NAV TWAP reads from (ORA-3 / F-09): fee tier for V3/V4, tick
 spacing for Aerodrome. `swapFee == 0` is the pool-independent-pricing
-sentinel (e.g. the Chronicle NAV adapter) and is exempt.
+sentinel and is exempt. No shipped asset uses it: the basket deploy
+script requires a non-zero `poolFee` (`contracts/script/BasketVaultDeployBase.sol`).
 
 ```solidity
 function requireExecutionPoolMatchesTwap(address pool, uint24 swapFee, Venue venue)
@@ -136,7 +171,80 @@ function requireExecutionPoolMatchesTwap(address pool, uint24 swapFee, Venue ven
 | swapFee | `uint24` |  |
 | venue | `Venue` |  |
 
+<a id="payinkind-assetinfo-address-uint256-uint256"></a>
+
+### payInKind
+
+The payout loop of `BasketVault.redeemInKind` (core 1665), delegatecall-linked so it
+runs as the vault (`address(this)` is the vault) and stays out of the EIP-170-tight
+vault bytecode. Pays `receiver` the floor-pro-rata share (`shares / supplyBefore`) of
+the vault's idle USDC and of each ACTIVE basket token. `exitFeeBps` of each leg goes to
+`feeRecipient`. No oracle read and no swap. The caller has already burned `shares`.
+
+```solidity
+function payInKind(
+        AssetInfo[] storage assets,
+        address receiver,
+        uint256 shares,
+        uint256 supplyBefore
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `AssetInfo[]` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+<a id="_payleg-ierc20-address-uint256-uint256-uint256-address"></a>
+
+### _payLeg
+
+```solidity
+function _payLeg(
+        IERC20 token,
+        address receiver,
+        uint256 shares,
+        uint256 supplyBefore,
+        uint256 exitFeeBps,
+        address feeRecipient
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `IERC20` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+
 ## Errors
+
+### InsufficientGas
+
+<i>
+
+Mirror of `BasketVault.InsufficientGas` (same selector): gas left at in-kind redeem entry is below the floor.
+
+</i>
+
+```solidity
+error InsufficientGas(uint256 available, uint256 required);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| available | `uint256` |  |
+| required | `uint256` |  |
 
 ### AdapterCodeHashNotAllowed
 
@@ -245,6 +353,24 @@ error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
 | required | `uint128` |  |
 | actual | `uint128` |  |
 
+### TokenHasNoCode
+
+<i>
+
+Token has no usable bytecode and its code hash is not the allowed B20 marker.
+
+</i>
+
+```solidity
+error TokenHasNoCode(address token);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
 ## Structs
 
 ### AssetInfo
@@ -285,7 +411,8 @@ struct AssetInfo {
 
 <i>
 
-Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals).
+Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is a reserved ordinal that no
+adapter implements; it stays so Aerodrome keeps ordinal 2 (see `BasketVault.Venue`).
 
 </i>
 

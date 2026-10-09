@@ -5,7 +5,7 @@ description: "`AccessControl` with a \"last-admin floor\" — the final holder o
 
 # AdminFloorAccessControlCounter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/lib/AdminFloorAccessControlCounter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/lib/AdminFloorAccessControlCounter.sol)
 
 **Inherits:** AccessControl
 
@@ -17,7 +17,7 @@ renounced down to zero holders — enforced with a manual membership
 counter instead of `AccessControlEnumerable`.
 
 Single owner for the last-admin floor across the vault family
-(`Vault`, `BasketVault` and its `RwaVault`/`AgentTokenVault`/
+(`BasketVault` and its `RwaBasketVault`/`AgentTokenVault`/
 `ProtocolAssetVault` subclasses, and `RobotMoneyVault`), replacing
 what were previously three independent hand-rolled counters (two
 of them near-identical, one — RobotMoneyVault — missing the floor

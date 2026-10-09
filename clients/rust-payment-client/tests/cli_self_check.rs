@@ -73,7 +73,7 @@ async fn self_check_happy_path_emits_v92_report_and_exits_zero() {
     let checks = &v["checks"];
     assert_eq!(checks["chain_id_match"], true);
     assert_eq!(checks["gateway_code_hash_match"], true);
-    assert_eq!(checks["gateway_paused"], false);
+    assert_eq!(checks["deposits_paused"], false);
     assert_eq!(checks["agent_active"], true);
     assert!(checks["agent_valid_until"].is_number());
     assert_eq!(checks["max_per_payment"], "1000000");
@@ -140,14 +140,14 @@ async fn self_check_chain_id_mismatch_exits_nonzero_with_named_error() {
 }
 
 #[tokio::test]
-async fn self_check_paused_gateway_exits_nonzero() {
+async fn self_check_deposits_paused_exits_nonzero() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
-    // paused() = true (higher priority).
+    // depositsPaused() = true (higher priority).
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::pausedCall,
+            RobotMoneyGateway::depositsPausedCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_bool(true)))
@@ -172,8 +172,8 @@ async fn self_check_paused_gateway_exits_nonzero() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(v["ok"], false);
-    assert_eq!(v["error"], "ErrGatewayPaused");
-    assert_eq!(v["checks"]["gateway_paused"], true);
+    assert_eq!(v["error"], "ErrDepositsPaused");
+    assert_eq!(v["checks"]["deposits_paused"], true);
 }
 
 #[tokio::test]

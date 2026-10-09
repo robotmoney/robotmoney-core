@@ -122,14 +122,16 @@ balances, weights, valuations, fees, and any unavailable leg.
 Router weights are the target allocation percentages the Portfolio
 Router uses when splitting deposits across active underlying vaults.
 
-Router weights are the only RM-token governance surface specified for
-the current product scope.
+Router weights are the only governance surface specified for the
+current product scope.
 
-## RM-Token Governance
+## Router-Weight Governance
 
-RM-token governance means `$RM` holders vote on router weights.
+Router-weight governance means addresses with admin-assigned voting
+power vote on router weights through `RouterGovernance`. `ADMIN_ROLE`
+assigns the voting power. There is no token-based governance.
 
-In the current product scope, RM-token governance does not control:
+Router-weight governance does not control:
 
 - vault onboarding,
 - vault retirement,

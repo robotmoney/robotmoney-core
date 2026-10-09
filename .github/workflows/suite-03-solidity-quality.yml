@@ -50,6 +50,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: solidity-lint
@@ -184,7 +189,7 @@ jobs:
           fi
           TWAP_INLINE=$(grep -REn "function (_meanTick|_priceFromTick|_checkPoolPair)" \
               contracts/adapters/AerodromeSwapAdapter.sol \
-              contracts/adapters/UniswapV4SwapAdapter.sol || true)
+              contracts/adapters/UniswapV3SwapAdapter.sol || true)
           if [ -n "$TWAP_INLINE" ]; then
             echo "::error::Inline TWAP helper body found in a swap adapter (issue #927 — delegate to TwapTickMath)." >&2
             echo "$TWAP_INLINE" >&2

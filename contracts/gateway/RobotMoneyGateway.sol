@@ -29,14 +29,45 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     // Errors
     // -------------------------------------------------------------------
 
+    /// @notice Gas left is below the floor a withdraw needs before it fans out to the vault
+    ///         (or to the router and its vaults). Raised before the external call so a
+    ///         gas limit that is too low reverts with a reason. Retry with more gas. (core 1482.)
+    /// @param available `gasleft()` at the check.
+    /// @param required  The floor that was not met.
+    error InsufficientGas(uint256 available, uint256 required);
+
+    /// @dev Gas `withdraw` needs, checked at entry before any state-dependent work (core 1482).
+    ///      The vault's entry floor is 1_600_000 after the 63/64 forward (about 1_625_400 at the
+    ///      call), and the gateway spends its policy reads, window and payment-id writes and the
+    ///      share pull before the call. A floor checked after that work would move with the
+    ///      state, so eth_estimateGas could land on it and fail at inclusion.
+    ///      See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant WITHDRAW_GAS_FLOOR = 2_000_000;
+    /// @dev `withdrawFromRouter` needs this fixed part plus `ROUTER_WITHDRAW_GAS_PER_LEG` per
+    ///      non-zero leg, checked at entry. Per leg the router needs 1_700_000 after the 63/64
+    ///      forward (about 1_727_000 at the call) plus the gateway's share pull, approvals and
+    ///      custody reads for that leg.
+    uint256 internal constant ROUTER_WITHDRAW_BASE_GAS = 400_000;
+    uint256 internal constant ROUTER_WITHDRAW_GAS_PER_LEG = 1_850_000;
+    /// @dev `deposit` and a vault-destination `depositTo` need this at entry. The vault's deposit
+    ///      entry floor is 1_600_000 after the 63/64 forward, and the gateway spends its policy
+    ///      reads, window and payment-id writes and the USDC pull before the call.
+    uint256 internal constant DEPOSIT_GAS_FLOOR = 2_000_000;
+    /// @dev A router-destination `depositTo` needs this fixed part plus
+    ///      `ROUTER_DEPOSIT_GAS_PER_LEG` per effective weight leg, checked before the first
+    ///      vault call. Per leg the router needs 1_700_000 after the 63/64 forward.
+    uint256 internal constant ROUTER_DEPOSIT_BASE_GAS = 400_000;
+    uint256 internal constant ROUTER_DEPOSIT_GAS_PER_LEG = 1_850_000;
+
     /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();
     /// @notice Constructor-time check: vault.asset() does not match the configured USDC token.
     error AssetMismatch();
-    /// @notice Operation rejected because the gateway is paused (also re-thrown by `pause()` if already paused).
-    error PausedError();
-    /// @notice `unpause()` called while the gateway was not paused.
-    error NotPaused();
+    /// @notice Deposit rejected because gateway deposits are paused (also raised by
+    ///         `pauseDeposits()` if deposits are already paused). Withdrawals never raise it.
+    error DepositsArePaused();
+    /// @notice `unpauseDeposits()` called while deposits were not paused.
+    error DepositsNotPaused();
     /// @notice Deposit amount is zero, or `authorizeAgent` policy has zero/inverted per-payment vs per-window caps.
     error InvalidAmount();
     /// @notice Deposit amount exceeds the agent's `maxPerPayment` cap.
@@ -287,8 +318,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice Replay protection. `paymentId => used`.
     mapping(bytes32 => bool) public usedPaymentIds;
 
-    /// @notice Stop-the-world flag.
-    bool private _paused;
+    /// @notice Deposit pause flag. Blocks `deposit` and `depositTo` only. Withdrawals
+    ///         are never frozen (owner decision 2026-10-05, core 1494).
+    bool private _depositsPaused;
 
     /// @notice Investment Committee Policy contract. When set, `committeeRegister`
     ///         and `committeeVoteSubmit` forward calls here. Settable by
@@ -353,7 +385,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @param usdc_    USDC (or 6-decimal stand-in) token address.
     /// @param vault_   ERC-4626 vault whose `asset()` MUST equal `usdc_`.
     /// @param admin_   Holder of `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
-    /// @param pauser_  Holder of `PAUSER_ROLE`. Must be distinct from agents.
+    /// @param pauser_  Holder of `DEPOSIT_PAUSER_ROLE`. Must be distinct from agents.
     /// @param router_  Portfolio Router address, or `address(0)` to deploy without
     ///                 router support (single-vault mode).
     constructor(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, address router_) {
@@ -379,7 +411,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
-        _grantRole(PAUSER_ROLE, pauser_);
+        _grantRole(DEPOSIT_PAUSER_ROLE, pauser_);
     }
 
     // -------------------------------------------------------------------
@@ -402,8 +434,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     /// @inheritdoc IGateway
-    function paused() external view returns (bool) {
-        return _paused;
+    function depositsPaused() external view returns (bool) {
+        return _depositsPaused;
     }
 
     /// @inheritdoc IGateway
@@ -658,7 +690,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         agents[agent] = p;
 
         // First-time grant. The role-separation override in AccessRoles
-        // will revert if the candidate already holds ADMIN/PAUSER.
+        // will revert if the candidate already holds ADMIN/DEPOSIT_PAUSER.
         _grantRole(AGENT_ROLE, agent);
         _assertRoleSeparation(agent);
 
@@ -735,17 +767,17 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     /// @inheritdoc IGateway
-    function pause() external onlyRole(PAUSER_ROLE) {
-        if (_paused) revert PausedError();
-        _paused = true;
-        emit Paused(msg.sender);
+    function pauseDeposits() external onlyRole(DEPOSIT_PAUSER_ROLE) {
+        if (_depositsPaused) revert DepositsArePaused();
+        _depositsPaused = true;
+        emit DepositsPaused(msg.sender);
     }
 
     /// @inheritdoc IGateway
-    function unpause() external onlyRole(ADMIN_ROLE) {
-        if (!_paused) revert NotPaused();
-        _paused = false;
-        emit Unpaused(msg.sender);
+    function unpauseDeposits() external onlyRole(ADMIN_ROLE) {
+        if (!_depositsPaused) revert DepositsNotPaused();
+        _depositsPaused = false;
+        emit DepositsUnpaused(msg.sender);
     }
 
     // -------------------------------------------------------------------
@@ -762,7 +794,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         onlyRole(AGENT_ROLE)
         returns (bytes32 paymentId, uint256 sharesMinted)
     {
-        if (_paused) revert PausedError();
+        // Gas guard (core 1482): at entry, before any state-dependent work.
+        if (gasleft() < DEPOSIT_GAS_FLOOR) revert InsufficientGas(gasleft(), DEPOSIT_GAS_FLOOR);
+        if (_depositsPaused) {
+            revert DepositsArePaused();
+        }
 
         AgentPolicy memory p = agents[msg.sender];
 
@@ -869,7 +905,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         address destination,
         uint256[] calldata minSharesPerLeg
     ) external nonReentrant onlyRole(AGENT_ROLE) returns (bytes32 paymentId) {
-        if (_paused) revert PausedError();
+        if (_depositsPaused) revert DepositsArePaused();
 
         // Build a DepositArgs struct early to collapse locals onto the heap.
         // This avoids the "stack too deep" limit imposed by the EVM legacy codegen.
@@ -902,6 +938,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             // one cold SLOAD per depositTo call — issue #509).
             args.maxPerWindow = p.maxPerWindow;
         }
+
+        // Gas guard (core 1482): before any vault call, so the estimate sits on this floor.
+        _requireDepositGas(args.isRouter);
 
         // 5. windowId — used for event emission only; cap is enforced by the
         //    rolling-window accounting below (#497).
@@ -958,6 +997,16 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         _executeDeposit(args, minSharesPerLeg);
         // slither-disable-end reentrancy-balance
+    }
+
+    /// @dev Entry gas floor for `depositTo`. The router floor scales with the effective legs.
+    function _requireDepositGas(bool isRouter) internal view {
+        uint256 floor = DEPOSIT_GAS_FLOOR;
+        if (isRouter) {
+            (address[] memory legs,) = routerContract.getEffectiveWeights();
+            floor = ROUTER_DEPOSIT_BASE_GAS + legs.length * ROUTER_DEPOSIT_GAS_PER_LEG;
+        }
+        if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
     }
 
     /// @dev Internal args struct to avoid stack-too-deep in `depositTo`.
@@ -1099,7 +1148,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         uint64 deadline,
         bytes32 idempotencyKey
     ) external nonReentrant onlyRole(AGENT_ROLE) returns (bytes32 paymentId, uint256 assetsOut) {
-        if (_paused) revert PausedError();
+        // Gas guard (core 1482): at entry, before any state-dependent work.
+        if (gasleft() < WITHDRAW_GAS_FLOOR) revert InsufficientGas(gasleft(), WITHDRAW_GAS_FLOOR);
+        // core 1494: no pause applies. Withdrawals stay open while deposits are paused.
 
         AgentPolicy memory p = agents[msg.sender];
 
@@ -1256,8 +1307,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         onlyRole(AGENT_ROLE)
         returns (bytes32 paymentId, uint256[] memory assetsPerLeg)
     {
-        if (_paused) revert PausedError();
-
+        // core 1494: no pause applies. Withdrawals stay open while deposits are paused.
         // 1. Router must be configured.
         if (address(routerContract) == address(0)) revert RouterNotConfigured();
 
@@ -1265,6 +1315,16 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         //     share vector (GW-5 / F-11). The gateway forwards this floor verbatim
         //     to the router; it no longer fabricates an all-zero vector.
         if (minAssetsPerLeg.length != sharesPerLeg.length) revert RouterLegLengthMismatch();
+
+        // Gas guard (core 1482): one floor at entry, scaled by the non-zero legs.
+        {
+            uint256 legs;
+            for (uint256 i = 0; i < sharesPerLeg.length; i++) {
+                if (sharesPerLeg[i] != 0) legs++;
+            }
+            uint256 floor = ROUTER_WITHDRAW_BASE_GAS + legs * ROUTER_WITHDRAW_GAS_PER_LEG;
+            if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
+        }
 
         // Build args struct early to collapse locals onto the heap.
         RouterWithdrawArgs memory args;
@@ -1296,7 +1356,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             //    caller-supplied `vaults[]` (issue #967, F-03) — NOT the router's
             //    live weight vector — so a holder can redeem a position the router
             //    has reweighted away from. The router re-validates each named vault
-            //    against the registry (registered + not Paused) in `redeemFor`.
+            //    against the registry (registered, any status) in `redeemFor`.
             if (args.vaultList.length == 0) revert RouterLegLengthMismatch();
             if (sharesPerLeg.length != args.vaultList.length) revert RouterLegLengthMismatch();
 

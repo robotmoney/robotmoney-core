@@ -40,13 +40,15 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///                              writes (register, voteSubmit, receipt record)
 ///                              must originate here.
 ///
-///         Optional env vars:
+///         Also required, with no default:
 ///           RECEIPT_ADMIN_ADDRESS — sole holder of ADMIN_ROLE on the receipt
-///                              contract; the TimelockController in production.
-///                              Defaults to ADMIN_ADDRESS for devnet ceremonies.
+///                              contract (the deployer until DeployTimelock hands it over).
 ///           DEPLOYMENT_OUT   — path for the output JSON
-///                              (default: "deployments/ic-policy-<chain_id>.json")
+///           EXPECTED_CHAIN_ID — mandatory and equal to 8453 on Base mainnet
 contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "ic-policy.json";
+
     using stdJson for string;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
@@ -64,9 +66,10 @@ contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
     /// @return d Struct containing the deployed contract and key parameters.
     function run() external returns (Deployed memory d) {
         _requireExpectedChain("");
-        address admin = vm.envAddress("ADMIN_ADDRESS");
-        address gateway = vm.envAddress("GATEWAY_ADDRESS");
-        address receiptAdmin = vm.envOr("RECEIPT_ADMIN_ADDRESS", admin);
+        address admin = _envAddressRequired("ADMIN_ADDRESS");
+        address gateway = _envAddressRequired("GATEWAY_ADDRESS");
+        address receiptAdmin = _envAddressRequired("RECEIPT_ADMIN_ADDRESS");
+        require(receiptAdmin != address(0), "RECEIPT_ADMIN_ADDRESS=0");
         require(gateway.code.length > 0, "GATEWAY_ADDRESS has no code on this chain");
 
         vm.startBroadcast();
@@ -172,12 +175,7 @@ contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
-        string memory outPath;
-        try vm.envString("DEPLOYMENT_OUT") returns (string memory s) {
-            outPath = s;
-        } catch {
-            outPath = string.concat("deployments/ic-policy-", vm.toString(block.chainid), ".json");
-        }
+        string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
 
         string memory obj = "ic_policy_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);

@@ -9,8 +9,8 @@
 > Modeled on the sibling frontend repo's `docs/technical/release-runbooks.md`
 > policy, adapted for immutable Solidity contract deployments rather than a
 > mutable Postgres-backed application: there is no schema migration, no
-> in-place rollback, and "the release branch" is `Deploy.s.sol` and its
-> companion deploy scripts at a specific commit, not a database.
+> in-place rollback, and "the release branch" is the stage scripts under `contracts/script/` (listed in
+> `scripts/deploy/stage-table.json`) at a specific commit, not a database.
 
 This is not the process for landing ordinary feature work — that is PR review
 against `dev`, covered by the repo's CI taxonomy. This document is
@@ -40,8 +40,8 @@ rehearsal that does not produce a lasting, addressed deployment record does
 not consume a version number.
 
 Unlike the frontend's `releases-A.B.x` branch convention, contract releases
-do not need a dedicated long-lived branch: `contracts/script/Deploy.s.sol`
-and its companion scripts already read every deploy-time parameter from
+do not need a dedicated long-lived branch: the scripts under `contracts/script/`
+already read every deploy-time parameter from
 environment variables, so the same scripts at a single commit on `dev`
 deploy to every target network. The version tag `vA.B.C` is cut on `dev` at
 the exact commit that was deployed and verified — there is no cherry-pick
@@ -56,15 +56,52 @@ its own go/no-go cycle through §4.
 
 ## 3. Version tags and rehearsal candidates
 
+This section covers two different tags. Do not confuse them.
+
+- The **release tag** (`release/<version>`, annotated) names the release SHA
+  *before* the final Twin rehearsal. It is the contracts-freeze gate: tag the
+  release SHA, run the final Twin rehearsal at that SHA, then commit its
+  frozen per-stage transaction counts to
+  `deployments/frozen-counts/<sha>.json`. The rehearsal is the `core-stages-twin-chain`
+  job of suite 28 (every push to `dev` and the nightly). Download the `rehearsal-counts-<sha>`
+  artifact of the release SHA's run, review `counts.json`, and write its `counts` (with `deploySha` and
+  the `measured` chain id and time) to that file with
+  `bun publish-contracts/scripts/freeze-counts.ts --counts counts.json`. Take the artifact from the
+  **push** run of the tagged SHA: on a pull request `github.sha` is the merge commit, not the release SHA.
+  CI never commits it. The mainnet plan job refuses any
+  `DEPLOY_SHA` that is not an annotated-release-tagged SHA (`RELEASE_SHA_UNTAGGED`), whose tag object differs from, or is missing on, the checkout's `origin` or whose remote is unreachable (`RELEASE_TAG_REMOTE_MISMATCH`, exit 23; push the tag before planning), has no committed
+  frozen counts (`COUNTS_MISSING`) or is not green in `check-sha-green` (`CI_NOT_GREEN`).
+  Any later commit that changes `contracts/` has a new SHA with no tag and no
+  counts, so it needs a new rehearsal and tag. This flow is enforced by the plan job (core #1524).
+  - **Green rehearsal only.** The artifact uploads even when the rehearsal failed. The job therefore records its
+    own conclusion in `counts.json` (`rehearsal.conclusion`), and `freeze-counts.ts` refuses any file whose
+    conclusion is not `success` (core #1602). `core-stages-twin-chain` is deliberately not in
+    `scripts/ci/required-checks.json`: it reads a public upstream that can rate limit, and a required entry would
+    block every DEPLOY_SHA on a provider outage. Freezing needs a green run, and `check-sha-green` still gates the plan.
+  - **Required list source.** `check-sha-green` runs from the tagged SHA's own checkout, so it reads that SHA's
+    `scripts/ci/required-checks.json`. Review that file's diff since the last release before tagging.
+  - **Later 8453 stages (decision, core #1602).** Only the `plan` stage checks the tag and green CI. Later stages check the
+    frozen counts file only. Default: they do not re-check, because the deploy job needs the plan job in the devops
+    workflow, and a re-check days later (stage 13 runs after the 48-hour delay) would fail on an unrelated
+    flaky check mid-deploy. Revisit if a deploy job ever runs without the plan job.
+  - **Remote tag check (core #1602).** The plan compares the local `release/<version>` tag with `origin` of the core
+    checkout (`git ls-remote`): the remote must hold the same tag object. Push the tag before planning.
+  - **Optional hardening (owner action, defense in depth).** A GitHub tag ruleset stops a pusher from creating or moving a
+    release tag at all. Settings: target `Tags`, pattern `release/*`, enforcement `Active`, rules `Restrict creations`,
+    `Restrict updates` and `Restrict deletions`, bypass list only the release owners. The gate does not depend on it.
+- The **version tag** (`vA.B.C[-network]`) is the post-deploy record
+  described in the rest of this section.
+
 A version tag is **never** cut before **both** a completed preflight and a
 completed postflight on the target network. The version tag records what has
 been *proven deployed*, not what is *intended for deployment*. Everything
-before that point is a rehearsal candidate, referenced by commit SHA, not a
-tag.
+before that point is a rehearsal candidate, referenced by commit SHA (and,
+for mainnet, by its release tag), not a version tag.
 
 The cycle:
 
-1. Pick the `dev` commit SHA you intend to deploy.
+1. Pick the `dev` commit SHA you intend to deploy. For mainnet this is the
+   release-tagged SHA with committed frozen counts (see above).
 2. Run preflight against that SHA (§4.1-4.2). **Preflight fails** → fix on
    `dev`, pick the new tip, return to step 2.
 3. **Preflight passes** → run the deploy ceremony against the target network.
@@ -72,7 +109,7 @@ The cycle:
    patch on `dev`, and go back through preflight (step 2) before deploying
    again. A contract deployment cannot be "patched in place": a postflight
    failure after broadcast means either the deployed contracts are
-   unusable (redeploy fresh addresses) or a mitigating admin action (pause,
+   unusable (redeploy fresh addresses) or a mitigating admin action (deposit pause,
    role revocation) contains the issue while a fix lands (§4.6).
 5. **Postflight clean** → tag `vA.B.C[-network]` at the exact commit that was
    deployed and verified.
@@ -116,13 +153,18 @@ Before any transaction is broadcast:
    build` artifacts, not a specific chain): the EIP-170 size gate on every
    contract in the ceremony's runtime set, and the env-default guard against
    an unsafe `RouterGovernance` `EXECUTION_DELAY`/`QUORUM_THRESHOLD`.
-2. **Role and address validation.** `Deploy.s.sol`'s and every companion
-   deploy script's own `_validate` step enforces distinct non-zero role
+   For a release deploy add `--dependency-manifest CHAIN_ID:RELEASE` (with
+   `DEPENDENCY_MANIFEST_RPC_URL` in the environment): it records every
+   third-party address, its code hash, its proxy implementation and the block
+   into `deployments/dependency-manifests/<chain id>/<release>.json`. Commit that
+   file with the release deployment record (hook: `scripts/release/record-release-dependencies.ts`; see `deployments/dependency-manifests/README.md`). The nightly third-party drift
+   workflow (disabled by default) compares live state to the latest such file.
+2. **Role and address validation.** Every deploy script's own `_validate` step enforces distinct non-zero role
    addresses, a canonical asset address with deployed bytecode, and a real
    timelock/Safe destination for the eventual role handover.
 3. **Funding.** The deployer EOA holds enough native gas token and enough of
-   the seed asset (`SEED_DEPOSIT_AMOUNT` in `Deploy.s.sol` — see
-   `docs/future/review-usdc-seed.md` for its current temporary value) for the
+   the seed asset (`SEED_DEPOSIT_USDC` on the frozen sheet, required, no default; 1 USDC is the
+   planned value) for the
    mandatory seed deposit.
 4. **Network identity.** Confirm the RPC's reported chain id matches the
    target network's expected chain id before broadcasting anything. Every
@@ -153,12 +195,74 @@ failures and no silently-skipped check.
 
 ### 4.3. Cutover — the deploy ceremony
 
-Run the ordered deploy-script sequence the deploy scripts themselves define (the
-canonical step order and postcondition set — this policy does not restate it,
-since the deploy scripts and their order are the same regardless of target
-network): core stack (vault, adapters, gateway, seed deposit) → vault
-registry → portfolio router → router governance → IC policy + consensus
-receipt → timelock + role handover → record.
+One driver runs the ceremony: the `publish-contracts` Bun CLI in this repo
+(`publish-contracts/`). It reads `scripts/deploy/stage-table.json` and runs
+the same scripts in the same order on every chain. Stage, rehearsal and
+production differ only by parameters (the frozen sheet and the CLI
+arguments), never by source. Core never depends on the devops repo. Devops
+owns operations only: the credential engine, fusion-qa product acceptance
+and the mainnet canary, stage hosts, the operator runbook
+(`docs/runbooks/publish-contracts.md` in devops), and the mainnet workflows
+that check out core. `--dry-run` is the preflight: it simulates every
+deployer stage on a local anvil and broadcasts nothing. A Twin-chain
+rehearsal of publish, verify and govern runs on every push to `dev` (not
+yet implemented: core #1523).
+
+The stage sequence. The stage table holds the forge stages 1 to 11; the CLI
+adds `safe`, `prove-control` (between stages 10 and 11), `verify` and `govern`:
+
+| Stage | What it does |
+| --- | --- |
+| 0 `safe` | Create a canonical SafeL2 1.4.1 through the canonical factory from the sheet's owners and threshold (threshold ≥ 2), then read it back. |
+| 1 `libs` | Deploy TickMath. The basket stages link it. |
+| 2 `vault` | rmUSDC and its lending adapters. Seed 1 USDC to `SEED_SHARE_RECEIVER`; the deployer holds no shares. |
+| 3 `registry` | Register rmUSDC. |
+| 4 `router` | Portfolio Router, `registry.setRouter`. |
+| 5 `gateway` | Gateway with the router as an immutable. No agent is authorized: `DeployGateway` reads no `AGENT_*` input and the sheet refuses them. Depositors authorize their own agents through `commitAuthorization` and `revealAuthorization`. |
+| 6 `governance` | RouterGovernance from the sheet. |
+| 7 `ic-policy` | IC policy and consensus receipt, bound to the gateway. |
+| 8 `proto` | rmPROTO, paused, wETH and cbBTC, registered. |
+| 9 `agent` | rmAGENT, paused, RM (`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`) on its venue, registered. The venue is decided (owner, 2026-10-06): the existing Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), the only venue the script wires (`contracts/script/BasketVaultDeployBase.sol`). Before the mainnet run the owner funds it with in-range liquidity at market price, sized to rmAGENT's first-period cap, and raises its observation cardinality. A restored V4 swap adapter is a later option, not a launch blocker. RM is in `config/agent-token-shortlist.json` (core #1554), so the live config check and the stage's own config check fail with a message naming the pool until the owner has funded it: `BasketVault.addAsset` needs observation cardinality of at least 2 and liquidity of at least 1e6, and those floors are not relaxed. On the Twin chain the harness funds the same pool with real transactions first (`rehearsal fund-rm-pool`), so the Twin run proves rmAGENT holds RM after the deploy. |
+| 10 `rwa` | rmRWA, paused, a plain basket row: deSPXA on its Uniswap V3 fee 500 pool, no oracle. |
+| — `prove-control` | Before stage 11 the real Safe signs and executes one proof transaction: a call from the Safe to itself with value 0 and empty data. EVERY owner signs it, not only a threshold, so one run proves every key (plan decision 21, core #1618). The Safe tool checks each owner signature, and the Safe itself checks all of them, before it executes. The run manifest records the transaction hash and the signers. The first owner pays the gas, not the deployer. The proof goes straight through the Safe, never through the timelock, so the 8453 evidence check (unpause operations only) is unaffected. A signer missing for any owner stops the step with `CONTROL_NOT_PROVEN` (exit 24) before anything is sent. **If the run died after the proof landed** (the Safe is at nonce 1 and the run manifest has no `prove-control` record), rerun the same command with `--resume`: the tool reads the Safe's own `ExecutionSuccess`/`ExecutionFailure` events from the safe stage block, adopts the nonce-0 execution only when it is the exact self-call (value 0, empty data, a plain call to the Safe, chain and Safe bound by the Safe transaction hash) whose calldata signatures recover to exactly the current owners (every owner, no stranger, no repeat), records it with `adopted: true` and the on-chain hash, sends nothing, and goes on to stage 11. Anything else (a failed or reverted execution, another target, value or data, a missing owner, a nonce of 2 or more, two executions, no event) stops with `CONTROL_NOT_PROVEN` and the reason. Without `--resume` it never adopts. Log reads walk the range in 2000-block windows (Base RPC providers cap one `eth_getLogs` call), and a read that fails is a refusal, never an empty answer. |
+| — config | Before stage 11 the deployer sets the deploy-time configuration: setters, router eligibility, voting power, and router default weights rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps (not yet implemented: core #1520). |
+| 11 `timelock` | Refuses with `CONTROL_NOT_PROVEN` (exit 24) unless the run manifest holds the `prove-control` record on the same Safe signed by every owner and the Safe nonce is 1 or more (stage 0 asserts nonce 0). TimelockController: proposer and canceller the Safe, executor open `address(0)` (implemented: core #1521; `DeployTimelock` grants `EXECUTOR_ROLE` to `address(0)` only, and the verifier checks it), delay from the sheet with a 172800 s floor on 8453. Every role on every vault, the gateway, registry, router, governance, IC policy and receipt goes to the timelock (vault EMERGENCY_ROLE to the emergency key), and the deployer is revoked. `AGENT_ADDRESSES=none`. |
+| 12 `verify` | One verifier reads the chain and checks every postcondition, including the Safe owners and threshold, the proof transaction read back from the chain (a self-call of the Safe, signed by every owner, Safe nonce 1 or more), the delay floor, that the deployer holds no role, that the gateway has no `AgentAuthorized` or `AgentOwnershipTransferred` log up to the handover block and nobody holds `AGENT_ROLE` from an earlier grant (the deploy authorizes no agent), and the deployer nonce against the frozen per-stage counts for the release SHA (counts not yet committed: core #1524). |
+| 13 `govern` | Only `unpauseDeposits()` on each basket vault (rmPROTO, rmAGENT, rmRWA). Each is its own timelock operation, scheduled the same day through the real Safe and executed after one 48-hour delay. None is skipped on any deploy. On 8453 the CLI exits `GOVERN_PENDING` with the resume command; on the Twin chain the wait runs by time warp (not yet implemented: core #1520; `govern.ts` still runs the older per-step matrix). |
+
+**Run order: publish, verify, govern, verify (issue 1667).** The stage numbers are fixed (12 `verify`, 13 `govern`), the run order on 8453 is not
+verify once. Verify runs twice, and each run checks a different state, which the CLI reads from the run manifest and confirms against the chain:
+
+1. `publish` (stages 0 to 11).
+2. `verify`: the **pre-govern** state. No unpause row is scheduled. rmPROTO, rmAGENT and rmRWA must read `depositsPaused` true and rmUSDC must read false.
+3. `govern`: schedules the three basket unpauses through the real Safe in one sitting and exits `GOVERN_PENDING` (15). After the 48-hour delay the same
+   command executes them.
+4. `verify`: the **post-govern** state. All three unpause rows are executed and all four vaults must read `depositsPaused` false.
+
+A manifest that says one state while the chain reads the other fails verify (exit 13), and a failed verify runs `pause-all` (§4.6). A verify run while
+govern is **part-way** (some but not all basket unpause rows scheduled or executed, or an `unpause-USDC` round scheduled and not executed) is not a failed
+verify: it exits 15 (`GOVERN_PENDING`), names the govern command that finishes the work, checks nothing and pauses nothing. Run that command, then verify.
+The Twin chain rehearsal runs the same order (`twin-publish.ts`, `twin_publish.rs`). It only checks that the scripts execute in this order: the 48-hour
+delay and the Safe signers are proven on 8453 through the real Safe.
+
+**Basket sheet values (issue 1666).** Each basket (`PROTO`, `AGENT`, `RWA`, never `USDC`) carries two more
+names in the frozen sheet, read by its stage as `NAV_DEVIATION_BPS` and `MIN_POOL_LIQUIDITY`:
+
+| Sheet name | Rule |
+| --- | --- |
+| `VAULT_<KEY>_NAV_DEVIATION_BPS` | The ORA-4 deposit guard in basis points, from 1 to 2000. The vault default is 0, which disables the check, so 0 is refused. A value above 2000 is refused (the vault ceiling is 20 percent). The unit is basis points: 100 is 1 percent. The guard runs on deposit only, never on redeem. |
+| `VAULT_<KEY>_MIN_POOL_LIQUIDITY` | The floor for `IUniswapV3Pool.liquidity()` of every pool the basket lists. The unit is the pool's in-range liquidity L (a `uint128`, about sqrt(token0 x token1) in raw units), not a USDC amount. Above 0 and at most 2^128 - 1. It is checked on top of the vault's own dust constant `MIN_POOL_LIQUIDITY` (1e6), which is not changed. Read the live value with `cast call <pool> "liquidity()(uint128)"` before you pick it. |
+
+`VAULT_USDC_NAV_DEVIATION_BPS` and `VAULT_USDC_MIN_POOL_LIQUIDITY` are refused: rmUSDC has no guard and no pool.
+The 8453 values are the owner's, set in the frozen sheet. The deploy script sets the guard on the new vault before the
+timelock handover and reads it back, then refuses any pool below the floor. The verifier (stage 12) reads
+`navDeviationGuardBps` from the chain and asserts it equals the sheet and is above zero, and asserts each basket pool's
+liquidity meets the floor. Each basket stage sends one more transaction (`setNavDeviationGuardBps`), so the frozen
+per-stage counts are the ones the Twin rehearsal measures after this change.
+
+Every privileged action after stage 11 is Safe → `TimelockController` →
+target. `updateDelay`, a batch and a cancel run only as Twin-chain tests of
+the Safe tool, never on 8453.
 
 Every destructive or irreversible step (anything past the seed deposit, since
 the vault is then open to real deposits) must be explicitly marked in the
@@ -170,8 +274,8 @@ After the ceremony completes, the release's manual QA is what actually proves
 the deployment is usable, not just that the transactions didn't revert. At
 minimum:
 
-1. **Role wiring.** Re-run every `cast call ... hasRole(...)` postcondition
-   named in each deploy script's per-step postconditions — do not trust that broadcast success implies correct role
+1. **Role wiring.** Run the stage 12 verifier (§4.3), which re-reads every
+   role postcondition from the chain — do not trust that broadcast success implies correct role
    state.
 2. **Functional smoke test.** Execute one real deposit and one real
    withdrawal against the deployed vault (through the gateway, using a
@@ -197,6 +301,36 @@ If preflight, the cutover, or postflight finds any issue:
 2. Merge the fixes to `dev`.
 3. Restart the runbook from §4.1 at the new `dev` tip.
 
+If verify (stage 12) or the postflight is what failed, the publish-contracts
+CLI has already paused deposits on all four vaults (rmUSDC, rmPROTO, rmAGENT,
+rmRWA) before you read the failure: `pause-all` (§4.6). Check the
+`rollout-report-<chain>.json` it wrote before you start the fix. A vault that `pause-all` paused comes back through the Safe: `govern --row unpause-USDC`
+for rmUSDC (never part of a default run, and refused while rmUSDC reads open) and `govern --row unpause-PROTO`, `unpause-AGENT` or `unpause-RWA` for a basket
+that was already unpaused. Each opens a new numbered round (a new timelock operation id, a new 48-hour delay): the run exits `GOVERN_PENDING`, and the same
+command executes it after the delay. A default `govern` run never reopens a vault that was paused again. Record each round under `govern` in the evidence
+file with its `round` number (`unpause-USDC` is optional there, and every step may have rounds 1 to n).
+
+**Never resume `govern` after a `pause-all` without cancelling first (issue 1686).**
+If an unpause was already scheduled when `pause-all` ran (by hand, or the
+automatic one after a failed verify), the timelock would still execute it after
+its delay and reopen the vault you just paused. `pause-all` therefore records a
+`pauses` entry (sequence number, timestamp, trigger, per-vault result) in
+`publish-run.json`, and `govern` refuses before it sends anything when a pause
+entry is newer than a pending unpause's schedule: `GOVERN` (exit 14), naming
+the row, the pause entry and the operation id. The tool has no cancel on 8453,
+so the recovery is, in this order:
+
+1. Cancel the pending operation through the Safe on the timelock: a Safe
+   transaction that calls `cancel(<operation id>)` on the timelock (the id is
+   in the error and in `publish-run.json` under `govern.<row>.scheduled.operation_id`).
+2. Fix what made you pause.
+3. Run `govern --row unpause-X` (same arguments as before). It sees the
+   cancelled operation, archives it in the manifest as `<row>:round-<n>:cancelled-<k>`
+   and schedules the same round again with a fresh sequence number, a new
+   48-hour delay and the usual `GOVERN_PENDING`. The same command executes it.
+4. A pause-all older than the schedule does not block. A row whose vault was
+   paused again after it executed opens round n+1 as described above.
+
 There is no branch to cherry-pick onto and no rc-numbering cost — every
 contract deployment is a fresh broadcast, so "try again" is simply "deploy
 the fixed commit."
@@ -207,15 +341,29 @@ the fixed commit."
 failure's mitigation depends on how far the ceremony got:
 
 - **Before the timelock/role handover (§4.3's last step):** the deployer EOA
-  still holds `ADMIN_ROLE` and can call `PAUSER_ROLE`-gated pause functions,
-  or simply abandon the deployment (it holds no real user funds yet on a
-  fresh network) and redeploy fresh addresses after the fix.
+  still holds `EMERGENCY_ROLE` on every vault and signs `pauseDeposits()`
+  (the `pause-all` command below), or you abandon the deployment (it holds
+  no real user funds yet on a fresh network) and redeploy fresh addresses
+  after the fix.
 - **After the timelock/role handover:** the deployer no longer holds admin
-  authority. Mitigation is whatever the timelock's configured emergency path
-  allows (the vault's `EMERGENCY_ROLE` pause, per
-  `docs/operations/manual-admin-actions.md`) while a fix is prepared and a
+  authority. The EMERGENCY key signs the vault's `EMERGENCY_ROLE` deposit
+  pause (`pause-all` with `--emergency-signer`), which never blocks a redeem
+  (`docs/operations/manual-admin-actions.md`), while a fix is prepared and a
   **new** deployment (new addresses) is planned — a live vault's stored
   state cannot be transplanted onto fixed contract code.
+
+**The command.** `bun publish-contracts/src/cli.ts pause-all ...` pauses
+deposits on **all four** vaults: rmUSDC, rmPROTO, rmAGENT and rmRWA (rmUSDC
+is not special; owner decision 2026-10-07, plan decision 22). It runs by
+itself when stage 12 (verify) or the postflight fails, and the run still exits
+with the verify failure's code (13). It picks the signer by stage (deployer
+before the handover, EMERGENCY key after), reads `depositsPaused` back on
+every vault and records each vault's paused state in
+`rollout-report-<chain>.json` under the run's evidence directory. Withdrawals
+stay open. Exit 25 means a vault is not confirmed paused. rmUSDC still deploys
+open with its 1 USDC seed. Only the baskets deploy paused (`docs/prd.md`).
+Rehearsed on every pull request that touches the deploy by the Twin test
+`testing/smoke-test/tests/twin_pause_all.rs`.
 
 The rollback/mitigation procedure must be written into the per-release
 runbook and rehearsed on the Devnet at least once before a
@@ -226,13 +374,23 @@ mainnet deployment.
 After a deployment (successful or not), produce a report covering at least:
 
 - the commit SHA and target network deployed,
-- preflight and postflight results,
+- preflight and postflight results (and, when verify or the postflight
+  failed, the `pause-all` result: each vault's `depositsPaused`),
 - any issues encountered and their resolution,
 - the final version tag applied (if any — see §3),
 - operator sign-off.
 
 The report is the closing artifact of the release. The release tracking
 issue is closed only after this report is filed.
+
+### 4.8. Post-launch consensus receipt release
+
+Releasing a consensus receipt on 8453 is a standalone post-launch action (core 1611). It is never part of
+stage 13, which stays the three basket unpauses (an `unpause-USDC` round after `pause-all` is likewise outside the default run). Run `govern --row release-receipt --receipt-id 0x<bytes32>`
+with the usual chain, RPC, sheet, signer and `--owner-signer` arguments. The real Safe schedules `releaseReceipt` on
+the timelock as its own operation and the CLI exits `GOVERN_PENDING` (exit 15) with the resume command. After the
+48-hour delay the same command makes the Safe execute it, and the CLI reads `released` back. Record the operation
+under `receipt_releases` in the evidence file. `update-delay`, `batch` and `cancel` stay Twin-only.
 
 ## 5. Per-release runbook format
 
@@ -275,5 +433,5 @@ no release branch to backport from, since every deployment runs the same
 
 | Network | Chain id | Default per ADR-0013 | Notes |
 | --- | --- | --- | --- |
-| Robot Money Devnet | `918453` | **Yes — the default verification target.** | Local `docker compose` stack, genesis forked from real Base-mainnet state (`docs/technical/full-stack-devnet.md`). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record; a version tag against the Devnet documents a verification pass, not a persistent deployment. |
+| Robot Money Devnet | `918453` | **Yes — the default verification target.** | The Twin chain: a pinned lazy anvil fork of real Base at the upstream head minus 2 per CI run (`scripts/devnet/twin-fork.ts`, `docs/technical/full-stack-devnet.md`). Tests deploy their own vault (clean room). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record; a version tag against the Devnet documents a verification pass, not a persistent deployment. |
 | Base mainnet | `8453` | The eventual real target — a separate, deliberately-costed decision (D9). | Requires an audit pass, Safe/hardware-wallet signers, and a funded submitter key. |

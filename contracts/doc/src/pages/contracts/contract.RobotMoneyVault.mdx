@@ -5,7 +5,7 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7ad48f9065de8dddbe6591f3819711a68aaed6b6/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/RobotMoneyVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -16,7 +16,10 @@ adapters. On-chain trustless pricing. Atomic deposit-to-yield AND withdraw — b
 single-transaction, standard ERC-4626. Exit fee applied on withdrawal.
 Yearn V3-inspired security: 2 roles + hardcoded floors.
 
-Deployed: 0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd (Base mainnet)
+Deployed (v1): 0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd (Base mainnet).
+The v1 deployment runs EARLIER code whose v1 `pause()` also froze withdrawals.
+The v1 vault is the one exception to "withdrawals are never frozen": never call
+v1 `pause()` (core 1494). This source is the code every new deployment ships.
 Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun
 
 ## Constants
@@ -36,11 +39,12 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
 ### EMERGENCY_ROLE
 
-Role that can pause and perform emergency withdrawals.
-Asymmetric with unpause by design: a compromised emergency key can
-only halt the vault (DoS), not restart it. Unpause is restricted to
-`ADMIN_ROLE` so that resuming operations is deliberate and requires
-the higher-trust role — mirroring the gateway's `PAUSER_ROLE` /
+Role that can pause deposits and perform emergency withdrawals.
+Asymmetric with `unpauseDeposits` by design: a compromised emergency
+key can only halt new deposits (DoS). It can never block an exit and
+cannot restart deposits. `unpauseDeposits` is restricted to
+`ADMIN_ROLE` so that resuming deposits is deliberate and requires
+the higher-trust role — mirroring the gateway's `DEPOSIT_PAUSER_ROLE` /
 `ADMIN_ROLE` asymmetry documented in `AccessRoles.sol`.
 
 ```solidity
@@ -95,6 +99,69 @@ Minimum enforced interval between rebalance calls (1 hour).
 
 ```solidity
 uint256 public constant MIN_REBALANCE_INTERVAL_FLOOR = 1 hours;
+```
+
+### ADAPTER_CALL_GAS_FLOOR
+
+<i>
+
+Gas that must remain before an adapter external call (its nested protocol calls
+and the 63/64 forwarding rule need headroom).
+
+</i>
+
+```solidity
+uint256 internal constant ADAPTER_CALL_GAS_FLOOR = 400_000;
+```
+
+### TAIL_GAS_FLOOR
+
+<i>
+
+Gas that must remain after the last adapter call for burn, fee and payout transfers.
+
+</i>
+
+```solidity
+uint256 internal constant TAIL_GAS_FLOOR = 150_000;
+```
+
+### PULL_ENTRY_GAS_FLOOR
+
+<i>
+
+Gas that must be available at the `redeem`/`withdraw` entrypoint. Below this the call
+reverts `InsufficientGas` instead of running out of gas. It must be the binding
+floor: eth_estimateGas returns the smallest passing limit in the estimate-time state,
+and a floor checked mid-path moves with that state. Measured on a Base fork, a redeem
+costs about 96k more in the first block after the venues accrue. With the entry
+floor removed, the mid-path floors set the smallest passing limit at about 1.22M in
+that later block, so 1.6M binds with about 378k to spare.
+See docs/technical/redeem-gas-1482.md.
+
+</i>
+
+```solidity
+uint256 internal constant PULL_ENTRY_GAS_FLOOR = 1_600_000;
+```
+
+### DEPOSIT_ENTRY_GAS_FLOOR
+
+<i>
+
+Gas that must be available at the `deposit`/`mint` entrypoint (core 1482). Same
+reasoning as `PULL_ENTRY_GAS_FLOOR`: the mid-path `ADAPTER_CALL_GAS_FLOOR` before
+`adpt.deploy` runs after accrual-dependent work, so the estimate would land on a
+threshold that moves between estimate and inclusion.
+Measured on a Base fork, a deposit costs about 41k more in the first block after the
+venues accrue. With the entry floor removed, the mid-path floor sets the smallest
+passing limit at about 1.20M in that later block, so 1.6M binds with about 400k to
+spare. See docs/technical/redeem-gas-1482.md.
+
+</i>
+
+```solidity
+uint256 internal constant DEPOSIT_ENTRY_GAS_FLOOR = 1_600_000;
 ```
 
 ## State Variables
@@ -208,18 +275,11 @@ address public registry;
 
 ### depositsPaused
 
-When true, new deposits and mints are blocked.
+When true, new deposits and mints are blocked. Withdrawals and
+redeems are never blocked.
 
 ```solidity
 bool public depositsPaused;
-```
-
-### withdrawalsPaused
-
-When true, withdrawals and redeems are blocked.
-
-```solidity
-bool public withdrawalsPaused;
 ```
 
 ### maxRebalanceBpsPerCall
@@ -247,6 +307,20 @@ uint256 public lastRebalanceAt;
 ```
 
 ## Functions
+
+<a id="_requiregas-uint256"></a>
+
+### _requireGas
+
+```solidity
+function _requireGas(uint256 floor) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| floor | `uint256` |  |
 
 <a id="constructor-ierc20-uint256-uint256-uint256-address-address-address"></a>
 
@@ -413,21 +487,82 @@ function _isAdapterCounted(uint256 i) internal view returns (bool);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
 
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+ERC-4626 deposit. Reverts `DepositsArePaused` while deposits are paused.
+
+<i>
+
+Overridden to read NAV once (issue #1397). The inherited flow reads whole-vault `totalAssets()` in `maxDeposit`,
+`previewDeposit`, `_deposit`'s TVL-cap guard and `_routeDeposit`'s
+snapshot: four identical sweeps, since nothing between them moves an
+adapter balance. This reads it once and threads it through. External
+`maxDeposit` / `previewDeposit` / `totalAssets` are unchanged.
+
+</i>
+
+```solidity
+function deposit(uint256 assets, address receiver) public override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` | Amount of USDC to deposit. |
+| receiver | `address` | Address that receives the minted shares. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | Shares minted to `receiver`. |
+
+<a id="mint-uint256-address"></a>
+
+### mint
+
+Mint exactly `shares` to `receiver`, pulling the matching USDC.
+
+<i>
+
+core 1482: same entry gas floor as `deposit`. Reverts `DepositsArePaused` while deposits are paused (core 1494).
+
+</i>
+
+```solidity
+function mint(uint256 shares, address receiver) public override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Amount of vault shares to mint. |
+| receiver | `address` | Address that receives the minted shares. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | The amount of USDC pulled from the caller. |
+
 <a id="_deposit-address-address-uint256-uint256"></a>
 
 ### _deposit
 
 <i>
 
-Deposit/mint common workflow.
+Reached by `mint()`, which has no cached NAV to offer.
 
 </i>
 
 ```solidity
 function _deposit(address caller, address receiver, uint256 assets, uint256 shares)
         internal
-        override
-        nonReentrant;
+        override;
 ```
 
 **Parameters**
@@ -438,6 +573,30 @@ function _deposit(address caller, address receiver, uint256 assets, uint256 shar
 | receiver | `address` |  |
 | assets | `uint256` |  |
 | shares | `uint256` |  |
+
+<a id="_depositat-address-address-uint256-uint256-uint256"></a>
+
+### _depositAt
+
+```solidity
+function _depositAt(
+        address caller,
+        address receiver,
+        uint256 assets,
+        uint256 shares,
+        uint256 nav
+    ) internal nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| receiver | `address` |  |
+| assets | `uint256` |  |
+| shares | `uint256` |  |
+| nav | `uint256` | `totalAssets()` as read BEFORE `assets` moves into the vault. |
 
 <a id="_routedeposit-uint256"></a>
 
@@ -452,6 +611,21 @@ function _routeDeposit(uint256 amount) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | amount | `uint256` |  |
+
+<a id="_routedepositat-uint256-uint256"></a>
+
+### _routeDepositAt
+
+```solidity
+function _routeDepositAt(uint256 amount, uint256 totalAfter) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+| totalAfter | `uint256` | NAV including `amount`, which already sits idle in the vault. |
 
 <a id="_allocateto-uint256-uint256"></a>
 
@@ -521,8 +695,7 @@ Overrides the OZ default to satisfy ERC-4626: withdraw(maxWithdraw(owner)) MUST 
 Uses floor rounding on the gross→net conversion so that
 `_netToGross(maxWithdraw(owner))` never exceeds `_convertToAssets(balanceOf(owner), Floor)`,
 guaranteeing `previewWithdraw(maxWithdraw(owner)) &lt;= balanceOf(owner)` even when `exitFeeBps > 0`.
-Returns 0 while withdrawals are paused, mirroring the deposit-side views
-(ERC-4626: withdraw(maxWithdraw(owner)) MUST NOT revert; audit 2026-06-09, L-1).
+A deposit pause never lowers it: withdrawals are never frozen (core 1494).
 
 ```solidity
 function maxWithdraw(address owner) public view override returns (uint256);
@@ -533,30 +706,6 @@ function maxWithdraw(address owner) public view override returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | owner | `address` | The address whose share balance determines the withdrawal cap. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
-<a id="maxredeem-address"></a>
-
-### maxRedeem
-
-Maximum shares a user can redeem in a single call.
-Returns 0 while withdrawals are paused so that `redeem(maxRedeem(owner))`
-never reverts, per ERC-4626 (audit 2026-06-09, L-1).
-
-```solidity
-function maxRedeem(address owner) public view override returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| owner | `address` | The address whose share balance determines the redemption cap. |
 
 **Returns**
 
@@ -581,6 +730,60 @@ function maxDeposit(address) public view override returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_depositsclosed"></a>
+
+### _depositsClosed
+
+```solidity
+function _depositsClosed() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_capsunbounded"></a>
+
+### _capsUnbounded
+
+```solidity
+function _capsUnbounded() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_maxdepositat-uint256"></a>
+
+### _maxDepositAt
+
+<i>
+
+`maxDeposit` evaluated against an already-read NAV.
+
+</i>
+
+```solidity
+function _maxDepositAt(uint256 nav) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| nav | `uint256` |  |
 
 **Returns**
 
@@ -649,6 +852,74 @@ function _netToGross(uint256 net) internal view returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+<a id="redeem-uint256-address-address"></a>
+
+### redeem
+
+Burn `shares` from `owner` and send the net USDC to `receiver`.
+
+<i>
+
+core 1482: the share-to-asset preview reads every adapter's `totalAssets()` before
+`_withdraw` runs, so the entry gas guard sits on the public entrypoints too. Share
+and fee math is untouched: both forward to the inherited ERC-4626 implementation.
+
+</i>
+
+```solidity
+function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Amount of vault shares to burn. |
+| receiver | `address` | Address that receives the USDC. |
+| owner | `address` | Address whose shares are burned (the caller or an approved spender). |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | The amount of USDC sent to `receiver`. |
+
+<a id="withdraw-uint256-address-address"></a>
+
+### withdraw
+
+Send `assets` USDC to `receiver` and burn the matching shares from `owner`.
+
+<i>
+
+See `redeem`.
+
+</i>
+
+```solidity
+function withdraw(uint256 assets, address receiver, address owner)
+        public
+        override
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` | Net amount of USDC the receiver should get. |
+| receiver | `address` | Address that receives the USDC. |
+| owner | `address` | Address whose shares are burned (the caller or an approved spender). |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | The amount of shares burned. |
 
 <a id="_withdraw-address-address-address-uint256-uint256"></a>
 
@@ -876,33 +1147,37 @@ function setMinRebalanceInterval(uint256 newInterval) external onlyRole(ADMIN_RO
 | ---- | ---- | ----------- |
 | newInterval | `uint256` | New minimum interval in seconds (must be ≥ `MIN_REBALANCE_INTERVAL_FLOOR`). |
 
-<a id="pause"></a>
+<a id="pausedeposits"></a>
 
-### pause
+### pauseDeposits
 
-Pause all deposits and withdrawals. Restricted to `EMERGENCY_ROLE`.
+Pause new deposits and mints. Restricted to `EMERGENCY_ROLE`.
+Withdrawals and redeems stay open: nothing stops a holder from
+exiting (owner decision 2026-10-05, core 1494; docs/prd.md).
 
 ```solidity
-function pause() external onlyRole(EMERGENCY_ROLE);
+function pauseDeposits() external onlyRole(EMERGENCY_ROLE);
 ```
 
-<a id="unpause"></a>
+<a id="unpausedeposits"></a>
 
-### unpause
+### unpauseDeposits
 
-Resume deposits and withdrawals. Restricted to `ADMIN_ROLE`.
-Intentionally asymmetric: pausing is fast and unilateral (`EMERGENCY_ROLE`);
-unpausing is deliberate and requires the higher-trust admin role.
+Resume deposits and mints. Restricted to `ADMIN_ROLE`.
+Intentionally asymmetric: pausing deposits is fast and unilateral
+(`EMERGENCY_ROLE`); resuming them is deliberate and requires the
+higher-trust admin role. Also clears the deposit halt set by
+`emergencyWithdraw`, `emergencyWithdrawAdapter` and `forceRemoveAdapter`.
 
 ```solidity
-function unpause() external onlyRole(ADMIN_ROLE);
+function unpauseDeposits() external onlyRole(ADMIN_ROLE);
 ```
 
 <a id="emergencywithdraw"></a>
 
 ### emergencyWithdraw
 
-Pause the vault and attempt to withdraw all assets from every active adapter.
+Pause deposits and attempt to withdraw all assets from every active adapter.
 Uses `try/catch` so a failed adapter does not block others. Restricted to `EMERGENCY_ROLE`.
 After this call, deposits are blocked but withdrawals remain open so users can exit.
 
@@ -1003,7 +1278,7 @@ function unretire() external;
 
 Shut down the vault: set `shutdown = true` and zero the TVL cap.
 Restricted to `EMERGENCY_ROLE`. Recoverable only by `ADMIN_ROLE`
-via `restoreVault`, mirroring the `pause`/`unpause` trust
+via `restoreVault`, mirroring the `pauseDeposits`/`unpauseDeposits` trust
 asymmetry: a compromised emergency hot key can DoS deposits but
 cannot permanently brick the vault — re-opening requires the
 higher-trust admin role.
@@ -1154,26 +1429,6 @@ Set `depositsPaused` and emit an event if the state changes.
 
 ```solidity
 function _setDepositsPaused(bool paused_) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| paused_ | `bool` |  |
-
-<a id="_setwithdrawalspaused-bool"></a>
-
-### _setWithdrawalsPaused
-
-<i>
-
-Set `withdrawalsPaused` and emit an event if the state changes.
-
-</i>
-
-```solidity
-function _setWithdrawalsPaused(bool paused_) internal;
 ```
 
 **Parameters**
@@ -1364,23 +1619,6 @@ function _activeAdapterCount() internal view returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
-
-<a id="paused"></a>
-
-### paused
-
-Returns true when both deposits and withdrawals are blocked (full pause).
-Provided for compatibility with tooling that queries `paused()`.
-
-```solidity
-function paused() external view returns (bool);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `bool` |  |
 
 <a id="adaptercount"></a>
 
@@ -1868,33 +2106,33 @@ event VaultRestored(uint256 newTvlCap);
 | ---- | ---- | ----------- |
 | newTvlCap | `uint256` | The fresh TVL cap set on restore. |
 
-### DepositsPausedChanged
+### DepositsPaused
 
-Emitted when deposit pause state changes.
+Emitted when new deposits become paused. Withdrawals stay open.
 
 ```solidity
-event DepositsPausedChanged(bool paused);
+event DepositsPaused(address indexed account);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| paused | `bool` | True when deposits are blocked, false when unblocked. |
+| account | `address` | The caller whose action paused deposits. |
 
-### WithdrawalsPausedChanged
+### DepositsUnpaused
 
-Emitted when withdrawal pause state changes.
+Emitted when new deposits are resumed.
 
 ```solidity
-event WithdrawalsPausedChanged(bool paused);
+event DepositsUnpaused(address indexed account);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| paused | `bool` | True when withdrawals are blocked, false when unblocked. |
+| account | `address` | The caller that resumed deposits. |
 
 ### UnroutedDeposit
 
@@ -2087,20 +2325,12 @@ Caller lacks `KEEPER_ROLE` (or `ADMIN_ROLE` where the rebalancer path also accep
 error UnauthorizedRebalancer();
 ```
 
-### DepositsPaused
+### DepositsArePaused
 
 Deposit attempted while deposits are paused.
 
 ```solidity
-error DepositsPaused();
-```
-
-### WithdrawalsPaused
-
-Withdrawal attempted while withdrawals are paused.
-
-```solidity
-error WithdrawalsPaused();
+error DepositsArePaused();
 ```
 
 ### AdapterNotAllowed
@@ -2194,6 +2424,23 @@ error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
 | ---- | ---- | ----------- |
 | requested | `uint256` | USDC needed from adapters (after idle balance is applied). |
 | available | `uint256` | Total USDC the active adapters actually delivered or report holding. |
+
+### InsufficientGas
+
+Gas left is below the floor needed to finish the current adapter call safely.
+Raised instead of an opaque out-of-gas so a limit that was too low reverts
+with a reason. Retry with a higher gas limit. (core 1482.)
+
+```solidity
+error InsufficientGas(uint256 available, uint256 required);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| available | `uint256` | `gasleft()` at the check. |
+| required | `uint256` | The floor that was not met. |
 
 ## Structs
 

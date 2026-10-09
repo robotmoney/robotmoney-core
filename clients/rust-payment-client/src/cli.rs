@@ -59,7 +59,7 @@ pub enum Command {
         receipt_timeout_secs: u64,
         /// Gas limit for the deposit tx envelope. Default 3_000_000 — a
         /// deposit allocates across the three real yield adapters and reads
-        /// `totalAssets()` on each, including the Morpho Gauntlet USDC Prime
+        /// `totalAssets()` on each, including the Moonwell Flagship USDC (Morpho)
         /// vault whose `convertToAssets` iterates its multi-market supply
         /// queue (per-market `idToMarketParams`/`extSloads`/`market` reads
         /// plus AdaptiveCurveIRM accrual). On a real-adapter vault this path
@@ -277,8 +277,8 @@ pub enum Command {
     },
     /// Redeem vault shares through the gateway (agent-initiated redemption).
     ///
-    /// Performs preflight reads (gateway paused, agent policy, vault paused,
-    /// share allowance, share balance) then builds and broadcasts a
+    /// Performs preflight reads (agent policy, share allowance, share
+    /// balance) then builds and broadcasts a
     /// `gateway.withdraw(orderId, shares, sourceVault, deadline, idempotencyKey)`
     /// call. Emits a stable JSON result with `assetsOut`, `assetRecipient`,
     /// `txHash`, and `blockNumber` on success; exits non-zero on any refusal.
@@ -307,7 +307,7 @@ pub enum Command {
         receipt_timeout_secs: u64,
         /// Gas limit for the withdraw tx envelope. Default 3_000_000 — a
         /// redemption reads `totalAssets()` across the three real yield
-        /// adapters (including the Morpho Gauntlet USDC Prime multi-market
+        /// adapters (including the Moonwell Flagship USDC (Morpho) multi-market
         /// `convertToAssets` loop) AND performs the real adapter withdrawal,
         /// so it is at least as expensive as a deposit. The historical
         /// 350_000 default was sized for the now-removed no-yield test
@@ -370,10 +370,12 @@ pub enum Command {
         /// Maximum seconds to wait for the receipt. Default 60.
         #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
         receipt_timeout_secs: u64,
-        /// Gas limit for the withdraw-router tx. Default 750_000 (covers
-        /// N-leg vault redemption with cold storage writes).
-        #[arg(long = "gas-limit", default_value_t = 750_000)]
-        gas_limit: u64,
+        /// Gas limit for the withdraw-router tx. When omitted the client
+        /// derives it from the gateway entry floor (400_000 + 1_850_000 per
+        /// leg) plus a margin, so the default is never below the floor
+        /// (issue #1512).
+        #[arg(long = "gas-limit")]
+        gas_limit: Option<u64>,
         /// Optional override for `max_fee_per_gas_cap` in wei.
         #[arg(long = "fee-cap")]
         fee_cap: Option<u64>,

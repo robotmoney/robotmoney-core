@@ -12,7 +12,7 @@ import { describe, it, expect } from "vitest";
 import { parseUsdcAmount } from "../../src/components/DepositWithdrawTab";
 import { buildVaultPreview, type VaultPreviewContext } from "../../src/lib/vaultPreview";
 
-const vault = "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" as const;
+const vault = "0x3333333333333333333333333333333333333333" as const;
 const gateway = "0x1111111111111111111111111111111111111111" as const;
 const user = "0x2222222222222222222222222222222222222222" as const;
 

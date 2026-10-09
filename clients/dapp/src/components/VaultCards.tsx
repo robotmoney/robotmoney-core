@@ -28,12 +28,12 @@ import { useExplorer } from "../lib/ExplorerContext";
 
 const STATUS_LABEL: Record<number, string> = {
   0: "Active",
-  1: "Paused",
+  1: "Deposits paused",
   2: "Retired",
 };
 
 /**
- * Active is status 0 in `VaultRegistry.VaultStatus` (0=Active, 1=Paused,
+ * Active is status 0 in `VaultRegistry.VaultStatus` (0=Active, 1=DepositsPaused,
  * 2=Retired). Any other value is an inactive vault that takes no deposits.
  */
 const VAULT_STATUS_ACTIVE = 0;

@@ -12,7 +12,7 @@ import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.so
 import {IInvestmentCommitteePolicy} from "../gateway/interfaces/IInvestmentCommitteePolicy.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "../gateway/MockVault.sol";
+import {MockVault} from "./helpers/MockVault.sol";
 
 /// @title ICGatewayIntegration
 /// @notice Integration tests verifying the full on-chain path:
@@ -55,7 +55,7 @@ contract ICGatewayIntegration is Test {
         vault = new MockVault(address(usdc));
 
         // 2. Deploy gateway (admin holds ADMIN_ROLE + DEFAULT_ADMIN_ROLE;
-        //    pauser holds PAUSER_ROLE; no router).
+        //    pauser holds DEPOSIT_PAUSER_ROLE; no router).
         gateway = new RobotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );

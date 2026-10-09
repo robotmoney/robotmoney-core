@@ -7,7 +7,7 @@
 # upstream-trust assumptions; without an offline alert an adapter could silently
 # return stale or zero balances.
 #
-# CONTRACT ADDRESSES (Base mainnet, fork pin: testing/fixtures/CURRENT.json)
+# CONTRACT ADDRESSES (Base mainnet)
 #   Compound V3 Comet: 0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf
 #   Aave V3 Pool:      0xA238Dd80C259a72e81d7e4664a9801593F98d1c5
 #   USDC:              0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
@@ -35,7 +35,7 @@ AAVE_POOL_ADDRESS="0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"
 
 # isAbsorbing() selector: keccak256("isAbsorbing()")[0:4] = 0xaa63b9c9
 COMET_IS_ABSORBING_SELECTOR="0xaa63b9c9"
-# paused() on Aave V3 Pool: keccak256("paused()")[0:4] = 0x5c975abb
+# paused() on Aave V3 Pool: keccak256("paused()")[0:4] = 0x5c975abb  (Aave's own third-party pause; pause-guard: allow)
 AAVE_PAUSED_SELECTOR="0x5c975abb"
 
 eth_call() {

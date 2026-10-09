@@ -25,7 +25,6 @@
 
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use alloy_primitives::{Address, LogData, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent};
@@ -38,8 +37,8 @@ use crate::output::emit;
 use crate::policy::{ChecksOutput, Preflight, PreflightInputs};
 use crate::replay_cache::OP_WITHDRAW;
 use crate::write_path::{
-    open_session, Submission, WriteRequest, EXIT_OK, EXIT_REFUSAL, EXIT_STARTUP_FAIL,
-    MAX_DEADLINE_SKEW_SECS,
+    chain_deadline, open_session, Submission, WriteRequest, EXIT_OK, EXIT_REFUSAL,
+    EXIT_STARTUP_FAIL, MAX_DEADLINE_SKEW_SECS,
 };
 
 /// Inputs collected by `main.rs` from the CLI parser.
@@ -65,7 +64,8 @@ pub struct Args {
     pub idempotency_key: Option<String>,
     pub deadline_secs: u64,
     pub receipt_timeout_secs: u64,
-    pub gas_limit: u64,
+    /// `None` derives the limit from the gateway entry floor and the leg count.
+    pub gas_limit: Option<u64>,
     /// Optional CLI override for `max_fee_per_gas_cap` in wei.
     pub fee_cap_wei: Option<u64>,
     /// Must be true to proceed past the preview. Without --confirm the
@@ -213,11 +213,6 @@ pub fn run(args: Args) -> i32 {
     };
 
     let deadline_secs = args.deadline_secs.min(MAX_DEADLINE_SKEW_SECS);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let deadline = now.saturating_add(deadline_secs);
 
     // -- Shared write-path prologue ---------------------------------------
     // total_shares is the replay-cache amount field, and OP_WITHDRAW keeps
@@ -230,7 +225,7 @@ pub fn run(args: Args) -> i32 {
             order_id,
             idempotency_key,
             amount: total_shares,
-            deadline,
+            deadline: 0,
             replay_op: Some(OP_WITHDRAW),
         },
     ) {
@@ -239,10 +234,28 @@ pub fn run(args: Args) -> i32 {
     };
     let agent_address = session.agent_address;
 
+    // -- Deadline from block timestamp ------------------------------------
+    // Block time, never wall clock (issue #1432): the gateway checks the
+    // deadline against `block.timestamp`, so a skewed host clock would
+    // otherwise build a transaction that reverts `DeadlineTooFar`.
+    let deadline = match session
+        .rt
+        .block_on(chain_deadline(&session.rpc, deadline_secs))
+    {
+        Ok(d) => {
+            session.audit.deadline = d;
+            d
+        }
+        Err(e) => {
+            log::error!("rmpc withdraw-router: failed to fetch block timestamp for deadline: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
     // -- Preflight --------------------------------------------------------
     // The withdrawal-specific gateway preflight (chain id, code hash,
-    // gateway paused, agent active+expiry, withdrawal window cap) with
-    // totalShares as the amount.
+    // agent active+expiry, withdrawal window cap) with totalShares as the
+    // amount. A deposit pause never refuses it (core 1494).
     let preflight_result = session.rt.block_on(async {
         Preflight::new(&session.rpc, &cfg)
             .run_withdraw_gateway(PreflightInputs {
@@ -269,7 +282,7 @@ pub fn run(args: Args) -> i32 {
     // *vault shares*, which the gateway pulls from each source vault, so the
     // agent must (a) hold enough shares in each vault and (b) have approved
     // the gateway to spend them. Run the same per-vault share
-    // allowance/balance/paused check the single-vault `withdraw` path uses,
+    // allowance/balance check the single-vault `withdraw` path uses,
     // once per identity-bound (vault, shares) leg.
     for (vault, leg_shares) in vaults.iter().zip(shares_per_leg.iter()) {
         let leg_result = session.rt.block_on(async {
@@ -319,7 +332,9 @@ pub fn run(args: Args) -> i32 {
         &cfg,
         Submission {
             calldata,
-            gas_limit: args.gas_limit,
+            gas_limit: args
+                .gas_limit
+                .unwrap_or_else(|| default_gas_limit(vaults.len())),
             fee_cap_wei: args.fee_cap_wei,
             receipt_timeout_secs: args.receipt_timeout_secs,
             replay_deadline: deadline,
@@ -384,6 +399,25 @@ pub fn run(args: Args) -> i32 {
     EXIT_OK
 }
 
+/// Gateway `withdrawFromRouter` entry floor: fixed part
+/// (`ROUTER_WITHDRAW_BASE_GAS`) in gas.
+pub const ROUTER_WITHDRAW_BASE_GAS: u64 = 400_000;
+/// Gateway entry floor per non-zero leg (`ROUTER_WITHDRAW_GAS_PER_LEG`).
+pub const ROUTER_WITHDRAW_GAS_PER_LEG: u64 = 1_850_000;
+/// Headroom above the floor for intrinsic tx gas and calldata, which the
+/// entry check does not see.
+const GAS_MARGIN: u64 = 150_000;
+
+/// Gateway entry floor for a `withdrawFromRouter` with `legs` legs.
+pub fn gas_floor(legs: usize) -> u64 {
+    ROUTER_WITHDRAW_BASE_GAS.saturating_add(ROUTER_WITHDRAW_GAS_PER_LEG.saturating_mul(legs as u64))
+}
+
+/// Default tx gas limit: the entry floor for every leg plus a margin.
+pub fn default_gas_limit(legs: usize) -> u64 {
+    gas_floor(legs).saturating_add(GAS_MARGIN)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,5 +461,14 @@ mod tests {
             RobotMoneyGateway::withdrawFromRouterCall::SELECTOR
         );
         assert!(encoded.len() > 4, "encoded call must have non-trivial body");
+    }
+
+    #[test]
+    fn default_gas_limit_is_at_or_above_gateway_floor() {
+        for legs in 1..=8usize {
+            assert!(default_gas_limit(legs) >= gas_floor(legs));
+        }
+        assert_eq!(gas_floor(2), 4_100_000);
+        assert!(default_gas_limit(1) > 750_000);
     }
 }

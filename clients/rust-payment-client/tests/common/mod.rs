@@ -230,7 +230,7 @@ pub async fn install_happy_path_mocks(
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::pausedCall,
+            RobotMoneyGateway::depositsPausedCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_bool(false)))
@@ -338,10 +338,10 @@ pub async fn install_happy_path_mocks(
 /// A per-test override registered with the default expectation still wins
 /// its first hit ahead of both sets.
 ///
-/// The three vault reads the withdraw preflight makes are already covered
-/// by `install_happy_path_mocks`: `vault.paused()` shares its selector
-/// with `gateway.paused()` (false), and the share allowance/balance reads
-/// are the same ERC-20 selectors it stubs at `u128::MAX`.
+/// The two vault reads the withdraw preflight makes are already covered
+/// by `install_happy_path_mocks`: the share allowance/balance reads are
+/// the same ERC-20 selectors it stubs at `u128::MAX`. The withdraw path
+/// never reads the vault's `depositsPaused()` (core 1494).
 pub async fn install_withdraw_preflight_mocks(
     server: &mut mockito::ServerGuard,
     max_withdraw_per_payment: U256,
@@ -378,4 +378,26 @@ pub async fn install_withdraw_preflight_mocks(
         .expect_at_least(0)
         .create_async()
         .await;
+}
+
+/// Assert the Base mainnet production warning reached the diagnostic log
+/// before the keystore load was attempted (owner decision 2026-10-06: the
+/// software keystore is allowed, the warning is not optional).
+#[allow(dead_code)]
+pub fn assert_mainnet_warning_precedes_keystore_load(log_dir: &std::path::Path) {
+    let log_file = std::fs::read_dir(log_dir)
+        .expect("log dir readable")
+        .map(|e| e.expect("dir entry").path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("rmpc") && n.contains("log") && !n.contains("audit"))
+        })
+        .expect("diagnostic log file written");
+    let log = std::fs::read_to_string(log_file).expect("diagnostic log readable");
+    let warn = log
+        .find("production Base mainnet")
+        .unwrap_or_else(|| panic!("warning logged; log was: {log:?}"));
+    let unset = log.find("is unset").expect("keystore load reached");
+    assert!(warn < unset, "warning must precede keystore load");
 }

@@ -1,0 +1,143 @@
+---
+title: "DeployLibs"
+description: "Stage 1 of the core deploy: libs, vault, registry, router, gateway. Deploys the externally linked libraries (TickMath) and proves they are canonical. The basket-family vaults DELEGATECALL TickMath on their NAV path, so the library has to exist, and be the audited code, before any vault stage runs (finding L3-D1)."
+---
+
+# DeployLibs
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/script/DeployLibs.s.sol)
+
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+
+**Title:** DeployLibs
+
+Stage 1 of the core deploy: libs, vault, registry, router, gateway.
+Deploys the externally linked libraries (TickMath) and proves they are canonical.
+The basket-family vaults DELEGATECALL TickMath on their NAV path, so the library has
+to exist, and be the audited code, before any vault stage runs (finding L3-D1).
+
+`forge script --broadcast` deploys a public library once when a script references
+it. This script references TickMath through a real call, so the broadcast of this
+stage is exactly one library deployment. The later basket-vault stages link the
+address this stage writes to the manifest (`tick_math`).
+
+Required env vars: EXPECTED_CHAIN_ID (mandatory and equal to 8453 on Base mainnet),
+DEPLOYMENT_OUT (output JSON path).
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+```solidity
+string public constant MANIFEST_FILE = "libs.json";
+```
+
+### SQRT_RATIO_AT_TICK_ZERO
+
+sqrt(1.0001^0) * 2^96: the canonical answer for tick 0.
+
+```solidity
+uint160 public constant SQRT_RATIO_AT_TICK_ZERO = 79228162514264337593543950336;
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` | The deployed library addresses. |
+
+<a id="runinprocess"></a>
+
+### runInProcess
+
+In-process variant for forge tests. No broadcast, no JSON written.
+
+```solidity
+function runInProcess() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` | The deployed library addresses. |
+
+<a id="_deploy"></a>
+
+### _deploy
+
+```solidity
+function _deploy() internal view returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_asserttickmathcanonical-address"></a>
+
+### _assertTickMathCanonical
+
+<i>
+
+Fail closed on a zero or empty linked library (finding L3-D1). The substantive
+per-vault codehash check lives in the basket-vault stage scripts.
+
+</i>
+
+```solidity
+function _assertTickMathCanonical(address lib) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lib | `address` |  |
+
+<a id="_writedeploymentjson-deployed"></a>
+
+### _writeDeploymentJson
+
+```solidity
+function _writeDeploymentJson(Deployed memory d) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+## Structs
+
+### Deployed
+
+```solidity
+struct Deployed {
+        address tickMath;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickMath | `address` |  |
+

@@ -10,6 +10,10 @@
       policy carried into inexact compositions;
       docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md — v1 retirement path.) -->
 
+> **Historical.** This document records the rejected unified-vault proposal (ADR-0010) and the deleted code it described. It does not describe shipped code.
+>
+> **Not implemented.** Its companion ADR-0010 is Rejected (2026-09-18). This spec is kept for history only.
+
 # Unified Vault — Engineering Specification
 
 > Scope: the buildable specification for collapsing the two production vault
@@ -267,7 +271,7 @@ inspection, replacing `AssetInfo.venue`.
 |---|---|---|---|
 | Token custody (`IERC20(token).balanceOf(vault)`) | Adapter balance | — | Vault never holds basket tokens. |
 | `AssetInfo {token, pool, swapFee, adapter, venue}` | Adapter constructor immutables | Deploy-time | Registering the asset = `Vault.addAdapter(assetPositionAdapter, capBps)`. |
-| `twapWindow[token]`, `setTwapWindow`, `MIN_TWAP_WINDOW` (600 s) / `MAX_TWAP_WINDOW` (86 400 s) / `DEFAULT_TWAP_WINDOW` (1 800 s), `effectiveTwapWindow` | Adapter storage + setter, constants carried verbatim | Vault-admin-derived (see below) | Same bounds, same `0 → DEFAULT` fallback, same `TwapWindowUpdated` event. |
+| `twapWindow[token]`, `setTwapWindow`, `MIN_TWAP_WINDOW` (600 s) / `MAX_TWAP_WINDOW` (86 400 s) / `DEFAULT_TWAP_WINDOW` (1 800 s), `effectiveTwapWindow` | Adapter storage + setter, constants carried verbatim | Vault-admin-derived (see below) | Same bounds, same `0 → DEFAULT` fallback, same `TwapWindowUpdated` event. `setTwapWindow` refuses a window the pool's observation history does not reach (`InsufficientObservationHistory(pool, window)`, core 1494). |
 | `EmergencyUnwindGuard {minUsdcOut, overrideAllowed, maxLossBps}`, `setEmergencyUnwindGuard` | Adapter storage + setter | Vault-admin-derived | Consumed by the emergency drain path (§4.4). |
 | `MIN_POOL_CARDINALITY` (2), `MIN_POOL_LIQUIDITY` (1e6), `InsufficientObservationHistory` — `BasketAssetConfigGuard.requirePoolUsable` | Adapter **constructor** precondition | Deploy-time | An adapter for an unusable pool cannot be constructed; `Vault.addAdapter` codehash+identity checks then gate registration. |
 | ORA-3 execution-pool == TWAP-pool (`requireExecutionPoolMatchesTwap`) | Adapter constructor precondition | Deploy-time | Same guard library, invoked once at construction instead of per `addAsset`. |
@@ -482,8 +486,8 @@ semantics unless a row in §4.3 or a subsection below says otherwise):
   rebalancer, and **no** rebalance throttles — `maxRebalanceBpsPerCall` /
   `minRebalanceInterval` are removed; correction is `forceRebalance`-only
   (§5.6).
-- Split pause flags `depositsPaused` / `withdrawalsPaused` (authority changes
-  in §5.5), `shutdownVault`/`restoreVault(newTvlCap)`, registry-driven
+- Deposit pause flag `depositsPaused` (§5.5; there is no withdrawal pause,
+  core 1494), `shutdownVault`/`restoreVault(newTvlCap)`, registry-driven
   `retire()`/`unretire()` with the set-once `setRegistry` link (DI-2).
 - Exit fee (`exitFeeBps` ≤ `MAX_EXIT_FEE_BPS` 100, `feeRecipient`,
   `ExitFeeCharged`), `tvlCap`/`perDepositCap` with cross-validation,
@@ -510,7 +514,7 @@ semantics unless a row in §4.3 or a subsection below says otherwise):
   transiently sweepable (resolves Q7's sweep half — see §10).
 - Share scale: `decimals() == 6`, `_decimalsOffset() == 18` (CUST-5).
 - Roles: `ADMIN_ROLE` (self-admin) and `EMERGENCY_ROLE`, with the
-  pause/unpause and shutdown/restore trust asymmetry. There is no
+  pauseDeposits/unpauseDeposits and shutdown/restore trust asymmetry. There is no
   `KEEPER_ROLE` — rebalancing is `forceRebalance`-only (§5.6), so no keeper is
   granted or wired.
 - **Plus, shared with `BasketVault` and `RobotMoneyVault`:** the ACL-3/F-06
@@ -543,11 +547,9 @@ semantics unless a row in §4.3 or a subsection below says otherwise):
   redeem/floored path — is left open but rejected here because it would
   silently change the exactness guarantee integrators rely on. When
   `allExact()`, `maxWithdraw`/`maxRedeem` keep `RobotMoneyVault`'s net-of-fee
-  floor rounding and paused→0 behavior.
-- **`paused()`, `depositsPaused`, `withdrawalsPaused` views** — see §5.5;
-  `depositsPaused`/`withdrawalsPaused` are exposed as first-class public views
-  (not only the composite `paused()`), because the deposits-only pause
-  narrowing changes what the composite means for off-chain consumers (M-A4).
+  floor rounding. A pause never lowers them (core 1494).
+- **`depositsPaused` view** — see §5.5. It is the only pause view. The
+  composite view and the withdrawal-pause view are removed (core 1494).
 
 ### 5.2 Deposit path — carried from `BasketVault`
 
@@ -653,7 +655,7 @@ pull loop, shortfall semantics, fee base, and all four previews.
 - **`withdraw()` / `previewWithdraw()` gate:** permitted iff `allExact()`.
   When any active adapter is inexact, both revert `RedeemOnly()` — exact-set
   vaults keep full ERC-4626 withdraw conformance (incl. `maxWithdraw` net-of-
-  fee floor rounding and paused-→-0 behavior from `RobotMoneyVault`);
+  fee floor rounding from `RobotMoneyVault`; a pause never lowers it, core 1494);
   inexact-set vaults are redeem-only exactly like today's `BasketVault`.
   `maxWithdraw`/`maxRedeem` return `0` when `!allExact()` (§5.1) so
   `withdraw(maxWithdraw(owner))` never reverts (E-4).
@@ -758,15 +760,19 @@ share-proportional realized proceeds.
 
 ### 5.5 Pause and lifecycle — LIFE-3 / LIFE-4 alignment
 
-The unified vault keeps the split flags but **narrows the hot key**: 
+The unified vault has one pause flag, `depositsPaused`. It stops new
+deposits only (owner decision 2026-10-05, core 1494):
 
-- `pause()` (EMERGENCY_ROLE) sets `depositsPaused` only.
-- `withdrawalsPaused` is settable **only by `ADMIN_ROLE`** (timelock), for
-  genuine incident response; `maxWithdraw`/`maxRedeem` return 0 while set.
-- `unpause()` remains ADMIN_ROLE.
+- `pauseDeposits()` (EMERGENCY_ROLE) sets `depositsPaused`. `deposit` and
+  `mint` revert `DepositsArePaused()`. It emits `DepositsPaused(account)`.
+- `unpauseDeposits()` (ADMIN_ROLE, the timelock) clears it and emits
+  `DepositsUnpaused(account)`.
+- There is no withdrawal pause. Core 1494 deleted the withdrawal-pause flag,
+  its setter, error and event. No role, flag or setting can block a redeem.
+  `maxWithdraw`/`maxRedeem` are never lowered by a pause.
 
-This is a deliberate change from today's `RobotMoneyVault`, whose
-EMERGENCY `pause()` freezes both sides; it adopts the LIFE-3/LIFE-4 posture
+This is a deliberate change from the deployed v1 `RobotMoneyVault`, whose
+EMERGENCY v1 `pause()` freezes both sides. It adopts the LIFE-3/LIFE-4 posture
 already enforced on the basket family (a hot key can DoS deposits, never
 withdrawals; every withdrawal-blocking state is reversible by a
 still-available authority, guaranteed by the last-admin floor).
@@ -775,32 +781,16 @@ while leaving withdrawals open. `retire()`/`unretire()` (registry-only,
 DI-2) and `shutdownVault`/`restoreVault` carry over unchanged; redemption is
 never revoked in any lifecycle state (ADR-0009).
 
-**`paused()` semantics after the narrowing (M-A4).** `RobotMoneyVault.paused()`
-today returns `depositsPaused && withdrawalsPaused`
-(`RobotMoneyVault.sol:1215-1216`). Under the deposits-only EMERGENCY pause an
-incident sets `depositsPaused = true` while `withdrawalsPaused == false`, so
-the composite `paused()` returns **`false`** — incident state becomes invisible
-to any consumer reading the single boolean. This is a real off-chain-visible
-authority change and MUST be recorded in ADR-0010 (LIFE-3 authority change),
-not presented as "split pause applies identically." The unified vault
-therefore **exposes `depositsPaused` and `withdrawalsPaused` as first-class
-public views** and treats `paused()` as a legacy convenience whose value is
-`depositsPaused || withdrawalsPaused` (either-side) — a deliberate change from
-the AND semantics so a deposits-only pause is not silently masked. *Decision
-note:* the OR redefinition is the low-risk choice for keeping the composite
-truthful; the alternative (keep AND, force all consumers onto the split flags)
-is left open but requires migrating every consumer atomically.
+**Off-chain consumers (core 1494).** The composite `paused` view is removed.
+Every consumer reads `depositsPaused()`. It exists on the deployed v1 vault
+too, so one read works everywhere. The v1 vault is the one exception to the
+rule: its v1 `pause()` also freezes withdrawals. Never call `pause()` on v1.
 
-**Off-chain consumers that read pause state (must migrate to the split
-flags):**
-
-- **Explorer indexer** snapshots `paused` per vault (`indexer.rs:1363`); with
-  the OR redefinition a deposits-only pause now shows as paused (correct), but
-  the indexer SHOULD decode `depositsPaused`/`withdrawalsPaused` separately to
-  distinguish deposit-halt from full-halt on dashboards.
-- **rmpc withdraw preflight** surfaces `ErrVaultPaused` from this flag; it MUST
-  read `withdrawalsPaused` (not the composite) so a deposits-only pause does
-  not spuriously block withdrawals in the preflight.
+- **Explorer indexer** decodes `DepositsPaused` / `DepositsUnpaused` and
+  reads `depositsPaused()` per vault.
+- **rmpc withdraw preflight** never refuses on a pause. It reports
+  `depositsPaused()` only. A deposit preflight refuses with
+  `ErrDepositsPaused`.
 
 **Adapter emergency-arming authority (M-S5).** ACL-5's two-key split (ADMIN
 arms a guard, EMERGENCY executes the unwind) is atomic on one contract today
@@ -911,10 +901,10 @@ question:
 | `Pulled(i, adapter, actual)` | **Byte-identical**; fires in both accounting modes. |
 | `ExitFeeCharged` | **Byte-identical**; base differs by composition (§5.4) but the event shape does not. |
 | `Rebalanced(totalMoved)` | **Byte-identical**; now fires on an admin `forceRebalance` (§5.6), including basket themes (ADR-0003's stub was `NotImplemented`) → new dashboard rows are expected, not a regression. No keeper or scheduled rebalance emits it. |
-| Indexer per-vault **view probe** | MUST keep succeeding against the unified vault, or the vault is silently skipped by the indexer. The probe's view set must be re-verified against the unified ABI (`allExact()`, split-pause views added; no view removed). |
+| Indexer per-vault **view probe** | MUST keep succeeding against the unified vault, or the vault is silently skipped by the indexer. The probe's view set must be re-verified against the unified ABI (`allExact()` and `depositsPaused()` present; the composite pause view is removed in core 1494, so the probe must not call it). |
 | Vault **address map** | v2 vault addresses MUST be added to the indexer/explorer address map (v1+v2 coexist, L3 disambiguation). |
 | `WeightSnapshot` | **Free choice** — nothing decodes it. Keep with adapter addresses, drop in favor of `Allocated`, or replace with adapter-emitted per-leg events, at the schema owner's discretion. |
-| `depositsPaused` / `withdrawalsPaused` / `paused()` | New/redefined views (§5.5) — indexer + rmpc preflight migrate per M-A4. |
+| `depositsPaused()` | The only pause view (§5.5). The composite and withdrawal-pause views are removed (core 1494). Indexer and rmpc read `depositsPaused()` and the `DepositsPaused` / `DepositsUnpaused` events. |
 | `ExactnessTransition` | New event (§5.1) — integrators/indexer observe exact→inexact class flips. |
 
 **Router error taxonomy (L5).** Unified deposit reverts —
@@ -955,7 +945,7 @@ that lands the locus).
 | SUP-5 / NC-1 | Idle-USDC redemption survives stale oracle | Adapter `totalAssets` zero-balance short-circuit | `StaleOracleRedemption.t.sol::test_SUP5_*` re-pointed to Chronicle adapter composition |
 | ACL-3 / F-06 | Last-admin floor | Vault `_grantRole`/`_revokeRole` hooks (`adminCount`, `LastAdminFloor`) — now also covering the lending theme | `BasketVault.t.sol` last-admin-floor tests re-pointed; NEW rmUSDC-composition case |
 | ACL-5 / F-08 (M-S5) | Stale-price override armed by EMERGENCY, not blocked by 48h latency mid-incident | Stale-override/unwind-guard is an **atomic `EMERGENCY_ROLE` arm+execute** (armed and executed in one hot-key action, no intervening ADMIN timelock); all other config on full ADMIN timelock; fast-EMERGENCY / timelocked-ADMIN asymmetry preserved | `RwaVault.t.sol::test_emergencyUnwindStaleOverride_requiresAdminNotEmergency` re-pointed to the atomic path; NEW: EMERGENCY can arm+execute the stale-override without the ADMIN timelock; blast-radius review (Phase 1) |
-| LIFE-3 / LIFE-4 (M-A4) | Withdrawals never pausable by hot key; no permanent freeze; incident state off-chain-visible | `pause()` = deposits-only; `withdrawalsPaused` ADMIN-only; `paused()` redefined to `depositsPaused \|\| withdrawalsPaused`; `depositsPaused`/`withdrawalsPaused` first-class views; last-admin floor guarantees reversal authority | `BasketVault.t.sol::test_pause_doesNotFreezeWithdrawals` re-pointed; NEW: EMERGENCY cannot set `withdrawalsPaused`; NEW: deposits-only pause is visible via split views |
+| LIFE-3 / LIFE-4 (core 1494) | Withdrawals never frozen, by anyone; no permanent freeze; incident state off-chain-visible | `pauseDeposits()` = deposits-only; no withdrawal pause exists; `depositsPaused` view; last-admin floor guarantees reversal authority | `BasketVault.t.sol::test_pauseDeposits_doesNotFreezeWithdrawals`; `WithdrawalsNeverFrozen.t.sol` (every emergency and status lever, then a redeem) |
 | LIFE-6 | Reabsorption never reverts-and-strands | Adapter `reabsorb` try/catch → quarantine fallback | `BasketVault.t.sol::test_LIFE6_reabsorbSurvivesDegradedPool` re-pointed |
 | DI-2 | Unified governance retire (registry flip + deposit halt, atomic) | `setRegistry`/`retire`/`unretire` carried verbatim; `retired` flag distinct from `shutdown` | `FvInvariants.t.sol::test_LIFE1_retireSyncsRegistryAndVaultFlag` re-pointed |
 | ADP-1 | No DELEGATECALL on NAV/deposit/withdraw path (lending adapters) | Unchanged for lending adapters; `AssetPositionAdapter` legitimately DELEGATECALLs linked `TickMath`/`TwapTickMath` — codehash pinning subsumes the guarantee (as for today's swap adapters) | `AdapterDelegatecallGuard.t.sol` scoped to exact adapters; codehash deploy-assertion for asset adapters |
@@ -1139,7 +1129,7 @@ so the parity plan's environments actually boot:
   (`RobotMoneyVault`/`BasketVault`/…) — re-point to the single `Vault` contract
   name.
 - `suite-16` ABI-drift gate — regenerate/rebaseline for the unified ABI
-  (new `addAdapter` arg, `allExact()`, split-pause views, new events).
+  (new `addAdapter` arg, `allExact()`, the `depositsPaused` view, new events).
 - `suite-22` CoverageMap ↔ invariants-doc 1:1 gate — the §6 matrix re-homes
   loci but the invariants-doc rewrite must be **scheduled**, not implied, or
   suite-22 goes red.

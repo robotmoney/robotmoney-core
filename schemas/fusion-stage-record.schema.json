@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://robotmoney.example/schemas/fusion-stage-record.schema.json",
   "title": "fusion-stage-record",
-  "description": "The cross-repo record contract (devops docs/plans/core-runbook-verbs.md, \"The record\"): what `scripts/stage/core-stack.sh record show` validates before it prints a stage record, and the only shape fusion-qa's src/core-record.ts is allowed to assume. The top-level `required` array is the drift guard devops#42 asks for: it is read with jq and asserted equal to `core-stack.sh record show --list-required-fields`, which walks the exact same RECORD_REQUIRED_FIELDS array `record show` enforces field-by-field. It intentionally lists dotted paths rather than only bare property names, so a field nested under `addresses`, `vault_addresses` or `ephemeral` is named unambiguously and the equality check is a flat array diff, not a recursive schema walk. The `properties` below still nest normally, and carry their own per-object `required` arrays, for validators that want to check shape rather than just the field list.",
+  "description": "The cross-repo record contract (devops docs/plans/core-runbook-verbs.md, \"The record\"): what `scripts/stage/core-stack.ts record show` validates before it prints a stage record, and the only shape fusion-qa's src/core-record.ts is allowed to assume. The top-level `required` array is the drift guard devops#42 asks for: it is read with jq and asserted equal to `core-stack.ts record show --list-required-fields`, which walks the exact same RECORD_REQUIRED_FIELDS array `record show` enforces field-by-field. It intentionally lists dotted paths rather than only bare property names, so a field nested under `addresses`, `vault_addresses` or `ephemeral` is named unambiguously and the equality check is a flat array diff, not a recursive schema walk. The `properties` below still nest normally, and carry their own per-object `required` arrays, for validators that want to check shape rather than just the field list.",
   "type": "object",
   "required": [
     ".chain_id",
@@ -27,7 +27,6 @@
     ".vault_addresses.rmPROTO",
     ".vault_addresses.rmAGENT",
     ".vault_addresses.rmRWA",
-    ".ephemeral.submitter",
     ".ephemeral.approver",
     ".ephemeral.voters",
     ".ephemeral.emergency",
@@ -37,7 +36,7 @@
   "$defs": {
     "address": {
       "type": "string",
-      "description": "A non-zero, 0x-prefixed 40-hex EVM address (record_addr in core-stack.sh).",
+      "description": "A non-zero, 0x-prefixed 40-hex EVM address (record_addr in core-stack.ts).",
       "pattern": "^0x[0-9a-fA-F]{40}$",
       "not": { "pattern": "^0x0{40}$" }
     },
@@ -109,9 +108,8 @@
     "ephemeral": {
       "type": "object",
       "description": "The throwaway ceremony keys and Safe signer roster (2026-09-24 decision: staging is throwaway, no key outlives the run that minted it).",
-      "required": ["submitter", "approver", "voters", "emergency", "keystore_dir", "safe_signers"],
+      "required": ["approver", "voters", "emergency", "keystore_dir", "safe_signers"],
       "properties": {
-        "submitter": { "$ref": "#/$defs/address" },
         "approver": {
           "allOf": [{ "$ref": "#/$defs/address" }],
           "description": "Must equal the address of the safe_signers entry whose role is \"approver\" — the relayer every Safe call is sent from."

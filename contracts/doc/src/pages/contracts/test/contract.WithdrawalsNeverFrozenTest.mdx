@@ -1,0 +1,668 @@
+---
+title: "WithdrawalsNeverFrozenTest"
+description: "Withdrawals are never frozen, by anyone. Every shipped vault (rmUSDC, the rmPROTO, rmAGENT, rmRWA), the gateway and the router are built and handed over the way we ship them: `DeployTimelock` moves ADMIN_ROLE to a TimelockController at the 172800 s Base delay whose proposer and executor is a real 2-of-3 Safe, and EMERGENCY_ROLE to the emergency key. Every emergency lever, the gateway deposit pauser and the governance status levers are pulled, then holders with shares and sufficient liquidity exit in full. Deposits revert with `DepositsArePaused` while paused, and `unpauseDeposits` runs only through the Safe and the timelock at the real delay."
+---
+
+# WithdrawalsNeverFrozenTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/WithdrawalsNeverFrozen.t.sol)
+
+**Inherits:** Test
+
+**Title:** WithdrawalsNeverFrozenTest
+
+Withdrawals are never frozen, by anyone. Every shipped vault (rmUSDC, the
+rmPROTO, rmAGENT, rmRWA), the gateway and the router are built
+and handed over the way we ship them: `DeployTimelock` moves ADMIN_ROLE to a
+TimelockController at the 172800 s Base delay whose proposer and executor is a
+real 2-of-3 Safe, and EMERGENCY_ROLE to the emergency key. Every emergency
+lever, the gateway deposit pauser and the governance status levers are pulled,
+then holders with shares and sufficient liquidity exit in full. Deposits revert
+with `DepositsArePaused` while paused, and `unpauseDeposits` runs only through
+the Safe and the timelock at the real delay.
+
+<i>
+
+Fork test. The Safe is a SafeProxy from the canonical SafeProxyFactory on the
+canonical SafeL2 singleton, driven by `execTransaction` with two owner
+signatures. Those contracts exist only on a Base fork, so CI runs this file
+through scripts/devnet/run-golden-forge-forks.sh against the golden fixture,
+like SafeIntegration.t.sol. No stub Safe and no pranked Safe.
+
+</i>
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+### AMOUNT
+
+```solidity
+uint256 internal constant AMOUNT = 1_000 * ONE_USDC;
+```
+
+### SWAP_OUT
+
+<i>
+
+Swap proceeds for selling a 1:1 basket position worth `AMOUNT`: above the
+1% TWAP floor of the V3 baskets.
+
+</i>
+
+```solidity
+uint256 internal constant SWAP_OUT = 995 * ONE_USDC;
+```
+
+### MIN_DELAY
+
+<i>
+
+The Base mainnet timelock delay (security-model.md §4).
+
+</i>
+
+```solidity
+uint256 internal constant MIN_DELAY = 172_800;
+```
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### EMERGENCY_ROLE
+
+```solidity
+bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+```
+
+### SAFE_PROXY_FACTORY
+
+```solidity
+address internal constant SAFE_PROXY_FACTORY = 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67;
+```
+
+### SAFE_SINGLETON_L2
+
+```solidity
+address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+```
+
+### SAFE_FALLBACK_HANDLER
+
+```solidity
+address internal constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### basketToken
+
+```solidity
+TestERC20 internal basketToken;
+```
+
+### swapRouter
+
+```solidity
+MockSwapRouter internal swapRouter;
+```
+
+### pool
+
+```solidity
+MockPool internal pool;
+```
+
+### rmUsdc
+
+```solidity
+RobotMoneyVault internal rmUsdc;
+```
+
+### rmProto
+
+```solidity
+ProtocolAssetVault internal rmProto;
+```
+
+### rmAgent
+
+```solidity
+AgentTokenVault internal rmAgent;
+```
+
+### rmRwa
+
+```solidity
+RwaBasketVault internal rmRwa;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### safe
+
+```solidity
+ISafe internal safe;
+```
+
+### ownerPks
+
+```solidity
+uint256[3] internal ownerPks;
+```
+
+### saltNonce
+
+```solidity
+uint256 internal saltNonce;
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_rmusdc_noleverfreezesexit_fundsinadapter"></a>
+
+### test_rmUSDC_noLeverFreezesExit_fundsInAdapter
+
+Every lever with funds still in the adapter: emergency pauseDeposits and
+shutdown, gateway pauseDeposits, governance DepositsPaused then Retired.
+Redeem and withdraw still pay in full.
+
+```solidity
+function test_rmUSDC_noLeverFreezesExit_fundsInAdapter() public;
+```
+
+<a id="test_rmusdc_noleverfreezesexit_afteremergencydrain"></a>
+
+### test_rmUSDC_noLeverFreezesExit_afterEmergencyDrain
+
+Every emergency drain lever: `emergencyWithdrawAdapter`, `emergencyWithdraw`,
+`forceRemoveAdapter`, pauseDeposits and shutdown. Funds move back to the
+vault and the holders still exit in full.
+
+```solidity
+function test_rmUSDC_noLeverFreezesExit_afterEmergencyDrain() public;
+```
+
+<a id="test_rmusdc_pausedeposits_thenredeem_thensafeunpause"></a>
+
+### test_rmUSDC_pauseDeposits_thenRedeem_thenSafeUnpause
+
+pauseDeposits, deposit and mint revert DepositsArePaused, redeem while
+paused, the emergency key cannot resume, the Safe resumes through the timelock.
+
+```solidity
+function test_rmUSDC_pauseDeposits_thenRedeem_thenSafeUnpause() public;
+```
+
+<a id="test_rmproto_noleverfreezesexit"></a>
+
+### test_rmPROTO_noLeverFreezesExit
+
+```solidity
+function test_rmPROTO_noLeverFreezesExit() public;
+```
+
+<a id="test_rmagent_noleverfreezesexit"></a>
+
+### test_rmAGENT_noLeverFreezesExit
+
+```solidity
+function test_rmAGENT_noLeverFreezesExit() public;
+```
+
+<a id="test_rmrwa_noleverfreezesexit"></a>
+
+### test_rmRWA_noLeverFreezesExit
+
+```solidity
+function test_rmRWA_noLeverFreezesExit() public;
+```
+
+<a id="test_rmproto_pausedeposits_thenredeem_thensafeunpause"></a>
+
+### test_rmPROTO_pauseDeposits_thenRedeem_thenSafeUnpause
+
+```solidity
+function test_rmPROTO_pauseDeposits_thenRedeem_thenSafeUnpause() public;
+```
+
+<a id="test_rmagent_pausedeposits_thenredeem_thensafeunpause"></a>
+
+### test_rmAGENT_pauseDeposits_thenRedeem_thenSafeUnpause
+
+```solidity
+function test_rmAGENT_pauseDeposits_thenRedeem_thenSafeUnpause() public;
+```
+
+<a id="test_rmrwa_pausedeposits_thenredeem_thensafeunpause"></a>
+
+### test_rmRWA_pauseDeposits_thenRedeem_thenSafeUnpause
+
+```solidity
+function test_rmRWA_pauseDeposits_thenRedeem_thenSafeUnpause() public;
+```
+
+<a id="test_basket_governancecannotsettwapwindowbeyondhistory_redeemstillworks"></a>
+
+### test_basket_governanceCannotSetTwapWindowBeyondHistory_redeemStillWorks
+
+Governance cannot set a TWAP window the pool's history does not reach:
+the Safe's timelock execution fails, and the holder still redeems.
+
+```solidity
+function test_basket_governanceCannotSetTwapWindowBeyondHistory_redeemStillWorks() public;
+```
+
+<a id="test_router_redeemswhilevaultdepositspausedandretired"></a>
+
+### test_router_redeemsWhileVaultDepositsPausedAndRetired
+
+The router redeems from a vault whose deposits are paused and whose
+registry status is DepositsPaused, then Retired.
+
+```solidity
+function test_router_redeemsWhileVaultDepositsPausedAndRetired() public;
+```
+
+<a id="test_gateway_withdrawswhilegatewayandvaultdepositspaused"></a>
+
+### test_gateway_withdrawsWhileGatewayAndVaultDepositsPaused
+
+A gateway agent withdraws on both paths while the deposit pauser has
+paused gateway deposits and the emergency key has paused vault deposits.
+Gateway deposits revert DepositsArePaused; the Safe resumes them.
+
+```solidity
+function test_gateway_withdrawsWhileGatewayAndVaultDepositsPaused() public;
+```
+
+<a id="_buildothervaults-address"></a>
+
+### _buildOtherVaults
+
+```solidity
+function _buildOtherVaults(address deployer) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| deployer | `address` |  |
+
+<a id="_others"></a>
+
+### _others
+
+```solidity
+function _others() internal view returns (address[3] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[3]` |  |
+
+<a id="_basketnoleverfreezesexit-basketvault"></a>
+
+### _basketNoLeverFreezesExit
+
+<i>
+
+Pull every basket lever, then redeem on the swap path and the idle path.
+
+</i>
+
+```solidity
+function _basketNoLeverFreezesExit(BasketVault v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+<a id="_basketpausethenredeemthensafeunpause-basketvault"></a>
+
+### _basketPauseThenRedeemThenSafeUnpause
+
+```solidity
+function _basketPauseThenRedeemThenSafeUnpause(BasketVault v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+<a id="_depositdirect-address-address-uint256"></a>
+
+### _depositDirect
+
+```solidity
+function _depositDirect(address v, address who, uint256 amount)
+        internal
+        returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address` |  |
+| who | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="_depositbasket-basketvault-address-uint256"></a>
+
+### _depositBasket
+
+```solidity
+function _depositBasket(BasketVault v, address who, uint256 amount)
+        internal
+        returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+| who | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="_fundbasketexit-basketvault"></a>
+
+### _fundBasketExit
+
+<i>
+
+Fund the swap router for one position's exit.
+
+</i>
+
+```solidity
+function _fundBasketExit(BasketVault) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `BasketVault` |  |
+
+<a id="_expectdepositsarepaused-address-bytes4"></a>
+
+### _expectDepositsArePaused
+
+```solidity
+function _expectDepositsArePaused(address v, bytes4 selector) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address` |  |
+| selector | `bytes4` |  |
+
+<a id="_expectemergencycannotunpause-address"></a>
+
+### _expectEmergencyCannotUnpause
+
+```solidity
+function _expectEmergencyCannotUnpause(address v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address` |  |
+
+<a id="_selfauthorize-address-address"></a>
+
+### _selfAuthorize
+
+<i>
+
+The permissionless commit/reveal route; a non-admin agent names itself as
+share receiver.
+
+</i>
+
+```solidity
+function _selfAuthorize(address agent, address recipient) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+| recipient | `address` |  |
+
+<a id="_setstatus-address-vaultregistry-vaultstatus"></a>
+
+### _setStatus
+
+```solidity
+function _setStatus(address v, VaultRegistry.VaultStatus status) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address` |  |
+| status | `VaultRegistry.VaultStatus` |  |
+
+<a id="_governone-address-bytes"></a>
+
+### _governOne
+
+```solidity
+function _governOne(address target, bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+
+<a id="_govern-address-bytes"></a>
+
+### _govern
+
+<i>
+
+The real governance route: the Safe schedules a batch on the timelock,
+execution before the delay fails, and the Safe executes after 172800 s.
+
+</i>
+
+```solidity
+function _govern(address target, bytes[] memory calls) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| calls | `bytes[]` |  |
+
+<a id="_schedule-address-bytes"></a>
+
+### _schedule
+
+```solidity
+function _schedule(address target, bytes[] memory calls)
+        internal
+        returns (address[] memory targets, uint256[] memory values, bytes32 salt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| calls | `bytes[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `address[]` |  |
+| values | `uint256[]` |  |
+| salt | `bytes32` |  |
+
+<a id="_createsafe"></a>
+
+### _createSafe
+
+<i>
+
+A 2-of-3 SafeProxy on SafeL2 through the canonical factory — the same call
+stage's ceremony makes.
+
+</i>
+
+```solidity
+function _createSafe() internal returns (ISafe created);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| created | `ISafe` |  |
+
+<a id="_safeexec-address-bytes-bool"></a>
+
+### _safeExec
+
+<i>
+
+`execTransaction` signed by the two lowest-address owners. `expectOk == false`
+asserts the Safe refuses (GS013: the inner call reverted).
+
+</i>
+
+```solidity
+function _safeExec(address to, bytes memory data, bool expectOk) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
+| expectOk | `bool` |  |
+
+<a id="_sign-uint256-bytes32"></a>
+
+### _sign
+
+```solidity
+function _sign(uint256 pk, bytes32 txHash) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pk | `uint256` |  |
+| txHash | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+

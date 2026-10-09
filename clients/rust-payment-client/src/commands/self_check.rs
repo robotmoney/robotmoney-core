@@ -5,9 +5,12 @@
 //! `rmpc self-check` — read-only backend report (v0 §9.2 + preflight snapshot).
 //!
 //! Loads the operator config, decrypts the configured signer, runs the
-//! full preflight against `eth_chainId`, gateway code-hash, paused, agent
-//! policy, allowance, and balance with `amount = 0`, and emits a single
-//! JSON document on stdout.
+//! full deposit preflight against `eth_chainId`, gateway code-hash,
+//! `depositsPaused()` (gateway and vault), agent policy, allowance, and
+//! balance with `amount = 0`, and emits a single JSON document on stdout.
+//! A deposit pause fails self-check with `ErrDepositsPaused`, which speaks
+//! to deposits only: withdrawals stay open while deposits are paused
+//! (core 1494).
 //!
 //! The output also carries a `withdrawal_exposure` block (issue #429)
 //! that reports whether the agent's policy permits withdrawals, what
@@ -20,7 +23,7 @@
 //! Exit codes:
 //! - 0 — every preflight rule passed.
 //! - 2 — at least one hard-refusal precondition failed (chain id,
-//!   code-hash, paused, agent active, etc.). The JSON body is still
+//!   code-hash, deposits paused, agent active, etc.). The JSON body is still
 //!   printed so operators can pipe it into log aggregation.
 //! - 3 — config / keystore / passphrase failure (cannot even start).
 
@@ -340,10 +343,10 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
                 RmpcError::ErrCodeHashMismatch => {
                     checks.chain_id_match = true;
                 }
-                RmpcError::ErrGatewayPaused => {
+                RmpcError::ErrDepositsPaused => {
                     checks.chain_id_match = true;
                     checks.gateway_code_hash_match = true;
-                    checks.gateway_paused = true;
+                    checks.deposits_paused = true;
                 }
                 _ => {
                     checks.chain_id_match = true;
@@ -420,7 +423,7 @@ mod tests {
         PreflightReport {
             chain_id: 31337,
             gateway_runtime_hash_ok: true,
-            paused: false,
+            deposits_paused: false,
             agent_active: true,
             agent_valid_until: 9_999_999_999,
             max_per_payment: U256::from(1_000_000u64),
@@ -439,7 +442,7 @@ mod tests {
         assert_eq!(c.window_gross, "0");
         assert!(c.chain_id_match);
         assert!(c.gateway_code_hash_match);
-        assert!(!c.gateway_paused);
+        assert!(!c.deposits_paused);
         assert!(c.agent_active);
     }
 

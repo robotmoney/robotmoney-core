@@ -1,0 +1,91 @@
+---
+title: "RwaBasketVaultScriptGuardsTest"
+---
+
+# RwaBasketVaultScriptGuardsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/VaultScriptGuards.t.sol)
+
+**Inherits:** [VaultScriptGuardBase](/contracts/test/abstract.VaultScriptGuardBase)
+
+## State Variables
+
+### h
+
+```solidity
+RwaGuardHarness internal h = new RwaGuardHarness();
+```
+
+## Functions
+
+<a id="_ns"></a>
+
+### _ns
+
+<i>
+
+Unique per subclass.
+
+</i>
+
+```solidity
+function _ns() internal pure override returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_runprefixed-string"></a>
+
+### _runPrefixed
+
+```solidity
+function _runPrefixed(string memory prefix) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+<a id="_readprefixed-string"></a>
+
+### _readPrefixed
+
+```solidity
+function _readPrefixed(string memory prefix)
+        internal
+        override
+        returns (BasketVaultDeployBase.Params memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultDeployBase.Params` |  |
+
+<a id="_runinprocess-basketvaultdeploybase-params"></a>
+
+### _runInProcess
+
+```solidity
+function _runInProcess(BasketVaultDeployBase.Params memory p) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `BasketVaultDeployBase.Params` |  |
+

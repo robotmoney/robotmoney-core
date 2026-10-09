@@ -7,10 +7,12 @@
 //!
 //! Sub-reads (all `eth_call`, pinned to a single block):
 //!
-//! - `DEFAULT_ADMIN_ROLE()`, `ADMIN_ROLE()`, `PAUSER_ROLE()`,
+//! - `DEFAULT_ADMIN_ROLE()`, `ADMIN_ROLE()`, `DEPOSIT_PAUSER_ROLE()`,
 //!   `AGENT_ROLE()` → fetch the four canonical role-hash constants from
 //!   the deployed contract, never bake them in. The §9 acceptance test
 //!   "role membership for ADMIN, PAUSER, AGENT, and any future roles"
+//!   (the pauser is `DEPOSIT_PAUSER_ROLE`: it pauses deposits only, core
+//!   1494)
 //!   relies on the on-chain truth.
 //! - `hasRole(role, address)` once per role.
 //!
@@ -45,7 +47,7 @@ const EXIT_STARTUP_FAIL: i32 = 3;
 
 /// One row in the per-role result list. The role name is the canonical
 /// string the contract exposes ("DEFAULT_ADMIN_ROLE", "ADMIN_ROLE",
-/// "PAUSER_ROLE", "AGENT_ROLE"); `hash` is the 0x-hex `bytes32` returned
+/// "DEPOSIT_PAUSER_ROLE", "AGENT_ROLE"); `hash` is the 0x-hex `bytes32` returned
 /// by the on-chain getter; `has_role` is `hasRole(hash, address)`.
 #[derive(Debug, Default, Serialize)]
 pub struct RoleEntry {
@@ -68,7 +70,7 @@ pub struct RolesData {
 const ROLES: &[&str] = &[
     "DEFAULT_ADMIN_ROLE",
     "ADMIN_ROLE",
-    "PAUSER_ROLE",
+    "DEPOSIT_PAUSER_ROLE",
     "AGENT_ROLE",
 ];
 
@@ -178,7 +180,7 @@ async fn read_role_hash(
     let data = match role {
         "DEFAULT_ADMIN_ROLE" => RobotMoneyGateway::DEFAULT_ADMIN_ROLECall {}.abi_encode(),
         "ADMIN_ROLE" => RobotMoneyGateway::ADMIN_ROLECall {}.abi_encode(),
-        "PAUSER_ROLE" => RobotMoneyGateway::PAUSER_ROLECall {}.abi_encode(),
+        "DEPOSIT_PAUSER_ROLE" => RobotMoneyGateway::DEPOSIT_PAUSER_ROLECall {}.abi_encode(),
         "AGENT_ROLE" => RobotMoneyGateway::AGENT_ROLECall {}.abi_encode(),
         other => return Err(format!("unknown role getter: {other}")),
     };

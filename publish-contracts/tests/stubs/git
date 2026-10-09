@@ -1,0 +1,3 @@
+#!/usr/bin/env bun
+import { stub } from "./tool.ts";
+await stub("git");

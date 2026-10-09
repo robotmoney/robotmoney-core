@@ -6,11 +6,11 @@
 //             the one-ceremony rule of issue #1247 AC10 to these two contracts).
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
-import {MockHighThresholdSafe} from "./DeployTimelock.t.sol";
+import {SafeFixture} from "./helpers/SafeFixture.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
@@ -19,6 +19,7 @@ import {RouterGovernance} from "../RouterGovernance.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {RoleHolders} from "./helpers/RoleHolders.sol";
 
 /// @title DeployTimelockCommitteeTest
 /// @notice Issue #1319: before this change, `DeployTimelock.s.sol` only handed
@@ -36,7 +37,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 ///         authorized to run the handover.
 ///
 ///         In-process identity note (mirrors contracts/test/fv/DeployAssertions.t.sol):
-///         when a test calls `script.runInProcessWithCommittee(...)` directly,
+///         when a test calls `script.runInProcessWithCommittee(..., _fixtureSpec())` directly,
 ///         `msg.sender` INSIDE the script's own code is `address(this)` (the
 ///         test contract) — that is the value substituted wherever the script
 ///         revokes "from msg.sender" or defaults `receiptAdmin_ == address(0)`
@@ -50,7 +51,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 ///         AND separately grants `address(script)` the same roles (matching
 ///         the grant/revoke authority every one of the script's external
 ///         calls actually executes under).
-contract DeployTimelockCommitteeTest is Test {
+contract DeployTimelockCommitteeTest is SafeFixture {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
@@ -75,10 +76,19 @@ contract DeployTimelockCommitteeTest is Test {
 
     uint256 public constant MIN_DELAY = 2 days;
 
+    /// @dev When set, the ceremony runs with address(script) as `msg.sender`, which is what a
+    ///      real `forge script --broadcast` run is: one address both sends the grants and is
+    ///      the deployer the script revokes. The role-holder tests need it, because only then
+    ///      does the revoke target the address that actually holds the roles.
+    bool internal runAsDeployer;
+
     function setUp() public {
+        // Record from before any contract exists so RoleHolders can list every ADMIN_ROLE holder.
+        vm.recordLogs();
         usdc = new TestERC20();
         script = new DeployTimelock();
-        safe = address(new MockHighThresholdSafe());
+        _installSafeSet();
+        safe = _newDefaultSafe();
 
         // The five core contracts: admin_ == address(script), matching
         // DeployTimelock.t.sol's convention (their revocation is already
@@ -88,12 +98,26 @@ contract DeployTimelockCommitteeTest is Test {
         );
         gateway = new RobotMoneyGateway(usdc, vault, address(script), pauser, address(0));
         registry = new VaultRegistry(address(script));
-        router = new PortfolioRouter(address(usdc), address(registry), address(script));
+        // The router is built with this test contract as its first admin so the setup below
+        // needs no prank of the script (issue #1644): this contract wires governance, then
+        // hands every router role to address(script) and drops its own, which leaves the
+        // router exactly as a script-built one.
+        router = new PortfolioRouter(address(usdc), address(registry), address(this));
         governance = new RouterGovernance(address(router), address(script), 7 days, 1 days, 2);
         // R7: mirror DeployRouterGovernance's router ADMIN_ROLE grant, which
         // DeployTimelock now asserts before completing the handover.
-        vm.prank(address(script));
         router.grantRole(keccak256("ADMIN_ROLE"), address(governance));
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
+        bytes32[4] memory routerRoles = [
+            keccak256("ADMIN_ROLE"),
+            keccak256("WEIGHT_SETTER_ROLE"),
+            keccak256("WEIGHT_SETTER_ROTATOR_ROLE"),
+            keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE")
+        ];
+        for (uint256 i = 0; i < routerRoles.length; i++) {
+            router.grantRole(routerRoles[i], address(script));
+            router.revokeRole(routerRoles[i], address(this));
+        }
 
         // InvestmentCommitteePolicy: admin_ == address(this) (this test
         // contract), so that DeployTimelock's `revokeRole(ADMIN_ROLE,
@@ -131,6 +155,7 @@ contract DeployTimelockCommitteeTest is Test {
             vm.prank(receiptConstructedAdmin);
             receipts.grantRole(DEFAULT_ADMIN_ROLE, address(script));
         }
+        if (runAsDeployer) vm.prank(address(script));
         d = script.runInProcessWithCommittee(
             address(vault),
             address(gateway),
@@ -140,9 +165,12 @@ contract DeployTimelockCommitteeTest is Test {
             safe,
             emergency,
             MIN_DELAY,
-            address(icPolicy),
-            address(receipts),
-            receiptAdminArg
+            DeployTimelock.Committee({
+                icPolicy: address(icPolicy),
+                consensusReceipt: address(receipts),
+                receiptAdmin: receiptAdminArg
+            }),
+            _fixtureSpec()
         );
     }
 
@@ -227,6 +255,68 @@ contract DeployTimelockCommitteeTest is Test {
         );
     }
 
+    // ─── The timelock is the only ADMIN_ROLE holder (issue #1644) ─────────────
+    //
+    // `hasRole` can only clear addresses the test thought to name. RoleHolders replays every
+    // RoleGranted / RoleRevoked log since before the contracts were built, so an address nobody
+    // named (the script contract, say) cannot hide.
+
+    /// @dev Makes the deployer identity match a real broadcast: address(script) is the only
+    ///      deployer, so this test contract gives up the IC roles it held only as a stand-in.
+    function _becomeScriptDeployer() internal {
+        icPolicy.revokeRole(ADMIN_ROLE, address(this));
+        icPolicy.revokeRole(DEFAULT_ADMIN_ROLE, address(this));
+        runAsDeployer = true;
+    }
+
+    function test_timelockIsTheOnlyAdminRoleHolder_onICPolicyAndReceipt() public {
+        _becomeScriptDeployer();
+        ConsensusRecommendationReceipt receipts = _deployReceiptAndRun(address(script), address(0));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        address[] memory receiptAdmins = RoleHolders.holders(logs, address(receipts), ADMIN_ROLE);
+        assertEq(receiptAdmins.length, 1, "receipt: exactly one ADMIN_ROLE holder");
+        assertEq(receiptAdmins[0], address(d.timelock), "receipt: the timelock is the only admin");
+
+        // The IC policy keeps the gateway's separate, intentional ADMIN_ROLE (architecture.md
+        // §4.9): the holders are exactly the timelock and the gateway, nobody else.
+        address[] memory icAdmins = RoleHolders.holders(logs, address(icPolicy), ADMIN_ROLE);
+        assertEq(icAdmins.length, 2, "IC policy: timelock and gateway only");
+        assertTrue(
+            (icAdmins[0] == address(d.timelock) && icAdmins[1] == address(gateway))
+                || (icAdmins[1] == address(d.timelock) && icAdmins[0] == address(gateway)),
+            "IC policy: holders are the timelock and the gateway"
+        );
+    }
+
+    function test_timelockIsTheOnlyAdminRoleHolder_onTheFiveCoreContracts() public {
+        _becomeScriptDeployer();
+        _deployReceiptAndRun(address(script), address(0));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        address[5] memory core = [
+            address(vault),
+            address(gateway),
+            address(registry),
+            address(router),
+            address(governance)
+        ];
+        for (uint256 i = 0; i < core.length; i++) {
+            address[] memory admins = RoleHolders.holders(logs, core[i], ADMIN_ROLE);
+            // The router's ADMIN_ROLE also stays with RouterGovernance (the approving body,
+            // granted at deploy time and asserted by DeployTimelock R7). Every other core
+            // contract has the timelock alone.
+            bool isRouter = core[i] == address(router);
+            assertEq(admins.length, isRouter ? 2 : 1, "no second admin");
+            for (uint256 j = 0; j < admins.length; j++) {
+                assertTrue(
+                    admins[j] == address(d.timelock)
+                        || (isRouter && admins[j] == address(governance)),
+                    "an unexpected ADMIN_ROLE holder"
+                );
+            }
+        }
+    }
+
     // ─── Skip: icPolicy_ / consensusReceipt_ == address(0) is a no-op ─────────
 
     function test_zeroCommitteeAddresses_skipsHandover_fiveCoreStillWorks() public {
@@ -239,9 +329,10 @@ contract DeployTimelockCommitteeTest is Test {
             safe,
             emergency,
             MIN_DELAY,
-            address(0), // icPolicy_ skipped
-            address(0), // consensusReceipt_ skipped
-            address(0)
+            DeployTimelock.Committee({
+                icPolicy: address(0), consensusReceipt: address(0), receiptAdmin: address(0)
+            }),
+            _fixtureSpec()
         );
         assertTrue(
             IAccessControl(address(vault)).hasRole(ADMIN_ROLE, address(d.timelock)),
@@ -284,9 +375,12 @@ contract DeployTimelockCommitteeTest is Test {
             safe,
             emergency,
             MIN_DELAY,
-            address(icPolicy),
-            address(receipts),
-            independentReceiptAdmin
+            DeployTimelock.Committee({
+                icPolicy: address(icPolicy),
+                consensusReceipt: address(receipts),
+                receiptAdmin: independentReceiptAdmin
+            }),
+            _fixtureSpec()
         );
     }
 }

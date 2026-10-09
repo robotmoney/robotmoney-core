@@ -21,7 +21,10 @@ import {AdminFloorAccessControlCounter} from "./lib/AdminFloorAccessControlCount
 ///         single-transaction, standard ERC-4626. Exit fee applied on withdrawal.
 ///         Yearn V3-inspired security: 2 roles + hardcoded floors.
 ///
-/// Deployed: 0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd (Base mainnet)
+/// Deployed (v1): 0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd (Base mainnet).
+/// The v1 deployment runs EARLIER code whose v1 `pause()` also froze withdrawals.
+/// The v1 vault is the one exception to "withdrawals are never frozen": never call
+/// v1 `pause()` (core 1494). This source is the code every new deployment ships.
 /// Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun
 contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -36,11 +39,12 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     ///         (including this role's own grant path) can never be
     ///         permanently bricked.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    /// @notice Role that can pause and perform emergency withdrawals.
-    ///         Asymmetric with unpause by design: a compromised emergency key can
-    ///         only halt the vault (DoS), not restart it. Unpause is restricted to
-    ///         `ADMIN_ROLE` so that resuming operations is deliberate and requires
-    ///         the higher-trust role — mirroring the gateway's `PAUSER_ROLE` /
+    /// @notice Role that can pause deposits and perform emergency withdrawals.
+    ///         Asymmetric with `unpauseDeposits` by design: a compromised emergency
+    ///         key can only halt new deposits (DoS). It can never block an exit and
+    ///         cannot restart deposits. `unpauseDeposits` is restricted to
+    ///         `ADMIN_ROLE` so that resuming deposits is deliberate and requires
+    ///         the higher-trust role — mirroring the gateway's `DEPOSIT_PAUSER_ROLE` /
     ///         `ADMIN_ROLE` asymmetry documented in `AccessRoles.sol`.
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     /// @notice Role for automated keeper rebalancing (not granted at launch).
@@ -116,14 +120,14 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     ///         `ADMIN_ROLE` over the vault.
     address public registry;
 
-    // ─── Split pause semantics ─────────────────────────────────────────
-    // Deposits and withdrawals are gated independently so that emergencyWithdraw()
-    // can block new capital inflows while preserving user exit rights.
+    // ─── Deposit pause ─────────────────────────────────────────────────
+    // Withdrawals are never frozen, by anyone (owner decision 2026-10-05, core
+    // 1494). `pauseDeposits()`, `emergencyWithdraw()` and the other emergency
+    // levers set `depositsPaused` only. No flag, role or setting blocks a redeem.
 
-    /// @notice When true, new deposits and mints are blocked.
+    /// @notice When true, new deposits and mints are blocked. Withdrawals and
+    ///         redeems are never blocked.
     bool public depositsPaused;
-    /// @notice When true, withdrawals and redeems are blocked.
-    bool public withdrawalsPaused;
 
     // ─── Rebalance throttling ──
 
@@ -232,12 +236,12 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @notice Emitted when a shut-down vault is restored and deposits re-open.
     /// @param newTvlCap The fresh TVL cap set on restore.
     event VaultRestored(uint256 newTvlCap);
-    /// @notice Emitted when deposit pause state changes.
-    /// @param paused True when deposits are blocked, false when unblocked.
-    event DepositsPausedChanged(bool paused);
-    /// @notice Emitted when withdrawal pause state changes.
-    /// @param paused True when withdrawals are blocked, false when unblocked.
-    event WithdrawalsPausedChanged(bool paused);
+    /// @notice Emitted when new deposits become paused. Withdrawals stay open.
+    /// @param account The caller whose action paused deposits.
+    event DepositsPaused(address indexed account);
+    /// @notice Emitted when new deposits are resumed.
+    /// @param account The caller that resumed deposits.
+    event DepositsUnpaused(address indexed account);
     /// @notice Emitted when a deposit cannot be fully routed into adapters (e.g. all caps are full).
     /// @param amount USDC that remains idle in the vault after both routing passes.
     event UnroutedDeposit(uint256 amount);
@@ -289,9 +293,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @notice Caller lacks `KEEPER_ROLE` (or `ADMIN_ROLE` where the rebalancer path also accepts it).
     error UnauthorizedRebalancer();
     /// @notice Deposit attempted while deposits are paused.
-    error DepositsPaused();
-    /// @notice Withdrawal attempted while withdrawals are paused.
-    error WithdrawalsPaused();
+    error DepositsArePaused();
     /// @notice Adapter address has not been approved by vault governance.
     /// @param adapter Adapter address that failed the address allowlist check.
     error AdapterNotAllowed(address adapter);
@@ -318,6 +320,52 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @param requested USDC needed from adapters (after idle balance is applied).
     /// @param available Total USDC the active adapters actually delivered or report holding.
     error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
+    /// @notice Gas left is below the floor needed to finish the current adapter call safely.
+    ///         Raised instead of an opaque out-of-gas so a limit that was too low reverts
+    ///         with a reason. Retry with a higher gas limit. (core 1482.)
+    /// @param available `gasleft()` at the check.
+    /// @param required  The floor that was not met.
+    error InsufficientGas(uint256 available, uint256 required);
+
+    // CHANGELOG (core 1482, audit-impact: no change to share accounting or fee math; one change
+    // to how a withdrawal is split across adapters):
+    //   Added `InsufficientGas` and `_requireGas` guards before each adapter `withdraw`
+    //   in `_pullProportional`, on the `redeem`/`withdraw` overrides (the entry floor, which must
+    //   bind), before `adpt.deploy` in `_routeDeposit`, and a tail reserve before the burn and
+    //   payout transfers. The guard only reverts earlier, with a reason, when the caller supplied
+    //   too little gas. In pass 1 of `_pullProportional` the last counted adapter now takes the
+    //   flooring remainder (still capped at its balance), so pass 2 runs only for a short adapter.
+    //   Total pulled is unchanged; up to a few wei of USDC move from the first adapter with a
+    //   balance to the last one. See docs/technical/redeem-gas-1482.md.
+    /// @dev Gas that must remain before an adapter external call (its nested protocol calls
+    ///      and the 63/64 forwarding rule need headroom).
+    uint256 internal constant ADAPTER_CALL_GAS_FLOOR = 400_000;
+    /// @dev Gas that must remain after the last adapter call for burn, fee and payout transfers.
+    uint256 internal constant TAIL_GAS_FLOOR = 150_000;
+    /// @dev Gas that must be available at the `redeem`/`withdraw` entrypoint. Below this the call
+    ///      reverts `InsufficientGas` instead of running out of gas. It must be the binding
+    ///      floor: eth_estimateGas returns the smallest passing limit in the estimate-time state,
+    ///      and a floor checked mid-path moves with that state. Measured on a Base fork, a redeem
+    ///      costs about 96k more in the first block after the venues accrue. With the entry
+    ///      floor removed, the mid-path floors set the smallest passing limit at about 1.22M in
+    ///      that later block, so 1.6M binds with about 378k to spare.
+    ///      See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant PULL_ENTRY_GAS_FLOOR = 1_600_000;
+
+    /// @dev Gas that must be available at the `deposit`/`mint` entrypoint (core 1482). Same
+    ///      reasoning as `PULL_ENTRY_GAS_FLOOR`: the mid-path `ADAPTER_CALL_GAS_FLOOR` before
+    ///      `adpt.deploy` runs after accrual-dependent work, so the estimate would land on a
+    ///      threshold that moves between estimate and inclusion.
+    ///      Measured on a Base fork, a deposit costs about 41k more in the first block after the
+    ///      venues accrue. With the entry floor removed, the mid-path floor sets the smallest
+    ///      passing limit at about 1.20M in that later block, so 1.6M binds with about 400k to
+    ///      spare. See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant DEPOSIT_ENTRY_GAS_FLOOR = 1_600_000;
+
+    function _requireGas(uint256 floor) private view {
+        uint256 g = gasleft();
+        if (g < floor) revert InsufficientGas(g, floor);
+    }
 
     // ─── Constructor ──────────────────────────────────────────────────
 
@@ -435,32 +483,80 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
 
     // ─── Deposit (atomic deposit-to-yield) ────────────────────────────
 
+    /// @notice ERC-4626 deposit. Reverts `DepositsArePaused` while deposits are paused.
+    /// @dev Overridden to read NAV once (issue #1397). The inherited flow reads whole-vault `totalAssets()` in `maxDeposit`,
+    ///      `previewDeposit`, `_deposit`'s TVL-cap guard and `_routeDeposit`'s
+    ///      snapshot: four identical sweeps, since nothing between them moves an
+    ///      adapter balance. This reads it once and threads it through. External
+    ///      `maxDeposit` / `previewDeposit` / `totalAssets` are unchanged.
+    /// @param assets Amount of USDC to deposit.
+    /// @param receiver Address that receives the minted shares.
+    /// @return Shares minted to `receiver`.
+    function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        _requireGas(DEPOSIT_ENTRY_GAS_FLOOR);
+        if (depositsPaused) revert DepositsArePaused();
+        uint256 nav = totalAssets();
+        uint256 maxAssets = _maxDepositAt(nav);
+        if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
+        // Same formula as `previewDeposit` -> `_convertToShares(assets, Floor)`.
+        uint256 shares =
+            assets.mulDiv(totalSupply() + 10 ** _decimalsOffset(), nav + 1, Math.Rounding.Floor);
+        _depositAt(_msgSender(), receiver, assets, shares, nav);
+        return shares;
+    }
+
+    /// @notice Mint exactly `shares` to `receiver`, pulling the matching USDC.
+    /// @dev core 1482: same entry gas floor as `deposit`. Reverts `DepositsArePaused` while deposits are paused (core 1494).
+    /// @param shares Amount of vault shares to mint.
+    /// @param receiver Address that receives the minted shares.
+    /// @return The amount of USDC pulled from the caller.
+    function mint(uint256 shares, address receiver) public override returns (uint256) {
+        _requireGas(DEPOSIT_ENTRY_GAS_FLOOR);
+        if (depositsPaused) revert DepositsArePaused();
+        return super.mint(shares, receiver);
+    }
+
+    /// @dev Reached by `mint()`, which has no cached NAV to offer.
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares)
         internal
         override
-        nonReentrant
     {
-        if (depositsPaused) revert DepositsPaused();
+        _depositAt(caller, receiver, assets, shares, totalAssets());
+    }
+
+    /// @param nav `totalAssets()` as read BEFORE `assets` moves into the vault.
+    function _depositAt(
+        address caller,
+        address receiver,
+        uint256 assets,
+        uint256 shares,
+        uint256 nav
+    ) internal nonReentrant {
         if (shutdown) revert VaultShutdown();
         if (retired) revert VaultRetired();
         if (assets > perDepositCap) revert PerDepositCapExceeded();
-        if (totalAssets() + assets > tvlCap) revert TVLCapExceeded();
+        if (nav + assets > tvlCap) revert TVLCapExceeded();
         if (_activeAdapterCount() == 0) revert NoActiveAdapters();
 
-        super._deposit(caller, receiver, assets, shares);
-        _routeDeposit(assets);
+        ERC4626._deposit(caller, receiver, assets, shares);
+        // The only state change since `nav` was read is `assets` of USDC landing
+        // idle in the vault (adapters are untouched and the call is nonReentrant),
+        // so post-transfer NAV is exactly `nav + assets`. Holds for USDC, which
+        // credits the full amount; a fee-on-transfer asset would break it.
+        _routeDepositAt(assets, nav + assets);
     }
 
     function _routeDeposit(uint256 amount) internal {
+        _routeDepositAt(amount, totalAssets());
+    }
+
+    /// @param totalAfter NAV including `amount`, which already sits idle in the vault.
+    function _routeDepositAt(uint256 amount, uint256 totalAfter) internal {
         // slither-disable-next-line incorrect-equality
         // Justification: `amount == 0` is a safe early-return guard, not a
         // balance-sensitive strict equality that reentrancy could manipulate.
         if (amount == 0) return;
 
-        // `totalAssets()` now includes the idle vault balance (the deposited USDC already sits
-        // in the vault at this point), so it already accounts for `amount`. Do NOT add `amount`
-        // again — that would double-count it.
-        uint256 totalAfter = totalAssets();
         uint256 activeCount = _activeAdapterCount();
         uint256 remaining = amount;
         uint256 len = adapters.length;
@@ -578,6 +674,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         address adptAddr = address(adpt);
         _requireAdapterEligible(adptAddr);
         IERC20(asset()).safeTransfer(adptAddr, amount);
+        _requireGas(ADAPTER_CALL_GAS_FLOOR);
         adpt.deploy(amount);
         emit Allocated(i, adptAddr, amount);
     }
@@ -605,37 +702,37 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     ///         Uses floor rounding on the gross→net conversion so that
     ///         `_netToGross(maxWithdraw(owner))` never exceeds `_convertToAssets(balanceOf(owner), Floor)`,
     ///         guaranteeing `previewWithdraw(maxWithdraw(owner)) <= balanceOf(owner)` even when `exitFeeBps > 0`.
-    ///         Returns 0 while withdrawals are paused, mirroring the deposit-side views
-    ///         (ERC-4626: withdraw(maxWithdraw(owner)) MUST NOT revert; audit 2026-06-09, L-1).
+    ///         A deposit pause never lowers it: withdrawals are never frozen (core 1494).
     /// @param owner The address whose share balance determines the withdrawal cap.
     function maxWithdraw(address owner) public view override returns (uint256) {
-        if (withdrawalsPaused) return 0;
         uint256 shares = balanceOf(owner);
         uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
         return grossAssets.mulDiv(MAX_BPS - exitFeeBps, MAX_BPS, Math.Rounding.Floor);
-    }
-
-    /// @notice Maximum shares a user can redeem in a single call.
-    ///         Returns 0 while withdrawals are paused so that `redeem(maxRedeem(owner))`
-    ///         never reverts, per ERC-4626 (audit 2026-06-09, L-1).
-    /// @param owner The address whose share balance determines the redemption cap.
-    function maxRedeem(address owner) public view override returns (uint256) {
-        if (withdrawalsPaused) return 0;
-        return balanceOf(owner);
     }
 
     /// @notice Maximum assets that can be deposited for `receiver` given current vault state.
     ///         Returns 0 when deposits are paused, the vault is shutdown, retired,
     ///         no adapters are active, or the TVL cap has been reached.
     function maxDeposit(address) public view override returns (uint256) {
-        if (depositsPaused || shutdown || retired) return 0;
-        if (_activeAdapterCount() == 0) return 0;
-        if (tvlCap == type(uint256).max && perDepositCap == type(uint256).max) {
-            return type(uint256).max;
-        }
-        uint256 current = totalAssets();
-        if (current >= tvlCap) return 0;
-        uint256 headroom = tvlCap - current;
+        if (_depositsClosed()) return 0;
+        if (_capsUnbounded()) return type(uint256).max;
+        return _maxDepositAt(totalAssets());
+    }
+
+    function _depositsClosed() internal view returns (bool) {
+        return depositsPaused || shutdown || retired || _activeAdapterCount() == 0;
+    }
+
+    function _capsUnbounded() internal view returns (bool) {
+        return tvlCap == type(uint256).max && perDepositCap == type(uint256).max;
+    }
+
+    /// @dev `maxDeposit` evaluated against an already-read NAV.
+    function _maxDepositAt(uint256 nav) internal view returns (uint256) {
+        if (_depositsClosed()) return 0;
+        if (_capsUnbounded()) return type(uint256).max;
+        if (nav >= tvlCap) return 0;
+        uint256 headroom = tvlCap - nav;
         return perDepositCap < headroom ? perDepositCap : headroom;
     }
 
@@ -656,6 +753,38 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         return net.mulDiv(MAX_BPS, MAX_BPS - exitFeeBps, Math.Rounding.Ceil);
     }
 
+    /// @notice Burn `shares` from `owner` and send the net USDC to `receiver`.
+    /// @dev core 1482: the share-to-asset preview reads every adapter's `totalAssets()` before
+    ///      `_withdraw` runs, so the entry gas guard sits on the public entrypoints too. Share
+    ///      and fee math is untouched: both forward to the inherited ERC-4626 implementation.
+    /// @param shares Amount of vault shares to burn.
+    /// @param receiver Address that receives the USDC.
+    /// @param owner Address whose shares are burned (the caller or an approved spender).
+    /// @return The amount of USDC sent to `receiver`.
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        returns (uint256)
+    {
+        _requireGas(PULL_ENTRY_GAS_FLOOR);
+        return super.redeem(shares, receiver, owner);
+    }
+
+    /// @notice Send `assets` USDC to `receiver` and burn the matching shares from `owner`.
+    /// @dev See `redeem`.
+    /// @param assets Net amount of USDC the receiver should get.
+    /// @param receiver Address that receives the USDC.
+    /// @param owner Address whose shares are burned (the caller or an approved spender).
+    /// @return The amount of shares burned.
+    function withdraw(uint256 assets, address receiver, address owner)
+        public
+        override
+        returns (uint256)
+    {
+        _requireGas(PULL_ENTRY_GAS_FLOOR);
+        return super.withdraw(assets, receiver, owner);
+    }
+
     function _withdraw(
         address caller,
         address receiver,
@@ -663,7 +792,6 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         uint256 assets,
         uint256 shares
     ) internal override nonReentrant {
-        if (withdrawalsPaused) revert WithdrawalsPaused();
         if (caller != owner) {
             _spendAllowance(owner, caller, shares);
         }
@@ -726,8 +854,12 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
 
         uint256 totalInAdapters;
         uint256 len = adapters.length;
+        uint256 lastCounted = type(uint256).max;
         for (uint256 i = 0; i < len; i++) {
-            if (_isAdapterCounted(i)) totalInAdapters += adapters[i].adapter.totalAssets();
+            if (_isAdapterCounted(i)) {
+                totalInAdapters += adapters[i].adapter.totalAssets();
+                lastCounted = i;
+            }
         }
 
         // Remaining amount that must come from adapters (after idle covers part of it).
@@ -747,10 +879,15 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             if (!_isAdapterCounted(i)) continue;
             IStrategyAdapter adpt = adapters[i].adapter;
             uint256 adapterBalance = adpt.totalAssets();
-            uint256 pull = (remainingNeeded * adapterBalance) / totalInAdapters;
+            // The last counted adapter takes the rounding remainder (core 1482), so pass 2 runs
+            // only when an adapter is short, not for flooring dust. Each pass-2 pull is one more
+            // adapter call behind a 400k gas floor. Still capped at the adapter's balance (L-2).
+            uint256 pull =
+                i == lastCounted ? remaining : (remainingNeeded * adapterBalance) / totalInAdapters;
             if (pull > remaining) pull = remaining;
             if (pull > adapterBalance) pull = adapterBalance;
             if (pull == 0) continue;
+            _requireGas(ADAPTER_CALL_GAS_FLOOR);
             uint256 actual = adpt.withdraw(pull);
             pulled += actual;
             remaining = actual >= remaining ? 0 : remaining - actual;
@@ -767,6 +904,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             uint256 adapterBalance = adpt.totalAssets();
             uint256 pull = adapterBalance < remaining ? adapterBalance : remaining;
             if (pull == 0) continue;
+            _requireGas(ADAPTER_CALL_GAS_FLOOR);
             uint256 actual = adpt.withdraw(pull);
             pulled += actual;
             remaining = actual >= remaining ? 0 : remaining - actual;
@@ -785,6 +923,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         // surplus idle for ALL holders rather than over-paying this one position. The fee and
         // payout are therefore bounded by the share-implied gross from above and by realised
         // proceeds from below — never socializing one holder's shortfall onto the others.
+        _requireGas(TAIL_GAS_FLOOR);
         uint256 realized = idleBalance + pulled;
         return realized < assetsNeeded ? realized : assetsNeeded;
     }
@@ -960,21 +1099,23 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
 
     // ─── Emergency ────────────────────────────────────────────────────
 
-    /// @notice Pause all deposits and withdrawals. Restricted to `EMERGENCY_ROLE`.
-    function pause() external onlyRole(EMERGENCY_ROLE) {
+    /// @notice Pause new deposits and mints. Restricted to `EMERGENCY_ROLE`.
+    ///         Withdrawals and redeems stay open: nothing stops a holder from
+    ///         exiting (owner decision 2026-10-05, core 1494; docs/prd.md).
+    function pauseDeposits() external onlyRole(EMERGENCY_ROLE) {
         _setDepositsPaused(true);
-        _setWithdrawalsPaused(true);
     }
 
-    /// @notice Resume deposits and withdrawals. Restricted to `ADMIN_ROLE`.
-    ///         Intentionally asymmetric: pausing is fast and unilateral (`EMERGENCY_ROLE`);
-    ///         unpausing is deliberate and requires the higher-trust admin role.
-    function unpause() external onlyRole(ADMIN_ROLE) {
+    /// @notice Resume deposits and mints. Restricted to `ADMIN_ROLE`.
+    ///         Intentionally asymmetric: pausing deposits is fast and unilateral
+    ///         (`EMERGENCY_ROLE`); resuming them is deliberate and requires the
+    ///         higher-trust admin role. Also clears the deposit halt set by
+    ///         `emergencyWithdraw`, `emergencyWithdrawAdapter` and `forceRemoveAdapter`.
+    function unpauseDeposits() external onlyRole(ADMIN_ROLE) {
         _setDepositsPaused(false);
-        _setWithdrawalsPaused(false);
     }
 
-    /// @notice Pause the vault and attempt to withdraw all assets from every active adapter.
+    /// @notice Pause deposits and attempt to withdraw all assets from every active adapter.
     ///         Uses `try/catch` so a failed adapter does not block others. Restricted to `EMERGENCY_ROLE`.
     ///         After this call, deposits are blocked but withdrawals remain open so users can exit.
     function emergencyWithdraw() external onlyRole(EMERGENCY_ROLE) nonReentrant {
@@ -1105,7 +1246,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
 
     /// @notice Shut down the vault: set `shutdown = true` and zero the TVL cap.
     ///         Restricted to `EMERGENCY_ROLE`. Recoverable only by `ADMIN_ROLE`
-    ///         via `restoreVault`, mirroring the `pause`/`unpause` trust
+    ///         via `restoreVault`, mirroring the `pauseDeposits`/`unpauseDeposits` trust
     ///         asymmetry: a compromised emergency hot key can DoS deposits but
     ///         cannot permanently brick the vault — re-opening requires the
     ///         higher-trust admin role.
@@ -1209,15 +1350,8 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     function _setDepositsPaused(bool paused_) internal {
         if (depositsPaused != paused_) {
             depositsPaused = paused_;
-            emit DepositsPausedChanged(paused_);
-        }
-    }
-
-    /// @dev Set `withdrawalsPaused` and emit an event if the state changes.
-    function _setWithdrawalsPaused(bool paused_) internal {
-        if (withdrawalsPaused != paused_) {
-            withdrawalsPaused = paused_;
-            emit WithdrawalsPausedChanged(paused_);
+            if (paused_) emit DepositsPaused(msg.sender);
+            else emit DepositsUnpaused(msg.sender);
         }
     }
 
@@ -1341,12 +1475,6 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     }
 
     // ─── Views ────────────────────────────────────────────────────────
-
-    /// @notice Returns true when both deposits and withdrawals are blocked (full pause).
-    ///         Provided for compatibility with tooling that queries `paused()`.
-    function paused() external view returns (bool) {
-        return depositsPaused && withdrawalsPaused;
-    }
 
     /// @notice Total number of adapters in the registry (active and inactive).
     function adapterCount() external view returns (uint256) {

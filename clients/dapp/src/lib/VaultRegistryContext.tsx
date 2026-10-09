@@ -6,7 +6,9 @@
  * Provides a single `VaultRecord[]` to all downstream components from
  * one batched `listVaults()` + per-vault `getVault()` read sequence.
  * This eliminates N+1 chain reads when multiple components (vault selector,
- * withdrawal tab, protocol stats) all need the active vault list.
+ * withdrawal tab, protocol stats) all need the registered vault list. The
+ * list is not filtered by status: the withdrawal tab must see a vault whose
+ * deposits are paused, because withdrawals stay open in every status.
  *
  * Implementation decisions from docs/technical/multi-vault-dapp-decisions.md §4.1:
  *   - The context issues exactly one `listVaults()` read, then one
@@ -17,7 +19,7 @@
  *     both the vault list and per-vault metadata.
  *
  * Safety note (AC §4 / ADR §4.1 risk 3): the cached `VaultRecord.status`
- * MAY be stale if a vault is paused between context refreshes. Components
+ * MAY be stale if a vault's deposits are paused between context refreshes. Components
  * that gate a signing prompt MUST call `registry.getVault(address)` live
  * via their own `useReadContract` rather than trusting the cached status.
  * This context is for display and routing only.

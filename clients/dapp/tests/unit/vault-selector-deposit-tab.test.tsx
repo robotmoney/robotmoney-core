@@ -5,7 +5,7 @@
  *   AC §1  VaultRegistryContext provides VaultRecord[] — vault picker populated
  *          from context; single useContractReads call assertion.
  *   AC §3  amount entry updates preview; previewDeposit shows estimated receipts.
- *   AC §4  submit disabled when vault status is paused.
+ *   AC §4  submit disabled when vault deposits are paused (status DepositsPaused).
  *   AC §5  submit disabled when USDC balance < entered amount.
  *
  * Test names match the issue test plan exactly so the pnpm --testNamePattern
@@ -76,7 +76,7 @@ const pausedVaults: MockVaultRecord[] = [
     vault: VAULT_A,
     name: "Test Vault Alpha",
     asset: ASSET,
-    status: 1, // Paused
+    status: 1, // DepositsPaused
     registeredAt: 1_700_000_000n,
   },
 ];
@@ -234,22 +234,22 @@ describe("VaultSelectorDepositTab preview block shows estimated receipts fee and
   });
 });
 
-describe("VaultSelectorDepositTab submit disabled when vault status is paused", () => {
+describe("VaultSelectorDepositTab submit disabled when vault deposits are paused", () => {
   beforeEach(() => {
     mockVaults = pausedVaults;
     mockIsLoading = false;
     mockState.isConnected = true;
     mockState.address = USER;
-    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 1] as const; // Paused — live read
+    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 1] as const; // DepositsPaused — live read
     mockState.allowance = 10_000_000n;
     mockState.usdcBalance = 10_000_000n;
-    mockState.depositSim = undefined; // sim disabled when vault is paused
+    mockState.depositSim = undefined; // sim disabled when vault deposits are paused
   });
 
-  it("shows paused vault warning when live getVault returns status=Paused", () => {
+  it("shows deposits-paused warning when live getVault returns status=DepositsPaused", () => {
     renderTab();
-    // The warning appears when vaultIsPaused is true
-    // vaultIsPaused requires selectedVaultAddr to be set (which triggers the live read)
+    // The warning appears when vaultRefusesDeposits is true
+    // vaultRefusesDeposits requires selectedVaultAddr to be set (which triggers the live read)
     // With no vault selected yet, no warning. The paused option should be disabled.
     const select = screen.getByTestId("vault-selector") as HTMLSelectElement;
     const pausedOption = Array.from(select.querySelectorAll<HTMLOptionElement>("option")).find(
@@ -257,11 +257,12 @@ describe("VaultSelectorDepositTab submit disabled when vault status is paused", 
     );
     // Paused vault option should be disabled per the status check
     expect(pausedOption).toBeDefined();
-    // The component marks status !== Active as disabled
+    // The component marks status !== Active as disabled for deposits
     expect(pausedOption?.disabled).toBe(true);
+    expect(pausedOption?.textContent).toContain("[DEPOSITS PAUSED]");
   });
 
-  it("submit button is disabled (no depositSim when vault is paused)", () => {
+  it("submit button is disabled (no depositSim when vault deposits are paused)", () => {
     renderTab();
     const submit = screen.getByTestId("vault-selector-deposit-submit") as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
@@ -273,10 +274,13 @@ describe("VaultSelectorDepositTab submit disabled when vault status is paused", 
   // `undefined !== Active` meant the guard latched ON permanently. These two
   // assertions pin both directions, so either mistake (never firing, or
   // always firing) is red.
-  it("raises the paused warning when the live status output is Paused", () => {
+  it("raises the deposits-paused warning when the live status output is DepositsPaused", () => {
     mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 1] as const;
     renderTab();
-    expect(screen.getByTestId("vault-paused-warning")).toBeDefined();
+    const warning = screen.getByTestId("vault-paused-warning");
+    // Core 1494: the banner says deposits are paused and withdrawals stay open.
+    expect(warning.textContent).toMatch(/Deposits into this vault are paused/);
+    expect(warning.textContent).toMatch(/Withdrawals stay open/);
   });
 
   it("does NOT raise the paused warning when the live status output is Active", () => {

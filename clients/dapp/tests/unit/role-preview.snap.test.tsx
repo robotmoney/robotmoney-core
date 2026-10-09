@@ -1,6 +1,6 @@
 /**
  * Snapshot test — TxPreview output for role grant + revoke for
- * ADMIN_ROLE and PAUSER_ROLE (issue #83 acceptance criterion 2).
+ * ADMIN_ROLE and DEPOSIT_PAUSER_ROLE (issue #83 acceptance criterion 2).
  *
  * Four snapshots, one per role × {grant, revoke}. Each snapshot pins
  * the structured preview block (target, selector, decoded args,
@@ -29,8 +29,14 @@ interface Case {
 const cases: Case[] = [
   { label: "grant ADMIN_ROLE", action: { kind: "grantRole", role: "ADMIN_ROLE", account } },
   { label: "revoke ADMIN_ROLE", action: { kind: "revokeRole", role: "ADMIN_ROLE", account } },
-  { label: "grant PAUSER_ROLE", action: { kind: "grantRole", role: "PAUSER_ROLE", account } },
-  { label: "revoke PAUSER_ROLE", action: { kind: "revokeRole", role: "PAUSER_ROLE", account } },
+  {
+    label: "grant DEPOSIT_PAUSER_ROLE",
+    action: { kind: "grantRole", role: "DEPOSIT_PAUSER_ROLE", account },
+  },
+  {
+    label: "revoke DEPOSIT_PAUSER_ROLE",
+    action: { kind: "revokeRole", role: "DEPOSIT_PAUSER_ROLE", account },
+  },
 ];
 
 describe("TxPreview snapshots — role grant/revoke (issue #83)", () => {

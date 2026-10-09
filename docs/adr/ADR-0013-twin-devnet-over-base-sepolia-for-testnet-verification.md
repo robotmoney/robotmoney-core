@@ -17,10 +17,7 @@
     this ADR designates as the primary verification target.
   - `docs/operations/base-sepolia-deployment.md` — the Base Sepolia
     rehearsal runbook this ADR downgrades to a secondary, opt-in rehearsal.
-  - `docs/future/review-usdc-seed.md` — unrelated temporary change made
-    while investigating this decision (`SEED_DEPOSIT_AMOUNT` lowered to
-    unblock testnet faucet limits); not reverted by this ADR.
-  - `contracts/script/Deploy.s.sol` (`AAVE_V3_POOL`, `COMPOUND_V3_COMET`,
+  - `contracts/script/DeployVault.s.sol` (`AAVE_V3_POOL`, `COMPOUND_V3_COMET`,
     `MORPHO_GAUNTLET_USDC_PRIME` constants) — the pinned Base-mainnet
     protocol addresses whose Base Sepolia gap this ADR documents.
   - PR #1340 (superseded) — the original attempt at a live Base Sepolia
@@ -39,7 +36,7 @@ assumption doesn't hold. `RobotMoneyVault.totalAssets()` sums
 `adapter.totalAssets()` across every *registered* adapter — including during
 the deploy script's mandatory seed deposit — so a registered adapter whose
 pinned pool address has no bytecode on the target chain reverts the ceremony
-outright, not just later yield queries. `Deploy.s.sol` hardcodes all three
+outright, not just later yield queries. `DeployVault.s.sol` hardcodes all three
 adapters to **Base-mainnet** protocol addresses:
 
 | Adapter | Constant | Base Sepolia (84532) |
@@ -55,7 +52,7 @@ against Base Sepolia for the specific addresses involved.
 The consequence: Base Sepolia cannot host a production-parity three-adapter
 vault. Any adapter-registering ceremony there either (a) omits Compound V3
 and Morpho, which no longer proves what the runbook claims to prove, or (b)
-requires forking Deploy.s.sol's adapter wiring into a testnet-specific branch
+requires forking DeployVault.s.sol's adapter wiring into a testnet-specific branch
 that diverges from the real deploy path — the opposite of what a rehearsal is
 for.
 
@@ -64,7 +61,7 @@ problem: the **Robot Money Devnet** (`docs/technical/full-stack-devnet.md`,
 internally referred to as the "Twin"). Its Geth genesis is seeded from a
 pinned Base-mainnet state snapshot, so real Aave, Compound, Morpho, and USDC
 contracts exist at their canonical addresses from block 0 — the exact
-addresses `Deploy.s.sol` already hardcodes. No adapter address overrides, no
+addresses `DeployVault.s.sol` already hardcodes. No adapter address overrides, no
 testnet-specific deploy-script branch, and no loss of ceremony fidelity.
 
 ## Decision
@@ -89,7 +86,7 @@ Concretely:
    full ceremony on Base Sepolia must explicitly skip those two adapters or
    supply Sepolia-specific overrides; this ADR does not build that path,
    since the Devnet already covers the same ground with full fidelity.
-3. No change to `Deploy.s.sol`'s production adapter wiring — the constants
+3. No change to `DeployVault.s.sol`'s production adapter wiring — the constants
    stay pinned to Base mainnet, which is correct for the contracts' actual
    deploy target.
 

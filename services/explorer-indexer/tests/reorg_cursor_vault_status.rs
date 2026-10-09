@@ -267,7 +267,7 @@ async fn delete_above_block_reverts_vault_status_above_root() {
     let vault = [0x11u8; 20];
     seed_vault(db, vault, 50).await;
 
-    // Block 60: Active → Paused (status 1). Block 70: Paused → Retired (2).
+    // Block 60: Active → DepositsPaused (status 1). Block 70: DepositsPaused → Retired (2).
     db.update_vault_status(CHAIN, vault, 60, 0, 1, 1_700_000_060)
         .await
         .unwrap();
@@ -278,12 +278,12 @@ async fn delete_above_block_reverts_vault_status_above_root() {
     assert_eq!(db.count(CountTable::VaultStatusEvents).await.unwrap(), 2);
 
     // A reorg rolls back to root=65 → the Retired transition at block 70 is
-    // orphaned. Status must revert to Paused (the surviving event at block 60).
+    // orphaned. Status must revert to DepositsPaused (the surviving event at block 60).
     db.delete_above_block(CHAIN, 65).await.unwrap();
     assert_eq!(
         vault_status(db, vault).await,
         1,
-        "status must revert to the surviving (block 60) Paused event"
+        "status must revert to the surviving (block 60) DepositsPaused event"
     );
     assert_eq!(
         db.count(CountTable::VaultStatusEvents).await.unwrap(),

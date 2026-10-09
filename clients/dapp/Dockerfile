@@ -33,10 +33,12 @@ ARG VITE_REGISTRY_ADDRESS=0x0000000000000000000000000000000000000000
 ARG VITE_ROUTER_ADDRESS=0x0000000000000000000000000000000000000000
 # Issue #364: RouterGovernance address for the Governance tab.
 ARG VITE_GOVERNANCE_ADDRESS=0x0000000000000000000000000000000000000000
-# Issue #463 / #365: RM token address. Gates the main-page balances panel
-# RM row and the Faucet tab 'Get RM tokens' button. Defaults to zero so
-# standalone builds without the smoke-test harness hide the RM surfaces.
-ARG VITE_RM_TOKEN_ADDRESS=0x0000000000000000000000000000000000000000
+# Core 1544: TimelockController and the Safe that proposes to it (admin tabs).
+ARG VITE_TIMELOCK_ADDRESS=0x0000000000000000000000000000000000000000
+ARG VITE_SAFE_ADDRESS=0x0000000000000000000000000000000000000000
+# Issue #463: RM token address for the main-page balances panel RM row.
+# Defaults to the live ROBOTMONEY token on Base; nothing deploys RM (core 1489).
+ARG VITE_RM_TOKEN_ADDRESS=0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3
 # Issue #1294: bucket-vault-symbol -> address JSON map (rmUSDC, rmPROTO,
 # rmAGENT, rmRWA) so ConsensusReceiptPanel can compute the applied/
 # not-applied state against live router weights. Defaults to empty so
@@ -57,6 +59,8 @@ ENV VITE_EXPLORER_API_URL=$VITE_EXPLORER_API_URL \
     VITE_REGISTRY_ADDRESS=$VITE_REGISTRY_ADDRESS \
     VITE_ROUTER_ADDRESS=$VITE_ROUTER_ADDRESS \
     VITE_GOVERNANCE_ADDRESS=$VITE_GOVERNANCE_ADDRESS \
+    VITE_TIMELOCK_ADDRESS=$VITE_TIMELOCK_ADDRESS \
+    VITE_SAFE_ADDRESS=$VITE_SAFE_ADDRESS \
     VITE_RM_TOKEN_ADDRESS=$VITE_RM_TOKEN_ADDRESS \
     VITE_VAULT_ADDRESSES=$VITE_VAULT_ADDRESSES
 

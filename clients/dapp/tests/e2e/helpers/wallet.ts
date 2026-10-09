@@ -24,9 +24,16 @@ interface InjectWalletOptions {
   privateKey: Hex;
   rpcUrl: string;
   chainId: number;
+  /**
+   * When given, every write/signing request that reaches the injected provider
+   * (eth_sendTransaction, personal_sign, eth_sign, eth_signTypedData*) is pushed
+   * here before it is signed. Specs use it to assert that a refusal sent nothing
+   * to the wallet (core 1544).
+   */
+  signRequests?: RpcRequest[];
 }
 
-interface RpcRequest {
+export interface RpcRequest {
   method: string;
   params?: unknown[];
 }
@@ -68,6 +75,7 @@ export async function injectWallet(page: Page, opts: InjectWalletOptions): Promi
   });
 
   await page.exposeBinding("__rmpcSign", async (_source, req: RpcRequest) => {
+    opts.signRequests?.push(req);
     switch (req.method) {
       case "eth_sendTransaction": {
         const [tx] = (req.params ?? []) as Array<{
@@ -269,25 +277,35 @@ export async function ensureWalletConnected(page: Page): Promise<void> {
 /**
  * Combined "open the dapp as <role>" setup: inject the role's wallet
  * provider, navigate to the smoke-test dapp URL, and (optionally)
- * connect. The default role is `admin` (the gateway deployer).
+ * connect. The default role is `admin`. After the timelock handover that
+ * key is the harness USDC holder, a plain EOA with no gateway role (see
+ * devnet-global-setup.ts). Pass `privateKey` to open the dapp as any
+ * other wallet, e.g. a fresh depositor from `helpers/depositor.ts`.
  */
 export async function openDapp(
   page: Page,
   endpoints: DevnetEndpoints,
-  opts: { role?: "admin" | "pauser" | "agent"; connect?: boolean } = {},
+  opts: {
+    role?: "admin" | "pauser" | "agent";
+    connect?: boolean;
+    privateKey?: Hex;
+    /** See InjectWalletOptions.signRequests. */
+    signRequests?: RpcRequest[];
+  } = {},
 ): Promise<void> {
   const role = opts.role ?? "admin";
-  const privateKey = (
-    role === "pauser"
+  const privateKey =
+    opts.privateKey ??
+    ((role === "pauser"
       ? endpoints.pauser_private_key
       : role === "agent"
         ? endpoints.agent_private_key
-        : endpoints.admin_private_key
-  ) as Hex;
+        : endpoints.admin_private_key) as Hex);
   await injectWallet(page, {
     privateKey,
     rpcUrl: endpoints.rpc_url,
     chainId: endpoints.chain_id,
+    signRequests: opts.signRequests,
   });
   await page.goto(endpoints.dapp_url);
   if (opts.connect !== false) {
@@ -333,6 +351,7 @@ export type AdminTabId =
   | "admin-role"
   | "pauser-role"
   | "faucet"
+  | "timelock"
   | "history"
   | "export";
 

@@ -4,7 +4,7 @@ title: "VaultRegistryTest"
 
 # VaultRegistryTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/VaultRegistry.t.sol)
 
 **Inherits:** Test
 
@@ -467,5 +467,19 @@ admin is granted, the original can be dropped.
 
 ```solidity
 function test_lastAdminFloor_registry_cannotDropSoleAdmin() public;
+```
+
+<a id="test_retire_succeedsoneachofthefourrealvaults"></a>
+
+### test_retire_succeedsOnEachOfTheFourRealVaults
+
+The one deployment scheme ships rmUSDC, rmPROTO, rmAGENT and rmRWA. After the
+timelock stage links each vault to the registry and the registry's ADMIN is the
+timelock, `registry.retire()` works on every one. Here `admin` stands in for the
+timelock as the registry ADMIN, and the vault stage's `setRegistry` is called by
+the vault ADMIN exactly as `DeployTimelock` does.
+
+```solidity
+function test_retire_succeedsOnEachOfTheFourRealVaults() public;
 ```
 

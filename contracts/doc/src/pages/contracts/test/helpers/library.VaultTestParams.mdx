@@ -1,0 +1,78 @@
+---
+title: "VaultTestParams"
+description: "Test-only inputs for the in-process `DeployVault` entrypoints. The production script holds no default cap, recipient or seed: every in-process caller passes explicit params, and the test constants live here."
+---
+
+# VaultTestParams
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/helpers/VaultTestParams.sol)
+
+Test-only inputs for the in-process `DeployVault` entrypoints. The production script
+holds no default cap, recipient or seed: every in-process caller passes explicit
+params, and the test constants live here.
+
+## Constants
+
+### TEST_TVL_CAP
+
+```solidity
+uint256 internal constant TEST_TVL_CAP = 10_000_000 * 1e6;
+```
+
+### TEST_PER_DEPOSIT_CAP
+
+```solidity
+uint256 internal constant TEST_PER_DEPOSIT_CAP = 1_000_000 * 1e6;
+```
+
+### SEED_DEPOSIT_AMOUNT
+
+<i>
+
+1 USDC (6 decimals), the seed the fork tests deposit.
+
+</i>
+
+```solidity
+uint256 internal constant SEED_DEPOSIT_AMOUNT = 1 * 1e6;
+```
+
+### TEST_FEE_RECIPIENT
+
+<i>
+
+A fee recipient that is never the admin or the test contract (the script rejects both).
+
+</i>
+
+```solidity
+address internal constant TEST_FEE_RECIPIENT =
+        address(uint160(uint256(keccak256("rmpc.test.fee-recipient"))));
+```
+
+## Functions
+
+<a id="params-address-address"></a>
+
+### params
+
+```solidity
+function params(address admin_, address usdc_)
+        internal
+        pure
+        returns (DeployVault.Params memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin_ | `address` |  |
+| usdc_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `DeployVault.Params` |  |
+

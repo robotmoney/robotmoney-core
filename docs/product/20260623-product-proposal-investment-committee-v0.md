@@ -7,9 +7,7 @@
 > receipts** contract, client, indexer, and read surfaces are also implemented
 > and exercised on the local-devnet path (`docs/architecture.md` §4.9, §5.1,
 > §5.4, §7.5). They are deliberately not a public-chain deployment. Companion
-> to the sprint spec
-> (`docs/sprint/20260601-week-sprint.md`, Workstream A) and the GTM strategy doc
-> (RobotMoney_PMF_GTM_Strategy).
+> to the GTM strategy doc (RobotMoney_PMF_GTM_Strategy).
 >
 > **Close-out boundary.** The independent local-devnet components above are
 > implemented. The cross-repository acceptance test proving the full route is

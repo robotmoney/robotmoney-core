@@ -1,0 +1,164 @@
+---
+title: "DeployBasketVaultRwaTest"
+description: "rmRWA script: a plain BasketVault row for deSPXA through the existing `UniswapV3SwapAdapter` on the fee 500 pool, priced from the pool TWAP. No oracle."
+---
+
+# DeployBasketVaultRwaTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/DeployBasketVaultRwa.t.sol)
+
+**Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
+
+rmRWA script: a plain BasketVault row for deSPXA through the existing
+`UniswapV3SwapAdapter` on the fee 500 pool, priced from the pool TWAP. No oracle.
+
+## State Variables
+
+### script
+
+```solidity
+DeployRwaBasketVault internal script;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_deploy_isbasketvaultrowfordespxawithv3adapterfee500"></a>
+
+### test_deploy_isBasketVaultRowForDespxaWithV3AdapterFee500
+
+```solidity
+function test_deploy_isBasketVaultRowForDespxaWithV3AdapterFee500() public;
+```
+
+<a id="test_deploy_registersasbasketvault"></a>
+
+### test_deploy_registersAsBasketVault
+
+```solidity
+function test_deploy_registersAsBasketVault() public;
+```
+
+<a id="test_reverts_whenpoolfeeisnot500"></a>
+
+### test_reverts_whenPoolFeeIsNot500
+
+```solidity
+function test_reverts_whenPoolFeeIsNot500() public;
+```
+
+<a id="test_norwavaultorchronicleartifactsremain"></a>
+
+### test_noRwaVaultOrChronicleArtifactsRemain
+
+```solidity
+function test_noRwaVaultOrChronicleArtifactsRemain() public view;
+```
+
+<a id="_prepare-basketvaultdeploybase-params"></a>
+
+### _prepare
+
+```solidity
+function _prepare(BasketVaultDeployBase.Params memory p) internal returns (string memory json);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `BasketVaultDeployBase.Params` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+<a id="_deploywith-basketvaultdeploybase-params"></a>
+
+### _deployWith
+
+```solidity
+function _deployWith(BasketVaultDeployBase.Params memory p)
+        internal
+        returns (BasketVaultDeployBase.Deployed memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `BasketVaultDeployBase.Params` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultDeployBase.Deployed` |  |
+
+<a id="test_guard_navdeviationguardbpsequalsthesheetvalue"></a>
+
+### test_guard_navDeviationGuardBpsEqualsTheSheetValue
+
+The vault ships with the sheet guard, not the vault default of 0 (which disables ORA-4).
+
+```solidity
+function test_guard_navDeviationGuardBpsEqualsTheSheetValue() public;
+```
+
+<a id="test_guard_acceptstheceiling"></a>
+
+### test_guard_acceptsTheCeiling
+
+```solidity
+function test_guard_acceptsTheCeiling() public;
+```
+
+<a id="test_reverts_whennavdeviationbpsunset"></a>
+
+### test_reverts_whenNavDeviationBpsUnset
+
+```solidity
+function test_reverts_whenNavDeviationBpsUnset() public;
+```
+
+<a id="test_reverts_whennavdeviationbpszero"></a>
+
+### test_reverts_whenNavDeviationBpsZero
+
+```solidity
+function test_reverts_whenNavDeviationBpsZero() public;
+```
+
+<a id="test_reverts_whennavdeviationbpsaboveceiling"></a>
+
+### test_reverts_whenNavDeviationBpsAboveCeiling
+
+```solidity
+function test_reverts_whenNavDeviationBpsAboveCeiling() public;
+```
+
+<a id="test_reverts_whenminpoolliquidityunset"></a>
+
+### test_reverts_whenMinPoolLiquidityUnset
+
+```solidity
+function test_reverts_whenMinPoolLiquidityUnset() public;
+```
+
+<a id="test_reverts_whenminpoolliquidityzero"></a>
+
+### test_reverts_whenMinPoolLiquidityZero
+
+```solidity
+function test_reverts_whenMinPoolLiquidityZero() public;
+```
+

@@ -1,0 +1,52 @@
+---
+title: "SafeProxy"
+---
+
+# SafeProxy
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/vendor/safe-1.4.1/proxies/SafeProxy.sol)
+
+**Title:** SafeProxy - Generic proxy contract allows to execute all transactions applying the code of a master contract.
+
+**Authors:** Stefan George - &lt;stefan@gnosis.io>, Richard Meissner - &lt;richard@gnosis.io>
+
+## State Variables
+
+### singleton
+
+```solidity
+address internal singleton;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+Constructor function sets address of singleton contract.
+
+```solidity
+constructor(address _singleton);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _singleton | `address` | Singleton address. |
+
+<a id="fallback"></a>
+
+### fallback
+
+<i>
+
+Fallback function forwards all transactions and returns all received return data.
+
+</i>
+
+```solidity
+fallback() external payable;
+```
+

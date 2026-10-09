@@ -32,12 +32,18 @@ export interface DevnetEndpoints {
   router_addr: string;
   /** RouterGovernance contract address (issue #477). */
   governance_addr: string;
-  /** RmToken ERC-20 address used for governance voting power (issue #477). */
-  rm_token_addr: string;
   /** InvestmentCommitteePolicy contract address (issue #1247/#1294). */
   ic_policy_addr: string;
   /** ConsensusRebalanceReceipt contract address (issue #1247/#1294). */
   consensus_receipt_addr: string;
+  /** The real 2-of-3 SafeL2 v1.4.1 that proposes to the timelock (core 1544). */
+  safe_addr: string;
+  /** TimelockController holding ADMIN_ROLE after the handover (core 1544). */
+  timelock_addr: string;
+  /** Directory of the encrypted rehearsal keystores: SAFE_OWNER_A, SAFE_OWNER_B, SAFE_OWNER_C. Path only. */
+  key_dir: string;
+  /** 0600 file holding the keystore passphrase. Path only. */
+  password_file: string;
 }
 
 export function loadEndpoints(): DevnetEndpoints {

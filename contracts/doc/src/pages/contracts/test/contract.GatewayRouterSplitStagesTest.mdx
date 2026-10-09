@@ -1,0 +1,86 @@
+---
+title: "GatewayRouterSplitStagesTest"
+description: "Runs the production stage scripts (libs, vault, registry, router, gateway) in process and completes a router deposit and a router withdraw through the gateway the gateway stage built. No fork: the three external lending venues are etched at their real addresses (`VenueEtcher`). The gateway, router, registry and vault are production code."
+---
+
+# GatewayRouterSplitStagesTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/GatewayRouter.t.sol)
+
+**Inherits:** Test
+
+Runs the production stage scripts (libs, vault, registry, router, gateway) in process
+and completes a router deposit and a router withdraw through the gateway the gateway
+stage built. No fork: the three external lending venues are etched at their real
+addresses (`VenueEtcher`). The gateway, router, registry and vault are production code.
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### stages
+
+```solidity
+CoreStages internal stages;
+```
+
+### s
+
+```solidity
+CoreStages.Stack internal s;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("split-admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("split-pauser");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("split-agent");
+```
+
+### shareReceiver
+
+```solidity
+address internal shareReceiver = makeAddr("split-share-receiver");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_splitstages_routerdepositthenwithdraw_succeed"></a>
+
+### test_splitStages_routerDepositThenWithdraw_succeed
+
+```solidity
+function test_splitStages_routerDepositThenWithdraw_succeed() public;
+```
+

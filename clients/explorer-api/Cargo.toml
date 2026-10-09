@@ -40,6 +40,12 @@ tracing = "0.1"
 rmpc-logging = { path = "../../crates/rmpc-logging" }
 hex = "0.4"
 anyhow = "1"
+# Issue #1430: the boot-time schema guard is SHARED with the indexer, not copied.
+# Both services read one schema, so one `compare_schema` over one embedded
+# `MIGRATOR` decides whether it matches (see `Db::assert_schema_matches_embedded`).
+# Two copies would drift, which is the failure this guard exists to prevent.
+# The crate is already in the same cargo workspace and the same Docker builder.
+explorer-indexer = { path = "../../services/explorer-indexer" }
 
 [dev-dependencies]
 testcontainers = { version = "0.23" }

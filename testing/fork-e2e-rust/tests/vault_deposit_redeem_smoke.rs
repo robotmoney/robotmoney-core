@@ -11,20 +11,20 @@
 //! it, ABI/address checks alone could miss silent revert behavior
 //! changes in the deployed bytecode.
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::U256;
 use rmpc_fork_e2e::{scenarios, ForkFixture, IRobotMoneyVault, IERC20};
 
 const DEPOSIT_USDC: u64 = 1_000_000; // 1 USDC (6 decimals)
 
 #[test]
 fn vault_deposit_redeem_smoke() {
-    // The golden contains production vault state plus deterministic USDC funding.
+    // The golden deploys its own vault through the vault stage script (clean room rule, core 1498).
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[vault_deposit_redeem_smoke] {}", fx.summary_line());
 
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
     let deposit = U256::from(DEPOSIT_USDC);
-    let vault = fixture_vault();
+    let vault = fx.vault();
     fx.rpc()
         .evm_increase_time(24 * 60 * 60)
         .expect("advance past deposit-entry limiter window");
@@ -101,20 +101,4 @@ fn vault_deposit_redeem_smoke() {
         loss <= max_allowed,
         "net USDC loss {loss} > allowed {max_allowed} (exitFeeBps={exit_fee_bps})"
     );
-}
-
-fn fixture_vault() -> Address {
-    if let Ok(value) = std::env::var("RMPC_FIXTURE_VAULT") {
-        return value.parse().expect("RMPC_FIXTURE_VAULT address");
-    }
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deployments/full-stack.json");
-    let value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(path).expect("read full-stack deployment"))
-            .expect("parse full-stack deployment");
-    value["vault"]
-        .as_str()
-        .expect("deployment vault")
-        .parse()
-        .expect("deployment vault address")
 }

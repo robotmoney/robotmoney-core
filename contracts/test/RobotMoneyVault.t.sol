@@ -244,7 +244,7 @@ contract RobotMoneyVaultTest is Test {
     // ─── Last-admin floor (ACL-3 / F-06, issue #1284) ─────────────────────────
     //
     // RobotMoneyVault previously had no protection against the final ADMIN_ROLE
-    // holder renouncing/being revoked, unlike Vault.sol and BasketVault.sol
+    // holder renouncing/being revoked, unlike BasketVault.sol
     // (which each had their own hand-rolled counter). These three tests were
     // red before this fix — `renounceRole`/`revokeRole` succeeded silently,
     // stripping the vault's ADMIN_ROLE membership to zero and permanently
@@ -1021,21 +1021,21 @@ contract RobotMoneyVaultTest is Test {
 
     // ─── Pause / unpause role asymmetry (issue #164) ────────────────────────
 
-    /// @notice EMERGENCY_ROLE holder can call pause().
-    function test_pause_allowedForEmergencyRole() public {
+    /// @notice EMERGENCY_ROLE holder can call pauseDeposits().
+    function test_pauseDeposits_allowedForEmergencyRole() public {
         address emergency = makeAddr("emergency");
         bytes32 emergencyRole = vault.EMERGENCY_ROLE();
         vm.prank(admin);
         vault.grantRole(emergencyRole, emergency);
 
         vm.prank(emergency);
-        vault.pause();
-        assertTrue(vault.paused(), "vault must be paused");
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused(), "vault must be paused");
     }
 
-    /// @notice EMERGENCY_ROLE holder cannot call unpause() — must revert.
+    /// @notice EMERGENCY_ROLE holder cannot call unpauseDeposits() — must revert.
     ///         A compromised emergency key can halt the vault (DoS) but cannot restart it.
-    function test_unpause_revertsForEmergencyRole() public {
+    function test_unpauseDeposits_revertsForEmergencyRole() public {
         address emergency = makeAddr("emergency");
         bytes32 emergencyRole = vault.EMERGENCY_ROLE();
         vm.prank(admin);
@@ -1043,16 +1043,16 @@ contract RobotMoneyVaultTest is Test {
 
         // First pause so we can attempt an unpause.
         vm.prank(emergency);
-        vault.pause();
+        vault.pauseDeposits();
 
         // Emergency role alone must NOT be able to unpause.
         vm.prank(emergency);
         vm.expectRevert();
-        vault.unpause();
+        vault.unpauseDeposits();
     }
 
-    /// @notice ADMIN_ROLE holder can call unpause() after the vault has been paused.
-    function test_unpause_allowedForAdminRole() public {
+    /// @notice ADMIN_ROLE holder can call unpauseDeposits() after the vault has been paused.
+    function test_unpauseDeposits_allowedForAdminRole() public {
         address emergency = makeAddr("emergency");
         bytes32 emergencyRole = vault.EMERGENCY_ROLE();
         vm.prank(admin);
@@ -1060,16 +1060,16 @@ contract RobotMoneyVaultTest is Test {
 
         // Pause via emergency role.
         vm.prank(emergency);
-        vault.pause();
-        assertTrue(vault.paused(), "vault must be paused before unpause test");
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused(), "vault must be paused before unpause test");
 
-        // Admin unpauses — the only role permitted to restart the vault.
+        // Admin resumes deposits — the only role permitted to restart them.
         vm.prank(admin);
-        vault.unpause();
-        assertFalse(vault.paused(), "vault must be unpaused after admin unpause");
+        vault.unpauseDeposits();
+        assertFalse(vault.depositsPaused(), "vault must be unpaused after admin unpause");
     }
 
-    // ─── Issue #368: split pause semantics — emergency withdraw preserves redemption rights ────
+    // ─── Issue #368 / core 1494: deposit pause only — emergency withdraw preserves redemption ────
 
     /// @notice After emergencyWithdraw(), users can redeem their shares (assets moved to idle USDC).
     ///         New deposits must be blocked.
@@ -1086,57 +1086,48 @@ contract RobotMoneyVaultTest is Test {
 
         // After emergencyWithdraw, deposits must be blocked.
         assertEq(vault.depositsPaused(), true, "deposits must be paused after emergencyWithdraw");
-        // Withdrawals must NOT be blocked.
-        assertEq(
-            vault.withdrawalsPaused(),
-            false,
-            "withdrawals must not be paused after emergencyWithdraw"
-        );
-        // paused() (= both flags) must be false.
-        assertFalse(vault.paused(), "full paused() must be false after emergencyWithdraw");
+        // Withdrawals are never blocked: the full position stays redeemable.
+        assertEq(vault.maxRedeem(alice), aliceShares, "maxRedeem is the full balance");
 
         // Alice can redeem — assets are now in idle USDC in the vault.
         vm.prank(alice);
         uint256 assetsOut = vault.redeem(aliceShares, alice, alice);
         assertApproxEqAbs(assetsOut, depositAmount, 1, "alice must recover her deposit on redeem");
 
-        // Bob tries a new deposit → must revert. maxDeposit() returns 0 when paused,
-        // so ERC4626ExceededMaxDeposit fires before DepositsPaused.
+        // Bob tries a new deposit → must revert with DepositsArePaused.
         uint256 bobDeposit = 1_000 * ONE_USDC;
         vm.prank(bob);
-        vm.expectRevert(); // ERC4626ExceededMaxDeposit(receiver, assets, 0)
+        vm.expectRevert(RobotMoneyVault.DepositsArePaused.selector);
         vault.deposit(bobDeposit, bob);
     }
 
-    /// @notice full pause() blocks both deposits and withdrawals.
-    function test_fullPause_blocksDepositsAndWithdrawals() public {
-        // Alice deposits.
+    /// @notice pauseDeposits() blocks deposits and mints only. Redeem and withdraw stay
+    ///         open, and maxRedeem / maxWithdraw are unchanged (core 1494).
+    function test_pauseDeposits_blocksDepositsOnly_withdrawalsStayOpen() public {
         uint256 depositAmount = 5_000 * ONE_USDC;
         vm.prank(alice);
         uint256 aliceShares = vault.deposit(depositAmount, alice);
 
-        // Admin full-pauses the vault.
         vm.prank(admin);
-        vault.pause();
-
+        vault.pauseDeposits();
         assertTrue(vault.depositsPaused(), "deposits must be paused");
-        assertTrue(vault.withdrawalsPaused(), "withdrawals must be paused");
-        assertTrue(vault.paused(), "paused() must be true");
 
-        // Deposit blocked. maxDeposit() returns 0 when paused, so ERC4626ExceededMaxDeposit
-        // fires before the internal DepositsPaused guard.
         vm.prank(bob);
-        vm.expectRevert(); // ERC4626ExceededMaxDeposit(receiver, assets, 0)
+        vm.expectRevert(RobotMoneyVault.DepositsArePaused.selector);
         vault.deposit(1_000 * ONE_USDC, bob);
+        vm.prank(bob);
+        vm.expectRevert(RobotMoneyVault.DepositsArePaused.selector);
+        vault.mint(1, bob);
 
-        // Redeem blocked. maxRedeem() returns 0 while withdrawals are paused
-        // (audit 2026-06-09, L-1), so ERC4626ExceededMaxRedeem fires before the
-        // internal WithdrawalsPaused guard.
-        assertEq(vault.maxRedeem(alice), 0, "maxRedeem must be 0 while paused");
-        assertEq(vault.maxWithdraw(alice), 0, "maxWithdraw must be 0 while paused");
+        assertEq(vault.maxRedeem(alice), aliceShares, "maxRedeem unchanged by the pause");
+        uint256 half = vault.maxWithdraw(alice) / 2;
+        assertGt(half, 0, "maxWithdraw unchanged by the pause");
         vm.prank(alice);
-        vm.expectRevert(); // ERC4626ExceededMaxRedeem(owner, shares, 0)
-        vault.redeem(aliceShares, alice, alice);
+        vault.withdraw(half, alice, alice);
+        uint256 rest = vault.balanceOf(alice);
+        vm.prank(alice);
+        vault.redeem(rest, alice, alice);
+        assertEq(vault.balanceOf(alice), 0, "alice exits in full while deposits are paused");
     }
 
     /// @notice After emergencyWithdraw, split-pause state is correctly set; full unpause restores both.
@@ -1151,14 +1142,12 @@ contract RobotMoneyVaultTest is Test {
         vault.emergencyWithdraw();
 
         assertEq(vault.depositsPaused(), true, "deposits paused after emergencyWithdraw");
-        assertEq(vault.withdrawalsPaused(), false, "withdrawals open after emergencyWithdraw");
 
-        // Admin unpauses fully.
+        // Admin resumes deposits.
         vm.prank(admin);
-        vault.unpause();
+        vault.unpauseDeposits();
 
-        assertEq(vault.depositsPaused(), false, "deposits unpaused after unpause");
-        assertEq(vault.withdrawalsPaused(), false, "withdrawals unpaused after unpause");
+        assertEq(vault.depositsPaused(), false, "deposits unpaused after unpauseDeposits");
 
         // Bob can now deposit again.
         vm.prank(bob);
@@ -1267,14 +1256,9 @@ contract RobotMoneyVaultTest is Test {
         // Deposits must now be paused.
         assertTrue(vault.depositsPaused(), "deposits must be paused after forceRemoveAdapter");
 
-        // A subsequent deposit attempt must revert (maxDeposit returns 0 when depositsPaused,
-        // so OZ ERC4626 reverts with ERC4626ExceededMaxDeposit before reaching _deposit).
+        // A subsequent deposit attempt must revert with DepositsArePaused.
         vm.prank(bob);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "ERC4626ExceededMaxDeposit(address,uint256,uint256)", bob, 100 * ONE_USDC, 0
-            )
-        );
+        vm.expectRevert(RobotMoneyVault.DepositsArePaused.selector);
         vault.deposit(100 * ONE_USDC, bob);
     }
 

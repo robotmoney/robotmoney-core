@@ -1,11 +1,11 @@
 ---
 title: "RouterGovernance"
-description: "Admin-weighted MVP governance module that controls Portfolio Router target weights. ADMIN_ROLE assigns voting power to addresses, creates proposals, and executes after quorum is reached and the execution delay elapses. This is an MVP mock — voting power is admin-assigned, not derived from token holdings. Token-holder voting is a future goal."
+description: "Admin-weighted MVP governance module that controls Portfolio Router target weights. ADMIN_ROLE assigns voting power to addresses, creates proposals, and executes after quorum is reached and the execution delay elapses. This is an MVP mock — voting power is admin-assigned, not derived from token holdings. There is no token-based governance."
 ---
 
 # RouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3e58819955536f714395fd3acf63c345b6ac3362/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/RouterGovernance.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -15,7 +15,7 @@ Admin-weighted MVP governance module that controls Portfolio Router
 target weights. ADMIN_ROLE assigns voting power to addresses, creates
 proposals, and executes after quorum is reached and the execution
 delay elapses. This is an MVP mock — voting power is admin-assigned,
-not derived from token holdings. Token-holder voting is a future goal.
+not derived from token holdings. There is no token-based governance.
 
 Design constraints (docs/architecture.md §2.3):
 - Controls router weights only; cannot govern vault internals,
@@ -289,7 +289,7 @@ function setExecutionDelay(uint64 delay) external onlyRole(ADMIN_ROLE);
 Grant `power` voting weight to `voter`. Setting to 0 removes voting rights.
 Restricted to ADMIN_ROLE.
 NOTE: This is admin-assigned MVP governance — voting power is not derived
-from token holdings. Token-holder voting is a future goal.
+from token holdings. There is no token-based governance.
 
 ```solidity
 function setVotingPower(address voter, uint256 power) external onlyRole(ADMIN_ROLE);
@@ -971,7 +971,7 @@ error ExecutionDelayBelowMinimum();
 
 Thrown by propose() when a vault in the proposed weight list is
 not router-eligible (zero address, unregistered, ineligible flag
-not set, or wrong underlying asset) OR not Active (Paused/Retired).
+not set, or wrong underlying asset) OR not Active (DepositsPaused/Retired).
 Identifies the offending vault so the proposer can correct the
 weight vector before resubmitting. Prevents governance deadlock
 and router self-DoS from stuck Queued proposals that would revert

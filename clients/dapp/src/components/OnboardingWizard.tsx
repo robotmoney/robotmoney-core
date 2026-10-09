@@ -10,9 +10,9 @@
  *      operator config, and prints its public address.
  *
  *      On testnet/devnet, step 1 also shows a "Drip test assets" button
- *      when the connected wallet has zero balance for USDC, Base ETH, or
- *      RM tokens — removing the chicken-and-egg friction for brand-new
- *      wallets (issue #614). The button fires all three drip handlers in
+ *      when the connected wallet has zero balance for USDC or Base ETH —
+ *      removing the chicken-and-egg friction for brand-new
+ *      wallets (issue #614). The button fires both drip handlers in
  *      parallel and shows per-asset status feedback. The gate mirrors the
  *      FaucetTab: harness key must be present, chain must not be mainnet.
  *
@@ -54,11 +54,9 @@ import { getInjectedProvider } from "../lib/syncDevnetChain";
 import {
   dripUsdc,
   dripEth,
-  dripRmToken,
   readHarnessPrivateKey,
   type DripUsdcArgs,
   type DripEthArgs,
-  type DripRmTokenArgs,
 } from "../lib/faucetClient";
 import { classifyChain } from "../lib/chainClassifier";
 import { PolicyFields } from "./PolicyFields";
@@ -77,8 +75,6 @@ type Props = Readonly<{
   env: Record<string, string | undefined>;
   now: number;
   onDismiss?: () => void;
-  /** RM token address. When provided, the drip button also drips RM tokens (issue #614). */
-  rmTokenAddress?: Address;
   /**
    * Injected USDC drip handler for tests. Production uses `dripUsdc` from faucetClient.
    * @internal
@@ -89,11 +85,6 @@ type Props = Readonly<{
    * @internal
    */
   dripEthFn?: (args: DripEthArgs) => Promise<Hex>;
-  /**
-   * Injected RM drip handler for tests. Production uses `dripRmToken` from faucetClient.
-   * @internal
-   */
-  dripRmFn?: (args: DripRmTokenArgs) => Promise<Hex>;
 }>;
 
 type Step = 1 | 2 | 3;
@@ -108,7 +99,6 @@ export function OnboardingWizard(props: Props) {
   // Drip button state — per-asset status for step-1 inline feedback (issue #614).
   const [usdcDripStatus, setUsdcDripStatus] = useState<DripStatus>({ kind: "idle" });
   const [ethDripStatus, setEthDripStatus] = useState<DripStatus>({ kind: "idle" });
-  const [rmDripStatus, setRmDripStatus] = useState<DripStatus>({ kind: "idle" });
 
   // Read the USDC contract address from the gateway so the seed drip
   // targets the same canonical token AdminFlow does. Enabled only once
@@ -141,32 +131,18 @@ export function OnboardingWizard(props: Props) {
   });
   const ethBalance = ethBalanceResult?.value;
 
-  const { data: rmBalance } = useReadContract({
-    address: props.rmTokenAddress ?? undefined,
-    abi: erc20Abi,
-    functionName: "balanceOf",
-    args: address ? [address] : undefined,
-    chainId,
-    query: { enabled: isConnected && !!props.rmTokenAddress && !!address, retry: 0 },
-  });
-
   // Faucet drip button gate logic (issue #614):
   // - must be on testnet/devnet (classifyChain)
   // - must have a harness key in the build env
-  // - button shows if any of USDC, ETH, or RM token balance is zero
+  // - button shows if the USDC or ETH balance is zero
   const harnessPrivateKey = readHarnessPrivateKey(props.env);
   const isTestnet = classifyChain(chainId) === "testnet";
   const usdcIsZero = usdcBalance !== undefined && (usdcBalance as bigint) === 0n;
   const ethIsZero = ethBalance !== undefined && ethBalance === 0n;
-  const rmIsZero =
-    props.rmTokenAddress !== undefined && rmBalance !== undefined && (rmBalance as bigint) === 0n;
-  const anyBalanceZero = usdcIsZero || ethIsZero || rmIsZero;
+  const anyBalanceZero = usdcIsZero || ethIsZero;
   const showDripButton = isTestnet && !!harnessPrivateKey && anyBalanceZero;
 
-  const isDripping =
-    usdcDripStatus.kind === "pending" ||
-    ethDripStatus.kind === "pending" ||
-    rmDripStatus.kind === "pending";
+  const isDripping = usdcDripStatus.kind === "pending" || ethDripStatus.kind === "pending";
 
   const onDrip = () => {
     if (!address || !harnessPrivateKey) return;
@@ -175,7 +151,6 @@ export function OnboardingWizard(props: Props) {
 
     const dripUsdcHandler = props.dripUsdcFn ?? dripUsdc;
     const dripEthHandler = props.dripEthFn ?? dripEth;
-    const dripRmHandler = props.dripRmFn ?? dripRmToken;
 
     // USDC drip
     if (usdcAddress && isAddress(usdcAddress)) {
@@ -217,28 +192,6 @@ export function OnboardingWizard(props: Props) {
               : String(err);
         setEthDripStatus({ kind: "error", message });
       });
-
-    // RM token drip
-    if (props.rmTokenAddress) {
-      setRmDripStatus({ kind: "pending" });
-      void dripRmHandler({
-        rmTokenAddress: props.rmTokenAddress,
-        recipient: address,
-        provider,
-        harnessPrivateKey,
-        chainId,
-      })
-        .then((hash) => setRmDripStatus({ kind: "success", hash }))
-        .catch((err: unknown) => {
-          const message =
-            typeof err === "object" && err !== null && "shortMessage" in err
-              ? String((err as { shortMessage: unknown }).shortMessage)
-              : err instanceof Error
-                ? err.message
-                : String(err);
-          setRmDripStatus({ kind: "error", message });
-        });
-    }
   };
 
   const [step, setStep] = useState<Step>(1);
@@ -473,19 +426,6 @@ export function OnboardingWizard(props: Props) {
                         `Base ETH: sent (tx ${ethDripStatus.hash})`}
                       {ethDripStatus.kind === "error" &&
                         `Base ETH: failed — ${ethDripStatus.message}`}
-                    </p>
-                  )}
-                  {props.rmTokenAddress && rmDripStatus.kind !== "idle" && (
-                    <p
-                      data-testid="onboarding-drip-rm-status"
-                      data-status={rmDripStatus.kind}
-                      className="hint"
-                    >
-                      {rmDripStatus.kind === "pending" && "RM token: dripping…"}
-                      {rmDripStatus.kind === "success" &&
-                        `RM token: sent (tx ${rmDripStatus.hash})`}
-                      {rmDripStatus.kind === "error" &&
-                        `RM token: failed — ${rmDripStatus.message}`}
                     </p>
                   )}
                 </div>

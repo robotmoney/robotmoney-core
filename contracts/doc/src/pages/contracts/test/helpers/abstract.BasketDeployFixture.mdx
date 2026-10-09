@@ -1,0 +1,238 @@
+---
+title: "BasketDeployFixture"
+---
+
+# BasketDeployFixture
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/helpers/BasketDeployFixture.sol)
+
+**Inherits:** Test
+
+<i>
+
+Shared setup for the three basket vault script tests. The scripts run in process under a
+prank of `deployer`. Pools are `ConstPool` instances: a unit test has no live Uniswap.
+A config-file test etches the mock code at each configured pool address, so the script
+reads the real `config/*.json` and the assertions compare chain state to that file.
+
+</i>
+
+## Constants
+
+### TVL_CAP
+
+```solidity
+uint256 internal constant TVL_CAP = 50_000 * 1e6;
+```
+
+### PER_DEPOSIT_CAP
+
+```solidity
+uint256 internal constant PER_DEPOSIT_CAP = 5_000 * 1e6;
+```
+
+### NAV_DEVIATION_BPS
+
+```solidity
+uint256 internal constant NAV_DEVIATION_BPS = 100;
+```
+
+### MIN_POOL_LIQUIDITY
+
+<i>
+
+Below the ConstPool double liquidity of 1e18.
+
+</i>
+
+```solidity
+uint256 internal constant MIN_POOL_LIQUIDITY = 1e12;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### deployer
+
+```solidity
+address internal deployer = makeAddr("deployer");
+```
+
+### feeRecipient
+
+```solidity
+address internal feeRecipient = makeAddr("feeRecipient");
+```
+
+### router02
+
+```solidity
+address internal router02 = makeAddr("swapRouter02");
+```
+
+## Functions
+
+<a id="_fixturesetup"></a>
+
+### _fixtureSetUp
+
+```solidity
+function _fixtureSetUp() internal;
+```
+
+<a id="_params"></a>
+
+### _params
+
+```solidity
+function _params() internal view returns (BasketVaultDeployBase.Params memory p);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `BasketVaultDeployBase.Params` |  |
+
+<a id="_setsheetenv-string-string"></a>
+
+### _setSheetEnv
+
+<i>
+
+Sets every script env input under `prefix` except `skip` (issue 1666 tests: env vars are process-wide, so each test passes a
+prefix that no other test uses).
+
+</i>
+
+```solidity
+function _setSheetEnv(string memory prefix, string memory skip) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+| skip | `string` |  |
+
+<a id="_json-string-address-address-uint24"></a>
+
+### _json
+
+<i>
+
+Config body with `swapRouter02` and one row per `tokens[i]`/`pools[i]`.
+
+</i>
+
+```solidity
+function _json(string memory key, address[] memory tokens, address[] memory pools, uint24 fee)
+        internal
+        view
+        returns (string memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+| tokens | `address[]` |  |
+| pools | `address[]` |  |
+| fee | `uint24` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `string` |  |
+
+<a id="_tokenandpool-string"></a>
+
+### _tokenAndPool
+
+<i>
+
+A fresh token and a usable mock pool for it at fee 500.
+
+</i>
+
+```solidity
+function _tokenAndPool(string memory label) internal returns (address token, address pool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| label | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| pool | `address` |  |
+
+<a id="_etchconfigpools-string-string"></a>
+
+### _etchConfigPools
+
+<i>
+
+Etch a usable mock pool (paired with this test's USDC) at every pool address named by
+`file[arrayKey]`, so the script can run against the real config file.
+
+</i>
+
+```solidity
+function _etchConfigPools(string memory file, string memory arrayKey)
+        internal
+        returns (string memory json);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| file | `string` |  |
+| arrayKey | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+<a id="_configrouter-string"></a>
+
+### _configRouter
+
+```solidity
+function _configRouter(string memory json) internal pure returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

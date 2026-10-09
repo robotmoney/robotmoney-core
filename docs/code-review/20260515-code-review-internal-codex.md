@@ -197,3 +197,5 @@ Deployment, devnet, fork fixture, and dapp environment setup are spread across s
 - The Rust workspace centralizes shared crates and test utilities better than ad-hoc per-service builds.
 - Many files include canonical doc links, which is useful for preserving intent during fast iteration.
 - CI workflow files are well-commented and explain why each suite exists; that pattern should be mirrored in repo-level test documentation.
+
+> Note 2026-10-05 (core 1494): A pause now stops deposits only; withdrawals are never frozen. pause()/unpause()/paused() are now pauseDeposits()/unpauseDeposits()/depositsPaused(), PAUSER_ROLE is DEPOSIT_PAUSER_ROLE, VaultStatus.Paused is VaultStatus.DepositsPaused, EnforcedPause is DepositsArePaused, and withdrawalsPaused is deleted. The router redeems from a vault in every status (VaultPausedForRedeem is removed). The deployed v1 vault keeps its old code: never call v1 pause(), it also freezes withdrawals. The text above is kept as written.

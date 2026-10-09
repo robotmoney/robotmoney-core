@@ -5,7 +5,7 @@ description: "On-chain registry of authorised Robot Money vaults."
 
 # VaultRegistry
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/VaultRegistry.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl)
 
@@ -221,7 +221,7 @@ Closing the back-door: previously this set only registry `_status`,
 leaving the vault's `retired` deposit-halt flag untouched — so
 `setVaultStatus(_, Retired)` recorded "Retired" in the registry
 while the vault still accepted direct deposits, and
-`setVaultStatus(_, Paused)` halted nothing on the vault. Now any
+`setVaultStatus(_, DepositsPaused)` halted nothing on the vault. Now any
 non-`Active` status drives `IRetirableVault.retire()` (hard-stop
 direct deposits) and `Active` drives `unretire()`, mirroring the
 atomic `retire()` / `reactivate()` paths. Both vault legs are
@@ -244,7 +244,7 @@ function setVaultStatus(address vault, VaultStatus newStatus) external onlyRole(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vault | `address` | Address of an already-registered vault. |
-| newStatus | `VaultStatus` | New lifecycle status (Active, Paused, or Retired). |
+| newStatus | `VaultStatus` | New lifecycle status (Active, DepositsPaused, or Retired). |
 
 <a id="setroutereligible-address-bool"></a>
 
@@ -660,7 +660,9 @@ Lifecycle status of a registered vault.
 ```solidity
 enum VaultStatus {
         Active,
-        Paused,
+        /// @dev DepositsPaused: new deposits are halted. Redemption stays open:
+        ///      no registry status ever blocks a withdrawal (core 1494).
+        DepositsPaused,
         /// @dev Retired: withdraw-only. Existing depositors keep standard
         ///      ERC-4626 `redeem` at any time and `PortfolioRouter` routes no
         ///      new deposits here. There is deliberately NO on-chain migration:
@@ -677,6 +679,6 @@ enum VaultStatus {
 | Name | Description |
 | ---- | ----------- |
 | Active |  |
-| Paused |  |
+| DepositsPaused |  |
 | Retired |  |
 

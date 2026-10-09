@@ -70,7 +70,8 @@ no workflow creates a key.**
 | `FUSION_ROUTER_ADDRESS` | `PortfolioRouter` (INV-4 witness) |
 | `FUSION_VAULT_ADDRESSES` | `rmUSDC,rmPROTO,rmAGENT,rmRWA` in canonical bucket order |
 | `FUSION_SUBMITTER_ADDRESS` | the authorized submitter (positive control) |
-| `FUSION_RELEASE_ADDRESS` | the admin EOA the release keystore unlocks |
+| `FUSION_TIMELOCK_ADDRESS` | the `TimelockController`, the only `ADMIN_ROLE` holder on the receipt contract after handover, used as `--from` for the duplicate-release probe (`cast call releaseReceipt`, which passes the role check and must revert `ReceiptAlreadyReleased`, not `AccessControlUnauthorizedAccount`) |
+| `FUSION_GOVERN_CMD` | the govern release command, `bun scripts/stage/core-stack.ts governance release`; the script appends `--receipt-id ID` and it runs publish contracts govern row `release-receipt` (`--row release-receipt --receipt-id ID`) through the real Safe and the `TimelockController` |
 | `FUSION_UNAUTHORIZED_SUBMITTER` | EOA with neither `AGENT_ROLE` nor submit rights |
 | `FUSION_UNAUTHORIZED_RELEASER` | EOA **without** `ADMIN_ROLE` on the receipt |
 
@@ -83,20 +84,27 @@ them quietly.
 | Secret | Contents |
 |---|---|
 | `FUSION_RMPC_CONFIG` | operator config TOML for the submitter identity |
-| `FUSION_RELEASE_KEYSTORE` | v3 keystore JSON for the admin releaser |
-| `FUSION_RELEASE_PASSWORD` | password that unlocks that keystore |
+
+There is no release keystore. After handover only the `TimelockController`
+holds the receipt contract's `ADMIN_ROLE`, so a receipt is released only by the
+`release-receipt` govern row (the real Safe schedules and executes
+`releaseReceipt` through the timelock). A `releaseReceipt` sent from any EOA
+reverts on authority. This is the same on the Twin chain and on Base mainnet. On Base mainnet the row is a
+standalone post-launch action (issue 1611): the first run exits `GOVERN_PENDING` after the schedule, and the same
+command executes it after the 48-hour delay.
 
 **Rules.**
 
-1. These are **devnet** keys for chain `918453` with no mainnet value. A Base
-   mainnet or Base Sepolia key must never be placed in them.
-2. The password reaches the harness as a **file** under `$RUNNER_TEMP`
-   (`FUSION_RELEASE_PASSWORD_FILE`), never as an argument and never echoed. All
-   three files are removed in an `if: always()` step.
-3. Rotate them whenever the devnet is rebuilt, and whenever anyone who held them
-   leaves. Rotation is: fund a new EOA on the devnet, re-grant its roles, replace
-   the three secrets, dispatch suite-26 once and confirm green.
-4. Fork PRs do not receive them, by design.
+1. This is **devnet** key material for chain `918453` with no mainnet value. A
+   Base mainnet or Base Sepolia key must never be placed in it.
+2. The config reaches the harness as a **file** under `$RUNNER_TEMP`
+   (`rmpc.toml`, written with `umask 077`), never as an argument and never
+   echoed. The file is removed in an `if: always()` step.
+3. Rotate it whenever the devnet is rebuilt, and whenever anyone who held it
+   leaves. Rotation is: fund a new submitter EOA on the devnet, authorize it
+   through the govern path, replace the secret, dispatch suite-26 once and
+   confirm green.
+4. Fork PRs do not receive it, by design.
 
 ### When they are absent
 

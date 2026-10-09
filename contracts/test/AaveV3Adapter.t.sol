@@ -5,7 +5,6 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
-import {IPositionAdapter} from "../interfaces/IPositionAdapter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
 /// @dev Minimal Aave V3 Pool mock. `supply` pulls USDC from the caller via
@@ -88,7 +87,7 @@ contract AaveV3AdapterTest is Test {
 
     function test_deploy_revertsForNonVault() public {
         vm.prank(stranger);
-        vm.expectRevert(IPositionAdapter.OnlyVault.selector);
+        vm.expectRevert(AaveV3Adapter.OnlyVault.selector);
         adapter.deploy(100 * ONE_USDC);
     }
 }

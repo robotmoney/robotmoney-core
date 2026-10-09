@@ -18,8 +18,9 @@ pragma solidity ^0.8.24;
 ///   (RobotMoneyGateway.sol, AuthorizedAgent struct). An upstream monitor check
 ///   could gate agent deposit routing to vaults whose strategy adapter is healthy.
 /// - The VaultRegistry (contracts/VaultRegistry.sol) tracks per-vault status
-///   (Active, Paused, Deprecated). The monitor could call registry.setVaultStatus()
-///   via the PAUSER_ROLE to halt a vault whose upstream protocol is unhealthy.
+///   (Active, DepositsPaused, Retired). The monitor could ask governance to call
+///   registry.setVaultStatus() to halt new deposits into a vault whose upstream
+///   protocol is unhealthy. No status blocks withdrawals (core 1494).
 /// - The FeatureFlags contract (contracts/FeatureFlags.sol) gates experimental
 ///   features; the monitor could use a feature flag to disable a risk-path before
 ///   the full circuit-breaker is wired.

@@ -1,0 +1,148 @@
+---
+title: "RwaVaultB20Test"
+description: "Unit coverage for adding Coinbase B20 tokens to rmRWA (core 1500). The four B20 token accounts carry the single byte 0xef as code on Base. A token with no bytecode is rejected. The 0xef marker is the one explicit allowance."
+---
+
+# RwaVaultB20Test
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/aff4c40a1ddd0d52759d7846c6e06e93e8a10512/contracts/test/RwaVaultB20.t.sol)
+
+**Inherits:** Test
+
+Unit coverage for adding Coinbase B20 tokens to rmRWA (core 1500). The four B20 token
+accounts carry the single byte 0xef as code on Base. A token with no bytecode is
+rejected. The 0xef marker is the one explicit allowance.
+
+## Constants
+
+### TICK_SPACING
+
+```solidity
+int24 internal constant TICK_SPACING = 10;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vault
+
+```solidity
+RwaBasketVault internal vault;
+```
+
+### adapter
+
+```solidity
+AerodromeSwapAdapter internal adapter;
+```
+
+### cfg
+
+```solidity
+string internal cfg;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_pool-address"></a>
+
+### _pool
+
+```solidity
+function _pool(address token) internal returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_add-address-address"></a>
+
+### _add
+
+```solidity
+function _add(address token, address pool) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| pool | `address` |  |
+
+<a id="test_config_listsfourb20tokenswitheightdecimals"></a>
+
+### test_config_listsFourB20TokensWithEightDecimals
+
+```solidity
+function test_config_listsFourB20TokensWithEightDecimals() public view;
+```
+
+<a id="test_addasset_rejectstokenwithnobytecode"></a>
+
+### test_addAsset_rejectsTokenWithNoBytecode
+
+```solidity
+function test_addAsset_rejectsTokenWithNoBytecode() public;
+```
+
+<a id="test_addasset_rejectsotheronebytecode"></a>
+
+### test_addAsset_rejectsOtherOneByteCode
+
+```solidity
+function test_addAsset_rejectsOtherOneByteCode() public;
+```
+
+<a id="test_addasset_acceptsthefourb20addresses"></a>
+
+### test_addAsset_acceptsTheFourB20Addresses
+
+```solidity
+function test_addAsset_acceptsTheFourB20Addresses() public;
+```
+
+<a id="test_addasset_acceptsordinarycontracttoken"></a>
+
+### test_addAsset_acceptsOrdinaryContractToken
+
+```solidity
+function test_addAsset_acceptsOrdinaryContractToken() public;
+```
+
+<a id="test_cap_holdslaunchassetplusfourb20"></a>
+
+### test_cap_holdsLaunchAssetPlusFourB20
+
+```solidity
+function test_cap_holdsLaunchAssetPlusFourB20() public;
+```
+

@@ -1,0 +1,41 @@
+---
+title: "SafeCallRelay"
+---
+
+# SafeCallRelay
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32dc89aac0e117b542fc122e5e44ef2022a5d8b3/contracts/test/helpers/SafeGovernance.sol)
+
+<i>
+
+Runs one call from inside the Safe's own context (the Safe delegatecalls it through
+`simulateAndRevert`), so the target sees `msg.sender == the Safe` with no prank.
+
+</i>
+
+## Functions
+
+<a id="relay-address-bytes"></a>
+
+### relay
+
+```solidity
+function relay(address target, bytes calldata data)
+        external
+        returns (bool ok, bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+

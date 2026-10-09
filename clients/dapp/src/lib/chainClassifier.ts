@@ -60,18 +60,6 @@ export const FAUCET_DRIP_AMOUNT_USDC: bigint = 100_000_000n;
 export const FAUCET_DRIP_AMOUNT_LABEL = "100 USDC";
 
 /**
- * RM token drip amount for the Faucet tab (issue #365). RM uses 18 decimals;
- * 100 RM = 100 * 10^18 base units. Single source of truth for the RM drip
- * button — FaucetTab and FaucetTabView both read this constant.
- */
-export const FAUCET_DRIP_AMOUNT_RM: bigint = 100_000_000_000_000_000_000n;
-
-/**
- * Human-readable form of the RM drip amount for UI rendering only.
- */
-export const FAUCET_DRIP_AMOUNT_RM_LABEL = "100 RM";
-
-/**
  * Native Base ETH gas drip amount for the Faucet tab (issue #466). Sized to
  * cover a handful of governance-vote transactions on devnet without
  * draining the harness holder's genesis ETH allocation; 0.01 ETH leaves

@@ -5,7 +5,7 @@ description: "R7's two halves, proved on one topology built the way the deploy s
 
 # GovernanceExecutePathAfterHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9754a452dda1133d32f6202ee22479b307098a20/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
 
 **Inherits:** Test
 
@@ -32,9 +32,9 @@ Fork test. The Safe that drives the timelock is the one stage now
 runs (issue #1447): a SafeProxy created through the canonical
 SafeProxyFactory on the canonical SafeL2 singleton, 2-of-3, driven
 by `execTransaction` with two owner signatures. Those contracts
-exist only on a Base fork, so CI runs this file through
-scripts/devnet/run-golden-forge-forks.sh against the golden
-fixture, like SafeIntegration.t.sol.
+exist only on a Base fork, so CI runs this file with
+FORK_RPC_URL set to the Twin chain (a pinned lazy fork of real Base), like
+SafeIntegration.t.sol. Unset, it skips with a named reason.
 
 </i>
 
@@ -44,6 +44,12 @@ fixture, like SafeIntegration.t.sol.
 
 ```solidity
 bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### WEIGHT_SETTER_ROLE
+
+```solidity
+bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 ```
 
 ### SAFE_PROXY_FACTORY
@@ -271,6 +277,18 @@ The deploy script leaves governance able to call setWeights.
 function test_governanceHoldsRouterAdminRole() public view;
 ```
 
+<a id="test_onlygovernanceholdsweightsetterrole"></a>
+
+### test_onlyGovernanceHoldsWeightSetterRole
+
+`setWeights` is gated by WEIGHT_SETTER_ROLE: governance holds it,
+the timelock, the deployer, the Safe, the pauser and the
+emergency key do not.
+
+```solidity
+function test_onlyGovernanceHoldsWeightSetterRole() public view;
+```
+
 <a id="test_executereachessetweightsonafreshdeployment"></a>
 
 ### test_executeReachesSetWeightsOnAFreshDeployment
@@ -302,6 +320,30 @@ function test_deployerEoaCannotCallSetWeightsDirectly() public;
 function test_deployerEoaHasNoRouterAdminRole() public view;
 ```
 
+<a id="test_timelocksetweightsthroughrealsafescheduleexecute_reverts"></a>
+
+### test_timelockSetWeightsThroughRealSafeScheduleExecute_reverts
+
+The Safe schedules and executes router.setWeights through the
+timelock. The operation is ready and the Safe signs it with real
+owner signatures (no vm.prank of the Safe), yet the router
+rejects the timelock, so the execute fails and no weight lands.
+
+```solidity
+function test_timelockSetWeightsThroughRealSafeScheduleExecute_reverts() public;
+```
+
+<a id="test_timelocksetdefaultweightsthroughrealsafescheduleexecute_succeeds"></a>
+
+### test_timelockSetDefaultWeightsThroughRealSafeScheduleExecute_succeeds
+
+The same Safe -> Timelock path still reaches setDefaultWeights,
+the below-quorum fallback the timelock keeps through ADMIN_ROLE.
+
+```solidity
+function test_timelockSetDefaultWeightsThroughRealSafeScheduleExecute_succeeds() public;
+```
+
 <a id="test_votersetisdisjointfromthecommittee"></a>
 
 ### test_voterSetIsDisjointFromTheCommittee
@@ -328,8 +370,8 @@ function test_quorumIsTwoOfTotalVotingPowerTwo() public view;
 
 ### test_safeIsTheTimelockDriverAndIsTwoOfThree
 
-The Safe is the timelock's proposer and executor, and it is a
-real 2-of-3: threshold and owner set read back from the Safe.
+The Safe is the timelock's proposer, EXECUTOR_ROLE is open (address(0)),
+and the Safe is a real 2-of-3: threshold and owner set read back from the Safe.
 
 ```solidity
 function test_safeIsTheTimelockDriverAndIsTwoOfThree() public view;
@@ -399,7 +441,7 @@ function _proposeViaTimelock(address[] memory vaults, uint256[] memory bps)
 <i>
 
 A 2-of-3 SafeProxy on SafeL2 through the canonical factory — the
-same call stage's ceremony makes (fusion-ceremony.sh create_safe).
+same call the stage deploy makes through the Safe SDK.
 
 </i>
 
@@ -412,6 +454,26 @@ function _createSafe() internal returns (ISafe created);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | created | `ISafe` |  |
+
+<a id="_ownersofsafe"></a>
+
+### _ownersOfSafe
+
+<i>
+
+The owners `_createSafe` set up, for DeployTimelock's SAFE_OWNERS check.
+
+</i>
+
+```solidity
+function _ownersOfSafe() internal view returns (address[] memory owners);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owners | `address[]` |  |
 
 <a id="_sortedownerpks"></a>
 
@@ -480,6 +542,29 @@ function _sign(uint256 pk, bytes32 txHash) internal pure returns (bytes memory);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bytes` |  |
+
+<a id="_safeexecexpectrevert-address-bytes-bytes"></a>
+
+### _safeExecExpectRevert
+
+<i>
+
+Like `_safeExec`, but expects the Safe itself to revert. The digest and
+signatures are built first so `expectRevert` binds to `execTransaction`.
+
+</i>
+
+```solidity
+function _safeExecExpectRevert(address to, bytes memory data, bytes memory reason) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
+| reason | `bytes` |  |
 
 <a id="_safeexec-address-bytes"></a>
 

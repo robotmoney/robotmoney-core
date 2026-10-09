@@ -1,0 +1,41 @@
+---
+title: "IProxyCreationCallback"
+---
+
+# IProxyCreationCallback
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/vendor/safe-1.4.1/proxies/IProxyCreationCallback.sol)
+
+**Title:** IProxyCreationCallback
+
+<i>
+
+An interface for a contract that implements a callback function to be executed after the creation of a proxy instance.
+
+</i>
+
+## Functions
+
+<a id="proxycreated-safeproxy-address-bytes-uint256"></a>
+
+### proxyCreated
+
+<i>
+
+Function to be called after the creation of a SafeProxy instance.
+
+</i>
+
+```solidity
+function proxyCreated(SafeProxy proxy, address _singleton, bytes calldata initializer, uint256 saltNonce) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `SafeProxy` | The newly created SafeProxy instance. |
+| _singleton | `address` | The address of the singleton contract used to create the proxy. |
+| initializer | `bytes` | The initializer function call data. |
+| saltNonce | `uint256` | The nonce used to generate the salt for the proxy deployment. |
+

@@ -21,7 +21,7 @@ use crate::common::{
     SIGNER_ADDRESS, TEST_PASSPHRASE, VAULT,
 };
 use alloy_primitives::{address, b256, hex as ahex, Address, Bytes, LogData, B256, U256};
-use alloy_sol_types::SolEvent;
+use alloy_sol_types::{SolCall, SolEvent};
 use assert_cmd::Command;
 use mockito::Matcher;
 use rust_payment_client::gateway::{Erc20, RobotMoneyGateway};
@@ -203,7 +203,12 @@ fn unique_state_dir() -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("rmpc-router-test-{stamp}-{}", std::process::id()))
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "rmpc-router-test-{stamp}-{}-{seq}",
+        std::process::id()
+    ))
 }
 
 /// A two-leg router withdrawal. `--confirm` is added by the callers that
@@ -358,11 +363,13 @@ fn router_refuses_mismatched_vault_and_leg_lengths() {
 }
 
 #[test]
-fn router_base_mainnet_refuses_software_signer_before_signing() {
+fn router_base_mainnet_allows_software_signer_and_warns_first() {
+    let logs = tempfile::TempDir::new().unwrap();
     let fix = Fixture::build("http://127.0.0.1:1", 8453);
     let state_dir = unique_state_dir();
 
     let out = router_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .env("RMPC_LOG_DIR", logs.path())
         .env_remove(PASSPHRASE_ENV_VAR)
         .args(["--confirm"])
         .assert()
@@ -370,11 +377,11 @@ fn router_base_mainnet_refuses_software_signer_before_signing() {
         .get_output()
         .clone();
 
-    assert_eq!(out.status.code(), Some(2));
-    let v = stdout_json(&out);
-    assert_eq!(v["status"], "refused");
-    assert_eq!(v["error"], "ErrProductionSignerRequired");
-    assert_eq!(v["order_id"], format!("{ORDER_ID:#x}"));
+    assert_eq!(out.status.code(), Some(3));
+    assert!(!String::from_utf8(out.stdout.clone())
+        .unwrap()
+        .contains("ErrProductionSignerRequired"));
+    common::assert_mainnet_warning_precedes_keystore_load(logs.path());
 }
 
 #[tokio::test]
@@ -403,32 +410,42 @@ async fn router_chain_id_mismatch_refuses_with_named_error() {
     assert_eq!(v["checks"]["chain_id_match"], false);
 }
 
+/// A deposit pause never blocks a router redemption (core 1494). With
+/// `depositsPaused() == true` on every target the redemption still signs,
+/// broadcasts and succeeds across both legs.
 #[tokio::test]
-async fn router_paused_gateway_refuses_with_named_error() {
+async fn router_withdraw_succeeds_while_deposits_paused() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
-    server
+    install_router_happy_path(&mut server, chain_id).await;
+    // Registered last with `expect_at_least`, so it serves every
+    // depositsPaused() read ahead of the happy-path `false`.
+    let paused_read = server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::pausedCall,
+            RobotMoneyGateway::depositsPausedCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_bool(true)))
+        .expect_at_least(1)
         .create_async()
         .await;
-    install_router_happy_path(&mut server, chain_id).await;
 
     let fix = Fixture::build(&server.url(), chain_id);
     let out = router_args(fix.config_path.to_str().unwrap(), &unique_state_dir())
-        .args(["--confirm"])
+        .args(["--confirm", "--receipt-timeout-secs", "5"])
         .assert()
-        .failure()
+        .success()
         .get_output()
         .clone();
-    assert_eq!(out.status.code(), Some(2));
     let v = stdout_json(&out);
-    assert_eq!(v["error"], "ErrGatewayPaused");
-    assert_eq!(v["checks"]["gateway_paused"], true);
+    assert_eq!(v["status"], "success");
+    assert_eq!(
+        v["assets_per_leg"],
+        json!([(LEG_A - 1_000).to_string(), (LEG_B - 1_000).to_string()])
+    );
+    assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"));
+    paused_read.assert_async().await;
 }
 
 /// The window cap is checked against the SUM of the legs, not each leg —
@@ -677,4 +694,52 @@ async fn router_duplicate_retry_refused_before_broadcast() {
     let v = stdout_json(&out2);
     assert_eq!(v["error"], "ErrOrderIdAlreadySubmitted");
     assert_eq!(v["tx_hash"].as_str().unwrap(), prior_tx.as_str());
+}
+
+/// Issue #1432: the deadline must come from chain time, not the host wall
+/// clock. The mock chain reports a 2023 block timestamp (0x64a9f4c0), so a
+/// wall-clock deadline (host clock is years ahead) would be far outside the
+/// gateway's `block.timestamp + 600` window. Decodes the broadcast calldata
+/// and pins `deadline == block timestamp + default 300`.
+#[tokio::test]
+async fn router_deadline_comes_from_chain_time_not_the_host_clock() {
+    use std::sync::{Arc, Mutex};
+
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_router_happy_path(&mut server, chain_id).await;
+    let sent: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = sent.clone();
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body_from_request(move |req| {
+            let v: Value = serde_json::from_slice(req.body().unwrap()).unwrap();
+            sink.lock()
+                .unwrap()
+                .push(v["params"][0].as_str().unwrap().to_string());
+            jrpc_result(&format!("{TX_HASH:#x}")).into_bytes()
+        })
+        .create_async()
+        .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+    router_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .args(["--confirm", "--receipt-timeout-secs", "5"])
+        .assert()
+        .success();
+
+    let raw = sent.lock().unwrap().first().cloned().expect("tx broadcast");
+    let raw = raw.trim_start_matches("0x").to_lowercase();
+    let selector = ahex::encode(RobotMoneyGateway::withdrawFromRouterCall::SELECTOR);
+    let at = raw.find(&selector).expect("calldata selector in raw tx");
+    let tail = ahex::decode(&raw[at..]).unwrap();
+    let call = RobotMoneyGateway::withdrawFromRouterCall::abi_decode(&tail, false)
+        .expect("decode withdrawFromRouter calldata");
+    // 0x64a9f4c0 = 1_688_859_840 (the mocked block timestamp) + 300.
+    assert_eq!(call.deadline, 1_688_860_140u64);
 }

@@ -1,0 +1,48 @@
+---
+title: "ZeroLiquidityPool"
+---
+
+# ZeroLiquidityPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/DeployBasketVaultPoolGuards.t.sol)
+
+**Inherits:** [ConstPool](/contracts/test/helpers/contract.ConstPool)
+
+<i>
+
+A pool that looks usable except it holds no liquidity (the wSOL shape at Base block 52082423).
+
+</i>
+
+## Functions
+
+<a id="constructor-address-address-uint24"></a>
+
+### constructor
+
+```solidity
+constructor(address a, address b, uint24 fee_) ConstPool(a, b, fee_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+| b | `address` |  |
+| fee_ | `uint24` |  |
+
+<a id="liquidity"></a>
+
+### liquidity
+
+```solidity
+function liquidity() external pure override returns (uint128);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint128` |  |
+

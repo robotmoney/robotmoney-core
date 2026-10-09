@@ -5,6 +5,9 @@ pragma solidity ^0.8.24;
 
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {IAerodromePool} from "../interfaces/IAerodromePool.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IObservablePool} from "../interfaces/IObservablePool.sol";
 
 /// @title BasketAssetConfigGuard
@@ -14,8 +17,19 @@ import {IObservablePool} from "../interfaces/IObservablePool.sol";
 /// @dev Declared `public` (external, DELEGATECALL-linked) so the checks live in a
 ///      single deployed library instead of being inlined into every vault in the
 ///      already-EIP-170-tight basket family.
+/// @dev The vault getters `payInKind` reads from `address(this)`.
+interface IInKindVault {
+    function asset() external view returns (address);
+    function exitFeeBps() external view returns (uint256);
+    function feeRecipient() external view returns (address);
+}
+
 library BasketAssetConfigGuard {
-    /// @dev Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals).
+    using SafeERC20 for IERC20;
+    using Math for uint256;
+
+    /// @dev Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is a reserved ordinal that no
+    ///      adapter implements; it stays so Aerodrome keeps ordinal 2 (see `BasketVault.Venue`).
     enum Venue {
         V3,
         V4,
@@ -34,6 +48,8 @@ library BasketAssetConfigGuard {
         Venue venue;
     }
 
+    /// @dev Mirror of `BasketVault.InsufficientGas` (same selector): gas left at in-kind redeem entry is below the floor.
+    error InsufficientGas(uint256 available, uint256 required);
     /// @dev Adapter runtime-bytecode hash not on the ADMIN-approved allowlist (ADP-2).
     error AdapterCodeHashNotAllowed();
     /// @dev Execution pool (resolved from swapFee) != registered TWAP pool (ORA-3).
@@ -48,6 +64,17 @@ library BasketAssetConfigGuard {
     error InsufficientObservationHistory(address pool, uint32 requiredWindow);
     /// @dev Pool in-range liquidity below the synchronous-redemption minimum.
     error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
+    /// @dev Token has no usable bytecode and its code hash is not the allowed B20 marker.
+    error TokenHasNoCode(address token);
+
+    /// @dev Code hash of the single byte `0xef`. Coinbase B20 tokenized stocks are protocol
+    ///      precompiles: the account code on Base is exactly `0xef`, so a plain "has code"
+    ///      check would be the only thing standing between a typo and a codeless token. This
+    ///      is the one explicit code-hash allowance for tokens with a 1-byte code (core 1500).
+    bytes32 internal constant B20_PRECOMPILE_CODEHASH = keccak256(hex"ef");
+
+    /// @dev Base block time in seconds, the cadence the cardinality floor is derived from.
+    uint32 internal constant BASE_BLOCK_SECONDS = 2;
 
     /// @notice Assert `pool` is usable as an `addAsset` venue: it pairs `token`
     ///         with `usdc`, has enough observation cardinality and history to serve
@@ -60,21 +87,42 @@ library BasketAssetConfigGuard {
         address token,
         address usdc,
         uint32 twapWindow,
-        uint16 minCardinality,
         uint128 minLiquidity
     ) public view {
+        // A token with no bytecode is rejected. A 1-byte code is accepted only when it is the
+        // B20 precompile marker. Any other bytecode is accepted as before.
+        if (token.code.length < 2 && token.codehash != B20_PRECOMPILE_CODEHASH) {
+            revert TokenHasNoCode(token);
+        }
         address t0 = IUniswapV3Pool(pool).token0();
         address t1 = IUniswapV3Pool(pool).token1();
         if (!((t0 == token && t1 == usdc) || (t1 == token && t0 == usdc))) {
             revert PoolTokenMismatch();
         }
-        // IObservablePool.slot0() decodes only the 4 leading fields, which is
-        // ABI-compatible with both the 7-field Uniswap V3 layout and the
-        // 6-field Aerodrome Slipstream layout (issue #1125) — see that
-        // interface's NatSpec for why a shorter-prefix decode is safe here.
+        requireObservationHistory(pool, twapWindow);
+        uint128 poolLiquidity = IUniswapV3Pool(pool).liquidity();
+        if (poolLiquidity < minLiquidity) {
+            revert InsufficientPoolLiquidity(pool, minLiquidity, poolLiquidity);
+        }
+    }
+
+    /// @notice Assert `pool` holds enough observation history to serve a
+    ///         `twapWindow`-second TWAP right now: `observe([twapWindow, 0])` must
+    ///         not revert. Used by `addAsset` (via `requirePoolUsable`) and by
+    ///         `setTwapWindow`, so governance can never set a window the pool's
+    ///         oldest observation does not reach. Such a window would make every
+    ///         NAV read revert ("OLD") and block every redeem (core 1494).
+    function requireObservationHistory(address pool, uint32 twapWindow) public view {
+        // Window-derived cardinality floor (core 1665). Uniswap V3 writes at most one observation
+        // per block and cardinality never decreases, so a ring of `twapWindow / BLOCK_SECONDS + 1`
+        // slots cannot be churned below the window by griefing swaps at Base's 2 s cadence. The
+        // 1800 s default window needs 901. IObservablePool.slot0() decodes only the 4 leading
+        // fields, which is ABI-compatible with both the 7-field Uniswap V3 layout and the 6-field
+        // Aerodrome Slipstream layout (issue #1125).
         (,,, uint16 cardinality) = IObservablePool(pool).slot0();
-        if (cardinality < minCardinality) {
-            revert InsufficientPoolCardinality(pool, minCardinality, cardinality);
+        uint16 required = uint16(twapWindow / BASE_BLOCK_SECONDS + 1);
+        if (cardinality < required) {
+            revert InsufficientPoolCardinality(pool, required, cardinality);
         }
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = twapWindow;
@@ -82,10 +130,6 @@ library BasketAssetConfigGuard {
         try IUniswapV3Pool(pool).observe(secondsAgos) returns (int56[] memory, uint160[] memory) {}
         catch {
             revert InsufficientObservationHistory(pool, twapWindow);
-        }
-        uint128 poolLiquidity = IUniswapV3Pool(pool).liquidity();
-        if (poolLiquidity < minLiquidity) {
-            revert InsufficientPoolLiquidity(pool, minLiquidity, poolLiquidity);
         }
     }
 
@@ -129,7 +173,8 @@ library BasketAssetConfigGuard {
     /// @notice Assert the execution pool resolved from `swapFee` is the SAME pool
     ///         the NAV TWAP reads from (ORA-3 / F-09): fee tier for V3/V4, tick
     ///         spacing for Aerodrome. `swapFee == 0` is the pool-independent-pricing
-    ///         sentinel (e.g. the Chronicle NAV adapter) and is exempt.
+    ///         sentinel and is exempt. No shipped asset uses it: the basket deploy
+    ///         script requires a non-zero `poolFee` (`contracts/script/BasketVaultDeployBase.sol`).
     function requireExecutionPoolMatchesTwap(address pool, uint24 swapFee, Venue venue)
         public
         view
@@ -139,5 +184,49 @@ library BasketAssetConfigGuard {
             ? uint256(uint24(IAerodromePool(pool).tickSpacing()))
             : uint256(IUniswapV3Pool(pool).fee());
         if (poolParam != uint256(swapFee)) revert ExecutionPoolMismatch();
+    }
+
+    /// @notice The payout loop of `BasketVault.redeemInKind` (core 1665), delegatecall-linked so it
+    ///         runs as the vault (`address(this)` is the vault) and stays out of the EIP-170-tight
+    ///         vault bytecode. Pays `receiver` the floor-pro-rata share (`shares / supplyBefore`) of
+    ///         the vault's idle USDC and of each ACTIVE basket token. `exitFeeBps` of each leg goes to
+    ///         `feeRecipient`. No oracle read and no swap. The caller has already burned `shares`.
+    function payInKind(
+        AssetInfo[] storage assets,
+        address receiver,
+        uint256 shares,
+        uint256 supplyBefore
+    ) public {
+        // Runs as the vault (delegatecall): read the vault's own public config through a self-call.
+        IInKindVault self = IInKindVault(address(this));
+        address usdc = self.asset();
+        uint256 exitFeeBps = self.exitFeeBps();
+        address feeRecipient = self.feeRecipient();
+        uint256 len = assets.length;
+        // Same entry gas floor as `BasketVault.redeem` (REDEEM_BASE_GAS 300_000 + 400_000 per listed asset).
+        uint256 floor = 300_000 + len * 400_000;
+        if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
+        _payLeg(IERC20(usdc), receiver, shares, supplyBefore, exitFeeBps, feeRecipient);
+        for (uint256 i = 0; i < len; i++) {
+            if (!assets[i].active) continue;
+            _payLeg(
+                IERC20(assets[i].token), receiver, shares, supplyBefore, exitFeeBps, feeRecipient
+            );
+        }
+    }
+
+    function _payLeg(
+        IERC20 token,
+        address receiver,
+        uint256 shares,
+        uint256 supplyBefore,
+        uint256 exitFeeBps,
+        address feeRecipient
+    ) private {
+        uint256 amount = token.balanceOf(address(this)).mulDiv(shares, supplyBefore);
+        if (amount == 0) return;
+        uint256 fee = amount.mulDiv(exitFeeBps, 10_000);
+        if (fee > 0) token.safeTransfer(feeRecipient, fee);
+        token.safeTransfer(receiver, amount - fee);
     }
 }

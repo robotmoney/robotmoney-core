@@ -158,6 +158,7 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         }
     };
 
+    // Fail closed before signing when the committee is not configured.
     let ic_addr = match resolve_ic_address(&cfg, "vote-submit", args.pretty) {
         Ok(a) => a,
         Err(code) => return code,

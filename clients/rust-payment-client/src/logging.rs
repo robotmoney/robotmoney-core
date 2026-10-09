@@ -221,6 +221,14 @@ static AUDIT_SINK: OnceLock<AuditSink> = OnceLock::new();
 /// alive for the program's lifetime.
 static LOGGER_HANDLE: OnceLock<LoggerHandle> = OnceLock::new();
 
+/// Flush buffered diagnostic log lines. `process::exit` skips destructors, so
+/// `main` calls this first or a startup refusal would lose its log lines.
+pub fn flush() {
+    if let Some(h) = LOGGER_HANDLE.get() {
+        h.flush();
+    }
+}
+
 /// Initialise the diagnostic + audit loggers. Idempotent: subsequent
 /// calls are a no-op (returns `Ok(())`).
 ///

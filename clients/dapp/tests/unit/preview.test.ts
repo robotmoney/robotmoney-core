@@ -1,10 +1,10 @@
 /**
  * Unit tests for the calldata-preview pipeline. Covers the happy path
- * (authorize, revoke, pause), the hard refusal on unverified bytecode,
+ * (authorize, revoke, pauseDeposits), the hard refusal on unverified bytecode,
  * and the risk classifier matrix from ADR §3.3.
  */
 import { describe, it, expect } from "vitest";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, keccak256, toBytes } from "viem";
 import {
   buildPreview,
   classifyRisk,
@@ -71,9 +71,26 @@ describe("buildPreview", () => {
     expect(p.reason).toBe("unknown_revert");
   });
 
-  it("flags pause on non-fork env as unsafe", () => {
-    expect(classifyRisk({ kind: "pause" }, baseCtx)).toBe("low");
-    expect(classifyRisk({ kind: "pause" }, { ...baseCtx, envClass: "mainnet" })).toBe("unsafe");
+  it("flags pauseDeposits on non-fork env as unsafe", () => {
+    expect(classifyRisk({ kind: "pauseDeposits" }, baseCtx)).toBe("low");
+    expect(classifyRisk({ kind: "pauseDeposits" }, { ...baseCtx, envClass: "mainnet" })).toBe(
+      "unsafe",
+    );
+  });
+
+  it("pauseDeposits preview says it stops deposits only and withdrawals stay open", () => {
+    const p = buildPreview({ kind: "pauseDeposits" }, baseCtx);
+    expect(p.ok).toBe(true);
+    if (!p.ok) return;
+    expect(p.functionName).toBe("pauseDeposits");
+    expect(p.effect).toContain("DepositsArePaused");
+    expect(p.effect).toContain("Withdrawals stay open");
+    expect(p.effect).not.toMatch(/withdraw\(\) reverts/i);
+  });
+
+  it("DEPOSIT_PAUSER_ROLE hash is keccak256 of the new role string", () => {
+    expect(ROLE_HASH.DEPOSIT_PAUSER_ROLE).toBe(keccak256(toBytes("DEPOSIT_PAUSER_ROLE")));
+    expect(ROLE_HASH.ADMIN_ROLE).toBe(keccak256(toBytes("ADMIN_ROLE")));
   });
 
   it("flags high-cap authorize as high risk", () => {
@@ -81,10 +98,10 @@ describe("buildPreview", () => {
     expect(classifyRisk({ kind: "authorizeAgent", agent, policy: big }, baseCtx)).toBe("high");
   });
 
-  // Issue #83: ADMIN_ROLE / PAUSER_ROLE grant + revoke previews.
+  // Issue #83: ADMIN_ROLE / DEPOSIT_PAUSER_ROLE grant + revoke previews.
   describe("role grant / revoke (issue #83)", () => {
     const account = agent;
-    for (const role of ["ADMIN_ROLE", "PAUSER_ROLE"] as const) {
+    for (const role of ["ADMIN_ROLE", "DEPOSIT_PAUSER_ROLE"] as const) {
       it(`grant ${role} encodes the AccessControl.grantRole(role, account) calldata`, () => {
         const p = buildPreview({ kind: "grantRole", role, account }, baseCtx);
         expect(p.ok).toBe(true);

@@ -82,42 +82,54 @@
 
 Every production contract under `contracts/` (excluding `contracts/test/`,
 `contracts/script/`, `contracts/interfaces/`, and the generated
-`contracts/doc/` mirror) is mapped to the audit report(s) that covered it.
+`contracts/doc/` mirror) is mapped. `scripts/check-audit-ledger.sh` fails when
+a shipped `.sol` has no row here and when a row names a file that no longer
+exists. Test-only contracts live under `contracts/test/` and are not shipped to the audit report(s) that covered it.
 
 | Contract | Audit report(s) | Status | Exception (if any) |
 |---|---|---|---|
 | `RobotMoneyVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | — |
-| `RmToken.sol` | VA-0609, HR-0618 | Audited | — |
 | `PortfolioRouter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
 | `RouterGovernance.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
 | `VaultRegistry.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
 | `FeatureFlags.sol` | VA-0609 | Audited | Pre-mainnet re-audit pending under the bucket-B/C economic-audit gate (security-model.md §14) |
-| `UniswapV3PoolSlot0Stub.sol` | VA-0609, HR-0618 | Audited | Devnet/demo helper; not router-eligible. Documented exception: fail-closed at the vault, not a production swap surface |
 | `gateway/RobotMoneyGateway.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | — |
 | `gateway/AccessRoles.sol` | VA-0609, HR-0618, MC-0619, CD-0602 | Audited | — |
-| `gateway/MockVault.sol` | VA-0609, HR-0618 | Audited | Test/mock surface (constructor asset-mismatch revert pinned, HR-0618 I-9); not production-reachable |
-| `vaults/BasketVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | Bucket-B/C economic-model audit required before router-eligible production use (security-model.md §14; gap BASKET-001/ECONOMIC-AUDIT-001) |
-| `vaults/RwaVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612, AZ-0623 | Audited | Same bucket-B/C economic-audit gate as BasketVault |
-| `vaults/AgentTokenVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate |
-| `vaults/ProtocolAssetVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate |
+| `gateway/ConsensusRecommendationReceipt.sol` | none | Not separately audited | Investment-committee receipt contract; no snapshot in docs/code-review/ covers it. Launch exception B2 granted 2026-10-06 by the owner. Post-audit change (1620): inherits `AdminFloorAccessControl` and floors `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE`; revoking or renouncing the last holder of either role reverts `LastAdminFloor`; a grant then renounce still hands the role over. The gateway binds this contract as an immutable, so a gateway redeploy needs a new copy of it |
+| `gateway/InvestmentCommitteePolicy.sol` | none | Not separately audited | Investment-committee policy contract; no snapshot in docs/code-review/ covers it. Launch exception B2 granted 2026-10-06 by the owner. Post-audit change (1620): inherits `AdminFloorAccessControl` and floors `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE`; revoking or renouncing the last holder of either role reverts `LastAdminFloor`; a grant then renounce still hands the role over. The gateway binds this contract as an immutable, so a gateway redeploy needs a new copy of it |
+| `vaults/BasketVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | Bucket-B/C economic-model audit required before router-eligible production use (security-model.md §14; gap BASKET-001/ECONOMIC-AUDIT-001). Launch exception B2 granted 2026-10-06 by the owner: rmPROTO, rmAGENT and rmRWA may launch before the economic audit closes |
+| `vaults/RwaBasketVault.sol` | none (thin subclass of `BasketVault`: name, symbol, asset cap) | Not separately audited | Same bucket-B/C economic-audit gate as BasketVault. Replaces the retired Chronicle-priced RWA vault (core 1492). Launch exception B2 granted 2026-10-06 by the owner: rmRWA may launch before its economic audit closes (plan decision 5) |
+| `vaults/AgentTokenVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate; launch exception B2 granted 2026-10-06 by the owner |
+| `vaults/ProtocolAssetVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate; launch exception B2 granted 2026-10-06 by the owner |
 | `adapters/AaveV3Adapter.sol` | VA-0609, HR-0618, SR-0612 | Audited | — |
 | `adapters/CompoundV3Adapter.sol` | VA-0609, HR-0618, FS-0619, SR-0612 | Audited | — |
 | `adapters/MorphoAdapter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612 | Audited | — |
 | `adapters/AerodromeSwapAdapter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612 | Audited | — |
-| `adapters/UniswapV4SwapAdapter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612 | Audited | — |
-| `adapters/ChronicleOracleAdapter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612 | Audited | — |
+| `adapters/UniswapV3SwapAdapter.sol` | none | Not separately audited | Used by rmAGENT (RM on the V3 RM/USDC pool), rmRWA, and any later basket asset that routes through an adapter. Launch exception B2 granted 2026-10-06 by the owner (plan decision 5) |
 | `lib/TickMath.sol` | HR-0618 | Audited | Externalized library (HR-0618 L3-D1); `pure` math, byte-identical, mis-link operational risk noted |
 | `lib/TwapTickMath.sol` | HR-0618 (via BasketVault TWAP path) | Audited | TWAP helper exercised through BasketVault NAV review |
 | `lib/AdminFloorAccessControl.sol` | MC-0619 (via F-06 admin-floor remediation) | Audited | Admin-floor mixin introduced by the F-06 remediation |
-| `lib/BasketAssetConfigGuard.sol` | HR-0618, MC-0619 (via BasketVault addAsset path) | Audited | Reviewed through BasketVault `addAsset` config-validation findings |
+| `lib/AdminFloorAccessControlCounter.sol` | HR-0618 (L-10) | Audited | Counter variant of the admin-floor mixin used by `RobotMoneyVault` and `BasketVault`; introduced by the HR-0618 L-10 remediation |
+| `lib/BasketAssetConfigGuard.sol` | HR-0618, MC-0619 (via BasketVault addAsset path) | Audited | Reviewed through BasketVault `addAsset` config-validation findings. Post-audit change (core 1500): `requirePoolUsable` rejects a token with no bytecode and accepts a 1-byte code only when it is the Coinbase B20 marker `0xef`. Not yet re-reviewed. |
 | `lib/BasketViews.sol` | HR-0618 (via BasketVault NAV/preview path) | Audited | View helper exercised through BasketVault preview findings |
 | `lib/BpsMath.sol` | VA-0609, HR-0618 (via exit-fee rounding findings) | Audited | Basis-point math exercised through exit-fee rounding findings |
 | `lib/ForeignTokenQuarantine.sol` | HR-0618 (via reabsorb/quarantine path) | Audited | Quarantine/reabsorb path reviewed under MC-0619 F-17 / HR-0618 |
 
+> The Chronicle-priced RWA vault, its Chronicle adapter, the deSPXA position adapter and the
+> Uniswap V4 adapters are deleted (core 1492, plan decisions 8 and 9). Findings that named them stay
+> in the register below as history.
+>
+> The RM test token contract (formerly audited under VA-0609 and HR-0618) was retired on 2026-10-05
+> and deleted under core 1489. RM is the live ROBOTMONEY token on Base
+> (`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`), which this repo never deploys, so it has no row.
+>
 > No production contract ships without coverage above. The recorded exceptions
 > (FeatureFlags pre-mainnet re-audit, the bucket-B/C basket-vault economic-audit
-> gate, and the devnet-only `UniswapV3PoolSlot0Stub` / `MockVault` helpers) are
-> the documented, team-approved carve-outs required by §14.
+> gate, and the not-separately-audited gateway and swap-adapter rows) are
+> the documented, team-approved carve-outs required by §14. The owner granted
+> launch exception B2 on 2026-10-06: rmPROTO, rmAGENT and rmRWA, the IC policy,
+> the consensus receipt and `UniswapV3SwapAdapter` may launch before their
+> economic audit closes.
 
 ## Finding register
 
@@ -199,7 +211,7 @@ merged remediation PRs rather than the stale accepted dispositions.
 | FS-RTR-10 | FS-0619 | Medium→Low | accepted-with-rationale | PortfolioRouter | — | Rounding remainder lets tiny split deposits bypass weights; cosmetic |
 | FS-VLT-1 | FS-0619 | Medium→Info | accepted-with-rationale | RobotMoneyVault | — | `IUpstreamMonitor` health gate not enforced; by-design stub |
 | FS-VLT-2 | FS-0619 | Medium→Info | dismissed-with-rationale | AerodromeSwapAdapter | — | Slipstream slot0 ABI "mismatch" refuted; targets repo's own internally-consistent shim |
-| FS-VLT-3 | FS-0619 | Medium | accepted-with-rationale | RwaVault, ChronicleOracleAdapter | — | Chronicle RWA route vs V3-style addAsset checks; latent integration |
+| FS-VLT-3 | FS-0619 | Medium | accepted-with-rationale | retired RWA vault, retired Chronicle adapter | — | Chronicle RWA route vs V3-style addAsset checks; latent integration |
 | FS-VLT-4 | FS-0619 | Medium→Info | dismissed-with-rationale | CompoundV3Adapter | — | Rewards "not harvested" refuted; they accrue in share price |
 | FS-VLT-5 | FS-0619 | Medium | accepted-with-rationale | RobotMoneyVault | — | Deposits mint on max-slippage haircut; by design (H-1) |
 | FS-VLT-6 | FS-0619 | Medium→down | dismissed-with-rationale | BasketVault | — | "Greedy deposit reverts" refuted for HEAD (skips + idles); claim on stale `src/` |
@@ -209,11 +221,11 @@ merged remediation PRs rather than the stale accepted dispositions.
 | FS-VLT-10 | FS-0619 | Medium | accepted-with-rationale | MorphoAdapter | — | Morpho reports illiquid shares as withdrawable; CONFIRMED at HEAD — `totalAssets()` still `convertToAssets(shares)` with no maxWithdraw cap, no fix landed |
 | FS-VLT-11 | FS-0619 | Medium | dismissed-with-rationale | BasketVault, MorphoAdapter | — | Stale duplicate of FS-VLT-10 |
 | FS-VLT-12 | FS-0619 | Medium→down | accepted-with-rationale | VaultRegistry, vault | — | Registry Paused doesn't halt direct deposits; router gates by design |
-| FS-VLT-13 | FS-0619 | Medium | accepted-with-rationale | RwaVault | — | RWA redemption blocked by price deviation from NAV; by design (ADR-0006) |
-| FS-VLT-14 | FS-0619 | Medium→Info | dismissed-with-rationale | RwaVault, ChronicleOracleAdapter | — | RWA freshness `latestTimestamp()` "noncanonical" refuted; own IChronicleOracle |
+| FS-VLT-13 | FS-0619 | Medium | accepted-with-rationale | retired RWA vault | — | RWA redemption blocked by price deviation from NAV; by design (ADR-0006) |
+| FS-VLT-14 | FS-0619 | Medium→Info | dismissed-with-rationale | retired RWA vault, retired Chronicle adapter | — | RWA freshness `latestTimestamp()` "noncanonical" refuted; own the retired Chronicle interface |
 | FS-VLT-15 | FS-0619 | Medium→down | fixed | RobotMoneyVault | #200 | Receipt-token donation inflation mitigated by 1e18 `_decimalsOffset` (mitigation pre-dates the scan) |
-| FS-VLT-16 | FS-0619 | Medium→Info | dismissed-with-rationale | UniswapV4SwapAdapter | — | "Noncanonical router ABI" refuted; own shim |
-| FS-VLT-17 | FS-0619 | Medium→down | accepted-with-rationale | UniswapV4SwapAdapter | #1186 | Router-eligibility now proven end-to-end (`UniswapV4RouterEligibilityIntegration.t.sol`: real Vault + VaultRegistry + PortfolioRouter, deposit drives adapter.deploy()); V4 pricing still assumes a V3-shaped observe() pool rather than real v4-core's PoolManager singleton — that half remains accepted-with-rationale, unchanged |
+| FS-VLT-16 | FS-0619 | Medium→Info | dismissed-with-rationale | retired V4 adapter | — | "Noncanonical router ABI" refuted; own shim |
+| FS-VLT-17 | FS-0619 | Medium→down | accepted-with-rationale | retired V4 adapter | #1186 | Router-eligibility now proven end-to-end (`the retired V4 router integration test`: real Vault + VaultRegistry + PortfolioRouter, deposit drives adapter.deploy()); V4 pricing still assumes a V3-shaped observe() pool rather than real v4-core's PoolManager singleton — that half remains accepted-with-rationale, unchanged |
 | FS-VLT-18 | FS-0619 | Medium | fixed | VaultRegistry, RobotMoneyVault | #959 | Retire left router-eligibility state stale; unified registry-driven `retire()`/`unretire()` on the base vault |
 | FS-VLT-19 | FS-0619 | Medium | fixed | VaultRegistry, BasketVault | #1092 | Registry retire() reverted on basket subclasses; `BasketVault` now implements matching-selector `retire()`/`unretire()` so `vaults/` subclasses dispatch correctly, registry-side calls no longer try/catch the hook |
 | FS-VLT-20 | FS-0619 | Medium→down | accepted-with-rationale | BasketVault | — | Withdrawals/rebalance push adapters above caps; by design, re-converges |
@@ -275,17 +287,17 @@ sub-PRs cited below.
 | MC-F-04 | MC-0619 | Medium | fixed | RobotMoneyVault, VaultRegistry | #976 | Registry/vault flag drift; atomic retire shipped earlier (#933/#958), #976 closes the residual `setVaultStatus` back-door (LIFE-1) |
 | MC-F-05 | MC-0619 | Medium | fixed | PortfolioRouter | #976 | `setWeights` could write a non-depositable weight vector; now requires `VaultStatus == Active` per weighted vault |
 | MC-F-06 | MC-0619 | Medium | fixed | RobotMoneyVault, BasketVault, AccessRoles | #975 | Admin-floor inconsistent; last-admin floor via `_revokeRole` on vaults + gateway (#974) (ACL-3) |
-| MC-F-07 | MC-0619 | Medium | fixed | BasketVault, RwaVault | #980 | `shutdownVault` irreversible; ADMIN-gated `restoreVault(newTvlCap)` inverts it (LIFE-4) |
-| MC-F-08 | MC-0619 | Medium | fixed | RwaVault | #975 | Stale-override + unwind under one EMERGENCY key; `setEmergencyUnwindStaleOverride` moved to ADMIN_ROLE (ACL-5) |
-| MC-F-09 | MC-0619 | Medium | fixed | UniswapV4SwapAdapter, AerodromeSwapAdapter, BasketVault | #975 | TWAP quote pool could mismatch execution pool; `BasketAssetConfigGuard` asserts execution-pool == TWAP-pool in `addAsset` (ORA-3) |
-| MC-F-10 | MC-0619 | Medium | fixed | RwaVault, ChronicleOracleAdapter | #978 | No NAV-vs-market deviation guard; timelock-configured deviation threshold reverts over-threshold deposits (ORA-4) |
+| MC-F-07 | MC-0619 | Medium | fixed | BasketVault, retired RWA vault | #980 | `shutdownVault` irreversible; ADMIN-gated `restoreVault(newTvlCap)` inverts it (LIFE-4) |
+| MC-F-08 | MC-0619 | Medium | fixed | retired RWA vault | #975 | Stale-override + unwind under one EMERGENCY key; `setEmergencyUnwindStaleOverride` moved to ADMIN_ROLE (ACL-5) |
+| MC-F-09 | MC-0619 | Medium | fixed | retired V4 adapter, AerodromeSwapAdapter, BasketVault | #975 | TWAP quote pool could mismatch execution pool; `BasketAssetConfigGuard` asserts execution-pool == TWAP-pool in `addAsset` (ORA-3) |
+| MC-F-10 | MC-0619 | Medium | fixed | retired RWA vault, retired Chronicle adapter | #978 | No NAV-vs-market deviation guard; timelock-configured deviation threshold reverts over-threshold deposits (ORA-4) |
 | MC-F-11 | MC-0619 | Low | fixed | RobotMoneyGateway | #978 | Gateway zeroed router per-leg floor + disabled deadline; `withdrawFromRouter` forwards `minAssetsPerLeg[]` into intent hash (GW-5) |
 | MC-F-12 | MC-0619 | Low | accepted-with-rationale | PortfolioRouter | — | Router cap per-tx only, splittable; documented as per-tx sanity bound (fix-or-document accepted, #980 recorded the decision) |
 | MC-F-13 | MC-0619 | Low | fixed | PortfolioRouter | #976 | Deposit all-or-revert diverged from preview; `_executeLegs` now skip-and-renormalise (RTR-5) |
 | MC-F-14 | MC-0619 | Low | fixed | RobotMoneyVault | #980 | Revoked-but-active adapter still trusted for NAV; `totalAssets`/`_pullProportional` exclude ineligible adapters (ADP-2) |
 | MC-F-15 | MC-0619 | Low | fixed | RobotMoneyGateway | #979 | Idempotency hash omitted destination + per-leg shares; `depositTo` paymentId folds them in (GW-2); withdraw side already bound (#980) |
 | MC-F-16 | MC-0619 | Info | fixed | RobotMoneyVault, MorphoAdapter, BasketVault | #978 | NAV trusted subcomponent prices/TWAP marks; `_deposit` mints on realized swap proceeds + round-trip pinned (SUP-3/NC-6) |
-| MC-F-17 | MC-0619 | Info | fixed | ChronicleOracleAdapter, BasketVault | #979 | Reabsorb reused stale pool; `reabsorbRemovedAsset` wraps TWAP read in quarantine fallback (LIFE-6). Hardcoded-18-dec half accepted as latent (safe while deSPXA=18) |
+| MC-F-17 | MC-0619 | Info | fixed | retired Chronicle adapter, BasketVault | #979 | Reabsorb reused stale pool; `reabsorbRemovedAsset` wraps TWAP read in quarantine fallback (LIFE-6). Hardcoded-18-dec half accepted as latent (safe while deSPXA=18) |
 | MC-F-18 | MC-0619 | Info | accepted-with-rationale | IUpstreamMonitor | — | Upstream health monitor interface-only stub (#702); deferred by design |
 | MC-F-19 | MC-0619 | Info | dismissed-with-rationale | Slither output | — | Meta-comment; mostly known/low-risk patterns, no new action |
 
@@ -303,10 +315,10 @@ the Passthrough natspec drift (L3-D2) by **#922**.
 | Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
 |---|---|---|---|---|---|---|
 | HR-H-1 | VA-0609/HR-0618 | High | fixed | BasketVault | #836 | `mint()` slippage-haircut bypass; symmetric `previewMint` gross-up, pinned |
-| HR-M-1 | VA-0609/HR-0618 | Medium | fixed | ChronicleOracleAdapter | #836 | Rejects zero/degenerate oracle price; bounds pinned |
+| HR-M-1 | VA-0609/HR-0618 | Medium | fixed | retired Chronicle adapter | #836 | Rejects zero/degenerate oracle price; bounds pinned |
 | HR-M-2 | VA-0609/HR-0618 | Medium | fixed | RobotMoneyVault | #836 | `withdraw(maxWithdraw)` 4626 violation; fee-enabled conformance suite |
 | HR-M-3 | VA-0609/HR-0618 | Medium | fixed | RobotMoneyVault | #836 | `forceRemoveAdapter` now pauses deposits; pinned |
-| HR-M-4 | VA-0609/HR-0618 | Medium | fixed | RwaVault, BasketVault | #836 | RWA emergency unwind staleness gate on both paths; pinned |
+| HR-M-4 | VA-0609/HR-0618 | Medium | fixed | retired RWA vault, BasketVault | #836 | RWA emergency unwind staleness gate on both paths; pinned |
 | HR-M-5 | VA-0609/HR-0618 | Medium | fixed | PortfolioRouter | #836 | `redeemFor` caller authorization enforced; pinned |
 | HR-M-6 | VA-0609/HR-0618 | Medium | fixed | RobotMoneyGateway | #836 | Per-window cap true sliding window; pinned + fuzz |
 | HR-M-7 | VA-0609/HR-0618 | Medium | fixed | RobotMoneyGateway | #836 | Caller-bound commit/reveal; pinned |
@@ -317,9 +329,9 @@ the Passthrough natspec drift (L3-D2) by **#922**.
 | HR-L-2 | VA-0609/HR-0618 | Low | fixed | RobotMoneyVault | #836 | `_pullProportional` last-adapter sweep/clamp DoS; pinned |
 | HR-L-3 | VA-0609/HR-0618 | Low | fixed | RobotMoneyVault | #920 | Irreversible `shutdownVault` under EMERGENCY_ROLE; ADMIN-gated `restoreVault` makes it recoverable (open at HR-0618 HEAD, fixed by #920) |
 | HR-L-4 | VA-0609/HR-0618 | Low | fixed | RobotMoneyVault | #836 | Allowlist revocation no longer bricks deposits (skips ineligible adapter); pinned |
-| HR-L-5 | VA-0609/HR-0618 | Low | fixed | AerodromeSwapAdapter, ChronicleOracleAdapter, UniswapV4SwapAdapter | #836 | Caller deadline forwarded; pinned |
-| HR-L-6 | VA-0609/HR-0618 | Low | fixed | UniswapV4SwapAdapter | #836 | SafeCast on uint128 truncation; pinned |
-| HR-L-7 | VA-0609/HR-0618 | Low | fixed | AerodromeSwapAdapter, ChronicleOracleAdapter | #836 | Unchecked router return-array indexing; structural rewrite (Chronicle secondary site lacks dedicated test) |
+| HR-L-5 | VA-0609/HR-0618 | Low | fixed | AerodromeSwapAdapter, retired Chronicle adapter, retired V4 adapter | #836 | Caller deadline forwarded; pinned |
+| HR-L-6 | VA-0609/HR-0618 | Low | fixed | retired V4 adapter | #836 | SafeCast on uint128 truncation; pinned |
+| HR-L-7 | VA-0609/HR-0618 | Low | fixed | AerodromeSwapAdapter, retired Chronicle adapter | #836 | Unchecked router return-array indexing; structural rewrite (Chronicle secondary site lacks dedicated test) |
 | HR-L-8 | VA-0609/HR-0618 | Low | fixed | PortfolioRouter | #920 | `redeemFor` no slippage/deadline; `minAssetsPerLeg` + deadline added (open at HR-0618 HEAD, fixed by #920) |
 | HR-L-9 | VA-0609/HR-0618 | Low | accepted-with-rationale | PortfolioRouter | — | `setWeights` accepts duplicate vault entries; admin-gated, accepted |
 | HR-L-10 | VA-0609/HR-0618 | Low | fixed | PortfolioRouter, RouterGovernance, VaultRegistry | #920 | Self-administered ADMIN_ROLE no floor; shared `AdminFloorAccessControl` forbids dropping to zero (open at HR-0618 HEAD, fixed by #920) |
@@ -333,18 +345,20 @@ the Passthrough natspec drift (L3-D2) by **#922**.
 | HR-I-1 | VA-0609/HR-0618 | Info | accepted-with-rationale | RobotMoneyVault | — | Adapter array never compacted; bounded by MAX_ADAPTERS active cap |
 | HR-I-2 | VA-0609/HR-0618 | Info | accepted-with-rationale | RobotMoneyVault | — | Exit-fee dust floors to zero; accepted by design |
 | HR-I-3 | VA-0609/HR-0618 | Info | accepted-with-rationale | MorphoAdapter | — | `max` sentinel ignored; out-of-trust-model, vault never passes max |
-| HR-I-4 | VA-0609/HR-0618 | Info | accepted-with-rationale | RmToken | — | approve race / infinite allowance; devnet token, not mainnet-ready |
+| HR-I-4 | VA-0609/HR-0618 | Info | accepted-with-rationale | retired RM test token | — | approve race / infinite allowance; devnet token, not mainnet-ready. Retired 2026-10-05: contract deleted (core 1489) |
 | HR-I-5 | VA-0609/HR-0618 | Info | accepted-with-rationale | UniswapV3PoolSlot0Stub | — | No chain-id guard; demo-only, fail-closed at vault |
-| HR-I-6 | VA-0609/HR-0618 | Info | accepted-with-rationale | UniswapV4SwapAdapter | — | No fee-on-transfer delta check; admin-curated input, out of trust model |
+| HR-I-6 | VA-0609/HR-0618 | Info | accepted-with-rationale | retired V4 adapter | — | No fee-on-transfer delta check; admin-curated input, out of trust model |
 | HR-I-7 | VA-0609/HR-0618 | Info | accepted-with-rationale | VaultRegistry | — | Stores `asset` without 4626 cross-check; admin-only, router re-derives |
 | HR-I-8 | VA-0609/HR-0618 | Info | accepted-with-rationale | RobotMoneyGateway | — | Unbounded AgentPolicy whitelist arrays; owner-self-DoS, out of trust model |
 | HR-I-9 | VA-0609/HR-0618 | Info | fixed | MockVault | #836 | Constructor asset-mismatch revert; pinned, not production-reachable |
-| HR-I-10 | VA-0609/HR-0618 | Info | fixed | ChronicleOracleAdapter | #836 | Hardcoded `WAD*1e12` scaling documented + `UnknownPricePair` revert tests |
+| HR-I-10 | VA-0609/HR-0618 | Info | fixed | retired Chronicle adapter | #836 | Hardcoded `WAD*1e12` scaling documented + `UnknownPricePair` revert tests |
 | HR-L3-D1 | HR-0618 | Low | fixed | BasketVault, lib/TickMath | #920 | Externalized NAV math via deploy-linked library (TickMath externalization #877); #920 adds linked-codehash assertion + totalAssets sanity probe |
 | HR-L3-F1 | HR-0618 | Info | accepted-with-rationale | BasketVault | — | Per-leg sell flooring can dip redeem below preview; dust-bounded (<1¢), documented (ADR-0007) |
 | HR-L3-F2 | HR-0618 | Info | accepted-with-rationale | RobotMoneyGateway | — | `revokeAgent` leaves rolling-window state uncleared; conservative, self-healing within window |
 | HR-L3-D2 | HR-0618 | Info | fixed | script/AdapterBytecodeGuard | #922 | Stale natspec listed Passthrough; purged from natspec + forge-doc mirror, grep-guarded |
 | HR-S-1 | HR-0618 | Info | dismissed-with-rationale | Slither (production source) | — | 0 High, 0 true-positive Medium; all hits known-safe patterns, no action |
+
+> Note 2026-10-05 (core 1494): HR-L-1 above predates core 1494. Withdrawals are now never frozen, and `withdrawalsPaused` is deleted. A pause stops deposits only (`pauseDeposits()` / `unpauseDeposits()` / `depositsPaused()`, `DEPOSIT_PAUSER_ROLE`, `VaultStatus.DepositsPaused`, `DepositsArePaused`). The deployed v1 vault keeps its old code. The rows above are kept as written.
 
 ### CD-0602 — Confused-deputy / caller-supplied-identity audit
 
@@ -372,9 +386,9 @@ found by SR-0612 do not contradict it). Nothing to remediate.
 
 | Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
 |---|---|---|---|---|---|---|
-| SR-0612-OPEN | SR-0612 | High–Medium | accepted-with-rationale | RobotMoneyGateway, PortfolioRouter, RobotMoneyVault, BasketVault, RwaVault, RouterGovernance, ChronicleOracleAdapter, AerodromeSwapAdapter | — | 4 High + 19 Medium + 14 Low + 10 Info open on `dev` (or with fixes only on an unmerged remediation branch); each a known, acknowledged risk pending the contract-security-remediation phases (#933/#958/#987) |
+| SR-0612-OPEN | SR-0612 | High–Medium | accepted-with-rationale | RobotMoneyGateway, PortfolioRouter, RobotMoneyVault, BasketVault, retired RWA vault, RouterGovernance, retired Chronicle adapter, AerodromeSwapAdapter | — | 4 High + 19 Medium + 14 Low + 10 Info open on `dev` (or with fixes only on an unmerged remediation branch); each a known, acknowledged risk pending the contract-security-remediation phases (#933/#958/#987) |
 | SR-0612-P1 | SR-0612 | Process | accepted-with-rationale | docs/code-review/20260606-code-review-internal-claude.md | — | Audit/remediation drift: DC-0606 claimed fixes (VAULT-002, VAULT-006, ORA-001/AC-005, MEV-001, AC-006, GOV-001/AC-002, VaultRegistry asset check) never landed on `dev`; recorded so this ledger reflects landing status, not claimed status |
-| DC-0606-LANDED | DC-0606 | High–Info | fixed | RobotMoneyVault, BasketVault, RobotMoneyGateway, RouterGovernance, ChronicleOracleAdapter, UniswapV4SwapAdapter, explorer-indexer, rmpc, dapp | #836, #933, #958 | ~63 deep-clean findings landed (5 Critical/High + Medium/Low/Info) across the contract-security-remediation phases; excludes the 8 contradicted-by-SR-0612 claims (above) and the 4 deferred items (below) |
+| DC-0606-LANDED | DC-0606 | High–Info | fixed | RobotMoneyVault, BasketVault, RobotMoneyGateway, RouterGovernance, retired Chronicle adapter, retired V4 adapter, explorer-indexer, rmpc, dapp | #836, #933, #958 | ~63 deep-clean findings landed (5 Critical/High + Medium/Low/Info) across the contract-security-remediation phases; excludes the 8 contradicted-by-SR-0612 claims (above) and the 4 deferred items (below) |
 | DC-0606-DEFER | DC-0606 | Deferred | accepted-with-rationale | VaultRegistry, RouterGovernance, BasketVault/AgentTokenVault, admin-transfer surface | — | 4 deferred items (RMDA-003 stale cached status, GOV-003 execute() re-validation, VAULT-011 SHORTLIST_ADD_DELAY, AC-008 two-step admin transfer); NatSpec invariant added, full fix needs governance/interface upgrade |
 
 ### AZ-0623 — TestMachine Azimuth automated scan (2026-06-23, 55 findings)
@@ -396,7 +410,7 @@ specific agent; the #751 router-layer guard does not address the gateway-level c
 | AZ-GW-2 | AZ-0623 | Medium | accepted-with-rationale | RobotMoneyGateway, rmpc (get_agent.rs), dapp (AgentPoliciesPanel.tsx) | — | rmpc get-agent and dapp report allowance(agent, gateway); router withdrawals spend shareReceiver allowances. Operator sees wrong blast radius for router-withdrawal policies. |
 | AZ-DAPP-1 | AZ-0623 | Medium | accepted-with-rationale | dapp (OnboardingWizard.tsx, AuthorizeTab.tsx), RobotMoneyGateway | — | Dapp onboarding and authorize tab call admin-only `authorizeAgent`; permissionless commit/reveal path not wired. Normal depositor cannot complete wizard. |
 | AZ-RPC-1 | AZ-0623 | Medium | accepted-with-rationale | rmpc (deposit.rs, tx/mod.rs) | — | Deposit receipt timeout unconditionally clears the replay cache entry even though timeout ≠ tx failed; in-flight tx can succeed after entry deleted, allowing duplicate broadcast. |
-| AZ-BSK-3 | AZ-0623 | Medium | fixed | BasketVault, RobotMoneyVault | #1098 | Deposits during adapter exclusion proceeded at reduced NAV; #1098 prices new shares against eligible-adapter NAV, excluding idle USDC from the denominator. |
+| AZ-BSK-3 | AZ-0623 | Medium | fixed | BasketVault, RobotMoneyVault | #1098, #1664 | Deposits during adapter exclusion proceeded at reduced NAV. #1098 excluded idle USDC from the mint denominator, which over-minted after `emergencyUnwind` + `unpauseDeposits`; #1664 (C1-corrected) prices new shares against the full idle-inclusive pre-deposit NAV, `mulDiv(realizedDelta, supplyBefore + 10^18, taBefore + 1)`. |
 | AZ-BSK-4 | AZ-0623 | Medium | accepted-with-rationale | BasketVault, dapp (DepositWithdrawTab.tsx) | — | Direct vault deposit/redeem paths have no on-chain minimum-output parameter; preview is advisory only. |
 | AZ-BSK-5 | AZ-0623 | Medium | fixed | BasketVault | #1099 | Permissionless `reabsorbRemovedAsset` allowed MEV to sandwich NAV recovery; #1099 requires caller-supplied `minUsdcOut` slippage protection. |
 | AZ-BSK-6 | AZ-0623 | Medium | accepted-with-rationale | BasketVault | — | Redemptions use only vault-wide slippage floor; no per-caller `minAssetsOut`; MEV can extract up to `maxSlippageBps` within the configured band. |

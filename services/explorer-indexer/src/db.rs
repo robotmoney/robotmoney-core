@@ -815,7 +815,7 @@ impl Db {
     /// events. But that made a WRONG value permanent: the column is keyed by
     /// `(chain_id, address)`, and a chain id plus a deterministic address is
     /// not a chain identity, so a block detected against the Geth devnet
-    /// survives the swap to `anvil --load-state` on the same Postgres and
+    /// survives the swap to the Twin fork (an anvil lazy fork) on the same Postgres and
     /// wedges the indexer below the new chain's servable range with no way out
     /// but manual SQL.
     ///
@@ -1210,6 +1210,11 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Insert one vault state snapshot.
+    ///
+    /// `deposits_paused` is the vault's `depositsPaused()` reading. It lands in
+    /// the `vault_snapshots.paused` column, which keeps its historical name (no
+    /// migration). The flag stops deposits only; withdrawals are never frozen.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_vault_snapshot(
         &self,
@@ -1220,7 +1225,7 @@ impl Db {
         total_supply: U256,
         exit_fee_bps: i64,
         tvl_cap: U256,
-        paused: bool,
+        deposits_paused: bool,
     ) -> Result<u64, DbError> {
         let r = sqlx::query(
             "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, exit_fee_bps, tvl_cap, paused) \
@@ -1234,7 +1239,7 @@ impl Db {
         .bind(u256_to_decimal(total_supply))
         .bind(exit_fee_bps)
         .bind(u256_to_decimal(tvl_cap))
-        .bind(paused)
+        .bind(deposits_paused)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
@@ -1299,7 +1304,8 @@ impl Db {
     /// re-indexing the same registration block is a no-op.
     ///
     /// `status` is the small integer encoding of `VaultStatus`:
-    /// 0 = Active, 1 = Paused, 2 = Retired.
+    /// 0 = Active, 1 = DepositsPaused, 2 = Retired. Every status, DepositsPaused
+    /// and Retired included, still lets holders redeem.
     #[allow(clippy::too_many_arguments)]
     pub async fn upsert_vault(
         &self,

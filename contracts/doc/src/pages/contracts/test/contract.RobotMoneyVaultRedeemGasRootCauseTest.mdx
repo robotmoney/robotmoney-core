@@ -1,0 +1,272 @@
+---
+title: "RobotMoneyVaultRedeemGasRootCauseTest"
+---
+
+# RobotMoneyVaultRedeemGasRootCauseTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### USDC_BASE
+
+```solidity
+address internal constant USDC_BASE = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### ENTRY_FLOOR
+
+```solidity
+uint24 internal constant ENTRY_FLOOR = 1_600_000;
+```
+
+### ADAPTER_FLOOR
+
+```solidity
+uint24 internal constant ADAPTER_FLOOR = 400_000;
+```
+
+### TAIL_FLOOR
+
+```solidity
+uint24 internal constant TAIL_FLOOR = 150_000;
+```
+
+## State Variables
+
+### vault
+
+```solidity
+RobotMoneyVault internal vault;
+```
+
+### dep
+
+```solidity
+DeployVault.Deployed internal dep;
+```
+
+### user
+
+```solidity
+address internal user = makeAddr("gasUser");
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("gasAdmin");
+```
+
+### seedReceiver
+
+```solidity
+address internal seedReceiver = makeAddr("gasSeedReceiver");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_used-uint256"></a>
+
+### _used
+
+```solidity
+function _used(uint256 shares) internal returns (uint256 used);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| used | `uint256` |  |
+
+<a id="_try-uint256-uint256"></a>
+
+### _try
+
+```solidity
+function _try(uint256 shares, uint256 gasLimit)
+        internal
+        returns (bool ok, bytes memory ret, uint256 used);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| gasLimit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+| used | `uint256` |  |
+
+<a id="_estimate-uint256"></a>
+
+### _estimate
+
+<i>
+
+Smallest passing limit by bisection (what eth_estimateGas does) at the current state.
+
+</i>
+
+```solidity
+function _estimate(uint256 shares) internal returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="test_rootcause_accrualaddsgasinlaterblock"></a>
+
+### test_rootCause_accrualAddsGasInLaterBlock
+
+Root cause: a redeem in the same second as the last protocol accrual skips the
+interest accrual. The first redeem in a later block pays for it. The gas
+difference is the whole gap between the estimate and the inclusion.
+
+```solidity
+function test_rootCause_accrualAddsGasInLaterBlock() public;
+```
+
+<a id="test_rootcause_estimatethenincludenextblock"></a>
+
+### test_rootCause_estimateThenIncludeNextBlock
+
+The reported failure, reproduced: estimate in the accrued-this-block state,
+include one block later at exactly that limit. Must execute (the gas floors
+lift every limit above the later-block cost). Against a vault without the
+floors this exact sequence reverts with empty data.
+
+```solidity
+function test_rootCause_estimateThenIncludeNextBlock() public;
+```
+
+<a id="test_rootcause_limitatsameblockcostrevertstyped"></a>
+
+### test_rootCause_limitAtSameBlockCostRevertsTyped
+
+A limit equal to the accrued-this-block cost reverts typed, never empty.
+
+```solidity
+function test_rootCause_limitAtSameBlockCostRevertsTyped() public;
+```
+
+<a id="_zerofloors-bool-bool"></a>
+
+### _zeroFloors
+
+<i>
+
+Replace the vault's runtime code with the same code, gas floors zeroed as asked.
+Storage and immutables are unchanged (the floors are constants, not storage).
+
+</i>
+
+```solidity
+function _zeroFloors(bool entry, bool midPath) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| entry | `bool` |  |
+| midPath | `bool` |  |
+
+<a id="_laterblock"></a>
+
+### _laterBlock
+
+```solidity
+function _laterBlock() internal;
+```
+
+<a id="test_unfixedvault_estimatefailsoneblocklaterwithemptyrevert"></a>
+
+### test_unfixedVault_estimateFailsOneBlockLaterWithEmptyRevert
+
+The reported defect, reproduced on the unfixed vault (every gas floor zeroed in the
+shipped bytecode): the estimate from the accrued-this-block state fails one block
+later with EMPTY revert data, the status-0-no-reason symptom of core 1482.
+
+```solidity
+function test_unfixedVault_estimateFailsOneBlockLaterWithEmptyRevert() public;
+```
+
+<a id="test_midpaththreshold_laterblock_staysunderentryfloor"></a>
+
+### test_midPathThreshold_laterBlock_staysUnderEntryFloor
+
+The margin under the entry floor. With only the entry floor zeroed, the smallest
+passing limit in the later block is set by the mid-path floors (the 400k check
+before the last adapter call or before a pass-2 rounding pull). It must stay well
+under the entry floor, or the mid-path floor would bind and the estimate would move
+with the accrual state again.
+
+```solidity
+function test_midPathThreshold_laterBlock_staysUnderEntryFloor() public;
+```
+
+<a id="_adapterwithdrawgas-address-uint256"></a>
+
+### _adapterWithdrawGas
+
+```solidity
+function _adapterWithdrawGas(address adapter, uint256 amount) internal returns (uint256 used);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| used | `uint256` |  |
+
+<a id="test_rootcause_realadapterwithdrawgas_laterblock"></a>
+
+### test_rootCause_realAdapterWithdrawGas_laterBlock
+
+Per adapter withdraw cost in the later-block state, against the 400k per-adapter
+floor. Moonwell (MetaMorpho) is the heaviest and the closest to the floor.
+
+```solidity
+function test_rootCause_realAdapterWithdrawGas_laterBlock() public;
+```
+

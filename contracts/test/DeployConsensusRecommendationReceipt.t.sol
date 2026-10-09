@@ -3,7 +3,6 @@
 // Implements: issue #1247 acceptance criteria 2 and 10, task 4.10
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
@@ -16,7 +15,8 @@ import {
 } from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "../gateway/MockVault.sol";
+import {MockVault} from "./helpers/MockVault.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 
 /// @title DeployConsensusRecommendationReceiptTest
 /// @notice AC10: the receipt contract deploys **alongside**
@@ -24,12 +24,12 @@ import {MockVault} from "../gateway/MockVault.sol";
 ///         the receipt contract lands on the `TimelockController` and nowhere
 ///         else. This is a single greenfield rollout — no migration and no
 ///         registered agent to preserve.
-contract DeployConsensusRecommendationReceiptTest is Test {
+contract DeployConsensusRecommendationReceiptTest is SafeGovernance {
     address admin = address(0xA0);
     address pauser = address(0xA1);
     address submitter = address(0xB1);
-    address proposer = address(0xC0);
-    address executor = address(0xC1);
+    /// A real SafeL2 1.4.1 proxy: the only proposer and canceller on the timelock.
+    address safe;
 
     TestERC20 usdc;
     MockVault vault;
@@ -45,11 +45,9 @@ contract DeployConsensusRecommendationReceiptTest is Test {
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
 
-        address[] memory proposers = new address[](1);
-        proposers[0] = proposer;
-        address[] memory executors = new address[](1);
-        executors[0] = executor;
-        timelock = new TimelockController(1 hours, proposers, executors, address(0));
+        _installSafeSet();
+        safe = _newDefaultSafe();
+        timelock = _newGovTimelock(safe, 1 hours);
 
         script = new DeployInvestmentCommitteePolicy();
 
@@ -140,8 +138,13 @@ contract DeployConsensusRecommendationReceiptTest is Test {
         vm.expectRevert();
         d.receipts.releaseReceipt(id);
 
-        vm.prank(address(timelock));
-        d.receipts.releaseReceipt(id);
+        // Release the way production does: Safe (two signatures) -> timelock -> receipt.
+        bytes memory release = abi.encodeCall(IConsensusRecommendationReceipt.releaseReceipt, (id));
+        _govSchedule(safe, timelock, address(d.receipts), release, bytes32(0), 1 hours);
+        _expectExecuteRefused(safe, timelock, address(d.receipts), release, bytes32(0));
+        vm.warp(block.timestamp + 1 hours);
+        _govExecute(safe, timelock, address(d.receipts), release, bytes32(0));
         assertTrue(d.receipts.isReleased(id));
+        _expectExecuteRefused(safe, timelock, address(d.receipts), release, bytes32(0));
     }
 }

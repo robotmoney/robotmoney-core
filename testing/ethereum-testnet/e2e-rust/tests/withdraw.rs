@@ -1,7 +1,7 @@
 //! Canonical: Plan tracking issue #109 §5 — End-to-end scenarios
 //! (See also: docs/technical/rmpc-read-output-contract.md)
 //!
-//! Suite-07 withdraw scenarios for `rmpc withdraw` against the Geth+Lighthouse
+//! Suite-07 withdraw scenarios for `rmpc withdraw` against the Twin chain
 //! devnet (issue #312).
 //!
 //! These tests exercise preflight refusal paths that do not require
@@ -10,8 +10,9 @@
 //! in this file will be enabled once that lands.
 //!
 //! Scenarios:
-//! 1. `withdraw_vault_paused_refuses` — vault paused, preflight refuses
-//!    with `ErrVaultPaused`.
+//! 1. `withdraw_non_vault_source_refuses` — the source "vault" is not an
+//!    ERC-4626 share token, so the share preflight read fails and rmpc
+//!    refuses. A deposit pause is never a withdrawal refusal (core 1494).
 //! 2. `withdraw_allowance_insufficient_refuses` — share allowance(agent, gateway)
 //!    is zero, preflight refuses with `ErrShareAllowanceInsufficient`.
 //! 3. `withdraw_balance_insufficient_refuses` — agent holds no shares,
@@ -23,22 +24,11 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use rmpc_e2e::Fixture;
+use rmpc_e2e::{require_prereqs, Fixture};
 use serde_json::Value;
 
 /// USDC/share units (6 decimals) used throughout the suite.
 const ONE_SHARE: u128 = 1_000_000;
-
-fn skip_if_no_prereqs(test_name: &str) -> bool {
-    if !rmpc_e2e::prerequisites_available() {
-        eprintln!(
-            "[{test_name}] docker / forge / cast not on PATH; skipping. \
-             Install Docker + Foundry to run this test."
-        );
-        return true;
-    }
-    false
-}
 
 fn parse_json(stdout: &str, ctx: &str) -> Value {
     serde_json::from_str(stdout)
@@ -61,7 +51,7 @@ fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
     let cell = shared_fixture();
     let mut guard = cell.lock().expect("shared fixture mutex poisoned");
     if guard.is_none() {
-        let fx = Fixture::new().expect("boot geth devnet + deploy");
+        let fx = Fixture::new().expect("boot the Twin chain + deploy");
         *guard = Some(fx);
     }
     f(guard.as_ref().expect("fixture present"))
@@ -86,42 +76,33 @@ fn withdraw_args(shares: u128, vault_hex: &str, oid: &str) -> Vec<String> {
 
 // ------------------------------------------------------------- scenario 1
 
-/// When the vault is paused, `rmpc withdraw` must refuse with
-/// `ErrVaultPaused` before signing anything.
+/// When `--source-vault` is not a share token, `rmpc withdraw` must refuse
+/// before signing anything.
 ///
-/// NOTE: the vault's `pause()` function requires `EMERGENCY_ROLE`. We
-/// simulate a paused vault by pointing `--source-vault` at the gateway
-/// address itself, which does not implement `paused()` and will revert
-/// the eth_call — causing the preflight to surface an `ErrRpcServer`
-/// or `ErrRpcDecode` refusal.
-///
-/// A proper test against a paused RobotMoneyVault requires the vault to
-/// have `EMERGENCY_ROLE` set up in the devnet deploy; this scenario
-/// exercises the non-zero exit contract and will be expanded when the
-/// full vault-pause fixture is added.
+/// We point `--source-vault` at the gateway address itself, which does not
+/// implement the ERC-20 share reads, so the eth_call reverts and the
+/// preflight surfaces an `ErrRpcServer` or `ErrRpcDecode` refusal.
 #[test]
-fn withdraw_vault_paused_refuses() {
-    if skip_if_no_prereqs("withdraw_vault_paused_refuses") {
-        return;
-    }
+fn withdraw_non_vault_source_refuses() {
+    require_prereqs("withdraw_non_vault_source_refuses");
     with_fixture(|fx| {
-        // The gateway does not implement vault.paused(); calling it will
-        // cause the vault preflight to fail (RPC error or decode error),
+        // The gateway does not implement the share reads; calling them
+        // causes the vault preflight to fail (RPC error or decode error),
         // which is a hard refusal. We accept any non-zero exit here as
         // proof the preflight gate fires before signing.
         let gateway_hex = format!("{:#x}", fx.gateway());
-        let oid = order_id("vault_paused_refuses");
+        let oid = order_id("non_vault_source_refuses");
         let args = withdraw_args(ONE_SHARE, &gateway_hex, &oid);
         let run = fx.run_rmpc_withdraw(args).expect("spawn rmpc withdraw");
 
         assert!(
             !run.status.success(),
-            "rmpc withdraw must refuse when vault does not implement paused(); \
+            "rmpc withdraw must refuse when the source is not a share token; \
              got exit 0.\nstdout={}\nstderr={}",
             run.stdout,
             run.stderr
         );
-        let v = parse_json(&run.stdout, "withdraw_vault_paused_refuses");
+        let v = parse_json(&run.stdout, "withdraw_non_vault_source_refuses");
         assert_eq!(
             v.get("status").and_then(|s| s.as_str()),
             Some("refused"),
@@ -141,9 +122,7 @@ fn withdraw_vault_paused_refuses() {
 /// is "refused".
 #[test]
 fn withdraw_allowance_insufficient_refuses() {
-    if skip_if_no_prereqs("withdraw_allowance_insufficient_refuses") {
-        return;
-    }
+    require_prereqs("withdraw_allowance_insufficient_refuses");
     with_fixture(|fx| {
         let vault_hex = format!("{:#x}", fx.vault());
         let oid = order_id("allowance_insufficient_refuses");
@@ -185,9 +164,7 @@ fn withdraw_allowance_insufficient_refuses() {
 /// so the balance check fails.
 #[test]
 fn withdraw_balance_insufficient_refuses() {
-    if skip_if_no_prereqs("withdraw_balance_insufficient_refuses") {
-        return;
-    }
+    require_prereqs("withdraw_balance_insufficient_refuses");
     with_fixture(|fx| {
         // Approve shares from agent to gateway to pass the allowance check.
         // The vault token address is the vault itself (ERC-4626 shares).
@@ -245,9 +222,7 @@ fn withdraw_balance_insufficient_refuses() {
 /// must be refused by the gateway preflight (`ErrConfig`).
 #[test]
 fn withdraw_over_per_payment_cap_refuses() {
-    if skip_if_no_prereqs("withdraw_over_per_payment_cap_refuses") {
-        return;
-    }
+    require_prereqs("withdraw_over_per_payment_cap_refuses");
     with_fixture(|fx| {
         let vault_hex = format!("{:#x}", fx.vault());
         let oid = order_id("over_per_payment_cap_refuses");

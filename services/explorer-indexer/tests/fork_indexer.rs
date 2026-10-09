@@ -1,89 +1,109 @@
-//! Full-stack integration test: boot Postgres in a container, connect to a
-//! shared Geth devnet via `RMPC_TESTNET_RPC_URL` (or fall back to the
-//! `rmpc-fork-e2e` anvil harness when the env var is unset), point the
-//! indexer at both, run a bounded range, and assert the contract of issue #57:
+//! Full-stack integration test: boot Postgres in a container, deploy a vault of OUR OWN to the Twin
+//! chain through the deploy scripts (the smoke-test harness, which calls the "publish
+//! contracts" runbook, `publish-contracts/` in this repo), point the indexer at the Twin chain and at the manifest addresses, run a
+//! bounded range, and assert the contract of issue #57:
 //!
 //! - `indexer_runs` records a successful run.
 //! - All 9 minimum tables are reachable by COUNT(*) (i.e. every
 //!   migration applied cleanly under load).
-//! - At least one `vault_snapshots` row is produced (heartbeat or
-//!   event-driven; the live vault on Base always has totalAssets
-//!   readable, so the snapshot succeeds).
+//! - A `vault_snapshots` row exists for the NEW vault (heartbeat or event-driven; our vault
+//!   always has totalAssets readable). The test waits for it and fails when it never lands.
 //! - Re-running the same range produces 0 net inserts (idempotency).
 //!
-//! Preferred: set `RMPC_TESTNET_RPC_URL=http://localhost:8545` (shared Geth
-//! devnet). Falls back to anvil via `RMPC_FORK_RPC_URL` or the checked-in
-//! fixture. Skips when neither is available.
+//! The Twin chain (id 918453) is a pinned lazy fork of real Base state made with anvil (core 1498,
+//! 1496). Set `TWIN_RPC_URL` to a running fork (CI does, through .github/actions/twin-fork), and
+//! optionally `STAGE_SHEET` for the publish run (default: the committed `deployments/twin-918453/stage-sheet.env`). Clean room rule: this test never
+//! reads the live production v1 vault or any hard-coded Robot Money address. Every address comes
+//! from the manifests the publish run wrote.
 
 mod common;
 
-use alloy_primitives::Address;
 use common::pg_fixture;
 use explorer_indexer::{db::CountTable, indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn populates_nine_tables_and_reindex_is_idempotent() {
-    let has_testnet = std::env::var("RMPC_TESTNET_RPC_URL")
+    let has_twin = std::env::var("TWIN_RPC_URL")
         .map(|v| !v.is_empty())
         .unwrap_or(false);
-    let has_fork = std::env::var("RMPC_FORK_RPC_URL")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    if !has_testnet && !has_fork {
+    if !has_twin {
         panic!(
-            "[explorer-indexer-tests] RPC endpoint REQUIRED here but unavailable. \
-             Set RMPC_TESTNET_RPC_URL or RMPC_FORK_RPC_URL to run against the shared Geth \
-             devnet or an Anvil fork."
+            "[explorer-indexer-tests] TWIN_RPC_URL REQUIRED here but unset. Start the Twin fork \
+             (bun scripts/devnet/twin-fork.ts start) and export TWIN_RPC_URL."
         );
     }
     let fx = pg_fixture().await;
 
-    // Boot fork-anvil on a blocking thread (the harness uses
-    // blocking reqwest + std::process). We hold the fixture for the
-    // duration of the test.
-    let fork = tokio::task::spawn_blocking(rmpc_fork_e2e::ForkFixture::new)
+    // Deploy our own vault. The harness uses blocking reqwest and std::process, so run it on a
+    // blocking thread. It reuses the running Twin fork and never stops it.
+    let twin = tokio::task::spawn_blocking(smoke_test::Fixture::new)
         .await
         .unwrap()
-        .expect("ForkFixture boots");
-    let rpc_url = fork.rpc_url.clone();
+        .expect("smoke-test fixture deploys its own vault on the Twin chain");
+    let rpc_url = twin.rpc_url().to_string();
 
     let rpc = JsonRpc::new(&rpc_url);
-    // The vault is real on Base mainnet (present in the devnet genesis alloc via
-    // genesis-alloc.json); the gateway hasn't deployed yet so we use a zero-address
-    // placeholder. eth_getLogs against an empty-event address is allowed.
-    // On the shared Geth devnet the chain_id is 918453 (the local testnet network
-    // id), but we record it as BASE_CHAIN_ID in the DB since the contract addresses
-    // are the same as Base mainnet — the chain_id field is metadata only.
-    let cfg = IndexerConfig {
-        chain_id: rmpc_fork_e2e::BASE_CHAIN_ID as i64,
-        chain_name: "base".into(),
-        rpc_label: fork.rpc_label.clone(),
-        gateway: Address::ZERO,
-        vault: rmpc_fork_e2e::addresses::VAULT,
+    let new_vault = twin.vault();
+    let new_vault_bytes: Vec<u8> = new_vault.as_slice().to_vec();
+    let cfg_for = |head: u64| IndexerConfig {
+        chain_id: twin.chain_id() as i64,
+        chain_name: "twin".into(),
+        rpc_label: "twin-fork".into(),
+        gateway: twin.gateway(),
+        vault: new_vault,
         registry: None,
         router_governance: None,
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
-        // Cap the run at the safe head so the heartbeat snapshot lands at a known
-        // block. Use saturating_sub so a fresh devnet (pin.block < CONFIRMATIONS)
-        // doesn't panic — the indexer processes the genesis range and the heartbeat
-        // fires because there is no previous vault snapshot in the DB.
-        end_block: Some(
-            fork.pin
-                .block
-                .saturating_sub(explorer_indexer::CONFIRMATIONS),
-        ),
+        // Cap the run at the safe head so the heartbeat snapshot lands at a known block.
+        end_block: Some(head.saturating_sub(explorer_indexer::CONFIRMATIONS)),
         feature_flags: 0,
     };
 
-    // First run.
-    let o1 = run_once(&fx.db, &rpc, &cfg).await.expect("run_once 1");
-    assert!(o1.error.is_none(), "first run clean: {:?}", o1.error);
+    // Wait for the indexer to index the freshly deployed vault: run, and when no vault_snapshots
+    // row for the NEW vault exists yet, mine a block (an allowed Twin chain environment step, so
+    // the safe head moves past the deploy block) and run again. Bounded: 30 attempts.
+    let snapshots_for_new_vault = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM vault_snapshots WHERE chain_id = $1 AND contract = $2",
+        )
+        .bind(twin.chain_id() as i64)
+        .bind(&new_vault_bytes[..])
+        .fetch_one(fx.db.pool())
+        .await
+        .expect("count vault_snapshots for the new vault")
+    };
+    let http = reqwest::Client::new();
+    let mut cfg = cfg_for(rpc.block_number().await.expect("Twin head block"));
+    let mut o1 = None;
+    for attempt in 0..30 {
+        let head = rpc.block_number().await.expect("Twin head block");
+        cfg = cfg_for(head);
+        let o = run_once(&fx.db, &rpc, &cfg).await.expect("run_once");
+        assert!(o.error.is_none(), "run {attempt} clean: {:?}", o.error);
+        o1.get_or_insert(o);
+        if snapshots_for_new_vault().await >= 1 {
+            break;
+        }
+        let _ = http
+            .post(&rpc_url)
+            .json(
+                &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"anvil_mine","params":["0x6"]}),
+            )
+            .send()
+            .await;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let o1 = o1.expect("at least one run");
     assert!(
         o1.last_indexed_block.is_some(),
         "first run advances last_indexed_block"
+    );
+    assert!(
+        snapshots_for_new_vault().await >= 1,
+        "no vault_snapshots row for the freshly deployed vault {new_vault:#x}"
     );
 
     // All nine tables addressable.
@@ -100,11 +120,7 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
     ] {
         let _ = fx.db.count(t).await.unwrap_or_else(|e| panic!("{e}"));
     }
-    // Heartbeat snapshot must have landed at least once.
-    assert!(
-        fx.db.count(CountTable::VaultSnapshots).await.unwrap() >= 1,
-        "at least one vault_snapshots row from heartbeat"
-    );
+    // Heartbeat snapshot for the NEW vault landed (asserted above).
     // Bookkeeping rows present.
     assert_eq!(fx.db.count(CountTable::Chains).await.unwrap(), 1);
     assert_eq!(fx.db.count(CountTable::Contracts).await.unwrap(), 2);
@@ -139,6 +155,6 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
         tx_before
     );
 
-    // Tear down the anvil child.
-    drop(fork);
+    // A fork this test did not start is left running.
+    drop(twin);
 }

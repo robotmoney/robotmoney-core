@@ -61,7 +61,12 @@ The deferred existing `rmpc status` (issue #15) command predates §9 and emits a
 - **Rationale.** A fabricated numeric default is data that a consumer can
   mistake for a successful answer. JSON `null` matches the existing
   `share_price` convention for "no answer" and is distinguishable from every
-  successful `totalAssets()` result, including an empty vault.
+  successful result, including an empty vault.
+- **Applies to.** Both `total_assets` (`totalAssets()`) and `total_supply`
+  (`totalSupply()`) on `get-vault` and `get-vaults`. A failed `totalSupply()`
+  renders `null`; a vault with genuinely zero shares renders `"0"`. Consumers
+  that parse these fields must treat `null` as "unknown" and fail loudly, never
+  coerce it to zero.
 
 ### 3.7 Snapshot-test placement is per-command, not per-envelope
 
@@ -117,13 +122,13 @@ strings are:
 ```
 ErrVaultDisabled: target vault is not registered or has been disabled
 ErrPolicyExpired: agent policy has expired (validUntil < block.timestamp)
-ErrLegUnavailable: router leg vault is unavailable (paused, full, or de-listed)
+ErrLegUnavailable: router leg vault is unavailable (deposits paused, full, or de-listed)
 ErrSlippageBoundExceeded: estimated shares per leg fall below the caller's minimum bound
 ```
 
 These are the only `RmpcError` variants that map directly from contract
 execution results rather than pre-flight checks.  Earlier variants such as
-`ErrGatewayPaused`, `ErrAllowanceInsufficient`, and `ErrBalanceInsufficient`
+`ErrDepositsPaused` (deposits only), `ErrAllowanceInsufficient`, and `ErrBalanceInsufficient`
 are raised before the transaction is signed; these four are raised from the
 on-chain revert data decoded from a mined or simulated transaction.
 

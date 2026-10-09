@@ -5,9 +5,10 @@
  * (issue #269 — each depositor is the sole authority over her own
  * agent). The `authorizeAgent` / `setPolicy` / `revokeAgent` surface is
  * permissionless on the contract; gating is by recorded `agentOwner`,
- * not by `ADMIN_ROLE`. `ADMIN_ROLE` survives only as a protocol-wide
- * kill-switch counterweight to `pause` (`unpause`) held by the
- * contract-upgrader.
+ * not by `ADMIN_ROLE`. `ADMIN_ROLE` survives only as the counterweight
+ * to `pauseDeposits` (it alone may call `unpauseDeposits`) held by the
+ * contract-upgrader. A deposit pause stops new deposits only; it never
+ * blocks a withdrawal (core 1494).
  *
  * Tracks the canonical interface in
  * `contracts/gateway/interfaces/IGateway.sol`. Only the functions the
@@ -81,21 +82,21 @@ export const gatewayAbi = [
   },
   {
     type: "function",
-    name: "pause",
+    name: "pauseDeposits",
     stateMutability: "nonpayable",
     inputs: [],
     outputs: [],
   },
   {
     type: "function",
-    name: "unpause",
+    name: "unpauseDeposits",
     stateMutability: "nonpayable",
     inputs: [],
     outputs: [],
   },
   {
     type: "function",
-    name: "paused",
+    name: "depositsPaused",
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "bool" }],
@@ -118,8 +119,9 @@ export const gatewayAbi = [
     outputs: [{ name: "", type: "bool" }],
   },
   // OpenZeppelin AccessControl — used to grant/revoke ADMIN_ROLE and
-  // PAUSER_ROLE. Caller must hold the role's admin role (DEFAULT_ADMIN_ROLE
-  // for ADMIN/PAUSER per `contracts/gateway/AccessRoles.sol`).
+  // DEPOSIT_PAUSER_ROLE. Caller must hold the role's admin role
+  // (DEFAULT_ADMIN_ROLE for ADMIN/DEPOSIT_PAUSER per
+  // `contracts/gateway/AccessRoles.sol`).
   {
     type: "function",
     name: "grantRole",
@@ -182,8 +184,8 @@ export type AdminActionName =
   | "authorizeAgent"
   | "setPolicy"
   | "revokeAgent"
-  | "pause"
-  | "unpause"
+  | "pauseDeposits"
+  | "unpauseDeposits"
   | "grantRole"
   | "revokeRole";
 
@@ -192,25 +194,32 @@ export type AdminActionName =
  * AGENT_ROLE has its own dedicated depositor-owned authorize/revoke
  * surface (because it carries a policy struct and is gated on
  * `msg.sender == agentOwner[agent]`, not on any privileged role).
- * The role-bytes32 path here is for ADMIN_ROLE and PAUSER_ROLE only —
+ * The role-bytes32 path here is for ADMIN_ROLE and DEPOSIT_PAUSER_ROLE only —
  * AGENT_ROLE is intentionally excluded so it can never be granted
  * without setting a policy through the depositor-owned surface.
  */
-export type RoleName = "ADMIN_ROLE" | "PAUSER_ROLE";
+export type RoleName = "ADMIN_ROLE" | "DEPOSIT_PAUSER_ROLE";
 
 /**
  * keccak256 of the role string, matching `contracts/gateway/AccessRoles.sol`:
- *   bytes32 public constant ADMIN_ROLE  = keccak256("ADMIN_ROLE");
- *   bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+ *   bytes32 public constant ADMIN_ROLE          = keccak256("ADMIN_ROLE");
+ *   bytes32 public constant DEPOSIT_PAUSER_ROLE = keccak256("DEPOSIT_PAUSER_ROLE");
  * Hard-coded to keep the dapp pure and avoid an extra RPC round trip.
  */
 export const ROLE_HASH: Record<RoleName, `0x${string}`> = {
   ADMIN_ROLE: "0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775",
-  PAUSER_ROLE: "0x65d7a28e3265b37a6474929f336521b332c1681b933f6cb9f3376673440d862a",
+  DEPOSIT_PAUSER_ROLE: "0x39d7c99df860586d89a6559d1f1be4c1787de0c0cafbcd46bfce1ec1f971e238",
 };
 
 export const ADMIN_ROLE_HASH = ROLE_HASH.ADMIN_ROLE;
-export const PAUSER_ROLE_HASH = ROLE_HASH.PAUSER_ROLE;
+export const DEPOSIT_PAUSER_ROLE_HASH = ROLE_HASH.DEPOSIT_PAUSER_ROLE;
+/**
+ * OpenZeppelin AccessControl `DEFAULT_ADMIN_ROLE` (bytes32 zero). It is the
+ * admin role of ADMIN_ROLE and DEPOSIT_PAUSER_ROLE on the gateway, so it is what a
+ * wallet needs to grant or revoke either.
+ */
+export const DEFAULT_ADMIN_ROLE_HASH =
+  "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
 
 /**
  * Minimal ERC-20 ABI fragment used by the testnet/devnet faucet (issue
@@ -371,9 +380,10 @@ export type VaultActionName = "deposit" | "redeem";
  *     `VaultRegistry.sol` today. See `VaultRecord` below for where the real
  *     equivalents (if any) live instead.
  *
- * VaultRecord.status encodes as uint8: 0=Active, 1=Paused, 2=Retired.
- * The `VaultSelectorDepositTab` calls `getVault` live before submit to
- * guard against cached paused-vault state (issue #417 AC §4). Because
+ * VaultRecord.status encodes as uint8: 0=Active, 1=DepositsPaused, 2=Retired.
+ * DepositsPaused stops new deposits only; holders can always redeem
+ * (core 1494). The `VaultSelectorDepositTab` calls `getVault` live before
+ * submit to guard against cached deposits-paused state (issue #417 AC §4). Because
  * `getVault` returns two top-level outputs, viem's `decodeFunctionResult`
  * decodes it as a 2-element array `[metadata, status]` — NOT a
  * `{ metadata, status }` object — so callers must index positionally.
@@ -406,8 +416,12 @@ export const registryAbi = [
   },
 ] as const;
 
-/** VaultStatus enum — matches VaultRegistry.sol's enum order. */
-export const VaultStatus = { Active: 0, Paused: 1, Retired: 2 } as const;
+/**
+ * VaultStatus enum — matches VaultRegistry.sol's enum order
+ * (`Active, DepositsPaused, Retired`). Status 1 stops new deposits only;
+ * a holder can redeem from a vault in every status.
+ */
+export const VaultStatus = { Active: 0, DepositsPaused: 1, Retired: 2 } as const;
 export type VaultStatusValue = (typeof VaultStatus)[keyof typeof VaultStatus];
 
 /**
@@ -421,7 +435,7 @@ export type VaultStatusValue = (typeof VaultStatus)[keyof typeof VaultStatus];
  *     contracts today; dropped. (A UI risk/mandate taxonomy, if wanted, is
  *     product scope for a future issue, not a mechanical field restore.)
  *   - `receiptToken`: redundant with `vault` — every vault contract
- *     (`RobotMoneyVault`, `BasketVault`, `RwaVault`, ...) is itself the
+ *     (`RobotMoneyVault`, `BasketVault`, `RwaBasketVault`, ...) is itself the
  *     ERC-4626 share token, so `receiptToken` always equals `vault`.
  *     Consumers that read the receipt token now use `.vault` directly.
  *   - `depositCap` / `exitFeeBps`: real per-vault getters (`tvlCap`/
@@ -500,7 +514,7 @@ export const routerAbi = [
   },
   // Router-eligibility view (issue #426): true if the vault's ERC-4626
   // `asset()` equals the router's USDC. Distinct from VaultRegistry status —
-  // registry status describes lifecycle (Active/Paused/Retired) while router
+  // registry status describes lifecycle (Active/DepositsPaused/Retired) while router
   // eligibility describes asset compatibility with the router's deposit flow.
   // Clients should treat a vault as depositable only if both signals agree.
   {

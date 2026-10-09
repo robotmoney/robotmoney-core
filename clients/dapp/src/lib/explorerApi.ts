@@ -85,7 +85,7 @@ export interface VaultRow {
   readonly address: string;
   readonly name: string;
   readonly risk_label: string;
-  /** 0 = Active, 1 = Paused, 2 = Retired */
+  /** 0 = Active, 1 = DepositsPaused (deposits stopped; withdrawals stay open), 2 = Retired */
   readonly status: number;
   readonly deposit_cap: string;
   readonly total_assets: string | null;

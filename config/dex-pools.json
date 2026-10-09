@@ -1,177 +1,39 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Canonical registry of DEX pool addresses for the dapp landing-page price strip and the four-vault basket swap routes (issue #482, #556, docs/prd.md§11). The `mainnet` map holds real Base mainnet pool + token addresses; the `devnet` map is the fork-aware override applied when the dapp targets the forked-Base devnet (chain id 918453). On a fresh fork the devnet pools ARE the Base mainnet pools (the genesis ingester copies Base state at the fork block), so the devnet override map points at the same addresses unless a smoke-test stub pool is deployed in their place. Pool addresses MUST NOT be hardcoded in TypeScript — the dapp reads them from this file (acceptance criteria, issue #482). `token0`/`token1` ordering and decimals are recorded so the sqrtPriceX96 -> price conversion is decimals-aware regardless of which token Uniswap assigned to slot 0. `basket_assets` records per-asset token addresses, swap venues (UniswapV3/UniswapV4/Aerodrome), and pool addresses for vault swap routing (issue #556). Pool addresses marked with `pool_status: pending` must be pinned from on-chain verification before the vault can be deployed.",
+  "description": "One map of Uniswap V3 pools for the dapp price strip (docs/prd.md section 11). The same map applies on Base and on the Twin chain (918453): one deployment scheme, no per-chain branch. Pool addresses are never hardcoded in TypeScript. token0/token1 ordering and decimals are recorded so the sqrtPriceX96 conversion is decimals-aware. Vault basket assets live in config/protocol-assets.json and config/rwa-assets.json. Verified by scripts/ci/config-check.ts against live Base.",
+  "venues": {
+    "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+    "swapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481"
+  },
   "pairs": [
-    {
-      "id": "eth-usd",
-      "label": "ETH/USD",
-      "base": "ETH",
-      "quote": "USD",
-      "baseDecimals": 18,
-      "quoteDecimals": 6
-    },
-    {
-      "id": "weth-usdc",
-      "label": "wETH/USDC",
-      "base": "wETH",
-      "quote": "USDC",
-      "baseDecimals": 18,
-      "quoteDecimals": 6
-    },
-    {
-      "id": "cbbtc-usdc",
-      "label": "cbBTC/USDC",
-      "base": "cbBTC",
-      "quote": "USDC",
-      "baseDecimals": 8,
-      "quoteDecimals": 6
-    },
-    {
-      "id": "wsol-usdc",
-      "label": "wSOL/USDC",
-      "base": "wSOL",
-      "quote": "USDC",
-      "baseDecimals": 9,
-      "quoteDecimals": 6
-    }
+    { "id": "eth-usd", "label": "ETH/USD", "base": "ETH", "quote": "USD", "baseDecimals": 18, "quoteDecimals": 6 },
+    { "id": "weth-usdc", "label": "wETH/USDC", "base": "wETH", "quote": "USDC", "baseDecimals": 18, "quoteDecimals": 6 },
+    { "id": "cbbtc-usdc", "label": "cbBTC/USDC", "base": "cbBTC", "quote": "USDC", "baseDecimals": 8, "quoteDecimals": 6 }
   ],
-  "$comment_despxa_not_in_pairs": "deSPXA/USDC is intentionally NOT in the `pairs` array. The landing-page price strip uses Uniswap sqrtPriceX96 reads; deSPXA is priced via the Chronicle NAV oracle (not a DEX TWAP). The Aerodrome pool address and all RWA vault routing config lives in the mainnet/devnet pool maps under 'despxa-usdc' (for use by basket-asset routing), NOT in the price-strip pairs list. See ADR-0006.",
-  "$comment_basket_assets": "Basket-vault swap routes (issue #556, docs/prd.md§11.2 ProtocolAssetVault, §11.3 AgentTokenVault, §11.4 RWA vault). Each entry records the asset token address on Base mainnet, the DEX venue (UniswapV3 / UniswapV4 / Aerodrome), pool address, and pool parameter (fee tier for V3/V4 in bps, or 0=volatile/1=stable for Aerodrome). Entries with `pool_status: pending` have a confirmed token address but the pool address must be verified on-chain (Basescan / Aerodrome factory / Uniswap V4 PoolManager) before vault deployment or fork-state snapshot update. The genesis ingester (testing/smoke-test/src/genesis_alloc.rs) must ingest every pool address listed here via testing/ethereum-testnet/config/fork-block.json::ingested_addresses.",
-  "basket_assets": {
-    "$comment": "ProtocolAssetVault (rmPROTO) assets: cbBTC and wSOL use Uniswap V3; pool addresses are already confirmed and ingested in fork-block.json.",
-    "cbbtc": {
-      "symbol": "cbBTC",
-      "token": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
-      "tokenDecimals": 8,
-      "venue": "UniswapV3",
+  "pools": {
+    "eth-usd": {
+      "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+      "token0": "0x4200000000000000000000000000000000000006",
+      "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "token0Decimals": 18,
+      "token1Decimals": 6,
+      "baseIsToken0": true
+    },
+    "weth-usdc": {
+      "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+      "token0": "0x4200000000000000000000000000000000000006",
+      "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "token0Decimals": 18,
+      "token1Decimals": 6,
+      "baseIsToken0": true
+    },
+    "cbbtc-usdc": {
       "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
-      "poolFee": 500,
-      "pool_status": "confirmed"
-    },
-    "wsol": {
-      "symbol": "wSOL",
-      "token": "0x1C61629598e4a901136a81BC138E5828dc150d67",
-      "tokenDecimals": 9,
-      "venue": "UniswapV3",
-      "pool": "0x170De01C2b662b7d54BFFd400bc35283B8671e38",
-      "poolFee": 500,
-      "pool_status": "confirmed"
-    },
-    "$comment_agent_tokens": "Retired: AgentTokenVault routing is defined only in config/agent-token-shortlist.json. Do not add rmAGENT entries here.",
-    "$comment_rwa": "RWA vault (rmRWA) asset: deSPXA (Centrifuge V3, Base). Entry/exit via Uniswap V3 secondary market (ERC-7540 primary NAV redeem is KYC-gated and not used — see ADR-0006). ADR-0006 originally assumed Aerodrome but on-chain liquidity has migrated to Uniswap V3 (~$3.6M TVL). Token address is the deSPXA ERC-20 on Base (Centrifuge ShareToken). Chronicle NAV oracle address is TBD — separate deployment config item in Phase D.",
-    "despxa": {
-      "symbol": "deSPXA",
-      "token": "0x9c5c365e764829876243d0b289733b9d2b729685",
-      "tokenDecimals": 18,
-      "venue": "UniswapV3",
-      "pool": "0xd08f1fb797bfacded23323178672557034c64cfa",
-      "poolFee": 100,
-      "pool_status": "confirmed",
-      "$comment_token": "Centrifuge deSPXA ERC-20 on Base — DeFi Janus Henderson Anemoy S&P500® Fund Token (ShareToken). Verified on Basescan and Centrifuge blog (centrifuge.io/blog/despxa-on-base, issue #556).",
-      "$comment_pool": "deSPXA/USDC Uniswap V3 0.01% pool on Base — ~$3.6M TVL, verified on-chain via Basescan/Moonwell governance forum. ADR-0006 §5 noted Aerodrome as original venue but liquidity migrated to Uniswap V3 per Centrifuge team confirmation (Moonwell proposal 2026-05-20). poolFee=100 (0.01% = 1 bps). token0=USDC, token1=deSPXA."
-    }
-  },
-  "mainnet": {
-    "chainId": 8453,
-    "pools": {
-      "eth-usd": {
-        "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
-        "token0": "0x4200000000000000000000000000000000000006",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token0Decimals": 18,
-        "token1Decimals": 6,
-        "baseIsToken0": true
-      },
-      "weth-usdc": {
-        "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
-        "token0": "0x4200000000000000000000000000000000000006",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token0Decimals": 18,
-        "token1Decimals": 6,
-        "baseIsToken0": true
-      },
-      "cbbtc-usdc": {
-        "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
-        "token0": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token1": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
-        "token0Decimals": 6,
-        "token1Decimals": 8,
-        "baseIsToken0": false
-      },
-      "wsol-usdc": {
-        "pool": "0x170De01C2b662b7d54BFFd400bc35283B8671e38",
-        "token0": "0x1C61629598e4a901136a81BC138E5828dc150d67",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token0Decimals": 9,
-        "token1Decimals": 6,
-        "baseIsToken0": true
-      },
-      "despxa-usdc": {
-        "$comment": "Centrifuge deSPXA tokenised S&P 500 on Base. Aerodrome secondary pool; Chronicle NAV oracle (0xc9Bc046d3a832f5Fb5cf24e8cb7Bb15Fe6F1b9e). Addresses verified from ADR-0006 research — confirm on Basescan before production deployment.",
-        "deSPXA": "0x1c0375688De2e7e8f83DB30A91aD8f9e31e4A4A",
-        "aerodromePool": "0xd53bF0FcE8E80a2f28c17Ef22FcBfB9b8FC8b6A",
-        "aerodromeRouter": "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43",
-        "aerodromeFactory": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
-        "chronicleFeed": "0xc9Bc046d3a832f5Fb5cf24e8cb7Bb15Fe6F1b9e",
-        "pool": "0xd53bF0FcE8E80a2f28c17Ef22FcBfB9b8FC8b6A",
-        "token0": "0x1c0375688De2e7e8f83DB30A91aD8f9e31e4A4A",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token0Decimals": 18,
-        "token1Decimals": 6,
-        "baseIsToken0": true
-      }
-    }
-  },
-  "devnet": {
-    "chainId": 918453,
-    "$comment": "Fork-aware override. On a fresh fork these are identical to the mainnet pools because the genesis ingester copies Base state at the fork block. Pinned to testing/ethereum-testnet/config/fork-block.json — see testing/ethereum-testnet/config/expected-prices.json for the prices these pools must read at the fork block.",
-    "pools": {
-      "eth-usd": {
-        "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
-        "token0": "0x4200000000000000000000000000000000000006",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token0Decimals": 18,
-        "token1Decimals": 6,
-        "baseIsToken0": true
-      },
-      "weth-usdc": {
-        "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
-        "token0": "0x4200000000000000000000000000000000000006",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token0Decimals": 18,
-        "token1Decimals": 6,
-        "baseIsToken0": true
-      },
-      "cbbtc-usdc": {
-        "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
-        "token0": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token1": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
-        "token0Decimals": 6,
-        "token1Decimals": 8,
-        "baseIsToken0": false
-      },
-      "wsol-usdc": {
-        "pool": "0x170De01C2b662b7d54BFFd400bc35283B8671e38",
-        "token0": "0x1C61629598e4a901136a81BC138E5828dc150d67",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token0Decimals": 9,
-        "token1Decimals": 6,
-        "baseIsToken0": true
-      },
-      "despxa-usdc": {
-        "$comment": "Fork-aware: same as mainnet (Base state copied at fork block). Chronicle feed must be kissed for the deployed RwaVault address before use.",
-        "deSPXA": "0x1c0375688De2e7e8f83DB30A91aD8f9e31e4A4A",
-        "aerodromePool": "0xd53bF0FcE8E80a2f28c17Ef22FcBfB9b8FC8b6A",
-        "aerodromeRouter": "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43",
-        "aerodromeFactory": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
-        "chronicleFeed": "0xc9Bc046d3a832f5Fb5cf24e8cb7Bb15Fe6F1b9e",
-        "pool": "0xd53bF0FcE8E80a2f28c17Ef22FcBfB9b8FC8b6A",
-        "token0": "0x1c0375688De2e7e8f83DB30A91aD8f9e31e4A4A",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token0Decimals": 18,
-        "token1Decimals": 6,
-        "baseIsToken0": true
-      }
+      "token0": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "token1": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "token0Decimals": 6,
+      "token1Decimals": 8,
+      "baseIsToken0": false
     }
   }
 }

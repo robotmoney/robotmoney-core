@@ -225,7 +225,7 @@ on exit code 0 alone to confirm task success.
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes (for live runs) | Anthropic API key. OpenCode uses this to call Claude. Without it, model calls fail. |
 | `OPENCODE_SERVER_PASSWORD` | No | Basic-auth password when attaching to a remote OpenCode server (`opencode attach`). Not needed for `opencode run`. |
-| `RMPC_FORK_RPC_URL` | Local-only, optional | Overrides the RPC endpoint for optional local live-fork reads by the Robot Money skill; defaults to a public Base RPC. Not consumed by OpenCode itself. It is a CI Actions **secret** for the `fork-regressions` and nightly live-drift jobs (issue #1239) — this repo is public, so GitHub does not mask an Actions variable in the log, and a keyed URL must stay masked. See [`docs/development/environments.md`](../development/environments.md) §2. |
+| `RMPC_FORK_RPC_URL` | Local-only, optional | Overrides the RPC endpoint for optional local live-fork reads by the Robot Money skill; defaults to a public Base RPC. Not consumed by OpenCode itself. It was a CI Actions **secret** for the `fork-regressions` job and a former scheduled live-RPC job (issue #1239); no scheduled job reads it any more — this repo is public, so GitHub does not mask an Actions variable in the log, and a keyed URL must stay masked. See [`docs/development/environments.md`](../development/environments.md) §2. |
 | `RMPC_BIN` | Conditional | Override path to the `rmpc` binary. Defaults to `rmpc` on `$PATH`. Not consumed by OpenCode itself. |
 
 **CI secret wiring (GitHub Actions example):**
@@ -399,7 +399,7 @@ provider (DeepSeek) rejected opencode 1.14.29's tool-schema serialization
 (`Upstream request failed`). The `opencode run` transcript was then a **single
 `{"type":"error", ...}` APIError event with zero tool calls** — the agent died
 before issuing any `rmpc` command. Everything upstream of the agent (rmpc build,
-fork-state Anvil, deploy, on-chain authorization asserts) still passed.
+Twin fork anvil, deploy, on-chain authorization asserts) still passed.
 
 **Loud-fail guard.** `opencode run` **exits 0** even on that dead session, and the
 error-only transcript is non-empty, so the previous `test -s <transcript>` guard

@@ -13,7 +13,7 @@ Two invariants are enforced:
    - testing/ethereum-testnet/config/docker-compose.dapp.yaml
 
    Vars that are intentionally out-of-scope for .env.example / compose (e.g.
-   low-level Geth port overrides, forge/rmpc runtime vars that live nowhere in
+   Twin chain harness overrides, forge/rmpc runtime vars that live nowhere in
    the dapp config) are listed in KNOWN_INFRA_VARS and are skipped.
 
 Wired into .github/workflows/suite-13-doc-checks.yml.
@@ -29,16 +29,17 @@ ENVIRONMENTS_MD = REPO_ROOT / "docs" / "development" / "environments.md"
 DAPP_ENV_EXAMPLE = REPO_ROOT / "clients" / "dapp" / ".env.example"
 DAPP_COMPOSE = REPO_ROOT / "testing" / "ethereum-testnet" / "config" / "docker-compose.dapp.yaml"
 
-# Vars that are Geth/CL node / forge / rmpc runtime configuration — they are
+# Vars that are Twin chain / forge / rmpc runtime configuration — they are
 # not expected to appear in the dapp .env.example or the dapp compose file.
 KNOWN_INFRA_VARS: frozenset[str] = frozenset(
     {
-        # Geth / Lighthouse node overrides
-        "GETH_RPC_PORT",
-        "GETH_WS_PORT",
-        "GETH_AUTHRPC_PORT",
-        "GENESIS_TIMESTAMP",
-        "SMOKE_GENESIS_ALLOC_FILE",
+        # Twin chain (anvil fork of real Base) harness overrides
+        "TWIN_RPC_URL",
+        "TWIN_PIN_BLOCK",
+        "TWIN_CACHE_DIR",
+        "BASE_UPSTREAM_RPC",
+        "RMPC_TESTNET_RPC_URL",
+        "SMOKE_TEST_RPC_PORT",
         # Fork / Anvil test-only vars
         "RMPC_FORK_RPC_URL",
         "RMPC_FORK_BLOCK",

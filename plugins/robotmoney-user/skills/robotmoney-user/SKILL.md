@@ -15,7 +15,7 @@ description: >
   ("Withdraw 1000 shares from vault 0x... for order 0x...").
   Always run reads first, run `self-check` before any write, and refuse to
   proceed when preflight (caps, allowance, code-hash, fee cap, role,
-  pause) does not pass.
+  deposit pause for a deposit) does not pass. A pause never blocks a withdraw.
 ---
 
 # robotmoney-user (`rmpc`)
@@ -38,7 +38,7 @@ Add `--pretty` for indented JSON.
 This skill is for **AI agents and autonomous machines** that have been issued
 an `AGENT_ROLE` key on the Robot Money gateway. It is not a retail wallet UX:
 output is JSON, errors are named, and writes are gated by on-chain policy
-(per-deposit cap, per-window cap, pause, role, share-receiver, code-hash).
+(per-deposit cap, per-window cap, deposit pause, role, share-receiver, code-hash).
 
 ## Reference docs
 
@@ -105,7 +105,7 @@ agent does not edit it at runtime.
 
 The agent must surface — not suppress — these refusals:
 
-- **Preflight (§4.4):** paused gateway, agent inactive or expired, allowance
+- **Preflight (§4.4):** gateway deposits paused (deposit only), agent inactive or expired, allowance
   or balance below `--amount`, chain id mismatch, gateway runtime code-hash
   mismatch.
 - **Caps (gateway):** `--amount > maxPerPayment` or

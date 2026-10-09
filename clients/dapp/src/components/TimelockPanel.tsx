@@ -25,15 +25,33 @@
  * Panel renders a loading state while data is fetched and an error state
  * if the contract address is unconfigured or any RPC call fails.
  *
+ * Execute (core 1544): a ready single-call operation whose payload the dapp can
+ * rebuild and decode offers "Prepare execute proposal". It opens the same
+ * Safe -> Timelock flow as the admin tabs (SafeProposalPanel) for
+ * `timelock.execute(...)`. The panel stays read-only otherwise.
+ *
  * Out of scope (per issue #647):
- *   - Scheduling, cancelling, or executing operations.
+ *   - Scheduling or cancelling operations from this panel.
  *   - Role management UI.
  */
 import { useEffect, useState } from "react";
 import { usePublicClient, useReadContracts } from "wagmi";
-import type { Address } from "viem";
-import { keccak256, toBytes, zeroAddress } from "viem";
-import { timelockAbi, type TimelockState, type TimelockPendingOp } from "../lib/timelockApi";
+import type { Address, Hex } from "viem";
+import { decodeFunctionData, keccak256, toBytes, zeroAddress } from "viem";
+import { gatewayAbi } from "../lib/abi";
+import { timelockOperationId } from "../lib/safeProposal";
+import { useRuntimeConfig } from "../lib/RuntimeConfigContext";
+import {
+  findDeploymentBlock,
+  parseDeployBlock,
+  scanInPages,
+  type ScanRange,
+  timelockAbi,
+  type TimelockPendingOp,
+  type TimelockScheduledCall,
+  type TimelockState,
+} from "../lib/timelockApi";
+import { SafeProposalPanel } from "./SafeProposalPanel";
 
 // ─── Role selectors (keccak256 of role name strings) ─────────────────────────
 const PROPOSER_ROLE = keccak256(toBytes("PROPOSER_ROLE")) as `0x${string}`;
@@ -44,42 +62,40 @@ const DONE_TIMESTAMP = 1n;
 
 // ─── Module-level async helpers ──────────────────────────────────────────────
 
+type PublicClientLike = NonNullable<ReturnType<typeof usePublicClient>>;
+
+const ROLE_EVENT_INPUTS = [
+  { name: "role", type: "bytes32", indexed: true },
+  { name: "account", type: "address", indexed: true },
+  { name: "sender", type: "address", indexed: true },
+] as const;
+
 async function fetchRoleMembers(
-  publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
+  publicClient: PublicClientLike,
   timelockAddress: Address,
   roleHash: `0x${string}`,
+  range: ScanRange,
 ): Promise<Address[]> {
-  const grantedLogs = await publicClient.getLogs({
-    address: timelockAddress,
-    event: {
-      type: "event",
-      name: "RoleGranted",
-      inputs: [
-        { name: "role", type: "bytes32", indexed: true },
-        { name: "account", type: "address", indexed: true },
-        { name: "sender", type: "address", indexed: true },
-      ],
-    },
-    args: { role: roleHash },
-    fromBlock: 0n,
-    toBlock: "latest",
-  });
-
-  const revokedLogs = await publicClient.getLogs({
-    address: timelockAddress,
-    event: {
-      type: "event",
-      name: "RoleRevoked",
-      inputs: [
-        { name: "role", type: "bytes32", indexed: true },
-        { name: "account", type: "address", indexed: true },
-        { name: "sender", type: "address", indexed: true },
-      ],
-    },
-    args: { role: roleHash },
-    fromBlock: 0n,
-    toBlock: "latest",
-  });
+  const [grantedLogs, revokedLogs] = await Promise.all([
+    scanInPages(range, (fromBlock, toBlock) =>
+      publicClient.getLogs({
+        address: timelockAddress,
+        event: { type: "event", name: "RoleGranted", inputs: ROLE_EVENT_INPUTS },
+        args: { role: roleHash },
+        fromBlock,
+        toBlock,
+      }),
+    ),
+    scanInPages(range, (fromBlock, toBlock) =>
+      publicClient.getLogs({
+        address: timelockAddress,
+        event: { type: "event", name: "RoleRevoked", inputs: ROLE_EVENT_INPUTS },
+        args: { role: roleHash },
+        fromBlock,
+        toBlock,
+      }),
+    ),
+  ]);
 
   return reconstructRoleMembers(grantedLogs, revokedLogs);
 }
@@ -146,39 +162,75 @@ export function reconstructRoleMembers(
   return [...members].sort();
 }
 
+interface ScheduledLog {
+  readonly args: {
+    readonly id?: Hex;
+    readonly target?: Address;
+    readonly value?: bigint;
+    readonly data?: Hex;
+    readonly predecessor?: Hex;
+  };
+}
+
 async function fetchPendingOps(
   publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
   timelockAddress: Address,
   nowSecs: bigint,
+  range: ScanRange,
 ): Promise<TimelockPendingOp[]> {
-  const scheduledLogs = await publicClient.getLogs({
-    address: timelockAddress,
-    event: {
-      type: "event",
-      name: "CallScheduled",
-      inputs: [
-        { name: "id", type: "bytes32", indexed: true },
-        { name: "index", type: "uint256", indexed: true },
-        { name: "target", type: "address", indexed: false },
-        { name: "value", type: "uint256", indexed: false },
-        { name: "data", type: "bytes", indexed: false },
-        { name: "predecessor", type: "bytes32", indexed: false },
-        { name: "delay", type: "uint256", indexed: false },
-      ],
-    },
-    fromBlock: 0n,
-    toBlock: "latest",
-  });
+  const [scheduledLogs, saltLogs] = await Promise.all([
+    scanInPages(range, (fromBlock, toBlock) =>
+      publicClient.getLogs({
+        address: timelockAddress,
+        event: {
+          type: "event",
+          name: "CallScheduled",
+          inputs: [
+            { name: "id", type: "bytes32", indexed: true },
+            { name: "index", type: "uint256", indexed: true },
+            { name: "target", type: "address", indexed: false },
+            { name: "value", type: "uint256", indexed: false },
+            { name: "data", type: "bytes", indexed: false },
+            { name: "predecessor", type: "bytes32", indexed: false },
+            { name: "delay", type: "uint256", indexed: false },
+          ],
+        },
+        fromBlock,
+        toBlock,
+      }),
+    ) as Promise<readonly ScheduledLog[]>,
 
-  const opIds = new Set<`0x${string}`>();
+    scanInPages(range, (fromBlock, toBlock) =>
+      publicClient.getLogs({
+        address: timelockAddress,
+        event: {
+          type: "event",
+          name: "CallSalt",
+          inputs: [
+            { name: "id", type: "bytes32", indexed: true },
+            { name: "salt", type: "bytes32", indexed: false },
+          ],
+        },
+        fromBlock,
+        toBlock,
+      }),
+    ) as Promise<ReadonlyArray<{ args: { id?: Hex; salt?: Hex } }>>,
+  ]);
+  const saltById = new Map<Hex, Hex>();
+  for (const log of saltLogs) {
+    if (log.args.id && log.args.salt) saltById.set(log.args.id, log.args.salt);
+  }
+
+  const scheduledById = new Map<Hex, ScheduledLog[]>();
   for (const log of scheduledLogs) {
-    const id = (log.args as { id?: `0x${string}` }).id;
-    if (id) opIds.add(id);
+    const id = log.args.id;
+    if (!id) continue;
+    scheduledById.set(id, [...(scheduledById.get(id) ?? []), log]);
   }
 
   const pending: TimelockPendingOp[] = [];
   await Promise.all(
-    [...opIds].map(async (id) => {
+    [...scheduledById.keys()].map(async (id) => {
       try {
         const ts = await publicClient.readContract({
           address: timelockAddress,
@@ -188,10 +240,26 @@ async function fetchPendingOps(
         });
         const readyTs = ts as bigint;
         if (readyTs > DONE_TIMESTAMP) {
+          // The chain is the authority on readiness (its clock moves with the
+          // delay, not with the browser's). Fall back to the wall clock only
+          // when the node does not answer isOperationReady.
+          let ready = readyTs <= nowSecs;
+          try {
+            const answer = await publicClient.readContract({
+              address: timelockAddress,
+              abi: timelockAbi,
+              functionName: "isOperationReady",
+              args: [id],
+            });
+            if (typeof answer === "boolean") ready = answer;
+          } catch {
+            /* keep the wall-clock verdict */
+          }
           pending.push({
             operationId: id,
             readyTimestamp: readyTs,
-            status: readyTs <= nowSecs ? "ready" : "waiting",
+            status: ready ? "ready" : "waiting",
+            call: rebuildCall(id, scheduledById.get(id) ?? [], saltById.get(id)),
           });
         }
       } catch {
@@ -203,9 +271,42 @@ async function fetchPendingOps(
   return pending.sort((a, b) => (a.readyTimestamp < b.readyTimestamp ? -1 : 1));
 }
 
+/**
+ * Rebuild the `execute` arguments of a single-call operation. Returns undefined
+ * (so no execute proposal is offered) for a batch, a call with value, or any
+ * operation whose rebuilt `hashOperation` differs from its id.
+ */
+function rebuildCall(
+  id: Hex,
+  logs: readonly ScheduledLog[],
+  salt: Hex | undefined,
+): TimelockScheduledCall | undefined {
+  const [only] = logs;
+  if (logs.length !== 1 || !only) return undefined;
+  const { target, value, data, predecessor } = only.args;
+  if (!target || !data || !predecessor || (value ?? 0n) !== 0n) return undefined;
+  const call: TimelockScheduledCall = {
+    target,
+    data,
+    predecessor,
+    salt: salt ?? "0x0000000000000000000000000000000000000000000000000000000000000000",
+  };
+  return timelockOperationId(call).toLowerCase() === id.toLowerCase() ? call : undefined;
+}
+
+/** The function the dapp can decode from an operation's inner call, or undefined. */
+function decodeInner(data: Hex): string | undefined {
+  try {
+    return decodeFunctionData({ abi: gatewayAbi, data }).functionName;
+  } catch {
+    return undefined;
+  }
+}
+
 async function fetchExecutorPolicy(
   publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
   timelockAddress: Address,
+  range: ScanRange,
 ): Promise<{ policy: "open" | "restricted"; executors: Address[] }> {
   const isOpen = await publicClient.readContract({
     address: timelockAddress,
@@ -218,7 +319,7 @@ async function fetchExecutorPolicy(
     return { policy: "open", executors: [] };
   }
 
-  const executors = await fetchRoleMembers(publicClient, timelockAddress, EXECUTOR_ROLE);
+  const executors = await fetchRoleMembers(publicClient, timelockAddress, EXECUTOR_ROLE, range);
   return { policy: "restricted", executors };
 }
 
@@ -226,6 +327,8 @@ async function fetchExecutorPolicy(
 
 export interface TimelockPanelProps {
   readonly timelockAddress?: Address;
+  /** The Safe that proposes to the timelock (core 1544). Absent: execute proposals are blocked. */
+  readonly safeAddress?: Address;
   /** Wall-clock ms, injected from parent — never call Date.now in render. */
   readonly now: number;
 }
@@ -239,8 +342,10 @@ type PanelState =
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
+export function TimelockPanel({ timelockAddress, safeAddress, now }: TimelockPanelProps) {
   const [state, setState] = useState<PanelState>({ kind: "loading" });
+  const [executing, setExecuting] = useState<string | null>(null);
+  const deployBlockSetting = useRuntimeConfig().VITE_TIMELOCK_DEPLOY_BLOCK;
   const publicClient = usePublicClient();
 
   const { data: scalars, error: scalarsError } = useReadContracts({
@@ -315,11 +420,19 @@ export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
 
         const nowSecs = BigInt(Math.floor(now / 1000));
 
+        // eth_getLogs is range-limited (500 blocks on many RPCs and on a fork's
+        // upstream), so scan only from the timelock's deployment block, in pages.
+        const configuredFrom = parseDeployBlock(deployBlockSetting);
+        const range: ScanRange =
+          configuredFrom !== undefined
+            ? { from: configuredFrom, to: await publicClient.getBlockNumber(), incomplete: false }
+            : await findDeploymentBlock(publicClient, timelockAddress);
+
         const [proposers, cancellers, executorInfo, pendingOps] = await Promise.all([
-          fetchRoleMembers(publicClient, timelockAddress, PROPOSER_ROLE),
-          fetchRoleMembers(publicClient, timelockAddress, CANCELLER_ROLE),
-          fetchExecutorPolicy(publicClient, timelockAddress),
-          fetchPendingOps(publicClient, timelockAddress, nowSecs),
+          fetchRoleMembers(publicClient, timelockAddress, PROPOSER_ROLE, range),
+          fetchRoleMembers(publicClient, timelockAddress, CANCELLER_ROLE, range),
+          fetchExecutorPolicy(publicClient, timelockAddress, range),
+          fetchPendingOps(publicClient, timelockAddress, nowSecs, range),
         ]);
 
         setState({
@@ -332,6 +445,9 @@ export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
             executorPolicy: executorInfo.policy,
             executors: executorInfo.executors,
             pendingOps,
+            scanWarning: range.incomplete
+              ? `Could not read historical state for the timelock, so the event scan started at block ${range.from}. Operations and role changes from before that block may be missing. Set VITE_TIMELOCK_DEPLOY_BLOCK to the timelock's deployment block.`
+              : undefined,
           },
         });
       } catch (err) {
@@ -341,7 +457,7 @@ export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
         });
       }
     })();
-  }, [timelockAddress, scalars, scalarsError, publicClient, now]);
+  }, [timelockAddress, scalars, scalarsError, publicClient, now, deployBlockSetting]);
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -443,6 +559,12 @@ export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
         </dd>
       </dl>
 
+      {timelock.scanWarning && (
+        <p className="error" data-testid="timelock-scan-warning">
+          {timelock.scanWarning}
+        </p>
+      )}
+
       {/* ── Pending operations ── */}
       <h3>Pending Operations</h3>
       {timelock.pendingOps.length === 0 ? (
@@ -457,6 +579,7 @@ export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
                 <th>Operation ID</th>
                 <th>Ready At (UTC)</th>
                 <th>Status</th>
+                <th>Execute</th>
               </tr>
             </thead>
             <tbody>
@@ -471,11 +594,49 @@ export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
                   <td data-testid="timelock-op-status">
                     {op.status === "ready" ? "Ready to execute" : "Waiting for delay"}
                   </td>
+                  <td>
+                    {op.status === "ready" && op.call && decodeInner(op.call.data) && (
+                      <button
+                        type="button"
+                        data-testid={`timelock-op-execute-${op.operationId}`}
+                        onClick={() =>
+                          setExecuting(executing === op.operationId ? null : op.operationId)
+                        }
+                      >
+                        Prepare execute proposal
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {timelock.pendingOps.map((op) =>
+        executing === op.operationId && op.call ? (
+          <div key={op.operationId} data-testid={`timelock-op-execute-panel-${op.operationId}`}>
+            <h4>Execute proposal for {op.operationId}</h4>
+            <p className="hint">
+              Inner call: <code>{decodeInner(op.call.data)}</code> on <code>{op.call.target}</code>
+            </p>
+            <SafeProposalPanel
+              testId={`timelock-exec-${op.operationId}`}
+              safeAddress={safeAddress}
+              timelockAddress={timelock.address}
+              request={{
+                kind: "execute",
+                target: op.call.target,
+                data: op.call.data,
+                predecessor: op.call.predecessor,
+                salt: op.call.salt,
+                action: "execute",
+                description: `execute operation ${op.operationId}`,
+              }}
+            />
+          </div>
+        ) : null,
       )}
     </section>
   );

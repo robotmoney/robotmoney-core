@@ -57,6 +57,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   unit:
     name: forge-unit-tests
@@ -68,6 +73,57 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # Core S1 (issue 1483): the flags that lifted a deploy floor must not return.
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Removed deploy flags are absent
+        run: |
+          bun scripts/ci/check-removed-flags.ts
+          bun test scripts/ci/check-removed-flags.test.ts
+
+      # Core S10 (issue 1489): no test-only code ships. The gate fails when it scans zero
+      # files, and its self-test plants a Demo contract, a stub and a mock Safe.
+      - name: No test-only code in the build
+        run: |
+          bun scripts/ci/check-no-test-only-code.ts
+          bun test scripts/ci/check-no-test-only-code.test.ts
+
+      # Core 1490 (clean room rule, core 1498): no test or harness file hard-codes a Robot Money
+      # production address. Tests deploy their own vault and read the manifests.
+      - name: No production Robot Money addresses in tests or harnesses
+        run: |
+          bun scripts/ci/check-no-production-addresses.ts
+          bun test scripts/ci/check-no-production-addresses.test.ts scripts/deploy/third-party-addresses.test.ts
+
+      - name: Audit ledger covers every shipped contract
+        run: |
+          bash scripts/check-audit-ledger.sh
+          bash scripts/check-audit-ledger.test.sh
+
+      # Core 1522: the docs name WEIGHT_SETTER_ROLE as the only setWeights gate and ADMIN_ROLE as the defaultWeights gate.
+      - name: Docs name the weight-setter split
+        run: |
+          for f in docs/technical/security-model.md docs/adr/ADR-0002-router-default-weights-on-chain.md; do
+            grep -q 'WEIGHT_SETTER_ROLE' "$f" || { echo "::error file=$f::WEIGHT_SETTER_ROLE is missing"; exit 1; }
+            grep -Eq 'defaultWeights.? gate' "$f" || { echo "::error file=$f::the ADMIN_ROLE defaultWeights gate is missing"; exit 1; }
+          done
+
+      # Core S3 (issue 1485): no reader of the deploy manifest names a retired key or script.
+      - name: Retired manifest keys are absent
+        run: bun scripts/ci/check-manifest-keys.ts
+
+      - name: Manifest-key gate and core stage table tests
+        run: bun test scripts/ci/check-manifest-keys.test.ts scripts/deploy/stage-table.test.ts
+
+      # Core S2 (issue 1484): config rules and the offline config-check test.
+      - name: Config-check offline test
+        run: bun test scripts/ci/config-check.test.ts
+
+      - name: Twin chain tooling unit tests (core issues 1498, 1447)
+        # Offline, no anvil, no network: the Twin fork tool, the Safe set check against a stub
+        # chain and the forge fork test runner's executed-test counter.
+        run: bun test scripts/devnet --timeout 60000
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -94,19 +150,10 @@ jobs:
         # so excluding them at the runner is the cleanest seam. The 24 vanilla
         # ERC-4626 properties in RobotMoneyVault4626Conformance still run.
         #
-        # `--no-match-contract "UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"`:
-        # those contracts are LOUD-SKIP fork tests (issues #1118 / #1124 / #1125) —
-        # their setUp reverts when no fork RPC is configured (never a silent
-        # skip). This light unit job has no fork RPC, so it excludes the fork
-        # contracts; they execute in the `fork-regressions` job below, which
-        # supplies one. The non-fork `UniV3AssetPositionAdapterTest` /
-        # `UniV4AssetPositionAdapterTest` / `AerodromeAssetPositionAdapterTest`
-        # mock harnesses still run here.
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover}.t.sol"
-          --no-match-contract "UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen}.t.sol"
 
       # Fusion's named evidence files need an execution boundary in the CI log.
       # A whole-suite `forge test` is not enough for a fail-closed external
@@ -115,7 +162,7 @@ jobs:
         run: |
           for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant QuorumFloorInvariant GatewayAgentPolicyAuthorization; do
             echo "::group::contracts/test/${f}.t.sol:"
-            forge test -vvv --match-path "contracts/test/${f}.t.sol"
+            bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/${f}.t.sol"
             echo "::endgroup::"
           done
 
@@ -133,55 +180,47 @@ jobs:
         # Measurement, not a budget: prints the RobotMoneyGateway rows for
         # authorizeAgent, revealAuthorization, setPolicy and
         # transferAgentOwnership so a change in their cost shows in the log.
-        run: forge test --match-contract "GatewayAgentPolicyAuthorizationTest" --gas-report
+        run: bash .github/scripts/forge_test_require_executed.sh --match-contract "GatewayAgentPolicyAuthorizationTest" --gas-report
 
-      - name: forge test (four-vault real-TVL pyramid — issue #592)
-        # Explicit, named guard for the four-vault real-TVL end state so it
-        # cannot silently regress (the suite above already runs these, but a
-        # dedicated step gives a discrete CI signal):
-        #   - DeployDemoExtraVaults.t.sol — four vaults Active and all four
-        #     router-eligible (8500/500/500/500 bps split, rmRWA at 500 per
-        #     issue #621), all with non-zero totalAssets after a routed +
-        #     direct deposit.
-        #   - RwaVault.t.sol — deSPXA deposit/redeem round-trip and stale-oracle
-        #     halt (PRD §11.4, ADR-0006).
-        #   - BasketVault / AgentTokenVault / ProtocolAssetVault — per-vault
-        #     basket composition. All THREE basket vaults are named: this guard
-        #     covered two of them while ProtocolAssetVault shipped without a
-        #     shortlist() at all and its dapp composition panel rendered
-        #     "unavailable" (issue #1364). A per-vault guard that skips a vault
-        #     is not a per-vault guard.
+      - name: forge test (basket vault production scripts and eligibility — core 1486)
+        # Explicit, named guard for the three basket vault scripts (one deployment scheme):
+        #   - DeployProtocolAssetVault.t.sol: rmPROTO paused with exactly wETH and cbBTC,
+        #     asset config read back equals config/protocol-assets.json.
+        #   - DeployAgentTokenVault.t.sol: rmAGENT holds RM (added through the V3 pool floors), paused, registered.
+        #   - DeployBasketVaultRwa.t.sol: rmRWA is a plain BasketVault row for deSPXA through
+        #     the UniswapV3SwapAdapter on the fee 500 pool.
+        #   - ActivateBasketVaultEligibility.t.sol: atomic migrateEligibility per basket.
+        #   - BasketVault / AgentTokenVault / ProtocolAssetVault: per-vault composition.
         run: |
-          forge test -vvv --match-path "contracts/test/DeployDemoExtraVaults.t.sol"
-          forge test -vvv --match-contract 'Rwa|DeSPXA|Despxa|BasketVault|AgentTokenVault|ProtocolAssetVault'
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployProtocolAssetVault.t.sol"
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployAgentTokenVault.t.sol"
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployBasketVaultRwa.t.sol"
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/ActivateBasketVaultEligibility.t.sol"
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-contract 'BasketVault|AgentTokenVault|ProtocolAssetVault'
+          bash scripts/ci/check-no-devnet-config.sh
+          bun scripts/ci/check-set-registry-owner.ts
+          bun test scripts/ci/check-set-registry-owner.test.ts
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployTimelock.t.sol"
 
-      - name: forge test (unified-vault ERC-4626 conformance per composition + EIP-170 size gate — issue #1127)
-        # Explicit, named guard so the ADR-0010 unified-vault deliverables cannot
-        # silently regress (the unit suite above already runs these; a dedicated
-        # step gives a discrete, required CI signal — M-A2/M-A3):
-        #   - UnifiedVaultConformanceTest{Exact,RedeemOnly}: ERC-4626 conformance
-        #     re-verified PER COMPOSITION — lending-only EXACT mode (live withdraw,
-        #     non-zero max*, fee-on-gross) vs basket REDEEM-ONLY mode (withdraw
-        #     reverts RedeemOnly, max*==0, fee-on-realized, floored previews). The
-        #     two modes expose different withdraw/redeem/preview/fee-base semantics
-        #     that integrators branch on, so one pass over one mode is insufficient.
-        #   - VaultCodeSizeGuard: asserts the unified `Vault` AND every deployable
-        #     adapter fit under the EIP-170 24576-byte runtime limit and fails the
-        #     build otherwise — undeployable-on-Base bytecode caught in CI, not on
-        #     broadcast (cf. issue #865). Runs OUTSIDE `forge coverage` (which
-        #     instruments bytecode and inflates every contract past the limit).
+      - name: forge test (non-zero test count guard for deploy input and timelock suites — core 1483)
+        # A path filter that matches nothing must be red, not green. Each named file has to run
+        # at least one test, counted from the JSON result.
         run: |
-          forge test -vvv --match-contract "UnifiedVaultConformanceTest"
-          forge test -vvv --match-contract "VaultCodeSizeGuard"
+          set -euo pipefail
+          for f in DeployTimelock DeployMainnetInputs DeployScriptChainGuards; do
+            forge test --json --match-path "contracts/test/${f}.t.sol" > "/tmp/${f}.json"
+            count="$(jq '[.. | objects | select(has("status"))] | length' "/tmp/${f}.json")"
+            echo "${f}.t.sol executed ${count} tests"
+            [[ "${count}" -gt 0 ]] || { echo "zero tests executed for ${f}.t.sol" >&2; exit 1; }
+          done
 
-      - name: forge test (unified-vault per-composition gas measurement — issue #1127)
-        # Gas MEASUREMENT for the two compositions (M-A3). The per-composition
-        # NUMERIC gas budget is set after the Phase-2 spike (out of scope here), so
-        # this step measures and reports rather than asserting a threshold; the
-        # EIP-170 size gate above is the gating budget check in this PR. Emitting
-        # the gas report in CI keeps the measurement running so a regression is
-        # visible in the log the moment the numeric budget lands.
-        run: forge test --match-contract "UnifiedVaultConformanceTest" --gas-report
+      - name: forge test (EIP-170 size gate)
+        # VaultCodeSizeGuard asserts every deployable vault and adapter fits under
+        # the EIP-170 24576-byte runtime limit and fails the build otherwise:
+        # undeployable-on-Base bytecode is caught in CI, not on broadcast (cf. issue
+        # #865). It runs OUTSIDE `forge coverage` (which instruments bytecode and
+        # inflates every contract past the limit).
+        run: bash .github/scripts/forge_test_require_executed.sh -vvv --match-contract "VaultCodeSizeGuard"
 
   invariant:
     name: forge-invariant-fuzz-tests
@@ -213,54 +252,64 @@ jobs:
       - name: forge build
         run: forge build
 
+      # Issue 1643: this used `--match-path "test/invariant/**"`, a directory that does not exist
+      # (the Foundry test dir is contracts/test), so the job matched zero tests and passed. The
+      # stateful invariant_* functions live in contracts/test/*Invariant*.t.sol. The wrapper
+      # makes a filter that matches nothing red (forge counts the four invariant_* functions of
+      # CustodyInvariant.t.sol as one passed test, so the floor is 1).
       - name: forge test (invariant / fuzz)
-        run: forge test --match-path "test/invariant/**" -vvv
+        run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/*Invariant*.t.sol" --match-test "^invariant_" -vvv
 
-  fork-regressions:
-    name: forge-fork-vault-regressions
+      - name: forge executed-test guard self-test (planted empty match-path is red, issue 1643)
+        run: bash .github/scripts/tests/test_forge_test_require_executed.sh
+
+  # ONE pin per workflow run (core 1498, 1496): the upstream head at the start of the run minus 2.
+  # The fork tests run on the Twin chain, a pinned lazy anvil fork of real Base state. There is no
+  # saved state file, no golden fixture and no secret (BASE_UPSTREAM_RPC is optional).
+  twin-pin:
+    name: twin-pin
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     env:
       CI_CLASS: system-correctness
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
-    # The fork gate is deterministic and offline: every target loads the checked-in
-    # Base state and fails loudly if the fixture or executed test count is missing.
+    outputs:
+      block: ${{ steps.pin.outputs.block }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        uses: ./.github/actions/twin-pin
+        with:
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+  fork-regressions:
+    name: forge-fork-vault-regressions
+    needs: twin-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    # Every test deploys its OWN contracts through the production deploy scripts and reads the
+    # addresses from what it deployed. None reads the live production v1 vault. FORK_RPC_URL names
+    # the Twin chain; with it unset a fork test skips with a named reason, and the runner below
+    # fails a run in which nothing executed.
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Fork-state digest helper round-trip self-test (issue #1152)
-        # Offline, no network/Docker: exercises scripts/devnet/fork-state-digest.sh
-        # write+verify against a throwaway temp blob before anything below relies
-        # on it against the real fixture.
-        run: scripts/devnet/check-fork-state-digest-selftest.sh
-
-      - name: Fork pin-age gate behaviour self-test (issue #1386)
-        # Offline, no network/Docker: drives scripts/devnet/check-fork-pin-age.sh
-        # against synthetic manifests so every branch of the gate (fresh, past
-        # the warn cadence, past --max-age-days, malformed input) is proven to
-        # behave before the real fixture is judged by it. A staleness gate that
-        # is never exercised is the same silence that let the pin reach 48 days.
-        run: scripts/devnet/check-fork-pin-age-selftest.sh
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      # Installs foundry and bun, restores anvil's RPC cache keyed by the pin block, starts the
+      # Twin chain and exports TWIN_RPC_URL.
+      - name: Start the Twin fork
+        id: twin
+        uses: ./.github/actions/twin-fork
         with:
-          # CURRENT.anvil-state uses the Anvil 1.6 serializer; anvil v1.7.1 loads it
-          # (verified locally against testing/fixtures/fork-state/CURRENT.anvil-state),
-          # so this site no longer needs the floating `nightly` channel.
-          version: stable
+          pin-block: ${{ needs.twin-pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
-      - name: Fork Safe-set gate behaviour self-test (issue #1447)
-        # Offline, no network/Docker: drives scripts/devnet/check-fork-safe-set.sh
-        # against state files built from the committed fixture's five Safe
-        # accounts, so a fixture missing a canonical Safe contract, carrying
-        # other code than the canonical one, or with an unlocked singleton is
-        # proven to fail (governance-isomorphism.md R3) before
-        # check-fork-manifest.sh judges the real fixture with it. After Install
-        # Foundry: the gate hashes code with `cast keccak`.
-        run: scripts/devnet/check-fork-safe-set-selftest.sh
+      - name: Canonical Safe v1.4.1 set is on the Twin chain (issue 1447)
+        run: bun scripts/devnet/safe-set.ts
 
       - name: Cache Foundry build artifacts
         uses: actions/cache@v4
@@ -276,219 +325,53 @@ jobs:
         run: forge build
 
       - name: forge test (fork vault regressions)
-        run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/VaultForkRegressions.t.sol"
 
       - name: forge test (deploy seed deposit precondition — issue #656)
-        run: scripts/devnet/run-golden-forge-forks.sh --match-contract "DeploySeedDeposit"
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "DeploySeedDeposit"
 
       - name: forge test (Safe multisig integration — issue 422)
-        run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/SafeIntegration.t.sol"
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/SafeIntegration.t.sol"
 
       - name: forge test (governance execute path through a real 2-of-3 Safe — issue 1447)
         # A Fusion named evidence file (AC-GOV-03). It drives the timelock through
-        # a canonical SafeL2 proxy, which exists only on the Base fork, so it moved
-        # here from the unit job's evidence loop; the group markers keep the
+        # a canonical SafeL2 proxy, which exists only on a Base fork; the group markers keep the
         # per-file boundary the external evidence reader looks for.
         run: |
           echo "::group::contracts/test/GovernanceExecutePathAfterHandover.t.sol:"
-          scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/GovernanceExecutePathAfterHandover.t.sol"
+          bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/GovernanceExecutePathAfterHandover.t.sol"
           echo "::endgroup::"
 
-      - name: Assert missing fixture is red
+      - name: forge test (redeem gas estimate then include and root cause — core 1482)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/{RobotMoneyVaultRedeemGas,RobotMoneyVaultRedeemGasRootCause}.t.sol" --match-contract "ForkTest|RootCauseTest"
+
+      - name: forge test (basket vault redeem estimate then include — core 1513)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/BasketVaultRedeemGas.t.sol"
+
+      - name: forge test (rmRWA fork regression — core 1492)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
+      - name: forge test (rmRWA adds the four Coinbase B20 tokens through the real timelock - core 1500)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "RwaVaultB20ForkTest"
+
+      - name: forge test (withdrawals are never frozen, through a real 2-of-3 Safe - core 1494)
+        # Every shipped vault, the gateway and the router: no emergency, deposit-pauser
+        # or governance lever blocks an exit, and unpauseDeposits runs only through the
+        # canonical SafeL2 proxy and the timelock at 172800 s. Fork-only like the Safe
+        # tests above.
         run: |
-          mv testing/fixtures/fork-state/CURRENT.anvil-state /tmp/CURRENT.anvil-state
-          if scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"; then
-            echo "missing fixture unexpectedly passed" >&2
-            exit 1
-          fi
-          mv /tmp/CURRENT.anvil-state testing/fixtures/fork-state/CURRENT.anvil-state
+          echo "::group::contracts/test/WithdrawalsNeverFrozen.t.sol:"
+          bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/WithdrawalsNeverFrozen.t.sol"
+          echo "::endgroup::"
 
-      - name: Assert tampered fixture is red
-        # ADR-0011 addendum (issue #1152): a byte-flipped blob must fail the
-        # sha256 integrity check in check-fork-manifest.sh, not silently load.
-        run: |
-          cp testing/fixtures/fork-state/CURRENT.anvil-state /tmp/CURRENT.anvil-state.bak
-          python3 - <<'PY'
-          import pathlib
-          p = pathlib.Path("testing/fixtures/fork-state/CURRENT.anvil-state")
-          data = bytearray(p.read_bytes())
-          data[0] ^= 0xFF
-          p.write_bytes(data)
-          PY
-          if scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"; then
-            echo "tampered fixture unexpectedly passed" >&2
-            mv /tmp/CURRENT.anvil-state.bak testing/fixtures/fork-state/CURRENT.anvil-state
-            exit 1
-          fi
-          mv /tmp/CURRENT.anvil-state.bak testing/fixtures/fork-state/CURRENT.anvil-state
+      - name: forge test (split-stage router deposit and withdraw on the fork — core 1485)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/CoreStagesFork.t.sol"
 
-      - name: Assert missing digest is red
-        # ADR-0011 addendum (issue #1152): a manifest lacking state_sha256 must
-        # fail loudly, not warn-and-continue.
-        run: |
-          cp testing/fixtures/fork-state/CURRENT.json /tmp/CURRENT.json.bak
-          jq 'del(.state_sha256)' /tmp/CURRENT.json.bak > testing/fixtures/fork-state/CURRENT.json
-          if scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"; then
-            echo "missing digest unexpectedly passed" >&2
-            mv /tmp/CURRENT.json.bak testing/fixtures/fork-state/CURRENT.json
-            exit 1
-          fi
-          mv /tmp/CURRENT.json.bak testing/fixtures/fork-state/CURRENT.json
+      - name: forge test (gateway router split stages on the fork)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "GatewayRouterSplitStagesForkTest"
 
-      - name: Verify ADR-0011 workflow structure
-        run: scripts/devnet/check-adr0011-ci.sh
-
-      - name: Fork RPC configuration self-test (issue #1239)
-        # Offline: proves check-fork-rpc-configured.sh reports a missing
-        # RMPC_FORK_RPC_URL by name and never echoes a configured value,
-        # before the real check below relies on it.
-        run: bash .github/scripts/tests/test_check_fork_rpc_configured.sh
-
-      - name: Live-RPC fork runner self-test (issue #1239)
-        # Offline, stubbed forge: proves run-live-rpc-forge-fork.sh calls a real
-        # assertion failure a test failure without retrying it, retries only
-        # provider failures (rotating public endpoints), fails a zero-test run,
-        # and never prints a configured endpoint, before the three live-RPC
-        # steps below rely on it.
-        run: bash .github/scripts/tests/test_run_live_rpc_forge_fork.sh
-
-      - name: Check fork RPC configuration (issue #1239)
-        # Makes the public-RPC fallback below loud: if the repo/org Actions
-        # secret is unset, name it explicitly via a `::warning::` annotation
-        # in the run summary instead of only showing up later as an
-        # unexplained Cloudflare 429 on the public fallback endpoint. This
-        # must be a secret, not a variable: this repo is public, and GitHub
-        # does not mask `vars.*` values, so an Actions variable would leak
-        # the keyed URL into this step's `env:` block in the public log.
-        env:
-          RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
-        run: scripts/devnet/check-fork-rpc-configured.sh "$RMPC_FORK_RPC_URL_RAW"
-
-      - name: forge test (Uniswap V3 AssetPositionAdapter fork — issue #1118)
-        env:
-          # UniV3AssetPositionAdapterForkTest swaps USDC<->wETH through a REAL Base
-          # Uniswap V3 pool via the concrete UniswapV3SwapAdapter venue seam,
-          # asserting TWAP-priced totalAssets, the composed slippage-floor revert,
-          # and the ORA-4 NAV-deviation guard on a manipulated spot. It cannot run
-          # against the offline golden fixture above (run-golden-forge-forks.sh):
-          # that snapshot only carries the state touched while generating the
-          # vault/adapter deployment fixtures, which never touched the Uniswap V3
-          # factory/pool — `getPool` has no code to call there. It genuinely needs
-          # a live RPC, same as the `live-base-fork-drift` job in
-          # suite-21-nightly.yml, so it uses the same `secrets.RMPC_FORK_RPC_URL`
-          # (repo/org secret, not variable). This repo is public and GitHub
-          # does not mask `vars.*` values in logs, including step `env:`
-          # headers, so a keyed URL stored as a variable leaks into every
-          # public run's log. It must be a secret so GitHub masks it wherever
-          # it appears. Until an admin provisions the secret it reads empty,
-          # same as an unset variable, and the fallback below still applies.
-          #
-          # RPC ATTRIBUTION (issue #1239): the raw secret goes to
-          # run-live-rpc-forge-fork.sh, which falls back to the public endpoints
-          # in scripts/devnet/fork-rpc-lib.sh when it is unset. It retries only
-          # when every failing test failed on the RPC provider, rotating public
-          # endpoints, and titles the red annotation "provider failure" or
-          # "test failure" so a rate limit no longer reads as a regression. A
-          # real assertion failure is never retried. It also redacts the
-          # endpoint from forge's output, because forge prints the request URL
-          # on a transport error and a keyed URL carries its API key.
-          #
-          # LOUD-SKIP (test-coverage-policy invariant 1): this contract's setUp
-          # REVERTS when neither RMPC_FORK_RPC_URL nor FORK_RPC_URL resolves to a
-          # non-empty string — it never silent-skips. The runner always sets
-          # both, and it fails a green run that executed zero tests.
-          RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
-        run: |
-          scripts/devnet/run-live-rpc-forge-fork.sh "Uniswap V3 AssetPositionAdapter fork" --match-contract "UniV3AssetPositionAdapterForkTest" -vvv
-
-      - name: forge test (Uniswap V4 AssetPositionAdapter fork — issue #1124)
-        env:
-          # UniV4AssetPositionAdapterForkTest exercises a full deploy/withdraw
-          # round-trip against REAL Base-mainnet USDC (`deal`d balances, genuine
-          # ERC-20 6-decimal token bytecode) through the concrete
-          # `UniswapV4SwapAdapter` venue seam. It deploys a local V4 router/pool
-          # harness on the fork (see the test file header): no genuinely deployed
-          # third-party Uniswap V4 pool is ABI-compatible with this repo's
-          # `IUniswapV4Pool`/`IUniswapV4SwapRouter` seam (documented architecture
-          # gap, docs/code-review/20260623-code-review-testmachine-azimuth.md,
-          # info-severity, out of #1124's scope to redesign). Same
-          # `secrets.RMPC_FORK_RPC_URL` (repo/org secret, not variable) and the
-          # same run-live-rpc-forge-fork.sh fallback and RPC attribution as the
-          # V3 fork test above.
-          #
-          # LOUD-SKIP (test-coverage-policy invariant 1): this contract's setUp
-          # REVERTS when neither RMPC_FORK_RPC_URL nor FORK_RPC_URL resolves to a
-          # non-empty string — it never silent-skips.
-          RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
-        run: |
-          scripts/devnet/run-live-rpc-forge-fork.sh "Uniswap V4 AssetPositionAdapter fork" --match-contract "UniV4AssetPositionAdapterForkTest" -vvv
-
-      - name: forge test (Aerodrome AssetPositionAdapter fork — issue #1125)
-        env:
-          # AerodromeAssetPositionAdapterForkTest swaps USDC<->wETH through a REAL
-          # Base Aerodrome Slipstream CL pool via the concrete AerodromeSwapAdapter
-          # venue seam, asserting TWAP-priced totalAssets, the composed
-          # slippage-floor revert, and the ORA-4 NAV-deviation guard on a
-          # manipulated spot — invariant parity with the sibling Uniswap V3 fork
-          # test above. It cannot run against the offline golden fixture
-          # (run-golden-forge-forks.sh): that snapshot never touched the Aerodrome
-          # Slipstream factory/pool. Same run-live-rpc-forge-fork.sh fallback and
-          # RPC attribution as the V3 fork job above.
-          #
-          # LOUD-SKIP (test-coverage-policy invariant 1): this contract's setUp
-          # REVERTS when neither RMPC_FORK_RPC_URL nor FORK_RPC_URL resolves to a
-          # non-empty string — it never silent-skips.
-          RMPC_FORK_RPC_URL_RAW: ${{ secrets.RMPC_FORK_RPC_URL }}
-        run: |
-          scripts/devnet/run-live-rpc-forge-fork.sh "Aerodrome AssetPositionAdapter fork" --match-contract "AerodromeAssetPositionAdapterForkTest" -vvv
-
-  ceremony-selftest:
-    name: fusion-ceremony-selftest
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      CI_CLASS: system-correctness
-      # Executed-assertion floor, held here independently of the script's own
-      # ASSERTION_FLOOR so a run that silently did less (a section skipped, a
-      # truncated file, a lost exit status) is red either way. Raise both
-      # together when cases are added.
-      CEREMONY_SELFTEST_FLOOR: "136"
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
-    # scripts/stage/tests/fusion-ceremony-selftest.sh (issue #1447): the stage
-    # governance ceremony's verify/ensure/run/release/propose/vote/execute
-    # paths driven against a fake chain and a fake 2-of-3 Safe, offline, with
-    # real foundry `cast` for keccak/abi encoding. It runs beside the
-    # fork-regressions job's Safe-set gate self-test rather than inside it, so
-    # its several minutes of fake-chain round trips do not eat that job's
-    # 20-minute budget for the forge fork suites.
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          # Pinned, not the floating `stable` channel: the self-test reads cast's
-          # output formats (abi-decode, wallet, keccak) through a fake chain, so
-          # a cast release that changes one must be adopted on purpose. v1.8.3 is
-          # the release this suite was last run green on.
-          version: v1.8.3
-
-      - name: Fusion ceremony self-test (issue #1447)
-        run: |
-          set -o pipefail
-          bash scripts/stage/tests/fusion-ceremony-selftest.sh 2>&1 | tee ceremony-selftest.log
-          tally="$(grep -E '^fusion-ceremony selftest TOTAL: [0-9]+ passed, [0-9]+ failed' ceremony-selftest.log | tail -1)"
-          if [ -z "$tally" ]; then
-            echo "::error::fusion-ceremony selftest printed no TOTAL line: the run ended before its tally"
-            exit 1
-          fi
-          passed="$(sed -E 's/^fusion-ceremony selftest TOTAL: ([0-9]+) passed.*/\1/' <<<"$tally")"
-          failed="$(sed -E 's/^.* ([0-9]+) failed.*/\1/' <<<"$tally")"
-          echo "fusion-ceremony selftest: $passed assertions executed, $failed failed, floor $CEREMONY_SELFTEST_FLOOR"
-          if [ "$failed" != 0 ] || [ "$passed" -lt "$CEREMONY_SELFTEST_FLOOR" ]; then
-            echo "::error::fusion-ceremony selftest: $passed passed / $failed failed, floor $CEREMONY_SELFTEST_FLOOR"
-            exit 1
-          fi
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
 
   coverage:
     name: forge-coverage-gate
@@ -567,7 +450,7 @@ jobs:
         #   - "stack too deep": does not occur. Nothing in contracts/ needs viaIR to
         #     compile under coverage's unoptimised profile — the sources were written
         #     to stay inside the non-viaIR stack limit on purpose (see the notes in
-        #     BasketViews.sol, DeployVaultThemes.s.sol, StaleOracleRedemption.t.sol).
+        #     BasketViews.sol, StaleOracleRedemption.t.sol).
         #   - coverage accuracy: it improves. `--ir-minimum` prints its own warning
         #     that it "can result in inaccurate source mappings", and that was costing
         #     real hits. Same instrumentation universe (LF 5772 / BRF 1263), more of
@@ -592,11 +475,8 @@ jobs:
         #     deployed bytecode is under the EIP-170 24576-byte limit (issues #865,
         #     1476), but coverage instruments bytecode and inflates every contract
         #     past it, so the assertion is meaningless here. They run in the unit job.
-        #   - `UniV3/UniV4/Aerodrome AssetPositionAdapterForkTest`: LOUD-SKIP fork
-        #     tests (issues #1118 / #1124 / #1125) whose setUp reverts without a fork
-        #     RPC, which this job does not set. They run in `fork-regressions`.
         #   - `DeploySeedDeposit` / `SafeIntegration` / `VaultForkRegressions` /
-        #     `GovernanceExecutePathAfterHandover`: fork tests, same reason.
+        #     `GovernanceExecutePathAfterHandover` / `WithdrawalsNeverFrozen`: fork tests, same reason.
         #
         # The wrapper measures the run's peak RSS and fails the job above 50% of
         # runner RAM, so the next contract-adding PR meets an explanatory red gate
@@ -605,8 +485,8 @@ jobs:
           python3 .github/scripts/run_coverage_memory_guard.py
           forge coverage --report lcov
           --no-match-test "^testFail_"
-          --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard|UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover}.t.sol"
+          --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

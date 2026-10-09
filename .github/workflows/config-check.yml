@@ -1,0 +1,60 @@
+# Core S2 (issue 1484): required job. Read-only check of the launch config against live Base head.
+# Public RPC by default. Optional: set repo secret BASE_MAINNET_RPC_URL (or variable of the same name)
+# to use a keyed endpoint; it is never printed. Output file name carries the Base block number and is uploaded.
+name: config-check
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  config-check:
+    name: config-check-live-base
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide whether config paths changed
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -Eq '^(config/|scripts/ci/config-check|\.github/workflows/config-check\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No config path changed: live Base check skipped, check reports success."
+          fi
+      - if: steps.paths.outputs.run == 'true'
+        uses: oven-sh/setup-bun@v2
+      - name: Check config against live Base head
+        if: steps.paths.outputs.run == 'true'
+        env:
+          RPC_SECRET: ${{ secrets.BASE_MAINNET_RPC_URL }}
+          RPC_VAR: ${{ vars.BASE_MAINNET_RPC_URL }}
+        run: |
+          RPC="${RPC_SECRET:-${RPC_VAR:-https://mainnet.base.org}}"
+          if [ -n "$RPC_SECRET" ]; then echo "::add-mask::$RPC_SECRET"; fi
+          bun scripts/ci/config-check.ts --rpc "$RPC" --out-dir config-check-output
+      - name: Upload config-check output
+        if: always() && steps.paths.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-check-output
+          path: config-check-output/config-check-block-*.json
+          if-no-files-found: warn

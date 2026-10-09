@@ -1,7 +1,7 @@
 /**
  * Single-mode Playwright config. Every spec runs against the
  * smoke-test full-stack devnet booted by `devnet-global-setup.ts`:
- * real Geth + Lighthouse, real deployed contracts, dapp container
+ * the Twin chain (a pinned lazy anvil fork of real Base), real deployed contracts, dapp container
  * built with the gateway runtime code hash pinned at build time.
  *
  * There is no local dev-server fast path. Tests must exercise a
@@ -38,6 +38,21 @@ export default defineConfig({
       "html",
       { open: "never", outputFolder: process.env.PLAYWRIGHT_HTML_REPORT ?? "playwright-report" },
     ],
+  ],
+  // Two projects over the one devnet (globalSetup runs once). `safe-governance` holds the
+  // specs that advance the Twin chain clock past the timelock delay (evm_increaseTime), so they
+  // run after every other spec has finished with the chain (core 1544). governance.spec.ts runs
+  // real Safe -> Timelock rounds to create its voting power and proposal (issue 1647).
+  projects: [
+    {
+      name: "dapp",
+      testIgnore: ["**/safe-proposal-role-grant.spec.ts", "**/governance.spec.ts"],
+    },
+    {
+      name: "safe-governance",
+      testMatch: ["**/safe-proposal-role-grant.spec.ts", "**/governance.spec.ts"],
+      dependencies: ["dapp"],
+    },
   ],
   globalSetup: "./tests/e2e/devnet-global-setup.ts",
   globalTeardown: "./tests/e2e/devnet-global-teardown.ts",

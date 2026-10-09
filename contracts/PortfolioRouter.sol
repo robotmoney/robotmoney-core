@@ -17,6 +17,11 @@ import {VaultRegistry} from "./VaultRegistry.sol";
 import {BpsMath} from "./lib/BpsMath.sol";
 import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
 
+/// @dev The one TimelockController getter the rotation delay reads.
+interface IMinDelay {
+    function getMinDelay() external view returns (uint256);
+}
+
 /// @title PortfolioRouter
 /// @notice Outer allocation contract that accepts USDC and splits deposits
 ///         across active vaults by RM-governed weight bps.
@@ -45,6 +50,28 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
     /// @notice Grants/revokes roles, sets weights, caps, and registry address.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
+    /// @notice Sole gate on `setWeights`, the active weight setter. After the
+    ///         deploy ceremony only the RouterGovernance contract holds it, so
+    ///         active weights move only through propose, vote, quorum and the
+    ///         execution delay. The timelock keeps `ADMIN_ROLE` and reaches
+    ///         `setDefaultWeights` and `clearVotedWeights` only. The constructor
+    ///         seeds the role to `_admin` so the router deploy stage can write
+    ///         the initial weights. The governance deploy stage revokes it. The role is its
+    ///         own role admin, so no `ADMIN_ROLE` holder can grant it.
+    bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
+
+    /// @notice Proposes and cancels a rotation of `WEIGHT_SETTER_ROLE`. After the
+    ///         deploy ceremony only the Safe holds it. Self-administered, so no
+    ///         `ADMIN_ROLE` holder (the timelock) can grant it to itself. ADR-0002.
+    bytes32 public constant WEIGHT_SETTER_ROTATOR_ROLE = keccak256("WEIGHT_SETTER_ROTATOR_ROLE");
+
+    /// @notice Executes a rotation of `WEIGHT_SETTER_ROLE` the rotator proposed, after
+    ///         the delay. After the deploy ceremony only the timelock holds it.
+    ///         Self-administered, so `RouterGovernance` (which holds `ADMIN_ROLE`) cannot
+    ///         revoke it to block its own replacement. ADR-0002.
+    bytes32 public constant WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE =
+        keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
 
     // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -132,6 +159,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param bps     Parallel weight array (must sum to BPS_DENOMINATOR).
     event WeightsSet(address[] vaults, uint256[] bps);
 
+    /// @notice A rotation of `WEIGHT_SETTER_ROLE` to `newHolder` is pending. It can execute
+    ///         from `proposedAt` plus the executing timelock's delay.
+    event WeightSetterRotationProposed(address indexed newHolder, uint64 proposedAt);
+
+    /// @notice The pending rotation to `newHolder` was cancelled by `by`.
+    event WeightSetterRotationCancelled(address indexed newHolder, address indexed by);
+
+    /// @notice `WEIGHT_SETTER_ROLE` now has exactly one holder, `newHolder`.
+    event WeightSetterRotated(address indexed newHolder, uint256 revokedHolders);
+
     /// @notice Emitted when the default (below-quorum fallback) weight vector
     ///         is updated by ADMIN_ROLE.
     /// @param vaults  New ordered list of vault addresses.
@@ -201,11 +238,29 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param status The current non-Active status of the vault.
     error VaultNotActive(address vault, VaultRegistry.VaultStatus status);
 
-    /// @notice A redeem leg targets a Paused vault. Redemption permits Active OR
-    ///         Retired status (withdraw-only after retirement, F-02); only Paused
-    ///         blocks the exit path.
-    /// @param vault  The vault address whose status is Paused.
-    error VaultPausedForRedeem(address vault);
+    /// @notice Gas left is below the floor a redeem leg needs. Raised before the leg
+    ///         calls `vault.redeem`, so a gas limit that is too low reverts with a
+    ///         reason instead of failing opaquely inside the vault fan-out. Retry
+    ///         with a higher gas limit. (core 1482.)
+    /// @param available `gasleft()` at the check.
+    /// @param required  The floor that was not met.
+    error InsufficientGas(uint256 available, uint256 required);
+
+    /// @dev Gas `redeemFor` needs per non-zero leg, checked once at entry (core 1482). The floor
+    ///      is checked at entry, never per leg: a per-leg check runs after earlier legs spent
+    ///      gas that depends on interest-accrual state, so eth_estimateGas would land on a
+    ///      threshold that moves between estimate and inclusion. Each leg must hand its vault
+    ///      1_600_000 after the 63/64 forward (about 1_625_400) plus its registry and allowance
+    ///      reads; a leg's real cost is about 1.11M on a Base fork, so earlier legs leave slack
+    ///      for later ones. See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant REDEEM_GAS_PER_LEG = 1_700_000;
+
+    /// @dev Gas `_depositTo` needs per weighted leg, checked once at entry (core 1482). Same
+    ///      reasoning as `REDEEM_GAS_PER_LEG`: each leg must hand `vault.deposit` its
+    ///      1_600_000 entry floor after the 63/64 forward, and a per-leg check in the vault
+    ///      would run after earlier legs spent accrual-dependent gas. Legs that end up skipped
+    ///      still count, so the floor is an upper bound. See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant DEPOSIT_GAS_PER_LEG = 1_700_000;
 
     /// @notice The explicit `vaults[]` array supplied to `redeemFor` does not
     ///         match the length of `sharesPerLeg` (or `minAssetsPerLeg`). Each
@@ -272,6 +327,24 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///         callable directly. Governance sets defaults via `setDefaultWeights`.
     error OnlyRegistry();
 
+    /// @notice A rotation target must be a deployed contract (not address(0), an EOA or an empty address).
+    error RotationTargetNotContract(address target);
+
+    /// @notice A rotation target must not be this router, the Safe (rotator) or the timelock (executor). Rotating to the timelock would hand it `WEIGHT_SETTER_ROLE` (core 1522).
+    error RotationTargetForbidden(address target);
+
+    /// @notice A rotation is already pending. Cancel it first.
+    error RotationAlreadyPending();
+
+    /// @notice No rotation is pending.
+    error NoRotationPending();
+
+    /// @notice The pending rotation is for `pending`, not `expected`.
+    error RotationTargetMismatch(address pending, address expected);
+
+    /// @notice The delay has not passed. The rotation can execute from `readyAt`.
+    error RotationNotReady(uint256 readyAt);
+
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     /// @param _usdc      USDC token address.
@@ -287,6 +360,81 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, _admin);
+        _setRoleAdmin(WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROLE);
+        _grantRole(WEIGHT_SETTER_ROLE, _admin);
+        _setRoleAdmin(WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATOR_ROLE);
+        _grantRole(WEIGHT_SETTER_ROTATOR_ROLE, _admin);
+        _setRoleAdmin(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE);
+        _grantRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, _admin);
+    }
+
+    // ─── Weight setter rotation (ADR-0002, 2026-10-07 amendment) ─────────────
+
+    /// @notice The pending rotation of `WEIGHT_SETTER_ROLE`. `newHolder` is address(0) when none is pending.
+    ///         The stage 12 verifier fails a run while a rotation is pending.
+    WeightSetterRotation public pendingWeightSetterRotation;
+
+    struct WeightSetterRotation {
+        address newHolder;
+        uint64 proposedAt;
+    }
+
+    /// @notice Propose rotating `WEIGHT_SETTER_ROLE` to `newHolder`. Rotator (the Safe) only.
+    /// @param newHolder A deployed contract, for example a replacement RouterGovernance.
+    function proposeWeightSetterRotation(address newHolder)
+        external
+        onlyRole(WEIGHT_SETTER_ROTATOR_ROLE)
+    {
+        if (newHolder.code.length == 0) revert RotationTargetNotContract(newHolder);
+        _requireAllowedRotationTarget(newHolder);
+        if (pendingWeightSetterRotation.newHolder != address(0)) revert RotationAlreadyPending();
+        pendingWeightSetterRotation =
+            WeightSetterRotation({newHolder: newHolder, proposedAt: uint64(block.timestamp)});
+        emit WeightSetterRotationProposed(newHolder, uint64(block.timestamp));
+    }
+
+    /// @dev Rejects this router and any holder of either rotation role (the Safe, the timelock).
+    function _requireAllowedRotationTarget(address target) private view {
+        if (
+            target == address(this) || hasRole(WEIGHT_SETTER_ROTATOR_ROLE, target)
+                || hasRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, target)
+        ) revert RotationTargetForbidden(target);
+    }
+
+    /// @notice Cancel the pending rotation. Rotator (the Safe) only.
+    function cancelWeightSetterRotation() external onlyRole(WEIGHT_SETTER_ROTATOR_ROLE) {
+        address pending = pendingWeightSetterRotation.newHolder;
+        if (pending == address(0)) revert NoRotationPending();
+        delete pendingWeightSetterRotation;
+        emit WeightSetterRotationCancelled(pending, msg.sender);
+    }
+
+    /// @notice Execute the pending rotation after the delay. Executor (the timelock) only.
+    ///         The delay is the calling timelock's `getMinDelay()`, measured from the proposal.
+    ///         Revokes `WEIGHT_SETTER_ROLE` from every holder, then grants it to the target,
+    ///         so exactly one holder remains.
+    /// @param expectedNewHolder The target the scheduled call names. Must equal the pending target.
+    function executeWeightSetterRotation(address expectedNewHolder)
+        external
+        onlyRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE)
+    {
+        WeightSetterRotation memory r = pendingWeightSetterRotation;
+        if (r.newHolder == address(0)) revert NoRotationPending();
+        if (r.newHolder != expectedNewHolder) {
+            revert RotationTargetMismatch(r.newHolder, expectedNewHolder);
+        }
+        uint256 readyAt = uint256(r.proposedAt) + IMinDelay(msg.sender).getMinDelay();
+        if (block.timestamp < readyAt) revert RotationNotReady(readyAt);
+        if (r.newHolder.code.length == 0) revert RotationTargetNotContract(r.newHolder);
+        _requireAllowedRotationTarget(r.newHolder);
+
+        delete pendingWeightSetterRotation;
+        uint256 revoked = getRoleMemberCount(WEIGHT_SETTER_ROLE);
+        for (uint256 i = revoked; i > 0; i--) {
+            _revokeRole(WEIGHT_SETTER_ROLE, getRoleMember(WEIGHT_SETTER_ROLE, i - 1));
+        }
+        _grantRole(WEIGHT_SETTER_ROLE, r.newHolder);
+        emit WeightSetterRotated(r.newHolder, revoked);
     }
 
     // ─── Admin: weight management ────────────────────────────────────────────
@@ -294,12 +442,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice Set the vault weight vector. All vaults must be registered in the
     ///         VaultRegistry and must be marked router-eligible there. The bps
     ///         values must sum to exactly BPS_DENOMINATOR.
-    ///         Restricted to `ADMIN_ROLE`.
+    ///         Restricted to `WEIGHT_SETTER_ROLE`, held only by RouterGovernance.
     /// @param vaults  Ordered list of vault addresses.
     /// @param bps     Parallel weight array in basis points (must sum to 10 000).
     function setWeights(address[] calldata vaults, uint256[] calldata bps)
         external
-        onlyRole(ADMIN_ROLE)
+        onlyRole(WEIGHT_SETTER_ROLE)
     {
         if (vaults.length != bps.length) revert LengthMismatch();
 
@@ -309,7 +457,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             // Active-status guard (F-05/RTR-4/GOV-4): a weight vector is only ever
             // executable if every weighted vault is simultaneously router-eligible
             // AND Active. `getVault` reverts NotRegistered if unknown; this also
-            // reverts VaultNotActive for any Paused/Retired vault so a
+            // reverts VaultNotActive for any DepositsPaused/Retired vault so a
             // non-depositable vector can never be written and self-DoS deposits.
             _requireActiveAndEligible(vaults[i]);
             total += bps[i];
@@ -394,7 +542,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             if (vaults[i] == address(0)) revert ZeroAddress();
             // Active-status guard (F-05/RTR-4): the default vector is also a
             // routed vector, so it must hold the same "eligible AND Active"
-            // invariant. Reverts VaultNotActive for any Paused/Retired vault.
+            // invariant. Reverts VaultNotActive for any DepositsPaused/Retired vault.
             _requireActiveAndEligible(vaults[i]);
             total += bps[i];
         }
@@ -653,9 +801,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///           targets exactly the address the caller named, so a reweight
     ///           between sign and execution can never redirect a leg to a vault
     ///           the caller did not name (NC-5).
-    ///         - Redemption succeeds when a leg's registry status is Active OR
-    ///           Retired; only Paused blocks the exit (F-02). Retired vaults are
-    ///           withdraw-only, never deposit targets — see ADR-0009.
+    ///         - Redemption succeeds whatever a leg's registry status is (Active,
+    ///           DepositsPaused or Retired). No status blocks an exit (F-02, core
+    ///           1494). Retired vaults are withdraw-only, never deposit targets —
+    ///           see ADR-0009.
     ///
     ///         SECURITY: users must NEVER grant a share-token approval directly to
     ///         this router. The router calls `vault.redeem` with itself as the
@@ -719,6 +868,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
         assetsPerLeg = new uint256[](n);
 
+        // Gas guard (core 1482): one floor at entry, scaled by the non-zero legs.
+        {
+            uint256 legs;
+            for (uint256 i = 0; i < n; i++) {
+                if (sharesPerLeg[i] != 0) legs++;
+            }
+            uint256 floor = legs * REDEEM_GAS_PER_LEG;
+            if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
+        }
+
         for (uint256 i = 0; i < n; i++) {
             uint256 shares = sharesPerLeg[i];
             if (shares == 0) continue;
@@ -746,21 +905,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         uint256 shares,
         uint256 minAssets
     ) private returns (uint256 assetsOut) {
-        // Registry status (F-02): redemption permits Active OR Retired (Retired is
-        // withdraw-only — existing holders keep redeeming, no new deposits, see
-        // ADR-0009). Only Paused blocks the exit. `getVault` reverts
+        // Registry status (F-02, core 1494): redemption works for every status.
+        // Active, DepositsPaused and Retired vaults all keep exits open; a deposit
+        // pause or a retirement stops deposits only (ADR-0009). `getVault` reverts
         // `NotRegistered` for an unknown vault; surface that as
         // `RedeemVaultNotRegistered` so a caller-named bad address fails loudly.
-        VaultRegistry.VaultStatus vaultStatus;
         try registry.getVault(vault) returns (
-            VaultRegistry.VaultMetadata memory, VaultRegistry.VaultStatus status
-        ) {
-            vaultStatus = status;
-        } catch {
+            VaultRegistry.VaultMetadata memory, VaultRegistry.VaultStatus
+        ) {}
+        catch {
             revert RedeemVaultNotRegistered(vault);
-        }
-        if (vaultStatus == VaultRegistry.VaultStatus.Paused) {
-            revert VaultPausedForRedeem(vault);
         }
 
         // Confused-deputy guard (issue #751): caller must be shareHolder or
@@ -794,6 +948,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         // body (keeps locals under the stack limit). ADR-0002.
         (address[] memory vaultList, uint256[] memory bpsList) = _effectiveWeightsMemory();
         if (vaultList.length == 0) revert NoWeightsSet();
+
+        // Gas guard (core 1482): one floor at entry, scaled by the weighted legs.
+        {
+            uint256 floor = vaultList.length * DEPOSIT_GAS_PER_LEG;
+            if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
+        }
 
         // Global router cap check.
         if (routerCap != 0 && amount > routerCap) revert RouterCapExceeded();
@@ -1011,7 +1171,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///         ERC-4626 `asset()` view equal to the router's USDC AND the
     ///         VaultRegistry has marked the vault as router-eligible.
     ///         This view is intentionally distinct from VaultRegistry
-    ///         lifecycle status (Active/Paused/Retired); clients (dapp,
+    ///         lifecycle status (Active/DepositsPaused/Retired); clients (dapp,
     ///         rmpc) read both signals to compose accurate UI state.
     /// @param vault Address of the vault to check.
     /// @return eligible True iff the vault's ERC-4626 asset equals the router's
@@ -1060,7 +1220,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///      the single guard that a weight vector is only ever written when every
     ///      leg is simultaneously eligible AND depositable (F-05/RTR-4/GOV-4):
     ///      eligibility and lifecycle status are independent signals, so checking
-    ///      eligibility alone would let an eligible-but-Paused/Retired vault enter
+    ///      eligibility alone would let an eligible-but-DepositsPaused/Retired vault enter
     ///      the vector and brick `deposit()` later. Used by `setWeights` and
     ///      `setDefaultWeights` at configuration time.
     function _requireActiveAndEligible(address vault) internal view {

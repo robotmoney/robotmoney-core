@@ -31,8 +31,11 @@ pub enum RmpcError {
     #[error("ErrChainIdMismatch: RPC eth_chainId does not match configured chain_id")]
     ErrChainIdMismatch,
 
-    #[error("ErrGatewayPaused: gateway contract reports paused() == true")]
-    ErrGatewayPaused,
+    /// Deposits are paused: the gateway or its vault reports
+    /// `depositsPaused() == true`. Deposit-only refusal: a deposit pause
+    /// never blocks a withdrawal, so no withdraw path raises it (core 1494).
+    #[error("ErrDepositsPaused: deposits are paused (depositsPaused() == true on the gateway or vault); withdrawals stay open")]
+    ErrDepositsPaused,
 
     #[error("ErrAllowanceInsufficient: USDC allowance(self, gateway) < amount")]
     ErrAllowanceInsufficient,
@@ -68,10 +71,6 @@ pub enum RmpcError {
     #[error("ErrAgentDepositLogMissing: receipt has no AgentDeposit log (tx_hash={tx_hash})")]
     ErrAgentDepositLogMissing { tx_hash: String },
 
-    /// The vault being redeemed from is paused — hard refusal before signing.
-    #[error("ErrVaultPaused: source vault reports paused() == true")]
-    ErrVaultPaused,
-
     /// Shares to withdraw exceed the agent's `maxWithdrawPerPayment` policy cap.
     #[error("ErrWithdrawCapExceeded: shares exceed agent maxWithdrawPerPayment policy cap")]
     ErrWithdrawCapExceeded,
@@ -97,9 +96,12 @@ pub enum RmpcError {
     #[error("ErrPolicyExpired: agent policy has expired (validUntil < block.timestamp)")]
     ErrPolicyExpired,
 
-    /// A required router leg is unavailable (vault paused, full, or de-listed).
+    /// A required router deposit leg is unavailable (vault deposits paused,
+    /// full, or de-listed). Never raised for a redeem: every status redeems.
     /// Maps to the `unavailable_leg` product reason code.
-    #[error("ErrLegUnavailable: router leg vault is unavailable (paused, full, or de-listed)")]
+    #[error(
+        "ErrLegUnavailable: router leg vault is unavailable (deposits paused, full, or de-listed)"
+    )]
     ErrLegUnavailable,
 
     /// The transaction would not satisfy the caller's `minSharesPerLeg` slippage bound.
@@ -185,7 +187,7 @@ impl RmpcError {
             RmpcError::ErrConcurrentInvocation => "ErrConcurrentInvocation",
             RmpcError::ErrCodeHashMismatch => "ErrCodeHashMismatch",
             RmpcError::ErrChainIdMismatch => "ErrChainIdMismatch",
-            RmpcError::ErrGatewayPaused => "ErrGatewayPaused",
+            RmpcError::ErrDepositsPaused => "ErrDepositsPaused",
             RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
             RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
             RmpcError::ErrSoftwareSignerDisallowed => "ErrSoftwareSignerDisallowed",
@@ -193,7 +195,6 @@ impl RmpcError {
             RmpcError::ErrOrderIdAlreadySubmitted { .. } => "ErrOrderIdAlreadySubmitted",
             RmpcError::ErrTxReverted { .. } => "ErrTxReverted",
             RmpcError::ErrAgentDepositLogMissing { .. } => "ErrAgentDepositLogMissing",
-            RmpcError::ErrVaultPaused => "ErrVaultPaused",
             RmpcError::ErrWithdrawCapExceeded => "ErrWithdrawCapExceeded",
             RmpcError::ErrShareBalanceInsufficient => "ErrShareBalanceInsufficient",
             RmpcError::ErrShareAllowanceInsufficient => "ErrShareAllowanceInsufficient",
@@ -235,7 +236,7 @@ mod tests {
             RmpcError::ErrConcurrentInvocation,
             RmpcError::ErrCodeHashMismatch,
             RmpcError::ErrChainIdMismatch,
-            RmpcError::ErrGatewayPaused,
+            RmpcError::ErrDepositsPaused,
             RmpcError::ErrAllowanceInsufficient,
             RmpcError::ErrBalanceInsufficient,
             RmpcError::ErrSoftwareSignerDisallowed,
@@ -249,7 +250,6 @@ mod tests {
             RmpcError::ErrAgentDepositLogMissing {
                 tx_hash: "0x00".into(),
             },
-            RmpcError::ErrVaultPaused,
             RmpcError::ErrWithdrawCapExceeded,
             RmpcError::ErrShareBalanceInsufficient,
             RmpcError::ErrShareAllowanceInsufficient,

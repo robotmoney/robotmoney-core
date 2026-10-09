@@ -7,9 +7,12 @@
 //!
 //! - `agent_withdrawal_happy_path` — authorize an agent with withdrawal caps,
 //!   deposit USDC into the vault so the share-receiver holds shares, approve
-//!   the gateway to pull the shares, call `gateway.withdraw(orderId, shares,
+//!   the gateway to pull the shares, have the deposit pauser call
+//!   `gateway.pauseDeposits()`, then call `gateway.withdraw(orderId, shares,
 //!   sourceVault, deadline, idempotencyKey)`, and assert USDC lands in
-//!   `assetRecipient` and `AgentWithdrawal` event is emitted.
+//!   `assetRecipient` and `AgentWithdrawal` event is emitted. The withdrawal
+//!   runs while deposits are paused: a deposit pause never blocks a
+//!   withdrawal (core 1494).
 //!
 //! - `agent_withdrawal_redirect_blocked` — attempt to pass a different recipient
 //!   address as calldata. The `withdraw(bytes32,uint256,address,uint64,bytes32)` API
@@ -28,7 +31,7 @@
 use std::path::PathBuf;
 
 use alloy_primitives::{keccak256, Address, Bytes, U256};
-use alloy_sol_types::sol;
+use alloy_sol_types::{sol, SolCall};
 use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture};
 use serde_json::Value;
 
@@ -151,12 +154,17 @@ sol! {
         // Issue #449: rolling-window withdrawal accounting.
         function effectiveWithdrawWindowGross(address agent)
             external view returns (uint256);
+
+        // Core 1494: the deposit pause (DEPOSIT_PAUSER_ROLE). It stops new
+        // deposits only; withdraw and withdrawFromRouter never check it.
+        function pauseDeposits() external;
+        function depositsPaused() external view returns (bool);
     }
 
     /// VaultRegistry minimal interface for router withdrawal tests.
     #[allow(missing_docs)]
     interface IVaultRegistry {
-        enum VaultStatus { Active, Paused, Retired }
+        enum VaultStatus { Active, DepositsPaused, Retired }
         struct VaultMetadata { string name; address asset; uint256 registeredAt; }
         function registerVault(address vault, VaultMetadata calldata metadata) external;
         function setRouterEligible(address vault, bool eligible) external;
@@ -328,7 +336,7 @@ fn agent_withdrawal_happy_path() {
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
     let deposit_amount = U256::from(100_000_000u64); // 100 USDC
 
-    // Three roles: deployer/admin (deploys + authorizes), pauser (holds PAUSER_ROLE),
+    // Three roles: deployer/admin (deploys + authorizes), pauser (holds DEPOSIT_PAUSER_ROLE),
     // agent (holds AGENT_ROLE — deposits USDC and later withdraws shares).
     let admin = fx
         .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
@@ -354,10 +362,7 @@ fn agent_withdrawal_happy_path() {
 
     // Authorize agent: shareReceiver = agent.address (shares land with the agent),
     // assetRecipient = asset_recipient_addr (USDC on withdrawal goes there).
-    let now_secs: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
     let policy = IGateway::AgentPolicy {
         active: true,
         validUntil: now_secs + 3600,
@@ -395,7 +400,7 @@ fn agent_withdrawal_happy_path() {
                 idempotencyKey: alloy_primitives::B256::from([2u8; 32]),
             },
             U256::ZERO,
-            800_000,
+            3_000_000,
         )
         .expect("gateway.deposit");
     assert_eq!(deposit_receipt.status, 1, "deposit must succeed");
@@ -408,9 +413,31 @@ fn agent_withdrawal_happy_path() {
     );
     approve_vault_shares(&agent, vault, gateway, shares_held);
 
-    // Pre-withdrawal: assetRecipient has zero USDC.
+    // Pause new deposits before the withdrawal. A deposit pause never blocks
+    // a withdrawal (core 1494), so the withdrawal below must still succeed.
+    let pause_receipt = pauser
+        .send(
+            gateway,
+            &IGateway::pauseDepositsCall {},
+            U256::ZERO,
+            200_000,
+        )
+        .expect("gateway.pauseDeposits");
+    assert_eq!(pause_receipt.status, 1, "pauseDeposits must succeed");
+    let paused_raw = agent
+        .call(gateway, &IGateway::depositsPausedCall {})
+        .expect("gateway.depositsPaused()");
+    let deposits_paused = IGateway::depositsPausedCall::abi_decode_returns(&paused_raw, true)
+        .expect("decode depositsPaused")
+        ._0;
+    assert!(
+        deposits_paused,
+        "gateway deposits must be paused before the withdrawal"
+    );
+
+    // Pre-withdrawal balance of assetRecipient. The Twin fork carries real Base state, where this
+    // low address may already hold USDC, so the test checks the DELTA, not an absolute zero.
     let pre_bal = usdc_balance_of(&agent, usdc, asset_recipient_addr);
-    assert_eq!(pre_bal, U256::ZERO, "assetRecipient must start with 0 USDC");
 
     // Agent calls gateway.withdraw(orderId, shares_held, vault, deadline, idempotencyKey).
     // The gateway pulls shares from the agent (transferFrom(agent → gateway)) and
@@ -427,10 +454,13 @@ fn agent_withdrawal_happy_path() {
                 idempotencyKey: alloy_primitives::B256::from([11u8; 32]),
             },
             U256::ZERO,
-            800_000,
+            3_000_000,
         )
         .expect("gateway.withdraw");
-    assert_eq!(withdraw_receipt.status, 1, "withdraw must succeed");
+    assert_eq!(
+        withdraw_receipt.status, 1,
+        "withdraw must succeed while deposits are paused"
+    );
     eprintln!(
         "[agent_withdrawal_happy_path] withdraw tx {:?} gasUsed={}",
         withdraw_receipt.tx_hash, withdraw_receipt.gas_used
@@ -439,7 +469,8 @@ fn agent_withdrawal_happy_path() {
     // Assert USDC landed in assetRecipient (MockVault is 1:1, so assetsOut == shares_held).
     let post_bal = usdc_balance_of(&agent, usdc, asset_recipient_addr);
     assert_eq!(
-        post_bal, shares_held,
+        post_bal - pre_bal,
+        shares_held,
         "assetRecipient must receive USDC equal to redeemed shares (1:1 MockVault)"
     );
 
@@ -520,14 +551,13 @@ fn agent_withdrawal_redirect_blocked() {
     let asset_recipient_addr: Address = "0x000000000000000000000000000000000000BEEF"
         .parse()
         .unwrap();
+    // Real Base state: the attacker address may already hold USDC, so the check is on the delta.
+    let attacker_bal_before = usdc_balance_of(&admin, usdc, attacker_addr);
 
     let vault = deploy_mock_vault(&admin, usdc);
     let gateway = deploy_gateway(&admin, usdc, vault, admin.address, pauser.address);
 
-    let now_secs: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
     let policy = IGateway::AgentPolicy {
         active: true,
         validUntil: now_secs + 3600,
@@ -565,7 +595,7 @@ fn agent_withdrawal_redirect_blocked() {
                 idempotencyKey: alloy_primitives::B256::from([4u8; 32]),
             },
             U256::ZERO,
-            800_000,
+            3_000_000,
         )
         .expect("gateway.deposit");
 
@@ -598,11 +628,10 @@ fn agent_withdrawal_redirect_blocked() {
         e => panic!("expected Reverted, got {e:?}"),
     }
 
-    // Sanity: attacker address still has 0 USDC.
+    // Sanity: the attacker address received no USDC.
     let attacker_bal = usdc_balance_of(&admin, usdc, attacker_addr);
     assert_eq!(
-        attacker_bal,
-        U256::ZERO,
+        attacker_bal, attacker_bal_before,
         "attacker address must receive 0 USDC"
     );
 
@@ -644,10 +673,7 @@ fn agent_withdrawal_window_cap() {
     let vault = deploy_mock_vault(&admin, usdc);
     let gateway = deploy_gateway(&admin, usdc, vault, admin.address, pauser.address);
 
-    let now_secs: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
 
     // Policy: shareReceiver = agent.address, maxWithdrawPerPayment = half, maxWithdrawPerWindow = half.
     let policy = IGateway::AgentPolicy {
@@ -687,7 +713,7 @@ fn agent_withdrawal_window_cap() {
                 idempotencyKey: alloy_primitives::B256::from([6u8; 32]),
             },
             U256::ZERO,
-            800_000,
+            3_000_000,
         )
         .expect("gateway.deposit");
 
@@ -709,7 +735,7 @@ fn agent_withdrawal_window_cap() {
                 idempotencyKey: alloy_primitives::B256::from([21u8; 32]),
             },
             U256::ZERO,
-            800_000,
+            3_000_000,
         )
         .expect("first withdrawal must succeed");
     assert_eq!(w1.status, 1, "first withdrawal must succeed");
@@ -730,7 +756,7 @@ fn agent_withdrawal_window_cap() {
             idempotencyKey: alloy_primitives::B256::from([23u8; 32]),
         },
         U256::ZERO,
-        800_000,
+        3_000_000,
     );
     assert!(
         result.is_err(),
@@ -926,10 +952,7 @@ fn router_withdrawal() {
     );
 
     // ── Authorize agent ──────────────────────────────────────────────────────
-    let now_secs: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
 
     // AZ-GW-3 fix: empty allowedSourceVaults now means pinned-vault-only
     // (vault_a, which is the gateway's vaultContract). Router withdrawal pulls
@@ -985,7 +1008,7 @@ fn router_withdrawal() {
                 minSharesPerLeg: vec![],
             },
             U256::ZERO,
-            1_500_000,
+            5_000_000,
         )
         .expect("gateway.depositTo(router)");
     assert_eq!(deposit_receipt.status, 1, "depositTo must succeed");
@@ -1031,7 +1054,7 @@ fn router_withdrawal() {
                 idempotencyKey: alloy_primitives::B256::from([61u8; 32]),
             },
             U256::ZERO,
-            1_500_000,
+            6_000_000,
         )
         .expect("gateway.withdrawFromRouter");
     assert_eq!(

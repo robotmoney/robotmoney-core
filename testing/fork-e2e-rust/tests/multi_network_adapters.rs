@@ -252,7 +252,8 @@ fn exercise_aave(fx: &ForkFixture, network: Network) -> Result<(), HarnessError>
 /// network (testnet vault deploy is a prerequisite, out of scope for #839).
 fn exercise_vault_adapter_stack(fx: &ForkFixture, network: Network) -> Result<(), HarnessError> {
     let vault = match network {
-        Network::RobotMoneyDevnet => Some(rmpc_fork_e2e::addresses::VAULT),
+        // Clean room rule (core 1498): the vault this test deploys itself through the vault stage.
+        Network::RobotMoneyDevnet => Some(fx.deployed()?.vault),
         Network::BaseTestnet => base_testnet_addresses::robotmoney_vault(),
     };
     let Some(vault) = vault else {
@@ -294,7 +295,10 @@ fn exercise_vault_adapter_stack(fx: &ForkFixture, network: Network) -> Result<()
             receiver: user.address,
         },
         U256::ZERO,
-        1_500_000,
+        // The vault deposit fans out to every adapter and refuses to start an adapter call with
+        // less than ADAPTER_CALL_GAS_FLOOR (400k) left (InsufficientGas). The three-adapter stack
+        // used 1.14M, so 1.5M left only 361k for the last adapter.
+        3_000_000,
     )?;
     assert!(
         !receipt.logs.is_empty(),
@@ -340,10 +344,16 @@ parameterized_e2e!(
 
         // chain_id guard: the macro already verified for_network, but assert here
         // too so the body is self-documenting about which chain it ran on.
-        assert_eq!(
+        // The devnet network is a local fork of Base (8453) or the shared Twin fork (918453).
+        let expected: &[u64] = match network {
+            Network::RobotMoneyDevnet => &[8453, 918453],
+            Network::BaseTestnet => &[network.chain_id()],
+        };
+        assert!(
+            expected.contains(&fx.chain_id),
+            "connected RPC chain id {} must match the selected network (one of {:?})",
             fx.chain_id,
-            network.chain_id(),
-            "connected RPC chain id must match the selected network"
+            expected
         );
 
         exercise_uniswap(&fx, network).expect("Uniswap adapter");

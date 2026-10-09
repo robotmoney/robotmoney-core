@@ -13,15 +13,23 @@
  * ZERO runs while reporting skipped-green on every PR.
  *
  * This spec is the standing gate underneath it. Its subject is the pair of
- * receipts the `--full-stack` smoke-test harness already seeds unconditionally
- * (`Fixture::seed_consensus_receipts`, served by the `receipt-fixtures` compose
- * service), so it needs no environment at all and runs on every suite-10 run:
+ * receipts the `--full-stack` smoke-test harness seeds unless
+ * `--no-receipt-fixtures` is set (`Fixture::seed_consensus_receipts`, run by
+ * `DappStack::boot`, served by the `receipt-fixtures` compose service), so it
+ * needs no environment at all and runs on every suite-10 run. The seeding uses
+ * the mainnet authorities, no test-only admin: `committeeRegister` and
+ * `releaseReceipt` go through the real Safe -> TimelockController (the release
+ * is the publish-contracts govern row `release-receipt`), and the harness agent
+ * key records both receipts.
  *
- *   receipt-a — digest matches its payload, released, weights match the live
- *               8500/500/500/500 router split  ⇒ Verified · Released · Applied
+ *   receipt-a — digest matches its payload, released, weights equal the live
+ *               router vector the deployer leaves before the handover (the Twin
+ *               stage sheet ROUTER_WEIGHTS: rmUSDC 6000, rmPROTO 2500, rmRWA 1500;
+ *               rmAGENT is not in the vector, so it counts as 0 bps, and
+ *               receipt-a asks 0 for it)       ⇒ Verified · Released · Applied
  *   receipt-b — deliberately wrong on-chain digest, never released, weights
- *               differ                          ⇒ Unverified · Recorded, not
- *                                                 released · Not applied
+ *               2500/4000/2500/1000 differ    ⇒ Unverified · Recorded, not
+ *                                               released · Not applied
  *
  * Between them the two rows exercise BOTH poles of all four state dimensions
  * (verification, release, application, payload-signature count) plus the

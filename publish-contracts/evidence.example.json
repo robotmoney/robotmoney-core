@@ -1,0 +1,90 @@
+{
+  "_comment": "Template for evidence/<run-id>/evidence.json. Every value here is a placeholder: fill each from the run, never invent one. Stage 13 on 8453 is the basket unpauses only (issue 1520): one govern entry per basket (unpause-PROTO, unpause-AGENT, unpause-RWA), each with its own schedule tx, its own execute tx, its own timelock operation id (operation_id, optional), the receipt statuses and the block timestamps. All three are scheduled in one sitting and wait one delay: each execute timestamp is at least 172800 s after the same entry's schedule timestamp. No two entries share a transaction or an operation id. update-delay, batch and cancel are Twin-only and are rejected on 8453. Issue 1667: a vault that pause-all paused is reopened by a numbered Safe round; add an optional unpause-USDC entry (rmUSDC, one unpauseDeposits call) and, for a vault paused again, a further entry of the same step with round 2, 3 and so on (each scheduled after the previous round executed, with its own transactions and operation id). A post-launch consensus receipt release (issue 1611, never part of stage 13) goes in receipt_releases, one entry per receipt id, with consensus_receipt.address: one schedule and one execute at least 172800 s apart, target the receipt contract, calldata releaseReceipt(receipt_id). Leave receipt_releases empty when none was released. No secret goes in this file.",
+  "chain_id": 8453,
+  "core_sha": "<40 hex: the DEPLOY_SHA>",
+  "plan_approved_at": "<ISO time>",
+  "owner_exceptions": [],
+  "stages": [
+    {
+      "stage": "<stage name>",
+      "frozen_count": 0,
+      "receipt_count": 0,
+      "tx_hashes": [],
+      "receipts_status": []
+    }
+  ],
+  "safe": {
+    "address": "0x0000000000000000000000000000000000000000",
+    "owners": [
+      "0x0000000000000000000000000000000000000000",
+      "0x0000000000000000000000000000000000000000",
+      "0x0000000000000000000000000000000000000000"
+    ],
+    "threshold": 2,
+    "creation_tx": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "timelock": {
+    "address": "0x0000000000000000000000000000000000000000",
+    "min_delay": 172800
+  },
+  "vaults": {
+    "rmUSDC": {
+      "address": "0x0000000000000000000000000000000000000000"
+    },
+    "rmPROTO": {
+      "address": "0x0000000000000000000000000000000000000000"
+    },
+    "rmAGENT": {
+      "address": "0x0000000000000000000000000000000000000000"
+    },
+    "rmRWA": {
+      "address": "0x0000000000000000000000000000000000000000"
+    }
+  },
+  "registry": {
+    "address": "0x0000000000000000000000000000000000000000"
+  },
+  "deployer": "0x0000000000000000000000000000000000000000",
+  "deployer_nonce_final": 0,
+  "verifier": {
+    "exit_code": 0,
+    "registry_list_vaults_equals_manifests": true
+  },
+  "sources": {
+    "blockscout_all_verified": true,
+    "sourcify_all_exact": true
+  },
+  "consensus_receipt": {
+    "address": "0x0000000000000000000000000000000000000000"
+  },
+  "receipt_releases": [],
+  "govern": [
+    {
+      "step": "unpause-PROTO",
+      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "schedule_status": 1,
+      "schedule_block_timestamp": 0,
+      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "execute_status": 1,
+      "execute_block_timestamp": 0
+    },
+    {
+      "step": "unpause-AGENT",
+      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "schedule_status": 1,
+      "schedule_block_timestamp": 0,
+      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "execute_status": 1,
+      "execute_block_timestamp": 0
+    },
+    {
+      "step": "unpause-RWA",
+      "schedule_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "schedule_status": 1,
+      "schedule_block_timestamp": 0,
+      "execute_tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "execute_status": 1,
+      "execute_block_timestamp": 0
+    }
+  ]
+}

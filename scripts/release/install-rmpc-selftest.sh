@@ -16,9 +16,8 @@
 #  1. release-rmpc.yml only triggers on `push: tags: rmpc-v*.*.*` and workflow_dispatch,
 #     so the step that publishes `<archive>.tar.gz.sha256` never runs on a PR. This
 #     selftest re-creates that step's exact commands on a fixture archive and, on
-#     top of that, asserts the workflow still contains them — mirroring
-#     scripts/devnet/check-fork-state-digest-selftest.sh, which covers a helper
-#     snapshot-fork.sh relies on but CI never reaches.
+#     top of that, asserts the workflow still contains them, so a release-only
+#     step that CI never reaches cannot drift unnoticed.
 #
 #  2. The corrupted-download path. A checksum that is published but never compared
 #     is decoration, so the load-bearing assertion here is the negative one: flip a

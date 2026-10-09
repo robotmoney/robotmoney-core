@@ -59,14 +59,15 @@
 #                                  address also lacks ADMIN_ROLE)
 # Required for the index stage:  FUSION_EXPLORER_API
 # Required for the dapp stage:   FUSION_DAPP_URL
-# Required for the release stage: FUSION_CEREMONY_SCRIPT (path to
-#   scripts/stage/fusion-ceremony.sh), FUSION_CEREMONY_RECORD (the deployment
-#   record it verified/generated), FUSION_RELEASE_ADDRESS (the approver EOA,
-#   used only for the direct-call duplicate-release probe below — the actual
-#   release itself goes through that record's Safe -> Timelock, per B10: a
-#   raw `releaseReceipt` send from any EOA reverts on authority once a
-#   ceremony deployment gives the receipt contract's ADMIN_ROLE to the
-#   TimelockController, not to any EOA)
+# Required for the release stage: FUSION_GOVERN_CMD (the govern release
+#   command, `bun scripts/stage/core-stack.ts governance release`; it is called with
+#   `--receipt-id ID` appended and runs publish contracts govern row
+#   release-receipt through the real Safe and the timelock), FUSION_TIMELOCK_ADDRESS
+#   (the TimelockController, the ONLY holder of ADMIN_ROLE on the receipt contract
+#   after the handover, used as `--from` of the duplicate-release probe below so
+#   the call passes the role check and reaches ReceiptAlreadyReleased). No keystore
+#   is needed: a raw `releaseReceipt` from any other address reverts on authority
+#   (AccessControlUnauthorizedAccount) before the one-shot check is ever reached.
 # Optional: RMPC_BIN, CAST_BIN, FUSION_INDEX_TIMEOUT_SECS (default 180),
 #           FUSION_EVIDENCE_DIR (raw command output is written there)
 set -uo pipefail
@@ -557,11 +558,10 @@ fi
 
 # ── stage: release ───────────────────────────────────────────────────────────
 if have_stage release; then
-  if [[ -z "${FUSION_CEREMONY_SCRIPT:-}" || -z "${FUSION_CEREMONY_RECORD:-}" \
-        || -z "${FUSION_RELEASE_ADDRESS:-}" ]]; then
+  if [[ -z "${FUSION_GOVERN_CMD:-}" || -z "${FUSION_TIMELOCK_ADDRESS:-}" ]]; then
     record_assertion release "admin release" SKIP \
-      "the release stage was SELECTED but FUSION_CEREMONY_SCRIPT / FUSION_CEREMONY_RECORD / \
-FUSION_RELEASE_ADDRESS are not all set" unconfigured
+      "the release stage was SELECTED but FUSION_GOVERN_CMD / \
+FUSION_TIMELOCK_ADDRESS are not all set" unconfigured
   elif [[ -z "$RECEIPT_ID" ]]; then
     record_assertion release "admin release" SKIP \
       "no receipt id — an earlier stage already failed" prerequisite_failed
@@ -583,20 +583,20 @@ FUSION_RELEASE_ADDRESS are not all set" unconfigured
         "AC-CORE-03 the admin release transaction succeeds (idempotent no-op: already released, no second transaction sent)" \
         PASS "isReleased=true before this run; releaseReceipt was NOT re-broadcast"
     else
-      # B10: release is a timelocked Safe operation, not a direct EOA send.
-      # fusion-ceremony.sh release schedules `releaseReceipt` through the
-      # record's Safe -> Timelock, waits out the record's min_delay, then
-      # executes — exactly the path a real admin release takes under a
-      # ceremony deployment. Idempotent: it checks isReleased() first and
-      # returns {"action":"already_released"} without sending anything, which
-      # this stage already handles above via its own isReleased() pre-check.
-      "$FUSION_CEREMONY_SCRIPT" release --record "$FUSION_CEREMONY_RECORD" \
-        --receipt-id "$RECEIPT_ID" --rpc-url "$FUSION_RPC_URL" \
+      # Release is a timelocked Safe operation through publish contracts govern
+      # (row release-receipt): the real Safe schedules `releaseReceipt` through
+      # the timelock, the delay passes, the real Safe executes. Every row prints
+      # a tx hash and receipt status. Idempotent: the isReleased() pre-check
+      # above sends nothing for an already released receipt.
+      # shellcheck disable=SC2086 # the command is a word list by contract
+      $FUSION_GOVERN_CMD --receipt-id "$RECEIPT_ID" \
         >"$WORK/release.json" 2>"$WORK/release.stderr"
       rel=$?
       keep "release-tx.json" "$(cat "$WORK/release.json" 2>/dev/null)"
       keep "release-stderr.txt" "$(cat "$WORK/release.stderr" 2>/dev/null)"
-      { (( rel == 0 )) && jq -e '.action == "released_via_timelock"' "$WORK/release.json" >/dev/null 2>&1; }
+      { (( rel == 0 )) && grep '^{' "$WORK/release.json" | jq -s -e \
+          'map(select(.row == "release-receipt")) | length >= 1 and all(.status == 1 or .status == "0x1") and all(.txHash | test("^0x[0-9a-fA-F]{64}$"))' \
+          >/dev/null 2>&1; }
       expect release "AC-CORE-03 the admin release transaction succeeds" $? \
         "$(head -c 300 "$WORK/release.json" 2>/dev/null) $(tail -c 300 "$WORK/release.stderr" 2>/dev/null)"
     fi
@@ -607,13 +607,14 @@ FUSION_RELEASE_ADDRESS are not all set" unconfigured
     expect release "AC-E2E-03 the receipt reads as released" $? "isReleased=$released"
 
     # The two duplicate refusals that cannot exist until something is anchored.
-    # `--from` is the OPERATOR-DECLARED admin address, not an address scraped out
-    # of the keystore file: keystore layouts differ (an `rmpc` keystore carries
-    # no `address` key at all), and an empty `--from` would make this assertion
-    # fail for the wrong reason — a diagnosable false failure, but still a lie
-    # about which check was exercised.
+    # The release probe is sent `--from` the TIMELOCK, the only ADMIN_ROLE holder.
+    # `onlyRole(ADMIN_ROLE)` runs before the one-shot check, so any other sender
+    # (an approver EOA, say) reverts AccessControlUnauthorizedAccount and would
+    # never exercise ReceiptAlreadyReleased. An eth_call needs no signature, so
+    # impersonating the timelock address is enough here; the real release above
+    # went through the Safe and the timelock.
     out="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$RECEIPT_ID" \
-      --from "$FUSION_RELEASE_ADDRESS" --rpc-url "$FUSION_RPC_URL" 2>&1)"
+      --from "$FUSION_TIMELOCK_ADDRESS" --rpc-url "$FUSION_RPC_URL" 2>&1)"
     grep -q 'ReceiptAlreadyReleased' <<<"$out"
     expect release "AC-CORE-03 a duplicate release is rejected (ReceiptAlreadyReleased)" $? "$(tr -d '\n' <<<"$out" | head -c 300)"
 

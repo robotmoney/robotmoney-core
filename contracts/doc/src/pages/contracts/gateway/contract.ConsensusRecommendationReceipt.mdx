@@ -5,9 +5,9 @@ description: "On-chain commitment register for the swarm's consensus recommendat
 
 # ConsensusRecommendationReceipt
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/gateway/ConsensusRecommendationReceipt.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/gateway/ConsensusRecommendationReceipt.sol)
 
-**Inherits:** AccessControl, ReentrancyGuard, [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt)
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard, [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt)
 
 **Title:** ConsensusRecommendationReceipt
 
@@ -149,6 +149,35 @@ constructor(address admin_, address gateway_, address icPolicy_);
 | admin_ | `address` | Address granted `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.<br/>In every non-test deployment this is the<br/>`TimelockController` (INV-3). |
 | gateway_ | `address` | Deployed `RobotMoneyGateway`; sole permitted writer. |
 | icPolicy_ | `address` | Deployed `InvestmentCommitteePolicy`; the single source<br/>of `COMMITTEE_AGENT_ROLE` membership. |
+
+<a id="_revokerole-bytes32-address"></a>
+
+### _revokeRole
+
+<i>
+
+Last-admin floor for `DEFAULT_ADMIN_ROLE` (ADMIN_ROLE is covered by
+`AdminFloorAccessControl`). Both `revokeRole` and `renounceRole`
+route here, so the timelock cannot lock itself out (#1447, L).
+
+</i>
+
+```solidity
+function _revokeRole(bytes32 role, address account) internal virtual override returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 
 <a id="onlygateway"></a>
 

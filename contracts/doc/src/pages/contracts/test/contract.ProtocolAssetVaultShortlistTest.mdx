@@ -5,7 +5,7 @@ description: "Issue #1364 — a deployed `ProtocolAssetVault` must answer `short
 
 # ProtocolAssetVaultShortlistTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0721b5607579ae8fe57f7d16428d23a62c533404/contracts/test/ProtocolAssetVaultShortlist.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/ProtocolAssetVaultShortlist.t.sol)
 
 **Inherits:** Test
 
@@ -132,5 +132,47 @@ distinguishes this ("No basket assets.") from the failure branch
 
 ```solidity
 function test_shortlist_emptyBasketReturnsEmptyArrays() public;
+```
+
+<a id="_wsolpooladd-uint16-uint128"></a>
+
+### _wsolPoolAdd
+
+```solidity
+function _wsolPoolAdd(uint16 card, uint128 liq) internal returns (bool ok, bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| card | `uint16` |  |
+| liq | `uint128` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+
+<a id="test_wsol_emptypoolcardinalityisrejected"></a>
+
+### test_wsol_emptyPoolCardinalityIsRejected
+
+A wSOL pool with no observation history is rejected, so wSOL cannot join the basket.
+
+```solidity
+function test_wsol_emptyPoolCardinalityIsRejected() public;
+```
+
+<a id="test_wsol_emptypoolliquidityisrejected"></a>
+
+### test_wsol_emptyPoolLiquidityIsRejected
+
+A wSOL pool with zero liquidity is rejected.
+
+```solidity
+function test_wsol_emptyPoolLiquidityIsRejected() public;
 ```
 

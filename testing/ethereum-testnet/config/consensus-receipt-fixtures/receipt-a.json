@@ -1,32 +1,68 @@
 {
   "schema_version": "1.0",
-  "session_id": "smoke-test-fusion-1294-a",
+  "session_id": "12940000-0000-4000-8000-00000000000a",
   "subject_id": "treasury-allocation",
   "created_at": "2026-09-01T00:00:00Z",
+  "prompt_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+  "inputs_digest": "0x2222222222222222222222222222222222222222222222222222222222222222",
   "quorum": {
     "active": 2,
     "submitted": 2,
     "absent": 0,
     "participation_bps": 10000
   },
+  "stances": {
+    "bearish": 0,
+    "cautious": 0,
+    "neutral": 0,
+    "constructive": 2,
+    "bullish": 0
+  },
+  "judge": {
+    "rationale": "Seeded harness fixture: hold the allocation the deployer left on the router, the Twin stage sheet ROUTER_WEIGHTS (rmUSDC 6000, rmPROTO 2500, rmRWA 1500 bps).",
+    "disagreements": [],
+    "release_safety": {
+      "release": "safe",
+      "thinly_supported": false,
+      "take_count": 2,
+      "min_takes": 2,
+      "concerns": []
+    },
+    "source": "fallback",
+    "mode": "shadow"
+  },
   "analyst_signatures": [
     {
       "member_id": "analyst-alpha",
       "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
       "canonical_submission": "{\"memberId\":\"analyst-alpha\",\"stance\":\"constructive\"}",
-      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "revision": 1
     },
     {
       "member_id": "analyst-beta",
       "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
       "canonical_submission": "{\"memberId\":\"analyst-beta\",\"stance\":\"constructive\"}",
-      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "revision": 1
     }
   ],
   "weights": [
-    { "bucket": "agent_tokens", "weight_bps": 500 },
-    { "bucket": "conservative_defi_yield", "weight_bps": 8500 },
-    { "bucket": "protocol_tokens", "weight_bps": 500 },
-    { "bucket": "real_world_assets", "weight_bps": 500 }
+    {
+      "bucket": "agent_tokens",
+      "weight_bps": 0
+    },
+    {
+      "bucket": "conservative_defi_yield",
+      "weight_bps": 6000
+    },
+    {
+      "bucket": "protocol_tokens",
+      "weight_bps": 2500
+    },
+    {
+      "bucket": "real_world_assets",
+      "weight_bps": 1500
+    }
   ]
 }

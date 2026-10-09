@@ -1,0 +1,58 @@
+---
+title: "CardinalityBelowFloorPool"
+---
+
+# CardinalityBelowFloorPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/test/DeployBasketVaultPoolGuards.t.sol)
+
+**Inherits:** [ConstPool](/contracts/test/helpers/contract.ConstPool)
+
+<i>
+
+A pool whose observation cardinality is 900, one below the 1800 s window floor of 901 (core 1665).
+
+</i>
+
+## Functions
+
+<a id="constructor-address-address-uint24"></a>
+
+### constructor
+
+```solidity
+constructor(address a, address b, uint24 fee_) ConstPool(a, b, fee_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+| b | `address` |  |
+| fee_ | `uint24` |  |
+
+<a id="slot0"></a>
+
+### slot0
+
+```solidity
+function slot0()
+        external
+        pure
+        override
+        returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+| &lt;none&gt; | `int24` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint8` |  |
+| &lt;none&gt; | `bool` |  |
+

@@ -11,18 +11,10 @@
 //!   cargo test -p smoke-test --release -- --test-threads=1 --nocapture
 
 use alloy_primitives::Address;
-use smoke_test::{prerequisites_available, Fixture};
+use smoke_test::{require_prereqs, Fixture};
 
-fn skip_if_no_prereqs(name: &str) -> bool {
-    if !prerequisites_available() {
-        eprintln!("[{name}] docker/forge/cast not on PATH; skipping.");
-        return true;
-    }
-    false
-}
-
-/// One shared fixture for the whole suite — booting Geth+Lighthouse
-/// costs 60-120 s; paying that per test would make the suite unusable.
+/// One shared fixture for the whole suite — booting the Twin fork and
+/// publishing four vaults is slow; paying that per test would make the suite unusable.
 /// Tests run with `--test-threads=1` so this static is safe.
 fn fixture() -> &'static Fixture {
     use std::sync::OnceLock;
@@ -35,9 +27,7 @@ fn fixture() -> &'static Fixture {
 /// RPC responds and reports the expected chain id.
 #[test]
 fn rpc_is_reachable() {
-    if skip_if_no_prereqs("rpc_is_reachable") {
-        return;
-    }
+    require_prereqs("rpc_is_reachable");
     let fx = fixture();
     let chain_id = rpc_call::<String>(fx.rpc_url(), "eth_chainId", serde_json::json!([]));
     let got =
@@ -45,16 +35,19 @@ fn rpc_is_reachable() {
     assert_eq!(got, fx.chain_id(), "chain_id mismatch");
 }
 
-/// Blocks are being produced — network is past genesis.
+/// The Twin fork has a head block. The fork is real Base state, so the head is a real Base block.
 #[test]
 fn blocks_are_being_produced() {
-    if skip_if_no_prereqs("blocks_are_being_produced") {
-        return;
-    }
+    require_prereqs("blocks_are_being_produced");
     let fx = fixture();
     let hex = rpc_call::<String>(fx.rpc_url(), "eth_blockNumber", serde_json::json!([]));
     let n = u64::from_str_radix(hex.trim_start_matches("0x"), 16).expect("eth_blockNumber is hex");
     assert!(n >= 1, "expected block_number >= 1, got {n}");
+    // The pin is an upstream head minus 2, a real Base block number in the tens of millions.
+    assert!(
+        n > 1_000_000,
+        "the Twin head {n} is not a forked Base block"
+    );
 }
 
 // -- Deployed address sanity ------------------------------------------
@@ -62,9 +55,7 @@ fn blocks_are_being_produced() {
 /// All deployed addresses are non-zero.
 #[test]
 fn deployed_addresses_are_non_zero() {
-    if skip_if_no_prereqs("deployed_addresses_are_non_zero") {
-        return;
-    }
+    require_prereqs("deployed_addresses_are_non_zero");
     let fx = fixture();
     assert_ne!(fx.gateway(), Address::ZERO, "gateway is zero");
     assert_ne!(fx.usdc(), Address::ZERO, "usdc is zero");
@@ -75,16 +66,18 @@ fn deployed_addresses_are_non_zero() {
         Address::ZERO,
         "compound_adapter is zero"
     );
-    assert_ne!(fx.morpho_adapter(), Address::ZERO, "morpho_adapter is zero");
+    assert_ne!(
+        fx.moonwell_flagship_adapter(),
+        Address::ZERO,
+        "moonwell_flagship_adapter is zero"
+    );
     assert_ne!(fx.agent(), Address::ZERO, "agent is zero");
 }
 
 /// Gateway, USDC, vault, and adapter contracts have bytecode deployed.
 #[test]
 fn contracts_have_code() {
-    if skip_if_no_prereqs("contracts_have_code") {
-        return;
-    }
+    require_prereqs("contracts_have_code");
     let fx = fixture();
     for (name, addr) in [
         ("gateway", fx.gateway()),
@@ -92,7 +85,7 @@ fn contracts_have_code() {
         ("vault", fx.vault()),
         ("aave_adapter", fx.aave_adapter()),
         ("compound_adapter", fx.compound_adapter()),
-        ("morpho_adapter", fx.morpho_adapter()),
+        ("moonwell_flagship_adapter", fx.moonwell_flagship_adapter()),
     ] {
         let code = get_code(fx.rpc_url(), addr);
         assert!(
@@ -106,9 +99,7 @@ fn contracts_have_code() {
 /// Issue #277: validates RobotMoneyVault on-chain state via RPC reads.
 #[test]
 fn vault_has_zero_exit_fee_and_one_active_adapter() {
-    if skip_if_no_prereqs("vault_has_zero_exit_fee_and_one_active_adapter") {
-        return;
-    }
+    require_prereqs("vault_has_zero_exit_fee_and_one_active_adapter");
     let fx = fixture();
 
     // exitFeeBps() selector: keccak256("exitFeeBps()")[0..4] = 0x57b17a52
@@ -144,13 +135,18 @@ fn vault_has_zero_exit_fee_and_one_active_adapter() {
 /// Agent and deployer EOAs have non-zero ETH balances.
 #[test]
 fn eoas_are_funded() {
-    if skip_if_no_prereqs("eoas_are_funded") {
-        return;
-    }
+    require_prereqs("eoas_are_funded");
     let fx = fixture();
     for (name, addr_hex) in [
         ("agent", format!("{:#x}", fx.agent())),
-        ("deployer", smoke_test::DEPLOYER_ADDRESS_HEX.to_string()),
+        (
+            "deployer",
+            fx.published()
+                .keys
+                .address("ADMIN_ADDRESS")
+                .expect("deployer address")
+                .to_string(),
+        ),
     ] {
         let hex = rpc_call::<String>(
             fx.rpc_url(),
@@ -165,31 +161,27 @@ fn eoas_are_funded() {
 
 // -- On-chain poke round-trips ----------------------------------------
 
-/// pause → unpause round-trips correctly.
+/// pauseDeposits → unpauseDeposits round-trips correctly.
 #[test]
-fn pause_unpause_round_trips() {
-    if skip_if_no_prereqs("pause_unpause_round_trips") {
-        return;
-    }
+fn pause_deposits_round_trips() {
+    require_prereqs("pause_deposits_round_trips");
     let fx = fixture();
-    fx.pause_gateway().expect("pause()");
+    fx.pause_gateway_deposits().expect("pauseDeposits()");
     assert!(
-        gateway_is_paused(fx),
-        "gateway should be paused after pause()"
+        gateway_deposits_paused(fx),
+        "gateway deposits should be paused after pauseDeposits()"
     );
-    fx.unpause_gateway().expect("unpause()");
+    fx.unpause_gateway_deposits().expect("unpauseDeposits()");
     assert!(
-        !gateway_is_paused(fx),
-        "gateway should not be paused after unpause()"
+        !gateway_deposits_paused(fx),
+        "gateway deposits should not be paused after unpauseDeposits()"
     );
 }
 
 /// revoke → reauthorize round-trips correctly.
 #[test]
 fn revoke_reauthorize_round_trips() {
-    if skip_if_no_prereqs("revoke_reauthorize_round_trips") {
-        return;
-    }
+    require_prereqs("revoke_reauthorize_round_trips");
     let fx = fixture();
     let one_usdc = 1_000_000u128;
     let cap = 10_000 * one_usdc;
@@ -203,9 +195,7 @@ fn revoke_reauthorize_round_trips() {
 /// approve_usdc_from_agent sends a tx that succeeds on-chain.
 #[test]
 fn approve_usdc_succeeds() {
-    if skip_if_no_prereqs("approve_usdc_succeeds") {
-        return;
-    }
+    require_prereqs("approve_usdc_succeeds");
     let fx = fixture();
     let tx_hash = fx
         .approve_usdc_from_agent(100 * 1_000_000)
@@ -216,101 +206,49 @@ fn approve_usdc_succeeds() {
     );
 }
 
-// -- Uniswap V3 stub pools (issue #531) ----------------------------------
+// -- One deployment scheme: four vaults, real Safe, timelock ------------
 
-/// All four devnet stub pool addresses are non-zero and distinct from the
-/// Base pool addresses (which have no bytecode on the fresh devnet).
+/// publish contracts wrote a manifest for each of the four vaults, and each has code.
 #[test]
-fn stub_pool_addresses_are_non_zero_and_distinct() {
-    if skip_if_no_prereqs("stub_pool_addresses_are_non_zero_and_distinct") {
-        return;
-    }
+fn four_vault_manifests_exist_and_have_code() {
+    require_prereqs("four_vault_manifests_exist_and_have_code");
     let fx = fixture();
-    let base_eth_usd: Address = "0xd0b53D9277642d899DF5C87A3966A349A798F224"
-        .parse()
-        .unwrap();
-    let base_cbbtc: Address = "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef"
-        .parse()
-        .unwrap();
-    let base_wsol: Address = "0xc1bF8adf6E62cC9C56E2b246b03d3e74da45A0E1"
-        .parse()
-        .unwrap();
-
-    for (name, addr) in [
-        ("eth_usd", fx.stub_pool_eth_usd()),
-        ("weth_usdc", fx.stub_pool_weth_usdc()),
-        ("cbbtc_usdc", fx.stub_pool_cbbtc_usdc()),
-        ("wsol_usdc", fx.stub_pool_wsol_usdc()),
-    ] {
-        assert_ne!(addr, Address::ZERO, "stub pool {name} is zero address");
-        assert_ne!(
-            addr, base_eth_usd,
-            "stub pool {name} matches Base eth/usd pool"
-        );
-        assert_ne!(addr, base_cbbtc, "stub pool {name} matches Base cbbtc pool");
-        assert_ne!(addr, base_wsol, "stub pool {name} matches Base wsol pool");
-    }
-}
-
-/// All four stub pool contracts have bytecode deployed on the devnet.
-#[test]
-fn stub_pools_have_code() {
-    if skip_if_no_prereqs("stub_pools_have_code") {
-        return;
-    }
-    let fx = fixture();
-    for (name, addr) in [
-        ("eth_usd", fx.stub_pool_eth_usd()),
-        ("weth_usdc", fx.stub_pool_weth_usdc()),
-        ("cbbtc_usdc", fx.stub_pool_cbbtc_usdc()),
-        ("wsol_usdc", fx.stub_pool_wsol_usdc()),
-    ] {
+    for key in ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"] {
+        let addr = fx.vault_by_key(key);
+        assert_ne!(addr, Address::ZERO, "manifest for {key} is missing");
         let code = get_code(fx.rpc_url(), addr);
-        assert!(
-            code.len() > 2,
-            "stub pool {name} at {addr:#x} has no bytecode (got {code:?})"
-        );
+        assert!(code.len() > 2, "{key} at {addr:#x} has no bytecode");
     }
+    assert_ne!(fx.safe(), Address::ZERO, "Safe manifest is missing");
+    assert_ne!(fx.timelock(), Address::ZERO, "timelock manifest is missing");
 }
 
-/// Each stub pool returns a non-zero sqrtPriceX96 via slot0().
-///
-/// Selector: keccak256("slot0()")[0..4] = 0x3850c7bd
+/// After handover the deployer holds no admin on the governance contract: the
+/// timelock does. Nothing here is set by a deployer fixup.
 #[test]
-fn stub_pools_return_nonzero_sqrt_price() {
-    if skip_if_no_prereqs("stub_pools_return_nonzero_sqrt_price") {
-        return;
-    }
+fn deployer_holds_no_admin_after_handover() {
+    require_prereqs("deployer_holds_no_admin_after_handover");
     let fx = fixture();
-    for (name, addr) in [
-        ("eth_usd", fx.stub_pool_eth_usd()),
-        ("weth_usdc", fx.stub_pool_weth_usdc()),
-        ("cbbtc_usdc", fx.stub_pool_cbbtc_usdc()),
-        ("wsol_usdc", fx.stub_pool_wsol_usdc()),
-    ] {
+    let deployer = fx
+        .published()
+        .keys
+        .address("ADMIN_ADDRESS")
+        .expect("deployer address")
+        .to_string();
+    let admin_role = "a49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775";
+    for (who, want) in [(deployer, false), (format!("{:#x}", fx.timelock()), true)] {
+        let who_hex = who.trim_start_matches("0x").to_lowercase();
+        let data = format!("0x91d14854{admin_role}{who_hex:0>64}");
         let result: String = rpc_call(
             fx.rpc_url(),
             "eth_call",
             serde_json::json!([
-                {"to": format!("{:#x}", addr), "data": "0x3850c7bd"},
+                {"to": format!("{:#x}", fx.governance()), "data": data},
                 "latest"
             ]),
         );
-        // slot0 returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
-        // ABI-encoded, the first 32 bytes hold the uint160 sqrtPriceX96.
-        let stripped = result.trim_start_matches("0x");
-        assert!(
-            stripped.len() >= 40,
-            "stub pool {name} slot0() returned too short: {result:?}"
-        );
-        // The first 32 bytes = sqrtPriceX96 (uint160 is right-aligned in a 32-byte slot).
-        let first_32 = &stripped[..64];
-        let sqrt_price =
-            u128::from_str_radix(&first_32[first_32.len().saturating_sub(40)..], 16).unwrap_or(0);
-        assert!(
-            sqrt_price > 0,
-            "stub pool {name} at {addr:#x} returned sqrtPriceX96=0"
-        );
+        let has = result.trim_start_matches("0x").ends_with('1');
+        assert_eq!(has, want, "hasRole(ADMIN_ROLE, {who}) on governance");
     }
 }
 
@@ -324,9 +262,7 @@ fn stub_pools_return_nonzero_sqrt_price() {
 #[test]
 fn fixture_teardown_documented() {
     // Drop is called when the OnceLock static is cleaned up at process
-    // exit. The CI workflow's `docker compose down` safety step catches
-    // any leak if the process exits uncleanly.
-    // Drop is called at process exit; the CI safety-net step catches any leak.
+    // exit. A fork this process did not start (TWIN_RPC_URL) is never stopped by it.
     // No assertion needed — test existence is the marker.
 }
 
@@ -381,16 +317,17 @@ fn u256_from_hex(hex: &str) -> u128 {
     u128::from_str_radix(slice, 16).unwrap_or(0)
 }
 
-fn gateway_is_paused(fx: &Fixture) -> bool {
-    // ABI-encode paused() selector: keccak256("paused()")[0..4] = 0x5c975abb
+fn gateway_deposits_paused(fx: &Fixture) -> bool {
+    // ABI-encode the depositsPaused() selector:
+    // keccak256("depositsPaused()")[0..4] = 0x60da3e83
     let result: String = rpc_call(
         fx.rpc_url(),
         "eth_call",
         serde_json::json!([
-            {"to": format!("{:#x}", fx.gateway()), "data": "0x5c975abb"},
+            {"to": format!("{:#x}", fx.gateway()), "data": "0x60da3e83"},
             "latest"
         ]),
     );
-    // Returns a 32-byte bool: last byte is 1 if paused.
+    // Returns a 32-byte bool: last byte is 1 if deposits are paused.
     result.trim_start_matches("0x").ends_with('1')
 }

@@ -1,0 +1,179 @@
+---
+title: "SafeMigration"
+description: "This is a generic contract that facilitates Safe and SafeL2 proxy contracts to migrate their singleton address. The supported target Safe version is immutable and set in the constructor during the deployment of the contract. This contract also supports migration with fallback handler update."
+---
+
+# SafeMigration
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/vendor/safe-1.4.1/libraries/SafeMigration.sol)
+
+**Inherits:** [SafeStorage](/contracts/test/vendor/safe-1.4.1/libraries/contract.SafeStorage)
+
+**Title:** Migration Contract for Safe Upgrade
+
+**Author:** @safe-global/safe-protocol
+
+This is a generic contract that facilitates Safe and SafeL2 proxy contracts to migrate their singleton address.
+        The supported target Safe version is immutable and set in the constructor during the deployment of the contract.
+        This contract also supports migration with fallback handler update.
+
+<i>
+
+IMPORTANT: The library is intended to be used with the Safe standard proxy that stores the singleton address
+     at the storage slot 0. Use at your own risk with custom proxy implementations. The contract will allow invocations
+     to the migration functions only via delegatecall.
+
+</i>
+
+## Constants
+
+### MIGRATION_SINGLETON
+
+Address of this contract
+
+```solidity
+address public immutable MIGRATION_SINGLETON;
+```
+
+### SAFE_SINGLETON
+
+Address of the Safe Singleton implementation
+
+```solidity
+address public immutable SAFE_SINGLETON;
+```
+
+### SAFE_L2_SINGLETON
+
+Address of the Safe Singleton (L2) implementation
+
+```solidity
+address public immutable SAFE_L2_SINGLETON;
+```
+
+### SAFE_FALLBACK_HANDLER
+
+Address of the Fallback Handler
+
+```solidity
+address public immutable SAFE_FALLBACK_HANDLER;
+```
+
+## Functions
+
+<a id="onlydelegatecall"></a>
+
+### onlyDelegateCall
+
+Modifier to make a function callable via delegatecall only.
+If the function is called via a regular call, it will revert.
+
+```solidity
+modifier onlyDelegateCall();
+```
+
+<a id="constructor-address-address-address"></a>
+
+### constructor
+
+Constructor
+
+```solidity
+constructor(address safeSingleton, address safeL2Singleton, address fallbackHandler);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safeSingleton | `address` | Address of the Safe Singleton implementation |
+| safeL2Singleton | `address` | Address of the SafeL2 Singleton implementation |
+| fallbackHandler | `address` | Address of the fallback handler implementation |
+
+<a id="migratesingleton"></a>
+
+### migrateSingleton
+
+Migrate the Safe contract to a new Safe Singleton implementation.
+
+```solidity
+function migrateSingleton() public onlyDelegateCall;
+```
+
+<a id="migratewithfallbackhandler"></a>
+
+### migrateWithFallbackHandler
+
+Migrate to Safe Singleton and set the fallback handler. This function is intended to be used when migrating
+        a Safe to a version which also requires updating fallback handler.
+
+```solidity
+function migrateWithFallbackHandler() external onlyDelegateCall;
+```
+
+<a id="migratel2singleton"></a>
+
+### migrateL2Singleton
+
+Migrate the Safe contract to a new Safe Singleton (L2) implementation.
+
+```solidity
+function migrateL2Singleton() public onlyDelegateCall;
+```
+
+<a id="migratel2withfallbackhandler"></a>
+
+### migrateL2WithFallbackHandler
+
+Migrate to Safe Singleton (L2) and set the fallback handler. This function is intended to be used when migrating
+        a Safe to a version which also requires updating fallback handler.
+
+```solidity
+function migrateL2WithFallbackHandler() external onlyDelegateCall;
+```
+
+<a id="hascode-address"></a>
+
+### hasCode
+
+Checks whether an account has code.
+
+<i>
+
+This function relies on the `extcodesize` assembly opcode to determine whether an address has code.
+It does not reliably determine whether or not an address is a smart contract or an EOA.
+
+</i>
+
+```solidity
+function hasCode(address account) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` | The address of the account to be checked. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` | A boolean value indicating whether the address has code (true) or not (false). |
+
+## Events
+
+### ChangedMasterCopy
+
+Event indicating a change of a singleton address. Named master copy here for legacy reasons.
+
+```solidity
+event ChangedMasterCopy(address singleton);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| singleton | `address` | New master copy address |
+

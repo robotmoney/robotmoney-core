@@ -222,8 +222,8 @@ def self_test() -> int:
         # 6: the legacy mdbook layout (Foundry <= 1.7.1) — must be named, not
         # mistaken for the vocs layout this comparator diffs.
         mdbook = tmp / "mdbook"
-        (mdbook / "src" / "contracts" / "Vault.sol").mkdir(parents=True)
-        (mdbook / "src" / "contracts" / "Vault.sol" / "contract.Vault.md").write_text(
+        (mdbook / "src" / "contracts" / "Example.sol").mkdir(parents=True)
+        (mdbook / "src" / "contracts" / "Example.sol" / "contract.Example.md").write_text(
             "# Vault\n"
         )
         layout, root = classify_output(mdbook)

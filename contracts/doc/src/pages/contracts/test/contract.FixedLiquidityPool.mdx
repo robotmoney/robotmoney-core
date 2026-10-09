@@ -1,0 +1,57 @@
+---
+title: "FixedLiquidityPool"
+---
+
+# FixedLiquidityPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/DeployBasketVaultPoolGuards.t.sol)
+
+**Inherits:** [ConstPool](/contracts/test/helpers/contract.ConstPool)
+
+<i>
+
+A pool that reports exactly `liq` of in-range liquidity.
+
+</i>
+
+## Constants
+
+### _liq
+
+```solidity
+uint128 private immutable _liq;
+```
+
+## Functions
+
+<a id="constructor-address-address-uint24-uint128"></a>
+
+### constructor
+
+```solidity
+constructor(address a, address b, uint24 fee_, uint128 liq) ConstPool(a, b, fee_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+| b | `address` |  |
+| fee_ | `uint24` |  |
+| liq | `uint128` |  |
+
+<a id="liquidity"></a>
+
+### liquidity
+
+```solidity
+function liquidity() external view override returns (uint128);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint128` |  |
+

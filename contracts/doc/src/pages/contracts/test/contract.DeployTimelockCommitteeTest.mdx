@@ -5,9 +5,9 @@ description: "Issue #1319: before this change, `DeployTimelock.s.sol` only hande
 
 # DeployTimelockCommitteeTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeployTimelockCommittee.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3ca473b2028cebb667ec67540037c713c43638c1/contracts/test/DeployTimelockCommittee.t.sol)
 
-**Inherits:** Test
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
 
 **Title:** DeployTimelockCommitteeTest
 
@@ -26,7 +26,7 @@ when the configured receipt admin does not match who is actually
 authorized to run the handover.
 
 In-process identity note (mirrors contracts/test/fv/DeployAssertions.t.sol):
-when a test calls `script.runInProcessWithCommittee(...)` directly,
+when a test calls `script.runInProcessWithCommittee(..., _fixtureSpec())` directly,
 `msg.sender` INSIDE the script's own code is `address(this)` (the
 test contract) — that is the value substituted wherever the script
 revokes "from msg.sender" or defaults `receiptAdmin_ == address(0)`
@@ -149,6 +149,21 @@ DeployTimelock internal script;
 DeployTimelock.Deployed internal d;
 ```
 
+### runAsDeployer
+
+<i>
+
+When set, the ceremony runs with address(script) as `msg.sender`, which is what a
+real `forge script --broadcast` run is: one address both sends the grants and is
+the deployer the script revokes. The role-holder tests need it, because only then
+does the revoke target the address that actually holds the roles.
+
+</i>
+
+```solidity
+bool internal runAsDeployer;
+```
+
 ## Functions
 
 <a id="setup"></a>
@@ -240,6 +255,37 @@ function test_deployer_noLongerHasRolesOnReceipt() public;
 
 ```solidity
 function test_receiptAdminExplicit_handoverSucceeds() public;
+```
+
+<a id="_becomescriptdeployer"></a>
+
+### _becomeScriptDeployer
+
+<i>
+
+Makes the deployer identity match a real broadcast: address(script) is the only
+deployer, so this test contract gives up the IC roles it held only as a stand-in.
+
+</i>
+
+```solidity
+function _becomeScriptDeployer() internal;
+```
+
+<a id="test_timelockistheonlyadminroleholder_onicpolicyandreceipt"></a>
+
+### test_timelockIsTheOnlyAdminRoleHolder_onICPolicyAndReceipt
+
+```solidity
+function test_timelockIsTheOnlyAdminRoleHolder_onICPolicyAndReceipt() public;
+```
+
+<a id="test_timelockistheonlyadminroleholder_onthefivecorecontracts"></a>
+
+### test_timelockIsTheOnlyAdminRoleHolder_onTheFiveCoreContracts
+
+```solidity
+function test_timelockIsTheOnlyAdminRoleHolder_onTheFiveCoreContracts() public;
 ```
 
 <a id="test_zerocommitteeaddresses_skipshandover_fivecorestillworks"></a>

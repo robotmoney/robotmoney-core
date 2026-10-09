@@ -2,15 +2,16 @@
 //! (See also: Plan tracking issue #109 — Full-stack integration phase)
 //! CLI entry point: `cargo r smoke-test`
 //!
-//! Boots the full Geth+Lighthouse devnet with deployed contracts and
-//! keeps it alive so external tests or tools can connect to it. Prints
+//! Boots the Twin chain (918453, a pinned lazy fork of real Base state made
+//! with anvil) with deployed contracts and keeps it alive so external tests or tools can connect to it. Prints
 //! the allocated URLs and addresses to stdout, then blocks until Ctrl-C.
 //! Drop tears the stack down on clean exit.
 //!
 //! With `--full-stack` the binary also starts the dapp, explorer-api,
 //! explorer-indexer, and Postgres containers after contract deployment,
 //! printing a structured endpoint summary once all services are healthy.
-//! Dropping or Ctrl-C tears down both compose stacks.
+//! Dropping or Ctrl-C stops the dapp compose stack and the Twin fork this
+//! process started (a fork reused through `TWIN_RPC_URL` is left running).
 //!
 //! Canonical: Plan tracking issue #109 §10.5 — Phase 4.5.
 
@@ -99,17 +100,6 @@ struct Cli {
     /// Defaults to 10 MiB.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     log_max_bytes: Option<u64>,
-
-    /// Chain backend to boot the contracts on.
-    ///
-    /// `geth` (the default) is the Geth+Lighthouse Docker devnet: real
-    /// proof-of-stake, so `block.timestamp` tracks wall clock and cannot be
-    /// moved. `anvil` boots a host-side `anvil --load-state` from the same
-    /// committed Base fork state and brings up NO chain compose stack; its
-    /// clock can be jumped (`evm_setNextBlockTimestamp`), which is what a run
-    /// that has to clear a governance timelock delay needs.
-    #[arg(long, value_name = "BACKEND", default_value = "geth")]
-    chain: String,
 }
 
 fn main() {
@@ -149,15 +139,8 @@ fn run() -> i32 {
         eprintln!("smoke-test: --public-*-url flags require --full-stack.");
         return 2;
     }
-    let backend: smoke_test::ChainBackend = match cli.chain.parse() {
-        Ok(backend) => backend,
-        Err(err) => {
-            eprintln!("smoke-test: {err}");
-            return 2;
-        }
-    };
     if let Some(rpc_port) = cli.rpc_port {
-        std::env::set_var("SMOKE_TEST_GETH_RPC_PORT", rpc_port.to_string());
+        std::env::set_var("SMOKE_TEST_RPC_PORT", rpc_port.to_string());
     }
     if let Some(path) = cli.log_file {
         std::env::set_var("SMOKE_TEST_LOG_FILE", path);
@@ -166,17 +149,14 @@ fn run() -> i32 {
         std::env::set_var("SMOKE_TEST_LOG_MAX_BYTES", limit.to_string());
     }
     let _ = smoke_test::logging::init();
-    let genesis_timestamp = ensure_genesis_timestamp();
     smoke_test::logging::info(
         "smoke-test",
         format!(
-            "CLI starting: full_stack={} tunnel={} chain={} log_file={} log_max_bytes={} genesis_timestamp={}",
+            "CLI starting: full_stack={} tunnel={} log_file={} log_max_bytes={}",
             cli.full_stack,
             cli.tunnel,
-            cli.chain,
             smoke_test::logging::log_path().display(),
-            smoke_test::logging::max_bytes(),
-            genesis_timestamp
+            smoke_test::logging::max_bytes()
         ),
     );
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -190,19 +170,30 @@ fn run() -> i32 {
 
     if !smoke_test::prerequisites_available() {
         eprintln!(
-            "smoke-test: docker / forge / cast not on PATH. \
-             Install Docker + Foundry to run the devnet."
+            "smoke-test: anvil / bun / forge / cast not on PATH. \
+             Install Foundry and Bun to run the Twin chain."
         );
-        smoke_test::logging::error("smoke-test", "missing prerequisites: docker / forge / cast");
+        smoke_test::logging::error(
+            "smoke-test",
+            "missing prerequisites: anvil / bun / forge / cast",
+        );
+        return 1;
+    }
+    if cli.full_stack && which::which("docker").is_err() {
+        eprintln!("smoke-test: --full-stack needs docker on PATH for the dapp compose stack.");
+        smoke_test::logging::error(
+            "smoke-test",
+            "missing prerequisite for --full-stack: docker",
+        );
         return 1;
     }
 
     if cli.no_receipt_fixtures {
         std::env::set_var(smoke_test::NO_RECEIPT_FIXTURES_ENV, "1");
     }
-    eprintln!("smoke-test: booting devnet (this takes 60-120 seconds)...");
-    smoke_test::logging::info("smoke-test", format!("booting devnet backend={backend:?}"));
-    let fixture = match smoke_test::Fixture::with_backend(backend, &[]) {
+    eprintln!("smoke-test: booting the Twin chain (a pinned lazy fork of Base) and deploying...");
+    smoke_test::logging::info("smoke-test", "booting the Twin chain");
+    let fixture = match smoke_test::Fixture::with_deploy_env(&[]) {
         Ok(fixture) => fixture,
         Err(err) => {
             smoke_test::logging::error("smoke-test", format!("devnet boot failed: {err}"));
@@ -282,14 +273,33 @@ fn run() -> i32 {
         println!("vault_addr={:#x}", fixture.vault());
         println!("usdc_addr={:#x}", fixture.usdc());
         println!("agent_addr={:#x}", fixture.agent());
-        println!("admin_addr={}", smoke_test::DEPLOYER_ADDRESS_HEX);
+        // The deployer is a fresh rehearsal keystore. After handover it holds
+        // nothing: the Safe and the timelock are the admin.
+        println!(
+            "deployer_addr={}",
+            fixture
+                .published()
+                .keys
+                .address("ADMIN_ADDRESS")
+                .unwrap_or("unknown")
+        );
+        println!("safe_addr={:#x}", fixture.safe());
+        println!("timelock_addr={:#x}", fixture.timelock());
+        println!("manifest_dir={}", fixture.manifest_dir().display());
+        println!("sheet_path={}", fixture.published().sheet_path.display());
+        // Paths only, never secrets: the keystore directory and the 0600 passphrase file.
+        println!("key_dir={}", fixture.published().keys.key_dir.display());
+        println!(
+            "password_file={}",
+            fixture.published().keys.password_file.display()
+        );
+        println!("core_sha={}", fixture.published().cfg.core_sha);
         println!("pauser_addr={}", smoke_test::PAUSER_ADDRESS_HEX);
         println!(
             "share_receiver_addr={}",
             smoke_test::SHARE_RECEIVER_ADDRESS_HEX
         );
         if cli.print_test_keys {
-            println!("admin_private_key={}", smoke_test::DEPLOYER_PRIVATE_KEY_HEX);
             println!("pauser_private_key={}", smoke_test::PAUSER_PRIVATE_KEY_HEX);
             println!(
                 "agent_private_key=0x{}",
@@ -301,11 +311,9 @@ fn run() -> i32 {
         // tests can drive the vault-selector and router deposit flow.
         println!("registry_addr={:#x}", fixture.registry());
         println!("router_addr={:#x}", fixture.router());
-        // Issue #477: surface governance and RM token addresses so the
-        // fresh-account drip-ETH-then-RM-then-vote E2E spec can locate
-        // RouterGovernance and RmToken without hard-coding them.
+        // Issue #477: surface the governance address so the dapp E2E specs
+        // can locate RouterGovernance without hard-coding it.
         println!("governance_addr={:#x}", fixture.governance());
-        println!("rm_token_addr={:#x}", fixture.rm_token());
         // Issue #1294: surface the IC policy + consensus receipt addresses so
         // the dapp e2e consensus-receipts spec can locate them without
         // hard-coding devnet addresses.
@@ -315,7 +323,10 @@ fn run() -> i32 {
         // Issue #363: surface real adapter addresses for dapp e2e tests.
         println!("aave_adapter_addr={:#x}", fixture.aave_adapter());
         println!("compound_adapter_addr={:#x}", fixture.compound_adapter());
-        println!("morpho_adapter_addr={:#x}", fixture.morpho_adapter());
+        println!(
+            "moonwell_flagship_adapter_addr={:#x}",
+            fixture.moonwell_flagship_adapter()
+        );
         // Issue #261: surface the harness USDC holder so dapp e2e tests
         // can verify the testnet faucet path drips from the same EOA the
         // Rust `Fixture::fund_usdc` helper uses. The private key is consumed
@@ -391,25 +402,8 @@ fn run() -> i32 {
     eprintln!("smoke-test: stopping...");
     smoke_test::logging::info("smoke-test", "shutdown reason=ctrl-c tearing down stacks");
     // _dapp_stack drops here first → docker compose down dapp stack
-    // fixture drops next → docker compose down chain stack
+    // fixture drops next → the Twin fork this process started is stopped
     0
-}
-
-fn ensure_genesis_timestamp() -> String {
-    match std::env::var("GENESIS_TIMESTAMP") {
-        Ok(value) => value,
-        Err(_) => {
-            const GENESIS_LEAD_SECS: u64 = 15;
-            let ts = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system time before UNIX_EPOCH")
-                .saturating_add(std::time::Duration::from_secs(GENESIS_LEAD_SECS))
-                .as_secs()
-                .to_string();
-            std::env::set_var("GENESIS_TIMESTAMP", &ts);
-            ts
-        }
-    }
 }
 
 const CHAIN_HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(3);

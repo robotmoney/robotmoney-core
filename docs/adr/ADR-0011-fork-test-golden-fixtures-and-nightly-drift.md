@@ -1,6 +1,7 @@
-# ADR-0011: Fork tests run against checked-in golden fixtures on every merge; live drift is a non-blocking nightly
+# ADR-0011: Fork tests run against checked-in golden fixtures on every merge
 
-- **Status:** Accepted
+- **Status:** Superseded (core issues 1495, 1496, 1498; owner decision 2026-10-05). Decision 1 (merge-gating fork tests on checked-in golden fixtures), Decision 2 (the live drift alarm) and the state digest addendum are retired. The fork tests of every suite now run on the Twin chain, a pinned lazy fork of real Base state. Decisions 3 and 4 stand as written. Read everything below that names a saved fixture, `snapshot-fork.ts`, the golden runner or a drift alarm as history.
+- **Update (2026-10-05, core 1498, 1496):** the saved snapshot machinery is deleted: `scripts/devnet/snapshot-fork.ts`, the `.anvil-state` fixtures and manifests in `testing/fixtures/fork-state/`, `genesis-alloc.json`, `fork-block.json`, `expected-prices.json`, the golden fork runner, the live-RPC runner, the state digest, the pin-age warning and the lockstep gate. The Twin chain (id 918453) is a pinned lazy anvil fork of real Base state (`anvil --fork-url <upstream> --fork-block-number <pin> --chain-id 918453`), one pin per CI run (the upstream head at the start of the run minus 2). The upstream is the public `https://mainnet.base.org`, or the optional secret `BASE_UPSTREAM_RPC`. No warm list, no state dump, no patching of forked state. Only fund USDC, fund gas and warp time differ from production. The forge fork tests read `FORK_RPC_URL` and skip with a named reason when it is unset. Suite 29 is the nightly Twin fork (`suite-29-nightly-twin-fork.yml`). See `docs/technical/full-stack-devnet.md` and `docs/development/ci-suites.md`.
 - **Date:** 2026-07-20
 - **Deciders:** Product owner
 - **Supersedes (in part):** `docs/technical/fork-e2e-decisions.md` —
@@ -19,7 +20,7 @@
   - `testing/fixtures/fork-state/` — the checked-in golden fixtures
     (`CURRENT.anvil-state`, `genesis-alloc.json`, pinned
     `base-<block>.anvil-state`)
-  - `scripts/devnet/snapshot-fork.sh` — the developer-run fixture generator
+  - `scripts/devnet/snapshot-fork.ts` — the developer-run fixture generator
   - `testing/fork-e2e-rust/` — the Rust fork-e2e crate that provides the
     `anvil --load-state` fixture-loading mechanism
   - `contracts/test/VaultForkRegressions.t.sol`,
@@ -112,28 +113,15 @@ the golden fixture is missing, or if **zero** fork tests execute, CI **fails** �
 it never silent-skips. A missing fixture or an empty fork run is red, not
 green. This is the direct fix for the pre-existing legacy silent-skip.
 
-### 2. Live-drift detection is a non-blocking nightly alarm on a free public RPC
+### 2. Live drift is caught by the nightly redesign (core 1495, 1496)
 
-A **schedule-only, non-blocking** nightly job forks **Base mainnet at latest**
-via a **free public RPC** and re-runs the fork suite as a **drift alarm**.
+This decision first proposed a schedule-only, non-blocking live-fork drift alarm on a free public RPC. That alarm was deleted. The nightly redesign replaces it:
 
-- Forking at latest needs only a **full node, not an archive node** — you only
-  read current state, not deep history. A free public endpoint is therefore
-  sufficient: e.g. `https://mainnet.base.org`, PublicNode
-  (`https://base-rpc.publicnode.com`), or LlamaRPC. A single nightly run will
-  not be rate-limited by these.
-- The endpoint URL is read from a **var with a public default** — **no CI
-  secret**. (`scripts/devnet/snapshot-fork.sh` already defaults
-  `RMPC_FORK_RPC_URL` to `https://base-rpc.publicnode.com`, so the same public
-  default applies.)
-- On failure the nightly **opens or updates a tracking issue** rather than
-  blocking any merge. It is the lane that catches **real upstream drift** —
-  pool migrations, ABI changes, oracle heartbeat changes — that a pinned
-  snapshot structurally cannot.
+- **Suite 29 (nightly fresh snapshot, core 1496)** re-captures the chain snapshot at the latest Base block and reruns the chain suites against it. It is not a pull request gate.
+- **The third-party drift workflow (core 1497)** compares the recorded dependency manifest with the live chain.
+- **The nightly dispatch (core 1495)** fails when any suite dispatch fails and lists each failed workflow. Nothing in it is swallowed.
 
-The existing nightly full-suite orchestrator (`docs/development/ci-suites.md`
-§21, `suite-21-nightly.yml`) is the natural host/dispatcher for this run; the
-live-fork drift alarm is registered there rather than as a second scheduler.
+The live-drift job, its script and its alarm text are gone (`scripts/ci/check-nightly-dispatch-selftest.ts` keeps them absent). See `docs/development/ci-suites.md` sections 21 and 29.
 
 ### 3. Fixture refresh is developer-owned on change — no scheduled cadence
 
@@ -141,7 +129,7 @@ There is **no monthly (or any scheduled) refresh cadence**. The fixture is
 refreshed by **whoever changes what it must cover**:
 
 - Adding an adapter, wiring a new pool, or changing an integration → the
-  **same PR** regenerates the fixture (`scripts/devnet/snapshot-fork.sh`, or
+  **same PR** regenerates the fixture (`scripts/devnet/snapshot-fork.ts`, or
   the `scripts/devnet/refresh-fork-fixture.sh` wrapper) and commits it.
 - A nightly drift alarm (Decision §2) firing → a developer refreshes the
   fixture in response, as a normal change.
@@ -162,6 +150,8 @@ It is never a CI secret and never gates a merge. The nightly (§2) uses a
 public-default var, not a secret.
 
 ## Consequences
+
+> Superseded in part: where this section says the nightly live-fork alarm catches drift, read suite 29 and the third-party drift workflow (Decision 2).
 
 **Positive.**
 
@@ -207,7 +197,7 @@ silent reversal:
   motivation.)
 - **Realism is preserved**: the golden fixture **is** real Base mainnet state
   (real deployed bytecode, real pools, real USDC), captured by
-  `snapshot-fork.sh`. Testing against it is testing against reality — a pinned
+  `snapshot-fork.ts`. Testing against it is testing against reality — a pinned
   instant of it, not a synthetic chain.
 - **Drift is still caught** — by the nightly live-fork alarm (§2). The realism
   the live-RPC path provided (freshness against upstream) is retained on the
@@ -232,9 +222,9 @@ adding a new dependency or changing the decision above.
   committed `base-<block>.json`).
 - `scripts/devnet/fork-state-digest.sh write <state_file> <manifest_json>`
   computes the digest and writes/overwrites `state_sha256` in place;
-  `scripts/devnet/snapshot-fork.sh` calls it for both the dated
+  `scripts/devnet/snapshot-fork.ts` calls it for both the dated
   `base-<block>.json` fixture and the `CURRENT.json` pointer at capture time,
-  so `refresh-fork-fixture.sh` (which execs into `snapshot-fork.sh`) inherits
+  so `refresh-fork-fixture.sh` (which execs into `snapshot-fork.ts`) inherits
   it automatically.
 - `scripts/devnet/fork-state-digest.sh verify <state_file> <manifest_json>`
   recomputes the digest and compares it to the recorded one. Per this ADR's
@@ -249,7 +239,7 @@ adding a new dependency or changing the decision above.
   `check-fork-manifest.sh`; the workflow runs `fork-state-digest.sh verify`
   directly for those two groups before `cargo test`.
 - Regeneration workflow is unchanged from Decision §3 (developer-owned on
-  change): `snapshot-fork.sh` / `refresh-fork-fixture.sh` writes the new
+  change): `snapshot-fork.ts` / `refresh-fork-fixture.sh` writes the new
   digest alongside the new blob, so a legitimate refresh shows up in review
   as an intentional manifest+digest diff — the reviewable proxy for the
   unreviewable blob — while a silent blob edit with no matching digest change
@@ -269,5 +259,5 @@ adding a new dependency or changing the decision above.
 - The precise workflow YAML wiring (job filters, schedule cron, tracking-issue
   automation) — an implementation detail carried by the CI workflow files and
   catalogued in `docs/development/ci-suites.md` §5 / §21.
-- Fixture format and manifest validation — governed by `snapshot-fork.sh`,
+- Fixture format and manifest validation — governed by `snapshot-fork.ts`,
   `refresh-fork-fixture.sh`, and `check-fork-manifest.sh`.

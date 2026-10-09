@@ -57,8 +57,8 @@ describe("Admin write buttons — verification gating (issue #207)", () => {
         action: { kind: "authorizeAgent" as const, agent, policy },
       },
       { kind: "revokeAgent" as const, action: { kind: "revokeAgent" as const, agent } },
-      { kind: "pause" as const, action: { kind: "pause" as const } },
-      { kind: "unpause" as const, action: { kind: "unpause" as const } },
+      { kind: "pauseDeposits" as const, action: { kind: "pauseDeposits" as const } },
+      { kind: "unpauseDeposits" as const, action: { kind: "unpauseDeposits" as const } },
       {
         kind: "grantRole" as const,
         action: { kind: "grantRole" as const, role: "ADMIN_ROLE" as const, account: agent },
@@ -99,8 +99,8 @@ describe("Admin write buttons — verification gating (issue #207)", () => {
       expect(getByTestId("refusal-reason").textContent).toMatch(/bytecode hash/i);
     });
 
-    it("pause: refusal preview when not verified", () => {
-      const preview = buildPreview({ kind: "pause" }, unverifiedCtx);
+    it("pauseDeposits: refusal preview when not verified", () => {
+      const preview = buildPreview({ kind: "pauseDeposits" }, unverifiedCtx);
       expect(preview.ok).toBe(false);
       const { getByTestId } = render(<TxPreview preview={preview} />);
       expect(getByTestId("refusal-reason").textContent).toMatch(/bytecode hash/i);

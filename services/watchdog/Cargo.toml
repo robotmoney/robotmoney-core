@@ -2,7 +2,7 @@
 name = "watchdog"
 version = "0.1.0"
 edition = "2021"
-description = "Robot Money mint/burn rate watchdog — monitors per-block and per-hour deposit/withdrawal volume against thresholds and triggers automated gateway pause or on-call alert on breach (security model §9)."
+description = "Robot Money mint/burn rate watchdog — monitors per-block and per-hour deposit/withdrawal volume against thresholds and triggers an automated gateway deposit pause (withdrawals are never frozen) or on-call alert on breach (security model §9)."
 license = "MIT"
 publish = false
 
@@ -34,7 +34,7 @@ serde_json = "1"
 # Async runtime.
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "signal", "sync"] }
 
-# HTTP client for gateway pause RPC and webhook alerts.
+# HTTP client for gateway pauseDeposits RPC and webhook alerts.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Postgres for querying indexed deposit/withdrawal data.
@@ -42,13 +42,13 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-r
 bigdecimal = { version = "0.4", features = ["serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 
-# EVM types for gateway pause transaction construction.
+# EVM types for gateway pauseDeposits transaction construction.
 alloy-primitives = { version = "0.8", features = ["k256"] }
-# ECDSA signing for the pause transaction.
+# ECDSA signing for the pauseDeposits transaction.
 k256 = { version = "0.13", features = ["ecdsa"] }
 # Hex encoding for addresses and raw transactions.
 hex = "0.4"
-# Zeroizing wrapper for the PAUSER_ROLE key hex, so the raw secret does not
+# Zeroizing wrapper for the DEPOSIT_PAUSER_ROLE key hex, so the raw secret does not
 # outlive the single startup extraction that derives the signing key from it
 # (issue #1357). Already in Cargo.lock transitively via k256 — no new
 # supply-chain surface, just a direct dependency edge.

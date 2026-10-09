@@ -11,7 +11,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
-import {Deploy} from "../script/Deploy.s.sol";
+import {CoreStages} from "./helpers/CoreStages.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
@@ -20,6 +20,22 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
+import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
+import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
+import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
+import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
+
+/// @dev A manifest path no other test, thread or forge process shares. The manifest tests used fixed
+///      /tmp names (and the run-entrypoint subclasses all shared one), so two test contracts running in
+///      parallel, or two forge runs on one machine, could delete or overwrite each other's file and fail
+///      at random. `randomUint` is drawn per call, so every test that asks gets its own file.
+function uniqueManifestPath(Vm cheats, string memory tag) view returns (string memory) {
+    return string.concat("/tmp/", tag, "-", cheats.toString(cheats.randomUint()), ".json");
+}
 
 /// @dev Fork-style unit tests for DeployTimelock.s.sol (issue #414).
 ///
@@ -44,7 +60,7 @@ import {RoleHolders} from "./helpers/RoleHolders.sol";
 /// schedule → mine delay → execute path, reverts on a direct ADMIN_ROLE EOA call,
 /// atomically flips registry status `Retired` + the vault deposit-halt in one
 /// executed call, and leaves the emergency `shutdownVault` overlay unchanged.
-contract DeployTimelockTest is Test {
+contract DeployTimelockTest is SafeGovernance {
     // ─── Roles ────────────────────────────────────────────────────────────────
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -55,9 +71,9 @@ contract DeployTimelockTest is Test {
     // ─── Test addresses ───────────────────────────────────────────────────────
 
     address internal admin = makeAddr("admin");
-    // `safe` is set in setUp() to the deployed MockHighThresholdSafe contract.
-    // It cannot be a plain EOA (makeAddr) because DeployTimelock now requires
-    // SAFE_ADDRESS to have deployed bytecode and getThreshold() >= 2 (issue #422).
+    // `safe` is set in setUp() to a real SafeL2 1.4.1 proxy built by SafeFixture.
+    // DeployTimelock runs the full Safe checks on it (code, codehash, singleton,
+    // owners, threshold, modules, guard, fallback handler).
     address internal safe;
     // Independent emergency hot key that receives the vault EMERGENCY_ROLE at
     // handover (ACL-1 / F-01). Distinct from the deployer (address(script)).
@@ -87,6 +103,7 @@ contract DeployTimelockTest is Test {
     /// not AccessControlEnumerable, so this is the only complete list).
     mapping(address => address[]) internal adminHolders;
     address[] internal gatewayRootHolders;
+    address[] internal executorHolders;
     address[] internal vaultEmergencyHolders;
     /// Contracts on which the logs show the deployer losing ADMIN_ROLE.
     mapping(address => bool) internal deployerAdminRevoked;
@@ -102,9 +119,10 @@ contract DeployTimelockTest is Test {
         script = new DeployTimelock();
         deployer = address(script);
 
-        // Deploy a mock Safe contract with threshold=2 so DeployTimelock's new
-        // code-length and threshold guards (issue #422) are satisfied.
-        safe = address(new MockHighThresholdSafe());
+        // A real SafeL2 1.4.1 proxy from the vendored sources, 2-of-3, so DeployTimelock's
+        // full Safe checks pass on a genuine Safe (no stub, no mock).
+        _installSafeSet();
+        safe = _newDefaultSafe();
 
         // In a real `forge script --broadcast` run one address does both jobs:
         // the broadcaster sends every grant and revoke, and it is also the
@@ -153,6 +171,8 @@ contract DeployTimelockTest is Test {
         // ADMIN_ROLE on the router.
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         vm.prank(deployer);
         d = script.runInProcess(
@@ -163,7 +183,8 @@ contract DeployTimelockTest is Test {
             address(governance),
             safe,
             emergency,
-            MIN_DELAY
+            MIN_DELAY,
+            _fixtureSpec()
         );
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -177,6 +198,7 @@ contract DeployTimelockTest is Test {
             RoleHolders.wasRevoked(logs, address(gateway), DEFAULT_ADMIN_ROLE, deployer);
         gatewayRootHolders = RoleHolders.holders(logs, address(gateway), DEFAULT_ADMIN_ROLE);
         vaultEmergencyHolders = RoleHolders.holders(logs, address(vault), EMERGENCY_ROLE);
+        executorHolders = RoleHolders.holders(logs, address(d.timelock), d.timelock.EXECUTOR_ROLE());
     }
 
     function _governed() internal view returns (address[5] memory) {
@@ -329,10 +351,61 @@ contract DeployTimelockTest is Test {
         );
     }
 
-    function test_safe_holdsExecutorRole() public view {
+    function test_safe_holdsCancellerRole() public view {
         assertTrue(
-            d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), safe), "safe missing EXECUTOR_ROLE"
+            d.timelock.hasRole(d.timelock.CANCELLER_ROLE(), safe), "safe missing CANCELLER_ROLE"
         );
+    }
+
+    /// @notice One policy (core 1521): EXECUTOR_ROLE is open, held by address(0).
+    function test_executorPolicy_executorRoleIsOpen() public view {
+        assertTrue(d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), address(0)), "executor not open");
+        assertFalse(d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), safe), "safe holds executor");
+    }
+
+    /// @notice The complete EXECUTOR_ROLE member set, replayed from every RoleGranted and
+    ///         RoleRevoked log since before construction, is exactly {address(0)}. No named
+    ///         key (emergency, deployer, Safe, admin) and no unnamed address may execute.
+    function test_executorPolicy_onlyAddressZeroHoldsExecutorRole() public view {
+        assertEq(executorHolders.length, 1, "EXECUTOR_ROLE must have exactly one holder");
+        assertEq(executorHolders[0], address(0), "EXECUTOR_ROLE holder is not address(0)");
+        address[6] memory named = [emergency, deployer, safe, admin, address(script), address(this)];
+        for (uint256 i = 0; i < named.length; i++) {
+            assertFalse(d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), named[i]), "named executor");
+        }
+    }
+
+    /// @notice The Safe is the only proposer and canceller: no deployer, emergency key or
+    ///         stranger holds either role, so no single signer can propose or cancel.
+    function test_executorPolicy_safeIsTheOnlyProposerAndCanceller() public view {
+        bytes32 proposer = d.timelock.PROPOSER_ROLE();
+        bytes32 canceller = d.timelock.CANCELLER_ROLE();
+        address[4] memory others = [deployer, emergency, stranger, address(0)];
+        for (uint256 i = 0; i < others.length; i++) {
+            assertFalse(d.timelock.hasRole(proposer, others[i]), "extra proposer");
+            assertFalse(d.timelock.hasRole(canceller, others[i]), "extra canceller");
+        }
+    }
+
+    /// @notice An address that is neither the Safe nor an owner cannot schedule or cancel.
+    function test_executorPolicy_strangerCannotScheduleOrCancel() public {
+        // stranger is the shared fixture address.
+        bytes32 proposer = d.timelock.PROPOSER_ROLE();
+        bytes32 canceller = d.timelock.CANCELLER_ROLE();
+        vm.startPrank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, proposer
+            )
+        );
+        d.timelock.schedule(address(0xBEEF), 0, "", bytes32(0), bytes32(uint256(1)), 2 days);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, canceller
+            )
+        );
+        d.timelock.cancel(bytes32(uint256(1)));
+        vm.stopPrank();
     }
 
     // ─── AC3: Direct ADMIN_ROLE call from Safe EOA reverts ────────────────────
@@ -349,13 +422,12 @@ contract DeployTimelockTest is Test {
             name: "Test Vault", asset: address(usdc), registeredAt: block.timestamp
         });
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe,
+            address(registry),
+            abi.encodeCall(VaultRegistry.registerVault, (makeAddr("vault"), meta))
         );
-        vm.prank(safe);
-        registry.registerVault(makeAddr("vault"), meta);
+        assertFalse(registry.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice Any random EOA that never held ADMIN_ROLE also cannot call
@@ -390,17 +462,8 @@ contract DeployTimelockTest is Test {
         bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("test-salt-1");
 
-        // Schedule from the Safe (PROPOSER_ROLE).
-        vm.prank(safe);
-        d.timelock
-            .schedule(
-                address(registry), // target
-                0, // value
-                callData,
-                predecessor,
-                salt,
-                MIN_DELAY
-            );
+        // Schedule from the Safe (PROPOSER_ROLE): two owner signatures, real execTransaction.
+        _govSchedule(safe, d.timelock, address(registry), callData, salt, MIN_DELAY);
 
         // Compute operation id.
         bytes32 opId = d.timelock.hashOperation(address(registry), 0, callData, predecessor, salt);
@@ -412,9 +475,7 @@ contract DeployTimelockTest is Test {
             "expected Waiting state pre-delay"
         );
 
-        vm.expectRevert();
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, predecessor, salt);
+        _expectExecuteRefused(safe, d.timelock, address(registry), callData, salt);
 
         // Advance time past the min delay.
         vm.warp(block.timestamp + MIN_DELAY + 1);
@@ -427,8 +488,7 @@ contract DeployTimelockTest is Test {
         );
 
         // Execute from the Safe (EXECUTOR_ROLE).
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, predecessor, salt);
+        _govExecute(safe, d.timelock, address(registry), callData, salt);
 
         // Verify the operation succeeded.
         assertEq(registry.vaultCount(), 1, "vault should be registered");
@@ -453,13 +513,11 @@ contract DeployTimelockTest is Test {
         bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("test-admin-grant");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(registry), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(registry), callData, salt, MIN_DELAY);
 
         vm.warp(block.timestamp + MIN_DELAY + 1);
 
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, predecessor, salt);
+        _govExecute(safe, d.timelock, address(registry), callData, salt);
 
         assertTrue(
             IAccessControl(address(registry)).hasRole(ADMIN_ROLE, newAdmin),
@@ -480,25 +538,19 @@ contract DeployTimelockTest is Test {
     ///         not ADMIN_ROLE on the vault.
     function test_INV3_setFeeRecipient_directHotKeyCallReverts() public {
         address newRecipient = makeAddr("newFeeRecipient");
-        vm.prank(safe);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe, address(vault), abi.encodeCall(vault.setFeeRecipient, (newRecipient))
         );
-        vault.setFeeRecipient(newRecipient);
+        assertFalse(vault.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice INV-3: a direct (non-timelock) setExitFeeBps call from the Safe hot
     ///         key reverts for the same reason.
     function test_INV3_setExitFeeBps_directHotKeyCallReverts() public {
-        vm.prank(safe);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe, address(vault), abi.encodeCall(vault.setExitFeeBps, (50))
         );
-        vault.setExitFeeBps(50);
+        assertFalse(vault.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice INV-3: setFeeRecipient succeeds ONLY when routed through the
@@ -509,17 +561,13 @@ contract DeployTimelockTest is Test {
         bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("inv3-fee-recipient");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(vault), callData, salt, MIN_DELAY);
 
         // Pre-delay execution must revert.
-        vm.expectRevert();
-        vm.prank(safe);
-        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+        _expectExecuteRefused(safe, d.timelock, address(vault), callData, salt);
 
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+        _govExecute(safe, d.timelock, address(vault), callData, salt);
 
         assertEq(vault.feeRecipient(), newRecipient, "fee recipient must update via timelock");
     }
@@ -532,11 +580,9 @@ contract DeployTimelockTest is Test {
         bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("inv3-exit-fee");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(vault), callData, salt, MIN_DELAY);
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+        _govExecute(safe, d.timelock, address(vault), callData, salt);
 
         assertEq(vault.exitFeeBps(), newFee, "exit fee must update via timelock");
     }
@@ -552,13 +598,10 @@ contract DeployTimelockTest is Test {
     ///         the timelock, not ADMIN_ROLE on the vault.
     function test_AC3_setQuarantineAddress_directHotKeyCallReverts() public {
         address newQuarantine = makeAddr("newQuarantine");
-        vm.prank(safe);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe, address(vault), abi.encodeCall(vault.setQuarantineAddress, (newQuarantine))
         );
-        vault.setQuarantineAddress(newQuarantine);
+        assertFalse(vault.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice AC3: setQuarantineAddress succeeds ONLY when routed through the
@@ -572,17 +615,13 @@ contract DeployTimelockTest is Test {
         bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("ac3-quarantine-addr");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(vault), callData, salt, MIN_DELAY);
 
         // Pre-delay execution must revert.
-        vm.expectRevert();
-        vm.prank(safe);
-        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+        _expectExecuteRefused(safe, d.timelock, address(vault), callData, salt);
 
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+        _govExecute(safe, d.timelock, address(vault), callData, salt);
 
         assertEq(
             vault.quarantineAddress(), newQuarantine, "quarantine address must update via timelock"
@@ -605,11 +644,9 @@ contract DeployTimelockTest is Test {
         });
         bytes memory callData = abi.encodeCall(VaultRegistry.registerVault, (address(vault), meta));
         bytes32 salt = keccak256("retire-register");
-        vm.prank(safe);
-        d.timelock.schedule(address(registry), 0, callData, bytes32(0), salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(registry), callData, salt, MIN_DELAY);
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+        _govExecute(safe, d.timelock, address(registry), callData, salt);
     }
 
     /// @notice #942 AC2: a direct (non-timelock) retire() call from the Safe hot
@@ -617,13 +654,10 @@ contract DeployTimelockTest is Test {
     ///         ADMIN_ROLE on the registry.
     function test_retire_directHotKeyCallReverts() public {
         _registerVaultViaTimelock();
-        vm.prank(safe);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe, address(registry), abi.encodeCall(registry.retire, (address(vault)))
         );
-        registry.retire(address(vault));
+        assertFalse(registry.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice #942 AC2: a stranger EOA likewise cannot call retire().
@@ -653,17 +687,13 @@ contract DeployTimelockTest is Test {
         bytes memory callData = abi.encodeCall(VaultRegistry.retire, (address(vault)));
         bytes32 salt = keccak256("retire-exec");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(registry), 0, callData, bytes32(0), salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(registry), callData, salt, MIN_DELAY);
 
         // Pre-delay execution must revert.
-        vm.expectRevert();
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+        _expectExecuteRefused(safe, d.timelock, address(registry), callData, salt);
 
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+        _govExecute(safe, d.timelock, address(registry), callData, salt);
 
         // Both layers flipped atomically in the one executed call: registry
         // status Retired AND the vault deposit-halt flag set.
@@ -706,7 +736,7 @@ contract DeployTimelockTest is Test {
     // ─── ACL-1 / F-01: deployer EOA holds NO privileged role after handover ───
     //
     // The handover (this script) must leave the deployer EOA with none of
-    // {DEFAULT_ADMIN_ROLE, ADMIN_ROLE, EMERGENCY_ROLE, PAUSER_ROLE} on the
+    // {DEFAULT_ADMIN_ROLE, ADMIN_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE} on the
     // Gateway or any vault. The deep deploy-assertion lives in
     // contracts/test/fv/DeployAssertions.t.sol::test_ACL1_*; these tests pin the
     // individual legs and the fix-interaction guarantees.
@@ -760,11 +790,9 @@ contract DeployTimelockTest is Test {
         bytes memory callData = abi.encodeCall(IAccessControl.grantRole, (AGENT_ROLE, newAgent));
         bytes32 salt = keccak256("acl1-grant-agent-role");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(gateway), 0, callData, bytes32(0), salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(gateway), callData, salt, MIN_DELAY);
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(gateway), 0, callData, bytes32(0), salt);
+        _govExecute(safe, d.timelock, address(gateway), callData, salt);
 
         assertTrue(
             gateway.hasRole(AGENT_ROLE, newAgent),
@@ -781,11 +809,9 @@ contract DeployTimelockTest is Test {
         bytes memory callData = abi.encodeCall(IGateway.authorizeAgent, (newAgent, p));
         bytes32 salt = keccak256("acl1-authorize-agent");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(gateway), 0, callData, bytes32(0), salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(gateway), callData, salt, MIN_DELAY);
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(gateway), 0, callData, bytes32(0), salt);
+        _govExecute(safe, d.timelock, address(gateway), callData, salt);
 
         assertTrue(
             gateway.hasRole(AGENT_ROLE, newAgent),
@@ -801,13 +827,12 @@ contract DeployTimelockTest is Test {
     ///         timelock-routed path works. Guards the role gate post-handover.
     function test_ACL1_directAuthorizeAgentFromHotKeyReverts() public {
         IGateway.AgentPolicy memory p = _agentPolicy();
-        vm.prank(safe);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe,
+            address(gateway),
+            abi.encodeCall(IGateway.authorizeAgent, (makeAddr("rejected-agent"), p))
         );
-        gateway.authorizeAgent(makeAddr("rejected-agent"), p);
+        assertFalse(gateway.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice Negative regression for the fix-interaction warning: a NAKED
@@ -872,7 +897,8 @@ contract DeployTimelockTest is Test {
             address(governance),
             address(0), // safe = zero
             emergency,
-            MIN_DELAY
+            MIN_DELAY,
+            _fixtureSpec()
         );
         vm.stopPrank();
     }
@@ -888,75 +914,232 @@ contract DeployTimelockTest is Test {
             address(governance),
             safe,
             emergency,
-            0 // zero delay
+            0, // zero delay
+            _fixtureSpec()
         );
         vm.stopPrank();
     }
 
-    // ─── AC: SAFE_ADDRESS must not be an EOA (issue #422) ─────────────────────
+    // ─── AC: SAFE_ADDRESS must be a real Safe (issue #422, core S1) ────────────
 
-    /// @notice DeployTimelock.s.sol aborts when SAFE_ADDRESS has no deployed code.
-    ///
-    /// @dev We pass a freshly-minted address that has no bytecode.  The script's
-    ///      new `code.length` guard should revert before attempting any state writes.
-    function test_deploy_revertsWhenSafeIsEOA() public {
-        address eoaSafe = makeAddr("eoaSafe");
-        // Confirm this address is truly an EOA (no bytecode).
-        assertEq(eoaSafe.code.length, 0, "pre-condition: address must be an EOA");
-
-        vm.expectRevert(bytes("SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first"));
+    function _runWithSafe(address safe_, address[] memory owners_, uint256 threshold_) internal {
         script.runInProcess(
             address(registry),
             address(registry),
             address(registry),
             address(router),
             address(governance),
-            eoaSafe,
+            safe_,
             emergency,
-            MIN_DELAY
+            MIN_DELAY,
+            DeployTimelock.SafeSpec({owners: owners_, threshold: threshold_})
         );
     }
 
-    // ─── AC: SAFE_ADDRESS threshold must be >= 2 (issue #422) ────────────────
+    function test_deploy_revertsWhenSafeIsEOA() public {
+        address eoaSafe = makeAddr("eoaSafe");
+        assertEq(eoaSafe.code.length, 0, "pre-condition: address must be an EOA");
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first"));
+        _runWithSafe(eoaSafe, owners, FIXTURE_THRESHOLD);
+    }
 
-    /// @notice DeployTimelock.s.sol aborts when the Safe at SAFE_ADDRESS has threshold < 2.
-    ///
-    /// @dev We deploy a `MockLowThresholdSafe` that returns `1` from `getThreshold()`.
-    ///      Passing a 1-of-N Safe as PROPOSER would reduce multisig security to a
-    ///      single-key model.
+    /// @notice A 10-byte code stub is not a Safe.
+    function test_deploy_rejectsTenByteCodeStub() public {
+        address stub = makeAddr("tenByteStub");
+        vm.etch(stub, hex"60016000526001601ff3");
+        assertEq(stub.code.length, 10);
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("SAFE_ADDRESS is not a SafeProxy 1.4.1: codehash mismatch"));
+        _runWithSafe(stub, owners, FIXTURE_THRESHOLD);
+    }
+
+    /// @notice A Safe proxy that does not delegate to the canonical SafeL2 singleton.
+    function test_deploy_rejectsWrongSingleton() public {
+        address other = _newDefaultSafe();
+        vm.store(other, bytes32(0), bytes32(uint256(uint160(makeAddr("other-singleton")))));
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("SAFE_ADDRESS does not delegate to the canonical SafeL2 singleton"));
+        _runWithSafe(other, owners, FIXTURE_THRESHOLD);
+    }
+
+    function test_deploy_rejectsWrongOwners() public {
+        address[] memory strangers = new address[](3);
+        strangers[0] = makeAddr("stranger-owner-1");
+        strangers[1] = makeAddr("stranger-owner-2");
+        strangers[2] = makeAddr("stranger-owner-3");
+        address wrongSafe = _newSafe(strangers, 2);
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("SAFE_OWNERS entry is not a Safe owner"));
+        _runWithSafe(wrongSafe, owners, FIXTURE_THRESHOLD);
+    }
+
+    function test_deploy_rejectsOwnerCountMismatch() public {
+        address[] memory two = new address[](2);
+        two[0] = makeAddr("safe-owner-1");
+        two[1] = makeAddr("safe-owner-2");
+        address defaultSafe = _newDefaultSafe();
+        vm.expectRevert(bytes("Safe owner count != SAFE_OWNERS"));
+        _runWithSafe(defaultSafe, two, 2);
+    }
+
+    /// @notice The Safe's real threshold is 1: rejected against SAFE_THRESHOLD=2.
     function test_deploy_revertsWhenSafeThresholdTooLow() public {
-        MockLowThresholdSafe lowSafe = new MockLowThresholdSafe();
+        address[] memory owners = _fixtureOwners();
+        address lowSafe = _newSafe(owners, 1);
+        vm.expectRevert(bytes("Safe threshold != SAFE_THRESHOLD"));
+        _runWithSafe(lowSafe, owners, 2);
+    }
 
-        vm.expectRevert(bytes("SAFE_ADDRESS threshold < 2: configure at least 2-of-N quorum"));
-        script.runInProcess(
-            address(registry),
-            address(registry),
-            address(registry),
-            address(router),
-            address(governance),
-            address(lowSafe),
-            emergency,
-            MIN_DELAY
+    /// @notice SAFE_THRESHOLD itself must be a real quorum.
+    function test_deploy_revertsWhenExpectedThresholdBelowTwo() public {
+        address[] memory owners = _fixtureOwners();
+        address lowSafe = _newSafe(owners, 1);
+        vm.expectRevert(bytes("SAFE_THRESHOLD < 2: configure at least 2-of-N quorum"));
+        _runWithSafe(lowSafe, owners, 1);
+    }
+
+    function test_deploy_revertsWhenSafeThresholdIsWrongNumber() public {
+        address[] memory owners = _fixtureOwners();
+        address threeSafe = _newSafe(owners, 3);
+        vm.expectRevert(bytes("Safe threshold != SAFE_THRESHOLD"));
+        _runWithSafe(threeSafe, owners, 2);
+    }
+
+    function test_deploy_rejectsEnabledModule() public {
+        address withModule = _newDefaultSafe();
+        address module = makeAddr("evil-module");
+        // modules[SENTINEL(1)] = module; modules[module] = SENTINEL (mapping at slot 1).
+        vm.store(
+            withModule,
+            keccak256(abi.encode(address(0x1), uint256(1))),
+            bytes32(uint256(uint160(module)))
         );
+        vm.store(withModule, keccak256(abi.encode(module, uint256(1))), bytes32(uint256(1)));
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("Safe has an enabled module"));
+        _runWithSafe(withModule, owners, FIXTURE_THRESHOLD);
+    }
+
+    function test_deploy_rejectsGuard() public {
+        address guarded = _newDefaultSafe();
+        bytes32 guardSlot = script.SAFE_GUARD_SLOT();
+        vm.store(guarded, guardSlot, bytes32(uint256(uint160(makeAddr("guard")))));
+        address[] memory owners = _fixtureOwners();
+        vm.expectRevert(bytes("Safe has a transaction guard set"));
+        _runWithSafe(guarded, owners, FIXTURE_THRESHOLD);
+    }
+
+    function test_deploy_rejectsWrongFallbackHandler() public {
+        address[] memory owners = _fixtureOwners();
+        address odd = _newSafeWith(owners, 2, makeAddr("odd-handler"));
+        vm.expectRevert(
+            bytes("Safe fallback handler is not the canonical CompatibilityFallbackHandler")
+        );
+        _runWithSafe(odd, owners, FIXTURE_THRESHOLD);
+    }
+
+    function test_deploy_rejectsDuplicateOwnersInList() public {
+        address[] memory dup = new address[](3);
+        dup[0] = makeAddr("safe-owner-1");
+        dup[1] = makeAddr("safe-owner-1");
+        dup[2] = makeAddr("safe-owner-3");
+        address defaultSafe = _newDefaultSafe();
+        vm.expectRevert(bytes("SAFE_OWNERS contains a duplicate"));
+        _runWithSafe(defaultSafe, dup, 2);
     }
 }
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
-/// @dev Minimal stub that mimics a compliant 2-of-3 Safe — `getThreshold()` returns 2.
-///      Used as the SAFE_ADDRESS in setUp() so DeployTimelock's code-length and
-///      threshold guards (issue #422) are satisfied without deploying a real Safe.
-contract MockHighThresholdSafe {
-    function getThreshold() external pure returns (uint256) {
-        return 2;
-    }
-}
+/// @dev Delay floor keyed to chain id, and a real Safe accepted end to end (core S1).
+///      Each test builds a fresh, un-handed-over topology.
+contract DeployTimelockChainFloorTest is SafeGovernance {
+    bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    uint256 internal constant TWIN_CHAIN_ID = 918453;
+    uint256 internal constant BASE_CHAIN_ID = 8453;
 
-/// @dev Minimal stub that mimics a 1-of-N Safe — `getThreshold()` returns 1.
-///      Used to prove DeployTimelock rejects low-threshold Safes.
-contract MockLowThresholdSafe {
-    function getThreshold() external pure returns (uint256) {
-        return 1;
+    DeployTimelock internal script;
+    address internal deployer;
+    address internal safe;
+    address internal emergency = makeAddr("floor-emergency");
+    RobotMoneyVault internal vault;
+    RobotMoneyGateway internal gateway;
+    VaultRegistry internal registry;
+    PortfolioRouter internal router;
+    RouterGovernance internal governance;
+
+    function setUp() public {
+        TestERC20 usdc = new TestERC20();
+        script = new DeployTimelock();
+        deployer = address(script);
+        _installSafeSet();
+        safe = _newDefaultSafe();
+        vault = new RobotMoneyVault(
+            usdc, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
+        );
+        gateway = new RobotMoneyGateway(usdc, vault, deployer, makeAddr("floor-pauser"), address(0));
+        registry = new VaultRegistry(deployer);
+        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        vm.prank(deployer);
+        router.grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
+    }
+
+    function _run(uint256 delay) internal returns (DeployTimelock.Deployed memory) {
+        address[] memory owners = _fixtureOwners();
+        vm.prank(deployer);
+        return script.runInProcess(
+            address(vault),
+            address(gateway),
+            address(registry),
+            address(router),
+            address(governance),
+            safe,
+            emergency,
+            delay,
+            DeployTimelock.SafeSpec({owners: owners, threshold: FIXTURE_THRESHOLD})
+        );
+    }
+
+    /// @notice On chain id 8453 a 60 second delay reverts.
+    function test_delay60_revertsOnBase() public {
+        vm.chainId(BASE_CHAIN_ID);
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
+        _run(60);
+    }
+
+    function test_delayJustBelowFloor_revertsOnBase() public {
+        vm.chainId(BASE_CHAIN_ID);
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
+        _run(172_799);
+    }
+
+    function test_delayAtFloor_passesOnBase() public {
+        vm.chainId(BASE_CHAIN_ID);
+        DeployTimelock.Deployed memory d = _run(172_800);
+        assertEq(d.timelock.getMinDelay(), 172_800);
+    }
+
+    /// @notice On the Twin chain (918453) the same 60 second delay passes.
+    function test_delay60_passesOnTwinChain() public {
+        vm.chainId(TWIN_CHAIN_ID);
+        DeployTimelock.Deployed memory d = _run(60);
+        assertEq(d.timelock.getMinDelay(), 60);
+    }
+
+    function test_delay1_passesOnTwinChain() public {
+        vm.chainId(TWIN_CHAIN_ID);
+        DeployTimelock.Deployed memory d = _run(1);
+        assertEq(d.timelock.getMinDelay(), 1);
+    }
+
+    /// @notice A SafeL2 1.4.1 proxy made by the factory is accepted.
+    function test_factoryMadeSafeL2_isAccepted() public {
+        DeployTimelock.Deployed memory d = _run(2 days);
+        assertTrue(IAccessControl(address(vault)).hasRole(ADMIN_ROLE, address(d.timelock)));
     }
 }
 
@@ -1004,7 +1187,7 @@ contract ManifestHarness is DeployTimelock {
 
 /// @notice The manifest must answer, from one file: which chain, which
 ///         addresses, which bytecode, holding which roles.
-contract DeployTimelockManifestTest is Test {
+contract DeployTimelockManifestTest is SafeGovernance {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -1019,7 +1202,8 @@ contract DeployTimelockManifestTest is Test {
         TestERC20 usdc = new TestERC20();
         DeployTimelock script = new DeployTimelock();
         address deployer = address(script);
-        address safe = address(new MockHighThresholdSafe());
+        _installSafeSet();
+        address safe = _newDefaultSafe();
         address emergency = makeAddr("manifest-emergency");
 
         RobotMoneyVault vault = new RobotMoneyVault(
@@ -1035,6 +1219,9 @@ contract DeployTimelockManifestTest is Test {
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
 
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
+
         // Call the script FROM the script's own address so the roles it revokes
         // from `msg.sender` are the roles it actually holds.
         vm.prank(deployer);
@@ -1046,11 +1233,12 @@ contract DeployTimelockManifestTest is Test {
             address(governance),
             safe,
             emergency,
-            2 days
+            2 days,
+            _fixtureSpec()
         );
 
         harness = new ManifestHarness();
-        outPath = "/tmp/r7-manifest-test.json";
+        outPath = uniqueManifestPath(vm, "r7-manifest-test");
         // A file left by an earlier run must not stand in for this one.
         if (vm.exists(outPath)) vm.removeFile(outPath);
 
@@ -1100,7 +1288,14 @@ contract DeployTimelockManifestTest is Test {
         );
         assertTrue(manifest.readBool(".roles.timelock_has_router_admin_role"));
         assertTrue(manifest.readBool(".roles.safe_is_timelock_proposer"));
-        assertTrue(manifest.readBool(".roles.safe_is_timelock_executor"));
+        assertTrue(manifest.readBool(".roles.safe_is_timelock_canceller"));
+        assertTrue(manifest.readBool(".roles.timelock_executor_is_open"));
+    }
+
+    /// @notice The policy the timelock was built with is in the manifest (core 1521).
+    function test_executorPolicy_manifestRecordsPolicy() public view {
+        assertEq(manifest.readString(".executorPolicy"), "open");
+        assertEq(manifest.readString(".cancellerPolicy"), "safe-only");
     }
 
     /// @notice Every manifest test in this file passes its output path to
@@ -1129,13 +1324,13 @@ contract DeployTimelockManifestTest is Test {
 
 // ─── Issue #1476: deployer-owned gateway agents move to the timelock ──────────
 
-/// @notice A full Deploy -> DeployTimelock run hands every deployer-owned gateway
-///         agent to the TimelockController: the deploy agent Deploy.s.sol
-///         authorizes and a stage-style submitter agent the deployer authorizes
+/// @notice A full stage-sequence -> DeployTimelock run hands every deployer-owned gateway
+///         agent to the TimelockController: the deploy agent the gateway
+///         stage authorizes and a stage-style submitter agent the deployer authorizes
 ///         afterwards. After the handover the timelock owns both, both keep
 ///         AGENT_ROLE, and the deployer can no longer call setPolicy or
 ///         revokeAgent on them.
-contract DeployTimelockAgentHandoverTest is Test {
+contract DeployTimelockAgentHandoverTest is SafeGovernance {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
     uint256 public constant MIN_DELAY = 2 days;
@@ -1147,7 +1342,7 @@ contract DeployTimelockAgentHandoverTest is Test {
     address internal deployAgent = makeAddr("deploy-agent");
     address internal submitter = makeAddr("stage-submitter");
 
-    Deploy.Deployed internal dep;
+    CoreStages.Stack internal dep;
     RobotMoneyGateway internal gateway;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
@@ -1169,12 +1364,13 @@ contract DeployTimelockAgentHandoverTest is Test {
         // from address(script), so that is the account the roles and the
         // agents must belong to.
         deployer = address(script);
-        safe = address(new MockHighThresholdSafe());
+        _installSafeSet();
+        safe = _newDefaultSafe();
 
-        // Deploy.s.sol: vault, adapters, gateway, and the deploy agent,
+        // Core stage scripts: vault, adapters, registry, router, gateway, and the deploy agent,
         // authorized by the admin (the deployer).
-        Deploy deployScript = new Deploy();
-        dep = deployScript.runInProcessWith(
+        CoreStages deployScript = new CoreStages();
+        dep = deployScript.run(
             deployer,
             makeAddr("handover-pauser"),
             deployAgent,
@@ -1194,6 +1390,8 @@ contract DeployTimelockAgentHandoverTest is Test {
         governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         listed.push(deployAgent);
         listed.push(submitter);
@@ -1207,7 +1405,8 @@ contract DeployTimelockAgentHandoverTest is Test {
             safe,
             emergency,
             MIN_DELAY,
-            listed
+            listed,
+            _fixtureSpec()
         );
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -1295,11 +1494,9 @@ contract DeployTimelockAgentHandoverTest is Test {
         bytes memory callData =
             abi.encodeCall(IGateway.setPolicy, (submitter, _policy(newReceiver)));
         bytes32 salt = keccak256("1476-setPolicy");
-        vm.prank(safe);
-        d.timelock.schedule(address(gateway), 0, callData, bytes32(0), salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(gateway), callData, salt, MIN_DELAY);
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(gateway), 0, callData, bytes32(0), salt);
+        _govExecute(safe, d.timelock, address(gateway), callData, salt);
         (,,,, address receiver,,,) = gateway.agents(submitter);
         assertEq(receiver, newReceiver, "timelock-routed setPolicy did not land");
     }
@@ -1321,6 +1518,8 @@ contract DeployTimelockAgentHandoverTest is Test {
             new RouterGovernance(address(router2), deployer2, 7 days, 1 days, 2);
         vm.prank(deployer2);
         router2.grantRole(ADMIN_ROLE, address(governance2));
+        vm.prank(deployer2);
+        router2.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance2));
 
         // Owned by another account, through the permissionless path.
         address other = makeAddr("other-owner");
@@ -1345,7 +1544,8 @@ contract DeployTimelockAgentHandoverTest is Test {
             safe,
             emergency,
             MIN_DELAY,
-            bad
+            bad,
+            _fixtureSpec()
         );
         assertEq(gateway2.agentOwner(otherAgent), other, "owner changed by a reverted handover");
     }
@@ -1354,7 +1554,7 @@ contract DeployTimelockAgentHandoverTest is Test {
     ///         that the deployer owns none of them.
     function test_manifestRecordsTimelockOwnedAgents() public {
         ManifestHarness harness = new ManifestHarness();
-        string memory outPath = "/tmp/1476-manifest-test.json";
+        string memory outPath = uniqueManifestPath(vm, "1476-manifest-test");
         if (vm.exists(outPath)) vm.removeFile(outPath);
         vm.prank(deployer);
         harness.exposedWriteJsonTo(d, outPath);
@@ -1399,7 +1599,7 @@ contract DeployTimelockAgentHandoverTest is Test {
         withKept.agents = agents;
 
         ManifestHarness harness = new ManifestHarness();
-        string memory outPath = "/tmp/1476-manifest-owned-test.json";
+        string memory outPath = uniqueManifestPath(vm, "1476-manifest-owned-test");
         if (vm.exists(outPath)) vm.removeFile(outPath);
         vm.prank(deployer);
         harness.exposedWriteJsonTo(withKept, outPath);
@@ -1415,17 +1615,17 @@ contract DeployTimelockAgentHandoverTest is Test {
         );
     }
 
-    /// @dev A fresh Deploy.s.sol stack owned by `script_`, plus a second agent
+    /// @dev A fresh core stack (CoreStages) owned by `script_`, plus a second agent
     ///      the deployer authorizes, so a case can change the agents' roles
     ///      before its own handover.
     function _freshStack(DeployTimelock script_, address agent_, address second_)
         internal
-        returns (Deploy.Deployed memory dep_, address[] memory agents_)
+        returns (CoreStages.Stack memory dep_, address[] memory agents_)
     {
         address deployer_ = address(script_);
         TestERC20 usdc_ = new TestERC20();
-        dep_ = new Deploy()
-            .runInProcessWith(
+        dep_ = new CoreStages()
+            .run(
                 deployer_,
                 makeAddr("fresh-pauser"),
                 agent_,
@@ -1443,7 +1643,7 @@ contract DeployTimelockAgentHandoverTest is Test {
     ///      owned by `script_`'s address.
     function _handover(
         DeployTimelock script_,
-        Deploy.Deployed memory dep_,
+        CoreStages.Stack memory dep_,
         address[] memory agents_
     ) internal returns (DeployTimelock.Deployed memory out) {
         address deployer_ = address(script_);
@@ -1455,6 +1655,8 @@ contract DeployTimelockAgentHandoverTest is Test {
         vm.prank(deployer_);
         router_.grantRole(ADMIN_ROLE, address(governance_));
         vm.prank(deployer_);
+        router_.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance_));
+        vm.prank(deployer_);
         out = script_.runInProcessWithAgents(
             address(dep_.vault),
             address(dep_.gateway),
@@ -1464,7 +1666,8 @@ contract DeployTimelockAgentHandoverTest is Test {
             safe,
             emergency,
             MIN_DELAY,
-            agents_
+            agents_,
+            _fixtureSpec()
         );
     }
 
@@ -1473,7 +1676,7 @@ contract DeployTimelockAgentHandoverTest is Test {
     ///      left the deployer no setPolicy or revokeAgent over either.
     function _assertHandedOverRoleUnchanged(
         DeployTimelock script_,
-        Deploy.Deployed memory dep_,
+        CoreStages.Stack memory dep_,
         DeployTimelock.Deployed memory out,
         address withRole,
         address withoutRole
@@ -1502,7 +1705,7 @@ contract DeployTimelockAgentHandoverTest is Test {
         DeployTimelock script2 = new DeployTimelock();
         address agent2 = makeAddr("renounce-deploy-agent");
         address renounced = makeAddr("renounced-submitter");
-        (Deploy.Deployed memory dep2, address[] memory agents2) =
+        (CoreStages.Stack memory dep2, address[] memory agents2) =
             _freshStack(script2, agent2, renounced);
 
         vm.prank(renounced);
@@ -1521,7 +1724,7 @@ contract DeployTimelockAgentHandoverTest is Test {
         DeployTimelock script2 = new DeployTimelock();
         address agent2 = makeAddr("revoke-deploy-agent");
         address revoked = makeAddr("revoked-submitter");
-        (Deploy.Deployed memory dep2, address[] memory agents2) =
+        (CoreStages.Stack memory dep2, address[] memory agents2) =
             _freshStack(script2, agent2, revoked);
 
         vm.prank(address(script2));
@@ -1539,7 +1742,7 @@ contract DeployTimelockAgentHandoverTest is Test {
 ///         gateway agents or to the literal `none`. Each reader case uses its
 ///         own variable name, because env vars are process-wide and forge runs
 ///         tests in parallel.
-contract DeployTimelockAgentListInputTest is Test {
+contract DeployTimelockAgentListInputTest is SafeGovernance {
     ManifestHarness internal harness;
 
     function setUp() public {
@@ -1593,10 +1796,10 @@ contract DeployTimelockAgentListInputTest is Test {
 
 /// @notice `run()` hands the AGENT_ADDRESSES list it reads to the handover
 ///         (issue #1476). This drives run()'s own body, `_runFrom`, through
-///         the broadcast path against a Deploy.s.sol stack. Every env var it
+///         the broadcast path against a core stack (CoreStages). Every env var it
 ///         reads carries a prefix only this test sets, because env vars are
 ///         process-wide and forge runs tests in parallel.
-abstract contract DeployTimelockRunEntrypointBase is Test {
+abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -1607,13 +1810,14 @@ abstract contract DeployTimelockRunEntrypointBase is Test {
     function _prefix() internal pure virtual returns (string memory) {
         return "RM_1476_RUN_ENTRYPOINT_";
     }
-    string internal constant OUT_PATH = "/tmp/1476-run-entrypoint-manifest.json";
+    /// @dev Set per test in setUp from `uniqueManifestPath`: the subclasses below share this base, so a fixed name would be shared too.
+    string internal OUT_PATH;
 
     ManifestHarness internal harness;
     address internal deployer;
     address internal deployAgent = makeAddr("run-deploy-agent");
     address internal submitter = makeAddr("run-stage-submitter");
-    Deploy.Deployed internal dep;
+    CoreStages.Stack internal dep;
     RobotMoneyGateway internal gateway;
 
     function _set(string memory name, string memory value) internal {
@@ -1630,8 +1834,8 @@ abstract contract DeployTimelockRunEntrypointBase is Test {
         deployer = tx.origin;
         vm.etch(deployer, address(new RunEntrypointRelay()).code);
         TestERC20 usdc = new TestERC20();
-        dep = new Deploy()
-            .runInProcessWith(
+        dep = new CoreStages()
+            .run(
                 deployer,
                 makeAddr("run-pauser"),
                 deployAgent,
@@ -1663,19 +1867,39 @@ abstract contract DeployTimelockRunEntrypointBase is Test {
             new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         _set(
             "AGENT_ADDRESSES", string.concat(vm.toString(deployAgent), ",", vm.toString(submitter))
         );
-        _set("VAULT_ADDRESS", vm.toString(address(dep.vault)));
+        _set("VAULT_ADDRESSES", vm.toString(address(dep.vault)));
         _set("GATEWAY_ADDRESS", vm.toString(address(gateway)));
         _set("REGISTRY_ADDRESS", vm.toString(address(registry)));
         _set("ROUTER_ADDRESS", vm.toString(address(router)));
         _set("GOVERNANCE_ADDRESS", vm.toString(address(governance)));
-        _set("SAFE_ADDRESS", vm.toString(address(new MockHighThresholdSafe())));
+        _installSafeSet();
+        address[] memory owners = _fixtureOwners();
+        _set("SAFE_ADDRESS", vm.toString(_newSafe(owners, FIXTURE_THRESHOLD)));
+        _set(
+            "SAFE_OWNERS",
+            string.concat(
+                vm.toString(owners[0]), ",", vm.toString(owners[1]), ",", vm.toString(owners[2])
+            )
+        );
+        _set("SAFE_THRESHOLD", vm.toString(FIXTURE_THRESHOLD));
         _set("EMERGENCY_ADDRESS", vm.toString(makeAddr("run-emergency")));
         _set("TIMELOCK_MIN_DELAY", "172800");
+        OUT_PATH = uniqueManifestPath(vm, "1476-run-entrypoint-manifest");
         _set("DEPLOYMENT_OUT", OUT_PATH);
+        // The committee contracts are required inputs on every chain. The deployer
+        // holds their admin roles until the handover.
+        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(deployer, address(gateway));
+        ConsensusRecommendationReceipt receipt =
+            new ConsensusRecommendationReceipt(deployer, address(gateway), address(ic));
+        _set("IC_POLICY_ADDRESS", vm.toString(address(ic)));
+        _set("CONSENSUS_RECEIPT_ADDRESS", vm.toString(address(receipt)));
+        _set("RECEIPT_ADMIN_ADDRESS", vm.toString(deployer));
         if (vm.exists(OUT_PATH)) vm.removeFile(OUT_PATH);
     }
 }
@@ -1728,29 +1952,110 @@ contract DeployTimelockDelayFloorTest is DeployTimelockRunEntrypointBase {
         return "RM_REVIEW_R04_FLOOR_";
     }
 
-    /// @notice R-04: a delay under 48 hours is refused on the broadcast path
-    ///         unless the devnet override is set explicitly.
-    function test_run_revertsBelowDelayFloor() public {
+    /// @notice R-04: on chain id 8453 a delay under 48 hours is refused on the
+    ///         broadcast path. No flag lifts it.
+    function test_run_revertsBelowDelayFloorOnBase() public {
+        vm.chainId(8453);
+        _set("EXPECTED_CHAIN_ID", "8453");
         _set("TIMELOCK_MIN_DELAY", "60");
-        vm.expectRevert(
-            bytes(
-                "TIMELOCK_MIN_DELAY below 172800 (48h): set ALLOW_SHORT_TIMELOCK_DELAY=true only on a devnet"
-            )
-        );
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
     }
 }
 
-contract DeployTimelockDelayOverrideTest is DeployTimelockRunEntrypointBase {
+/// @dev Ported from dev #1541: the floor is exact on the broadcast path, 172799 reverts and
+///      172800 passes through `run()` on chain id 8453.
+contract DeployTimelockDelayBoundaryTest is DeployTimelockRunEntrypointBase {
     function _prefix() internal pure override returns (string memory) {
-        return "RM_REVIEW_R04_OVERRIDE_";
+        return "RM_S1_FLOOR_BOUNDARY_";
     }
 
-    function test_run_shortDelayAllowedWithExplicitOverride() public {
-        _set("TIMELOCK_MIN_DELAY", "60");
-        _set("ALLOW_SHORT_TIMELOCK_DELAY", "true");
+    function test_run_floorBoundaryOnBase() public {
+        vm.chainId(8453);
+        _set("EXPECTED_CHAIN_ID", "8453");
+        _set("TIMELOCK_MIN_DELAY", "172799");
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        _set("TIMELOCK_MIN_DELAY", "172800");
         DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
-        assertEq(d.timelock.getMinDelay(), 60, "override not honoured");
+        assertEq(d.timelock.getMinDelay(), 172_800, "floor delay not applied");
+    }
+}
+
+contract DeployTimelockTwinChainDelayTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_REVIEW_R04_TWIN_";
+    }
+
+    /// @notice On the Twin chain (918453) the same short delay is a plain parameter.
+    function test_run_shortDelayAllowedOnTwinChain() public {
+        vm.chainId(918453);
+        _set("TIMELOCK_MIN_DELAY", "60");
+        DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        assertEq(d.timelock.getMinDelay(), 60, "short delay not honoured on the Twin chain");
+    }
+}
+
+contract DeployTimelockStrictChainGuardTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_STRICT_CHAIN_";
+    }
+
+    /// @notice On 8453 an unset EXPECTED_CHAIN_ID no longer disables the guard.
+    function test_run_revertsOnBaseWhenExpectedChainUnset() public {
+        vm.chainId(8453);
+        vm.expectRevert(bytes("EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+
+    function test_run_revertsOnBaseWhenExpectedChainIsOther() public {
+        vm.chainId(8453);
+        _set("EXPECTED_CHAIN_ID", "918453");
+        vm.expectRevert(bytes("EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+}
+
+/// @notice Required inputs: unset or malformed values revert on every chain. One contract per
+///         test with its own prefix: forge runs the tests of a contract in parallel over a
+///         process-wide environment, so two tests that mutate inputs would leak into each other.
+contract DeployTimelockRequiredIcPolicyTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_REQUIRED_IC_";
+    }
+
+    function test_run_revertsWhenIcPolicyUnset() public {
+        _set("IC_POLICY_ADDRESS", vm.toString(address(0)));
+        vm.expectRevert(bytes("IC_POLICY_ADDRESS=0"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+}
+
+contract DeployTimelockRequiredSafeOwnersTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_REQUIRED_OWNERS_";
+    }
+
+    function test_run_revertsWhenSafeOwnersMalformed() public {
+        _set("SAFE_OWNERS", "not-an-address");
+        vm.expectRevert();
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+}
+
+contract DeployTimelockRequiredDelayTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S1_REQUIRED_DELAY_";
+    }
+
+    function test_run_revertsWhenDelayMalformed() public {
+        _set("TIMELOCK_MIN_DELAY", "two-days");
+        vm.expectRevert(
+            bytes(
+                "RM_S1_REQUIRED_DELAY_TIMELOCK_MIN_DELAY is malformed: expected an unsigned integer"
+            )
+        );
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
     }
 }
 
@@ -1796,5 +2101,240 @@ contract ReceiptRoleStub is AccessControl {
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(ADMIN_ROLE, admin);
+    }
+}
+
+// ─── S5 (core 1487): the timelock stage hands over every vault ────────────────
+
+interface IVaultLinkRead {
+    function registry() external view returns (address);
+    function setRegistry(address newRegistry) external;
+    function retired() external view returns (bool);
+}
+
+/// @notice The one deployment scheme ships four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA). The
+///         timelock stage treats each the same way: setRegistry once, EMERGENCY to the emergency
+///         key, ADMIN to the timelock, deployer revoked. These tests use the real vault contracts,
+///         a real Safe and the real timelock.
+contract DeployTimelockFourVaultsTest is SafeGovernance {
+    using stdJson for string;
+
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+    uint256 public constant MIN_DELAY = 2 days;
+
+    ManifestHarness internal script;
+    address internal deployer;
+    address internal safe;
+    address internal emergency = makeAddr("four-emergency");
+    TestERC20 internal usdc;
+    address[] internal vaults;
+    VaultRegistry internal registry;
+    RobotMoneyGateway internal gateway;
+    PortfolioRouter internal router;
+    RouterGovernance internal governance;
+    DeployTimelock.Deployed internal d;
+
+    function setUp() public {
+        usdc = new TestERC20();
+        script = new ManifestHarness();
+        deployer = address(script);
+        _installSafeSet();
+        safe = _newDefaultSafe();
+
+        address swapRouter = makeAddr("four-swap-router");
+        RobotMoneyVault rmUsdc = new RobotMoneyVault(
+            usdc, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
+        );
+        vaults.push(address(rmUsdc));
+        vaults.push(
+            address(
+                new ProtocolAssetVault(
+                    IERC20(address(usdc)),
+                    ISwapRouter(swapRouter),
+                    type(uint256).max,
+                    type(uint256).max,
+                    0,
+                    safe,
+                    deployer,
+                    deployer
+                )
+            )
+        );
+        vaults.push(
+            address(
+                new AgentTokenVault(
+                    IERC20(address(usdc)),
+                    ISwapRouter(swapRouter),
+                    type(uint256).max,
+                    type(uint256).max,
+                    0,
+                    safe,
+                    deployer,
+                    deployer
+                )
+            )
+        );
+        vaults.push(
+            address(
+                new RwaBasketVault(
+                    IERC20(address(usdc)),
+                    ISwapRouter(swapRouter),
+                    type(uint256).max,
+                    type(uint256).max,
+                    0,
+                    safe,
+                    deployer,
+                    deployer
+                )
+            )
+        );
+
+        gateway = new RobotMoneyGateway(usdc, rmUsdc, deployer, makeAddr("four-pauser"), address(0));
+        registry = new VaultRegistry(deployer);
+        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        vm.prank(deployer);
+        router.grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
+
+        // Register every vault while the deployer still administers the registry (the vault
+        // stages and registry stage do this in the ceremony).
+        for (uint256 i = 0; i < vaults.length; i++) {
+            vm.prank(deployer);
+            registry.registerVault(
+                vaults[i],
+                VaultRegistry.VaultMetadata({
+                    name: "four-vault", asset: address(usdc), registeredAt: 0
+                })
+            );
+        }
+
+        vm.prank(deployer);
+        d = script.runInProcessVaults(
+            vaults,
+            address(gateway),
+            address(registry),
+            address(router),
+            address(governance),
+            safe,
+            emergency,
+            MIN_DELAY,
+            _fixtureSpec()
+        );
+    }
+
+    function test_deployerHoldsNoRoleOnAnyVault() public view {
+        for (uint256 i = 0; i < vaults.length; i++) {
+            assertFalse(IAccessControl(vaults[i]).hasRole(ADMIN_ROLE, deployer), "deployer ADMIN");
+            assertFalse(
+                IAccessControl(vaults[i]).hasRole(EMERGENCY_ROLE, deployer), "deployer EMERGENCY"
+            );
+            assertFalse(IAccessControl(vaults[i]).hasRole(0x00, deployer), "deployer DEFAULT_ADMIN");
+        }
+    }
+
+    function test_everyVaultHasTimelockAdminEmergencyKeyAndRegistry() public view {
+        for (uint256 i = 0; i < vaults.length; i++) {
+            assertTrue(IAccessControl(vaults[i]).hasRole(ADMIN_ROLE, address(d.timelock)), "admin");
+            assertTrue(IAccessControl(vaults[i]).hasRole(EMERGENCY_ROLE, emergency), "emergency");
+            assertEq(IVaultLinkRead(vaults[i]).registry(), address(registry), "registry link");
+        }
+    }
+
+    function test_secondSetRegistryRevertsOnEveryVault() public {
+        for (uint256 i = 0; i < vaults.length; i++) {
+            vm.prank(address(d.timelock));
+            vm.expectRevert();
+            IVaultLinkRead(vaults[i]).setRegistry(makeAddr("other-registry"));
+        }
+    }
+
+    function test_registryRetireSucceedsOnEveryVault() public {
+        for (uint256 i = 0; i < vaults.length; i++) {
+            bytes memory callData = abi.encodeCall(VaultRegistry.retire, (vaults[i]));
+            bytes32 salt = keccak256(abi.encode("retire", i));
+            _govSchedule(safe, d.timelock, address(registry), callData, salt, MIN_DELAY);
+            vm.warp(block.timestamp + MIN_DELAY + 1);
+            _govExecute(safe, d.timelock, address(registry), callData, salt);
+            (, VaultRegistry.VaultStatus st) = registry.getVault(vaults[i]);
+            assertEq(uint256(st), uint256(VaultRegistry.VaultStatus.Retired), "status");
+            assertTrue(IVaultLinkRead(vaults[i]).retired(), "vault deposit-halt");
+        }
+    }
+
+    function test_emptyVaultListReverts() public {
+        address[] memory none = new address[](0);
+        vm.prank(deployer);
+        vm.expectRevert(bytes("VAULT_ADDRESSES is empty"));
+        script.runInProcessVaults(
+            none,
+            address(gateway),
+            address(registry),
+            address(router),
+            address(governance),
+            safe,
+            emergency,
+            MIN_DELAY,
+            _fixtureSpec()
+        );
+    }
+
+    function test_duplicateVaultReverts() public {
+        address[] memory dup = new address[](2);
+        dup[0] = vaults[0];
+        dup[1] = vaults[0];
+        vm.prank(deployer);
+        vm.expectRevert(bytes("VAULT_ADDRESSES contains a duplicate"));
+        script.runInProcessVaults(
+            dup,
+            address(gateway),
+            address(registry),
+            address(router),
+            address(governance),
+            safe,
+            emergency,
+            MIN_DELAY,
+            _fixtureSpec()
+        );
+    }
+
+    function test_manifestHasAHandoverEntryForEachVault() public {
+        string memory out = uniqueManifestPath(vm, "s5-four-vault-manifest");
+        if (vm.exists(out)) vm.removeFile(out);
+        vm.prank(deployer);
+        script.exposedWriteJsonTo(d, out);
+        string memory manifest = vm.readFile(out);
+        address[] memory listed = manifest.readAddressArray(".vaults");
+        assertEq(listed.length, vaults.length, "vaults array length");
+        assertEq(manifest.readUint(".roles.vaults_handed_over_count"), vaults.length);
+        for (uint256 i = 0; i < vaults.length; i++) {
+            string memory base = string.concat(".vault_handover.vault_", vm.toString(i));
+            assertEq(listed[i], vaults[i], "listed vault");
+            assertEq(manifest.readAddress(string.concat(base, ".address")), vaults[i]);
+            assertEq(manifest.readAddress(string.concat(base, ".registry")), address(registry));
+            assertTrue(manifest.readBool(string.concat(base, ".registry_linked")));
+            assertTrue(manifest.readBool(string.concat(base, ".timelock_has_admin_role")));
+            assertTrue(manifest.readBool(string.concat(base, ".emergency_key_has_emergency_role")));
+            assertFalse(manifest.readBool(string.concat(base, ".deployer_has_admin_role")));
+            assertFalse(manifest.readBool(string.concat(base, ".deployer_has_emergency_role")));
+        }
+        vm.removeFile(out);
+    }
+}
+
+/// @notice VAULT_ADDRESSES is required on the broadcast path: unset reverts (empty reverts in process).
+contract DeployTimelockVaultListInputTest is DeployTimelockRunEntrypointBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_S5_VAULT_LIST_";
+    }
+
+    function test_run_revertsWhenVaultAddressesUnset() public {
+        // A prefix nothing else sets: only the agent list is present, so the run reaches the
+        // vault list and finds it missing.
+        vm.setEnv("RM_S5_NEVER_AGENT_ADDRESSES", "none");
+        vm.expectRevert(bytes("VAULT_ADDRESSES must be set: every vault, comma-separated"));
+        RunEntrypointRelay(deployer).runFrom(harness, "RM_S5_NEVER_");
     }
 }

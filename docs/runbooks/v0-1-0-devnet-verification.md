@@ -14,10 +14,8 @@ no persisted `deployments/devnet.json` the way there is for Base Sepolia or
 mainnet.
 
 **Executed at commit:** `755e9b28` on `feat/testnet-verification-tool`
-(carries the `SEED_DEPOSIT_AMOUNT` -> 1 USDC change from
-[`docs/future/review-usdc-seed.md`](../future/review-usdc-seed.md) — every
-address and balance below reflects that temporary value, not the production
-1,000 USDC).
+(`SEED_DEPOSIT_AMOUNT` is 1 USDC, the default for every network; a mainnet
+ceremony sets `SEED_DEPOSIT_USDC` explicitly on its frozen sheet).
 
 This runbook follows [`docs/operations/contract-release-runbooks.md`](../operations/contract-release-runbooks.md).
 Read that first for what each gate below is actually proving.
@@ -43,7 +41,7 @@ forge build                 # expect: success (contracts/)
 
 The Devnet's own boot sequence *is* the preflight for this runbook: its
 genesis is seeded from a pinned Base-mainnet state snapshot, so the
-canonical Base mainnet addresses `Deploy.s.sol` hardcodes
+canonical Base mainnet addresses the deploy scripts and `config/` hardcode
 (`AAVE_V3_POOL`, `COMPOUND_V3_COMET`, `MORPHO_GAUNTLET_USDC_PRIME`,
 `AAVE_V3_A_TOKEN`) already have real, correct bytecode at chain id `918453`
 — there is no separate address-validity check to run before boot the way
@@ -62,9 +60,9 @@ artifacts (network-agnostic despite the directory name).
 cargo run -p smoke-test -- --full-stack
 ```
 
-**What this does.** Boots `docker compose` (Geth + Lighthouse), waits for
+**What this does.** Starts the Twin chain (a pinned lazy anvil fork of real Base), waits for
 chain RPC readiness and real block production, then runs the standard
-`forge script` deploy ceremony (`Deploy.s.sol` → `DeployVaultRegistry.s.sol` →
+`forge script` stage sequence (`DeployLibs.s.sol` → `DeployVault.s.sol` → `DeployVaultRegistry.s.sol` →
 `DeployPortfolioRouter.s.sol` → `DeployRouterGovernance.s.sol` →
 `DeployInvestmentCommitteePolicy.s.sol`), seeds four demo depositors, then
 boots the dapp, explorer-api, explorer-indexer, and Postgres containers.
@@ -159,14 +157,28 @@ contracts, and the indexed Postgres data all stay up.
 
 ```bash
 cd testing/ethereum-testnet/config
-docker compose -f docker-compose.dapp.yaml up -d --build explorer-api
+export VITE_GATEWAY_ADDRESS=<gateway_addr>   # from the §4.3 summary
+export VITE_VAULT_ADDRESS=<vault_addr>       # from the §4.3 summary
+export INDEXER_GATEWAY=$VITE_GATEWAY_ADDRESS
+export INDEXER_VAULT=$VITE_VAULT_ADDRESS
+export VITE_GATEWAY_EXPECTED_CODE_HASH=$(cast keccak "$(cast code <gateway_addr> --rpc-url <rpc_url>)")
+export EXPLORER_API_PORT=<port of explorer_api_url>
+docker compose -f docker-compose.dapp.yaml up -d --no-deps --build explorer-api
 ```
 
-Export the same values the bring-up used first — contract addresses from
-`deployments/devnet.json`, and `EXPLORER_API_PORT` / `DAPP_PORT` /
-`POSTGRES_PORT` matching the URLs the harness printed in §4.1 — because
-compose re-evaluates the file's required substitutions on every invocation.
-Re-run step 4 once the container reports healthy. Full command set and the
+There is no `deployments/devnet.json` (see the top of this runbook), so the
+addresses come from the §4.3 summary and the code hash is computed from the
+live gateway. Compose re-evaluates the file's required substitutions on every
+subcommand, `restart` and `logs` included, so all of these must be exported
+first. Always pass `--no-deps`: without it, `up` recreates any dependency
+whose interpolated published port differs from the running one. The harness
+chose a dynamic Postgres host port and never prints it, so a plain `up -d
+explorer-api` would recreate and rebind the live `dapp-postgres`. Do not set
+`POSTGRES_PORT` for this recipe. To check, `docker inspect -f '{{.Id}}'
+dapp-postgres` must print the same id before and after.
+Re-run step 4 once the container reports healthy. If step 4 failed because the
+indexed data is wrong (an indexer logic bug), the fast path can keep serving
+stale rows: take the full §4.1 path instead. Full command set and the
 `restart` caveat: [`docs/development/environments.md` §3 — Per-service restart
 and rebuild](../development/environments.md#per-service-restart-and-rebuild).
 

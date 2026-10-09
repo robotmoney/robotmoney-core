@@ -4,7 +4,14 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
+import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
+import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
+import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
+import {TestERC20} from "./helpers/TestERC20.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 
 /// @notice Minimal stand-in for `PortfolioRouter` exposing only the
@@ -199,11 +206,11 @@ contract VaultRegistryTest is Test {
     function test_setVaultStatus_toPaused() public {
         vm.startPrank(admin);
         registry.registerVault(vault1, meta1);
-        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.DepositsPaused);
         vm.stopPrank();
 
         (, VaultRegistry.VaultStatus status) = registry.getVault(vault1);
-        assertEq(uint256(status), uint256(VaultRegistry.VaultStatus.Paused));
+        assertEq(uint256(status), uint256(VaultRegistry.VaultStatus.DepositsPaused));
     }
 
     function test_setVaultStatus_toRetired() public {
@@ -219,7 +226,7 @@ contract VaultRegistryTest is Test {
     function test_setVaultStatus_activeAfterPaused() public {
         vm.startPrank(admin);
         registry.registerVault(vault1, meta1);
-        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.DepositsPaused);
         registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Active);
         vm.stopPrank();
 
@@ -234,8 +241,10 @@ contract VaultRegistryTest is Test {
         vm.warp(2_000_000);
         vm.prank(admin);
         vm.expectEmit(true, true, false, true);
-        emit VaultRegistry.VaultStatusChanged(vault1, VaultRegistry.VaultStatus.Paused, 2_000_000);
-        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+        emit VaultRegistry.VaultStatusChanged(
+            vault1, VaultRegistry.VaultStatus.DepositsPaused, 2_000_000
+        );
+        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.DepositsPaused);
     }
 
     // ─── setVaultStatus: revert cases ────────────────────────────────────────
@@ -243,7 +252,7 @@ contract VaultRegistryTest is Test {
     function test_setVaultStatus_revertsForNotRegistered() public {
         vm.prank(admin);
         vm.expectRevert(VaultRegistry.NotRegistered.selector);
-        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.DepositsPaused);
     }
 
     function test_setVaultStatus_revertsForUnauthorizedCaller() public {
@@ -257,7 +266,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vm.prank(stranger);
-        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.DepositsPaused);
     }
 
     // ─── retire (unified governance action, DI-2) ─────────────────────────────
@@ -489,13 +498,13 @@ contract VaultRegistryTest is Test {
         vm.startPrank(admin);
         registry.registerVault(address(mockVault), meta1);
         registry.setRouterEligible(address(mockVault), true);
-        registry.setVaultStatus(address(mockVault), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(mockVault), VaultRegistry.VaultStatus.DepositsPaused);
         vm.stopPrank();
 
         (, VaultRegistry.VaultStatus status) = registry.getVault(address(mockVault));
         assertEq(
             uint256(status),
-            uint256(VaultRegistry.VaultStatus.Paused),
+            uint256(VaultRegistry.VaultStatus.DepositsPaused),
             "Paused transition must not be blocked by the retire strand guard"
         );
     }
@@ -745,4 +754,71 @@ contract VaultRegistryTest is Test {
         assertEq(registry.getRoleMemberCount(adminRole), 1, "second registry admin remains");
         assertTrue(registry.hasRole(adminRole, admin2), "admin2 retains the role");
     }
+
+    // ─── retire on each of the four real vaults (core 1487) ───────────────────
+
+    /// @notice The one deployment scheme ships rmUSDC, rmPROTO, rmAGENT and rmRWA. After the
+    ///         timelock stage links each vault to the registry and the registry's ADMIN is the
+    ///         timelock, `registry.retire()` works on every one. Here `admin` stands in for the
+    ///         timelock as the registry ADMIN, and the vault stage's `setRegistry` is called by
+    ///         the vault ADMIN exactly as `DeployTimelock` does.
+    function test_retire_succeedsOnEachOfTheFourRealVaults() public {
+        TestERC20 usdc = new TestERC20();
+        address swapRouter = makeAddr("retire-swap-router");
+        address[] memory vaults = new address[](4);
+        vaults[0] = address(
+            new RobotMoneyVault(usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin)
+        );
+        vaults[1] = address(
+            new ProtocolAssetVault(
+                IERC20(address(usdc)),
+                ISwapRouter(swapRouter),
+                type(uint256).max,
+                type(uint256).max,
+                0,
+                admin,
+                admin,
+                admin
+            )
+        );
+        vaults[2] = address(
+            new AgentTokenVault(
+                IERC20(address(usdc)),
+                ISwapRouter(swapRouter),
+                type(uint256).max,
+                type(uint256).max,
+                0,
+                admin,
+                admin,
+                admin
+            )
+        );
+        vaults[3] = address(
+            new RwaBasketVault(
+                IERC20(address(usdc)),
+                ISwapRouter(swapRouter),
+                type(uint256).max,
+                type(uint256).max,
+                0,
+                admin,
+                admin,
+                admin
+            )
+        );
+        for (uint256 i = 0; i < vaults.length; i++) {
+            vm.startPrank(admin);
+            IRetireVaultLinks(vaults[i]).setRegistry(address(registry));
+            registry.registerVault(vaults[i], meta1);
+            registry.retire(vaults[i]);
+            vm.stopPrank();
+            (, VaultRegistry.VaultStatus st) = registry.getVault(vaults[i]);
+            assertEq(uint256(st), uint256(VaultRegistry.VaultStatus.Retired), "status Retired");
+            assertTrue(IRetireVaultLinks(vaults[i]).retired(), "vault deposit-halt set");
+        }
+    }
+}
+
+interface IRetireVaultLinks {
+    function setRegistry(address newRegistry) external;
+    function retired() external view returns (bool);
 }

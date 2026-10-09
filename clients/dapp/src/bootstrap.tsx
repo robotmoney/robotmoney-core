@@ -94,6 +94,12 @@ import {
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
 
+/** An address value, or undefined when it is empty or the zero-address placeholder of an unconfigured build. */
+function configuredAddress(value: string | undefined): Address | undefined {
+  if (!value || value.toLowerCase() === ZERO_ADDRESS) return undefined;
+  return value as Address;
+}
+
 /** The deployment values the app tree needs, derived from a runtime config. */
 export interface DappConfig {
   readonly env: RuntimeConfig;
@@ -103,6 +109,8 @@ export interface DappConfig {
   readonly router?: Address;
   readonly governance?: Address;
   readonly timelock?: Address;
+  /** Core 1544: the 2-of-3 Safe that proposes to the timelock. Absent: admin proposals are blocked. */
+  readonly safe?: Address;
   readonly rmToken?: Address;
   readonly expectedCodeHash?: string;
   readonly envClass: "fork" | "devnet" | "testnet" | "mainnet";
@@ -124,9 +132,10 @@ export function deriveDappConfig(env: RuntimeConfig): DappConfig {
     router: env.VITE_ROUTER_ADDRESS ? (env.VITE_ROUTER_ADDRESS as Address) : undefined,
     governance: env.VITE_GOVERNANCE_ADDRESS ? (env.VITE_GOVERNANCE_ADDRESS as Address) : undefined,
     // Issue #647: TimelockController address for the Timelock admin tab (architecture §4.5).
-    timelock: env.VITE_TIMELOCK_ADDRESS ? (env.VITE_TIMELOCK_ADDRESS as Address) : undefined,
-    // Issue #365: RM token address for the Faucet tab drip button. Absent means
-    // the button is hidden in standalone deployments without the smoke-test harness.
+    timelock: configuredAddress(env.VITE_TIMELOCK_ADDRESS),
+    safe: configuredAddress(env.VITE_SAFE_ADDRESS),
+    // Issue #463: RM token address for the balances panel RM row (the live
+    // ROBOTMONEY token on Base; nothing deploys RM, core 1489).
     rmToken: env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Address) : undefined,
     expectedCodeHash: env.VITE_GATEWAY_EXPECTED_CODE_HASH,
     envClass: (env.VITE_ENV_CLASS as DappConfig["envClass"]) ?? "fork",
@@ -229,8 +238,8 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                   now={Date.now()}
                   registryAddress={cfg.registry}
                   routerAddress={cfg.router}
-                  rmTokenAddress={cfg.rmToken}
                   timelockAddress={cfg.timelock}
+                  safeAddress={cfg.safe}
                 />
               ),
             },

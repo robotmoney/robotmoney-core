@@ -97,6 +97,19 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "DEPOSIT_PAUSER_ROLE",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "MAX_DEADLINE_SKEW",
     inputs: [],
     outputs: [
@@ -117,19 +130,6 @@ export const gatewayAbiGenerated = [
         name: "",
         type: "uint256",
         internalType: "uint256",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "PAUSER_ROLE",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bytes32",
-        internalType: "bytes32",
       },
     ],
     stateMutability: "view",
@@ -620,6 +620,19 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "depositsPaused",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "effectiveDepositWindowGross",
     inputs: [
       {
@@ -732,23 +745,10 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "pause",
+    name: "pauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "paused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "function",
@@ -1035,7 +1035,7 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "unpause",
+    name: "unpauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
@@ -1582,6 +1582,32 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "event",
+    name: "DepositsPaused",
+    inputs: [
+      {
+        name: "by",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "DepositsUnpaused",
+    inputs: [
+      {
+        name: "by",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "ICPolicySet",
     inputs: [
       {
@@ -1592,19 +1618,6 @@ export const gatewayAbiGenerated = [
       },
       {
         name: "policy",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "Paused",
-    inputs: [
-      {
-        name: "by",
         type: "address",
         indexed: true,
         internalType: "address",
@@ -1680,19 +1693,6 @@ export const gatewayAbiGenerated = [
       },
       {
         name: "sender",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "Unpaused",
-    inputs: [
-      {
-        name: "by",
         type: "address",
         indexed: true,
         internalType: "address",
@@ -1810,6 +1810,16 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "DepositsArePaused",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "DepositsNotPaused",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "FailedInnerCall",
     inputs: [],
   },
@@ -1822,6 +1832,22 @@ export const gatewayAbiGenerated = [
     type: "error",
     name: "ICPolicyNotSet",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "InsufficientGas",
+    inputs: [
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "required",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
   },
   {
     type: "error",
@@ -1866,16 +1892,6 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "NotAgentOwner",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "NotPaused",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "PausedError",
     inputs: [],
   },
   {
@@ -3784,23 +3800,10 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "pause",
+    name: "pauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "paused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "function",
@@ -4352,7 +4355,7 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "unpause",
+    name: "unpauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
@@ -4392,19 +4395,6 @@ export const robotMoneyVaultAbiGenerated = [
       },
     ],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "withdrawalsPaused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "event",
@@ -4621,13 +4611,26 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "DepositsPausedChanged",
+    name: "DepositsPaused",
     inputs: [
       {
-        name: "paused",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "DepositsUnpaused",
+    inputs: [
+      {
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
       },
     ],
     anonymous: false,
@@ -5103,19 +5106,6 @@ export const robotMoneyVaultAbiGenerated = [
     anonymous: false,
   },
   {
-    type: "event",
-    name: "WithdrawalsPausedChanged",
-    inputs: [
-      {
-        name: "paused",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
-      },
-    ],
-    anonymous: false,
-  },
-  {
     type: "error",
     name: "AccessControlBadConfirmation",
     inputs: [],
@@ -5250,7 +5240,7 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
-    name: "DepositsPaused",
+    name: "DepositsArePaused",
     inputs: [],
   },
   {
@@ -5451,6 +5441,22 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "InsufficientGas",
+    inputs: [
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "required",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "InvalidCap",
     inputs: [],
   },
@@ -5554,11 +5560,6 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "VaultShutdown",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "WithdrawalsPaused",
     inputs: [],
   },
   {
@@ -6363,6 +6364,45 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "WEIGHT_SETTER_ROLE",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "WEIGHT_SETTER_ROTATOR_ROLE",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "applyMigrationDefaultWeights",
     inputs: [
       {
@@ -6376,6 +6416,13 @@ export const routerAbiGenerated = [
         internalType: "uint256[]",
       },
     ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "cancelWeightSetterRotation",
+    inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
   },
@@ -6450,6 +6497,19 @@ export const routerAbiGenerated = [
         internalType: "uint256[]",
       },
     ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "executeWeightSetterRotation",
+    inputs: [
+      {
+        name: "expectedNewHolder",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
     stateMutability: "nonpayable",
   },
   {
@@ -6650,6 +6710,24 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "pendingWeightSetterRotation",
+    inputs: [],
+    outputs: [
+      {
+        name: "newHolder",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "proposedAt",
+        type: "uint64",
+        internalType: "uint64",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "previewDeposit",
     inputs: [
       {
@@ -6693,6 +6771,19 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "proposeWeightSetterRotation",
+    inputs: [
+      {
+        name: "newHolder",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -7197,6 +7288,63 @@ export const routerAbiGenerated = [
   },
   {
     type: "event",
+    name: "WeightSetterRotated",
+    inputs: [
+      {
+        name: "newHolder",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "revokedHolders",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "WeightSetterRotationCancelled",
+    inputs: [
+      {
+        name: "newHolder",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "by",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "WeightSetterRotationProposed",
+    inputs: [
+      {
+        name: "newHolder",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "proposedAt",
+        type: "uint64",
+        indexed: false,
+        internalType: "uint64",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "WeightsSet",
     inputs: [
       {
@@ -7269,6 +7417,22 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "InsufficientGas",
+    inputs: [
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "required",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "InvalidWeightSum",
     inputs: [],
   },
@@ -7290,6 +7454,11 @@ export const routerAbiGenerated = [
   {
     type: "error",
     name: "MinSharesLengthMismatch",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "NoRotationPending",
     inputs: [],
   },
   {
@@ -7322,6 +7491,60 @@ export const routerAbiGenerated = [
     type: "error",
     name: "ReentrancyGuardReentrantCall",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "RotationAlreadyPending",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "RotationNotReady",
+    inputs: [
+      {
+        name: "readyAt",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "RotationTargetForbidden",
+    inputs: [
+      {
+        name: "target",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "RotationTargetMismatch",
+    inputs: [
+      {
+        name: "pending",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "expected",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "RotationTargetNotContract",
+    inputs: [
+      {
+        name: "target",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",
@@ -7443,17 +7666,6 @@ export const routerAbiGenerated = [
   {
     type: "error",
     name: "VaultNotRouterEligible",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "VaultPausedForRedeem",
     inputs: [
       {
         name: "vault",
@@ -7634,19 +7846,6 @@ export const agentTokenVaultAbiGenerated = [
         name: "",
         type: "uint32",
         internalType: "uint32",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "MIN_POOL_CARDINALITY",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "uint16",
-        internalType: "uint16",
       },
     ],
     stateMutability: "view",
@@ -8458,23 +8657,10 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "pause",
+    name: "pauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "paused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "function",
@@ -8676,6 +8862,29 @@ export const agentTokenVaultAbiGenerated = [
         internalType: "uint256",
       },
     ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "redeemInKind",
+    inputs: [
+      {
+        name: "shares",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "receiver",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "owner",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
     stateMutability: "nonpayable",
   },
   {
@@ -9152,7 +9361,7 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "unpause",
+    name: "unpauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
@@ -9332,13 +9541,26 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "DepositsPausedSet",
+    name: "DepositsPaused",
     inputs: [
       {
-        name: "paused",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "DepositsUnpaused",
+    inputs: [
+      {
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
       },
     ],
     anonymous: false,
@@ -9557,19 +9779,6 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "Paused",
-    inputs: [
-      {
-        name: "account",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
     name: "PerDepositCapUpdated",
     inputs: [
       {
@@ -9580,6 +9789,31 @@ export const agentTokenVaultAbiGenerated = [
       },
       {
         name: "newCap",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "RedeemedInKind",
+    inputs: [
+      {
+        name: "owner",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "receiver",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "shares",
         type: "uint256",
         indexed: false,
         internalType: "uint256",
@@ -9808,19 +10042,6 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "Unpaused",
-    inputs: [
-      {
-        name: "account",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
     name: "Unretired",
     inputs: [],
     anonymous: false,
@@ -9966,6 +10187,11 @@ export const agentTokenVaultAbiGenerated = [
         internalType: "uint256",
       },
     ],
+  },
+  {
+    type: "error",
+    name: "DepositsArePaused",
+    inputs: [],
   },
   {
     type: "error",
@@ -10176,18 +10402,24 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "error",
-    name: "EnforcedPause",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "ExpectedPause",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "FailedInnerCall",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "InsufficientGas",
+    inputs: [
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "required",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
   },
   {
     type: "error",
@@ -10573,19 +10805,6 @@ export const protocolAssetVaultAbiGenerated = [
         name: "",
         type: "uint32",
         internalType: "uint32",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "MIN_POOL_CARDINALITY",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "uint16",
-        internalType: "uint16",
       },
     ],
     stateMutability: "view",
@@ -11371,23 +11590,10 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "pause",
+    name: "pauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "paused",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "function",
@@ -11589,6 +11795,29 @@ export const protocolAssetVaultAbiGenerated = [
         internalType: "uint256",
       },
     ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "redeemInKind",
+    inputs: [
+      {
+        name: "shares",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "receiver",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "owner",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
     stateMutability: "nonpayable",
   },
   {
@@ -12065,7 +12294,7 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "unpause",
+    name: "unpauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
@@ -12245,13 +12474,26 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "DepositsPausedSet",
+    name: "DepositsPaused",
     inputs: [
       {
-        name: "paused",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "DepositsUnpaused",
+    inputs: [
+      {
+        name: "account",
+        type: "address",
+        indexed: true,
+        internalType: "address",
       },
     ],
     anonymous: false,
@@ -12470,19 +12712,6 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "Paused",
-    inputs: [
-      {
-        name: "account",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
     name: "PerDepositCapUpdated",
     inputs: [
       {
@@ -12493,6 +12722,31 @@ export const protocolAssetVaultAbiGenerated = [
       },
       {
         name: "newCap",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "RedeemedInKind",
+    inputs: [
+      {
+        name: "owner",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "receiver",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "shares",
         type: "uint256",
         indexed: false,
         internalType: "uint256",
@@ -12721,19 +12975,6 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "event",
-    name: "Unpaused",
-    inputs: [
-      {
-        name: "account",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
     name: "Unretired",
     inputs: [],
     anonymous: false,
@@ -12879,6 +13120,11 @@ export const protocolAssetVaultAbiGenerated = [
         internalType: "uint256",
       },
     ],
+  },
+  {
+    type: "error",
+    name: "DepositsArePaused",
+    inputs: [],
   },
   {
     type: "error",
@@ -13089,18 +13335,24 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "error",
-    name: "EnforcedPause",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "ExpectedPause",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "FailedInnerCall",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "InsufficientGas",
+    inputs: [
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "required",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
   },
   {
     type: "error",

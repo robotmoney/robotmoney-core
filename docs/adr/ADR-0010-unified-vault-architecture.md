@@ -1,6 +1,6 @@
 # ADR-0010: Unified Vault architecture — one Vault class, position adapters for every theme
 
-- **Status:** Rejected — the three deployed vault families stay as they are; the current design is audited and migrating it is not worth the reversibility cost (2026-09-18, product owner).
+- **Status:** Rejected — the three deployed vault families stay as they are; the current design is audited and migrating it is not worth the reversibility cost (2026-09-18, product owner). Dead: the code this ADR proposed (`Vault.sol`, `IPositionAdapter`, the V4 and Chronicle adapters, `RwaVault`) was deleted from the tree and is not coming back. rmRWA ships as a plain `RwaBasketVault` basket row with no oracle.
 - **Date:** 2026-07-16
 - **Deciders:** Product owner
 - **Related:**
@@ -422,3 +422,5 @@ foreclosing it. The spec resolves them before engineering.
   vault.
 - deSPXA asset constraints (KYC, freeze risk, Chronicle heartbeat) — governed
   by ADR-0006, unchanged.
+
+> Note 2026-10-05 (core 1494): A pause now stops deposits only; withdrawals are never frozen. pause()/unpause()/paused() are now pauseDeposits()/unpauseDeposits()/depositsPaused(), PAUSER_ROLE is DEPOSIT_PAUSER_ROLE, VaultStatus.Paused is VaultStatus.DepositsPaused, EnforcedPause is DepositsArePaused, and withdrawalsPaused is deleted. The router redeems from a vault in every status (VaultPausedForRedeem is removed). The deployed v1 vault keeps its old code: never call v1 pause(), it also freezes withdrawals. The text above is kept as written.

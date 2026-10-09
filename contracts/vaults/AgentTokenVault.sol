@@ -7,9 +7,9 @@
 //            delays, public veto window). ADR-0004 resolves open-questions §1.3 and §1.4
 //            and unblocks rmAGENT router-eligibility pending TWAP oracle, rebalancing
 //            model, and liquidity proof gaps.)
-// Production-readiness: not audited. Router-eligibility is registry state
-// (VaultRegistry.isRouterEligible) set by governance once audit / oracle hardening
-// is complete. See docs/development/single-production-codebase.md.
+// Audit status: see the audit-scope ledger in docs/audits.md (audited, with the
+// bucket-B/C economic-audit gate still open). Router-eligibility is registry state
+// (VaultRegistry.isRouterEligible) set by governance once that gate is complete. See docs/development/single-production-codebase.md.
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";

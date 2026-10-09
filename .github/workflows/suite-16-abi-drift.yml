@@ -23,6 +23,7 @@
 # - clients/rust-payment-client/abi/TimelockController.json     (added #1362)
 # - clients/rust-payment-client/abi/InvestmentCommitteePolicy.json (added #1362)
 # - clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json (added #1362)
+# - clients/rust-payment-client/abi/IVault.json                 (added #1464)
 # - clients/dapp/src/lib/abi.generated.ts
 #
 # THE OTHER TWO GATES IN THIS JOB (issue #1346)
@@ -39,10 +40,11 @@
 #    check_abi_binding_inventory.py now requires every binding on disk to be
 #    either drift-gated or recorded against an OPEN tracking issue, so an
 #    un-gated file can no longer persist untracked. #1362 then regenerated six
-#    of the seven and moved them into the diff below. The one still un-gated is
-#    MockVault.json, tracked by #1464 (Q3: should the clients bind to a
-#    compiler-owned IVault.sol instead of a declared test fixture?). #1464
-#    replaces #1286, which was deleted from GitHub.
+#    of the seven and moved them into the diff below. #1464 resolved the last,
+#    MockVault.json: rmpc now binds to the compiler-owned, interface-only
+#    contracts/interfaces/IVault.sol, generated as IVault.json and diffed below.
+#    No deployed vault inherits IVault (vault bytecode is frozen), and no file is
+#    left un-gated.
 #
 # 2. SOLIDITY-TRUTH EVENT TOPICS. services/explorer-indexer/src/abi.rs keeps
 #    three hand-maintained copies of every event signature, and its
@@ -127,9 +129,19 @@ concurrency:
 env:
   CI_CLASS: feature-correctness
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   abi-drift:
     name: abi-drift-gate
+    # The binding-inventory check reads issue state through `gh issue view` with
+    # GH_TOKEN (issue #1428): the one job-level scope beyond the contents: read floor.
+    permissions:
+      contents: read
+      issues: read
     runs-on: ubuntu-latest
     # 30 (was 15): issue #1346 added a Rust build of explorer-indexer so the
     # topic-0 cross-check can run against the artifacts this job already builds.
@@ -206,6 +218,7 @@ jobs:
                clients/rust-payment-client/abi/TimelockController.json \
                clients/rust-payment-client/abi/InvestmentCommitteePolicy.json \
                clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json \
+               clients/rust-payment-client/abi/IVault.json \
                clients/dapp/src/lib/abi.generated.ts; then
             echo ""
             echo "ERROR: Generated ABI files differ from committed files."

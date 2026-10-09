@@ -11,7 +11,7 @@ use crate::common::{
 use alloy_primitives::{address, hex as ahex, Address, U256};
 use assert_cmd::Command;
 use mockito::Matcher;
-use rust_payment_client::gateway::{MockVault, VaultRegistry};
+use rust_payment_client::gateway::{IVault, VaultRegistry};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -222,7 +222,7 @@ async fn get_vaults_one_registered_vault() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalAssetsCall,
+            IVault::totalAssetsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(total_assets)))
@@ -257,9 +257,10 @@ async fn get_vaults_one_registered_vault() {
     assert_eq!(vault["total_assets"].as_str().unwrap(), "5000000");
 }
 
-/// Paused vault: status field in output is "paused".
+/// A `VaultStatus.DepositsPaused` vault: status field in output is
+/// "deposits_paused". It stops new deposits only; holders still redeem.
 #[tokio::test]
-async fn get_vaults_paused_vault_status() {
+async fn get_vaults_deposits_paused_vault_status() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
     let block_no = 0x30u64;
@@ -297,10 +298,10 @@ async fn get_vaults_paused_vault_status() {
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_vault_record(
-            "Paused Vault",
+            "Deposits Paused Vault",
             USDC,
             1_700_000_000,
-            1, // Paused
+            1, // DepositsPaused
         )))
         .expect_at_least(0)
         .create_async()
@@ -308,7 +309,7 @@ async fn get_vaults_paused_vault_status() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalAssetsCall,
+            IVault::totalAssetsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::ZERO)))
@@ -326,12 +327,12 @@ async fn get_vaults_paused_vault_status() {
 
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     let vaults = v["data"]["vaults"].as_array().unwrap();
-    assert_eq!(vaults[0]["status"], "paused");
+    assert_eq!(vaults[0]["status"], "deposits_paused");
     assert_eq!(vaults[0]["total_assets"], "0");
 }
 
 /// A reverting `totalAssets()` must not be reported as the in-domain value
-/// `"0"` — the exact string `get_vaults_paused_vault_status` above proves a
+/// `"0"` — the exact string `get_vaults_deposits_paused_vault_status` above proves a
 /// genuinely empty vault emits (issue #1390). The degraded value is `null`.
 #[tokio::test]
 async fn get_vaults_total_assets_revert_is_null_not_zero() {
@@ -385,7 +386,7 @@ async fn get_vaults_total_assets_revert_is_null_not_zero() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalAssetsCall,
+            IVault::totalAssetsCall,
         >()))
         .with_status(200)
         .with_body(r#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}"#)
@@ -467,9 +468,9 @@ async fn get_vault_address_happy_path() {
     // vault.asset()
     server
         .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::assetCall,
-        >()))
+        .match_body(match_eth_call_selector(
+            &selector_hex_of::<IVault::assetCall>(),
+        ))
         .with_status(200)
         .with_body(jrpc_result(&enc_address(USDC)))
         .expect_at_least(0)
@@ -482,7 +483,7 @@ async fn get_vault_address_happy_path() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::decimalsCall,
+            IVault::decimalsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&dec_hex))
@@ -493,7 +494,7 @@ async fn get_vault_address_happy_path() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalAssetsCall,
+            IVault::totalAssetsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(total_assets)))
@@ -504,7 +505,7 @@ async fn get_vault_address_happy_path() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalSupplyCall,
+            IVault::totalSupplyCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(total_supply)))
@@ -593,9 +594,9 @@ async fn get_vault_address_total_assets_revert_is_null() {
         .await;
     server
         .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::assetCall,
-        >()))
+        .match_body(match_eth_call_selector(
+            &selector_hex_of::<IVault::assetCall>(),
+        ))
         .with_status(200)
         .with_body(jrpc_result(&enc_address(USDC)))
         .expect_at_least(0)
@@ -607,7 +608,7 @@ async fn get_vault_address_total_assets_revert_is_null() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::decimalsCall,
+            IVault::decimalsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&dec_hex))
@@ -618,7 +619,7 @@ async fn get_vault_address_total_assets_revert_is_null() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalAssetsCall,
+            IVault::totalAssetsCall,
         >()))
         .with_status(200)
         .with_body(r#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}"#)
@@ -630,7 +631,7 @@ async fn get_vault_address_total_assets_revert_is_null() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalSupplyCall,
+            IVault::totalSupplyCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(1_000_000u64))))
@@ -716,9 +717,9 @@ async fn get_vault_address_total_supply_revert_is_null() {
         .await;
     server
         .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::assetCall,
-        >()))
+        .match_body(match_eth_call_selector(
+            &selector_hex_of::<IVault::assetCall>(),
+        ))
         .with_status(200)
         .with_body(jrpc_result(&enc_address(USDC)))
         .expect_at_least(0)
@@ -730,7 +731,7 @@ async fn get_vault_address_total_supply_revert_is_null() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::decimalsCall,
+            IVault::decimalsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&dec_hex))
@@ -742,7 +743,7 @@ async fn get_vault_address_total_supply_revert_is_null() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalAssetsCall,
+            IVault::totalAssetsCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(2_000_000u64))))
@@ -753,7 +754,7 @@ async fn get_vault_address_total_supply_revert_is_null() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockVault::totalSupplyCall,
+            IVault::totalSupplyCall,
         >()))
         .with_status(200)
         .with_body(r#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}"#)

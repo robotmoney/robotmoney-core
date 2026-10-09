@@ -1,0 +1,45 @@
+---
+title: "NativeCurrencyPaymentFallback"
+---
+
+# NativeCurrencyPaymentFallback
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/vendor/safe-1.4.1/common/NativeCurrencyPaymentFallback.sol)
+
+**Title:** NativeCurrencyPaymentFallback - A contract that has a fallback to accept native currency payments.
+
+**Author:** Richard Meissner - @rmeissner
+
+## Functions
+
+<a id="receive"></a>
+
+### receive
+
+Receive function accepts native currency transactions.
+
+<i>
+
+Emits an event with sender and received value.
+
+</i>
+
+```solidity
+receive() external payable;
+```
+
+## Events
+
+### SafeReceived
+
+```solidity
+event SafeReceived(address indexed sender, uint256 value);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sender | `address` |  |
+| value | `uint256` |  |
+

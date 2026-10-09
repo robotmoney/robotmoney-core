@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -42,6 +42,43 @@ Grants/revokes roles, sets weights, caps, and registry address.
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 ```
 
+### WEIGHT_SETTER_ROLE
+
+Sole gate on `setWeights`, the active weight setter. After the
+deploy ceremony only the RouterGovernance contract holds it, so
+active weights move only through propose, vote, quorum and the
+execution delay. The timelock keeps `ADMIN_ROLE` and reaches
+`setDefaultWeights` and `clearVotedWeights` only. The constructor
+seeds the role to `_admin` so the router deploy stage can write
+the initial weights. The governance deploy stage revokes it. The role is its
+own role admin, so no `ADMIN_ROLE` holder can grant it.
+
+```solidity
+bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
+```
+
+### WEIGHT_SETTER_ROTATOR_ROLE
+
+Proposes and cancels a rotation of `WEIGHT_SETTER_ROLE`. After the
+deploy ceremony only the Safe holds it. Self-administered, so no
+`ADMIN_ROLE` holder (the timelock) can grant it to itself. ADR-0002.
+
+```solidity
+bytes32 public constant WEIGHT_SETTER_ROTATOR_ROLE = keccak256("WEIGHT_SETTER_ROTATOR_ROLE");
+```
+
+### WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE
+
+Executes a rotation of `WEIGHT_SETTER_ROLE` the rotator proposed, after
+the delay. After the deploy ceremony only the timelock holds it.
+Self-administered, so `RouterGovernance` (which holds `ADMIN_ROLE`) cannot
+revoke it to block its own replacement. ADR-0002.
+
+```solidity
+bytes32 public constant WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE =
+        keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
+```
+
 ### BPS_DENOMINATOR
 
 Basis-points denominator (10 000 = 100%). Sourced from the
@@ -66,6 +103,40 @@ router-eligibility state are read.
 
 ```solidity
 VaultRegistry public immutable registry;
+```
+
+### REDEEM_GAS_PER_LEG
+
+<i>
+
+Gas `redeemFor` needs per non-zero leg, checked once at entry (core 1482). The floor
+is checked at entry, never per leg: a per-leg check runs after earlier legs spent
+gas that depends on interest-accrual state, so eth_estimateGas would land on a
+threshold that moves between estimate and inclusion. Each leg must hand its vault
+1_600_000 after the 63/64 forward (about 1_625_400) plus its registry and allowance
+reads; a leg's real cost is about 1.11M on a Base fork, so earlier legs leave slack
+for later ones. See docs/technical/redeem-gas-1482.md.
+
+</i>
+
+```solidity
+uint256 internal constant REDEEM_GAS_PER_LEG = 1_700_000;
+```
+
+### DEPOSIT_GAS_PER_LEG
+
+<i>
+
+Gas `_depositTo` needs per weighted leg, checked once at entry (core 1482). Same
+reasoning as `REDEEM_GAS_PER_LEG`: each leg must hand `vault.deposit` its
+1_600_000 entry floor after the 63/64 forward, and a per-leg check in the vault
+would run after earlier legs spent accrual-dependent gas. Legs that end up skipped
+still count, so the floor is an upper bound. See docs/technical/redeem-gas-1482.md.
+
+</i>
+
+```solidity
+uint256 internal constant DEPOSIT_GAS_PER_LEG = 1_700_000;
 ```
 
 ## State Variables
@@ -170,6 +241,15 @@ Parallel array — must always sum to BPS_DENOMINATOR.
 uint256[] private _defaultWeightBps;
 ```
 
+### pendingWeightSetterRotation
+
+The pending rotation of `WEIGHT_SETTER_ROLE`. `newHolder` is address(0) when none is pending.
+The stage 12 verifier fails a run while a rotation is pending.
+
+```solidity
+WeightSetterRotation public pendingWeightSetterRotation;
+```
+
 ## Functions
 
 <a id="constructor-address-address-address"></a>
@@ -188,6 +268,75 @@ constructor(address _usdc, address _registry, address _admin);
 | _registry | `address` | VaultRegistry contract address. |
 | _admin | `address` | Address that receives `ADMIN_ROLE` at deploy time. |
 
+<a id="proposeweightsetterrotation-address"></a>
+
+### proposeWeightSetterRotation
+
+Propose rotating `WEIGHT_SETTER_ROLE` to `newHolder`. Rotator (the Safe) only.
+
+```solidity
+function proposeWeightSetterRotation(address newHolder)
+        external
+        onlyRole(WEIGHT_SETTER_ROTATOR_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newHolder | `address` | A deployed contract, for example a replacement RouterGovernance. |
+
+<a id="_requireallowedrotationtarget-address"></a>
+
+### _requireAllowedRotationTarget
+
+<i>
+
+Rejects this router and any holder of either rotation role (the Safe, the timelock).
+
+</i>
+
+```solidity
+function _requireAllowedRotationTarget(address target) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+<a id="cancelweightsetterrotation"></a>
+
+### cancelWeightSetterRotation
+
+Cancel the pending rotation. Rotator (the Safe) only.
+
+```solidity
+function cancelWeightSetterRotation() external onlyRole(WEIGHT_SETTER_ROTATOR_ROLE);
+```
+
+<a id="executeweightsetterrotation-address"></a>
+
+### executeWeightSetterRotation
+
+Execute the pending rotation after the delay. Executor (the timelock) only.
+The delay is the calling timelock's `getMinDelay()`, measured from the proposal.
+Revokes `WEIGHT_SETTER_ROLE` from every holder, then grants it to the target,
+so exactly one holder remains.
+
+```solidity
+function executeWeightSetterRotation(address expectedNewHolder)
+        external
+        onlyRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| expectedNewHolder | `address` | The target the scheduled call names. Must equal the pending target. |
+
 <a id="setweights-address-uint256"></a>
 
 ### setWeights
@@ -195,12 +344,12 @@ constructor(address _usdc, address _registry, address _admin);
 Set the vault weight vector. All vaults must be registered in the
 VaultRegistry and must be marked router-eligible there. The bps
 values must sum to exactly BPS_DENOMINATOR.
-Restricted to `ADMIN_ROLE`.
+Restricted to `WEIGHT_SETTER_ROLE`, held only by RouterGovernance.
 
 ```solidity
 function setWeights(address[] calldata vaults, uint256[] calldata bps)
         external
-        onlyRole(ADMIN_ROLE);
+        onlyRole(WEIGHT_SETTER_ROLE);
 ```
 
 **Parameters**
@@ -581,9 +730,10 @@ the router never silently skips or reorders a named vault.
 targets exactly the address the caller named, so a reweight
 between sign and execution can never redirect a leg to a vault
 the caller did not name (NC-5).
-- Redemption succeeds when a leg's registry status is Active OR
-Retired; only Paused blocks the exit (F-02). Retired vaults are
-withdraw-only, never deposit targets — see ADR-0009.
+- Redemption succeeds whatever a leg's registry status is (Active,
+DepositsPaused or Retired). No status blocks an exit (F-02, core
+1494). Retired vaults are withdraw-only, never deposit targets —
+see ADR-0009.
 
 SECURITY: users must NEVER grant a share-token approval directly to
 this router. The router calls `vault.redeem` with itself as the
@@ -909,7 +1059,7 @@ Return true if `vault` is router-eligible: it exposes an
 ERC-4626 `asset()` view equal to the router's USDC AND the
 VaultRegistry has marked the vault as router-eligible.
 This view is intentionally distinct from VaultRegistry
-lifecycle status (Active/Paused/Retired); clients (dapp,
+lifecycle status (Active/DepositsPaused/Retired); clients (dapp,
 rmpc) read both signals to compose accurate UI state.
 
 ```solidity
@@ -969,7 +1119,7 @@ AND it is router-eligible (asset == USDC + eligibility flag). This is
 the single guard that a weight vector is only ever written when every
 leg is simultaneously eligible AND depositable (F-05/RTR-4/GOV-4):
 eligibility and lifecycle status are independent signals, so checking
-eligibility alone would let an eligible-but-Paused/Retired vault enter
+eligibility alone would let an eligible-but-DepositsPaused/Retired vault enter
 the vector and brick `deposit()` later. Used by `setWeights` and
 `setDefaultWeights` at configuration time.
 
@@ -1048,6 +1198,52 @@ event WeightsSet(address[] vaults, uint256[] bps);
 | ---- | ---- | ----------- |
 | vaults | `address[]` | New ordered list of vault addresses. |
 | bps | `uint256[]` | Parallel weight array (must sum to BPS_DENOMINATOR). |
+
+### WeightSetterRotationProposed
+
+A rotation of `WEIGHT_SETTER_ROLE` to `newHolder` is pending. It can execute
+from `proposedAt` plus the executing timelock's delay.
+
+```solidity
+event WeightSetterRotationProposed(address indexed newHolder, uint64 proposedAt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newHolder | `address` |  |
+| proposedAt | `uint64` |  |
+
+### WeightSetterRotationCancelled
+
+The pending rotation to `newHolder` was cancelled by `by`.
+
+```solidity
+event WeightSetterRotationCancelled(address indexed newHolder, address indexed by);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newHolder | `address` |  |
+| by | `address` |  |
+
+### WeightSetterRotated
+
+`WEIGHT_SETTER_ROLE` now has exactly one holder, `newHolder`.
+
+```solidity
+event WeightSetterRotated(address indexed newHolder, uint256 revokedHolders);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newHolder | `address` |  |
+| revokedHolders | `uint256` |  |
 
 ### DefaultWeightsSet
 
@@ -1228,21 +1424,23 @@ error VaultNotActive(address vault, VaultRegistry.VaultStatus status);
 | vault | `address` | The vault address that is not Active. |
 | status | `VaultRegistry.VaultStatus` | The current non-Active status of the vault. |
 
-### VaultPausedForRedeem
+### InsufficientGas
 
-A redeem leg targets a Paused vault. Redemption permits Active OR
-Retired status (withdraw-only after retirement, F-02); only Paused
-blocks the exit path.
+Gas left is below the floor a redeem leg needs. Raised before the leg
+calls `vault.redeem`, so a gas limit that is too low reverts with a
+reason instead of failing opaquely inside the vault fan-out. Retry
+with a higher gas limit. (core 1482.)
 
 ```solidity
-error VaultPausedForRedeem(address vault);
+error InsufficientGas(uint256 available, uint256 required);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| vault | `address` | The vault address whose status is Paused. |
+| available | `uint256` | `gasleft()` at the check. |
+| required | `uint256` | The floor that was not met. |
 
 ### RedeemVaultsLengthMismatch
 
@@ -1384,7 +1582,96 @@ callable directly. Governance sets defaults via `setDefaultWeights`.
 error OnlyRegistry();
 ```
 
+### RotationTargetNotContract
+
+A rotation target must be a deployed contract (not address(0), an EOA or an empty address).
+
+```solidity
+error RotationTargetNotContract(address target);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+### RotationTargetForbidden
+
+A rotation target must not be this router, the Safe (rotator) or the timelock (executor). Rotating to the timelock would hand it `WEIGHT_SETTER_ROLE` (core 1522).
+
+```solidity
+error RotationTargetForbidden(address target);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+### RotationAlreadyPending
+
+A rotation is already pending. Cancel it first.
+
+```solidity
+error RotationAlreadyPending();
+```
+
+### NoRotationPending
+
+No rotation is pending.
+
+```solidity
+error NoRotationPending();
+```
+
+### RotationTargetMismatch
+
+The pending rotation is for `pending`, not `expected`.
+
+```solidity
+error RotationTargetMismatch(address pending, address expected);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pending | `address` |  |
+| expected | `address` |  |
+
+### RotationNotReady
+
+The delay has not passed. The rotation can execute from `readyAt`.
+
+```solidity
+error RotationNotReady(uint256 readyAt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| readyAt | `uint256` |  |
+
 ## Structs
+
+### WeightSetterRotation
+
+```solidity
+struct WeightSetterRotation {
+        address newHolder;
+        uint64 proposedAt;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newHolder | `address` |  |
+| proposedAt | `uint64` |  |
 
 ### LegPreview
 

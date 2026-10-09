@@ -42,6 +42,8 @@ fn config(max_fee_cap: u64) -> Config {
         router_address: None,
         governance_address: None,
         timelock_address: None,
+        timelock_from_block: None,
+        gateway_from_block: None,
         ic_policy_address: None,
         receipt_address: None,
         vault_addresses: None,
@@ -105,6 +107,31 @@ async fn chain_deadline_uses_block_timestamp_not_wall_clock() {
     // 0x64a9f4c0 = 1_688_859_840 — a 2023 timestamp, so a wall-clock
     // implementation could not produce this number.
     assert_eq!(chain_deadline(&rpc, 300).await.unwrap(), 1_688_860_140);
+}
+
+/// Issue #1432: "block time, never wall clock" holds for every write
+/// command. Each consumer must call [`chain_deadline`] and must not read
+/// the host clock, so a new command cannot silently opt out.
+#[test]
+fn every_write_command_takes_its_deadline_from_chain_deadline() {
+    let consumers = [
+        ("deposit", include_str!("../commands/deposit.rs")),
+        ("withdraw", include_str!("../commands/withdraw.rs")),
+        (
+            "withdraw_router",
+            include_str!("../commands/withdraw_router.rs"),
+        ),
+    ];
+    for (name, src) in consumers {
+        assert!(
+            src.contains("chain_deadline(&session.rpc"),
+            "{name} must derive its deadline from write_path::chain_deadline"
+        );
+        assert!(
+            !src.contains("SystemTime"),
+            "{name} must not read the host wall clock for its deadline"
+        );
+    }
 }
 
 #[tokio::test]
@@ -277,7 +304,43 @@ fn refusal_documents_share_one_field_set() {
 fn abort_exit_codes_match_the_documented_cli_contract() {
     assert_eq!(WriteAbort::Startup.exit(false), EXIT_STARTUP_FAIL);
     assert_eq!(
-        WriteAbort::refused(WriteFailure::new("ErrGatewayPaused")).exit(false),
+        WriteAbort::refused(WriteFailure::new("ErrDepositsPaused")).exit(false),
         EXIT_REFUSAL
+    );
+}
+
+/// Issue #1431: the only broadcast in this module is the one inside
+/// `WriteSession::submit`, which holds the `AgentLock` and runs the replay
+/// cache insert / retain (AZ-RPC-1) / clear (AZ-RPC-2) sequence. A pub
+/// helper that broadcasts without those guarantees is a footgun for the next
+/// write command, and `pub` items raise no `dead_code` warning, so the
+/// property is pinned here by scanning the production source.
+#[test]
+fn submit_is_the_only_broadcast_call_site() {
+    let src = include_str!("../write_path.rs");
+    let prod = &src[..src.find("#[cfg(test)]").expect("test module marker")];
+    let calls: Vec<usize> = prod
+        .match_indices("broadcast(")
+        .filter(|(i, _)| {
+            // Ignore doc/line comments mentioning the function.
+            let line_start = prod[..*i].rfind('\n').map_or(0, |n| n + 1);
+            !prod[line_start..*i].trim_start().starts_with("//")
+        })
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(calls.len(), 1, "exactly one broadcast call site: {calls:?}");
+    let submit = prod.find("pub fn submit(").expect("WriteSession::submit");
+    assert!(calls[0] > submit, "the broadcast must be inside submit");
+    // And the replay insert must follow it in the same function.
+    let insert = prod[calls[0]..]
+        .find("replay.insert")
+        .or_else(|| prod[calls[0]..].find(".insert("));
+    assert!(
+        insert.is_some(),
+        "replay-cache insert must follow the broadcast"
+    );
+    assert!(
+        !prod.contains("pub async fn broadcast_and_confirm"),
+        "unguarded broadcast helper must stay deleted"
     );
 }

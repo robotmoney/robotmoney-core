@@ -1,7 +1,7 @@
 # Geth Read-After-Write State-Lag: Why the Devnet Harness Must Poll Reads
 
-> Canonical: `testing/smoke-test/src/lib.rs` (`Fixture::approve_and_confirm`,
-> `Fixture::erc20_allowance`, `wait_for_vault_registered`, `Fixture::cast_send`
+> Canonical: `testing/smoke-test/src/lib.rs` (`Fixture::erc20_allowance`,
+> `Fixture::cast_send`
 > and the funding helpers via `NonceTracker::pin_next_nonce` /
 > `pinned_cast_send`).
 > Sibling class: [`docs/testing/geth-gas-estimation.md`](geth-gas-estimation.md)
@@ -77,24 +77,27 @@ Both fixes share one shape — after a write whose result a later step reads, po
 the dependent read until it reflects the write, with a bounded retry budget, and
 **error loudly** (return `Err`, never skip) if it never settles.
 
-### Allowance visibility — `approve_and_confirm` + `erc20_allowance`
+### Allowance visibility — `erc20_allowance`
 
-`Fixture::approve_and_confirm` sends `approve(spender, amount)` and then polls
-`Fixture::erc20_allowance(token, owner, spender)` — a plain `eth_call` /
-`cast call` of `allowance(address,address)` — until the on-chain allowance is
-`>= amount` before returning the tx hash. The poll runs **5 attempts, 200ms
-apart**; if the allowance never reaches `amount`, it returns an `Err` naming the
-unsettled state-lag rather than letting the dependent `transferFrom`/`deposit`
-revert with the misleading "transfer amount exceeds allowance".
+`Fixture::erc20_allowance(token, owner, spender)` is a plain `eth_call` /
+`cast call` of `allowance(address,address)`: the read half of the
+poll-until-settled shape. A caller that sends `approve(spender, amount)` and then
+sends a dependent `transferFrom` / `deposit` polls this read until the allowance
+is `>= amount`, and returns an `Err` naming the unsettled state-lag if it never
+is, rather than letting the dependent call revert with the misleading
+"transfer amount exceeds allowance".
 
-### Registry visibility — `wait_for_vault_registered`
+### Helpers removed with the stage deploy rewrite (core 1488)
 
-`wait_for_vault_registered` sends nothing itself; it is called after a
-`registerVault` write and polls `listVaults()(address[])` on the `VaultRegistry`
-until the just-registered vault address appears, so the dependent
-PortfolioRouter deploy forks a head that already includes the registration. It
-polls with a 30s deadline at 500ms intervals and returns an `Err` naming the
-unsettled registry read if the vault never appears.
+`Fixture::approve_and_confirm` (approve, then poll the allowance) and
+`wait_for_vault_registered` (poll `listVaults()` until a just-registered vault
+appears) no longer exist in the harness. They served the Rust deployment and
+demo seeding, which core 1488 deleted: the stage now deploys through the devops
+"publish contracts" runbook, and that runbook owns the registry-visibility wait
+for its own `registerVault` writes. The harness still sends `approve` through
+`cast_send` (`approve_usdc_from_agent`), whose nonce handling is the section
+below. A new harness step that reads state right after a write must poll the
+dependent read the same way, using `erc20_allowance` for allowances.
 
 ### Nonce visibility — every send via `NonceTracker::pin_next_nonce` (issues #1241, #1374)
 

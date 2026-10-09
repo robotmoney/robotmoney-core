@@ -66,7 +66,7 @@
 //! root` from a fixed table list. Originally the **`vaults` table was not in
 //! that list**: vault status was mutated *in place* by `db.update_vault_status`,
 //! so a reorg that removed the block carrying a status transition
-//! (Active→Paused→Retired) left the **post-reorg status stuck** at the orphaned
+//! (Active→DepositsPaused→Retired) left the **post-reorg status stuck** at the orphaned
 //! value with no per-block history to roll back to.
 //!
 //! **Resolved (#1021):** vault-status writes are now block-versioned via an

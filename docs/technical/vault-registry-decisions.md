@@ -37,7 +37,7 @@ items that are blocked until this scout closes:
 
 The current codebase has `RobotMoneyGateway` with a single immutable
 `vaultContract` pinned at construction time and three separated roles:
-`ADMIN_ROLE`, `PAUSER_ROLE`, and `AGENT_ROLE` (see
+`ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, and `AGENT_ROLE` (see
 `contracts/gateway/AccessRoles.sol`). There is no vault-list storage of any
 kind — the gateway treats the vault address as a fixed immutable.
 
@@ -183,7 +183,7 @@ function vaultCount() external view returns (uint256);
 Supporting types:
 
 ```solidity
-enum VaultStatus { Active, Paused, Retired }
+enum VaultStatus { Active, DepositsPaused, Retired } // DepositsPaused was Paused (core 1494); no status blocks a redeem
 
 struct VaultRecord {
     address vault;          // ERC-4626 contract address
@@ -228,33 +228,21 @@ safety-critical fields).
 > of the decision, not as a contract.
 
 The following two events are the canonical indexable events for the Vault
-registry phase. They must appear verbatim in `VaultRegistry.sol`.
+registry phase, as shipped in `VaultRegistry.sol`.
 
 ```solidity
 /// @notice Emitted when a vault is added to the registry for the first time.
-/// @param vault          The registered ERC-4626 vault address. Indexed for log filtering.
-/// @param name           Human-readable label stored in the registry.
-/// @param riskLabel      Risk category string (e.g. "stable-yield").
-/// @param depositCap     Maximum total-assets cap at registration time; 0 = no cap.
-/// @param registeredAt   block.timestamp of the registration transaction.
-event VaultRegistered(
-    address indexed vault,
-    string  name,
-    string  riskLabel,
-    uint256 depositCap,
-    uint64  registeredAt
-);
+/// @param vault  The registered ERC-4626 vault address. Indexed for log filtering.
+/// @param name   Human-readable label stored in the registry.
+/// @param asset  The vault's underlying asset. Indexed.
+event VaultRegistered(address indexed vault, string name, address indexed asset);
 
 /// @notice Emitted when an admin changes a vault's operational status.
-/// @param vault          The affected ERC-4626 vault address. Indexed for log filtering.
-/// @param oldStatus      The status before this call.
-/// @param newStatus      The status after this call.
-/// @param changedAt      block.timestamp of the status-change transaction.
+/// @param vault      The affected ERC-4626 vault address. Indexed for log filtering.
+/// @param newStatus  The status after this call. Indexed.
+/// @param timestamp  block.timestamp of the status-change transaction.
 event VaultStatusChanged(
-    address indexed vault,
-    VaultStatus     oldStatus,
-    VaultStatus     newStatus,
-    uint64          changedAt
+    address indexed vault, VaultStatus indexed newStatus, uint256 timestamp
 );
 ```
 
@@ -263,14 +251,11 @@ event VaultStatusChanged(
 
 | Event field          | Indexer column            | Notes                                      |
 |----------------------|---------------------------|--------------------------------------------|
-| `vault` (topic 1)    | `vaults.address`          | Primary key                                |
+| `vault` (topic 1)    | `vaults.vault_address`    | Primary key with chain id                  |
 | `name`               | `vaults.name`             | Non-indexed ABI data                       |
-| `riskLabel`          | `vaults.risk_label`       | Non-indexed ABI data                       |
-| `depositCap`         | `vaults.deposit_cap`      | `NUMERIC(78,0)` per explorer ADR §3.1      |
-| `registeredAt`       | `vaults.registered_at`    | Unix timestamp                             |
-| `oldStatus`          | `vaults.status` (prev)    | For status history; upsert on `VaultStatusChanged` |
+| (derived from `name`)| `vaults.risk_label`       | Not in the event. The indexer classifies `name` per PRD §11: Protocol = VOLATILE, Agent Tokens and RWA = SPECULATIVE, USDC = STABLE_YIELD. An unrecognised name stores STABLE_YIELD and logs a warning. |
 | `newStatus`          | `vaults.status`           | Current operational status                 |
-| `changedAt`          | `vaults.status_changed_at`| Unix timestamp of last status change       |
+| `timestamp`          | `vaults.status_changed_at`| Unix timestamp of last status change       |
 | block_number         | `vaults.registered_block` | From log metadata, not ABI data            |
 | tx_hash              | `vaults.registered_tx`    | From log metadata                          |
 

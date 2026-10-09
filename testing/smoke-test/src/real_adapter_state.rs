@@ -4,26 +4,18 @@
 //! This documentation-only module records the real-adapter state injection
 //! boundary implemented by issue #685.
 //!
-//! # What changed (issue #685)
+//! # Real adapter state
 //!
-//! `scripts/devnet/snapshot-fork.sh` now executes a deposit→redeem round-trip
-//! through each real adapter (Aave V3, Compound V3, Morpho) after the forge
-//! deploy. This forces anvil to fetch the reserve config, liquidity/borrow
-//! index, aToken supply, Comet base tracking, and Morpho market+position slots
-//! into the fork cache and dirties every slot the round-trip writes, so
-//! `--dump-state` captures the working set. The committed
-//! `testing/fixtures/fork-state/genesis-alloc.json` now carries real protocol
-//! storage for all three adapters.
+//! The Twin chain (core 1498) is a pinned lazy fork of real Base state made with anvil, so the
+//! real Aave V3, Compound V3 and Morpho protocol storage is served on demand from the upstream
+//! node. There is no saved state snapshot to warm and nothing is injected or patched.
 //!
-//! `Deploy.s.sol` deploys the three real adapters unconditionally — the
-//! test-only no-yield deploy hatch was removed in issue #912, so every devnet
-//! boot exercises real Aave V3 / Compound V3 / Morpho protocol state.
+//! `DeployVault.s.sol` deploys the three real adapters unconditionally (the test-only no-yield
+//! deploy hatch was removed in issue #912), so every devnet boot exercises real protocol state.
 //!
 //! # Ownership
 //!
-//! Issue #685 owns `testing/smoke-test`, `testing/fixtures/fork-state`,
-//! `testing/ethereum-testnet/config`, `contracts/script/Deploy.s.sol`, and
-//! `scripts/devnet/snapshot-fork.sh`. Issue #658 consumes the fixture API
-//! after #685 lands.
+//! Issue #685 owns `testing/smoke-test`, `testing/ethereum-testnet/config` and
+//! `contracts/script/DeployVault.s.sol`.
 
 // This module intentionally contains no runtime code.

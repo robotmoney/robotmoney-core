@@ -1,0 +1,36 @@
+{
+  "$comment": "Canonical: docs/prd.md#112-protocol-asset-vault (issue #482). The landing-page price strip pairs the fork test (testing/fork-e2e-rust/tests/landing_price_strip_fork.rs) and the dapp e2e (clients/dapp/tests/e2e/landing-price-strip.spec.ts) read from the Twin chain (a pinned lazy fork of real Base, core 1498). The pin moves every run, so there is no golden price and no pinned block. Each pair carries a sanity band: a live price must sit inside [min_price, max_price]. The band is wide on purpose. It still catches wrong decimals (a factor of 10^12), an inverted pair (the reciprocal) and a missing pool.",
+  "chain": "base",
+  "pairs": [
+    {
+      "id": "eth-usd",
+      "label": "ETH/USD",
+      "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+      "base_decimals": 18,
+      "quote_decimals": 6,
+      "base_is_token0": true,
+      "min_price": 500,
+      "max_price": 20000
+    },
+    {
+      "id": "weth-usdc",
+      "label": "wETH/USDC",
+      "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+      "base_decimals": 18,
+      "quote_decimals": 6,
+      "base_is_token0": true,
+      "min_price": 500,
+      "max_price": 20000
+    },
+    {
+      "id": "cbbtc-usdc",
+      "label": "cbBTC/USDC",
+      "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
+      "base_decimals": 8,
+      "quote_decimals": 6,
+      "base_is_token0": false,
+      "min_price": 10000,
+      "max_price": 500000
+    }
+  ]
+}

@@ -5,9 +5,9 @@ description: "Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
 
 # BasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/vaults/BasketVault.sol)
 
-**Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), Pausable, ReentrancyGuard
+**Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
 **Title:** BasketVault
 
@@ -110,17 +110,34 @@ the EIP-170-tight vault family — the value is documented here.
 uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000;
 ```
 
-### MIN_POOL_CARDINALITY
+### REDEEM_BASE_GAS
 
-Minimum observation cardinality required on the Uniswap V3 pool
-when registering an asset via addAsset(). A cardinality of 1
-(the Uniswap deployment default) means observe() can only return
-the single stored slot and always reverts with "OLD" for any
-non-zero secondsAgo, which would permanently break totalAssets(),
-deposits, and withdrawals for the entire basket.
+<i>
+
+Fixed part of the `redeem` entry gas floor: burn, fee and payout transfers, and the
+idle USDC read.
+
+</i>
 
 ```solidity
-uint16 public constant MIN_POOL_CARDINALITY = 2;
+uint256 internal constant REDEEM_BASE_GAS = 300_000;
+```
+
+### REDEEM_GAS_PER_ASSET
+
+<i>
+
+Per-asset part of the `redeem` entry gas floor: one TWAP-bounded Uniswap V3 sell. A
+real sell costs about 200k to 340k on a Base fork, and the cost moves with the pool
+state (observation writes, tick crossings) between the node estimate and inclusion.
+The floor binds at entry, before any state-dependent work, so `eth_estimateGas`
+lands on it in every state. It counts every listed asset, so it is an upper bound.
+See docs/technical/redeem-gas-1482.md (core 1513).
+
+</i>
+
+```solidity
+uint256 internal constant REDEEM_GAS_PER_ASSET = 400_000;
 ```
 
 ### MIN_POOL_LIQUIDITY
@@ -188,6 +205,10 @@ bool public shutdown;
 
 ### depositsPaused
 
+When true, new deposits and mints are blocked. Withdrawals and
+redeems are never blocked, by anyone (owner decision 2026-10-05,
+core 1494). There is no generic pause function: this flag is the only pause.
+
 ```solidity
 bool public depositsPaused;
 ```
@@ -196,7 +217,7 @@ bool public depositsPaused;
 
 Whether the vault has been retired by the unified governance
 `retire()` action (DI-2 / FS-VLT-19). Distinct from
-`depositsPaused` so `unpause()` (ADMIN_ROLE) can never clear a
+`depositsPaused` so `unpauseDeposits()` (ADMIN_ROLE) can never clear a
 registry-driven retirement — matching RobotMoneyVault's and
 Vault's separate-flag model (the three enforcement paths never
 alias). Recovery is the deliberate governance abort
@@ -410,7 +431,7 @@ USDC value of all held assets (idle USDC + TWAP-priced basket assets).
 
 <i>
 
-Marked `virtual` so subclasses (e.g. RwaVault) can inject oracle-freshness
+Marked `virtual` so subclasses (e.g. RwaBasketVault) can inject oracle-freshness
 checks before delegating to this base implementation.
 
 </i>
@@ -452,6 +473,29 @@ function deposit(uint256 assets, address receiver) public override returns (uint
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | assets | `uint256` |  |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="mint-uint256-address"></a>
+
+### mint
+
+Mint `shares`. Reverts `DepositsArePaused` while deposits are paused.
+
+```solidity
+function mint(uint256 shares, address receiver) public override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
 | receiver | `address` |  |
 
 **Returns**
@@ -508,7 +552,6 @@ function _deposit(
     )
         internal
         override
-        whenNotPaused
         nonReentrant;
 ```
 
@@ -582,6 +625,36 @@ function redeem(uint256 shares, address receiver, address owner)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+<a id="redeeminkind-uint256-address-address"></a>
+
+### redeemInKind
+
+Oracle-free exit (core 1665): burn `shares` of `owner` and pay `receiver` the pro-rata
+idle USDC plus the pro-rata amount of each ACTIVE basket token, with NO TWAP read and
+NO swap. This is the holder's exit when `redeem` cannot price or fill a leg.
+
+<i>
+
+`exitFeeBps` is applied to each leg and the fee is sent to `feeRecipient`. Each leg is
+floored (`bal * shares / supply`), so rounding favours the vault and the remaining
+holders' per-share backing never decreases. Shares burn before any transfer and the call
+is `nonReentrant`. No pause, shutdown, retire or role gates it. Inactive (removed) assets
+are not paid. A caller other than `owner` spends allowance, as in `redeem`.
+
+</i>
+
+```solidity
+function redeemInKind(uint256 shares, address receiver, address owner) external nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| receiver | `address` |  |
+| owner | `address` |  |
 
 <a id="previewredeem-uint256"></a>
 
@@ -699,7 +772,7 @@ function previewMint(uint256 shares) public view override returns (uint256);
 ### maxDeposit
 
 Maximum USDC that can be deposited given current vault state.
-Returns 0 when the vault is paused or shut down, when no basket
+Returns 0 when deposits are paused or the vault is shut down, when no basket
 asset is active, or when the TVL cap is reached; otherwise
 min(perDepositCap, TVL-cap headroom). Overrides the OZ default
 (`type(uint256).max`) for ERC-4626 conformance: max* views MUST
@@ -787,14 +860,14 @@ Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
 
 <i>
 
-LIFE-3 / NC-3 / F-06: withdrawals are intentionally NOT `whenNotPaused`.
-`pause()` is a deposits-only freeze (see `_deposit`, which is
-`whenNotPaused` and checks `depositsPaused`). Gating withdrawals on the
-same low-trust EMERGENCY_ROLE pause would let a hot key freeze
-already-deposited funds — and, combined with last-ADMIN renounce, freeze
+LIFE-3 / NC-3 / F-06: no pause gates withdrawals (core 1494).
+`pauseDeposits()` stops deposits only (see `deposit`, `mint` and
+`maxDeposit`, which check `depositsPaused`). Gating withdrawals on the
+low-trust EMERGENCY_ROLE would let a hot key lock up
+already-deposited funds — and, combined with last-ADMIN renounce, lock
 them forever (LIFE-4). The last-admin floor (AdminFloorAccessControl)
 and the deposits-only pause together keep withdrawals always reachable,
-matching RobotMoneyVault's separate `withdrawalsPaused` model.
+matching RobotMoneyVault and Vault, which have no withdrawal pause either.
 
 </i>
 
@@ -1050,7 +1123,7 @@ Register a new basket asset. Restricted to ADMIN_ROLE.
 <i>
 
 Reverts with InsufficientPoolCardinality when the pool's current
-observationCardinality is below MIN_POOL_CARDINALITY. Callers must
+observationCardinality is below the window-derived floor (`window / 2 s + 1`, 901 for the 1800 s default; see `BasketAssetConfigGuard.requireObservationHistory`). Callers must
 invoke pool.increaseObservationCardinalityNext(n) and wait for the
 cardinality to be populated before calling addAsset.
 
@@ -1074,7 +1147,7 @@ function addAsset(
 | pool_ | `address` | DEX pool pairing `token_` with USDC (either token0 or token1).<br/>For the Uniswap V3 default path, this is the V3 pool address.<br/>For Aerodrome, this is the CL pool address used for TWAP reads. |
 | swapFee_ | `uint24` | Venue parameter forwarded to execution: Uniswap fee tier<br/>for V3/V4, or signed tick spacing for Aerodrome Slipstream. |
 | adapter_ | `address` | Swap+TWAP adapter address implementing `IBasketSwapAdapter`.<br/>Pass `address(0)` to use the built-in Uniswap V3 default path<br/>(venue = V3). For V4 or Aerodrome, pass the deployed adapter<br/>address and the corresponding `venue_`. |
-| venue_ | `Venue` | DEX venue selector. Must match the adapter type:<br/>`Venue.V3` with `adapter_=address(0)`,<br/>`Venue.V4` with a `UniswapV4SwapAdapter`,<br/>`Venue.Aerodrome` with an `AerodromeSwapAdapter`.<br/>Stored on `AssetInfo` so governance tooling can inspect<br/>the venue without decoding the adapter address. |
+| venue_ | `Venue` | DEX venue selector. Must match the adapter type:<br/>`Venue.V3` with `adapter_=address(0)`,<br/>`Venue.V4` (reserved; no V4 adapter ships),<br/>`Venue.Aerodrome` with an `AerodromeSwapAdapter`.<br/>Stored on `AssetInfo` so governance tooling can inspect<br/>the venue without decoding the adapter address. |
 
 <a id="removeasset-uint256"></a>
 
@@ -1218,7 +1291,7 @@ which sets registry status to `Retired` in the same call (atomic
 unified governance retire, DI-2 / FS-VLT-19). Idempotent.
 Withdrawals/redemptions stay open (ERC-4626 `redeem` is never
 revoked; ADR-0009). Sets the dedicated `retired` flag — distinct
-from `depositsPaused` so `unpause()` cannot clear it (matches
+from `depositsPaused` so `unpauseDeposits()` cannot clear it (matches
 RobotMoneyVault's / Vault's separate-flag model).
 
 ```solidity
@@ -1237,20 +1310,26 @@ transition in docs/architecture.md §4.7. Idempotent.
 function unretire() external;
 ```
 
-<a id="pause"></a>
+<a id="pausedeposits"></a>
 
-### pause
+### pauseDeposits
+
+Pause new deposits and mints. Restricted to `EMERGENCY_ROLE`.
+Redeems stay open while deposits are paused (core 1494; see `_withdraw`).
 
 ```solidity
-function pause() external onlyRole(EMERGENCY_ROLE);
+function pauseDeposits() external onlyRole(EMERGENCY_ROLE);
 ```
 
-<a id="unpause"></a>
+<a id="unpausedeposits"></a>
 
-### unpause
+### unpauseDeposits
+
+Resume deposits. Restricted to `ADMIN_ROLE`. Idempotent. Also clears
+the deposit halt set by `emergencyUnwind` and `emergencyUnwindWithOverride`.
 
 ```solidity
-function unpause() external onlyRole(ADMIN_ROLE);
+function unpauseDeposits() external onlyRole(ADMIN_ROLE);
 ```
 
 <a id="_setdepositspaused-bool"></a>
@@ -1363,7 +1442,7 @@ LIFE-4 / F-07: `shutdownVault` (an `EMERGENCY_ROLE` hot-key lever) sets
 reverse path — a low-trust key could otherwise freeze the deposit side forever.
 Withdrawals are never frozen (LIFE-3), so holder funds were always redeemable;
 this restores the DEPOSIT side and is therefore gated to the strictly higher-trust
-`ADMIN_ROLE` (timelock in production), mirroring `unpause`. A new `tvlCap` is
+`ADMIN_ROLE` (timelock in production), mirroring `unpauseDeposits`. A new `tvlCap` is
 required because shutdown zeroed it; pass `type(uint256).max` for no cap.
 Mirrors `RobotMoneyVault.restoreVault`: reverts when the vault is not shut down
 (`NotShutdown`), when the new cap is zero (`InvalidParam`), or when the new cap
@@ -1597,11 +1676,11 @@ Set the TWAP window in seconds for `token`. ADMIN_ROLE only.
 
 <i>
 
-The window must fall inside `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`.
-ADMIN_ROLE is expected to verify off-chain that the pool's
-observation cardinality is large enough to satisfy the requested
-window; otherwise NAV / unwind reads will revert with the pool's
-`"OLD"` error.
+The window must fall inside `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`, and
+the asset's pool must hold enough observation history to serve it now
+(`InsufficientObservationHistory` otherwise). A window longer than the
+pool's oldest observation would make every NAV and redeem-floor read
+revert with the pool's `"OLD"` error, which would block redeem (core 1494).
 
 </i>
 
@@ -2036,6 +2115,26 @@ event ExitFeeCharged(
 | fee | `uint256` |  |
 | net | `uint256` |  |
 
+### RedeemedInKind
+
+<i>
+
+Emitted by `redeemInKind` (core 1665). Per-leg amounts are the ERC-20 transfers.
+
+</i>
+
+```solidity
+event RedeemedInKind(address indexed owner, address indexed receiver, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+
 ### TvlCapUpdated
 
 ```solidity
@@ -2101,17 +2200,33 @@ event MaxSlippageUpdated(uint256 oldBps, uint256 newBps);
 | oldBps | `uint256` |  |
 | newBps | `uint256` |  |
 
-### DepositsPausedSet
+### DepositsPaused
+
+Emitted when new deposits become paused. Withdrawals stay open.
 
 ```solidity
-event DepositsPausedSet(bool paused);
+event DepositsPaused(address indexed account);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| paused | `bool` |  |
+| account | `address` |  |
+
+### DepositsUnpaused
+
+Emitted when new deposits are resumed.
+
+```solidity
+event DepositsUnpaused(address indexed account);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
 
 ### Shutdown
 
@@ -2494,6 +2609,22 @@ See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
 error NotImplemented();
 ```
 
+### InsufficientGas
+
+Gas left at `redeem` entry is below the floor for this basket. Retry with a
+higher gas limit. (core 1513, same mechanism as core 1482.)
+
+```solidity
+error InsufficientGas(uint256 available, uint256 required);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| available | `uint256` | `gasleft()` at the check. |
+| required | `uint256` | The floor that was not met. |
+
 ### InsufficientPoolCardinality
 
 <i>
@@ -2572,6 +2703,18 @@ redeem() instead, which returns actual swap proceeds.
 
 ```solidity
 error RedeemOnly();
+```
+
+### DepositsArePaused
+
+<i>
+
+Deposit or mint attempted while deposits are paused.
+
+</i>
+
+```solidity
+error DepositsArePaused();
 ```
 
 ### DepositBelowSlippageFloor
@@ -2674,7 +2817,11 @@ Recorded on AssetInfo so off-chain tooling and governance can
 inspect which DEX each asset is wired to without parsing the
 opaque adapter address.
 V3       — Uniswap V3 via the built-in SWAP_ROUTER (adapter = address(0)).
-V4       — Uniswap V4 via a UniswapV4SwapAdapter.
+V4       — reserved ordinal; no V4 adapter ships. Kept on purpose: `Venue` is
+ABI-visible (`addAsset(..., uint8 venue_)`, `AssetInfo.venue`, the
+fork-e2e Rust bindings, `BasketAssetConfigGuard.Venue` and the
+`BasketVault` tests all use the ordinals), and deleting V4 would
+renumber Aerodrome from 2 to 1.
 Aerodrome — Aerodrome CL pool via an AerodromeSwapAdapter.
 
 ```solidity

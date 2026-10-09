@@ -22,6 +22,11 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 ///      devnet ended up reporting `quorumThreshold() == 1`. The gap was a
 ///      DEFAULT, so the test has to be about the default.
 contract DeployRouterGovernanceDefaultsTest is Test {
+    /// @dev Explicit values the test passes. The script has no defaults for any of them.
+    uint64 internal constant VOTING_PERIOD = 3600;
+    uint64 internal constant EXECUTION_DELAY = 3600;
+    uint256 internal constant QUORUM_THRESHOLD = 2;
+
     DeployRouterGovernance internal script;
     PortfolioRouter internal router;
     address internal admin = makeAddr("gov-admin");
@@ -35,27 +40,14 @@ contract DeployRouterGovernanceDefaultsTest is Test {
 
     // ─── The default itself ──────────────────────────────────────────────────
 
-    /// @notice The shipped default is greater than the placeholder `1`.
-    function test_defaultQuorumThresholdIsAboveThePlaceholder() public view {
-        assertGt(
-            script.DEFAULT_QUORUM_THRESHOLD(),
-            1,
-            "a deployment that takes no QUORUM_THRESHOLD must not land on 1"
-        );
-    }
-
     /// @notice Deploying with the default produces on-chain state that agrees
     ///         with it. The criterion is about `quorumThreshold()` as READ FROM
     ///         THE CHAIN, so assert the deployed value, not the constant.
     function test_deployingWithTheDefaultYieldsAMeaningfulOnChainQuorum() public {
         DeployRouterGovernance.Deployed memory d = script.runInProcessWith(
-            admin,
-            address(router),
-            script.DEFAULT_VOTING_PERIOD(),
-            script.DEFAULT_EXECUTION_DELAY(),
-            script.DEFAULT_QUORUM_THRESHOLD()
+            admin, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
         );
-        assertEq(d.governance.quorumThreshold(), script.DEFAULT_QUORUM_THRESHOLD());
+        assertEq(d.governance.quorumThreshold(), QUORUM_THRESHOLD);
         assertGt(d.governance.quorumThreshold(), 1, "deployed quorum is still the placeholder");
     }
 
@@ -68,11 +60,7 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     ///         GovernanceSeparationInvariant.t.sol::test_quorumReflectsTheVoterSet.
     function test_defaultQuorumExceedsOneUnitOfVotingPower() public {
         DeployRouterGovernance.Deployed memory d = script.runInProcessWith(
-            admin,
-            address(router),
-            script.DEFAULT_VOTING_PERIOD(),
-            script.DEFAULT_EXECUTION_DELAY(),
-            script.DEFAULT_QUORUM_THRESHOLD()
+            admin, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
         );
         address soloVoter = makeAddr("solo-voter");
         vm.prank(admin);
@@ -82,6 +70,27 @@ contract DeployRouterGovernanceDefaultsTest is Test {
             d.governance.quorumThreshold(),
             "one unit of voting power must not constitute quorum"
         );
+    }
+
+    // ─── Stage 6 wires the weight-setter role ────────────────────────────────
+
+    /// @notice Stage 6 grants WEIGHT_SETTER_ROLE to RouterGovernance, the sole setWeights gate.
+    function test_stage6_grantsWeightSetterRoleToGovernance() public {
+        DeployRouterGovernance.Deployed memory d = script.runInProcessWith(
+            admin, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
+        );
+        assertTrue(router.hasRole(router.WEIGHT_SETTER_ROLE(), address(d.governance)));
+    }
+
+    /// @notice The router constructor seeds the deployer with the role. Stage 6 drops it.
+    function test_stage6_deployerHoldsNoWeightSetterRole() public {
+        bytes32 role = router.WEIGHT_SETTER_ROLE();
+        assertTrue(router.hasRole(role, admin), "precondition: deployer seeded");
+        script.runInProcessWith(
+            admin, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
+        );
+        assertFalse(router.hasRole(role, admin));
+        assertTrue(router.hasRole(router.ADMIN_ROLE(), admin), "admin role stays until stage 11");
     }
 
     // ─── The floor is enforced, not merely defaulted ─────────────────────────
@@ -102,7 +111,7 @@ contract DeployRouterGovernanceDefaultsTest is Test {
         vm.setEnv("QUORUM_THRESHOLD", "1");
         vm.expectRevert(bytes("QUORUM_THRESHOLD must be greater than 1"));
         script.run();
-        vm.setEnv("QUORUM_THRESHOLD", vm.toString(script.DEFAULT_QUORUM_THRESHOLD()));
+        vm.setEnv("QUORUM_THRESHOLD", vm.toString(QUORUM_THRESHOLD));
     }
 
     /// @notice `QUORUM_THRESHOLD=0` — the #864 env-default hazard — is refused
@@ -113,7 +122,7 @@ contract DeployRouterGovernanceDefaultsTest is Test {
         vm.setEnv("QUORUM_THRESHOLD", "0");
         vm.expectRevert(bytes("QUORUM_THRESHOLD must be greater than 1"));
         script.run();
-        vm.setEnv("QUORUM_THRESHOLD", vm.toString(script.DEFAULT_QUORUM_THRESHOLD()));
+        vm.setEnv("QUORUM_THRESHOLD", vm.toString(QUORUM_THRESHOLD));
     }
 
     /// @notice The in-process path enforces the same floor. It is the entrypoint
@@ -122,8 +131,8 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     function test_inProcessDeployRefusesAQuorumOfOne() public {
         // Read the defaults BEFORE arming expectRevert: they are external calls
         // on `script`, and the cheatcode applies to the next call it sees.
-        uint64 period = script.DEFAULT_VOTING_PERIOD();
-        uint64 delay = script.DEFAULT_EXECUTION_DELAY();
+        uint64 period = VOTING_PERIOD;
+        uint64 delay = EXECUTION_DELAY;
         vm.expectRevert(bytes("QUORUM_THRESHOLD must be greater than 1"));
         script.runInProcessWith(admin, address(router), period, delay, 1);
     }
@@ -137,15 +146,11 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     ///         if the two ever drift apart in the weaker direction.
     function test_theDeployDefaultIsNotBelowTheContractFloor() public {
         DeployRouterGovernance.Deployed memory d = script.runInProcessWith(
-            admin,
-            address(router),
-            script.DEFAULT_VOTING_PERIOD(),
-            script.DEFAULT_EXECUTION_DELAY(),
-            script.DEFAULT_QUORUM_THRESHOLD()
+            admin, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
         );
         assertEq(d.governance.MIN_QUORUM_THRESHOLD(), 2, "contract floor is no longer 2 (D16)");
         assertGe(
-            script.DEFAULT_QUORUM_THRESHOLD(),
+            QUORUM_THRESHOLD,
             d.governance.MIN_QUORUM_THRESHOLD(),
             "the deploy default must never be below the constructor floor"
         );
@@ -156,8 +161,8 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     function test_theContractItselfRefusesAQuorumOfOne() public {
         // Read the defaults BEFORE arming expectRevert — they are external
         // calls on `script` and the cheatcode applies to the next call it sees.
-        uint64 period = script.DEFAULT_VOTING_PERIOD();
-        uint64 delay = script.DEFAULT_EXECUTION_DELAY();
+        uint64 period = VOTING_PERIOD;
+        uint64 delay = EXECUTION_DELAY;
         vm.expectRevert(RouterGovernance.QuorumBelowMinimum.selector);
         new RouterGovernance(address(router), admin, period, delay, 1);
     }

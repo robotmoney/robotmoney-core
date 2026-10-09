@@ -8,8 +8,10 @@
  * receipts, fees, net amount, and slippage bounds from on-chain reads.
  *
  * Safety gates (all live chain reads, never cached context values per AC §11):
- *   - Submit disabled when vault status is paused — live `registry.getVault()`
- *     re-query used, not the cached context status (AC §4).
+ *   - Submit disabled when the vault is not Active (deposits paused or
+ *     retired) — live `registry.getVault()` re-query used, not the cached
+ *     context status (AC §4). This gates deposits only: withdrawals stay
+ *     open in every vault status (core 1494).
  *   - Submit disabled when USDC balance < entered amount (AC §5).
  *   - Approve button shown when allowance < entered amount.
  *
@@ -66,14 +68,14 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
     args: selectedVaultAddr ? [selectedVaultAddr as Address] : undefined,
     query: {
       enabled: Boolean(selectedVaultAddr) && isConnected,
-      // refetch on every block to catch vault pauses in real-time
+      // refetch on every block to catch a deposit pause in real-time
       refetchInterval: 12_000,
     },
   });
 
   // `getVault` returns two outputs (metadata, status), so viem decodes it
   // as a 2-element array — index 1 is the status, not a `.status` property.
-  const vaultIsPaused =
+  const vaultRefusesDeposits =
     liveVaultRecord !== undefined &&
     (liveVaultRecord as readonly [unknown, number])[1] !== VaultStatus.Active;
 
@@ -142,7 +144,7 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
     isConnected &&
     depositPreview?.ok === true &&
     allowanceOk &&
-    !vaultIsPaused &&
+    !vaultRefusesDeposits &&
     !hasInsufficientBalance;
 
   const { data: depositSim, error: depositSimError } = useSimulateContract({
@@ -205,7 +207,7 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
     ? "wallet-not-connected"
     : !selectedVaultAddr
       ? "no-vault-selected"
-      : vaultIsPaused
+      : vaultRefusesDeposits
         ? "vault-paused"
         : hasInsufficientBalance
           ? "insufficient-balance"
@@ -236,16 +238,20 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
           {vaults.map((v) => (
             <option key={v.vault} value={v.vault} disabled={v.status !== VaultStatus.Active}>
               {v.name || v.vault}
-              {v.status !== VaultStatus.Active ? " [PAUSED/RETIRED]" : ""}
+              {v.status === VaultStatus.DepositsPaused
+                ? " [DEPOSITS PAUSED]"
+                : v.status !== VaultStatus.Active
+                  ? " [RETIRED]"
+                  : ""}
             </option>
           ))}
         </select>
       </label>
 
-      {/* Paused vault safety gate (AC §4) */}
-      {vaultIsPaused && (
+      {/* Deposits-paused / retired vault safety gate (AC §4) */}
+      {vaultRefusesDeposits && (
         <p className="hint" data-testid="vault-paused-warning" style={{ color: "red" }}>
-          This vault is currently paused or retired. Deposits are disabled.
+          Deposits into this vault are paused or the vault is retired. Withdrawals stay open.
         </p>
       )}
 
@@ -257,7 +263,7 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
           onChange={(e) => setAmountInput(e.target.value)}
           placeholder="0.00"
           inputMode="decimal"
-          disabled={!selectedVaultAddr || vaultIsPaused}
+          disabled={!selectedVaultAddr || vaultRefusesDeposits}
         />
       </label>
 
@@ -286,7 +292,7 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
 
       {depositPreview && <TxPreview preview={depositPreview} />}
 
-      {approveNeeded && !vaultIsPaused && (
+      {approveNeeded && !vaultRefusesDeposits && (
         <button
           type="button"
           data-testid="vault-selector-deposit-approve"

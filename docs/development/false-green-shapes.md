@@ -553,3 +553,93 @@ Verified red-before by hand on PR #1408 — moving `indexed` from `agent` to
 `contracts/gateway/interfaces/IGateway.sol` and rebuilding turned this test
 red while `abi_drift_gate` and `topic_hashes_match_sol_macros`, the two
 topic-0-only tests, both stayed green.
+
+---
+
+## A warm build cache ships an embedded artefact the source tree no longer holds
+
+### Name
+`stale-cache-embedded-artefact`
+
+### Mechanism
+A macro embeds a directory of non-`.rs` data into a binary at compile time,
+but does not tell cargo that it read those files. Cargo's freshness check
+therefore sees no dependency between the crate and the data: change only the
+data and the crate is "fresh", so nothing recompiles and the artefact keeps
+the **previous** copy of the data.
+
+Alone that is a developer annoyance. It becomes a false green when CI restores
+`target/` across runs (`Swatinem/rust-cache`), because the job then compiles
+nothing, runs the full test suite against a binary built from an older tree,
+and reports success. Every signal a reviewer would look at is honest-looking:
+the tests ran, they executed a non-zero count of assertions, they passed. What
+they exercised is not the change under review. The executed-count guard cannot
+see it — the tests really did run — and neither can a target-coverage guard,
+because the target really is wired up.
+
+The shape generalises past migrations to any `include`-a-directory macro:
+embedded assets, templates, fixtures, ABI JSON. The distinguishing question is
+not "is the data read at compile time" but "does anything emit
+`cargo:rerun-if-changed` for it". `include_str!` and `include_bytes!` are safe
+— rustc records them in its dep-info and cargo honours that — but a proc macro
+that reads the filesystem itself is not, unless it calls
+`proc_macro::tracked_path::path()`, which is nightly-only.
+
+### Instance
+`services/explorer-indexer/src/db.rs` embeds the migration set with
+`sqlx::migrate!("./migrations")`. sqlx calls `proc_macro::tracked_path::path()`
+only under `#[cfg(any(sqlx_macros_unstable, procmacro2_semver_exempt))]`
+(`sqlx-macros-core/src/migrate.rs`) and this workspace builds on stable, and
+the crate had no `build.rs`, so nothing tracked the directory listing (issue
+#1416, found while implementing issue #1392 / PR #1405). The macro does expand
+each migration it found to `include_str!("<absolute path>")`, so rustc's
+dep-info already covered an edit to, or a deletion of, an existing migration;
+the untracked case is an **added** file, which appears in no dep-info.
+Measured on the pre-fix tree with a warm `target/`: adding
+`migrations/0016_*.sql` and re-running `cargo test -p explorer-indexer`
+printed `Finished` in 0.16s with no `Compiling explorer-indexer` line, and the
+embedded `MIGRATOR` still held 15 migrations against 16 on disk. A PR that only
+added a migration — the common shape of schema work — could therefore have
+gone green in `explorer-indexer-fast` with that migration never compiled in,
+and `indexer --migrate-only` built from that cache would not have applied it.
+
+### Detecting check
+`services/explorer-indexer/build.rs` emits
+`cargo:rerun-if-changed=migrations`; cargo walks a directory dependency
+recursively, so an addition (and, redundantly with rustc's dep-info, an edit
+or a deletion) marks the crate dirty. Two checks hold it in place, both in
+`.github/workflows/suite-04-rust-quality.yml`'s `lint` job — a LIGHT suite with
+no draft gate, because a stale `target/` bites hardest during draft
+iteration — and both need no Postgres, Docker or network:
+
+- `services/explorer-indexer/tests/migration_set_parity.rs` compares the
+  compile-time embedded set against the run-time contents of `migrations/`:
+  by version AND checksum, through the same `compare_schema` the indexer boot
+  guard uses (#1441): an added, deleted or edited-in-place migration each fail
+  it RED, with a disk-context message. Disk checksums come from
+  `sqlx::migrate::Migration::new`, so nothing reimplements the hash. A pure
+  rename that keeps the version and SQL is the one shape it no longer sees.
+- `.github/scripts/tests/test_indexer_migration_rebuild_trigger.sh` is the
+  half that can see the trigger itself go missing, which the parity target
+  cannot: on a cold build both sides always agree. It warms `target/`, then
+  adds, edits, reverts and deletes a migration with no `.rs` change and
+  asserts after each that explorer-indexer's own build script re-ran, the
+  crate recompiled and the parity target passed; controls check that an
+  unchanged tree does not re-run the build script and that a missing
+  `migrations/` fails the build loudly. Verified red-before in a scratch clone
+  on PR #1423: with `build.rs` deleted, the ADD step failed with
+  `embedded migration COUNT 16 != on-disk count 17` and no
+  `Compiling explorer-indexer` line; with the directive pointed at a missing
+  path, the unchanged-tree control failed.
+
+It checks the build script's own `output` stamp rather than only the
+`Compiling explorer-indexer` line because a dirty dependency also prints that
+line. In a linked `git worktree`, `clients/rust-payment-client/build.rs`
+watches `../../.git/HEAD`, which is not a file there, so that crate and every
+dependent recompiles on every build — a `Compiling` check alone would pass
+with or without the fix.
+
+Nothing detects a _new_ instance of this shape in another crate:
+`services/explorer-indexer` is currently the only workspace member with a
+`migrations/` directory, and a future compile-time-directory-reading macro
+elsewhere would need its own guard.

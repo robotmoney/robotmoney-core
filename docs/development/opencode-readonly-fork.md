@@ -195,11 +195,11 @@ a Rust test crate that runs in CI on every PR via
 | `opencode_parity::skill_package_referenced_and_files_exist` | This doc points at `plugins/robotmoney-user/` and the referenced files exist. |
 | `opencode_config::fixture_parses_with_rmpc_config_loader` | The `rmpc-fork.toml.template` shipped under `fixtures/opencode/` deserializes with `rust_payment_client::config::Config`. |
 | `opencode_refusal::unknown_subcommand_refuses_with_nonzero_exit` | `rmpc not-a-real-subcommand` exits non-zero with stderr text — the structured refusal contract step 6 documents. |
-| `opencode_read_only::get_vault_against_fork` *(skip-clean without `RMPC_FORK_RPC_URL`)* | Boots anvil against the same fork URL, runs `rmpc get-vault` against it, asserts the envelope contract (`chain_id`, `block_number`, `source`). |
-| `opencode_read_only::get_gateway_against_fork_is_partial` *(skip-clean without `RMPC_FORK_RPC_URL`)* | Boots anvil against the fork URL, runs `rmpc get-gateway`, asserts `partial: true` with at least one named per-field error — the documented degradation shape. |
+| `opencode_read_only::get_vault_against_fork` *(skips locally without `RMPC_FORK_RPC_URL`, panics under CI)* | Boots anvil against the same fork URL, runs `rmpc get-vault` against it, asserts the envelope contract (`chain_id`, `block_number`, `source`). |
+| `opencode_read_only::get_gateway_against_fork_is_partial` *(skips locally without `RMPC_FORK_RPC_URL`, panics under CI)* | Boots anvil against the fork URL, runs `rmpc get-gateway`, asserts `partial: true` with at least one named per-field error — the documented degradation shape. |
 
 The two fork-driven tests skip cleanly when no archive RPC is
 configured, mirroring [`testing/fork-e2e-rust`](../../testing/fork-e2e-rust)
 — a contributor laptop without an RPC stays green. This local skip-clean
-is current reality, not the endorsed CI coverage model: ADR-0011 moves
-fork coverage to an offline golden fixture (no secret, loud on missing).
+is current reality, not the endorsed CI coverage model: the Twin chain
+(a pinned lazy fork of real Base, core 1498) is the endorsed coverage model (no secret, loud on missing).

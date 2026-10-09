@@ -1,75 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Real four-vault demo AgentTokenVault basket (issue #560). Three Base-only agent-economy tokens curated by ADMIN_ROLE: BNKR (V3), JUNO (V4), RM (V4/Aerodrome). Token addresses live here, never in Solidity source (contracts/vaults/AgentTokenVault.sol). The deploy script (contracts/script/DeployDemoExtraVaults.s.sol) seeds devnet stand-in ERC20s + stub pools at deploy time. Ordering is load-bearing: AgentTokenVault.shortlist() returns tokens in this order.",
-  "tokens": [
-    "BNKR",
-    "JUNO",
-    "RM"
-  ],
-  "mainnet": {
-    "chain_id": 8453,
-    "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    "shortlist": [
-      {
-        "symbol": "BNKR",
-        "token": "0x22aF33FE49fD1Fa80c7149773dDe5890D3C76F3b",
-        "pool": "0x0000000000000000000000000000000000000000",
-        "swapFee": 10000,
-        "venue": "V3",
-        "adapter": "0x0000000000000000000000000000000000000000",
-        "note": "TODO: confirm Base mainnet BNKR/USDC V3 pool address before mainnet deploy"
-      },
-      {
-        "symbol": "JUNO",
-        "token": "0x4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07",
-        "pool": "0x0000000000000000000000000000000000000000",
-        "swapFee": 10000,
-        "venue": "V4",
-        "adapter": "0x0000000000000000000000000000000000000000",
-        "note": "TODO: confirm Base mainnet JUNO/USDC V4 pool address and deploy UniswapV4SwapAdapter before mainnet deploy"
-      },
-      {
-        "symbol": "RM",
-        "token": "0x0000000000000000000000000000000000000000",
-        "pool": "0x0000000000000000000000000000000000000000",
-        "swapFee": 10000,
-        "venue": "Aerodrome",
-        "adapter": "0x0000000000000000000000000000000000000000",
-        "note": "TODO: confirm RM token address, Aerodrome CL pool, and deploy AerodromeSwapAdapter before mainnet deploy"
-      }
-    ]
-  },
-  "devnet": {
-    "description": "Stand-in ERC20 + pool addresses for devnet/test deploys. The demo deploy script (DeployDemoExtraVaults.s.sol) creates DemoBasketToken + DemoUsdcPool stubs at run-time and wires them with per-asset venue adapters (DemoV3SwapRouter for BNKR, DemoV4SwapRouter for JUNO, DemoAerodromeRouter for RM). Token/pool/adapter addresses are dynamically assigned per run; this config documents the expected structure and venue assignment only.",
-    "shortlist": [
-      {
-        "symbol": "BNKR",
-        "venue": "V3",
-        "swapFee": 10000,
-        "adapter_type": "none",
-        "note": "Uses built-in SWAP_ROUTER path (DemoV3SwapRouter on devnet). No per-asset adapter (adapter = address(0))."
-      },
-      {
-        "symbol": "JUNO",
-        "venue": "V4",
-        "swapFee": 10000,
-        "adapter_type": "UniswapV4SwapAdapter",
-        "note": "Uses UniswapV4SwapAdapter wrapping DemoV4SwapRouter on devnet."
-      },
-      {
-        "symbol": "RM",
-        "venue": "Aerodrome",
-        "swapFee": 10000,
-        "adapter_type": "AerodromeSwapAdapter",
-        "note": "Uses AerodromeSwapAdapter wrapping the Slipstream-compatible DemoAerodromeRouter on devnet. swapFee carries the CL pool tick spacing."
-      }
-    ],
-    "override_env_prefix": {
-      "token": "DEVNET_AGENT_TOKEN_",
-      "pool": "DEVNET_AGENT_POOL_",
-      "swapFee": "DEVNET_AGENT_FEE_",
-      "adapter": "DEVNET_AGENT_ADAPTER_"
-    },
-    "default_swap_fee": 10000
-  }
+  "description": "rmAGENT (AgentTokenVault) launch shortlist: RM only, the live ROBOTMONEY token pinned by code hash like USDC, on the owner-funded Uniswap V3 RM/USDC pool (fee 10000, no liquidity until the owner funds it). Other agent tokens are added later through the timelock. One list for every chain. swapRouter02 is the Uniswap V3 SwapRouter02 the vault trades through.",
+  "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+  "swapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481",
+  "shortlist": [
+    {
+      "symbol": "RM",
+      "token": "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
+      "tokenDecimals": 18,
+      "tokenCodeHash": "0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6",
+      "pool": "0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882",
+      "poolFee": 10000,
+      "venue": "UniswapV3"
+    }
+  ]
 }

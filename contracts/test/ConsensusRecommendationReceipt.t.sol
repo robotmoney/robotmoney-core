@@ -10,6 +10,7 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {
@@ -17,14 +18,15 @@ import {
 } from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "../gateway/MockVault.sol";
+import {MockVault} from "./helpers/MockVault.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 
 /// @title ConsensusRecommendationReceiptTest
 /// @notice Full on-chain path for the consensus receipt anchor:
 ///         gateway → receipt contract → event, plus the signalling-only
 ///         boundary, the timelock-held `ADMIN_ROLE`, the 3-topic event limit,
 ///         and the anchoring-digest assertion that closes issue #1280.
-contract ConsensusRecommendationReceiptTest is Test {
+contract ConsensusRecommendationReceiptTest is SafeGovernance {
     // ─── Fixture paths (goldens are byte-identical to robotmoney-frontend's
     //     contract/src/__fixtures__/ — that byte identity IS the cross-repo
     //     pin, issue #1244 AC5; nothing here may edit them). ────────────────
@@ -46,8 +48,8 @@ contract ConsensusRecommendationReceiptTest is Test {
     address shareReceiver = address(0xA2);
     address submitter = address(0xB1);
     address stranger = address(0xDEAD);
-    address proposer = address(0xC0);
-    address executor = address(0xC1);
+    /// A real SafeL2 1.4.1 proxy: the only proposer and canceller on the timelock.
+    address safe;
 
     // ─── Contracts ───────────────────────────────────────────────────────────
 
@@ -73,12 +75,11 @@ contract ConsensusRecommendationReceiptTest is Test {
         );
         ic = new InvestmentCommitteePolicy(admin, address(gateway));
 
-        // Timelock that will hold ADMIN_ROLE on the receipt contract (INV-3).
-        address[] memory proposers = new address[](1);
-        proposers[0] = proposer;
-        address[] memory executors = new address[](1);
-        executors[0] = executor;
-        timelock = new TimelockController(MIN_DELAY, proposers, executors, address(0));
+        // Timelock that will hold ADMIN_ROLE on the receipt contract (INV-3). The Safe is its
+        // only proposer and canceller and EXECUTOR_ROLE is open, as in DeployTimelock.
+        _installSafeSet();
+        safe = _newDefaultSafe();
+        timelock = _newGovTimelock(safe, MIN_DELAY);
 
         // The receipt contract's ADMIN_ROLE goes to the timelock and nowhere
         // else — deliberately NOT to the gateway, because a gateway-routed
@@ -270,17 +271,26 @@ contract ConsensusRecommendationReceiptTest is Test {
 
         // Routed through the timelock: schedule, wait out the delay, execute.
         bytes memory payload = abi.encodeCall(IConsensusRecommendationReceipt.releaseReceipt, (id));
-        vm.prank(proposer);
-        timelock.schedule(address(receipts), 0, payload, bytes32(0), bytes32(0), MIN_DELAY);
+        _govSchedule(safe, timelock, address(receipts), payload, bytes32(0), MIN_DELAY);
 
-        // Executing before the delay elapses is refused.
-        vm.prank(executor);
-        vm.expectRevert();
-        timelock.execute(address(receipts), 0, payload, bytes32(0), bytes32(0));
+        // One owner signature is below the 2-of-3 threshold: the Safe itself refuses.
+        bytes memory scheduleAgain = abi.encodeCall(
+            timelock.schedule,
+            (address(receipts), 0, payload, bytes32(0), bytes32(uint256(1)), MIN_DELAY)
+        );
+        bytes memory oneSig =
+            _oneOwnerSignature(_safeDigest(safe, address(timelock), scheduleAgain));
+        vm.expectRevert(bytes("GS020"));
+        _safeExecWith(safe, address(timelock), scheduleAgain, oneSig);
 
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(executor);
-        timelock.execute(address(receipts), 0, payload, bytes32(0), bytes32(0));
+        // Executing before the delay elapses is refused with the exact reasons.
+        _expectExecuteRefused(safe, timelock, address(receipts), payload, bytes32(0));
+
+        vm.warp(block.timestamp + MIN_DELAY);
+        _govExecute(safe, timelock, address(receipts), payload, bytes32(0));
+
+        // Replay of the executed release is refused with the exact reasons.
+        _expectExecuteRefused(safe, timelock, address(receipts), payload, bytes32(0));
 
         assertTrue(receipts.isReleased(id), "timelock-routed release must succeed");
         IConsensusRecommendationReceipt.Receipt memory r = receipts.getReceiptById(id);
@@ -535,5 +545,43 @@ contract ConsensusRecommendationReceiptTest is Test {
             keccak256(_goldenBytes(VALID_CANONICAL)) != keccak256(_goldenBytes(ESCAPING_CANONICAL)),
             "the two goldens must not share a digest"
         );
+    }
+
+    // ─── Last-admin floor (#1447, workstream L) ──────────────────────────────
+
+    function test_receipt_lastAdminFloor_revokeAndRenounceRevert() public {
+        bytes32 adminRole = receipts.ADMIN_ROLE();
+        bytes32 defaultAdmin = receipts.DEFAULT_ADMIN_ROLE();
+        vm.startPrank(address(timelock));
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        receipts.revokeRole(adminRole, address(timelock));
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        receipts.renounceRole(adminRole, address(timelock));
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        receipts.revokeRole(defaultAdmin, address(timelock));
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        receipts.renounceRole(defaultAdmin, address(timelock));
+        vm.stopPrank();
+        assertTrue(receipts.hasRole(adminRole, address(timelock)));
+        assertTrue(receipts.hasRole(defaultAdmin, address(timelock)));
+    }
+
+    function test_receipt_lastAdminFloor_handoverSucceeds() public {
+        address next = address(0xBEEF);
+        bytes32 adminRole = receipts.ADMIN_ROLE();
+        bytes32 defaultAdmin = receipts.DEFAULT_ADMIN_ROLE();
+        vm.startPrank(address(timelock));
+        receipts.grantRole(adminRole, next);
+        receipts.grantRole(defaultAdmin, next);
+        receipts.renounceRole(adminRole, address(timelock));
+        receipts.renounceRole(defaultAdmin, address(timelock));
+        vm.stopPrank();
+        assertFalse(receipts.hasRole(adminRole, address(timelock)));
+        assertFalse(receipts.hasRole(defaultAdmin, address(timelock)));
+        // The new holder is now the last admin and is floored in turn.
+        vm.startPrank(next);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        receipts.renounceRole(defaultAdmin, next);
+        vm.stopPrank();
     }
 }

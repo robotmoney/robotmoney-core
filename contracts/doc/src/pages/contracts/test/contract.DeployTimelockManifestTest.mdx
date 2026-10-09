@@ -5,9 +5,9 @@ description: "The manifest must answer, from one file: which chain, which addres
 
 # DeployTimelockManifestTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/db74d747cb63d7157485338d758ffc470a9ae2cf/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3ca473b2028cebb667ec67540037c713c43638c1/contracts/test/DeployTimelock.t.sol)
 
-**Inherits:** Test
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
 The manifest must answer, from one file: which chain, which
 addresses, which bytecode, holding which roles.
@@ -86,6 +86,16 @@ The two R7 conditions, recorded as booleans an auditor can grep.
 
 ```solidity
 function test_manifestRecordsTheR7RoleConditions() public view;
+```
+
+<a id="test_executorpolicy_manifestrecordspolicy"></a>
+
+### test_executorPolicy_manifestRecordsPolicy
+
+The policy the timelock was built with is in the manifest (core 1521).
+
+```solidity
+function test_executorPolicy_manifestRecordsPolicy() public view;
 ```
 
 <a id="test_manifesttests_passanexplicitpath_neversetdeploymentout"></a>

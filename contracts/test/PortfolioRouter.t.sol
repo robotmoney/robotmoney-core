@@ -2,7 +2,6 @@
 // Canonical: none — Foundry unit tests for contracts/PortfolioRouter.sol
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -12,6 +11,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -195,7 +195,7 @@ contract BlacklistableVault is ERC20 {
 
 // ─── PortfolioRouterTest ──────────────────────────────────────────────────────
 
-contract PortfolioRouterTest is Test {
+contract PortfolioRouterTest is SafeGovernance {
     MockUSDC internal usdc;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
@@ -319,19 +319,144 @@ contract PortfolioRouterTest is Test {
         router.setWeights(vaults, bps);
     }
 
-    function test_setWeights_revertsForUnauthorized() public {
-        address[] memory vaults = new address[](1);
-        uint256[] memory bps = new uint256[](1);
+    function _oneVault() internal view returns (address[] memory vaults, uint256[] memory bps) {
+        vaults = new address[](1);
+        bps = new uint256[](1);
         vaults[0] = address(vaultA);
         bps[0] = 10_000;
-        bytes32 role = router.ADMIN_ROLE();
+    }
+
+    function _expectWeightSetterRevert(address caller) internal {
+        bytes32 role = router.WEIGHT_SETTER_ROLE();
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
+                IAccessControl.AccessControlUnauthorizedAccount.selector, caller, role
             )
         );
+    }
+
+    function test_setWeights_revertsForUnauthorized() public {
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        _expectWeightSetterRevert(stranger);
         vm.prank(stranger);
         router.setWeights(vaults, bps);
+    }
+
+    /// @notice The timelock holds ADMIN_ROLE and still cannot set active weights.
+    function test_setWeights_revertsForTimelock() public {
+        address timelock = makeAddr("timelock");
+        vm.startPrank(admin);
+        router.grantRole(router.ADMIN_ROLE(), timelock);
+        router.revokeRole(router.WEIGHT_SETTER_ROLE(), admin);
+        vm.stopPrank();
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        _expectWeightSetterRevert(timelock);
+        vm.prank(timelock);
+        router.setWeights(vaults, bps);
+    }
+
+    /// @notice WEIGHT_SETTER_ROLE is its own role admin, so the timelock (ADMIN_ROLE
+    ///         only) cannot grant itself the role, and a granted setter cannot be
+    ///         escalated by an ADMIN_ROLE holder. Closes the self-grant loophole.
+    function test_timelock_cannotGrantItselfWeightSetterRole() public {
+        address timelock = makeAddr("timelock");
+        bytes32 setterRole = router.WEIGHT_SETTER_ROLE();
+        assertEq(router.getRoleAdmin(setterRole), setterRole);
+        vm.startPrank(admin);
+        router.grantRole(router.ADMIN_ROLE(), timelock);
+        router.revokeRole(setterRole, admin);
+        vm.stopPrank();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, timelock, setterRole
+            )
+        );
+        vm.prank(timelock);
+        router.grantRole(setterRole, timelock);
+        assertFalse(router.hasRole(setterRole, timelock));
+    }
+
+    /// @notice The Safe holds no router role: it reaches the router only through the timelock.
+    function test_setWeights_revertsForSafe() public {
+        _installSafeSet();
+        address safe = _newDefaultSafe();
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        // The real Safe, as msg.sender, is refused with the exact access-control error.
+        _assertSafeCallReverts(
+            safe,
+            address(router),
+            abi.encodeCall(PortfolioRouter.setWeights, (vaults, bps)),
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                safe,
+                router.WEIGHT_SETTER_ROLE()
+            )
+        );
+    }
+
+    /// @notice After the deploy ceremony drops the deployer's copy, the deployer
+    ///         and a random EOA both revert.
+    function test_setWeights_revertsForDeployerAndEoa() public {
+        bytes32 setterRole = router.WEIGHT_SETTER_ROLE();
+        vm.prank(admin);
+        router.revokeRole(setterRole, admin);
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        _expectWeightSetterRevert(admin);
+        vm.prank(admin);
+        router.setWeights(vaults, bps);
+        address eoa = makeAddr("eoa");
+        _expectWeightSetterRevert(eoa);
+        vm.prank(eoa);
+        router.setWeights(vaults, bps);
+    }
+
+    function test_setWeights_succeedsForWeightSetterRole() public {
+        address setter = makeAddr("weightSetter");
+        bytes32 setterRole = router.WEIGHT_SETTER_ROLE();
+        vm.prank(admin);
+        router.grantRole(setterRole, setter);
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        vm.prank(setter);
+        router.setWeights(vaults, bps);
+        (address[] memory got,) = router.getWeights();
+        assertEq(got.length, 1);
+        assertEq(got[0], address(vaultA));
+    }
+
+    /// @notice The timelock (ADMIN_ROLE only) can still set the default weights.
+    function test_setDefaultWeights_succeedsForTimelockAdmin() public {
+        address timelock = makeAddr("timelock");
+        vm.startPrank(admin);
+        router.grantRole(router.ADMIN_ROLE(), timelock);
+        router.revokeRole(router.WEIGHT_SETTER_ROLE(), admin);
+        vm.stopPrank();
+        // setDefaultWeights needs one entry per router-eligible vault.
+        address[] memory vaults = new address[](2);
+        uint256[] memory bps = new uint256[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        bps[0] = 6_000;
+        bps[1] = 4_000;
+        vm.prank(timelock);
+        router.setDefaultWeights(vaults, bps);
+        (address[] memory got,) = router.getDefaultWeights();
+        assertEq(got.length, 2);
+    }
+
+    function test_setDefaultWeights_revertsForWeightSetterRoleOnly() public {
+        address setter = makeAddr("weightSetterOnly");
+        bytes32 setterRole = router.WEIGHT_SETTER_ROLE();
+        bytes32 adminRole = router.ADMIN_ROLE();
+        vm.prank(admin);
+        router.grantRole(setterRole, setter);
+        (address[] memory vaults, uint256[] memory bps) = _oneVault();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, setter, adminRole
+            )
+        );
+        vm.prank(setter);
+        router.setDefaultWeights(vaults, bps);
     }
 
     function test_setWeights_happyPath_emitsEvent() public {
@@ -555,7 +680,7 @@ contract PortfolioRouterTest is Test {
 
         // Pause vaultA.
         vm.prank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
 
         uint256 amount = 1000 * ONE_USDC;
         PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
@@ -592,8 +717,8 @@ contract PortfolioRouterTest is Test {
 
         // Pause both vaults.
         vm.startPrank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
-        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
+        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.DepositsPaused);
         vm.stopPrank();
 
         // Should not revert.
@@ -649,7 +774,7 @@ contract PortfolioRouterTest is Test {
 
         // Pause vaultA in the registry; the vault contract still accepts deposits.
         vm.prank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
 
         uint256 amount = 1000 * ONE_USDC;
 
@@ -711,7 +836,7 @@ contract PortfolioRouterTest is Test {
         // retired (#1173 make-ineligible-before-retire); it stays in the weight
         // vector so the all-legs-unavailable path is still exercised.
         vm.startPrank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
         registry.setRouterEligible(address(vaultB), false);
         registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Retired);
         vm.stopPrank();
@@ -891,7 +1016,7 @@ contract PortfolioRouterTest is Test {
         // Pause vaultA in the registry. Router eligibility should not change —
         // Paused is transient and does not touch the eligibility flag.
         vm.prank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(router.isRouterEligible(address(vaultA)));
 
         // Retiring a still-eligible vault reverts (#1173 make-ineligible-before-
@@ -1379,8 +1504,8 @@ contract PortfolioRouterTest is Test {
         vm.startPrank(admin);
         registry.registerVault(address(rwa), meta);
         // Non-Active status; isRouterEligible stays false (the registry
-        // default). This mirrors DeployDemoExtraVaults' RWA placeholder.
-        registry.setVaultStatus(address(rwa), VaultRegistry.VaultStatus.Paused);
+        // default). This is a plain basket-row placeholder.
+        registry.setVaultStatus(address(rwa), VaultRegistry.VaultStatus.DepositsPaused);
         vm.stopPrank();
     }
 
@@ -1707,20 +1832,17 @@ contract PortfolioRouterTest is Test {
         assertEq(assetsOut[1], sharesToRedeem[1], "Active vaultB redeemable");
     }
 
-    /// @notice redeemFor reverts VaultPausedForRedeem when a named leg is Paused
-    ///         (F-02): only Paused blocks the exit path.
-    function test_redeemFor_revertsWhenLegPaused() public {
+    /// @notice redeemFor still redeems a leg whose registry status is DepositsPaused:
+    ///         no status blocks an exit (F-02, core 1494).
+    function test_redeemFor_redeemsWhenLegDepositsPaused() public {
         uint256 amount = 1000 * ONE_USDC;
         uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
 
         vm.prank(admin);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
 
         vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.VaultPausedForRedeem.selector, address(vaultA))
-        );
-        router.redeemFor(
+        uint256[] memory assetsOut = router.redeemFor(
             depositor,
             depositor,
             _redeemVaults(),
@@ -1728,6 +1850,8 @@ contract PortfolioRouterTest is Test {
             new uint256[](2),
             type(uint256).max
         );
+        assertEq(assetsOut[0], sharesToRedeem[0], "DepositsPaused vaultA still redeemable");
+        assertEq(assetsOut[1], sharesToRedeem[1], "Active vaultB redeemable");
     }
 
     /// @notice redeemFor reverts RedeemVaultNotRegistered when a named vault is

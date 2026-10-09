@@ -1,0 +1,90 @@
+---
+title: "EtchAavePool"
+---
+
+# EtchAavePool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/helpers/VenueMocks.sol)
+
+<i>
+
+Stand-ins for the three EXTERNAL lending venues (Aave V3, Compound V3, Moonwell Flagship
+USDC). Their runtime code is etched at the real venue addresses the production vault
+stage uses, so the split stages run unchanged in process and a deposit and a withdraw
+round trip completes without a fork. Each is 1:1, holds no state in the constructor
+(the runtime code is copied, storage is not) and takes the USDC address as an immutable.
+These are venues, not the thing under test: the gateway, router, registry and vault
+are the production contracts built by the production stage scripts.
+
+</i>
+
+## Constants
+
+### usdc
+
+```solidity
+IERC20 public immutable usdc;
+```
+
+### aToken
+
+```solidity
+TestERC20 public immutable aToken;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_, address aToken_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+| aToken_ | `address` |  |
+
+<a id="supply-address-uint256-address-uint16"></a>
+
+### supply
+
+```solidity
+function supply(address asset, uint256 amount, address onBehalfOf, uint16) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+| onBehalfOf | `address` |  |
+| _ | `uint16` |  |
+
+<a id="withdraw-address-uint256-address"></a>
+
+### withdraw
+
+```solidity
+function withdraw(address asset, uint256 amount, address to) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

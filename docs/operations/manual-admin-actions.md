@@ -91,9 +91,25 @@ A non-empty result confirms the gate is in place.
 
 **What.** Deploy `PortfolioRouter`, `RouterGovernance`, and `TimelockController`
 to **Base mainnet (chain `8453`)**, record their addresses in
-`deployments/full-stack.json`, then transfer `ADMIN_ROLE` to the
-`TimelockController` across **all five protocol contracts**: Gateway, Vault,
-VaultRegistry, PortfolioRouter, and RouterGovernance.
+the run's deploy manifests (`deployments/<chain>/`), then hand the privileged
+roles to the `TimelockController`. `DeployTimelock.s.sol` hands over:
+
+- `ADMIN_ROLE` on the five protocol contracts: Gateway, VaultRegistry,
+  PortfolioRouter, RouterGovernance, and every vault in `VAULT_ADDRESSES`.
+  The basket vaults (rmPROTO, rmAGENT, rmRWA) are in that list alongside rmUSDC.
+  The deployer's vault `EMERGENCY_ROLE` moves to the independent
+  `EMERGENCY_ADDRESS` key.
+- `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the Gateway.
+- `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the IC policy
+  (`InvestmentCommitteePolicy`, `IC_POLICY_ADDRESS`), revoked from the deployer.
+  The gateway's own `ADMIN_ROLE` on the IC policy is left in place.
+- `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the consensus receipt
+  (`ConsensusRecommendationReceipt`, `CONSENSUS_RECEIPT_ADDRESS`), revoked from
+  the address named by `RECEIPT_ADMIN_ADDRESS`.
+- Ownership of every gateway agent in `AGENT_ADDRESSES`.
+
+`IC_POLICY_ADDRESS`, `CONSENSUS_RECEIPT_ADDRESS` and `RECEIPT_ADMIN_ADDRESS` are
+required on every chain. The script reverts when one is unset.
 
 **Why.** Architecture §8 requires that `ADMIN_ROLE` on all protocol contracts be
 held by the deployed `TimelockController` in production — no EOA may hold
@@ -118,8 +134,8 @@ contract-enforced rather than operational convention.
    log whose second topic is the deployer, plus every
    `AgentOwnershipTransferred` log whose third topic is the deployer, keeping
    only the agents whose `agentOwner(agent)` is still the deployer (the
-   `deployer_owned_agents` helper in `scripts/stage/fusion-ceremony.sh` does
-   exactly this). Deploy.s.sol's deploy agent is among them unless it was
+   `deployer_owned_agents` helper in the devops publish-contracts CLI does
+   exactly this). The gateway stage's deploy agent is among them unless it was
    already revoked or handed over.
 
    ```bash
@@ -139,10 +155,11 @@ contract-enforced rather than operational convention.
    left to you is the list itself: `roles.gateway_agents_listed_count` in the
    manifest must equal the number of agents found above.
 3. Record the resulting `portfolio_router`, `router_governance`, and
-   `timelock_controller` addresses in `deployments/full-stack.json`.
+   `timelock_controller` addresses in the run's deploy manifests (`deployments/<chain>/`).
 
-**Verify.** For each of the five contracts, confirm the timelock holds
-`ADMIN_ROLE` and no EOA does:
+**Verify.** For each of the five protocol contracts, each basket vault, the IC
+policy and the consensus receipt, confirm the timelock holds `ADMIN_ROLE` and no
+EOA does:
 
 ```bash
 cast call "$CONTRACT" "hasRole(bytes32,address)(bool)" \
@@ -150,12 +167,33 @@ cast call "$CONTRACT" "hasRole(bytes32,address)(bool)" \
   --rpc-url "$BASE_RPC"   # expect: true
 ```
 
-Also confirm `deployments/full-stack.json` carries the three new addresses:
+Also confirm the run's merged deploy manifest carries the three new addresses:
 
 ```bash
 jq 'has("portfolio_router") and has("router_governance") and has("timelock_controller")' \
-  deployments/full-stack.json   # expect: true
+  deployments/<chain>/<merged manifest>.json   # expect: true
 ```
+
+**If verify (stage 12) or the postflight fails.** The publish-contracts CLI
+pauses deposits on all four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) by itself
+and still exits with the verify failure's code (owner decision 2026-10-07, plan
+decision 22, core 1619). rmUSDC is not special. Withdrawals stay open
+(`pauseDeposits()` sets `depositsPaused` only). The same step runs by hand with
+the `pause-all` verb and the same arguments as the run (the same `--evidence`
+directory):
+
+```bash
+bun publish-contracts/src/cli.ts pause-all --chain 8453 --rpc "$BASE_RPC" --sheet "$SHEET"   --signer "$DEPLOYER_SIGNER" --emergency-signer "$EMERGENCY_SIGNER"   --core-sha "$DEPLOY_SHA" --evidence "$EVIDENCE_DIR" --correlated-owners-file "$CORRELATED_OWNERS_FILE"
+```
+
+The signer follows the stage. Before the stage 11 handover the deployer signs
+(it still holds `EMERGENCY_ROLE` on every vault). After it, the EMERGENCY key
+signs (`--emergency-signer`, never defaulted on mainnet). The CLI reads
+`depositsPaused` back on every vault and writes each vault's paused state to
+`rollout-report-<chain>.json` in the evidence directory. Exit 25 means a vault
+is not confirmed paused: pause it by hand now. Unpausing is a different
+operation (`ADMIN_ROLE` through the timelock). The fix then follows the release
+runbook fix loop: merge the fix on `dev`, redeploy to fresh addresses.
 
 ---
 
@@ -209,8 +247,8 @@ roster, and that each signer has acknowledged the playbook.
 
 ## 5. Retired v1 vault — indefinite feed + pool-liquidity maintenance
 
-**What.** After a v1 vault is retired during the unified-Vault (ADR-0010)
-migration, keep every dependency its redemptions need — the Chronicle deSPXA feed
+**What.** After a v1 vault is retired when the v2 core stack replaces it
+(ADR-0010, the unified-Vault proposal, is Rejected), keep every dependency its redemptions need — the Chronicle deSPXA feed
 and the Aerodrome/execution-pool liquidity — funded and live until that vault's
 `totalSupply()` reaches zero.
 

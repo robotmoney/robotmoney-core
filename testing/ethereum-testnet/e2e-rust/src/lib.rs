@@ -19,9 +19,8 @@ use once_cell::sync::Lazy;
 
 pub use rust_payment_client::signer::software::PASSPHRASE_ENV_VAR;
 pub use smoke_test::{
-    agent_address, prerequisites_available, HarnessError, AGENT_PRIVATE_KEY, DEPLOYER_ADDRESS_HEX,
-    DEPLOYER_PRIVATE_KEY_HEX, PAUSER_ADDRESS_HEX, PAUSER_PRIVATE_KEY_HEX,
-    SHARE_RECEIVER_ADDRESS_HEX,
+    agent_address, prerequisites_available, require_prereqs, HarnessError, AGENT_PRIVATE_KEY,
+    PAUSER_ADDRESS_HEX, PAUSER_PRIVATE_KEY_HEX, SHARE_RECEIVER_ADDRESS_HEX,
 };
 
 const TEST_PASSPHRASE: &str = "rmpc-e2e-passphrase";
@@ -97,14 +96,14 @@ pub struct Fixture {
 impl Fixture {
     /// Boot the devnet, build rmpc, write a keystore and config.
     ///
-    /// Deploys the three real Aave/Compound/Morpho adapters against the warmed
-    /// fork-state snapshot the devnet boots from (real protocol storage is
+    /// Deploys the three real Aave/Compound/Morpho adapters against the Twin chain,
+    /// a lazy fork of real Base (real protocol storage is
     /// present, so no test passthrough hatch is needed).
     pub fn new() -> Result<Self, HarnessError> {
         Self::with_deploy_env(&[])
     }
 
-    /// Like [`Self::new`] but passes extra env vars to `forge script Deploy`.
+    /// Like [`Self::new`] but passes parameter overrides (allow-listed sheet keys) to publish contracts.
     pub fn with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
         // Build rmpc first so we fail fast before the 60-90s devnet boot.
         let rmpc_bin = ensure_rmpc_built()?;
@@ -168,12 +167,12 @@ impl Fixture {
         self.devnet.approve_usdc_from_agent(amount)
     }
 
-    pub fn pause_gateway(&self) -> Result<String, HarnessError> {
-        self.devnet.pause_gateway()
+    pub fn pause_gateway_deposits(&self) -> Result<String, HarnessError> {
+        self.devnet.pause_gateway_deposits()
     }
 
-    pub fn unpause_gateway(&self) -> Result<String, HarnessError> {
-        self.devnet.unpause_gateway()
+    pub fn unpause_gateway_deposits(&self) -> Result<String, HarnessError> {
+        self.devnet.unpause_gateway_deposits()
     }
 
     pub fn revoke_agent(&self) -> Result<String, HarnessError> {
@@ -189,8 +188,29 @@ impl Fixture {
             .reauthorize_agent(max_per_payment, max_per_window)
     }
 
-    pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<String, HarnessError> {
+    /// `authorizeAgent(agent, policy)` through the real Safe and the timelock (see the smoke-test fixture).
+    pub fn authorize_agent_for(
+        &self,
+        agent: Address,
+        max_per_payment: u128,
+        max_per_window: u128,
+    ) -> Result<String, HarnessError> {
+        self.devnet
+            .authorize_agent_for(agent, max_per_payment, max_per_window)
+    }
+
+    pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<u128, HarnessError> {
         self.devnet.fund_usdc(recipient, amount)
+    }
+
+    /// Run one govern row through the real Safe and the timelock.
+    pub fn govern(&self, row: &str, args: &[&str]) -> Result<String, HarnessError> {
+        self.devnet.govern(row, args)
+    }
+
+    /// The timelock that holds admin after handover.
+    pub fn timelock(&self) -> Address {
+        self.devnet.timelock()
     }
 
     // ---- rmpc accessors ---------------------------------------------
@@ -305,6 +325,11 @@ fn write_keystore_and_config(
     let state_dir = tmp.join("state");
     std::fs::create_dir_all(&state_dir)?;
 
+    // The Twin chain forwards pre-fork block ranges to the upstream, which caps eth_getLogs at 500
+    // blocks, so `rmpc status` cannot scan from `earliest`. The vault and gateway are already
+    // deployed, so the current block precedes every event the tests will look up.
+    let from_block = current_block_number(devnet.rpc_url())?;
+
     let config_path = tmp.join("rmpc.toml");
     let toml = format!(
         r#"chain_id              = {chain_id}
@@ -314,12 +339,14 @@ usdc_address          = "{usdc}"
 vault_address         = "{vault}"
 gateway_runtime_hash  = "{hash}"
 max_fee_per_gas_cap   = 100000000000
+gateway_from_block    = {from_block}
 
 [signer]
 allow_software_fallback = true
 keystore_path           = "{keystore}"
 "#,
         chain_id = devnet.chain_id(),
+        from_block = from_block,
         rpc_url = devnet.rpc_url(),
         gateway = devnet.gateway_hex(),
         usdc = devnet.usdc_hex(),
@@ -330,4 +357,21 @@ keystore_path           = "{keystore}"
     std::fs::write(&config_path, toml)?;
 
     Ok((keystore_path, config_path, state_dir))
+}
+
+/// `eth_blockNumber` through `cast rpc` (the same tool the smoke-test fixture uses).
+fn current_block_number(rpc_url: &str) -> Result<u64, HarnessError> {
+    let out = Command::new("cast")
+        .args(["rpc", "--rpc-url", rpc_url, "eth_blockNumber"])
+        .output()?;
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "eth_blockNumber failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let hex = text.trim().trim_matches('"').trim_start_matches("0x");
+    u64::from_str_radix(hex, 16)
+        .map_err(|e| HarnessError::other(format!("eth_blockNumber parse {text:?}: {e}")))
 }

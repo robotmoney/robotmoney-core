@@ -194,10 +194,10 @@ Keeper/admin rebalance:
 
 Emergency controls:
 
-- `emergencyWithdraw()` pauses the vault and attempts to drain all
-  active adapters.
-- `emergencyWithdrawAdapter(index)` pauses the vault and attempts to
-  drain one adapter.
+- `emergencyWithdraw()` pauses deposits and attempts to drain all
+  active adapters. Withdrawals stay open (core 1494).
+- `emergencyWithdrawAdapter(index)` pauses deposits and attempts to
+  drain one adapter. Withdrawals stay open.
 - `forceRemoveAdapter(index)` marks an adapter inactive without
   withdrawing. Assets left there are treated as lost.
 - `shutdownVault()` disables deposits by setting shutdown and zeroing
@@ -256,7 +256,7 @@ Any production adapter must satisfy these properties before activation:
 Adapters and the Portfolio Router operate at different layers.
 
 The Portfolio Router is the outer product allocation layer. It splits a
-deposit across active vaults according to RM-governed router weights.
+deposit across active vaults according to RouterGovernance-voted router weights.
 Its destinations are vaults.
 
 Adapters are internal to a vault. They split or deploy one vault's
@@ -267,33 +267,20 @@ Therefore:
 
 - A Portfolio Router weight is a weight across vaults.
 - An adapter cap is a cap inside one vault.
-- RM-token governance currently controls Portfolio Router weights only.
-- RM-token governance does not currently control adapter selection,
+- RouterGovernance currently controls active Portfolio Router weights only.
+  The timelock may set default weights only (not yet implemented: core
+  #1522).
+- RouterGovernance does not currently control adapter selection,
   adapter caps, or per-vault strategy internals.
 
-## 9. Forward reference: unified vault architecture (ADR-0010)
+## 9. History: the unified vault proposal
 
-The adapter layer described above is being generalized. The accepted
-direction (rationale in `docs/adr/ADR-0010-unified-vault-architecture.md`;
-build-from specification in `docs/technical/unified-vault-spec.md`) unifies
-`RobotMoneyVault` and the `BasketVault` subclasses into a single `Vault`
-contract composed with `IPositionAdapter` implementations:
-
-- `IStrategyAdapter` is superseded by `IPositionAdapter`, a superset that
-  adds min-out parameters, a realized-value return on `deploy`, and an
-  `isExact()` self-declaration. The lending adapters documented in §4
-  (Aave V3, Compound V3, Morpho) are retrofitted with `isExact() == true`
-  and otherwise unchanged behavior.
-- Basket assets become `AssetPositionAdapter` instances (one per asset)
-  that custody the token, execute swaps through the existing
-  `IBasketSwapAdapter` venue seam, and price via TWAP or Chronicle oracle —
-  absorbing the per-asset configuration that today lives on `BasketVault`.
-- The vault flow in §3 and the controls in §5 carry into the unified
-  vault; the deposit path adopts `BasketVault`'s route-first
-  mint-on-realized-delta model, and ERC-4626 `withdraw()` is gated on all
-  active adapters being exact.
-
-This document remains accurate for the deployed v1 `RobotMoneyVault` until
-the v1 vaults are retired per
-`docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md`. New adapter
-work should target `IPositionAdapter` per the unified spec.
+ADR-0010 proposed generalizing this layer into a single `Vault` with position
+adapters. It was Rejected and its code is deleted (see
+`docs/adr/ADR-0010-unified-vault-architecture.md`). The adapter layer in this document
+(`IStrategyAdapter` for lending, `IBasketSwapAdapter` for basket swaps) is the shipped
+design. The basket swap adapters on this branch are `UniswapV3SwapAdapter` and
+`AerodromeSwapAdapter`. The deploy scripts wire only venue `UniswapV3`; no deploy script
+registers `AerodromeSwapAdapter`. The Uniswap V4 adapters were deleted on core PR 1505.
+Restoring a V4 swap adapter is a decided option for RM's venue (not yet implemented; core
+issue to be filed).

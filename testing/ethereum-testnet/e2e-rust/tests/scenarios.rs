@@ -1,6 +1,6 @@
 //! Canonical: Plan tracking issue #109 §5 — End-to-end scenarios
 //!
-//! End-to-end scenario tests for `rmpc` against the Geth+Lighthouse
+//! End-to-end scenario tests for `rmpc` against the Twin chain
 //! devnet (issues #18, #19, #37).
 //!
 //! Issue #37 consolidated the previous Anvil-flavor scenarios into
@@ -24,9 +24,11 @@
 //!    `ErrOrderIdAlreadySubmitted`.
 //! 5. `over_per_payment_cap_rejected` — `amount > maxPerPayment`
 //!    refused by preflight (`ErrConfig`).
-//! 6. `paused_blocks_deposit` — `paused() == true` refused by
-//!    preflight (`ErrGatewayPaused`); test cleans up by calling
-//!    `unpause()` so subsequent tests can deposit.
+//! 6. `deposits_paused_blocks_deposit_not_withdraw` — with
+//!    `depositsPaused() == true` a deposit is refused by preflight
+//!    (`ErrDepositsPaused`) and a withdrawal is never refused for the
+//!    pause (core 1494); test cleans up by calling `unpauseDeposits()`
+//!    so subsequent tests can deposit.
 //! 7. `role_separation_invariant` — admin granting itself
 //!    `AGENT_ROLE` reverts via `RoleSeparationViolated`.
 //! 8. `software_fallback_disabled_aborts_startup` — startup-time
@@ -38,8 +40,8 @@
 //!
 //! ## Boot model
 //!
-//! All scenarios share a single Geth devnet boot. Bringing up the
-//! Geth + Lighthouse + 4-validator stack costs ~60-90s, so paying
+//! All scenarios share a single Twin chain boot. Bringing up the
+//! Twin chain (anvil lazy fork) costs a few seconds, so paying
 //! that nine times is a CI budget killer. We serialize via
 //! `--test-threads=1` (the only safe mode for Docker tests anyway —
 //! port 8545 is a global resource) and share one [`Fixture`] across
@@ -65,7 +67,7 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
-use rmpc_e2e::{Fixture, AGENT_PRIVATE_KEY, DEPLOYER_PRIVATE_KEY_HEX};
+use rmpc_e2e::{require_prereqs, Fixture, AGENT_PRIVATE_KEY};
 use serde_json::Value;
 
 /// USDC has 6 decimals throughout the harness.
@@ -89,19 +91,6 @@ fn order_id(label: &str) -> String {
     format!("{h:#x}")
 }
 
-/// Print + return `true` when the harness prerequisites aren't on
-/// PATH (Docker, forge, cast).
-fn skip_if_no_prereqs(test_name: &str) -> bool {
-    if !rmpc_e2e::prerequisites_available() {
-        eprintln!(
-            "[{test_name}] docker / forge / cast not on PATH; skipping. \
-             Install Docker + Foundry to run this test."
-        );
-        return true;
-    }
-    false
-}
-
 /// Parse rmpc stdout as JSON, panicking with a helpful diagnostic on
 /// failure.
 fn parse_json(stdout: &str, ctx: &str) -> Value {
@@ -119,14 +108,14 @@ fn shared_fixture() -> &'static Mutex<Option<Fixture>> {
     CELL.get_or_init(|| Mutex::new(None))
 }
 
-/// Lazily boot the geth fixture on first call. Subsequent calls reuse
+/// Lazily boot the Twin chain fixture on first call. Subsequent calls reuse
 /// the live deployment. The lock is held for the duration of each
 /// test, which is fine because tests run with `--test-threads=1`.
 fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
     let cell = shared_fixture();
-    let mut guard = cell.lock().expect("shared fixture mutex poisoned");
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
-        let fx = Fixture::new().expect("boot geth devnet + deploy");
+        let fx = Fixture::new().expect("boot the Twin chain + deploy");
         *guard = Some(fx);
     }
     f(guard.as_ref().expect("fixture present"))
@@ -137,7 +126,7 @@ fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
 /// `--slow`/finality stutters that happen in early devnet life.
 const RECEIPT_TIMEOUT_SECS: &str = "180";
 
-/// Common deposit args for the geth flavor.
+/// Common deposit args for the Twin chain.
 fn deposit_args(amount: u128, oid: &str) -> [String; 6] {
     [
         "--amount".into(),
@@ -157,9 +146,7 @@ fn deposit_args(amount: u128, oid: &str) -> [String; 6] {
 /// the canonical one in place.
 #[test]
 fn code_hash_mismatch_aborts() {
-    if skip_if_no_prereqs("code_hash_mismatch_aborts") {
-        return;
-    }
+    require_prereqs("code_hash_mismatch_aborts");
     with_fixture(|fx| {
         let original = std::fs::read_to_string(fx.config_path()).expect("read config");
         let bad_hash = bitflip_hash(fx.gateway_runtime_hash());
@@ -231,9 +218,7 @@ fn bitflip_hash(h: &str) -> String {
 /// `flock` attempt overlaps with the winner's preflight every run.
 #[test]
 fn concurrent_invocation_locked() {
-    if skip_if_no_prereqs("concurrent_invocation_locked") {
-        return;
-    }
+    require_prereqs("concurrent_invocation_locked");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT * 2)
             .expect("approve usdc");
@@ -304,9 +289,7 @@ fn concurrent_invocation_locked() {
 /// observable on-chain side effects via `rmpc status`.
 #[test]
 fn deposit_happy_path() {
-    if skip_if_no_prereqs("deposit_happy_path") {
-        return;
-    }
+    require_prereqs("deposit_happy_path");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT)
             .expect("approve usdc");
@@ -382,9 +365,7 @@ fn deposit_happy_path() {
 /// submission is attempted.
 #[test]
 fn idempotent_replay_rejected() {
-    if skip_if_no_prereqs("idempotent_replay_rejected") {
-        return;
-    }
+    require_prereqs("idempotent_replay_rejected");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT * 2)
             .expect("approve usdc");
@@ -443,9 +424,7 @@ fn idempotent_replay_rejected() {
 /// message mentioning `maxPerPayment`.
 #[test]
 fn over_per_payment_cap_rejected() {
-    if skip_if_no_prereqs("over_per_payment_cap_rejected") {
-        return;
-    }
+    require_prereqs("over_per_payment_cap_rejected");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(OVER_PAYMENT_CAP_DEPOSIT)
             .expect("approve usdc");
@@ -486,23 +465,36 @@ fn over_per_payment_cap_rejected() {
 
 // ------------------------------------------------------------- scenario 6
 
-/// `paused() == true` causes preflight to refuse with
-/// `ErrGatewayPaused`. The client never broadcasts. Cleans up by
-/// calling `unpause()` so subsequent tests can deposit.
+/// `depositsPaused() == true` causes the deposit preflight to refuse with
+/// `ErrDepositsPaused`. The client never broadcasts. A withdrawal under the
+/// same pause is never refused for it: a deposit pause never blocks a
+/// withdrawal (core 1494). Cleans up by calling `unpauseDeposits()` so
+/// subsequent tests can deposit.
 #[test]
-fn paused_blocks_deposit() {
-    if skip_if_no_prereqs("paused_blocks_deposit") {
-        return;
-    }
+fn deposits_paused_blocks_deposit_not_withdraw() {
+    require_prereqs("deposits_paused_blocks_deposit_not_withdraw");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT)
             .expect("approve usdc");
-        fx.pause_gateway().expect("pause()");
+        fx.pause_gateway_deposits().expect("pauseDeposits()");
 
-        let oid = order_id("paused_blocks_deposit");
+        let oid = order_id("deposits_paused_blocks_deposit");
         let run = fx
             .run_rmpc_deposit(deposit_args(SMALL_DEPOSIT, &oid))
             .expect("run rmpc deposit");
+        let withdraw_oid = order_id("deposits_paused_withdraw_not_refused");
+        let withdraw_run = fx
+            .run_rmpc_withdraw(vec![
+                "--shares".into(),
+                "1".into(),
+                "--source-vault".into(),
+                format!("{:#x}", fx.vault()),
+                "--order-id".into(),
+                withdraw_oid,
+                "--receipt-timeout-secs".into(),
+                "180".into(),
+            ])
+            .expect("run rmpc withdraw");
 
         // Always restore the gateway state, even if assertions panic.
         let pause_result = (|| -> Result<(), String> {
@@ -512,17 +504,17 @@ fn paused_blocks_deposit() {
                     run.status, run.stdout, run.stderr
                 ));
             }
-            let v = parse_json(&run.stdout, "paused_blocks_deposit");
+            let v = parse_json(&run.stdout, "deposits_paused_blocks_deposit_not_withdraw");
             if v["status"] != "refused" {
                 return Err(format!("expected refused; stdout={}", run.stdout));
             }
-            if v["error"] != "ErrGatewayPaused" {
-                return Err(format!("expected ErrGatewayPaused; stdout={}", run.stdout));
+            if v["error"] != "ErrDepositsPaused" {
+                return Err(format!("expected ErrDepositsPaused; stdout={}", run.stdout));
             }
             if let Some(checks) = v.get("checks") {
-                if checks["gateway_paused"] != true {
+                if checks["deposits_paused"] != true {
                     return Err(format!(
-                        "expected checks.gateway_paused=true; stdout={}",
+                        "expected checks.deposits_paused=true; stdout={}",
                         run.stdout
                     ));
                 }
@@ -533,13 +525,28 @@ fn paused_blocks_deposit() {
                     run.stdout
                 ));
             }
+            // The withdrawal is never refused for the deposit pause. The agent
+            // may hold no shares on this fixture, so a share-side refusal is
+            // allowed; a pause-named refusal is the failure this guards.
+            let w = parse_json(
+                &withdraw_run.stdout,
+                "deposits_paused_blocks_deposit_not_withdraw (withdraw)",
+            );
+            let werr = w.get("error").and_then(|e| e.as_str()).unwrap_or("");
+            if werr.to_ascii_lowercase().contains("paused") {
+                return Err(format!(
+                    "a deposit pause must never refuse a withdrawal; stdout={}",
+                    withdraw_run.stdout
+                ));
+            }
             Ok(())
         })();
 
-        // Unpause so subsequent scenarios can deposit. Errors here are
-        // surfaced after the assertion check so a real test failure
+        // Resume deposits so subsequent scenarios can deposit. Errors here
+        // are surfaced after the assertion check so a real test failure
         // reports the right thing.
-        fx.unpause_gateway().expect("unpause() to restore fixture");
+        fx.unpause_gateway_deposits()
+            .expect("unpauseDeposits() to restore fixture");
 
         if let Err(e) = pause_result {
             panic!("{e}");
@@ -559,41 +566,22 @@ fn paused_blocks_deposit() {
 /// `AccessRoles` reverts with `RoleSeparationViolated()`.
 #[test]
 fn role_separation_invariant() {
-    if skip_if_no_prereqs("role_separation_invariant") {
-        return;
-    }
+    require_prereqs("role_separation_invariant");
     with_fixture(|fx| {
-        let admin = rmpc_e2e::DEPLOYER_ADDRESS_HEX;
-        // allowedDestinations is empty ([]) — open policy used only to
-        // trigger the RoleSeparationViolated revert path before deposit.
-        let policy_tuple = format!("(true,18446744073709551615,1,1,{admin},[],0x0000000000000000000000000000000000000000,0,0,[])");
-
-        let out = Command::new("cast")
-            .args([
-                "send",
-                "--rpc-url",
-                fx.rpc_url(),
-                "--private-key",
-                DEPLOYER_PRIVATE_KEY_HEX,
-                &format!("{:#x}", fx.gateway()),
-                "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
-                admin,
-                &policy_tuple,
-            ])
-            .output()
-            .expect("invoke cast send");
-
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            !out.status.success(),
-            "authorizeAgent(admin) must revert; got success.\nstdout={stdout}\nstderr={stderr}"
-        );
-        let combined = format!("{stdout}\n{stderr}");
+        // The admin is the timelock after handover. Authorizing an admin-holding
+        // address as an agent goes through the real Safe and the timelock (a
+        // generic Safe -> Timelock call of `authorizeAgent`); the inner
+        // `_grantRole` override in `AccessRoles` reverts with
+        // `RoleSeparationViolated()` at execution, so the run must fail. No
+        // deployer key is involved.
+        let one_usdc = 1_000_000u128;
+        let result = fx.authorize_agent_for(fx.timelock(), 10_000 * one_usdc, 100_000 * one_usdc);
+        let err = result.expect_err("authorizeAgent(admin) must revert; the govern run succeeded");
+        let combined = err.to_string();
         assert!(
             combined.contains("RoleSeparationViolated")
-                || combined.contains("0x") && combined.to_lowercase().contains("revert"),
-            "expected RoleSeparationViolated in revert output;\nstdout={stdout}\nstderr={stderr}"
+                || combined.to_lowercase().contains("revert"),
+            "expected RoleSeparationViolated in revert output;\n{combined}"
         );
 
         // Sanity: AGENT_PRIVATE_KEY constant is not silently empty.
@@ -610,9 +598,7 @@ fn role_separation_invariant() {
 /// exits non-zero with the right error.
 #[test]
 fn software_fallback_disabled_aborts_startup() {
-    if skip_if_no_prereqs("software_fallback_disabled_aborts_startup") {
-        return;
-    }
+    require_prereqs("software_fallback_disabled_aborts_startup");
     with_fixture(|fx| {
         let original = std::fs::read_to_string(fx.config_path()).expect("read config");
         let tweaked = original
@@ -683,9 +669,7 @@ fn software_fallback_disabled_aborts_startup() {
 /// pattern) can deposit.
 #[test]
 fn unauthorized_agent_rejected() {
-    if skip_if_no_prereqs("unauthorized_agent_rejected") {
-        return;
-    }
+    require_prereqs("unauthorized_agent_rejected");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT)
             .expect("approve usdc");

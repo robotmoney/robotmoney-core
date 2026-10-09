@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/unified-vault-spec.md §2 (`IPositionAdapter`), §3 (lending retrofit);
-//            docs/adr/ADR-0010-unified-vault-architecture.md §2.
+// Canonical: docs/architecture.md §4.3 — Vault Adapters
 //
-// IPositionAdapter conformance suite for the retrofitted lending adapters
+// Min-out surface conformance suite for the lending adapters
 // (MorphoAdapter / AaveV3Adapter / CompoundV3Adapter, issue #1117). These
 // exercise the REAL adapter bytecode — only the external lending venue is a
 // local mock — so every assertion executes unconditionally in the always-on
@@ -33,9 +32,25 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
-import {IPositionAdapter} from "../interfaces/IPositionAdapter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+
+/// @dev Test-local view of the min-out surface the lending adapters expose
+///      beside `IStrategyAdapter`. Shared errors (`OnlyVault`, `SlippageExceeded`)
+///      have identical selectors on every adapter.
+interface ILendingMinOutSurface {
+    error OnlyVault();
+    error SlippageExceeded();
+
+    function deploy(uint256 usdcIn, uint256 minValueOut) external returns (uint256 valueAdded);
+    function withdraw(uint256 usdcWanted, uint256 minUsdcOut) external returns (uint256 usdcOut);
+    function totalAssets() external view returns (uint256);
+    function isExact() external view returns (bool);
+    function harvestRewards() external;
+    function sweepForeignToken(address token) external;
+    function USDC() external view returns (address);
+    function VAULT() external view returns (address);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Faithful 1:1 mock venues (uniquely named to avoid forge-doc re-link collisions)
@@ -143,7 +158,7 @@ contract PosConfComet {
 
 abstract contract PositionConformanceBase is Test {
     TestERC20 internal usdc;
-    IPositionAdapter internal adapter;
+    ILendingMinOutSurface internal adapter;
 
     address internal vault = makeAddr("vault");
     address internal stranger = makeAddr("stranger");
@@ -195,14 +210,14 @@ abstract contract PositionConformanceBase is Test {
     function test_deploy_revertsBelowFloor() public {
         usdc.mint(address(adapter), AMT);
         vm.prank(vault);
-        vm.expectRevert(IPositionAdapter.SlippageExceeded.selector);
+        vm.expectRevert(ILendingMinOutSurface.SlippageExceeded.selector);
         adapter.deploy(AMT, AMT + 1); // valueAdded (== AMT) < minValueOut
     }
 
     function test_deploy_revertsForNonVault() public {
         usdc.mint(address(adapter), AMT);
         vm.prank(stranger);
-        vm.expectRevert(IPositionAdapter.OnlyVault.selector);
+        vm.expectRevert(ILendingMinOutSurface.OnlyVault.selector);
         adapter.deploy(AMT, 0);
     }
 
@@ -229,14 +244,14 @@ abstract contract PositionConformanceBase is Test {
         _fundAndDeploy(AMT);
         vm.prank(vault);
         // Realized (<= AMT) is below the AMT+1 floor ⇒ SlippageExceeded.
-        vm.expectRevert(IPositionAdapter.SlippageExceeded.selector);
+        vm.expectRevert(ILendingMinOutSurface.SlippageExceeded.selector);
         adapter.withdraw(AMT, AMT + 1);
     }
 
     function test_withdraw_revertsForNonVault() public {
         _fundAndDeploy(AMT);
         vm.prank(stranger);
-        vm.expectRevert(IPositionAdapter.OnlyVault.selector);
+        vm.expectRevert(ILendingMinOutSurface.OnlyVault.selector);
         adapter.withdraw(AMT, 0);
     }
 
@@ -285,8 +300,9 @@ contract MorphoAdapterPositionTest is PositionConformanceBase {
 
     function _setUpAdapter() internal override {
         morpho = new PosConfMorphoVault(address(usdc));
-        adapter =
-            IPositionAdapter(address(new MorphoAdapter(address(morpho), address(usdc), vault)));
+        adapter = ILendingMinOutSurface(
+            address(new MorphoAdapter(address(morpho), address(usdc), vault))
+        );
     }
 
     function _shareToken() internal view override returns (address) {
@@ -301,7 +317,7 @@ contract AaveV3AdapterPositionTest is PositionConformanceBase {
     function _setUpAdapter() internal override {
         aToken = new TestERC20();
         pool = new PosConfAavePool(address(usdc), address(aToken));
-        adapter = IPositionAdapter(
+        adapter = ILendingMinOutSurface(
             address(new AaveV3Adapter(address(pool), address(usdc), address(aToken), vault))
         );
     }
@@ -316,8 +332,9 @@ contract CompoundV3AdapterPositionTest is PositionConformanceBase {
 
     function _setUpAdapter() internal override {
         comet = new PosConfComet(address(usdc));
-        adapter =
-            IPositionAdapter(address(new CompoundV3Adapter(address(comet), address(usdc), vault)));
+        adapter = ILendingMinOutSurface(
+            address(new CompoundV3Adapter(address(comet), address(usdc), vault))
+        );
     }
 
     function _shareToken() internal view override returns (address) {

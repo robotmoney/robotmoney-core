@@ -4,7 +4,7 @@ title: "CustodyMultiVaultTest"
 
 # CustodyMultiVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/fv/CustodyMultiVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/fv/CustodyMultiVault.t.sol)
 
 **Inherits:** Test
 
@@ -96,8 +96,8 @@ function test_SUP1_basketFamily_redeemableLeqTotalAssets() public;
 
 ### test_SUP1_rwaVault_redeemableLeqTotalAssets
 
-SUP-1 (RwaVault): a live Chronicle-priced RWA deposit keeps its
-holder's redeemable value within NAV.
+SUP-1 (RwaBasketVault): a live pool-TWAP-priced RWA deposit through the
+`UniswapV3SwapAdapter` keeps its holder's redeemable value within NAV.
 
 ```solidity
 function test_SUP1_rwaVault_redeemableLeqTotalAssets() public;

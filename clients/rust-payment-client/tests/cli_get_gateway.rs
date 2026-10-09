@@ -3,7 +3,7 @@
 //! Integration tests for `rmpc get-gateway` (issue #49). Drives the
 //! command against a `mockito` JSON-RPC server with canned responses
 //! for `eth_chainId`, `eth_blockNumber`, `eth_getCode`, and the three
-//! gateway view selectors (`paused`, `usdc`, `vault`).
+//! gateway view selectors (`depositsPaused`, `usdc`, `vault`).
 
 mod common;
 
@@ -49,7 +49,7 @@ async fn install_gateway_mocks(server: &mut mockito::ServerGuard, chain_id: u64,
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::pausedCall,
+            RobotMoneyGateway::depositsPausedCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_bool(false)))
@@ -108,7 +108,7 @@ async fn get_gateway_clean_envelope_shape() {
     let observed_hash = format!("0x{}", ahex::encode(keccak256(GATEWAY_CODE)));
     assert_eq!(d["code_hash"], observed_hash);
     assert_eq!(d["configured_code_hash"], observed_hash);
-    assert_eq!(d["paused"], false);
+    assert_eq!(d["deposits_paused"], false);
     assert_eq!(
         d["usdc"].as_str().unwrap().to_lowercase(),
         format!("{USDC:#x}")
@@ -120,9 +120,9 @@ async fn get_gateway_clean_envelope_shape() {
 }
 
 #[tokio::test]
-async fn get_gateway_partial_when_paused_reverts() {
-    // Install everything except `paused` succeeds, then layer a 200
-    // *response* with a JSON-RPC error object on the paused selector.
+async fn get_gateway_partial_when_deposits_paused_reverts() {
+    // Install everything except `depositsPaused` succeeds, then layer a 200
+    // *response* with a JSON-RPC error object on the depositsPaused selector.
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
     let block_no = 0x10u64;
@@ -150,11 +150,11 @@ async fn get_gateway_partial_when_paused_reverts() {
         .expect_at_least(0)
         .create_async()
         .await;
-    // paused: deliberate revert via JSON-RPC error object.
+    // depositsPaused: deliberate revert via JSON-RPC error object.
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::pausedCall,
+            RobotMoneyGateway::depositsPausedCall,
         >()))
         .with_status(200)
         .with_body(r#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}"#)
@@ -192,7 +192,7 @@ async fn get_gateway_partial_when_paused_reverts() {
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["partial"], true);
     let errs = v["errors"].as_array().unwrap();
-    assert!(errs.iter().any(|e| e["field"] == "paused"));
+    assert!(errs.iter().any(|e| e["field"] == "deposits_paused"));
 }
 
 #[tokio::test]

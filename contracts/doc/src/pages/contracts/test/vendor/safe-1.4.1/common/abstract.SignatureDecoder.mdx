@@ -1,0 +1,47 @@
+---
+title: "SignatureDecoder"
+---
+
+# SignatureDecoder
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/vendor/safe-1.4.1/common/SignatureDecoder.sol)
+
+**Title:** SignatureDecoder - Decodes signatures encoded as bytes
+
+**Author:** Richard Meissner - @rmeissner
+
+## Functions
+
+<a id="signaturesplit-bytes-uint256"></a>
+
+### signatureSplit
+
+Splits signature bytes into `uint8 v, bytes32 r, bytes32 s`.
+
+<i>
+
+Make sure to perform a bounds check for @param pos, to avoid out of bounds access on @param signatures
+     The signature format is a compact form of `bytes32 r``bytes32 s``uint8 v`
+     Compact means uint8 is not padded to 32 bytes.
+
+</i>
+
+```solidity
+function signatureSplit(bytes memory signatures, uint256 pos) internal pure returns (uint8 v, bytes32 r, bytes32 s);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| signatures | `bytes` | Concatenated `r, s, v` signatures. |
+| pos | `uint256` | Which signature to read.<br/>           A prior bounds check of this parameter should be performed, to avoid out of bounds access. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint8` | Recovery ID or Safe signature type. |
+| r | `bytes32` | Output value r of the signature. |
+| s | `bytes32` | Output value s of the signature. |
+

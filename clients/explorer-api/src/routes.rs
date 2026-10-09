@@ -120,6 +120,8 @@ type WeightSnapshotRow = (
 );
 
 // (chain_id, proposal_id, proposer BYTEA, description, created_at, deadline_block, status, votes_for, votes_against, block_number, executed_block, indexed_at)
+// votes_for / votes_against are NUMERIC(78,0) since migration 0013 (vote power sums); the queries clamp
+// them to BIGINT, so a real row decodes instead of failing the whole list with a 500 (issue 1647).
 type ProposalRow = (
     i64,
     i64,
@@ -836,7 +838,10 @@ async fn get_router_weights(
 async fn list_proposals(State(state): State<AppState>) -> ApiResult<Json<ProposalsResponse>> {
     let rows: Vec<ProposalRow> = sqlx::query_as(
         "SELECT chain_id, proposal_id, proposer, description, created_at, deadline_block, \
-                status, votes_for, votes_against, block_number, executed_block, indexed_at \
+                status, \
+                LEAST(votes_for, 9223372036854775807)::BIGINT AS votes_for, \
+                LEAST(votes_against, 9223372036854775807)::BIGINT AS votes_against, \
+                block_number, executed_block, indexed_at \
          FROM governance_proposals \
          WHERE chain_id = $1 \
          ORDER BY block_number DESC, proposal_id DESC \
@@ -899,7 +904,10 @@ async fn get_proposal(
 ) -> ApiResult<Json<ProposalDetailResponse>> {
     let row: Option<ProposalRow> = sqlx::query_as(
         "SELECT chain_id, proposal_id, proposer, description, created_at, deadline_block, \
-                status, votes_for, votes_against, block_number, executed_block, indexed_at \
+                status, \
+                LEAST(votes_for, 9223372036854775807)::BIGINT AS votes_for, \
+                LEAST(votes_against, 9223372036854775807)::BIGINT AS votes_against, \
+                block_number, executed_block, indexed_at \
          FROM governance_proposals \
          WHERE chain_id = $1 AND proposal_id = $2 \
          LIMIT 1",

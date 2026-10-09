@@ -1,7 +1,7 @@
 # ADR-0004: Agent-token shortlist governance mechanism (production, router-eligible)
 
-- **Status:** Accepted
-- **Date:** 2026-06-03
+- **Status:** Accepted (amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-canceller-executor-and-what-the-delay-split-enforces))
+- **Date:** 2026-06-03 (amended 2026-10-05)
 - **Deciders:** Product owner
 - **Related:**
   - `docs/technical/basket-vault-gap-report.md` §Eligibility-requirement-9, Appendix C
@@ -69,8 +69,8 @@ This model was chosen over the alternatives for the following reasons:
 | Minimum delay for `addAsset` | 48 hours | Long enough for stakeholders to observe the pending change and raise a public challenge before the token appears in the vault. |
 | Minimum delay for `removeAsset` | 24 hours | Removal is lower-risk than addition (no new exposure); a shorter window is sufficient. |
 | Maximum shortlist size | 15 tokens | Inherited from PRD §11.3 cap. The `AgentTokenVault` contract enforces this via `maxAssets`. |
-| Timelock executor | Safe (≥2-of-3) | No change from current configuration. The Safe must also be the `TimelockController` proposer. |
-| Canceller | Any Safe signer (unilaterally) | Any single signer may cancel a queued change before execution, providing a low-friction veto path within the multisig. |
+| Timelock executor | Open (`address(0)`) | Anyone may execute a ready operation after the delay (amended 2026-10-05). The Safe is the only proposer. |
+| Canceller | The Safe only, at its threshold (≥ 2 signatures) | No single signer can cancel a queued change (amended 2026-10-05). |
 
 ### Veto / challenge path
 
@@ -86,14 +86,9 @@ During the timelock delay window:
    the queued change (`TimelockController.cancel(id)`) if the challenge reveals
    the token fails the gate criteria (see `addAsset` gate additions below).
 
-3. **Unilateral Safe cancellation:** any one Safe signer may call
-   `TimelockController.cancel(id)` at any time before execution, stopping the
-   change without requiring a full quorum. This is the cheapest veto path.
-
-4. **Future upgrade path:** if the protocol adopts `$RM` token voting (Option B),
-   the `TimelockController` `CANCELLER_ROLE` can be extended to a token-vote
-   veto module without redeploying the vault. This upgrade path is reserved but
-   not implemented now.
+3. **Safe cancellation:** the Safe may call `TimelockController.cancel(id)` at
+   any time before execution. It acts at its threshold (≥ 2 signatures), so no
+   single signer can cancel.
 
 ### `addAsset` gate additions
 
@@ -168,6 +163,50 @@ invalid `addAsset` proposals to consume Safe gas and operator attention.
 - **Conclusion:** griefing via proposals is not economically motivated;
   it harms the attacker's reputation without meaningfully harming the protocol.
 
+## Amendment — 2026-10-05: Canceller, executor, and what the delay split enforces
+
+Owner decisions of 2026-10-05 (mainnet plan §2.2, §3.1, §3.3) and
+`docs/technical/security-model.md` §4 override two rows of the
+*Timelock parameters* table and veto step 3:
+
+- **Canceller: the Safe only.** A cancel needs the Safe acting at its
+  threshold (≥ 2 signatures). The earlier single-signer cancel row
+  and veto-path step 3 (single-signer cancel) are replaced;
+  no single signer can cancel. In code, `DeployTimelock` passes
+  `proposers = [safe]`, and OpenZeppelin's `TimelockController`
+  constructor grants `CANCELLER_ROLE` to each proposer, so the Safe is
+  the sole canceller.
+- **Executor: open (`address(0)`).** Anyone may execute a ready
+  operation after the delay. This replaces the earlier "Safe (≥2-of-3)"
+  executor row. The Safe stays the only proposer. `DeployTimelock`
+  passes `executors = [address(0)]`, records `executorPolicy` and
+  `cancellerPolicy` in `timelock.json`, and the stage 12 verifier reads
+  the role holders back from chain (core 1521).
+- **The 48-hour add / 24-hour remove split is not enforced on chain.**
+  `AgentTokenVault.SHORTLIST_ADD_DELAY` (48 h) and
+  `SHORTLIST_REMOVE_DELAY` (24 h) are public constants that no contract
+  logic reads; their NatSpec says "Enforced off-chain by the Safe
+  signers". The only on-chain delay is the `TimelockController`'s single
+  `getMinDelay()`, which applies to every operation alike. On Base
+  (chain 8453) `DeployTimelock` refuses a min delay under 172800 s, so on
+  mainnet both `addAsset` and `removeAsset` wait at least 48 hours. A
+  24-hour removal is not possible there. Nothing on chain stops the Safe
+  from scheduling an `addAsset` at exactly the min delay. Decided by the
+  owner on 2026-10-06: every shortlist change waits this single 48-hour
+  delay, and the 24-hour removal split is not built.
+
+Consequences of this amendment for the text above: the veto path is no
+longer "cheap (single Safe signer can cancel)"; it needs the Safe
+threshold. The "rapid response" `removeAsset` path takes at least
+48 hours on mainnet; the vault's slippage-cap revert remains the
+depositor protection during that window. The first checklist item (min
+delay ≥ 48 hours) is now enforced by the `DeployTimelock` floor on
+chain 8453.
+
+2026-10-06: no token-based governance is foreseen; considered alternatives that mention token voting are historical only.
+
+2026-10-06: the owner decided that every shortlist change, add or remove, waits the single 48-hour timelock delay. The 24-hour removal split above is not built.
+
 ## Consequences
 
 **Positive.**
@@ -178,8 +217,6 @@ invalid `addAsset` proposals to consume Safe gas and operator attention.
   the transparent-performance requirement (`docs/prd.md` §2).
 - The veto path is cheap (single Safe signer can cancel) and accessible
   (any observer can raise a challenge).
-- The upgrade path to token-vote veto (Option B) is preserved without
-  commitment.
 - Resolves gap-report Appendix C blocking item. AgentTokenVault (rmAGENT)
   may proceed to router-eligibility once the TWAP oracle, rebalancing model,
   and liquidity proof gaps are also resolved.
@@ -192,9 +229,8 @@ invalid `addAsset` proposals to consume Safe gas and operator attention.
 - The 48-hour delay for `addAsset` slows legitimate shortlist updates.
   A token that gains rapid community support still waits 48 hours from
   proposal to inclusion.
-- The governance model is still trust-centralized relative to a full
-  token-vote model (Option B). This is accepted for the Real-four-vault demo
-  phase; the upgrade path is documented.
+- The governance model is trust-centralized in the Safe signers. This is
+  accepted; there is no token-based governance.
 
 **Out of scope of this decision.**
 

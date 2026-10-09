@@ -1,5 +1,7 @@
 # Unified vault — resolution of open questions
 
+> **Historical.** ADR-0010 (the unified vault) is Rejected and its code is deleted. This whole document describes a proposal that was not built.
+
 > **Superseded (rebalancing model) — see
 > `docs/adr/ADR-0010-unified-vault-architecture.md`.** The isomorphic
 > flow-based rebalancing decision this document records — question **D1**
@@ -473,10 +475,11 @@ from `contracts/RobotMoneyVault.sol`:
 Redemption is always reachable, so the withdrawal-side pause has nothing to
 guard. Removable from `contracts/RobotMoneyVault.sol`:
 
-- `withdrawalsPaused` state (`:121`), the `WithdrawalsPaused` error (`:289`),
-  `_setWithdrawalsPaused` (`:1143`) with its `WithdrawalsPausedChanged` event
-  (`:235`), and the three exit-gating branches `if (withdrawalsPaused) …` in
-  `maxWithdraw` (`:542`), `maxRedeem` (`:553`), and `_withdraw` (`:596`).
+- the withdrawal-pause state (`:121`), its error (`:289`), its setter
+  (`:1143`) with its change event (`:235`), and the three exit-gating branches
+  in `maxWithdraw` (`:542`), `maxRedeem` (`:553`), and `_withdraw` (`:596`).
+  Core 1494 removed all of them (2026-10-05). The deployed v1 vault still has
+  them.
 - Only a deposit-side halt remains: the `EMERGENCY_ROLE` hot-key deposit pause
   and the global limiter's automatic deposit halt.
 
@@ -546,7 +549,7 @@ only and does not localize which adapter moved.
   force-removes, and NAV-exclusion stay `EMERGENCY_ROLE`-gated actions on
   objective per-adapter failure conditions, and the role also halts the
   **entry** path — preserving the pause/unpause trust asymmetry. The role gates
-  `pause` (`contracts/RobotMoneyVault.sol:890`), `emergencyWithdraw` (`:906`),
+  `pause` (now `pauseDeposits`, `contracts/RobotMoneyVault.sol:890`), `emergencyWithdraw` (`:906`),
   `emergencyWithdrawAdapter` (`:936`), `forceRemoveAdapter` (`:966`), and
   `shutdownVault` (`:1038`) — all retained, none reduced to a deposit-halt-only
   key. Incident-critical actions gain atomic arm+execute so the ADMIN timelock

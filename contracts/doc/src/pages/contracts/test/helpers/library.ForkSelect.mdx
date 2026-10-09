@@ -1,0 +1,53 @@
+---
+title: "ForkSelect"
+description: "Fork selection for tests that need real Base state. The state comes from the Twin chain (chain id 918453), a pinned lazy anvil fork of real Base, whose RPC URL the caller puts in FORK_RPC_URL (scripts/devnet/twin-fork.ts, .github/actions/twin-fork). With FORK_RPC_URL unset the test skips with a named reason, so the plain unit run stays green on a machine with no chain. With it set, an unreachable endpoint fails the test: a configured fork that cannot be reached is never a silent skip."
+---
+
+# ForkSelect
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/helpers/ForkSelect.sol)
+
+Fork selection for tests that need real Base state. The state comes from the Twin chain
+(chain id 918453), a pinned lazy anvil fork of real Base, whose RPC URL the caller puts in
+FORK_RPC_URL (scripts/devnet/twin-fork.ts, .github/actions/twin-fork). With FORK_RPC_URL
+unset the test skips with a named reason, so the plain unit run stays green on a machine
+with no chain. With it set, an unreachable endpoint fails the test: a configured fork that
+cannot be reached is never a silent skip.
+
+## Constants
+
+### vm
+
+```solidity
+Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+```
+
+### SKIP_REASON
+
+```solidity
+string internal constant SKIP_REASON =
+        "FORK_RPC_URL unset: start the Twin fork (bun scripts/devnet/twin-fork.ts start) and export its URL";
+```
+
+## Functions
+
+<a id="selectorskip-string"></a>
+
+### selectOrSkip
+
+```solidity
+function selectOrSkip(string memory rpc) internal returns (bool selected);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rpc | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| selected | `bool` |  |
+

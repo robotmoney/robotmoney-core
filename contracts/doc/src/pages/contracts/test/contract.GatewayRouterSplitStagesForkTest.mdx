@@ -1,0 +1,93 @@
+---
+title: "GatewayRouterSplitStagesForkTest"
+description: "Runs the production stage scripts (libs, vault, registry, router, gateway) against real Base state, then routes a deposit and a withdraw through the gateway that the gateway stage built. Before core S3 the gateway held a zero router, so both calls reverted (`InvalidDestination`, `RouterNotConfigured`). Real USDC and the real Aave, Compound and Moonwell venues are needed, so this test runs on the Twin chain (pinned lazy fork of real Base) the other fork tests use. `FORK_RPC_URL` names it; unset, the test skips with a named reason."
+---
+
+# GatewayRouterSplitStagesForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/GatewayRouter.t.sol)
+
+**Inherits:** Test
+
+Runs the production stage scripts (libs, vault, registry, router, gateway) against
+real Base state, then routes a deposit and a withdraw through the gateway that the
+gateway stage built. Before core S3 the gateway held a zero router, so both calls
+reverted (`InvalidDestination`, `RouterNotConfigured`). Real USDC and the real
+Aave, Compound and Moonwell venues are needed, so this test runs on the Twin
+chain (pinned lazy fork of real Base) the other fork tests use. `FORK_RPC_URL` names it;
+unset, the test skips with a named reason.
+
+## Constants
+
+### BASE_USDC
+
+```solidity
+address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address internal admin = makeAddr("split-admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("split-pauser");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("split-agent");
+```
+
+### shareReceiver
+
+```solidity
+address internal shareReceiver = makeAddr("split-share-receiver");
+```
+
+## Functions
+
+<a id="_forkrpcurl"></a>
+
+### _forkRpcUrl
+
+```solidity
+function _forkRpcUrl() internal view returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="test_fork_splitstages_routerdepositthenwithdraw_succeed"></a>
+
+### test_fork_splitStages_routerDepositThenWithdraw_succeed
+
+```solidity
+function test_fork_splitStages_routerDepositThenWithdraw_succeed() public;
+```
+
+<a id="test_splitstages_gatewaystagerefusesunsetrouter"></a>
+
+### test_splitStages_gatewayStageRefusesUnsetRouter
+
+A gateway stage with no router never produces a gateway: the stage reverts.
+
+```solidity
+function test_splitStages_gatewayStageRefusesUnsetRouter() public;
+```
+

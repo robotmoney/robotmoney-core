@@ -18,7 +18,7 @@ import { useExplorer } from "../lib/ExplorerContext";
 
 const STATUS_LABEL: Record<number, string> = {
   0: "Active",
-  1: "Paused",
+  1: "Deposits paused",
   2: "Retired",
 };
 

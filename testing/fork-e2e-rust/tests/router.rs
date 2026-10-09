@@ -11,12 +11,13 @@
 //!   `RouterDeposit` events are emitted with per-leg detail.
 //!
 //! - `router_unavailable_leg_skipped_and_renormalised` — register two
-//!   vaults weighted 50/50, pause one in the registry, and assert that
-//!   `router.deposit()` SUCCEEDS under skip-and-renormalise semantics
-//!   (issue #968): the paused leg is skipped (receives nothing) and the
+//!   vaults weighted 50/50, set one to DepositsPaused in the registry, and
+//!   assert that `router.deposit()` SUCCEEDS under skip-and-renormalise
+//!   semantics (issue #968): the deposits-paused leg is skipped (receives
+//!   nothing) and the
 //!   remaining Active leg absorbs the full renormalised deposit amount.
 //!
-//! - `router_all_legs_unavailable_reverts` — pause EVERY weighted vault and
+//! - `router_all_legs_unavailable_reverts` — pause deposits on EVERY weighted vault and
 //!   assert `router.deposit()` still reverts (`NoWeightsSet`) because there
 //!   is no available leg to renormalise onto.
 //!
@@ -89,7 +90,7 @@ sol! {
     /// VaultRegistry interface (same as in lib.rs but scoped to this test).
     #[allow(missing_docs)]
     interface IVaultRegistry {
-        enum VaultStatus { Active, Paused, Retired }
+        enum VaultStatus { Active, DepositsPaused, Retired }
 
         struct VaultMetadata {
             string name;
@@ -245,6 +246,7 @@ fn deploy_portfolio_router(
 /// Deploy `RobotMoneyGateway`.
 ///
 /// Constructor: `(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, address router_)`.
+/// `pauser_` receives DEPOSIT_PAUSER_ROLE: it pauses deposits only.
 #[allow(clippy::too_many_arguments)]
 fn deploy_gateway(
     deployer: &rmpc_fork_e2e::Account<'_>,
@@ -413,7 +415,7 @@ fn router_deposit_happy_path() {
         minSharesPerLeg: vec![],
     };
     let receipt = deployer
-        .send(router, &deposit_call, U256::ZERO, 1_500_000)
+        .send(router, &deposit_call, U256::ZERO, 4_000_000)
         .expect("router.deposit");
 
     assert_eq!(receipt.status, 1, "router.deposit must succeed");
@@ -477,23 +479,27 @@ fn router_deposit_happy_path() {
 // ── Scenario 2: unavailable leg skipped & renormalised ────────────────────────
 
 /// router_unavailable_leg_skipped_and_renormalised — when one weighted leg
-/// becomes unavailable (Paused in the registry), `router.deposit()` SUCCEEDS:
-/// the paused leg is skipped and the deposit is renormalised onto the
+/// becomes unavailable (DepositsPaused in the registry), `router.deposit()`
+/// SUCCEEDS: the deposits-paused leg is skipped and the deposit is
+/// renormalised onto the
 /// remaining Active leg(s). This is the skip-and-renormalise semantics
 /// introduced in issue #968, replacing the old all-or-revert behaviour.
 ///
-/// Strategy: deploy two USDC-backed MockVaults, weight them 50/50, then pause
-/// vault_b in the VaultRegistry. PortfolioRouter._depositTo re-reads registry
-/// status per leg, skips the Paused vault_b, and renormalises the FULL
+/// Strategy: deploy two USDC-backed MockVaults, weight them 50/50, then set
+/// vault_b to DepositsPaused in the VaultRegistry. PortfolioRouter._depositTo
+/// re-reads registry status per leg, skips the DepositsPaused vault_b, and
+/// renormalises the FULL
 /// `deposit_amount` onto vault_a (the only remaining 50% weight, which becomes
 /// 100% of the available basket). Asserted via per-vault USDC balance and
 /// minted-share reads:
 ///   - vault_a (Active) holds the entire `deposit_amount` and mints 1:1 shares.
-///   - vault_b (Paused) holds nothing and mints nothing.
+///   - vault_b (DepositsPaused) holds nothing and mints nothing. It would
+///     still redeem for any holder: a deposit pause never blocks a redeem
+///     (core 1494).
 ///
 /// Note: this test previously used an EOA as one leg, but issue #426 added a
 /// `_requireRouterEligible` check that rejects code-less vaults at
-/// `setWeights` (no `asset()` view). The pause-after-weighting path is the
+/// `setWeights` (no `asset()` view). The deposit-pause-after-weighting path is the
 /// correct e2e shape now — eligibility is enforced at config time and lifecycle
 /// status is enforced (skip-and-renormalise) at deposit time.
 #[test]
@@ -541,20 +547,20 @@ fn router_unavailable_leg_skipped_and_renormalised() {
         )
         .expect("setWeights");
 
-    // Pause vault_b in the registry — this makes the leg unavailable at
-    // deposit time without changing router eligibility (registry status and
+    // Pause vault_b's deposits in the registry — this makes the leg
+    // unavailable at deposit time without changing router eligibility (registry status and
     // router eligibility are distinct signals; see issue #426).
     deployer
         .send(
             registry,
             &IVaultRegistry::setVaultStatusCall {
                 vault: vault_b,
-                newStatus: IVaultRegistry::VaultStatus::Paused,
+                newStatus: IVaultRegistry::VaultStatus::DepositsPaused,
             },
             U256::ZERO,
             200_000,
         )
-        .expect("setVaultStatus(Paused)");
+        .expect("setVaultStatus(DepositsPaused)");
 
     // Approve router.
     approve_usdc(&deployer, usdc, router, deposit_amount);
@@ -569,14 +575,14 @@ fn router_unavailable_leg_skipped_and_renormalised() {
                 minSharesPerLeg: vec![],
             },
             U256::ZERO,
-            1_500_000,
+            4_000_000,
         )
         .expect(
-            "router.deposit must succeed when one weighted leg is paused (skip-and-renormalise)",
+            "router.deposit must succeed when one weighted leg has deposits paused (skip-and-renormalise)",
         );
     assert_eq!(
         receipt.status, 1,
-        "router.deposit must succeed (skip-and-renormalise); paused leg is skipped"
+        "router.deposit must succeed (skip-and-renormalise); deposits-paused leg is skipped"
     );
 
     // vault_a (Active) absorbs the FULL deposit after renormalisation: its 50%
@@ -584,15 +590,15 @@ fn router_unavailable_leg_skipped_and_renormalised() {
     let usdc_in_a = usdc_balance_of(&deployer, usdc, vault_a);
     assert_eq!(
         usdc_in_a, deposit_amount,
-        "vault_a must hold the full renormalised deposit (paused vault_b skipped)"
+        "vault_a must hold the full renormalised deposit (deposits-paused vault_b skipped)"
     );
 
-    // vault_b (Paused) is skipped — it receives no USDC.
+    // vault_b (DepositsPaused) is skipped — it receives no USDC.
     let usdc_in_b = usdc_balance_of(&deployer, usdc, vault_b);
     assert_eq!(
         usdc_in_b,
         U256::ZERO,
-        "vault_b (Paused) must receive nothing — leg skipped"
+        "vault_b (DepositsPaused) must receive nothing — leg skipped"
     );
 
     // Receipts: MockVault mints 1:1, so vault_a shares equal the full deposit
@@ -606,7 +612,7 @@ fn router_unavailable_leg_skipped_and_renormalised() {
     assert_eq!(
         shares_b,
         U256::ZERO,
-        "depositor must hold no vault_b shares (paused leg skipped)"
+        "depositor must hold no vault_b shares (deposits-paused leg skipped)"
     );
 
     // Exactly one RouterDeposit event — only the surviving vault_a leg executes.
@@ -633,7 +639,7 @@ fn router_unavailable_leg_skipped_and_renormalised() {
 
 // ── Scenario 2b: all legs unavailable reverts ─────────────────────────────────
 
-/// router_all_legs_unavailable_reverts — when EVERY weighted leg is paused,
+/// router_all_legs_unavailable_reverts — when EVERY weighted leg has deposits paused,
 /// there is no available leg to renormalise onto, so `router.deposit()` still
 /// reverts with `NoWeightsSet` (issue #968: revert only when the whole basket
 /// is unavailable). This is the boundary case of skip-and-renormalise and
@@ -677,24 +683,24 @@ fn router_all_legs_unavailable_reverts() {
         )
         .expect("setWeights");
 
-    // Pause BOTH weighted vaults — no leg is available.
+    // Pause deposits on BOTH weighted vaults — no leg is available.
     for vault in [vault_a, vault_b] {
         deployer
             .send(
                 registry,
                 &IVaultRegistry::setVaultStatusCall {
                     vault,
-                    newStatus: IVaultRegistry::VaultStatus::Paused,
+                    newStatus: IVaultRegistry::VaultStatus::DepositsPaused,
                 },
                 U256::ZERO,
                 200_000,
             )
-            .expect("setVaultStatus(Paused)");
+            .expect("setVaultStatus(DepositsPaused)");
     }
 
     approve_usdc(&deployer, usdc, router, deposit_amount);
 
-    // With every leg paused there is nothing to renormalise onto — must revert.
+    // With every leg's deposits paused there is nothing to renormalise onto — must revert.
     let result = deployer.send(
         router,
         &IPortfolioRouter::depositCall {
@@ -702,11 +708,11 @@ fn router_all_legs_unavailable_reverts() {
             minSharesPerLeg: vec![],
         },
         U256::ZERO,
-        1_500_000,
+        4_000_000,
     );
     assert!(
         result.is_err(),
-        "router.deposit must revert when ALL weighted vaults are paused; got Ok"
+        "router.deposit must revert when ALL weighted vaults have deposits paused; got Ok"
     );
     match result.unwrap_err() {
         rmpc_fork_e2e::HarnessError::Reverted(_) => {
@@ -795,7 +801,7 @@ fn router_cap_exceeded_reverts() {
             minSharesPerLeg: vec![],
         },
         U256::ZERO,
-        1_000_000,
+        2_000_000,
     );
 
     assert!(
@@ -838,8 +844,8 @@ fn agent_gateway_router_deposit() {
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
     let deposit_amount = U256::from(100_000_000u64); // 100 USDC
 
-    // Three accounts: owner (admin/deployer), pauser (holds PAUSER_ROLE),
-    // agent (calls depositTo). ADMIN_ROLE and PAUSER_ROLE must be held by
+    // Three accounts: owner (admin/deployer), pauser (holds DEPOSIT_PAUSER_ROLE),
+    // agent (calls depositTo). ADMIN_ROLE and DEPOSIT_PAUSER_ROLE must be held by
     // distinct addresses (AccessRoles role-separation invariant).
     let owner = fx
         .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
@@ -883,10 +889,7 @@ fn agent_gateway_router_deposit() {
     // Policy: active=true, validUntil = now + 3600, maxPerPayment = deposit_amount,
     // maxPerWindow = deposit_amount, shareReceiver = owner.address,
     // allowedDestinations = [router].
-    let now_secs: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
     let policy = IGateway::AgentPolicy {
         active: true,
         validUntil: now_secs + 3600,
@@ -936,7 +939,7 @@ fn agent_gateway_router_deposit() {
                 minSharesPerLeg: vec![],
             },
             U256::ZERO,
-            2_000_000,
+            3_000_000,
         )
         .expect("gateway.depositTo");
 

@@ -10,7 +10,6 @@
 //         issue #506 — separate admin_ and emergencyResponder_ addresses in constructor
 //         issue #508 — emergencyUnwind uses live TWAP floor instead of stale minUsdcOut
 //         issue #553 — Aerodrome swap + TWAP adapter (IBasketSwapAdapter venue abstraction)
-//         issue #554 — Uniswap V4 swap + TWAP adapter (UniswapV4SwapAdapter)
 //         issue #555 — per-asset DEX venue selector (Venue enum on AssetInfo + addAsset)
 pragma solidity ^0.8.24;
 
@@ -24,11 +23,11 @@ import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
-import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
+import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
 import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
 import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
-import {IUniswapV4SwapRouter} from "../interfaces/IUniswapV4SwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
@@ -46,6 +45,10 @@ contract MockPool {
     uint16 public cardinality;
     uint128 public poolLiquidity; // in-range liquidity returned by liquidity()
     bool public revertObserve;
+    /// @dev Oldest observation age in seconds; 0 means unlimited history.
+    ///      `observe()` reverts "OLD" for any `secondsAgo` beyond it, like a
+    ///      real pool whose ring buffer does not reach that far back.
+    uint32 public maxHistory;
     uint24 public feeTier; // fee() value asserted against swapFee_ by addAsset (ORA-3)
 
     constructor(address token0_, address token1_, uint160 sqrtPriceX96_) {
@@ -55,7 +58,7 @@ contract MockPool {
         // Tick=0 means 1:1 price (sqrtP = 2^96); arithmetic-mean tick is 0
         // when tickCumulativeRate=0. Tests override as needed.
         tickCumulativeRate = 0;
-        cardinality = 100;
+        cardinality = 50_000;
         poolLiquidity = 1e18; // large default so existing tests pass unmodified
         feeTier = 500; // matches the swapFee_ tests pass to addAsset by default
     }
@@ -96,6 +99,10 @@ contract MockPool {
         revertObserve = value;
     }
 
+    function setMaxHistory(uint32 seconds_) external {
+        maxHistory = seconds_;
+    }
+
     function liquidity() external view returns (uint128) {
         return poolLiquidity;
     }
@@ -110,6 +117,9 @@ contract MockPool {
         returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq)
     {
         if (revertObserve) revert("OLD");
+        for (uint256 i = 0; i < secondsAgos.length; i++) {
+            if (maxHistory != 0 && secondsAgos[i] > maxHistory) revert("OLD");
+        }
         tickCumulatives = new int56[](secondsAgos.length);
         secondsPerLiq = new uint160[](secondsAgos.length);
         // Cumulative grows linearly: cum(now) > cum(past). Use uint256 to do
@@ -177,6 +187,40 @@ contract BasketVaultHarness is BasketVault {
 
     function maxAssets() public pure override returns (uint256) {
         return 4;
+    }
+}
+
+/// @dev Basket token that calls back into the vault while the vault pays out (an ERC-777 style hook).
+///      Records the owner's share balance and the total supply at callback time, then tries to
+///      re-enter `redeemInKind`. Core 1665 reentrancy probe.
+contract ReentrantHookToken is TestERC20 {
+    BasketVault public target;
+    address public victim;
+    bool public armed;
+    bool public reentered;
+    bool public reentrySucceeded;
+    bytes4 public reentryReason;
+    uint256 public sharesAtCallback = type(uint256).max;
+    uint256 public supplyAtCallback;
+
+    function arm(BasketVault target_, address victim_) external {
+        target = target_;
+        victim = victim_;
+        armed = true;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        if (armed && from == address(target) && !reentered) {
+            reentered = true;
+            sharesAtCallback = target.balanceOf(victim);
+            supplyAtCallback = target.totalSupply();
+            try target.redeemInKind(1, victim, victim) {
+                reentrySucceeded = true;
+            } catch (bytes memory reason) {
+                reentryReason = bytes4(reason); // expected: ReentrancyGuardReentrantCall
+            }
+        }
+        super._update(from, to, value);
     }
 }
 
@@ -258,7 +302,10 @@ contract BasketVaultTest is Test {
         assertEq(basketToken.balanceOf(address(vault)), 0, "basket asset unwound");
         assertEq(usdc.balanceOf(address(vault)), amountOut, "guarded USDC received");
         assertTrue(vault.depositsPaused(), "emergency unwind pauses deposits");
-        assertFalse(vault.paused(), "emergency unwind keeps redemption available");
+        assertTrue(
+            vault.depositsPaused(),
+            "unwind halts deposits only; emergency unwind keeps redemption available"
+        );
     }
 
     function test_emergencyUnwindWithOverride_emitsHighRiskEvent() public {
@@ -377,9 +424,9 @@ contract BasketVaultTest is Test {
         assertTrue(vault.hasRole(adminRole, admin2), "second admin retains role");
     }
 
-    /// @notice LIFE-3 / NC-3 / F-06: pause() freezes deposits but NOT withdrawals;
+    /// @notice LIFE-3 / NC-3 / F-06: pauseDeposits() stops deposits only, never withdrawals;
     ///         a holder can still redeem while the vault is paused.
-    function test_pause_doesNotFreezeWithdrawals() public {
+    function test_pauseDeposits_doesNotFreezeWithdrawals() public {
         // Seed a position via a direct deposit on the default V3 path. The deposit
         // swaps USDC→basketToken, so the router yields basketToken.
         usdc.mint(stranger, 1_000 * ONE_USDC);
@@ -393,8 +440,8 @@ contract BasketVaultTest is Test {
 
         // EMERGENCY pauses (deposits-only freeze).
         vm.prank(emergencyResponder);
-        vault.pause();
-        assertTrue(vault.paused(), "vault paused");
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused(), "vault paused");
 
         // Redeem must still succeed under pause (withdrawals are never frozen). The
         // redeem swaps basketToken→USDC, so the router now yields USDC. Output must
@@ -720,12 +767,12 @@ contract BasketVaultTest is Test {
 
     function test_maxDeposit_zeroWhenPaused() public {
         vm.prank(emergencyResponder);
-        vault.pause();
+        vault.pauseDeposits();
         assertEq(vault.maxDeposit(stranger), 0, "maxDeposit 0 while paused");
         assertEq(vault.maxMint(stranger), 0, "maxMint 0 while paused");
 
         vm.prank(admin);
-        vault.unpause();
+        vault.unpauseDeposits();
         assertGt(vault.maxDeposit(stranger), 0, "maxDeposit restored after unpause");
     }
 
@@ -973,8 +1020,8 @@ contract BasketVaultTest is Test {
 
     function test_pauseAndShutdownEmergencyControlsRemainFunctional() public {
         vm.prank(emergencyResponder);
-        vault.pause();
-        assertTrue(vault.paused(), "pause remains available");
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused(), "pause remains available");
 
         vm.prank(emergencyResponder);
         vault.shutdownVault();
@@ -1044,6 +1091,37 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setTwapWindow(address(basketToken), 86_400);
         assertEq(vault.effectiveTwapWindow(address(basketToken)), 86_400, "max window set");
+    }
+
+    /// @notice Governance can never set a TWAP window longer than the pool's
+    ///         observation history: such a window would make every NAV read
+    ///         revert "OLD" and block redeem. The setter rejects it, the old
+    ///         window stays in force, and a holder still redeems (core 1494).
+    function test_setTwapWindow_rejectsWindowBeyondPoolHistory_redeemStillWorks() public {
+        uint256 shares = _depositAt1to1(stranger, 1_000 * ONE_USDC);
+        // The pool's oldest observation is 1 hour old.
+        pool.setMaxHistory(3_600);
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientObservationHistory.selector,
+                address(pool),
+                uint32(7_200)
+            )
+        );
+        vault.setTwapWindow(address(basketToken), 7_200);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 1_800, "default window unchanged");
+
+        // A window the history covers is still accepted.
+        vm.prank(admin);
+        vault.setTwapWindow(address(basketToken), 3_600);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 3_600, "covered window set");
+
+        usdc.mint(address(router), 995 * ONE_USDC);
+        router.setAmountOut(995 * ONE_USDC);
+        vm.prank(stranger);
+        assertEq(vault.redeem(shares, stranger, stranger), 995 * ONE_USDC, "redeem still works");
     }
 
     function test_effectiveTwapWindow_fallsBackToDefault() public view {
@@ -1164,7 +1242,10 @@ contract BasketVaultTest is Test {
         assertEq(basketToken.balanceOf(address(vault)), 0, "all tokens swapped");
         assertEq(usdc.balanceOf(address(vault)), routerOut, "USDC received");
         assertTrue(vault.depositsPaused(), "deposits paused after unwind");
-        assertFalse(vault.paused(), "redemption remains available after unwind");
+        assertTrue(
+            vault.depositsPaused(),
+            "unwind halts deposits only; redemption remains available after unwind"
+        );
     }
 
     /// @notice Override execution remains available when the TWAP oracle is unavailable.
@@ -1279,16 +1360,16 @@ contract BasketVaultTest is Test {
 
         // Pre-pause first — the common incident sequence.
         vm.prank(emergencyResponder);
-        vault.pause();
-        assertTrue(vault.paused(), "pre-condition: vault is paused");
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused(), "pre-condition: vault is paused");
 
-        // emergencyUnwind must not revert with EnforcedPause.
+        // emergencyUnwind must not revert when deposits are already paused.
         vm.prank(emergencyResponder);
         vault.emergencyUnwind();
 
         assertEq(basketToken.balanceOf(address(vault)), 0, "basket asset fully unwound");
         assertEq(usdc.balanceOf(address(vault)), amountOut, "USDC received after pre-paused unwind");
-        assertTrue(vault.paused(), "vault remains paused after unwind");
+        assertTrue(vault.depositsPaused(), "vault remains paused after unwind");
     }
 
     /// @notice emergencyUnwindWithOverride succeeds when vault is already paused.
@@ -1305,8 +1386,8 @@ contract BasketVaultTest is Test {
 
         // Pre-pause first.
         vm.prank(emergencyResponder);
-        vault.pause();
-        assertTrue(vault.paused(), "pre-condition: vault is paused");
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused(), "pre-condition: vault is paused");
 
         address[] memory tokens = new address[](1);
         tokens[0] = address(basketToken);
@@ -1315,7 +1396,7 @@ contract BasketVaultTest is Test {
         vault.emergencyUnwindWithOverride(tokens);
 
         assertEq(basketToken.balanceOf(address(vault)), 0, "basket asset unwound with override");
-        assertTrue(vault.paused(), "vault remains paused after override unwind");
+        assertTrue(vault.depositsPaused(), "vault remains paused after override unwind");
     }
 
     /// @notice emergencyUnwind on an unpaused vault pauses deposits only.
@@ -1330,13 +1411,15 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setEmergencyUnwindGuard(address(basketToken), 400 * ONE_USDC, false, 0);
 
-        assertFalse(vault.paused(), "pre-condition: vault is not paused");
+        assertFalse(vault.depositsPaused(), "pre-condition: vault is not paused");
 
         vm.prank(emergencyResponder);
         vault.emergencyUnwind();
 
         assertTrue(vault.depositsPaused(), "deposits are paused after emergencyUnwind");
-        assertFalse(vault.paused(), "redemption remains available");
+        assertTrue(
+            vault.depositsPaused(), "unwind halts deposits only; redemption remains available"
+        );
         assertEq(basketToken.balanceOf(address(vault)), 0, "assets unwound");
     }
 
@@ -1352,7 +1435,7 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setEmergencyUnwindGuard(address(basketToken), 400 * ONE_USDC, true, 500);
 
-        assertFalse(vault.paused(), "pre-condition: vault is not paused");
+        assertFalse(vault.depositsPaused(), "pre-condition: vault is not paused");
 
         address[] memory tokens = new address[](1);
         tokens[0] = address(basketToken);
@@ -1361,7 +1444,9 @@ contract BasketVaultTest is Test {
         vault.emergencyUnwindWithOverride(tokens);
 
         assertTrue(vault.depositsPaused(), "deposits are paused after override unwind");
-        assertFalse(vault.paused(), "redemption remains available");
+        assertTrue(
+            vault.depositsPaused(), "unwind halts deposits only; redemption remains available"
+        );
         assertEq(basketToken.balanceOf(address(vault)), 0, "assets unwound with override");
     }
 
@@ -1385,7 +1470,10 @@ contract BasketVaultTest is Test {
         vm.prank(emergencyResponder);
         vault.emergencyUnwind();
         assertTrue(vault.depositsPaused(), "emergencyUnwind pauses deposits");
-        assertFalse(vault.paused(), "emergencyUnwind keeps redemption available");
+        assertTrue(
+            vault.depositsPaused(),
+            "unwind halts deposits only; emergencyUnwind keeps redemption available"
+        );
     }
 
     // ─── Pool cardinality check on addAsset (issue #494) ──────────────
@@ -1401,7 +1489,7 @@ contract BasketVaultTest is Test {
             abi.encodeWithSelector(
                 BasketVault.InsufficientPoolCardinality.selector,
                 address(lowCardPool),
-                vault.MIN_POOL_CARDINALITY(),
+                uint16(901),
                 uint16(1)
             )
         );
@@ -1472,11 +1560,11 @@ contract BasketVaultTest is Test {
         assertGt(redeemed, 0, "existing holder can redeem after unwind");
     }
 
-    /// @notice addAsset() succeeds when pool cardinality equals MIN_POOL_CARDINALITY (2).
+    /// @notice addAsset() succeeds when pool cardinality equals the 1800 s window floor (901).
     function test_addAsset_succeedsWhenCardinalityMeetsMinimum() public {
         TestERC20 newAsset = new TestERC20();
         MockPool goodPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
-        goodPool.setCardinality(vault.MIN_POOL_CARDINALITY());
+        goodPool.setCardinality(901);
 
         vm.prank(admin);
         vault.addAsset(address(newAsset), address(goodPool), 500, address(0), BasketVault.Venue.V3);
@@ -1489,7 +1577,7 @@ contract BasketVaultTest is Test {
     function test_totalAssets_doesNotRevertAfterValidAddAsset() public {
         TestERC20 newAsset = new TestERC20();
         MockPool goodPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
-        goodPool.setCardinality(100);
+        goodPool.setCardinality(1000);
 
         vm.prank(admin);
         vault.addAsset(address(newAsset), address(goodPool), 500, address(0), BasketVault.Venue.V3);
@@ -1535,7 +1623,7 @@ contract BasketVaultTest is Test {
     }
 
     /// @notice Fuzz: addAsset() reverts exactly when pool cardinality is below
-    ///         MIN_POOL_CARDINALITY and succeeds at or above it.
+    ///         the window floor (901) and succeeds at or above it.
     function testFuzz_addAsset_cardinalityBoundary(uint16 cardinality_) public {
         // Use a fresh vault so we don't hit MaxAssetsReached after repeated calls.
         BasketVaultHarness freshVault = new BasketVaultHarness(
@@ -1546,7 +1634,7 @@ contract BasketVaultTest is Test {
         MockPool fuzzPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
         fuzzPool.setCardinality(cardinality_);
 
-        uint16 required = freshVault.MIN_POOL_CARDINALITY();
+        uint16 required = 901;
 
         if (cardinality_ < required) {
             vm.expectRevert(
@@ -2039,6 +2127,31 @@ contract BasketVaultTest is Test {
         assertGt(shares, 0, "ORA-4: deposit succeeds once the guard is disabled");
     }
 
+    /// @notice Issue 1666: the guard runs on deposit only. With the guard at 100 bps and spot moved past it, a deposit reverts
+    ///         `NavMarketDeviationExceeded` and an existing holder still redeems. The sheet-set guard can never trap exits.
+    function test_ORA4_guardNeverBlocksRedeem() public {
+        uint256 shares = _depositAt1to1(stranger, 1_000e6);
+        assertGt(shares, 0, "holder has shares");
+
+        vm.prank(admin);
+        vault.setNavDeviationGuardBps(100);
+        pool.setSpotTick(200); // about +2%, beyond the 1% band
+
+        usdc.mint(address(this), 1_000e6);
+        usdc.approve(address(vault), 1_000e6);
+        vm.expectPartialRevert(BasketVault.NavMarketDeviationExceeded.selector);
+        vault.deposit(1_000e6, address(this));
+
+        // The holder redeems through the same deviated spot.
+        usdc.mint(address(router), 1_000e6);
+        router.setAmountOut(1_000e6);
+        uint256 balBefore = usdc.balanceOf(stranger);
+        vm.prank(stranger);
+        uint256 out = vault.redeem(shares, stranger, stranger);
+        assertGt(out, 0, "redeem returns USDC");
+        assertEq(usdc.balanceOf(stranger) - balBefore, out, "redeem paid the holder");
+    }
+
     /// @notice ORA-4: a deposit within the deviation band settles normally — the
     ///         guard does not block ordinary, market-consistent settlement.
     function test_ORA4_withinBandSettles() public {
@@ -2210,73 +2323,168 @@ contract BasketVaultTest is Test {
         );
     }
 
-    // ─── AZ-BSK-3: deposit NAV excludes idle USDC from excluded adapters ────────
+    // ─── AZ-BSK-3 (C1-corrected): deposit mints against the FULL pre-deposit NAV ─
 
-    /// @notice AZ-BSK-3: when idle USDC is present (e.g. from an emergency-unwound
-    ///         adapter), a new deposit prices shares against the active-adapter-only
-    ///         NAV (taBefore − idleUSDC), not the full totalAssets. This prevents a
-    ///         new depositor from capturing recovery value that belongs to existing
-    ///         holders who bore the original loss.
-    ///
-    ///         Setup: seed the vault at 1:1, inject idle USDC directly to simulate
-    ///         the proceeds of an excluded adapter sitting un-deployed, then deposit
-    ///         and verify the minted shares match the eligible-NAV formula.
-    function test_AZBSK3_depositExclusionWindowUsesEligibleNAV() public {
-        // Seed vault so it has non-zero NAV and share supply.
+    /// @dev Redeem `shares` for `who`, funding the mock router with the fair USDC value
+    ///      of the redeemer's pro-rata slice of the vault's basket tokens (1:1 price).
+    function _redeemFair(address who, uint256 shares) internal returns (uint256 received) {
+        uint256 supply = vault.totalSupply();
+        uint256 tokenSlice = basketToken.balanceOf(address(vault)) * shares / supply;
+        usdc.mint(address(router), tokenSlice);
+        router.setAmountOut(tokenSlice);
+        uint256 beforeBal = usdc.balanceOf(who);
+        vm.prank(who);
+        vault.redeem(shares, who, who);
+        received = usdc.balanceOf(who) - beforeBal;
+    }
+
+    /// @notice AZ-BSK-3 (C1-corrected): with idle USDC present, deposit() mints exactly
+    ///         mulDiv(realizedDelta, supplyBefore + 1e18, taBefore + 1). The old
+    ///         `taBefore - idle + 1` denominator (a different, larger share count) is
+    ///         asserted unequal. Idle USDC backs existing shares, so it stays in the
+    ///         denominator.
+    function test_AZBSK3_depositMintsAgainstIdleInclusiveNAV() public {
         _depositAt1to1(address(this), 10_000e6);
-
-        // Simulate idle USDC from an excluded adapter (bypass emergency unwind
-        // to avoid the depositsPaused gate; the relevant invariant is the idle
-        // USDC balance, not how it arrived).
         uint256 idleUsdc = 5_000e6;
         usdc.mint(address(vault), idleUsdc);
 
-        // Snapshot pre-deposit state (mirrors what _deposit() does internally).
         uint256 supplyBefore = vault.totalSupply();
         uint256 taBefore = vault.totalAssets(); // includes idleUsdc
-        uint256 navBefore = taBefore - usdc.balanceOf(address(vault)); // active-adapter NAV only
+        uint256 idleBefore = usdc.balanceOf(address(vault));
+        assertGt(idleBefore, 0, "idle USDC must be non-zero");
+        assertEq(idleBefore, idleUsdc, "idle is the injected balance");
 
-        assertGt(idleUsdc, 0, "idle USDC must be non-zero for this test to be meaningful");
-        assertGt(navBefore, 0, "active-adapter NAV must be positive for a valid deposit");
-        assertLt(navBefore, taBefore, "eligible NAV must be less than full totalAssets");
-
-        // Configure swap: 1,000 USDC → 1,000 basket tokens (1:1).
         uint256 depositAmount = 1_000e6;
-        uint256 swapOut = depositAmount; // 1:1 execution
-        basketToken.mint(address(router), swapOut);
-        router.setAmountOut(swapOut);
-
+        basketToken.mint(address(router), depositAmount);
+        router.setAmountOut(depositAmount);
         usdc.mint(stranger, depositAmount);
         vm.startPrank(stranger);
         usdc.approve(address(vault), depositAmount);
         uint256 actualShares = vault.deposit(depositAmount, stranger);
         vm.stopPrank();
 
-        uint256 realizedDelta = vault.totalAssets() - taBefore; // delta from the swap
+        uint256 realizedDelta = vault.totalAssets() - taBefore;
+        uint256 expectedShares = Math.mulDiv(realizedDelta, supplyBefore + 1e18, taBefore + 1);
+        uint256 oldShares =
+            Math.mulDiv(realizedDelta, supplyBefore + 1e18, taBefore - idleBefore + 1);
 
-        // AZ-BSK-3: expected shares use navBefore (active-adapter NAV) in the
-        // denominator, NOT taBefore (full NAV including idle USDC).
-        // _decimalsOffset() = 18 (large virtual offset to prevent first-deposit
-        // inflation attacks; BasketVault.decimals() returns 6, offset = 18).
-        uint256 decimalsOffset = 1e18; // 10 ** _decimalsOffset()
-        uint256 expectedShares =
-            Math.mulDiv(realizedDelta, supplyBefore + decimalsOffset, navBefore + 1);
-        // OLD (vulnerable) formula would have used taBefore as denominator.
-        uint256 vulnerableShares =
-            Math.mulDiv(realizedDelta, supplyBefore + decimalsOffset, taBefore + 1);
+        assertEq(actualShares, expectedShares, "AZ-BSK-3: mint uses idle-inclusive taBefore + 1");
+        assertEq(vault.balanceOf(stranger), expectedShares, "shares minted to receiver");
+        assertTrue(actualShares != oldShares, "AZ-BSK-3: old idle-excluded denominator rejected");
+        assertLt(actualShares, oldShares, "AZ-BSK-3: old formula over-minted");
+    }
 
-        assertEq(
-            actualShares,
-            expectedShares,
-            "AZ-BSK-3: shares must use eligible-NAV denominator (active tokens only)"
+    /// @notice AZ-BSK-3 PoC regression (audit 2026-10-08 test_idleUsdcOverMint):
+    ///         emergencyUnwind -> unpauseDeposits -> deposit -> redeem must not let the
+    ///         late depositor take value from the incumbent.
+    function test_AZBSK3_emergencyUnwindThenDepositNoOverMint() public {
+        address alice = makeAddr("alice");
+        address eve = makeAddr("eve");
+
+        uint256 aliceShares = _depositAt1to1(alice, 10_000e6);
+
+        // Emergency key unwinds the whole basket to idle USDC at 1:1.
+        usdc.mint(address(router), 10_000e6);
+        router.setAmountOut(10_000e6);
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+        assertEq(basketToken.balanceOf(address(vault)), 0, "basket fully unwound");
+        assertEq(usdc.balanceOf(address(vault)), 10_000e6, "all value idle");
+        assertTrue(vault.depositsPaused(), "unwind pauses deposits");
+
+        vm.prank(admin);
+        vault.unpauseDeposits();
+
+        uint256 eveShares = _depositAt1to1(eve, 1_000e6);
+        uint256 supply = vault.totalSupply();
+
+        // eve owns at most 1000/11000 of supply, plus rounding.
+        assertLe(eveShares, supply * 1_000e6 / 11_000e6 + 1, "eve share of supply capped");
+
+        uint256 eveOut = _redeemFair(eve, eveShares);
+        assertLe(eveOut, 1_000e6, "eve cannot redeem more than she deposited");
+
+        uint256 aliceOut = _redeemFair(alice, aliceShares);
+        assertGe(aliceOut, 9_999e6, "alice keeps her value");
+    }
+
+    /// @notice AZ-BSK-3: no-profit round trip with idle USDC present. A deposit followed
+    ///         by an immediate full redeem returns at most the deposit, and the
+    ///         incumbent's previewRedeem never drops, up to a 2 wei tolerance. The
+    ///         tolerance is the 10^18 virtual-share offset: mint prices against
+    ///         (supply + 1e18) while redeem is raw pro-rata, so a donated idle balance
+    ///         lets a round trip gain sub-wei-scale dust (measured max 1 wei over 20000
+    ///         fuzz runs). That is not the over-mint fixed here (thousands of USDC).
+    function test_AZBSK3_idleDepositRoundTripNoProfit(uint256 idle, uint256 d) public {
+        idle = bound(idle, 1, 1e13);
+        d = bound(d, 1e6, vault.perDepositCap());
+
+        vm.prank(admin);
+        vault.setTvlCap(100_000_000e6); // headroom for the 1e13 idle upper bound
+        uint256 incumbentShares = _depositAt1to1(address(this), 50_000e6);
+        usdc.mint(address(vault), idle);
+        uint256 previewBefore = vault.previewRedeem(incumbentShares);
+
+        address eve = makeAddr("eveFuzz");
+        uint256 eveShares = _depositAt1to1(eve, d);
+        assertGe(
+            vault.previewRedeem(incumbentShares),
+            previewBefore - 2,
+            "incumbent previewRedeem must not drop on deposit"
         );
-        // When idle USDC > 0, the fix gives MORE shares (smaller denominator),
-        // which correctly prices the deposit against only the active-adapter NAV.
-        assertGt(
-            actualShares,
-            vulnerableShares,
-            "AZ-BSK-3: eligible-NAV formula gives more shares than full-NAV (idle USDC excluded)"
+
+        uint256 out = _redeemFair(eve, eveShares);
+        assertLe(out, d + 2, "round trip cannot profit");
+        assertGe(
+            vault.previewRedeem(incumbentShares),
+            previewBefore - 2,
+            "incumbent previewRedeem must not drop after round trip"
         );
+    }
+
+    /// @notice AZ-BSK-3 adversarial: first deposit (supply 0) with idle USDC donated
+    ///         beforehand cannot be gamed: the first depositor pays the donation into
+    ///         the denominator, never receives more than the OZ formula, and caps hold.
+    function test_AZBSK3_firstDepositWithDonatedIdleCannotOverMint() public {
+        usdc.mint(address(vault), 7_000e6); // donation before any deposit
+        assertEq(vault.totalSupply(), 0);
+
+        uint256 d = 1_000e6;
+        uint256 taBefore = vault.totalAssets();
+        uint256 shares = _depositAt1to1(stranger, d);
+        assertEq(shares, Math.mulDiv(d, 1e18, taBefore + 1), "first mint uses full NAV + 1");
+
+        // The depositor cannot extract more than deposit (donation is not recoverable
+        // as a profit for the donor-depositor).
+        uint256 out = _redeemFair(stranger, shares);
+        assertLe(out, d + 7_000e6, "redeem bounded by total vault value");
+    }
+
+    /// @notice AZ-BSK-3 adversarial: tiny deposits round down and never mint a profit;
+    ///         per-deposit cap still enforced.
+    function test_AZBSK3_tinyDepositRoundsDownAndCapStillEnforced() public {
+        _depositAt1to1(address(this), 10_000e6);
+        usdc.mint(address(vault), 1_000e6);
+        uint256 tiny = 1;
+        basketToken.mint(address(router), tiny);
+        router.setAmountOut(tiny);
+        usdc.mint(stranger, tiny);
+        uint256 taBefore = vault.totalAssets();
+        uint256 supplyBefore = vault.totalSupply();
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), tiny);
+        uint256 shares = vault.deposit(tiny, stranger);
+        vm.stopPrank();
+        assertEq(shares, Math.mulDiv(tiny, supplyBefore + 1e18, taBefore + 1));
+        assertLe(vault.previewRedeem(shares), tiny, "dust mint never redeems above deposit");
+
+        uint256 over = vault.perDepositCap() + 1;
+        usdc.mint(stranger, over);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), over);
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit: maxDeposit is capped by perDepositCap
+        vault.deposit(over, stranger);
+        vm.stopPrank();
     }
 
     /// @notice AZ-BSK-3: totalAssets() accounts for ALL vault USDC (including idle
@@ -2312,7 +2520,7 @@ contract BasketVaultTest is Test {
 
     /// @notice issue #1284: retire() sets the dedicated `retired` flag, NOT
     ///         `depositsPaused` — the two are independent so ADMIN_ROLE's
-    ///         `unpause()` (which unconditionally clears `depositsPaused`) can
+    ///         `unpauseDeposits()` (which unconditionally clears `depositsPaused`) can
     ///         never re-open deposits on a registry-retired vault. Matches
     ///         RobotMoneyVault's / Vault's separate-flag model; superseded the
     ///         old aliasing behavior this test used to pin.
@@ -2347,11 +2555,11 @@ contract BasketVaultTest is Test {
         assertFalse(vault.retired(), "unretire() must clear retired");
     }
 
-    /// @notice issue #1284 (F-06 regression): retire() -> emergency pause() ->
-    ///         admin unpause() must leave deposits closed (the registry still
+    /// @notice issue #1284 (F-06 regression): retire() -> emergency pauseDeposits() ->
+    ///         admin unpauseDeposits() must leave deposits closed (the registry still
     ///         records the vault Retired) while ERC-4626 redeem stays open
     ///         (ADR-0009). Before this fix, BasketVault aliased retirement
-    ///         onto `depositsPaused`, so `unpause()` (which unconditionally
+    ///         onto `depositsPaused`, so `unpauseDeposits()` (which unconditionally
     ///         calls `_setDepositsPaused(false)`) silently re-opened deposits
     ///         on a vault the registry still recorded as Retired.
     function test_retirePauseUnpause_leavesDepositsClosedButRedeemOpen() public {
@@ -2375,12 +2583,12 @@ contract BasketVaultTest is Test {
         assertTrue(vault.retired(), "vault must be retired");
 
         vm.prank(emergencyResponder);
-        vault.pause();
+        vault.pauseDeposits();
 
         vm.prank(admin);
-        vault.unpause();
+        vault.unpauseDeposits();
 
-        assertTrue(vault.retired(), "unpause() must not clear retirement (issue #1284)");
+        assertTrue(vault.retired(), "unpauseDeposits() must not clear retirement (issue #1284)");
         assertEq(vault.maxDeposit(stranger), 0, "deposits must stay closed on a retired vault");
 
         vm.prank(stranger);
@@ -2418,6 +2626,308 @@ contract BasketVaultTest is Test {
         vm.expectRevert(BasketVault.RegistryAlreadySet.selector);
         vm.prank(admin);
         vault.setRegistry(reg);
+    }
+
+    // ─── core 1513: redeem entry gas floor ───────────────────────────────────────
+
+    /// @notice A redeem entered with less gas than the floor reverts with the typed
+    ///         `InsufficientGas(available, required)` error, before any state change.
+    ///         The harness lists one asset, so the floor is 300k + 400k = 700k.
+    function test_redeem_revertsInsufficientGasBelowFloor() public {
+        uint256 shares = _depositAt1to1(stranger, 1_000e6);
+        uint256 floor = 700_000;
+
+        vm.prank(stranger);
+        (bool ok, bytes memory ret) = address(vault).call{gas: 600_000}(
+            abi.encodeCall(vault.redeem, (shares, stranger, stranger))
+        );
+        assertFalse(ok, "redeem below the floor must revert");
+        assertEq(bytes4(ret), BasketVault.InsufficientGas.selector, "typed floor error");
+        (uint256 available, uint256 required) = abi.decode(_tail(ret), (uint256, uint256));
+        assertLt(available, floor, "reported gas is below the floor");
+        assertEq(required, floor, "reported floor is base + one asset");
+        assertEq(vault.balanceOf(stranger), shares, "shares untouched by the refused redeem");
+    }
+
+    /// @notice A redeem entered with at least the floor does not hit the guard.
+    function test_redeem_succeedsAtOrAboveFloor() public {
+        uint256 shares = _depositAt1to1(stranger, 1_000e6);
+        usdc.mint(address(router), 1_000e6);
+        router.setAmountOut(1_000e6);
+
+        vm.prank(stranger);
+        (bool ok,) = address(vault).call{gas: 2_000_000}(
+            abi.encodeCall(vault.redeem, (shares, stranger, stranger))
+        );
+        assertTrue(ok, "redeem with ample gas succeeds");
+        assertEq(vault.balanceOf(stranger), 0, "shares burned");
+    }
+
+    // ─── Core 1665: window-derived cardinality floor ──────────────────
+
+    /// @notice The 1800 s default window needs 1800 / 2 + 1 = 901 slots: 900 reverts, 901 registers.
+    function test_addAsset_rejectsCardinalityBelowWindowFloor() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool p = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        p.setCardinality(900);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientPoolCardinality.selector,
+                address(p),
+                uint16(901),
+                uint16(900)
+            )
+        );
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(p), 500, address(0), BasketVault.Venue.V3);
+
+        p.setCardinality(901);
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(p), 500, address(0), BasketVault.Venue.V3);
+        assertEq(vault.assetCount(), 2, "registered at exactly the floor");
+    }
+
+    /// @notice A 3600 s window needs 1801 slots: 1800 reverts, 1801 is accepted.
+    function test_setTwapWindow_rejectsCardinalityBelowNewFloor() public {
+        pool.setCardinality(1_800);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientPoolCardinality.selector,
+                address(pool),
+                uint16(1_801),
+                uint16(1_800)
+            )
+        );
+        vm.prank(admin);
+        vault.setTwapWindow(address(basketToken), 3_600);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 1_800, "window unchanged");
+
+        pool.setCardinality(1_801);
+        vm.prank(admin);
+        vault.setTwapWindow(address(basketToken), 3_600);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 3_600, "window set at floor");
+    }
+
+    // ─── Core 1665: redeemInKind ──────────────────────────────────────
+
+    /// @dev Alice holds all shares of a vault with `basketToken` backing, idle USDC and a 1% exit fee.
+    function _seedInKind() internal returns (address alice, uint256 shares) {
+        alice = makeAddr("alice");
+        shares = _depositAt1to1(alice, 10_000 * ONE_USDC);
+        usdc.mint(address(vault), 777 * ONE_USDC); // idle USDC
+        vm.prank(admin);
+        vault.setExitFeeBps(100);
+    }
+
+    /// @dev Registers a second ACTIVE asset holding `amount` tokens.
+    function _addSecond(uint256 amount) internal returns (TestERC20 t2) {
+        t2 = new TestERC20();
+        MockPool p2 = new MockPool(address(t2), address(usdc), uint160(1 << 96));
+        vm.prank(admin);
+        vault.addAsset(address(t2), address(p2), 500, address(0), BasketVault.Venue.V3);
+        t2.mint(address(vault), amount);
+    }
+
+    /// @notice PoC test_redeemBlockedByOracle: with observe() reverting, redeem reverts and
+    ///         redeemInKind pays the pro-rata tokens and idle USDC minus the exit fee.
+    function test_redeemInKind_succeedsWhenObserveReverts() public {
+        (address alice, uint256 shares) = _seedInKind();
+        pool.setRevertObserve(true);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.redeem(shares / 2, alice, alice);
+
+        uint256 sup = vault.totalSupply();
+        uint256 tokBal = basketToken.balanceOf(address(vault));
+        uint256 usdcBal = usdc.balanceOf(address(vault));
+        uint256 tokAmt = tokBal * (shares / 2) / sup;
+        uint256 usdcAmt = usdcBal * (shares / 2) / sup;
+        uint256 tokFee = tokAmt * 100 / 10_000;
+        uint256 usdcFee = usdcAmt * 100 / 10_000;
+        assertGt(tokFee, 0, "fee leg exercised");
+
+        vm.prank(alice);
+        vault.redeemInKind(shares / 2, alice, alice);
+
+        assertEq(vault.balanceOf(alice), shares - shares / 2, "shares burned");
+        assertEq(basketToken.balanceOf(alice), tokAmt - tokFee, "token net of fee");
+        assertEq(usdc.balanceOf(alice), usdcAmt - usdcFee, "idle USDC net of fee");
+        assertEq(basketToken.balanceOf(admin), tokFee, "token fee to feeRecipient");
+        assertEq(usdc.balanceOf(admin), usdcFee, "usdc fee to feeRecipient");
+        assertEq(
+            basketToken.balanceOf(address(vault)), tokBal - tokAmt, "vault paid exactly pro rata"
+        );
+    }
+
+    /// @notice redeemInKind is not blocked by pause, unwind, shutdown or retire. A third party with
+    ///         allowance redeems for the owner and the allowance is spent.
+    function test_redeemInKind_neverBlocked() public {
+        (address alice, uint256 shares) = _seedInKind();
+        uint256 q = shares / 5;
+
+        vm.prank(emergencyResponder);
+        vault.pauseDeposits();
+        assertTrue(vault.depositsPaused());
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        // After emergencyUnwind the basket token is USDC.
+        usdc.mint(address(router), 10_000 * ONE_USDC);
+        router.setAmountOut(9_000 * ONE_USDC);
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        vm.prank(emergencyResponder);
+        vault.shutdownVault();
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        address reg = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(reg);
+        vm.prank(reg);
+        vault.retire();
+        vm.prank(alice);
+        vault.redeemInKind(q, alice, alice);
+
+        // Third party with allowance, receiver differs from owner.
+        address spender = makeAddr("spender");
+        address dest = makeAddr("dest");
+        vm.prank(alice);
+        vault.approve(spender, q + 5);
+        vm.prank(spender);
+        vault.redeemInKind(q, dest, alice);
+        assertEq(vault.allowance(alice, spender), 5, "allowance spent by exactly shares");
+        assertGt(usdc.balanceOf(dest), 0, "receiver paid");
+
+        // Without allowance it reverts and nothing is burned.
+        address nobody = makeAddr("nobody");
+        uint256 before_ = vault.balanceOf(alice);
+        vm.prank(nobody);
+        vm.expectRevert();
+        vault.redeemInKind(1, nobody, alice);
+        assertEq(vault.balanceOf(alice), before_, "no burn without allowance");
+    }
+
+    /// @notice Fuzz: exact floor pro-rata per ACTIVE asset, inactive assets not paid, and the remaining
+    ///         holder's per-share backing never decreases for any token or USDC.
+    function testFuzz_redeemInKind_proRataExact(uint256 shares_) public {
+        (address alice, uint256 aliceShares) = _seedInKind();
+        address bob = makeAddr("bob");
+        // Bob joins so there is a remaining holder.
+        _depositAt1to1(bob, 3_000 * ONE_USDC);
+        TestERC20 t2 = _addSecond(1_234_567);
+        // A removed (inactive) asset whose balance reappeared must not be paid.
+        TestERC20 t3 = new TestERC20();
+        MockPool p3 = new MockPool(address(t3), address(usdc), uint160(1 << 96));
+        vm.startPrank(admin);
+        vault.addAsset(address(t3), address(p3), 500, address(0), BasketVault.Venue.V3);
+        vault.removeAsset(2);
+        vm.stopPrank();
+        t3.mint(address(vault), 999_999);
+
+        shares_ = bound(shares_, 1, aliceShares);
+        uint256[4] memory pre = [
+            vault.totalSupply(),
+            basketToken.balanceOf(address(vault)),
+            t2.balanceOf(address(vault)),
+            usdc.balanceOf(address(vault))
+        ];
+        uint256 aliceUsdc0 = usdc.balanceOf(alice);
+
+        vm.prank(alice);
+        vault.redeemInKind(shares_, alice, alice);
+
+        assertEq(
+            basketToken.balanceOf(alice) + basketToken.balanceOf(admin),
+            pre[1] * shares_ / pre[0],
+            "token1 exact"
+        );
+        assertEq(
+            t2.balanceOf(alice) + t2.balanceOf(admin), pre[2] * shares_ / pre[0], "token2 exact"
+        );
+        assertEq(
+            usdc.balanceOf(alice) - aliceUsdc0 + usdc.balanceOf(admin),
+            pre[3] * shares_ / pre[0],
+            "usdc exact"
+        );
+        assertEq(t3.balanceOf(address(vault)), 999_999, "inactive asset not paid");
+        assertEq(t3.balanceOf(alice), 0, "inactive asset not paid out");
+
+        assertEq(vault.totalSupply(), pre[0] - shares_, "supply reduced by shares");
+        uint256 sup2 = vault.totalSupply();
+        assertGe(basketToken.balanceOf(address(vault)) * pre[0], pre[1] * sup2, "token1 backing");
+        assertGe(t2.balanceOf(address(vault)) * pre[0], pre[2] * sup2, "token2 backing");
+        assertGe(usdc.balanceOf(address(vault)) * pre[0], pre[3] * sup2, "usdc backing");
+    }
+
+    /// @notice A token callback cannot re-enter, and shares are already burned when the callback runs.
+    function test_redeemInKind_reentrancyBlockedAndSharesBurnedFirst() public {
+        ReentrantHookToken hook = new ReentrantHookToken();
+        MockPool hp = new MockPool(address(hook), address(usdc), uint160(1 << 96));
+        BasketVaultHarness v = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
+        );
+        vm.prank(admin);
+        v.addAsset(address(hook), address(hp), 500, address(0), BasketVault.Venue.V3);
+        address alice = makeAddr("alice");
+        // Mint shares by seeding the vault through a deposit at 1:1.
+        hook.mint(address(router), 1_000 * ONE_USDC);
+        router.setAmountOut(1_000 * ONE_USDC);
+        usdc.mint(alice, 1_000 * ONE_USDC);
+        vm.startPrank(alice);
+        usdc.approve(address(v), 1_000 * ONE_USDC);
+        uint256 sh = v.deposit(1_000 * ONE_USDC, alice);
+        vm.stopPrank();
+
+        hook.arm(v, alice);
+        vm.prank(alice);
+        v.redeemInKind(sh, alice, alice);
+
+        assertTrue(hook.reentered(), "callback ran");
+        assertFalse(hook.reentrySucceeded(), "re-entry must not succeed");
+        assertEq(
+            hook.reentryReason(),
+            bytes4(abi.encodeWithSignature("ReentrancyGuardReentrantCall()")),
+            "blocked by the reentrancy guard"
+        );
+        assertEq(hook.sharesAtCallback(), 0, "shares were burned before the first transfer");
+        assertEq(hook.supplyAtCallback(), 0, "supply already reduced at the callback");
+        assertEq(hook.balanceOf(alice), 1_000 * ONE_USDC, "paid in kind (fee is 0 on this vault)");
+    }
+
+    /// @notice redeemInKind reads no TWAP and sells nothing: it works with a router that has no
+    ///         liquidity and a pool that reverts on both observe and slot0-priced reads.
+    function test_redeemInKind_noSwapNoOracle() public {
+        (address alice, uint256 shares) = _seedInKind();
+        pool.setRevertObserve(true);
+        router.setAmountOut(0);
+        vm.prank(alice);
+        vault.redeemInKind(shares, alice, alice);
+        assertEq(vault.totalSupply(), 0);
+        assertGt(basketToken.balanceOf(alice), 0);
+    }
+
+    /// @notice The entry gas floor applies as in redeem.
+    function test_redeemInKind_revertsBelowGasFloor() public {
+        (address alice, uint256 shares) = _seedInKind();
+        vm.prank(alice);
+        (bool ok, bytes memory ret) = address(vault).call{gas: 400_000}(
+            abi.encodeCall(vault.redeemInKind, (shares, alice, alice))
+        );
+        assertFalse(ok, "low gas must revert");
+        assertEq(bytes4(ret), BasketVault.InsufficientGas.selector, "InsufficientGas");
+        assertEq(vault.balanceOf(alice), shares, "no burn");
+    }
+
+    function _tail(bytes memory data) internal pure returns (bytes memory out) {
+        out = new bytes(data.length - 4);
+        for (uint256 i = 0; i < out.length; i++) {
+            out[i] = data[i + 4];
+        }
     }
 }
 
@@ -2686,7 +3196,7 @@ contract MockAerodromePool {
         token0 = token0_;
         token1 = token1_;
         tickCumulativeRate = 0;
-        cardinality = 100;
+        cardinality = 1000;
     }
 
     function setTickCumulativeRate(int56 rate) external {
@@ -2917,7 +3427,10 @@ contract BasketVaultAerodromeTest is Test {
         assertEq(aeroToken.balanceOf(address(vault)), 0, "aeroToken unwound via Aerodrome");
         assertEq(usdc.balanceOf(address(vault)), amountOut, "USDC received via Aerodrome adapter");
         assertTrue(vault.depositsPaused(), "deposits paused after Aerodrome emergency unwind");
-        assertFalse(vault.paused(), "Aerodrome unwind keeps redemption available");
+        assertTrue(
+            vault.depositsPaused(),
+            "unwind halts deposits only; Aerodrome unwind keeps redemption available"
+        );
     }
 
     // ─── AerodromeSwapAdapter unit tests ──────────────────────────────────
@@ -3039,529 +3552,17 @@ contract BasketVaultAerodromeTest is Test {
     }
 }
 
-// ─── Uniswap V4 swap + TWAP adapter tests (issue #554) ────────────────────────
-
-/// @dev Mock Uniswap V4 Router: records calls and disburses pre-set output amounts.
-///      Mimics IUniswapV4SwapRouter.exactInputSingle.
-contract MockUniswapV4Router {
-    using SafeERC20 for IERC20;
-
-    uint256 public amountOut;
-
-    error TooLittleReceived(uint256 amountOut, uint256 amountOutMinimum);
-
-    function setAmountOut(uint256 amountOut_) external {
-        amountOut = amountOut_;
-    }
-
-    function exactInputSingle(IUniswapV4SwapRouter.ExactInputSingleParams calldata params)
-        external
-        payable
-        returns (uint256)
-    {
-        if (amountOut < params.amountOutMinimum) {
-            revert TooLittleReceived(amountOut, params.amountOutMinimum);
-        }
-        // Determine tokenIn/tokenOut from zeroForOne and PoolKey.
-        address tokenIn = params.zeroForOne ? params.poolKey.currency0 : params.poolKey.currency1;
-        address tokenOut = params.zeroForOne ? params.poolKey.currency1 : params.poolKey.currency0;
-        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), params.amountIn);
-        IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
-        return amountOut;
-    }
-}
-
-/// @dev V4-style pool mock: observe() returns tick cumulatives identical to MockPool.
-///      Also implements token0/token1, slot0, and liquidity for addAsset checks.
-contract MockUniswapV4Pool {
-    address public immutable token0;
-    address public immutable token1;
-    int56 public tickCumulativeRate;
-    uint16 public cardinality;
-    uint128 public poolLiquidity;
-
-    constructor(address token0_, address token1_) {
-        token0 = token0_;
-        token1 = token1_;
-        tickCumulativeRate = 0;
-        cardinality = 100;
-        poolLiquidity = 1e18;
-    }
-
-    function setTickCumulativeRate(int56 rate) external {
-        tickCumulativeRate = rate;
-    }
-
-    function setCardinality(uint16 cardinality_) external {
-        cardinality = cardinality_;
-    }
-
-    function setLiquidity(uint128 liquidity_) external {
-        poolLiquidity = liquidity_;
-    }
-
-    function liquidity() external view returns (uint128) {
-        return poolLiquidity;
-    }
-
-    /// @dev ORA-3 / F-09: `addAsset` asserts the pool's `fee()` equals `swapFee_`
-    ///      (V4 resolves the execution pool from the fee tier). The V4 tests
-    ///      register with `swapFee_ == 3000`.
-    function fee() external pure returns (uint24) {
-        return 3000;
-    }
-
-    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
-        return (uint160(1 << 96), 0, 0, cardinality, cardinality, 0, true);
-    }
-
-    function observe(uint32[] calldata secondsAgos)
-        external
-        view
-        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq)
-    {
-        tickCumulatives = new int56[](secondsAgos.length);
-        secondsPerLiq = new uint160[](secondsAgos.length);
-        for (uint256 i = 0; i < secondsAgos.length; i++) {
-            int56 t =
-                int56(int256(uint256(block.timestamp))) - int56(int256(uint256(secondsAgos[i])));
-            tickCumulatives[i] = tickCumulativeRate * t;
-        }
-    }
-}
-
-/// @title BasketVaultUniswapV4Test
-/// @notice Verifies the Uniswap V4 swap + TWAP adapter path in BasketVault.
-///         All tests use mock V4 Router and mock V4 pool; no mainnet fork is required.
-///         Acceptance criteria (issue #554):
-///         AC1 — BasketVault routes a configured asset's swap through Uniswap V4.
-///         AC2 — The Uniswap V3 default path is unchanged (existing V3 tests still pass).
-///         AC3 — forge tests cover the V4 swap and TWAP paths.
-contract BasketVaultUniswapV4Test is Test {
-    uint256 internal constant ONE_USDC = 1e6;
-
-    TestERC20 internal usdc;
-    TestERC20 internal v4Token;
-    MockUniswapV4Router internal v4Router;
-    MockUniswapV4Pool internal v4Pool;
-    MockSwapRouter internal v3Router; // kept for vault constructor; not exercised by V4 tests
-    UniswapV4SwapAdapter internal v4Adapter;
-    BasketVaultHarness internal vault;
-
-    address internal admin = makeAddr("admin");
-    address internal emergencyResponder = makeAddr("emergencyResponder");
-    address internal stranger = makeAddr("stranger");
-
-    function setUp() public {
-        vm.warp(1_800_000); // ensure block.timestamp > DEFAULT_TWAP_WINDOW (1800 s)
-
-        usdc = new TestERC20();
-        v4Token = new TestERC20();
-        v4Router = new MockUniswapV4Router();
-
-        // Sort tokens so token0 < token1 (V4 pool ordering).
-        address t0 = address(v4Token) < address(usdc) ? address(v4Token) : address(usdc);
-        address t1 = address(v4Token) < address(usdc) ? address(usdc) : address(v4Token);
-        v4Pool = new MockUniswapV4Pool(t0, t1);
-
-        v3Router = new MockSwapRouter();
-        vault = new BasketVaultHarness(
-            IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
-        );
-
-        // Deploy Uniswap V4 adapter.
-        v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
-
-        // ADP-2 / NC-2: approve the adapter's codehash before it can be onboarded.
-        vm.prank(admin);
-        vault.setAdapterCodeHashAllowed(address(v4Adapter).codehash, true);
-
-        // Register v4Token with the V4 adapter, fee tier 3000 (standard 0.3% pool).
-        vm.prank(admin);
-        vault.addAsset(
-            address(v4Token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
-        );
-    }
-
-    // ─── AC1: Uniswap V4 swap path ────────────────────────────────────────
-
-    /// @notice Deposit routes USDC→v4Token through the V4 adapter, not V3.
-    function test_V4_deposit_routesThroughUniswapV4Adapter() public {
-        uint256 depositAmount = 1_000 * ONE_USDC;
-        // tick=0 → 1:1 price; slippage = 100 bps → minOut = 990 tokens.
-        uint256 routerOut = 995 * ONE_USDC; // satisfies floor
-
-        usdc.mint(stranger, depositAmount);
-        v4Token.mint(address(v4Router), routerOut);
-        v4Router.setAmountOut(routerOut);
-
-        vm.startPrank(stranger);
-        usdc.approve(address(vault), depositAmount);
-        vault.deposit(depositAmount, stranger);
-        vm.stopPrank();
-
-        assertEq(
-            v4Token.balanceOf(address(vault)),
-            routerOut,
-            "V4 deposit: vault holds v4Tokens received from V4 router"
-        );
-        assertEq(usdc.balanceOf(address(vault)), 0, "no idle USDC after full deposit");
-        // V3 router must NOT have been touched.
-        assertEq(
-            usdc.allowance(address(vault), address(v3Router)),
-            0,
-            "no residual USDC approval on V3 router"
-        );
-    }
-
-    /// @notice Withdrawal routes v4Token→USDC through the V4 adapter.
-    function test_V4_withdrawal_routesThroughUniswapV4Adapter() public {
-        uint256 depositAmount = 1_000 * ONE_USDC;
-        uint256 depositOut = 995 * ONE_USDC;
-        uint256 withdrawOut = 990 * ONE_USDC;
-
-        usdc.mint(stranger, depositAmount);
-        v4Token.mint(address(v4Router), depositOut);
-        v4Router.setAmountOut(depositOut);
-
-        vm.startPrank(stranger);
-        usdc.approve(address(vault), depositAmount);
-        vault.deposit(depositAmount, stranger);
-        vm.stopPrank();
-
-        // Now redeem.
-        usdc.mint(address(v4Router), withdrawOut);
-        v4Router.setAmountOut(withdrawOut);
-
-        uint256 shares = vault.balanceOf(stranger);
-        vm.prank(stranger);
-        vault.redeem(shares, stranger, stranger);
-
-        assertEq(v4Token.balanceOf(address(vault)), 0, "all v4Tokens swapped on redeem");
-        assertGt(usdc.balanceOf(stranger), 0, "stranger received USDC from V4 redeem");
-        assertEq(
-            v4Token.allowance(address(vault), address(v4Adapter)),
-            0,
-            "no residual v4Token allowance on adapter after redeem"
-        );
-    }
-
-    /// @notice Deposit slippage floor is derived from the V4 TWAP: a router returning
-    ///         zero output triggers the floor and reverts.
-    function test_V4_deposit_slippageFloorFromV4Twap() public {
-        uint256 depositAmount = 1_000 * ONE_USDC;
-        // minOut = 1000 * 9900/10000 = 990. Router returns 0 → revert.
-        v4Router.setAmountOut(0);
-        usdc.mint(stranger, depositAmount);
-
-        vm.startPrank(stranger);
-        usdc.approve(address(vault), depositAmount);
-        vm.expectRevert(); // V4 router TooLittleReceived
-        vault.deposit(depositAmount, stranger);
-        vm.stopPrank();
-    }
-
-    // ─── AC1 continued: TWAP pricing path ────────────────────────────────
-
-    /// @notice totalAssets() prices v4Token via the V4 adapter's twapPrice().
-    ///         tick=0 → 1:1 price → 1000 v4Tokens == 1000 USDC in NAV.
-    function test_UniswapV4_totalAssets_usesAdapterTwap() public {
-        uint256 tokenAmount = 1_000 * ONE_USDC;
-        v4Token.mint(address(vault), tokenAmount);
-        // tick=0 (default rate=0) → 1:1 price → NAV should be 1000 USDC.
-        uint256 nav = vault.totalAssets();
-        assertEq(nav, tokenAmount, "V4 TWAP NAV: 1:1 price at tick=0");
-    }
-
-    /// @notice A positive tick (token appreciates vs USDC) yields NAV > tokenAmount.
-    function test_UniswapV4_totalAssets_reflectsPositiveTick() public {
-        // tickCumulativeRate = 1 → mean tick = 1 → token price > 1 USDC per token.
-        v4Pool.setTickCumulativeRate(1);
-        uint256 tokenAmount = 1_000 * ONE_USDC;
-        v4Token.mint(address(vault), tokenAmount);
-        uint256 nav = vault.totalAssets();
-        // At tick=1, sqrtPrice slightly above 1, so token is worth slightly more than 1 USDC.
-        // Depending on token ordering, NAV > tokenAmount or NAV < tokenAmount.
-        // We just verify it is non-zero and differs from the tick=0 reference.
-        assertGt(nav, 0, "V4 TWAP NAV must be non-zero for non-zero balance");
-    }
-
-    // ─── AC2: Uniswap V3 default path unchanged ───────────────────────────
-
-    /// @notice A V3-registered asset (adapter=address(0)) still swaps via V3 router
-    ///         when a V4 asset is also registered.
-    function test_UniswapV4_v3DefaultPathUnchanged() public {
-        TestERC20 v3Token = new TestERC20();
-        MockPool v3Pool = new MockPool(address(v3Token), address(usdc), uint160(1 << 96));
-
-        vm.prank(admin);
-        vault.addAsset(address(v3Token), address(v3Pool), 500, address(0), BasketVault.Venue.V3);
-
-        uint256 depositAmount = 2_000 * ONE_USDC; // 2 assets → 1000 each
-        uint256 routerOut = 990 * ONE_USDC;
-
-        usdc.mint(stranger, depositAmount);
-        v4Token.mint(address(v4Router), routerOut);
-        v4Router.setAmountOut(routerOut);
-        v3Token.mint(address(v3Router), routerOut);
-        v3Router.setAmountOut(routerOut);
-
-        vm.startPrank(stranger);
-        usdc.approve(address(vault), depositAmount);
-        vault.deposit(depositAmount, stranger);
-        vm.stopPrank();
-
-        assertGt(v3Token.balanceOf(address(vault)), 0, "V3 token received via V3 router");
-        assertGt(v4Token.balanceOf(address(vault)), 0, "v4Token received via V4 adapter");
-    }
-
-    // ─── V4 emergency unwind ──────────────────────────────────────────────
-
-    /// @notice emergencyUnwind uses the V4 adapter path for V4-registered assets.
-    function test_UniswapV4_emergencyUnwind_routesThroughAdapter() public {
-        uint256 tokenAmount = 1_000 * ONE_USDC;
-        // TWAP floor (tick=0, 1:1, 1% slippage) = 990 USDC. Use 995.
-        uint256 amountOut = 995 * ONE_USDC;
-        v4Token.mint(address(vault), tokenAmount);
-        usdc.mint(address(v4Router), amountOut);
-        v4Router.setAmountOut(amountOut);
-
-        vm.prank(admin);
-        vault.setEmergencyUnwindGuard(address(v4Token), 900 * ONE_USDC, false, 0);
-
-        vm.prank(emergencyResponder);
-        vault.emergencyUnwind();
-
-        assertEq(v4Token.balanceOf(address(vault)), 0, "v4Token unwound via V4 adapter");
-        assertEq(usdc.balanceOf(address(vault)), amountOut, "USDC received via V4 adapter");
-        assertTrue(vault.depositsPaused(), "deposits paused after V4 emergency unwind");
-        assertFalse(vault.paused(), "V4 unwind keeps redemption available");
-    }
-
-    // ─── UniswapV4SwapAdapter unit tests ──────────────────────────────────
-
-    /// @notice UniswapV4SwapAdapter.swap() reverts when amountOutMinimum is not met.
-    function test_UniswapV4SwapAdapter_swap_revertsOnSlippage() public {
-        TestERC20 tokenA = new TestERC20();
-        TestERC20 tokenB = new TestERC20();
-
-        MockUniswapV4Router localRouter = new MockUniswapV4Router();
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(localRouter));
-
-        tokenA.mint(address(this), 1_000 * ONE_USDC);
-        tokenB.mint(address(localRouter), 500 * ONE_USDC);
-        tokenA.approve(address(adapter), 1_000 * ONE_USDC);
-        localRouter.setAmountOut(500 * ONE_USDC); // below minAmountOut
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                MockUniswapV4Router.TooLittleReceived.selector, 500 * ONE_USDC, 900 * ONE_USDC
-            )
-        );
-        adapter.swap(
-            address(tokenA),
-            address(tokenB),
-            3000,
-            1_000 * ONE_USDC,
-            900 * ONE_USDC,
-            address(this),
-            block.timestamp
-        );
-    }
-
-    /// @notice UniswapV4SwapAdapter.swap() succeeds and returns correct amountOut.
-    function test_UniswapV4SwapAdapter_swap_succeedsAboveMinimum() public {
-        TestERC20 tokenA = new TestERC20();
-        TestERC20 tokenB = new TestERC20();
-
-        MockUniswapV4Router localRouter = new MockUniswapV4Router();
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(localRouter));
-
-        uint256 amountIn = 1_000 * ONE_USDC;
-        uint256 expectedOut = 995 * ONE_USDC;
-
-        tokenA.mint(address(this), amountIn);
-        tokenB.mint(address(localRouter), expectedOut);
-        tokenA.approve(address(adapter), amountIn);
-        localRouter.setAmountOut(expectedOut);
-
-        uint256 out = adapter.swap(
-            address(tokenA),
-            address(tokenB),
-            500,
-            amountIn,
-            990 * ONE_USDC,
-            address(this),
-            block.timestamp
-        );
-        assertEq(out, expectedOut, "swap returns expected amountOut");
-        assertEq(tokenB.balanceOf(address(this)), expectedOut, "caller received tokenB");
-    }
-
-    /// @notice UniswapV4SwapAdapter.swap() returns 0 for zero amountIn (no revert).
-    function test_UniswapV4SwapAdapter_swap_zeroAmountInReturnsZero() public {
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-        uint256 out = adapter.swap(
-            address(usdc), address(v4Token), 500, 0, 0, address(this), block.timestamp
-        );
-        assertEq(out, 0, "zero amountIn returns 0 without revert");
-    }
-
-    /// @notice UniswapV4SwapAdapter.swap() enforces the caller-chosen deadline in the
-    ///         adapter (the V4 router params carry none) — audit 2026-06-09, L-5.
-    function test_UniswapV4SwapAdapter_swap_revertsOnExpiredDeadline() public {
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-        uint256 expired = block.timestamp - 1;
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                UniswapV4SwapAdapter.DeadlineExpired.selector, expired, block.timestamp
-            )
-        );
-        adapter.swap(
-            address(usdc), address(v4Token), 500, 1_000 * ONE_USDC, 0, address(this), expired
-        );
-    }
-
-    /// @notice UniswapV4SwapAdapter.swap() reverts (SafeCast) instead of silently
-    ///         truncating a minAmountOut above uint128 max, which would have
-    ///         weakened the slippage floor — audit 2026-06-09, L-6.
-    function test_UniswapV4SwapAdapter_swap_revertsOnUint128MinAmountOutOverflow() public {
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-
-        uint256 amountIn = 1_000 * ONE_USDC;
-        usdc.mint(address(this), amountIn);
-        usdc.approve(address(adapter), amountIn);
-        v4Router.setAmountOut(type(uint256).max); // never the limiting factor here
-
-        uint256 oversizedMinOut = uint256(type(uint128).max) + 1;
-        vm.expectRevert(); // SafeCastOverflowedUintDowncast(128, oversizedMinOut)
-        adapter.swap(
-            address(usdc),
-            address(v4Token),
-            500,
-            amountIn,
-            oversizedMinOut,
-            address(this),
-            block.timestamp
-        );
-    }
-
-    /// @notice UniswapV4SwapAdapter.swap() reverts (SafeCast) for amountIn above
-    ///         uint128 max instead of wrapping — audit 2026-06-09, L-6.
-    function test_UniswapV4SwapAdapter_swap_revertsOnUint128AmountInOverflow() public {
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-
-        uint256 oversizedAmountIn = uint256(type(uint128).max) + 1;
-        usdc.mint(address(this), oversizedAmountIn);
-        usdc.approve(address(adapter), oversizedAmountIn);
-        v4Router.setAmountOut(1);
-
-        vm.expectRevert(); // SafeCastOverflowedUintDowncast(128, oversizedAmountIn)
-        adapter.swap(
-            address(usdc),
-            address(v4Token),
-            500,
-            oversizedAmountIn,
-            0,
-            address(this),
-            block.timestamp
-        );
-    }
-
-    /// @notice UniswapV4SwapAdapter.twapPrice() returns 1:1 at tick=0.
-    function test_UniswapV4SwapAdapter_twapPrice_returnsCorrectAtTickZero() public {
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-        uint256 baseAmount = 1_000 * ONE_USDC;
-        uint32 window = 1800;
-        uint256 quote =
-            adapter.twapPrice(address(v4Pool), address(v4Token), address(usdc), baseAmount, window);
-        assertEq(quote, baseAmount, "tick=0: 1:1 price, twapPrice returns baseAmount");
-    }
-
-    /// @notice UniswapV4SwapAdapter.twapPrice() reverts on pool token mismatch.
-    function test_UniswapV4SwapAdapter_twapPrice_revertsOnPoolTokenMismatch() public {
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-        TestERC20 wrongToken = new TestERC20();
-        vm.expectRevert(UniswapV4SwapAdapter.PoolTokenMismatch.selector);
-        adapter.twapPrice(
-            address(v4Pool), address(wrongToken), address(usdc), 1_000 * ONE_USDC, 1800
-        );
-    }
-
-    /// @notice UniswapV4SwapAdapter.twapPrice() reverts on zero window.
-    function test_UniswapV4SwapAdapter_twapPrice_revertsOnZeroWindow() public {
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-        vm.expectRevert(UniswapV4SwapAdapter.ZeroWindow.selector);
-        adapter.twapPrice(address(v4Pool), address(v4Token), address(usdc), 1_000 * ONE_USDC, 0);
-    }
-
-    /// @notice UniswapV4SwapAdapter.twapPrice() reverts on zero pool address.
-    function test_UniswapV4SwapAdapter_twapPrice_revertsOnZeroPoolAddress() public {
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-        vm.expectRevert(UniswapV4SwapAdapter.ZeroAddress.selector);
-        adapter.twapPrice(address(0), address(v4Token), address(usdc), 1_000 * ONE_USDC, 1800);
-    }
-
-    /// @notice UniswapV4SwapAdapter constructor reverts on zero router address.
-    function test_UniswapV4SwapAdapter_constructor_revertsOnZeroRouter() public {
-        vm.expectRevert(UniswapV4SwapAdapter.ZeroAddress.selector);
-        new UniswapV4SwapAdapter(address(0));
-    }
-
-    /// @notice UniswapV4SwapAdapter reverts for unsupported fee tiers.
-    function test_UniswapV4SwapAdapter_swap_revertsOnUnsupportedFeeTier() public {
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-        usdc.mint(address(this), 1_000 * ONE_USDC);
-        usdc.approve(address(adapter), 1_000 * ONE_USDC);
-        vm.expectRevert(
-            abi.encodeWithSelector(UniswapV4SwapAdapter.UnsupportedFeeTier.selector, uint24(9999))
-        );
-        adapter.swap(
-            address(usdc),
-            address(v4Token),
-            9999,
-            1_000 * ONE_USDC,
-            0,
-            address(this),
-            block.timestamp
-        );
-    }
-
-    /// @notice All standard fee tiers (100, 500, 3000, 10000) are accepted.
-    function test_UniswapV4SwapAdapter_standardFeeTiersAccepted() public {
-        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-        // We just verify the tick spacing derivation doesn't revert for known fee tiers.
-        // Deploy fresh pools for each fee tier (token ordering matters for pool key).
-        uint24[4] memory fees = [uint24(100), uint24(500), uint24(3000), uint24(10000)];
-        for (uint256 i = 0; i < 4; i++) {
-            TestERC20 ta = new TestERC20();
-            TestERC20 tb = new TestERC20();
-            uint256 amtIn = 100 * ONE_USDC;
-            uint256 amtOut = 99 * ONE_USDC;
-            ta.mint(address(this), amtIn);
-            tb.mint(address(v4Router), amtOut);
-            ta.approve(address(adapter), amtIn);
-            v4Router.setAmountOut(amtOut);
-            // Should not revert (fee tier is supported).
-            uint256 out = adapter.swap(
-                address(ta), address(tb), fees[i], amtIn, 0, address(this), block.timestamp
-            );
-            assertEq(out, amtOut, "swap succeeds for standard fee tier");
-        }
-    }
-}
-
 // ─── Per-asset venue selector tests (issue #555) ──────────────────────────────
 
 /// @title BasketVaultVenueSelectorTest
 /// @notice Verifies that addAsset stores the Venue enum on AssetInfo and
 ///         dispatches swap + TWAP through the matching adapter for all three
-///         venue types (V3, V4, Aerodrome).
+///         venue types (V3, V3 via adapter, Aerodrome).
 ///         Acceptance criteria (issue #555):
 ///         AC1 — addAsset accepts a venue selector and stores it on AssetInfo.
 ///         AC2 — Swap and TWAP dispatch to the correct adapter per venue,
 ///               including in emergency unwind.
-///         AC3 — Tests cover adding assets on V3, V4, and Aerodrome.
+///         AC3 — Tests cover adding assets on V3, V3 via adapter, and Aerodrome.
 contract BasketVaultVenueSelectorTest is Test {
     uint256 internal constant ONE_USDC = 1e6;
 
@@ -3576,7 +3577,6 @@ contract BasketVaultVenueSelectorTest is Test {
 
     TestERC20 internal usdc;
     MockSwapRouter internal v3Router;
-    MockUniswapV4Router internal v4Router;
     MockAerodromeRouter internal aeroRouter;
     BasketVaultHarness internal vault;
 
@@ -3589,21 +3589,20 @@ contract BasketVaultVenueSelectorTest is Test {
 
         usdc = new TestERC20();
         v3Router = new MockSwapRouter();
-        v4Router = new MockUniswapV4Router();
         aeroRouter = new MockAerodromeRouter();
 
         vault = new BasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
         );
 
-        // ADP-2 / NC-2: every UniswapV4SwapAdapter / AerodromeSwapAdapter instance
+        // ADP-2 / NC-2: every UniswapV3SwapAdapter / AerodromeSwapAdapter instance
         // shares the same runtime codehash, so approving one representative codehash
         // per type covers all per-test adapter deployments below.
-        bytes32 v4CodeHash = address(new UniswapV4SwapAdapter(address(v4Router))).codehash;
+        bytes32 v3AdapterCodeHash = address(new UniswapV3SwapAdapter(address(v3Router))).codehash;
         bytes32 aeroCodeHash =
             address(new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter))).codehash;
         vm.startPrank(admin);
-        vault.setAdapterCodeHashAllowed(v4CodeHash, true);
+        vault.setAdapterCodeHashAllowed(v3AdapterCodeHash, true);
         vault.setAdapterCodeHashAllowed(aeroCodeHash, true);
         vm.stopPrank();
     }
@@ -3635,28 +3634,6 @@ contract BasketVaultVenueSelectorTest is Test {
         assertTrue(storedActive, "V3: active");
         assertEq(storedAdapter, address(0), "V3: adapter is zero");
         assertEq(uint8(storedVenue), uint8(BasketVault.Venue.V3), "V3: venue stored as V3");
-    }
-
-    /// @notice addAsset with Venue.V4 stores Venue.V4 on AssetInfo and emits AssetAdded.
-    function test_addAsset_venueV4_storedOnAssetInfo() public {
-        TestERC20 token = new TestERC20();
-        address t0 = address(token) < address(usdc) ? address(token) : address(usdc);
-        address t1 = address(token) < address(usdc) ? address(usdc) : address(token);
-        MockUniswapV4Pool v4Pool = new MockUniswapV4Pool(t0, t1);
-        UniswapV4SwapAdapter v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
-
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit AssetAdded(
-            0, address(token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
-        );
-
-        vm.prank(admin);
-        vault.addAsset(
-            address(token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
-        );
-
-        (,,,,, BasketVault.Venue storedVenue) = vault.assets(0);
-        assertEq(uint8(storedVenue), uint8(BasketVault.Venue.V4), "V4: venue stored as V4");
     }
 
     /// @notice addAsset with Venue.Aerodrome stores Venue.Aerodrome on AssetInfo and emits AssetAdded.
@@ -3747,72 +3724,6 @@ contract BasketVaultVenueSelectorTest is Test {
         assertEq(usdc.balanceOf(address(vault)), amountOut, "V3 venue: USDC received via V3 router");
     }
 
-    /// @notice V4 asset (venue=V4) deposits via the V4 adapter, not V3 router.
-    function test_venueV4_deposit_routesThroughV4Adapter() public {
-        TestERC20 token = new TestERC20();
-        address t0 = address(token) < address(usdc) ? address(token) : address(usdc);
-        address t1 = address(token) < address(usdc) ? address(usdc) : address(token);
-        MockUniswapV4Pool v4Pool = new MockUniswapV4Pool(t0, t1);
-        UniswapV4SwapAdapter v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
-
-        vm.prank(admin);
-        vault.addAsset(
-            address(token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
-        );
-
-        uint256 depositAmount = 1_000 * ONE_USDC;
-        uint256 routerOut = 995 * ONE_USDC;
-        usdc.mint(stranger, depositAmount);
-        token.mint(address(v4Router), routerOut);
-        v4Router.setAmountOut(routerOut);
-
-        vm.startPrank(stranger);
-        usdc.approve(address(vault), depositAmount);
-        vault.deposit(depositAmount, stranger);
-        vm.stopPrank();
-
-        assertEq(
-            token.balanceOf(address(vault)), routerOut, "V4 venue: tokens deposited via V4 adapter"
-        );
-        // V3 router must not have been touched.
-        assertEq(
-            usdc.allowance(address(vault), address(v3Router)),
-            0,
-            "V4 venue: no approval on V3 router"
-        );
-    }
-
-    /// @notice V4 asset emergency unwind dispatches via the V4 adapter.
-    function test_venueV4_emergencyUnwind_routesThroughV4Adapter() public {
-        TestERC20 token = new TestERC20();
-        address t0 = address(token) < address(usdc) ? address(token) : address(usdc);
-        address t1 = address(token) < address(usdc) ? address(usdc) : address(token);
-        MockUniswapV4Pool v4Pool = new MockUniswapV4Pool(t0, t1);
-        UniswapV4SwapAdapter v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
-
-        vm.prank(admin);
-        vault.addAsset(
-            address(token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
-        );
-
-        uint256 tokenAmount = 1_000 * ONE_USDC;
-        uint256 amountOut = 995 * ONE_USDC;
-        token.mint(address(vault), tokenAmount);
-        usdc.mint(address(v4Router), amountOut);
-        v4Router.setAmountOut(amountOut);
-
-        vm.prank(admin);
-        vault.setEmergencyUnwindGuard(address(token), 900 * ONE_USDC, false, 0);
-
-        vm.prank(emergencyResponder);
-        vault.emergencyUnwind();
-
-        assertEq(token.balanceOf(address(vault)), 0, "V4 venue: token unwound via V4 adapter");
-        assertEq(
-            usdc.balanceOf(address(vault)), amountOut, "V4 venue: USDC received via V4 adapter"
-        );
-    }
-
     /// @notice Aerodrome asset (venue=Aerodrome) deposits via the Aerodrome adapter.
     function test_venueAerodrome_deposit_routesThroughAerodromeAdapter() public {
         TestERC20 token = new TestERC20();
@@ -3900,7 +3811,7 @@ contract BasketVaultVenueSelectorTest is Test {
 
     // ─── AC3: mixed-venue basket — venue values stored correctly ─────────────
 
-    /// @notice A three-asset basket (V3 + V4 + Aerodrome) stores all three venue
+    /// @notice A three-asset basket (V3 + V3 adapter + Aerodrome) stores all three venue
     ///         values correctly on AssetInfo.
     function test_mixedVenue_allVenueValuesStoredCorrectly() public {
         BasketVaultHarness freshVault = _buildMixedVenueVault();
@@ -3908,7 +3819,7 @@ contract BasketVaultVenueSelectorTest is Test {
         (,,,,, BasketVault.Venue venue1) = freshVault.assets(1);
         (,,,,, BasketVault.Venue venue2) = freshVault.assets(2);
         assertEq(uint8(venue0), uint8(BasketVault.Venue.V3), "mixed: asset[0] venue is V3");
-        assertEq(uint8(venue1), uint8(BasketVault.Venue.V4), "mixed: asset[1] venue is V4");
+        assertEq(uint8(venue1), uint8(BasketVault.Venue.V3), "mixed: asset[1] venue is V3");
         assertEq(
             uint8(venue2), uint8(BasketVault.Venue.Aerodrome), "mixed: asset[2] venue is Aerodrome"
         );
@@ -3931,12 +3842,10 @@ contract BasketVaultVenueSelectorTest is Test {
         TestERC20 v3Token = new TestERC20();
         MockPool v3Pool = new MockPool(address(v3Token), address(usdc), uint160(1 << 96));
 
-        // V4 asset
+        // V3 asset routed through the UniswapV3SwapAdapter
         TestERC20 v4Token = new TestERC20();
-        address v4t0 = address(v4Token) < address(usdc) ? address(v4Token) : address(usdc);
-        address v4t1 = address(v4Token) < address(usdc) ? address(usdc) : address(v4Token);
-        MockUniswapV4Pool v4Pool = new MockUniswapV4Pool(v4t0, v4t1);
-        UniswapV4SwapAdapter v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
+        MockPool v4Pool = new MockPool(address(v4Token), address(usdc), uint160(1 << 96));
+        UniswapV3SwapAdapter v4Adapter = new UniswapV3SwapAdapter(address(v3Router));
 
         // Aerodrome asset
         TestERC20 aeroToken = new TestERC20();
@@ -3955,7 +3864,7 @@ contract BasketVaultVenueSelectorTest is Test {
             address(v3Token), address(v3Pool), 500, address(0), BasketVault.Venue.V3
         );
         freshVault.addAsset(
-            address(v4Token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
+            address(v4Token), address(v4Pool), 500, address(v4Adapter), BasketVault.Venue.V3
         );
         freshVault.addAsset(
             address(aeroToken),
@@ -3981,8 +3890,7 @@ contract BasketVaultVenueSelectorTest is Test {
         usdc.mint(stranger, depositAmount);
         TestERC20(v3TokenAddr).mint(address(v3Router), routerOut);
         v3Router.setAmountOut(routerOut);
-        TestERC20(v4TokenAddr).mint(address(v4Router), routerOut);
-        v4Router.setAmountOut(routerOut);
+        TestERC20(v4TokenAddr).mint(address(v3Router), routerOut);
         TestERC20(aeroTokenAddr).mint(address(aeroRouter), routerOut);
         aeroRouter.setAmountOut(routerOut);
 
@@ -3999,7 +3907,7 @@ contract BasketVaultVenueSelectorTest is Test {
         assertGt(
             IERC20(v4TokenAddr).balanceOf(address(freshVault)),
             0,
-            "mixed: v4Token received via V4 adapter"
+            "mixed: adapter token received via V3 adapter"
         );
         assertGt(
             IERC20(aeroTokenAddr).balanceOf(address(freshVault)),
@@ -4023,14 +3931,7 @@ contract BasketVaultVenueSelectorTest is Test {
 // for sweeps (not a settable address) — the quarantine-address setter is only on
 // RobotMoneyVault and PortfolioRouter. AC3 quarantine tests are in DeployTimelock.t.sol.
 
-/// @dev A minimal mock Safe with threshold >= 2 (satisfies DeployTimelock guards).
-contract MockSafe929 {
-    function getThreshold() external pure returns (uint256) {
-        return 2;
-    }
-}
-
-contract BasketVaultTimelockTest is Test {
+contract BasketVaultTimelockTest is SafeGovernance {
     uint256 internal constant ONE_USDC = 1e6;
     uint256 internal constant MIN_DELAY = 2 days;
 
@@ -4052,14 +3953,11 @@ contract BasketVaultTimelockTest is Test {
         vault = new BasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(swapRouter)), admin, emergencyResponder
         );
-        safe = address(new MockSafe929());
+        _installSafeSet();
+        safe = _newDefaultSafe();
 
-        // Deploy a TimelockController with `safe` as proposer + executor.
-        address[] memory proposers = new address[](1);
-        proposers[0] = safe;
-        address[] memory executors = new address[](1);
-        executors[0] = safe;
-        timelock = new TimelockController(MIN_DELAY, proposers, executors, address(0));
+        // Production timelock shape: the Safe is the only proposer and canceller.
+        timelock = _newGovTimelock(safe, MIN_DELAY);
 
         // Transfer ADMIN_ROLE from admin EOA to TimelockController.
         vm.startPrank(admin);
@@ -4096,20 +3994,15 @@ contract BasketVaultTimelockTest is Test {
     function test_AC7_basket_setFeeRecipient_succeedsViaTimelock() public {
         address newRecipient = makeAddr("newFeeRecipient");
         bytes memory callData = abi.encodeCall(BasketVault.setFeeRecipient, (newRecipient));
-        bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("ac7-basket-fee-recipient");
 
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, timelock, address(vault), callData, salt, MIN_DELAY);
 
-        // Pre-delay revert.
-        vm.expectRevert();
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
+        // Pre-delay: exact reasons through the Safe (GS013) and on the timelock.
+        _expectExecuteRefused(safe, timelock, address(vault), callData, salt);
 
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
+        vm.warp(block.timestamp + MIN_DELAY);
+        _govExecute(safe, timelock, address(vault), callData, salt);
 
         assertEq(vault.feeRecipient(), newRecipient, "fee recipient must update via timelock");
     }
@@ -4118,14 +4011,12 @@ contract BasketVaultTimelockTest is Test {
     function test_AC7_basket_setExitFeeBps_succeedsViaTimelock() public {
         uint256 newFee = 50;
         bytes memory callData = abi.encodeCall(BasketVault.setExitFeeBps, (newFee));
-        bytes32 predecessor = bytes32(0);
-        bytes32 salt = keccak256("ac7-basket-exit-fee");
 
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
+        bytes32 salt = keccak256("ac7-basket-exit-fee");
+        _govRun(safe, timelock, address(vault), callData, salt, MIN_DELAY);
+
+        // Replay of the executed operation: exact reasons on both paths.
+        _expectExecuteRefused(safe, timelock, address(vault), callData, salt);
 
         assertEq(vault.exitFeeBps(), newFee, "exit fee must update via timelock");
     }

@@ -48,12 +48,6 @@ export type BuildAdminTabsArgs = Readonly<{
    */
   explorerApiUrl?: string;
   /**
-   * RM token contract address (issue #365). When provided, the Faucet tab
-   * renders a 'Drip RM tokens' button so testnet users can self-serve
-   * governance voting power.
-   */
-  rmTokenAddress?: Address;
-  /**
    * keccak256(eth_getCode(gateway)) pinned at deploy time. Passed through to
    * ConfigExportPanel so the exported TOML carries the verified hash.
    * Defaults to an empty string when not yet verified.
@@ -65,6 +59,12 @@ export type BuildAdminTabsArgs = Readonly<{
    * When absent the tab is still rendered in the error/missing-config state.
    */
   timelockAddress?: Address;
+  /**
+   * The 2-of-3 Safe that proposes to the timelock (core 1544). Admin tabs build
+   * a Safe -> Timelock proposal for it. Absent: those tabs show a blocking
+   * preview with no signing button.
+   */
+  safeAddress?: Address;
 }>;
 
 export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
@@ -109,11 +109,13 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
                   role="ADMIN_ROLE"
                   gatewayAddress={a.gatewayAddress}
                   ctx={a.ctx}
+                  safeAddress={a.safeAddress}
+                  timelockAddress={a.timelockAddress}
                   description={
                     <p>
-                      Mutually exclusive with AGENT_ROLE and PAUSER_ROLE per
-                      <code> AccessRoles._grantRole</code>. Only DEFAULT_ADMIN_ROLE holders may
-                      grant.
+                      Mutually exclusive with AGENT_ROLE and DEPOSIT_PAUSER_ROLE per
+                      <code> AccessRoles._grantRole</code>. Only DEFAULT_ADMIN_ROLE holders (the
+                      timelock, after handover) may grant.
                     </p>
                   }
                 />
@@ -121,17 +123,20 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
             },
             {
               id: "pauser-role",
-              label: "Pauser Role",
+              label: "Deposit Pauser Role",
               content: (
                 <RoleTab
-                  role="PAUSER_ROLE"
+                  role="DEPOSIT_PAUSER_ROLE"
                   gatewayAddress={a.gatewayAddress}
                   ctx={a.ctx}
+                  safeAddress={a.safeAddress}
+                  timelockAddress={a.timelockAddress}
                   description={
                     <p>
-                      PAUSER may call <code>pause()</code> only; <code>unpause()</code> requires
-                      ADMIN_ROLE. Mutually exclusive with AGENT_ROLE and ADMIN_ROLE on the same
-                      account.
+                      DEPOSIT_PAUSER may call <code>pauseDeposits()</code> only;{" "}
+                      <code>unpauseDeposits()</code> requires ADMIN_ROLE. A deposit pause stops new
+                      deposits only and never blocks a withdrawal. Mutually exclusive with
+                      AGENT_ROLE and ADMIN_ROLE on the same account.
                     </p>
                   }
                 />
@@ -145,12 +150,14 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
 
   tabs.push({
     id: "pause",
-    label: "Pause / Unpause",
+    label: "Pause / Unpause Deposits",
     content: (
       <PauseFlow
         gatewayAddress={a.gatewayAddress}
         gatewayCodeHashVerified={a.ctx.gatewayCodeHashVerified}
         envClass={a.ctx.envClass}
+        safeAddress={a.safeAddress}
+        timelockAddress={a.timelockAddress}
       />
     ),
   });
@@ -161,7 +168,9 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
   tabs.push({
     id: "timelock",
     label: "Timelock",
-    content: <TimelockPanel timelockAddress={a.timelockAddress} now={a.now} />,
+    content: (
+      <TimelockPanel timelockAddress={a.timelockAddress} safeAddress={a.safeAddress} now={a.now} />
+    ),
   });
 
   // History tab — only when an explorer API URL and a plausible agent
@@ -225,7 +234,6 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           chainId={a.chainId}
           walletAddresses={a.faucetWalletAddresses}
           harnessPrivateKey={readHarnessPrivateKey(a.flagEnv)}
-          rmTokenAddress={a.rmTokenAddress}
         />
       ),
     });

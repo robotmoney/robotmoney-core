@@ -5,7 +5,7 @@ description: "Minimal pool surface required by the shared TWAP tick math: the tw
 
 # IObservablePool
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/interfaces/IObservablePool.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/interfaces/IObservablePool.sol)
 
 **Title:** IObservablePool
 
@@ -35,7 +35,7 @@ Uniswap V4 pools, so `BasketAssetConfigGuard.requirePoolUsable` and
 `TwapTickMath.deviationBps` can read cardinality/spot-tick through a
 single venue-agnostic call site instead of branching per venue.
 `liquidity()` and the other members of `IAerodromePool` /
-`IUniswapV4Pool` remain on the venue-specific interfaces and are
+`IUniswapV3Pool` remain on the venue-specific interfaces and are
 unrelated to mean-tick pricing.
 
 ## Functions

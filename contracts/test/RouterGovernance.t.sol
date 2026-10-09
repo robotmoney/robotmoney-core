@@ -3,6 +3,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -133,6 +134,9 @@ contract RouterGovernanceTest is Test {
         bytes32 adminRole = router.ADMIN_ROLE();
         vm.startPrank(routerAdmin);
         router.grantRole(adminRole, address(gov));
+        // setWeights is gated by WEIGHT_SETTER_ROLE, held only by governance.
+        router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
+        router.revokeRole(router.WEIGHT_SETTER_ROLE(), routerAdmin);
         vm.stopPrank();
         // Issue #475: production-readiness is registry state. Mark both
         // vaults router-eligible in the registry so governance can weight
@@ -356,7 +360,7 @@ contract RouterGovernanceTest is Test {
         // Mark vaultA Paused (transient status; eligibility flag stays set).
         vm.startPrank(registryAdmin);
         registry.setRouterEligible(address(vaultA), true);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
         vm.stopPrank();
         assertFalse(
             router.isRouterEligibleAndActive(address(vaultA)), "Paused vault must be ineligible"
@@ -678,6 +682,41 @@ contract RouterGovernanceTest is Test {
         assertEq(vaults[1], address(vaultB));
         assertEq(bps[0], 6_000);
         assertEq(bps[1], 4_000);
+    }
+
+    function test_execute_setsActiveWeightsThroughWeightSetterRole() public {
+        assertTrue(router.hasRole(router.WEIGHT_SETTER_ROLE(), address(gov)));
+        uint256 pid = _proposeValid();
+        vm.prank(alice);
+        gov.vote(pid);
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
+
+        vm.prank(carol);
+        gov.execute(pid);
+
+        (, uint256[] memory bps) = router.getWeights();
+        assertEq(bps[0], 6_000);
+        assertEq(bps[1], 4_000);
+    }
+
+    function test_execute_revertsWhenGovernanceLacksWeightSetterRole() public {
+        bytes32 role = router.WEIGHT_SETTER_ROLE();
+        // The role is self-administered, so only the holder can drop it.
+        vm.prank(address(gov));
+        router.renounceRole(role, address(gov));
+
+        uint256 pid = _proposeValid();
+        vm.prank(alice);
+        gov.vote(pid);
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, address(gov), role
+            )
+        );
+        vm.prank(carol);
+        gov.execute(pid);
     }
 
     function test_execute_emitsProposalExecuted() public {

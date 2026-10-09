@@ -196,7 +196,7 @@ pub struct IndexerOutcome {
 /// 300 ticks is one hour of catching up, which is a long but recoverable cold
 /// start. Anything beyond it is not a slow start, it is a broken derivation —
 /// the live case that produced this constant was a `from_block` of 0 against an
-/// `anvil --load-state` head of ~48.9M, i.e. ~49_000 ticks (about seven days)
+/// the Twin fork (an anvil lazy fork) head of ~48.9M, i.e. ~49_000 ticks (about seven days)
 /// of ticks that could never have succeeded anyway, because that chain holds no
 /// history below its fork point. Expressing the threshold in ticks also makes
 /// it scale with `max_blocks_per_tick`: raising the per-tick cap raises the gap
@@ -206,7 +206,7 @@ pub const CONVERGENCE_TICK_BUDGET: u64 = 300;
 /// One `eth_getCode` probe, classified.
 ///
 /// The point of this enum is that an ERROR is information. Below the earliest
-/// block an `anvil --load-state` chain can serve, `eth_getCode` does not answer
+/// block an the Twin fork (an anvil lazy fork) chain can serve, `eth_getCode` does not answer
 /// "no code here" — it fails with `BlockOutOfRangeError`, and a search that
 /// read that as a failure would give up on exactly the chain that needs the
 /// search most.
@@ -241,7 +241,7 @@ pub enum CodeProbe {
 /// code, so the match is on the message. The markers, in the order they were
 /// measured:
 ///
-///  * `BlockOutOfRangeError` — `anvil --load-state` below the fork point,
+///  * `BlockOutOfRangeError` — the Twin fork (an anvil lazy fork) below the fork point,
 ///    reported under JSON-RPC code `-32602`.
 ///  * `not found` — Geth's `header not found`, and Anvil's `block 0x3e8 not
 ///    found` for a height inside the hole below its restored range.
@@ -341,7 +341,7 @@ pub enum DeployBlock {
 ///
 /// A boundary is a property of the chain, so it is still there a moment later.
 /// Noise is not. Asking the same height twice separates them for the price of
-/// one extra round trip on exactly the probes that move `lo` on a fork-state
+/// one extra round trip on exactly the probes that move `lo` on a Twin fork
 /// chain. A second answer that DISAGREES is not a boundary and not a reading
 /// either — it is proof the first reply was noise — so it aborts detection via
 /// [`CodeProbe::Unusable`] rather than picking a winner, and the tick degrades
@@ -410,7 +410,7 @@ pub fn fold_deploy_floor(found: &[u64], undetermined: usize) -> Option<u64> {
 /// is keyed by `(chain_id, address)` — which is not a chain identity. Both
 /// backends on the stage host run as chain id 918453 at the same deterministic
 /// addresses, so a value detected against the Geth devnet reads as perfectly
-/// valid to the `anvil --load-state` chain that replaced it. That is the same
+/// valid to the the Twin fork (an anvil lazy fork) chain that replaced it. That is the same
 /// shape as the stale cursor this floor was built to override, one level down,
 /// and it is worse: the cursor is re-derived every tick, whereas the floor was
 /// trusted for ever.
@@ -424,7 +424,7 @@ pub enum FloorCheck {
     /// Clear it and re-detect.
     Stale,
     /// The chain could not serve the block at all. Measured on the live
-    /// `anvil --load-state` devnet: it retains a rolling window of roughly
+    /// the Twin fork (an anvil lazy fork) devnet: it retains a rolling window of roughly
     /// 3,600 blocks, so a correctly detected floor drops out of history a few
     /// blocks later through nothing but time passing. Treating that as
     /// [`FloorCheck::Stale`] made every tick clear all five contracts,
@@ -475,7 +475,7 @@ pub fn classify_floor_check(probe: CodeProbe) -> FloorCheck {
 /// answered is not the chain the values were recorded against. Without it the
 /// bug this whole derivation fixes comes back one level down and permanently:
 /// the Geth devnet persists `deployed_block = 4`, the backend is swapped for
-/// `anvil --load-state` on the same Postgres, and every later tick takes floor
+/// the Twin fork (an anvil lazy fork) on the same Postgres, and every later tick takes floor
 /// 4, keeps the dead cursor of 5999 because `6000 >= 4`, and fails on
 /// `eth_getLogs` for ever with no line in the log saying why.
 ///
@@ -956,7 +956,7 @@ async fn run_inner(
             "indexer starts too far behind the safe head to converge; deploy-block \
              detection did not give this run a usable floor (a deploy_floor of 0 \
              means it degraded — the warning naming the contract says why), and on \
-             a fork-state chain the blocks below the fork point do not exist, so \
+             a Twin fork chain the blocks below the fork point do not exist, so \
              every historical read of them fails"
         );
     }
@@ -1184,7 +1184,7 @@ async fn run_inner(
 ///
 /// The walk STOPS at `deploy_floor`, the same floor `first_block` applies two
 /// lines below the call. That bound is not an optimisation, it is what keeps
-/// the descent finite in the case this floor exists for: on a fork-state chain
+/// the descent finite in the case this floor exists for: on a Twin fork chain
 /// the cursor sits at ~48.9M, so a single hash mismatch — anvil re-mining its
 /// tip after a restart, or a regenerated state fixture — sent this loop one
 /// height at a time towards genesis, roughly 48.9 million `SELECT hash FROM
@@ -1638,8 +1638,10 @@ pub async fn handle_log(
         return Ok(fee_rows + history_rows);
     }
 
-    // Paused / Unpaused — only drive state snapshots; no dedicated table row.
-    if topic0 == topics.paused || topic0 == topics.unpaused {
+    // DepositsPaused / DepositsUnpaused (gateway and vaults share the topic-0s).
+    // They only drive state snapshots; no dedicated table row. A deposit pause
+    // stops new deposits only and never freezes withdrawals (core 1494).
+    if topic0 == topics.deposits_paused || topic0 == topics.deposits_unpaused {
         return Ok(0);
     }
 
@@ -1657,7 +1659,7 @@ pub async fn handle_log(
                 cfg.chain_id,
                 decoded.vault.into_array(),
                 &decoded.name,
-                risk_label_from_vault_name(&decoded.name),
+                risk_label_from_vault_name(decoded.vault, &decoded.name),
                 U256::ZERO,              // depositCap removed
                 0i16,                    // VaultStatus::Active at registration
                 log.block_number as i64, // registeredAt removed; use block_number
@@ -2431,8 +2433,10 @@ fn into_alloy_log(log: &LogEntry) -> alloy_primitives::Log {
     }
 }
 
-/// Read totalAssets / totalSupply / exitFeeBps / tvlCap / paused from a
-/// vault at `block` and write a `vault_snapshots` row.
+/// Read totalAssets / totalSupply / exitFeeBps / tvlCap / depositsPaused from a
+/// vault at `block` and write a `vault_snapshots` row. The `paused` column
+/// keeps its historical name but stores `depositsPaused()` (a deposit-only
+/// pause; withdrawals are never frozen).
 /// Snapshot one vault, logging and skipping on failure instead of propagating.
 ///
 /// A single vault's `totalAssets()`/`totalSupply()` read can fail for reasons
@@ -2492,9 +2496,15 @@ async fn snapshot_vault_address(
     let tvl_cap = call_u256(rpc, vault, IVaultReads::tvlCapCall {}.abi_encode(), block)
         .await
         .unwrap_or(U256::ZERO);
-    let paused = call_bool(rpc, vault, IVaultReads::pausedCall {}.abi_encode(), block)
-        .await
-        .unwrap_or(false);
+    // `depositsPaused()` exists on every vault, the v1 vault included.
+    let deposits_paused = call_bool(
+        rpc,
+        vault,
+        IVaultReads::depositsPausedCall {}.abi_encode(),
+        block,
+    )
+    .await
+    .unwrap_or(false);
 
     db.insert_vault_snapshot(
         chain_id,
@@ -2504,7 +2514,7 @@ async fn snapshot_vault_address(
         total_supply,
         exit_fee_bps.try_into().unwrap_or(0i64),
         tvl_cap,
-        paused,
+        deposits_paused,
     )
     .await
     .map_err(IndexerError::Db)
@@ -2536,18 +2546,49 @@ async fn call_bool(
     Ok(v != U256::ZERO)
 }
 
-/// Map vault name to risk label per PRD §11.
-/// The VaultRegistered event carries only name and asset; risk_label was
-/// removed from VaultMetadata to avoid contract changes. The indexer derives
-/// it from the registration name as a stopgap — a contract-level risk_label
-/// field is a future improvement.
-fn risk_label_from_vault_name(name: &str) -> &'static str {
-    match name {
-        "RM USDC" => "STABLE_YIELD",
-        "RM Protocol" => "VOLATILE",
-        "RM Agent Tokens" | "RM RWA / Thematic" => "SPECULATIVE",
-        _ => "STABLE_YIELD",
+/// Label stored when a registration name matches no discriminator.
+const DEFAULT_RISK_LABEL: &str = "STABLE_YIELD";
+
+/// Classify a vault registration name into its PRD §11 risk label, or `None`
+/// when no discriminator matches.
+///
+/// The deploy scripts register `Robot Money ...` names (`Robot Money USDC`,
+/// `Robot Money Protocol`, `Robot Money Agent Tokens`, `Robot Money RWA`); the
+/// legacy `RM ...` names also classify. The name is lower-cased and
+/// whitespace-collapsed first, because the rmUSDC name is a deploy-time env
+/// input. Basket discriminators (agent, rwa, protocol) are tested before
+/// `usdc` so a basket vault denominated in USDC classifies on what it holds.
+fn classify_vault_risk_label(name: &str) -> Option<&'static str> {
+    let n = name
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    if n.contains("agent") || n.contains("rwa") {
+        Some("SPECULATIVE")
+    } else if n.contains("protocol") {
+        Some("VOLATILE")
+    } else if n.contains("usdc") {
+        Some("STABLE_YIELD")
+    } else {
+        None
     }
+}
+
+/// Map vault name to risk label per PRD §11.
+/// The VaultRegistered event carries only (vault, name, asset), so the indexer
+/// derives risk_label from the registration name via
+/// [`classify_vault_risk_label`]. An unrecognised name stores STABLE_YIELD and
+/// logs a warning, because the dapp renders basket composition off this column.
+fn risk_label_from_vault_name(vault: Address, name: &str) -> &'static str {
+    classify_vault_risk_label(name).unwrap_or_else(|| {
+        tracing::warn!(
+            vault = %vault,
+            name = %name,
+            "vault name matches no risk-label discriminator; defaulting to STABLE_YIELD"
+        );
+        DEFAULT_RISK_LABEL
+    })
 }
 
 /// Unit coverage for the deploy-block derivation (the start-block bug).
@@ -2556,11 +2597,99 @@ fn risk_label_from_vault_name(name: &str) -> &'static str {
 /// classification and the cursor reconciliation are the parts that have to be
 /// right on THREE different chain shapes, and none of those shapes is
 /// reproducible from a single live backend. The end-to-end behaviour against a
-/// simulated `anvil --load-state` chain is in
+/// simulated the Twin fork (an anvil lazy fork) chain is in
 /// `tests/deploy_block_detection.rs`.
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── risk_label classification (issue 1566) ──────────────────────────────
+
+    #[test]
+    fn risk_label_robot_money_names() {
+        for (name, want) in [
+            ("Robot Money USDC", "STABLE_YIELD"),
+            ("Robot Money Protocol", "VOLATILE"),
+            ("Robot Money Agent Tokens", "SPECULATIVE"),
+            ("Robot Money RWA", "SPECULATIVE"),
+            ("Robot Money RWA / Thematic", "SPECULATIVE"),
+        ] {
+            assert_eq!(classify_vault_risk_label(name), Some(want), "{name}");
+        }
+    }
+
+    #[test]
+    fn risk_label_legacy_rm_names() {
+        for (name, want) in [
+            ("RM USDC", "STABLE_YIELD"),
+            ("RM Protocol", "VOLATILE"),
+            ("RM Agent Tokens", "SPECULATIVE"),
+            ("RM RWA / Thematic", "SPECULATIVE"),
+        ] {
+            assert_eq!(classify_vault_risk_label(name), Some(want), "{name}");
+        }
+    }
+
+    #[test]
+    fn risk_label_normalises_case_and_whitespace() {
+        for name in [
+            "ROBOT MONEY AGENT TOKENS",
+            "  robot  money\tagent   tokens\n",
+        ] {
+            assert_eq!(classify_vault_risk_label(name), Some("SPECULATIVE"));
+        }
+    }
+
+    #[test]
+    fn risk_label_basket_outranks_usdc() {
+        assert_eq!(
+            classify_vault_risk_label("Robot Money Protocol (USDC)"),
+            Some("VOLATILE")
+        );
+    }
+
+    #[test]
+    fn risk_label_unrecognised_is_none_and_defaults() {
+        assert_eq!(classify_vault_risk_label("Some Unrelated Vault"), None);
+        assert_eq!(
+            risk_label_from_vault_name(Address::ZERO, "Some Unrelated Vault"),
+            "STABLE_YIELD"
+        );
+    }
+
+    #[test]
+    fn risk_label_deploy_script_vault_names_classify_as_baskets() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts/script");
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("read contracts/script") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("sol") {
+                continue;
+            }
+            for line in std::fs::read_to_string(&path).expect("read script").lines() {
+                let t = line.trim_start();
+                if t.starts_with("//") || !t.contains("VAULT_NAME = \"") {
+                    continue;
+                }
+                if !t.contains("string public constant VAULT_NAME") {
+                    continue;
+                }
+                let lit = t.split('"').nth(1).expect("string literal");
+                found.push(lit.to_string());
+            }
+        }
+        assert!(
+            found.len() >= 3,
+            "scraped only {found:?}; scrape went blind"
+        );
+        for name in &found {
+            let label = classify_vault_risk_label(name);
+            assert!(
+                matches!(label, Some("VOLATILE") | Some("SPECULATIVE")),
+                "{name} classified {label:?}, expected a basket label"
+            );
+        }
+    }
 
     fn server_error(message: &str) -> Result<Bytes, RpcError> {
         Err(RpcError::Server {
@@ -2586,7 +2715,7 @@ mod tests {
 
     #[test]
     fn out_of_range_errors_classify_as_below_history() {
-        // Verbatim from the live stage host's `anvil --load-state` chain.
+        // Verbatim from the live stage host's the Twin fork (an anvil lazy fork) chain.
         assert_eq!(
             classify_code_probe(&server_error(
                 "{\"code\":-32602,\"message\":\"BlockOutOfRangeError: block height is \
@@ -2666,7 +2795,7 @@ mod tests {
         );
     }
 
-    /// `anvil --load-state`: the head is Base mainnet's, and the chain serves
+    /// the Twin fork (an anvil lazy fork): the head is Base mainnet's, and the chain serves
     /// NOTHING between genesis and the fork point. The contract predates the
     /// fork, so the honest answer is the earliest block at which this chain can
     /// show it — not a "deploy block" it cannot see.
@@ -2805,7 +2934,7 @@ mod tests {
         // being deterministic means it was deployed somewhere else.
         assert_eq!(classify_floor_check(CodeProbe::Empty), FloorCheck::Stale);
         // `BelowHistory` proves nothing about which chain is answering. The
-        // live `anvil --load-state` devnet retains ~3,600 blocks, so a floor
+        // live the Twin fork (an anvil lazy fork) devnet retains ~3,600 blocks, so a floor
         // this code detected correctly ages out of history within a minute
         // through nothing but time passing. Calling that "the chain is gone"
         // cleared all five contracts and re-searched on EVERY tick, and the

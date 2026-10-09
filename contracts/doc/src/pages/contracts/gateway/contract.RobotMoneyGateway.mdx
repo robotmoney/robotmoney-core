@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c8a5162b490e1d50c82ad7f169d4e57d3f29c333/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
 
@@ -25,6 +25,78 @@ hash deliberately excludes `deadline`.
 </i>
 
 ## Constants
+
+### WITHDRAW_GAS_FLOOR
+
+<i>
+
+Gas `withdraw` needs, checked at entry before any state-dependent work (core 1482).
+The vault's entry floor is 1_600_000 after the 63/64 forward (about 1_625_400 at the
+call), and the gateway spends its policy reads, window and payment-id writes and the
+share pull before the call. A floor checked after that work would move with the
+state, so eth_estimateGas could land on it and fail at inclusion.
+See docs/technical/redeem-gas-1482.md.
+
+</i>
+
+```solidity
+uint256 internal constant WITHDRAW_GAS_FLOOR = 2_000_000;
+```
+
+### ROUTER_WITHDRAW_BASE_GAS
+
+<i>
+
+`withdrawFromRouter` needs this fixed part plus `ROUTER_WITHDRAW_GAS_PER_LEG` per
+non-zero leg, checked at entry. Per leg the router needs 1_700_000 after the 63/64
+forward (about 1_727_000 at the call) plus the gateway's share pull, approvals and
+custody reads for that leg.
+
+</i>
+
+```solidity
+uint256 internal constant ROUTER_WITHDRAW_BASE_GAS = 400_000;
+```
+
+### ROUTER_WITHDRAW_GAS_PER_LEG
+
+```solidity
+uint256 internal constant ROUTER_WITHDRAW_GAS_PER_LEG = 1_850_000;
+```
+
+### DEPOSIT_GAS_FLOOR
+
+<i>
+
+`deposit` and a vault-destination `depositTo` need this at entry. The vault's deposit
+entry floor is 1_600_000 after the 63/64 forward, and the gateway spends its policy
+reads, window and payment-id writes and the USDC pull before the call.
+
+</i>
+
+```solidity
+uint256 internal constant DEPOSIT_GAS_FLOOR = 2_000_000;
+```
+
+### ROUTER_DEPOSIT_BASE_GAS
+
+<i>
+
+A router-destination `depositTo` needs this fixed part plus
+`ROUTER_DEPOSIT_GAS_PER_LEG` per effective weight leg, checked before the first
+vault call. Per leg the router needs 1_700_000 after the 63/64 forward.
+
+</i>
+
+```solidity
+uint256 internal constant ROUTER_DEPOSIT_BASE_GAS = 400_000;
+```
+
+### ROUTER_DEPOSIT_GAS_PER_LEG
+
+```solidity
+uint256 internal constant ROUTER_DEPOSIT_GAS_PER_LEG = 1_850_000;
+```
 
 ### WINDOW_SECONDS
 
@@ -201,12 +273,13 @@ Replay protection. `paymentId => used`.
 mapping(bytes32 => bool) public usedPaymentIds;
 ```
 
-### _paused
+### _depositsPaused
 
-Stop-the-world flag.
+Deposit pause flag. Blocks `deposit` and `depositTo` only. Withdrawals
+are never frozen (owner decision 2026-10-05, core 1494).
 
 ```solidity
-bool private _paused;
+bool private _depositsPaused;
 ```
 
 ### icPolicy
@@ -322,7 +395,7 @@ constructor(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, addr
 | usdc_ | `IERC20` | USDC (or 6-decimal stand-in) token address. |
 | vault_ | `IERC4626` | ERC-4626 vault whose `asset()` MUST equal `usdc_`. |
 | admin_ | `address` | Holder of `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`. |
-| pauser_ | `address` | Holder of `PAUSER_ROLE`. Must be distinct from agents. |
+| pauser_ | `address` | Holder of `DEPOSIT_PAUSER_ROLE`. Must be distinct from agents. |
 | router_ | `address` | Portfolio Router address, or `address(0)` to deploy without<br/>router support (single-vault mode). |
 
 <a id="usdc"></a>
@@ -373,14 +446,14 @@ function router() external view returns (address);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address` |  |
 
-<a id="paused"></a>
+<a id="depositspaused"></a>
 
-### paused
+### depositsPaused
 
-Whether the gateway is currently paused.
+Whether gateway deposits are currently paused. Withdrawals are never paused.
 
 ```solidity
-function paused() external view returns (bool);
+function depositsPaused() external view returns (bool);
 ```
 
 **Returns**
@@ -870,27 +943,29 @@ function _validatePolicy(address caller, AgentPolicy calldata p) internal view;
 | caller | `address` |  |
 | p | `AgentPolicy` |  |
 
-<a id="pause"></a>
+<a id="pausedeposits"></a>
 
-### pause
+### pauseDeposits
 
-Stop-the-world pause. Restricted to `PAUSER_ROLE`.
+Pause new deposits (`deposit`, `depositTo`). Restricted to
+`DEPOSIT_PAUSER_ROLE`. Withdrawals (`withdraw`, `withdrawFromRouter`)
+stay open (owner decision 2026-10-05, core 1494).
 
 ```solidity
-function pause() external onlyRole(PAUSER_ROLE);
+function pauseDeposits() external onlyRole(DEPOSIT_PAUSER_ROLE);
 ```
 
-<a id="unpause"></a>
+<a id="unpausedeposits"></a>
 
-### unpause
+### unpauseDeposits
 
-Resume operations. Restricted to `ADMIN_ROLE` (asymmetric).
-`ADMIN_ROLE` is retained as a protocol-wide kill-switch
-counterweight to `pause`; it has no authority over the
+Resume deposits. Restricted to `ADMIN_ROLE` (asymmetric).
+`ADMIN_ROLE` is retained as the counterweight to
+`pauseDeposits`; it has no authority over the
 lifecycle of an agent it does not own.
 
 ```solidity
-function unpause() external onlyRole(ADMIN_ROLE);
+function unpauseDeposits() external onlyRole(ADMIN_ROLE);
 ```
 
 <a id="deposit-bytes32-uint256-uint64-bytes32"></a>
@@ -980,6 +1055,26 @@ function depositTo(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | paymentId | `bytes32` | keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent,<br/>orderId, amount, idempotencyKey)) — op-kind prefix ensures<br/>depositTo ids are disjoint from deposit and withdraw ids. |
+
+<a id="_requiredepositgas-bool"></a>
+
+### _requireDepositGas
+
+<i>
+
+Entry gas floor for `depositTo`. The router floor scales with the effective legs.
+
+</i>
+
+```solidity
+function _requireDepositGas(bool isRouter) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| isRouter | `bool` |  |
 
 <a id="_validatedestination-address-address"></a>
 
@@ -1141,8 +1236,9 @@ function withdraw(
 
 Redeem vault shares proportionally across all Portfolio Router
 legs. Enforces the same policy checks (valid-until, per-payment
-cap, window cap, allowed-source-vaults, pause, idempotency,
-recipient) as single-vault `withdraw`. Each leg's vault must
+cap, window cap, allowed-source-vaults, idempotency,
+recipient) as single-vault `withdraw`. Works while deposits are
+paused: a pause never blocks a withdrawal (core 1494). Each leg's vault must
 appear in `policy.allowedSourceVaults` (when non-empty). USDC
 is forwarded exclusively to the policy-configured `assetRecipient`.
 
@@ -1451,6 +1547,23 @@ event ConsensusReceiptSet(address indexed by, address indexed receipt);
 
 ## Errors
 
+### InsufficientGas
+
+Gas left is below the floor a withdraw needs before it fans out to the vault
+(or to the router and its vaults). Raised before the external call so a
+gas limit that is too low reverts with a reason. Retry with more gas. (core 1482.)
+
+```solidity
+error InsufficientGas(uint256 available, uint256 required);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| available | `uint256` | `gasleft()` at the check. |
+| required | `uint256` | The floor that was not met. |
+
 ### ZeroAddress
 
 Constructor or admin call passed `address(0)` where a real address is required.
@@ -1467,20 +1580,21 @@ Constructor-time check: vault.asset() does not match the configured USDC token.
 error AssetMismatch();
 ```
 
-### PausedError
+### DepositsArePaused
 
-Operation rejected because the gateway is paused (also re-thrown by `pause()` if already paused).
+Deposit rejected because gateway deposits are paused (also raised by
+`pauseDeposits()` if deposits are already paused). Withdrawals never raise it.
 
 ```solidity
-error PausedError();
+error DepositsArePaused();
 ```
 
-### NotPaused
+### DepositsNotPaused
 
-`unpause()` called while the gateway was not paused.
+`unpauseDeposits()` called while deposits were not paused.
 
 ```solidity
-error NotPaused();
+error DepositsNotPaused();
 ```
 
 ### InvalidAmount

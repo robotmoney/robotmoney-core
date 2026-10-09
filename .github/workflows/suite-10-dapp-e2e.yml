@@ -3,13 +3,13 @@
 # WHY THIS SUITE EXISTS
 # The dApp's primary user-facing flows — connect wallet, render verified state,
 # preview authorize/revoke/pause/unpause/grant calldata, surface the history
-# pane — are tested end-to-end through a real Chromium against a real
-# Geth+Lighthouse devnet with the gateway, vault, and explorer indexer all
-# deployed. Type-checking (suite 9) does not prove these flows work.
+# pane — are tested end-to-end through a real Chromium against the Twin
+# chain (id 918453, a pinned lazy fork of real Base state made with anvil, core 1498 and 1496)
+# with the gateway, vault, and explorer indexer all deployed. Type-checking (suite 9) does not prove these flows work.
 #
 # WHY ONE JOB
 # Every spec runs against the same smoke-test full-stack devnet, booted by
-# Playwright globalSetup. There is no "fast" local-dev variant — the dapp
+# Playwright globalSetup on the Twin fork this job starts (TWIN_RPC_URL). There is no "fast" local-dev variant — the dapp
 # bundle is built bit-identically to a production deployment, with the
 # gateway runtime code hash pinned at build time. The principle:
 # **no test-only code lands in production**. See docs/development/smoke-test-design.md.
@@ -21,7 +21,16 @@
 name: dapp-e2e
 
 on:
-  # HEAVY tier: the dapp-e2e Playwright suite boots a full devnet and is the
+  # Called by suite-29-nightly-twin-fork.yml, which chooses ONE pin for the whole nightly run and
+  # hands it down as pin_block. Steps are not copied: the nightly calls this very workflow.
+  workflow_call:
+    inputs:
+      pin_block:
+        description: "Twin chain pin handed down by a parent run. Empty: this run chooses one."
+        type: string
+        required: false
+        default: ""
+  # HEAVY tier: the dapp-e2e Playwright suite boots the full stack on the Twin chain and is the
   # merge gate for `dev` — it runs on every pull_request targeting dev (no path
   # filter, so the gate always reports for any branch merging to dev) and on
   # push to dev for merged-commit coverage.
@@ -37,12 +46,35 @@ on:
 # distinct concurrency lane per ref and never cancel, so merged-commit coverage
 # always completes. See docs/development/ci-suites.md (CI velocity tiers).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # suite tag keeps called copies (nightly Twin chain run) in separate lanes:
+  # inside workflow_call github.workflow is the CALLER's name, shared by every suite.
+  group: ${{ github.workflow }}-suite10-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
+  # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
+  pin:
+    name: twin-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      block: ${{ steps.pin.outputs.block }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        uses: ./.github/actions/twin-pin
+        with:
+          pin-block: ${{ inputs.pin_block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
   e2e:
     name: dapp-e2e
+    needs: pin
     runs-on: ubuntu-latest
     timeout-minutes: 90
     defaults:
@@ -52,7 +84,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
       - uses: oven-sh/setup-bun@v2
 
       - uses: actions/setup-node@v4
@@ -70,12 +101,17 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      # The Twin chain: installs foundry and bun, restores anvil's RPC cache keyed by the pin block,
+      # starts the fork and exports TWIN_RPC_URL. The harness (globalSetup) reuses it. It listens
+      # on every interface and mines a block per second: the explorer-indexer container reaches it
+      # over the Docker bridge and its safe head is tip minus 5.
+      - name: Start the Twin chain at the run pin
+        uses: ./.github/actions/twin-fork
         with:
-          version: stable
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+          host: "0.0.0.0"
+          block-time: "1"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -86,10 +122,14 @@ jobs:
         run: cargo build -p smoke-test
         working-directory: ${{ github.workspace }}
 
+      # The full-stack devnet publishes contracts through the "publish contracts" runbook (publish-contracts/ in this repo).
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
+
       - name: Install Playwright browsers
         run: bunx playwright install --with-deps chromium
 
-      - name: Run Playwright (boots smoke-test full-stack devnet via globalSetup)
+      - name: Run Playwright (globalSetup boots smoke-test full-stack on the Twin chain)
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-suite-10.log
           PLAYWRIGHT_HTML_REPORT: ${{ runner.temp }}/robotmoney-playwright/report
@@ -109,3 +149,7 @@ jobs:
         with:
           name: smoke-test-logs
           path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-suite-10.log*
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

@@ -4,7 +4,7 @@ title: "RobotMoneyVaultRouteDepositTest"
 
 # RobotMoneyVaultRouteDepositTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/bc45d15d9b60824c9fb575df196f7c638a354620/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
 
 **Inherits:** Test
 
@@ -80,7 +80,7 @@ uint256 internal constant METAMORPHO_TOTAL_ASSETS_GAS = 201_145;
 
 <i>
 
-The devnet / `Deploy.s.sol` cap set: 3334 / 3333 / 3333, summing to
+The devnet cap set (the stage default): 3334 / 3333 / 3333, summing to
 exactly `MAX_BPS`. Reproduced verbatim so the test models the real
 three-adapter vault the out-of-gas failure was observed on.
 
@@ -257,6 +257,156 @@ walked all three adapters a second time — 3 reads each, not 2.
 function test_routeDeposit_balancedVault_readsEachAdapterOnce() public;
 ```
 
+<a id="test_deposit_balancedvault_sweepsnavonce"></a>
+
+### test_deposit_balancedVault_sweepsNavOnce
+
+One `deposit()` performs ONE whole-vault `totalAssets()` sweep
+(issue #1397): 1 NAV read + 1 pass-1 read per adapter = 6 total,
+down from 15 when `maxDeposit`, `previewDeposit`, the TVL-cap
+guard and `_routeDeposit` each re-swept.
+
+```solidity
+function test_deposit_balancedVault_sweepsNavOnce() public;
+```
+
+<a id="testfuzz_deposit_cachednavequalseveryreplacedread-uint256-uint256"></a>
+
+### testFuzz_deposit_cachedNavEqualsEveryReplacedRead
+
+The cached NAV is the value each replaced call site would read:
+shares equal the standalone `previewDeposit`, the TVL-cap
+headroom equals `maxDeposit`, and post-transfer NAV (what
+`_routeDeposit` used to re-read) equals `nav + assets`.
+
+```solidity
+function testFuzz_deposit_cachedNavEqualsEveryReplacedRead(uint256 seed, uint256 amount)
+        public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seed | `uint256` |  |
+| amount | `uint256` |  |
+
+<a id="_expectexceeded-uint256-uint256"></a>
+
+### _expectExceeded
+
+```solidity
+function _expectExceeded(uint256 assets, uint256 max) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+| max | `uint256` |  |
+
+<a id="test_deposit_whenpaused_revertsdepositsarepaused"></a>
+
+### test_deposit_whenPaused_revertsDepositsArePaused
+
+```solidity
+function test_deposit_whenPaused_revertsDepositsArePaused() public;
+```
+
+<a id="test_mint_whenpaused_revertsdepositsarepaused"></a>
+
+### test_mint_whenPaused_revertsDepositsArePaused
+
+```solidity
+function test_mint_whenPaused_revertsDepositsArePaused() public;
+```
+
+<a id="test_deposit_aboveheadroom_revertswithheadroommax"></a>
+
+### test_deposit_aboveHeadroom_revertsWithHeadroomMax
+
+```solidity
+function test_deposit_aboveHeadroom_revertsWithHeadroomMax() public;
+```
+
+<a id="test_deposit_attvlcap_revertswithzeromax"></a>
+
+### test_deposit_atTvlCap_revertsWithZeroMax
+
+```solidity
+function test_deposit_atTvlCap_revertsWithZeroMax() public;
+```
+
+<a id="test_mint_routesthroughshareddepositpath"></a>
+
+### test_mint_routesThroughSharedDepositPath
+
+```solidity
+function test_mint_routesThroughSharedDepositPath() public;
+```
+
+<a id="test_depositat_whenshutdown_reverts"></a>
+
+### test_depositAt_whenShutdown_reverts
+
+```solidity
+function test_depositAt_whenShutdown_reverts() public;
+```
+
+<a id="test_depositat_whenretired_reverts"></a>
+
+### test_depositAt_whenRetired_reverts
+
+```solidity
+function test_depositAt_whenRetired_reverts() public;
+```
+
+<a id="test_depositat_aboveperdepositcap_reverts"></a>
+
+### test_depositAt_abovePerDepositCap_reverts
+
+```solidity
+function test_depositAt_abovePerDepositCap_reverts() public;
+```
+
+<a id="test_depositat_pushingnavpasttvlcap_reverts"></a>
+
+### test_depositAt_pushingNavPastTvlCap_reverts
+
+```solidity
+function test_depositAt_pushingNavPastTvlCap_reverts() public;
+```
+
+<a id="test_depositat_withnoactiveadapters_reverts"></a>
+
+### test_depositAt_withNoActiveAdapters_reverts
+
+```solidity
+function test_depositAt_withNoActiveAdapters_reverts() public;
+```
+
+<a id="_min-uint256-uint256"></a>
+
+### _min
+
+```solidity
+function _min(uint256 a, uint256 b) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
 <a id="test_routedeposit_balancedvault_passonecompletesthefill"></a>
 
 ### test_routeDeposit_balancedVault_passOneCompletesTheFill
@@ -295,7 +445,7 @@ function test_routeDeposit_dustDeposit_isPlacedByPassOne() public;
 The exact devnet fork-fixture composition the out-of-gas failure
 was traced on (PR #1394): NAV 1 050 131 554 with the three
 adapters at 350 098 606 / 350 033 503 / 349 999 444 and the
-`Deploy.s.sol` cap set, taking the same 5 USDC deposit.
+devnet cap set, taking the same 5 USDC deposit.
 
 <i>
 

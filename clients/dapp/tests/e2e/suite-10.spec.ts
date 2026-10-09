@@ -130,7 +130,7 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
 
     // Every vault row must expose a TVL cell and a status cell.
     // TVL must be a non-blank string (may be "—" when not yet snapshotted).
-    // Status must be a non-blank string (Active / Paused / Retired).
+    // Status must be a non-blank string (Active / Deposits paused / Retired).
     // NOTE: per-vault depositor count is not surfaced by the VaultList component —
     // aggregate depositor count is available at /v1/stats (protocol-stats tests above).
     const tvlCells = page.getByTestId("vault-list-row-tvl");
@@ -165,13 +165,13 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
           if (rows.length < registeredVaults.length) return false;
           for (const row of rows) {
             const statusText = (await row.textContent())?.trim();
-            if (!["Active", "Paused", "Retired"].includes(statusText ?? "")) return false;
+            if (!["Active", "Deposits paused", "Retired"].includes(statusText ?? "")) return false;
           }
           return true;
         },
         {
           message:
-            "each registered vault must have a status cell reading Active / Paused / Retired",
+            "each registered vault must have a status cell reading Active / Deposits paused / Retired",
           timeout: 120_000,
           intervals: [5_000],
         },
@@ -201,12 +201,12 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
           if (rows.length === 0) return false;
           for (const row of rows) {
             const text = (await row.textContent())?.trim();
-            if (!["Active", "Paused", "Retired"].includes(text ?? "")) return false;
+            if (!["Active", "Deposits paused", "Retired"].includes(text ?? "")) return false;
           }
           return true;
         },
         {
-          message: "every vault row status must read Active / Paused / Retired",
+          message: "every vault row status must read Active / Deposits paused / Retired",
           timeout: 120_000,
           intervals: [5_000],
         },
@@ -283,18 +283,16 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     await expect(page.getByTestId("vault-detail-freshness")).toBeVisible();
   });
 
-  // Four-vault PRD conformance (issue #479, updated by #562): the landing
-  // VaultCards must render one tile per registered vault — four after the demo
-  // seed — and all four tiles must be Active (the RWA vault is now registered
-  // Active per issue #562; no Paused placeholder remains).
-  test("landing renders a tile per registered vault with all four tiles Active", async ({
-    page,
-  }) => {
-    // Ground truth: the chain-registered vault set, and each vault's status.
+  // Four-vault conformance (core 1488, one deployment scheme): the landing
+  // VaultCards render one tile per registered vault. All four vaults ship
+  // (rmUSDC, rmPROTO, rmAGENT, rmRWA); rmAGENT is deployed holding RM and paused, so
+  // this test no longer asserts that every tile is Active.
+  test("landing renders a tile per registered vault", async ({ page }) => {
+    // Ground truth: the chain-registered vault set.
     const registeredVaults = await listVaults(rpcUrl, registryAddr);
     expect(
       registeredVaults.length,
-      "expected the four-vault demo set in the registry (4 Active vaults)",
+      "expected all four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) in the registry",
     ).toBe(4);
 
     await page.goto(dappUrl);
@@ -302,60 +300,5 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     const cards = page.getByTestId("landing-vault-card");
     // One tile per registered vault.
     await expect(cards).toHaveCount(registeredVaults.length, { timeout: 30_000 });
-
-    // All four tiles are Active — no Paused placeholder remains (issue #562).
-    const inactiveCards = page.locator(
-      '[data-testid="landing-vault-card"][data-vault-active="false"]',
-    );
-    await expect(inactiveCards).toHaveCount(0);
-
-    const activeCards = page.locator(
-      '[data-testid="landing-vault-card"][data-vault-active="true"]',
-    );
-    await expect(activeCards).toHaveCount(4);
-  });
-
-  // Vault cards: non-zero TVL after DappStack::boot auto-seeding (issue #532).
-  // DappStack::boot now calls seed_demo_depositors so the vault TVL is non-zero
-  // without any manual follow-up command. This test asserts the dapp reflects
-  // the seeded TVL in the landing-vault-card-tvl elements.
-  test("vault cards show non-zero total_assets after auto-seeding", async ({ page }) => {
-    await page.goto(dappUrl);
-
-    // The Active vault cards must be visible before we can read their TVL.
-    // All four vaults are Active after issue #562 (no Paused placeholder).
-    const activeCards = page.locator(
-      '[data-testid="landing-vault-card"][data-vault-active="true"]',
-    );
-    await expect(activeCards).toHaveCount(4, { timeout: 30_000 });
-
-    // All four Active vault cards must show a non-zero TVL value. The
-    // explorer-indexer processes Deposit events asynchronously; the seeding
-    // was done during DappStack::boot but the indexer may still be catching
-    // up, so we poll until every card has a non-zero TVL.
-    const tvlCells = page.getByTestId("landing-vault-card-tvl");
-
-    await expect
-      .poll(
-        async () => {
-          // Snapshot a stable element list each poll iteration (locator.all())
-          // so a mid-loop re-render cannot misalign indices.
-          const cells = await tvlCells.all();
-          if (cells.length !== 4) return false;
-          for (const cell of cells) {
-            const trimmed = ((await cell.textContent()) ?? "").trim();
-            // "0", "—", or blank all mean no TVL yet.
-            if (trimmed === "" || trimmed === "—" || trimmed === "0") return false;
-          }
-          return true;
-        },
-        {
-          message:
-            "all 4 Active vault cards must show a non-zero TVL after DappStack::boot auto-seeding (issue #593)",
-          timeout: 120_000,
-          intervals: [5_000],
-        },
-      )
-      .toBe(true);
   });
 });

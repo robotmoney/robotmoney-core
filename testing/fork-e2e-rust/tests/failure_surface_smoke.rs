@@ -3,8 +3,9 @@
 //!
 //! Exercises the documented refusal surfaces of the deployed
 //! vault: insufficient balance, missing allowance, and (where
-//! safely reproducible against a fork) `paused()` / `tvlCap`
-//! permutations. Each case asserts that the call reverts cleanly
+//! safely reproducible against a fork) `depositsPaused()` / `tvlCap`
+//! permutations. A deposit pause refuses deposits only; redeems stay
+//! open (core 1494). Each case asserts that the call reverts cleanly
 //! and does not leave partial state behind.
 //!
 //! Manually-triggered / post-merge per ADR §3.4 — the matrix is
@@ -26,7 +27,8 @@ fn failure_surface_smoke() {
     // -- Case 1: deposit without USDC balance must revert ----------
     {
         let user = fx.ephemeral(one_eth, U256::ZERO).expect("fund ETH only");
-        let res = scenarios::vault_deposit(&user, U256::from(50_000_000u64), user.address);
+        let res =
+            scenarios::vault_deposit_at(&user, fx.vault(), U256::from(50_000_000u64), user.address);
         assert!(
             res.is_err(),
             "deposit with zero USDC balance should revert (vault asks USDC.transferFrom)"
@@ -53,7 +55,7 @@ fn failure_surface_smoke() {
         let amount = U256::from(50_000_000u64);
         let user = fx.ephemeral(one_eth, amount).expect("fund ETH + USDC");
         // No approve() call — go straight to deposit.
-        let res = scenarios::vault_deposit(&user, amount, user.address);
+        let res = scenarios::vault_deposit_at(&user, fx.vault(), amount, user.address);
         assert!(
             res.is_err(),
             "deposit without allowance should revert (USDC.transferFrom without approval)"
@@ -75,7 +77,7 @@ fn failure_surface_smoke() {
         // requires `assets <= maxDeposit(receiver)`, and we don't
         // have the balance anyway — so this reverts on either ground.
         let attempt = max_dep.saturating_add(U256::from(1u64));
-        let res = scenarios::vault_deposit(&user, attempt, user.address);
+        let res = scenarios::vault_deposit_at(&user, fx.vault(), attempt, user.address);
         assert!(
             res.is_err(),
             "deposit above maxDeposit should revert (got attempt={attempt}, maxDeposit={max_dep})"

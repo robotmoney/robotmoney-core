@@ -6,7 +6,7 @@
 //! > detects the breach.
 //!
 //! Note on scope: this test proves the full detection pipeline — DB queries, threshold
-//! comparison, and breach reporting — without actually calling `gateway.pause()` on
+//! comparison, and breach reporting — without actually calling `gateway.pauseDeposits()` on
 //! a real chain (which would require a funded account and a live devnet).  The pause
 //! call itself is tested by unit tests in `pause.rs` (selector, RLP encoding) and
 //! validated by the CI fork-integration suite.  A future issue can add an end-to-end

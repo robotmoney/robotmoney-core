@@ -15,7 +15,7 @@
 //     suites (CustodyInvariant.t.sol, CustodyInvariantGuard.t.sol,
 //     AccessRoles.t.sol, DeployTimelock.t.sol, AdapterDelegatecallGuard.t.sol,
 //     PortfolioRouter.t.sol, GatewayRouter.t.sol, …) and in the new FV harnesses
-//     (CustodyMultiVault, StaleOracleRedemption, TwapManipulation,
+//     (CustodyMultiVault, TwapManipulation,
 //     DeployAssertions).
 //
 //   - RED invariants: a named `test_<ID>_expectedFail_*` function that calls
@@ -195,10 +195,9 @@ contract FvInvariantsTest is Test {
     // ── #966 (NC-1, NC-2, F-06, F-08, F-09): high-sev vault & oracle hardening ─
 
     /// @notice SUP-5 (FLIPPED GREEN by #966) — redeem never reverts on a stale feed
-    ///         when the underlying is idle USDC. Fix: `RwaVault.totalAssets`
-    ///         short-circuits `_checkOracleFreshness` when no priced RWA is held.
-    ///         Behavioural proof: RwaVault.t.sol::test_staleFeed_idleUsdcRedeemSurvives;
-    ///         deep harness: StaleOracleRedemption.t.sol::test_SUP5_*.
+    ///         when the underlying is idle USDC. Moot after core 1492: the Chronicle
+    ///         oracle and its staleness halt are deleted. No vault has a feed that
+    ///         can go stale, and rmRWA prices from its pool TWAP like every basket.
     function test_SUP5_expectedFail_idleUsdcRedeemSurvivesStaleFeed() public pure {
         _assertHolds("SUP-5");
     }
@@ -213,7 +212,7 @@ contract FvInvariantsTest is Test {
     }
 
     /// @notice ACL-3 (FLIPPED GREEN by #966) — ADMIN_ROLE on a fund-holding contract
-    ///         never reaches zero. Fix: BasketVault (→ RwaVault) and the Gateway (via
+    ///         never reaches zero. Fix: BasketVault (→ RwaBasketVault) and the Gateway (via
     ///         AccessRoles) now inherit `AdminFloorAccessControl`; the gateway also
     ///         floors `DEFAULT_ADMIN_ROLE` (F-06).
     function test_ACL3_expectedFail_vaultsAndGatewayHaveAdminFloor() public pure {
@@ -222,9 +221,9 @@ contract FvInvariantsTest is Test {
 
     /// @notice ACL-5 (FLIPPED GREEN by #966) — the stale-override setter sits at a
     ///         higher tier than the unwind executor. Fix:
-    ///         `RwaVault.setEmergencyUnwindStaleOverride` is ADMIN_ROLE while
-    ///         `emergencyUnwind` stays EMERGENCY_ROLE (F-08). Behavioural proof:
-    ///         RwaVault.t.sol::test_emergencyUnwindStaleOverride_requiresAdminNotEmergency.
+    ///         the unwind override setters are ADMIN_ROLE while `emergencyUnwind` stays
+    ///         EMERGENCY_ROLE (F-08). The retired Chronicle vault's stale-override setter is deleted
+    ///         with the Chronicle oracle (core 1492).
     function test_ACL5_expectedFail_emergencyOverrideIsHigherTier() public pure {
         _assertHolds("ACL-5");
     }
@@ -271,7 +270,7 @@ contract FvInvariantsTest is Test {
     ///         onto vaultB and Retire vaultA. The holder still redeems the vaultA
     ///         position through `redeemFor` by naming it explicitly — the redeem
     ///         path no longer iterates the live weight vector, and a Retired leg
-    ///         (only Paused is blocked) is still redeemable.
+    ///         (no status blocks an exit, core 1494) is still redeemable.
     function test_LIFE5_expectedFail_reweightKeepsPositionRedeemable() public {
         _assertHolds("LIFE-5");
 
@@ -459,7 +458,7 @@ contract FvInvariantsTest is Test {
         assertFalse(vault.retired(), "LIFE-1: setVaultStatus(Active) must re-open deposits");
 
         // Back-door #2: setVaultStatus(_, Paused) also halts the vault.
-        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(vault.retired(), "LIFE-1: setVaultStatus(Paused) must halt vault deposits");
 
         // The atomic governance path stays in sync as well.
@@ -489,7 +488,7 @@ contract FvInvariantsTest is Test {
         router.setWeights(vaults, bps);
 
         // Pause via the registry: the vault is still eligible but not Active.
-        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(router.isRouterEligible(address(vault)), "still eligible");
 
         // setWeights must now revert VaultNotActive — a non-depositable vector can
@@ -498,7 +497,7 @@ contract FvInvariantsTest is Test {
             abi.encodeWithSelector(
                 PortfolioRouter.VaultNotActive.selector,
                 address(vault),
-                VaultRegistry.VaultStatus.Paused
+                VaultRegistry.VaultStatus.DepositsPaused
             )
         );
         router.setWeights(vaults, bps);
@@ -508,7 +507,7 @@ contract FvInvariantsTest is Test {
             abi.encodeWithSelector(
                 PortfolioRouter.VaultNotActive.selector,
                 address(vault),
-                VaultRegistry.VaultStatus.Paused
+                VaultRegistry.VaultStatus.DepositsPaused
             )
         );
         router.setDefaultWeights(vaults, bps);
@@ -534,7 +533,7 @@ contract FvInvariantsTest is Test {
         router.setWeights(vaults, bps);
 
         // Pause vaultA AFTER weighting (allowed; the vector was valid when written).
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
 
         uint256 amount = 1_000e6;
 
@@ -556,7 +555,7 @@ contract FvInvariantsTest is Test {
         // Whole-basket-unavailable case: both paused ⇒ preview all-unavailable AND
         // execute reverts (consistent), never a preview-healthy / execute-revert
         // divergence.
-        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.DepositsPaused);
         legs = router.previewDeposit(amount);
         assertTrue(legs[0].unavailable && legs[1].unavailable, "RTR-5: all legs unavailable");
         usdc.mint(address(this), amount);
@@ -578,6 +577,7 @@ contract FvInvariantsTest is Test {
         RouterGovernance gov =
             new RouterGovernance(address(router), address(this), 1 hours, 1 hours, 2);
         router.grantRole(router.ADMIN_ROLE(), address(gov));
+        router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
 
         address[] memory vaults = new address[](1);
         uint256[] memory bps = new uint256[](1);
@@ -591,7 +591,7 @@ contract FvInvariantsTest is Test {
 
         // Pause the vault: a proposal that would route deposits to it must be
         // rejected at propose() time (GOV-4) — it can never become executable.
-        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(router.isRouterEligible(address(vault)), "still eligible");
         assertFalse(
             router.isRouterEligibleAndActive(address(vault)),

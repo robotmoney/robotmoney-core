@@ -4,7 +4,7 @@ title: "RobotMoneyVaultTest"
 
 # RobotMoneyVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:** Test
 
@@ -504,35 +504,35 @@ UnroutedDeposit event is emitted when routing cannot place all assets
 function test_routeDeposit_emitsUnroutedDeposit_whenCapsExhausted() public;
 ```
 
-<a id="test_pause_allowedforemergencyrole"></a>
+<a id="test_pausedeposits_allowedforemergencyrole"></a>
 
-### test_pause_allowedForEmergencyRole
+### test_pauseDeposits_allowedForEmergencyRole
 
-EMERGENCY_ROLE holder can call pause().
+EMERGENCY_ROLE holder can call pauseDeposits().
 
 ```solidity
-function test_pause_allowedForEmergencyRole() public;
+function test_pauseDeposits_allowedForEmergencyRole() public;
 ```
 
-<a id="test_unpause_revertsforemergencyrole"></a>
+<a id="test_unpausedeposits_revertsforemergencyrole"></a>
 
-### test_unpause_revertsForEmergencyRole
+### test_unpauseDeposits_revertsForEmergencyRole
 
-EMERGENCY_ROLE holder cannot call unpause() — must revert.
+EMERGENCY_ROLE holder cannot call unpauseDeposits() — must revert.
 A compromised emergency key can halt the vault (DoS) but cannot restart it.
 
 ```solidity
-function test_unpause_revertsForEmergencyRole() public;
+function test_unpauseDeposits_revertsForEmergencyRole() public;
 ```
 
-<a id="test_unpause_allowedforadminrole"></a>
+<a id="test_unpausedeposits_allowedforadminrole"></a>
 
-### test_unpause_allowedForAdminRole
+### test_unpauseDeposits_allowedForAdminRole
 
-ADMIN_ROLE holder can call unpause() after the vault has been paused.
+ADMIN_ROLE holder can call unpauseDeposits() after the vault has been paused.
 
 ```solidity
-function test_unpause_allowedForAdminRole() public;
+function test_unpauseDeposits_allowedForAdminRole() public;
 ```
 
 <a id="test_emergencywithdraw_usercanredeem_newdepositblocked"></a>
@@ -546,14 +546,15 @@ New deposits must be blocked.
 function test_emergencyWithdraw_userCanRedeem_newDepositBlocked() public;
 ```
 
-<a id="test_fullpause_blocksdepositsandwithdrawals"></a>
+<a id="test_pausedeposits_blocksdepositsonly_withdrawalsstayopen"></a>
 
-### test_fullPause_blocksDepositsAndWithdrawals
+### test_pauseDeposits_blocksDepositsOnly_withdrawalsStayOpen
 
-full pause() blocks both deposits and withdrawals.
+pauseDeposits() blocks deposits and mints only. Redeem and withdraw stay
+open, and maxRedeem / maxWithdraw are unchanged (core 1494).
 
 ```solidity
-function test_fullPause_blocksDepositsAndWithdrawals() public;
+function test_pauseDeposits_blocksDepositsOnly_withdrawalsStayOpen() public;
 ```
 
 <a id="test_emergencywithdraw_thenunpause_restoresfullfunctionality"></a>

@@ -1,7 +1,7 @@
 # Write commands
 
 `rmpc` ships two write commands: `deposit` and `withdraw`. There is no
-role-grant, pause, or unpause path — those flow through the human dapp
+role-grant, pause-deposits, or unpause-deposits path — those flow through the human dapp
 (implementation plan §12), not the agent client. `status` is listed here
 because it is the canonical follow-up to a write.
 
@@ -154,9 +154,10 @@ rmpc withdraw --config <CONFIG> \
 ```
 
 Redeem vault shares through the gateway (agent-initiated redemption). Performs
-the same preflight discipline as `deposit` (chain id, code hash, gateway paused,
-agent policy) plus withdraw-specific checks: vault paused, vault share
-allowance(agent, gateway), and vault share balance.
+the same preflight discipline as `deposit` (chain id, code hash, agent policy)
+plus withdraw-specific checks: vault share allowance(agent, gateway) and vault
+share balance. A gateway or vault with deposits paused never refuses a
+withdrawal (core 1494). The preflight only reports `deposits_paused`.
 
 Required flags:
 
@@ -191,15 +192,16 @@ JSON on stdout including:
 ### Output (refusal / error)
 
 Non-zero exit, structured JSON on stdout, with a stable `error` field. Hard
-refusals include: `ErrVaultPaused`, `ErrShareAllowanceInsufficient`,
-`ErrShareBalanceInsufficient`, `ErrAgentNotAuthorized`, `ErrGatewayPaused`.
+refusals include: `ErrShareAllowanceInsufficient`,
+`ErrShareBalanceInsufficient`, `ErrAgentNotAuthorized`. A pause never refuses
+a withdrawal: it stops new deposits only.
 
 ---
 
 ## What `rmpc` will not do
 
 - Grant or revoke roles. Authorize, revoke, or modify agent policy.
-- Pause or unpause the gateway.
+- Pause or unpause gateway deposits.
 - Sign anything other than an EIP-1559 envelope hash for a typed
   `GatewayTxRequest`. The `AgentSigner` trait deliberately does not expose
   `sign_hash`, `sign_message`, or `sign_typed_data`.

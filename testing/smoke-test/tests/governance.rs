@@ -3,22 +3,13 @@
 //! Verifies that:
 //!   - RouterGovernance is deployed at a non-zero address.
 //!   - RouterGovernance has bytecode on-chain.
-//!   - setVotingPower assigns power to the test account.
-//!   - Initial voting power for a fresh address is 0.
+//!   - The deployer holds no voting power and no admin; the timelock is admin.
 //!
 //! Run with:
 //!   cargo test -p smoke-test --release -- governance --test-threads=1 --nocapture
 
 use alloy_primitives::Address;
-use smoke_test::{prerequisites_available, Fixture, DEPLOYER_ADDRESS_HEX};
-
-fn skip_if_no_prereqs(name: &str) -> bool {
-    if !prerequisites_available() {
-        eprintln!("[{name}] docker/forge/cast not on PATH; skipping.");
-        return true;
-    }
-    false
-}
+use smoke_test::{require_prereqs, Fixture};
 
 /// One shared fixture for the whole suite.
 fn fixture() -> &'static Fixture {
@@ -32,9 +23,7 @@ fn fixture() -> &'static Fixture {
 /// RouterGovernance is deployed at a non-zero address (issue #364 AC).
 #[test]
 fn governance_address_is_non_zero() {
-    if skip_if_no_prereqs("governance_address_is_non_zero") {
-        return;
-    }
+    require_prereqs("governance_address_is_non_zero");
     let fx = fixture();
     assert_ne!(
         fx.governance(),
@@ -46,9 +35,7 @@ fn governance_address_is_non_zero() {
 /// RouterGovernance has bytecode deployed on-chain.
 #[test]
 fn governance_has_code() {
-    if skip_if_no_prereqs("governance_has_code") {
-        return;
-    }
+    require_prereqs("governance_has_code");
     let fx = fixture();
     let code = get_code(fx.rpc_url(), fx.governance());
     assert!(
@@ -58,54 +45,46 @@ fn governance_has_code() {
     );
 }
 
-/// setVotingPower assigns power; initial power for agent is 0, then becomes non-zero.
+/// Voting power is not set by the deployer. A fresh address has none, and the
+/// deployer's own power is zero: quorum and voters come through the real Safe
+/// and the timelock (the stage 13 govern matrix).
 #[test]
-fn set_voting_power_round_trip() {
-    if skip_if_no_prereqs("set_voting_power_round_trip") {
-        return;
-    }
+fn deployer_holds_no_voting_power() {
+    require_prereqs("deployer_holds_no_voting_power");
     let fx = fixture();
-    let agent = fx.agent();
-
-    // Agent should have 0 voting power initially.
-    let initial_power = read_voting_power(fx, agent);
+    let deployer: Address = fx
+        .published()
+        .keys
+        .address("ADMIN_ADDRESS")
+        .expect("deployer address")
+        .parse()
+        .expect("parse deployer address");
     assert_eq!(
-        initial_power, 0,
-        "agent should have 0 initial voting power, got {initial_power}"
-    );
-
-    // Assign voting power to the agent.
-    let power: u128 = 100;
-    fx.set_voting_power(agent, power)
-        .expect("setVotingPower should succeed");
-
-    // Verify voting power was assigned.
-    let assigned_power = read_voting_power(fx, agent);
-    assert_eq!(
-        assigned_power, power,
-        "expected voting power {power}, got {assigned_power}"
+        read_voting_power(fx, deployer),
+        0,
+        "the deployer must not hold voting power"
     );
 }
 
-/// Deployer holds ADMIN_ROLE on the governance contract.
+/// The deployer does NOT hold ADMIN_ROLE on RouterGovernance after handover; the timelock does.
 #[test]
-fn deployer_holds_admin_role() {
-    if skip_if_no_prereqs("deployer_holds_admin_role") {
-        return;
-    }
+fn deployer_holds_no_admin_role_timelock_does() {
+    require_prereqs("deployer_holds_no_admin_role_timelock_does");
     let fx = fixture();
-    let deployer: Address = DEPLOYER_ADDRESS_HEX
+    let deployer: Address = fx
+        .published()
+        .keys
+        .address("ADMIN_ADDRESS")
+        .expect("deployer address")
         .parse()
         .expect("parse deployer address");
-
-    // hasRole(ADMIN_ROLE, deployer) — ADMIN_ROLE = keccak256("ADMIN_ROLE")
-    // selector for hasRole(bytes32,address) = 0x91d14854
-    // ADMIN_ROLE bytes32 = keccak256("ADMIN_ROLE")
-    // We call it via cast using the ABI encoding.
-    let has_role = deployer_has_admin_role(fx, deployer);
     assert!(
-        has_role,
-        "deployer should hold ADMIN_ROLE on RouterGovernance"
+        !deployer_has_admin_role(fx, deployer),
+        "deployer must not hold ADMIN_ROLE on RouterGovernance"
+    );
+    assert!(
+        deployer_has_admin_role(fx, fx.timelock()),
+        "the timelock must hold ADMIN_ROLE on RouterGovernance"
     );
 }
 

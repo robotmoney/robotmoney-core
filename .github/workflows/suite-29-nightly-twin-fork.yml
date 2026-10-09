@@ -1,0 +1,184 @@
+# Canonical: docs/development/ci-suites.md §29 (nightly Twin fork)
+# Issue: robotmoney-core 1496 (nightly job (b)); siblings 1495 (a) and 1497 (c); owner decision 2026-10-05.
+#
+# WHY THIS WORKFLOW EXISTS
+# Every chain suite runs on the Twin chain (chain id 918453): a pinned lazy fork of real Base state
+# made with anvil, started with .github/actions/twin-fork. The pin is the upstream head at the
+# start of a run minus 2, so every run is already as fresh as the upstream allows. This nightly runs
+# every chain suite in ONE workflow run with ONE shared pin, so a green run shows our contracts and
+# clients still work against Base as it is today. There is no snapshot to take, no genesis to build
+# and no overlay to apply.
+#
+# ONE PIN FOR THE WHOLE RUN
+# The `pin` job chooses the block once (.github/actions/twin-pin). Each suite is the existing
+# workflow, called with workflow_call and pin_block: suites 5, 7, 8, 10, 11b, 14 and 28. Steps are not
+# copied: a suite change lands in one file and this nightly picks it up. Each suite's own pin job
+# hands that block through unchanged, then its chain jobs start their own Twin fork at it.
+#
+# SECRETS
+# `secrets: inherit` hands the called suites what they already use when they run on their own
+# triggers: the optional BASE_UPSTREAM_RPC (a
+# paid upstream, never printed) and the base-testnet secrets of suite 5. The workflow itself
+# references none of them.
+#
+# Suite 26 is NOT in this list: it targets the shared stage devnet (a Twin fork kept alive as a
+# service on the stage host) and needs secrets.FUSION_RMPC_CONFIG, so it does not start a fork per
+# run. See docs/development/ci-suites.md §26.
+#
+# RESULT
+# The `results` job fails when the pin job or any suite did not succeed (failure, cancelled and
+# skipped all count as not passing). It uploads suite-results (one JSON per suite, with the pin).
+# The pin job uploads twin-pin (the pin file: block, run id and time, never the upstream URL).
+# No secret is required. BASE_UPSTREAM_RPC is optional and never printed.
+
+name: nightly-twin-fork
+
+env:
+  CI_CLASS: ignore
+
+on:
+  schedule:
+    - cron: "30 5 * * *" # 05:30 UTC, after the 02:00 nightly and the 03:xx / 04:10 jobs
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-twin-fork
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  pin:
+    name: twin-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      block: ${{ steps.pin.outputs.block }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        uses: ./.github/actions/twin-pin
+        with:
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+      - name: Write the pin file
+        env:
+          PIN_BLOCK: ${{ steps.pin.outputs.block }}
+          BASE_UPSTREAM_RPC: ${{ secrets.BASE_UPSTREAM_RPC }}
+          TWIN_LIB: ${{ github.workspace }}/scripts/devnet/twin-fork-lib.ts
+          OUT_DIR: ${{ runner.temp }}/twin-pin
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT_DIR"
+          # Block, hash, block timestamp and upstream HOST only. The URL is never written.
+          bun -e '
+            const {selectPin, resolveUpstream} = await import(process.env.TWIN_LIB!);
+            const up = resolveUpstream();
+            const secrets = up === process.env.BASE_UPSTREAM_RPC?.trim() ? [up] : [];
+            const p = await selectPin(up, process.env.PIN_BLOCK!, {secrets});
+            const out = {chain_id: 918453, pin_block: p.block, pin_hash: p.hash, pin_timestamp: p.timestamp,
+              upstream_host: p.upstreamHost, pin_rule: "upstream head at run start minus 2",
+              run_id: process.env.GITHUB_RUN_ID, chosen_at: new Date().toISOString()};
+            await Bun.write(process.env.OUT_DIR + "/twin-pin.json", JSON.stringify(out, null, 2) + "\n");
+          '
+          cat "$OUT_DIR/twin-pin.json"
+
+      - name: Upload the pin file
+        uses: actions/upload-artifact@v4
+        with:
+          name: twin-pin
+          path: ${{ runner.temp }}/twin-pin
+          retention-days: 30
+
+  suite-05:
+    name: suite-05 fork integration
+    needs: pin
+    uses: ./.github/workflows/suite-05-fork-integration.yml
+    secrets: inherit
+    with:
+      pin_block: ${{ needs.pin.outputs.block }}
+
+  suite-07:
+    name: suite-07 rmpc integration
+    needs: pin
+    uses: ./.github/workflows/suite-07-rmpc-integration.yml
+    secrets: inherit
+    with:
+      pin_block: ${{ needs.pin.outputs.block }}
+
+  suite-08:
+    name: suite-08 explorer indexer
+    needs: pin
+    uses: ./.github/workflows/suite-08-explorer-indexer.yml
+    secrets: inherit
+    with:
+      pin_block: ${{ needs.pin.outputs.block }}
+
+  suite-10:
+    name: suite-10 dapp e2e
+    needs: pin
+    uses: ./.github/workflows/suite-10-dapp-e2e.yml
+    secrets: inherit
+    with:
+      pin_block: ${{ needs.pin.outputs.block }}
+
+  suite-11b:
+    name: suite-11b opencode headless
+    needs: pin
+    uses: ./.github/workflows/suite-11b-opencode-headless.yml
+    secrets: inherit
+    with:
+      pin_block: ${{ needs.pin.outputs.block }}
+
+  suite-14:
+    name: suite-14 smoke test
+    needs: pin
+    uses: ./.github/workflows/suite-14-smoke-test.yml
+    secrets: inherit
+    with:
+      pin_block: ${{ needs.pin.outputs.block }}
+
+  suite-28:
+    name: suite-28 core stages rehearsal
+    needs: pin
+    uses: ./.github/workflows/suite-28-core-stages.yml
+    secrets: inherit
+    with:
+      pin_block: ${{ needs.pin.outputs.block }}
+
+  results:
+    name: record-results
+    if: ${{ always() }}
+    needs: [pin, suite-05, suite-07, suite-08, suite-10, suite-11b, suite-14, suite-28]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Write one result file per suite and fail on any that did not succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          PIN_BLOCK: ${{ needs.pin.outputs.block }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/suite-results"
+          bad=0
+          while IFS=$'\t' read -r job result; do
+            suite="${job#suite-}"
+            jq -n --arg suite "$suite" --arg result "$result" --arg run "$GITHUB_RUN_ID" --arg pin "$PIN_BLOCK" \
+              '{suite: $suite, result: $result, run_id: $run, pin_block: $pin}' > "$RUNNER_TEMP/suite-results/suite-${suite}.json"
+            echo "suite $suite: $result" | tee -a "$GITHUB_STEP_SUMMARY"
+            [ "$result" = "success" ] || bad=1
+          done < <(echo "$NEEDS" | jq -r 'to_entries[] | select(.key | startswith("suite-")) | "\(.key)\t\(.value.result)"')
+          pin_result="$(echo "$NEEDS" | jq -r '.pin.result')"
+          echo "pin job: $pin_result (Twin pin block ${PIN_BLOCK:-none})" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$pin_result" = "success" ] || bad=1
+          [ "$(find "$RUNNER_TEMP/suite-results" -maxdepth 1 -name "suite-*.json" | wc -l)" -ge 7 ] || { echo "::error::fewer than seven suite results were recorded"; bad=1; }
+          exit "$bad"
+
+      - name: Upload the suite results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-results
+          path: ${{ runner.temp }}/suite-results
+          retention-days: 30

@@ -70,7 +70,9 @@ contract VaultRegistry is AdminFloorAccessControl {
     /// @notice Lifecycle status of a registered vault.
     enum VaultStatus {
         Active,
-        Paused,
+        /// @dev DepositsPaused: new deposits are halted. Redemption stays open:
+        ///      no registry status ever blocks a withdrawal (core 1494).
+        DepositsPaused,
         /// @dev Retired: withdraw-only. Existing depositors keep standard
         ///      ERC-4626 `redeem` at any time and `PortfolioRouter` routes no
         ///      new deposits here. There is deliberately NO on-chain migration:
@@ -307,7 +309,7 @@ contract VaultRegistry is AdminFloorAccessControl {
     ///         leaving the vault's `retired` deposit-halt flag untouched — so
     ///         `setVaultStatus(_, Retired)` recorded "Retired" in the registry
     ///         while the vault still accepted direct deposits, and
-    ///         `setVaultStatus(_, Paused)` halted nothing on the vault. Now any
+    ///         `setVaultStatus(_, DepositsPaused)` halted nothing on the vault. Now any
     ///         non-`Active` status drives `IRetirableVault.retire()` (hard-stop
     ///         direct deposits) and `Active` drives `unretire()`, mirroring the
     ///         atomic `retire()` / `reactivate()` paths. Both vault legs are
@@ -321,15 +323,15 @@ contract VaultRegistry is AdminFloorAccessControl {
     ///         `IRetirableVault`; a registered address that lacks the hook
     ///         fails the call intentionally.
     /// @param vault      Address of an already-registered vault.
-    /// @param newStatus  New lifecycle status (Active, Paused, or Retired).
+    /// @param newStatus  New lifecycle status (Active, DepositsPaused, or Retired).
     function setVaultStatus(address vault, VaultStatus newStatus) external onlyRole(ADMIN_ROLE) {
         if (!_registered[vault]) revert NotRegistered();
         // Same retirement invariant as `retire()` (issue #1173): a Retired vault
         // must never remain counted in `routerEligibleCount`, or the router's
         // default weight vector strands. `setVaultStatus(_, Retired)` is the
         // other door to the Retired state, so it enforces the same
-        // make-ineligible-before-retire ordering. (Paused is transient and
-        // reversible via unpause, so it is not gated here — only the Retired
+        // make-ineligible-before-retire ordering. (DepositsPaused is transient and
+        // reversible via setVaultStatus(_, Active), so it is not gated here — only the Retired
         // transition is.)
         if (newStatus == VaultStatus.Retired && _routerEligible[vault]) {
             revert RetireWhileRouterEligible(vault);
@@ -338,7 +340,7 @@ contract VaultRegistry is AdminFloorAccessControl {
 
         // Drive the vault's deposit-halt flag so it can never disagree with the
         // registry status (LIFE-1 / F-04 / AZ-REG-1). Active re-opens direct
-        // deposits; any non-Active status (Paused or Retired) hard-stops them.
+        // deposits; any non-Active status (DepositsPaused or Retired) hard-stops them.
         // The empty-code guard skips addresses with no contract code. Calls are
         // made directly (no try/catch) so a hook failure propagates to the
         // caller: a failed retire must NOT be silently absorbed while the

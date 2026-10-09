@@ -7,6 +7,9 @@
  *   AC §9   preview block shows estimated USDC out, exit fee, and net amount
  *           from live previewRedeem and exitFeeBps.
  *   AC §10  submit disabled when maxRedeem is zero for selected vault.
+ *   core 1494  a vault whose deposits are paused (or that is retired) stays
+ *           redeemable: the tab lists it and never gates on registry status
+ *           or depositsPaused().
  *
  * Test names match the issue test plan exactly so the pnpm --testNamePattern
  * invocations resolve correctly.
@@ -14,7 +17,7 @@
  * Wagmi hooks are mocked at the module boundary so no WagmiProvider is needed.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "./helpers/render";
+import { fireEvent, render, screen } from "./helpers/render";
 import type { Address } from "viem";
 import { MultiVaultWithdrawalTab } from "../../src/components/MultiVaultWithdrawalTab";
 import type { VaultPreviewContext } from "../../src/lib/vaultPreview";
@@ -65,7 +68,15 @@ const registeredVaults: MockVaultRecord[] = [
   },
 ];
 
+// Core 1494: status 1 (DepositsPaused) and status 2 (Retired) vaults must
+// stay redeemable.
+const nonActiveVaults: MockVaultRecord[] = [
+  { ...registeredVaults[0], status: 1 }, // DepositsPaused
+  { ...registeredVaults[1], status: 2 }, // Retired
+];
+
 let mockVaults: MockVaultRecord[] = registeredVaults;
+const readFunctionNames: string[] = [];
 
 vi.mock("../../src/lib/VaultRegistryContext", () => ({
   useVaultRegistry: () => ({
@@ -114,6 +125,7 @@ vi.mock("wagmi", () => ({
     refetch: vi.fn(),
   }),
   useReadContract: (opts: { functionName?: string }) => {
+    if (opts.functionName) readFunctionNames.push(opts.functionName);
     if (opts.functionName === "maxRedeem") return { data: mockState.maxRedeemValue };
     if (opts.functionName === "previewRedeem") return { data: mockState.previewRedeemAssets };
     if (opts.functionName === "exitFeeBps") return { data: mockState.exitFeeBps };
@@ -248,5 +260,48 @@ describe("MultiVaultWithdrawalTab submit disabled when maxRedeem is zero", () =>
     const input = screen.getByTestId("multi-vault-withdraw-amount") as HTMLInputElement;
     // Without a vault selected, disabled due to !selectedVault
     expect(input.disabled).toBe(true);
+  });
+});
+
+describe("MultiVaultWithdrawalTab keeps withdrawals open when deposits are paused (core 1494)", () => {
+  beforeEach(() => {
+    mockVaults = nonActiveVaults;
+    readFunctionNames.length = 0;
+    mockState.isConnected = true;
+    mockState.address = USER;
+    mockState.maxRedeemValue = 5_000_000n;
+    mockState.previewRedeemAssets = 4_975_000n;
+    mockState.exitFeeBps = 50n;
+    mockState.redeemSim = { request: {} };
+    mockState.batchBalances = [
+      { status: "success", result: 5_000_000n },
+      { status: "success", result: 3_000_000n },
+    ];
+  });
+
+  it("lists positions in a deposits-paused vault and a retired vault", () => {
+    renderTab();
+    expect(screen.queryByTestId(`position-${VAULT_A}`)).not.toBeNull();
+    expect(screen.queryByTestId(`position-${VAULT_B}`)).not.toBeNull();
+  });
+
+  it("enables the redeem form for a deposits-paused vault", () => {
+    renderTab();
+    const radio = screen
+      .getByTestId(`position-${VAULT_A}`)
+      .querySelector("input") as HTMLInputElement;
+    fireEvent.click(radio);
+    const input = screen.getByTestId("multi-vault-withdraw-amount") as HTMLInputElement;
+    expect(input.disabled).toBe(false);
+    expect(screen.queryByTestId("max-redeem-zero-warning")).toBeNull();
+  });
+
+  it("never reads registry status or depositsPaused() to gate a withdrawal", () => {
+    renderTab();
+    fireEvent.click(
+      screen.getByTestId(`position-${VAULT_A}`).querySelector("input") as HTMLInputElement,
+    );
+    expect(readFunctionNames).not.toContain("depositsPaused");
+    expect(readFunctionNames).not.toContain("getVault");
   });
 });

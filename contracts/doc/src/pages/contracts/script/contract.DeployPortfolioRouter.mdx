@@ -1,35 +1,49 @@
 ---
 title: "DeployPortfolioRouter"
-description: "Foundry deploy script for the PortfolioRouter contract. Deploys PortfolioRouter, sets initial weights (10 000 bps to RobotMoneyVault — the sole active vault), and writes the router address to a deployment JSON alongside the registry address."
+description: "Foundry deploy script for the PortfolioRouter contract. Stage 4 of the core deploy (libs, vault, registry, router, gateway). Deploys PortfolioRouter, sets initial weights (10 000 bps to RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`, and writes the router address to a deployment JSON alongside the registry address. The router comes BEFORE the gateway: the gateway stores the router as an immutable (core 1493)."
 ---
 
 # DeployPortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e1909cc7da21c643b880a2d9a0be7fb390b4432f/contracts/script/DeployPortfolioRouter.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/script/DeployPortfolioRouter.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
 **Title:** DeployPortfolioRouter
 
 Foundry deploy script for the PortfolioRouter contract.
+Stage 4 of the core deploy (libs, vault, registry, router, gateway).
 Deploys PortfolioRouter, sets initial weights (10 000 bps to
-RobotMoneyVault — the sole active vault), and writes the router
-address to a deployment JSON alongside the registry address.
+RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`,
+and writes the router address to a deployment JSON alongside the registry
+address. The router comes BEFORE the gateway: the gateway stores the router as
+an immutable (core 1493).
 
-The smoke-test devnet startup sequence runs this script so that
-`rmpc get-router` and the dapp router view return real data in CI.
+The stage driver runs this script on every chain so that
+`rmpc get-router` and the dapp router view return real data.
 
 Required env vars:
-ADMIN_ADDRESS      — receives ADMIN_ROLE on the router
+ADMIN_ADDRESS      — receives ADMIN_ROLE and WEIGHT_SETTER_ROLE on the router
 REGISTRY_ADDRESS   — deployed VaultRegistry address
 VAULT_ADDRESS      — RobotMoneyVault (sole active vault, 10 000 bps)
-USDC_ADDRESS       — ERC-20 asset the router accepts
 
-Optional env vars:
-DEPLOYMENT_OUT     — path for the output JSON
-(default: "deployments/router-&lt;chain_id>.json")
+USDC is the canonical Base USDC constant on every chain.
+Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
+(mandatory and equal to 8453 on Base mainnet).
 
 ## Constants
+
+### MANIFEST_FILE
+
+<i>
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+</i>
+
+```solidity
+string public constant MANIFEST_FILE = "router.json";
+```
 
 ### INITIAL_VAULT_WEIGHT_BPS
 
@@ -48,9 +62,9 @@ uint256 public constant INITIAL_VAULT_WEIGHT_BPS = 10_000;
 Forge broadcast entrypoint. Reads env vars, deploys the router,
 sets initial weights, and writes a deployment JSON.
 
-In broadcast mode the broadcaster IS admin (the smoke-test devnet
-runs the script with the admin private key), so msg.sender on
-setWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
+In broadcast mode the broadcaster IS admin (the deployer signs
+the broadcast), so msg.sender on
+setWeights holds WEIGHT_SETTER_ROLE. No vm.prank is needed or allowed.
 
 ```solidity
 function run() external returns (Deployed memory d);
@@ -67,7 +81,7 @@ function run() external returns (Deployed memory d);
 ### runInProcessWith
 
 In-process variant for forge tests. No broadcast, no JSON written.
-setWeights requires ADMIN_ROLE; this method pranks admin.
+setWeights requires WEIGHT_SETTER_ROLE; this method pranks admin.
 
 ```solidity
 function runInProcessWith(address admin_, address registry_, address vault_, address usdc_)
@@ -79,7 +93,7 @@ function runInProcessWith(address admin_, address registry_, address vault_, add
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| admin_ | `address` | Address to receive ADMIN_ROLE. |
+| admin_ | `address` | Address to receive ADMIN_ROLE and WEIGHT_SETTER_ROLE. |
 | registry_ | `address` | Deployed VaultRegistry address. |
 | vault_ | `address` | RobotMoneyVault to seed with 10 000 bps. |
 | usdc_ | `address` | ERC-20 asset the router accepts. |
@@ -96,7 +110,7 @@ function runInProcessWith(address admin_, address registry_, address vault_, add
 
 <i>
 
-Deploy router and set initial weights. Caller must ensure ADMIN_ROLE
+Deploy router and set initial weights. Caller must ensure ADMIN_ROLE and WEIGHT_SETTER_ROLE
 is active on the call context (broadcast or prank).
 
 </i>

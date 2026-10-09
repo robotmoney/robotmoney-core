@@ -1,0 +1,36 @@
+name: twin-fork-save-cache
+description: >-
+  Core issues 1498, 1496. Run as the LAST step of every job that uses .github/actions/twin-fork, with
+  if: always(). Anvil writes its RPC cache only when it exits, so this stops the fork gracefully
+  (twin-fork.ts stop, which waits for the exit) and THEN saves the cache with actions/cache/save keyed
+  by the pin block the fork served. It never fails the job. Paths use github.action_path.
+runs:
+  using: composite
+  steps:
+    - id: stop
+      shell: bash
+      env:
+        TWIN_TOOL: ${{ github.action_path }}/../../../scripts/devnet/twin-fork.ts
+      run: |
+        set -uo pipefail
+        pin=""
+        if [ -f "$RUNNER_TEMP/twin-pin.json" ]; then
+          pin="$(bun -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).block)' "$RUNNER_TEMP/twin-pin.json" 2>/dev/null || true)"
+        fi
+        if [ -d "$RUNNER_TEMP/twin-state" ]; then
+          bun "$TWIN_TOOL" stop --state-dir "$RUNNER_TEMP/twin-state" || echo "::warning::twin fork stop failed"
+        else
+          echo "no twin fork state in this job"
+        fi
+        if [ -n "$pin" ] && [ -d "$RUNNER_TEMP/twin-cache" ]; then
+          echo "save=true" >> "$GITHUB_OUTPUT"
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+        else
+          echo "save=false" >> "$GITHUB_OUTPUT"
+        fi
+    - if: ${{ steps.stop.outputs.save == 'true' }}
+      uses: actions/cache/save@v4
+      continue-on-error: true
+      with:
+        path: ${{ runner.temp }}/twin-cache
+        key: twin-anvil-rpc-${{ steps.stop.outputs.pin }}

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://robotmoney.net/schemas/committee-vote/1.0",
   "title": "CommitteeVote",
-  "description": "Fixed-shape JSON vote submitted by a registered Investment Committee agent. Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §3 and docs/sprint/20260601-week-sprint.md §3 (Workstream A).",
+  "description": "Fixed-shape JSON vote submitted by a registered Investment Committee agent. Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §3.",
   "type": "object",
   "required": [
     "schema_version",

@@ -7,6 +7,15 @@
  * effects before wallet signing is enabled for either step. The operator
  * must confirm both previews before any wallet interaction occurs.
  *
+ * The rotation runs as a DEPOSITOR. After the timelock handover no EOA holds
+ * ADMIN_ROLE on any chain, so a browser wallet authorizes and rotates only
+ * its own agents: revokeAgent is gated on agentOwner == msg.sender, and the
+ * new agent is authorized through commitAuthorization + revealAuthorization
+ * (docs/architecture.md §6, docs/technical/dapp-credential-decisions.md §3.2
+ * 2026-10-06 amendment). `beforeAll` makes a fresh depositor and has it
+ * authorize OLD_AGENT through the dapp's Authorize tab, so OLD_AGENT is
+ * depositor-owned before any rotation test runs.
+ *
  * Invariants verified here:
  *   1. Rotation section renders two independent step sub-sections.
  *   2. Both signing buttons are disabled until all rotation inputs are
@@ -16,28 +25,51 @@
  *   4. Entering identical addresses for old and new prevents the
  *      previews from rendering (rotation requires distinct addresses).
  *   5. Step-2 (authorize new) button is disabled until step-1
- *      (revoke old) has been submitted.
+ *      (revoke old) has been submitted. Completing the rotation leaves
+ *      OLD_AGENT unowned without AGENT_ROLE, and NEW_AGENT owned by the
+ *      depositor with AGENT_ROLE and the previewed policy.
  */
 import { test, expect } from "./helpers/fixtures";
+import { zeroAddress, type Address } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
+import {
+  ADMIN_ROLE,
+  agentPolicyOf,
+  authorizeOwnAgentViaUi,
+  freshAccount,
+  freshDepositor,
+  gatewayHasRole,
+  waitForAgentState,
+  type TestAccount,
+} from "./helpers/depositor";
 
 let endpoints: DevnetEndpoints;
-let OLD_AGENT: string;
-let NEW_AGENT: string;
-let SHARE_RECEIVER: string;
+let DEPOSITOR: TestAccount;
+let OLD_AGENT: Address;
+let NEW_AGENT: Address;
+let SHARE_RECEIVER: Address;
 
-test.beforeAll(() => {
+test.beforeAll(async ({ browser }) => {
   endpoints = loadEndpoints();
-  // OLD_AGENT = smoke-test's pre-authorized agent EOA.
-  // NEW_AGENT must be an address with no existing role on the gateway:
-  // AccessRoles._grantRole is mutex with AGENT_ROLE/PAUSER_ROLE, so an
-  // authorizeAgent simulation against pauser_addr (which has PAUSER_ROLE)
-  // would revert and keep the submit button disabled. Use a fresh hex
-  // address that is guaranteed to have no roles on the deployed gateway.
-  OLD_AGENT = endpoints.agent_addr;
-  NEW_AGENT = "0x2222222222222222222222222222222222222222";
-  SHARE_RECEIVER = endpoints.share_receiver_addr;
+  DEPOSITOR = await freshDepositor(endpoints);
+  // The depositor holds no admin role: this is the production wallet shape.
+  expect(await gatewayHasRole(endpoints, ADMIN_ROLE, DEPOSITOR.address)).toBe(false);
+  // OLD_AGENT and NEW_AGENT are fresh addresses with no role and no owner.
+  // AccessRoles._grantRole is mutex with ADMIN/DEPOSIT_PAUSER, and authorization
+  // reverts with AgentAlreadyOwned on an owned agent, so neither may be a
+  // harness key.
+  OLD_AGENT = freshAccount().address;
+  NEW_AGENT = freshAccount().address;
+  // A caller without ADMIN_ROLE must name itself as shareReceiver.
+  SHARE_RECEIVER = DEPOSITOR.address;
+
+  const setupPage = await browser.newPage();
+  try {
+    await authorizeOwnAgentViaUi(setupPage, endpoints, DEPOSITOR, OLD_AGENT);
+  } finally {
+    await setupPage.close();
+  }
 });
 
 async function fillRotationForm(
@@ -55,7 +87,7 @@ async function fillRotationForm(
 
 test.describe("agent rotation flow — UI invariants", () => {
   test.beforeEach(async ({ page }) => {
-    await openDapp(page, endpoints);
+    await openDapp(page, endpoints, { privateKey: DEPOSITOR.privateKey });
     await openTab(page, "rotation");
   });
 
@@ -86,6 +118,10 @@ test.describe("agent rotation flow — UI invariants", () => {
       shareReceiver: SHARE_RECEIVER,
     });
 
+    // The wallet lacks ADMIN_ROLE, so the dapp takes the depositor path.
+    await expect(page.getByTestId("rotation-depositor-path")).toBeVisible();
+    await expect(page.getByTestId("rotation-depositor-error")).toHaveCount(0);
+
     // After valid inputs, step-1 button must be enabled (previews OK).
     await expect(page.getByTestId("rotation-revoke-submit")).toBeEnabled();
   });
@@ -105,6 +141,28 @@ test.describe("agent rotation flow — UI invariants", () => {
     await expect(page.getByTestId("rotation-authorize-submit")).toBeEnabled();
     // And step-1 is now disabled (already submitted).
     await expect(page.getByTestId("rotation-revoke-submit")).toBeDisabled();
+
+    // The revoke mined: OLD_AGENT has no owner and no AGENT_ROLE.
+    await waitForAgentState(endpoints, OLD_AGENT, zeroAddress);
+
+    // Step 2 (commit) then step 3 (reveal, one block later) authorize NEW_AGENT.
+    const reveal = page.getByTestId("rotation-reveal-submit");
+    await expect(reveal).toBeDisabled();
+    await page.getByTestId("rotation-authorize-submit").click();
+    await expect(reveal).toBeEnabled({ timeout: 60_000 });
+    await reveal.click();
+    await expect(page.getByTestId("rotation-complete")).toBeVisible();
+
+    // NEW_AGENT is owned by the depositor, holds AGENT_ROLE, and stores the
+    // previewed policy (form defaults: 100 / 1000 USDC caps).
+    await waitForAgentState(endpoints, NEW_AGENT, DEPOSITOR.address);
+    const policy = await agentPolicyOf(endpoints, NEW_AGENT);
+    expect(policy.active).toBe(true);
+    expect(policy.shareReceiver.toLowerCase()).toBe(DEPOSITOR.address.toLowerCase());
+    expect(policy.maxPerPayment).toBe(100_000_000n);
+    expect(policy.maxPerWindow).toBe(1_000_000_000n);
+    // The revoked agent's policy is cleared.
+    expect((await agentPolicyOf(endpoints, OLD_AGENT)).active).toBe(false);
   });
 
   test("revokeAgent preview for old address renders structured fields", async ({ page }) => {

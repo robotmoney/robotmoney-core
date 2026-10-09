@@ -1,0 +1,107 @@
+---
+title: "SafeMath"
+description: "Math operations with safety checks that revert on error (overflow/underflow)"
+---
+
+# SafeMath
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/vendor/safe-1.4.1/external/SafeMath.sol)
+
+**Title:** SafeMath
+
+Math operations with safety checks that revert on error (overflow/underflow)
+
+## Functions
+
+<a id="mul-uint256-uint256"></a>
+
+### mul
+
+Multiplies two numbers, reverts on overflow.
+
+```solidity
+function mul(uint256 a, uint256 b) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` | First number |
+| b | `uint256` | Second number |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | Product of a and b |
+
+<a id="sub-uint256-uint256"></a>
+
+### sub
+
+Subtracts two numbers, reverts on overflow (i.e. if subtrahend is greater than minuend).
+
+```solidity
+function sub(uint256 a, uint256 b) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` | First number |
+| b | `uint256` | Second number |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | Difference of a and b |
+
+<a id="add-uint256-uint256"></a>
+
+### add
+
+Adds two numbers, reverts on overflow.
+
+```solidity
+function add(uint256 a, uint256 b) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` | First number |
+| b | `uint256` | Second number |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | Sum of a and b |
+
+<a id="max-uint256-uint256"></a>
+
+### max
+
+Returns the largest of two numbers.
+
+```solidity
+function max(uint256 a, uint256 b) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` | First number |
+| b | `uint256` | Second number |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | Largest of a and b |
+

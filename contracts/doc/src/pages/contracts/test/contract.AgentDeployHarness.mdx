@@ -1,0 +1,82 @@
+---
+title: "AgentDeployHarness"
+---
+
+# AgentDeployHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/DeployAgentTokenVault.t.sol)
+
+**Inherits:** [DeployAgentTokenVault](/contracts/script/contract.DeployAgentTokenVault)
+
+## Functions
+
+<a id="writemanifestto-string-deployed-string"></a>
+
+### writeManifestTo
+
+```solidity
+function writeManifestTo(string memory path, Deployed memory d, string memory json) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| path | `string` |  |
+| d | `Deployed` |  |
+| json | `string` |  |
+
+<a id="parse-string"></a>
+
+### parse
+
+```solidity
+function parse(string memory json) external view returns (Cfg memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Cfg` |  |
+
+<a id="manifestpath"></a>
+
+### manifestPath
+
+```solidity
+function manifestPath() external view returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="readprefixed-string"></a>
+
+### readPrefixed
+
+```solidity
+function readPrefixed(string memory prefix) external view returns (Params memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Params` |  |
+

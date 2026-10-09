@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-// Canonical: none — Foundry test for contracts/gateway/MockVault.sol fixture
+// Canonical: none — Foundry test for contracts/test/helpers/MockVault.sol fixture
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "../gateway/MockVault.sol";
+import {MockVault} from "./helpers/MockVault.sol";
 
 contract MockVaultTest is Test {
     TestERC20 internal usdc;

@@ -1,0 +1,41 @@
+---
+title: "BytecodePatch"
+description: "Test-local harness: rewrites immediates in deployed runtime bytecode. Used to build the unfixed vault (every gas floor zeroed) and a vault with only the entry floor zeroed, from the exact shipped bytecode, with no test-only code in production contracts. It walks opcodes so PUSH data is never mistaken for an opcode."
+---
+
+# BytecodePatch
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
+
+Test-local harness: rewrites immediates in deployed runtime bytecode. Used to build the
+unfixed vault (every gas floor zeroed) and a vault with only the entry floor zeroed,
+from the exact shipped bytecode, with no test-only code in production contracts.
+It walks opcodes so PUSH data is never mistaken for an opcode.
+
+## Functions
+
+<a id="patchpush3-bytes-uint24-uint24"></a>
+
+### patchPush3
+
+```solidity
+function patchPush3(bytes memory code, uint24 from, uint24 to)
+        internal
+        pure
+        returns (uint256 n);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| code | `bytes` |  |
+| from | `uint24` |  |
+| to | `uint24` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+

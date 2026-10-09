@@ -13,7 +13,9 @@ import {IConsensusRecommendationReceipt} from "./IConsensusRecommendationReceipt
 ///      friends), an owner-gated agent lifecycle surface
 ///      (`commitAuthorization`/`revealAuthorization`, `authorizeAgent`,
 ///      `setPolicy`, `transferAgentOwnership`, `revokeAgent`), and a
-///      protocol-wide pause asymmetry (PAUSER pauses, ADMIN unpauses).
+///      deposit-pause asymmetry (DEPOSIT_PAUSER pauses deposits, ADMIN
+///      resumes them). A pause stops new deposits only; withdrawals are never
+///      frozen (owner decision 2026-10-05, core 1494).
 ///
 /// Authority model (issues #269, #1476). First-time authorization records
 /// `msg.sender` as the agent's owner: any account through
@@ -120,12 +122,12 @@ interface IGateway {
     /// @param agent Agent address whose policy was removed.
     /// @param owner Depositor EOA that revoked (must equal the recorded owner).
     event AgentRevoked(address indexed agent, address indexed owner);
-    /// @notice Emitted when the gateway is paused.
-    /// @param by Address that called `pause()`.
-    event Paused(address indexed by);
-    /// @notice Emitted when the gateway is unpaused.
-    /// @param by Address that called `unpause()`.
-    event Unpaused(address indexed by);
+    /// @notice Emitted when gateway deposits are paused. Withdrawals stay open.
+    /// @param by Address that called `pauseDeposits()`.
+    event DepositsPaused(address indexed by);
+    /// @notice Emitted when gateway deposits are resumed.
+    /// @param by Address that called `unpauseDeposits()`.
+    event DepositsUnpaused(address indexed by);
     /// @notice Emitted on every successful agent deposit to a single vault.
     /// @param paymentId     Replay-protection hash for this payment.
     /// @param orderId       Caller-supplied order identifier.
@@ -212,7 +214,7 @@ interface IGateway {
 
     /// @notice Pull `amount` USDC from caller, deposit into the vault, route
     ///         resulting shares to the agent's configured `shareReceiver`.
-    /// @dev Restricted to `AGENT_ROLE`. Reverts when paused. See MVP §2.2 for
+    /// @dev Restricted to `AGENT_ROLE`. Reverts `DepositsArePaused` while deposits are paused. See MVP §2.2 for
     ///      the full preflight checklist (caps, window, deadline, idempotency).
     /// @param orderId          Caller-supplied order identifier (echoed in event).
     /// @param amount           Gross USDC amount, in 6-decimal base units.
@@ -230,8 +232,8 @@ interface IGateway {
     ///         Portfolio Router), and deliver resulting shares to the agent's
     ///         configured `shareReceiver`. When `destination` is the router,
     ///         `minSharesPerLeg` provides per-leg slippage protection.
-    /// @dev Restricted to `AGENT_ROLE`. Reverts when paused. Enforces all the
-    ///      same caps, deadline, idempotency, and policy checks as `deposit`.
+    /// @dev Restricted to `AGENT_ROLE`. Reverts `DepositsArePaused` while deposits are
+    ///      paused. Enforces all the same caps, deadline, idempotency, and policy checks as `deposit`.
     ///      `destination` must appear in the agent's `allowedDestinations` list
     ///      (or the list must be empty, in which case only the pinned vault or
     ///      the pinned router is accepted — no registry lookup is performed).
@@ -259,8 +261,9 @@ interface IGateway {
     ///         policy-configured `assetRecipient` — the agent cannot redirect
     ///         funds. The gateway pulls shares from `msg.sender` via
     ///         `transferFrom` (agent must have approved the gateway).
-    /// @dev Restricted to `AGENT_ROLE`. Reverts when paused. Enforces all the
-    ///      same deadline, idempotency, and policy checks as `deposit`. The
+    /// @dev Restricted to `AGENT_ROLE`. Works while deposits are paused: a pause
+    ///      never blocks a withdrawal (core 1494). Enforces the same deadline,
+    ///      idempotency, and policy checks as `deposit`. The
     ///      agent must approve the gateway to spend its vault shares before
     ///      calling this function.
     /// @param orderId          Caller-supplied order identifier (echoed in event).
@@ -282,8 +285,9 @@ interface IGateway {
 
     /// @notice Redeem vault shares proportionally across all Portfolio Router
     ///         legs. Enforces the same policy checks (valid-until, per-payment
-    ///         cap, window cap, allowed-source-vaults, pause, idempotency,
-    ///         recipient) as single-vault `withdraw`. Each leg's vault must
+    ///         cap, window cap, allowed-source-vaults, idempotency,
+    ///         recipient) as single-vault `withdraw`. Works while deposits are
+    ///         paused: a pause never blocks a withdrawal (core 1494). Each leg's vault must
     ///         appear in `policy.allowedSourceVaults` (when non-empty). USDC
     ///         is forwarded exclusively to the policy-configured `assetRecipient`.
     ///
@@ -293,7 +297,7 @@ interface IGateway {
     ///         passes them through to the router — no outer share token is
     ///         minted and no intermediate custody persists beyond the call.
     ///
-    /// @dev Restricted to `AGENT_ROLE`. Reverts when paused. `totalShares` is
+    /// @dev Restricted to `AGENT_ROLE`. No pause applies. `totalShares` is
     ///      the sum of `sharesPerLeg` and is checked against
     ///      `maxWithdrawPerPayment` and the rolling window cap.
     /// @param orderId          Caller-supplied order identifier (echoed in event).
@@ -404,14 +408,16 @@ interface IGateway {
     /// @param agent The agent address whose policy and role are revoked.
     function revokeAgent(address agent) external;
 
-    /// @notice Stop-the-world pause. Restricted to `PAUSER_ROLE`.
-    function pause() external;
+    /// @notice Pause new deposits (`deposit`, `depositTo`). Restricted to
+    ///         `DEPOSIT_PAUSER_ROLE`. Withdrawals (`withdraw`, `withdrawFromRouter`)
+    ///         stay open (owner decision 2026-10-05, core 1494).
+    function pauseDeposits() external;
 
-    /// @notice Resume operations. Restricted to `ADMIN_ROLE` (asymmetric).
-    ///         `ADMIN_ROLE` is retained as a protocol-wide kill-switch
-    ///         counterweight to `pause`; it has no authority over the
+    /// @notice Resume deposits. Restricted to `ADMIN_ROLE` (asymmetric).
+    ///         `ADMIN_ROLE` is retained as the counterweight to
+    ///         `pauseDeposits`; it has no authority over the
     ///         lifecycle of an agent it does not own.
-    function unpause() external;
+    function unpauseDeposits() external;
 
     /// @notice Set or update the Investment Committee policy contract address.
     ///         Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear.
@@ -471,8 +477,8 @@ interface IGateway {
     /// @notice Portfolio Router address, or `address(0)` if not configured.
     function router() external view returns (address);
 
-    /// @notice Whether the gateway is currently paused.
-    function paused() external view returns (bool);
+    /// @notice Whether gateway deposits are currently paused. Withdrawals are never paused.
+    function depositsPaused() external view returns (bool);
 
     /// @notice Investment Committee policy contract, or `address(0)` if not configured.
     function icPolicy() external view returns (IInvestmentCommitteePolicy);

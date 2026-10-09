@@ -6,7 +6,7 @@
 //! Per issue #11 and `Plan tracking issue #109` §3.5: typed ABI
 //! encode/decode for `RobotMoneyGateway`, plus read-side bindings for the
 //! standard ERC-20 `allowance`+`balanceOf` views (used against real USDC in
-//! production and against test ERC-20 deployments in CI) and the `MockVault`
+//! production and against test ERC-20 deployments in CI) and the `IVault`
 //! used by tests. The ABIs are extracted from the Foundry build output and
 //! committed under `clients/rust-payment-client/abi/` so the Rust crate is
 //! buildable without re-running `forge build`.
@@ -48,8 +48,11 @@ sol_binding!(
     RobotMoneyGateway,
     "abi/RobotMoneyGateway.json"
 );
+/// The `VoteParams` struct as the gateway ABI declares it, which
+/// `RobotMoneyGateway::committeeVoteSubmitCall` takes (issue #1511).
+pub use robot_money_gateway::IInvestmentCommitteePolicy::VoteParams as GatewayVoteParams;
 sol_binding!(erc20, Erc20, "abi/Erc20.json");
-sol_binding!(mock_vault, MockVault, "abi/MockVault.json");
+sol_binding!(vault, IVault, "abi/IVault.json");
 sol_binding!(vault_registry, VaultRegistry, "abi/VaultRegistry.json");
 sol_binding!(
     portfolio_router,
@@ -82,13 +85,6 @@ sol_binding!(
 /// every draft to the anchored `payloadDigest` and `payloadUri` carried in it
 /// (T01), and the generated struct otherwise lives in a private module.
 pub use consensus_recommendation_receipt::IConsensusRecommendationReceipt::Receipt as AnchoredReceipt;
-
-/// The `IInvestmentCommitteePolicy.VoteParams` tuple
-/// `RobotMoneyGateway.committeeVoteSubmit` takes. Re-exported by name because
-/// `rmpc committee vote-submit` must encode the GATEWAY call (the policy's
-/// `submitVote` is `onlyGateway`, issue #1511), and the generated struct
-/// otherwise lives in a private module.
-pub use robot_money_gateway::IInvestmentCommitteePolicy::VoteParams as GatewayVoteParams;
 
 #[cfg(test)]
 mod tests {
@@ -138,11 +134,28 @@ mod tests {
         assert_eq!(&actual, expected);
     }
 
+    /// `depositsPaused()` is one selector on the gateway and on every vault
+    /// (the IVault binding rmpc reads vaults through), so the deposit
+    /// preflight reads both with the same call (core 1494).
     #[test]
-    fn paused_view_selector_matches() {
-        let expected = &keccak256(b"paused()")[..4];
-        let actual = RobotMoneyGateway::pausedCall::SELECTOR;
-        assert_eq!(&actual, expected);
+    fn deposits_paused_view_selector_matches() {
+        let expected = &keccak256(b"depositsPaused()")[..4];
+        assert_eq!(&RobotMoneyGateway::depositsPausedCall::SELECTOR, expected);
+        assert_eq!(&IVault::depositsPausedCall::SELECTOR, expected);
+    }
+
+    /// The gateway's pause errors rmpc may see in revert data. `withdraw`
+    /// and `withdrawFromRouter` never raise either one (core 1494).
+    #[test]
+    fn deposit_pause_error_selectors_match() {
+        assert_eq!(
+            &RobotMoneyGateway::DepositsArePaused::SELECTOR,
+            &keccak256(b"DepositsArePaused()")[..4]
+        );
+        assert_eq!(
+            &RobotMoneyGateway::DepositsNotPaused::SELECTOR,
+            &keccak256(b"DepositsNotPaused()")[..4]
+        );
     }
 
     #[test]

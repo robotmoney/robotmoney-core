@@ -40,13 +40,13 @@ type Props = Readonly<{
   registryAddress?: Address;
   /** PortfolioRouter address (issue #320). Optional. */
   routerAddress?: Address;
-  /** RM token address for the Faucet tab drip button (issue #365). Optional. */
-  rmTokenAddress?: Address;
   /**
    * TimelockController address (issue #647 / architecture §4.5).
    * Forwarded to AdminFlow → buildAdminTabs → TimelockPanel.
    */
   timelockAddress?: Address;
+  /** The Safe that proposes to the timelock (core 1544). Forwarded to AdminFlow. */
+  safeAddress?: Address;
 }>;
 
 export function AgentsPanel(props: Props) {
@@ -153,7 +153,6 @@ export function AgentsPanel(props: Props) {
           if (address) markOnboardingDismissed(address);
           setOnboardingDismissed(true);
         }}
-        rmTokenAddress={props.rmTokenAddress}
       />
     );
   }
@@ -168,8 +167,8 @@ export function AgentsPanel(props: Props) {
       now={props.now}
       registryAddress={props.registryAddress}
       routerAddress={props.routerAddress}
-      rmTokenAddress={props.rmTokenAddress}
       timelockAddress={props.timelockAddress}
+      safeAddress={props.safeAddress}
     />
   );
 }

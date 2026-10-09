@@ -1,0 +1,563 @@
+---
+title: "BasketVaultDeployBase"
+description: "Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on the new vault. The deployer needs ADMIN_ROLE for `addAsset` and `setAdapterCodeHashAllowed`, and EMERGENCY_ROLE for `pauseDeposits()`. The timelock stage hands both roles over and revokes the deployer (core 1487). This script never grants a role to anyone else."
+---
+
+# BasketVaultDeployBase
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/script/BasketVaultDeployBase.sol)
+
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+
+<i>
+
+Shared flow: validate sheet inputs, deploy the vault, check each configured pool,
+add each configured asset, pause, register, write the manifest.
+
+</i>
+
+Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on the new vault. The
+deployer needs ADMIN_ROLE for `addAsset` and `setAdapterCodeHashAllowed`, and
+EMERGENCY_ROLE for `pauseDeposits()`. The timelock stage hands both roles over and revokes the
+deployer (core 1487). This script never grants a role to anyone else.
+
+## Constants
+
+### MAX_NAV_DEVIATION_BPS
+
+Hard ceiling the vault setter enforces (BasketVault.MAX_NAV_DEVIATION_BPS, 20%). Mirrored here so a sheet typo fails
+before any deploy transaction. A percent typed as bps (5 meaning 5 percent) is in range but sets a 5 bps guard, which
+fails closed (deposits revert on small drift), never open. A value above 2000 or 0 is refused.
+
+```solidity
+uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000;
+```
+
+## Functions
+
+<a id="_newvault-params-address"></a>
+
+### _newVault
+
+<i>
+
+Construct the concrete vault. `emergencyResponder` is the deployer for this run.
+
+</i>
+
+```solidity
+function _newVault(Params memory p, address emergencyResponder)
+        internal
+        virtual
+        returns (BasketVault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| emergencyResponder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVault` |  |
+
+<a id="_registryname"></a>
+
+### _registryName
+
+<i>
+
+Name stored in the registry.
+
+</i>
+
+```solidity
+function _registryName() internal pure virtual returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_label"></a>
+
+### _label
+
+<i>
+
+Manifest object key and log label.
+
+</i>
+
+```solidity
+function _label() internal pure virtual returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_usesadapter"></a>
+
+### _usesAdapter
+
+<i>
+
+True when assets route through a deployed `UniswapV3SwapAdapter`. False uses the
+built-in SwapRouter02 path (adapter address 0).
+
+</i>
+
+```solidity
+function _usesAdapter() internal pure virtual returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_readparams"></a>
+
+### _readParams
+
+<i>
+
+Reads the sheet inputs. Every value is required: no default for a cap or a recipient.
+
+</i>
+
+```solidity
+function _readParams() internal view returns (Params memory p);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+
+<a id="_readparamsfrom-string"></a>
+
+### _readParamsFrom
+
+<i>
+
+`_readParams` with a name prefix. Production passes "". Tests pass a unique prefix
+because env vars are process-wide and forge runs test contracts in parallel.
+
+</i>
+
+```solidity
+function _readParamsFrom(string memory prefix) internal view returns (Params memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+
+<a id="_runfrom-string-string-string"></a>
+
+### _runFrom
+
+<i>
+
+The broadcast entrypoint shared by the three scripts. The chain guard is the first
+statement, then the sheet inputs, then the config file, then the deploy. `prefix` is
+"" in production.
+
+</i>
+
+```solidity
+function _runFrom(string memory prefix, string memory configFile, string memory arrayKey)
+        internal
+        returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+| configFile | `string` |  |
+| arrayKey | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_readeligibilitybps-string"></a>
+
+### _readEligibilityBps
+
+<i>
+
+`ROUTER_DEFAULT_BPS` is required: the word `none` leaves this basket ineligible, otherwise a comma list of bps for the
+router default vector right after this basket flips eligible (rmUSDC, the already eligible baskets in registry order, this vault).
+
+</i>
+
+```solidity
+function _readEligibilityBps(string memory prefix)
+        internal
+        view
+        returns (uint256[] memory bps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+
+<a id="_makeroutereligible-vaultregistry-address-uint256"></a>
+
+### _makeRouterEligible
+
+<i>
+
+One atomic `registry.migrateEligibility`: flips `vault` eligible and re-sets the router default vector in the same call. The
+vector is the current eligible set in registry order, then `vault`, with the given bps. The broadcaster holds ADMIN_ROLE on the
+registry until the timelock stage. An empty `bps` leaves the vault ineligible.
+
+</i>
+
+```solidity
+function _makeRouterEligible(VaultRegistry registry, address vault, uint256[] memory bps)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| registry | `VaultRegistry` |  |
+| vault | `address` |  |
+| bps | `uint256[]` |  |
+
+<a id="_parsecfg-string-string"></a>
+
+### _parseCfg
+
+<i>
+
+Parse a config file body. `arrayKey` is "assets" or "shortlist".
+
+</i>
+
+```solidity
+function _parseCfg(string memory json, string memory arrayKey)
+        internal
+        view
+        returns (Cfg memory cfg);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+| arrayKey | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cfg | `Cfg` |  |
+
+<a id="_deployall-params-cfg"></a>
+
+### _deployAll
+
+<i>
+
+Validates inputs, deploys, adds assets, pauses and registers. The caller owns the
+broadcast (or prank) context: every call below is made as `p.admin`.
+
+</i>
+
+```solidity
+function _deployAll(Params memory p, Cfg memory cfg) internal returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| cfg | `Cfg` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_asserttickmathlinkintegrity-address-uint256"></a>
+
+### _assertTickMathLinkIntegrity
+
+<i>
+
+TickMath link integrity for one vault (finding L3-D1). The reference is the library
+linked into this script: a correctly linked vault points at the same instance with
+the same runtime codehash. Also probes `totalAssets()`: it must not revert and must
+stay far below a sane ceiling (1000 times the TVL cap).
+
+</i>
+
+```solidity
+function _assertTickMathLinkIntegrity(address vault, uint256 tvlCap) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
+| tvlCap | `uint256` |  |
+
+<a id="_addassets-basketvault-params-cfg-deployed"></a>
+
+### _addAssets
+
+```solidity
+function _addAssets(BasketVault vault, Params memory p, Cfg memory cfg, Deployed memory d)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `BasketVault` |  |
+| p | `Params` |  |
+| cfg | `Cfg` |  |
+| d | `Deployed` |  |
+
+<a id="_checkpool-assetcfg-uint256"></a>
+
+### _checkPool
+
+<i>
+
+Config check on chain: pool code present, live fee equals config and in-range liquidity
+(`IUniswapV3Pool.liquidity()`, a uint128 L, not a USDC amount) is at least the sheet floor.
+The cardinality floor and the vault's dust `MIN_POOL_LIQUIDITY` are enforced by `addAsset` itself.
+
+</i>
+
+```solidity
+function _checkPool(AssetCfg memory a, uint256 minPoolLiquidity) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetCfg` |  |
+| minPoolLiquidity | `uint256` |  |
+
+<a id="_registerifabsent-vaultregistry-address-address"></a>
+
+### _registerIfAbsent
+
+```solidity
+function _registerIfAbsent(VaultRegistry registry, address vault, address asset) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| registry | `VaultRegistry` |  |
+| vault | `address` |  |
+| asset | `address` |  |
+
+<a id="_writemanifest-deployed-cfg"></a>
+
+### _writeManifest
+
+<i>
+
+Manifest: chain id, vault, registry, adapter, paused flag and the asset list.
+
+</i>
+
+```solidity
+function _writeManifest(Deployed memory d, Cfg memory cfg) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| cfg | `Cfg` |  |
+
+<a id="_manifestpath"></a>
+
+### _manifestPath
+
+<i>
+
+`DEPLOYMENT_OUT` is required. There is no default path.
+
+</i>
+
+```solidity
+function _manifestPath() internal view returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_writemanifestto-string-deployed-cfg"></a>
+
+### _writeManifestTo
+
+```solidity
+function _writeManifestTo(string memory outPath, Deployed memory d, Cfg memory cfg) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| outPath | `string` |  |
+| d | `Deployed` |  |
+| cfg | `Cfg` |  |
+
+## Structs
+
+### Params
+
+Sheet inputs for one deploy.
+
+```solidity
+struct Params {
+        address admin;
+        address swapRouter;
+        address usdc;
+        address registry;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
+        address feeRecipient;
+        /// @dev ORA-4 deposit guard threshold in basis points, 1..MAX_NAV_DEVIATION_BPS. Never 0: 0 disables the guard (issue 1666).
+        uint256 navDeviationGuardBps;
+        /// @dev Floor for `IUniswapV3Pool.liquidity()` of every configured pool. That is the pool's in-range liquidity L, a raw uint128 of
+        ///      sqrt(token0 * token1) units, NOT a USDC amount (issue 1666). Must be above 0.
+        uint256 minPoolLiquidity;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin | `address` |  |
+| swapRouter | `address` |  |
+| usdc | `address` |  |
+| registry | `address` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+| navDeviationGuardBps | `uint256` |  |
+| minPoolLiquidity | `uint256` |  |
+
+### AssetCfg
+
+One configured basket row, read from a config file.
+
+```solidity
+struct AssetCfg {
+        string symbol;
+        address token;
+        address pool;
+        uint24 poolFee;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| symbol | `string` |  |
+| token | `address` |  |
+| pool | `address` |  |
+| poolFee | `uint24` |  |
+
+### Cfg
+
+A parsed config file.
+
+```solidity
+struct Cfg {
+        address swapRouter02;
+        AssetCfg[] assets;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| swapRouter02 | `address` |  |
+| assets | `AssetCfg[]` |  |
+
+### Deployed
+
+Result returned to in-process callers (forge tests, stage driver).
+
+```solidity
+struct Deployed {
+        address vault;
+        address registry;
+        address adapter;
+        address[] tokens;
+        bool registered;
+        bool paused;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
+| registry | `address` |  |
+| adapter | `address` |  |
+| tokens | `address[]` |  |
+| registered | `bool` |  |
+| paused | `bool` |  |
+

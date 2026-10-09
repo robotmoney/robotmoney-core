@@ -135,7 +135,7 @@ development of the Router path.
 ### 3.4 `StatusHeader.tsx`
 
 `StatusHeader` displays a single `vaultAddress: Address` scalar in a stat card.
-It issues two `useReadContract` calls against the gateway (`paused`, `usdc`).
+It issues two `useReadContract` calls against the gateway (`depositsPaused`, `usdc`).
 The vault address is display-only (no on-chain reads against it).
 
 **Hot-file edit required.** The `vaultAddress` prop becomes either a list
@@ -235,7 +235,7 @@ goes through RPC per implementation-plan.md §12."
 
 | Data | Source | Used for |
 |---|---|---|
-| `gateway.paused()` | `useReadContract` | Block signing if paused; safety gate |
+| `gateway.depositsPaused()` | `useReadContract` | Block deposit signing while deposits are paused. A withdrawal is never blocked by it (core 1494). |
 | `gateway.usdc()` | `useReadContract` | Approve target address; wrong address = lost funds |
 | `gateway.agentOwner(agent)` | `useReadContract` | Policy read-back; controls revoke access |
 | `gateway.hasRole(role, account)` | `useReadContract` | Role display in AdminFlow |
@@ -245,7 +245,7 @@ goes through RPC per implementation-plan.md §12."
 | `vault.maxRedeem(owner)` | `useReadContract` | Withdrawal cap; guards submit button |
 | `vault.exitFeeBps()` | `useReadContract` | Fee disclosure in preview block |
 | `registry.listVaults()` | `useReadContract` | Authoritative vault list for deposit routing |
-| `registry.getVault(address)` | `useReadContract` | Per-vault status (active/paused/retired) |
+| `registry.getVault(address)` | `useReadContract` | Per-vault status (active/deposits paused/retired). Every status redeems. |
 | `router.activeVaults()` | `useReadContract` | Weight routing for deposit split |
 | `router.previewDeposit(amount)` | `useReadContract` | Router deposit preview with per-leg splits |
 | USDC `allowance(owner, spender)` | `useReadContract` | Approve gate on deposit |
@@ -370,7 +370,7 @@ This scout (317)
 
 3. **`VaultRecord.status` in context vs live `registry.getVault`.** The
    `VaultRegistryContext` caches `VaultRecord.status` as of its last fetch. If
-   a vault is paused between context refreshes, the deposit action layer may
+   a vault's deposits are paused between context refreshes, the deposit action layer may
    briefly show the vault as available. The `VaultSelectorDepositTab` must always
    call `registry.getVault(vaultAddress)` live (via `useSimulateContract`) before
    enabling the submit button — it must not rely on the cached status from the

@@ -4,12 +4,11 @@ title: "MockAerodromeRouter"
 
 # MockAerodromeRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/RwaVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/BasketVault.t.sol)
 
 <i>
 
-Mock Aerodrome Router: records calls and disburses pre-set amounts.
-Identical pattern to BasketVault.t.sol::MockAerodromeRouter.
+Mock Aerodrome Slipstream router and CL factory.
 
 </i>
 
@@ -19,6 +18,25 @@ Identical pattern to BasketVault.t.sol::MockAerodromeRouter.
 
 ```solidity
 uint256 public amountOut;
+```
+
+### enforceDeadline
+
+<i>
+
+When set, the deadline forwarded by the adapter is enforced
+(mirrors the real Aerodrome Router's "Expired" check).
+
+</i>
+
+```solidity
+bool public enforceDeadline;
+```
+
+### pools
+
+```solidity
+mapping(bytes32 => address) public pools;
 ```
 
 ## Functions
@@ -37,43 +55,77 @@ function setAmountOut(uint256 amountOut_) external;
 | ---- | ---- | ----------- |
 | amountOut_ | `uint256` |  |
 
-<a id="swapexacttokensfortokens-uint256-uint256-iaerodromerouter-route-address-uint256"></a>
+<a id="setenforcedeadline-bool"></a>
 
-### swapExactTokensForTokens
+### setEnforceDeadline
 
 ```solidity
-function swapExactTokensForTokens(
-        uint256 amountIn,
-        uint256 amountOutMin,
-        IAerodromeRouter.Route[] calldata routes,
-        address to,
-        uint256 /* deadline */
-    ) external returns (uint256[] memory amounts);
+function setEnforceDeadline(bool enforce_) external;
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| amountIn | `uint256` |  |
-| amountOutMin | `uint256` |  |
-| routes | `IAerodromeRouter.Route[]` |  |
-| to | `address` |  |
-| _ | `uint256` |  |
+| enforce_ | `bool` |  |
+
+<a id="setpool-address-address-int24-address"></a>
+
+### setPool
+
+```solidity
+function setPool(address tokenA, address tokenB, int24 tickSpacing, address pool) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenA | `address` |  |
+| tokenB | `address` |  |
+| tickSpacing | `int24` |  |
+| pool | `address` |  |
+
+<a id="exactinputsingle-iaerodromeslipstreamrouter-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(IAerodromeSlipstreamRouter.ExactInputSingleParams calldata params)
+        external
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `IAerodromeSlipstreamRouter.ExactInputSingleParams` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| amounts | `uint256[]` |  |
+| &lt;none&gt; | `uint256` |  |
 
-<a id="defaultfactory"></a>
+<a id="getpool-address-address-int24"></a>
 
-### defaultFactory
+### getPool
 
 ```solidity
-function defaultFactory() external pure returns (address);
+function getPool(address tokenA, address tokenB, int24 tickSpacing)
+        external
+        view
+        returns (address);
 ```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenA | `address` |  |
+| tokenB | `address` |  |
+| tickSpacing | `int24` |  |
 
 **Returns**
 
@@ -95,4 +147,17 @@ error TooLittleReceived(uint256 amountOut, uint256 amountOutMin);
 | ---- | ---- | ----------- |
 | amountOut | `uint256` |  |
 | amountOutMin | `uint256` |  |
+
+### Expired
+
+```solidity
+error Expired(uint256 deadline, uint256 blockTimestamp);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| deadline | `uint256` |  |
+| blockTimestamp | `uint256` |  |
 

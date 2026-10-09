@@ -9,43 +9,50 @@
 # integration and that breakage reaching users.
 #
 # WHY A PARALLEL MATRIX (issue #607)
-# Running all 17 test files with --test-threads=1 against a single Geth devnet took
-# ~60 min because governance tests each need ~2 min to propose/vote before time
-# manipulation. Splitting into 4 independent matrix slots — each with its own
-# isolated backend — cuts wall-clock to ~20-25 min (dominated by the heaviest slot).
+# Running all test files with --test-threads=1 against one chain took ~60 min because
+# governance tests each wait on a voting period. Splitting into independent matrix slots,
+# each on its own runner with its own chain, cuts wall-clock to the heaviest slot.
 # fail-fast: false keeps every slot's signal independent.
 #
-# WHY GOVERNANCE USES ANVIL, NOT GETH (matrix.devnet = false)
-# Governance scenarios advance the EVM clock by 1+ hour via evm_increaseTime to
-# simulate voting periods. Geth does not expose evm_increaseTime (Anvil-only admin
-# RPC). Since the governance contract's MIN_VOTING_PERIOD is 3600 s, waiting for
-# real Geth blocks is not feasible. The governance slot therefore boots anvil with
-# the checked-in fixture (no RMPC_TESTNET_RPC_URL set), while the three Geth slots
-# share RMPC_TESTNET_RPC_URL=http://localhost:8545 for their isolated devnets.
+# THE CHAIN IS THE TWIN FORK (core 1498, 1496)
+# Every slot starts the Twin chain with .github/actions/twin-fork: anvil --fork-url <upstream>
+# --fork-block-number <pin> --chain-id 918453, a pinned lazy fork of real Base state. There is no
+# saved .anvil-state fixture, no genesis snapshot and no docker compose chain. ONE pin per workflow
+# run: the `pin` job chooses it (upstream head minus 2) and every slot takes it as input. The
+# upstream is https://mainnet.base.org unless the optional secret BASE_UPSTREAM_RPC is set.
+# - The three twin-* slots run the tests straight on the Twin fork (RMPC_TESTNET_RPC_URL).
+# - The goldens and governance slots point RMPC_FORK_RPC_URL at the Twin fork, so each test forks
+#   the Twin again at the pin (RMPC_FORK_BLOCK) and may move time and rewind state without
+#   touching the shared Twin chain. Governance scenarios advance the EVM clock with
+#   evm_increaseTime: no real waiting.
 #
 # WHY --test-threads=1
-# Within each Geth slot, HARNESS_USDC_HOLDER funds ephemeral accounts via signed
-# txs. Running tests concurrently within a slot would collide on that nonce.
-# Sequential within a slot, parallel across slots — no collision possible.
+# Within a slot, ephemeral accounts are funded through the anvil admin RPCs (fund gas, fund USDC).
+# Running tests concurrently on one chain would race on block time and shared state.
+# Sequential within a slot, parallel across slots.
 #
-# WHY FOUNDRY IS INSTALLED FOR EVERY SLOT
-# forge build is required by tests/registry.rs (reads VaultRegistry.json artefact).
-# The anvil binary is required by the governance slot. Installing once and caching
-# covers both needs with negligible overhead.
+# WHY forge build RUNS IN EVERY SLOT
+# tests/registry.rs reads the VaultRegistry.json artefact. The twin-fork action installs foundry
+# and bun first.
 #
 # GOTCHAS
-# - The devnet's genesis-alloc.json must stay in sync with CURRENT.json (the fork pin).
-#   If the fixture is refreshed (snapshot-fork.sh), re-run smoke-test-genesis-ingester
-#   and commit the new genesis-alloc.json.
-# - The governance slot must NOT set RMPC_TESTNET_RPC_URL; omitting it makes
-#   ForkFixture fall through to the checked-in .anvil-state fixture.
-# - Each Geth slot boots docker compose on the default port 8545. Slots run on
-#   separate GitHub-hosted runners so there is no port conflict between them.
+# - The pinned block must be recent for a non-archive upstream, so the slots start right after the
+#   pin job. A rate-limited upstream (HTTP 429) is retried by anvil and the twin-fork tool; the RPC
+#   cache is persisted per pin block.
 
 name: fork-protocol-adapter-integration
 
 on:
-  # System-correctness: boots isolated Geth/Anvil devnets (20-25 min wall-clock)
+  # Called by suite-29-nightly-twin-fork.yml, which chooses ONE pin for the whole nightly run and
+  # hands it down as pin_block. Steps are not copied: the nightly calls this very workflow.
+  workflow_call:
+    inputs:
+      pin_block:
+        description: "Twin chain pin handed down by a parent run. Empty: this run chooses one."
+        type: string
+        required: false
+        default: ""
+  # System-correctness: boots isolated Twin forks (20-25 min wall-clock)
   # once a PR is ready for review, and reruns on push to dev for merged-commit
   # coverage. Draft PRs rely on suite-06 (rmpc-unit) for fast feedback.
   # See docs/development/ci-suites.md (CI velocity tiers).
@@ -63,12 +70,39 @@ on:
 # distinct concurrency lane per ref and never cancel, so merged-commit coverage
 # always completes. See docs/development/ci-suites.md (CI velocity tiers).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # suite tag keeps called copies (nightly Twin chain run) in separate lanes:
+  # inside workflow_call github.workflow is the CALLER's name, shared by every suite.
+  group: ${{ github.workflow }}-suite05-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
+  # ONE pin per workflow run (core 1498, 1496): the upstream head at the start of the run minus 2,
+  # chosen here and handed to every slot below.
+  pin:
+    name: twin-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    outputs:
+      block: ${{ steps.pin.outputs.block }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        uses: ./.github/actions/twin-pin
+        with:
+          pin-block: ${{ inputs.pin_block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
   fork-integration:
     name: fork-integration-${{ matrix.group }}
+    needs: pin
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -78,139 +112,112 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Heaviest Geth slot: router (18 tests — deposit/redeem/weight flows).
-          - group: geth-router
+          - group: twin-router
             cargo_tests: --test router
-            devnet: true
-          # Medium Geth slot: withdrawal (13) + registry (10, deploys VaultRegistry).
-          - group: geth-withdrawal-registry
+            mode: shared
+            min_executed: 5
+          - group: twin-withdrawal-registry
             cargo_tests: --test withdrawal --test registry
-            devnet: true
-          # Light Geth slot: rmpc CLI read-path and failure surface tests.
-          - group: geth-light
+            mode: shared
+            min_executed: 8
+          - group: twin-light
             cargo_tests: >-
               --test failure_surface_smoke
-              --test rmpc_get_timelock_fork
               --test rmpc_get_vault_fork
               --test rmpc_get_balance_fork
               --test rmpc_get_allowance_fork
               --test rmpc_get_tx_fork
-              --test devnet_adapter_round_trip
-              --test gas_estimate_reality_check
-              --test landing_price_strip_fork
-              --test basket_vault_round_trip
-            devnet: true
-          # Flagship Base scenarios execute against the storage-enriched golden.
+            mode: shared
+            min_executed: 5
+          # Issue 1647: rmpc get-timelock on the REAL Safe topology. The smoke-test Fixture runs the one
+          # deploy driver on the shared Twin chain (real 2-of-3 Safe, timelock, handover), the Safe
+          # schedules a pending operation, and the test reads rmpc's output against on-chain state.
+          # Its own group: the topology deploy takes minutes and must not eat twin-light's budget.
+          - group: twin-governance-topology
+            cargo_tests: --test rmpc_get_timelock_fork
+            mode: shared
+            min_executed: 1
+            required_markers: |
+              [get_timelock_integration] all assertions passed
           - group: anvil-goldens
             cargo_tests: >-
               --test abi_address_sanity
               --test dex_route_smoke
               --test vault_deposit_redeem_smoke
-            devnet: false
-          # Governance slot: uses anvil + checked-in fixture for evm_increaseTime.
-          # RMPC_TESTNET_RPC_URL is intentionally NOT set so ForkFixture falls back
-          # to the .anvil-state fixture (see WHY GOVERNANCE USES ANVIL above).
+            mode: fork
+            min_executed: 3
+          # Issue 1656: these four binaries use skip_if_no_devnet_fork!, which needs RMPC_FORK_RPC_URL
+          # and anvil. Under mode shared that variable is empty, so they silently skipped (and counted
+          # as passed) in twin-light. mode fork sets it, so they now run, and the macro panics under CI
+          # if the fork is ever absent.
+          - group: anvil-devnet-adapters
+            cargo_tests: >-
+              --test devnet_adapter_round_trip
+              --test gas_estimate_reality_check
+              --test landing_price_strip_fork
+              --test basket_vault_round_trip
+            mode: fork
+            min_executed: 5
           - group: anvil-governance
             cargo_tests: --test governance
-            devnet: false
+            mode: fork
+            min_executed: 3
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Verify Docker is available
-        if: matrix.devnet
-        run: |
-          docker version
-          docker compose version
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          # CURRENT.anvil-state uses the Anvil 1.6 serializer; anvil v1.7.1 and
-          # v1.8.1 both load it (verified locally against
-          # testing/fixtures/fork-state/CURRENT.anvil-state — issue #1264), so
-          # this site tracks `stable` like every other foundry-toolchain step.
-          version: stable
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
+      # The Twin chain (918453): a pinned lazy fork of real Base state. Installs foundry and bun,
+      # restores anvil's RPC cache keyed by the pin block, exports TWIN_RPC_URL and TWIN_PIN_BLOCK.
+      - name: Start the Twin chain at the run pin
+        id: twin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+      # The fixture deploys through the one deploy driver and the rehearsal key helper (publish-contracts/, Bun).
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
+
       - name: Build Solidity contracts (required by registry fork-e2e)
         run: forge build
-
-      - name: Boot Geth+Lighthouse devnet (with genesis alloc overlay)
-        if: matrix.devnet
-        working-directory: testing/ethereum-testnet/config
-        env:
-          SMOKE_GENESIS_ALLOC_FILE: ${{ github.workspace }}/testing/fixtures/fork-state/genesis-alloc.json
-        run: |
-          BOOT_START=$(date +%s)
-          docker compose -f docker-compose.yaml -f docker-compose.alloc.yaml up -d
-          echo "Waiting for Geth RPC to be ready..."
-          until curl -sf -X POST -H 'Content-Type: application/json' \
-            --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-            http://localhost:8545 2>/dev/null | grep -q '"result"'; do
-            sleep 2
-          done
-          BOOT_END=$(date +%s)
-          BOOT_SECS=$((BOOT_END - BOOT_START))
-          echo "devnet-boot-seconds=${BOOT_SECS}" >> "$GITHUB_STEP_SUMMARY" || true
-          echo "Devnet ready in ${BOOT_SECS}s"
-          if [ "${BOOT_SECS}" -gt 90 ]; then
-            echo "ERROR: devnet boot took ${BOOT_SECS}s > 90s limit (AC #6: median target 60s)" >&2
-            exit 1
-          fi
 
       - name: Build test binaries
         working-directory: testing/fork-e2e-rust
         run: cargo test --no-run --release
 
-      - name: Verify fork-state blob integrity (ADR-0011 sha256 binding, issue #1152)
-        # anvil-goldens and anvil-governance load CURRENT.anvil-state directly
-        # via ForkFixture (matrix.devnet == false) and so bypass
-        # check-fork-manifest.sh's verification entirely. Recompute the digest
-        # here, before cargo test consumes the fixture, so a tampered or
-        # digest-less blob is a loud red instead of a silent load.
-        if: ${{ matrix.devnet == false }}
-        run: >-
-          scripts/devnet/fork-state-digest.sh verify
-          testing/fixtures/fork-state/CURRENT.anvil-state
-          testing/fixtures/fork-state/CURRENT.json
-
+      # shared: the tests run straight on the Twin fork. fork: each test forks the Twin again at the
+      # pin (anvil forking anvil), so it can warp and rewind without touching the shared chain.
       - name: Fork integration tests (${{ matrix.group }})
         working-directory: testing/fork-e2e-rust
         env:
-          RMPC_TESTNET_RPC_URL: ${{ matrix.devnet && 'http://localhost:8545' || '' }}
-        run: cargo test --release ${{ matrix.cargo_tests }} -- --test-threads=1 --nocapture
+          RMPC_TESTNET_RPC_URL: ${{ matrix.mode == 'shared' && steps.twin.outputs.rpc-url || '' }}
+          RMPC_FORK_RPC_URL: ${{ matrix.mode == 'fork' && steps.twin.outputs.rpc-url || '' }}
+          RMPC_FORK_BLOCK: ${{ matrix.mode == 'fork' && steps.twin.outputs.pin-block || '' }}
+          # Issue 1647: a group that executes zero tests is red, and a group that names markers needs
+          # each printed on a real assertion's success path (cargo_test_require_executed.sh).
+          REQUIRE_EXECUTED_MARKERS: ${{ matrix.required_markers }}
+          # Issue 1656: the floor is the executed count in a green run, so one test fewer is red.
+          CARGO_TEST_MIN_EXECUTED: ${{ matrix.min_executed }}
+        run: >-
+          bash ../../.github/scripts/cargo_test_require_executed.sh
+          --release ${{ matrix.cargo_tests }} -- --test-threads=1 --nocapture
 
-      - name: Devnet teardown (always)
-        if: always() && matrix.devnet
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans || true
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
 
-  # Base's public testnet (currently Sepolia) live-service adapter e2e (issue #839).
-  #
-  # Validates all adapter types against LIVE Aave/Uniswap/Curve pools on Base's
-  # public testnet, plus the eth_getBalance funding assertion. This job needs no
-  # Docker devnet and no anvil — it talks directly to the Base public testnet RPC
-  # named by the BASE_TESTNET_RPC_URL secret, funding ephemeral accounts from
-  # BASE_TESTNET_FUNDER_KEY.
-  #
-  # GRACEFUL SKIP CONTRACT: when BASE_TESTNET_RPC_URL is unset (the secret has
-  # not been provisioned, or the Robot Money contracts have not yet been deployed
-  # to Base's public testnet — both prerequisites are out of scope for #839), the
-  # parameterized tests skip the testnet network and pass. So this job is green
-  # both before and after the testnet environment is provisioned; provisioning
-  # the secret flips it from "skipped" to "live-exercised" with no code change.
   base-testnet-adapters:
     name: base-testnet-adapters
+    needs: pin
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
@@ -228,16 +235,86 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Base testnet account-funding assertion (smoke-test)
-        run: cargo test -p smoke-test --release --test base_testnet_fixture -- --nocapture
+      # The crate's #[cfg(test)] unit tests (src/**) are hermetic (no chain) and were never run by
+      # the per-binary `--test` invocations (issue #1471). The wrapper fails RED if zero tests ran.
+      - name: fork-e2e-rust lib unit tests (cargo test --lib)
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            --manifest-path testing/fork-e2e-rust/Cargo.toml --release --lib -- --nocapture
+
+      # Issue 1643: skip_if_no_fork! must be RED in CI when no fork is available, never a quiet pass.
+      # Runs one fork test with CI=true and both fork URLs unset and requires a non-zero exit that
+      # names the refusal. If the macro ever goes back to returning early, this step goes red.
+      - name: fork-e2e-rust refuses to skip without a fork when CI is set (issue 1643)
+        run: |
+          # bare-cargo-test-allowed: this step expects cargo test to FAIL (the skip refusal).
+          set +e
+          out="$(env -u RMPC_TESTNET_RPC_URL -u RMPC_FORK_RPC_URL CI=true \
+            cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml --release \
+            --test rmpc_get_balance_fork 2>&1)"
+          status=$?
+          set -e
+          echo "$out" | tail -25
+          [ "$status" -ne 0 ] || { echo "ERROR: fork test exited 0 with CI=true and no fork URL" >&2; exit 1; }
+          echo "$out" | grep -q "Refusing to skip" || { echo "ERROR: failure was not the skip refusal" >&2; exit 1; }
+
+      # Issue 1656: the funding assertion skips locally when the testnet secrets are absent and
+      # panics under CI. The secrets are not provisioned on every ref, so the live assertion has its
+      # own step that runs only when both are present, and the hermetic tests of the binary run
+      # always under the executed-test guard. The refusal step proves the panic with CI=true.
+      - name: Base testnet fixture hermetic tests (smoke-test)
+        run: |
+          CARGO_TEST_MIN_EXECUTED=12 bash .github/scripts/cargo_test_require_executed.sh \
+            -p smoke-test --release --test base_testnet_fixture \
+            -- --nocapture --skip base_testnet_account_funding_assertion
+
+      - name: Base testnet account-funding assertion (smoke-test, needs the testnet secrets)
+        if: ${{ env.BASE_TESTNET_RPC_URL != '' && env.BASE_TESTNET_FUNDER_ADDR != '' }}
+        run: |
+          CARGO_TEST_MIN_EXECUTED=1 bash .github/scripts/cargo_test_require_executed.sh \
+            -p smoke-test --release --test base_testnet_fixture \
+            -- --nocapture base_testnet_account_funding_assertion
+
+      - name: Funding assertion refuses to skip without testnet env when CI is set (issue 1656)
+        run: |
+          # bare-cargo-test-allowed: this step expects cargo test to FAIL (the skip refusal).
+          set +e
+          out="$(env -u BASE_TESTNET_RPC_URL -u BASE_TESTNET_FUNDER_ADDR CI=true \
+            cargo test -p smoke-test --release --test base_testnet_fixture \
+            base_testnet_account_funding_assertion 2>&1)"
+          status=$?
+          set -e
+          echo "$out" | tail -25
+          [ "$status" -ne 0 ] || { echo "ERROR: funding test exited 0 with CI=true and no testnet env" >&2; exit 1; }
+          echo "$out" | grep -q "Refusing to skip" || { echo "ERROR: failure was not the skip refusal" >&2; exit 1; }
+
+      # The live third-party service legs (Aave, Uniswap, Curve) run on the Twin fork, which also
+      # installs foundry (anvil) and bun. The BASE_TESTNET_* secrets drive the testnet leg.
+      - name: Start the Twin chain at the run pin
+        id: twin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+      # The fixture deploys through the one deploy driver and the rehearsal key helper (publish-contracts/, Bun).
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
 
       - name: Base testnet multi-network adapter e2e (fork-e2e)
         working-directory: testing/fork-e2e-rust
-        run: cargo test --release --test multi_network_adapters -- --test-threads=1 --nocapture
+        env:
+          RMPC_TESTNET_RPC_URL: ${{ steps.twin.outputs.rpc-url }}
+        run: |
+          CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
+            --release --test multi_network_adapters -- --test-threads=1 --nocapture
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

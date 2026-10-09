@@ -16,7 +16,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "../gateway/MockVault.sol";
+import {MockVault} from "./helpers/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
@@ -37,7 +37,7 @@ contract MockPoolForGuards {
     constructor(address token0_, address token1_) {
         token0 = token0_;
         token1 = token1_;
-        cardinality = 100;
+        cardinality = 1000;
         poolLiquidity = 1e18; // large default so existing tests pass unmodified
     }
 
@@ -454,20 +454,20 @@ contract BasketVaultSwapGuardsTest is Test {
         vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
     }
 
-    /// @notice addAsset rejects a pool with cardinality < MIN_POOL_CARDINALITY (2).
+    /// @notice addAsset rejects a pool with cardinality < the window floor (901).
     ///         A cardinality-1 pool would cause observe() to revert with "OLD",
     ///         permanently breaking TWAP reads and thus all deposits/withdrawals.
     function test_invariant8c_addAsset_rejectsLowCardinalityPool() public {
         TestERC20 newAsset = new TestERC20();
         MockPoolForGuards lowCardPool = new MockPoolForGuards(address(newAsset), address(usdc));
-        lowCardPool.setCardinality(1); // below MIN_POOL_CARDINALITY=2
+        lowCardPool.setCardinality(1); // below the window floor (901)
 
         vm.prank(admin);
         vm.expectRevert(
             abi.encodeWithSelector(
                 BasketVault.InsufficientPoolCardinality.selector,
                 address(lowCardPool),
-                uint16(2),
+                uint16(901),
                 uint16(1)
             )
         );

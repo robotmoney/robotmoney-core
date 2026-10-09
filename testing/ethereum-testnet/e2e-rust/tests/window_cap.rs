@@ -1,6 +1,6 @@
 //! Canonical: Plan tracking issue #109 §5 — Window-cap scenario
 //!
-//! Per-agent `maxPerWindow` enforcement on the Geth+Lighthouse devnet.
+//! Per-agent `maxPerWindow` enforcement on the Twin chain.
 //! This scenario lives in its own test binary because it requires a
 //! deploy-time `AGENT_MAX_PER_WINDOW` override that disagrees with the
 //! defaults the rest of the e2e suite assumes — co-residing it in
@@ -14,7 +14,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use rmpc_e2e::Fixture;
+use rmpc_e2e::{require_prereqs, Fixture};
 use serde_json::Value;
 
 /// USDC has 6 decimals throughout the harness.
@@ -40,17 +40,6 @@ fn order_id(label: &str) -> String {
     format!("{h:#x}")
 }
 
-fn skip_if_no_prereqs(test_name: &str) -> bool {
-    if !rmpc_e2e::prerequisites_available() {
-        eprintln!(
-            "[{test_name}] docker / forge / cast not on PATH; skipping. \
-             Install Docker + Foundry to run this test."
-        );
-        return true;
-    }
-    false
-}
-
 fn parse_json(stdout: &str, ctx: &str) -> Value {
     serde_json::from_str(stdout)
         .unwrap_or_else(|e| panic!("{ctx}: rmpc stdout is not valid JSON: {e}\nstdout:\n{stdout}"))
@@ -69,7 +58,7 @@ fn with_fixture<F: FnOnce(&Fixture) -> R, R>(f: F) -> R {
             ("AGENT_MAX_PER_PAYMENT", AGENT_MAX_PER_PAYMENT_E2E),
             ("AGENT_MAX_PER_WINDOW", AGENT_MAX_PER_WINDOW_E2E),
         ])
-        .expect("boot geth devnet + low-cap deploy");
+        .expect("boot the Twin chain + low-cap deploy");
         *guard = Some(fx);
     }
     f(guard.as_ref().expect("fixture present"))
@@ -93,9 +82,7 @@ fn deposit_args(amount: u128, oid: &str) -> [String; 6] {
 /// (preflight) or `ErrTxReverted` (gateway revert).
 #[test]
 fn over_window_cap_rejected() {
-    if skip_if_no_prereqs("over_window_cap_rejected") {
-        return;
-    }
+    require_prereqs("over_window_cap_rejected");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(CAP_TEST_FIRST_LEG + CAP_TEST_SECOND_LEG)
             .expect("approve usdc");

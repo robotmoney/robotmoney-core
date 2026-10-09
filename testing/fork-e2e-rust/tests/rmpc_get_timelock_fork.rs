@@ -1,61 +1,45 @@
-//! Canonical: docs/technical/security-model.md §4 — Timelock bypass → Mitigated
-//! Implements: issue #422 — rmpc get-timelock integration test (AC: `rmpc get-timelock`
-//! against a devnet where a real Safe proxy holds PROPOSER_ROLE returns the correct
-//! address and delay).
+//! Canonical: docs/technical/security-model.md §16 (rmpc CLI integration tests: no mocking),
+//! docs/technical/governance-isomorphism.md.
+//! Implements: issue #422 (rmpc get-timelock against a real Safe proxy holding PROPOSER_ROLE),
+//! issue #1647 (the real Safe topology on the Twin chain, no EOA proposer, no mock).
 //!
-//! This test:
-//! 1. Boots a forked anvil backend.
-//! 2. Deploys an OZ TimelockController with a known proposer address.
-//! 3. Writes an rmpc config pointing at the fork and setting `timelock_address`.
-//! 4. Runs `rmpc get-timelock` and asserts the envelope contains the expected
-//!    `min_delay_secs`, `proposers` list (containing our address), and `address`.
+//! This test boots the SAME topology stage and mainnet use, on the Twin chain (a pinned lazy fork of
+//! real Base state): the smoke-test `Fixture` runs the one deploy driver (publish contracts), which
+//! deploys the real 2-of-3 Safe proxy through the canonical SafeProxyFactory, the
+//! `TimelockController` with that Safe as proposer, and the handover of every admin role to the
+//! timelock. It then runs `rmpc get-timelock` and checks its output against on-chain state read
+//! independently with `cast`:
 //!
-//! The test uses an EOA as the proposer (rather than a full Safe proxy) because
-//! deploying the Safe proxy factory and singleton on an anvil-fork requires the
-//! factory bytecode to be present — which is present on a live forked Base block
-//! but not on a bare anvil instance. Deploying the TimelockController itself is
-//! sufficient to prove the `rmpc get-timelock` CLI can read the on-chain data
-//! correctly.
+//! 1. `proposers` is exactly the real Safe (`hasRole(PROPOSER_ROLE, safe)`), and the Safe is a real
+//!    contract with threshold 2 of 3 owners.
+//! 2. `executors` matches `hasRole(EXECUTOR_ROLE, address(0))`, whether EXECUTOR_ROLE is open or
+//!    Safe-restricted.
+//! 3. `min_delay_secs` equals `getMinDelay()`.
+//! 4. After the real Safe schedules an operation through the timelock (propose, two owner
+//!    signatures, execute, by the publish-contracts Safe tool) and leaves it pending, `pending_ops`
+//!    holds exactly that operation id, ready at `getTimestamp(id)`.
 //!
-//! Skips cleanly when no fork RPC / fixture is available (`skip_if_no_fork!`).
+//! There is no EOA proposer and no mock. A broken Safe signing path (one signature short of the
+//! quorum) or a broken role wiring (the Safe not holding PROPOSER_ROLE) makes this test fail.
 //!
-//! To run locally:
-//!   RMPC_FORK_RPC_URL=<base-archive-rpc> \
-//!     cargo test --test rmpc_get_timelock_fork -- --nocapture
+//! To run locally (needs anvil, bun, forge, cast):
+//!   TWIN_RPC_URL=<running Twin fork> \
+//!     cargo test -p rmpc-fork-e2e --test rmpc_get_timelock_fork -- --nocapture
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use alloy_primitives::{Address, Bytes, U256};
-use alloy_sol_types::SolCall;
-use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture};
 use serde_json::Value;
+use smoke_test::{require_prereqs, Fixture};
 
-// ── TimelockController ABI bindings ──────────────────────────────────────────
-
-alloy_sol_types::sol! {
-    /// OZ TimelockController — only the subset required for fork deployment
-    /// and assertions.
-    #[allow(missing_docs)]
-    interface ITimelockController {
-        /// Selector: 0xf27a0c92
-        function getMinDelay() external view returns (uint256 duration);
-
-        /// Selector: 0xe38335e5
-        function PROPOSER_ROLE() external pure returns (bytes32);
-
-        /// Selector: 0x07bd0265
-        function EXECUTOR_ROLE() external pure returns (bytes32);
-    }
-}
-
-// ── Constants ────────────────────────────────────────────────────────────────
-
-/// 2-day min delay in seconds (matches DeployTimelock.s.sol default).
-const TWO_DAYS_SECS: u64 = 2 * 24 * 60 * 60;
-
-// ── Workspace helpers ─────────────────────────────────────────────────────────
+/// keccak256("PROPOSER_ROLE"), the OZ TimelockController constant.
+const PROPOSER_ROLE: &str = "0xb09aa5aeb3702cfd50b6b62bc4532604938f21248a27a1d5ca736082b6819cc1";
+/// keccak256("EXECUTOR_ROLE"), the OZ TimelockController constant.
+const EXECUTOR_ROLE: &str = "0xd8aa0f3194971a2a116679f7c2090f6939c8d4e01a2a8d7e41d55e5351469e63";
+/// keccak256("CANCELLER_ROLE"), the OZ TimelockController constant.
+const CANCELLER_ROLE: &str = "0xfd643c72710c63c0180259aba6b2d05451e3591a24e58b62239378085726f783";
+const ZERO_ADDR: &str = "0x0000000000000000000000000000000000000000";
 
 fn workspace_root() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -64,8 +48,6 @@ fn workspace_root() -> PathBuf {
     p.pop();
     p
 }
-
-// ── rmpc binary ──────────────────────────────────────────────────────────────
 
 fn rmpc_bin() -> &'static PathBuf {
     static BIN: OnceLock<PathBuf> = OnceLock::new();
@@ -89,101 +71,64 @@ fn rmpc_bin() -> &'static PathBuf {
     })
 }
 
-// ── TimelockController initcode ──────────────────────────────────────────────
-
-/// Load the TimelockController creation bytecode from the Foundry build
-/// artefact (`out/TimelockController.sol/TimelockController.json`) and
-/// append ABI-encoded constructor arguments.
-///
-/// Constructor: `(uint256 minDelay, address[] proposers, address[] executors, address admin)`
-///
-/// Requires `forge build` to have run first (CI does this via the
-/// "Build Solidity contracts" step).
-fn timelock_initcode(min_delay: u64, proposer: Address, executor: Address) -> Bytes {
-    let artifact_path = workspace_root()
-        .join("out")
-        .join("TimelockController.sol")
-        .join("TimelockController.json");
-    let raw = std::fs::read_to_string(&artifact_path).unwrap_or_else(|e| {
-        panic!(
-            "Cannot read Foundry build artefact at {}; run `forge build` first: {e}",
-            artifact_path.display()
-        )
-    });
-    let json: Value = serde_json::from_str(&raw).expect("TimelockController.json is valid JSON");
-    let hex_with_prefix = json
-        .get("bytecode")
-        .and_then(|v| v.get("object"))
-        .and_then(|v| v.as_str())
-        .unwrap_or_else(|| panic!("TimelockController.json missing bytecode.object"));
-    let hex = hex_with_prefix.trim_start_matches("0x");
-    let mut code = hex::decode(hex)
-        .unwrap_or_else(|e| panic!("TimelockController bytecode not valid hex: {e}"));
-
-    // ABI-encode constructor args:
-    //   (uint256 minDelay, address[] proposers, address[] executors, address admin)
-    //
-    // ABI layout (all words are 32 bytes big-endian):
-    //   [0]  minDelay                — uint256 (static)
-    //   [1]  offset to proposers     — uint256 = 0x80 (4 words * 32)
-    //   [2]  offset to executors     — uint256 = 0xc0 (6 words * 32)
-    //   [3]  admin                   — address (static, zero-padded)
-    //   [4]  proposers.length = 1
-    //   [5]  proposers[0]
-    //   [6]  executors.length = 1
-    //   [7]  executors[0]
-
-    let mut args = Vec::<u8>::with_capacity(8 * 32);
-
-    // [0] minDelay
-    args.extend_from_slice(&pad_u64(min_delay));
-    // [1] offset to proposers array = 4*32 = 128 = 0x80
-    args.extend_from_slice(&pad_u64(0x80));
-    // [2] offset to executors array = 6*32 = 192 = 0xc0
-    args.extend_from_slice(&pad_u64(0xc0));
-    // [3] admin = address(0) — self-administered timelock
-    args.extend_from_slice(&pad_addr(Address::ZERO));
-    // [4] proposers.length = 1
-    args.extend_from_slice(&pad_u64(1));
-    // [5] proposers[0]
-    args.extend_from_slice(&pad_addr(proposer));
-    // [6] executors.length = 1
-    args.extend_from_slice(&pad_u64(1));
-    // [7] executors[0]
-    args.extend_from_slice(&pad_addr(executor));
-
-    code.extend_from_slice(&args);
-    Bytes::from(code)
+/// `cast <args>` against the Twin chain; returns trimmed stdout and panics with stderr on failure.
+fn cast(rpc: &str, args: &[&str]) -> String {
+    let out = Command::new("cast")
+        .args(args)
+        .args(["--rpc-url", rpc])
+        .output()
+        .expect("spawn cast");
+    assert!(
+        out.status.success(),
+        "cast {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-fn pad_u64(v: u64) -> [u8; 32] {
-    let mut buf = [0u8; 32];
-    buf[24..].copy_from_slice(&v.to_be_bytes());
-    buf
+fn has_role(rpc: &str, timelock: &str, role: &str, who: &str) -> bool {
+    cast(
+        rpc,
+        &[
+            "call",
+            timelock,
+            "hasRole(bytes32,address)(bool)",
+            role,
+            who,
+        ],
+    ) == "true"
 }
 
-fn pad_addr(a: Address) -> [u8; 32] {
-    let mut buf = [0u8; 32];
-    buf[12..].copy_from_slice(a.as_slice());
-    buf
+/// First block at which `addr` has code, by bisection over `[lo, hi]`. The rmpc log scan starts
+/// there: a forked chain forwards ranges older than the pin to the upstream, which caps
+/// `eth_getLogs` at 500 blocks, so the scan must not start below the deployment.
+fn first_block_with_code(rpc: &str, addr: &str, lo: u64, hi: u64) -> u64 {
+    let (mut lo, mut hi) = (lo, hi);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let code = cast(rpc, &["code", addr, "--block", &mid.to_string()]);
+        if code.len() > 2 {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
 }
 
-// ── Config writer ─────────────────────────────────────────────────────────────
-
-/// Write a minimal `rmpc.toml` that points at `rpc_url` and sets
-/// `timelock_address = <timelock>`. All other fields use placeholder
-/// values — read commands only consume the fields relevant to the
-/// command being tested.
-fn write_config(dir: &Path, rpc_url: &str, chain_id: u64, timelock: Address) -> PathBuf {
+fn write_config(dir: &Path, fx: &Fixture, from_block: u64) -> PathBuf {
     let keystore = dir.join("keystore.json");
     let cfg_path = dir.join("rmpc.toml");
+    // Read commands only consume the fields of the command under test. The addresses are the real
+    // topology's.
     let toml = format!(
         r#"chain_id              = {chain_id}
 rpc_url               = "{rpc_url}"
-gateway_address       = "0x000000000000000000000000000000000000dEaD"
-usdc_address          = "0x{usdc_zeros}"
-vault_address         = "0x{vault_zeros}"
-timelock_address      = "{timelock:#x}"
+gateway_address       = "{gateway}"
+usdc_address          = "{usdc}"
+vault_address         = "{vault}"
+timelock_address      = "{timelock}"
+timelock_from_block   = {from_block}
 gateway_runtime_hash  = "0x{zeros}"
 max_fee_per_gas_cap   = 100000000000
 
@@ -191,81 +136,20 @@ max_fee_per_gas_cap   = 100000000000
 allow_software_fallback = true
 keystore_path           = "{ks}"
 "#,
-        chain_id = chain_id,
-        rpc_url = rpc_url,
-        usdc_zeros = "00".repeat(20),
-        vault_zeros = "00".repeat(20),
+        chain_id = fx.chain_id(),
+        rpc_url = fx.rpc_url(),
+        gateway = fx.gateway_hex(),
+        usdc = fx.usdc_hex(),
+        vault = fx.vault_hex(),
+        timelock = fx.timelock_hex(),
         zeros = "0".repeat(64),
         ks = keystore.display(),
-        timelock = timelock,
     );
     std::fs::write(&cfg_path, toml).expect("write rmpc.toml");
     cfg_path
 }
 
-// ── Test ─────────────────────────────────────────────────────────────────────
-
-/// Deploy a TimelockController on a forked anvil backend, then assert that
-/// `rmpc get-timelock` returns the correct address, min delay, and proposer list.
-///
-/// This is the integration acceptance criterion from issue #422:
-///   "rmpc get-timelock integration test passes against a devnet where a real
-///    Safe proxy (not a vm.prank EOA) holds PROPOSER_ROLE — output includes the
-///    Safe address and confirms threshold via on-chain call."
-///
-/// The test uses an EOA as proposer rather than a full Safe proxy because
-/// deploying the SafeProxyFactory on the fork requires the factory bytecode
-/// to already be present on the forked chain. For a live Base fork that is
-/// satisfied automatically; for the checked-in fixture it may not be.
-/// The rmpc CLI only reads TimelockController state — it does not call into
-/// the Safe — so the on-chain data shape is identical whether PROPOSER_ROLE
-/// is held by an EOA or a Safe contract.
-#[test]
-fn get_timelock_integration() {
-    skip_if_no_fork!();
-    let fx = ForkFixture::new().expect("boot fork");
-    eprintln!("[get_timelock_integration] {}", fx.summary_line());
-
-    let one_eth = U256::from(10u64).pow(U256::from(18u64));
-    let deployer = fx
-        .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
-        .expect("fund deployer");
-
-    // Choose a fixed proposer/executor address for this test.
-    // In a full Safe integration this would be the Safe proxy; here we use
-    // a known test address to keep the test self-contained and hermetic.
-    let proposer_addr: Address = "0x000000000000000000000000000000000000bEEF"
-        .parse()
-        .unwrap();
-    let executor_addr: Address = "0x000000000000000000000000000000000000bEEF"
-        .parse()
-        .unwrap();
-
-    // Deploy TimelockController.
-    let initcode = timelock_initcode(TWO_DAYS_SECS, proposer_addr, executor_addr);
-    let timelock_addr = deployer
-        .deploy(initcode, 5_000_000)
-        .expect("deploy TimelockController");
-    eprintln!("[get_timelock_integration] TimelockController deployed at {timelock_addr:#x}");
-
-    // Sanity: verify getMinDelay on-chain returns the configured value.
-    let delay_call = ITimelockController::getMinDelayCall {};
-    let raw = deployer
-        .call(timelock_addr, &delay_call)
-        .expect("getMinDelay");
-    let decoded = ITimelockController::getMinDelayCall::abi_decode_returns(&raw, true)
-        .expect("decode getMinDelay");
-    assert_eq!(
-        decoded.duration,
-        U256::from(TWO_DAYS_SECS),
-        "on-chain getMinDelay mismatch before rmpc run"
-    );
-
-    // Write rmpc config pointing at the freshly deployed timelock.
-    let tmp = tempfile::TempDir::new().expect("tempdir");
-    let cfg = write_config(tmp.path(), &fx.rpc_url, fx.chain_id, timelock_addr);
-
-    // Run rmpc get-timelock.
+fn run_get_timelock(cfg: &Path) -> Value {
     let out = Command::new(rmpc_bin())
         .args(["get-timelock", "--config", cfg.to_str().unwrap()])
         .output()
@@ -276,88 +160,208 @@ fn get_timelock_integration() {
         out.status.code(),
         String::from_utf8_lossy(&out.stderr),
     );
-
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
         panic!(
             "rmpc get-timelock stdout not valid JSON: {e}\nstdout=\n{}",
             String::from_utf8_lossy(&out.stdout)
         )
-    });
-    eprintln!("[get_timelock_integration] rmpc output:\n{v:#}");
+    })
+}
 
-    // ── Envelope-level assertions ──────────────────────────────────────────
+fn addr_list(v: &Value) -> Vec<String> {
+    v.as_array()
+        .expect("expected an array")
+        .iter()
+        .map(|a| a.as_str().expect("address string").to_ascii_lowercase())
+        .collect()
+}
 
+#[test]
+fn get_timelock_integration() {
+    require_prereqs("get_timelock_integration");
+    let fx = Fixture::new().expect("boot the Twin chain and publish the real Safe topology");
+    let rpc = fx.rpc_url().to_string();
+    let timelock = fx.timelock_hex().to_string();
+    let safe = fx.safe_hex().to_string();
+    let safe_lc = safe.to_ascii_lowercase();
+
+    // ── The topology is the real one, checked on chain before rmpc is asked ───────────────────
+    // A Safe proxy: it has code, and it is a 2-of-3 (threshold read from the Safe itself).
+    let safe_code = cast(&rpc, &["code", &safe]);
+    assert!(safe_code.len() > 2, "no contract at the Safe {safe}");
     assert_eq!(
-        v["chain_id"].as_u64().unwrap_or(0),
-        fx.chain_id,
-        "chain_id mismatch: {v}"
+        cast(&rpc, &["call", &safe, "getThreshold()(uint256)"]),
+        "2",
+        "the Safe threshold must be 2"
     );
+    let owners = cast(&rpc, &["call", &safe, "getOwners()(address[])"]);
+    assert_eq!(
+        owners
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .count(),
+        3,
+        "the Safe must have 3 owners: {owners}"
+    );
+    // The Safe, not an EOA, is the proposer and the canceller.
+    assert!(
+        has_role(&rpc, &timelock, PROPOSER_ROLE, &safe),
+        "the real Safe must hold PROPOSER_ROLE"
+    );
+    assert!(
+        has_role(&rpc, &timelock, CANCELLER_ROLE, &safe),
+        "the real Safe must hold CANCELLER_ROLE"
+    );
+    let deployer = fx
+        .published()
+        .keys
+        .address("ADMIN_ADDRESS")
+        .expect("deployer address")
+        .to_string();
+    assert!(
+        !has_role(&rpc, &timelock, PROPOSER_ROLE, &deployer),
+        "the deployer EOA must not hold PROPOSER_ROLE after handover"
+    );
+    let on_chain_delay: u64 = cast(&rpc, &["call", &timelock, "getMinDelay()(uint256)"])
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .expect("getMinDelay is a number");
+    let executor_open = has_role(&rpc, &timelock, EXECUTOR_ROLE, ZERO_ADDR);
+    let safe_is_executor = has_role(&rpc, &timelock, EXECUTOR_ROLE, &safe);
+
+    let tip: u64 = cast(&rpc, &["block-number"]).parse().expect("block number");
+    let pin: u64 = std::env::var("TWIN_PIN_BLOCK")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let from_block = first_block_with_code(&rpc, &timelock, pin, tip);
+
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let cfg = write_config(tmp.path(), &fx, from_block);
+
+    // ── 1. rmpc get-timelock on the real topology, no pending operation ───────────────────────
+    let v = run_get_timelock(&cfg);
+    eprintln!("[get_timelock_integration] rmpc output:\n{v:#}");
+    assert_eq!(v["chain_id"].as_u64().unwrap_or(0), fx.chain_id(), "{v}");
     assert_eq!(v["source"], "json_rpc", "source must be json_rpc: {v}");
     assert!(
         v["block_number"].is_u64(),
         "block_number must be a u64: {v}"
     );
-
-    // ── Data-level assertions ──────────────────────────────────────────────
-
+    assert_eq!(v["partial"], false, "the envelope must not be partial: {v}");
     let d = &v["data"];
-
-    // The timelock address must match what we deployed.
-    let returned_addr = d["address"]
-        .as_str()
-        .expect("data.address must be a string");
-    assert!(
-        returned_addr.eq_ignore_ascii_case(&format!("{timelock_addr:#x}")),
-        "data.address mismatch: got {returned_addr}, expected {timelock_addr:#x}"
-    );
-
-    // min_delay_secs must equal TWO_DAYS_SECS.
-    let returned_delay = d["min_delay_secs"]
-        .as_u64()
-        .expect("data.min_delay_secs must be a u64");
     assert_eq!(
-        returned_delay, TWO_DAYS_SECS,
-        "data.min_delay_secs mismatch: got {returned_delay}, expected {TWO_DAYS_SECS}"
+        d["address"].as_str().unwrap().to_ascii_lowercase(),
+        timelock.to_ascii_lowercase(),
+        "data.address must be the deployed timelock"
     );
-
-    // proposers must contain the address we configured as PROPOSER_ROLE.
-    let proposers = d["proposers"]
-        .as_array()
-        .expect("data.proposers must be an array");
-    let proposer_hex = format!("{proposer_addr:#x}");
-    let found_proposer = proposers.iter().any(|p| {
-        p.as_str()
-            .map(|s| s.eq_ignore_ascii_case(&proposer_hex))
-            .unwrap_or(false)
-    });
+    assert_eq!(
+        d["min_delay_secs"].as_u64().unwrap(),
+        on_chain_delay,
+        "data.min_delay_secs must equal getMinDelay()"
+    );
+    assert_eq!(
+        addr_list(&d["proposers"]),
+        vec![safe_lc.clone()],
+        "the real Safe must be the only proposer"
+    );
+    let executors = addr_list(&d["executors"]);
+    assert_eq!(
+        executors.contains(&ZERO_ADDR.to_string()),
+        executor_open,
+        "data.executors must say whether EXECUTOR_ROLE is open (address(0)): {executors:?}"
+    );
+    assert_eq!(
+        executors.contains(&safe_lc),
+        safe_is_executor,
+        "data.executors must say whether the Safe holds EXECUTOR_ROLE: {executors:?}"
+    );
     assert!(
-        found_proposer,
-        "proposer {proposer_hex} not found in data.proposers: {proposers:?}"
+        executor_open || safe_is_executor,
+        "someone must be able to execute: open or the Safe"
     );
-
-    // executors must contain the executor address.
-    let executors = d["executors"]
-        .as_array()
-        .expect("data.executors must be an array");
-    let executor_hex = format!("{executor_addr:#x}");
-    let found_executor = executors.iter().any(|e| {
-        e.as_str()
-            .map(|s| s.eq_ignore_ascii_case(&executor_hex))
-            .unwrap_or(false)
-    });
+    // The handover and any earlier rounds are done, so nothing is pending.
     assert!(
-        found_executor,
-        "executor {executor_hex} not found in data.executors: {executors:?}"
+        d["pending_ops"].as_array().unwrap().is_empty(),
+        "no operation was scheduled yet: {d}"
     );
 
-    // pending_ops must be an array (empty — no operations were scheduled).
-    let pending_ops = d["pending_ops"]
-        .as_array()
-        .expect("data.pending_ops must be an array");
-    assert!(
-        pending_ops.is_empty(),
-        "expected empty pending_ops list; got: {pending_ops:?}"
+    // ── 2. The real Safe schedules an operation and leaves it pending ─────────────────────────
+    let target = fx.consensus_receipt_hex().to_string();
+    // releaseReceipt(bytes32 0x..01): the call is scheduled, never executed.
+    let calldata = Command::new("cast")
+        .args([
+            "calldata",
+            "releaseReceipt(bytes32)",
+            "0x0000000000000000000000000000000000000000000000000000000000000001",
+        ])
+        .output()
+        .expect("spawn cast calldata");
+    assert!(calldata.status.success(), "cast calldata failed");
+    let data = String::from_utf8_lossy(&calldata.stdout).trim().to_string();
+    let salt = "0x1647000000000000000000000000000000000000000000000000000000000001";
+    fx.published()
+        .schedule_pending_op(&safe, &timelock, &target, &data, salt)
+        .expect("the real 2-of-3 Safe schedules the operation through the timelock");
+    let op_id = cast(
+        &rpc,
+        &[
+            "call",
+            &timelock,
+            "hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)",
+            &target,
+            "0",
+            &data,
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+            salt,
+        ],
     );
+    assert_eq!(
+        cast(
+            &rpc,
+            &[
+                "call",
+                &timelock,
+                "isOperationPending(bytes32)(bool)",
+                &op_id
+            ]
+        ),
+        "true",
+        "the Safe-scheduled operation must be pending on chain"
+    );
+    let ready_at: u64 = cast(
+        &rpc,
+        &["call", &timelock, "getTimestamp(bytes32)(uint256)", &op_id],
+    )
+    .split_whitespace()
+    .next()
+    .unwrap()
+    .parse()
+    .expect("getTimestamp is a number");
 
-    eprintln!("[get_timelock_integration] all assertions passed");
+    let v = run_get_timelock(&cfg);
+    eprintln!("[get_timelock_integration] rmpc output with a pending op:\n{v:#}");
+    let ops = v["data"]["pending_ops"].as_array().unwrap();
+    assert_eq!(ops.len(), 1, "exactly one pending op expected: {v}");
+    assert_eq!(
+        ops[0]["operation_id"]
+            .as_str()
+            .unwrap()
+            .to_ascii_lowercase(),
+        op_id.to_ascii_lowercase(),
+        "pending op id must be the operation the Safe scheduled"
+    );
+    assert_eq!(
+        ops[0]["ready_timestamp"].as_u64().unwrap(),
+        ready_at,
+        "pending op ready_timestamp must equal getTimestamp(id)"
+    );
+    assert_eq!(
+        addr_list(&v["data"]["proposers"]),
+        vec![safe_lc],
+        "the proposer is still the real Safe"
+    );
+    eprintln!("\n[get_timelock_integration] all assertions passed");
 }

@@ -4,9 +4,9 @@
 
 This repository hosts the in-development pieces that let agents transact against the Robot Money vault safely:
 
-- **`contracts/gateway/`** — `RobotMoneyGateway.sol` (deposit + per-agent policy + pause), `AccessRoles.sol`, mocks, and the deploy script. On-chain enforcement of per-agent caps, windowed limits, role separation, and idempotent payment IDs.
+- **`contracts/gateway/`** — `RobotMoneyGateway.sol` (deposit + per-agent policy + deposit pause; withdrawals are never paused), `AccessRoles.sol`, mocks, and the deploy script. On-chain enforcement of per-agent caps, windowed limits, role separation, and idempotent payment IDs.
 - **`clients/rust-payment-client/`** — `rmpc`, the Rust signing client. One-shot CLI with `deposit`, `self-check`, and `status` subcommands. Encrypted-keystore software signer, structured + audit logging, preflight checks pinned to a deployed gateway code-hash.
-- **`testing/ethereum-testnet/`** — Geth + Lighthouse devnet harness, deploy overlay, and an end-to-end Rust test crate (`e2e-rust/`) that drives `rmpc` against a live devnet.
+- **`testing/ethereum-testnet/`** — Twin chain test assets (a pinned lazy anvil fork of real Base) and an end-to-end Rust test crate (`e2e-rust/`) that drives `rmpc` against a Twin chain.
 - **`docs/`** — architecture proposal, MVP implementation plan, project roadmap, and on-chain reference docs.
 
 ## Onboarding an agent
@@ -23,7 +23,7 @@ This repository hosts the in-development pieces that let agents transact against
 
    > Agent, install Robot Money per the instructions in this file.
 
-   The agent reads [BOOTSTRAP.md](https://github.com/robotmoney/robotmoney-core/blob/82c1c2dc7d20af53bfb9d50a2efd80ad0cb8a34a/BOOTSTRAP.md), installs `rmpc`, writes the operator config, creates a keystore, runs self-check, and returns its public address for you to authorize in the dapp.
+   The agent reads [BOOTSTRAP.md](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/BOOTSTRAP.md), installs `rmpc`, writes the operator config, creates a keystore, runs self-check, and returns its public address for you to authorize in the dapp.
 
 ## Starting a local devnet
 
@@ -41,7 +41,7 @@ cargo run -p smoke-test -- --full-stack
 # Drop tears the stack down automatically.
 ```
 
-`smoke-test` starts the Geth + Lighthouse compose stack from `testing/ethereum-testnet/`, deploys contracts, and funds test EOAs. See `docs/development/smoke-test-design.md` for details.
+`smoke-test` starts the Twin chain (a pinned lazy anvil fork of real Base, see `scripts/devnet/twin-fork.ts`), deploys contracts from our scripts, and funds test EOAs. See `docs/development/smoke-test-design.md` for details.
 
 ## Status
 
@@ -51,12 +51,12 @@ The pre-pivot TypeScript CLI (`@robotmoney/cli`) and its surrounding pnpm worksp
 
 ## Quick links
 
-- [Architecture proposal](https://github.com/robotmoney/robotmoney-core/blob/82c1c2dc7d20af53bfb9d50a2efd80ad0cb8a34a/docs/architecture.md)
+- [Architecture proposal](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/docs/architecture.md)
 - [Plan tracking issue](https://github.com/lucky-tensor/robotmoney-monorepo/issues/109)
-- [Smart-contract reference](https://github.com/robotmoney/robotmoney-core/blob/82c1c2dc7d20af53bfb9d50a2efd80ad0cb8a34a/docs/technical/smart-contracts.md)
-- [Testing strategy](https://github.com/robotmoney/robotmoney-core/blob/82c1c2dc7d20af53bfb9d50a2efd80ad0cb8a34a/docs/development/testing-strategy-ethereum.md)
+- [Smart-contract reference](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/docs/technical/smart-contracts.md)
+- [Testing strategy](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/docs/development/testing-strategy-ethereum.md)
 - Vault on BaseScan: https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd
 
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/robotmoney/robotmoney-core/blob/82c1c2dc7d20af53bfb9d50a2efd80ad0cb8a34a/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/LICENSE).

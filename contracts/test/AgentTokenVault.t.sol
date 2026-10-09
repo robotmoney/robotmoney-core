@@ -21,7 +21,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {DeployDemoExtraVaults} from "../script/DeployDemoExtraVaults.s.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 
 /// @dev Uniswap V3 pool mock: token0/token1 reads for addAsset validation plus
 ///      a flat 1:1 TWAP via observe() (arithmetic-mean tick = 0). One unit of
@@ -32,7 +32,7 @@ import {DeployDemoExtraVaults} from "../script/DeployDemoExtraVaults.s.sol";
 contract MockPool {
     address public immutable token0;
     address public immutable token1;
-    uint16 public cardinality = 100;
+    uint16 public cardinality = 1000;
     uint128 public poolLiquidity = 1e18; // large default so all existing tests pass unmodified
     uint24 public feeTier; // fee() read by addAsset's ORA-3 equality check
 
@@ -226,93 +226,6 @@ contract AgentTokenVaultTest is Test {
             vault.SHORTLIST_REMOVE_DELAY(), 24 hours, "removeAsset delay must be 24h per ADR-0004"
         );
     }
-
-    // ─── Demo-seed integration (issues #481, #560 test plan) ─────────────────
-
-    /// @notice Exercises the real demo seed chain: DeployDemoExtraVaults.run()
-    ///         deploys + seeds AgentTokenVault with the three real-asset demo
-    ///         tokens (BNKR/V3, JUNO/V4, RM/Aerodrome), registers it in
-    ///         VaultRegistry, and makes it router-eligible (issue #560).
-    ///         The vault is reachable via the same registry path the dapp uses.
-    function test_demo_seed_registers_agent_token_vault_with_shortlist() public {
-        // Drive the demo seed through `runInProcess(Params)` rather than the
-        // env-driven `run()`. `vm.setEnv` mutates process-global state, so two
-        // env-driven script tests running in parallel test files (this one and
-        // Deploy.t.sol::test_deploy_envDriven_runInProcessSucceeds) raced on
-        // ADMIN_ADDRESS and intermittently deployed with the wrong admin,
-        // reverting with AccessControlUnauthorizedAccount. The in-process path
-        // takes a fully-formed Params struct (no env reads) and is the same
-        // deterministic seam every DeployDemoExtraVaults.t.sol test uses.
-        address deployer = address(this);
-        TestERC20 seedUsdc = new TestERC20();
-
-        VaultRegistry registry = new VaultRegistry(deployer);
-        PortfolioRouter portfolioRouter =
-            new PortfolioRouter(address(seedUsdc), address(registry), deployer);
-
-        // Primary vault must be registered + router-eligible for setWeights.
-        RobotMoneyVault primary = new RobotMoneyVault(
-            IERC20(address(seedUsdc)),
-            10_000_000 * ONE_USDC,
-            1_000_000 * ONE_USDC,
-            0,
-            deployer,
-            deployer,
-            deployer
-        );
-        registry.registerVault(
-            address(primary),
-            VaultRegistry.VaultMetadata({
-                name: "Primary", asset: address(seedUsdc), registeredAt: 0
-            })
-        );
-        registry.setRouterEligible(address(primary), true);
-
-        // The script makes the registry/router calls in-process, so it must
-        // hold ADMIN_ROLE on both (mirrors the production broadcast key).
-        DeployDemoExtraVaults script = new DeployDemoExtraVaults();
-        registry.grantRole(registry.ADMIN_ROLE(), address(script));
-        portfolioRouter.grantRole(portfolioRouter.ADMIN_ROLE(), address(script));
-
-        DeployDemoExtraVaults.Deployed memory d = script.runInProcess(
-            DeployDemoExtraVaults.Params({
-                admin: address(script),
-                emergencyResponder: address(script),
-                registry: address(registry),
-                router: address(portfolioRouter),
-                primaryVault: address(primary),
-                usdc: address(seedUsdc),
-                swapRouter: 0x2626664c2603336E57B271c5C0b26F421741e481,
-                rwaName: "Robot Money RWA / Thematic"
-            })
-        );
-
-        // 1. AgentTokenVault deployed and seeded with three real-asset demo tokens
-        //    (BNKR, JUNO, RM — issue #560 three-token basket).
-        assertTrue(d.agentTokenVault != address(0), "agent token vault deployed");
-        assertEq(d.agentTokens.length, 3, "three real-asset demo tokens seeded");
-
-        AgentTokenVault agentVault = AgentTokenVault(d.agentTokenVault);
-        (address[] memory t,,,,) = agentVault.shortlist();
-        assertEq(t.length, 3, "shortlist() returns three tokens after demo seed");
-
-        // 2. Reachable via the registry path the dapp uses. getVault reverts if
-        //    the vault is not registered, so a successful read proves presence.
-        (VaultRegistry.VaultMetadata memory meta,) = registry.getVault(d.agentTokenVault);
-        assertEq(meta.name, "Robot Money Agent Tokens", "registered under canonical name");
-        assertEq(meta.asset, address(seedUsdc), "registered against USDC");
-
-        // 3. Router-eligible (issue #560): demo adapters wire working multi-DEX
-        //    swap paths (DemoV4SwapRouter + DemoAerodromeRouter), so a routed
-        //    deposit to rmAGENT succeeds on devnet. This overrides the prior
-        //    "basket-vault gap blocks live deposits" constraint from the
-        //    prototype deploy: the real multi-DEX adapters resolve that gap for
-        //    the demo environment.
-        assertTrue(
-            registry.isRouterEligible(d.agentTokenVault),
-            "rmAGENT must be router-eligible after real four-vault demo seed (issue #560)"
-        );
-    }
 }
 
 // ─── Governance tests (issue #552 / ADR-0004) ─────────────────────────────────
@@ -322,7 +235,10 @@ contract AgentTokenVaultTest is Test {
 // ADMIN_ROLE, with mandatory delays and a veto (cancel) path.
 //
 // The test mirrors the production deployment model:
-//   Safe (proposer/executor) → TimelockController (ADMIN_ROLE holder) → AgentTokenVault
+//   Safe (only proposer, only canceller) → TimelockController (ADMIN_ROLE holder) → AgentTokenVault
+//
+// Every governed call runs through a real two-signature SafeL2 execTransaction
+// (helpers/SafeGovernance.sol). No test pranks the Safe (issue #1644).
 //
 // Tests cover:
 //   - Governed addAsset: timelock-routed, executes after SHORTLIST_ADD_DELAY
@@ -331,7 +247,7 @@ contract AgentTokenVaultTest is Test {
 //   - Veto: any canceller may cancel a queued shortlist change before execution
 //   - Unauthorized rejection: non-admin direct calls revert with AccessControl error
 
-contract AgentTokenVaultGovernanceTest is Test {
+contract AgentTokenVaultGovernanceTest is SafeGovernance {
     uint256 internal constant ONE_USDC = 1e6;
 
     // Governance timing per ADR-0004.
@@ -345,10 +261,11 @@ contract AgentTokenVaultGovernanceTest is Test {
     // TimelockController holds ADMIN_ROLE on vault (production model).
     TimelockController internal timelock;
 
-    // MockHighThresholdSafe acts as the Safe multisig (proposer + executor + canceller).
+    // A real SafeL2 1.4.1 proxy (SafeFixture) acts as the Safe multisig. It is the ONLY
+    // proposer and so the ONLY canceller (issue #1521, security-model.md line 89).
     address internal safe;
-    // A separate canceller (any Safe signer may cancel unilaterally per ADR-0004).
-    address internal signer = makeAddr("signer");
+    // A Safe owner key acting alone, outside the Safe: it holds no timelock role.
+    address internal signer = makeAddr("safe-owner-1");
     address internal stranger = makeAddr("stranger");
 
     // Two pre-seeded tokens so removeAsset tests have a real asset to remove.
@@ -382,23 +299,10 @@ contract AgentTokenVaultGovernanceTest is Test {
         vault.addAsset(address(tokenA), address(poolA), 3000, address(0), BasketVault.Venue.V3);
         vault.addAsset(address(tokenB), address(poolB), 3000, address(0), BasketVault.Venue.V3);
 
-        // Deploy TimelockController: safe is proposer + executor.
-        // signer also gets PROPOSER_ROLE (OpenZeppelin 5.x TimelockController grants
-        // CANCELLER_ROLE to every proposer automatically). This models the ADR-0004
-        // pattern where any Safe signer may cancel a queued change unilaterally.
-        safe = address(new MockHighThresholdSafeGov());
-        address[] memory proposers = new address[](2);
-        proposers[0] = safe;
-        proposers[1] = signer; // signer is also a proposer so it gets CANCELLER_ROLE
-        address[] memory executors = new address[](1);
-        executors[0] = safe;
-
-        timelock = new TimelockController(
-            ADD_DELAY, // minimum delay (we use addAsset delay as the timelock minimum)
-            proposers,
-            executors,
-            address(0) // no default admin; the timelock is self-administered
-        );
+        _installSafeSet();
+        safe = _newDefaultSafe();
+        // Production shape: the Safe is the only proposer and canceller, EXECUTOR_ROLE is open.
+        timelock = _newGovTimelock(safe, ADD_DELAY);
 
         // Transfer ADMIN_ROLE from this contract to the timelock.
         vault.grantRole(vault.ADMIN_ROLE(), address(timelock));
@@ -422,17 +326,14 @@ contract AgentTokenVaultGovernanceTest is Test {
         bytes memory callData = abi.encodeCall(
             BasketVault.addAsset, (token_, pool_, fee_, address(0), BasketVault.Venue.V3)
         );
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, bytes32(0), salt_, ADD_DELAY);
-        opId = timelock.hashOperation(address(vault), 0, callData, bytes32(0), salt_);
+        opId = _govSchedule(safe, timelock, address(vault), callData, salt_, ADD_DELAY);
     }
 
     function _executeAddAsset(address token_, address pool_, uint24 fee_, bytes32 salt_) internal {
         bytes memory callData = abi.encodeCall(
             BasketVault.addAsset, (token_, pool_, fee_, address(0), BasketVault.Venue.V3)
         );
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, bytes32(0), salt_);
+        _govExecute(safe, timelock, address(vault), callData, salt_);
     }
 
     // ─── Helper: schedule and execute a removeAsset through the timelock ──────
@@ -441,15 +342,12 @@ contract AgentTokenVaultGovernanceTest is Test {
         bytes memory callData = abi.encodeCall(BasketVault.removeAsset, (index_));
         // removeAsset needs only REMOVE_DELAY but the timelock minimum is ADD_DELAY,
         // so we schedule with ADD_DELAY (the timelock won't accept less than its minimum).
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, bytes32(0), salt_, ADD_DELAY);
-        opId = timelock.hashOperation(address(vault), 0, callData, bytes32(0), salt_);
+        opId = _govSchedule(safe, timelock, address(vault), callData, salt_, ADD_DELAY);
     }
 
     function _executeRemoveAsset(uint256 index_, bytes32 salt_) internal {
         bytes memory callData = abi.encodeCall(BasketVault.removeAsset, (index_));
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, bytes32(0), salt_);
+        _govExecute(safe, timelock, address(vault), callData, salt_);
     }
 
     // ─── Governance: addAsset via timelock executes after delay ──────────────
@@ -469,8 +367,16 @@ contract AgentTokenVaultGovernanceTest is Test {
             uint256(TimelockController.OperationState.Waiting),
             "expected Waiting state before delay"
         );
-        vm.expectRevert();
-        _executeAddAsset(address(newToken), address(newPool), 3000, salt);
+        _expectExecuteRefused(
+            safe,
+            timelock,
+            address(vault),
+            abi.encodeCall(
+                BasketVault.addAsset,
+                (address(newToken), address(newPool), 3000, address(0), BasketVault.Venue.V3)
+            ),
+            salt
+        );
 
         // Advance past ADD_DELAY.
         vm.warp(block.timestamp + ADD_DELAY + 1);
@@ -494,6 +400,18 @@ contract AgentTokenVaultGovernanceTest is Test {
             uint256(TimelockController.OperationState.Done),
             "operation must be Done after execution"
         );
+
+        // Replay of the executed operation: exact reasons on both paths.
+        _expectExecuteRefused(
+            safe,
+            timelock,
+            address(vault),
+            abi.encodeCall(
+                BasketVault.addAsset,
+                (address(newToken), address(newPool), 3000, address(0), BasketVault.Venue.V3)
+            ),
+            salt
+        );
     }
 
     // ─── Governance: removeAsset via timelock executes after delay ────────────
@@ -506,8 +424,9 @@ contract AgentTokenVaultGovernanceTest is Test {
         bytes32 opId = _scheduleRemoveAsset(0, salt);
 
         // Pre-delay execute reverts.
-        vm.expectRevert();
-        _executeRemoveAsset(0, salt);
+        _expectExecuteRefused(
+            safe, timelock, address(vault), abi.encodeCall(BasketVault.removeAsset, (0)), salt
+        );
 
         vm.warp(block.timestamp + ADD_DELAY + 1);
 
@@ -541,9 +460,25 @@ contract AgentTokenVaultGovernanceTest is Test {
             "must be Waiting before veto"
         );
 
-        // Signer exercises veto (ADR-0004: any Safe signer may cancel unilaterally).
+        // A Safe owner acting alone holds no CANCELLER_ROLE: the veto is a Safe quorum act.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                signer,
+                timelock.CANCELLER_ROLE()
+            )
+        );
         vm.prank(signer);
         timelock.cancel(opId);
+
+        // One owner signature is below the 2-of-3 threshold: the Safe refuses (GS020).
+        bytes memory cancelCall = abi.encodeCall(timelock.cancel, (opId));
+        bytes memory oneSig = _oneOwnerSignature(_safeDigest(safe, address(timelock), cancelCall));
+        vm.expectRevert(bytes("GS020"));
+        _safeExecWith(safe, address(timelock), cancelCall, oneSig);
+
+        // The Safe, with two signatures, exercises the veto.
+        _govCancel(safe, timelock, opId);
 
         assertEq(
             uint256(timelock.getOperationState(opId)),
@@ -564,8 +499,7 @@ contract AgentTokenVaultGovernanceTest is Test {
         bytes32 salt = keccak256("safe-cancel-salt-1");
         bytes32 opId = _scheduleAddAsset(address(newToken), address(newPool), 3000, salt);
 
-        vm.prank(safe);
-        timelock.cancel(opId);
+        _govCancel(safe, timelock, opId);
 
         assertEq(
             uint256(timelock.getOperationState(opId)),
@@ -628,7 +562,7 @@ contract AgentTokenVaultGovernanceTest is Test {
     function test_governance_addAsset_rejects_low_cardinality_pool() public {
         TestERC20 newToken = new TestERC20();
         MockPool lowCardPool = new MockPool(address(newToken), address(usdc), 3000);
-        lowCardPool.setCardinality(1); // below MIN_POOL_CARDINALITY = 2
+        lowCardPool.setCardinality(1); // below the window floor (901)
 
         bytes memory callData = abi.encodeCall(
             BasketVault.addAsset,
@@ -637,21 +571,27 @@ contract AgentTokenVaultGovernanceTest is Test {
 
         // Schedule through the timelock.
         bytes32 salt = keccak256("low-card-salt");
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, bytes32(0), salt, ADD_DELAY);
+        _govSchedule(safe, timelock, address(vault), callData, salt, ADD_DELAY);
 
         vm.warp(block.timestamp + ADD_DELAY + 1);
 
-        // Execution must revert because the pool cardinality is too low.
+        // Execution must revert because the pool cardinality is too low. EXECUTOR_ROLE is open
+        // (as in production), so the execute is called directly and the vault's own error is
+        // visible. Through the Safe the same revert surfaces as GS013.
+        bytes memory viaSafe =
+            abi.encodeCall(timelock.execute, (address(vault), 0, callData, bytes32(0), salt));
+        bytes memory sigs = _twoOwnerSignatures(_safeDigest(safe, address(timelock), viaSafe));
+        vm.expectRevert(bytes(GS013));
+        _safeExecWith(safe, address(timelock), viaSafe, sigs);
+
         vm.expectRevert(
             abi.encodeWithSelector(
                 BasketVault.InsufficientPoolCardinality.selector,
                 address(lowCardPool),
-                uint16(2), // MIN_POOL_CARDINALITY
+                uint16(901), // window-derived floor (1800 s / 2 s + 1)
                 uint16(1)
             )
         );
-        vm.prank(safe);
         timelock.execute(address(vault), 0, callData, bytes32(0), salt);
     }
 
@@ -668,20 +608,11 @@ contract AgentTokenVaultGovernanceTest is Test {
         );
 
         bytes32 salt = keccak256("wrong-pair-salt");
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, bytes32(0), salt, ADD_DELAY);
+        _govSchedule(safe, timelock, address(vault), callData, salt, ADD_DELAY);
 
         vm.warp(block.timestamp + ADD_DELAY + 1);
 
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
-        vm.prank(safe);
         timelock.execute(address(vault), 0, callData, bytes32(0), salt);
-    }
-}
-
-/// @dev Minimal Safe stub with threshold=2 for TimelockController proposer/executor/canceller role.
-contract MockHighThresholdSafeGov {
-    function getThreshold() external pure returns (uint256) {
-        return 2;
     }
 }

@@ -8,7 +8,7 @@
 //! Sub-reads (all `eth_call`, pinned to a single `eth_blockNumber` snapshot):
 //!
 //! - `VaultRegistry.listVaults()` → `address[]` of all registered vaults
-//!   (active, paused, and retired).
+//!   (active, deposits paused, and retired).
 //! - For each vault address: `VaultRegistry.getVault(address)` → **two**
 //!   top-level outputs, `(VaultMetadata metadata, VaultStatus status)`, where
 //!   `VaultMetadata` is `{ name, asset, registeredAt }`. Two outputs decode as
@@ -34,7 +34,7 @@ use alloy_sol_types::SolCall;
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::gateway::{MockVault, VaultRegistry};
+use crate::gateway::{IVault, VaultRegistry};
 use crate::network_env::NetworkEnv;
 use crate::output::emit;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
@@ -64,7 +64,9 @@ pub struct VaultEntry {
     pub name: String,
     /// `VaultMetadata.asset` — the ERC-20 the vault denominates in.
     pub asset: String,
-    /// Operational status: `"active"`, `"paused"`, or `"retired"`.
+    /// Operational status: `"active"`, `"deposits_paused"`, or `"retired"`.
+    /// `"deposits_paused"` (`VaultStatus.DepositsPaused`) stops new deposits
+    /// only; holders still redeem (core 1494).
     pub status: String,
     /// `VaultMetadata.registeredAt` — block timestamp of `registerVault`.
     pub registered_at: u64,
@@ -213,7 +215,7 @@ async fn read_vaults(
 fn vault_status_to_str(s: u8) -> &'static str {
     match s {
         0 => "active",
-        1 => "paused",
+        1 => "deposits_paused",
         2 => "retired",
         _ => "unknown",
     }
@@ -278,7 +280,7 @@ async fn call_total_assets(
     vault: Address,
     block_tag: &str,
 ) -> std::result::Result<U256, String> {
-    let data = MockVault::totalAssetsCall {}.abi_encode();
+    let data = IVault::totalAssetsCall {}.abi_encode();
     let out = rpc
         .eth_call(
             &CallRequest {
@@ -290,7 +292,7 @@ async fn call_total_assets(
         )
         .await
         .map_err(|e| format!("eth_call failed: {e}"))?;
-    let r = MockVault::totalAssetsCall::abi_decode_returns(&out, true)
+    let r = IVault::totalAssetsCall::abi_decode_returns(&out, true)
         .map_err(|e| format!("abi decode: {e}"))?;
     Ok(r._0)
 }
@@ -303,7 +305,7 @@ mod tests {
     #[test]
     fn vault_status_to_str_coverage() {
         assert_eq!(vault_status_to_str(0), "active");
-        assert_eq!(vault_status_to_str(1), "paused");
+        assert_eq!(vault_status_to_str(1), "deposits_paused");
         assert_eq!(vault_status_to_str(2), "retired");
         assert_eq!(vault_status_to_str(99), "unknown");
     }

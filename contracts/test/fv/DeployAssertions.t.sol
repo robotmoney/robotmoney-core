@@ -8,7 +8,7 @@
 // spec calls out for a post-deploy state check:
 //
 //   - ACL-1 (RED, F-01): after handover NO EOA holds ANY privileged role
-//     (DEFAULT_ADMIN_ROLE, ADMIN_ROLE, EMERGENCY_ROLE, PAUSER_ROLE). Today the
+//     (DEFAULT_ADMIN_ROLE, ADMIN_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE). Today the
 //     deployer EOA keeps the Gateway DEFAULT_ADMIN_ROLE and every vault
 //     EMERGENCY_ROLE; DeployTimelock.t.sol only asserts ADMIN_ROLE is clear. The
 //     #965 fix completes the handover AND broadens the assertion — this is where
@@ -19,13 +19,8 @@
 //     independently and never asserts they resolve to one pool. The #966 fix adds
 //     the equality check in addAsset; this asserts addAsset reverts on mismatch.
 //
-//   - ORA-6 (HOLDS — 🟡 TRUSTED, F-17): the decimals scaling between a priced
-//     asset and USDC is correct for the asset actually configured. Today the
-//     ChronicleOracleAdapter hardcodes 1e12 = 10^(18-6), correct only while
-//     deSPXA == 18 decimals and USDC == 6. The constructor SHOULD assert
-//     decimals()==18 && usdc.decimals()==6. This is a passing static-guard that
-//     documents the current trust assumption (the 1e12 constant) and is the seam
-//     where the dynamic decimals() read would be asserted.
+//   - ORA-6 (retired): the Chronicle decimals-scale guard went with the Chronicle adapter
+//     (core 1492). rmRWA prices through the UniswapV3SwapAdapter TWAP.
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -44,6 +39,7 @@ import {BasketVault} from "../../vaults/BasketVault.sol";
 import {BasketAssetConfigGuard} from "../../lib/BasketAssetConfigGuard.sol";
 import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 import {TestERC20} from "../helpers/TestERC20.sol";
+import {SafeFixture} from "../helpers/SafeFixture.sol";
 
 /// @dev Minimal 18-dec basket token for the ORA-3 addAsset rig.
 contract Ora3Token is ERC20 {
@@ -73,7 +69,7 @@ contract Ora3Pool {
     }
 
     function slot0() external pure returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
-        return (uint160(1 << 96), 0, 0, 100, 100, 0, true);
+        return (uint160(1 << 96), 0, 0, 1000, 1000, 0, true);
     }
 
     function observe(uint32[] calldata secondsAgos)
@@ -106,14 +102,6 @@ contract Ora3BasketVault is BasketVault {
 
     function maxAssets() public pure override returns (uint256) {
         return 8;
-    }
-}
-
-/// @dev Minimal 2-of-N Safe stub (code + threshold>=2) so DeployTimelock's
-///      SAFE_ADDRESS guards are satisfied without a real Safe.
-contract _FvSafeStub {
-    function getThreshold() external pure returns (uint256) {
-        return 2;
     }
 }
 
@@ -156,18 +144,27 @@ contract _FvDeployerHarness {
         address governance_,
         address safe_,
         address emergency_,
-        uint256 minDelay_
+        uint256 minDelay_,
+        DeployTimelock.SafeSpec memory safeSpec_
     ) external returns (DeployTimelock.Deployed memory) {
         return script_.runInProcess(
-            vault_, gateway_, registry_, router_, governance_, safe_, emergency_, minDelay_
+            vault_,
+            gateway_,
+            registry_,
+            router_,
+            governance_,
+            safe_,
+            emergency_,
+            minDelay_,
+            safeSpec_
         );
     }
 }
 
-contract DeployAssertionsTest is Test {
+contract DeployAssertionsTest is SafeFixture {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
-    bytes32 internal constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 internal constant DEPOSIT_PAUSER_ROLE = keccak256("DEPOSIT_PAUSER_ROLE");
     bytes32 internal constant AGENT_ROLE = keccak256("AGENT_ROLE");
     bytes32 internal constant DEFAULT_ADMIN_ROLE = 0x00;
 
@@ -200,7 +197,7 @@ contract DeployAssertionsTest is Test {
 
     /// @notice ACL-1 (REMEDIATED by #965, F-01): after the DeployTimelock
     ///         handover the deployer EOA holds NONE of {DEFAULT_ADMIN_ROLE,
-    ///         ADMIN_ROLE, EMERGENCY_ROLE, PAUSER_ROLE} on the Gateway or the
+    ///         ADMIN_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE} on the Gateway or the
     ///         vault. The Timelock receives the Gateway root (ADMIN + DEFAULT),
     ///         and an independent hot key receives the vault EMERGENCY_ROLE. This
     ///         is the deep deploy-assertion: it actually runs the handover and
@@ -225,7 +222,8 @@ contract DeployAssertionsTest is Test {
             _aclGateway.hasRole(ADMIN_ROLE, deployer), "deployer retains Gateway ADMIN_ROLE"
         );
         assertFalse(
-            _aclGateway.hasRole(PAUSER_ROLE, deployer), "deployer retains Gateway PAUSER_ROLE"
+            _aclGateway.hasRole(DEPOSIT_PAUSER_ROLE, deployer),
+            "deployer retains Gateway DEPOSIT_PAUSER_ROLE"
         );
         assertFalse(_aclVault.hasRole(ADMIN_ROLE, deployer), "deployer retains vault ADMIN_ROLE");
         assertFalse(
@@ -331,7 +329,8 @@ contract DeployAssertionsTest is Test {
         TestERC20 usdc = new TestERC20();
         DeployTimelock script = new DeployTimelock();
         _FvDeployerHarness harness = new _FvDeployerHarness();
-        address safe = address(new _FvSafeStub());
+        _installSafeSet();
+        address safe = _newDefaultSafe();
         _aclDeployer = address(harness);
         _aclEmergency = makeAddr("fv-emergency");
 
@@ -356,6 +355,19 @@ contract DeployAssertionsTest is Test {
         bytes32 routerAdminRole = _aclRouter.ADMIN_ROLE();
         vm.prank(_aclDeployer);
         _aclRouter.grantRole(routerAdminRole, address(_aclGovernance));
+        vm.prank(_aclDeployer);
+        _aclRouter.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(_aclGovernance));
+        // DeployRouterGovernance drops the deployer's copy. WEIGHT_SETTER_ROLE is
+        // self-administered, so the handover script cannot revoke it for the harness.
+        vm.prank(_aclDeployer);
+        _aclRouter.revokeRole(keccak256("WEIGHT_SETTER_ROLE"), _aclDeployer);
+
+        // The rotation roles are self-administered too. The script grants them to the Safe and
+        // the timelock and revokes the harness's copies, so it must hold them (core 1616).
+        vm.startPrank(_aclDeployer);
+        _aclRouter.grantRole(keccak256("WEIGHT_SETTER_ROTATOR_ROLE"), address(script));
+        _aclRouter.grantRole(keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE"), address(script));
+        vm.stopPrank();
 
         // The script's grant calls run as `address(script)`, so it needs ADMIN on
         // each contract (and the gateway DEFAULT_ADMIN_ROLE to hand the timelock
@@ -386,7 +398,8 @@ contract DeployAssertionsTest is Test {
             address(_aclGovernance),
             safe,
             _aclEmergency,
-            2 days
+            2 days,
+            _fixtureSpec()
         );
         return address(d.timelock);
     }
@@ -419,23 +432,5 @@ contract DeployAssertionsTest is Test {
         vm.prank(admin);
         vault.addAsset(address(token), address(matchedPool), 500, address(0), BasketVault.Venue.V3);
         assertEq(vault.assetCount(), 1, "matched pool/fee registers the asset");
-    }
-
-    /// @notice ORA-6 (HOLDS — 🟡 TRUSTED, F-17): documents the current decimals
-    ///         trust assumption. The ChronicleOracleAdapter hardcodes the
-    ///         1e12 = 10^(18-6) scale, correct only while the priced asset is
-    ///         18-dec and USDC is 6-dec. This passing static-guard pins that the
-    ///         hardcoded constant is still present (so a silent decimals change is
-    ///         caught) and marks the seam where #966 would add the dynamic
-    ///         `decimals()==18 && usdc.decimals()==6` constructor assertion.
-    function test_ORA6_chronicleAdapterDecimalsAssumptionIsDocumented() public view {
-        string memory src = vm.readFile("contracts/adapters/ChronicleOracleAdapter.sol");
-        // The 18→6 decimals scale is currently hardcoded (1e12). This guard makes
-        // any change to that scaling a deliberate, reviewed edit — and is the
-        // anchor for ORA-6's eventual dynamic decimals() assertion.
-        assertTrue(
-            _contains(src, "1e12"),
-            "ORA-6: ChronicleOracleAdapter 18->6 decimals scale (1e12) missing - re-verify F-17 assumption"
-        );
     }
 }

@@ -5,7 +5,7 @@ description: "Interface stub for upstream protocol health monitoring integration
 
 # IUpstreamMonitor
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/interfaces/IUpstreamMonitor.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/interfaces/IUpstreamMonitor.sol)
 
 **Title:** IUpstreamMonitor
 
@@ -29,8 +29,9 @@ Integration points discovered by scout (issue #702):
 (RobotMoneyGateway.sol, AuthorizedAgent struct). An upstream monitor check
 could gate agent deposit routing to vaults whose strategy adapter is healthy.
 - The VaultRegistry (contracts/VaultRegistry.sol) tracks per-vault status
-(Active, Paused, Deprecated). The monitor could call registry.setVaultStatus()
-via the PAUSER_ROLE to halt a vault whose upstream protocol is unhealthy.
+(Active, DepositsPaused, Retired). The monitor could ask governance to call
+registry.setVaultStatus() to halt new deposits into a vault whose upstream
+protocol is unhealthy. No status blocks withdrawals (core 1494).
 - The FeatureFlags contract (contracts/FeatureFlags.sol) gates experimental
 features; the monitor could use a feature flag to disable a risk-path before
 the full circuit-breaker is wired.

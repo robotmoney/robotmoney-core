@@ -1,11 +1,11 @@
 ---
 title: "DeploySeedDeposit"
-description: "Fork test asserting that after running the deploy script the vault satisfies the seed deposit precondition required by the deploy runbook: - vault.totalAssets() >= 1_000 * 1e6 (1,000 USDC) - vault.totalSupply() > 0 before any simulated public deposit."
+description: "Fork test asserting that after running the deploy script the vault satisfies the seed deposit precondition required by the deploy runbook: - vault.totalAssets() >= 99.99% of the seed (1 USDC, `VaultTestParams.SEED_DEPOSIT_AMOUNT`; the broadcast run reads it from `SEED_DEPOSIT_USDC`) - vault.totalSupply() > 0 - the seed shares go to the seed receiver (`SEED_SHARE_RECEIVER` in the broadcast run), never to the deployer, who pays the seed USDC and holds no shares before any simulated public deposit."
 ---
 
 # DeploySeedDeposit
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/294ae939cc4db43ac7ec7bac05d27e475246f588/contracts/test/DeploySeedDeposit.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/DeploySeedDeposit.t.sol)
 
 **Inherits:** Test
 
@@ -13,22 +13,25 @@ description: "Fork test asserting that after running the deploy script the vault
 
 Fork test asserting that after running the deploy script the vault
 satisfies the seed deposit precondition required by the deploy runbook:
-- vault.totalAssets() >= 1_000 * 1e6 (1,000 USDC)
+- vault.totalAssets() >= 99.99% of the seed (1 USDC, `VaultTestParams.SEED_DEPOSIT_AMOUNT`;
+the broadcast run reads it from `SEED_DEPOSIT_USDC`)
 - vault.totalSupply() > 0
+- the seed shares go to the seed receiver (`SEED_SHARE_RECEIVER` in the broadcast run),
+never to the deployer, who pays the seed USDC and holds no shares
 before any simulated public deposit.
 
 <i>
 
-CI boots the checked-in Base golden fixture at localhost:8545. A local
-live fork remains possible by overriding `FORK_RPC_URL`.
+CI runs this on the Twin chain (a pinned lazy anvil fork of real Base state) named by
+`FORK_RPC_URL`. Unset, the tests skip with a named reason.
 
 </i>
 
 To run locally:
-FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/&lt;key> \
-forge test --match-contract DeploySeedDeposit --fork-url $FORK_RPC_URL -vvv
+bun scripts/devnet/twin-fork.ts start && FORK_RPC_URL=http://127.0.0.1:8545 \
+forge test --match-contract DeploySeedDeposit -vvv
 
-CI uses `CURRENT.anvil-state`; no live RPC secret is involved.
+No secret is needed: the upstream is the public Base endpoint unless BASE_UPSTREAM_RPC is set.
 
 See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
 
@@ -75,7 +78,7 @@ address internal shareReceiver;
 ### script
 
 ```solidity
-Deploy internal script;
+DeployVault internal script;
 ```
 
 ## Functions
@@ -86,7 +89,7 @@ Deploy internal script;
 
 <i>
 
-Use an explicit local override, otherwise the offline fixture RPC.
+Use the Twin chain named by FORK_RPC_URL, or skip.
 
 </i>
 
@@ -128,7 +131,7 @@ function _trySelectFork() internal returns (bool);
 <i>
 
 Shared setup: create the deploy script, named test accounts,
-and ensure admin has enough USDC for the seed deposit.
+and fund the deployer (`admin`) with the 1 USDC seed it pays.
 Returns false when the fork URL is absent (test should skip).
 
 </i>
@@ -151,29 +154,32 @@ function _setUp() internal returns (bool);
 
 Run the deploy script in-process with real Base USDC and seed deposit.
 Adapters are deployed against real Base mainnet protocol addresses.
-Uses runInProcessWithSeed() which includes the mandatory seed deposit step.
+Uses runInProcessWithSeed() which includes the mandatory seed deposit step:
+the deployer pays the seed and `shareReceiver` gets the seed shares.
 
 </i>
 
 ```solidity
-function _runDeploy() internal returns (Deploy.Deployed memory);
+function _runDeploy() internal returns (DeployVault.Deployed memory);
 ```
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `Deploy.Deployed` |  |
+| &lt;none&gt; | `DeployVault.Deployed` |  |
 
 <a id="test_fork_deployseed_totalassetsatleastminseed"></a>
 
 ### test_fork_deploySeed_totalAssetsAtLeastMinSeed
 
-After deploy, vault.totalAssets() >= 1_000_000_000 (1,000 USDC).
+After deploy, vault.totalAssets() >= 99.99% of the 1 USDC seed
+(`VaultTestParams.SEED_DEPOSIT_AMOUNT` = 1e6).
 
 This is the primary AC from issue #656: the deploy runbook must
-seed the vault with ≥ 1,000 USDC before the vault is opened to
-the public (security-model.md §3).
+seed the vault before it is opened to the public
+(security-model.md §3). The broadcast run seeds `SEED_DEPOSIT_USDC`
+(1 USDC on the stage sheet) and mints the shares to `SEED_SHARE_RECEIVER`.
 
 ```solidity
 function test_fork_deploySeed_totalAssetsAtLeastMinSeed() public;
@@ -193,17 +199,70 @@ offset.  The seed deposit eliminates this window.
 function test_fork_deploySeed_totalSupplyPositive() public;
 ```
 
-<a id="test_fork_deployseed_adminholdsshares"></a>
+<a id="test_fork_deployseed_receiverholdsshares"></a>
 
-### test_fork_deploySeed_adminHoldsShares
+### test_fork_deploySeed_receiverHoldsShares
 
-Admin (deployer) holds seed shares after deploy.
-
-The seed deposit mints shares to the admin/deployer; the
-public cannot exploit a zero-supply state even briefly.
+The seed receiver holds the seed shares and the deployer holds none.
 
 ```solidity
-function test_fork_deploySeed_adminHoldsShares() public;
+function test_fork_deploySeed_receiverHoldsShares() public;
+```
+
+<a id="test_fork_deployseed_depositusesfixedgas"></a>
+
+### test_fork_deploySeed_depositUsesFixedGas
+
+The seed deposit is called with the script's fixed gas, never a forge estimate
+(core 1505). forge broadcasts a call that names its gas with exactly that gas
+limit (`isFixedGasLimit` in the broadcast file), so this pins the gas limit of the
+broadcast seed transaction. It also shows the fixed gas clears every adapter gas
+floor at the fork's venue state.
+
+```solidity
+function test_fork_deploySeed_depositUsesFixedGas() public;
+```
+
+<a id="test_seeddepositgas_keepsheadroomovermeasuredestimate"></a>
+
+### test_seedDepositGas_keepsHeadroomOverMeasuredEstimate
+
+The fixed seed gas keeps at least 2x the largest `cast estimate` measured for the
+seed deposit (1 329 873 on the Twin chain at Base block 52256191, core 1505). Runs
+without a fork, so lowering the constant fails the plain unit run.
+
+```solidity
+function test_seedDepositGas_keepsHeadroomOverMeasuredEstimate() public;
+```
+
+<a id="test_seedstep_unsetreceiver_reverts"></a>
+
+### test_seedStep_unsetReceiver_reverts
+
+An unset receiver reads as the zero address: the seed step reverts.
+
+```solidity
+function test_seedStep_unsetReceiver_reverts() public;
+```
+
+<a id="test_seedstep_zeroreceiver_reverts"></a>
+
+### test_seedStep_zeroReceiver_reverts
+
+A zero receiver reverts the seed step.
+
+```solidity
+function test_seedStep_zeroReceiver_reverts() public;
+```
+
+<a id="test_seedstep_deployerreceiver_reverts"></a>
+
+### test_seedStep_deployerReceiver_reverts
+
+The deployer as receiver reverts the seed step (the deployer is retired).
+
+```solidity
+function test_seedStep_deployerReceiver_reverts() public;
 ```
 
 <a id="test_fork_deployseed_firstpublicdepositreceivesfairshares"></a>

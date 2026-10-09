@@ -188,11 +188,17 @@ async fn test_committee_vote_submit_happy_path() {
     let raw_tx: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let raw_tx_sink = Arc::clone(&raw_tx);
     let tx_hash_body = jrpc_result(&format!("{TX_HASH:#x}"));
+    // Issue #1511: the signed tx must target the GATEWAY (not the IC policy,
+    // whose `submitVote` is `onlyGateway`) and carry the `committeeVoteSubmit`
+    // selector. The body regex pins both; a tx aimed at the policy matches no
+    // mock and the command fails.
+    let selector = ahex::encode(RobotMoneyGateway::committeeVoteSubmitCall::SELECTOR);
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(
-            json!({"method": "eth_sendRawTransaction"}),
-        ))
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_sendRawTransaction"})),
+            Matcher::Regex(format!("{GATEWAY:x}[0-9a-f]{{0,12}}{selector}")),
+        ]))
         .with_status(200)
         .with_body_from_request(move |req| {
             let body: serde_json::Value =

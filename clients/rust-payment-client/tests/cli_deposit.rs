@@ -175,7 +175,9 @@ fn unique_state_dir() -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("rmpc-test-{stamp}-{}", std::process::id()))
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("rmpc-test-{stamp}-{}-{seq}", std::process::id()))
 }
 
 #[tokio::test]
@@ -235,11 +237,16 @@ async fn deposit_happy_path_emits_payment_id_and_exits_zero() {
     assert!(v["effective_gas_price"].is_string());
 }
 
+/// Owner decision 2026-10-06: a depositor may sign with the software keystore
+/// on Base mainnet. The guard is gone, the production warning still prints
+/// first. With no passphrase the command stops at keystore load (exit 3).
 #[test]
-fn deposit_base_mainnet_refuses_software_signer_before_signing() {
+fn deposit_base_mainnet_allows_software_signer_and_warns_first() {
+    let logs = tempfile::TempDir::new().unwrap();
     let fix = Fixture::build("http://127.0.0.1:1", 8453);
 
     let out = rmpc()
+        .env("RMPC_LOG_DIR", logs.path())
         .env_remove(PASSPHRASE_ENV_VAR)
         .args([
             "deposit",
@@ -255,12 +262,10 @@ fn deposit_base_mainnet_refuses_software_signer_before_signing() {
         .get_output()
         .clone();
 
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(3));
     let stdout = String::from_utf8(out.stdout).unwrap();
-    let v: Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON");
-    assert_eq!(v["status"], "refused");
-    assert_eq!(v["error"], "ErrProductionSignerRequired");
-    assert!(v["message"].as_str().unwrap().contains("HSM/KMS"));
+    assert!(!stdout.contains("ErrProductionSignerRequired"));
+    common::assert_mainnet_warning_precedes_keystore_load(logs.path());
 }
 
 #[tokio::test]
@@ -313,13 +318,13 @@ async fn deposit_chain_id_mismatch_refuses_with_named_error() {
 }
 
 #[tokio::test]
-async fn deposit_paused_gateway_refuses_with_named_error() {
+async fn deposit_while_deposits_paused_refuses_with_named_error() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::pausedCall,
+            RobotMoneyGateway::depositsPausedCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_bool(true)))
@@ -356,8 +361,8 @@ async fn deposit_paused_gateway_refuses_with_named_error() {
         .clone();
     assert_eq!(out.status.code(), Some(2));
     let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
-    assert_eq!(v["error"], "ErrGatewayPaused");
-    assert_eq!(v["checks"]["gateway_paused"], true);
+    assert_eq!(v["error"], "ErrDepositsPaused");
+    assert_eq!(v["checks"]["deposits_paused"], true);
 }
 
 #[tokio::test]

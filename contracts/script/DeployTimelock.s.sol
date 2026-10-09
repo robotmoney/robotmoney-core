@@ -16,10 +16,16 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
-/// @dev Minimal Safe interface — only `getThreshold()` is required for the
-///      deploy-time guard that rejects EOA or low-threshold Safe addresses.
-interface ISafeMinimal {
+/// @dev Safe 1.4.1 read surface used by the full deploy-time Safe checks.
+interface ISafeFull {
     function getThreshold() external view returns (uint256);
+    function getOwners() external view returns (address[] memory);
+    function isOwner(address owner) external view returns (bool);
+    function VERSION() external view returns (string memory);
+    function getModulesPaginated(address start, uint256 pageSize)
+        external
+        view
+        returns (address[] memory array, address next);
 }
 
 /// @dev Minimal vault interface used to link the registry into the vault so the
@@ -72,7 +78,11 @@ interface IRouterGovernanceQuorum {
 ///         - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
 ///           hot key, not the deployer.
 ///         - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
-///           EXECUTOR_ROLE on the TimelockController.
+///           CANCELLER_ROLE on the TimelockController, and no other account
+///           does: no single signer can propose or cancel (security-model §4).
+///         - EXECUTOR_ROLE is open: it is held by address(0), so any address
+///           can execute an operation whose delay has elapsed. One policy, no
+///           switch (core 1521).
 ///         - Direct ADMIN_ROLE calls from any EOA revert with
 ///           AccessControlUnauthorizedAccount.
 ///         - Admin operations must be routed through
@@ -84,22 +94,21 @@ interface IRouterGovernanceQuorum {
 ///           REGISTRY_ADDRESS       — VaultRegistry
 ///           ROUTER_ADDRESS         — PortfolioRouter
 ///           GOVERNANCE_ADDRESS     — RouterGovernance
-///           SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + EXECUTOR)
+///           SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + CANCELLER)
 ///           EMERGENCY_ADDRESS      — independent hot key that receives the vault
 ///                                    EMERGENCY_ROLE (must differ from the deployer
 ///                                    EOA; ACL-1 / F-01)
-///           TIMELOCK_MIN_DELAY     — minimum delay in seconds. Must be >= 172800
-///                                    (48 hours, security-model.md §4) unless
-///                                    ALLOW_SHORT_TIMELOCK_DELAY=true (devnets only).
-///
-///         Optional env vars:
-///           EXPECTED_CHAIN_ID      — refuse to run unless block.chainid matches
-///                                    (set 8453 for Base mainnet)
-///           ALLOW_SHORT_TIMELOCK_DELAY — `true` lifts the 48-hour floor. Devnets only.
-///           DEPLOYMENT_OUT         — output JSON path; default deployments/timelock-<chain_id>.json
+///           SAFE_OWNERS            — comma-separated owners the Safe must have
+///           SAFE_THRESHOLD         — threshold the Safe must have (>= 2)
+///           TIMELOCK_MIN_DELAY     — minimum delay in seconds. On chain id 8453 it must
+///                                    be >= 172800 (48 hours, security-model.md §4).
+///                                    On any other chain (the Twin chain 918453) it must
+///                                    be >= 1. No flag lifts the 8453 floor.
+///           EXPECTED_CHAIN_ID      — mandatory and equal to 8453 on Base mainnet
+///           DEPLOYMENT_OUT         — output JSON path (no default)
 ///           IC_POLICY_ADDRESS      — InvestmentCommitteePolicy (issue #1319, one-
-///                                    ceremony rule #1247 AC10 / INV-3). When set,
-///                                    the same grant→verify→revoke handover runs on
+///                                    ceremony rule #1247 AC10 / INV-3). The
+///                                    same grant→verify→revoke handover runs on
 ///                                    it: ADMIN_ROLE + DEFAULT_ADMIN_ROLE move to the
 ///                                    timelock and are revoked from the deployer EOA
 ///                                    (the ADMIN_ADDRESS DeployInvestmentCommitteePolicy
@@ -107,11 +116,11 @@ interface IRouterGovernanceQuorum {
 ///                                    IC policy — granted separately so it can forward
 ///                                    committeeRegister calls — is untouched.
 ///           CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
-///                                    same rule). When set, ADMIN_ROLE +
+///                                    same rule). ADMIN_ROLE +
 ///                                    DEFAULT_ADMIN_ROLE move to the timelock.
 ///           AGENT_ADDRESSES        — comma-separated gateway agents the deployer
-///                                    owns (issue #1476): the deploy agent from
-///                                    Deploy.s.sol, the stage ceremony's submitter.
+///                                    owns (issue #1476): the deploy agent the
+///                                    gateway stage authorizes (DeployGateway.s.sol).
 ///                                    Each is handed to the timelock with
 ///                                    transferAgentOwnership while the timelock
 ///                                    already holds gateway ADMIN_ROLE and before
@@ -128,27 +137,71 @@ interface IRouterGovernanceQuorum {
 ///                                    DEFAULT_ADMIN_ROLE on the receipt contract (the
 ///                                    RECEIPT_ADMIN_ADDRESS DeployInvestmentCommittee-
 ///                                    Policy granted them to — not necessarily the
-///                                    deployer EOA). Only meaningful when
-///                                    CONSENSUS_RECEIPT_ADDRESS is set; revoked from
-///                                    here instead of msg.sender. Defaults to
-///                                    msg.sender when unset.
+///                                    deployer EOA). Required on every chain together
+///                                    with CONSENSUS_RECEIPT_ADDRESS; revoked from
+///                                    here instead of msg.sender. No default.
 ///
 /// @dev After deploying, the broadcaster (current ADMIN_ROLE holder) is no
 ///      longer the admin on any contract. Verify with:
 ///        cast call <vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") <timelock>
 contract DeployTimelock is ExpectedChainGuard {
+    /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+    string public constant MANIFEST_FILE = "timelock.json";
+
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
+    bytes32 public constant WEIGHT_SETTER_ROTATOR_ROLE = keccak256("WEIGHT_SETTER_ROTATOR_ROLE");
+    bytes32 public constant WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE =
+        keccak256("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 public constant DEPOSIT_PAUSER_ROLE = keccak256("DEPOSIT_PAUSER_ROLE");
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
     /// @dev OZ `AccessControl.DEFAULT_ADMIN_ROLE` is `bytes32(0)`.
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
-    /// @dev security-model.md §4: production timelock delay floor, 48 hours.
+    /// @dev security-model.md §4: production timelock delay floor, 48 hours. Enforced
+    ///      by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin.
     uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
+
+    /// @dev Recorded in timelock.json as `executorPolicy` / `cancellerPolicy`.
+    ///      `open`: EXECUTOR_ROLE is held by address(0). `safe-only`: only the Safe
+    ///      (threshold >= 2) holds PROPOSER_ROLE and CANCELLER_ROLE.
+    string public constant EXECUTOR_POLICY = "open";
+    string public constant CANCELLER_POLICY = "safe-only";
+
+    /// @dev Safe 1.4.1 canonical deployments (identical on Base and on the Twin chain,
+    ///      whose state is a Base snapshot).
+    address public constant SAFE_L2_SINGLETON = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+    address public constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+    /// @dev Runtime codehash of the SafeProxy 1.4.1 the canonical factory deploys
+    ///      (read from a live Base Safe proxy). A stub, a mock or any other proxy differs.
+    bytes32 public constant SAFE_PROXY_1_4_1_CODEHASH =
+        0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c;
+    /// @dev Safe storage slots: keccak256("guard_manager.guard.address") and
+    ///      keccak256("fallback_manager.handler.address").
+    bytes32 public constant SAFE_GUARD_SLOT =
+        0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8;
+    bytes32 public constant SAFE_FALLBACK_HANDLER_SLOT =
+        0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
+
+    /// @notice SAFE_OWNERS and SAFE_THRESHOLD: what the Safe at SAFE_ADDRESS must look like.
+    struct SafeSpec {
+        address[] owners;
+        uint256 threshold;
+    }
+
+    /// @dev The optional committee handover inputs, grouped so
+    ///      `runInProcessWithCommittee` stays inside the non-viaIR stack limit
+    ///      (`forge coverage` compiles without the optimizer or viaIR).
+    struct Committee {
+        address icPolicy;
+        address consensusReceipt;
+        address receiptAdmin;
+    }
 
     struct Deployed {
         TimelockController timelock;
-        address vault;
+        /// Every vault handed over (VAULT_ADDRESSES), all treated the same way.
+        address[] vaults;
         address gateway;
         address registry;
         address router;
@@ -179,32 +232,31 @@ contract DeployTimelock is ExpectedChainGuard {
     function _runFrom(string memory prefix) internal returns (Deployed memory d) {
         // Read first, so a run that leaves the list out stops on that input.
         d.agents = _readAgentList(string.concat(prefix, "AGENT_ADDRESSES"));
-        d.vault = vm.envAddress(string.concat(prefix, "VAULT_ADDRESS"));
-        d.gateway = vm.envAddress(string.concat(prefix, "GATEWAY_ADDRESS"));
-        d.registry = vm.envAddress(string.concat(prefix, "REGISTRY_ADDRESS"));
-        d.router = vm.envAddress(string.concat(prefix, "ROUTER_ADDRESS"));
-        d.governance = vm.envAddress(string.concat(prefix, "GOVERNANCE_ADDRESS"));
-        d.safe = vm.envAddress(string.concat(prefix, "SAFE_ADDRESS"));
-        d.emergency = vm.envAddress(string.concat(prefix, "EMERGENCY_ADDRESS"));
-        d.minDelay = vm.envUint(string.concat(prefix, "TIMELOCK_MIN_DELAY"));
-        d.icPolicy = vm.envOr(string.concat(prefix, "IC_POLICY_ADDRESS"), address(0));
-        d.consensusReceipt =
-            vm.envOr(string.concat(prefix, "CONSENSUS_RECEIPT_ADDRESS"), address(0));
-        d.receiptAdmin = vm.envOr(string.concat(prefix, "RECEIPT_ADMIN_ADDRESS"), address(0));
+        d.vaults = _readVaultList(string.concat(prefix, "VAULT_ADDRESSES"));
+        d.gateway = _envAddressRequired(string.concat(prefix, "GATEWAY_ADDRESS"));
+        d.registry = _envAddressRequired(string.concat(prefix, "REGISTRY_ADDRESS"));
+        d.router = _envAddressRequired(string.concat(prefix, "ROUTER_ADDRESS"));
+        d.governance = _envAddressRequired(string.concat(prefix, "GOVERNANCE_ADDRESS"));
+        d.safe = _envAddressRequired(string.concat(prefix, "SAFE_ADDRESS"));
+        d.emergency = _envAddressRequired(string.concat(prefix, "EMERGENCY_ADDRESS"));
+        d.minDelay = _envUintRequired(string.concat(prefix, "TIMELOCK_MIN_DELAY"));
+        uint256 safeThreshold = _envUintRequired(string.concat(prefix, "SAFE_THRESHOLD"));
+        address[] memory safeOwners = _readAddressList(string.concat(prefix, "SAFE_OWNERS"));
+        // One deployment scheme: these inputs are required on every chain. No input
+        // silently skips the committee handover or defaults to the deployer.
+        d.icPolicy = _envAddressRequired(string.concat(prefix, "IC_POLICY_ADDRESS"));
+        d.consensusReceipt = _envAddressRequired(string.concat(prefix, "CONSENSUS_RECEIPT_ADDRESS"));
+        d.receiptAdmin = _envAddressRequired(string.concat(prefix, "RECEIPT_ADMIN_ADDRESS"));
+        require(d.icPolicy != address(0), "IC_POLICY_ADDRESS=0");
+        require(d.consensusReceipt != address(0), "CONSENSUS_RECEIPT_ADDRESS=0");
+        require(d.receiptAdmin != address(0), "RECEIPT_ADMIN_ADDRESS=0");
+        _envStringRequired(string.concat(prefix, "DEPLOYMENT_OUT"));
 
+        // Strict on 8453 (unset EXPECTED_CHAIN_ID no longer disables it). The delay
+        // floor lives in `_validate`, so every entry point enforces it.
         _requireExpectedChain(prefix);
-        // security-model.md §4: the production delay for high-risk operations is
-        // >= 48 hours. The contract accepts any non-zero delay, and nothing else
-        // in the ceremony checks it (devops review 2026-09-30, R-04: a 60-second
-        // delay landed on a mainnet fork with no error). Devnets opt out
-        // explicitly; a broadcast run never gets a short delay by accident.
-        require(
-            d.minDelay >= MIN_PRODUCTION_DELAY
-                || vm.envOr(string.concat(prefix, "ALLOW_SHORT_TIMELOCK_DELAY"), false),
-            "TIMELOCK_MIN_DELAY below 172800 (48h): set ALLOW_SHORT_TIMELOCK_DELAY=true only on a devnet"
-        );
 
-        _validate(d);
+        _validate(d, SafeSpec({owners: safeOwners, threshold: safeThreshold}));
 
         vm.startBroadcast();
         d.timelock = _deployAndWire(d);
@@ -227,9 +279,10 @@ contract DeployTimelock is ExpectedChainGuard {
         address governance_,
         address safe_,
         address emergency_,
-        uint256 minDelay_
+        uint256 minDelay_,
+        SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
-        d.vault = vault_;
+        d.vaults = _single(vault_);
         d.gateway = gateway_;
         d.registry = registry_;
         d.router = router_;
@@ -238,18 +291,52 @@ contract DeployTimelock is ExpectedChainGuard {
         d.emergency = emergency_;
         d.minDelay = minDelay_;
 
-        _validate(d);
+        _validate(d, safeSpec_);
         d.timelock = _deployAndWire(d);
+    }
+
+    /// @notice In-process variant for the one deployment scheme: hands over every
+    ///         vault in `vaults_` (the in-process form of VAULT_ADDRESSES). Caller
+    ///         sets up prank context. No JSON is written; no env vars are read.
+    function runInProcessVaults(
+        address[] memory vaults_,
+        address gateway_,
+        address registry_,
+        address router_,
+        address governance_,
+        address safe_,
+        address emergency_,
+        uint256 minDelay_,
+        SafeSpec memory safeSpec_
+    ) external returns (Deployed memory d) {
+        d.vaults = vaults_;
+        d.gateway = gateway_;
+        d.registry = registry_;
+        d.router = router_;
+        d.governance = governance_;
+        d.safe = safe_;
+        d.emergency = emergency_;
+        d.minDelay = minDelay_;
+
+        _validate(d, safeSpec_);
+        d.timelock = _deployAndWire(d);
+    }
+
+    /// @dev One-element vault list for the single-vault in-process entry points.
+    function _single(address v) internal pure returns (address[] memory a) {
+        a = new address[](1);
+        a[0] = v;
     }
 
     /// @notice In-process variant that also exercises the optional IC policy /
     ///         consensus receipt handover (issue #1319). Caller sets up prank
     ///         context. No JSON is written; no env vars are read.
-    /// @param icPolicy_        InvestmentCommitteePolicy address, or address(0) to skip.
-    /// @param consensusReceipt_ ConsensusRecommendationReceipt address, or address(0) to skip.
-    /// @param receiptAdmin_    Current holder of ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the
-    ///                         receipt contract (RECEIPT_ADMIN_ADDRESS at its
-    ///                         construction); address(0) defaults to msg.sender.
+    /// @param committee_ `icPolicy`: InvestmentCommitteePolicy address, or address(0)
+    ///        to skip. `consensusReceipt`: ConsensusRecommendationReceipt address, or
+    ///        address(0) to skip. `receiptAdmin`: current holder of
+    ///        ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the receipt contract
+    ///        (RECEIPT_ADMIN_ADDRESS at its construction); address(0) defaults to
+    ///        msg.sender.
     function runInProcessWithCommittee(
         address vault_,
         address gateway_,
@@ -259,11 +346,10 @@ contract DeployTimelock is ExpectedChainGuard {
         address safe_,
         address emergency_,
         uint256 minDelay_,
-        address icPolicy_,
-        address consensusReceipt_,
-        address receiptAdmin_
+        Committee memory committee_,
+        SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
-        d.vault = vault_;
+        d.vaults = _single(vault_);
         d.gateway = gateway_;
         d.registry = registry_;
         d.router = router_;
@@ -271,11 +357,11 @@ contract DeployTimelock is ExpectedChainGuard {
         d.safe = safe_;
         d.emergency = emergency_;
         d.minDelay = minDelay_;
-        d.icPolicy = icPolicy_;
-        d.consensusReceipt = consensusReceipt_;
-        d.receiptAdmin = receiptAdmin_;
+        d.icPolicy = committee_.icPolicy;
+        d.consensusReceipt = committee_.consensusReceipt;
+        d.receiptAdmin = committee_.receiptAdmin;
 
-        _validate(d);
+        _validate(d, safeSpec_);
         d.timelock = _deployAndWire(d);
     }
 
@@ -293,9 +379,10 @@ contract DeployTimelock is ExpectedChainGuard {
         address safe_,
         address emergency_,
         uint256 minDelay_,
-        address[] calldata agents_
+        address[] calldata agents_,
+        SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
-        d.vault = vault_;
+        d.vaults = _single(vault_);
         d.gateway = gateway_;
         d.registry = registry_;
         d.router = router_;
@@ -305,7 +392,7 @@ contract DeployTimelock is ExpectedChainGuard {
         d.minDelay = minDelay_;
         d.agents = agents_;
 
-        _validate(d);
+        _validate(d, safeSpec_);
         d.timelock = _deployAndWire(d);
     }
 
@@ -328,8 +415,29 @@ contract DeployTimelock is ExpectedChainGuard {
         return vm.envAddress(name, ",");
     }
 
-    function _validate(Deployed memory d) internal view {
-        require(d.vault != address(0), "VAULT_ADDRESS=0");
+    /// @dev VAULT_ADDRESSES: required, no default, comma-separated, at least one vault.
+    function _readVaultList(string memory name) internal view returns (address[] memory) {
+        require(vm.envExists(name), "VAULT_ADDRESSES must be set: every vault, comma-separated");
+        require(bytes(vm.envString(name)).length != 0, "VAULT_ADDRESSES is empty");
+        return vm.envAddress(name, ",");
+    }
+
+    /// @dev A required comma-separated address list from env var `name`.
+    function _readAddressList(string memory name) internal view returns (address[] memory) {
+        require(vm.envExists(name), string.concat(name, " must be set"));
+        require(bytes(vm.envString(name)).length != 0, string.concat(name, " is empty"));
+        return vm.envAddress(name, ",");
+    }
+
+    /// @param spec SAFE_OWNERS and SAFE_THRESHOLD: the owners and threshold the Safe must have.
+    function _validate(Deployed memory d, SafeSpec memory spec) internal view {
+        require(d.vaults.length > 0, "VAULT_ADDRESSES is empty");
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            require(d.vaults[i] != address(0), "VAULT_ADDRESSES contains the zero address");
+            for (uint256 j = 0; j < i; j++) {
+                require(d.vaults[i] != d.vaults[j], "VAULT_ADDRESSES contains a duplicate");
+            }
+        }
         require(d.gateway != address(0), "GATEWAY_ADDRESS=0");
         require(d.registry != address(0), "REGISTRY_ADDRESS=0");
         require(d.router != address(0), "ROUTER_ADDRESS=0");
@@ -344,42 +452,102 @@ contract DeployTimelock is ExpectedChainGuard {
         // EOA-retains-a-privileged-role gap this script closes.
         require(d.emergency != msg.sender, "EMERGENCY_ADDRESS == deployer EOA");
 
-        // AC: SAFE_ADDRESS must have deployed bytecode (not an EOA).
-        // An EOA at SAFE_ADDRESS would let a single private key control all
-        // ADMIN_ROLE operations — defeating the multisig security model.
-        require(
-            d.safe.code.length > 0, "SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first"
-        );
+        // Delay floor, keyed to the chain id (security-model.md §4). A require, never a
+        // different code path: 8453 refuses anything under 48 hours, every other chain
+        // (the Twin chain 918453, anvil) accepts any non-zero delay. The contract is
+        // stock OpenZeppelin and carries no floor of its own.
+        if (block.chainid == BASE_MAINNET_CHAIN_ID) {
+            require(
+                d.minDelay >= MIN_PRODUCTION_DELAY,
+                "TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"
+            );
+        }
 
-        // AC: The Safe at SAFE_ADDRESS must have threshold >= 2.
-        // A 1-of-N threshold provides no meaningful quorum protection.
-        uint256 threshold = ISafeMinimal(d.safe).getThreshold();
-        require(threshold >= 2, "SAFE_ADDRESS threshold < 2: configure at least 2-of-N quorum");
+        _requireRealSafe(d.safe, spec.owners, spec.threshold);
+    }
+
+    /// @dev The full Safe check. The address must be a SafeProxy 1.4.1 (code and
+    ///      codehash) that delegates to the canonical SafeL2 singleton (slot 0), with
+    ///      exactly the expected owners and threshold, no modules, no guard and the
+    ///      canonical CompatibilityFallbackHandler. A stub, a mock or an EOA fails.
+    function _requireRealSafe(address safe, address[] memory owners, uint256 threshold)
+        internal
+        view
+    {
+        // An EOA at SAFE_ADDRESS would let one key control every ADMIN_ROLE operation.
+        require(
+            safe.code.length > 0, "SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first"
+        );
+        require(
+            safe.codehash == SAFE_PROXY_1_4_1_CODEHASH,
+            "SAFE_ADDRESS is not a SafeProxy 1.4.1: codehash mismatch"
+        );
+        // SafeProxy keeps its singleton in storage slot 0: it must be the L2 singleton.
+        require(
+            address(uint160(uint256(vm.load(safe, bytes32(0))))) == SAFE_L2_SINGLETON,
+            "SAFE_ADDRESS does not delegate to the canonical SafeL2 singleton"
+        );
+        require(SAFE_L2_SINGLETON.code.length > 0, "SafeL2 singleton has no code on this chain");
+
+        require(owners.length >= 2, "SAFE_OWNERS must list at least 2 owners");
+        require(threshold >= 2, "SAFE_THRESHOLD < 2: configure at least 2-of-N quorum");
+        require(threshold <= owners.length, "SAFE_THRESHOLD exceeds SAFE_OWNERS");
+
+        ISafeFull s = ISafeFull(safe);
+        require(
+            keccak256(bytes(s.VERSION())) == keccak256("1.4.1"), "SAFE_ADDRESS VERSION is not 1.4.1"
+        );
+        require(s.getThreshold() == threshold, "Safe threshold != SAFE_THRESHOLD");
+
+        address[] memory actual = s.getOwners();
+        require(actual.length == owners.length, "Safe owner count != SAFE_OWNERS");
+        for (uint256 i = 0; i < owners.length; i++) {
+            require(owners[i] != address(0), "SAFE_OWNERS contains the zero address");
+            for (uint256 j = 0; j < i; j++) {
+                require(owners[i] != owners[j], "SAFE_OWNERS contains a duplicate");
+            }
+            require(s.isOwner(owners[i]), "SAFE_OWNERS entry is not a Safe owner");
+        }
+
+        // No module may bypass the owner quorum.
+        (address[] memory modules,) = s.getModulesPaginated(address(0x1), 10);
+        require(modules.length == 0, "Safe has an enabled module");
+        // No transaction guard: a guard can veto or rewrite every Safe transaction.
+        require(vm.load(safe, SAFE_GUARD_SLOT) == bytes32(0), "Safe has a transaction guard set");
+        // The canonical fallback handler, stored by setup().
+        require(
+            address(uint160(uint256(vm.load(safe, SAFE_FALLBACK_HANDLER_SLOT))))
+                == SAFE_FALLBACK_HANDLER,
+            "Safe fallback handler is not the canonical CompatibilityFallbackHandler"
+        );
     }
 
     function _deployAndWire(Deployed memory d) internal returns (TimelockController timelock) {
         // 1. Deploy TimelockController.
-        //    proposers = [safe], executors = [safe], admin = address(0)
+        //    proposers = [safe], executors = [address(0)], admin = address(0)
+        //    OZ grants CANCELLER_ROLE to each proposer, so the Safe is the only
+        //    proposer and canceller. address(0) as executor opens EXECUTOR_ROLE
+        //    to any caller once the delay has elapsed (security-model §4; core 1521).
         //    admin = address(0) means the timelock is self-administered
         //    (the safe can change delay/roles only through the timelock).
         address[] memory proposers = new address[](1);
         proposers[0] = d.safe;
         address[] memory executors = new address[](1);
-        executors[0] = d.safe;
+        executors[0] = address(0);
 
         timelock = new TimelockController(d.minDelay, proposers, executors, address(0));
 
         // ACL-7 / NC-10: GATE THE GRANT-DoS. The Gateway's agent registration is
         // permissionless (anyone may `commitAuthorization`/`revealAuthorization`),
         // and the role-separation invariant forbids one account from holding both
-        // AGENT_ROLE and an ADMIN/PAUSER-tier role. An attacker who front-runs the
-        // handover by pre-binding an INTENDED admin/pauser address as an AGENT
+        // AGENT_ROLE and an ADMIN/DEPOSIT_PAUSER-tier role. An attacker who front-runs the
+        // handover by pre-binding an INTENDED admin/deposit-pauser address as an AGENT
         // would make the subsequent `grantRole(ADMIN_ROLE, …)` revert with
         // `RoleSeparationViolated`, bricking the handover with a confusing,
         // late-stage failure.
         //
         // Assert UP FRONT — before any gateway grant — that every address about to
-        // receive an ADMIN/PAUSER-tier role on the Gateway is AGENT-free. The
+        // receive an ADMIN/DEPOSIT_PAUSER-tier role on the Gateway is AGENT-free. The
         // freshly-deployed `timelock` cannot have been pre-bound, but we assert it
         // anyway (defence in depth and a clear, typed early failure). This turns a
         // griefing vector into an explicit deploy-time precondition.
@@ -401,41 +569,44 @@ contract DeployTimelock is ExpectedChainGuard {
         // the set-once ADMIN_ROLE-gated `setRegistry`, so it must run while the
         // deployer still holds ADMIN_ROLE on the vault (i.e. before the revoke
         // below). The vault gates `retire()`/`unretire()` to this registry only.
-        IRetirableVaultLink(d.vault).setRegistry(d.registry);
-        require(
-            IRetirableVaultLink(d.vault).registry() == d.registry, "Vault registry link not set"
-        );
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            address vault_ = d.vaults[i];
+            IRetirableVaultLink(vault_).setRegistry(d.registry);
+            require(
+                IRetirableVaultLink(vault_).registry() == d.registry, "Vault registry link not set"
+            );
 
-        // RobotMoneyVault
-        //
-        // ACL-1 / F-01: the deployer EOA also holds the vault EMERGENCY_ROLE
-        // (granted as `_emergencyResponder` at construction). Move it to the
-        // independent emergency hot key, then revoke it from the deployer, BEFORE
-        // revoking the deployer's ADMIN_ROLE — EMERGENCY_ROLE's admin is
-        // ADMIN_ROLE (see RobotMoneyVault `_setRoleAdmin`), so the deployer must
-        // still hold ADMIN_ROLE to perform the grant/revoke. After this block no
-        // EOA except the dedicated emergency hot key holds any vault role.
-        IAccessControl(d.vault).grantRole(EMERGENCY_ROLE, d.emergency);
-        require(
-            IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, d.emergency),
-            "Emergency key missing EMERGENCY_ROLE on vault"
-        );
-        IAccessControl(d.vault).revokeRole(EMERGENCY_ROLE, msg.sender);
-        require(
-            !IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, msg.sender),
-            "Deployer still has EMERGENCY_ROLE on vault"
-        );
+            // RobotMoneyVault
+            //
+            // ACL-1 / F-01: the deployer EOA also holds the vault EMERGENCY_ROLE
+            // (granted as `_emergencyResponder` at construction). Move it to the
+            // independent emergency hot key, then revoke it from the deployer, BEFORE
+            // revoking the deployer's ADMIN_ROLE — EMERGENCY_ROLE's admin is
+            // ADMIN_ROLE (see RobotMoneyVault `_setRoleAdmin`), so the deployer must
+            // still hold ADMIN_ROLE to perform the grant/revoke. After this block no
+            // EOA except the dedicated emergency hot key holds any vault role.
+            IAccessControl(vault_).grantRole(EMERGENCY_ROLE, d.emergency);
+            require(
+                IAccessControl(vault_).hasRole(EMERGENCY_ROLE, d.emergency),
+                "Emergency key missing EMERGENCY_ROLE on vault"
+            );
+            IAccessControl(vault_).revokeRole(EMERGENCY_ROLE, msg.sender);
+            require(
+                !IAccessControl(vault_).hasRole(EMERGENCY_ROLE, msg.sender),
+                "Deployer still has EMERGENCY_ROLE on vault"
+            );
 
-        IAccessControl(d.vault).grantRole(ADMIN_ROLE, address(timelock));
-        require(
-            IAccessControl(d.vault).hasRole(ADMIN_ROLE, address(timelock)),
-            "Timelock missing ADMIN_ROLE on vault"
-        );
-        IAccessControl(d.vault).revokeRole(ADMIN_ROLE, msg.sender);
-        require(
-            !IAccessControl(d.vault).hasRole(ADMIN_ROLE, msg.sender),
-            "Deployer still has ADMIN_ROLE on vault"
-        );
+            IAccessControl(vault_).grantRole(ADMIN_ROLE, address(timelock));
+            require(
+                IAccessControl(vault_).hasRole(ADMIN_ROLE, address(timelock)),
+                "Timelock missing ADMIN_ROLE on vault"
+            );
+            IAccessControl(vault_).revokeRole(ADMIN_ROLE, msg.sender);
+            require(
+                !IAccessControl(vault_).hasRole(ADMIN_ROLE, msg.sender),
+                "Deployer still has ADMIN_ROLE on vault"
+            );
+        }
 
         // RobotMoneyGateway
         //
@@ -508,7 +679,7 @@ contract DeployTimelock is ExpectedChainGuard {
 
         // PortfolioRouter
         //
-        // R7 / §4.3: the router's ADMIN_ROLE is what gates `setWeights`, so
+        // R7 / §4.3: the router's WEIGHT_SETTER_ROLE is what gates `setWeights`, so
         // this block decides who can move allocation weights afterwards. Two
         // conditions must BOTH hold when it finishes, and neither is implied
         // by the other:
@@ -527,6 +698,17 @@ contract DeployTimelock is ExpectedChainGuard {
             "R7: RouterGovernance lacks router ADMIN_ROLE - execute() cannot reach setWeights"
         );
 
+        require(
+            IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, d.governance),
+            "R7: RouterGovernance lacks router WEIGHT_SETTER_ROLE - execute() cannot reach setWeights"
+        );
+        // Defence in depth: DeployRouterGovernance already drops the deployer's
+        // WEIGHT_SETTER_ROLE. Drop it here too, while the deployer still holds
+        // ADMIN_ROLE (the role admin), so a skipped stage cannot leave it behind.
+        if (IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, msg.sender)) {
+            IAccessControl(d.router).revokeRole(WEIGHT_SETTER_ROLE, msg.sender);
+        }
+
         IAccessControl(d.router).grantRole(ADMIN_ROLE, address(timelock));
         require(
             IAccessControl(d.router).hasRole(ADMIN_ROLE, address(timelock)),
@@ -540,12 +722,19 @@ contract DeployTimelock is ExpectedChainGuard {
 
         // (b), stated as the capability rather than as the role: after this
         // point `setWeights` from the deployer EOA reverts. `setWeights` is
-        // `onlyRole(ADMIN_ROLE)` on the router, so the role read IS the
+        // `onlyRole(WEIGHT_SETTER_ROLE)` on the router, so the role read IS the
         // capability — asserted separately from the revoke above so the
         // failure message names what an operator actually cares about.
         require(
-            !IAccessControl(d.router).hasRole(ADMIN_ROLE, msg.sender),
+            !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, msg.sender),
             "R7: deployer EOA can still call router.setWeights directly"
+        );
+        // `setWeights` is gated by WEIGHT_SETTER_ROLE, held only by
+        // RouterGovernance. The timelock gets ADMIN_ROLE (setDefaultWeights,
+        // clearVotedWeights) and must not hold the active weight setter.
+        require(
+            !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, address(timelock)),
+            "R7: timelock holds router WEIGHT_SETTER_ROLE - it could bypass RouterGovernance"
         );
         // And the grant survived the handover: nothing above touched it, but
         // this is the invariant the ceremony exists to establish, so read it
@@ -553,6 +742,30 @@ contract DeployTimelock is ExpectedChainGuard {
         require(
             IAccessControl(d.router).hasRole(ADMIN_ROLE, d.governance),
             "R7: RouterGovernance lost router ADMIN_ROLE during handover"
+        );
+
+        // Rotation roles (ADR-0002, core 1616). Both are self-administered, so the
+        // deployer, as their only holder, hands them over: the rotator role to the
+        // Safe (propose, cancel) and the executor role to the timelock (execute after
+        // the delay). The timelock must not hold the rotator role and the Safe must not
+        // hold the executor role, or one actor could rotate the weight setter alone.
+        IAccessControl(d.router).grantRole(WEIGHT_SETTER_ROTATOR_ROLE, d.safe);
+        IAccessControl(d.router).grantRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, address(timelock));
+        IAccessControl(d.router).revokeRole(WEIGHT_SETTER_ROTATOR_ROLE, msg.sender);
+        IAccessControl(d.router).revokeRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, msg.sender);
+        require(
+            IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROTATOR_ROLE, d.safe)
+                && !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROTATOR_ROLE, msg.sender)
+                && !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROTATOR_ROLE, address(timelock)),
+            "R7: router rotator role is not the Safe alone"
+        );
+        require(
+            IAccessControl(d.router)
+                    .hasRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, address(timelock))
+                && !IAccessControl(d.router)
+                    .hasRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, msg.sender)
+                && !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, d.safe),
+            "R7: router rotation executor role is not the timelock alone"
         );
 
         // RouterGovernance
@@ -603,9 +816,8 @@ contract DeployTimelock is ExpectedChainGuard {
         //
         // DeployInvestmentCommitteePolicy grants DEFAULT_ADMIN_ROLE + ADMIN_ROLE
         // on the receipt contract to RECEIPT_ADMIN_ADDRESS, which is NOT
-        // necessarily the deployer EOA (it defaults to ADMIN_ADDRESS for devnet
-        // ceremonies but may be configured independently). Resolve the actual
-        // current holder (d.receiptAdmin, defaulting to msg.sender when unset)
+        // necessarily the deployer EOA (it is a required input and may differ
+        // from ADMIN_ADDRESS). Resolve the actual current holder (d.receiptAdmin)
         // and revoke from there instead of assuming msg.sender.
         if (d.consensusReceipt != address(0)) {
             address currentReceiptAdmin = d.receiptAdmin == address(0) ? msg.sender : d.receiptAdmin;
@@ -680,7 +892,9 @@ contract DeployTimelock is ExpectedChainGuard {
         console2.log("  safe        :", d.safe);
         console2.log("  emergency   :", d.emergency);
         console2.log("  min_delay   :", d.minDelay);
-        console2.log("  vault       :", d.vault);
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            console2.log("  vault       :", d.vaults[i]);
+        }
         console2.log("  gateway     :", d.gateway);
         console2.log("  registry    :", d.registry);
         console2.log("  router      :", d.router);
@@ -706,15 +920,7 @@ contract DeployTimelock is ExpectedChainGuard {
     ///      the local `out/` directory happened to contain.
     ///      `outVar` names the env var that holds the output path.
     function _writeJson(Deployed memory d, string memory outVar) internal {
-        string memory outPath;
-        try vm.envString(outVar) returns (string memory s) {
-            outPath = s;
-        } catch {
-            // Under deployments/ like every other deploy script: foundry.toml
-            // grants no write permission to artifacts/, so the old default
-            // failed every run that did not set DEPLOYMENT_OUT.
-            outPath = string.concat("deployments/timelock-", vm.toString(block.chainid), ".json");
-        }
+        string memory outPath = _envStringRequired(outVar);
         _writeJsonTo(d, outPath);
     }
 
@@ -722,28 +928,8 @@ contract DeployTimelock is ExpectedChainGuard {
     ///      from the `DEPLOYMENT_OUT` read so a caller can name the path
     ///      without setting a process-wide variable.
     function _writeJsonTo(Deployed memory d, string memory outPath) internal {
-        string memory addrs = "manifest_addresses";
-        vm.serializeAddress(addrs, "timelock", address(d.timelock));
-        vm.serializeAddress(addrs, "safe", d.safe);
-        vm.serializeAddress(addrs, "emergency", d.emergency);
-        vm.serializeAddress(addrs, "vault", d.vault);
-        vm.serializeAddress(addrs, "gateway", d.gateway);
-        vm.serializeAddress(addrs, "registry", d.registry);
-        vm.serializeAddress(addrs, "router", d.router);
-        vm.serializeAddress(addrs, "ic_policy", d.icPolicy);
-        vm.serializeAddress(addrs, "consensus_receipt", d.consensusReceipt);
-        string memory addrsJson = vm.serializeAddress(addrs, "governance", d.governance);
-
-        string memory hashes = "manifest_code_hashes";
-        vm.serializeBytes32(hashes, "timelock", address(d.timelock).codehash);
-        vm.serializeBytes32(hashes, "safe", d.safe.codehash);
-        vm.serializeBytes32(hashes, "vault", d.vault.codehash);
-        vm.serializeBytes32(hashes, "gateway", d.gateway.codehash);
-        vm.serializeBytes32(hashes, "registry", d.registry.codehash);
-        vm.serializeBytes32(hashes, "router", d.router.codehash);
-        vm.serializeBytes32(hashes, "ic_policy", d.icPolicy.codehash);
-        vm.serializeBytes32(hashes, "consensus_receipt", d.consensusReceipt.codehash);
-        string memory hashesJson = vm.serializeBytes32(hashes, "governance", d.governance.codehash);
+        string memory addrsJson = _serializeAddressSection(d);
+        string memory hashesJson = _serializeCodeHashSection(d);
 
         string memory rolesJson = _serializeRoles(d);
 
@@ -765,7 +951,12 @@ contract DeployTimelock is ExpectedChainGuard {
         vm.serializeAddress(obj, "timelock", address(d.timelock));
         vm.serializeAddress(obj, "safe", d.safe);
         vm.serializeAddress(obj, "emergency", d.emergency);
-        vm.serializeAddress(obj, "vault", d.vault);
+        // The policy the timelock was built with, for the stage 12 verifier to
+        // compare against the chain. One policy: no sheet key selects it.
+        vm.serializeString(obj, "executorPolicy", EXECUTOR_POLICY);
+        vm.serializeString(obj, "cancellerPolicy", CANCELLER_POLICY);
+        vm.serializeAddress(obj, "vault", d.vaults[0]);
+        vm.serializeAddress(obj, "vaults", d.vaults);
         vm.serializeAddress(obj, "gateway", d.gateway);
         vm.serializeAddress(obj, "registry", d.registry);
         vm.serializeAddress(obj, "router", d.router);
@@ -774,10 +965,101 @@ contract DeployTimelock is ExpectedChainGuard {
         vm.serializeString(obj, "code_hashes", hashesJson);
         // Issue #1476: the gateway agents this run handed to the timelock.
         vm.serializeAddress(obj, "timelock_owned_agents", d.agents);
+        // One handover entry per vault in VAULT_ADDRESSES, read back from the chain.
+        vm.serializeString(obj, "vault_handover", _serializeVaultHandovers(d));
         string memory json = vm.serializeString(obj, "roles", rolesJson);
 
         vm.writeJson(json, outPath);
         console2.log("Wrote timelock deployment manifest to", outPath);
+    }
+
+    /// @dev The `addresses` section of the manifest. Split out of `_writeJsonTo`
+    ///      to keep that function inside the non-viaIR stack limit (`forge coverage`).
+    function _serializeAddressSection(Deployed memory d) internal returns (string memory) {
+        string memory addrs = "manifest_addresses";
+        vm.serializeAddress(addrs, "timelock", address(d.timelock));
+        vm.serializeAddress(addrs, "safe", d.safe);
+        vm.serializeAddress(addrs, "emergency", d.emergency);
+        vm.serializeAddress(addrs, "vault", d.vaults[0]);
+        vm.serializeAddress(addrs, "vaults", d.vaults);
+        vm.serializeAddress(addrs, "gateway", d.gateway);
+        vm.serializeAddress(addrs, "registry", d.registry);
+        vm.serializeAddress(addrs, "router", d.router);
+        vm.serializeAddress(addrs, "ic_policy", d.icPolicy);
+        vm.serializeAddress(addrs, "consensus_receipt", d.consensusReceipt);
+        return vm.serializeAddress(addrs, "governance", d.governance);
+    }
+
+    /// @dev The `code_hashes` section of the manifest, read from the chain.
+    function _serializeCodeHashSection(Deployed memory d) internal returns (string memory) {
+        string memory hashes = "manifest_code_hashes";
+        vm.serializeBytes32(hashes, "timelock", address(d.timelock).codehash);
+        vm.serializeBytes32(hashes, "safe", d.safe.codehash);
+        vm.serializeBytes32(hashes, "vault", d.vaults[0].codehash);
+        vm.serializeBytes32(hashes, "gateway", d.gateway.codehash);
+        vm.serializeBytes32(hashes, "registry", d.registry.codehash);
+        vm.serializeBytes32(hashes, "router", d.router.codehash);
+        vm.serializeBytes32(hashes, "ic_policy", d.icPolicy.codehash);
+        vm.serializeBytes32(hashes, "consensus_receipt", d.consensusReceipt.codehash);
+        return vm.serializeBytes32(hashes, "governance", d.governance.codehash);
+    }
+
+    /// @dev The per-vault handover record: one object per vault in VAULT_ADDRESSES,
+    ///      keyed `vault_<index>`. Every field is a live read from the chain.
+    function _serializeVaultHandovers(Deployed memory d) internal returns (string memory out) {
+        string memory all = "manifest_vault_handover";
+        out = "{}";
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            address vault_ = d.vaults[i];
+            IAccessControl v = IAccessControl(vault_);
+            string memory k = string.concat("manifest_vault_handover_", vm.toString(i));
+            vm.serializeAddress(k, "address", vault_);
+            vm.serializeBytes32(k, "code_hash", vault_.codehash);
+            vm.serializeAddress(k, "registry", IRetirableVaultLink(vault_).registry());
+            vm.serializeBool(
+                k, "registry_linked", IRetirableVaultLink(vault_).registry() == d.registry
+            );
+            vm.serializeAddress(k, "admin", address(d.timelock));
+            vm.serializeBool(
+                k, "timelock_has_admin_role", v.hasRole(ADMIN_ROLE, address(d.timelock))
+            );
+            vm.serializeAddress(k, "emergency", d.emergency);
+            vm.serializeBool(
+                k, "emergency_key_has_emergency_role", v.hasRole(EMERGENCY_ROLE, d.emergency)
+            );
+            vm.serializeBool(k, "deployer_has_admin_role", v.hasRole(ADMIN_ROLE, msg.sender));
+            string memory entry = vm.serializeBool(
+                k, "deployer_has_emergency_role", v.hasRole(EMERGENCY_ROLE, msg.sender)
+            );
+            out = vm.serializeString(all, string.concat("vault_", vm.toString(i)), entry);
+        }
+    }
+
+    /// @dev Folds the per-vault role reads into three booleans for the manifest.
+    function _vaultRoleAggregates(Deployed memory d)
+        internal
+        view
+        returns (bool allTimelockAdmin, bool allEmergencyKey, bool deployerHoldsVaultRole)
+    {
+        allTimelockAdmin = true;
+        allEmergencyKey = true;
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            IAccessControl v = IAccessControl(d.vaults[i]);
+            if (!v.hasRole(ADMIN_ROLE, address(d.timelock))) allTimelockAdmin = false;
+            if (!v.hasRole(EMERGENCY_ROLE, d.emergency)) allEmergencyKey = false;
+            if (v.hasRole(ADMIN_ROLE, msg.sender) || v.hasRole(EMERGENCY_ROLE, msg.sender)) {
+                deployerHoldsVaultRole = true;
+            }
+        }
+    }
+
+    /// @dev True when the deployer still owns any gateway agent in `d.agents`.
+    function _deployerOwnsListedAgent(Deployed memory d) internal view returns (bool owns) {
+        for (uint256 i = 0; i < d.agents.length; i++) {
+            if (IGatewayAgentOwnership(d.gateway).agentOwner(d.agents[i]) == msg.sender) {
+                owns = true;
+            }
+        }
     }
 
     /// @dev The role table, read back from the chain after the handover.
@@ -810,11 +1092,13 @@ contract DeployTimelock is ExpectedChainGuard {
             "timelock_has_governance_admin_role",
             IAccessControl(d.governance).hasRole(ADMIN_ROLE, address(d.timelock))
         );
-        vm.serializeBool(
-            roles,
-            "timelock_has_vault_admin_role",
-            IAccessControl(d.vault).hasRole(ADMIN_ROLE, address(d.timelock))
-        );
+        // Aggregates over every vault; the per-vault rows are in `vault_handover`.
+        // Computed in helpers so this function stays inside the non-viaIR stack
+        // limit that `forge coverage` compiles under.
+        (bool allTimelockAdmin, bool allEmergencyKey, bool deployerHoldsVaultRole) =
+            _vaultRoleAggregates(d);
+        vm.serializeBool(roles, "timelock_has_vault_admin_role", allTimelockAdmin);
+        vm.serializeUint(roles, "vaults_handed_over_count", d.vaults.length);
         vm.serializeBool(
             roles,
             "timelock_has_registry_admin_role",
@@ -825,26 +1109,13 @@ contract DeployTimelock is ExpectedChainGuard {
             "timelock_has_gateway_default_admin_role",
             IAccessControl(d.gateway).hasRole(DEFAULT_ADMIN_ROLE, address(d.timelock))
         );
-        vm.serializeBool(
-            roles,
-            "emergency_key_has_vault_emergency_role",
-            IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, d.emergency)
-        );
-        vm.serializeBool(
-            roles,
-            "deployer_has_vault_emergency_role",
-            IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, msg.sender)
-        );
+        vm.serializeBool(roles, "emergency_key_has_vault_emergency_role", allEmergencyKey);
+        vm.serializeBool(roles, "deployer_has_vault_emergency_role", deployerHoldsVaultRole);
         // Issue #1476: read from the gateway like the rows above. run() writes
         // the manifest only after _deployAndWire requires every listed agent to
         // have left the deployer, so a manifest run() writes records false; it
         // is a record for the reader, not a check.
-        bool deployerOwnsListedAgent;
-        for (uint256 i = 0; i < d.agents.length; i++) {
-            if (IGatewayAgentOwnership(d.gateway).agentOwner(d.agents[i]) == msg.sender) {
-                deployerOwnsListedAgent = true;
-            }
-        }
+        bool deployerOwnsListedAgent = _deployerOwnsListedAgent(d);
         vm.serializeBool(roles, "deployer_owns_a_listed_gateway_agent", deployerOwnsListedAgent);
         // The bool above covers the listed agents only; the count says how many
         // that is, so an empty list does not read as a checked one.
@@ -856,10 +1127,15 @@ contract DeployTimelock is ExpectedChainGuard {
             "safe_is_timelock_proposer",
             d.timelock.hasRole(d.timelock.PROPOSER_ROLE(), d.safe)
         );
+        vm.serializeBool(
+            roles,
+            "safe_is_timelock_canceller",
+            d.timelock.hasRole(d.timelock.CANCELLER_ROLE(), d.safe)
+        );
         return vm.serializeBool(
             roles,
-            "safe_is_timelock_executor",
-            d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), d.safe)
+            "timelock_executor_is_open",
+            d.timelock.hasRole(d.timelock.EXECUTOR_ROLE(), address(0))
         );
     }
 }

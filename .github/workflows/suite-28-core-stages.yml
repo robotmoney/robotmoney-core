@@ -1,0 +1,147 @@
+# Canonical: core issue 1499, core S3 (1485), S5 (1487), 1493, 1523.
+#
+# There is ONE deploy driver: the publish-contracts CLI (bun publish-contracts/src/cli.ts). This workflow
+# runs the offline checks of the data it reads (scripts/deploy/stage-table.json, the manifest rules and the
+# stage tools) on every pull request. The rehearsal job (core-stages-twin-chain) starts its own Twin chain
+# (918453, a pinned lazy anvil fork, .github/actions/twin-fork) and runs the CLI publish (stages 0 to 11),
+# verify (12) and govern (13, with the time warp) with the committed stage sheet. It runs on every push to
+# dev, on a ready pull request, and nightly (suite-29 calls this workflow with the run's one pin). It writes
+# counts.json (per-stage broadcast counts and the deployer nonce), checks it, compares it with
+# deployments/frozen-counts/<sha>.json when that file exists, and uploads rehearsal-counts-<sha>.
+# At release time a person copies `counts` from that artifact into the frozen counts file (docs/operations/contract-release-runbooks.md).
+# The router, basket and timelock role proofs are labels of the one verifier.
+name: core-stages
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: ["dev", "releases-*"]
+    tags: ["v*.*.*"]
+  # Called by suite-29-nightly-twin-fork.yml, which chooses ONE pin for the whole nightly run.
+  workflow_call:
+    inputs:
+      pin_block:
+        description: "Twin chain pin handed down by a parent run. Empty: this run chooses one."
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-suite28-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  core-stages-offline:
+    name: core-stages-offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Stage table, manifest rules and config-check fixtures
+        run: |
+          set -euo pipefail
+          bun test scripts/deploy scripts/ci 2>&1 | tee core-stages.log
+          grep -Eq '^ *[1-9][0-9]* pass' core-stages.log || { echo "zero tests passed" >&2; exit 1; }
+
+  publish-contracts-tests:
+    name: publish-contracts-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/publish-contracts-setup
+      - name: Typecheck
+        working-directory: publish-contracts
+        run: bun x tsc --noEmit
+      - name: Unit tests (stub forge and cast, no chain)
+        working-directory: publish-contracts
+        run: |
+          set -euo pipefail
+          bun test --timeout 60000 2>&1 | tee ../publish-contracts-tests.log
+          grep -Eq '^ *[1-9][0-9]* pass' ../publish-contracts-tests.log || { echo "zero tests passed" >&2; exit 1; }
+
+  pin:
+    name: twin-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: feature-correctness
+    outputs:
+      block: ${{ steps.pin.outputs.block }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        uses: ./.github/actions/twin-pin
+        with:
+          pin-block: ${{ inputs.pin_block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+  # THE REHEARSAL (core 1523): publish, verify and govern on a Twin chain this job starts itself.
+  core-stages-twin:
+    name: core-stages-twin-chain
+    needs: pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    env:
+      CI_CLASS: system-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Start the Twin chain at the run pin
+        id: fork
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+      # Throwaway keystores, the committed stage sheet, gas and USDC for the deployer, then
+      # `publish` (libs through the timelock handover and the real Safe), `verify`, `govern` and `verify` again (issue 1667).
+      # Any stage that exits non-zero fails this step.
+      - name: Publish, verify and govern on the Twin chain with the one driver
+        uses: ./.github/actions/twin-publish
+        with:
+          rpc-url: ${{ steps.fork.outputs.rpc-url }}
+          verify: "true"
+          govern: "true"
+      - name: Check counts.json against the stage table
+        run: bun publish-contracts/src/ci/rehearsal-counts.ts check --file "$TWIN_COUNTS_JSON"
+      - name: Drift check against the frozen counts of this SHA
+        run: bun publish-contracts/src/counts-drift.ts --counts "$TWIN_COUNTS_JSON"
+      - name: Collect the counts and the run files
+        if: always()
+        env:
+          # success only when every step above passed: freeze-counts (core 1602) refuses a counts.json without it
+          REHEARSAL_CONCLUSION: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/rehearsal-out"
+          mkdir -p "$out"
+          [ -z "${TWIN_COUNTS_JSON:-}" ] || jq --arg c "$REHEARSAL_CONCLUSION" '. + {rehearsal: {conclusion: $c}}' "$TWIN_COUNTS_JSON" > "$out/counts.json"
+          [ -z "${TWIN_MANIFEST_DIR:-}" ] || cp -r "$TWIN_MANIFEST_DIR" "$out/manifests"
+          [ -z "${TWIN_VERIFY_LABELS:-}" ] || cp "$TWIN_VERIFY_LABELS" "$out/verify-labels.txt"
+          [ -z "${TWIN_GOVERN_ROWS:-}" ] || cp "$TWIN_GOVERN_ROWS" "$out/govern-rows.txt"
+          [ -z "${TWIN_VERIFY_LABELS_POST_GOVERN:-}" ] || cp "$TWIN_VERIFY_LABELS_POST_GOVERN" "$out/verify-labels-post-govern.txt"
+          ls -R "$out"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rehearsal-counts-${{ github.sha }}
+          path: ${{ runner.temp }}/rehearsal-out
+          if-no-files-found: error
+          retention-days: 90
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

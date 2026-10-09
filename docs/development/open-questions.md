@@ -30,7 +30,7 @@ Decision: admin-settable on-chain default-weights vector that the Router falls b
 
 **AgentTokenVault shortlist governance (§1.3, §1.4).** **Resolved** — see [ADR-0004](../adr/ADR-0004-agent-token-shortlist-governance.md) (2026-06-03).
 
-Decision: admin multisig (Safe ≥2-of-3) + mandatory `TimelockController` delay (48 h for `addAsset`, 24 h for `removeAsset`) + public veto window. Any Safe signer may cancel a queued change unilaterally. `addAsset` gate requires market-cap ≥ $10M, listing age ≥ 90 days, daily volume ≥ $100K, holder count ≥ 500, oracle availability, and liquidity depth ≥ $50K within 2% of mid-price. Maximum shortlist size: 15 tokens. Upgrade path to RM-token veto module (Option B) is reserved via `TimelockController` `CANCELLER_ROLE`. Resolves the blocking gap-report Appendix C item and enables rmAGENT router-eligibility (pending TWAP oracle, rebalancing model, and liquidity proof gaps).
+Decision: admin multisig (Safe ≥2-of-3) + mandatory `TimelockController` delay (48 h for `addAsset`, 24 h for `removeAsset`) + public veto window. Amended 2026-10-06: every shortlist change waits the single 48 h delay; the 24 h removal split is not built. ~~Any Safe signer may cancel a queued change unilaterally.~~ Resolved 2026-10-05: the canceller is the Safe only, acting at its threshold (ADR-0004 amendment). `addAsset` gate requires market-cap ≥ $10M, listing age ≥ 90 days, daily volume ≥ $100K, holder count ≥ 500, oracle availability, and liquidity depth ≥ $50K within 2% of mid-price. Maximum shortlist size: 15 tokens. No token-based governance is foreseen. Resolves the blocking gap-report Appendix C item and enables rmAGENT router-eligibility (pending TWAP oracle, rebalancing model, and liquidity proof gaps).
 
 ### 1.B Agent-token vault internals
 
@@ -52,7 +52,7 @@ Decision: no on-chain migration. Retired vaults keep standard ERC-4626 `redeem` 
 
 Decision: NAV haircut at current per-share NAV. Depositors always redeem at the current per-share NAV (already reflecting drawdown via the slippage-adjusted `previewRedeem`); no forced sale, no withdrawal queue. A bounded-slippage / minimum-haircut cap prevents thin-liquidity redemptions from being sandwiched into catastrophic loss. This unblocks marking the basket vaults router-eligible (subject to any remaining audit gate).
 
-> **Research questions** (open-ended modeling and assurance, not product/engineering decisions) live in `docs/technical/research-questions.md` — currently the inclusion-attack economic bounds (§3.8) and protocol-agent resilience (§3.10).
+> **Research questions** (open-ended modeling and assurance, not product/engineering decisions) live in `docs/technical/research-questions.md` — currently protocol-agent resilience (§3.10). Inclusion-attack economic bounds (§3.8) is closed because there is no token-based governance.
 
 ---
 
