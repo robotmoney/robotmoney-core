@@ -1,0 +1,23 @@
+{
+  "deploySha": "fc089a77a1c7fadb10b272cd265fc69c52616549",
+  "measured": {
+    "chainId": 918453,
+    "at": "2026-10-09T15:10:54.625Z",
+    "forge": "forge Version: 1.8.3"
+  },
+  "counts": {
+    "safe": 1,
+    "libs": 1,
+    "recorder": 6,
+    "vault": 15,
+    "registry": 2,
+    "router": 4,
+    "gateway": 1,
+    "governance": 6,
+    "ic-policy": 5,
+    "proto": 10,
+    "agent": 9,
+    "rwa": 8,
+    "timelock": 43
+  }
+}
