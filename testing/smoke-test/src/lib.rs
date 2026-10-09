@@ -1632,7 +1632,7 @@ impl Fixture {
     ///
     /// - `receipt-a.json`: recorded with its OWN correct digest and released. Its weights equal the live router
     ///   vector under the missing-vault = 0 bps rule (the Twin stage sheet `ROUTER_WEIGHTS` the deployer leaves on
-    ///   the router before the handover: rmUSDC 6000, rmPROTO 2500, rmRWA 1500, rmAGENT 0), so it renders
+    ///   the router before the handover: rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0), so it renders
     ///   "Verified", "Released" and "Applied".
     /// - `receipt-b.json`: recorded with a deliberately WRONG digest and never released. Its weights differ from
     ///   the live vector, so it renders "Unverified", "Recorded, not released" and "Not applied".
@@ -3531,7 +3531,7 @@ mod tests {
 
     /// The seeded fixtures load, derive distinct ids from their own payload fields, and are served under the
     /// `receipt-fixtures` hostname. receipt-a matches the live router vector under the missing-vault = 0 bps rule
-    /// (the Twin stage sheet `ROUTER_WEIGHTS`: rmUSDC 6000, rmPROTO 2500, rmRWA 1500, rmAGENT 0), and receipt-b differs from it.
+    /// (the Twin stage sheet `ROUTER_WEIGHTS`: rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0), and receipt-b differs from it.
     #[test]
     fn fixture_receipts_load_and_carry_the_expected_weights() {
         let root = locate_repo_root().expect("repo root");
@@ -3558,9 +3558,9 @@ mod tests {
         };
         let live = vec![
             ("agent_tokens".to_string(), 0),
-            ("conservative_defi_yield".to_string(), 6_000),
-            ("protocol_tokens".to_string(), 2_500),
-            ("real_world_assets".to_string(), 1_500),
+            ("conservative_defi_yield".to_string(), 9_500),
+            ("protocol_tokens".to_string(), 500),
+            ("real_world_assets".to_string(), 0),
         ];
         assert_eq!(weights(&a.bytes), live);
         assert_ne!(weights(&b.bytes), live);
