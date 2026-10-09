@@ -1,0 +1,132 @@
+---
+title: "UniswapV4SwapAdapterForkTest"
+description: "Runs on the Twin chain (a pinned lazy anvil fork of real Base). With FORK_RPC_URL unset the test skips with a named reason (ForkSelect). The shipped config names the live PoolKey, so a wrong field fails here."
+---
+
+# UniswapV4SwapAdapterForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/UniswapV4SwapAdapterFork.t.sol)
+
+**Inherits:** Test
+
+Runs on the Twin chain (a pinned lazy anvil fork of real Base). With FORK_RPC_URL unset the test skips with a
+named reason (ForkSelect). The shipped config names the live PoolKey, so a wrong field fails here.
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+## State Variables
+
+### cfg
+
+```solidity
+string internal cfg;
+```
+
+### key
+
+```solidity
+IPoolManagerV4.PoolKey internal key;
+```
+
+### poolManager
+
+```solidity
+address internal poolManager;
+```
+
+### stateView
+
+```solidity
+address internal stateView;
+```
+
+### poolId
+
+```solidity
+bytes32 internal poolId;
+```
+
+### rmToken
+
+```solidity
+address internal rmToken;
+```
+
+### rec
+
+```solidity
+UniswapV4PriceRecorder internal rec;
+```
+
+### adapter
+
+```solidity
+UniswapV4SwapAdapter internal adapter;
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_fork_configpoolkeyhashestothepoolid"></a>
+
+### test_fork_configPoolKeyHashesToThePoolId
+
+```solidity
+function test_fork_configPoolKeyHashesToThePoolId() public view;
+```
+
+<a id="test_fork_recorderreadsmatchstateview"></a>
+
+### test_fork_recorderReadsMatchStateView
+
+The recorder reads the same slot0 and liquidity StateView reports, through the PoolManager extsload.
+
+```solidity
+function test_fork_recorderReadsMatchStateView() public view;
+```
+
+<a id="test_fork_swapusdctormandbackthroughtherealpoolmanager"></a>
+
+### test_fork_swapUsdcToRmAndBackThroughTheRealPoolManager
+
+USDC to RM and back through the real PoolManager. The recorder is poked by the swaps.
+
+```solidity
+function test_fork_swapUsdcToRmAndBackThroughTheRealPoolManager() public;
+```
+
+<a id="test_fork_swaprefusesafloortherealpoolcannotmeet"></a>
+
+### test_fork_swapRefusesAFloorTheRealPoolCannotMeet
+
+```solidity
+function test_fork_swapRefusesAFloorTheRealPoolCannotMeet() public;
+```
+
+<a id="test_fork_twappricefromtherecordertracksthelivetick"></a>
+
+### test_fork_twapPriceFromTheRecorderTracksTheLiveTick
+
+```solidity
+function test_fork_twapPriceFromTheRecorderTracksTheLiveTick() public;
+```
+

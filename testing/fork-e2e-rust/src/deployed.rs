@@ -262,8 +262,8 @@ pub fn deploy_own_vault(fx: &ForkFixture) -> Result<DeployedVault, HarnessError>
         .set_balance(deployer, one_eth * U256::from(100u64))?;
     fx.fund_usdc(deployer, U256::from(SEED_DEPOSIT_USDC))?;
 
-    // The vault stage runs core's config check first, and that check covers the RM/USDC pool rmAGENT adds RM on (core 1554).
-    // The live pool is unfunded until the owner funds it, so the Twin chain funds it with real transactions (`rehearsal fund-rm-pool`).
+    // The vault stage runs core's config check first, and that check covers the RM/USDC Uniswap V4 pool rmAGENT adds RM on (core 1554, 1676).
+    // The Twin chain deepens the live pool with real transactions through the real V4 PositionManager (`rehearsal fund-rm-pool`).
     let pool = Command::new("bun")
         .arg(root.join(REHEARSAL_CLI_REL))
         .args(["fund-rm-pool", "--rpc", &fx.rpc_url, "--core-dir"])

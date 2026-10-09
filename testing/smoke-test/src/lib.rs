@@ -1540,6 +1540,17 @@ impl Fixture {
         )
     }
 
+    /// Open rmAGENT deposits through the real Safe and the real timelock (core 1676). The default Twin sheet never unpauses rmAGENT, so the
+    /// V4 deposit test opens it with a generic Twin-only call, the way the gateway is reopened above.
+    pub fn unpause_agent_vault(&self) -> Result<String, HarnessError> {
+        self.timelock_call(
+            "agent-unpause-deposits",
+            self.agent_vault(),
+            "unpauseDeposits()",
+            &[],
+        )
+    }
+
     /// Revoke the agent as its owner, the test depositor (`revokeAgent` requires the recorded owner).
     pub fn revoke_agent(&self) -> Result<String, HarnessError> {
         let agent = format!("{:#x}", self.agent());
@@ -1764,11 +1775,11 @@ fn cast_call_raw_at(
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_lowercase())
 }
 
-/// Fund the live RM/USDC Uniswap V3 pool on the Twin chain (issue 1554) with `rehearsal fund-rm-pool`, the one
-/// implementation of the step (the twin-publish CI action runs the same verb). Real pool, real position manager,
-/// real transactions: it gives a funder RM and USDC with the fork's balance helpers, raises the pool's
-/// observation cardinality and mints one in-range position. It asserts the `BasketVault.addAsset` floors
-/// (cardinality >= 901, liquidity >= 1e6) itself, so a failure names the pool and not a later revert.
+/// Fund the live RM/USDC Uniswap V4 pool on the Twin chain (issues 1554, 1676) with `rehearsal fund-rm-pool`, the one
+/// implementation of the step (the twin-publish CI action runs the same verb). Real pool, real V4 PositionManager
+/// (Permit2), real transactions: it gives a funder RM and USDC with the fork's balance helpers and mints one in-range
+/// position. It asserts the pool took the liquidity and clears the `BasketVault.addAsset` floor (liquidity >= 1e6)
+/// itself, so a failure names the pool and not a later revert.
 fn fund_rm_pool(
     cfg: &publish::PublishConfig,
     rpc_url: &str,

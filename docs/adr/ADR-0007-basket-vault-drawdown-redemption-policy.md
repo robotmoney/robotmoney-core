@@ -177,6 +177,13 @@ A holder must still always be able to exit, even if a TWAP read or a swap leg ca
   backing never falls. A caller other than the owner spends allowance. The entry gas floor matches `redeem`.
   Pause, shutdown, retire and roles do not gate it. Removed assets are not paid.
 
+## Amendment (core 1676): a stale price recorder
+
+rmAGENT prices RM from the permissionless `UniswapV4PriceRecorder` (ADR-0005 amendment, 2026-10-08). When no one has recorded for more than one
+1800 s window, the recorder is stale and `observe` reverts. Deposits, USDC `redeem` and `totalAssets()` then revert (fail closed). The USDC redeem
+uses the TWAP floors only while the recorder is fresh. `redeemInKind` reads no oracle, so it keeps working. Any `record()` call (the swap adapter,
+a keeper, a user) makes the recorder fresh again.
+
 ## NatSpec disclosure
 
 A NatSpec block on `contracts/vaults/BasketVault.sol` documents the NAV-haircut

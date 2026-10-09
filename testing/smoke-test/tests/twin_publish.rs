@@ -258,26 +258,24 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "receipt B was recorded only: it must not read released"
     );
 
-    // Issue 1554: rmAGENT launches paused and holding RM. Its one asset is the live RM token,
-    // read back from the deployed vault (`assetCount()` is 1, `assets(0)` word 0 is the token).
-    let agent = fx.agent_vault();
-    let count = fx
-        .cast_call_raw(agent, "assetCount()", &[])
-        .expect("read rmAGENT assetCount");
-    assert_eq!(
-        count.trim_start_matches("0x").trim_start_matches('0'),
-        "1",
-        "rmAGENT must hold exactly one asset, RM (assetCount raw {count})"
-    );
-    let first = fx
-        .cast_call_raw(agent, "assets(uint256)", &["0"])
-        .expect("read rmAGENT assets(0)");
-    assert!(
-        first
-            .trim_start_matches("0x")
-            .starts_with("00000000000000000000000065021a79aeef22b17cdc1b768f5e79a8618beba3"),
-        "rmAGENT asset 0 must be RM 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3, got {first}"
-    );
+    // Core 1676 (owner decision 2026-10-08): rmAGENT holds RM on the Uniswap V4 RM/USDC pool. The verifier read the venue, the V4 adapter, the
+    // recorder PoolKey and the absence of any recorder admin back from the chain: each label is in the output or `verify()` above would have failed.
+    for label in [
+        "vault[rmAGENT]: asset row is venue V4 with the price recorder as its pool",
+        "vault[rmAGENT]: V4 adapter codehash is allowed",
+        "vault[rmAGENT]: V4 adapter is bound to the recorder, the PoolManager and the pool key",
+        "recorder: PoolKey and PoolManager equal config",
+        "recorder: observation ring holds the full window floor",
+        "recorder: has no owner, role or setter",
+        "recorder: runtime code equals build artifact (masked)",
+        "adapter[V4:rmAGENT]: runtime code equals build artifact (masked)",
+    ] {
+        assert!(
+            verified.lines().any(|l| l.trim() == label),
+            "the verifier output lacks the label '{label}'"
+        );
+    }
+    rm_v4_flows(&fx, dir);
 
     // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain
     // after the full publish and govern run. `cast_send` fails on a reverted receipt.
@@ -346,5 +344,237 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     assert!(
         usdc_after_withdraw > usdc_after_deposit,
         "the withdraw returned no USDC"
+    );
+}
+
+fn word(raw: &str, i: usize) -> String {
+    let h = raw.trim_start_matches("0x");
+    h[i * 64..(i + 1) * 64].to_string()
+}
+
+/// A signed 24-bit tick from a 32-byte ABI word (sign-extended).
+fn tick_of(raw: &str, i: usize) -> i32 {
+    let w = word(raw, i);
+    u32::from_str_radix(&w[w.len() - 8..], 16).expect("tick word") as i32
+}
+
+/// Core 1676. rmAGENT holds RM through the REAL Uniswap V4 PoolManager pool `0xf2e7b957...`, priced by the REAL recorder, on the Twin chain
+/// after the full publish and govern run. Nothing is mocked: the pool is real Base state (funded through the real PositionManager by
+/// `rehearsal fund-rm-pool`), the vault is opened by the real Safe and timelock, and every swap goes through the real PoolManager.
+///  1. the asset row is RM, venue V4, pool = the recorder, adapter = the V4 adapter the vault manifest names;
+///  2. after the 48 hour govern warp the recorder is stale: a deposit fails closed until someone pokes it (permissionless);
+///  3. a deposit swaps USDC to RM through the PoolManager (the pool tick moves) and the swap pokes the recorder (its index advances);
+///  4. a USDC redeem returns USDC;
+///  5. left unpoked for more than one window the recorder is stale: a deposit and a USDC redeem fail, and redeemInKind still pays RM.
+fn rm_v4_flows(fx: &Fixture, dir: &Path) {
+    let cfg: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fx.repo_root().join("config/agent-token-shortlist.json"))
+            .expect("read the shipped agent config"),
+    )
+    .expect("agent config is JSON");
+    let rm_cfg = &cfg["shortlist"][0];
+    assert_eq!(rm_cfg["venue"], "UniswapV4", "RM is a Uniswap V4 asset");
+    let pool_id = rm_cfg["poolId"].as_str().expect("poolId").to_string();
+    assert_eq!(
+        pool_id,
+        "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391"
+    );
+    let state_view: alloy_primitives::Address = rm_cfg["stateView"]
+        .as_str()
+        .expect("stateView")
+        .parse()
+        .expect("stateView address");
+    let rm: alloy_primitives::Address = rm_cfg["token"]
+        .as_str()
+        .expect("token")
+        .parse()
+        .expect("RM address");
+    let read_json = |f: &str| -> serde_json::Value {
+        serde_json::from_str(
+            &std::fs::read_to_string(dir.join(f)).unwrap_or_else(|_| panic!("read {f}")),
+        )
+        .unwrap_or_else(|_| panic!("{f} is JSON"))
+    };
+    let recorder: alloy_primitives::Address = read_json("recorder.json")["recorder"]
+        .as_str()
+        .expect("recorder manifest")
+        .parse()
+        .expect("recorder address");
+    let agent_manifest = read_json("agent-token-vault.json");
+    let v4_adapter = agent_manifest["adapter_v4"].as_str().expect("adapter_v4");
+
+    // 1. The asset row.
+    let agent_vault = fx.agent_vault();
+    let first = fx
+        .cast_call_raw(agent_vault, "assets(uint256)", &["0"])
+        .expect("read rmAGENT assets(0)");
+    assert!(
+        word(&first, 0).ends_with("65021a79aeef22b17cdc1b768f5e79a8618beba3"),
+        "rmAGENT asset 0 must be RM, got {first}"
+    );
+    assert!(
+        word(&first, 1).ends_with(
+            &format!("{recorder:#x}")
+                .trim_start_matches("0x")
+                .to_lowercase()
+        ),
+        "rmAGENT asset 0 pool must be the recorder {recorder:#x}, got {first}"
+    );
+    assert_eq!(
+        u64::from_str_radix(word(&first, 2).trim_start_matches('0').max("0"), 16).unwrap(),
+        29100,
+        "the swap fee is the pool fee 29100"
+    );
+    assert!(
+        word(&first, 4).ends_with(&v4_adapter.trim_start_matches("0x").to_lowercase()),
+        "rmAGENT asset 0 adapter must be the V4 adapter {v4_adapter}, got {first}"
+    );
+    assert_eq!(
+        word(&first, 5).trim_start_matches('0'),
+        "1",
+        "venue is V4 (1)"
+    );
+
+    // The depositor: a funded EOA. rmAGENT is opened through the real Safe and timelock (a generic Twin-only call).
+    fx.unpause_agent_vault()
+        .expect("open rmAGENT deposits through the real Safe and timelock");
+    let user = fx.agent();
+    let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
+    fx.fund_gas(user, 10_000_000_000_000_000_000)
+        .expect("fund gas for the depositor");
+    let deposit: u128 = 50_000_000; // 50 USDC, under the 100 USDC per-deposit cap
+    fx.fund_usdc(user, deposit * 4)
+        .expect("fund USDC for the depositor");
+    let (vault_s, dep_s) = (format!("{agent_vault:#x}"), deposit.to_string());
+    let user_s = format!("{user:#x}");
+    let slot0 = |fx: &Fixture| {
+        fx.cast_call_raw(state_view, "getSlot0(bytes32)", &[&pool_id])
+            .expect("StateView.getSlot0")
+    };
+    let latest = |fx: &Fixture| {
+        // latest() -> (lastTick, lastRecordedAt, index, cardinality, cardinalityNext)
+        let raw = fx
+            .cast_call_raw(recorder, "latest()", &[])
+            .expect("recorder.latest()");
+        let at = u64::from_str_radix(word(&raw, 1).trim_start_matches('0').max("0"), 16).unwrap();
+        let idx = u64::from_str_radix(word(&raw, 2).trim_start_matches('0').max("0"), 16).unwrap();
+        let card = u64::from_str_radix(word(&raw, 3).trim_start_matches('0').max("0"), 16).unwrap();
+        (at, idx, card)
+    };
+
+    // 2. Stale after the govern warp: the deposit fails closed. (Anyone may poke the recorder: `record()` has no role.)
+    fx.cast_send(
+        &pk,
+        fx.usdc(),
+        "approve(address,uint256)",
+        &[&vault_s, &dep_s],
+    )
+    .expect("approve rmAGENT");
+    assert!(
+        fx.cast_send(
+            &pk,
+            agent_vault,
+            "deposit(uint256,address)",
+            &[&dep_s, &user_s]
+        )
+        .is_err(),
+        "a deposit into rmAGENT must fail closed while the recorder is stale"
+    );
+    fx.cast_send(&pk, recorder, "record()", &[])
+        .expect("anyone may poke the recorder");
+    let (poked_at, idx_before, card) = latest(fx);
+    assert!(card >= 901, "the ring holds the 901 slot floor, got {card}");
+    let tick_before = tick_of(&slot0(fx), 1);
+
+    // 3. A deposit, one block later, routed through the real PoolManager pool.
+    fx.warp(10).expect("one block later");
+    let rm_before = fx.erc20_balance_of(rm, agent_vault).expect("RM balance");
+    fx.cast_send(
+        &pk,
+        agent_vault,
+        "deposit(uint256,address)",
+        &[&dep_s, &user_s],
+    )
+    .expect("the rmAGENT deposit must succeed through the V4 PoolManager");
+    let shares = fx
+        .erc20_balance_of(agent_vault, user)
+        .expect("rmAGENT shares");
+    assert!(shares > 0, "the rmAGENT deposit minted no shares");
+    let rm_after = fx.erc20_balance_of(rm, agent_vault).expect("RM balance");
+    assert!(
+        rm_after > rm_before,
+        "rmAGENT holds no RM after the deposit"
+    );
+    assert_ne!(
+        tick_of(&slot0(fx), 1),
+        tick_before,
+        "the deposit must move the tick of PoolManager pool {pool_id}: the swap went through it"
+    );
+    let (swap_at, idx_after, _) = latest(fx);
+    assert!(
+        swap_at > poked_at && idx_after != idx_before,
+        "the recorder index must advance during the swap (index {idx_before} -> {idx_after}, time {poked_at} -> {swap_at})"
+    );
+
+    // 4. A USDC redeem returns USDC.
+    let half = (shares / 2).to_string();
+    let usdc_before = fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance");
+    fx.cast_send(
+        &pk,
+        agent_vault,
+        "redeem(uint256,address,address)",
+        &[&half, &user_s, &user_s],
+    )
+    .expect("the rmAGENT USDC redeem must succeed while the recorder is fresh");
+    assert!(
+        fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance") > usdc_before,
+        "the USDC redeem returned no USDC"
+    );
+
+    // 5. Left unpoked for more than one window: deposits and USDC redeems fail closed, redeemInKind pays RM with no oracle read.
+    fx.warp(1900)
+        .expect("leave the recorder unpoked for more than one 1800 s window");
+    let rest = fx
+        .erc20_balance_of(agent_vault, user)
+        .expect("rmAGENT shares");
+    assert!(rest > 0, "no shares left for the in-kind exit");
+    fx.cast_send(
+        &pk,
+        fx.usdc(),
+        "approve(address,uint256)",
+        &[&vault_s, &dep_s],
+    )
+    .expect("approve rmAGENT");
+    assert!(
+        fx.cast_send(
+            &pk,
+            agent_vault,
+            "deposit(uint256,address)",
+            &[&dep_s, &user_s]
+        )
+        .is_err(),
+        "a deposit must fail closed with a stale recorder"
+    );
+    assert!(
+        fx.cast_send(
+            &pk,
+            agent_vault,
+            "redeem(uint256,address,address)",
+            &[&rest.to_string(), &user_s, &user_s]
+        )
+        .is_err(),
+        "a USDC redeem must fail closed with a stale recorder"
+    );
+    let rm_user_before = fx.erc20_balance_of(rm, user).expect("RM balance");
+    fx.cast_send(
+        &pk,
+        agent_vault,
+        "redeemInKind(uint256,address,address)",
+        &[&rest.to_string(), &user_s, &user_s],
+    )
+    .expect("redeemInKind must pay with a stale recorder (withdrawals are never frozen)");
+    assert!(
+        fx.erc20_balance_of(rm, user).expect("RM balance") > rm_user_before,
+        "redeemInKind returned no RM"
     );
 }
