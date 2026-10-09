@@ -5,7 +5,7 @@
  */
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { keygen } from "../keystore/keygen.ts";
+import { keygen, keygenWithPassword } from "../keystore/keygen.ts";
 
 export const MIN_PASSWORD_CHARS = 16;
 export const DEFAULT_VOTERS = 2;
@@ -37,7 +37,10 @@ export function assertPassword(pw: string): void {
 
 export interface MakeKeysOptions {
   dir: string;
-  passwordFile: string;
+  /** A 0600 passphrase file (the unattended CI path). Exactly one of passwordFile and password is given. */
+  passwordFile?: string;
+  /** The passphrase held in memory only (the hidden-prompt path): no file is read or written. */
+  password?: string;
   names?: string[];
   voters?: number;
 }
@@ -54,12 +57,13 @@ export function makeRehearsalKeys(o: MakeKeysOptions): RehearsalKeys {
     seen.add(n);
     if (existsSync(join(o.dir, n))) throw new Error(`${join(o.dir, n)} already exists`);
   }
-  readPasswordFile(o.passwordFile); // fails on a loose mode or a short passphrase before any key exists
+  if ((o.passwordFile === undefined) === (o.password === undefined)) throw new Error("give exactly one of a password file or an in-memory password");
+  if (o.password !== undefined) assertPassword(o.password); else readPasswordFile(o.passwordFile!); // fails on a loose mode or a short passphrase before any key exists
   if (existsSync(o.dir)) {
     if (lstatSync(o.dir).isSymbolicLink()) throw new Error(`${o.dir} is a symlink`);
   } else mkdirSync(o.dir, { recursive: true, mode: 0o700 });
   chmodSync(o.dir, 0o700);
-  const addresses = keygen(o.dir, o.passwordFile, names);
+  const addresses = o.password !== undefined ? keygenWithPassword(o.dir, o.password, names) : keygen(o.dir, o.passwordFile!, names);
   return { dir: o.dir, addresses, names };
 }
 

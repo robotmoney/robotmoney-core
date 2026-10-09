@@ -274,6 +274,7 @@ export function buildWorld(chainId = 8453): World {
     ch.set(v.address, "perDepositCap", caps.per);
     ch.set(v.address, "exitFeeBps", 10n);
     if (v.kind !== "usdc") ch.set(v.address, "navDeviationGuardBps", NAV_GUARD_BPS);
+    if (v.kind === "agent") ch.set(v.address, "maxSlippageBps", 500n);
     ch.set(v.address, "feeRecipient", SAFE);
     const paused = k !== "rmUSDC";
     ch.set(v.address, "depositsPaused", paused);

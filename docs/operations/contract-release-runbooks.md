@@ -246,6 +246,15 @@ verify: it exits 15 (`GOVERN_PENDING`), names the govern command that finishes t
 The Twin chain rehearsal runs the same order (`twin-publish.ts`, `twin_publish.rs`). It only checks that the scripts execute in this order: the 48-hour
 delay and the Safe signers are proven on 8453 through the real Safe.
 
+**Mainnet test run-day steps (issue 1695).** The run checks core out at the release tag commit (`9a768bb9`, `release/v0.4.0-base`) and passes `--counts-dir` pointing at a dev checkout (`0d40e671` or later) `deployments/frozen-counts`.
+
+1. **Make the keys.** Run `bun run rehearsal keys --dir <backed-up folder> --voters 0 --chain-id 8453` and type the passphrase at the hidden prompt. Never pass `--password-file` for the mainnet test, and never put the passphrase in an argument or the environment. `--voters 0` makes no voter keys. `--chain-id 8453` puts `CHAIN_ID=8453` in the printed sheet fragment. Back the folder up before any funds move. Replace the printed voter lines with unheld addresses.
+2. **The seed receiver is Safe owner A's address** (`SAFE_OWNER_A` in the printed fragment). The tool makes no separate seed key.
+3. **Passphrase file on older code.** From this change on, the hidden-prompt path keeps the passphrase in memory and writes no file. Keys made from the `release/v0.4.0-base` tag (older code) also wrote the passphrase to a plaintext 0600 file `<dir>.pw` beside the folder. When keys were made that way, run `shred -u <dir>.pw` after use and never back that file up.
+4. **Funding.** Only the deployer is funded. It submits every transaction, including the Safe owners' signature bundles (prove-control and govern). The pauser and the emergency key are funded only when an agent asks to exercise a pause. `pause-all` with an unfunded key stops and names the key to fund.
+5. **Recorder poker (named role).** `UniswapV4PriceRecorder.record()` has no keeper. The run names one accountable poker before it starts, who calls `record()` at least every 1800 s (the staleness limit). After 1800 s without a `record()`, every rmAGENT deposit and USDC redeem reverts `StaleRecorder` until someone pokes. `redeemInKind` stays available while the recorder is stale. The first poke after a long gap weights the old tick over the whole gap, so the recorded average lags the live price until the window refills. An automated keeper is out of scope.
+6. **Run the verifier before unpausing.** `RECORDER_ADDRESS` comes from the environment and the deploy script only checks its getters, so only the verifier binds the recorder codehash. Run `verify` (pre-govern) and require it green before `govern` schedules any unpause. The verifier also reads `maxSlippageBps` back from the rmAGENT vault (label `vault[rmAGENT]: maxSlippageBps equals 500`) and fails on any other value.
+
 **Basket sheet values (issue 1666).** Each basket (`PROTO`, `AGENT`, `RWA`, never `USDC`) carries two more
 names in the frozen sheet, read by its stage as `NAV_DEVIATION_BPS` and `MIN_POOL_LIQUIDITY`:
 

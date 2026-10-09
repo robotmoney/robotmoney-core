@@ -25,7 +25,7 @@ describe("healthy deployment", () => {
     const r = await verifyDeployment(buildWorld().opts);
     const labels = r.checks.map((c) => c.label);
     expect(new Set(labels).size).toBe(labels.length);
-    for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "")).not.toMatch(/\d{3,}/); }
+    for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "").replace("maxSlippageBps equals 500", "")).not.toMatch(/\d{3,}/); }
   });
 });
 
@@ -198,6 +198,19 @@ describe("mutations fail with the expected label", () => {
     const w = buildWorld();
     w.sheet.vaults.rmRWA.assets[0].swapFee = 100;
     expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: asset config equals sheet"]);
+  });
+
+  test("rmAGENT maxSlippageBps read back on chain: 500 passes, any other value fails (core 1695)", async () => {
+    const L = "vault[rmAGENT]: maxSlippageBps equals 500";
+    const ok = await verifyDeployment(buildWorld().opts);
+    expect(ok.checks.find((c) => c.label === L)).toMatchObject({ ok: true });
+    for (const bad of [499n, 501n, 291n, 0n]) {
+      const w = buildWorld();
+      w.chain.set(VAULTS.rmAGENT.address, "maxSlippageBps", bad);
+      expect(failed(await verifyDeployment(w.opts))).toEqual([L]);
+    }
+    // the other vaults are not asked for it
+    expect(ok.checks.filter((c) => c.label.endsWith("maxSlippageBps equals 500")).map((c) => c.label)).toEqual([L]);
   });
 
   test("rmAGENT must be paused", async () => {

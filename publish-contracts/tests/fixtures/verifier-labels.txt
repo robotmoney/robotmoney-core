@@ -195,6 +195,7 @@ vault[rmAGENT]: V4 adapter is bound to the recorder, the PoolManager and the poo
 recorder: PoolKey and PoolManager equal config
 recorder: observation ring holds the full window floor
 recorder: has no owner, role or setter
+vault[rmAGENT]: maxSlippageBps equals 500
 vault[rmRWA]: ADMIN_ROLE held by timelock
 vault[rmRWA]: ADMIN_ROLE not held by deployer
 vault[rmRWA]: DEFAULT_ADMIN not held by deployer
