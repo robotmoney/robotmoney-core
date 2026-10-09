@@ -247,34 +247,6 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
-    /// Cast a vote on an active RouterGovernance proposal (issue #632).
-    /// Uses `RouterGovernance.vote(proposalId)` for `--choice yes`;
-    /// `no` and `abstain` are client-side no-ops (contract supports FOR only).
-    /// Idempotent: re-casting the same choice exits 0; a different choice
-    /// after an on-chain `yes` exits 2 with ErrVoteAlreadyCast.
-    Vote {
-        /// Path to the operator config TOML.
-        #[arg(long, short = 'c')]
-        config: PathBuf,
-        /// Proposal id to vote on (decimal integer).
-        #[arg(long = "proposal-id")]
-        proposal_id: String,
-        /// Vote direction: `yes`, `no`, or `abstain`.
-        #[arg(long)]
-        choice: String,
-        /// Gas limit for the vote tx envelope. Default 200 000.
-        #[arg(long = "gas-limit", default_value_t = 200_000)]
-        gas_limit: u64,
-        /// Optional override for `max_fee_per_gas_cap` in wei.
-        #[arg(long = "fee-cap")]
-        fee_cap: Option<u64>,
-        /// Maximum seconds to wait for the receipt. Default 60.
-        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
-        receipt_timeout_secs: u64,
-        /// Pretty-print the JSON output.
-        #[arg(long)]
-        pretty: bool,
-    },
     /// Redeem vault shares through the gateway (agent-initiated redemption).
     ///
     /// Performs preflight reads (agent policy, share allowance, share

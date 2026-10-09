@@ -40,7 +40,6 @@ fn main() {
         Command::GetAllowance { config, .. } => Some(config.as_path()),
         Command::GetDeposit { config, .. } => Some(config.as_path()),
         Command::GetTx { config, .. } => Some(config.as_path()),
-        Command::Vote { config, .. } => Some(config.as_path()),
         Command::Withdraw { config, .. } => Some(config.as_path()),
         Command::WithdrawRouter { config, .. } => Some(config.as_path()),
         Command::Committee { config, .. } => Some(config.as_path()),
@@ -129,34 +128,6 @@ fn main() {
             tx_hash,
             pretty,
         } => commands::get_tx::run(&config, &tx_hash, pretty),
-        Command::Vote {
-            config,
-            proposal_id,
-            choice,
-            gas_limit,
-            fee_cap,
-            receipt_timeout_secs,
-            pretty,
-        } => {
-            let choice = match commands::vote::VoteChoice::from_str_ci(&choice) {
-                Some(c) => c,
-                None => {
-                    eprintln!(
-                        "rmpc vote: --choice must be one of: yes, no, abstain (got {choice:?})"
-                    );
-                    std::process::exit(3);
-                }
-            };
-            commands::vote::run(commands::vote::Args {
-                config_path: config,
-                proposal_id,
-                choice,
-                gas_limit,
-                fee_cap_wei: fee_cap,
-                receipt_timeout_secs,
-                pretty,
-            })
-        }
         Command::Withdraw {
             config,
             shares,

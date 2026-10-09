@@ -5,14 +5,13 @@ description: >
   surface for the Robot Money Rust payment client, including read commands
   (get-vault, get-gateway, get-agent, get-roles, get-balance, get-allowance,
   get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
-  write commands (deposit, withdraw, status, self-check), governance write
-  commands (vote), Investment Committee commands (committee
+  write commands (deposit, withdraw, status, self-check), Investment Committee commands (committee
   vote-submit), consensus recommendation receipt commands
   (receipt verify, receipt submit), and the Investment Swarm signing
   identity commands (committee-identity create, show-public-key, sign).
-  Covers all flags, output shapes, preflight rules, and the get-governance
-  → vote example trace. rmpc is not a governance signer: it has no propose or
-  committee register command.
+  Covers all flags, output shapes, and preflight rules. rmpc is not a
+  governance signer and has no voting: it has no vote, propose, or committee
+  register command.
 ---
 
 # robotmoney-cli (`rmpc`)
@@ -60,7 +59,6 @@ rmpc get-balance     Read an ERC-20 token balance for an address (USDC by defaul
 rmpc get-allowance   Read an ERC-20 allowance(owner, spender) on the configured USDC
 rmpc get-deposit     Look up a gateway deposit by its on-chain id
 rmpc get-tx          Look up a transaction's receipt status by hash
-rmpc vote            Cast a vote on an active RouterGovernance proposal
 rmpc committee       Investment Committee: submit signed allocation votes
 rmpc receipt         Consensus recommendation receipt: verify a receipt off-chain and anchor its digest on chain
 rmpc committee-identity  Investment Swarm signing identity: local Ed25519 identity, public-key export, and canonical-payload signing
@@ -73,84 +71,6 @@ rmpc is not a governance signer. It has no `propose` command and no
 calls that belong to the Safe and timelock after handover. Use
 `rmpc governance draft-proposal` for unsigned calldata, and sign through the
 Safe with a wallet.
-
-### vote
-
-Cast a vote on an active `RouterGovernance` proposal.
-
-```bash
-rmpc vote --config <CONFIG> \
-  --proposal-id <ID> \
-  --choice yes|no|abstain \
-  [--gas-limit <GAS>] \
-  [--fee-cap <WEI>] \
-  [--receipt-timeout-secs <SECS>] \
-  [--pretty]
-```
-
-Flags:
-- `--config` / `-c` — path to operator config TOML (required)
-- `--proposal-id` — proposal id to vote on, decimal integer (required)
-- `--choice` — vote direction: `yes`, `no`, or `abstain` (required)
-- `--gas-limit` — gas limit for the vote tx (default 200 000)
-- `--fee-cap` — override `max_fee_per_gas_cap` in wei
-- `--receipt-timeout-secs` — seconds to wait for the receipt (default 60)
-- `--pretty` — indented JSON output
-
-The contract supports only FOR votes (`vote(proposalId)`). Calling with
-`--choice yes` submits the on-chain vote. `--choice no` and `--choice abstain`
-are client-side no-ops (the contract has no mechanism to record them).
-
-Idempotency: re-calling `--choice yes` when already voted exits 0 (no-op).
-Calling with a different direction after a previous `yes` exits 2 with
-`ErrVoteAlreadyCast`.
-
-Output on success (`exit 0`):
-```json
-{
-  "ok": true,
-  "status": "cast",
-  "receipt": {
-    "proposal_id": "1",
-    "choice": "yes",
-    "tx_hash": "0x...",
-    "block_number": 12345
-  }
-}
-```
-
-Idempotent no-op output:
-```json
-{
-  "ok": true,
-  "status": "noop"
-}
-```
-
-Exit codes:
-- `0` — vote cast or idempotent no-op.
-- `2` — `ErrVoteAlreadyCast` (different direction after an on-chain yes).
-- `3` — startup failure: missing `governance_address`, uninitialized signer, etc.
-
-## Example trace: get-governance → vote
-
-```bash
-# 1. Read current governance state
-rmpc get-governance --config rmpc.toml --pretty
-
-# 2. Vote in favour of the proposal
-rmpc vote --config rmpc.toml \
-  --proposal-id 1 \
-  --choice yes \
-  --pretty
-
-# 3. Confirm the vote was recorded
-rmpc get-governance --config rmpc.toml --pretty
-```
-
-The `get-governance` output includes the active proposal's `proposal_id`,
-`voting_deadline`, `proposed_vaults`, `proposed_bps`, `votes_for`,
-`votes_against`, and `votes_abstain`.
 
 ## Investment Committee commands
 

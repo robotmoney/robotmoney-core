@@ -189,34 +189,3 @@ rmpc does not submit `RouterGovernance.propose()`. That call needs a governance
 signer, and rmpc is not one. Prepare the change as unsigned calldata with
 `rmpc governance draft-proposal`, then a Safe signer submits it through the
 Safe from a wallet (see `robotmoney-cli` references).
-
-### vote
-
-Cast a vote on an active governance proposal.
-
-```bash
-rmpc vote --config <CONFIG> \
-  --proposal-id <ID> \
-  --choice yes \
-  --pretty
-```
-
-Parameters:
-- `--proposal-id` — decimal proposal id from `get-governance` output
-- `--choice` — `yes`, `no`, or `abstain` (`yes` submits on-chain; `no`/`abstain` are client-side no-ops)
-
-Idempotency: re-calling with the same choice exits 0 (no-op). A different
-direction after an on-chain `yes` exits 2 with `ErrVoteAlreadyCast`.
-
-Example trace (get-governance → vote):
-
-```bash
-# Read current state
-rmpc get-governance --config rmpc.toml --pretty
-
-# Vote in favour
-rmpc vote --config rmpc.toml --proposal-id 1 --choice yes
-
-# Confirm vote recorded
-rmpc get-governance --config rmpc.toml --pretty
-```

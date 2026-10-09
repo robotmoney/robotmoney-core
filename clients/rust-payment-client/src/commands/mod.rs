@@ -25,7 +25,6 @@ pub mod governance_draft;
 pub mod receipt;
 pub mod self_check;
 pub mod status;
-pub mod vote;
 pub mod withdraw;
 pub mod withdraw_router;
 

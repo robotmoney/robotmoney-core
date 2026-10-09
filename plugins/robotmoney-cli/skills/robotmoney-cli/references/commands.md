@@ -181,22 +181,6 @@ register` command. Both are governance calls that belong to the Safe and
 timelock after handover. Use `rmpc governance draft-proposal` for unsigned
 calldata and sign through the Safe with a wallet.
 
-### `rmpc vote`
-
-Cast a vote on an active `RouterGovernance` proposal.
-Requires `governance_address` in config and a configured signer.
-
-```
-rmpc vote --config <CONFIG> --proposal-id <ID> --choice yes|no|abstain
-  [--gas-limit <N>] [--fee-cap <WEI>] [--receipt-timeout-secs <N>]
-  [--pretty]
-```
-
-`--choice yes` submits `vote(proposalId)` on-chain. `no` and `abstain` are
-client-side no-ops (the contract only records FOR votes). Re-calling with the
-same choice after a `yes` vote exits 0 (idempotent). A different choice after
-an on-chain `yes` exits 2 with `ErrVoteAlreadyCast`.
-
 ## Investment Committee write commands
 
 ### `rmpc committee vote-submit`

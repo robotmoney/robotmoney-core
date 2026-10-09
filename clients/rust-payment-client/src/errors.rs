@@ -116,14 +116,6 @@ pub enum RmpcError {
     #[error("ErrAgentWithdrawLogMissing: receipt has no AgentWithdrawal log (tx_hash={tx_hash})")]
     ErrAgentWithdrawLogMissing { tx_hash: String },
 
-    /// Caller has already voted on this proposal with a different choice.
-    /// On-chain the contract only records a single FOR vote per address;
-    /// attempting to re-cast with a different direction is refused.
-    #[error(
-        "ErrVoteAlreadyCast: a different vote direction was already cast for proposal_id={proposal_id}"
-    )]
-    ErrVoteAlreadyCast { proposal_id: String },
-
     // ── Committee errors ───────────────────────────────────────────────────
     /// The caller's address is not on the IC policy allowlist.
     /// On-chain: `AgentNotAllowlisted` custom error on `submitVote`.
@@ -203,7 +195,6 @@ impl RmpcError {
             RmpcError::ErrLegUnavailable => "ErrLegUnavailable",
             RmpcError::ErrSlippageBoundExceeded => "ErrSlippageBoundExceeded",
             RmpcError::ErrAgentWithdrawLogMissing { .. } => "ErrAgentWithdrawLogMissing",
-            RmpcError::ErrVoteAlreadyCast { .. } => "ErrVoteAlreadyCast",
             RmpcError::ErrNotAllowlisted => "ErrNotAllowlisted",
             RmpcError::ErrIcContractNotConfigured => "ErrIcContractNotConfigured",
             RmpcError::ErrConfig(_) => "ErrConfig",
@@ -259,9 +250,6 @@ mod tests {
             RmpcError::ErrSlippageBoundExceeded,
             RmpcError::ErrAgentWithdrawLogMissing {
                 tx_hash: "0x00".into(),
-            },
-            RmpcError::ErrVoteAlreadyCast {
-                proposal_id: "1".into(),
             },
             RmpcError::ErrNotAllowlisted,
             RmpcError::ErrIcContractNotConfigured,
