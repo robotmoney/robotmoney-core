@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Evidence check for a mainnet run. Reads evidence/<run-id>/evidence.json (template: publish-contracts/evidence.example.json).
-// Usage: bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--rpc URL]   (a Twin run, issue 1696)
+// Usage: bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a Twin run; the floor defaults to the 8453 floor, a Twin run passes its own timelock min delay, issue 1696)
 //        bun src/evidence-check.ts --evidence FILE [--frozen FILE --deploy-sha SHA] [--rpc URL [--record-chain-fixture OUT] | --chain-fixture FILE]
 // Rejects: a wrong tx count against the frozen count, a missing tx hash, a failed receipt, a delay under 172800 s, a govern
 // schedule-to-execute gap under 172800 s per operation, a govern operation that shares a transaction or a timelock operation id with another one, any
@@ -67,7 +67,7 @@ export const applyCalldata = (receiptId: string, vaults: string[], bps: number[]
 const applyLabel = (r: any) => `apply-receipt ${r?.receipt_id}`;
 
 /** The checks every operation of the run shares: both transactions present with status 1, one delay apart, none shared with another operation. */
-function operationProblems(operations: any[], bad: (m: string) => void): void {
+function operationProblems(operations: any[], bad: (m: string) => void, floor: number = MAINNET_DELAY_FLOOR): void {
   for (const field of ["schedule_tx", "execute_tx", "operation_id"]) {
     const seen = new Map<string, string>();
     for (const g of operations) {
@@ -84,7 +84,7 @@ function operationProblems(operations: any[], bad: (m: string) => void): void {
     if (!TX.test(g.execute_tx ?? "")) bad(`govern ${g.step}: execute_tx is missing`);
     if (g.execute_status !== 1) bad(`govern ${g.step}: execute receipt status is ${g.execute_status}`);
     const gap = Number(g.execute_block_timestamp) - Number(g.schedule_block_timestamp);
-    if (!(gap >= MAINNET_DELAY_FLOOR)) bad(`govern ${g.step}: schedule-to-execute gap ${gap} s is under ${MAINNET_DELAY_FLOOR} s`);
+    if (!(gap >= floor)) bad(`govern ${g.step}: schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
 }
 
@@ -113,10 +113,10 @@ function applicationShapeProblems(ev: any, bad: (m: string) => void): any[] {
 const releasedIds = (ev: any): Set<string> => new Set<string>((Array.isArray(ev?.receipt_releases) ? ev.receipt_releases : []).map((r: any) => lc(String(r?.receipt_id ?? ""))));
 
 /** Offline check of `receipt_applications` alone: the shape, both transactions, the statuses and the delay floor. Problems; an empty list is a pass. */
-export function checkReceiptApplications(ev: any): string[] {
+export function checkReceiptApplications(ev: any, floor: number = MAINNET_DELAY_FLOOR): string[] {
   const p: string[] = [];
   const apps = applicationShapeProblems(ev, (m) => p.push(m));
-  operationProblems(apps.map((r) => ({ ...r, step: applyLabel(r) })), (m) => p.push(m));
+  operationProblems(apps.map((r) => ({ ...r, step: applyLabel(r) })), (m) => p.push(m), floor);
   return p;
 }
 
@@ -325,7 +325,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
  * each with a delay of at least MAINNET_DELAY_FLOOR. The execute tx has the two matching CallExecuted events. The block gap is at least MAINNET_DELAY_FLOOR.
  * It does not read the chain id: a Twin run uses it too (run it with `--receipt-applications`).
  */
-export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReader): Promise<string[]> {
+export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReader, floor: number = MAINNET_DELAY_FLOOR): Promise<string[]> {
   const p: string[] = [];
   const bad = (m: string) => p.push(m);
   const ts = async (rc: { blockNumber: bigint }) => Number((await chain.getBlock({ blockNumber: rc.blockNumber })).timestamp);
@@ -352,7 +352,7 @@ export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReade
       if (lc(e.target) !== lc(want.target)) bad(`${w}: CallScheduled call ${i} target ${e.target} is not ${want.target}`);
       else if (lc(e.data) !== lc(want.data)) bad(`${w}: CallScheduled call ${i} calldata is not ${want.what}`);
       if (e.index !== BigInt(i)) bad(`${w}: CallScheduled call ${i} has batch index ${e.index}`);
-      if (!(e.delay !== undefined && e.delay >= BigInt(MAINNET_DELAY_FLOOR))) bad(`${w}: CallScheduled delay ${e.delay} is under ${MAINNET_DELAY_FLOOR} s`);
+      if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
       if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the batch calls are not one operation (${e.id} and ${scheduled[0]!.id})`);
     });
     if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0]!.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0]!.id}`);
@@ -362,7 +362,7 @@ export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReade
     const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id)).sort((x, y) => Number(x.index - y.index));
     if (executed.length !== wantCalls.length || !executed.every((e, i) => lc(e.target) === lc(wantCalls[i]!.target) && lc(e.data) === lc(wantCalls[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the scheduled release and weight change`);
     const gap = (await ts(ex)) - schedTs;
-    if (!(gap >= MAINNET_DELAY_FLOOR)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${MAINNET_DELAY_FLOOR} s`);
+    if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
   return p;
 }
@@ -463,17 +463,19 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
   if (need.length) { console.error(`evidence: --receipt-applications needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
   const m = JSON.parse(readFileSync(values["receipt-applications"] as string, "utf8"));
   const ev = { consensus_receipt: { address: values["consensus-receipt"] }, governance: { address: values.governance }, timelock: { address: values.timelock }, receipt_applications: m.receipt_applications };
-  const problems = [...(Array.isArray(m.receipt_applications) && m.receipt_applications.length > 0 ? [] : ["the run manifest has no receipt_applications entry"]), ...checkReceiptApplications(ev)];
+  const floor = typeof values["delay-floor"] === "string" ? Number(values["delay-floor"]) : MAINNET_DELAY_FLOOR;
+  if (!Number.isInteger(floor) || floor < 1) { console.error("evidence: --delay-floor must be a positive number of seconds"); process.exit(2); }
+  const problems = [...(Array.isArray(m.receipt_applications) && m.receipt_applications.length > 0 ? [] : ["the run manifest has no receipt_applications entry"]), ...checkReceiptApplications(ev, floor)];
   if (typeof values.rpc === "string") {
     const { createPublicClient, http } = await import("viem");
-    problems.push(...(await checkReceiptApplicationsOnChain(ev, createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader)));
+    problems.push(...(await checkReceiptApplicationsOnChain(ev, createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader, floor)));
   }
   if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
   console.log(`evidence ok (${m.receipt_applications.length} receipt application(s)${values.rpc ? ", chain read" : ", offline shape only"})`);
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" } } });
+  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" } } });
   if (values["receipt-applications"]) return checkApplicationsMain(values);
   if (!values.evidence) { console.error("missing --evidence FILE"); process.exit(2); }
   const ev = JSON.parse(readFileSync(values.evidence, "utf8"));

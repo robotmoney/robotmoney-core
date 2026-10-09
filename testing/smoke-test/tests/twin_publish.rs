@@ -319,10 +319,22 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     );
     // The rehearsal evidence: the run manifest records the round under receipt_applications and evidence-check asserts it against the chain
     // (one batch of exactly the release and the weight change, one real delay apart).
+    // The Twin timelock runs a short delay: the floor is the delay the chain itself reports, so the gap must still reach it.
+    let min_delay = u64::from_str_radix(
+        &word(
+            &fx.cast_call_raw(fx.timelock(), "getMinDelay()", &[])
+                .expect("read the timelock min delay"),
+            0,
+        ),
+        16,
+    )
+    .expect("min delay");
     run_bun(
         fx.repo_root(),
         &[
             s("publish-contracts/src/evidence-check.ts"),
+            s("--delay-floor"),
+            min_delay.to_string(),
             s("--receipt-applications"),
             run_manifest_path.display().to_string(),
             s("--consensus-receipt"),

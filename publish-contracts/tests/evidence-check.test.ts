@@ -247,6 +247,9 @@ describe("receipt_applications: one timelock batch, release then weights (issue 
     const e = app();
     expect(await checkReceiptApplicationsOnChain(e, stub(e, { chainId: 918453 }))).toEqual([]);
     expect((await checkReceiptApplicationsOnChain(e, stub(e, { appCalls: 1 }))).join()).toContain("exactly 2 calls");
+    // a shorter floor (a Twin timelock) accepts a shorter delay and gap, and still rejects one under it
+    expect(await checkReceiptApplicationsOnChain(e, stub(e, { appDelay: 3600n, appGap: 3601 }), 3600)).toEqual([]);
+    expect((await checkReceiptApplicationsOnChain(e, stub(e, { appDelay: 3599n, appGap: 3599 }), 3600)).join("\n")).toContain("under 3600 s");
   });
   test("receipt_applications: the template lists the block and an empty list passes", () => {
     const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
@@ -275,6 +278,10 @@ describe("evidence-check --receipt-applications: the Twin run manifest (issue 16
     const gap = run({ receipt_applications: [{ ...entry, execute_block_timestamp: 1000 + 172799 }] });
     expect(gap.code).toBe(1);
     expect(gap.err).toContain("gap");
+    // a Twin run passes its own (shorter) timelock delay as the floor; the gap must still reach it
+    expect(run({ receipt_applications: [{ ...entry, execute_block_timestamp: 1000 + 3601 }] }, ["--delay-floor", "3600"]).code).toBe(0);
+    expect(run({ receipt_applications: [{ ...entry, execute_block_timestamp: 1000 + 3599 }] }, ["--delay-floor", "3600"]).code).toBe(1);
+    expect(run({ receipt_applications: [entry] }, ["--delay-floor", "0"]).code).toBe(2);
     const nohash = run({ receipt_applications: [{ ...entry, execute_tx: "" }] });
     expect(nohash.code).toBe(1);
     expect(nohash.err).toContain("execute_tx is missing");
