@@ -20,6 +20,10 @@
 // gets a NEW timelock operation id on its next `--row unpause-X` run, instead of re-hitting the operation that is already done. The earlier round's
 // record is kept in the run manifest under `<row>:round-<n>`. Only an explicit `--row` opens a new round: a default run that finds an executed row
 // whose vault reads paused again refuses (GOVERN) and names the row command, so a script can never reopen a vault the operators paused.
+// PAUSE-ALL AFTER A SCHEDULE (issue 1686): pause-all records an entry (monotonic `seq`) in the run manifest. Every schedule record carries a `seq` from the same
+// counter. The execute phase of an unpause refuses (GOVERN, exit 14) before it sends anything when a pause entry has a higher seq than the round's schedule,
+// and prints the cancel-through-the-Safe instruction. There is no tool cancel on 8453: the operator cancels the operation through the Safe on the timelock, then
+// `--row unpause-X` finds the cancelled operation and schedules the same round again (a cancelled id may be scheduled again), which gets a newer seq and executes.
 // A basket the sheet does not list in GOVERN_UNPAUSE_VAULTS is recorded as skipped (it stays paused). This module decides nothing about pause semantics.
 // The wait is the timelock's real delay. On a Twin fork (chain id is not 8453 and the RPC answers anvil_nodeInfo) it runs by ONE time warp to one second
 // past the latest ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING once, with the ready time and the exact next
@@ -27,7 +31,7 @@
 import { encodeFunctionData, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
 import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
-import { readManifestField, saveRunManifest, type RunContext, type RunManifest } from "./runner.ts";
+import { loadRunManifest, readManifestField, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
 import { BASKET_KEYS, VAULT_NAME, type Sheet, type VaultKey } from "./sheet.ts";
 import { VAULT_STAGES, manifestRef, type StageRow } from "./stages.ts";
 import {
@@ -197,7 +201,7 @@ export interface GovernOpts {
 /** One generic timelock call, named by `label` (the manifest key, the salt input and the `row` of the output lines). */
 export interface TwinCall { label: string; target: Address; data: Hex }
 
-interface PhaseRecord { tx_hash?: string; safe_tx_hash?: string; status?: number; at: string; operation_id?: string; ready_at?: string; note?: string; [k: string]: unknown }
+interface PhaseRecord { seq?: number; tx_hash?: string; safe_tx_hash?: string; status?: number; at: string; operation_id?: string; ready_at?: string; note?: string; [k: string]: unknown }
 /** What the run manifest keeps per row. A row is complete when it is skipped, executed or (for cancel) cancelled. */
 export interface RowRecord { round?: number; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
 type GovernState = Record<string, RowRecord>;
@@ -255,7 +259,7 @@ async function waitReady(ctx: RunContext, o: GovernOpts, api: GovernApi, handle:
     for (const op of ops) {
       const st = await api.operationState(handle, timelock, op.id);
       if (st.ready || st.done) continue;
-      if (!st.pending) throw new PublishError("GOVERN", `operation ${op.id} (${op.row}) is not pending: it was cancelled or never scheduled`, { id: op.id });
+      if (!st.pending) throw new PublishError("GOVERN", `operation ${op.id} (${op.row}) is not pending: it was cancelled or never scheduled${op.row.startsWith("unpause-") ? `. If it was cancelled through the Safe, open a fresh round: ${resumeCommand(ctx, op.row)}` : ""}`, { id: op.id });
       if (st.readyAt > latest) latest = st.readyAt;
     }
     if (latest === 0n) return;
@@ -420,7 +424,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     }
     const st = await api.operationState(handle, a.timelock, p.id);
     let sched: PhaseRecord;
-    if (st.exists) sched = { at: new Date().toISOString(), operation_id: p.id, ready_at: st.readyAt.toString(), note: "already scheduled by an earlier run" };
+    if (st.exists) sched = { at: new Date().toISOString(), operation_id: p.id, ready_at: st.readyAt.toString(), note: "already scheduled by an earlier run", seq: 0 }; // seq 0: the schedule time is unknown, so ANY recorded pause-all is newer (issue 1686)
     else {
       const done = await signAndExecute(ctx, o, api, handle, await p.schedule());
       const after = await api.operationState(handle, a.timelock, p.id);
@@ -447,10 +451,38 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     emitPhase(o, emitAs, "cancelled", rec.cancelled);
   }
 
+  /** The pause entries on disk (pause-all may have written one since this process loaded the manifest) merged with the in-memory ones. */
+  function livePauses(): PauseEntry[] {
+    let disk: PauseEntry[] = [];
+    try { disk = loadRunManifest(ctx.evidenceDir)?.pauses ?? []; } catch { /* an unreadable manifest is not a reason to execute: the in-memory entries still count */ }
+    const bySeq = new Map<number, PauseEntry>();
+    for (const e of [...(manifest.pauses ?? []), ...disk]) bySeq.set(e.seq, e);
+    manifest.pauses = [...bySeq.values()].sort((x, y) => x.seq - y.seq);
+    return manifest.pauses;
+  }
+
+  /**
+   * Issue 1686: refuses to execute an unpause whose schedule is older (lower seq) than a recorded pause-all. Sends nothing, changes no manifest row.
+   * An operation already done on chain is left to the read-back (there is nothing left to cancel). Other rows (Twin-only, receipt, generic) are not unpauses.
+   */
+  async function refuseIfPausedSince(name: string, p: RoundPlan): Promise<void> {
+    if (!name.startsWith("unpause-")) return;
+    const rec = state[name];
+    if (!rec?.scheduled || rec.executed) return;
+    const newest = livePauses().filter((e) => e.seq > (rec.scheduled!.seq ?? 0)).pop();
+    if (!newest) return;
+    const st = await api.operationState(handle, a.timelock, p.id);
+    if (st.done || !st.exists) return; // done: nothing left to cancel, the read-back decides. Gone: already cancelled, waitReady names the fresh-round command.
+    const next = resumeCommand(ctx, name);
+    throw new PublishError("GOVERN", `govern row ${name} (round ${rec.round ?? 1}) will NOT execute: operation ${p.id} was scheduled (sequence ${rec.scheduled.seq ?? 0}) before pause-all #${newest.seq} (${newest.trigger}, ${newest.at}), which paused the vaults on purpose. Executing it would reopen ${VAULT_NAME[name.slice("unpause-".length) as VaultKey]}. Nothing was sent. First cancel the operation through the Safe on the timelock, with a Safe transaction that calls cancel(${p.id}) on ${a.timelock} (the tool has no cancel on chain ${ctx.chainId}). Then open a fresh round: ${next}`,
+      { row: name, round: rec.round ?? 1, operation_id: p.id, timelock: a.timelock, pause_seq: newest.seq, pause_at: newest.at, pause_trigger: newest.trigger, scheduled_seq: rec.scheduled.seq ?? 0, next_command: next });
+  }
+
   /** Phase 2 of an executing round, once the delay has passed: execute (or adopt an execution already on chain), read back, record. */
   async function executePhase(name: string, p: RoundPlan, emitAs: string = name): Promise<void> {
     const rec = state[name]!;
     if (rec.executed) { emitPhase(o, emitAs, "executed", rec.executed); return; }
+    await refuseIfPausedSince(name, p);
     let ex: PhaseRecord;
     if ((await api.operationState(handle, a.timelock, p.id)).done) {
       const bad = await p.readBack();
@@ -495,6 +527,20 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const live: { name: PlannedRow; p: RoundPlan }[] = [];
     const pausedNow = async (name: PlannedRow): Promise<boolean> => reader(handle)<boolean>(a.vaults[name.slice("unpause-".length) as VaultKey], VAULT_ABI, "depositsPaused");
     for (const name of names) {
+      // Issue 1686: the operator cancelled this round's operation through the Safe and named the row. The same round is scheduled again (a cancelled id is free).
+      const cur = state[name];
+      if (selected === name && cur?.scheduled?.operation_id && !rowComplete(cur)) {
+        const st = await api.operationState(handle, a.timelock, cur.scheduled.operation_id as Hex);
+        if (!st.exists && !st.done) {
+          const n = cur.round ?? 1;
+          let k = 1;
+          while (state[`${roundKey(name, n)}:cancelled-${k}`]) k++;
+          state[`${roundKey(name, n)}:cancelled-${k}`] = cur;
+          state[name] = { round: n };
+          save();
+          ctx.log.log("info", "govern.round_rescheduled", { row: name, round: n, cancelled_operation: cur.scheduled.operation_id });
+        }
+      }
       if (rowComplete(state[name])) {
         const prev = state[name]!;
         // An executed round whose vault reads paused again (pause-all ran after it) needs a NEW round, and only a named row opens one.
@@ -528,6 +574,8 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       await schedulePhase(name, p);
       live.push({ name, p });
     }
+    // refuse BEFORE the wait and before the first execute (executePhase checks again, so a pause-all that lands during the wait is caught before its send)
+    for (const { name, p } of live) await refuseIfPausedSince(name, p);
     await waitReady(ctx, o, api, handle, a.timelock, live.map((x) => ({ id: x.p.id, row: x.name })), resumeRow);
     for (const { name, p } of live) {
       await executePhase(name, p);

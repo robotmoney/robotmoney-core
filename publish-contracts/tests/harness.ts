@@ -8,7 +8,7 @@ import type { PublishSigner } from "../src/signer.ts";
 import { keccak256, toHex, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { BUNDLE_FORMAT, localSafeTxHash, signTx, type SafeHandle, type SafeTxBundle, type Signer } from "../src/safe/index.ts";
-import type { ProveApi } from "../src/prove-control.ts";
+import type { LandedTx, ProveApi, SafeExecution } from "../src/prove-control.ts";
 import { STUB_CODE } from "./stubs/tool.ts";
 import { COUNTS, SHA, healthyPoolReader, sheetText, tmp, writeCoreAssetConfig, writeCounts } from "./fixtures.ts";
 
@@ -44,6 +44,8 @@ export interface World {
   safeCalls: string[];
   /** The live nonce of the fake Safe: 0 until the fake prove-control execution moves it to 1. */
   safeNonce: number;
+  /** What the fake chain holds for the adoption of a landed proof (prove-control.ts adoptLandedProof): the Safe's execution events and the transactions. Empty: nothing landed. */
+  landed: { executions: SafeExecution[]; txs: Record<string, LandedTx>; reads: string[] };
   chainEvents: string[];
   /** The fork URL each started preflight chain was given (the target RPC: the vault stages need the real USDC and venues). */
   forkUrls: (string | undefined)[];
@@ -95,7 +97,7 @@ export function world(o: WorldOpts = {}): World {
   const write = () => writeFileSync(cfgPath, JSON.stringify(cfg));
   write();
   const w: World = {
-    dir, coreDir, sheetPath, countsDir, evidence: join(dir, "evidence"), statePath, cfgPath, lines: [], cfg, safeCalls: [], safeNonce: 0, chainEvents: [], forkUrls: [], coreChecks: [], coreCheckCode: 0,
+    dir, coreDir, sheetPath, countsDir, evidence: join(dir, "evidence"), statePath, cfgPath, lines: [], cfg, safeCalls: [], safeNonce: 0, landed: { executions: [], txs: {}, reads: [] }, chainEvents: [], forkUrls: [], coreChecks: [], coreCheckCode: 0,
     state() { try { return JSON.parse(readFileSync(statePath, "utf8")); } catch { return { nonces: {}, calls: [] }; } },
     setNonce(n) { const s = w.state(); s.nonces = { ...(s.nonces ?? {}), [ADMIN.toLowerCase()]: n }; s.calls ??= []; writeFileSync(statePath, JSON.stringify(s)); },
     logs() { return w.lines.map((l) => JSON.parse(l)); },
@@ -120,7 +122,7 @@ export function world(o: WorldOpts = {}): World {
   if (o.startNonce !== undefined) w.setNonce(o.startNonce);
   if (o.writeSafeManifest) {
     mkdirSync(join(coreDir, "deployments", String(chainId)), { recursive: true });
-    writeFileSync(join(coreDir, "deployments", String(chainId), "safe.json"), JSON.stringify({ safe: "0x00000000000000000000000000000000000050fe" }));
+    writeFileSync(join(coreDir, "deployments", String(chainId), "safe.json"), JSON.stringify({ safe: "0x00000000000000000000000000000000000050fe", block: 7 }));
   }
   return w;
 }
@@ -163,6 +165,7 @@ export function fakeProveApi(w: World): ProveApi {
   return {
     async connectSafe(opts: any) { w.safeCalls.push("connectSafe:prove"); return fakeSafeHandle(w, opts); },
     async proposeTx(handle, o) {
+      w.safeCalls.push("proposeTx");
       const nonce = await handle.nonce();
       return {
         format: BUNDLE_FORMAT, chain_id: handle.chain.chainId, safe: handle.address, safe_version: "1.4.1", action: o.action ?? "call", description: o.description ?? "", to: o.to, value: "0", data: o.data,
@@ -170,8 +173,12 @@ export function fakeProveApi(w: World): ProveApi {
         safe_tx_hash: localSafeTxHash(handle.chain.chainId, handle.address, o.to, o.data, nonce), threshold: handle.threshold, owners: [...handle.owners], signatures: [], proposed_at: "2026-01-01T00:00:00Z",
       } satisfies SafeTxBundle;
     },
-    signTx: (handle, bundle, signer) => signTx(handle, bundle, signer, { skipChainChecks: true }),
+    signTx: (handle, bundle, signer) => (w.safeCalls.push("signTx"), signTx)(handle, bundle, signer, { skipChainChecks: true }),
     async checkSignaturesOnChain() { w.safeCalls.push("checkSignaturesOnChain"); },
+    chain: {
+      async executions(_h, fromBlock) { w.landed.reads.push(`executions:${fromBlock}`); return w.landed.executions; },
+      async transaction(_h, hash) { w.landed.reads.push(`transaction:${hash}`); return w.landed.txs[hash.toLowerCase()] ?? null; },
+    },
     async executeTx(_handle, bundle, sender, opts) {
       w.safeCalls.push(`executeTx:${bundle.signatures.length}${opts?.allSignatures ? ":all" : ""}`);
       w.safeNonce = 1;

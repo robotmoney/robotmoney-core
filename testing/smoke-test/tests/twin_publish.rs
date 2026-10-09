@@ -101,6 +101,59 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         Some(3),
         "the prove-control record must name all three Safe owners"
     );
+    // Issue 1670: the run crashed AFTER the proof landed on the real Safe but before the run manifest was written. Simulated by removing the record
+    // (the Safe is at nonce 1, as it is now). Without --resume the rerun refuses (exit 16, RESUME). With --resume the tool finds the nonce-0 execution on the
+    // real chain (the Safe's own ExecutionSuccess event), recovers the owner signatures from the real calldata, adopts it with the SAME on-chain
+    // hash and sends nothing.
+    {
+        let original = proof.clone();
+        let mut crashed = run_manifest.clone();
+        crashed["stages"]
+            .as_object_mut()
+            .expect("stages is an object")
+            .remove("prove-control");
+        std::fs::write(
+            &run_manifest_path,
+            serde_json::to_string_pretty(&crashed).unwrap(),
+        )
+        .expect("write the crashed run manifest");
+        let refused = fx
+            .published()
+            .stage_raw(&["--stage", "prove-control"])
+            .expect("run the prove-control rerun");
+        // The run manifest has earlier stages, so a rerun without --resume stops at RESUME (exit 16) before any stage runs. The
+        // refusal to adopt without --resume on a manifest with no other stages (exit 24) is asserted in prove-control.test.ts.
+        assert_eq!(
+            refused.code, 16,
+            "a rerun without --resume must refuse: {}{}",
+            refused.stdout, refused.stderr
+        );
+        let adopted = fx
+            .published()
+            .stage_raw(&["--stage", "prove-control", "--resume"])
+            .expect("run the prove-control resume");
+        assert_eq!(
+            adopted.code, 0,
+            "--resume must adopt the landed proof: {}{}",
+            adopted.stdout, adopted.stderr
+        );
+        let after: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&run_manifest_path).expect("read the run manifest"),
+        )
+        .expect("the run manifest is JSON");
+        let rec = &after["stages"]["prove-control"];
+        assert_eq!(rec["status"], "done");
+        assert_eq!(rec["adopted"], true, "the record must say it was adopted");
+        assert_eq!(
+            rec["txHash"], original["txHash"],
+            "the adopted hash is the on-chain hash of the original proof"
+        );
+        assert_eq!(rec["signers"], original["signers"]);
+        // Nothing was sent again: the verifier still reads the Safe at the same single execution.
+        fx.published()
+            .verify()
+            .expect("the verifier must pass after the adoption");
+    }
     // Saved for scripts/stage/label-diff.ts: the stage label set must equal mainnet's.
     if let Ok(path) = std::env::var("SMOKE_TEST_VERIFY_OUT") {
         std::fs::write(&path, &verified).expect("write the verifier output");

@@ -3,7 +3,7 @@
 // What is a fake: the chain. A recording `cast send` / `cast call` stands in for the node (every other tool call goes to the stub forge and cast).
 // The vaults themselves, the real keys and a real redeem on every paused vault are the Twin rehearsal: testing/smoke-test/tests/twin_pause_all.rs (suite 14).
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT_CODES } from "../src/errors.ts";
 import { EMERGENCY_ROLE, pauseSignerRole, rolloutReportPath } from "../src/pause-all.ts";
@@ -242,3 +242,56 @@ describe("a failed verify or postflight pauses the vaults by itself", () => {
     expect(report(w).pauseAll.trigger).toBe("postflight");
   });
 });
+
+describe("issue 1686: pause-all records a pause entry in the run manifest", () => {
+  const manifestOf = (w: ReturnType<typeof world>) => JSON.parse(readFileSync(join(w.evidence, "publish-run.json"), "utf8"));
+
+  test("a manual pause-all writes seq, timestamp, trigger and the per-vault results next to the rollout report, which is unchanged", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
+    const m = manifestOf(w);
+    expect(m.pauses).toHaveLength(1);
+    expect(m.pauses[0]).toMatchObject({ seq: 1, trigger: "manual", status: "done", allPaused: true });
+    expect(Number.isNaN(Date.parse(m.pauses[0].at))).toBe(false);
+    expect(m.pauses[0].vaults.map((v: any) => [v.vault, v.depositsPaused])).toEqual([["rmUSDC", true], ["rmPROTO", true], ["rmAGENT", true], ["rmRWA", true]]);
+    expect(m.stages).toEqual(AFTER_HANDOVER); // the rest of the manifest is untouched
+    expect(report(w).pauseAll).toMatchObject({ trigger: "manual", allPaused: true });
+    expect(existsSync(rolloutReportPath({ evidenceDir: w.evidence, chainId: 918453 }))).toBe(true);
+  });
+
+  test("the entry is on disk BEFORE the first pauseDeposits() is sent, and each vault is appended as it finishes (a crash half way still leaves it)", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, BEFORE_HANDOVER);
+    const run = chainRunner(c);
+    const seen: { sendNo: number; status: string; vaults: number }[] = [];
+    await w.run(["pause-all"], { run: async (t, a, o) => {
+      if (t === "cast" && a[0] === "send") { const e = manifestOf(w).pauses?.[0]; seen.push({ sendNo: c.sends.length + 1, status: e?.status, vaults: e?.vaults.length }); }
+      return run(t, a, o);
+    }, makeSigner: signerFor });
+    expect(seen).toEqual([{ sendNo: 1, status: "started", vaults: 0 }, { sendNo: 2, status: "started", vaults: 1 }, { sendNo: 3, status: "started", vaults: 2 }, { sendNo: 4, status: "started", vaults: 3 }]);
+    expect(manifestOf(w).pauses[0].status).toBe("done");
+  });
+
+  test("the automatic pause after a failed verify records the same entry with trigger verify; a second pause-all gets the next seq", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, BEFORE_HANDOVER);
+    expect(await w.run(["verify"], { ...deps(c), verify: failingVerifier })).toBe(EXIT_CODES.VERIFY);
+    expect(await w.run(["pause-all"], deps(c))).toBe(0);
+    expect(manifestOf(w).pauses.map((p: any) => [p.seq, p.trigger])).toEqual([[1, "verify"], [2, "manual"]]);
+  });
+
+  test("a stale manifest lock (a crashed holder) is taken over: the entry is still written and all four vaults are paused", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, BEFORE_HANDOVER);
+    const lock = join(w.evidence, "publish-run.json.lock");
+    writeFileSync(lock, "");
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(lock, old, old);
+    expect(await w.run(["pause-all"], deps(c))).toBe(0);
+    expect(c.sends).toHaveLength(4);
+    expect(manifestOf(w).pauses).toHaveLength(1);
+    expect(existsSync(lock)).toBe(false);
+  });
+});
+

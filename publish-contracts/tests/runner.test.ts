@@ -274,6 +274,7 @@ describe("the stage runner on stub forge and cast", () => {
     expect(r.forge.optimizerRuns).toBe(100);
     expect(r.forge.evmVersion).toBe("cancun");
     expect(Object.keys(r.configHashes).sort()).toEqual(["config/agent-token-shortlist.json", "config/dex-pools.json", "config/protocol-assets.json", "config/rwa-assets.json"]);
+    for (const v of Object.values(r.configHashes)) expect(v).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(Object.keys(r.codehashes).length).toBeGreaterThan(5);
     expect(r.notes.join(" ")).toContain("does not prove the real delay");
     expect(existsSync(join(w.evidence, "publish-run.json"))).toBe(true);

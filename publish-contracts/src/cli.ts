@@ -66,7 +66,7 @@ export const USAGE = `publish contracts
   --receipt-id ID    govern with --row release-receipt only: the bytes32 receipt id to release.
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
-  --resume           continue a run: adopt the existing Safe, skip finished stages
+  --resume           continue a run: adopt the existing Safe, skip finished stages; prove-control also adopts a proof that landed on chain before the run died (nothing is sent again)
   --dry-run          the preflight: run every check and simulate EVERY deployer stage in order on a blank local anvil it starts itself
                      (no fork). Nothing is broadcast, nothing is sent to --rpc, the checkout is left as found.
   --core-dir DIR     core checkout (default: the repo root that holds scripts/deploy/stage-table.json, found by walking up; use it only for a checkout elsewhere)

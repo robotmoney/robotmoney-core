@@ -3,7 +3,7 @@
 // It spawns forge, cast and a read-only git status only. Every log line is JSON. Every failure class is a typed PublishError with its own exit code.
 // Resume: the run manifest keeps each stage's start nonce and count. A rerun adopts the existing Safe and skips finished stages.
 // A count mismatch after a broadcast is a hard failure. Plan: "One deploy sequence" (Resume), principle 17.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { decodeErrorResult, type Abi, type Hex } from "viem";
 import { PublishError, isPublishError } from "./errors.ts";
@@ -81,6 +81,23 @@ export interface RunManifest {
   firstBlock?: number;
   stages: Record<string, StageRecord>;
   govern?: Record<string, unknown>;
+  /** Every pause-all that ran against this run, oldest first (issue 1686). Written by pause-all only, merged on every save. */
+  pauses?: PauseEntry[];
+}
+
+/**
+ * One pause-all in the run manifest (issue 1686). `seq` is the manifest-wide monotonic sequence number shared with the govern `scheduled.seq`: govern
+ * compares sequence numbers, never clocks, so clock skew between the operator machine, the chain and the log cannot hide a pause. The entry is written
+ * `started` BEFORE the first pauseDeposits() is sent, each vault is appended as it finishes, and the last write sets `done` and `allPaused`.
+ */
+export interface PauseEntry {
+  seq: number;
+  at: string;
+  trigger: string;
+  reason: string;
+  status: "started" | "done";
+  allPaused?: boolean;
+  vaults: Record<string, unknown>[];
 }
 
 export const manifestPath = (evidenceDir: string): string => join(evidenceDir, "publish-run.json");
@@ -93,12 +110,80 @@ export function loadRunManifest(evidenceDir: string): RunManifest | undefined {
   return j as RunManifest;
 }
 
-export function saveRunManifest(evidenceDir: string, m: RunManifest): void {
+/**
+ * The manifest write lock (issue 1686). pause-all and govern both rewrite publish-run.json, possibly from two processes: every read-modify-write takes
+ * this lock file (O_EXCL), so neither drops the other's change. A lock older than 30 s is a crashed holder and is taken over.
+ */
+function withManifestLock<T>(evidenceDir: string, fn: () => T): T {
   mkdirSync(evidenceDir, { recursive: true });
+  const lock = `${manifestPath(evidenceDir)}.lock`;
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    try { closeSync(openSync(lock, "wx")); break; } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      try { if (Date.now() - statSync(lock).mtimeMs > 30_000) { unlinkSync(lock); continue; } } catch { /* released meanwhile */ }
+      if (Date.now() > deadline) throw new PublishError("MANIFEST", `${lock} is held by another process for over 15 s: remove it only if no publish-contracts process is running`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try { return fn(); } finally { try { unlinkSync(lock); } catch { /* already gone */ } }
+}
+
+function writeManifestFile(evidenceDir: string, m: RunManifest): void {
   const p = manifestPath(evidenceDir);
-  const tmp = `${p}.tmp`;
+  const tmp = `${p}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(m, null, 2) + "\n", { mode: 0o644 });
   renameSync(tmp, p);
+}
+
+const governScheduled = (m: Pick<RunManifest, "govern">): { seq?: number }[] =>
+  Object.values(m.govern ?? {}).map((r) => (r as { scheduled?: { seq?: number } } | undefined)?.scheduled).filter((x): x is { seq?: number } => !!x);
+
+/** The next manifest sequence number: above every pause entry and every stamped govern schedule. */
+export const nextManifestSeq = (m: Pick<RunManifest, "govern" | "pauses">): number =>
+  1 + Math.max(0, ...(m.pauses ?? []).map((p) => p.seq), ...governScheduled(m).map((x) => x.seq ?? 0));
+
+/**
+ * Saves the manifest under the write lock without dropping a concurrent pause-all: the pause entries on disk are merged in first (pause-all owns them,
+ * the disk copy wins), then each govern `scheduled` record that has no `seq` yet is stamped with the next sequence number. The merge and the stamp
+ * mutate `m`, so the caller's in-memory copy sees them.
+ */
+export function saveRunManifest(evidenceDir: string, m: RunManifest): void {
+  withManifestLock(evidenceDir, () => {
+    let disk: RunManifest | undefined;
+    try { disk = loadRunManifest(evidenceDir); } catch { /* a damaged file is overwritten, as before */ }
+    const bySeq = new Map<number, PauseEntry>();
+    for (const e of m.pauses ?? []) bySeq.set(e.seq, e);
+    for (const e of disk?.pauses ?? []) bySeq.set(e.seq, e);
+    if (bySeq.size) m.pauses = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+    for (const sc of governScheduled(m)) if (sc.seq === undefined) sc.seq = nextManifestSeq(m);
+    writeManifestFile(evidenceDir, m);
+  });
+}
+
+/**
+ * pause-all: opens a pause entry (status `started`, next sequence number) in the manifest on disk. Re-reads the file under the lock, so a govern save
+ * that landed a moment ago is kept. Returns undefined when there is no manifest file (nothing for govern to compare against).
+ */
+export function beginPauseEntry(evidenceDir: string, e: Omit<PauseEntry, "seq" | "status" | "vaults">): PauseEntry | undefined {
+  return withManifestLock(evidenceDir, () => {
+    const disk = loadRunManifest(evidenceDir);
+    if (!disk) return undefined;
+    const entry: PauseEntry = { ...e, seq: nextManifestSeq(disk), status: "started", vaults: [] };
+    disk.pauses = [...(disk.pauses ?? []), entry];
+    writeManifestFile(evidenceDir, disk);
+    return entry;
+  });
+}
+
+/** pause-all: replaces the entry with this `seq` on disk (re-read under the lock). Used per vault and for the final `done`. */
+export function updatePauseEntry(evidenceDir: string, entry: PauseEntry): void {
+  withManifestLock(evidenceDir, () => {
+    const disk = loadRunManifest(evidenceDir);
+    if (!disk) return;
+    disk.pauses = (disk.pauses ?? []).map((p) => (p.seq === entry.seq ? entry : p));
+    writeManifestFile(evidenceDir, disk);
+  });
 }
 
 // ---- context -------------------------------------------------------------------------------------------------------------
