@@ -96,6 +96,7 @@ go through explicit approval.
 | Fee-recipient swap to attacker address | `setFeeRecipient` must be admin-gated and routed through the timelock. The fee recipient must be verified to be a non-zero address. |
 | Multisig social engineering (Drift-class) | A signer playbook must be published and followed. Signers must independently simulate the operation before approving, review the calldata diff against the expected effect, and meet a minimum deliberation time. No signer may approve on the same device as the proposer. |
 | Signer-device compromise | All Safe signers must use hardware wallets. Software key signing is prohibited for any `ADMIN_ROLE` or `PROPOSER_ROLE` operation. |
+| Safe whose signers cannot sign (lock-out at the handover) | Stage 11 gives every role on every vault to a timelock whose proposer is the Safe. A Safe whose real keys cannot sign would lock every vault for good, and comparing owners and threshold with the sheet proves the addresses only. Before stage 11 the real Safe must execute one self-call (value 0, empty data) signed by EVERY owner (core #1618, plan decision 21). The run manifest records the transaction hash and the signers, stage 11 refuses without that record on the same Safe and a Safe nonce of 1 or more, and the stage 12 verifier reads the transaction back from the chain and recovers every signer. The proof goes through the Safe, never the timelock. |
 | Role separation drift | At deploy and at every admin operation, an off-chain assertion must confirm that admin, pause, emergency, agent, proposer, canceller, and executor authorities satisfy their documented separation rules. No account may hold more than one of gateway `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, or `AGENT_ROLE`. |
 
 ### 4.1 Deploy-time governance record
@@ -150,6 +151,10 @@ source. The manipulation-resistance posture is:
   cardinality causes the pool's `observe()` to revert (`"OLD"`), which
   fails NAV and emergency-unwind reads closed — preferred to silently
   reading a manipulable short window.
+  On-chain, `addAsset` and `setTwapWindow` now refuse a pool whose cardinality is
+  below `window / 2 s + 1` (901 for the default window), so griefing swaps cannot
+  churn the ring below the window. `redeemInKind` is the oracle-free exit if a
+  read still fails (core 1665, ADR-0007 amendment).
 - **Circuit breaker.** `pauseDeposits()` (EMERGENCY_ROLE) suspends new
   deposits only. Withdrawals are never frozen, by anyone (core 1494).
   `shutdownVault()` zeroes the TVL cap. Both remain available

@@ -40,13 +40,17 @@ export default defineConfig({
     ],
   ],
   // Two projects over the one devnet (globalSetup runs once). `safe-governance` holds the
-  // spec that advances the Twin chain clock past the timelock delay (evm_increaseTime), so it
-  // runs after every other spec has finished with the chain (core 1544).
+  // specs that advance the Twin chain clock past the timelock delay (evm_increaseTime), so they
+  // run after every other spec has finished with the chain (core 1544). governance.spec.ts runs
+  // real Safe -> Timelock rounds to create its voting power and proposal (issue 1647).
   projects: [
-    { name: "dapp", testIgnore: ["**/safe-proposal-role-grant.spec.ts"] },
+    {
+      name: "dapp",
+      testIgnore: ["**/safe-proposal-role-grant.spec.ts", "**/governance.spec.ts"],
+    },
     {
       name: "safe-governance",
-      testMatch: ["**/safe-proposal-role-grant.spec.ts"],
+      testMatch: ["**/safe-proposal-role-grant.spec.ts", "**/governance.spec.ts"],
       dependencies: ["dapp"],
     },
   ],

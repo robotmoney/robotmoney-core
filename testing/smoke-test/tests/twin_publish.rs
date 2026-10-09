@@ -2,14 +2,15 @@
 //!
 //! One test boots the Twin chain (918453) through the harness. The harness has already called
 //! `publish` (deploy all four vaults, real Safe handover). This test then asserts the four
-//! manifests, runs the one verifier (which holds the router, basket and timelock role proofs), and runs the stage 13 govern matrix through the real Safe.
+//! manifests, runs the one verifier (which holds the router, basket and timelock role proofs), runs the stage 13 govern matrix through the real Safe,
+//! and runs the verifier again (the order is publish, verify, govern, verify: issue 1667).
 //! The verifier output (SMOKE_TEST_VERIFY_OUT) and the run sheet (SMOKE_TEST_SHEET_OUT) are saved for the
 //! parity step in suite 14. Every govern row must carry a tx hash and receipt status 1 (checked by `govern_matrix`).
 //!
 //! Run with:
 //!   cargo test -p smoke-test --release --test twin_publish -- --test-threads=1 --nocapture
 
-use smoke_test::{prerequisites_available, Fixture};
+use smoke_test::{require_prereqs, Fixture};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -35,11 +36,7 @@ fn run_bun(repo_root: &Path, args: &[String]) {
 
 #[test]
 fn twin_chain_publish_verify_and_govern_matrix() {
-    if !prerequisites_available() {
-        panic!(
-            "anvil/bun/forge/cast not on PATH: the Twin chain publish run cannot be skipped in CI"
-        );
-    }
+    require_prereqs("twin_chain_publish_verify_and_govern_matrix");
     let fx = Fixture::new().expect("smoke-test fixture boot failed");
     let dir = fx.manifest_dir();
     let table = smoke_test::stage_table::StageTable::load_default().expect("read the stage table");
@@ -54,6 +51,109 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .verify()
         .expect("the verifier must pass on the Twin chain");
     assert!(!verified.trim().is_empty(), "the verifier printed nothing");
+    // Core 1618: before the stage 11 handover the real Safe executed one self-call signed by EVERY owner. The verifier read it back
+    // from the chain (four `safe:` labels, all passed or `verify()` above would have failed), and the run manifest records it.
+    for label in [
+        "safe: control proof transaction recorded",
+        "safe: control proof transaction succeeded",
+        "safe: control proof is a self-call signed by every owner",
+        "safe: nonce at least 1",
+    ] {
+        assert!(
+            verified.lines().any(|l| l.trim() == label),
+            "the verifier output lacks the label '{label}'"
+        );
+    }
+    // Issue 1666: every basket ships with a nonzero NAV deviation guard from the sheet and sits on pools at or above the sheet liquidity
+    // floor. The verifier read both back from the chain; `verify()` above would have failed on any of these labels failing.
+    for vault in ["rmPROTO", "rmAGENT", "rmRWA"] {
+        for what in [
+            "navDeviationGuardBps equals sheet",
+            "navDeviationGuardBps above zero",
+            "pool liquidity meets the sheet floor",
+        ] {
+            let label = format!("vault[{vault}]: {what}");
+            assert!(
+                verified.lines().any(|l| l.trim() == label),
+                "the verifier output lacks the label '{label}'"
+            );
+        }
+    }
+    let run_manifest_path = dir
+        .parent()
+        .unwrap_or(dir)
+        .join("evidence")
+        .join("publish-run.json");
+    let run_manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&run_manifest_path).expect("read the run manifest"),
+    )
+    .expect("the run manifest is JSON");
+    let proof = &run_manifest["stages"]["prove-control"];
+    assert_eq!(proof["status"], "done", "no finished prove-control record");
+    assert!(
+        proof["txHash"]
+            .as_str()
+            .is_some_and(|h| h.starts_with("0x") && h.len() == 66),
+        "the prove-control record has no transaction hash"
+    );
+    assert_eq!(
+        proof["signers"].as_array().map(|a| a.len()),
+        Some(3),
+        "the prove-control record must name all three Safe owners"
+    );
+    // Issue 1670: the run crashed AFTER the proof landed on the real Safe but before the run manifest was written. Simulated by removing the record
+    // (the Safe is at nonce 1, as it is now). Without --resume the rerun refuses (exit 16, RESUME). With --resume the tool finds the nonce-0 execution on the
+    // real chain (the Safe's own ExecutionSuccess event), recovers the owner signatures from the real calldata, adopts it with the SAME on-chain
+    // hash and sends nothing.
+    {
+        let original = proof.clone();
+        let mut crashed = run_manifest.clone();
+        crashed["stages"]
+            .as_object_mut()
+            .expect("stages is an object")
+            .remove("prove-control");
+        std::fs::write(
+            &run_manifest_path,
+            serde_json::to_string_pretty(&crashed).unwrap(),
+        )
+        .expect("write the crashed run manifest");
+        let refused = fx
+            .published()
+            .stage_raw(&["--stage", "prove-control"])
+            .expect("run the prove-control rerun");
+        // The run manifest has earlier stages, so a rerun without --resume stops at RESUME (exit 16) before any stage runs. The
+        // refusal to adopt without --resume on a manifest with no other stages (exit 24) is asserted in prove-control.test.ts.
+        assert_eq!(
+            refused.code, 16,
+            "a rerun without --resume must refuse: {}{}",
+            refused.stdout, refused.stderr
+        );
+        let adopted = fx
+            .published()
+            .stage_raw(&["--stage", "prove-control", "--resume"])
+            .expect("run the prove-control resume");
+        assert_eq!(
+            adopted.code, 0,
+            "--resume must adopt the landed proof: {}{}",
+            adopted.stdout, adopted.stderr
+        );
+        let after: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&run_manifest_path).expect("read the run manifest"),
+        )
+        .expect("the run manifest is JSON");
+        let rec = &after["stages"]["prove-control"];
+        assert_eq!(rec["status"], "done");
+        assert_eq!(rec["adopted"], true, "the record must say it was adopted");
+        assert_eq!(
+            rec["txHash"], original["txHash"],
+            "the adopted hash is the on-chain hash of the original proof"
+        );
+        assert_eq!(rec["signers"], original["signers"]);
+        // Nothing was sent again: the verifier still reads the Safe at the same single execution.
+        fx.published()
+            .verify()
+            .expect("the verifier must pass after the adoption");
+    }
     // Saved for scripts/stage/label-diff.ts: the stage label set must equal mainnet's.
     if let Ok(path) = std::env::var("SMOKE_TEST_VERIFY_OUT") {
         std::fs::write(&path, &verified).expect("write the verifier output");
@@ -102,6 +202,82 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .govern_matrix()
         .expect("the govern matrix must pass through the real Safe");
     assert!(!rows.is_empty(), "the govern matrix ran no rows");
+
+    // Issue 1667: the order is publish, verify, govern, verify. The first verify above passed before govern (the baskets paused). This second verify reads the
+    // post-govern state: the unpause rows are executed, so the verifier expects those vaults open. The Twin run only checks that the scripts execute in this
+    // order. The 48 hour delay and the Safe signers are proven on chain 8453 through the real Safe.
+    let verified_after = fx
+        .published()
+        .verify()
+        .expect("the verifier must pass on the Twin chain after govern");
+    assert!(
+        !verified_after.trim().is_empty(),
+        "the post-govern verifier printed nothing"
+    );
+    let labels = |out: &str| -> Vec<String> { out.lines().map(|l| l.trim().to_string()).collect() };
+    assert_eq!(
+        labels(&verified),
+        labels(&verified_after),
+        "the verifier ran the same checks before and after govern"
+    );
+
+    // Core 1611: one consensus receipt is released end to end through the REAL Safe and the REAL timelock on the fork. The seed records two
+    // receipts (the gateway committee registration is itself a Safe -> Timelock call), then `govern --row release-receipt` schedules
+    // `releaseReceipt` through the Safe, waits the real timelock delay (one time warp on the fork) and executes it. The CLI reads `released`
+    // back, and this test reads it again from the chain: A is released, B (recorded, never released) is not.
+    fx.seed_consensus_receipts()
+        .expect("record two receipts and release one through the real Safe and timelock");
+    let receipt = format!("{:#x}", fx.consensus_receipt());
+    let is_released = |file: &str| -> bool {
+        let r = smoke_test::load_fixture_receipt(fx.repo_root(), file).expect("fixture receipt");
+        let id = format!("0x{}", hex::encode(r.receipt_id));
+        let out = Command::new("cast")
+            .args([
+                "call",
+                "--rpc-url",
+                fx.rpc_url(),
+                &receipt,
+                "isReleased(bytes32)(bool)",
+                &id,
+            ])
+            .output()
+            .expect("cast on PATH");
+        assert!(
+            out.status.success(),
+            "cast call isReleased failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim() == "true"
+    };
+    assert!(
+        is_released("receipt-a.json"),
+        "receipt A must read released after the Safe -> Timelock release round"
+    );
+    assert!(
+        !is_released("receipt-b.json"),
+        "receipt B was recorded only: it must not read released"
+    );
+
+    // Issue 1554: rmAGENT launches paused and holding RM. Its one asset is the live RM token,
+    // read back from the deployed vault (`assetCount()` is 1, `assets(0)` word 0 is the token).
+    let agent = fx.agent_vault();
+    let count = fx
+        .cast_call_raw(agent, "assetCount()", &[])
+        .expect("read rmAGENT assetCount");
+    assert_eq!(
+        count.trim_start_matches("0x").trim_start_matches('0'),
+        "1",
+        "rmAGENT must hold exactly one asset, RM (assetCount raw {count})"
+    );
+    let first = fx
+        .cast_call_raw(agent, "assets(uint256)", &["0"])
+        .expect("read rmAGENT assets(0)");
+    assert!(
+        first
+            .trim_start_matches("0x")
+            .starts_with("00000000000000000000000065021a79aeef22b17cdc1b768f5e79a8618beba3"),
+        "rmAGENT asset 0 must be RM 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3, got {first}"
+    );
 
     // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain
     // after the full publish and govern run. `cast_send` fails on a reverted receipt.

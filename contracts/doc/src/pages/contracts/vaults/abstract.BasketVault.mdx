@@ -5,7 +5,7 @@ description: "Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
 
 # BasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/545620af5e4698bceb8d0238b458204689682176/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/vaults/BasketVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -138,19 +138,6 @@ See docs/technical/redeem-gas-1482.md (core 1513).
 
 ```solidity
 uint256 internal constant REDEEM_GAS_PER_ASSET = 400_000;
-```
-
-### MIN_POOL_CARDINALITY
-
-Minimum observation cardinality required on the Uniswap V3 pool
-when registering an asset via addAsset(). A cardinality of 1
-(the Uniswap deployment default) means observe() can only return
-the single stored slot and always reverts with "OLD" for any
-non-zero secondsAgo, which would permanently break totalAssets(),
-deposits, and withdrawals for the entire basket.
-
-```solidity
-uint16 public constant MIN_POOL_CARDINALITY = 2;
 ```
 
 ### MIN_POOL_LIQUIDITY
@@ -639,6 +626,36 @@ function redeem(uint256 shares, address receiver, address owner)
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
+<a id="redeeminkind-uint256-address-address"></a>
+
+### redeemInKind
+
+Oracle-free exit (core 1665): burn `shares` of `owner` and pay `receiver` the pro-rata
+idle USDC plus the pro-rata amount of each ACTIVE basket token, with NO TWAP read and
+NO swap. This is the holder's exit when `redeem` cannot price or fill a leg.
+
+<i>
+
+`exitFeeBps` is applied to each leg and the fee is sent to `feeRecipient`. Each leg is
+floored (`bal * shares / supply`), so rounding favours the vault and the remaining
+holders' per-share backing never decreases. Shares burn before any transfer and the call
+is `nonReentrant`. No pause, shutdown, retire or role gates it. Inactive (removed) assets
+are not paid. A caller other than `owner` spends allowance, as in `redeem`.
+
+</i>
+
+```solidity
+function redeemInKind(uint256 shares, address receiver, address owner) external nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| receiver | `address` |  |
+| owner | `address` |  |
+
 <a id="previewredeem-uint256"></a>
 
 ### previewRedeem
@@ -1106,7 +1123,7 @@ Register a new basket asset. Restricted to ADMIN_ROLE.
 <i>
 
 Reverts with InsufficientPoolCardinality when the pool's current
-observationCardinality is below MIN_POOL_CARDINALITY. Callers must
+observationCardinality is below the window-derived floor (`window / 2 s + 1`, 901 for the 1800 s default; see `BasketAssetConfigGuard.requireObservationHistory`). Callers must
 invoke pool.increaseObservationCardinalityNext(n) and wait for the
 cardinality to be populated before calling addAsset.
 
@@ -2097,6 +2114,26 @@ event ExitFeeCharged(
 | gross | `uint256` |  |
 | fee | `uint256` |  |
 | net | `uint256` |  |
+
+### RedeemedInKind
+
+<i>
+
+Emitted by `redeemInKind` (core 1665). Per-leg amounts are the ERC-20 transfers.
+
+</i>
+
+```solidity
+event RedeemedInKind(address indexed owner, address indexed receiver, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
 
 ### TvlCapUpdated
 

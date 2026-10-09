@@ -1,19 +1,22 @@
 ---
 title: "WeightSetterRotationTest"
-description: "One test per safety property of the rotation. Each test is mutation-checked: the property's guard in `PortfolioRouter` is removed and the test must fail. The Safe is an address here (the real 2-of-3 Safe runs in `SafeIntegration`). The timelock is a real `TimelockController` at the production delay."
+description: "One test per safety property of the rotation. Each test is mutation-checked: the property's guard in `PortfolioRouter` is removed and the test must fail. The Safe is a real SafeL2 proxy. State changes go through a two-signature `execTransaction`. A call that must fail with an exact router error is replayed with the Safe as `msg.sender` (`_assertSafeCallReverts`), because `execTransaction` would hide that error as `GS013`. The timelock is a real `TimelockController` at the production delay."
 ---
 
 # WeightSetterRotationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/94a474ba53da2c0db2f819b63668620ce69d765a/contracts/test/WeightSetterRotation.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32dc89aac0e117b542fc122e5e44ef2022a5d8b3/contracts/test/WeightSetterRotation.t.sol)
 
-**Inherits:** Test
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
 **Title:** WeightSetterRotationTest
 
 One test per safety property of the rotation. Each test is mutation-checked: the
 property's guard in `PortfolioRouter` is removed and the test must fail.
-The Safe is an address here (the real 2-of-3 Safe runs in `SafeIntegration`).
+The Safe is a real SafeL2 proxy. State changes go through a two-signature
+`execTransaction`. A call that must fail with an exact router error is replayed
+with the Safe as `msg.sender` (`_assertSafeCallReverts`), because `execTransaction`
+would hide that error as `GS013`.
 The timelock is a real `TimelockController` at the production delay.
 
 ## Constants
@@ -71,7 +74,7 @@ TimelockController internal timelock;
 ### safe
 
 ```solidity
-address internal safe = makeAddr("safe");
+address internal safe;
 ```
 
 ### deployer
@@ -192,6 +195,21 @@ function _propose(address target) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | target | `address` |  |
+
+<a id="_proposereverts-address-bytes"></a>
+
+### _proposeReverts
+
+```solidity
+function _proposeReverts(address target, bytes memory expected) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| expected | `bytes` |  |
 
 <a id="test_rotationroles_areselfadministered"></a>
 

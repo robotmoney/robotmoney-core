@@ -25,7 +25,6 @@
 
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use alloy_primitives::{Address, LogData, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent};
@@ -38,8 +37,8 @@ use crate::output::emit;
 use crate::policy::{ChecksOutput, Preflight, PreflightInputs};
 use crate::replay_cache::OP_WITHDRAW;
 use crate::write_path::{
-    open_session, Submission, WriteRequest, EXIT_OK, EXIT_REFUSAL, EXIT_STARTUP_FAIL,
-    MAX_DEADLINE_SKEW_SECS,
+    chain_deadline, open_session, Submission, WriteRequest, EXIT_OK, EXIT_REFUSAL,
+    EXIT_STARTUP_FAIL, MAX_DEADLINE_SKEW_SECS,
 };
 
 /// Inputs collected by `main.rs` from the CLI parser.
@@ -214,11 +213,6 @@ pub fn run(args: Args) -> i32 {
     };
 
     let deadline_secs = args.deadline_secs.min(MAX_DEADLINE_SKEW_SECS);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let deadline = now.saturating_add(deadline_secs);
 
     // -- Shared write-path prologue ---------------------------------------
     // total_shares is the replay-cache amount field, and OP_WITHDRAW keeps
@@ -231,7 +225,7 @@ pub fn run(args: Args) -> i32 {
             order_id,
             idempotency_key,
             amount: total_shares,
-            deadline,
+            deadline: 0,
             replay_op: Some(OP_WITHDRAW),
         },
     ) {
@@ -239,6 +233,24 @@ pub fn run(args: Args) -> i32 {
         Err(abort) => return abort.exit(args.pretty),
     };
     let agent_address = session.agent_address;
+
+    // -- Deadline from block timestamp ------------------------------------
+    // Block time, never wall clock (issue #1432): the gateway checks the
+    // deadline against `block.timestamp`, so a skewed host clock would
+    // otherwise build a transaction that reverts `DeadlineTooFar`.
+    let deadline = match session
+        .rt
+        .block_on(chain_deadline(&session.rpc, deadline_secs))
+    {
+        Ok(d) => {
+            session.audit.deadline = d;
+            d
+        }
+        Err(e) => {
+            log::error!("rmpc withdraw-router: failed to fetch block timestamp for deadline: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
 
     // -- Preflight --------------------------------------------------------
     // The withdrawal-specific gateway preflight (chain id, code hash,

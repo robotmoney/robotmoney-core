@@ -60,7 +60,7 @@ on:
       - "clients/rust-payment-client/src/scan_residual_seams.rs"
       - "docs/audits.md"
       - "SECURITY.md"
-      - ".github/workflows/suite-18-security-gates.yml"
+      - ".github/workflows/*.yml"
       - ".github/workflows/release-dapp.yml"
       - ".github/workflows/release-rmpc.yml"
       - ".github/scripts/audit_workflow_run_splice_and_perms.py"
@@ -70,6 +70,11 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
 
 jobs:
   # ── Cargo audit ────────────────────────────────────────────────────────────
@@ -250,3 +255,27 @@ jobs:
             exit 1
           fi
           echo "release-rmpc.yml: clean"
+      # Issue #1428: the floor for EVERY workflow. Files are discovered, not
+      # enumerated, so a new workflow cannot skip the check by omission. Only
+      # the workflow-scope check runs here (--workflow-scope-only): a top-level
+      # permissions: block must exist and must not grant contents: write.
+      - name: Audit every workflow declares a restrictive top-level permissions block
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          FILES=(.github/workflows/*.yml .github/workflows/*.yaml)
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::no workflow files discovered — the audit would be vacuous"
+            exit 1
+          fi
+          BAD=0
+          for f in "${FILES[@]}"; do
+            OUT="$(python3 .github/scripts/audit_workflow_run_splice_and_perms.py "$f" --workflow-scope-only)"
+            if [ -n "$OUT" ]; then
+              echo "::error file=$f::failed the workflow-scope permissions audit:"
+              echo "$OUT"
+              BAD=1
+            fi
+          done
+          echo "audited ${#FILES[@]} workflow files"
+          exit "$BAD"

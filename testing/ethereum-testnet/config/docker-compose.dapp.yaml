@@ -51,7 +51,7 @@ x-testnet-labels: &testnet-labels
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     container_name: dapp-postgres
     labels: *testnet-labels
     restart: unless-stopped
@@ -169,6 +169,10 @@ services:
       # this the explorer /v1/router/weights endpoint returns an empty weight list
       # even when the deploy script called setWeights() before the dapp stack booted.
       INDEXER_PORTFOLIO_ROUTER: ${INDEXER_PORTFOLIO_ROUTER:-}
+      # Issue 1647: INDEXER_ROUTER_GOVERNANCE enables ProposalCreated / VoteCast /
+      # ProposalExecuted ingestion from RouterGovernance. Without it /v1/governance/proposals
+      # stays empty however many proposals the Safe and timelock created on chain.
+      INDEXER_ROUTER_GOVERNANCE: ${INDEXER_ROUTER_GOVERNANCE:-}
       # Bit 2 (INDEXER_MULTI_VAULT_EVENTS) enables VaultRegistered /
       # VaultStatusChanged event ingestion from the VaultRegistry.  Without
       # this flag the /v1/vaults explorer endpoint returns an empty list even
@@ -225,9 +229,9 @@ services:
       # Issue #1370: this is NOT a bare liveness ping and must not be
       # simplified into one. `/health` SELECTs from `indexer_runs`
       # (clients/explorer-api/src/routes.rs), so it cannot report healthy while
-      # the explorer schema is missing. That makes it the schema guarantee on
-      # every path where the `explorer-migrate` barrier above does not apply —
-      # notably `docker compose restart explorer-api`, which re-evaluates no
+      # the explorer schema is missing. That makes it the schema-presence guard
+      # (not a schema-version guard) on every path where the `explorer-migrate`
+      # barrier above does not apply — notably `docker compose restart explorer-api`, which re-evaluates no
       # `depends_on` condition. Removing or weakening this probe removes that
       # guarantee, and also un-gates `dapp`, which starts on
       # `explorer-api: service_healthy`.
@@ -317,7 +321,7 @@ services:
   # handling beyond serving files from disk.
   receipt-fixtures:
     profiles: ["receipt-fixtures"]
-    image: python:3-alpine
+    image: python:3-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
     container_name: dapp-receipt-fixtures
     labels: *testnet-labels
     restart: unless-stopped

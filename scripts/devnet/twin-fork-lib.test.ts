@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildAnvilArgv, ethToWei, keccak256, redact, redactArgv, rpc, selectPin, urlHost,
-  usdcBalanceSlot, usdcBalanceWord, resolveUpstream, DEFAULT_UPSTREAM, warp, hexToBytes, isStalePinText, pinStateServed, repinIfStale,
+  usdcBalanceSlot, usdcBalanceWord, resolveUpstream, DEFAULT_UPSTREAM, warp, hexToBytes, isStalePinText, pinStateServed, repinIfStale, superviseUntil,
 } from "./twin-fork-lib.ts";
 
 /** Stub JSON-RPC fetcher. */
@@ -242,5 +242,27 @@ describe("resolveUpstream", () => {
     const secret = "https://rpc.example/very-secret-key";
     expect(redact(`failed at ${secret}`, [secret])).not.toContain("very-secret-key");
     expect(urlHost(secret)).toBe("rpc.example");
+  });
+});
+
+describe("superviseUntil (the serve loop of the stage chain container, core 1549)", () => {
+  test("a stop request ends the loop as stopped, without waiting for the child", async () => {
+    let polls = 0;
+    const how = await superviseUntil(() => true, () => polls++ >= 3, 10, async () => {});
+    expect(how).toBe("stopped");
+    expect(polls).toBe(4);
+  });
+  test("a dead child ends the loop as died", async () => {
+    let n = 0;
+    const how = await superviseUntil(() => ++n < 3, () => false, 10, async () => {});
+    expect(how).toBe("died");
+  });
+  test("a stop request wins over a dead child seen in the same poll", async () => {
+    expect(await superviseUntil(() => false, () => true, 10, async () => {})).toBe("stopped");
+  });
+  test("serve is wired in the tool and forwards the stop to anvil (stop saves the RPC cache)", () => {
+    const tool = require("node:fs").readFileSync(`${import.meta.dir}/twin-fork.ts`, "utf8");
+    expect(tool).toContain('case "serve": return serve();');
+    expect(tool).toMatch(/if \(how === "stopped"\) \{ await stop\(\); return; \}/);
   });
 });

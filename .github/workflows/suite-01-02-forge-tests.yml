@@ -57,6 +57,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   unit:
     name: forge-unit-tests
@@ -157,7 +162,7 @@ jobs:
         run: |
           for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant QuorumFloorInvariant GatewayAgentPolicyAuthorization; do
             echo "::group::contracts/test/${f}.t.sol:"
-            forge test -vvv --match-path "contracts/test/${f}.t.sol"
+            bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/${f}.t.sol"
             echo "::endgroup::"
           done
 
@@ -175,27 +180,27 @@ jobs:
         # Measurement, not a budget: prints the RobotMoneyGateway rows for
         # authorizeAgent, revealAuthorization, setPolicy and
         # transferAgentOwnership so a change in their cost shows in the log.
-        run: forge test --match-contract "GatewayAgentPolicyAuthorizationTest" --gas-report
+        run: bash .github/scripts/forge_test_require_executed.sh --match-contract "GatewayAgentPolicyAuthorizationTest" --gas-report
 
       - name: forge test (basket vault production scripts and eligibility — core 1486)
         # Explicit, named guard for the three basket vault scripts (one deployment scheme):
         #   - DeployProtocolAssetVault.t.sol: rmPROTO paused with exactly wETH and cbBTC,
         #     asset config read back equals config/protocol-assets.json.
-        #   - DeployAgentTokenVault.t.sol: rmAGENT empty, paused, registered.
+        #   - DeployAgentTokenVault.t.sol: rmAGENT holds RM (added through the V3 pool floors), paused, registered.
         #   - DeployBasketVaultRwa.t.sol: rmRWA is a plain BasketVault row for deSPXA through
         #     the UniswapV3SwapAdapter on the fee 500 pool.
         #   - ActivateBasketVaultEligibility.t.sol: atomic migrateEligibility per basket.
         #   - BasketVault / AgentTokenVault / ProtocolAssetVault: per-vault composition.
         run: |
-          forge test -vvv --match-path "contracts/test/DeployProtocolAssetVault.t.sol"
-          forge test -vvv --match-path "contracts/test/DeployAgentTokenVault.t.sol"
-          forge test -vvv --match-path "contracts/test/DeployBasketVaultRwa.t.sol"
-          forge test -vvv --match-path "contracts/test/ActivateBasketVaultEligibility.t.sol"
-          forge test -vvv --match-contract 'BasketVault|AgentTokenVault|ProtocolAssetVault'
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployProtocolAssetVault.t.sol"
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployAgentTokenVault.t.sol"
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployBasketVaultRwa.t.sol"
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/ActivateBasketVaultEligibility.t.sol"
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-contract 'BasketVault|AgentTokenVault|ProtocolAssetVault'
           bash scripts/ci/check-no-devnet-config.sh
           bun scripts/ci/check-set-registry-owner.ts
           bun test scripts/ci/check-set-registry-owner.test.ts
-          forge test -vvv --match-path "contracts/test/DeployTimelock.t.sol"
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployTimelock.t.sol"
 
       - name: forge test (non-zero test count guard for deploy input and timelock suites — core 1483)
         # A path filter that matches nothing must be red, not green. Each named file has to run
@@ -215,7 +220,7 @@ jobs:
         # undeployable-on-Base bytecode is caught in CI, not on broadcast (cf. issue
         # #865). It runs OUTSIDE `forge coverage` (which instruments bytecode and
         # inflates every contract past the limit).
-        run: forge test -vvv --match-contract "VaultCodeSizeGuard"
+        run: bash .github/scripts/forge_test_require_executed.sh -vvv --match-contract "VaultCodeSizeGuard"
 
   invariant:
     name: forge-invariant-fuzz-tests
@@ -247,8 +252,16 @@ jobs:
       - name: forge build
         run: forge build
 
+      # Issue 1643: this used `--match-path "test/invariant/**"`, a directory that does not exist
+      # (the Foundry test dir is contracts/test), so the job matched zero tests and passed. The
+      # stateful invariant_* functions live in contracts/test/*Invariant*.t.sol. The wrapper
+      # makes a filter that matches nothing red (forge counts the four invariant_* functions of
+      # CustodyInvariant.t.sol as one passed test, so the floor is 1).
       - name: forge test (invariant / fuzz)
-        run: forge test --match-path "test/invariant/**" -vvv
+        run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/*Invariant*.t.sol" --match-test "^invariant_" -vvv
+
+      - name: forge executed-test guard self-test (planted empty match-path is red, issue 1643)
+        run: bash .github/scripts/tests/test_forge_test_require_executed.sh
 
   # ONE pin per workflow run (core 1498, 1496): the upstream head at the start of the run minus 2.
   # The fork tests run on the Twin chain, a pinned lazy anvil fork of real Base state. There is no

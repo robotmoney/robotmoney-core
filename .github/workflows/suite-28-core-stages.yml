@@ -108,7 +108,7 @@ jobs:
           pin-block: ${{ needs.pin.outputs.block }}
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
       # Throwaway keystores, the committed stage sheet, gas and USDC for the deployer, then
-      # `publish` (libs through the timelock handover and the real Safe), `verify` and `govern`.
+      # `publish` (libs through the timelock handover and the real Safe), `verify`, `govern` and `verify` again (issue 1667).
       # Any stage that exits non-zero fails this step.
       - name: Publish, verify and govern on the Twin chain with the one driver
         uses: ./.github/actions/twin-publish
@@ -133,6 +133,7 @@ jobs:
           [ -z "${TWIN_MANIFEST_DIR:-}" ] || cp -r "$TWIN_MANIFEST_DIR" "$out/manifests"
           [ -z "${TWIN_VERIFY_LABELS:-}" ] || cp "$TWIN_VERIFY_LABELS" "$out/verify-labels.txt"
           [ -z "${TWIN_GOVERN_ROWS:-}" ] || cp "$TWIN_GOVERN_ROWS" "$out/govern-rows.txt"
+          [ -z "${TWIN_VERIFY_LABELS_POST_GOVERN:-}" ] || cp "$TWIN_VERIFY_LABELS_POST_GOVERN" "$out/verify-labels-post-govern.txt"
           ls -R "$out"
       - uses: actions/upload-artifact@v4
         if: always()

@@ -76,6 +76,11 @@ on:
       - "clients/rust-payment-client/src/bin/rmpc_keystore_import.rs"
       - "clients/rust-payment-client/Cargo.toml"
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
   pin:
@@ -166,7 +171,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Refusal transcript assertions
-        run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_refusal -- --nocapture
+        run: |
+          CARGO_TEST_MIN_EXECUTED=2 bash .github/scripts/cargo_test_require_executed.sh \
+            --manifest-path testing/doctests/Cargo.toml --test opencode_refusal -- --nocapture
 
   deposit:
     name: opencode-headless-deposit-replay
@@ -578,8 +585,16 @@ jobs:
         with:
           share-receiver-address: ${{ env.SHARE_RECEIVER_ADDRESS }}
 
+      # Issue 1656: RMPC_FORK_RPC_URL is the Twin chain started above. Unset, the test used to skip
+      # and still pass. It now panics under CI.
       - name: Read-only isolation assertions
-        run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_read_only -- --nocapture
+        env:
+          RMPC_FORK_RPC_URL: ${{ env.TWIN_RPC_URL }}
+        run: |
+          # The vault the Twin deploy just made, so get-vault's identity is asserted on a real vault.
+          export RMPC_FORK_VAULT_ADDRESS="$(jq -r '.vault' "$TWIN_MANIFEST_DIR/vault.json")"
+          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
+            --manifest-path testing/doctests/Cargo.toml --test opencode_read_only -- --nocapture
 
       # rmpc reads require a config.toml pinning chain id, RPC, and the deployed
       # gateway/vault/USDC addresses. The read job is read-only, but rmpc's

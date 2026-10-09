@@ -68,14 +68,14 @@ const OBSERVE_ABI = parseAbi2(["function observe(uint32[] secondsAgos) view retu
 const w32 = (n: bigint): string => BigInt.asUintN(256, n).toString(16).padStart(64, "0");
 export const NOW_TS = 1_800_000_000n;
 
-/** A read-only chain on which every address has code and every V3 pool is healthy: fee 500, cardinality 4, liquidity above 0, fresh, TWAP equal to spot. */
+/** A read-only chain on which every address has code and every V3 pool is healthy: fee 500, cardinality 1000, liquidity above 0, fresh, TWAP equal to spot. */
 export function healthyPoolReader(): ChainReader {
   const c = {
     chainId: async () => 918453, blockNumber: async () => 1n, nonce: async () => 0, getStorageAt: async () => "0x" as Hex2, read: async () => { throw new Error("unused"); },
     getLogs: async () => [], getCode: async () => "0x6001" as Hex2, blockTimestamp: async () => NOW_TS,
     callRaw: async (_to: string, data: Hex2) => {
       if (data === "0xddca3f43") return { ok: true, data: `0x${w32(500n)}` as Hex2 };
-      if (data === "0x3850c7bd") return { ok: true, data: `0x${[1n, 100n, 7n, 4n, 5n, 0n, 1n].map(w32).join("")}` as Hex2 };
+      if (data === "0x3850c7bd") return { ok: true, data: `0x${[1n, 100n, 7n, 1000n, 1000n, 0n, 1n].map(w32).join("")}` as Hex2 };
       if (data === "0x1a686502") return { ok: true, data: `0x${w32(10n)}` as Hex2 };
       if (data.startsWith("0x252c09d7")) return { ok: true, data: `0x${[NOW_TS - 60n, 0n, 0n, 1n].map(w32).join("")}` as Hex2 };
       if (data === encodeFn({ abi: OBSERVE_ABI, functionName: "observe", args: [[1800, 0]] })) {

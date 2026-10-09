@@ -59,7 +59,7 @@ compare (it names the mismatch rather than reporting stale docs).
 7. `forge test` (four-vault real-TVL pyramid, issue #592) — a dedicated, named
    step guards the real four-vault end state so it cannot silently regress:
    the basket vault script suites assert all four PRD §11 vaults deploy
-   registered, paused and with config-equal assets (rmAGENT empty); `DeployBasketVaultRwa.t.sol` and
+   registered, paused and with config-equal assets (rmAGENT holds RM); `DeployBasketVaultRwa.t.sol` and
    `RwaBasketVaultFork.t.sol` cover the deSPXA basket row and its NAV against the pool TWAP; the
    `BasketVault`/`AgentTokenVault` suites pin per-vault basket composition.
 
@@ -68,7 +68,7 @@ compare (it names the mismatch rather than reporting stale docs).
 2. Install Foundry toolchain
 3. Cache Foundry build artifacts (`cache/`, `out/`)
 4. `forge build`
-5. `forge test` with fuzzer enabled — invariant tests: share accounting, per-agent cap sequences, deposit monotonicity, reentrancy under malicious stub, pause invariant
+5. `forge test` with fuzzer enabled — invariant tests: share accounting, per-agent cap sequences, deposit monotonicity, reentrancy under malicious stub, pause invariant. It runs through `.github/scripts/forge_test_require_executed.sh` on `contracts/test/*Invariant*.t.sol` with `--match-test "^invariant_"`. `forge test` exits 0 when a path filter matches nothing, so the wrapper fails the job when no test passed (issue 1643). The same wrapper guards the per-file `--match-path` steps of the `unit` job. Step 6 runs its self-test, `.github/scripts/tests/test_forge_test_require_executed.sh`, which plants an empty `--match-path` and requires a red result.
 
 **Steps — `coverage` job:**
 1. Checkout repository
@@ -210,7 +210,8 @@ A `pin` job chooses ONE pinned Base block per workflow run (upstream head minus 
 |---|---|---|
 | `twin-router` | `router` | straight on the Twin fork (`RMPC_TESTNET_RPC_URL`) |
 | `twin-withdrawal-registry` | `withdrawal`, `registry` | straight on the Twin fork |
-| `twin-light` | `failure_surface_smoke`, the `rmpc_get_*` fork tests, `devnet_adapter_round_trip`, `gas_estimate_reality_check`, `landing_price_strip_fork`, `basket_vault_round_trip` | straight on the Twin fork |
+| `twin-light` | `failure_surface_smoke`, the `rmpc_get_*` fork tests | straight on the Twin fork |
+| `anvil-devnet-adapters` | `devnet_adapter_round_trip`, `gas_estimate_reality_check`, `landing_price_strip_fork`, `basket_vault_round_trip` (core 1656: `skip_if_no_devnet_fork!` needs `RMPC_FORK_RPC_URL`, so they silently skipped in `twin-light`) | each test forks the Twin |
 | `anvil-goldens` | `abi_address_sanity`, `dex_route_smoke`, `vault_deposit_redeem_smoke` | each test forks the Twin (`RMPC_FORK_RPC_URL=$TWIN_RPC_URL`, `RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK`) |
 | `anvil-governance` | `governance` | each test forks the Twin; governance scenarios warp (`evm_increaseTime`) instead of waiting |
 
@@ -520,7 +521,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 Validates the `smoke-test` crate — the canonical devnet fixture library — in
 isolation, independent of any client (rmpc, dapp, explorer).
 
-**Jobs:** `smoke-test-guards` (hermetic, no chain), `pin` (the run's one Twin chain pin), `devnet` (matrix, `needs: pin`), `changes`, `twin_publish` (`needs: [changes, pin]`).
+**Jobs:** `smoke-test-guards` (hermetic, no chain), `pin` (the run's one Twin chain pin), `devnet` (matrix, `needs: pin`), `changes`, `twin_publish` and `twin_pause_all` (both `needs: [changes, pin]`).
 
 **Steps (`devnet` matrix row):**
 1. Checkout repository
@@ -618,17 +619,17 @@ decoded a `VaultRegistry` shape that no longer existed (#1348).
    workflow's `git diff --exit-code`. It replaces a comment that said "known
    schema drift, tracked separately" and named no issue for four files — while
    two more had joined the directory unlisted. #1362 then regenerated six of the
-   seven un-gated files from their artifacts and moved them into gate 2. The one
-   still un-gated is `MockVault.json`, tracked by #1464 (Q3: should clients bind
-   to a compiler-owned `IVault.sol` rather than to a declared test fixture?;
-   #1464 replaces #1286, which was deleted from GitHub); closing that issue
-   without doing the work turns this suite red. Self-tested
+   seven un-gated files from their artifacts and moved them into gate 2. #1464 then
+   resolved the last, `MockVault.json`: clients bind to the compiler-owned,
+   interface-only `contracts/interfaces/IVault.sol` (generated as `IVault.json`,
+   in gate 2). No deployed vault inherits it, because vault bytecode is frozen.
+   No file is un-gated now. Self-tested
    (`--self-test`) against seven synthetic defect shapes before the real run.
 2. **Regenerate and diff.** `forge build`, then `generate_abi_bindings.sh`, then
    `git diff --exit-code` over `Erc20.json`, `RobotMoneyGateway.json`,
    `VaultRegistry.json`, `PortfolioRouter.json`, `RouterGovernance.json`,
    `TimelockController.json`, `InvestmentCommitteePolicy.json`,
-   `ConsensusRecommendationReceipt.json` and `abi.generated.ts`. Fix a failure by
+   `ConsensusRecommendationReceipt.json`, `IVault.json` and `abi.generated.ts`. Fix a failure by
    running those two commands locally and committing the result. The six added by
    #1362 were hand-trimmed excerpts; one of them, `VaultRegistry.json`, had
    drifted to a `getVault` shape no deployed contract returns, so `rmpc
@@ -879,7 +880,10 @@ The release procedure copies `counts` from the release SHA's artifact into `depl
 **File:** `.github/workflows/suite-28-core-stack-selftest.yml`
 
 `scripts/stage/core-stack.ts` (Bun TypeScript, called directly; the old `core-stack.sh` shim is deleted) is the boot, health, record and parity tool. It deploys and governs by calling publish contracts (`publish-contracts/` in this repo, Bun TypeScript) with the Twin chain argument list. Jobs:
-- `core-stack-selftest` — `bun test scripts/stage/tests/core-stack.test.ts` against a fake runner standing in for publish contracts: the exact argument list with the `keystore:PATH:PASSFILE` signer, a fresh keystore set per boot, exit-code passthrough, the four-manifest count, the govern row gate (tx hash and receipt status 1 on every row), the usage errors and the record contract with its schema drift guard. Executed-test floor held in the workflow.
+- `core-stack-selftest` — `bun test scripts/stage/tests/core-stack.test.ts` against a fake runner standing in for publish contracts: the exact argument list with the `keystore:PATH:PASSFILE` signer, a fresh keystore set per boot, exit-code passthrough, the four-manifest count, the govern row gate (tx hash and receipt status 1 on every row), the usage errors and the record contract with its schema drift guard. Executed-test floor held in the workflow. Core 1549: the file also runs `chain up`, `chain down`, `chain status` and `dapp status` against a fake `docker compose` (the stage chain, the deploy job and the dapp stack are containers, `core-stack.ts` starts no host process) and holds every status class line and exit code verbatim; the floor was raised with those cases.
+- `stage-container-rules` (`feature-correctness`, runs on drafts) — `bun scripts/ci/check-stage-containers.ts .` plus `bun scripts/ci/check-stage-containers.test.ts` with its own executed-test floor. Fails on a Dockerfile `FROM` or a pulled compose image without a `@sha256` digest, on `docker.sock` in any stage compose file, Dockerfile or script, on `cargo build` without `--locked` or `bun install` without `--frozen-lockfile`, on a missing lockfile and on host process machinery in `core-stack.ts`. Every rule has a mutation case.
+- `stage-chain-container` (`system-correctness`, REQUIRED) — builds the chain image, starts the `twin-chain` service of `docker-compose.stage-chain.yaml` and asserts `eth_chainId` is `0xe03b5` on 18545 with curl and jq, the head reached the pin and keeps moving, the container is healthy and holds no Docker socket. Always removes the container.
+- `stage-core-stack-containers` (`system-correctness`) — the real `bun scripts/stage/core-stack.ts chain up` on the runner: chain container, deploy job (the real publish contracts ceremony with the Safe handover; every stage manifest present), dapp stack. Then `chain status`, `dapp status`, `governance preflight` (host `cast` against the container chain), proof that every `anvil`, `smoke-test` and `forge` process sits in a docker cgroup, no container mounts the Docker socket, and `chain down` leaves no stage container and no work directory.
 - `deleted-stage-gate` — `bun scripts/stage/check-deleted-stage-scripts.ts .` exits 0 only when the stage ceremony shell, the stage deploy script, the old core runner (`core-stages.ts`) and its assert scripts, the devops checkout action, the devops read token, the driver-directory variable, the deploy workflow and the Rust harness deployment (forge script calls, demo seeding, faucet funding) and the `core-stack.sh` shim are absent and `core-stack.ts` holds no deploy or ceremony logic.
 - `stage-tooling-tests` — `bun test scripts/stage/tests`: the govern row parser, the sheet-diff allow-list (stage versus production sheet differ only in parameter lines), the label-diff (verifier labels on stage equal the mainnet set) and the gate.
 
@@ -1284,10 +1288,10 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 22 | `suite-22-formal-verification.yml` | `forge-formal-verification` | `none` |
 | 23 | `suite-23-skill-url-reachability.yml` (live, sweep-only) + `suite-23-skill-url-monitor-selftest.yml` (`reachability-selftest`, every PR) | asserts every published raw `SKILL.md` URL returns 200, including the deprecated compat stubs; the selftest proves the monitor fails red (#1199) | `none` (live network) |
 | 25 | `suite-25-fusion-harness-selftests.yml` | `fusion-harness-selftests` | `none` |
-| 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | the shared stage Twin fork `918453` (a service on the stage host, not started per run) |
+| 26 | `suite-26-fusion-devnet-acceptance.yml` | `fusion-devnet-acceptance` (dispatch/nightly, never a merge gate) | the shared stage Twin fork `918453` (the `twin-chain` container of the stage host, not started per run) |
 | 27 | `suite-27-rmpc-unit-releases.yml` | `rmpc-unit-releases` (suite 6's job on `releases-*` and `v*.*.*`) | `none` |
 | 28 | `suite-28-core-stages.yml` | `core-stages-offline`, `publish-contracts-tests`, `core-stages-twin-chain` (rehearsal: push to dev, ready PR, nightly) | `none` / Twin `918453` |
-| 28 | `suite-28-core-stack-selftest.yml` | `core-stack-selftest` | `none` |
+| 28 | `suite-28-core-stack-selftest.yml` | `core-stack-selftest`, `deleted-stage-gate`, `stage-tooling-tests`, `stage-container-rules`, `stage-chain-container`, `stage-core-stack-containers` | `none` / Twin `918453` in a container (the last two) |
 | 29 | `suite-29-nightly-twin-fork.yml` | `pin` (uploads `twin-pin`) → suites 5, 7, 8, 10, 11b, 14 (called with `pin_block`) → `record-results` | Twin chain `918453`, one shared pin |
 
 ### 29. Nightly Twin fork (nightly-twin-fork)
@@ -1308,7 +1312,7 @@ The `nightly-and-release-checks` job in `suite-13-doc-checks.yml` runs on every 
 - `scripts/devnet/check-twin-chain-ci-selftest.ts` (cores 1496, 1498, Bun, run in suite 13, needs `yq`): the nightly calls suites 5, 7, 8, 10, 11b and 14 with `pin_block` from its own pin job and `secrets: inherit`; each of those suites declares the `pin_block` input, has a `pin` job using `.github/actions/twin-pin`, and every `twin-fork` step takes `pin-block` from that job and sits in a job that needs it; the nightly uploads `suite-results` and `twin-pin`; suite 1-2's `fork-regressions` starts the Twin fork at the pin and runs through the Bun runner; nothing in `.github`, `scripts`, `testing`, the dapp e2e tests or `services` still names the retired geth devnet, the genesis alloc, the fresh-snapshot overlay or the saved fork-state snapshot machinery; the retired files are gone.
 - The nightly third-party drift workflow check, the dependency manifest self-test and the manifest address check (core 1497). The self-test records a manifest from a Twin fork (real Base code and storage) and checks it, so the address check covers something before the first release commits a manifest. It skips with a named reason when no chain is given.
 
-Suite 14's `smoke-test-guards` job runs the smoke-test lib unit tests with a floor on the `cargo test -p smoke-test --lib` test count. The fork-block manifest guards, the snapshot contents check and the fixture lockstep gate are retired with the saved snapshot (core 1498). Suite 14's `twin_publish` job (its own job, not a matrix row) runs the real Twin chain publish through the one deploy driver (`bun publish-contracts/src/cli.ts`), the one verifier (its labels hold the router, basket and timelock role proofs) and the stage 13 govern matrix. While the chain is up it runs `scripts/stage/twin-run-report.ts` (stages, tx counts, vault set, labels), then `parity.ts` (label-diff and sheet-diff against the production fixtures when the input `production_fixtures_dir` names them, else against the fixtures committed in `publish-contracts/tests/fixtures`). It uploads the manifests, labels and report. On `pull_request` it runs only when `contracts/script/`, `scripts/deploy/`, `scripts/stage/`, `publish-contracts/`, `deployments/twin-918453/`, `config/` or `testing/smoke-test/` changed (a `changes` job reads the git diff); push, `workflow_dispatch` and the nightly `workflow_call` always run it. A non-zero test count floor applies through `cargo_test_require_executed.sh` (`CARGO_TEST_MIN_EXECUTED=1`) plus the `--lib` floor in the guards job. The job needs no Docker and runs only in CI.
+Suite 14's `smoke-test-guards` job runs the smoke-test lib unit tests with a floor on the `cargo test -p smoke-test --lib` test count. The fork-block manifest guards, the snapshot contents check and the fixture lockstep gate are retired with the saved snapshot (core 1498). Suite 14's `twin_publish` job (its own job, not a matrix row) runs the real Twin chain publish through the one deploy driver (`bun publish-contracts/src/cli.ts`), the one verifier (its labels hold the router, basket and timelock role proofs) and the stage 13 govern matrix. While the chain is up it runs `scripts/stage/twin-run-report.ts` (stages, tx counts, vault set, labels), then `parity.ts` (label-diff and sheet-diff against the production fixtures when the input `production_fixtures_dir` names them, else against the fixtures committed in `publish-contracts/tests/fixtures`). It uploads the manifests, labels and report. Its own job `twin_pause_all` (core 1619, a fresh Twin chain, because a second deployment on the same fork finds the libraries already deployed and sends nothing) forces a real stage 12 failure on a fresh deployment, then asserts `depositsPaused` on all four vaults, the `rollout-report-<chain>.json` entries and a redeem on every paused vault that holds shares. On `pull_request` it runs only when `contracts/script/`, `scripts/deploy/`, `scripts/stage/`, `publish-contracts/`, `deployments/twin-918453/`, `config/` or `testing/smoke-test/` changed (a `changes` job reads the git diff); push, `workflow_dispatch` and the nightly `workflow_call` always run it. A non-zero test count floor applies through `cargo_test_require_executed.sh` (`CARGO_TEST_MIN_EXECUTED=1`) plus the `--lib` floor in the guards job. The job needs no Docker and runs only in CI.
 
 ## check-sha-green (core 1502)
 

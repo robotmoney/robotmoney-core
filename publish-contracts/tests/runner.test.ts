@@ -28,8 +28,12 @@ describe("the stage runner on stub forge and cast", () => {
     expect(w.safeCalls[0]).toBe("createSafe");
     const m = manifest(w);
     expect(Object.keys(m.stages)).toEqual(DEPLOY);
+    // the Safe control proof (core 1618) sits between stage 10 and the timelock stage, and sends nothing from the deployer
+    expect(DEPLOY.slice(-2)).toEqual(["prove-control", "timelock"]);
+    expect(m.stages["prove-control"]).toMatchObject({ status: "done", nonce: 0, txHash: `0x${"ee".repeat(32)}` });
+    expect(m.stages["prove-control"].signers).toHaveLength(3);
     let n = 0;
-    for (const s of DEPLOY) {
+    for (const s of DEPLOY.filter((x) => x !== "prove-control")) {
       const key = s;
       expect(m.stages[s].startNonce).toBe(n);
       expect(m.stages[s].count).toBe(COUNTS[key]!);
@@ -161,7 +165,10 @@ describe("the stage runner on stub forge and cast", () => {
     expect(code).toBe(0);
     expect(targetBroadcasts(w)).toEqual([]);
     expect(simulations(w).length).toBe(11);
-    expect(w.logs().some((l) => l.event === "stage.dry_run_skipped")).toBe(false);
+    // only the control proof is skipped (a real Safe transaction signed by every owner), loudly, and the stage 11 gate with it
+    expect(w.logs().filter((l) => l.event === "stage.dry_run_skipped").map((l) => l.stage)).toEqual(["prove-control"]);
+    expect(w.logs().some((l) => l.event === "stage.control_proof_skipped")).toBe(true);
+    expect(w.safeCalls.some((c) => c.startsWith("executeTx"))).toBe(false);
   });
 
   test("a stage that died partway continues only with --resume, and finished stages are skipped", async () => {
@@ -177,7 +184,7 @@ describe("the stage runner on stub forge and cast", () => {
     // with --resume it adopts the Safe and the finished stages and continues
     w.safeCalls.length = 0;
     expect(await w.run(["--stage", "deploy", "--resume"])).toBe(0);
-    expect(w.safeCalls).toEqual([]);
+    expect(w.safeCalls.filter((c) => c === "createSafe" || c === "verifyCreatedSafe")).toEqual([]);
     expect(w.logs().filter((l) => l.event === "stage.skipped").map((l) => l.stage)).toEqual(["safe", "libs"]);
     const resumed = forgeScripts(w).filter((c: any) => c.args.includes("--resume")).map((c: any) => c.args[1].split(":")[0].split("/").pop());
     expect(resumed).toEqual([SCRIPT.vault]);
@@ -267,6 +274,7 @@ describe("the stage runner on stub forge and cast", () => {
     expect(r.forge.optimizerRuns).toBe(100);
     expect(r.forge.evmVersion).toBe("cancun");
     expect(Object.keys(r.configHashes).sort()).toEqual(["config/agent-token-shortlist.json", "config/dex-pools.json", "config/protocol-assets.json", "config/rwa-assets.json"]);
+    for (const v of Object.values(r.configHashes)) expect(v).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(Object.keys(r.codehashes).length).toBeGreaterThan(5);
     expect(r.notes.join(" ")).toContain("does not prove the real delay");
     expect(existsSync(join(w.evidence, "publish-run.json"))).toBe(true);

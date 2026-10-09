@@ -13,6 +13,12 @@ import {BasketVault} from "../vaults/BasketVault.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
 import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";
 
+contract RwaDeployHarness is DeployRwaBasketVault {
+    function readPrefixed(string memory prefix) external view returns (Params memory) {
+        return _readParamsFrom(prefix);
+    }
+}
+
 /// @notice rmRWA script: a plain BasketVault row for deSPXA through the existing
 ///         `UniswapV3SwapAdapter` on the fee 500 pool, priced from the pool TWAP. No oracle.
 contract DeployBasketVaultRwaTest is BasketDeployFixture {
@@ -101,6 +107,76 @@ contract DeployBasketVaultRwaTest is BasketDeployFixture {
                 revert(string.concat("deleted source still present: ", gone[i]));
             } catch {}
         }
+    }
+
+    // ─── Issue 1666: the NAV deviation guard and the pool floor come from the sheet ──
+
+    function _prepare(BasketVaultDeployBase.Params memory p) internal returns (string memory json) {
+        json = _etchConfigPools("config/rwa-assets.json", "assets");
+        p.swapRouter = _configRouter(json);
+    }
+
+    function _deployWith(BasketVaultDeployBase.Params memory p)
+        internal
+        returns (BasketVaultDeployBase.Deployed memory)
+    {
+        return script.runInProcess(p, _prepare(p));
+    }
+
+    /// @notice The vault ships with the sheet guard, not the vault default of 0 (which disables ORA-4).
+    function test_guard_navDeviationGuardBpsEqualsTheSheetValue() public {
+        BasketVaultDeployBase.Deployed memory d = _deployWith(_params());
+        assertEq(
+            BasketVault(d.vault).navDeviationGuardBps(), NAV_DEVIATION_BPS, "guard from the sheet"
+        );
+        assertGt(BasketVault(d.vault).navDeviationGuardBps(), 0, "guard above zero");
+    }
+
+    function test_guard_acceptsTheCeiling() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 2000;
+        BasketVaultDeployBase.Deployed memory d = _deployWith(p);
+        assertEq(BasketVault(d.vault).navDeviationGuardBps(), 2000);
+    }
+
+    function test_reverts_whenNavDeviationBpsUnset() public {
+        string memory prefix = "D1666RWA_";
+        RwaDeployHarness h = new RwaDeployHarness();
+        _setSheetEnv(prefix, "NAV_DEVIATION_BPS");
+        vm.expectRevert(bytes(string.concat(prefix, "NAV_DEVIATION_BPS must be set")));
+        h.readPrefixed(prefix);
+    }
+
+    function test_reverts_whenNavDeviationBpsZero() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 0;
+        string memory json = _prepare(p);
+        vm.expectRevert(bytes("NAV_DEVIATION_BPS must be 1..2000"));
+        script.runInProcess(p, json);
+    }
+
+    function test_reverts_whenNavDeviationBpsAboveCeiling() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 2001;
+        string memory json = _prepare(p);
+        vm.expectRevert(bytes("NAV_DEVIATION_BPS must be 1..2000"));
+        script.runInProcess(p, json);
+    }
+
+    function test_reverts_whenMinPoolLiquidityUnset() public {
+        string memory prefix = "D1666LRWA_";
+        RwaDeployHarness h = new RwaDeployHarness();
+        _setSheetEnv(prefix, "MIN_POOL_LIQUIDITY");
+        vm.expectRevert(bytes(string.concat(prefix, "MIN_POOL_LIQUIDITY must be set")));
+        h.readPrefixed(prefix);
+    }
+
+    function test_reverts_whenMinPoolLiquidityZero() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.minPoolLiquidity = 0;
+        string memory json = _prepare(p);
+        vm.expectRevert(bytes("MIN_POOL_LIQUIDITY missing from the sheet"));
+        script.runInProcess(p, json);
     }
 }
 

@@ -34,7 +34,7 @@ use alloy_sol_types::SolCall;
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::gateway::{MockVault, VaultRegistry};
+use crate::gateway::{IVault, VaultRegistry};
 use crate::network_env::NetworkEnv;
 use crate::output::emit;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
@@ -280,7 +280,7 @@ async fn call_total_assets(
     vault: Address,
     block_tag: &str,
 ) -> std::result::Result<U256, String> {
-    let data = MockVault::totalAssetsCall {}.abi_encode();
+    let data = IVault::totalAssetsCall {}.abi_encode();
     let out = rpc
         .eth_call(
             &CallRequest {
@@ -292,7 +292,7 @@ async fn call_total_assets(
         )
         .await
         .map_err(|e| format!("eth_call failed: {e}"))?;
-    let r = MockVault::totalAssetsCall::abi_decode_returns(&out, true)
+    let r = IVault::totalAssetsCall::abi_decode_returns(&out, true)
         .map_err(|e| format!("abi decode: {e}"))?;
     Ok(r._0)
 }

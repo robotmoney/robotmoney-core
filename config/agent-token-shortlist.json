@@ -1,8 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "rmAGENT (AgentTokenVault) launch shortlist. Empty: the vault ships empty and paused until replacement agent tokens with Base liquidity are named. Tokens are added later through the timelock. One list for every chain. swapRouter02 is the Uniswap V3 SwapRouter02 the vault trades through.",
+  "description": "rmAGENT (AgentTokenVault) launch shortlist: RM only, the live ROBOTMONEY token pinned by code hash like USDC, on the owner-funded Uniswap V3 RM/USDC pool (fee 10000, no liquidity until the owner funds it). Other agent tokens are added later through the timelock. One list for every chain. swapRouter02 is the Uniswap V3 SwapRouter02 the vault trades through.",
   "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
   "swapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481",
-  "shortlist": []
+  "shortlist": [
+    {
+      "symbol": "RM",
+      "token": "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
+      "tokenDecimals": 18,
+      "tokenCodeHash": "0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6",
+      "pool": "0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882",
+      "poolFee": 10000,
+      "venue": "UniswapV3"
+    }
+  ]
 }

@@ -49,6 +49,8 @@ export const VAULT_ADDRESS_FIELD = "vault";
 /** Env names core uses for the per-vault caps -> the suffix of the sheet name VAULT_<KEY>_<suffix>. */
 export const VAULT_CAP_ENV: Record<string, string> = {
   TVL_CAP: "TVL_CAP", PER_DEPOSIT_CAP: "PER_DEPOSIT_CAP", EXIT_FEE_BPS: "EXIT_FEE_BPS",
+  // basket stages only (issue 1666): the table lists them for proto, agent and rwa, never for vault (rmUSDC)
+  NAV_DEVIATION_BPS: "NAV_DEVIATION_BPS", MIN_POOL_LIQUIDITY: "MIN_POOL_LIQUIDITY",
 };
 /** Env names core reads that carry a different name in the sheet. */
 export const SHEET_RENAMES: Record<string, string> = {

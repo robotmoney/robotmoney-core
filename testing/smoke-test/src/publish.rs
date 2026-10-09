@@ -90,7 +90,7 @@ impl PublishConfig {
         self.publish_dir.join("src/cli.ts")
     }
 
-    fn rehearsal_cli(&self) -> PathBuf {
+    pub(crate) fn rehearsal_cli(&self) -> PathBuf {
         self.publish_dir.join("src/rehearsal/cli.ts")
     }
 }
@@ -330,14 +330,27 @@ pub struct Published {
     pub rpc_url: String,
 }
 
-fn run_cli(
+/// What one CLI run printed and how it ended. Used where a non-zero exit is the thing under test.
+#[derive(Debug, Clone)]
+pub struct CliRun {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Spawn the CLI and return its raw outcome. Only a failure to start the process is an error here.
+fn run_cli_raw(
     cfg: &PublishConfig,
     p: &Published,
     verb: &str,
     extra: &[String],
-) -> Result<String, HarnessError> {
+) -> Result<CliRun, HarnessError> {
     let signer = signer_spec(&p.keys);
     let mut args = publish_args(verb, &p.rpc_url, &p.sheet_path, &signer, &cfg.core_sha);
+    if verb.is_empty() {
+        // no verb: the caller names a `--stage` (the CLI refuses a verb and a stage together)
+        args.remove(0);
+    }
     args.extend(run_dir_args(&p.manifest_dir));
     args.extend(extra.iter().cloned());
     let mut cmd = Command::new("bun");
@@ -347,16 +360,34 @@ fn run_cli(
         .stdin(Stdio::null());
     apply_publish_env(&mut cmd, TWIN_CHAIN_ID);
     let out = cmd.output()?;
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    if !out.status.success() {
+    Ok(CliRun {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+    })
+}
+
+fn run_cli(
+    cfg: &PublishConfig,
+    p: &Published,
+    verb: &str,
+    extra: &[String],
+) -> Result<String, HarnessError> {
+    let r = run_cli_raw(cfg, p, verb, extra)?;
+    if r.code != 0 {
         return Err(HarnessError::DeployFailed(format!(
             "publish contracts `{verb}` exited {:?}: {}{}",
-            out.status.code(),
-            stdout.lines().rev().take(20).collect::<Vec<_>>().join("\n"),
-            String::from_utf8_lossy(&out.stderr)
+            r.code,
+            r.stdout
+                .lines()
+                .rev()
+                .take(20)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            r.stderr
         )));
     }
-    Ok(stdout)
+    Ok(r.stdout)
 }
 
 /// Where the CLI keeps the run's own state: its evidence (run manifest, reports) and the measured frozen counts. Both
@@ -370,6 +401,28 @@ pub fn run_dir_args(manifest_dir: &Path) -> Vec<String> {
         "--counts-dir".into(),
         work.join("counts").display().to_string(),
     ]
+}
+
+/// The sheet text with the value of one key replaced by `value` (the whole line, comment included). Errors when the key is not in the sheet,
+/// so a renamed key cannot turn a forced failure into a quiet pass.
+pub fn with_sheet_value(text: &str, key: &str, value: &str) -> Result<String, HarnessError> {
+    let mut found = false;
+    let mut out = String::new();
+    for line in text.lines() {
+        let t = line.trim_start();
+        let body = t.strip_prefix("export ").unwrap_or(t);
+        if body.split('=').next().map(str::trim) == Some(key) && body.contains('=') {
+            found = true;
+            out.push_str(&format!("export {key}={value}\n"));
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !found {
+        return Err(HarnessError::other(format!("sheet key {key} not found")));
+    }
+    Ok(out)
 }
 
 /// The publish-contracts CLI refuses an unattended publish without `YES=1` (exit 17) and refuses `YES=1` on
@@ -461,10 +514,118 @@ impl Published {
         Ok(rows)
     }
 
+    /// Schedule one Safe -> Timelock operation through the publish-contracts Safe tool and leave it PENDING
+    /// (no delay warp, no execute): `propose`, then two owner `sign`s (the 2-of-3 quorum), then `execute` of
+    /// the Safe transaction by the deployer as gas payer. The real Safe proxy holds PROPOSER_ROLE, so the
+    /// timelock only accepts this when the real quorum signed. Returns nothing: read the operation from
+    /// the timelock (`hashOperation`, `isOperationPending`).
+    pub fn schedule_pending_op(
+        &self,
+        safe: &str,
+        timelock: &str,
+        target: &str,
+        data: &str,
+        salt: &str,
+    ) -> Result<(), HarnessError> {
+        let cli = self.cfg.publish_dir.join("src/safe/cli.ts");
+        let work = tempfile::tempdir()?;
+        let bundle = work.path().join("bundle.json");
+        let owner = |name: &str| {
+            format!(
+                "keystore:{}:{}",
+                self.keys.key_dir.join(name).display(),
+                self.keys.password_file.display()
+            )
+        };
+        let chain = TWIN_CHAIN_ID.to_string();
+        let bundle_s = bundle.display().to_string();
+        let run = |sub: &str, flags: &[&str]| -> Result<String, HarnessError> {
+            let mut cmd = Command::new("bun");
+            cmd.arg(&cli)
+                .arg(sub)
+                .args(["--rpc", &self.rpc_url, "--chain-id", &chain])
+                .args(flags)
+                .current_dir(
+                    self.cfg
+                        .publish_dir
+                        .parent()
+                        .unwrap_or(&self.cfg.publish_dir),
+                )
+                .stdin(Stdio::null());
+            apply_publish_env(&mut cmd, TWIN_CHAIN_ID);
+            let out = cmd.output()?;
+            if !out.status.success() {
+                return Err(HarnessError::DeployFailed(format!(
+                    "safe tool `{sub}` exited {:?}: {}{}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                )));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        };
+        run(
+            "propose",
+            &[
+                "--safe",
+                safe,
+                "--timelock",
+                timelock,
+                "--action",
+                "schedule",
+                "--target",
+                target,
+                "--data",
+                data,
+                "--salt",
+                salt,
+                "--out",
+                &bundle_s,
+            ],
+        )?;
+        for name in ["SAFE_OWNER_A", "SAFE_OWNER_B"] {
+            run("sign", &["--bundle", &bundle_s, "--signer", &owner(name)])?;
+        }
+        run(
+            "execute",
+            &["--bundle", &bundle_s, "--signer", &signer_spec(&self.keys)],
+        )?;
+        Ok(())
+    }
+
     /// Run the one verifier. Exits non-zero (an Err here) unless every label passes.
     /// Returns the verifier's output so a caller can diff its labels against mainnet's.
     pub fn verify(&self) -> Result<String, HarnessError> {
         run_cli(&self.cfg, self, "verify", &[])
+    }
+
+    /// Core 1619: run the one verifier against a sheet that disagrees with the chain, so stage 12 fails for real. The CLI then pauses deposits
+    /// on all four vaults by itself. Returns the raw outcome: the exit code is the thing under test (13, the verifier's own).
+    pub fn verify_against_sheet(&self, sheet_path: &Path) -> Result<CliRun, HarnessError> {
+        let p = Published {
+            sheet_path: sheet_path.to_path_buf(),
+            ..self.clone()
+        };
+        run_cli_raw(&self.cfg, &p, "verify", &[])
+    }
+
+    /// Issue 1670: one `--stage` run (no verb) with extra arguments, returning the raw outcome. The exit code is the thing under test.
+    pub fn stage_raw(&self, extra: &[&str]) -> Result<CliRun, HarnessError> {
+        let extra: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
+        run_cli_raw(&self.cfg, self, "", &extra)
+    }
+
+    /// Core 1619: `pause-all` by hand. Fails on a non-zero exit (a vault not confirmed paused is exit 25).
+    pub fn pause_all(&self) -> Result<String, HarnessError> {
+        run_cli(&self.cfg, self, "pause-all", &[])
+    }
+
+    /// The directory the CLI keeps its evidence in for this run (run manifest, rollout report).
+    pub fn evidence_dir(&self) -> PathBuf {
+        self.manifest_dir
+            .parent()
+            .unwrap_or(&self.manifest_dir)
+            .join("evidence")
     }
 
     /// The whole stage-13 govern matrix, the same on stage and mainnet.
@@ -782,6 +943,14 @@ mod tests {
                 "YES must be removed on {chain}"
             );
         }
+    }
+
+    #[test]
+    fn with_sheet_value_replaces_one_key_and_refuses_a_missing_one() {
+        let text = "A=1\nexport VAULT_RWA_TVL_CAP=1000000000   # cap\nB=2\n";
+        let out = with_sheet_value(text, "VAULT_RWA_TVL_CAP", "7").unwrap();
+        assert_eq!(out, "A=1\nexport VAULT_RWA_TVL_CAP=7\nB=2\n");
+        assert!(with_sheet_value(text, "VAULT_RWA_TVL", "7").is_err());
     }
 
     #[test]

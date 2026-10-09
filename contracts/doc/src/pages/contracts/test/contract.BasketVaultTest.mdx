@@ -4,7 +4,7 @@ title: "BasketVaultTest"
 
 # BasketVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/545620af5e4698bceb8d0238b458204689682176/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/BasketVault.t.sol)
 
 **Inherits:** Test
 
@@ -789,7 +789,7 @@ function test_emergencyUnwind_blocksDepositsButAllowsRedemption() public;
 
 ### test_addAsset_succeedsWhenCardinalityMeetsMinimum
 
-addAsset() succeeds when pool cardinality equals MIN_POOL_CARDINALITY (2).
+addAsset() succeeds when pool cardinality equals the 1800 s window floor (901).
 
 ```solidity
 function test_addAsset_succeedsWhenCardinalityMeetsMinimum() public;
@@ -832,7 +832,7 @@ function test_addAsset_succeedsWhenPoolLiquidityMeetsMinimum() public;
 ### testFuzz_addAsset_cardinalityBoundary
 
 Fuzz: addAsset() reverts exactly when pool cardinality is below
-MIN_POOL_CARDINALITY and succeeds at or above it.
+the window floor (901) and succeeds at or above it.
 
 ```solidity
 function testFuzz_addAsset_cardinalityBoundary(uint16 cardinality_) public;
@@ -1058,6 +1058,17 @@ deposit succeeds — proving the guard, not some other check, blocks.
 function test_ORA4_deviationGuardBlocksSettlement() public;
 ```
 
+<a id="test_ora4_guardneverblocksredeem"></a>
+
+### test_ORA4_guardNeverBlocksRedeem
+
+Issue 1666: the guard runs on deposit only. With the guard at 100 bps and spot moved past it, a deposit reverts
+`NavMarketDeviationExceeded` and an existing holder still redeems. The sheet-set guard can never trap exits.
+
+```solidity
+function test_ORA4_guardNeverBlocksRedeem() public;
+```
+
 <a id="test_ora4_withinbandsettles"></a>
 
 ### test_ORA4_withinBandSettles
@@ -1118,22 +1129,104 @@ guards are evaluated against accurate amounts.
 function test_AZBSK2_redeemReturnsActualWithdrawnAssets() public;
 ```
 
-<a id="test_azbsk3_depositexclusionwindowuseseligiblenav"></a>
+<a id="_redeemfair-address-uint256"></a>
 
-### test_AZBSK3_depositExclusionWindowUsesEligibleNAV
+### _redeemFair
 
-AZ-BSK-3: when idle USDC is present (e.g. from an emergency-unwound
-adapter), a new deposit prices shares against the active-adapter-only
-NAV (taBefore − idleUSDC), not the full totalAssets. This prevents a
-new depositor from capturing recovery value that belongs to existing
-holders who bore the original loss.
+<i>
 
-Setup: seed the vault at 1:1, inject idle USDC directly to simulate
-the proceeds of an excluded adapter sitting un-deployed, then deposit
-and verify the minted shares match the eligible-NAV formula.
+Redeem `shares` for `who`, funding the mock router with the fair USDC value
+of the redeemer's pro-rata slice of the vault's basket tokens (1:1 price).
+
+</i>
 
 ```solidity
-function test_AZBSK3_depositExclusionWindowUsesEligibleNAV() public;
+function _redeemFair(address who, uint256 shares) internal returns (uint256 received);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| received | `uint256` |  |
+
+<a id="test_azbsk3_depositmintsagainstidleinclusivenav"></a>
+
+### test_AZBSK3_depositMintsAgainstIdleInclusiveNAV
+
+AZ-BSK-3 (C1-corrected): with idle USDC present, deposit() mints exactly
+mulDiv(realizedDelta, supplyBefore + 1e18, taBefore + 1). The old
+`taBefore - idle + 1` denominator (a different, larger share count) is
+asserted unequal. Idle USDC backs existing shares, so it stays in the
+denominator.
+
+```solidity
+function test_AZBSK3_depositMintsAgainstIdleInclusiveNAV() public;
+```
+
+<a id="test_azbsk3_emergencyunwindthendepositnoovermint"></a>
+
+### test_AZBSK3_emergencyUnwindThenDepositNoOverMint
+
+AZ-BSK-3 PoC regression (audit 2026-10-08 test_idleUsdcOverMint):
+emergencyUnwind -> unpauseDeposits -> deposit -> redeem must not let the
+late depositor take value from the incumbent.
+
+```solidity
+function test_AZBSK3_emergencyUnwindThenDepositNoOverMint() public;
+```
+
+<a id="test_azbsk3_idledepositroundtripnoprofit-uint256-uint256"></a>
+
+### test_AZBSK3_idleDepositRoundTripNoProfit
+
+AZ-BSK-3: no-profit round trip with idle USDC present. A deposit followed
+by an immediate full redeem returns at most the deposit, and the
+incumbent's previewRedeem never drops, up to a 2 wei tolerance. The
+tolerance is the 10^18 virtual-share offset: mint prices against
+(supply + 1e18) while redeem is raw pro-rata, so a donated idle balance
+lets a round trip gain sub-wei-scale dust (measured max 1 wei over 20000
+fuzz runs). That is not the over-mint fixed here (thousands of USDC).
+
+```solidity
+function test_AZBSK3_idleDepositRoundTripNoProfit(uint256 idle, uint256 d) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idle | `uint256` |  |
+| d | `uint256` |  |
+
+<a id="test_azbsk3_firstdepositwithdonatedidlecannotovermint"></a>
+
+### test_AZBSK3_firstDepositWithDonatedIdleCannotOverMint
+
+AZ-BSK-3 adversarial: first deposit (supply 0) with idle USDC donated
+beforehand cannot be gamed: the first depositor pays the donation into
+the denominator, never receives more than the OZ formula, and caps hold.
+
+```solidity
+function test_AZBSK3_firstDepositWithDonatedIdleCannotOverMint() public;
+```
+
+<a id="test_azbsk3_tinydepositroundsdownandcapstillenforced"></a>
+
+### test_AZBSK3_tinyDepositRoundsDownAndCapStillEnforced
+
+AZ-BSK-3 adversarial: tiny deposits round down and never mint a profit;
+per-deposit cap still enforced.
+
+```solidity
+function test_AZBSK3_tinyDepositRoundsDownAndCapStillEnforced() public;
 ```
 
 <a id="test_azbsk3_totalassetsunchangedbyexclusionfix"></a>
@@ -1240,6 +1333,143 @@ A redeem entered with at least the floor does not hit the guard.
 
 ```solidity
 function test_redeem_succeedsAtOrAboveFloor() public;
+```
+
+<a id="test_addasset_rejectscardinalitybelowwindowfloor"></a>
+
+### test_addAsset_rejectsCardinalityBelowWindowFloor
+
+The 1800 s default window needs 1800 / 2 + 1 = 901 slots: 900 reverts, 901 registers.
+
+```solidity
+function test_addAsset_rejectsCardinalityBelowWindowFloor() public;
+```
+
+<a id="test_settwapwindow_rejectscardinalitybelownewfloor"></a>
+
+### test_setTwapWindow_rejectsCardinalityBelowNewFloor
+
+A 3600 s window needs 1801 slots: 1800 reverts, 1801 is accepted.
+
+```solidity
+function test_setTwapWindow_rejectsCardinalityBelowNewFloor() public;
+```
+
+<a id="_seedinkind"></a>
+
+### _seedInKind
+
+<i>
+
+Alice holds all shares of a vault with `basketToken` backing, idle USDC and a 1% exit fee.
+
+</i>
+
+```solidity
+function _seedInKind() internal returns (address alice, uint256 shares);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| alice | `address` |  |
+| shares | `uint256` |  |
+
+<a id="_addsecond-uint256"></a>
+
+### _addSecond
+
+<i>
+
+Registers a second ACTIVE asset holding `amount` tokens.
+
+</i>
+
+```solidity
+function _addSecond(uint256 amount) internal returns (TestERC20 t2);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t2 | `TestERC20` |  |
+
+<a id="test_redeeminkind_succeedswhenobservereverts"></a>
+
+### test_redeemInKind_succeedsWhenObserveReverts
+
+PoC test_redeemBlockedByOracle: with observe() reverting, redeem reverts and
+redeemInKind pays the pro-rata tokens and idle USDC minus the exit fee.
+
+```solidity
+function test_redeemInKind_succeedsWhenObserveReverts() public;
+```
+
+<a id="test_redeeminkind_neverblocked"></a>
+
+### test_redeemInKind_neverBlocked
+
+redeemInKind is not blocked by pause, unwind, shutdown or retire. A third party with
+allowance redeems for the owner and the allowance is spent.
+
+```solidity
+function test_redeemInKind_neverBlocked() public;
+```
+
+<a id="testfuzz_redeeminkind_prorataexact-uint256"></a>
+
+### testFuzz_redeemInKind_proRataExact
+
+Fuzz: exact floor pro-rata per ACTIVE asset, inactive assets not paid, and the remaining
+holder's per-share backing never decreases for any token or USDC.
+
+```solidity
+function testFuzz_redeemInKind_proRataExact(uint256 shares_) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares_ | `uint256` |  |
+
+<a id="test_redeeminkind_reentrancyblockedandsharesburnedfirst"></a>
+
+### test_redeemInKind_reentrancyBlockedAndSharesBurnedFirst
+
+A token callback cannot re-enter, and shares are already burned when the callback runs.
+
+```solidity
+function test_redeemInKind_reentrancyBlockedAndSharesBurnedFirst() public;
+```
+
+<a id="test_redeeminkind_noswapnooracle"></a>
+
+### test_redeemInKind_noSwapNoOracle
+
+redeemInKind reads no TWAP and sells nothing: it works with a router that has no
+liquidity and a pool that reverts on both observe and slot0-priced reads.
+
+```solidity
+function test_redeemInKind_noSwapNoOracle() public;
+```
+
+<a id="test_redeeminkind_revertsbelowgasfloor"></a>
+
+### test_redeemInKind_revertsBelowGasFloor
+
+The entry gas floor applies as in redeem.
+
+```solidity
+function test_redeemInKind_revertsBelowGasFloor() public;
 ```
 
 <a id="_tail-bytes"></a>

@@ -15,6 +15,14 @@ export function viemReader(rpcUrl: string): ChainReader {
       const item = parseAbiItem(signature) as any;
       return await client.readContract({ address, abi: [item], functionName: item.name, args } as any);
     },
+    getTransaction: async (hash) => {
+      try { const t = await client.getTransaction({ hash }); return { to: (t.to ?? null) as Address | null, input: t.input, value: t.value }; }
+      catch (e: any) { if (/not found|could not be found/i.test(String(e?.name ?? "") + String(e?.message ?? ""))) return null; throw e; }
+    },
+    receiptStatus: async (hash) => {
+      try { return (await client.getTransactionReceipt({ hash })).status; }
+      catch (e: any) { if (/not found|could not be found/i.test(String(e?.name ?? "") + String(e?.message ?? ""))) return null; throw e; }
+    },
     callRaw: async (to, data, from): Promise<RawCallResult> => {
       try {
         const r = await client.call({ to, data, account: from });

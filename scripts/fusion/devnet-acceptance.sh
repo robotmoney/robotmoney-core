@@ -62,11 +62,12 @@
 # Required for the release stage: FUSION_GOVERN_CMD (the govern release
 #   command, `bun scripts/stage/core-stack.ts governance release`; it is called with
 #   `--receipt-id ID` appended and runs publish contracts govern row
-#   release-receipt through the real Safe and the timelock), FUSION_RELEASE_ADDRESS
-#   (an EOA that does NOT hold ADMIN_ROLE on the receipt contract, used only for
-#   the direct-call duplicate-release probe below). No keystore is needed: a raw
-#   `releaseReceipt` send from any EOA reverts on authority once the handover
-#   gave the receipt contract's ADMIN_ROLE to the TimelockController.
+#   release-receipt through the real Safe and the timelock), FUSION_TIMELOCK_ADDRESS
+#   (the TimelockController, the ONLY holder of ADMIN_ROLE on the receipt contract
+#   after the handover, used as `--from` of the duplicate-release probe below so
+#   the call passes the role check and reaches ReceiptAlreadyReleased). No keystore
+#   is needed: a raw `releaseReceipt` from any other address reverts on authority
+#   (AccessControlUnauthorizedAccount) before the one-shot check is ever reached.
 # Optional: RMPC_BIN, CAST_BIN, FUSION_INDEX_TIMEOUT_SECS (default 180),
 #           FUSION_EVIDENCE_DIR (raw command output is written there)
 set -uo pipefail
@@ -557,10 +558,10 @@ fi
 
 # ── stage: release ───────────────────────────────────────────────────────────
 if have_stage release; then
-  if [[ -z "${FUSION_GOVERN_CMD:-}" || -z "${FUSION_RELEASE_ADDRESS:-}" ]]; then
+  if [[ -z "${FUSION_GOVERN_CMD:-}" || -z "${FUSION_TIMELOCK_ADDRESS:-}" ]]; then
     record_assertion release "admin release" SKIP \
       "the release stage was SELECTED but FUSION_GOVERN_CMD / \
-FUSION_RELEASE_ADDRESS are not all set" unconfigured
+FUSION_TIMELOCK_ADDRESS are not all set" unconfigured
   elif [[ -z "$RECEIPT_ID" ]]; then
     record_assertion release "admin release" SKIP \
       "no receipt id — an earlier stage already failed" prerequisite_failed
@@ -606,13 +607,14 @@ FUSION_RELEASE_ADDRESS are not all set" unconfigured
     expect release "AC-E2E-03 the receipt reads as released" $? "isReleased=$released"
 
     # The two duplicate refusals that cannot exist until something is anchored.
-    # `--from` is the OPERATOR-DECLARED admin address, not an address scraped out
-    # of the keystore file: keystore layouts differ (an `rmpc` keystore carries
-    # no `address` key at all), and an empty `--from` would make this assertion
-    # fail for the wrong reason — a diagnosable false failure, but still a lie
-    # about which check was exercised.
+    # The release probe is sent `--from` the TIMELOCK, the only ADMIN_ROLE holder.
+    # `onlyRole(ADMIN_ROLE)` runs before the one-shot check, so any other sender
+    # (an approver EOA, say) reverts AccessControlUnauthorizedAccount and would
+    # never exercise ReceiptAlreadyReleased. An eth_call needs no signature, so
+    # impersonating the timelock address is enough here; the real release above
+    # went through the Safe and the timelock.
     out="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$RECEIPT_ID" \
-      --from "$FUSION_RELEASE_ADDRESS" --rpc-url "$FUSION_RPC_URL" 2>&1)"
+      --from "$FUSION_TIMELOCK_ADDRESS" --rpc-url "$FUSION_RPC_URL" 2>&1)"
     grep -q 'ReceiptAlreadyReleased' <<<"$out"
     expect release "AC-CORE-03 a duplicate release is rejected (ReceiptAlreadyReleased)" $? "$(tr -d '\n' <<<"$out" | head -c 300)"
 

@@ -33,6 +33,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   mock-tests:
     name: mock-tests

@@ -42,6 +42,10 @@ describe("static rules", () => {
       expect(failures(c).length).toBeGreaterThan(0);
     });
   }
+  test("RM outside the agent shortlist fails the forbidden-symbol rule", () => {
+    const c = fixture((f) => { f["rwa-assets.json"].assets.push({ ...f["rwa-assets.json"].assets[0], symbol: "RM" }); });
+    expect(failures(c).some((x) => x.rule === "forbidden-symbol")).toBe(true);
+  });
   test("a mainnet or devnet branch key fails", () => {
     const c = fixture((f) => { f["dex-pools.json"].devnet = { pools: {} }; });
     expect(failures(c).some((x) => x.rule === "forbidden-key")).toBe(true);
@@ -50,9 +54,23 @@ describe("static rules", () => {
     const c = fixture((f) => { delete f["agent-token-shortlist.json"].swapRouter02; });
     expect(failures(c).some((x) => x.rule === "swap-router-recorded")).toBe(true);
   });
-  test("a non-empty agent shortlist fails", () => {
+  test("an agent shortlist other than exactly RM fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist = [{ symbol: "X" }]; });
-    expect(failures(c).some((x) => x.rule === "launch-list-empty")).toBe(true);
+    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+    const e = fixture((f) => { f["agent-token-shortlist.json"].shortlist = []; });
+    expect(failures(e).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+  });
+  test("the committed RM entry pins the public RM code hash (the same value .gitleaks.toml allowlists)", () => {
+    const rm = loadConfigs(realDir).agent.shortlist[0];
+    expect(rm.tokenCodeHash).toBe("0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6");
+  });
+  test("an RM pool other than the owner-funded one fails", () => {
+    const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].pool = "0x" + "22".repeat(20); });
+    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+  });
+  test("an RM pool fee other than 10000 fails", () => {
+    const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolFee = 3000; });
+    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
   });
 });
 
@@ -97,11 +115,15 @@ describe("reader test: removed keys are gone from clients/ and testing/", () => 
 describe("live rules against a fake RPC", () => {
   // The fake chain serves the code "0x6001" at every address, so that code's hash is the pin.
   const FAKE_HASH = keccakHex("0x6001");
-  const pin = (c: ReturnType<typeof loadConfigs>) => ({ ...c, usdcHashes: { proxyCodeHash: FAKE_HASH, implementationCodeHash: FAKE_HASH } });
+  const pin = (c: ReturnType<typeof loadConfigs>) => ({
+    ...c,
+    usdcHashes: { proxyCodeHash: FAKE_HASH, implementationCodeHash: FAKE_HASH },
+    agent: { ...c.agent, shortlist: c.agent.shortlist.map((e) => ({ ...e, tokenCodeHash: FAKE_HASH })) },
+  });
   const cfg = pin(loadConfigs(realDir));
   const w = (n: bigint | number) => BigInt(n).toString(16).padStart(64, "0");
   const a = (x: string) => x.replace(/^0x/, "").toLowerCase().padStart(64, "0");
-  const all = [...cfg.protocol.assets, ...cfg.rwa.assets];
+  const all = [...cfg.protocol.assets, ...cfg.rwa.assets, ...cfg.agent.shortlist];
   const FACTORY = cfg.rwa.uniswapV3Factory.toLowerCase();
 
   /** Per-pool live facts. Defaults match the committed config, so a test overrides one thing. */
@@ -119,7 +141,7 @@ describe("live rules against a fake RPC", () => {
       if (sel === "0xddca3f43") return "0x" + w(o.fee ?? feeOf(t));
       if (sel === "0x0dfe1681") return "0x" + a(cfg.rwa.usdc);
       if (sel === "0xd21220a7") return "0x" + a(asset!.token);
-      if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(0) + w(o.cardinality ?? 50) + w(0) + w(1);
+      if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(0) + w(o.cardinality ?? 1000) + w(0) + w(1);
       if (sel === "0x1a686502") return "0x" + w(o.liquidity ?? 10n ** 18n);
       if (sel === "0x70a08231") return "0x" + w(2_000_000n * 10n ** 6n);
       if (sel === "0x1698ee82" && t === FACTORY) {
@@ -147,8 +169,10 @@ describe("live rules against a fake RPC", () => {
   test("fails when the factory returns another pool", async () => {
     expect(await bad({ deSPXA: { factoryPool: "0x1111111111111111111111111111111111111111" } }, "factory-getPool-equals-config", "deSPXA")).toBe(true);
   });
-  test("fails when observation cardinality is below 2", async () => {
-    expect(await bad({ deSPXA: { cardinality: 1 } }, "observation-cardinality>=2", "deSPXA")).toBe(true);
+  test("fails when observation cardinality is below the 901 window floor, passes at 901", async () => {
+    expect(await bad({ deSPXA: { cardinality: 900 } }, "observation-cardinality>=901", "deSPXA")).toBe(true);
+    expect(await bad({ deSPXA: { cardinality: 901 } }, "observation-cardinality>=901", "deSPXA")).toBe(false);
+    expect(await bad({ deSPXA: { cardinality: 1 } }, "observation-cardinality>=901", "deSPXA")).toBe(true);
   });
   test("fails when liquidity is zero", async () => {
     expect(await bad({ deSPXA: { liquidity: 0n } }, "liquidity>0", "deSPXA")).toBe(true);
@@ -160,8 +184,8 @@ describe("live rules against a fake RPC", () => {
     test(`${sym}: a factory that returns another pool fails`, async () => {
       expect(await bad({ [sym]: { factoryPool: "0x2222222222222222222222222222222222222222" } }, "factory-getPool-equals-config", sym)).toBe(true);
     });
-    test(`${sym}: cardinality below 2 and zero liquidity fail`, async () => {
-      expect(await bad({ [sym]: { cardinality: 0 } }, "observation-cardinality>=2", sym)).toBe(true);
+    test(`${sym}: cardinality below 901 and zero liquidity fail`, async () => {
+      expect(await bad({ [sym]: { cardinality: 0 } }, "observation-cardinality>=901", sym)).toBe(true);
       expect(await bad({ [sym]: { liquidity: 0n } }, "liquidity>0", sym)).toBe(true);
     });
   }
@@ -190,6 +214,28 @@ describe("live rules against a fake RPC", () => {
       expect(await failedRules(c)).toContain(`${sym}/pool-fee-equals-config`);
     });
   }
+  test("RM: a token whose code hash differs from the pin fails", async () => {
+    const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].tokenCodeHash = "0x" + "11".repeat(32); });
+    const r = await liveFindings(rpcFor(), "latest", { ...pin(c), agent: c.agent });
+    expect(r.findings.some((f) => f.rule === "token-code-hash-pinned" && !f.ok)).toBe(true);
+  });
+  test("RM: an unfunded pool (no liquidity, cardinality 1) fails until the owner funds it", async () => {
+    expect(await bad({ RM: { liquidity: 0n } }, "liquidity>0", "RM")).toBe(true);
+    expect(await bad({ RM: { cardinality: 1 } }, "observation-cardinality>=901", "RM")).toBe(true);
+  });
+  test("RM: an unfunded pool fails with a message that names the pool and the owner action", async () => {
+    const r = await liveFindings(rpcFor({ RM: { liquidity: 0n, cardinality: 1 } }), "latest", cfg);
+    const failed = r.findings.filter((f) => !f.ok && f.scope.endsWith(":RM"));
+    expect(failed.map((f) => f.rule).sort()).toEqual(["liquidity>0", "liquidity>=1000000", "observation-cardinality>=901"]);
+    for (const f of failed) expect(f.detail).toMatch(/0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882 is not funded yet: the owner must add in-range liquidity/);
+  });
+  test("RM: liquidity under the addAsset floor of 1e6 fails even though it is above zero", async () => {
+    expect(await bad({ RM: { liquidity: 999_999n } }, "liquidity>=1000000", "RM")).toBe(true);
+    expect(await bad({ RM: { liquidity: 1_000_000n } }, "liquidity>=1000000", "RM")).toBe(false);
+  });
+  test("RM: a live pool fee other than 10000 fails", async () => {
+    expect(await bad({ RM: { fee: 3000 } }, "pool-fee-equals-config", "RM")).toBe(true);
+  });
   test("the committed config has no failing rule with the same fake RPC", async () => {
     expect(await failedRules(cfg)).toEqual([]);
   });

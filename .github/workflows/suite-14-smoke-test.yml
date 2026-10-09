@@ -96,6 +96,11 @@ concurrency:
   group: ${{ github.workflow }}-suite14-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   # Hermetic guards that need the binary/lib but NO chain and NO Docker. Kept as their own fast
   # job so a manifest/alignment regression fails in seconds, before paying for any
@@ -150,11 +155,12 @@ jobs:
       # silently empty the crate.
       # Floor calibrated to the real count after the fork_manifest and genesis
       # machinery was retired (52 lib tests at the final tree; the earlier 60 was
-      # never reachable). Raise it when tests are added.
+      # never reachable). Core 1549 added the dapp compose environment tests: 60.
+      # Raise it when tests are added.
       - name: smoke-test lib test count floor
         working-directory: testing/smoke-test
         env:
-          SMOKE_TEST_LIB_TEST_FLOOR: "53"
+          SMOKE_TEST_LIB_TEST_FLOOR: "60"
         run: |
           set -o pipefail
           cargo test -p smoke-test --lib 2>&1 | tee "$RUNNER_TEMP/smoke-lib.log"
@@ -173,6 +179,15 @@ jobs:
         working-directory: testing/smoke-test
         run: "cargo test -p smoke-test --lib tests:: -- --nocapture"
 
+      # Core 1549: the stage deploy job's command line (`smoke-test --deploy-only`). The refusals of
+      # impossible flag combinations are decided before anything boots, so this is hermetic: no chain,
+      # no Docker. Routed through the executed-test guard so a run that collects zero tests is red.
+      - name: deploy-only command line (hermetic)
+        working-directory: testing/smoke-test
+        env:
+          CARGO_TEST_MIN_EXECUTED: "5"
+        run: bash ../../.github/scripts/cargo_test_require_executed.sh -p smoke-test --test deploy_only_cli
+
       # Self-test for the executed-test guard's REQUIRE_EXECUTED_MARKERS gate
       # (issue #1371): replays canned libtest transcripts through a stub cargo
       # and proves the guard goes RED when hermetic tests keep the pass count
@@ -180,6 +195,33 @@ jobs:
       # in seconds, so a broken gate is caught before the devnet matrix trusts it.
       - name: executed-test guard self-test (required markers, hermetic)
         run: bash .github/scripts/tests/test_cargo_test_require_executed.sh
+
+      # Issue 1436: a devnet test that prints "skipping" and returns early is recorded as PASSED.
+      # The guard fails on any skip_if_no_* helper or direct prerequisites_available() call in the
+      # smoke-test and e2e-rust test dirs (use smoke_test::require_prereqs). The self-test
+      # mutates a temp tree to prove the guard goes red.
+      - name: no silent prerequisite skip in devnet tests (guard + self-test, hermetic)
+        run: |
+          bash .github/scripts/tests/test_check_no_silent_prereq_skip.sh
+          bash .github/scripts/check_no_silent_prereq_skip.sh
+
+      # Issue 1647: the governance e2e tests run on the real Safe and timelock (security-model
+      # section 16). The guard fails if a mock RPC, a fake Safe or the approver-EOA release probe
+      # comes back. The self-test mutates a temp tree to prove the guard goes red.
+      - name: governance e2e tests stay unmocked (guard + self-test, hermetic)
+        run: |
+          bash .github/scripts/tests/test_check_governance_tests_unmocked.sh
+          bash .github/scripts/check_governance_tests_unmocked.sh
+
+      # Issue 1656: a bare `cargo test --test X` exits 0 when X collects zero tests. The guard fails
+      # on any such step in .github/workflows that skips cargo_test_require_executed.sh. Its
+      # self-test runs it on a bare and a wrapped fixture workflow. The floors test replays a stub
+      # cargo through the real wrapper at each floor, floor minus one and zero.
+      - name: every cargo test --test step is wrapped with an executed floor (guard + self-tests, hermetic)
+        run: |
+          bash .github/scripts/tests/test_check_no_bare_cargo_test.sh
+          python3 .github/scripts/check_no_bare_cargo_test.py
+          bash .github/scripts/tests/test_wrapped_step_floors.sh
 
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once. Every chain job
   # below takes it as input.
@@ -458,6 +500,62 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-test-logs-twin_publish
+          path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
+
+  # CORE 1619 (plan decision 22): a failed verify pauses deposits on all four vaults. Its own job, so it gets a fresh Twin chain: a second
+  # deployment on the fork twin_publish used would find the libraries already there and send nothing. The test forces a real stage 12
+  # failure on a fresh deployment, then asserts depositsPaused on rmUSDC, rmPROTO, rmAGENT and rmRWA read from the chain, each vault's
+  # entry in the rollout report, and a redeem on every paused vault that holds shares. Real vaults, the real EMERGENCY keystore, no mock.
+  twin_pause_all:
+    name: smoke-test-twin-pause-all
+    needs: [changes, pin]
+    if: ${{ needs.changes.outputs.deploy == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
+        uses: ./.github/actions/publish-contracts-setup
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Start the Twin chain at the run pin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+      - name: cargo build (includes CLI binary)
+        working-directory: testing/smoke-test
+        run: cargo build -p smoke-test
+
+      # Non-zero test count floor: a filter that matches nothing is a failure, not a green.
+      - name: Twin chain forced verify failure pauses all four vaults
+        working-directory: testing/smoke-test
+        env:
+          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-twin_pause_all.log
+          CARGO_TEST_MIN_EXECUTED: "1"
+        run: >-
+          bash ../../.github/scripts/cargo_test_require_executed.sh
+          -p smoke-test --release --test twin_pause_all -- --test-threads=1 --nocapture
+
+      - name: Upload smoke-test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-logs-twin_pause_all
           path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
 
       - name: Stop the Twin fork and save its RPC cache

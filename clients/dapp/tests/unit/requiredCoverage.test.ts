@@ -39,6 +39,48 @@ describe("required browser coverage guard", () => {
     expect(skipped.ok).toBe(false);
   });
 
+  it("names the governance spec as required and fails when it is absent, passes when present (issue 1643)", () => {
+    expect(REQUIRED_SPECS).toContain("governance.spec.ts");
+    const others = Object.fromEntries(
+      REQUIRED_SPECS.filter((s) => s !== "governance.spec.ts").map((s) => [
+        s,
+        { executed: 1, skipped: 0 },
+      ]),
+    );
+    const absent = evaluateCoverage(seen(others));
+    expect(absent.ok).toBe(false);
+    expect(absent.failures.join("\n")).toContain("governance.spec.ts");
+    const skipped = evaluateCoverage(
+      seen({ ...others, "governance.spec.ts": { executed: 0, skipped: 3 } }),
+    );
+    expect(skipped.ok).toBe(false);
+    const present = evaluateCoverage(
+      seen({ ...others, "governance.spec.ts": { executed: 3, skipped: 0 } }),
+    );
+    expect(present.ok).toBe(true);
+  });
+
+  it("names the role grant/revoke spec as required: the Safe proposal path must execute (issue 1647)", () => {
+    expect(REQUIRED_SPECS).toContain("role-grant-revoke.spec.ts");
+    const others = Object.fromEntries(
+      REQUIRED_SPECS.filter((s) => s !== "role-grant-revoke.spec.ts").map((s) => [
+        s,
+        { executed: 1, skipped: 0 },
+      ]),
+    );
+    expect(evaluateCoverage(seen(others)).ok).toBe(false);
+    expect(
+      evaluateCoverage(
+        seen({ ...others, "role-grant-revoke.spec.ts": { executed: 0, skipped: 6 } }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      evaluateCoverage(
+        seen({ ...others, "role-grant-revoke.spec.ts": { executed: 8, skipped: 0 } }),
+      ).ok,
+    ).toBe(true);
+  });
+
   it("does NOT require the environment-gated real-artifact spec", () => {
     // That spec is allowed to skip; requiring it would make every ordinary CI
     // run red instead of making the coverage hole visible.

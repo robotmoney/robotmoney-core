@@ -14,7 +14,7 @@ import {
 } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, OWNERS, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
+import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
 
 const LABELS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "expected-labels.json"), "utf8")) as string[];
 const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK };
@@ -98,10 +98,15 @@ const RULES: Rule[] = [
   // vault facts
   [/^(vault\[\w+\]): registry link$/, (w, m) => w.chain.set(subject(m[1]), "registry", OTHER)],
   [/^(vault\[\w+\]): a second setRegistry reverts$/, (w) => { w.chain.setRegistryOpen = true; }],
-  [/^vault\[rmAGENT\]: ships with no assets$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
+  [/^vault\[rmAGENT\]: holds RM as its one asset$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): tvlCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "tvlCap", 1n)],
   [/^(vault\[\w+\]): perDepositCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "perDepositCap", 1n)],
   [/^(vault\[\w+\]): exitFeeBps equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "exitFeeBps", 999n)],
+  [/^(vault\[\w+\]): navDeviationGuardBps equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "navDeviationGuardBps", 500n)],
+  // the vault default: a basket the deploy never armed. Fails "above zero" and "equals sheet" together.
+  [/^(vault\[\w+\]): navDeviationGuardBps above zero$/, (w, m) => w.chain.set(subject(m[1]), "navDeviationGuardBps", 0n)],
+  // a thin pool: the first asset pool of the vault reports liquidity below the sheet floor
+  [/^(vault\[\w+\]): pool liquidity meets the sheet floor$/, (w, m) => w.chain.set(w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].assets[0]!.pool, "liquidity", 1n)],
   [/^(vault\[\w+\]): feeRecipient equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", OTHER)],
   [/^(vault\[\w+\]): feeRecipient is not deployer$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", DEPLOYER)],
   [/^(vault\[\w+\]): paused state equals sheet$/, (w, m) => { const a = subject(m[1]); const was = w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].expectPaused; w.chain.set(a, "depositsPaused", !was); }],
@@ -133,6 +138,10 @@ const RULES: Rule[] = [
   [/^safe: no module enabled$/, (w) => { w.chain.modules = [OTHER]; }],
   [/^safe: no guard set$/, (w) => { w.chain.storage.set(`${SAFE.toLowerCase()}|${SAFE_GUARD_SLOT}`, pad(OTHER, { size: 32 })); }],
   [/^safe: fallback handler is canonical$/, (w) => { w.chain.storage.set(`${SAFE.toLowerCase()}|${SAFE_FALLBACK_SLOT}`, pad(OTHER, { size: 32 })); }],
+  [/^safe: control proof transaction recorded$/, (w) => { w.opts.controlProof = undefined; }],
+  [/^safe: control proof transaction succeeded$/, (w) => { w.chain.txs.get(PROOF_TX.toLowerCase())!.status = "reverted"; }],
+  [/^safe: control proof is a self-call signed by every owner$/, (w) => { w.chain.txs.get(PROOF_TX.toLowerCase())!.input = proofInput(8453, OWNER_KEYS.slice(0, 2)); }],
+  [/^safe: nonce at least 1$/, (w) => w.chain.set(SAFE, "nonce", 0n)],
   [/^safe: control below-threshold signatures revert GS020$/, (w) => { w.chain.threshold = 1; }],
   [/^safe: control non-owner signature reverts GS026$/, (w) => { w.chain.owners = [...OWNERS, SAFE_PROBE_ADDRESS]; }],
   [/^safe: control non-owner pair reverts GS026$/, (w) => { w.chain.owners = [...OWNERS, SAFE_PROBE_ADDRESS_2]; }],

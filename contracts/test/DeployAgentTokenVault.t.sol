@@ -7,6 +7,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {BasketVaultDeployBase} from "../script/BasketVaultDeployBase.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {BasketVault} from "../vaults/BasketVault.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
 import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";
@@ -24,14 +25,20 @@ contract AgentDeployHarness is DeployAgentTokenVault {
     function manifestPath() external view returns (string memory) {
         return _manifestPath();
     }
+
+    function readPrefixed(string memory prefix) external view returns (Params memory) {
+        return _readParamsFrom(prefix);
+    }
 }
 
-/// @notice rmAGENT script: empty, paused and registered at launch. The same script adds an asset
+/// @notice rmAGENT script: paused and registered at launch, holding RM on the shipped config
+///         (an empty list is also supported). The same script adds an asset
 ///         from one config entry (adapter deployed, code hash allowed, `addAsset` called).
 contract DeployAgentTokenVaultTest is BasketDeployFixture {
     using stdJson for string;
 
     DeployAgentTokenVault internal script;
+    address internal constant RM_TOKEN = 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3;
 
     function setUp() public {
         _fixtureSetUp();
@@ -42,40 +49,62 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         return vm.readFile("config/agent-token-shortlist.json");
     }
 
-    /// @dev Runs the SHIPPED config file through the script's parser, with no substitute body.
-    ///      The test points SWAP_ROUTER at the file's own swapRouter02 value.
-    function _runLaunch() internal returns (BasketVaultDeployBase.Deployed memory) {
-        string memory json = _launchConfig();
+    /// @dev The shipped file's router with no assets, for the paused-and-empty deploy path.
+    function _runEmpty() internal returns (BasketVaultDeployBase.Deployed memory) {
+        string memory json = _emptyConfig();
         BasketVaultDeployBase.Params memory p = _params();
         p.swapRouter = _configRouter(json);
         return script.runInProcess(p, json);
     }
 
-    /// @notice The shipped rmAGENT config carries swapRouter02 and an empty shortlist, so the
+    function _emptyConfig() internal view returns (string memory) {
+        return string.concat(
+            '{"swapRouter02":"', vm.toString(_configRouter(_launchConfig())), '","shortlist":[]}'
+        );
+    }
+
+    /// @dev Runs the SHIPPED config (RM) through the script. A mock pool paired with this test's
+    ///      USDC is etched at the shipped RM pool address, as the live pool is on Base.
+    function _runLaunch() internal returns (BasketVaultDeployBase.Deployed memory) {
+        string memory json = _etchConfigPools("config/agent-token-shortlist.json", "shortlist");
+        BasketVaultDeployBase.Params memory p = _params();
+        p.swapRouter = _configRouter(json);
+        return script.runInProcess(p, json);
+    }
+
+    /// @notice The shipped rmAGENT config carries swapRouter02 and the RM entry, so the
     ///         script's parser accepts it (review defect: it used to revert on a missing key).
     function test_shippedConfig_parsesThroughTheScriptParser() public {
         AgentDeployHarness h = new AgentDeployHarness();
         BasketVaultDeployBase.Cfg memory cfg = h.parse(_launchConfig());
         assertEq(cfg.swapRouter02, 0x2626664c2603336E57B271c5C0b26F421741e481);
-        assertEq(cfg.assets.length, 0);
+        assertEq(cfg.assets.length, 1);
+        assertEq(cfg.assets[0].symbol, "RM");
+        assertEq(cfg.assets[0].token, 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3);
+        assertEq(cfg.assets[0].pool, 0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882);
+        assertEq(cfg.assets[0].poolFee, 10000);
     }
 
     // ─── Launch path ──────────────────────────────────────────────────────────
 
-    function test_launchConfigShortlistIsEmpty() public view {
-        string[] memory symbols;
+    function test_launchConfigShortlistIsRmOnly() public view {
         string memory j = _launchConfig();
-        assertEq(abi.decode(j.parseRaw(".shortlist"), (address[])).length, 0);
-        symbols; // silence
+        assertEq(j.readString(".shortlist[0].symbol"), "RM");
+        assertFalse(vm.keyExistsJson(j, ".shortlist[1]"), "RM only");
     }
 
-    function test_deploy_isRegisteredPausedAndEmpty() public {
+    /// @notice The shipped launch config deploys rmAGENT holding RM, registered and paused.
+    function test_deploy_addsRmAndRegistersPaused() public {
         BasketVaultDeployBase.Deployed memory d = _runLaunch();
         AgentTokenVault v = AgentTokenVault(d.vault);
         assertTrue(v.depositsPaused(), "paused");
-        assertEq(v.assetCount(), 0, "zero assets");
-        assertEq(d.tokens.length, 0, "result lists no tokens");
-        assertEq(d.adapter, address(0), "no adapter deployed for an empty list");
+        assertEq(v.assetCount(), 1, "RM is the one asset");
+        (address t,, uint24 fee, bool active, address adapter,) = v.assets(0);
+        assertEq(t, 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3, "asset is RM");
+        assertEq(uint256(fee), 10000, "fee 10000");
+        assertTrue(active, "active");
+        assertTrue(adapter != address(0), "adapter deployed");
+        assertEq(d.tokens.length, 1, "result lists RM");
         address[] memory listed = registry.listVaults();
         assertEq(listed.length, 1, "registered once");
         assertEq(listed[0], d.vault);
@@ -103,10 +132,19 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         assertTrue(v.hasRole(v.ADMIN_ROLE(), deployer));
     }
 
+    /// @notice An empty shortlist still deploys a paused, empty vault.
+    function test_emptyShortlist_deploysPausedAndEmpty() public {
+        BasketVaultDeployBase.Deployed memory d = _runEmpty();
+        AgentTokenVault v = AgentTokenVault(d.vault);
+        assertTrue(v.depositsPaused(), "paused");
+        assertEq(v.assetCount(), 0, "zero assets");
+        assertEq(d.adapter, address(0), "no adapter for an empty list");
+    }
+
     function test_manifest_hasEmptyAssetList() public {
-        BasketVaultDeployBase.Deployed memory d = _runLaunch();
+        BasketVaultDeployBase.Deployed memory d = _runEmpty();
         AgentDeployHarness h = new AgentDeployHarness();
-        string memory json = _launchConfig();
+        string memory json = _emptyConfig();
         string memory path =
             string.concat(vm.projectRoot(), "/deployments/test-agent-manifest.json");
         h.writeManifestTo(path, d, json);
@@ -155,6 +193,76 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         BasketVaultDeployBase.Params memory p = _params();
         p.swapRouter = makeAddr("other");
         vm.expectRevert(bytes("SWAP_ROUTER is not SwapRouter02"));
+        script.runInProcess(p, json);
+    }
+
+    // ─── Issue 1666: the NAV deviation guard and the pool floor come from the sheet ──
+
+    function _prepare(BasketVaultDeployBase.Params memory p) internal returns (string memory json) {
+        json = _etchConfigPools("config/agent-token-shortlist.json", "shortlist");
+        p.swapRouter = _configRouter(json);
+    }
+
+    function _deployWith(BasketVaultDeployBase.Params memory p)
+        internal
+        returns (BasketVaultDeployBase.Deployed memory)
+    {
+        return script.runInProcess(p, _prepare(p));
+    }
+
+    /// @notice The vault ships with the sheet guard, not the vault default of 0 (which disables ORA-4).
+    function test_guard_navDeviationGuardBpsEqualsTheSheetValue() public {
+        BasketVaultDeployBase.Deployed memory d = _deployWith(_params());
+        assertEq(
+            BasketVault(d.vault).navDeviationGuardBps(), NAV_DEVIATION_BPS, "guard from the sheet"
+        );
+        assertGt(BasketVault(d.vault).navDeviationGuardBps(), 0, "guard above zero");
+    }
+
+    function test_guard_acceptsTheCeiling() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 2000;
+        BasketVaultDeployBase.Deployed memory d = _deployWith(p);
+        assertEq(BasketVault(d.vault).navDeviationGuardBps(), 2000);
+    }
+
+    function test_reverts_whenNavDeviationBpsUnset() public {
+        string memory prefix = "D1666AGENT_";
+        AgentDeployHarness h = new AgentDeployHarness();
+        _setSheetEnv(prefix, "NAV_DEVIATION_BPS");
+        vm.expectRevert(bytes(string.concat(prefix, "NAV_DEVIATION_BPS must be set")));
+        h.readPrefixed(prefix);
+    }
+
+    function test_reverts_whenNavDeviationBpsZero() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 0;
+        string memory json = _prepare(p);
+        vm.expectRevert(bytes("NAV_DEVIATION_BPS must be 1..2000"));
+        script.runInProcess(p, json);
+    }
+
+    function test_reverts_whenNavDeviationBpsAboveCeiling() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 2001;
+        string memory json = _prepare(p);
+        vm.expectRevert(bytes("NAV_DEVIATION_BPS must be 1..2000"));
+        script.runInProcess(p, json);
+    }
+
+    function test_reverts_whenMinPoolLiquidityUnset() public {
+        string memory prefix = "D1666LAGENT_";
+        AgentDeployHarness h = new AgentDeployHarness();
+        _setSheetEnv(prefix, "MIN_POOL_LIQUIDITY");
+        vm.expectRevert(bytes(string.concat(prefix, "MIN_POOL_LIQUIDITY must be set")));
+        h.readPrefixed(prefix);
+    }
+
+    function test_reverts_whenMinPoolLiquidityZero() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.minPoolLiquidity = 0;
+        string memory json = _prepare(p);
+        vm.expectRevert(bytes("MIN_POOL_LIQUIDITY missing from the sheet"));
         script.runInProcess(p, json);
     }
 }

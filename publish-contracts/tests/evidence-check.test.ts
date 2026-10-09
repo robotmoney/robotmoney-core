@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { encodeAbiParameters, encodeEventTopics, parseAbi, type Hex } from "viem";
-import { chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, type ChainReader } from "../src/evidence-check.ts";
+import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, type Hex } from "viem";
+import { chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
+import { releaseCalldata } from "../src/evidence-check.ts";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
 const a = (n: number) => "0x" + n.toString(16).padStart(40, "0");
@@ -74,13 +75,13 @@ const EV = parseAbi([
 ]);
 const tl = a(9);
 const id32 = (n: number) => h(n);
-const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: number, delay = 172800n) => {
+const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: number, delay = 172800n, target: string = a(1), calldata: string = "0x") => {
   const topics = encodeEventTopics({ abi: EV, eventName, args: eventName === "Cancelled" ? { id: id32(n) as Hex } : { id: id32(n) as Hex, index: 0n } } as any);
-  const data = eventName === "CallScheduled" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [a(1) as Hex, 0n, "0x", h(0) as Hex, delay])
-    : eventName === "CallExecuted" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [a(1) as Hex, 0n, "0x"]) : "0x";
+  const data = eventName === "CallScheduled" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [target as Hex, 0n, calldata as Hex, h(0) as Hex, delay])
+    : eventName === "CallExecuted" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [target as Hex, 0n, calldata as Hex]) : "0x";
   return { address: tl, topics: topics as Hex[], data: data as Hex };
 };
-interface Opts { sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
+interface Opts { stepData?: Record<string, string>; stepTarget?: Record<string, string>; pausedBy?: Record<string, boolean>; relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
 function stub(ev: any, o: Opts = {}): ChainReader {
   const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
   const add = (hash: string, logs: any[], ts: number) => { receipts.set(hash, { status: o.failed === hash ? "reverted" : "success", blockNumber: bn, logs }); blocks.set(bn++, ts); };
@@ -88,18 +89,36 @@ function stub(ev: any, o: Opts = {}): ChainReader {
   add(ev.safe.creation_tx, [], 1);
   ev.govern.forEach((g: any, i: number) => {
     const id = o.sharedId && i === 1 ? 1 : i + 1;
-    const t0 = T0 + i;
-    add(g.schedule_tx, [log("CallScheduled", id, o.delay)], t0);
-    add(g.execute_tx, [log("CallExecuted", id)], t0 + (o.gap ?? 172800));
+    const t0 = g.schedule_block_timestamp ?? T0 + i;
+    const label = g.round > 1 ? `${g.step}#${g.round}` : g.step;
+    const target = o.stepTarget?.[label] ?? ev.vaults[VAULT[g.step] ?? "rmPROTO"].address;
+    const data = o.stepData?.[label] ?? unpauseCalldata();
+    add(g.schedule_tx, [log("CallScheduled", id, o.delay, target, data)], t0);
+    add(g.execute_tx, [log("CallExecuted", id, 0n, target, data)], t0 + (o.gap ?? 172800));
+  });
+  (ev.receipt_releases ?? []).forEach((r: any, i: number) => {
+    const id = 50 + i;
+    const t0 = T0 + 10 + i;
+    const sched = [log("CallScheduled", id, o.relDelay, o.relTarget ?? RCPT, o.relData ?? releaseCalldata(r.receipt_id))];
+    if (o.relExtraCall) sched.push(log("CallScheduled", id, o.relDelay, o.relTarget ?? RCPT, o.relData ?? releaseCalldata(r.receipt_id)));
+    add(r.schedule_tx, sched, t0);
+    add(r.execute_tx, [log("CallExecuted", id, 0n, o.relTarget ?? RCPT, o.relData ?? releaseCalldata(r.receipt_id))], t0 + (o.relGap ?? 172800));
   });
   return {
     getChainId: async () => o.chainId ?? 8453,
     getTransactionCount: async () => o.nonce ?? 2,
     getTransactionReceipt: async ({ hash }) => { const r = receipts.get(hash); if (!r) throw new Error("not found"); return r; },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(blocks.get(blockNumber)!) }),
-    readContract: async ({ functionName }) => (functionName === "depositsPaused" ? (o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
+    readContract: async ({ address, functionName }) => (functionName === "depositsPaused" ? (o.pausedBy?.[address] ?? o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
   };
 }
+const VAULT: Record<string, string> = { "unpause-USDC": "rmUSDC", "unpause-PROTO": "rmPROTO", "unpause-AGENT": "rmAGENT", "unpause-RWA": "rmRWA" };
+const RCPT = a(30);
+const RID = h(0xabc);
+const withRelease = (e: any) => {
+  e.consensus_receipt = { address: RCPT };
+  e.receipt_releases = [{ receipt_id: RID, target: RCPT, operation_id: h(950), schedule_tx: h(600), schedule_status: 1, schedule_block_timestamp: T0 + 10, execute_tx: h(601), execute_status: 1, execute_block_timestamp: T0 + 10 + 172800 }];
+};
 const online = (o: Opts = {}, mutate: (e: any) => void = () => {}) => { const e = good(); const chain = stub(e, o); mutate(e); return checkEvidenceOnChain(e, chain, { safe: 2 }); };
 
 describe("evidence check reading the chain (stub RPC)", () => {
@@ -120,6 +139,48 @@ describe("evidence check reading the chain (stub RPC)", () => {
   test("another chain id is rejected", async () => expect((await online({ chainId: 918453 })).join()).toContain("RPC reports chain"));
 });
 
+describe("a post-launch consensus receipt release on 8453 (issue 1611)", () => {
+  const rel = (f: (e: any) => void = () => {}) => { const e = good(); withRelease(e); f(e); return e; };
+  const offline = (f: (e: any) => void = () => {}) => checkEvidence(rel(f)).join("\n");
+  const chain = (o: Opts = {}, f: (e: any) => void = () => {}) => { const e = rel(); const c = stub(e, o); f(e); return checkEvidenceOnChain(e, c, { safe: 2 }).then((p) => p.join("\n")); };
+
+  test("a correct release passes offline and on chain", async () => {
+    expect(offline()).toBe("");
+    expect(await chain()).toBe("");
+  });
+  test("a release in the govern list is still refused: only receipt_releases may carry it", () => {
+    expect(mut((e) => { e.govern.push({ ...e.govern[0], step: "release-receipt", schedule_tx: h(700), execute_tx: h(701), operation_id: h(702) }); })).toContain("is not a basket unpause");
+  });
+  test("the receipt contract address is required when a release is recorded", () => expect(offline((e) => { delete e.consensus_receipt; })).toContain("consensus_receipt.address is missing"));
+  test("a recorded target that is not the receipt contract is rejected", () => expect(offline((e) => { e.receipt_releases[0].target = a(31); })).toContain("is not the receipt contract"));
+  test("a malformed receipt id and a repeated receipt id are rejected", () => {
+    expect(offline((e) => { e.receipt_releases[0].receipt_id = "0x12"; })).toContain("receipt_id is not a bytes32");
+    expect(offline((e) => { e.receipt_releases.push({ ...e.receipt_releases[0], schedule_tx: h(610), execute_tx: h(611), operation_id: h(951) }); })).toContain("more than one evidence entry");
+  });
+  test("a recorded gap under 172800 s is rejected", () => expect(offline((e) => { e.receipt_releases[0].execute_block_timestamp = T0 + 10 + 172799; })).toContain("gap"));
+  test("a release sharing a transaction or an operation id with an unpause is rejected", () => {
+    expect(offline((e) => { e.receipt_releases[0].schedule_tx = e.govern[0].schedule_tx; })).toContain("none shared");
+    expect(offline((e) => { e.receipt_releases[0].operation_id = e.govern[0].operation_id; })).toContain("operation_id is also");
+  });
+  test("a wrong target on chain is rejected", async () => expect(await chain({ relTarget: a(31) })).toContain("is not the receipt contract"));
+  test("a wrong receipt id on chain is rejected", async () => expect(await chain({}, (e) => { e.receipt_releases[0].receipt_id = h(0xdef); })).toContain("calldata is not releaseReceipt"));
+  test("a delay under 172800 s on chain is rejected: the event delay and the block gap", async () => {
+    expect(await chain({ relDelay: 60n })).toContain("CallScheduled delay");
+    expect(await chain({ relGap: 172799 })).toContain("on-chain schedule-to-execute gap");
+  });
+  test("a schedule with more than one call is rejected", async () => expect(await chain({ relExtraCall: true })).toContain("exactly one call"));
+  test("any other operation on 8453 still fails", async () => {
+    expect(await chain({ relData: "0x12345678" })).toContain("calldata is not releaseReceipt");
+    const e = rel(); e.govern.push({ ...e.govern[0], step: "update-delay", schedule_tx: h(500), execute_tx: h(501) });
+    expect((await checkEvidenceOnChain(e, stub(e), { safe: 2 })).join()).toContain("not a basket unpause");
+  });
+  test("the template lists the release block and an empty list passes", () => {
+    const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
+    expect(tpl.receipt_releases).toEqual([]);
+    expect(checkEvidence({ ...good(), receipt_releases: [] })).toEqual([]);
+  });
+});
+
 describe("owner exceptions before plan approval", () => {
   test("an empty list passes", () => expect(() => assertOwnerExceptions([], "2026-10-05T10:00:00Z")).not.toThrow());
   test("a placeholder is refused", () => expect(() => assertOwnerExceptions([{ text: "<x>", recorded_at: "2026-10-01T00:00:00Z" }], "2026-10-05T10:00:00Z")).toThrow());
@@ -131,13 +192,13 @@ describe("unpause govern rows and paused=false reads tell one story", () => {
   test("an unpause row that executed while the vault still reads paused=true is rejected, naming the row", async () => {
     const p = await online({ paused: true });
     expect(p.join("\n")).toContain("govern unpause-PROTO executed with receipt status 1, but rmPROTO.depositsPaused() reads true");
-    expect(p.filter((m) => m.includes("depositsPaused()")).length).toBe(3);
+    expect(p.filter((m) => m.includes("depositsPaused()")).length).toBe(4); // three baskets and rmUSDC (which must read open)
   });
   test("a vault that reads paused=false with no executed unpause row is rejected", async () => {
     const p = await online({ paused: false }, (e) => { const g = e.govern.find((x: any) => x.step === "unpause-RWA"); g.execute_status = 0; });
     expect(p.join("\n")).toContain("rmRWA.depositsPaused() reads false on chain, but govern unpause-RWA has no executed receipt");
   });
-  test("rmUSDC ships unpaused and is not part of the link", async () => expect((await online({ paused: false })).join()).not.toContain("rmUSDC"));
+  test("rmUSDC ships unpaused: it reads false with no unpause-USDC round", async () => expect((await online({ paused: false })).join()).not.toContain("rmUSDC"));
 });
 
 describe("recorded chain fixture (offline mode of the same chain checks)", () => {
@@ -213,3 +274,60 @@ describe("the evidence template", () => {
     expect(checkEvidence(tpl).length).toBeGreaterThan(0);
   });
 });
+
+// ---- issue 1667: the four-vault unpause rounds ----
+describe("issue 1667: rmUSDC and re-paused vaults come back through numbered Safe unpause rounds", () => {
+  const usdc = (n = 0, round?: number) => ({ step: "unpause-USDC", ...(round ? { round } : {}), operation_id: h(800 + n), schedule_tx: h(300 + n * 2), schedule_block_timestamp: T0 + 400000 + n * 400000, execute_tx: h(301 + n * 2), execute_block_timestamp: T0 + 400000 + n * 400000 + 172800, schedule_status: 1, execute_status: 1 });
+  /** a second PROTO round: scheduled after round 1 executed */
+  const proto2 = () => ({ ...usdc(5, 2), step: "unpause-PROTO" });
+  const withUsdc = (e: any) => { e.govern.push(usdc()); };
+  const offline = (f: (e: any) => void) => { const e = good(); f(e); return checkEvidence(e).join("\n"); };
+  const chain = (o: Opts, f: (e: any) => void) => { const e = good(); f(e); return checkEvidenceOnChain(e, stub(e, o), { safe: 2 }).then((p) => p.join("\n")); };
+
+  test("an unpause-USDC round is accepted offline and on chain, and rmUSDC may also have no round at all", async () => {
+    expect(offline(withUsdc)).toBe("");
+    expect(await chain({}, withUsdc)).toBe("");
+    expect(checkEvidence(good())).toEqual([]);
+  });
+  test("the template step list still has the three basket steps only: rmUSDC is optional", () => expect(GOVERN_STEPS).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]));
+  test("any other call on rmUSDC is rejected: another function (setPerDepositCap), garbage calldata, another target", async () => {
+    const calls = ["0x12345678", encodeFunctionDataSetCap()];
+    for (const data of calls) expect(await chain({ stepData: { "unpause-USDC": data } }, withUsdc)).toContain("unpauseDeposits(): the only call");
+    expect(await chain({ stepTarget: { "unpause-USDC": a(6) } }, withUsdc)).toContain("is not rmUSDC");
+  });
+  test("a basket step is held to the same rule: one unpauseDeposits on its own vault", async () => {
+    expect(await chain({ stepData: { "unpause-PROTO": "0x12345678" } }, () => {})).toContain("unpauseDeposits()");
+    expect(await chain({ stepTarget: { "unpause-RWA": a(5) } }, () => {})).toContain("is not rmRWA");
+  });
+  test("a step that is not an unpause is still rejected, rmUSDC included", () => {
+    expect(offline((e) => { e.govern.push({ ...usdc(), step: "set-cap-USDC" }); })).toContain("is not a basket unpause");
+  });
+  test("rmUSDC that reads paused is rejected even when a round is recorded", async () => {
+    const p = await chain({ pausedBy: { [a(5)]: true } }, withUsdc);
+    expect(p).toContain("rmUSDC.depositsPaused() reads true on chain, want false");
+  });
+  test("a second round of a basket is accepted when it is scheduled after round 1 executed and has its own transactions and operation id", async () => {
+    const add = (e: any) => { e.govern.push(proto2()); };
+    expect(offline(add)).toBe("");
+    expect(await chain({}, add)).toBe("");
+  });
+  test("rounds: a repeated round, a gap in the numbers, a round scheduled before the one it follows executed, and a bad round number are rejected", () => {
+    expect(offline((e) => { e.govern.push({ ...proto2(), round: 1 }); })).toContain("more than one evidence entry");
+    expect(offline((e) => { e.govern.push({ ...proto2(), round: 3 }); })).toContain("rounds must be 1 to 2 in order");
+    expect(offline((e) => { e.govern.push({ ...proto2(), schedule_block_timestamp: T0 + 100 }); })).toContain("not after round 1 executed");
+    expect(offline((e) => { e.govern.push({ ...proto2(), round: 0 }); })).toContain("round 0 is not a positive integer");
+  });
+  test("a second round that reuses the first round's operation id or transactions is rejected (a replay, not a new round)", () => {
+    expect(offline((e) => { e.govern.push({ ...proto2(), operation_id: e.govern[0].operation_id }); })).toContain("operation_id is also");
+    expect(offline((e) => { e.govern.push({ ...proto2(), schedule_tx: e.govern[0].schedule_tx }); })).toContain("none shared");
+  });
+  test("a second round whose on-chain gap is under 172800 s is rejected", async () => {
+    const add = (e: any) => { e.govern.push(proto2()); };
+    expect(await chain({ gap: 172799 }, add)).toContain("on-chain schedule-to-execute gap");
+  });
+  test("the latest round decides the paused link: round 2 executed and the vault reads unpaused passes, reads paused fails", async () => {
+    const add = (e: any) => { e.govern.push(proto2()); };
+    expect(await chain({ pausedBy: { [a(6)]: true } }, add)).toContain("rmPROTO.depositsPaused() reads true");
+  });
+});
+function encodeFunctionDataSetCap(): string { return encodeFunctionData({ abi: parseAbi(["function setPerDepositCap(uint256 newCap)"]), functionName: "setPerDepositCap", args: [1n] }); }

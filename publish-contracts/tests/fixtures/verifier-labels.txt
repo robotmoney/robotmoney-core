@@ -159,6 +159,9 @@ vault[rmPROTO]: feeRecipient is not deployer
 vault[rmPROTO]: paused state equals sheet
 vault[rmPROTO]: router eligibility equals sheet
 vault[rmPROTO]: asset config equals sheet
+vault[rmPROTO]: navDeviationGuardBps equals sheet
+vault[rmPROTO]: navDeviationGuardBps above zero
+vault[rmPROTO]: pool liquidity meets the sheet floor
 vault[rmAGENT]: ADMIN_ROLE held by timelock
 vault[rmAGENT]: ADMIN_ROLE not held by deployer
 vault[rmAGENT]: DEFAULT_ADMIN not held by deployer
@@ -177,7 +180,10 @@ vault[rmAGENT]: feeRecipient is not deployer
 vault[rmAGENT]: paused state equals sheet
 vault[rmAGENT]: router eligibility equals sheet
 vault[rmAGENT]: asset config equals sheet
-vault[rmAGENT]: ships with no assets
+vault[rmAGENT]: navDeviationGuardBps equals sheet
+vault[rmAGENT]: navDeviationGuardBps above zero
+vault[rmAGENT]: pool liquidity meets the sheet floor
+vault[rmAGENT]: holds RM as its one asset
 vault[rmRWA]: ADMIN_ROLE held by timelock
 vault[rmRWA]: ADMIN_ROLE not held by deployer
 vault[rmRWA]: DEFAULT_ADMIN not held by deployer
@@ -196,6 +202,9 @@ vault[rmRWA]: feeRecipient is not deployer
 vault[rmRWA]: paused state equals sheet
 vault[rmRWA]: router eligibility equals sheet
 vault[rmRWA]: asset config equals sheet
+vault[rmRWA]: navDeviationGuardBps equals sheet
+vault[rmRWA]: navDeviationGuardBps above zero
+vault[rmRWA]: pool liquidity meets the sheet floor
 agents: no agent authorized at handover
 agents: manifest lists zero agents
 agents: no address holds AGENT_ROLE after handover
@@ -232,6 +241,10 @@ safe: pauser is not an owner
 safe: no module enabled
 safe: no guard set
 safe: fallback handler is canonical
+safe: control proof transaction recorded
+safe: control proof transaction succeeded
+safe: control proof is a self-call signed by every owner
+safe: nonce at least 1
 safe: control below-threshold signatures revert GS020
 safe: control non-owner signature reverts GS026
 safe: control non-owner pair reverts GS026

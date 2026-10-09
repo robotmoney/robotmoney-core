@@ -1,16 +1,25 @@
 ---
 title: "DeployAgentTokenVaultTest"
-description: "rmAGENT script: empty, paused and registered at launch. The same script adds an asset from one config entry (adapter deployed, code hash allowed, `addAsset` called)."
+description: "rmAGENT script: paused and registered at launch, holding RM on the shipped config (an empty list is also supported). The same script adds an asset from one config entry (adapter deployed, code hash allowed, `addAsset` called)."
 ---
 
 # DeployAgentTokenVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/DeployAgentTokenVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/DeployAgentTokenVault.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
-rmAGENT script: empty, paused and registered at launch. The same script adds an asset
+rmAGENT script: paused and registered at launch, holding RM on the shipped config
+(an empty list is also supported). The same script adds an asset
 from one config entry (adapter deployed, code hash allowed, `addAsset` called).
+
+## Constants
+
+### RM_TOKEN
+
+```solidity
+address internal constant RM_TOKEN = 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3;
+```
 
 ## State Variables
 
@@ -44,14 +53,48 @@ function _launchConfig() internal view returns (string memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
+<a id="_runempty"></a>
+
+### _runEmpty
+
+<i>
+
+The shipped file's router with no assets, for the paused-and-empty deploy path.
+
+</i>
+
+```solidity
+function _runEmpty() internal returns (BasketVaultDeployBase.Deployed memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultDeployBase.Deployed` |  |
+
+<a id="_emptyconfig"></a>
+
+### _emptyConfig
+
+```solidity
+function _emptyConfig() internal view returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
 <a id="_runlaunch"></a>
 
 ### _runLaunch
 
 <i>
 
-Runs the SHIPPED config file through the script's parser, with no substitute body.
-The test points SWAP_ROUTER at the file's own swapRouter02 value.
+Runs the SHIPPED config (RM) through the script. A mock pool paired with this test's
+USDC is etched at the shipped RM pool address, as the live pool is on Base.
 
 </i>
 
@@ -69,27 +112,29 @@ function _runLaunch() internal returns (BasketVaultDeployBase.Deployed memory);
 
 ### test_shippedConfig_parsesThroughTheScriptParser
 
-The shipped rmAGENT config carries swapRouter02 and an empty shortlist, so the
+The shipped rmAGENT config carries swapRouter02 and the RM entry, so the
 script's parser accepts it (review defect: it used to revert on a missing key).
 
 ```solidity
 function test_shippedConfig_parsesThroughTheScriptParser() public;
 ```
 
-<a id="test_launchconfigshortlistisempty"></a>
+<a id="test_launchconfigshortlistisrmonly"></a>
 
-### test_launchConfigShortlistIsEmpty
+### test_launchConfigShortlistIsRmOnly
 
 ```solidity
-function test_launchConfigShortlistIsEmpty() public view;
+function test_launchConfigShortlistIsRmOnly() public view;
 ```
 
-<a id="test_deploy_isregisteredpausedandempty"></a>
+<a id="test_deploy_addsrmandregisterspaused"></a>
 
-### test_deploy_isRegisteredPausedAndEmpty
+### test_deploy_addsRmAndRegistersPaused
+
+The shipped launch config deploys rmAGENT holding RM, registered and paused.
 
 ```solidity
-function test_deploy_isRegisteredPausedAndEmpty() public;
+function test_deploy_addsRmAndRegistersPaused() public;
 ```
 
 <a id="test_deploy_depositrevertswhilepaused"></a>
@@ -106,6 +151,16 @@ function test_deploy_depositRevertsWhilePaused() public;
 
 ```solidity
 function test_deploy_deployerHoldsEmergencyUntilHandover() public;
+```
+
+<a id="test_emptyshortlist_deployspausedandempty"></a>
+
+### test_emptyShortlist_deploysPausedAndEmpty
+
+An empty shortlist still deploys a paused, empty vault.
+
+```solidity
+function test_emptyShortlist_deploysPausedAndEmpty() public;
 ```
 
 <a id="test_manifest_hasemptyassetlist"></a>
@@ -140,5 +195,105 @@ function test_oneConfigEntryAddsAnAssetThroughTheAdapterPath() public;
 
 ```solidity
 function test_reverts_whenSwapRouterIsNotSwapRouter02() public;
+```
+
+<a id="_prepare-basketvaultdeploybase-params"></a>
+
+### _prepare
+
+```solidity
+function _prepare(BasketVaultDeployBase.Params memory p) internal returns (string memory json);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `BasketVaultDeployBase.Params` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+<a id="_deploywith-basketvaultdeploybase-params"></a>
+
+### _deployWith
+
+```solidity
+function _deployWith(BasketVaultDeployBase.Params memory p)
+        internal
+        returns (BasketVaultDeployBase.Deployed memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `BasketVaultDeployBase.Params` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultDeployBase.Deployed` |  |
+
+<a id="test_guard_navdeviationguardbpsequalsthesheetvalue"></a>
+
+### test_guard_navDeviationGuardBpsEqualsTheSheetValue
+
+The vault ships with the sheet guard, not the vault default of 0 (which disables ORA-4).
+
+```solidity
+function test_guard_navDeviationGuardBpsEqualsTheSheetValue() public;
+```
+
+<a id="test_guard_acceptstheceiling"></a>
+
+### test_guard_acceptsTheCeiling
+
+```solidity
+function test_guard_acceptsTheCeiling() public;
+```
+
+<a id="test_reverts_whennavdeviationbpsunset"></a>
+
+### test_reverts_whenNavDeviationBpsUnset
+
+```solidity
+function test_reverts_whenNavDeviationBpsUnset() public;
+```
+
+<a id="test_reverts_whennavdeviationbpszero"></a>
+
+### test_reverts_whenNavDeviationBpsZero
+
+```solidity
+function test_reverts_whenNavDeviationBpsZero() public;
+```
+
+<a id="test_reverts_whennavdeviationbpsaboveceiling"></a>
+
+### test_reverts_whenNavDeviationBpsAboveCeiling
+
+```solidity
+function test_reverts_whenNavDeviationBpsAboveCeiling() public;
+```
+
+<a id="test_reverts_whenminpoolliquidityunset"></a>
+
+### test_reverts_whenMinPoolLiquidityUnset
+
+```solidity
+function test_reverts_whenMinPoolLiquidityUnset() public;
+```
+
+<a id="test_reverts_whenminpoolliquidityzero"></a>
+
+### test_reverts_whenMinPoolLiquidityZero
+
+```solidity
+function test_reverts_whenMinPoolLiquidityZero() public;
 ```
 

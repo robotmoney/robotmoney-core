@@ -5,7 +5,7 @@ description: >-
   their addresses, gas and USDC for the deployer (Twin environment steps), then the publish run (libs through
   the timelock handover and the real Safe). Exports TWIN_MANIFEST_DIR (the stage manifests),
   TWIN_DEPLOYER_ADDRESS, TWIN_COUNTS_JSON (the measured per-stage counts and the deployer nonce, core 1523)
-  and, with verify, TWIN_VERIFY_LABELS and, with govern, TWIN_GOVERN_ROWS. The steps are in publish-contracts/src/ci/twin-publish.ts. No secret reaches a file in the repo, an argument or a log: the passphrase is a random
+  and, with verify, TWIN_VERIFY_LABELS and, with govern, TWIN_GOVERN_ROWS (with both, the order is publish, verify, govern, verify and TWIN_VERIFY_LABELS_POST_GOVERN holds the second verify, issue 1667). The steps are in publish-contracts/src/ci/twin-publish.ts. No secret reaches a file in the repo, an argument or a log: the passphrase is a random
   0600 file in a 0700 directory under /tmp. Never use this against Base mainnet.
 inputs:
   rpc-url:
@@ -21,7 +21,7 @@ inputs:
     required: false
     default: "false"
   govern:
-    description: "'true' also runs stage 13 (the govern verb, with the Twin time warp) after verify."
+    description: "'true' also runs stage 13 (the govern verb, with the Twin time warp) after verify, then verify again (post-govern state) when verify is also on."
     required: false
     default: "false"
 runs:

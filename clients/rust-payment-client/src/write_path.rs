@@ -36,10 +36,21 @@
 //!
 //! # Injected RPC
 //!
-//! The chain-touching steps ([`chain_deadline`], [`signed_envelope`],
-//! [`broadcast_and_confirm`]) take `&FailoverRpcClient` rather than
-//! building one from config, so the orchestration is unit-testable
-//! against a `mockito` server without spawning the `rmpc` binary.
+//! The chain-touching steps ([`chain_deadline`], [`signed_envelope`]) take
+//! `&FailoverRpcClient` rather than building one from config, so the
+//! orchestration is unit-testable against a `mockito` server without
+//! spawning the `rmpc` binary.
+//!
+//! # One broadcast path
+//!
+//! [`WriteSession::submit`] is the only place in this module that calls
+//! `broadcast`. A standalone broadcast-and-confirm helper was deleted (not
+//! made private) because it had no caller: privatising it would have left a
+//! second copy of the broadcast + receipt sequence for `submit` to drift
+//! from, and routing `submit` through it would have forced the replay-cache
+//! insert (between the two steps) into a callback. Deleting is the smaller
+//! change and leaves the replay-cache insert / retain (AZ-RPC-1) / clear
+//! (AZ-RPC-2) sequence and the `AgentLock` requirement unavoidable.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -190,9 +201,10 @@ pub struct WriteRequest {
     /// The replay-cache and audit amount field: USDC for `deposit`,
     /// shares for `withdraw`, summed shares for `withdraw-router`.
     pub amount: U256,
-    /// Deadline stamped into the audit record at open time. `deposit` and
-    /// `withdraw` derive theirs from the block timestamp later and stamp
-    /// it then, so they pass 0 here.
+    /// Deadline stamped into the audit record at open time. Every write
+    /// command derives its deadline from the block timestamp
+    /// ([`chain_deadline`]) after the session opens and stamps it then, so
+    /// they all pass 0 here.
     pub deadline: u64,
     /// Replay-cache op-kind prefix. `None` keeps `deposit` on its
     /// pre-op-prefix key shape so existing operator caches keep matching;
@@ -516,27 +528,6 @@ pub async fn fee_bid(
             .map_or(u128::MAX, |v| v as u128),
     )
     .map_err(EnvelopeError::FeeCap)
-}
-
-/// Broadcast a signed envelope, poll for its receipt, and REFUSE a reverted one.
-///
-/// A mined transaction is not a successful one: on `status == 0` this fails with
-/// [`RmpcError::ErrTxReverted`] carrying the `tx_hash` the operator has to
-/// inspect. The check lives in [`wait_for_successful_receipt`], which is the one
-/// place it exists — see that function for why it is a seam and not a sixth
-/// copy. `tx_hash` is returned alongside the error's own copy so a caller that
-/// wants to keep its command-specific error code can still name the transaction.
-pub async fn broadcast_and_confirm(
-    rpc: &FailoverRpcClient,
-    raw: &Bytes,
-    receipt_timeout_secs: u64,
-) -> RmpcResult<(B256, TransactionReceipt)> {
-    let tx_hash = broadcast(rpc, raw).await?;
-    let max_attempts = receipt_timeout_secs.min(u32::MAX as u64) as u32;
-    let receipt =
-        wait_for_successful_receipt(rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1))
-            .await?;
-    Ok((tx_hash, receipt))
 }
 
 /// The per-command inputs to [`WriteSession::submit`].

@@ -21,7 +21,7 @@ use crate::common::{
     SIGNER_ADDRESS, TEST_PASSPHRASE, VAULT,
 };
 use alloy_primitives::{address, b256, hex as ahex, Address, Bytes, LogData, B256, U256};
-use alloy_sol_types::SolEvent;
+use alloy_sol_types::{SolCall, SolEvent};
 use assert_cmd::Command;
 use mockito::Matcher;
 use rust_payment_client::gateway::{Erc20, RobotMoneyGateway};
@@ -694,4 +694,52 @@ async fn router_duplicate_retry_refused_before_broadcast() {
     let v = stdout_json(&out2);
     assert_eq!(v["error"], "ErrOrderIdAlreadySubmitted");
     assert_eq!(v["tx_hash"].as_str().unwrap(), prior_tx.as_str());
+}
+
+/// Issue #1432: the deadline must come from chain time, not the host wall
+/// clock. The mock chain reports a 2023 block timestamp (0x64a9f4c0), so a
+/// wall-clock deadline (host clock is years ahead) would be far outside the
+/// gateway's `block.timestamp + 600` window. Decodes the broadcast calldata
+/// and pins `deadline == block timestamp + default 300`.
+#[tokio::test]
+async fn router_deadline_comes_from_chain_time_not_the_host_clock() {
+    use std::sync::{Arc, Mutex};
+
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_router_happy_path(&mut server, chain_id).await;
+    let sent: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = sent.clone();
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body_from_request(move |req| {
+            let v: Value = serde_json::from_slice(req.body().unwrap()).unwrap();
+            sink.lock()
+                .unwrap()
+                .push(v["params"][0].as_str().unwrap().to_string());
+            jrpc_result(&format!("{TX_HASH:#x}")).into_bytes()
+        })
+        .create_async()
+        .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+    router_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .args(["--confirm", "--receipt-timeout-secs", "5"])
+        .assert()
+        .success();
+
+    let raw = sent.lock().unwrap().first().cloned().expect("tx broadcast");
+    let raw = raw.trim_start_matches("0x").to_lowercase();
+    let selector = ahex::encode(RobotMoneyGateway::withdrawFromRouterCall::SELECTOR);
+    let at = raw.find(&selector).expect("calldata selector in raw tx");
+    let tail = ahex::decode(&raw[at..]).unwrap();
+    let call = RobotMoneyGateway::withdrawFromRouterCall::abi_decode(&tail, false)
+        .expect("decode withdrawFromRouter calldata");
+    // 0x64a9f4c0 = 1_688_859_840 (the mocked block timestamp) + 300.
+    assert_eq!(call.deadline, 1_688_860_140u64);
 }

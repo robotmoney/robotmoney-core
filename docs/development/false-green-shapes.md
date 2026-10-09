@@ -614,8 +614,11 @@ iteration — and both need no Postgres, Docker or network:
 
 - `services/explorer-indexer/tests/migration_set_parity.rs` compares the
   compile-time embedded set against the run-time contents of `migrations/`:
-  versions and descriptions (an added, deleted or renamed migration), then
-  each migration's SQL text (an in-place edit). A stale binary fails it RED.
+  by version AND checksum, through the same `compare_schema` the indexer boot
+  guard uses (#1441): an added, deleted or edited-in-place migration each fail
+  it RED, with a disk-context message. Disk checksums come from
+  `sqlx::migrate::Migration::new`, so nothing reimplements the hash. A pure
+  rename that keeps the version and SQL is the one shape it no longer sees.
 - `.github/scripts/tests/test_indexer_migration_rebuild_trigger.sh` is the
   half that can see the trigger itself go missing, which the parity target
   cannot: on a cold build both sides always agree. It warms `target/`, then

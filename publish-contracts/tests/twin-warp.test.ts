@@ -133,6 +133,15 @@ describe("rehearsal cli: fund-gas, fund-usdc, warp", () => {
     await expect(main(["fund-gas", "--rpc", base.url, "--sheet", SHEET])).rejects.toThrow(/Base mainnet/);
     await expect(main(["warp", "--rpc", base.url, "--seconds", "5"])).rejects.toThrow(/Base mainnet/);
   });
+  test("fund-gas with no --wei gives every wallet TWIN_GAS_WEI, and that default stays at 0.5 ETH or more (core 1554: 0.02 ETH failed the vault stage pre-flight)", async () => {
+    const { main } = await import("../src/rehearsal/cli.ts");
+    const { TWIN_GAS_WEI } = await import("../src/rehearsal/twin.ts");
+    const c = stubChain();
+    expect(await main(["fund-gas", "--rpc", c.url, "--sheet", SHEET])).toBe(0);
+    expect(c.s.eth.size).toBeGreaterThanOrEqual(6);
+    for (const bal of c.s.eth.values()) expect(bal).toBe(TWIN_GAS_WEI);
+    expect(TWIN_GAS_WEI).toBeGreaterThanOrEqual(5n * 10n ** 17n);
+  });
   test("fund-usdc refuses a token that is not the pinned FiatTokenProxy", async () => {
     const { main } = await import("../src/rehearsal/cli.ts");
     const c = stubChain({ usdcCode: "0x6000" });

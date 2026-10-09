@@ -723,9 +723,16 @@ Operators release a receipt with the publish-contracts govern row
 release-receipt --receipt-id 0x<bytes32> ...`, wrapped by `bun
 scripts/stage/core-stack.ts governance release --receipt-id ID`): the real Safe
 schedules `releaseReceipt` on the timelock, the delay passes, and the Safe
-executes it. That path runs on the Twin chain only: the row is refused with USAGE on Base
-mainnet (8453), where govern is the three basket unpauses. No
-EOA can release a receipt after handover.
+executes it. The same row runs on Base mainnet (8453) as a standalone
+post-launch action (issue 1611): its own timelock operation with its own
+48-hour delay, never part of stage 13, which stays the three basket
+unpauses. The first run schedules and exits `GOVERN_PENDING` with the resume
+command. After the delay the Safe executes it and the CLI reads `isReleased`
+back. `update-delay`, `batch` and `cancel` stay Twin-only. The mainnet evidence
+check (`evidence-check.ts`) accepts a release only under `receipt_releases`:
+one schedule and one execute at least 172800 s apart, target the receipt
+contract, calldata `releaseReceipt(receiptId)`. No EOA can release a
+receipt after handover.
 
 **Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,
 no ERC-20 surface, no call into any vault, `PortfolioRouter`, or
@@ -1115,8 +1122,10 @@ The main-page balances panel reads the RM balance at
 to the live address. No test needs to hold RM. `RouterGovernance` voting
 power is assigned by `ADMIN_ROLE` through `setVotingPower`
 (`contracts/RouterGovernance.sol`), not read from an RM balance. rmAGENT
-ships empty and paused with an empty `config/agent-token-shortlist.json`,
-so no deposit buys RM yet (RM is not yet in config: core 1491).
+launches paused and holding RM: `config/agent-token-shortlist.json` lists RM
+only, on the owner-funded Uniswap V3 RM/USDC pool at fee 10000. The owner
+funds the pool and raises its observation cardinality before the deploy,
+because `BasketVault.addAsset` refuses a pool below those floors (core 1554).
 
 ### 5.4 Explorer Indexer and API
 
@@ -1469,6 +1478,13 @@ out core. Rehearsals run on the Twin chain (918453), a pinned lazy anvil
 fork of real Base at the upstream head minus 2, pinned once per CI run.
 Tests deploy their own vault every time (clean room). The stage sequence
 is in `docs/operations/contract-release-runbooks.md` §4.3.
+
+On the stage host every service runs in a container (core 1549): the Twin chain
+(the pinned lazy fork), the one-shot deploy job that runs the same publish
+contracts ceremony against it, and the dapp stack. `scripts/stage/core-stack.ts`
+only calls `docker compose`, no stage process runs on the host, and no
+container mounts the Docker socket. Images are pinned by digest and built with
+`--locked` (`docs/development/stage-deployment.md`).
 
 The `rmpc` rule (one client, no env-specific behavior, never spoof
 users) is the same principle applied to the daemon. The detailed

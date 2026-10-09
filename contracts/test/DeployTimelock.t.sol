@@ -20,7 +20,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
-import {SafeFixture} from "./helpers/SafeFixture.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
@@ -60,7 +60,7 @@ function uniqueManifestPath(Vm cheats, string memory tag) view returns (string m
 /// schedule → mine delay → execute path, reverts on a direct ADMIN_ROLE EOA call,
 /// atomically flips registry status `Retired` + the vault deposit-halt in one
 /// executed call, and leaves the emergency `shutdownVault` overlay unchanged.
-contract DeployTimelockTest is SafeFixture {
+contract DeployTimelockTest is SafeGovernance {
     // ─── Roles ────────────────────────────────────────────────────────────────
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -422,13 +422,12 @@ contract DeployTimelockTest is SafeFixture {
             name: "Test Vault", asset: address(usdc), registeredAt: block.timestamp
         });
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe,
+            address(registry),
+            abi.encodeCall(VaultRegistry.registerVault, (makeAddr("vault"), meta))
         );
-        vm.prank(safe);
-        registry.registerVault(makeAddr("vault"), meta);
+        assertFalse(registry.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice Any random EOA that never held ADMIN_ROLE also cannot call
@@ -463,17 +462,8 @@ contract DeployTimelockTest is SafeFixture {
         bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("test-salt-1");
 
-        // Schedule from the Safe (PROPOSER_ROLE).
-        vm.prank(safe);
-        d.timelock
-            .schedule(
-                address(registry), // target
-                0, // value
-                callData,
-                predecessor,
-                salt,
-                MIN_DELAY
-            );
+        // Schedule from the Safe (PROPOSER_ROLE): two owner signatures, real execTransaction.
+        _govSchedule(safe, d.timelock, address(registry), callData, salt, MIN_DELAY);
 
         // Compute operation id.
         bytes32 opId = d.timelock.hashOperation(address(registry), 0, callData, predecessor, salt);
@@ -485,9 +475,7 @@ contract DeployTimelockTest is SafeFixture {
             "expected Waiting state pre-delay"
         );
 
-        vm.expectRevert();
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, predecessor, salt);
+        _expectExecuteRefused(safe, d.timelock, address(registry), callData, salt);
 
         // Advance time past the min delay.
         vm.warp(block.timestamp + MIN_DELAY + 1);
@@ -500,8 +488,7 @@ contract DeployTimelockTest is SafeFixture {
         );
 
         // Execute from the Safe (EXECUTOR_ROLE).
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, predecessor, salt);
+        _govExecute(safe, d.timelock, address(registry), callData, salt);
 
         // Verify the operation succeeded.
         assertEq(registry.vaultCount(), 1, "vault should be registered");
@@ -526,13 +513,11 @@ contract DeployTimelockTest is SafeFixture {
         bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("test-admin-grant");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(registry), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(registry), callData, salt, MIN_DELAY);
 
         vm.warp(block.timestamp + MIN_DELAY + 1);
 
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, predecessor, salt);
+        _govExecute(safe, d.timelock, address(registry), callData, salt);
 
         assertTrue(
             IAccessControl(address(registry)).hasRole(ADMIN_ROLE, newAdmin),
@@ -553,25 +538,19 @@ contract DeployTimelockTest is SafeFixture {
     ///         not ADMIN_ROLE on the vault.
     function test_INV3_setFeeRecipient_directHotKeyCallReverts() public {
         address newRecipient = makeAddr("newFeeRecipient");
-        vm.prank(safe);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe, address(vault), abi.encodeCall(vault.setFeeRecipient, (newRecipient))
         );
-        vault.setFeeRecipient(newRecipient);
+        assertFalse(vault.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice INV-3: a direct (non-timelock) setExitFeeBps call from the Safe hot
     ///         key reverts for the same reason.
     function test_INV3_setExitFeeBps_directHotKeyCallReverts() public {
-        vm.prank(safe);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe, address(vault), abi.encodeCall(vault.setExitFeeBps, (50))
         );
-        vault.setExitFeeBps(50);
+        assertFalse(vault.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice INV-3: setFeeRecipient succeeds ONLY when routed through the
@@ -582,17 +561,13 @@ contract DeployTimelockTest is SafeFixture {
         bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("inv3-fee-recipient");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(vault), callData, salt, MIN_DELAY);
 
         // Pre-delay execution must revert.
-        vm.expectRevert();
-        vm.prank(safe);
-        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+        _expectExecuteRefused(safe, d.timelock, address(vault), callData, salt);
 
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+        _govExecute(safe, d.timelock, address(vault), callData, salt);
 
         assertEq(vault.feeRecipient(), newRecipient, "fee recipient must update via timelock");
     }
@@ -605,11 +580,9 @@ contract DeployTimelockTest is SafeFixture {
         bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("inv3-exit-fee");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(vault), callData, salt, MIN_DELAY);
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+        _govExecute(safe, d.timelock, address(vault), callData, salt);
 
         assertEq(vault.exitFeeBps(), newFee, "exit fee must update via timelock");
     }
@@ -625,13 +598,10 @@ contract DeployTimelockTest is SafeFixture {
     ///         the timelock, not ADMIN_ROLE on the vault.
     function test_AC3_setQuarantineAddress_directHotKeyCallReverts() public {
         address newQuarantine = makeAddr("newQuarantine");
-        vm.prank(safe);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe, address(vault), abi.encodeCall(vault.setQuarantineAddress, (newQuarantine))
         );
-        vault.setQuarantineAddress(newQuarantine);
+        assertFalse(vault.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice AC3: setQuarantineAddress succeeds ONLY when routed through the
@@ -645,17 +615,13 @@ contract DeployTimelockTest is SafeFixture {
         bytes32 predecessor = bytes32(0);
         bytes32 salt = keccak256("ac3-quarantine-addr");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(vault), callData, salt, MIN_DELAY);
 
         // Pre-delay execution must revert.
-        vm.expectRevert();
-        vm.prank(safe);
-        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+        _expectExecuteRefused(safe, d.timelock, address(vault), callData, salt);
 
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+        _govExecute(safe, d.timelock, address(vault), callData, salt);
 
         assertEq(
             vault.quarantineAddress(), newQuarantine, "quarantine address must update via timelock"
@@ -678,11 +644,9 @@ contract DeployTimelockTest is SafeFixture {
         });
         bytes memory callData = abi.encodeCall(VaultRegistry.registerVault, (address(vault), meta));
         bytes32 salt = keccak256("retire-register");
-        vm.prank(safe);
-        d.timelock.schedule(address(registry), 0, callData, bytes32(0), salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(registry), callData, salt, MIN_DELAY);
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+        _govExecute(safe, d.timelock, address(registry), callData, salt);
     }
 
     /// @notice #942 AC2: a direct (non-timelock) retire() call from the Safe hot
@@ -690,13 +654,10 @@ contract DeployTimelockTest is SafeFixture {
     ///         ADMIN_ROLE on the registry.
     function test_retire_directHotKeyCallReverts() public {
         _registerVaultViaTimelock();
-        vm.prank(safe);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe, address(registry), abi.encodeCall(registry.retire, (address(vault)))
         );
-        registry.retire(address(vault));
+        assertFalse(registry.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice #942 AC2: a stranger EOA likewise cannot call retire().
@@ -726,17 +687,13 @@ contract DeployTimelockTest is SafeFixture {
         bytes memory callData = abi.encodeCall(VaultRegistry.retire, (address(vault)));
         bytes32 salt = keccak256("retire-exec");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(registry), 0, callData, bytes32(0), salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(registry), callData, salt, MIN_DELAY);
 
         // Pre-delay execution must revert.
-        vm.expectRevert();
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+        _expectExecuteRefused(safe, d.timelock, address(registry), callData, salt);
 
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+        _govExecute(safe, d.timelock, address(registry), callData, salt);
 
         // Both layers flipped atomically in the one executed call: registry
         // status Retired AND the vault deposit-halt flag set.
@@ -833,11 +790,9 @@ contract DeployTimelockTest is SafeFixture {
         bytes memory callData = abi.encodeCall(IAccessControl.grantRole, (AGENT_ROLE, newAgent));
         bytes32 salt = keccak256("acl1-grant-agent-role");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(gateway), 0, callData, bytes32(0), salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(gateway), callData, salt, MIN_DELAY);
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(gateway), 0, callData, bytes32(0), salt);
+        _govExecute(safe, d.timelock, address(gateway), callData, salt);
 
         assertTrue(
             gateway.hasRole(AGENT_ROLE, newAgent),
@@ -854,11 +809,9 @@ contract DeployTimelockTest is SafeFixture {
         bytes memory callData = abi.encodeCall(IGateway.authorizeAgent, (newAgent, p));
         bytes32 salt = keccak256("acl1-authorize-agent");
 
-        vm.prank(safe);
-        d.timelock.schedule(address(gateway), 0, callData, bytes32(0), salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(gateway), callData, salt, MIN_DELAY);
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(gateway), 0, callData, bytes32(0), salt);
+        _govExecute(safe, d.timelock, address(gateway), callData, salt);
 
         assertTrue(
             gateway.hasRole(AGENT_ROLE, newAgent),
@@ -874,13 +827,12 @@ contract DeployTimelockTest is SafeFixture {
     ///         timelock-routed path works. Guards the role gate post-handover.
     function test_ACL1_directAuthorizeAgentFromHotKeyReverts() public {
         IGateway.AgentPolicy memory p = _agentPolicy();
-        vm.prank(safe);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
-            )
+        _expectDirectSafeCallRefused(
+            safe,
+            address(gateway),
+            abi.encodeCall(IGateway.authorizeAgent, (makeAddr("rejected-agent"), p))
         );
-        gateway.authorizeAgent(makeAddr("rejected-agent"), p);
+        assertFalse(gateway.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
     }
 
     /// @notice Negative regression for the fix-interaction warning: a NAKED
@@ -1102,7 +1054,7 @@ contract DeployTimelockTest is SafeFixture {
 
 /// @dev Delay floor keyed to chain id, and a real Safe accepted end to end (core S1).
 ///      Each test builds a fresh, un-handed-over topology.
-contract DeployTimelockChainFloorTest is SafeFixture {
+contract DeployTimelockChainFloorTest is SafeGovernance {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     uint256 internal constant TWIN_CHAIN_ID = 918453;
     uint256 internal constant BASE_CHAIN_ID = 8453;
@@ -1235,7 +1187,7 @@ contract ManifestHarness is DeployTimelock {
 
 /// @notice The manifest must answer, from one file: which chain, which
 ///         addresses, which bytecode, holding which roles.
-contract DeployTimelockManifestTest is SafeFixture {
+contract DeployTimelockManifestTest is SafeGovernance {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -1378,7 +1330,7 @@ contract DeployTimelockManifestTest is SafeFixture {
 ///         afterwards. After the handover the timelock owns both, both keep
 ///         AGENT_ROLE, and the deployer can no longer call setPolicy or
 ///         revokeAgent on them.
-contract DeployTimelockAgentHandoverTest is SafeFixture {
+contract DeployTimelockAgentHandoverTest is SafeGovernance {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
     uint256 public constant MIN_DELAY = 2 days;
@@ -1542,11 +1494,9 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
         bytes memory callData =
             abi.encodeCall(IGateway.setPolicy, (submitter, _policy(newReceiver)));
         bytes32 salt = keccak256("1476-setPolicy");
-        vm.prank(safe);
-        d.timelock.schedule(address(gateway), 0, callData, bytes32(0), salt, MIN_DELAY);
+        _govSchedule(safe, d.timelock, address(gateway), callData, salt, MIN_DELAY);
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        d.timelock.execute(address(gateway), 0, callData, bytes32(0), salt);
+        _govExecute(safe, d.timelock, address(gateway), callData, salt);
         (,,,, address receiver,,,) = gateway.agents(submitter);
         assertEq(receiver, newReceiver, "timelock-routed setPolicy did not land");
     }
@@ -1792,7 +1742,7 @@ contract DeployTimelockAgentHandoverTest is SafeFixture {
 ///         gateway agents or to the literal `none`. Each reader case uses its
 ///         own variable name, because env vars are process-wide and forge runs
 ///         tests in parallel.
-contract DeployTimelockAgentListInputTest is SafeFixture {
+contract DeployTimelockAgentListInputTest is SafeGovernance {
     ManifestHarness internal harness;
 
     function setUp() public {
@@ -1849,7 +1799,7 @@ contract DeployTimelockAgentListInputTest is SafeFixture {
 ///         the broadcast path against a core stack (CoreStages). Every env var it
 ///         reads carries a prefix only this test sets, because env vars are
 ///         process-wide and forge runs tests in parallel.
-abstract contract DeployTimelockRunEntrypointBase is SafeFixture {
+abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -2166,7 +2116,7 @@ interface IVaultLinkRead {
 ///         timelock stage treats each the same way: setRegistry once, EMERGENCY to the emergency
 ///         key, ADMIN to the timelock, deployer revoked. These tests use the real vault contracts,
 ///         a real Safe and the real timelock.
-contract DeployTimelockFourVaultsTest is SafeFixture {
+contract DeployTimelockFourVaultsTest is SafeGovernance {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -2305,11 +2255,9 @@ contract DeployTimelockFourVaultsTest is SafeFixture {
         for (uint256 i = 0; i < vaults.length; i++) {
             bytes memory callData = abi.encodeCall(VaultRegistry.retire, (vaults[i]));
             bytes32 salt = keccak256(abi.encode("retire", i));
-            vm.prank(safe);
-            d.timelock.schedule(address(registry), 0, callData, bytes32(0), salt, MIN_DELAY);
+            _govSchedule(safe, d.timelock, address(registry), callData, salt, MIN_DELAY);
             vm.warp(block.timestamp + MIN_DELAY + 1);
-            vm.prank(safe);
-            d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+            _govExecute(safe, d.timelock, address(registry), callData, salt);
             (, VaultRegistry.VaultStatus st) = registry.getVault(vaults[i]);
             assertEq(uint256(st), uint256(VaultRegistry.VaultStatus.Retired), "status");
             assertTrue(IVaultLinkRead(vaults[i]).retired(), "vault deposit-halt");

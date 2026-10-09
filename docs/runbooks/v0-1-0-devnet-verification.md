@@ -157,14 +157,28 @@ contracts, and the indexed Postgres data all stay up.
 
 ```bash
 cd testing/ethereum-testnet/config
-docker compose -f docker-compose.dapp.yaml up -d --build explorer-api
+export VITE_GATEWAY_ADDRESS=<gateway_addr>   # from the §4.3 summary
+export VITE_VAULT_ADDRESS=<vault_addr>       # from the §4.3 summary
+export INDEXER_GATEWAY=$VITE_GATEWAY_ADDRESS
+export INDEXER_VAULT=$VITE_VAULT_ADDRESS
+export VITE_GATEWAY_EXPECTED_CODE_HASH=$(cast keccak "$(cast code <gateway_addr> --rpc-url <rpc_url>)")
+export EXPLORER_API_PORT=<port of explorer_api_url>
+docker compose -f docker-compose.dapp.yaml up -d --no-deps --build explorer-api
 ```
 
-Export the same values the bring-up used first — contract addresses from
-`deployments/devnet.json`, and `EXPLORER_API_PORT` / `DAPP_PORT` /
-`POSTGRES_PORT` matching the URLs the harness printed in §4.1 — because
-compose re-evaluates the file's required substitutions on every invocation.
-Re-run step 4 once the container reports healthy. Full command set and the
+There is no `deployments/devnet.json` (see the top of this runbook), so the
+addresses come from the §4.3 summary and the code hash is computed from the
+live gateway. Compose re-evaluates the file's required substitutions on every
+subcommand, `restart` and `logs` included, so all of these must be exported
+first. Always pass `--no-deps`: without it, `up` recreates any dependency
+whose interpolated published port differs from the running one. The harness
+chose a dynamic Postgres host port and never prints it, so a plain `up -d
+explorer-api` would recreate and rebind the live `dapp-postgres`. Do not set
+`POSTGRES_PORT` for this recipe. To check, `docker inspect -f '{{.Id}}'
+dapp-postgres` must print the same id before and after.
+Re-run step 4 once the container reports healthy. If step 4 failed because the
+indexed data is wrong (an indexer logic bug), the fast path can keep serving
+stale rows: take the full §4.1 path instead. Full command set and the
 `restart` caveat: [`docs/development/environments.md` §3 — Per-service restart
 and rebuild](../development/environments.md#per-service-restart-and-rebuild).
 

@@ -19,8 +19,8 @@ use once_cell::sync::Lazy;
 
 pub use rust_payment_client::signer::software::PASSPHRASE_ENV_VAR;
 pub use smoke_test::{
-    agent_address, prerequisites_available, HarnessError, AGENT_PRIVATE_KEY, PAUSER_ADDRESS_HEX,
-    PAUSER_PRIVATE_KEY_HEX, SHARE_RECEIVER_ADDRESS_HEX,
+    agent_address, prerequisites_available, require_prereqs, HarnessError, AGENT_PRIVATE_KEY,
+    PAUSER_ADDRESS_HEX, PAUSER_PRIVATE_KEY_HEX, SHARE_RECEIVER_ADDRESS_HEX,
 };
 
 const TEST_PASSPHRASE: &str = "rmpc-e2e-passphrase";

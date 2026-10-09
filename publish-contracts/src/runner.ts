@@ -3,7 +3,7 @@
 // It spawns forge, cast and a read-only git status only. Every log line is JSON. Every failure class is a typed PublishError with its own exit code.
 // Resume: the run manifest keeps each stage's start nonce and count. A rerun adopts the existing Safe and skips finished stages.
 // A count mismatch after a broadcast is a hard failure. Plan: "One deploy sequence" (Resume), principle 17.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { decodeErrorResult, type Abi, type Hex } from "viem";
 import { PublishError, isPublishError } from "./errors.ts";
@@ -12,7 +12,8 @@ import { countFor, sumCounts, checkNonce, type FrozenCounts } from "./counts.ts"
 import type { Logger } from "./log.ts";
 import { DryRunFiles, type ChainStarter } from "./preflight.ts";
 import type { PublishSigner } from "./signer.ts";
-import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, stageByName, type StageRow } from "./stages.ts";
+import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, manifestRef, stageByName, type StageRow } from "./stages.ts";
+import { PROOF_STAGE, assertControlProven } from "./control-proof.ts";
 import { LIBS_STAGE, VAULT_KIND, resolveEnv } from "./core-wiring.ts";
 import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts";
 import { configCheck, loadVaultConfiguredAssets } from "./ci/config-check.ts";
@@ -79,6 +80,23 @@ export interface RunManifest {
   firstBlock?: number;
   stages: Record<string, StageRecord>;
   govern?: Record<string, unknown>;
+  /** Every pause-all that ran against this run, oldest first (issue 1686). Written by pause-all only, merged on every save. */
+  pauses?: PauseEntry[];
+}
+
+/**
+ * One pause-all in the run manifest (issue 1686). `seq` is the manifest-wide monotonic sequence number shared with the govern `scheduled.seq`: govern
+ * compares sequence numbers, never clocks, so clock skew between the operator machine, the chain and the log cannot hide a pause. The entry is written
+ * `started` BEFORE the first pauseDeposits() is sent, each vault is appended as it finishes, and the last write sets `done` and `allPaused`.
+ */
+export interface PauseEntry {
+  seq: number;
+  at: string;
+  trigger: string;
+  reason: string;
+  status: "started" | "done";
+  allPaused?: boolean;
+  vaults: Record<string, unknown>[];
 }
 
 export const manifestPath = (evidenceDir: string): string => join(evidenceDir, "publish-run.json");
@@ -91,12 +109,80 @@ export function loadRunManifest(evidenceDir: string): RunManifest | undefined {
   return j as RunManifest;
 }
 
-export function saveRunManifest(evidenceDir: string, m: RunManifest): void {
+/**
+ * The manifest write lock (issue 1686). pause-all and govern both rewrite publish-run.json, possibly from two processes: every read-modify-write takes
+ * this lock file (O_EXCL), so neither drops the other's change. A lock older than 30 s is a crashed holder and is taken over.
+ */
+function withManifestLock<T>(evidenceDir: string, fn: () => T): T {
   mkdirSync(evidenceDir, { recursive: true });
+  const lock = `${manifestPath(evidenceDir)}.lock`;
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    try { closeSync(openSync(lock, "wx")); break; } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      try { if (Date.now() - statSync(lock).mtimeMs > 30_000) { unlinkSync(lock); continue; } } catch { /* released meanwhile */ }
+      if (Date.now() > deadline) throw new PublishError("MANIFEST", `${lock} is held by another process for over 15 s: remove it only if no publish-contracts process is running`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try { return fn(); } finally { try { unlinkSync(lock); } catch { /* already gone */ } }
+}
+
+function writeManifestFile(evidenceDir: string, m: RunManifest): void {
   const p = manifestPath(evidenceDir);
-  const tmp = `${p}.tmp`;
+  const tmp = `${p}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(m, null, 2) + "\n", { mode: 0o644 });
   renameSync(tmp, p);
+}
+
+const governScheduled = (m: Pick<RunManifest, "govern">): { seq?: number }[] =>
+  Object.values(m.govern ?? {}).map((r) => (r as { scheduled?: { seq?: number } } | undefined)?.scheduled).filter((x): x is { seq?: number } => !!x);
+
+/** The next manifest sequence number: above every pause entry and every stamped govern schedule. */
+export const nextManifestSeq = (m: Pick<RunManifest, "govern" | "pauses">): number =>
+  1 + Math.max(0, ...(m.pauses ?? []).map((p) => p.seq), ...governScheduled(m).map((x) => x.seq ?? 0));
+
+/**
+ * Saves the manifest under the write lock without dropping a concurrent pause-all: the pause entries on disk are merged in first (pause-all owns them,
+ * the disk copy wins), then each govern `scheduled` record that has no `seq` yet is stamped with the next sequence number. The merge and the stamp
+ * mutate `m`, so the caller's in-memory copy sees them.
+ */
+export function saveRunManifest(evidenceDir: string, m: RunManifest): void {
+  withManifestLock(evidenceDir, () => {
+    let disk: RunManifest | undefined;
+    try { disk = loadRunManifest(evidenceDir); } catch { /* a damaged file is overwritten, as before */ }
+    const bySeq = new Map<number, PauseEntry>();
+    for (const e of m.pauses ?? []) bySeq.set(e.seq, e);
+    for (const e of disk?.pauses ?? []) bySeq.set(e.seq, e);
+    if (bySeq.size) m.pauses = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+    for (const sc of governScheduled(m)) if (sc.seq === undefined) sc.seq = nextManifestSeq(m);
+    writeManifestFile(evidenceDir, m);
+  });
+}
+
+/**
+ * pause-all: opens a pause entry (status `started`, next sequence number) in the manifest on disk. Re-reads the file under the lock, so a govern save
+ * that landed a moment ago is kept. Returns undefined when there is no manifest file (nothing for govern to compare against).
+ */
+export function beginPauseEntry(evidenceDir: string, e: Omit<PauseEntry, "seq" | "status" | "vaults">): PauseEntry | undefined {
+  return withManifestLock(evidenceDir, () => {
+    const disk = loadRunManifest(evidenceDir);
+    if (!disk) return undefined;
+    const entry: PauseEntry = { ...e, seq: nextManifestSeq(disk), status: "started", vaults: [] };
+    disk.pauses = [...(disk.pauses ?? []), entry];
+    writeManifestFile(evidenceDir, disk);
+    return entry;
+  });
+}
+
+/** pause-all: replaces the entry with this `seq` on disk (re-read under the lock). Used per vault and for the final `done`. */
+export function updatePauseEntry(evidenceDir: string, entry: PauseEntry): void {
+  withManifestLock(evidenceDir, () => {
+    const disk = loadRunManifest(evidenceDir);
+    if (!disk) return;
+    disk.pauses = (disk.pauses ?? []).map((p) => (p.seq === entry.seq ? entry : p));
+    writeManifestFile(evidenceDir, disk);
+  });
 }
 
 // ---- context -------------------------------------------------------------------------------------------------------------
@@ -405,7 +491,7 @@ function estimatedEthFrom(stdout: string): number | undefined {
 
 /**
  * Before each vault stage the config-check runs again against the live RPC (the target chain, also in a dry run: it only reads) and the
- * stage fails on any failed row. A vault with no configured assets (rmAGENT ships empty, rmUSDC holds no basket assets) has nothing to check.
+ * stage fails on any failed row. A vault with no configured assets (rmUSDC holds no basket assets, and an agent list emptied through the timelock holds none) has nothing to check.
  */
 export async function vaultConfigGate(ctx: RunContext, row: StageRow): Promise<void> {
   if (!row.vault) return;
@@ -440,7 +526,23 @@ async function applyToSimulationChain(ctx: RunContext, row: StageRow, base: stri
   if (!existsSync(outPath)) throw new PublishError("MANIFEST", `manifest ${outPath} was not written by ${row.name}`, { stage: row.name });
 }
 
+/**
+ * The stage 11 gate (core 1618): the handover gives every role to a timelock whose proposer is the Safe, so the Safe must have signed
+ * before it. Refuses with CONTROL_NOT_PROVEN unless the run manifest holds the finished proof on this Safe, signed by every owner, and
+ * the live Safe nonce is 1 or more. A dry run has no proof to find (it sends nothing) and skips the gate, loudly.
+ */
+export async function controlProofGate(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
+  if (row.name !== "timelock") return;
+  if (ctx.dryRun) { ctx.log.log("warn", "stage.control_proof_skipped", { stage: row.name, reason: "dry run: the proof is a real transaction" }); return; }
+  const api: Pick<SafeApi, "connectSafe"> = { connectSafe, ...(ctx.safeApi ?? {}) };
+  const safe = readManifestField(ctx, manifestRef("safe", "safe"));
+  const handle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: safe as Address, logger: ctx.log });
+  const rec = assertControlProven(manifest.stages[PROOF_STAGE], { safe, owners: handle.owners, nonce: await handle.nonce() });
+  ctx.log.log("info", "stage.control_proof_ok", { stage: row.name, safe, tx_hash: rec.txHash, signers: rec.signers.length });
+}
+
 async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
+  await controlProofGate(ctx, row, manifest);
   await vaultConfigGate(ctx, row);
   const script = row.script!;
   const env = stageEnv(ctx, row);
@@ -636,7 +738,7 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
 // ---- the loop --------------------------------------------------------------------------------------------------------------
 
 export type StageHandler = (ctx: RunContext, row: StageRow, manifest: RunManifest) => Promise<void>;
-export interface Handlers { verify: StageHandler; govern: StageHandler }
+export interface Handlers { prove: StageHandler; verify: StageHandler; govern: StageHandler }
 
 export function newManifest(ctx: RunContext, deployer: string): RunManifest {
   return { version: 1, chainId: ctx.chainId, coreSha: ctx.coreSha, deployer, environment: ctx.environment, startedAt: new Date().toISOString(), stages: {} };
@@ -654,7 +756,7 @@ export function dryRunOrder(names: string[]): StageRow[] {
   const deployer = STAGES.filter((s) => s.kind === "safe" || s.kind === "forge");
   const last = Math.max(-1, ...deployer.map((s, i) => (names.includes(s.name) ? i : -1)));
   const upTo = deployer.slice(0, last + 1);
-  const rest = STAGES.filter((s) => (s.kind === "verify" || s.kind === "govern") && names.includes(s.name));
+  const rest = STAGES.filter((s) => (s.kind === "prove" || s.kind === "verify" || s.kind === "govern") && names.includes(s.name));
   return [...upTo, ...rest];
 }
 
@@ -703,8 +805,8 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
         skipped.push(row.name);
         continue;
       }
-      if (ctx.dryRun && (row.kind === "verify" || row.kind === "govern")) {
-        ctx.log.log("warn", "stage.dry_run_skipped", { stage: row.name, reason: `${row.kind} reads a finished deployment: nothing to simulate` });
+      if (ctx.dryRun && (row.kind === "prove" || row.kind === "verify" || row.kind === "govern")) {
+        ctx.log.log("warn", "stage.dry_run_skipped", { stage: row.name, reason: row.kind === "prove" ? "the control proof is a real Safe transaction signed by every owner: nothing to simulate" : `${row.kind} reads a finished deployment: nothing to simulate` });
         skipped.push(row.name);
         continue;
       }
@@ -716,6 +818,7 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
       try {
         if (row.kind === "safe") await runSafeStage(ctx, row, manifest);
         else if (row.kind === "forge") await runForgeStage(ctx, row, manifest);
+        else if (row.kind === "prove") await handlers.prove(ctx, row, manifest);
         else if (row.kind === "verify") await handlers.verify(ctx, row, manifest);
         else await handlers.govern(ctx, row, manifest);
         ran.push(row.name);

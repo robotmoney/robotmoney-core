@@ -1,0 +1,110 @@
+---
+title: "ISafeTx"
+---
+
+# ISafeTx
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/helpers/SafeGovernance.sol)
+
+<i>
+
+The two Safe 1.4.1 calls the helper makes.
+
+</i>
+
+## Functions
+
+<a id="exectransaction-address-uint256-bytes-uint8-uint256-uint256-uint256-address-address-payable-bytes"></a>
+
+### execTransaction
+
+```solidity
+function execTransaction(
+        address to,
+        uint256 value,
+        bytes calldata data,
+        uint8 operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address payable refundReceiver,
+        bytes memory signatures
+    ) external payable returns (bool success);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| value | `uint256` |  |
+| data | `bytes` |  |
+| operation | `uint8` |  |
+| safeTxGas | `uint256` |  |
+| baseGas | `uint256` |  |
+| gasPrice | `uint256` |  |
+| gasToken | `address` |  |
+| refundReceiver | `address payable` |  |
+| signatures | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| success | `bool` |  |
+
+<a id="gettransactionhash-address-uint256-bytes-uint8-uint256-uint256-uint256-address-address-payable-uint256"></a>
+
+### getTransactionHash
+
+```solidity
+function getTransactionHash(
+        address to,
+        uint256 value,
+        bytes calldata data,
+        uint8 operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address payable refundReceiver,
+        uint256 _nonce
+    ) external view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| value | `uint256` |  |
+| data | `bytes` |  |
+| operation | `uint8` |  |
+| safeTxGas | `uint256` |  |
+| baseGas | `uint256` |  |
+| gasPrice | `uint256` |  |
+| gasToken | `address` |  |
+| refundReceiver | `address payable` |  |
+| _nonce | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="nonce"></a>
+
+### nonce
+
+```solidity
+function nonce() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

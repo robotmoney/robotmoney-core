@@ -117,6 +117,11 @@ concurrency:
   group: ${{ github.workflow }}-suite07-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege (issue #1428): read-only repo contents for every job. A job that
+# needs more declares it at job level with the reason.
+permissions:
+  contents: read
+
 jobs:
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
   pin:
@@ -250,11 +255,15 @@ jobs:
 
       - name: Skill-package parity
         working-directory: clients/rust-payment-client
-        run: cargo test --test skill_docs_parity -- --nocapture
+        run: |
+          CARGO_TEST_MIN_EXECUTED=7 bash ../../.github/scripts/cargo_test_require_executed.sh \
+            --test skill_docs_parity -- --nocapture
 
       - name: dApp TOML round-trip
         working-directory: clients/rust-payment-client
-        run: cargo test --test dapp_toml_roundtrip -- --nocapture
+        run: |
+          CARGO_TEST_MIN_EXECUTED=5 bash ../../.github/scripts/cargo_test_require_executed.sh \
+            --test dapp_toml_roundtrip -- --nocapture
 
       # Investment-Committee register / vote-submit integration test (issue #1105).
       # mockito-backed, drives the release rmpc binary via assert_cmd. Wrapped in the
@@ -385,7 +394,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        binary: [smoke, scenarios, window_cap, withdraw]
+        include:
+          # min_executed (issue 1656) is the executed count of the binary in a green run.
+          - { binary: smoke, min_executed: 1 }
+          - { binary: scenarios, min_executed: 10 }
+          - { binary: window_cap, min_executed: 1 }
+          - { binary: withdraw, min_executed: 4 }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -411,7 +425,11 @@ jobs:
 
       - name: e2e ${{ matrix.binary }}
         working-directory: testing/ethereum-testnet/e2e-rust
-        run: cargo test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
+        env:
+          CARGO_TEST_MIN_EXECUTED: ${{ matrix.min_executed }}
+        run: |
+          bash ../../../.github/scripts/cargo_test_require_executed.sh \
+            --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
 
       - name: Stop the Twin fork and save its RPC cache
         if: always()

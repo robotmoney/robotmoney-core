@@ -40,7 +40,7 @@ use alloy_sol_types::SolCall;
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::gateway::{MockVault, RobotMoneyGateway, VaultRegistry};
+use crate::gateway::{IVault, RobotMoneyGateway, VaultRegistry};
 use crate::network_env::NetworkEnv;
 use crate::output::emit;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
@@ -283,11 +283,11 @@ async fn read_vault(
     }
 
     // vault.name() / vault.symbol() / vault.decimals()
-    match call_string(rpc, vault, &block_tag, MockVault::nameCall {}).await {
+    match call_string(rpc, vault, &block_tag, IVault::nameCall {}).await {
         Ok(s) => b.data_mut().name = s,
         Err(e) => b.record_err("name", e),
     }
-    match call_string(rpc, vault, &block_tag, MockVault::symbolCall {}).await {
+    match call_string(rpc, vault, &block_tag, IVault::symbolCall {}).await {
         Ok(s) => b.data_mut().symbol = s,
         Err(e) => b.record_err("symbol", e),
     }
@@ -298,7 +298,7 @@ async fn read_vault(
 
     // accounting
     let total_assets =
-        match call_u256_view(rpc, vault, &block_tag, MockVault::totalAssetsCall {}).await {
+        match call_u256_view(rpc, vault, &block_tag, IVault::totalAssetsCall {}).await {
             Ok(v) => {
                 b.data_mut().total_assets = Some(DecimalU256(v));
                 Some(v)
@@ -309,7 +309,7 @@ async fn read_vault(
             }
         };
     let total_supply =
-        match call_u256_view(rpc, vault, &block_tag, MockVault::totalSupplyCall {}).await {
+        match call_u256_view(rpc, vault, &block_tag, IVault::totalSupplyCall {}).await {
             Ok(v) => {
                 b.data_mut().total_supply = Some(DecimalU256(v));
                 Some(v)
@@ -367,7 +367,7 @@ async fn read_vault_from_registry(
         Err(e) => b.record_err("decimals", e),
     }
     let total_assets =
-        match call_u256_view(rpc, vault, &block_tag, MockVault::totalAssetsCall {}).await {
+        match call_u256_view(rpc, vault, &block_tag, IVault::totalAssetsCall {}).await {
             Ok(v) => {
                 b.data_mut().total_assets = Some(DecimalU256(v));
                 Some(v)
@@ -378,7 +378,7 @@ async fn read_vault_from_registry(
             }
         };
     let total_supply =
-        match call_u256_view(rpc, vault, &block_tag, MockVault::totalSupplyCall {}).await {
+        match call_u256_view(rpc, vault, &block_tag, IVault::totalSupplyCall {}).await {
             Ok(v) => {
                 b.data_mut().total_supply = Some(DecimalU256(v));
                 Some(v)
@@ -471,7 +471,7 @@ async fn call_asset(
     vault: Address,
     block_tag: &str,
 ) -> std::result::Result<Address, String> {
-    let data = MockVault::assetCall {}.abi_encode();
+    let data = IVault::assetCall {}.abi_encode();
     let out = rpc
         .eth_call(
             &CallRequest {
@@ -483,7 +483,7 @@ async fn call_asset(
         )
         .await
         .map_err(|e| format!("eth_call failed: {e}"))?;
-    let r = MockVault::assetCall::abi_decode_returns(&out, true)
+    let r = IVault::assetCall::abi_decode_returns(&out, true)
         .map_err(|e| format!("abi decode: {e}"))?;
     Ok(r._0)
 }
@@ -493,7 +493,7 @@ async fn call_decimals(
     vault: Address,
     block_tag: &str,
 ) -> std::result::Result<u8, String> {
-    let data = MockVault::decimalsCall {}.abi_encode();
+    let data = IVault::decimalsCall {}.abi_encode();
     let out = rpc
         .eth_call(
             &CallRequest {
@@ -505,7 +505,7 @@ async fn call_decimals(
         )
         .await
         .map_err(|e| format!("eth_call failed: {e}"))?;
-    let r = MockVault::decimalsCall::abi_decode_returns(&out, true)
+    let r = IVault::decimalsCall::abi_decode_returns(&out, true)
         .map_err(|e| format!("abi decode: {e}"))?;
     Ok(r._0)
 }
@@ -540,12 +540,12 @@ where
 trait ReturnString {
     fn into_string(self) -> String;
 }
-impl ReturnString for MockVault::nameReturn {
+impl ReturnString for IVault::nameReturn {
     fn into_string(self) -> String {
         self._0
     }
 }
-impl ReturnString for MockVault::symbolReturn {
+impl ReturnString for IVault::symbolReturn {
     fn into_string(self) -> String {
         self._0
     }
@@ -581,12 +581,12 @@ where
 trait ReturnU256 {
     fn into_u256(self) -> U256;
 }
-impl ReturnU256 for MockVault::totalAssetsReturn {
+impl ReturnU256 for IVault::totalAssetsReturn {
     fn into_u256(self) -> U256 {
         self._0
     }
 }
-impl ReturnU256 for MockVault::totalSupplyReturn {
+impl ReturnU256 for IVault::totalSupplyReturn {
     fn into_u256(self) -> U256 {
         self._0
     }

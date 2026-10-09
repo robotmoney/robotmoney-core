@@ -15,13 +15,7 @@ use rmpc_e2e::Fixture;
 
 #[test]
 fn self_check_ok() {
-    if !rmpc_e2e::prerequisites_available() {
-        eprintln!(
-            "[smoke] docker / forge / cast not on PATH; skipping. \
-             Install Docker + Foundry to run this test."
-        );
-        return;
-    }
+    rmpc_e2e::require_prereqs("self_check_ok");
 
     let fx = Fixture::new().expect("boot the Twin chain + deploy");
     assert_ne!(fx.gateway(), alloy_primitives::Address::ZERO);

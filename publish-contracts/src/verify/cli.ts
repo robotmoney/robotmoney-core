@@ -11,6 +11,7 @@ export function parseSheetJson(text: string): VerifySheet {
   const j = JSON.parse(text);
   for (const v of Object.values<any>(j.vaults ?? {})) {
     for (const k of ["tvlCap", "perDepositCap", "exitFeeBps"]) v[k] = BigInt(v[k]);
+    for (const k of ["navDeviationBps", "minPoolLiquidity"]) if (v[k] !== undefined) v[k] = BigInt(v[k]);
     if (v.seed !== undefined) v.seed = BigInt(v.seed);
     v.assets ??= [];
   }

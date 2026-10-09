@@ -234,6 +234,8 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     event ExitFeeCharged(
         address indexed owner, address indexed receiver, uint256 gross, uint256 fee, uint256 net
     );
+    /// @dev Emitted by `redeemInKind` (core 1665). Per-leg amounts are the ERC-20 transfers.
+    event RedeemedInKind(address indexed owner, address indexed receiver, uint256 shares);
     event TvlCapUpdated(uint256 oldCap, uint256 newCap);
     event PerDepositCapUpdated(uint256 oldCap, uint256 newCap);
     event ExitFeeUpdated(uint256 oldBps, uint256 newBps);
@@ -582,11 +584,11 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         // Snapshot pre-deposit state so shares are minted against the value the
         // pool held BEFORE this deposit's tokens landed. Reuse `taBefore` for the
         // TVL-cap check (pre-swap; post-swap NAV may differ slightly by slippage).
-        // AZ-BSK-3: the share-price denominator uses eligible NAV = taBefore minus
-        // idle USDC (active-adapter tokens only). Idle USDC from an excluded adapter
-        // is counted toward the TVL cap but NOT the denominator, so excluded-adapter
-        // recoveries stay with existing holders. realizedDelta uses taBefore directly
-        // (algebraically identical to the eligible-NAV delta; idle USDC cancels out).
+        // AZ-BSK-3 (C1-corrected): the share-price denominator is the FULL
+        // pre-deposit NAV `taBefore` (adapter-free basket token value PLUS every
+        // idle USDC dollar), the exact OZ mint denominator. Idle USDC backs
+        // existing shares, so it must never be subtracted: leaving it out
+        // over-mints to a depositor after emergencyUnwind + unpauseDeposits.
         uint256 supplyBefore = totalSupply();
         uint256 taBefore = totalAssets();
         if (taBefore + usdcAmount > tvlCap) revert TVLCapExceeded();
@@ -614,11 +616,9 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         if (realizedDelta < slippageFloor) {
             revert DepositBelowSlippageFloor(realizedDelta, slippageFloor);
         }
-        // AZ-BSK-3: denominator = eligible NAV = taBefore - idle USDC.
+        // AZ-BSK-3 (C1-corrected): denominator = full pre-deposit NAV + 1.
         uint256 mintShares = realizedDelta.mulDiv(
-            supplyBefore + 10 ** _decimalsOffset(),
-            taBefore - _USDC.balanceOf(address(this)) + 1,
-            Math.Rounding.Floor
+            supplyBefore + 10 ** _decimalsOffset(), taBefore + 1, Math.Rounding.Floor
         );
 
         _mint(receiver, mintShares);
@@ -700,6 +700,23 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         if (g < floor) revert InsufficientGas(g, floor);
         super.redeem(shares, receiver, owner);
         return _lastWithdrawnAssets;
+    }
+
+    /// @notice Oracle-free exit (core 1665): burn `shares` of `owner` and pay `receiver` the pro-rata
+    ///         idle USDC plus the pro-rata amount of each ACTIVE basket token, with NO TWAP read and
+    ///         NO swap. This is the holder's exit when `redeem` cannot price or fill a leg.
+    /// @dev `exitFeeBps` is applied to each leg and the fee is sent to `feeRecipient`. Each leg is
+    ///      floored (`bal * shares / supply`), so rounding favours the vault and the remaining
+    ///      holders' per-share backing never decreases. Shares burn before any transfer and the call
+    ///      is `nonReentrant`. No pause, shutdown, retire or role gates it. Inactive (removed) assets
+    ///      are not paid. A caller other than `owner` spends allowance, as in `redeem`.
+    function redeemInKind(uint256 shares, address receiver, address owner) external nonReentrant {
+        if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
+        uint256 supplyBefore = totalSupply();
+        _burn(owner, shares);
+
+        BasketAssetConfigGuard.payInKind(_guardAssets(), receiver, shares, supplyBefore);
+        emit RedeemedInKind(owner, receiver, shares);
     }
 
     /// @notice Worst-case floor of USDC received when redeeming `shares`.
@@ -967,14 +984,6 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
 
     // ─── Asset registry management ────────────────────────────────────
 
-    /// @notice Minimum observation cardinality required on the Uniswap V3 pool
-    ///         when registering an asset via addAsset(). A cardinality of 1
-    ///         (the Uniswap deployment default) means observe() can only return
-    ///         the single stored slot and always reverts with "OLD" for any
-    ///         non-zero secondsAgo, which would permanently break totalAssets(),
-    ///         deposits, and withdrawals for the entire basket.
-    uint16 public constant MIN_POOL_CARDINALITY = 2;
-
     /// @notice Minimum in-range Uniswap V3 pool liquidity required when
     ///         registering an asset via addAsset(). Pools below this floor
     ///         cannot absorb vault-sized trades without exceeding the
@@ -1024,7 +1033,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///                  Stored on `AssetInfo` so governance tooling can inspect
     ///                  the venue without decoding the adapter address.
     /// @dev Reverts with InsufficientPoolCardinality when the pool's current
-    ///      observationCardinality is below MIN_POOL_CARDINALITY. Callers must
+    ///      observationCardinality is below the window-derived floor (`window / 2 s + 1`, 901 for the 1800 s default; see `BasketAssetConfigGuard.requireObservationHistory`). Callers must
     ///      invoke pool.increaseObservationCardinalityNext(n) and wait for the
     ///      cardinality to be populated before calling addAsset.
     function addAsset(
@@ -1066,12 +1075,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         // enough in-range liquidity for synchronous redemption. Extracted to the
         // delegatecall-linked guard to keep the EIP-170-tight vault bytecode small.
         BasketAssetConfigGuard.requirePoolUsable(
-            pool_,
-            token_,
-            address(_USDC),
-            DEFAULT_TWAP_WINDOW,
-            MIN_POOL_CARDINALITY,
-            MIN_POOL_LIQUIDITY
+            pool_, token_, address(_USDC), DEFAULT_TWAP_WINDOW, MIN_POOL_LIQUIDITY
         );
 
         // NC-8 (no duplicate AssetInfo): an ACTIVE re-add is rejected; an INACTIVE

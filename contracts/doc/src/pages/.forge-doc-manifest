@@ -31,9 +31,11 @@ contracts/interfaces/interface.IStrategyAdapter.mdx
 contracts/interfaces/interface.ISwapRouter.mdx
 contracts/interfaces/interface.IUniswapV3Pool.mdx
 contracts/interfaces/interface.IUpstreamMonitor.mdx
+contracts/interfaces/interface.IVault.mdx
 contracts/lib/abstract.AdminFloorAccessControl.mdx
 contracts/lib/abstract.AdminFloorAccessControlCounter.mdx
 contracts/lib/interface.IBasketVaultViews.mdx
+contracts/lib/interface.IInKindVault.mdx
 contracts/lib/library.BasketAssetConfigGuard.mdx
 contracts/lib/library.BasketViews.mdx
 contracts/lib/library.BpsMath.mdx
@@ -91,7 +93,7 @@ contracts/test/contract.BasketVaultVenueSelectorTest.mdx
 contracts/test/contract.BlacklistableUSDC.mdx
 contracts/test/contract.BlacklistableVault.mdx
 contracts/test/contract.BpsMathTest.mdx
-contracts/test/contract.CardinalityOnePool.mdx
+contracts/test/contract.CardinalityBelowFloorPool.mdx
 contracts/test/contract.CompoundV3AdapterPositionTest.mdx
 contracts/test/contract.ConfigFilesTest.mdx
 contracts/test/contract.ConfusedDeputyGuardsTest.mdx
@@ -157,6 +159,8 @@ contracts/test/contract.GatewayWithdrawTest.mdx
 contracts/test/contract.GovernanceExecutePathAfterHandoverTest.mdx
 contracts/test/contract.GovernanceSeparationInvariant.mdx
 contracts/test/contract.GovernanceVotersHarness.mdx
+contracts/test/contract.GovernedSurfacesSafeTimelockTest.mdx
+contracts/test/contract.GovernedVaultSafeTimelockTest.mdx
 contracts/test/contract.GuardHarness.mdx
 contracts/test/contract.ICGatewayIntegration.mdx
 contracts/test/contract.InterlockMockVault.mdx
@@ -211,6 +215,7 @@ contracts/test/contract.ReadCountingAdapter.mdx
 contracts/test/contract.ReceiptRoleStub.mdx
 contracts/test/contract.RecordingSwapRouter.mdx
 contracts/test/contract.RedeemGasGuardsTest.mdx
+contracts/test/contract.ReentrantHookToken.mdx
 contracts/test/contract.ReentrantVault.mdx
 contracts/test/contract.RevertingRetireVault.mdx
 contracts/test/contract.RobotMoneyGatewayTest.mdx
@@ -276,6 +281,7 @@ contracts/test/fv/contract._FvDeployerHarness.mdx
 contracts/test/fv/library.InvariantRegistry.mdx
 contracts/test/helpers/abstract.BasketDeployFixture.mdx
 contracts/test/helpers/abstract.SafeFixture.mdx
+contracts/test/helpers/abstract.SafeGovernance.mdx
 contracts/test/helpers/contract.ConstPool.mdx
 contracts/test/helpers/contract.CoreStages.mdx
 contracts/test/helpers/contract.EtchAavePool.mdx
@@ -283,8 +289,10 @@ contracts/test/helpers/contract.EtchComet.mdx
 contracts/test/helpers/contract.EtchErc4626Venue.mdx
 contracts/test/helpers/contract.MockVault.mdx
 contracts/test/helpers/contract.NoYieldTestAdapter.mdx
+contracts/test/helpers/contract.SafeCallRelay.mdx
 contracts/test/helpers/contract.TestERC20.mdx
 contracts/test/helpers/interface.ISafeSetupCall.mdx
+contracts/test/helpers/interface.ISafeTx.mdx
 contracts/test/helpers/interface.Vm__.mdx
 contracts/test/helpers/library.ForkSelect.mdx
 contracts/test/helpers/library.RoleHolders.mdx

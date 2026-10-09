@@ -226,7 +226,7 @@ Dapp overlay (`docker-compose.dapp.yaml`) requires:
 | `POSTGRES_PASSWORD` | `robotmoney` | Postgres password |
 | `POSTGRES_DB` | `explorer` | Postgres database name |
 | `VITE_ENV_CLASS` | `fork` | One of: `fork` \| `devnet` \| `testnet` \| `mainnet`. Set to `devnet` for this mode. |
-| `VITE_GATEWAY_EXPECTED_CODE_HASH` | _(empty)_ | Keccak-256 of deployed gateway bytecode. The dapp refuses admin writes until this matches. Set from `deployments/devnet.json` field `gateway_runtime_hash`. |
+| `VITE_GATEWAY_EXPECTED_CODE_HASH` | _(none — required)_ | Keccak-256 of the deployed gateway runtime bytecode. Compose hard-requires it (`${VITE_GATEWAY_EXPECTED_CODE_HASH:?...}`), so every `docker compose` subcommand aborts while it is unset, not only `up`. The dapp refuses admin writes until it matches on-chain. Read it from the `gateway_runtime_hash` field of `deployments/918453.json` (see `BOOTSTRAP.md`), or compute `cast keccak $(cast code <gateway> --rpc-url <rpc>)`. The harness derives it itself. It is baked in at build time only. |
 | `VITE_RM_TOKEN_ADDRESS` | `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` | RM token address for the balances panel RM row (issue #466). RM is the live ROBOTMONEY token on Base; nothing deploys an RM token (core 1489), and the Twin fork carries the live token at the same address. The smoke-test threads `RM_TOKEN_ADDRESS_HEX` here. The faucet does not drip RM. |
 | `VITE_TIMELOCK_ADDRESS` | `0x0000000000000000000000000000000000000000` | TimelockController that holds `ADMIN_ROLE` after the handover (core 1544). The smoke-test threads the published timelock here. Zero or unset: the Timelock panel shows its config-missing state and no Safe proposal is offered. |
 | `VITE_SAFE_ADDRESS` | `0x0000000000000000000000000000000000000000` | The 2-of-3 SafeL2 v1.4.1 that proposes to the timelock (core 1544). The admin tabs build a Safe -> Timelock proposal for it. Zero or unset: the tab shows a blocking preview with no signing button. The smoke-test threads the published Safe here. |
@@ -250,10 +250,16 @@ export VITE_GATEWAY_ADDRESS=<gateway>
 export VITE_VAULT_ADDRESS=<vault>
 export INDEXER_GATEWAY=$VITE_GATEWAY_ADDRESS
 export INDEXER_VAULT=$VITE_VAULT_ADDRESS
+export VITE_GATEWAY_EXPECTED_CODE_HASH=<gateway_runtime_hash>
 
 cd testing/ethereum-testnet/config
-docker compose -f docker-compose.dapp.yaml up --build
+docker compose -f docker-compose.dapp.yaml up -d --build
 ```
+
+Use the overlay file **alone**. Do not add `-f docker-compose.yaml`: the last
+`-f` names the project, and the overlay is its own project (`robotmoney-dapp`)
+that reaches the host chain through `INDEXER_RPC_URL`, not a shared compose
+network. This matches how the harness invokes it.
 
 ### Per-service restart and rebuild
 
@@ -273,22 +279,25 @@ cd testing/ethereum-testnet/config
 docker compose -f docker-compose.dapp.yaml restart explorer-api
 
 # Rebuild one service's image from source and recreate only that container.
-docker compose -f docker-compose.dapp.yaml up -d --build explorer-api
+docker compose -f docker-compose.dapp.yaml up -d --no-deps --build explorer-api
 
 # Follow one service's logs.
 docker compose -f docker-compose.dapp.yaml logs -f explorer-indexer
 ```
 
-Swap `explorer-indexer` for `explorer-api` to iterate on the indexer instead.
+Swap `explorer-api` for `explorer-indexer` to iterate on the indexer instead.
 The `dapp`, `postgres`, and `receipt-fixtures` containers stay up throughout.
 
 Every `docker compose` invocation — `restart` included — re-evaluates the
 compose file's `${VAR:?...}` substitutions, so the same required env vars the
 initial bring-up needed must still be exported. If the stack was launched by
 `cargo run -p smoke-test -- --full-stack`, the harness also chose the host
-ports; re-export `EXPLORER_API_PORT` / `DAPP_PORT` / `POSTGRES_PORT` to match
-the URLs it printed, or compose republishes on the defaults in the table
-above.
+ports. Pass `--no-deps` to `up`, because without it compose recreates and
+rebinds any dependency (such as `dapp-postgres`) whose interpolated published
+port differs from the running one, and the harness never prints the Postgres
+port. Re-export `EXPLORER_API_PORT` (or `DAPP_PORT`) to match the URL it
+printed for the service you recreate, or compose republishes it on the default
+in the table above.
 
 **`restart` does not re-evaluate `depends_on`.** `docker compose restart`
 restarts an existing container in place; it does not recreate it and does not

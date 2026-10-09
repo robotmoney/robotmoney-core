@@ -6,7 +6,7 @@
 //! Per issue #11 and `Plan tracking issue #109` §3.5: typed ABI
 //! encode/decode for `RobotMoneyGateway`, plus read-side bindings for the
 //! standard ERC-20 `allowance`+`balanceOf` views (used against real USDC in
-//! production and against test ERC-20 deployments in CI) and the `MockVault`
+//! production and against test ERC-20 deployments in CI) and the `IVault`
 //! used by tests. The ABIs are extracted from the Foundry build output and
 //! committed under `clients/rust-payment-client/abi/` so the Rust crate is
 //! buildable without re-running `forge build`.
@@ -52,7 +52,7 @@ sol_binding!(
 /// `RobotMoneyGateway::committeeVoteSubmitCall` takes (issue #1511).
 pub use robot_money_gateway::IInvestmentCommitteePolicy::VoteParams as GatewayVoteParams;
 sol_binding!(erc20, Erc20, "abi/Erc20.json");
-sol_binding!(mock_vault, MockVault, "abi/MockVault.json");
+sol_binding!(vault, IVault, "abi/IVault.json");
 sol_binding!(vault_registry, VaultRegistry, "abi/VaultRegistry.json");
 sol_binding!(
     portfolio_router,
@@ -125,13 +125,13 @@ mod tests {
     }
 
     /// `depositsPaused()` is one selector on the gateway and on every vault
-    /// (the MockVault binding rmpc reads vaults through), so the deposit
+    /// (the IVault binding rmpc reads vaults through), so the deposit
     /// preflight reads both with the same call (core 1494).
     #[test]
     fn deposits_paused_view_selector_matches() {
         let expected = &keccak256(b"depositsPaused()")[..4];
         assert_eq!(&RobotMoneyGateway::depositsPausedCall::SELECTOR, expected);
-        assert_eq!(&MockVault::depositsPausedCall::SELECTOR, expected);
+        assert_eq!(&IVault::depositsPausedCall::SELECTOR, expected);
     }
 
     /// The gateway's pause errors rmpc may see in revert data. `withdraw`
