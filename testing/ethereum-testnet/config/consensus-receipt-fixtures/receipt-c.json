@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "session_id": "12940000-0000-4000-8000-00000000000c",
+  "subject_id": "treasury-allocation",
+  "created_at": "2026-09-01T00:10:00Z",
+  "prompt_hash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+  "inputs_digest": "0x6666666666666666666666666666666666666666666666666666666666666666",
+  "quorum": {
+    "active": 2,
+    "submitted": 2,
+    "absent": 0,
+    "participation_bps": 10000
+  },
+  "stances": {
+    "bearish": 0,
+    "cautious": 0,
+    "neutral": 0,
+    "constructive": 2,
+    "bullish": 0
+  },
+  "judge": {
+    "rationale": "Seeded Twin rehearsal fixture: the allocation the Safe applies through the timelock (rmUSDC 5000, rmPROTO 3000, rmRWA 2000 bps), unlike the allocation the deployer left on the router.",
+    "disagreements": [],
+    "release_safety": {
+      "release": "safe",
+      "thinly_supported": false,
+      "take_count": 2,
+      "min_takes": 2,
+      "concerns": []
+    },
+    "source": "fallback",
+    "mode": "shadow"
+  },
+  "analyst_signatures": [
+    {
+      "member_id": "analyst-alpha",
+      "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "canonical_submission": "{\"memberId\":\"analyst-alpha\",\"stance\":\"constructive\"}",
+      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "revision": 1
+    },
+    {
+      "member_id": "analyst-beta",
+      "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "canonical_submission": "{\"memberId\":\"analyst-beta\",\"stance\":\"constructive\"}",
+      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "revision": 1
+    }
+  ],
+  "weights": [
+    {
+      "bucket": "agent_tokens",
+      "weight_bps": 0
+    },
+    {
+      "bucket": "conservative_defi_yield",
+      "weight_bps": 5000
+    },
+    {
+      "bucket": "protocol_tokens",
+      "weight_bps": 3000
+    },
+    {
+      "bucket": "real_world_assets",
+      "weight_bps": 2000
+    }
+  ]
+}

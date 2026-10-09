@@ -8,7 +8,7 @@ import { padTopic } from "../../src/verify/logs.ts";
 import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
 import { LABELS_TXT, rewriteLabelsTxt, verifySection } from "./labels-file.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, type World } from "./world.ts";
+import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, type World } from "./world.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "expected-labels.json");
 
@@ -55,6 +55,40 @@ describe("agents the depositors authorize after the handover are theirs (core 15
     before.chain.logs.push(log(3000n));
     before.opts.handoverBlock = 3000n;
     expect(failed(await verifyDeployment(before.opts))).toEqual(["agents: no agent authorized at handover"]);
+  });
+});
+
+describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
+  const LABEL = "receipt: applied receipt is released and its weights are on the router";
+  const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
+  const vaults = () => Object.values(VAULTS).map((v) => v.address);
+  const BPS = [4000, 3000, 2000, 1000];
+  /** The router holds the applied vector and the receipt reads released. */
+  const applied = (over: { released?: boolean; routerBps?: number[] } = {}) => {
+    const w = buildWorld();
+    w.opts.appliedReceipt = { receiptId: RID, vaults: vaults(), bps: BPS };
+    w.chain.set(REC, "isReleased", () => over.released ?? true);
+    w.chain.set(ROUTER, "getDefaultWeights", [vaults(), (over.routerBps ?? BPS).map((x) => BigInt(x))]);
+    return w;
+  };
+  test("no application: the label is present and passes, and the sheet vector is still required", async () => {
+    const ok = await verifyDeployment(buildWorld().opts);
+    expect(ok.checks.find((c) => c.label === LABEL)).toMatchObject({ ok: true });
+    const w = buildWorld();
+    w.chain.set(ROUTER, "getDefaultWeights", [vaults(), BPS.map((x) => BigInt(x))]);
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["router: default weights equal sheet"]);
+  });
+  test("applied, released and on the router: every check passes, the sheet vector having been superseded", async () => {
+    const r = await verifyDeployment(applied().opts);
+    expect(failed(r)).toEqual([]);
+    expect(r.checks.find((c) => c.label === LABEL)).toMatchObject({ ok: true });
+    expect(r.checks.find((c) => c.label === LABEL)!.detail).toContain(RID);
+  });
+  test("applied but the receipt reads not released fails the label", async () => {
+    expect(failed(await verifyDeployment(applied({ released: false }).opts))).toEqual([LABEL]);
+  });
+  test("applied but the router holds another vector fails the label and the weights label", async () => {
+    expect(failed(await verifyDeployment(applied({ routerBps: [5000, 3000, 2000, 0] }).opts)).sort()).toEqual([LABEL, "router: default weights equal sheet"].sort());
   });
 });
 

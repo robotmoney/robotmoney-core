@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, type Hex } from "viem";
-import { chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
+import { applyCalldata, chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, checkReceiptApplications, checkReceiptApplicationsOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,13 +75,13 @@ const EV = parseAbi([
 ]);
 const tl = a(9);
 const id32 = (n: number) => h(n);
-const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: number, delay = 172800n, target: string = a(1), calldata: string = "0x") => {
-  const topics = encodeEventTopics({ abi: EV, eventName, args: eventName === "Cancelled" ? { id: id32(n) as Hex } : { id: id32(n) as Hex, index: 0n } } as any);
+const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: number, delay = 172800n, target: string = a(1), calldata: string = "0x", index = 0n) => {
+  const topics = encodeEventTopics({ abi: EV, eventName, args: eventName === "Cancelled" ? { id: id32(n) as Hex } : { id: id32(n) as Hex, index } } as any);
   const data = eventName === "CallScheduled" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [target as Hex, 0n, calldata as Hex, h(0) as Hex, delay])
     : eventName === "CallExecuted" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [target as Hex, 0n, calldata as Hex]) : "0x";
   return { address: tl, topics: topics as Hex[], data: data as Hex };
 };
-interface Opts { stepData?: Record<string, string>; stepTarget?: Record<string, string>; pausedBy?: Record<string, boolean>; relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
+interface Opts { appDelay?: bigint; appGap?: number; appCalls?: number; appData?: [string?, string?]; appTarget?: [string?, string?]; appId?: number; stepData?: Record<string, string>; stepTarget?: Record<string, string>; pausedBy?: Record<string, boolean>; relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
 function stub(ev: any, o: Opts = {}): ChainReader {
   const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
   const add = (hash: string, logs: any[], ts: number) => { receipts.set(hash, { status: o.failed === hash ? "reverted" : "success", blockNumber: bn, logs }); blocks.set(bn++, ts); };
@@ -104,6 +104,14 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     add(r.schedule_tx, sched, t0);
     add(r.execute_tx, [log("CallExecuted", id, 0n, o.relTarget ?? RCPT, o.relData ?? releaseCalldata(r.receipt_id))], t0 + (o.relGap ?? 172800));
   });
+  (ev.receipt_applications ?? []).forEach((r: any, i: number) => {
+    const id = o.appId ?? 70 + i;
+    const t0 = T0 + 20 + i;
+    const [relData, wData] = applyCalldata(r.receipt_id, r.vaults, r.bps);
+    const calls = [{ target: o.appTarget?.[0] ?? RCPT, data: o.appData?.[0] ?? relData }, { target: o.appTarget?.[1] ?? GOV, data: o.appData?.[1] ?? wData }].slice(0, o.appCalls ?? 2);
+    add(r.schedule_tx, calls.map((c, k) => log("CallScheduled", id, o.appDelay, c.target, c.data, BigInt(k))), t0);
+    add(r.execute_tx, calls.map((c, k) => log("CallExecuted", id, 0n, c.target, c.data, BigInt(k))), t0 + (o.appGap ?? 172800));
+  });
   return {
     getChainId: async () => o.chainId ?? 8453,
     getTransactionCount: async () => o.nonce ?? 2,
@@ -114,6 +122,7 @@ function stub(ev: any, o: Opts = {}): ChainReader {
 }
 const VAULT: Record<string, string> = { "unpause-USDC": "rmUSDC", "unpause-PROTO": "rmPROTO", "unpause-AGENT": "rmAGENT", "unpause-RWA": "rmRWA" };
 const RCPT = a(30);
+const GOV = a(32);
 const RID = h(0xabc);
 const withRelease = (e: any) => {
   e.consensus_receipt = { address: RCPT };
@@ -178,6 +187,104 @@ describe("a post-launch consensus receipt release on 8453 (issue 1611)", () => {
     const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
     expect(tpl.receipt_releases).toEqual([]);
     expect(checkEvidence({ ...good(), receipt_releases: [] })).toEqual([]);
+  });
+});
+
+describe("receipt_applications: one timelock batch, release then weights (issue 1696)", () => {
+  const VAULTS = [a(5), a(6), a(8)];
+  const BPS = [5000, 3000, 2000];
+  const withApply = (e: any) => {
+    e.consensus_receipt = { address: RCPT }; e.governance = { address: GOV };
+    e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, target: RCPT, governance: GOV, vaults: VAULTS, bps: BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 172800 }];
+  };
+  const app = (f: (e: any) => void = () => {}) => { const e = good(); withApply(e); f(e); return e; };
+  const offline = (f: (e: any) => void = () => {}) => checkEvidence(app(f)).join("\n");
+  const chain = (o: Opts = {}, f: (e: any) => void = () => {}) => { const e = app(); const c = stub(e, o); f(e); return checkEvidenceOnChain(e, c, { safe: 2 }).then((p) => p.join("\n")); };
+
+  test("receipt_applications accepts a complete entry and rejects a missing tx hash, a failed receipt, a gap under the chain delay floor and two entries sharing an operation id", async () => {
+    expect(offline()).toBe("");
+    expect(await chain()).toBe("");
+    expect(checkReceiptApplications(app())).toEqual([]);
+    expect(offline((e) => { delete e.receipt_applications[0].schedule_tx; })).toContain("schedule_tx is missing");
+    expect(offline((e) => { e.receipt_applications[0].execute_tx = ""; })).toContain("execute_tx is missing");
+    expect(offline((e) => { e.receipt_applications[0].schedule_status = 0; })).toContain("schedule receipt status is 0");
+    expect(offline((e) => { e.receipt_applications[0].execute_status = 0; })).toContain("execute receipt status is 0");
+    expect(offline((e) => { e.receipt_applications[0].execute_block_timestamp = T0 + 20 + 172799; })).toContain("gap");
+    expect(offline((e) => { e.receipt_applications.push({ ...e.receipt_applications[0], receipt_id: h(0xabd), schedule_tx: h(630), execute_tx: h(631) }); })).toContain("operation_id is also");
+    // the standalone check (the Twin run manifest) says the same
+    const tw = app((e) => { e.receipt_applications[0].schedule_tx = "0x12"; });
+    expect(checkReceiptApplications(tw).join("\n")).toContain("schedule_tx is missing");
+  });
+  test("receipt_applications: receipt id, targets and the vector are checked, and one receipt is released once", () => {
+    expect(offline((e) => { e.receipt_applications[0].receipt_id = "0x12"; })).toContain("receipt_id is not a bytes32");
+    expect(offline((e) => { e.receipt_applications.push({ ...e.receipt_applications[0], schedule_tx: h(640), execute_tx: h(641), operation_id: h(971) }); })).toContain("more than one evidence entry");
+    expect(offline((e) => { e.receipt_applications[0].target = a(31); })).toContain("is not the receipt contract");
+    expect(offline((e) => { e.receipt_applications[0].governance = a(33); })).toContain("is not the governance contract");
+    expect(offline((e) => { delete e.consensus_receipt; })).toContain("consensus_receipt.address is missing");
+    expect(offline((e) => { delete e.governance; })).toContain("governance.address is missing");
+    expect(offline((e) => { e.receipt_applications[0].bps = [5000, 3000, 1999]; })).toContain("bps do not sum to 10000");
+    expect(offline((e) => { e.receipt_applications[0].bps = [5000, 5000]; })).toContain("distinct addresses with one weight each");
+    expect(offline((e) => { e.receipt_applications[0].vaults = [a(5), a(5), a(8)]; })).toContain("distinct addresses");
+    expect(offline((e) => { e.receipt_applications[0].step = "release-receipt"; })).toContain("is not apply-receipt");
+    expect(offline((e) => { e.receipt_applications = {}; })).toContain("receipt_applications is not a list");
+    expect(offline((e) => { e.receipt_releases = [{ receipt_id: RID, target: RCPT, operation_id: h(950), schedule_tx: h(600), schedule_status: 1, schedule_block_timestamp: T0 + 10, execute_tx: h(601), execute_status: 1, execute_block_timestamp: T0 + 10 + 172800 }]; })).toContain("a receipt is released once");
+  });
+  test("receipt_applications on chain: one batch of exactly the release then the weight change, one delay apart", async () => {
+    expect(await chain({ appCalls: 1 })).toContain("exactly 2 calls");
+    expect(await chain({ appTarget: [a(31), undefined] })).toContain("call 0 target");
+    expect(await chain({ appTarget: [undefined, a(33)] })).toContain("call 1 target");
+    expect(await chain({ appData: ["0x12345678", undefined] })).toContain("calldata is not releaseReceipt");
+    expect(await chain({ appData: [undefined, "0x12345678"] })).toContain("calldata is not setDefaultWeights");
+    expect(await chain({}, (e) => { e.receipt_applications[0].bps = [6000, 2000, 2000]; })).toContain("calldata is not setDefaultWeights");
+    expect(await chain({}, (e) => { e.receipt_applications[0].receipt_id = h(0xdef); })).toContain("calldata is not releaseReceipt");
+    expect(await chain({ appDelay: 60n })).toContain("CallScheduled delay");
+    expect(await chain({ appGap: 172799 })).toContain("on-chain schedule-to-execute gap");
+    expect(await chain({ failed: h(620) })).toContain("reverted");
+    expect(await chain({ failed: h(621) })).toContain("reverted");
+    expect(await chain({}, (e) => { e.receipt_applications[0].operation_id = h(5); })).toContain("is not the scheduled operation");
+    expect(await chain({}, (e) => { e.receipt_applications[0].schedule_tx = h(998); })).toContain("not readable");
+    // the standalone chain check (the Twin run) is the same function and does not read the chain id
+    const e = app();
+    expect(await checkReceiptApplicationsOnChain(e, stub(e, { chainId: 918453 }))).toEqual([]);
+    expect((await checkReceiptApplicationsOnChain(e, stub(e, { appCalls: 1 }))).join()).toContain("exactly 2 calls");
+    // a shorter floor (a Twin timelock) accepts a shorter delay and gap, and still rejects one under it
+    expect(await checkReceiptApplicationsOnChain(e, stub(e, { appDelay: 3600n, appGap: 3601 }), 3600)).toEqual([]);
+    expect((await checkReceiptApplicationsOnChain(e, stub(e, { appDelay: 3599n, appGap: 3599 }), 3600)).join("\n")).toContain("under 3600 s");
+  });
+  test("receipt_applications: the template lists the block and an empty list passes", () => {
+    const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
+    expect(tpl.receipt_applications).toEqual([]);
+    expect(tpl.governance.address).toBeDefined();
+    expect(checkEvidence({ ...good(), receipt_applications: [] })).toEqual([]);
+  });
+});
+
+describe("evidence-check --receipt-applications: the Twin run manifest (issue 1696)", () => {
+  const run = (manifest: object, extra: string[] = []) => {
+    const dir = mkdtempSync(join(tmpdir(), "pc-apply-ev-"));
+    const file = join(dir, "publish-run.json");
+    writeFileSync(file, JSON.stringify(manifest));
+    const r = Bun.spawnSync(["bun", join(import.meta.dir, "..", "src", "evidence-check.ts"), "--receipt-applications", file, "--consensus-receipt", a(30), "--governance", a(32), "--timelock", a(9), ...extra]);
+    return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
+  };
+  const entry = { step: "apply-receipt", receipt_id: h(0xabc), target: a(30), governance: a(32), vaults: [a(5), a(6)], bps: [6000, 4000], operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: 1000, execute_tx: h(621), execute_status: 1, execute_block_timestamp: 1000 + 172800 };
+  test("a complete entry passes, a missing entry or a broken one exits 1 naming the problem", () => {
+    const ok = run({ receipt_applications: [entry] });
+    expect(ok.code).toBe(0);
+    expect(ok.out).toContain("1 receipt application(s)");
+    const none = run({});
+    expect(none.code).toBe(1);
+    expect(none.err).toContain("no receipt_applications entry");
+    const gap = run({ receipt_applications: [{ ...entry, execute_block_timestamp: 1000 + 172799 }] });
+    expect(gap.code).toBe(1);
+    expect(gap.err).toContain("gap");
+    // a Twin run passes its own (shorter) timelock delay as the floor; the gap must still reach it
+    expect(run({ receipt_applications: [{ ...entry, execute_block_timestamp: 1000 + 3601 }] }, ["--delay-floor", "3600"]).code).toBe(0);
+    expect(run({ receipt_applications: [{ ...entry, execute_block_timestamp: 1000 + 3599 }] }, ["--delay-floor", "3600"]).code).toBe(1);
+    expect(run({ receipt_applications: [entry] }, ["--delay-floor", "0"]).code).toBe(2);
+    const nohash = run({ receipt_applications: [{ ...entry, execute_tx: "" }] });
+    expect(nohash.code).toBe(1);
+    expect(nohash.err).toContain("execute_tx is missing");
   });
 });
 

@@ -141,7 +141,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await c.runEq("registry: router() equals the deployed router", async () => lc((await chain.read(registry, "function router() view returns (address)")) as string), lc(router));
 
   // ---- deploy-time configuration, set by the deployer before the handover and never touched by govern (issue 1520)
-  await deployTimeChecks(c, chain, sheet, { governance: byName.governance!, router, vaults: man.vaults });
+  await deployTimeChecks(c, chain, sheet, { governance: byName.governance!, router, vaults: man.vaults, receipt: byName.receipt!, applied: opts.appliedReceipt });
 
   // ---- vaults
   for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet, recorder: byName.recorder!, artifactsDir: opts.artifactsDir, v4AdapterArtifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY] });
@@ -219,7 +219,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
 }
 
 async function deployTimeChecks(
-  c: Collector, chain: ChainReader, sheet: VerifyOptions["sheet"], at: { governance: Address; router: Address; vaults: ManifestVault[] },
+  c: Collector, chain: ChainReader, sheet: VerifyOptions["sheet"], at: { governance: Address; router: Address; vaults: ManifestVault[]; receipt: Address; applied?: VerifyOptions["appliedReceipt"] },
 ): Promise<void> {
   const g = sheet.governance;
   await c.run("governance: votingPower of every voter equals sheet", async () => {
@@ -230,14 +230,27 @@ async function deployTimeChecks(
   await c.runEq("governance: quorumThreshold equals sheet", () => chain.read(at.governance, "function quorumThreshold() view returns (uint256)"), g.quorum);
   await c.runEq("governance: votingPeriod equals sheet", () => chain.read(at.governance, "function votingPeriod() view returns (uint64)"), g.votingPeriod);
   await c.runEq("governance: executionDelay equals sheet", () => chain.read(at.governance, "function executionDelay() view returns (uint64)"), g.executionDelay);
+  const [rVaults, rBps] = await (async () => {
+    try { return (await chain.read(at.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]]; } catch { return undefined; }
+  })() ?? [undefined, undefined];
+  const gotWeights = rVaults && rBps ? rVaults.map((v, i) => `${lc(v)}:${rBps[i]}`).join(",") : undefined;
+  // Issue 1696: after `govern --row apply-receipt` the router holds the applied receipt's vector, not the sheet's.
+  const appliedWant = at.applied ? at.applied.vaults.map((v, i) => `${lc(v)}:${at.applied!.bps[i]}`).join(",") : undefined;
   await c.run("router: default weights equal sheet", async () => {
+    if (gotWeights === undefined) return { ok: false, detail: "getDefaultWeights unreadable" };
+    if (appliedWant !== undefined) return { ok: gotWeights === appliedWant, detail: gotWeights === appliedWant ? `${rVaults!.length} weights, set by the applied receipt ${at.applied!.receiptId}` : `got ${gotWeights}, want the applied receipt's ${appliedWant}` };
     const addrOf = new Map(at.vaults.map((v) => [v.key, v.address]));
     const missing = sheet.defaultWeights.filter((w) => !addrOf.has(w.vault)).map((w) => w.vault);
     if (missing.length) return { ok: false, detail: `no manifest vault for ${missing.join(",")}` };
-    const [vaults, bps] = (await chain.read(at.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
-    const got = vaults.map((v, i) => `${lc(v)}:${bps[i]}`).join(",");
     const want = sheet.defaultWeights.map((w) => `${lc(addrOf.get(w.vault)!)}:${w.bps}`).join(",");
-    return { ok: got === want, detail: got === want ? `${vaults.length} weights` : `got ${got}, want ${want}` };
+    return { ok: gotWeights === want, detail: gotWeights === want ? `${rVaults!.length} weights` : `got ${gotWeights}, want ${want}` };
+  });
+  // Always present, so the label set is the same with and without an application. Nothing applied: nothing to check. Applied: released, and the vector is on the router.
+  await c.run("receipt: applied receipt is released and its weights are on the router", async () => {
+    if (!at.applied) return { ok: true, detail: "no receipt applied by govern" };
+    const released = (await chain.read(at.receipt, "function isReleased(bytes32 receiptId) view returns (bool)", [at.applied.receiptId])) as boolean;
+    if (!released) return { ok: false, detail: `receipt ${at.applied.receiptId} reads not released` };
+    return { ok: gotWeights === appliedWant, detail: gotWeights === appliedWant ? `receipt ${at.applied.receiptId} released, ${at.applied.vaults.length} weights on the router` : `router weights ${gotWeights}, the applied receipt's vector is ${appliedWant}` };
   });
 }
 

@@ -1708,6 +1708,39 @@ impl Fixture {
         Ok(())
     }
 
+    /// Record a fixture payload on the receipt contract with its OWN digest, as the harness agent (issue 1696). The agent must be registered
+    /// already ([`Self::seed_consensus_receipts`] does it). The receipt stays recorded, not released. Returns the receipt id as 0x hex.
+    pub fn record_fixture_receipt(&self, file: &str) -> Result<String, HarnessError> {
+        let r = load_fixture_receipt(&self.repo_root, file)?;
+        let id = format!("0x{}", hex::encode(r.receipt_id));
+        let digest = format!("0x{}", hex::encode(keccak256(&r.bytes).0));
+        let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
+        self.cast_send(
+            &agent_pk_hex,
+            self.gateway(),
+            "consensusRecordReceipt(bytes32,bytes32,string)",
+            &[&id, &digest, &r.payload_uri],
+        )?;
+        Ok(id)
+    }
+
+    /// Apply a recorded fixture receipt through the REAL Safe and the REAL timelock (issue 1696): `govern --row apply-receipt` schedules ONE batch
+    /// (releaseReceipt plus the router weight change), waits the real delay (one time warp on the fork) and executes it. Returns the govern lines
+    /// (scheduled, executed), each with a tx hash and receipt status 1.
+    pub fn apply_fixture_receipt(
+        &self,
+        file: &str,
+    ) -> Result<Vec<publish::GovernRow>, HarnessError> {
+        let r = load_fixture_receipt(&self.repo_root, file)?;
+        let id = format!("0x{}", hex::encode(r.receipt_id));
+        let payload = self.repo_root.join(RECEIPT_FIXTURES_DIR_REL).join(file);
+        let payload = payload.display().to_string();
+        self.published.govern(
+            "apply-receipt",
+            &["--receipt-id", &id, "--payload", &payload],
+        )
+    }
+
     /// Grant `amount` USDC base units (6 decimals) to `recipient` on the real Base USDC token.
     ///
     /// This is the Twin chain environment step "fund USDC": it writes the real FiatToken

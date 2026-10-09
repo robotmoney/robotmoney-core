@@ -118,6 +118,12 @@ export interface VerifyOptions {
    * transaction back from the chain. Absent: the proof label fails (a deploy without the prove-control step is not accepted).
    */
   controlProof?: { txHash: Hex; nonce: number };
+  /**
+   * The last consensus receipt the Safe applied through `govern --row apply-receipt` (issue 1696), from the run manifest: the receipt id and the vector the
+   * router took. Absent: no receipt was applied and the router default weights must equal the sheet. Present: the receipt must read released and the router
+   * default weights must equal this vector (the sheet vector was superseded by the application).
+   */
+  appliedReceipt?: { receiptId: Hex; vaults: Address[]; bps: number[] };
   /** Test seam only: the pinned FiatTokenProxy code hash. Production never sets it (src/usdc.ts holds the pin). */
   usdcCodeHash?: string;
   /** Delay in ms between 429 retries (tests set 0). */

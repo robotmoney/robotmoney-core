@@ -141,6 +141,20 @@ describe("stage 12: the one verifier", () => {
     expect(manifest.stages.verify!.status).toBe("done");
   });
 
+  test("the verifier is handed the last receipt the Safe applied, from the run manifest receipt_applications (issue 1696)", async () => {
+    const { ctx } = setup();
+    const entry = (id: string, bps: number[]) => ({ receipt_id: id, vaults: ["0x00000000000000000000000000000000000000c1", "0x00000000000000000000000000000000000000c2"], bps });
+    const manifest = { ...newManifest(ctx, "0xa"), firstBlock: 5, receipt_applications: [entry("0x" + "01".repeat(32), [1000, 9000]), { bogus: true }, entry("0x" + "02".repeat(32), [4000, 6000])] };
+    let seen: any;
+    const deps = { verifyDeployment: async (o: any) => { seen = o; return { ok: true, checks: [{ label: "x", ok: true, detail: "" }] }; }, verifySources: async () => { throw new Error("no explorer"); } };
+    await runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest, deps as never);
+    expect(seen.appliedReceipt).toEqual({ receiptId: "0x" + "02".repeat(32), vaults: ["0x00000000000000000000000000000000000000c1", "0x00000000000000000000000000000000000000c2"], bps: [4000, 6000] });
+    // no application: nothing is handed over
+    const none = { ...newManifest(ctx, "0xa"), firstBlock: 5 };
+    await runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), none, deps as never);
+    expect(seen.appliedReceipt).toBeUndefined();
+  });
+
   test("without a first deploy block the role scan cannot run: stop", async () => {
     const { ctx } = setup();
     await expect(runVerifyStage(ctx, stageByName("verify"), newManifest(ctx, "0xa"), { verifyDeployment: async () => ({ ok: true, checks: [] }), verifySources: async () => ({ ok: true, checks: [] }) } as never)).rejects.toMatchObject({ kind: "INPUT_MISSING" });

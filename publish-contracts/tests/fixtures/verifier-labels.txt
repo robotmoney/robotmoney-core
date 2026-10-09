@@ -121,6 +121,7 @@ governance: quorumThreshold equals sheet
 governance: votingPeriod equals sheet
 governance: executionDelay equals sheet
 router: default weights equal sheet
+receipt: applied receipt is released and its weights are on the router
 vault[rmUSDC]: ADMIN_ROLE held by timelock
 vault[rmUSDC]: ADMIN_ROLE not held by deployer
 vault[rmUSDC]: DEFAULT_ADMIN not held by deployer

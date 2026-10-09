@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Evidence check for a mainnet run. Reads evidence/<run-id>/evidence.json (template: publish-contracts/evidence.example.json).
-// Usage: bun src/evidence-check.ts --evidence FILE [--frozen FILE --deploy-sha SHA] [--rpc URL [--record-chain-fixture OUT] | --chain-fixture FILE]
+// Usage: bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a Twin run; the floor defaults to the 8453 floor, a Twin run passes its own timelock min delay, issue 1696)
+//        bun src/evidence-check.ts --evidence FILE [--frozen FILE --deploy-sha SHA] [--rpc URL [--record-chain-fixture OUT] | --chain-fixture FILE]
 // Rejects: a wrong tx count against the frozen count, a missing tx hash, a failed receipt, a delay under 172800 s, a govern
 // schedule-to-execute gap under 172800 s per operation, a govern operation that shares a transaction or a timelock operation id with another one, any
 // operation scheduled on 8453 that is not a basket unpause (issue 1520) or a validated receipt release (issue 1611), a chain id other than 8453, owner exceptions recorded at or after plan approval.
@@ -51,6 +52,73 @@ const stepLabel = (g: any): string => (roundOf(g) === 1 ? String(g?.step) : `${g
 const RELEASE_ABI = parseAbi(["function releaseReceipt(bytes32 receiptId)"]);
 export const releaseCalldata = (receiptId: string): Hex => encodeFunctionData({ abi: RELEASE_ABI, functionName: "releaseReceipt", args: [receiptId as Hex] });
 const releaseLabel = (r: any) => `release-receipt ${r?.receipt_id}`;
+
+/**
+ * A post-launch receipt application (issue 1696, `govern --row apply-receipt`), recorded under `receipt_applications` (never in `govern`, so stage 13 stays the
+ * three unpauses). One entry per receipt: ONE timelock batch of exactly two calls, releaseReceipt(receipt_id) on the receipt contract (`consensus_receipt.address`)
+ * then setDefaultWeights(vaults, bps) on the governance contract (`governance.address`), one schedule and one execute at least MAINNET_DELAY_FLOOR apart.
+ * The Twin run writes the same entries into the run manifest and `--receipt-applications` checks them (a Twin run proves execution only, not mainnet governance).
+ */
+const APPLY_WEIGHTS_ABI = parseAbi(["function setDefaultWeights(address[] vaults, uint256[] bps)"]);
+export const applyCalldata = (receiptId: string, vaults: string[], bps: number[]): [Hex, Hex] => [
+  releaseCalldata(receiptId),
+  encodeFunctionData({ abi: APPLY_WEIGHTS_ABI, functionName: "setDefaultWeights", args: [vaults as Hex[], bps.map(BigInt)] }),
+];
+const applyLabel = (r: any) => `apply-receipt ${r?.receipt_id}`;
+
+/** The checks every operation of the run shares: both transactions present with status 1, one delay apart, none shared with another operation. */
+function operationProblems(operations: any[], bad: (m: string) => void, floor: number = MAINNET_DELAY_FLOOR): void {
+  for (const field of ["schedule_tx", "execute_tx", "operation_id"]) {
+    const seen = new Map<string, string>();
+    for (const g of operations) {
+      const h = typeof g?.[field] === "string" ? g[field].toLowerCase() : "";
+      if (!(field === "operation_id" ? h !== "" : TX.test(h))) continue;
+      const other = seen.get(h);
+      if (other !== undefined) bad(`govern ${g.step}: ${field} is also the ${field} of step '${other}' (one operation per unpause, none shared)`);
+      else seen.set(h, g.step);
+    }
+  }
+  for (const g of operations) {
+    if (!TX.test(g.schedule_tx ?? "")) bad(`govern ${g.step}: schedule_tx is missing`);
+    if (g.schedule_status !== 1) bad(`govern ${g.step}: schedule receipt status is ${g.schedule_status}`);
+    if (!TX.test(g.execute_tx ?? "")) bad(`govern ${g.step}: execute_tx is missing`);
+    if (g.execute_status !== 1) bad(`govern ${g.step}: execute receipt status is ${g.execute_status}`);
+    const gap = Number(g.execute_block_timestamp) - Number(g.schedule_block_timestamp);
+    if (!(gap >= floor)) bad(`govern ${g.step}: schedule-to-execute gap ${gap} s is under ${floor} s`);
+  }
+}
+
+/** The shape of the `receipt_applications` list and of each entry (no chain read). Also run on its own for a Twin run manifest. */
+function applicationShapeProblems(ev: any, bad: (m: string) => void): any[] {
+  const apps: any[] = ev?.receipt_applications === undefined ? [] : Array.isArray(ev.receipt_applications) ? ev.receipt_applications : (bad("receipt_applications is not a list"), []);
+  if (apps.length > 0 && !ADDR.test(ev?.consensus_receipt?.address ?? "")) bad("consensus_receipt.address is missing: a receipt application has no release target to check");
+  if (apps.length > 0 && !ADDR.test(ev?.governance?.address ?? "")) bad("governance.address is missing: a receipt application has no weight-change target to check");
+  const seen = new Set<string>();
+  for (const r of apps) {
+    const w = applyLabel(r);
+    if (!TX.test(r?.receipt_id ?? "")) bad(`${w}: receipt_id is not a bytes32`);
+    else if (seen.has(lc(r.receipt_id))) bad(`${w}: receipt_id has more than one evidence entry`);
+    else seen.add(lc(r.receipt_id));
+    if (r?.step !== undefined && r.step !== "apply-receipt") bad(`${w}: step '${r.step}' is not apply-receipt`);
+    if (lc(r?.target ?? "") !== lc(ev?.consensus_receipt?.address ?? "")) bad(`${w}: target ${r?.target} is not the receipt contract ${ev?.consensus_receipt?.address}`);
+    if (lc(r?.governance ?? "") !== lc(ev?.governance?.address ?? "")) bad(`${w}: governance ${r?.governance} is not the governance contract ${ev?.governance?.address}`);
+    const vaults: unknown[] = Array.isArray(r?.vaults) ? r.vaults : [];
+    const bps: unknown[] = Array.isArray(r?.bps) ? r.bps : [];
+    if (vaults.length === 0 || vaults.length !== bps.length || !vaults.every((v) => typeof v === "string" && ADDR.test(v)) || new Set(vaults.map((v) => lc(String(v)))).size !== vaults.length) bad(`${w}: vaults and bps are not a list of distinct addresses with one weight each`);
+    else if (!bps.every((x) => Number.isInteger(x) && (x as number) >= 0) || (bps as number[]).reduce((t, x) => t + x, 0) !== 10000) bad(`${w}: bps do not sum to 10000`);
+    if (releasedIds(ev).has(lc(r?.receipt_id ?? ""))) bad(`${w}: the receipt is also under receipt_releases: a receipt is released once`);
+  }
+  return apps;
+}
+const releasedIds = (ev: any): Set<string> => new Set<string>((Array.isArray(ev?.receipt_releases) ? ev.receipt_releases : []).map((r: any) => lc(String(r?.receipt_id ?? ""))));
+
+/** Offline check of `receipt_applications` alone: the shape, both transactions, the statuses and the delay floor. Problems; an empty list is a pass. */
+export function checkReceiptApplications(ev: any, floor: number = MAINNET_DELAY_FLOOR): string[] {
+  const p: string[] = [];
+  const apps = applicationShapeProblems(ev, (m) => p.push(m));
+  operationProblems(apps.map((r) => ({ ...r, step: applyLabel(r) })), (m) => p.push(m), floor);
+  return p;
+}
 
 export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): string[] {
   const p: string[] = [];
@@ -103,26 +171,9 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): s
     if (lc(r?.target ?? "") !== lc(ev?.consensus_receipt?.address ?? "")) bad(`${w}: target ${r?.target} is not the receipt contract ${ev?.consensus_receipt?.address}`);
     if (r?.step !== undefined && r.step !== "release-receipt") bad(`${w}: step '${r.step}' is not release-receipt`);
   }
-  // one operation per unpause or release: no schedule or execute transaction, and no timelock operation id, is shared by two operations
-  const operations = [...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) }))];
-  for (const field of ["schedule_tx", "execute_tx", "operation_id"]) {
-    const seen = new Map<string, string>();
-    for (const g of operations) {
-      const h = typeof g?.[field] === "string" ? g[field].toLowerCase() : "";
-      if (!(field === "operation_id" ? h !== "" : TX.test(h))) continue;
-      const other = seen.get(h);
-      if (other !== undefined) bad(`govern ${g.step}: ${field} is also the ${field} of step '${other}' (one operation per unpause, none shared)`);
-      else seen.set(h, g.step);
-    }
-  }
-  for (const g of operations) {
-    if (!TX.test(g.schedule_tx ?? "")) bad(`govern ${g.step}: schedule_tx is missing`);
-    if (g.schedule_status !== 1) bad(`govern ${g.step}: schedule receipt status is ${g.schedule_status}`);
-    if (!TX.test(g.execute_tx ?? "")) bad(`govern ${g.step}: execute_tx is missing`);
-    if (g.execute_status !== 1) bad(`govern ${g.step}: execute receipt status is ${g.execute_status}`);
-    const gap = Number(g.execute_block_timestamp) - Number(g.schedule_block_timestamp);
-    if (!(gap >= MAINNET_DELAY_FLOOR)) bad(`govern ${g.step}: schedule-to-execute gap ${gap} s is under ${MAINNET_DELAY_FLOOR} s`);
-  }
+  const applications = applicationShapeProblems(ev, bad);
+  // one operation per unpause, release or application: no schedule or execute transaction, and no timelock operation id, is shared by two operations
+  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) }))], bad);
   if (!ADDR.test(ev?.deployer ?? "")) bad("deployer address is missing");
   if (!ADDR.test(ev?.registry?.address ?? "")) bad("registry address is missing");
   if (!Number.isInteger(ev?.deployer_nonce_final)) bad("deployer_nonce_final is missing");
@@ -152,12 +203,12 @@ const PAUSED_ABI = parseAbi(["function depositsPaused() view returns (bool)"]);
 const lc = (x: string) => x.toLowerCase();
 
 function timelockEvents(rc: Awaited<ReturnType<ChainReader["getTransactionReceipt"]>>, timelock: string, name: "CallScheduled" | "CallExecuted") {
-  const out: { id: string; delay?: bigint; target: string; data: string }[] = [];
+  const out: { id: string; index: bigint; delay?: bigint; target: string; data: string }[] = [];
   for (const l of rc.logs) {
     if (lc(l.address) !== lc(timelock)) continue;
     try {
       const d: any = decodeEventLog({ abi: TIMELOCK_ABI, data: l.data, topics: l.topics as [Hex, ...Hex[]] });
-      if (d.eventName === name) out.push({ id: d.args.id as string, delay: d.args.delay as bigint | undefined, target: d.args.target as string, data: d.args.data as string });
+      if (d.eventName === name) out.push({ id: d.args.id as string, index: d.args.index as bigint, delay: d.args.delay as bigint | undefined, target: d.args.target as string, data: d.args.data as string });
     } catch { /* another event of the timelock */ }
   }
   return out;
@@ -246,6 +297,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= MAINNET_DELAY_FLOOR)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${MAINNET_DELAY_FLOOR} s`);
   }
+  p.push(...(await checkReceiptApplicationsOnChain(ev, chain)));
   // The unpause govern rows and the depositsPaused() reads must tell one story: a basket vault is unpaused on chain exactly when its LATEST unpause round executed,
   // and rmUSDC (open from launch, reopened by an unpause-USDC round after pause-all) reads unpaused whatever rounds it has.
   for (const b of [...BASKETS, "USDC"] as const) {
@@ -263,6 +315,54 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     }
     if (executed && paused !== false) bad(`govern unpause-${b} executed with receipt status 1, but rm${b}.depositsPaused() reads ${String(paused)} on chain, want false`);
     if (!executed && paused === false) bad(`rm${b}.depositsPaused() reads false on chain, but govern unpause-${b} has no executed receipt`);
+  }
+  return p;
+}
+
+/**
+ * Chain check of `receipt_applications` (issue 1696). Each entry is ONE timelock batch: the schedule tx has exactly two CallScheduled events with one operation
+ * id (the recorded operation_id), index 0 releaseReceipt(receipt_id) on the receipt contract, index 1 setDefaultWeights(vaults, bps) on the governance contract,
+ * each with a delay of at least MAINNET_DELAY_FLOOR. The execute tx has the two matching CallExecuted events. The block gap is at least MAINNET_DELAY_FLOOR.
+ * It does not read the chain id: a Twin run uses it too (run it with `--receipt-applications`).
+ */
+export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReader, floor: number = MAINNET_DELAY_FLOOR): Promise<string[]> {
+  const p: string[] = [];
+  const bad = (m: string) => p.push(m);
+  const ts = async (rc: { blockNumber: bigint }) => Number((await chain.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+  const status = async (what: string, hash: string) => {
+    try {
+      const rc = await chain.getTransactionReceipt({ hash: hash as Hex });
+      if (rc.status !== "success") bad(`${what}: receipt on chain is ${rc.status}`);
+      return rc;
+    } catch (e) { bad(`${what}: receipt not readable on chain (${(e as Error).message})`); return undefined; }
+  };
+  for (const r of Array.isArray(ev?.receipt_applications) ? ev.receipt_applications : []) {
+    const w = applyLabel(r);
+    if (!TX.test(r?.receipt_id ?? "") || !ADDR.test(ev.consensus_receipt?.address ?? "") || !ADDR.test(ev.governance?.address ?? "") || !Array.isArray(r.vaults) || !Array.isArray(r.bps) || r.vaults.length !== r.bps.length) continue; // the offline check already named it
+    const sc = await status(`${w} schedule`, r.schedule_tx);
+    if (!sc) continue;
+    const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
+    if (scheduled.length === 0) { bad(`${w}: the schedule tx has no CallScheduled event from the timelock`); continue; }
+    const [relData, wData] = applyCalldata(r.receipt_id, r.vaults, r.bps);
+    const wantCalls = [{ target: ev.consensus_receipt.address as string, data: relData, what: `releaseReceipt(${r.receipt_id})` }, { target: ev.governance.address as string, data: wData, what: "setDefaultWeights(vaults, bps) of the recorded vector" }];
+    if (scheduled.length !== wantCalls.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, an application is exactly ${wantCalls.length} calls (release, then weights) in one batch`);
+    scheduled.forEach((e, i) => {
+      const want = wantCalls[i];
+      if (want === undefined) { bad(`${w}: CallScheduled call ${i} is not part of an application`); return; }
+      if (lc(e.target) !== lc(want.target)) bad(`${w}: CallScheduled call ${i} target ${e.target} is not ${want.target}`);
+      else if (lc(e.data) !== lc(want.data)) bad(`${w}: CallScheduled call ${i} calldata is not ${want.what}`);
+      if (e.index !== BigInt(i)) bad(`${w}: CallScheduled call ${i} has batch index ${e.index}`);
+      if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
+      if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the batch calls are not one operation (${e.id} and ${scheduled[0]!.id})`);
+    });
+    if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0]!.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0]!.id}`);
+    const schedTs = await ts(sc);
+    const ex = await status(`${w} execute`, r.execute_tx);
+    if (!ex) continue;
+    const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id)).sort((x, y) => Number(x.index - y.index));
+    if (executed.length !== wantCalls.length || !executed.every((e, i) => lc(e.target) === lc(wantCalls[i]!.target) && lc(e.data) === lc(wantCalls[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the scheduled release and weight change`);
+    const gap = (await ts(ex)) - schedTs;
+    if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
   return p;
 }
@@ -353,8 +453,30 @@ export function scanEvidenceFolder(dir: string): string[] {
   return hits;
 }
 
+/**
+ * `--receipt-applications RUN_MANIFEST` (issue 1696): checks the `receipt_applications` entries a `govern --row apply-receipt` run wrote to its run manifest,
+ * with the receipt, governance and timelock addresses of that run. Offline shape and delay checks, then (with --rpc) the timelock events on that chain.
+ * The Twin rehearsal uses it: a Twin run proves the row executes on the real contracts, not that mainnet governance works.
+ */
+async function checkApplicationsMain(values: Record<string, string | boolean | undefined>): Promise<void> {
+  const need = ["consensus-receipt", "governance", "timelock"].filter((k) => typeof values[k] !== "string");
+  if (need.length) { console.error(`evidence: --receipt-applications needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
+  const m = JSON.parse(readFileSync(values["receipt-applications"] as string, "utf8"));
+  const ev = { consensus_receipt: { address: values["consensus-receipt"] }, governance: { address: values.governance }, timelock: { address: values.timelock }, receipt_applications: m.receipt_applications };
+  const floor = typeof values["delay-floor"] === "string" ? Number(values["delay-floor"]) : MAINNET_DELAY_FLOOR;
+  if (!Number.isInteger(floor) || floor < 1) { console.error("evidence: --delay-floor must be a positive number of seconds"); process.exit(2); }
+  const problems = [...(Array.isArray(m.receipt_applications) && m.receipt_applications.length > 0 ? [] : ["the run manifest has no receipt_applications entry"]), ...checkReceiptApplications(ev, floor)];
+  if (typeof values.rpc === "string") {
+    const { createPublicClient, http } = await import("viem");
+    problems.push(...(await checkReceiptApplicationsOnChain(ev, createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader, floor)));
+  }
+  if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
+  console.log(`evidence ok (${m.receipt_applications.length} receipt application(s)${values.rpc ? ", chain read" : ", offline shape only"})`);
+}
+
 async function main() {
-  const { values } = parseArgs({ options: { evidence: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" } } });
+  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" } } });
+  if (values["receipt-applications"]) return checkApplicationsMain(values);
   if (!values.evidence) { console.error("missing --evidence FILE"); process.exit(2); }
   const ev = JSON.parse(readFileSync(values.evidence, "utf8"));
   let counts: Record<string, number> | undefined;

@@ -404,6 +404,24 @@ the timelock as its own operation and the CLI exits `GOVERN_PENDING` (exit 15) w
 48-hour delay the same command makes the Safe execute it, and the CLI reads `released` back. Record the operation
 under `receipt_releases` in the evidence file. `update-delay`, `batch` and `cancel` stay Twin-only.
 
+### 4.9. Post-launch receipt application (the Safe applies a rebalance)
+
+The Safe multisig, through the timelock, is the only body that changes Robot Money contract configuration, router weights included. There is no vote. `govern --row apply-receipt --receipt-id 0x<bytes32> --payload FILE` applies one recorded consensus receipt as ONE timelock batch (issue 1696): `releaseReceipt(receiptId)` on the receipt contract and the router weight change for the receipt's vector (on today's bytecode `RouterGovernance.setDefaultWeights(vaults, bps)`, the ADMIN call the timelock holds). Release and weights are one operation, so partial state is impossible. After the real delay the same command makes the Safe execute the batch, and the tool reads `isReleased(receiptId)` and the router's default weights back and fails (`GOVERN`, exit 14) if either differs.
+
+`--payload FILE` is the receipt payload whose `weights` list names a bucket and `weight_bps` per entry. The buckets map to the basket vaults (`conservative_defi_yield` rmUSDC, `protocol_tokens` rmPROTO, `agent_tokens` rmAGENT, `real_world_assets` rmRWA). A bucket at 0 bps whose vault is not router-eligible is dropped, every other entry stays in payload order.
+
+Refusals. Each exits `USAGE` (exit 2) before anything is sent, so no delay is spent:
+
+- the receipt is not recorded on the receipt contract, or is already released;
+- `keccak256` of the payload file bytes differs from the digest the receipt stored on chain (a weights-only edit of a published receipt);
+- the weights do not sum to 10000 bps;
+- the vector does not list exactly the registry's router-eligible vaults (a missing vault, a vault that is not eligible and carries weight, an unknown or repeated bucket);
+- the vault order differs from the registry order.
+
+Never part of stage 13, which stays the three basket unpauses: no default run, stage run or numbered `--row` reaches it. On 8453 it runs only when named with `--row apply-receipt`, a receipt id and a payload, as a post-launch action with its own 172800 s delay: the first run schedules and exits `GOVERN_PENDING` (exit 15) with the resume command, the same command after the delay executes it. An operation the operator cancelled through the Safe is scheduled again by the same command, with a newer sequence number. Record the operation under `receipt_applications` in the evidence file (with `governance.address`): `evidence-check` accepts it only as one batch of exactly the release and the weight change, one delay apart. Whether the mainnet test deployment runs this row after the unpause round is an open owner decision, default: no.
+
+The Twin rehearsal runs the row after the unpause rows (and checks `receipt_applications` of its run manifest with `evidence-check --receipt-applications`). The Twin proves execution only: that the row executes on the real contracts through the real Safe and timelock. It is not evidence that mainnet governance works (rule b).
+
 ## 5. Per-release runbook format
 
 Each release has an operator runbook committed under `docs/runbooks/`. The

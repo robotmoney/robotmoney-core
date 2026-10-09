@@ -258,6 +258,105 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "receipt B was recorded only: it must not read released"
     );
 
+    // Issue 1696: the Safe applies a consensus receipt through the timelock as ONE batch (releaseReceipt plus the router weight change), after the
+    // unpause rows. A third receipt (receipt-c) is recorded with its own digest, unreleased. `govern --row apply-receipt` checks it before sending,
+    // schedules the batch through the real Safe, waits the real delay (one time warp on the fork) and executes it. The tool read both back; this test
+    // reads them again from the chain. The Twin proves the row executes on the real contracts, not that mainnet governance works.
+    let router_weights = |fx: &Fixture| -> (Vec<String>, Vec<u64>) {
+        let raw = fx
+            .cast_call_raw(fx.router(), "getDefaultWeights()", &[])
+            .expect("read the router default weights");
+        let n = usize::from_str_radix(&word(&raw, 2), 16).expect("vault count");
+        let vaults = (0..n)
+            .map(|i| format!("0x{}", &word(&raw, 3 + i)[24..]))
+            .collect();
+        let bps = (0..n)
+            .map(|i| u64::from_str_radix(&word(&raw, 4 + n + i), 16).expect("bps"))
+            .collect();
+        (vaults, bps)
+    };
+    let c_id = fx
+        .record_fixture_receipt("receipt-c.json")
+        .expect("record receipt C with its own digest");
+    let c_released = |fx: &Fixture| -> bool {
+        fx.cast_call_raw(fx.consensus_receipt(), "isReleased(bytes32)", &[&c_id])
+            .expect("read isReleased")
+            .ends_with('1')
+    };
+    assert!(!c_released(&fx), "receipt C is recorded, not released");
+    let before = router_weights(&fx);
+    let want_vaults: Vec<String> = [fx.vault(), fx.proto_vault(), fx.rwa_vault()]
+        .iter()
+        .map(|a| format!("{a:#x}"))
+        .collect();
+    assert_eq!(
+        before.0, want_vaults,
+        "the router lists the eligible vaults in registry order"
+    );
+    assert_ne!(
+        before.1,
+        vec![5000, 3000, 2000],
+        "the router must not already hold receipt C's vector"
+    );
+    let applied = fx
+        .apply_fixture_receipt("receipt-c.json")
+        .expect("the Safe applies receipt C through the timelock");
+    assert_eq!(
+        applied.iter().map(|r| r.row.as_str()).collect::<Vec<_>>(),
+        vec!["apply-receipt", "apply-receipt"],
+        "one scheduled line and one executed line"
+    );
+    assert!(
+        c_released(&fx),
+        "receipt C must read released after the batch"
+    );
+    let after = router_weights(&fx);
+    assert_eq!(after.0, want_vaults, "the vault list is unchanged");
+    assert_eq!(
+        after.1,
+        vec![5000, 3000, 2000],
+        "the router holds receipt C's vector after the batch"
+    );
+    // The rehearsal evidence: the run manifest records the round under receipt_applications and evidence-check asserts it against the chain
+    // (one batch of exactly the release and the weight change, one real delay apart).
+    // The Twin timelock runs a short delay: the floor is the delay the chain itself reports, so the gap must still reach it.
+    let min_delay = u64::from_str_radix(
+        &word(
+            &fx.cast_call_raw(fx.timelock(), "getMinDelay()", &[])
+                .expect("read the timelock min delay"),
+            0,
+        ),
+        16,
+    )
+    .expect("min delay");
+    run_bun(
+        fx.repo_root(),
+        &[
+            s("publish-contracts/src/evidence-check.ts"),
+            s("--delay-floor"),
+            min_delay.to_string(),
+            s("--receipt-applications"),
+            run_manifest_path.display().to_string(),
+            s("--consensus-receipt"),
+            fx.consensus_receipt_hex().to_string(),
+            s("--governance"),
+            fx.governance_hex().to_string(),
+            s("--timelock"),
+            fx.timelock_hex().to_string(),
+            s("--rpc"),
+            fx.rpc_url().to_string(),
+        ],
+    );
+    let run_after: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&run_manifest_path).expect("read the run manifest"),
+    )
+    .expect("the run manifest is JSON");
+    let apps = run_after["receipt_applications"]
+        .as_array()
+        .expect("the run manifest records receipt_applications");
+    assert_eq!(apps.len(), 1, "one receipt was applied");
+    assert_eq!(apps[0]["receipt_id"], c_id.to_lowercase());
+
     // Core 1676 (owner decision 2026-10-08): rmAGENT holds RM on the Uniswap V4 RM/USDC pool. The verifier read the venue, the V4 adapter, the
     // recorder PoolKey and the absence of any recorder admin back from the chain: each label is in the output or `verify()` above would have failed.
     for label in [
