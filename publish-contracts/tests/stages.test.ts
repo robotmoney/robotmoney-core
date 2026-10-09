@@ -154,9 +154,9 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
 });
 
 describe("the govern stage lists the unpause-only matrix (issue 1520)", () => {
-  test("governRowNames() is the three basket unpauses then the Twin-only demonstrations, and no 13-row list survives", () => {
-    expect([...governRowNames()]).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
-    expect(governRowNames().length).toBe(6);
+  test("governRowNames() is the four vault unpauses then the Twin-only demonstrations, and no 13-row list survives", () => {
+    expect([...governRowNames()]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
+    expect(governRowNames().length).toBe(7);
     const g = (table as unknown as { govern: { mainnetRows: string[]; twinOnlyRows: string[] } }).govern;
     expect([...g.mainnetRows, ...g.twinOnlyRows]).toEqual([...governRowNames()]);
   });

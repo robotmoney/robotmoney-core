@@ -43,19 +43,19 @@ describe("evidence check, more negatives", () => {
   test("a missing govern schedule tx is rejected", () => expect(mut((e) => { delete e.govern[0].schedule_tx; })).toContain("schedule_tx is missing"));
   test("a missing unpause is rejected", () => expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== "unpause-AGENT"); })).toContain("'unpause-AGENT'"));
   test("every unpause is required", () => { for (const step of GOVERN_STEPS) expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== step); })).toContain(`'${step}'`); });
-  test("Stage 13 on 8453 is the three basket unpauses, and the unpause rows of the govern CLI are the same list", () => {
-    expect(GOVERN_STEPS).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
+  test("Stage 13 on 8453 is the four vault unpauses (rmUSDC first), and the unpause rows of the govern CLI are the same list", () => {
+    expect(GOVERN_STEPS).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
     expect([...GOVERN_STEPS]).toEqual([...UNPAUSE_ROWS]);
   });
   test("a non-unpause operation scheduled on 8453 is rejected: update-delay, batch, cancel and anything else", () => {
     for (const step of ["update-delay", "batch", "cancel", "voting-power-quorum", "agents", "other-setters", "router-weights", "migrate-eligibility-PROTO", "round1"]) {
-      expect(mut((e) => { e.govern.push({ ...e.govern[0], step, schedule_tx: h(700), execute_tx: h(701), operation_id: h(702) }); })).toContain(`'${step}' is not a basket unpause`);
+      expect(mut((e) => { e.govern.push({ ...e.govern[0], step, schedule_tx: h(700), execute_tx: h(701), operation_id: h(702) }); })).toContain(`'${step}' is not a vault unpause`);
     }
   });
   test("a complete record with one schedule and one execute per unpause, at least 172800 s apart and with distinct operation ids, passes", () => {
     const e = good();
-    expect(e.govern.length).toBe(3);
-    expect(new Set(e.govern.map((g: any) => g.operation_id)).size).toBe(3);
+    expect(e.govern.length).toBe(4);
+    expect(new Set(e.govern.map((g: any) => g.operation_id)).size).toBe(4);
     for (const g of e.govern) expect(g.execute_block_timestamp - g.schedule_block_timestamp).toBeGreaterThanOrEqual(172800);
     expect(checkEvidence(e)).toEqual([]);
   });
@@ -143,7 +143,7 @@ describe("evidence check reading the chain (stub RPC)", () => {
   test("a non-unpause operation on chain is rejected, even with a clean receipt", async () => {
     const e = good();
     e.govern.push({ ...e.govern[0], step: "update-delay", schedule_tx: h(500), execute_tx: h(501) });
-    expect((await checkEvidenceOnChain(e, stub(e), { safe: 2 })).join()).toContain("not a basket unpause");
+    expect((await checkEvidenceOnChain(e, stub(e), { safe: 2 })).join()).toContain("not a vault unpause");
   });
   test("another chain id is rejected", async () => expect((await online({ chainId: 918453 })).join()).toContain("RPC reports chain"));
 });
@@ -158,7 +158,7 @@ describe("a post-launch consensus receipt release on 8453 (issue 1611)", () => {
     expect(await chain()).toBe("");
   });
   test("a release in the govern list is still refused: only receipt_releases may carry it", () => {
-    expect(mut((e) => { e.govern.push({ ...e.govern[0], step: "release-receipt", schedule_tx: h(700), execute_tx: h(701), operation_id: h(702) }); })).toContain("is not a basket unpause");
+    expect(mut((e) => { e.govern.push({ ...e.govern[0], step: "release-receipt", schedule_tx: h(700), execute_tx: h(701), operation_id: h(702) }); })).toContain("is not a vault unpause");
   });
   test("the receipt contract address is required when a release is recorded", () => expect(offline((e) => { delete e.consensus_receipt; })).toContain("consensus_receipt.address is missing"));
   test("a recorded target that is not the receipt contract is rejected", () => expect(offline((e) => { e.receipt_releases[0].target = a(31); })).toContain("is not the receipt contract"));
@@ -181,7 +181,7 @@ describe("a post-launch consensus receipt release on 8453 (issue 1611)", () => {
   test("any other operation on 8453 still fails", async () => {
     expect(await chain({ relData: "0x12345678" })).toContain("calldata is not releaseReceipt");
     const e = rel(); e.govern.push({ ...e.govern[0], step: "update-delay", schedule_tx: h(500), execute_tx: h(501) });
-    expect((await checkEvidenceOnChain(e, stub(e), { safe: 2 })).join()).toContain("not a basket unpause");
+    expect((await checkEvidenceOnChain(e, stub(e), { safe: 2 })).join()).toContain("not a vault unpause");
   });
   test("the template lists the release block and an empty list passes", () => {
     const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
@@ -295,17 +295,23 @@ describe("owner exceptions before plan approval", () => {
 });
 
 describe("unpause govern rows and paused=false reads tell one story", () => {
-  test("every unpause row executed and every basket vault reads paused=false: passes", async () => expect(await online({ paused: false })).toEqual([]));
+  test("every unpause row executed and every vault reads paused=false: passes", async () => expect(await online({ paused: false })).toEqual([]));
   test("an unpause row that executed while the vault still reads paused=true is rejected, naming the row", async () => {
     const p = await online({ paused: true });
     expect(p.join("\n")).toContain("govern unpause-PROTO executed with receipt status 1, but rmPROTO.depositsPaused() reads true");
-    expect(p.filter((m) => m.includes("depositsPaused()")).length).toBe(4); // three baskets and rmUSDC (which must read open)
+    expect(p.filter((m) => m.includes("depositsPaused()")).length).toBe(4); // rmUSDC and the three baskets, all four tied to their unpause row
+    expect(p.join("\n")).toContain("govern unpause-USDC executed with receipt status 1, but rmUSDC.depositsPaused() reads true");
   });
   test("a vault that reads paused=false with no executed unpause row is rejected", async () => {
     const p = await online({ paused: false }, (e) => { const g = e.govern.find((x: any) => x.step === "unpause-RWA"); g.execute_status = 0; });
     expect(p.join("\n")).toContain("rmRWA.depositsPaused() reads false on chain, but govern unpause-RWA has no executed receipt");
   });
-  test("rmUSDC ships unpaused: it reads false with no unpause-USDC round", async () => expect((await online({ paused: false })).join()).not.toContain("rmUSDC"));
+  test("rmUSDC deploys paused (core 1710): it reads false only with an executed unpause-USDC row", async () => {
+    expect((await online({ paused: false })).join()).not.toContain("rmUSDC");
+    const p = await online({ paused: false }, (e) => { e.govern.find((x: any) => x.step === "unpause-USDC").execute_status = 0; });
+    expect(p.join("\n")).toContain("rmUSDC.depositsPaused() reads false on chain, but govern unpause-USDC has no executed receipt");
+  });
+  test("a missing unpause-USDC row is rejected: rmUSDC is no longer optional", () => expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== "unpause-USDC"); })).toContain("'unpause-USDC' of Stage 13 has no evidence entry"));
 });
 
 describe("recorded chain fixture (offline mode of the same chain checks)", () => {
@@ -384,19 +390,18 @@ describe("the evidence template", () => {
 
 // ---- issue 1667: the four-vault unpause rounds ----
 describe("issue 1667: rmUSDC and re-paused vaults come back through numbered Safe unpause rounds", () => {
-  const usdc = (n = 0, round?: number) => ({ step: "unpause-USDC", ...(round ? { round } : {}), operation_id: h(800 + n), schedule_tx: h(300 + n * 2), schedule_block_timestamp: T0 + 400000 + n * 400000, execute_tx: h(301 + n * 2), execute_block_timestamp: T0 + 400000 + n * 400000 + 172800, schedule_status: 1, execute_status: 1 });
+  const usdc = (n = 5, round = 2) => ({ step: "unpause-USDC", round, operation_id: h(800 + n), schedule_tx: h(300 + n * 2), schedule_block_timestamp: T0 + 400000 + n * 400000, execute_tx: h(301 + n * 2), execute_block_timestamp: T0 + 400000 + n * 400000 + 172800, schedule_status: 1, execute_status: 1 });
   /** a second PROTO round: scheduled after round 1 executed */
-  const proto2 = () => ({ ...usdc(5, 2), step: "unpause-PROTO" });
+  const proto2 = () => ({ ...usdc(6, 2), step: "unpause-PROTO" });
   const withUsdc = (e: any) => { e.govern.push(usdc()); };
   const offline = (f: (e: any) => void) => { const e = good(); f(e); return checkEvidence(e).join("\n"); };
   const chain = (o: Opts, f: (e: any) => void) => { const e = good(); f(e); return checkEvidenceOnChain(e, stub(e, o), { safe: 2 }).then((p) => p.join("\n")); };
 
-  test("an unpause-USDC round is accepted offline and on chain, and rmUSDC may also have no round at all", async () => {
+  test("a second unpause-USDC round (after a pause-all) is accepted offline and on chain", async () => {
     expect(offline(withUsdc)).toBe("");
     expect(await chain({}, withUsdc)).toBe("");
-    expect(checkEvidence(good())).toEqual([]);
   });
-  test("the template step list still has the three basket steps only: rmUSDC is optional", () => expect(GOVERN_STEPS).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]));
+  test("the template step list has all four vault steps: rmUSDC is required", () => expect(GOVERN_STEPS).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA"]));
   test("any other call on rmUSDC is rejected: another function (setPerDepositCap), garbage calldata, another target", async () => {
     const calls = ["0x12345678", encodeFunctionDataSetCap()];
     for (const data of calls) expect(await chain({ stepData: { "unpause-USDC": data } }, withUsdc)).toContain("unpauseDeposits(): the only call");
@@ -407,11 +412,11 @@ describe("issue 1667: rmUSDC and re-paused vaults come back through numbered Saf
     expect(await chain({ stepTarget: { "unpause-RWA": a(5) } }, () => {})).toContain("is not rmRWA");
   });
   test("a step that is not an unpause is still rejected, rmUSDC included", () => {
-    expect(offline((e) => { e.govern.push({ ...usdc(), step: "set-cap-USDC" }); })).toContain("is not a basket unpause");
+    expect(offline((e) => { e.govern.push({ ...usdc(), step: "set-cap-USDC" }); })).toContain("is not a vault unpause");
   });
-  test("rmUSDC that reads paused is rejected even when a round is recorded", async () => {
+  test("rmUSDC that reads paused is rejected when its latest round executed", async () => {
     const p = await chain({ pausedBy: { [a(5)]: true } }, withUsdc);
-    expect(p).toContain("rmUSDC.depositsPaused() reads true on chain, want false");
+    expect(p).toContain("govern unpause-USDC executed with receipt status 1, but rmUSDC.depositsPaused() reads true");
   });
   test("a second round of a basket is accepted when it is scheduled after round 1 executed and has its own transactions and operation id", async () => {
     const add = (e: any) => { e.govern.push(proto2()); };

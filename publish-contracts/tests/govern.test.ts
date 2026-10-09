@@ -16,17 +16,18 @@ import { REPO, SHA, sheetText } from "./fixtures.ts";
 import { A, addr, fakeTimelock, sender, setup, signers } from "./govern-world.ts";
 
 const ALL = {
-  ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA",
+  ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA",
   ROUTER_WEIGHTS: "USDC:5000,PROTO:2500,AGENT:1000,RWA:1500",
 };
 const DELAY = 172800n;
 const authorizeAgentSelector = toFunctionSelector("authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))");
 const BASKETS = ["PROTO", "AGENT", "RWA"] as const;
+const VAULTS = ["USDC", ...BASKETS] as const;
 
-describe("the govern rows: the basket unpauses plus the Twin-only demonstrations", () => {
-  test("governRowNames() is exactly the three unpauses then update-delay, batch, cancel", () => {
-    expect([...governRowNames()]).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
-    expect([...UNPAUSE_ROWS]).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
+describe("the govern rows: the four vault unpauses plus the Twin-only demonstrations", () => {
+  test("governRowNames() is exactly the four unpauses (rmUSDC first) then update-delay, batch, cancel", () => {
+    expect([...governRowNames()]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
+    expect([...UNPAUSE_ROWS]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
     expect([...TWIN_ONLY_ROWS]).toEqual(["update-delay", "batch", "cancel"]);
   });
   test("there is no agents row and the planner never encodes authorizeAgent (core 1527)", () => {
@@ -40,24 +41,25 @@ describe("the govern rows: the basket unpauses plus the Twin-only demonstrations
     expect([...stageRows(8453)]).toEqual([...UNPAUSE_ROWS]);
     expect([...stageRows(918453)]).toEqual([...GOVERN_ROWS]);
   });
-  test("an unknown or out-of-range row is a usage error, and the numbers are the six rows", () => {
-    for (const bad of ["0", "7", "13", "nope", "-1", "voting-power-quorum", "agents", "other-setters", "router-weights", "migrate-eligibility-PROTO"]) expect(() => resolveGovernRow(bad)).toThrow(PublishError);
-    expect(resolveGovernRow("1")).toBe("unpause-PROTO");
-    expect(resolveGovernRow("6")).toBe("cancel");
+  test("an unknown or out-of-range row is a usage error, and the numbers are the seven rows", () => {
+    for (const bad of ["0", "8", "13", "nope", "-1", "voting-power-quorum", "agents", "other-setters", "router-weights", "migrate-eligibility-PROTO"]) expect(() => resolveGovernRow(bad)).toThrow(PublishError);
+    expect(resolveGovernRow("1")).toBe("unpause-USDC");
+    expect(resolveGovernRow("2")).toBe("unpause-PROTO");
+    expect(resolveGovernRow("7")).toBe("cancel");
     expect(resolveGovernRow("update-delay")).toBe("update-delay");
   });
 });
 
-describe("the committed Twin stage sheet plans the three basket unpauses (core 1703)", () => {
+describe("the committed Twin stage sheet plans the four vault unpauses (core 1710)", () => {
   const twinSheet = parseSheet(readFileSync(join(REPO, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
-  test("GOVERN_UNPAUSE_VAULTS is PROTO,AGENT,RWA: a rehearsal differs from production only in arguments", () => {
-    expect(twinSheet.govern.unpauseVaults).toEqual(["PROTO", "AGENT", "RWA"]);
+  test("GOVERN_UNPAUSE_VAULTS is USDC,PROTO,AGENT,RWA: a rehearsal differs from production only in arguments", () => {
+    expect(twinSheet.govern.unpauseVaults).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
   });
   test("each unpause row builds exactly one unpauseDeposits call from that sheet", () => {
     const { ctx } = setup();
     const a = loadGovernAddrs(ctx);
     const calls = UNPAUSE_ROWS.map((r) => buildStepCalls(twinSheet, a, r).length);
-    expect(calls).toEqual([1, 1, 1]);
+    expect(calls).toEqual([1, 1, 1, 1]);
   });
 });
 
@@ -95,7 +97,7 @@ const spyPaused = (tl: ReturnType<typeof fakeTimelock>) => {
 };
 
 describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, one resume executes them all", () => {
-  test("one run schedules PROTO, AGENT and RWA, each its own operation and its own Safe transaction, and exits GOVERN_PENDING exactly once", async () => {
+  test("one run schedules USDC, PROTO, AGENT and RWA, each its own operation and its own Safe transaction, and exits GOVERN_PENDING exactly once", async () => {
     const { ctx, sheet } = setup(ALL, 8453);
     const tl = fakeTimelock(sheet, DELAY);
     const out: string[] = [];
@@ -107,17 +109,17 @@ describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, o
     expect(e.kind).toBe("GOVERN_PENDING");
     expect(e.exitCode).toBe(15);
     expect(warps).toBe(0);
-    // all three scheduled in this one run, in order, none executed
-    expect(tl.s.events).toEqual(["schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA"]);
+    // all four scheduled in this one run, in order, none executed
+    expect(tl.s.events).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA"]);
     // distinct timelock operation ids
     const ids = UNPAUSE_ROWS.map((r) => tl.s.ids.get(r)!);
-    expect(new Set(ids).size).toBe(3);
+    expect(new Set(ids).size).toBe(4);
     // no Safe transaction is shared by two operations: one transaction per operation, all hashes different
     const hashes = ids.flatMap((id) => tl.s.safeTxs.get(id)!);
-    expect(hashes.length).toBe(3);
-    expect(new Set(hashes).size).toBe(3);
+    expect(hashes.length).toBe(4);
+    expect(new Set(hashes).size).toBe(4);
     // each is a single-call unpause of its own vault
-    for (const k of BASKETS) {
+    for (const k of VAULTS) {
       const sc = tl.s.scheduled.get(`unpause-${k}`)!;
       expect(sc.form).toBe("single");
       expect(sc.calls.map((c) => c.target)).toEqual([A.vaults[k]]);
@@ -147,11 +149,11 @@ describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, o
     const res = await run(ctx, manifest, sheet, tl, { warp: noWarp, emit: (l: string) => out.push(l) });
     expect(res.rows).toEqual([...UNPAUSE_ROWS]);
     expect(tl.s.events).toEqual([
-      "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA",
-      "execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA",
+      "schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA",
+      "execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA",
     ]);
-    expect([...new Set(paused)].sort()).toEqual(BASKETS.map((k) => A.vaults[k]).sort());
-    for (const k of BASKETS) expect((manifest.govern as any)[`unpause-${k}`].executed.tx_hash).toBeDefined();
+    expect([...new Set(paused)].sort()).toEqual(VAULTS.map((k) => A.vaults[k]).sort());
+    for (const k of VAULTS) expect((manifest.govern as any)[`unpause-${k}`].executed.tx_hash).toBeDefined();
     // the stage is done on 8453 with the unpauses alone: the Twin-only rows never run there
     expect(manifest.stages.govern!.status).toBe("done");
     expect(Object.keys(manifest.govern!)).toEqual([...UNPAUSE_ROWS]);
@@ -168,7 +170,7 @@ describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, o
     await expect(run(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
     tl.s.clock += DELAY - 7200n;
     await expect(run(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING", details: { remaining: 7200 } });
-    expect(tl.s.events.length).toBe(3);
+    expect(tl.s.events.length).toBe(4);
   });
 
   test("a huge --max-wait still does not block for the delay on 8453", async () => {
@@ -194,7 +196,7 @@ describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, o
   });
 
   test("the Twin-only rows are refused with USAGE on 8453, by name and by number, and nothing is sent", async () => {
-    for (const row of [...TWIN_ONLY_ROWS, "4", "5", "6"]) {
+    for (const row of [...TWIN_ONLY_ROWS, "5", "6", "7"]) {
       const { ctx, sheet } = setup(ALL, 8453);
       const tl = fakeTimelock(sheet, DELAY);
       const err = await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row }).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
@@ -232,7 +234,7 @@ describe("a dependent operation carries its predecessor and runs in the same res
     expect(tl.s.ids.get("unpause-AGENT")).not.toBe(tl.s.ids.get("unpause-RWA"));
     tl.s.clock += DELAY;
     await run(ctx, manifest, sheet, tl, { dependsOn });
-    expect(tl.s.events.slice(3)).toEqual(["execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA"]);
+    expect(tl.s.events.slice(4)).toEqual(["execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA"]);
     expect(manifest.stages.govern!.status).toBe("done");
   });
 
@@ -246,7 +248,7 @@ describe("a dependent operation carries its predecessor and runs in the same res
     const m = newManifest(ctx, addr(0xa001));
     await run(ctx, m, sheet, tl, { dependsOn, warp: async (s: bigint) => { warped.push(s); tl.s.clock += s; } });
     expect(warped[0]).toBe(DELAY + 1n);
-    expect(tl.s.events.slice(0, 7)).toEqual(["schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA", "execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA", "updateDelay.schedule:update-delay"]);
+    expect(tl.s.events.slice(0, 9)).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA", "execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA", "updateDelay.schedule:update-delay"]);
   });
 
   test("a predecessor that does not come first is a usage error", async () => {
@@ -282,8 +284,8 @@ describe("a Twin fork: one sitting, ONE warp, then the Twin-only rows one round 
     const res = await run(ctx, manifest, sheet, tl, { warp: async (s: bigint) => { warped.push(s); tl.s.events.push("warp"); tl.s.clock += s; }, emit: (l: string) => out.push(l) });
     expect(res.rows as string[]).toEqual([...GOVERN_ROWS]);
     expect(tl.s.events).toEqual([
-      "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA", "warp",
-      "execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA",
+      "schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA", "warp",
+      "execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-AGENT", "execute:unpause-RWA",
       "updateDelay.schedule:update-delay", "warp", "updateDelay.execute:update-delay",
       "scheduleBatch:batch", "warp", "executeBatch:batch",
       "schedule:cancel", "cancel:cancel",
@@ -306,7 +308,7 @@ describe("a Twin fork: one sitting, ONE warp, then the Twin-only rows one round 
   });
 
   test("a sheet that omits a basket skips it and says why", async () => {
-    const { ctx, sheet } = setup({ GOVERN_UNPAUSE_VAULTS: "PROTO,RWA" });
+    const { ctx, sheet } = setup({ GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA" });
     const tl = fakeTimelock(sheet, DELAY);
     const manifest = newManifest(ctx, addr(0xa001));
     const res = await run(ctx, manifest, sheet, tl, { warp: warpTo(tl) });
@@ -349,7 +351,7 @@ describe("a Twin fork: one sitting, ONE warp, then the Twin-only rows one round 
     const tl = fakeTimelock(sheet, DELAY);
     tl.s.reads.depositsPaused = true;
     const manifest = newManifest(ctx, addr(0xa001));
-    await expect(run(ctx, manifest, sheet, tl, { warp: warpTo(tl) })).rejects.toThrow("unpause-PROTO");
+    await expect(run(ctx, manifest, sheet, tl, { warp: warpTo(tl) })).rejects.toThrow("unpause-USDC");
     // every unpause was scheduled in the one sitting, only the first execute ran and its read-back failed
     expect((manifest.govern as any)["unpause-PROTO"].scheduled).toBeDefined();
     expect((manifest.govern as any)["unpause-PROTO"].executed).toBeUndefined();
@@ -364,7 +366,7 @@ describe("ordering of the Twin-only rows", () => {
     const tl = fakeTimelock(sheet, DELAY);
     const err = await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "update-delay", warp: warpTo(tl) }).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
     expect(err.kind).toBe("GOVERN");
-    expect(err.message).toContain("unpause-PROTO");
+    expect(err.message).toContain("unpause-USDC");
     expect(tl.s.events).toEqual([]);
   });
 
@@ -646,7 +648,7 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
 describe("issue 1667: the on-demand unpause-USDC row and round-numbered salts", () => {
   const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
   const R = (ctx: any, manifest: any, sheet: any, tl: any, extra: object = {}) => run(ctx, manifest, sheet, tl, { warp: noWarp, ...extra });
-  /** A full default 8453 run: schedule, wait, execute all three baskets. */
+  /** A full default 8453 run: schedule, wait, execute all four vaults. */
   async function launched() {
     const d = setup(ALL, 8453);
     const tl = fakeTimelock(sheet0(d), DELAY);
@@ -658,28 +660,29 @@ describe("issue 1667: the on-demand unpause-USDC row and round-numbered salts", 
   }
   const sheet0 = (d: { sheet: ReturnType<typeof parseSheet> }) => d.sheet;
 
-  test("unpause-USDC is accepted by name, is not a numbered row, and is in no default run on either chain", () => {
+  test("unpause-USDC is a stage row like the other three (core 1710): accepted by name and as row 1, in the default run on both chains", () => {
     expect(resolveGovernRow("unpause-USDC")).toBe(UNPAUSE_USDC_ROW);
-    expect(GOVERN_ROWS as readonly string[]).not.toContain(UNPAUSE_USDC_ROW);
-    expect([...stageRows(8453)] as string[]).not.toContain(UNPAUSE_USDC_ROW);
-    expect([...stageRows(918453)] as string[]).not.toContain(UNPAUSE_USDC_ROW);
-    expect(() => resolveGovernRow("7")).toThrow(PublishError);
+    expect(resolveGovernRow("1")).toBe(UNPAUSE_USDC_ROW);
+    expect(GOVERN_ROWS as readonly string[]).toContain(UNPAUSE_USDC_ROW);
+    expect([...stageRows(8453)] as string[]).toContain(UNPAUSE_USDC_ROW);
+    expect([...stageRows(918453)] as string[]).toContain(UNPAUSE_USDC_ROW);
+    expect(() => resolveGovernRow("8")).toThrow(PublishError);
   });
-  test("its one call is unpauseDeposits() on rmUSDC, whatever GOVERN_UNPAUSE_VAULTS lists", () => {
-    for (const over of [ALL, {}]) {
-      const { ctx, sheet } = setup(over);
-      const calls = buildStepCalls(sheet, loadGovernAddrs(ctx), UNPAUSE_USDC_ROW);
-      expect(calls.map((c) => [c.target, decodeFunctionData({ abi: VAULT_ABI, data: c.data }).functionName])).toEqual([[A.vaults.USDC, "unpauseDeposits"]]);
-    }
+  test("its one call is unpauseDeposits() on rmUSDC when the sheet lists USDC, and no call when it does not (it stays paused)", () => {
+    const { ctx, sheet } = setup(ALL);
+    const calls = buildStepCalls(sheet, loadGovernAddrs(ctx), UNPAUSE_USDC_ROW);
+    expect(calls.map((c) => [c.target, decodeFunctionData({ abi: VAULT_ABI, data: c.data }).functionName])).toEqual([[A.vaults.USDC, "unpauseDeposits"]]);
+    const d = setup({ GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA" });
+    expect(buildStepCalls(d.sheet, loadGovernAddrs(d.ctx), UNPAUSE_USDC_ROW)).toEqual([]);
   });
-  test("a default run on 8453 never schedules it, even when rmUSDC reads paused", async () => {
+  test("a default run on 8453 schedules unpause-USDC with the three baskets: rmUSDC deploys paused, so it is a stage 13 row", async () => {
     const { ctx, sheet } = setup(ALL, 8453);
     const tl = fakeTimelock(sheet, DELAY);
-    tl.s.paused.add(A.vaults.USDC);
+    expect(tl.s.paused.has(A.vaults.USDC)).toBe(true);
     const manifest = newManifest(ctx, addr(0xa001));
     await expect(R(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(tl.s.events).toEqual(["schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA"]);
-    expect(Object.keys(manifest.govern!)).not.toContain(UNPAUSE_USDC_ROW);
+    expect(tl.s.events).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA"]);
+    expect(Object.keys(manifest.govern!)).toContain(UNPAUSE_USDC_ROW);
   });
   test("--row unpause-USDC on 8453 after pause-all: schedules, exits GOVERN_PENDING, the resume executes and rmUSDC reads open", async () => {
     const { ctx, sheet } = setup(ALL, 8453);
@@ -699,9 +702,10 @@ describe("issue 1667: the on-demand unpause-USDC row and round-numbered salts", 
     // a single row never completes the stage
     expect(manifest.stages.govern).toBeUndefined();
   });
-  test("unpause-USDC while rmUSDC is open (pause-all never paused it) schedules nothing", async () => {
+  test("unpause-USDC while rmUSDC is open (nothing paused it) schedules nothing", async () => {
     const { ctx, sheet } = setup(ALL, 8453);
     const tl = fakeTimelock(sheet, DELAY);
+    tl.s.paused.delete(A.vaults.USDC);
     const manifest = newManifest(ctx, addr(0xa001));
     await expect(R(ctx, manifest, sheet, tl, { row: UNPAUSE_USDC_ROW })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("nothing to unpause") });
     expect(tl.s.events).toEqual([]);
@@ -715,7 +719,7 @@ describe("issue 1667: the on-demand unpause-USDC row and round-numbered salts", 
   });
 
   test("salts are round numbered: every round of every unpause row is its own salt", () => {
-    const labels = [...UNPAUSE_ROWS, UNPAUSE_USDC_ROW].flatMap((r) => [1, 2, 3].map((n) => governSalt(SHA, 8453, roundKey(r, n))));
+    const labels = [...UNPAUSE_ROWS].flatMap((r) => [1, 2, 3].map((n) => governSalt(SHA, 8453, roundKey(r, n))));
     expect(new Set(labels).size).toBe(12);
   });
   test("after an executed unpause, a re-pause and a second govern of the same row yields a different operation id and executes", async () => {
@@ -797,7 +801,7 @@ describe("issue 1686: govern refuses to execute an unpause scheduled before a pa
   const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
   const R = (ctx: any, manifest: any, sheet: any, tl: any, extra: object = {}) => run(ctx, manifest, sheet, tl, { warp: noWarp, ...extra });
   const pauseAll = (ctx: any, trigger = "manual") => beginPauseEntry(ctx.evidenceDir, { at: new Date().toISOString(), trigger, reason: "test" })!;
-  /** The first 8453 sitting: all three unpauses scheduled, GOVERN_PENDING, the manifest saved. */
+  /** The first 8453 sitting: all four unpauses scheduled, GOVERN_PENDING, the manifest saved. */
   async function scheduled() {
     const d = setup(ALL, 8453);
     const tl = fakeTimelock(d.sheet, DELAY);
@@ -818,16 +822,16 @@ describe("issue 1686: govern refuses to execute an unpause scheduled before a pa
     expect(e.kind).toBe("GOVERN");
     expect(e.exitCode).toBe(EXIT_CODES.GOVERN);
     expect(EXIT_CODES.GOVERN).toBe(14);
-    expect(e.message).toContain("unpause-PROTO");
+    expect(e.message).toContain("unpause-USDC");
     expect(e.message).toContain(`pause-all #${pause.seq} (verify`);
-    expect(e.message).toContain(tl.s.ids.get("unpause-PROTO")!);
+    expect(e.message).toContain(tl.s.ids.get("unpause-USDC")!);
     expect(e.message).toContain("cancel the operation through the Safe on the timelock");
-    expect(e.message).toContain(`cancel(${tl.s.ids.get("unpause-PROTO")})`);
-    expect(e.message).toContain("--row unpause-PROTO");
+    expect(e.message).toContain(`cancel(${tl.s.ids.get("unpause-USDC")})`);
+    expect(e.message).toContain("--row unpause-USDC");
     expect(tl.s.events.length).toBe(events); // nothing sent
     expect(executes(tl)).toEqual([]);
     expect(JSON.stringify(manifest.govern)).toBe(before); // rows unchanged
-    for (const v of BASKETS) expect(tl.s.paused.has(A.vaults[v])).toBe(true);
+    for (const v of VAULTS) expect(tl.s.paused.has(A.vaults[v])).toBe(true);
   });
 
   test("no pause-all recorded: the resume executes the rounds as before", async () => {
@@ -835,7 +839,7 @@ describe("issue 1686: govern refuses to execute an unpause scheduled before a pa
     tl.s.clock += DELAY;
     const res = await R(ctx, manifest, sheet, tl);
     expect(res.rows).toEqual([...UNPAUSE_ROWS]);
-    expect(executes(tl)).toHaveLength(3);
+    expect(executes(tl)).toHaveLength(4);
   });
 
   test("a pause-all OLDER than the schedule does not block: the round scheduled after it executes", async () => {
@@ -875,12 +879,12 @@ describe("issue 1686: govern refuses to execute an unpause scheduled before a pa
   test("a schedule adopted from the chain has no known time (seq 0): any recorded pause-all blocks it", async () => {
     const { ctx, sheet, tl, manifest } = await scheduled();
     pauseAll(ctx);
-    delete (manifest.govern as any)["unpause-PROTO"]; // the schedule was sent but its record was lost
+    delete (manifest.govern as any)["unpause-USDC"]; // the schedule was sent but its record was lost
     tl.s.clock += DELAY;
     const e = await R(ctx, manifest, sheet, tl).catch((x) => x);
     expect(e.kind).toBe("GOVERN");
-    expect(e.message).toContain("unpause-PROTO");
-    expect((manifest.govern as any)["unpause-PROTO"].scheduled.seq).toBe(0);
+    expect(e.message).toContain("unpause-USDC");
+    expect((manifest.govern as any)["unpause-USDC"].scheduled.seq).toBe(0);
   });
 
   test("the recovery: cancel through the Safe, then --row reschedules the SAME round (so the evidence rounds stay 1..n), gets a newer seq and executes; the other rows stay blocked", async () => {
@@ -910,11 +914,11 @@ describe("issue 1686: govern refuses to execute an unpause scheduled before a pa
     const { ctx, sheet, tl, manifest } = await scheduled();
     pauseAll(ctx);
     tl.s.clock += DELAY;
-    for (const k of BASKETS) tl.s.ops.delete(tl.s.ids.get(`unpause-${k}`)!);
+    for (const k of VAULTS) tl.s.ops.delete(tl.s.ids.get(`unpause-${k}`)!);
     const e = await R(ctx, manifest, sheet, tl).catch((x) => x);
     expect(e.kind).toBe("GOVERN");
     expect(e.message).toContain("cancelled");
-    expect(e.message).toContain("--row unpause-PROTO");
+    expect(e.message).toContain("--row unpause-USDC");
     expect(executes(tl)).toEqual([]);
   });
 
@@ -1042,8 +1046,8 @@ describe("issue 1688: the unpause ordering cannot be bypassed by a legacy record
     const seenAtSend: (number | undefined)[] = [];
     (tl.api as any).scheduleOnTimelock = async (...a: any[]) => { seenAtSend.push(loadRunManifest(d.ctx.evidenceDir)?.seqHigh); return (orig as any)(...a); };
     await expect(R(d.ctx, manifest, d.sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(seenAtSend).toEqual([1, 2, 3]);
-    expect(Object.values(manifest.govern as Record<string, any>).map((r) => r.scheduled.seq)).toEqual([1, 2, 3]);
+    expect(seenAtSend).toEqual([1, 2, 3, 4]);
+    expect(Object.values(manifest.govern as Record<string, any>).map((r) => r.scheduled.seq)).toEqual([1, 2, 3, 4]);
   });
 
   test("a pause-all that lands between the schedule send and the first save orders AFTER the schedule, so the unpause is refused", async () => {
@@ -1054,11 +1058,11 @@ describe("issue 1688: the unpause ordering cannot be bypassed by a legacy record
     let pause: { seq: number } | undefined;
     (tl.api as any).scheduleOnTimelock = async (...a: any[]) => { const r = await (orig as any)(...a); pause ??= pauseAll(d.ctx); return r; }; // lands after the send, before the save
     const e = await R(d.ctx, manifest, d.sheet, tl).catch((x) => x); // refused in the same run, before the wait
-    const first = (manifest.govern as any)["unpause-PROTO"].scheduled.seq as number;
+    const first = (manifest.govern as any)["unpause-USDC"].scheduled.seq as number;
     expect(pause!.seq).toBeGreaterThan(first);
     expect(e.kind).toBe("GOVERN");
     expect(e.message).toContain(`pause-all #${pause!.seq}`);
-    expect(e.message).toContain("unpause-PROTO");
+    expect(e.message).toContain("unpause-USDC");
     expect(executes(tl)).toEqual([]);
   });
 
@@ -1225,8 +1229,8 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     expect(agentEligible.tl.s.events).toEqual([]);
   });
 
-  test("apply-receipt is not in stage 13: stageRows(8453) is the three unpauses and GOVERN_ROWS has no apply-receipt", () => {
-    expect([...stageRows(8453)]).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
+  test("apply-receipt is not in stage 13: stageRows(8453) is the four unpauses and GOVERN_ROWS has no apply-receipt", () => {
+    expect([...stageRows(8453)]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
     expect([...stageRows(8453)]).toEqual([...UNPAUSE_ROWS]);
     expect(GOVERN_ROWS as readonly string[]).not.toContain(APPLY_ROW);
     expect([...stageRows(918453)]).not.toContain(APPLY_ROW as never);
@@ -1237,7 +1241,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // a default run on 8453 schedules the three unpauses and nothing else
     const w = world(8453);
     await expect(runGovern(w.ctx, stageByName("govern"), w.manifest, opts(w.sheet, w.tl, { warp: noWarp }))).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(w.tl.s.events).toEqual(["schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA"]);
+    expect(w.tl.s.events).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-AGENT", "schedule:unpause-RWA"]);
     expect(w.tl.s.released.has(RID)).toBe(false);
     expect(Object.keys(w.manifest.govern!)).not.toContain(applyRecordKey(RID));
     // no numbered row is the apply row, and the bare name needs its receipt id and payload

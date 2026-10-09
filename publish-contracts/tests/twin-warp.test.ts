@@ -176,7 +176,7 @@ describe("govern warps the timelock waits on a Twin fork only", () => {
     const manifest = newManifest(ctx, addr(0xa001));
     await runGovern(ctx, stageByName("govern"), manifest, base(sheet, tl, { warp: async (s: bigint) => { warps.push(s); tl.s.clock += s; } }) as never);
     expect(manifest.stages.govern!.status).toBe("done");
-    expect(warps.length).toBe(3);                 // one wait for all three unpauses, one for update-delay, one for batch; the cancel round has none
+    expect(warps.length).toBe(3);                 // one wait for all four unpauses, one for update-delay, one for batch; the cancel round has none
     // the unpauses and update-delay wait the real 172800 s delay; the batch round runs after update-delay, at the new delay (the sheet's GOVERN_NEW_DELAY)
     expect(warps.slice(0, 2)).toEqual([172_801n, 172_801n]);
     expect(warps[2]).toBe(sheet.govern.newDelay + 1n);
@@ -273,8 +273,8 @@ describe("govern warp guards", () => {
     const twin = spy(tl, { chainId: 918453 });
     (ctx as { rpc: string }).rpc = twin.url;
     const manifest = newManifest(ctx, addr(0xa001));
-    for (const row of ["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]) await runGovern(ctx, stageByName("govern"), manifest, { ...base(sheet, tl), row } as never);
-    expect(Object.keys(manifest.govern!)).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
+    for (const row of ["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]) await runGovern(ctx, stageByName("govern"), manifest, { ...base(sheet, tl), row } as never);
+    expect(Object.keys(manifest.govern!)).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
     expect(twin.calls).toContain("evm_increaseTime");
   });
 

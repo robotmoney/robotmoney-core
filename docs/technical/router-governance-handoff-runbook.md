@@ -228,7 +228,7 @@ govern --row release-receipt --receipt-id 0x<64hex>` plus the usual chain, RPC,
 sheet and signer arguments; on the Twin chain `bun scripts/stage/core-stack.ts
 governance release --receipt-id 0x<64hex>` wraps it). The row runs on the Twin chain
 and on 8453. On 8453 it is a standalone post-launch action, never part of stage 13 (the
-three basket unpauses). The real Safe schedules `releaseReceipt` as its own timelock operation and the
+four vault unpauses). The real Safe schedules `releaseReceipt` as its own timelock operation and the
 CLI exits `GOVERN_PENDING` (exit 15) with the exact resume command. After the 48-hour delay (172800 s) the
 same command makes the Safe execute it, and the CLI reads `isReleased` back. Record the release
 in the evidence file under `receipt_releases` (see `publish-contracts/evidence.example.json`).

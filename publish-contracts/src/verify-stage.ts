@@ -3,7 +3,7 @@
 import { join } from "node:path";
 import { createPublicClient, http, parseAbi } from "viem";
 import { PublishError } from "./errors.ts";
-import { resumeCommand, UNPAUSE_USDC_ROW } from "./govern.ts";
+import { resumeCommand } from "./govern.ts";
 import { MAINNET_CHAIN_ID } from "./floors.ts";
 import { governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
 import { VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
@@ -42,32 +42,28 @@ export function unpausedByGovern(manifest: Pick<RunManifest, "govern">, sheet: R
   return sheet.govern.unpauseVaults.filter((k) => !!g?.[`unpause-${k}`]?.executed);
 }
 
-/** The three basket vaults whose unpause rows are stage 13 on 8453 (the sheet parser requires all three listed). */
-export const MAINNET_UNPAUSE_BASKETS: readonly VaultKey[] = ["PROTO", "AGENT", "RWA"];
+/** The four vaults whose unpause rows are stage 13 on 8453 (the sheet parser requires all four listed, issue 1710). */
+export const MAINNET_UNPAUSE_VAULTS: readonly VaultKey[] = ["USDC", "PROTO", "AGENT", "RWA"];
 
 type RowPhase = "none" | "scheduled" | "executed";
 const phaseOf = (g: Record<string, { scheduled?: unknown; executed?: unknown } | undefined> | undefined, row: string): RowPhase =>
   g?.[row]?.executed ? "executed" : g?.[row]?.scheduled ? "scheduled" : "none";
 
 /**
- * The govern state stage 12 verifies on 8453 (issue 1667), read from the run manifest's CURRENT round of each unpause row.
- *   pre-govern   no basket unpause row is scheduled: rmPROTO, rmAGENT, rmRWA must read paused and rmUSDC open.
- *   post-govern  all three basket unpause rows are executed: all four vaults must read unpaused.
- *   part-way     anything else (some but not all basket rows scheduled or executed, or an rmUSDC unpause round scheduled and not executed): verify refuses.
+ * The govern state stage 12 verifies on 8453 (issue 1667, four vaults since issue 1710), read from the run manifest's CURRENT round of each unpause row.
+ *   pre-govern   no unpause row is scheduled: all four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) must read paused.
+ *   post-govern  all four unpause rows are executed: all four vaults must read unpaused.
+ *   part-way     anything else (some but not all rows scheduled or executed): verify refuses.
  * The manifest picks the mode only. runVerifyStage then confirms it against the chain and fails closed when they disagree.
  */
-export type MainnetGovernMode = { mode: "pre-govern" | "post-govern" } | { mode: "part-way"; baskets: boolean; usdc: boolean; detail: string };
+export type MainnetGovernMode = { mode: "pre-govern" | "post-govern" } | { mode: "part-way"; detail: string };
 export function mainnetGovernMode(manifest: Pick<RunManifest, "govern">): MainnetGovernMode {
   const g = manifest.govern as Record<string, { scheduled?: unknown; executed?: unknown } | undefined> | undefined;
-  const baskets = MAINNET_UNPAUSE_BASKETS.map((k) => [k, phaseOf(g, `unpause-${k}`)] as const);
-  const usdc = phaseOf(g, "unpause-USDC");
-  const basketsPartWay = !(baskets.every(([, p]) => p === "none") || baskets.every(([, p]) => p === "executed"));
-  const usdcPartWay = usdc === "scheduled";
-  if (basketsPartWay || usdcPartWay) {
-    const rows = [...baskets.map(([k, p]) => [`unpause-${k}`, p] as const), ["unpause-USDC", usdc] as const];
-    return { mode: "part-way", baskets: basketsPartWay, usdc: usdcPartWay, detail: rows.map(([r, p]) => `${r} ${p === "none" ? "not scheduled" : p}`).join(", ") };
+  const rows = MAINNET_UNPAUSE_VAULTS.map((k) => [`unpause-${k}`, phaseOf(g, `unpause-${k}`)] as const);
+  if (!(rows.every(([, p]) => p === "none") || rows.every(([, p]) => p === "executed"))) {
+    return { mode: "part-way", detail: rows.map(([r, p]) => `${r} ${p === "none" ? "not scheduled" : p}`).join(", ") };
   }
-  return { mode: baskets[0]![1] === "executed" ? "post-govern" : "pre-govern" };
+  return { mode: rows[0]![1] === "executed" ? "post-govern" : "pre-govern" };
 }
 
 /** The timelock delay the chain should read: GOVERN_NEW_DELAY once the executed phase of the govern row `update-delay` ran, else TIMELOCK_MIN_DELAY. */
@@ -78,7 +74,7 @@ export function expectedTimelockDelay(manifest: Pick<RunManifest, "govern">, she
 
 /**
  * The verifier's sheet, from the frozen sheet. Basket and agent vaults ship paused until stage 13. The link between the govern rows and the
- * reads: a vault the unpause rows unpaused is expected paused=false, every other basket and agent vault is expected paused=true. So a verify
+ * reads: a vault the unpause rows unpaused is expected paused=false, every other vault is expected paused=true. So a verify
  * run after govern fails when an unpause row ran and the vault still reads paused, and when a vault reads unpaused with no unpause row behind it.
  */
 export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "chainId" | "manifestOut">, safeAddress: string, unpaused: readonly VaultKey[] = [], timelockDelay?: number): VerifySheet {
@@ -90,7 +86,7 @@ export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "ch
       tvlCap: v.tvlCap, perDepositCap: v.perDepositCap, exitFeeBps: v.exitFeeBps,
       ...(k !== "USDC" ? { navDeviationBps: v.navDeviationBps, minPoolLiquidity: v.minPoolLiquidity } : {}),
       feeRecipient: (s.feeRecipient === "@safe" ? safeAddress : s.feeRecipient) as `0x${string}`,
-      expectPaused: k !== "USDC" && !unpaused.includes(k),
+      expectPaused: !unpaused.includes(k),
       routerEligible: k === "USDC" || s.eligibleVaults.includes(k),
       assets: loadExpectedAssets(ctx, k),
       ...(k === "USDC" ? { seed: s.seedDeposit, seedShareReceiver: s.shareReceiver } : {}),
@@ -153,18 +149,18 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   const safe = readManifestField(ctx, manifestRef("safe", "safe"));
   const startedAt = Date.now();
   const mainnet = ctx.chainId === MAINNET_CHAIN_ID;
-  // 8453 (issue 1667): verify runs before govern (baskets paused, rmUSDC open) and after it (all four open). The manifest names the mode, the chain is read
+  // 8453 (issue 1667): verify runs before govern (all four paused) and after it (all four open). The manifest names the mode, the chain is read
   // below to confirm it. A part-way govern run is neither: verify refuses, names the govern command and pauses nothing (GOVERN_PENDING is not a VERIFY failure).
   let mode: "pre-govern" | "post-govern" | undefined;
   if (mainnet) {
     const m = mainnetGovernMode(manifest);
     if (m.mode === "part-way") {
-      const next = [...(m.baskets ? [resumeCommand(ctx)] : []), ...(m.usdc ? [resumeCommand(ctx, UNPAUSE_USDC_ROW)] : [])];
+      const next = [resumeCommand(ctx)];
       throw new PublishError("GOVERN_PENDING", `verify refused: govern is part-way (${m.detail}), so neither the pre-govern nor the post-govern state can be checked. Nothing was paused. Finish govern first: ${next.join("  then  ")}`, { next_command: next[0], next_commands: next });
     }
     mode = m.mode;
   }
-  const unpaused = mode ? (mode === "post-govern" ? [...MAINNET_UNPAUSE_BASKETS] : []) : unpausedByGovern(manifest, ctx.sheet);
+  const unpaused = mode ? (mode === "post-govern" ? [...MAINNET_UNPAUSE_VAULTS] : []) : unpausedByGovern(manifest, ctx.sheet);
   ctx.log.log("info", "stage.start", { stage: row.name });
   const report = await deps.verifyDeployment({
     chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
@@ -178,11 +174,11 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     // The mode came from the manifest, which an operator can edit or lose: read depositsPaused of all four vaults and fail on any disagreement with it.
     const read = deps.depositsPaused ?? readDepositsPaused;
     for (const v of VAULT_STAGES) {
-      const want = mode === "pre-govern" && v.key !== "USDC";
+      const want = mode === "pre-govern";
       const vault = readManifestField(ctx, manifestRef(v.stage, "vault")) as `0x${string}`;
       let got: boolean | string;
       try { got = await read(ctx.rpc, vault); } catch (e) { got = (e as Error).message; }
-      if (got !== want) report.checks.push({ label: `govern ${mode}: ${VAULT_NAME[v.key]} depositsPaused is ${want}`, ok: false, detail: `the run manifest says ${mode}, so ${VAULT_NAME[v.key]} must read depositsPaused ${want}, the chain reads ${String(got)}${mode === "post-govern" ? `. If pause-all ran, reopen it: ${resumeCommand(ctx, v.key === "USDC" ? UNPAUSE_USDC_ROW : `unpause-${v.key}`)}` : ""}` });
+      if (got !== want) report.checks.push({ label: `govern ${mode}: ${VAULT_NAME[v.key]} depositsPaused is ${want}`, ok: false, detail: `the run manifest says ${mode}, so ${VAULT_NAME[v.key]} must read depositsPaused ${want}, the chain reads ${String(got)}${mode === "post-govern" ? `. If pause-all ran, reopen it: ${resumeCommand(ctx, `unpause-${v.key}`)}` : ""}` });
     }
     report.ok = report.checks.every((c) => c.ok);
     const s = await deps.verifySources({ chainId: ctx.chainId, contracts: contractsFromManifests(manifestDir(ctx), getStageTable()) });

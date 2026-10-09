@@ -23,7 +23,7 @@ Run order is the table order. The per-stage wiring (which manifest key feeds whi
 
 ## Stage 13 (govern)
 
-`stage-table.json` carries a `govern` block that describes stage 13: after the timelock handover the only mainnet operation is the unpause of each basket vault (`mainnetRows`), one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait. Voting power, quorum, voting period, execution delay, vault setters, router eligibility and router default weights are deploy-time configuration set in stages 4 to 10 (router through rwa) and asserted by the verify stage. `update-delay`, `batch` and `cancel` (`twinOnlyRows`) run on the Twin fork only. `stage-table.test.ts` asserts the description.
+`stage-table.json` carries a `govern` block that describes stage 13: after the timelock handover the only mainnet operation is the unpause of each of the four vaults, rmUSDC included, because all four deploy paused (`mainnetRows`), one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait. Voting power, quorum, voting period, execution delay, vault setters, router eligibility and router default weights are deploy-time configuration set in stages 4 to 10 (router through rwa) and asserted by the verify stage. `update-delay`, `batch` and `cancel` (`twinOnlyRows`) run on the Twin fork only. `stage-table.test.ts` asserts the description.
 
 ## Required env (no defaults)
 

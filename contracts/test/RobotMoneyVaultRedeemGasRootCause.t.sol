@@ -67,6 +67,9 @@ contract RobotMoneyVaultRedeemGasRootCauseTest is Test {
             );
         dep = d;
         vault = d.vault;
+        // core 1710: rmUSDC deploys paused. The admin opens it as the govern stage does.
+        vm.prank(admin);
+        vault.unpauseDeposits();
         deal(USDC_BASE, user, 10_000 * 1e6);
         vm.startPrank(user);
         IERC20(USDC_BASE).approve(address(vault), type(uint256).max);
