@@ -11,6 +11,12 @@
 // A run schedules every unpause the sheet asks for (GOVERN_UNPAUSE_VAULTS), waits ONE timelock delay, then executes each and reads depositsPaused() back.
 // An operation declared dependent on another carries that operation's id as the timelock predecessor and runs in the same resume (no second wait).
 // On demand, outside the matrix (it never blocks or completes the govern stage):
+//   safe-add-owner, safe-remove-owner, safe-swap-owner, safe-change-threshold   (issue 1645) Safe self-administration: one direct Safe transaction to the Safe itself.
+//   timelock-grant-role, timelock-revoke-role                                   (issue 1645) a Safe -> Timelock self-call: the timelock calls itself after the delay.
+// The self-administration rows are TWIN-ONLY until the owner decides otherwise (owner question 2, default (a)): refused with USAGE on 8453, before the Safe is read.
+// A Safe module, guard or fallback-handler change has no row and is refused by name (refuseSafeConfigChange): the Safe contract itself would accept a
+// well-formed one from two owners, so the control is this tool plus the verifier (no module, no guard, the canonical handler), not the contract.
+// The Safe's own timelock role is given up by timelock-revoke-role, which waits the delay. The tool never builds renounceRole (owner question 1, default (b)).
 //   release-receipt              ConsensusRecommendationReceipt.releaseReceipt(receiptId), one round per receipt id (--receipt-id)
 // The receipt contract's ADMIN_ROLE is held by the TimelockController after the timelock stage (INV-3), so the release is the same Safe ->
 // Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
@@ -28,15 +34,15 @@
 // The wait is the timelock's real delay. On a Twin fork (chain id is not 8453 and the RPC answers anvil_nodeInfo) it runs by ONE time warp to one second
 // past the latest ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING once, with the ready time and the exact next
 // command, and the same command resumes the stage.
-import { encodeFunctionData, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
+import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
 import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import { loadRunManifest, readManifestField, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
 import { BASKET_KEYS, VAULT_NAME, type Sheet, type VaultKey } from "./sheet.ts";
 import { VAULT_STAGES, manifestRef, type StageRow } from "./stages.ts";
 import {
-  cancelOnTimelock, connectSafe, executeOnTimelock, executeTx, operationId, operationState, scheduleOnTimelock, signTx, timelockMinDelay,
-  updateTimelockDelay, verifyTimelockEffect, type Signer, type SafeHandle, type SafeTxBundle, type TimelockCall,
+  cancelOnTimelock, connectSafe, executeOnTimelock, executeTx, operationId, operationState, proposeTx, roleId, scheduleOnTimelock, signTx, timelockMinDelay,
+  updateTimelockDelay, TIMELOCK_ROLES, verifyTimelockEffect, type Signer, type SafeHandle, type SafeTxBundle, type TimelockCall,
 } from "./safe/index.ts";
 
 export const VAULT_ABI = parseAbi([
@@ -51,6 +57,15 @@ export const RECEIPT_ABI = parseAbi([
   "function isReleased(bytes32 receiptId) view returns (bool)",
 ]);
 const TL_ABI = parseAbi(["function updateDelay(uint256 newDelay)"]);
+export const SAFE_ADMIN_ABI = parseAbi([
+  "function addOwnerWithThreshold(address owner, uint256 _threshold)",
+  "function removeOwner(address prevOwner, address owner, uint256 _threshold)",
+  "function swapOwner(address prevOwner, address oldOwner, address newOwner)",
+  "function changeThreshold(uint256 _threshold)",
+  "function getOwners() view returns (address[])",
+  "function getThreshold() view returns (uint256)",
+]);
+const ROLE_ABI = parseAbi(["function grantRole(bytes32 role, address account)", "function revokeRole(bytes32 role, address account)", "function hasRole(bytes32 role, address account) view returns (bool)"]);
 
 export interface GovernAddrs {
   timelock: Address; safe: Address;
@@ -116,6 +131,110 @@ export function buildReleaseCall(receipt: Address, receiptId: Hex): LabelledCall
 /** The deployed ConsensusRecommendationReceipt, from the ic-policy stage manifest (field consensus_receipt). */
 export const loadReceiptAddr = (ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): Address => readManifestField(ctx, manifestRef("ic-policy", "consensus_receipt")) as Address;
 
+// ---- Safe and timelock self-administration (issue 1645) --------------------------------------------------------------------
+
+/** Safe self-administration: each is ONE Safe transaction to the Safe itself. */
+export const SAFE_ADMIN_ROWS = ["safe-add-owner", "safe-remove-owner", "safe-swap-owner", "safe-change-threshold"] as const;
+/** Timelock self-administration: each is a Safe -> Timelock round whose target is the timelock itself. The delay change is the existing `update-delay` row. */
+export const TIMELOCK_ADMIN_ROWS = ["timelock-grant-role", "timelock-revoke-role"] as const;
+/** On demand and Twin-only: not in GOVERN_ROWS, so no default run, stage run or numbered `--row` reaches them. */
+export const SELF_ADMIN_ROWS = [...SAFE_ADMIN_ROWS, ...TIMELOCK_ADMIN_ROWS] as const;
+export type SelfAdminRow = (typeof SELF_ADMIN_ROWS)[number];
+export const isSelfAdminRow = (row: string): row is SelfAdminRow => (SELF_ADMIN_ROWS as readonly string[]).includes(row);
+
+/** The arguments of a self-administration row. Each row names the ones it needs. */
+export interface SelfAdminArgs {
+  /** safe-add-owner: the owner to add. safe-remove-owner: the owner to remove. */
+  owner?: string;
+  /** safe-swap-owner: the owner to replace, and the owner that takes its place. */
+  oldOwner?: string; newOwner?: string;
+  /** safe-add-owner, safe-remove-owner, safe-change-threshold: the threshold after the change. */
+  threshold?: number | string;
+  /** timelock-grant-role, timelock-revoke-role: the role name (PROPOSER_ROLE, EXECUTOR_ROLE or CANCELLER_ROLE) and the account. */
+  role?: string; account?: string;
+}
+
+/** The Safe functions that change what can act as the Safe. No row builds them: the Safe accepts a well-formed call from two owners at once, outside the timelock. */
+const REFUSED_SAFE_CONFIG = ["enableModule", "disableModule", "setGuard", "setModuleGuard", "setFallbackHandler"] as const;
+const SAFE_CONFIG_ABI = parseAbi([
+  "function enableModule(address module)", "function disableModule(address prevModule, address module)", "function setGuard(address guard)",
+  "function setModuleGuard(address moduleGuard)", "function setFallbackHandler(address handler)",
+]);
+/** Throws USAGE when `data` is a Safe module, guard or fallback-handler change. Every self-administration call passes through here before it is proposed. */
+export function refuseSafeConfigChange(data: Hex): void {
+  let fn: string | undefined;
+  try { fn = decodeFunctionData({ abi: SAFE_CONFIG_ABI, data }).functionName; } catch { /* not one of them */ }
+  if (fn && (REFUSED_SAFE_CONFIG as readonly string[]).includes(fn)) {
+    throw new PublishError("USAGE", `${fn} is refused: a Safe module, guard or fallback-handler change is not a govern row. The Safe contract would accept it from two owners at once, so the verifier (no module, no guard, the canonical fallback handler) is the only check`, { function: fn });
+  }
+}
+
+/** Twin-only gate for the self-administration rows (owner question 2, default (a)). Called before the Safe is read or anything is sent. */
+export function assertSelfAdminAllowed(chainId: number, row: string): void {
+  if (chainId === BASE_CHAIN_ID) throw new PublishError("USAGE", `--row ${row} is Safe or timelock self-administration: it runs on a Twin fork only and is refused on chain 8453 until the owner decides otherwise (issue 1645)`, { row });
+}
+
+const need = (v: string | undefined, row: string, flag: string): string => {
+  if (v === undefined) throw new PublishError("USAGE", `--row ${row} needs ${flag}`, { row });
+  return v;
+};
+const addrArg = (v: string | undefined, row: string, flag: string): Address => {
+  const s = need(v, row, flag);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(s)) throw new PublishError("USAGE", `${flag} must be an address, got '${s}'`, { row });
+  return getAddress(s);
+};
+const thresholdArg = (v: number | string | undefined, row: string): bigint => {
+  const s = need(v === undefined ? undefined : String(v), row, "--admin-arg threshold=N");
+  if (!/^[1-9][0-9]*$/.test(s)) throw new PublishError("USAGE", `threshold must be a positive integer, got '${s}'`, { row });
+  return BigInt(s);
+};
+
+/** The one call of a self-administration row. `owners` is the Safe's owner list on chain (for the predecessor the Safe's linked list needs). */
+export function buildSelfAdminCall(row: SelfAdminRow, a: Pick<GovernAddrs, "safe" | "timelock">, args: SelfAdminArgs, owners: readonly Address[]): LabelledCall {
+  const prevOf = (o: Address): Address => {
+    const i = owners.findIndex((x) => x.toLowerCase() === o.toLowerCase());
+    if (i < 0) throw new PublishError("USAGE", `${o} is not an owner of the Safe`, { row });
+    return i === 0 ? ("0x0000000000000000000000000000000000000001" as Address) : owners[i - 1]!;
+  };
+  let call: LabelledCall;
+  switch (row) {
+    case "safe-add-owner": {
+      const owner = addrArg(args.owner, row, "--admin-arg owner=0x..");
+      const threshold = thresholdArg(args.threshold, row);
+      call = { label: `safe.addOwnerWithThreshold(${owner}, ${threshold})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "addOwnerWithThreshold", args: [owner, threshold] }) };
+      break;
+    }
+    case "safe-remove-owner": {
+      const owner = addrArg(args.owner, row, "--admin-arg owner=0x..");
+      const threshold = thresholdArg(args.threshold, row);
+      call = { label: `safe.removeOwner(${owner}, ${threshold})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "removeOwner", args: [prevOf(owner), owner, threshold] }) };
+      break;
+    }
+    case "safe-swap-owner": {
+      const oldOwner = addrArg(args.oldOwner, row, "--admin-arg old-owner=0x..");
+      const newOwner = addrArg(args.newOwner, row, "--admin-arg new-owner=0x..");
+      call = { label: `safe.swapOwner(${oldOwner} -> ${newOwner})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "swapOwner", args: [prevOf(oldOwner), oldOwner, newOwner] }) };
+      break;
+    }
+    case "safe-change-threshold": {
+      const threshold = thresholdArg(args.threshold, row);
+      call = { label: `safe.changeThreshold(${threshold})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "changeThreshold", args: [threshold] }) };
+      break;
+    }
+    case "timelock-grant-role":
+    case "timelock-revoke-role": {
+      const roleName = need(args.role, row, "--admin-arg role=PROPOSER_ROLE|EXECUTOR_ROLE|CANCELLER_ROLE");
+      if (!(TIMELOCK_ROLES as readonly string[]).includes(roleName)) throw new PublishError("USAGE", `role must be one of ${TIMELOCK_ROLES.join(", ")}, got '${roleName}'`, { row });
+      const account = addrArg(args.account, row, "--admin-arg account=0x..");
+      const fn = row === "timelock-grant-role" ? "grantRole" : "revokeRole";
+      call = { label: `timelock.${fn}(${roleName}, ${account})`, target: a.timelock, data: encodeFunctionData({ abi: ROLE_ABI, functionName: fn, args: [roleId(roleName as (typeof TIMELOCK_ROLES)[number]), account] }) };
+      break;
+    }
+  }
+  refuseSafeConfigChange(call.data);
+  return call;
+}
+
 /** `--row` value to a row name: a 1-based number or a name. Anything else is a usage error. */
 export function resolveGovernRow(row: string): PlannedRow {
   if (row === UNPAUSE_USDC_ROW) return UNPAUSE_USDC_ROW;
@@ -160,8 +279,10 @@ export interface GovernApi {
   signTx: typeof signTx;
   executeTx: typeof executeTx;
   verifyTimelockEffect: typeof verifyTimelockEffect;
+  /** Safe self-administration only (issue 1645). Absent in a test world that does not exercise it: the real one is used. */
+  proposeTx?: typeof proposeTx;
 }
-export const realGovernApi: GovernApi = { connectSafe, scheduleOnTimelock, executeOnTimelock, cancelOnTimelock, updateTimelockDelay, operationId, operationState, timelockMinDelay, signTx, executeTx, verifyTimelockEffect };
+export const realGovernApi: GovernApi = { connectSafe, scheduleOnTimelock, executeOnTimelock, cancelOnTimelock, updateTimelockDelay, operationId, operationState, timelockMinDelay, signTx, executeTx, verifyTimelockEffect, proposeTx };
 
 export type GovernPhase = "scheduled" | "executed" | "cancelled";
 
@@ -196,6 +317,8 @@ export interface GovernOpts {
    * actions that are not mainnet govern rows (gateway unpause, agent revoke or authorize). Refused on chain 8453. Not combined with `row`.
    */
   call?: TwinCall;
+  /** With a self-administration row (`--row safe-add-owner` and the others): the arguments of that row. Twin chain only. */
+  selfAdmin?: SelfAdminArgs;
 }
 
 /** One generic timelock call, named by `label` (the manifest key, the salt input and the `row` of the output lines). */
@@ -328,8 +451,11 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   if (o.call && o.row !== undefined) throw new PublishError("USAGE", "a generic timelock call and --row are mutually exclusive");
   if (o.receiptId !== undefined && o.row !== RECEIPT_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only`);
   if (o.call && o.receiptId !== undefined) throw new PublishError("USAGE", "a generic timelock call and --receipt-id are mutually exclusive");
+  if (o.selfAdmin !== undefined && !(o.row !== undefined && isSelfAdminRow(o.row))) throw new PublishError("USAGE", "--admin-arg goes with a self-administration row only (" + SELF_ADMIN_ROWS.join(", ") + ")");
+  const selfAdminRow = o.row !== undefined && isSelfAdminRow(o.row) ? o.row : undefined;
+  if (selfAdminRow !== undefined) assertSelfAdminAllowed(ctx.chainId, selfAdminRow);
   const releasing = o.row === RECEIPT_ROW;
-  const selected: PlannedRow | undefined = o.row === undefined || releasing ? undefined : resolveGovernRow(o.row);
+  const selected: PlannedRow | undefined = o.row === undefined || releasing || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
   if (selected !== undefined && isTwinOnlyRow(selected) && ctx.chainId === BASE_CHAIN_ID) {
     throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the basket unpause; the one other mainnet action is --row ${RECEIPT_ROW})`);
   }
@@ -639,6 +765,50 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       const r = state[name]!;
       if (r.scheduled) emitPhase(o, name, "scheduled", r.scheduled);
       if (r.executed) emitPhase(o, name, "executed", r.executed);
+    }
+    save();
+    return { rows: [name], skipped: [], opIds };
+  }
+
+  if (selfAdminRow !== undefined) {
+    const args = o.selfAdmin ?? {};
+    const rd = reader(handle);
+    const owners = await rd<Address[]>(a.safe, SAFE_ADMIN_ABI, "getOwners");
+    const c = buildSelfAdminCall(selfAdminRow, a, args, owners);
+    // one row name can be used for many different changes: the calldata picks the record
+    const name = `${selfAdminRow}-${keccak256(c.data).slice(2, 10)}`;
+    if (rowComplete(state[name])) { reprint(name); save(); return { rows: [name], skipped: [], opIds }; }
+    if (SAFE_ADMIN_ROWS.includes(selfAdminRow as never)) {
+      const bundle = await (api.proposeTx ?? proposeTx)(handle, { to: a.safe, data: c.data, action: selfAdminRow, description: c.label });
+      const done = await signAndExecute(ctx, o, api, handle, bundle);
+      const after = { owners: await rd<Address[]>(a.safe, SAFE_ADMIN_ABI, "getOwners"), threshold: await rd<bigint>(a.safe, SAFE_ADMIN_ABI, "getThreshold") };
+      const want = decodeFunctionData({ abi: SAFE_ADMIN_ABI, data: c.data });
+      const has = (x: string) => after.owners.some((y) => y.toLowerCase() === x.toLowerCase());
+      const bad: string[] = [];
+      if (want.functionName === "addOwnerWithThreshold" && !has(want.args[0])) bad.push("the new owner is not an owner");
+      if (want.functionName === "removeOwner" && has(want.args[1])) bad.push("the removed owner is still an owner");
+      if (want.functionName === "swapOwner" && (has(want.args[1]) || !has(want.args[2]))) bad.push("the swap did not happen");
+      const wantThreshold = want.functionName === "addOwnerWithThreshold" || want.functionName === "changeThreshold" ? want.args[want.functionName === "changeThreshold" ? 0 : 1] : want.functionName === "removeOwner" ? want.args[2] : undefined;
+      if (wantThreshold !== undefined && after.threshold !== wantThreshold) bad.push(`getThreshold is ${after.threshold}, want ${wantThreshold}`);
+      if (bad.length) throw new PublishError("GOVERN", `govern row ${selfAdminRow} read-back failed: ${bad.join(", ")}`, { bad });
+      const ex: PhaseRecord = { at: new Date().toISOString(), ...note(done) };
+      state[name] = { executed: ex };
+      save();
+      emitPhase(o, selfAdminRow, "executed", ex);
+    } else {
+      const p = { timelock: a.timelock, calls: [{ target: c.target, data: c.data }], salt: salt(name), form: "single" as const };
+      const id = await api.operationId(handle, p);
+      const decoded = decodeFunctionData({ abi: ROLE_ABI, data: c.data });
+      const [role, account] = decoded.args as [Hex, Address];
+      await round(name, {
+        id, description: c.label,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${selfAdminRow}: ${c.label}` }),
+        execute: () => api.executeOnTimelock(handle, { ...p, description: `${selfAdminRow} execute` }),
+        readBack: async () => {
+          const has = await rd<boolean>(a.timelock, ROLE_ABI, "hasRole", [role, account]);
+          return has === (selfAdminRow === "timelock-grant-role") ? [] : [`timelock.hasRole(${role}, ${account}) is ${has}`];
+        },
+      }, selfAdminRow);
     }
     save();
     return { rows: [name], skipped: [], opIds };
