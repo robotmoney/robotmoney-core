@@ -253,7 +253,7 @@
   ],
   "govern": {
     "stage": 13,
-    "description": "After the timelock handover the only mainnet operation is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all four deployed paused: one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Voting power, quorum, voting period, execution delay, vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
+    "description": "After the timelock handover the only mainnet operation is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all four deployed paused: one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. The governance stage's VOTER_*, QUORUM_THRESHOLD, VOTING_PERIOD and EXECUTION_DELAY are constructor arguments of today's RouterGovernance bytecode, not governance: there is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696), never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
     "mainnetRows": [
       "unpause-USDC",
       "unpause-PROTO",

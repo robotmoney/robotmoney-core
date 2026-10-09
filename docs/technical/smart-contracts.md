@@ -53,16 +53,15 @@
 
         ┌────────────────────────────────────────────────────────────────┐
         │              RouterGovernance                                  │
-        │              • Proposal lifecycle                              │
-        │              • Vote tabulation                                 │
-        │              • Weight execution to PortfolioRouter            │
-        │              • Admin-assigned voting power (MVP)              │
+        │              • Holds WEIGHT_SETTER_ROLE on PortfolioRouter    │
+        │              • Applies consensus receipts as router weights   │
+        │              • ADMIN_ROLE held by the timelock                │
         │                                                               │
-        │              ADMIN_ROLE (no token-based governance)          │
+        │              (no voting by anyone)                            │
         └────────────────────────────────────────────────────────────────┘
 ```
 
-**Allocation flow**: Humans and agents deposit USDC either directly to a vault (RobotMoneyVault or a BasketVault) or through PortfolioRouter, which splits the deposit across multiple vaults by admin-set or governance-voted weights. VaultRegistry provides the single source of truth for vault discovery and router eligibility. RouterGovernance (MVP) creates and executes weight proposals.
+**Allocation flow**: Humans and agents deposit USDC either directly to a vault (RobotMoneyVault or a BasketVault) or through PortfolioRouter, which splits the deposit across multiple vaults by the router weight vector. VaultRegistry provides the single source of truth for vault discovery and router eligibility. RouterGovernance holds `WEIGHT_SETTER_ROLE` on the router and applies the weights the Safe schedules through the timelock from a consensus receipt.
 
 ---
 
@@ -489,12 +488,12 @@ The legs that run execute atomically: if any of them reverts, the entire deposit
 
 The router maintains two weight vectors:
 
-- **Voted weights**: Set by `RouterGovernance` on proposal execution via `setWeights(vaults, bps)`. Only one governance proposal active at a time. If the voted vector is active, it is the source of truth.
-- **Default weights**: Admin-set fallback via `setDefaultWeights(vaults, bps)`. Used when no voted proposal is active (`votedWeightsActive = false`). Survives proposal execution unchanged, providing a below-quorum safety fallback (ADR-0002). Its length must equal `VaultRegistry.routerEligibleCount()`.
+- **Active weights**: Written by `setWeights(vaults, bps)`, gated by `WEIGHT_SETTER_ROLE`. While `votedWeightsActive` is true this vector is the source of truth.
+- **Default weights**: Written by `setDefaultWeights(vaults, bps)` through `RouterGovernance.setDefaultWeights` (ADMIN_ROLE, held by the timelock). The router routes by it whenever `votedWeightsActive` is false. This is the vector the `apply-receipt` govern row writes on today's bytecode (ADR-0002, core 1696). Its length must equal `VaultRegistry.routerEligibleCount()`.
 
 At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the launch vector with `setWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. Because it is written with `setWeights`, `votedWeightsActive` is true from deploy. rmPROTO, rmAGENT and rmRWA are not in that vector, so each routes 0.
 
-The timelock may set default weights only. Active weights come only from RouterGovernance votes: `PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE`, held by RouterGovernance, and stage 11 grants the timelock `ADMIN_ROLE` only (core 1522, `docs/technical/governance-decisions.md` §3.6).
+The Safe multisig, through the TimelockController, is the only body that changes router weights. `PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE`, held by RouterGovernance, and stage 11 grants the timelock `ADMIN_ROLE` only (core 1522, `docs/technical/governance-decisions.md` §3.6). The timelock reaches the weights through `RouterGovernance.setDefaultWeights` in the `apply-receipt` batch; the weight-setter `applyReceipt` call that lands before the final deployment calls `setWeights` instead.
 
 #### Routing eligibility
 
@@ -542,51 +541,38 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 
 ## 9.2 RouterGovernance
 
-### 9.2.1 Purpose and MVP scope
+### 9.2.1 Purpose and scope
 
-`RouterGovernance` is the MVP governance module that controls `PortfolioRouter` weight changes. It creates weight proposals, accepts votes from ADMIN_ROLE-assigned voting power (not token holders; there is no token-based governance), and executes once the voting period ends and quorum is reached after a configured execution delay.
+`RouterGovernance` is the contract that holds `WEIGHT_SETTER_ROLE` on `PortfolioRouter` and the only path by which router weights change. The Safe multisig, through the TimelockController, is the only body that changes any Robot Money contract configuration, router weights included. `WEIGHT_SETTER_ROLE` is the only authority over router weights. It submits the Investment Committee's consensus receipt, and that submission is the rebalance: one timelock operation releases the receipt and applies its weights (publish-contracts govern row `apply-receipt`, core 1696; on today's bytecode the batch is `ConsensusRecommendationReceipt.releaseReceipt(receiptId)` plus `RouterGovernance.setDefaultWeights(vaults, bps)`). There is no voting by token holders or anyone else: no voter set, no voting power, no quorum, no voting period, no execution delay, no propose, vote or execute.
+
+`RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused, have no voters, and are deleted before the final deployment, when a weight-setter `applyReceipt` call replaces them.
 
 **Design constraints** (docs/architecture.md §2.3):
 - Controls router weights only; cannot govern vault internals, agent permissions, or protocol admin operations.
-- Exposes proposal state, vote tallies, cadence metadata, and resulting weights for rmpc and dapp reads.
-- One active proposal at a time (simple linear cadence).
+- Exposes the resulting weights for rmpc and dapp reads.
+- `ADMIN_ROLE` is held by the timelock after stage 11; the deployer holds nothing.
 
-### 9.2.2 Proposal lifecycle
+### 9.2.2 Applying a receipt
 
-1. **Propose** (ADMIN_ROLE): `propose(vaults[], bps[])` creates a new proposal and returns its `proposalId`. Voting starts immediately. The proposal's snapshot block captures voting power; votes cast mid-proposal use checkpointed power at that block.
-2. **Vote** (assigned voter): Voters with non-zero voting power call `vote(proposalId)` during the voting window. One vote per voter per proposal (no vote changing).
-3. **Defeated** or **Queued**: After the voting period (admin-set duration) expires, the proposal is either `Defeated` (did not reach quorum) or `Queued` (quorum reached, awaiting execution delay).
-4. **Execute** (anyone): After the execution delay elapses, anyone calls `execute(proposalId)`, which calls `router.setWeights(...)` with the proposal's vaults and bps.
-5. **Executed** or **Cancelled**: The proposal is marked executed, or ADMIN_ROLE can cancel before execution.
+1. **Record**: the committee submitter records the consensus receipt through the gateway (`ConsensusRecommendationReceipt.recordReceipt`).
+2. **Schedule**: the Safe schedules one timelock batch: `releaseReceipt(receiptId)` and `RouterGovernance.setDefaultWeights(vaults, bps)` with the receipt's weight vector. The govern row checks before sending that the receipt is recorded, its digest equals `keccak256` of the payload, it is not yet released, the bps sum to 10000 and the vault list equals the registry's router-eligible list in order.
+3. **Delay**: the timelock delay elapses (172800 s on 8453).
+4. **Execute**: the Safe executes the batch. Release and weights land in one operation; partial state is impossible.
+5. **Read back**: the tool reads `isReleased(receiptId)` and the router weights and fails on any difference.
 
-### 9.2.3 Voting power and checkpoints
-
-- ADMIN_ROLE assigns voting power to addresses via `setVotingPower(address, uint256)`.
-- Voting power is stored as a history of checkpoints `(block, power)`, enabling `getPastVotes(address, blockNumber)` to read power as of the proposal's snapshot block.
-- Total voting power is the sum of all assigned powers (`totalVotingPower`).
-- Quorum is a fixed threshold: `propose` snapshots the current `quorumThreshold` at proposal time, preventing retroactive defeats or passages if the threshold changes.
-
-### 9.2.4 Key functions
+### 9.2.3 Key functions
 
 | Function | Role | Effect |
 |---|---|---|
-| `propose(address[] vaults, uint256[] bps)` | ADMIN | Create a new proposal (only one active/queued at a time) and return its `proposalId`. Validates the weight sum and per-vault router eligibility. Snapshot quorum and voting power block. Start voting period. |
-| `vote(uint256 proposalId)` | voting power holder | Cast one vote FOR the proposal. Uses checkpointed power at proposal's snapshot block. |
-| `execute(uint256 proposalId)` | anyone | If quorum reached and voting period + execution delay have elapsed, execute via `router.setWeights(...)`. `nonReentrant`. |
-| `cancel(uint256 proposalId)` | ADMIN | Cancel any non-executed proposal before execution. Emit `ProposalCancelled`. |
-| `setVotingPower(address voter, uint256 power)` | ADMIN | Assign voting power to a voter. Pushes a checkpoint if power changes. |
-| `setQuorumThreshold(uint256)` | ADMIN | Set minimum voting power needed for quorum. New proposals use the updated threshold. |
-| `setVotingPeriod(uint64 seconds)` | ADMIN | Set voting window duration. Minimum `MIN_VOTING_PERIOD` (1 hour). |
-| `setExecutionDelay(uint64 seconds)` | ADMIN | Set delay from voting deadline to earliest execution. Minimum `MIN_EXECUTION_DELAY` (1 hour). |
-| `activeProposal()` | view | Return the single active/queued proposal's full state: id, proposer, vaults, bps, deadlines, vote tally, snapshot quorum, and executed/cancelled flags. Reverts if no proposal exists. |
-| `proposalState(uint256 proposalId)` | view | Return the proposal's `ProposalState` enum (Active, Defeated, Queued, Executed, Cancelled). |
+| `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN (timelock) | Forward to `router.setDefaultWeights`. The router checks the bps sum and that the length equals the registry's router-eligible count. The weight write of the `apply-receipt` batch on today's bytecode. |
+| `clearVotedWeights()` | ADMIN (timelock) | Clear the router's active vector so routing follows the default vector. |
+| `cancel(uint256 proposalId)`, `activeProposal()`, `proposalState(uint256)` | today's bytecode only | Unused with no voters; deleted with `propose`, `vote` and `execute` before the final deployment. |
 
-### 9.2.5 Key invariants
+### 9.2.4 Key invariants
 
-- **One active proposal at a time**: `propose` reverts if a proposal is already active or queued (not yet executed or cancelled).
-- **Voting power snapshot immutability**: A proposal's quorum threshold and vote snapshot block are set at proposal time and never change, even if governance parameters are updated later.
-- **No vote changing**: A voter can vote once per proposal; `vote` reverts if the voter has already voted.
-- **Execution delay enforcement**: A proposal cannot execute until the voting period ends and the execution delay elapses.
+- **One path to weights**: only the holder of `WEIGHT_SETTER_ROLE` can call `PortfolioRouter.setWeights`, and only the timelock can reach `RouterGovernance`'s admin calls.
+- **Atomic rebalance**: a receipt's release and its weights are one timelock operation.
+- **Timelock delay enforcement**: no weight change lands before the timelock delay elapses.
 
 ---
 

@@ -39,6 +39,10 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   EMERGENCY_ADDRESS: { kind: "address" },
   SHARE_RECEIVER_ADDRESS: { kind: "address" },
   RECEIPT_ADMIN_ADDRESS: { kind: "address" },
+  // VOTER_ADDRESSES and VOTER_POWER (with QUORUM_THRESHOLD and VOTING_PERIOD below) are constructor arguments of today's RouterGovernance
+  // bytecode. They stay parseable until the contract issue deletes voting. There is no voting by anyone: the mainnet test deploys with no voters,
+  // and RouterGovernance.propose, vote and execute exist in the deployed test bytecode, are unused, have no voters, and are deleted before the
+  // final deployment. Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt, core 1696).
   VOTER_ADDRESSES: { kind: "address-list" },
   VOTER_POWER: { kind: "uint" },
   SAFE_OWNERS: { kind: "address-list" },
@@ -53,7 +57,7 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   VAULT_NAME: { kind: "string" },
   /** The Uniswap V3 SwapRouter02 the basket vaults trade through (core env SWAP_ROUTER). */
   SWAP_ROUTER: { kind: "address" },
-  // governance
+  // governance: constructor arguments of today's RouterGovernance bytecode (see the VOTER_* note above); not a governance model
   QUORUM_THRESHOLD: { kind: "uint" },
   VOTING_PERIOD: { kind: "uint" },
   EXECUTION_DELAY: { kind: "uint" },
@@ -80,7 +84,7 @@ const REFUSED: [RegExp, string][] = [
   [/^(PRIVATE_KEY|ETH_PRIVATE_KEY|MNEMONIC|ETH_MNEMONIC|ETH_PASSWORD|CHAIN_SIGNER_KEYSTORE|CHAIN_SIGNER_PASSWORD|[A-Z_]*(PRIVATE_KEY|PASSWORD|PASSPHRASE|SECRET|MNEMONIC)[A-Z_]*)$/, "a secret never goes in a sheet: use the credential engine, a hardware wallet or an encrypted keystore"],
   [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|IC_POLICY_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
-  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Voting power, quorum, voting period, execution delay, agents, vault setters, eligibility and router weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VOTER_*, QUORUM_THRESHOLD, VAULT_<KEY>_*)"],
+  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*); VOTER_*, QUORUM_THRESHOLD and VOTING_PERIOD are constructor arguments of today's RouterGovernance bytecode, not governance. Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
   [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
   [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO, AGENT or RWA), for example VAULT_AGENT_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
 ];

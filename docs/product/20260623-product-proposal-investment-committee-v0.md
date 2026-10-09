@@ -119,8 +119,8 @@ asks for:
 | Vote record & auditability | **Content-addressed, not gist-addressed.** Vote + commitment registered on-chain via `InvestmentCommitteePolicy` through the gateway; the narrative memo/CoT lives at any public `rationale_uri` but is **bound by `vote_digest` (= `keccak256` of the canonical vote JSON per `tests/fixtures/committee-vote.schema.json`)**. The indexer fetches `rationale_uri`, checks `keccak256(memo)==vote_digest`, and stores tilts only when verified; otherwise it records an unverified commitment (`docs/architecture.md` §5.4, §7.4). The dapp renders verified vs unverified distinctly and shows a fallback when the URI is unreachable or a reorg rewrites the log. | Shipped | `tests/fixtures/committee-vote.schema.json:1-60`, `contracts/gateway/InvestmentCommitteePolicy.sol:78,90-91,110-120`, `services/explorer-indexer/src/indexer.rs:1125,1164`, `docs/architecture.md:554-561,7.4,911-914` |
 | Allocation choices | **Per-vault tilts over the existing 4-vault catalog, not a weight vector.** Each vote is one vault (`overweight`/`neutral`/`underweight` at `InvestmentCommitteePolicy.sol:63-69`, `tests/fixtures/committee-vote.schema.json:22-33` with `target_weight_bps` 0–10 000 and `confidence` 0–100). Aggregation to a router weight vector is **off-chain, admin-applied**; there is no on-chain aggregation in v0. A vault is votable only when it is Active and (for router relevance) `isRouterEligible` (`docs/architecture.md` §4.1, §4.7; `RouterGovernance.sol:387`). | Shipped | `docs/prd.md` §11, `docs/architecture.md:4.1,4.7`, `RouterGovernance.sol:365-422` |
 | Daily regime feed | **Protocol-scope, read-only dapp surface with declared authority.** Rendered from the indexer + live chain reads per `docs/architecture.md` §5.0/5.3/5.4 (protocol scope: no wallet; safety-critical signing values still come from live `rmpc` reads, `docs/architecture.md` §6.1). Authored by Robot Money (RM) on a daily cadence; staleness and late-publish handling are specified in §3.2. | Shipped (shape) | `docs/architecture.md:5.0,5.3,5.4` |
-| Committee display | **Three-layer dapp surface (protocol / account / action) per `docs/architecture.md` §5.3.** Protocol layer: registered agents, per-vault tilts, aggregated tilt, per-agent track record (from indexer). Account layer: connected agent's own vote history (live `getVote`/`latestVoteByAgent` + indexed history). Action layer: vote submission (vault → stance/weight → `rationale_uri` → preview → sign via gateway). Preview states explicitly: vote is signalling-only, does not move funds or set weights. | Shipped (shape) | `contracts/gateway/InvestmentCommitteePolicy.sol:250-270`, `docs/architecture.md:845-856,906-921` |
-| Consensus recommendation receipts | **v0.1 — implemented on the local devnet (see §2.1, §3.3, §6.1).** The on-chain write is an **EOA-via-gateway commitment** by a **single submitter** attesting for the committee; the analysts' ed25519 signatures ride inside the payload as data verified off-chain (§2.2, ADR-0012 §5). The allocation is the **deterministic mean** of the analysts' vectors converted to bps; a judge agent authors the rationale, not the numbers. Admin may `consensusReleaseReceipt` as a **signalling-only** release (sets `released=true`, emits `ReceiptReleased`; no fund movement, no `setWeights` call — INV-4 `docs/prd.md` §12, `docs/architecture.md` §4.9). Receipts are observable via the indexer/API like votes. Full spec (schema, judge, gateway interface, indexer, `rmpc`, worker) is in §2.1. | Implemented locally; public deployment deferred | `docs/prd.md:650-657` INV-4, `docs/architecture.md:4.9,5.1,5.4,7.5`, `docs/adr/ADR-0012-dual-curve-identity-policy.md` §4–5 |
+| Committee display | **Three-layer dapp surface (protocol / account / action) per `docs/architecture.md` §5.3.** Protocol layer: registered agents, per-vault tilts, aggregated tilt, per-agent track record (from indexer). Account layer: connected agent's own tilt history (live `getVote`/`latestVoteByAgent` + indexed history). Action layer: tilt submission (`committee vote-submit`: vault → stance/weight → `rationale_uri` → preview → sign via gateway). A tilt is a signed recommendation, not a vote on anything; the preview states explicitly that it does not move funds or set weights. | Shipped (shape) | `contracts/gateway/InvestmentCommitteePolicy.sol:250-270`, `docs/architecture.md:845-856,906-921` |
+| Consensus recommendation receipts | **v0.1 — implemented on the local devnet (see §2.1, §3.3, §6.1).** The on-chain write is an **EOA-via-gateway commitment** by a **single submitter** attesting for the committee; the analysts' ed25519 signatures ride inside the payload as data verified off-chain (§2.2, ADR-0012 §5). The allocation is the **deterministic mean** of the analysts' vectors converted to bps; a judge agent authors the rationale, not the numbers. The Safe, through the timelock, releases the receipt and applies its weights in one timelock operation (`releaseReceipt` sets `released=true` and emits `ReceiptReleased`; the weight setter writes the router weights in the same batch — INV-4 `docs/prd.md` §12, `docs/architecture.md` §4.9; the receipt contract itself makes no router call). Receipts are observable via the indexer/API like tilts. Full spec (schema, judge, gateway interface, indexer, `rmpc`, worker) is in §2.1. | Implemented locally; public deployment deferred | `docs/prd.md:650-657` INV-4, `docs/architecture.md:4.9,5.1,5.4,7.5`, `docs/adr/ADR-0012-dual-curve-identity-policy.md` §4–5 |
 
 #### 2.1 Consensus recommendation receipts — v0.1 implementation scope
 
@@ -175,17 +175,19 @@ the local-devnet path; there is no unimplemented receipt interface.
     presentation. This is a first-class requirement of the surface, not a polish
     item.
 
-  This also removes any tension with `RouterGovernance`'s one-active-proposal
-  limit (`RouterGovernance.sol:393-399`): receipts are not queued for application,
-  so a fast publishing cadence against slow governance throughput is the intended
-  shape rather than a bottleneck.
-- **Signalling-only:** `consensusReleaseReceipt` is an **admin signal** (emits
-  `ReceiptReleased`, sets `released=true`). It does not call
-  `RouterGovernance.propose`/`execute` (`RouterGovernance.sol:365-422,474-500`)
-  or `PortfolioRouter.setWeights` on-chain. Any translation to live weights is
-  **off-chain, admin-applied** via the existing `RouterGovernance` path
-  (`docs/architecture.md` §2.3, §2.4, §4.8). If a future phase needs on-chain
-  coupling, it requires a new ADR revising `docs/prd.md` §12 INV-4 before build.
+  Receipts are not queued for application, so a fast publishing cadence
+  against a slow timelock cadence is the intended shape rather than a
+  bottleneck.
+- **Applied by the weight setter through the timelock:** the receipt contract
+  itself makes no router call. The Safe multisig, through the
+  `TimelockController`, is the only body that changes router weights.
+  `WEIGHT_SETTER_ROLE` is the only authority over router weights, and it
+  submits the committee's consensus receipt: one timelock operation releases
+  the receipt (`releaseReceipt`, emits `ReceiptReleased`) and applies its
+  weights (publish-contracts govern row `apply-receipt`, core 1696; on today's
+  bytecode the batch is `releaseReceipt(receiptId)` plus
+  `RouterGovernance.setDefaultWeights(vaults, bps)`). There is no voting by
+  anyone (`docs/architecture.md` §2.3, §2.4, §4.8).
 - **Consensus derivation — deterministic; the judge explains, it does not decide
   (decided).** The weight vector is the **unweighted arithmetic mean of the
   analysts' normalized vectors** — `robotmoney-frontend`'s shipped
@@ -260,28 +262,29 @@ the local-devnet path; there is no unimplemented receipt interface.
 - **Indexer / API / rmpc / worker:** each specified with its shipped analogue
   as template — `services/explorer-indexer/src/indexer.rs:74,1125` + reorg handling
   `docs/architecture.md:928`, `docs/architecture.md:5.4` read scopes,
-  `docs/architecture.md:5.1,690-710` `rmpc committee …` commands, and an off-chain
-  worker that watches `ReceiptReleased` and (if policy says so) drafts a
-  `RouterGovernance.propose(vaults,bps)` — the on-chain execution still needs
-  quorum and delay (`RouterGovernance.sol:54-63,365-422`).
+  `docs/architecture.md:5.1,690-710` `rmpc committee …` commands, and the
+  publish-contracts govern row `apply-receipt`, which the Safe schedules through
+  the timelock to release the receipt and apply its weights after the timelock
+  delay.
 - **No contract expiry.** The earlier `deadline = firstSignatureAt +
   WINDOW_SECONDS` (7 days, stored immutably on first signature, expiry derived
   off-chain as `block.timestamp > deadline && !released`, no keeper) existed to
   bound a **multi-party signature-collection window**. With one submitter there
   is nothing to wait for, so it is deleted rather than repurposed. An unreleased
   receipt remains an immutable public record. The dapp labels it unreleased and
-  stale from payload `created_at`; the worker never drafts from it. No timeout
+  stale from payload `created_at`; the Safe does not apply it. No timeout
   deletes it or changes its on-chain state.
 - **Event correctness:** no event may use a `uint8[64] indexed` signature
   parameter (exceeds the 3-topic limit; cf. the `VoteSubmitted` pattern at
   `IInvestmentCommitteePolicy.sol:68-78`). This applies to whatever the
   entrypoint set above resolves to.
 - **Release policy (D5).** There is no automatic signature threshold. Release is
-  admin discretion after human review of the judge's safety opinion and the
+  the Safe's discretion after human review of the judge's safety opinion and the
   verified embedded signatures. The dapp always renders the payload signature
   count as `submitted / active` and labels those as off-chain analyst signatures,
-  never on-chain approvals. Release remains signalling-only and no worker submits
-  a governance proposal unattended (§3.4, §6.2).
+  never on-chain approvals. Release and weight application are one timelock
+  operation scheduled by the Safe; no worker submits anything unattended
+  (§3.4, §6.2).
 
 #### 2.2 Identity note — EOA vs ed25519 (resolved)
 
@@ -529,55 +532,47 @@ behaviors the shape leaves open.
 `InvestmentCommitteePolicy` never calls and is never called by
 `RouterGovernance` (`RouterGovernance.sol:1-630` controls `PortfolioRouter`
 weights only, `docs/architecture.md:92-99,114-125`). The linkage is
-**off-chain, admin-applied**: an admin (via timelock, `docs/architecture.md:4.5`)
-reads hash-verified tilts/receipts off-chain and proposes weights through
-`RouterGovernance.propose(vaults,bps)` (`RouterGovernance.sol:365-422`), which
-enforces `bps` sum to `BPS_DENOMINATOR` at `:377` and `isRouterEligibleAndActive`
-at `:387`, then the existing `propose` → `vote` → `execute` path (`:474-500`)
-applies weights. **No governance-interface refactor is required**
-(`docs/architecture.md:604`).
+the `apply-receipt` govern row: the Safe (via timelock, `docs/architecture.md:4.5`)
+schedules one batch that releases the hash-verified receipt and applies its
+weight vector through the weight setter; the tool checks before sending that
+the bps sum to 10000 and that the vault list equals the registry's
+router-eligible list. `RouterGovernance.propose`, `vote` and `execute` exist in
+the deployed test bytecode, are unused, have no voters, and are deleted before
+the final deployment, when a weight-setter `applyReceipt` call replaces them.
 
 #### Governance topology (this repo has more than one governing body)
 
-Earlier drafts said "admin-applied" as though one Safe did everything. It does
-not. Three distinct bodies exist, with different membership models:
+One body governs. The Safe multisig, through the `TimelockController`, is the
+only body that changes any Robot Money contract configuration, router weights
+included. Two roles sit beside it with no configuration authority:
 
 | Body | Membership | Governs |
 |---|---|---|
-| **Safe → `TimelockController` → `ADMIN_ROLE`** | 2-of-N Safe, hardware wallets required (`docs/technical/security-model.md` §4, `:89,98`) | Role changes, protocol params, committee agent registration, the agent-token shortlist (with a public veto window, ADR-0004) |
-| **`RouterGovernance` voter set** | Addresses given power by `ADMIN_ROLE` via `setVotingPower` (`RouterGovernance.sol:310`); `vote()` reads power checkpointed at the proposal's `voteSnapshot`. Explicitly **not** token-holder governance (`docs/technical/governance-decisions.md:98`, `services/explorer-indexer/src/abi.rs:139`) | Portfolio weights, and only those |
+| **Safe → `TimelockController` → `ADMIN_ROLE`** | 2-of-N Safe, hardware wallets required (`docs/technical/security-model.md` §4, `:89,98`) | Role changes, protocol params, committee agent registration, the agent-token shortlist (with a public veto window, ADR-0004), and router weights through `WEIGHT_SETTER_ROLE` (the `apply-receipt` batch) |
+| **Committee agents** | `COMMITTEE_AGENT_ROLE` holders registered by the timelock | Nothing on chain: they record tilts and the consensus receipt as signed recommendations |
 | **Guardian** | Lower quorum than the full Safe; may pause, may **not** unpause (`docs/technical/security-model.md:212`) | Emergency pause |
 
-**Decision — the committee and the `RouterGovernance` voter set are separate
-bodies.** The committee recommends; a different set approves. No committee agent
-address may hold `RouterGovernance` voting power.
+**Decision — the committee and the approving body are separate.** The
+committee recommends; the Safe, through the timelock and the weight setter,
+applies. No committee agent address holds `WEIGHT_SETTER_ROLE`, `ADMIN_ROLE` or
+a Safe seat.
 
-This is what makes INV-4's signalling-only boundary real rather than nominal — if
-the same parties both recommended and approved, "signalling-only" would be a
-label, not a control. Three consequences:
+This is what makes INV-4's boundary real rather than nominal — if the same
+parties both recommended and applied, the boundary would be a label, not a
+control. Three consequences:
 
-- **New invariant, and it is testable.** The `COMMITTEE_AGENT_ROLE` holder set and
-  the `RouterGovernance` non-zero-voting-power set MUST be disjoint. Add a
-  regression test asserting it, alongside `testSignallingOnlyBoundary`. Any future
-  change granting a committee agent voting power is a security-model change
-  requiring a new ADR against `docs/prd.md` §12 INV-4.
-- **The loop never runs unattended.** A human approval step sits in every
-  rebalance, permanently — not merely by default. The off-chain worker drafts a
-  proposal for human review and must never submit one itself (§6.2).
-- **This strengthens the case for keeping the per-vault vote path.** Because the
-  approving body is different, the committee's on-chain per-agent record is its
+- **The invariant is testable.** The `COMMITTEE_AGENT_ROLE` holder set and the
+  holders of `WEIGHT_SETTER_ROLE` and `ADMIN_ROLE` MUST be disjoint, asserted
+  alongside `testSignallingOnlyBoundary` (the receipt contract makes no router
+  call). Any change granting a committee agent either role is a security-model
+  change requiring a new ADR against `docs/prd.md` §12 INV-4.
+- **The loop never runs unattended.** The Safe signers schedule every
+  rebalance, permanently — not merely by default. No worker submits anything
+  (§6.2).
+- **This strengthens the case for keeping the per-vault tilt path.** Because the
+  applying body is different, the committee's on-chain per-agent record is its
   own public artifact rather than a duplicate of who holds power — which is
   precisely the "live, per-agent track record" the GTM strategy asks for (§1).
-
-**Closed (was: the approving body's quorum is 1).**
-`DeployRouterGovernance.s.sol` now deploys `quorumThreshold =
-DEFAULT_QUORUM_THRESHOLD` = 2, and `MIN_QUORUM_THRESHOLD` is 2 in the contract —
-enforced by both the constructor and `setQuorumThreshold`, so a single voter can
-neither carry a weight proposal nor be restored as a sufficient one afterwards.
-The floor is a lower bound, not a target: before receipts drive real weight
-changes, still set a quorum that reflects the intended voter set
-(`docs/technical/router-governance-handoff-runbook.md` §1.1), otherwise "a
-different body approves" is true on paper and thin in practice.
 
 ### 3.5 Drop / out of scope for v0
 
@@ -596,7 +591,7 @@ Remaining uncertainty is in §6.
 | # | Decision | Resolution | Owner / grounding |
 |---|---|---|---|
 | 1 | Exact split of fields on-chain vs off-chain memo | **Shipped for votes; pinned for receipts.** Votes retain their existing commitment tuple and public memo. A receipt's chain record stores derived `receipt_id`, `payload_digest`, `payload_uri`, authenticated submitter, and released state only. The schema-pinned off-chain payload carries session/subject identity, quorum and stance counts, judge prose, exact analyst Ed25519 signature material, `prompt_hash` / `inputs_digest`, and an optional four-bucket bps vector (§2.1, §6.1). | Contract + schema |
-| 2 | Shape of the IC-policy → `RouterGovernance` linkage and governance-interface refactor | **Off-chain, admin-applied; no refactor.** IC output (votes and v0.1 receipts) is signalling-only (`docs/prd.md:650-657` INV-4, `docs/architecture.md:126-130,148`). Translation to live weights is `RouterGovernance.propose` → `vote` → `execute` (`RouterGovernance.sol:365-500`), gated by quorum/delay (`:54-63`). The architecture already states "RouterGovernance is unchanged and no governance-interface refactor is required" (`docs/architecture.md:604`). | Architecture |
+| 2 | Shape of the IC-policy → `RouterGovernance` linkage and governance-interface refactor | **The `apply-receipt` timelock batch; no refactor.** IC tilts are signed recommendations and the IC contracts make no router call (`docs/prd.md:650-657` INV-4, `docs/architecture.md:126-130,148`). Translation to live weights is one timelock operation scheduled by the Safe: release the receipt and apply its weights through the weight setter (core 1696). | Architecture |
 | 3 | Genesis seats (Athena / Robot Money / Woon) | **3–5 internal seats in v0/v0.1, no external seats.** Athena / Robot Money / Woon are the named genesis agents under the admin-gated, timelock-held model (`InvestmentCommitteePolicy.sol:164-168`). Their EOAs are provisioned by RM ops, attested via `agentId` string (`:128,166`) and the public `AgentRegistered` log, and (if needed) seeded via `rmpc committee register` (*note 2026-10-05: that command was removed in issue #1447 workstream K; seed through the Safe and timelock per `docs/technical/consensus-receipt-submitter-runbook.md` §3*). External organization onboarding is deferred to a follow-on proposal (§6.3). | Ops + product |
 
 ---
@@ -640,15 +635,10 @@ Remaining uncertainty is in §6.
   an influence the committee does not have; rendering it badly implies the
   committee is ignored. Mitigated by making applied vs. not-applied an explicit,
   per-recommendation state in the dapp rather than something a reader infers.
-- **Approving body with a thin quorum (from §3.4, largely retired).** The
-  committee and the `RouterGovernance` voter set are deliberately separate
-  bodies. The deployed default was `quorumThreshold = 1`, which let a single
-  voter carry a weight proposal and hollowed out that separation; the contract
-  floor and the deploy default are now both `2`, so the separation is an
-  enforced control rather than an organisational one. What remains is a matter
-  of degree: `2` out of a large voter set is still a minority, so set a quorum
-  that reflects the real voter set before receipts drive weight changes. The
-  disjointness invariant in §3.4 covers the other half.
+- **Approving body (from §3.4).** The committee and the Safe are separate
+  bodies. The Safe's signer threshold (2-of-N) and the timelock delay are the
+  controls on every rebalance; the disjointness invariant in §3.4 covers the
+  other half.
 - **`meanTakeWeights` as a single point of failure (new, from §2.1's derivation
   decision).** A rounding or normalization bug in
   `backend/src/swarm/domain.ts:1691-1710` now propagates into a signed artifact
@@ -696,15 +686,16 @@ Remaining uncertainty is in §6.
   `consensus-receipt.bucket-vault-map.json`; no address is global.
 
 - **6.2 Release quorum and governance handoff — implemented and pinned (D5/D6).** Release is
-  admin discretion with no automatic signature threshold. The dapp renders the
+  the Safe's discretion with no automatic signature threshold. The dapp renders the
   payload signature count as off-chain evidence. `meanTakeWeights` supplies the
   normalized unweighted mean; conversion uses the schema-pinned binary64
   largest-remainder allocation in canonical bucket order, which closes exactly
-  at 10,000 bps. A released receipt records a signal only. Any worker may
-  prepare a draft for human review after re-checking
-  `isRouterEligibleAndActive`, but it never submits unattended. The existing
-  per-vault registration and vote-submission path is kept unchanged alongside
-  receipts; no receipt call replaces or deprecates it.
+  at 10,000 bps. The Safe schedules the `apply-receipt` batch through the
+  timelock; it releases the receipt and applies its weights in one operation
+  after the pre-send eligibility checks. Nothing submits unattended. The existing
+  per-vault registration and tilt-submission path (`committee vote-submit`, a
+  signed tilt, not a vote on anything) is kept unchanged alongside receipts; no
+  receipt call replaces or deprecates it.
 
 - **6.3 External-organization attestation — explicitly re-deferred past v0.1.**
   Beyond the 3–5 internal genesis seats (§4 decision 3), what is the onboarding bar

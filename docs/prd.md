@@ -35,9 +35,10 @@ organizations a way to contribute visible allocation signals.
   Portfolio Router paths.
 - Autonomous depositors can authorize agent activity with user-defined
   limits, destinations, recipients, and expiration.
-- Addresses with admin-assigned voting power can vote on target weights
-  for the Portfolio Router allocation. (Governance is admin-weighted;
-  there is no token-based governance.)
+- The Safe multisig, through the TimelockController, is the only body
+  that changes Portfolio Router target weights: the weight setter applies
+  the Investment Committee's consensus receipt as one timelock operation.
+  There is no voting by token holders or anyone else.
 - Any user can inspect vault availability, allocation weights,
   performance, fees, governance state, and execution results.
 - Product failures are explicit: users receive a product-level reason
@@ -72,18 +73,18 @@ Success is measured by:
 - **Human depositor.** A person who deposits USDC, chooses vault or
   Portfolio Router allocation exposure, withdraws funds, and monitors
   positions.
-- **Governance voter.** An address with admin-assigned voting power
-  (current MVP) who votes on target weights for the Portfolio Router
-  allocation and observes protocol value capture. There is no
-  token-based governance.
+- **Protocol governance.** The Safe multisig acting through the
+  TimelockController. It is the only body that changes any Robot Money
+  contract configuration, router weights included. There is no
+  governance voter role and no token-based governance.
 - **Committee agent.** An admin-allowlisted AI agent, operated by a
   participating organization, that holds a registered on-chain identity
   and submits signed per-vault allocation-tilt votes over the vaults. It
   is distinct from an *autonomous depositor* (which sweeps treasury funds)
-  and from a *governance voter* (which votes directly on router target
-  weights): a committee agent only produces signalling-only allocation
-  tilts that feed allocation governance upstream, and has no authority
-  over funds or weights.
+  and from *protocol governance* (the Safe through the timelock, which
+  applies the committee's consensus receipt to router target weights): a
+  committee agent only produces allocation tilts that feed the consensus
+  receipt upstream, and has no authority over funds or weights.
 - **Integrator.** A builder who embeds Robot Money treasury actions and
   reporting into an agent runtime, treasury workflow, or external
   product.
@@ -103,9 +104,9 @@ Access expectations:
   through commit and reveal. The protocol deploy authorizes no agent
   (deploy-time agent removal not yet implemented: tracked in the mainnet
   plan).
-- Addresses with admin-assigned voting power can participate in
-  allocation-weight governance and view governance history. (Governance
-  is admin-weighted; there is no token-based governance.)
+- Any user can view allocation-weight governance history: the consensus
+  receipts the Safe applied through the timelock and the resulting
+  weights. There is no voting by token holders or anyone else.
 - Integrators can read public product state and submit user-authorized
   actions.
 - Committee agents can register an identity and submit signed votes only
@@ -130,10 +131,11 @@ Access expectations:
   with no queue — withdrawing a chosen amount from the stable-yield
   product, or redeeming my shares for their current value from a basket
   product — so that funds are available when needed.
-- As an address with admin-assigned voting power, I want to vote on
-  Portfolio Router target weights so that I can influence how the
-  composite treasury exposure is balanced. (Governance is
-  admin-weighted; there is no token-based governance.)
+- As a Safe signer, I want to apply the Investment Committee's consensus
+  receipt to the Portfolio Router target weights as one timelock
+  operation, so that every rebalance is a scheduled, delayed and
+  observable governance action. There is no voting by token holders or
+  anyone else.
 - As a committee agent operated by a participating organization, I want to
   register a signed on-chain identity and submit a fixed-shape per-vault
   allocation-tilt vote referencing a public rationale memo, so that my
@@ -187,20 +189,27 @@ Access expectations:
 
 ### Allocation Governance
 
-NOTE: Current governance is admin-weighted MVP (RouterGovernance.sol).
-Voting power is assigned by ADMIN_ROLE; proposal creation is
-ADMIN_ROLE-only. There is no token-based governance. Governance is
-flat in the MVP — there is no tier system (Observer / Participant /
-Analyst / Strategist) and no activity gate. Tiering is deferred past
-MVP and is not on the build list.
+The Safe multisig, through the TimelockController, is the only body that
+changes any Robot Money contract configuration, router weights included.
+`WEIGHT_SETTER_ROLE` is the only authority over router weights. It
+submits the Investment Committee's consensus receipt, and that submission
+is the rebalance: one timelock operation releases the receipt and applies
+its weights (govern row `apply-receipt`, core 1696). There is no voting by
+token holders or anyone else: no voter set, no voting power, no quorum,
+no voting period, no propose, vote or execute. `RouterGovernance.propose`,
+`vote` and `execute` exist in the deployed test bytecode, are unused, have
+no voters, and are deleted before the final deployment, when a
+weight-setter `applyReceipt` call replaces them. There is no tier system
+(Observer / Participant / Analyst / Strategist) and no activity gate.
 
-1. An address with admin-assigned voting power reviews active
-   allocation-weight proposals, target weights, timing, and expected
-   impact.
-2. The voter votes.
-3. The product publishes vote outcome, execution state, and resulting
-   allocation weights.
-4. Depositors and agents see the resulting weights before future
+1. The Investment Committee records a consensus receipt with a weight
+   vector over the router-eligible vaults.
+2. The Safe schedules `apply-receipt` through the timelock: release the
+   receipt and apply its weights, as one operation.
+3. The timelock delay elapses and the Safe executes the operation.
+4. The product publishes the released receipt, the execution state, and
+   the resulting allocation weights.
+5. Depositors and agents see the resulting weights before future
    Portfolio Router actions.
 
 Committee allocation tilts (see the Committee Vote workflow) are an
@@ -236,8 +245,8 @@ Consensus receipts do not replace these per-vault votes. A receipt represents
 one frontend swarm session and its one subject, is served from the stable
 `GET /api/swarm/receipts/{session_id}` path, and carries a dapp-visible count of
 embedded off-chain analyst signatures. Release has no automatic signature
-threshold: an admin may release after human review, but release remains a signal
-and no worker may submit a RouterGovernance proposal unattended.
+threshold: the Safe applies a receipt after human review as one timelock
+operation, and no worker may schedule or execute that operation unattended.
 
 ### Integrator Read And Action Flow
 
@@ -259,7 +268,7 @@ Common edge cases:
 - account balance or approval is insufficient;
 - agent permission is expired, revoked, or scoped to a different
   destination;
-- governance proposal expires, fails, or is not executable;
+- the timelock weight operation is cancelled, fails, or is not yet executable;
 - external market, liquidity, valuation, or compliance constraints make
   a strategy temporarily unavailable.
 
@@ -283,8 +292,8 @@ Common edge cases:
 - **Agent action.** Requested -> previewed -> approved -> settled;
   requested or previewed -> refused; approved -> partially settled only
   when the user-facing preview allows partial execution.
-- **Governance proposal.** Draft -> open for voting -> approved or
-  rejected -> applied or expired.
+- **Consensus receipt.** Recorded -> scheduled on the timelock ->
+  released and applied in one operation, or cancelled before execution.
 - **Committee agent registration.** Allowlisted -> registered (signed
   on-chain identity) -> active -> deactivated when removed from the
   allowlist. A deactivated agent's historical votes and track record remain
@@ -309,8 +318,9 @@ Common edge cases:
 - **Market access and valuation.** Triggered when vaults need asset
   pricing, liquidity checks, performance reporting, or strategy
   execution.
-- **Governance participation.** Triggered by proposal creation, vote
-  casting, vote tallying, weight publication, and execution reporting.
+- **Governance participation.** Triggered by the Safe scheduling,
+  cancelling or executing a timelock operation, weight publication, and
+  execution reporting.
 - **Committee participation.** Triggered by agent allowlisting, on-chain
   identity registration, vote signing and submission through the gateway,
   publication of the shared market-regime feed, and posting of off-chain
@@ -684,14 +694,18 @@ fee-parameter changes, strategy add/allowlist/caps, quarantine set and
 recover) require multisig plus timelock. Depositor principal is moved by the
 depositor alone.
 
-**INV-4 — Committee policy is signalling-only.** The Investment-Committee
-policy contract holds only registered agents, their votes, and aggregated
-tilts; it grants no treasury-spend and no auto-apply authority. Committee
-writes cannot move depositor or protocol funds and cannot set Portfolio
-Router weights directly — committee output is an upstream signal, and any
-application to live weights stays on the admin-applied governance path. The
-contract is reached only through the gateway entrypoint, and
-registration/vote submission is restricted to admin-allowlisted agents.
-Consensus receipts are additive commitments under the same boundary: they do
-not remove or alter the per-vault vote path, and their release cannot call the
-router or governance contracts.
+**INV-4 — Committee output is applied only by the weight setter through the
+timelock.** The Investment-Committee policy contract holds only registered
+agents, their signed tilts, and aggregated tilts; it grants no treasury-spend
+and no auto-apply authority. Committee writes cannot move depositor or
+protocol funds and cannot set Portfolio Router weights directly. The
+committee's consensus receipt reaches live weights on exactly one path: the
+Safe, through the TimelockController, schedules one operation that releases
+the receipt and applies its weight vector through `WEIGHT_SETTER_ROLE`
+(govern row `apply-receipt`, core 1696). No committee agent, submitter or
+EOA can release a receipt or set weights. The policy contract is reached only
+through the gateway entrypoint, and registration and tilt submission are
+restricted to admin-allowlisted agents. A committee agent's `vote-submit` is a
+signed allocation tilt, not a vote on anything. The receipt contract itself
+cannot call the router: release and weight application are two calls of the
+same timelock batch.

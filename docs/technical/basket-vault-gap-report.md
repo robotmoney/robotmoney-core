@@ -342,7 +342,7 @@ vaults") has no specified on-chain mechanic.
 | Option | Summary | Risk |
 |---|---|---|
 | A. Admin multisig (prototype, current) | N-of-M multisig controls `addAsset`/`removeAsset`. No further governance. | Trust-centralized; violates transparent-performance requirement for router-eligible vault. Acceptable for prototype; not for production. |
-| B. RM-token inclusion vote | `$RM` holders propose and vote on shortlist changes via an on-chain governance module. Quorum, delay, and execution path required. | Requires a voting contract and token-vote mechanics not yet specified (see `docs/development/open-questions.md` §3.9). Adds significant implementation scope. |
+| B. RM-token inclusion vote | `$RM` holders propose and vote on shortlist changes via an on-chain governance module. | Rejected: there is no voting by token holders or anyone else. The Safe, through the timelock, is the only body that changes contract configuration. |
 | C. Bribery/incentive mechanism | Agent-economy token projects pay a fee in `$RM` or USDC to nominate tokens; RM holders vote on ranked inclusion. | Most complex; requires fee-collection, bribery-escrow, and ranked-vote logic. Explicitly flagged as future spec work. |
 | D. Protocol-agent curation with timelock | Protocol agent (off-chain agent) proposes shortlist changes; changes are queued behind an on-chain timelock allowing RM holders to veto before execution. | Balances automation with community oversight; timelock duration is a free parameter. Adds agent-failure risk. |
 

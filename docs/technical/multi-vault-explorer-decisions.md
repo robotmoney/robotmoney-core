@@ -27,8 +27,9 @@ Companion ADRs:
   (DB engine, cadence, reorg handling, per-table PKs, idempotency keying).
 - `docs/technical/portfolio-router-decisions.md` — Portfolio Router deposit
   signature, preview shape, cap enforcement, and gateway coupling.
-- `docs/technical/governance-decisions.md` — Router-weight governance: quorum,
-  cadence, voting power, execution delay, proposal lifecycle, and events.
+- `docs/technical/governance-decisions.md` — Router-weight governance: the Safe
+  applies consensus receipts through the timelock and the weight setter; there
+  is no voting by anyone.
 
 ---
 
@@ -307,8 +308,12 @@ block order (already guaranteed by the `eth_getLogs` ordering); within the
 same block, `ProposalCreated` must be processed before `VoteCast`. The
 existing `handle_log` loop iterates logs in `log_index` order, which satisfies
 this as long as governance contracts emit `ProposalCreated` before any same-block
-`VoteCast` (contractually impossible: you cannot vote before a proposal is open;
-the voting period starts in a separate block).
+`VoteCast` (contractually impossible: a `VoteCast` needs an open proposal, which
+starts in a separate block). On mainnet these tables stay empty: there are no
+proposals and no voters. `RouterGovernance.propose`, `vote` and `execute` exist
+in the deployed test bytecode, are unused, have no voters, and are deleted
+before the final deployment, when a weight-setter `applyReceipt` call replaces
+them.
 
 ---
 
@@ -499,8 +504,9 @@ the same or separate PRs but must not land before step 2.
   cadence, reorg handling, per-table PKs, ingestion model).
 - `docs/technical/portfolio-router-decisions.md` — `WeightsSet` / `WeightsApplied`
   event source for `router_weight_snapshots`.
-- `docs/technical/governance-decisions.md` — All seven governance events, proposal
-  lifecycle, and voting model for `governance_proposals` / `governance_votes`.
+- `docs/technical/governance-decisions.md` — the receipt application path;
+  the `governance_proposals` / `governance_votes` tables index events of today's
+  bytecode that never fire on mainnet.
 - `services/explorer-indexer/src/indexer.rs` — Single-vault hardcoding audit
   (§3.1).
 - `services/explorer-indexer/migrations/0001_minimum_tables.sql` — Current schema.

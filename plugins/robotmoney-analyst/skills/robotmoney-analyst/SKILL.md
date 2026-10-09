@@ -42,8 +42,8 @@ history, or on-chain state — use the `robotmoney-user` skill for those.
 
 ## Research datasources
 
-The skill uses two external datasources when evaluating or creating governance
-proposals. See [references/research-datasources.md](references/research-datasources.md)
+The skill uses two external datasources when evaluating or creating weight
+recommendations. See [references/research-datasources.md](references/research-datasources.md)
 for field-level schema, update frequencies, stability annotations, and
 governance-decision interpretation guidance for each source.
 
@@ -51,30 +51,30 @@ governance-decision interpretation guidance for each source.
 
 #### https://www.robotmoney.net/regime
 
-- **Required before every proposal draft.** Fetch the regime page to
+- **Required before every weight recommendation.** Fetch the regime page to
   obtain the current regime bucket (`risk_on`, `neutral`, `risk_off`),
   composite score, and sub-regime labels. Cite these fields verbatim in the
-  proposal rationale.
+  recommendation rationale.
 - When the user asks about current market conditions or whether a weight
   rebalance is appropriate.
-- When evaluating a third-party governance proposal — verify the cited regime
+- When evaluating a third-party weight recommendation — verify the cited regime
   matches the current snapshot.
 
 #### https://analytics.robotmoney.net/projects
 
-- **Required before every proposal draft.** Check for active research
-  threads relevant to the vaults or signals targeted by the proposal. Cite any
-  relevant threads in the proposal rationale. If none apply, state "No active
+- **Required before every weight recommendation.** Check for active research
+  threads relevant to the vaults or signals targeted by the recommendation. Cite any
+  relevant threads in the recommendation rationale. If none apply, state "No active
   research threads identified for the targeted vaults."
 - When the user asks about the analytical basis for a past or proposed weight
   change.
-- When evaluating a third-party governance proposal — verify cited methodology
+- When evaluating a third-party weight recommendation — verify cited methodology
   notes are consistent with the analytics page.
 
 ## Worked examples
 
 See [references/examples.md](references/examples.md) for a complete trace:
-regime fetch → regime signal extraction → governance-proposal reasoning citing
+regime fetch → regime signal extraction → weight-recommendation reasoning citing
 both datasources.
 
 ## Fetch helper
@@ -145,17 +145,17 @@ value.
 The following governance read commands are thin stubs that delegate to `rmpc`
 read subcommands. They are read-only and require a valid `--config` path.
 
-### get-proposals
+### get-governance
 
-Fetch the active or most-recent governance proposal from the `RouterGovernance`
-contract. Delegates to:
+Read the `RouterGovernance` state. Delegates to:
 
 ```bash
 rmpc get-governance --config <CONFIG> --pretty
 ```
 
-Surface the `active_proposal` field (if present) and the `cadence_params`
-block. If no proposal is active, report that explicitly.
+Surface the router weight vector. `active_proposal` is always `null` and the
+`cadence_params` block holds constructor arguments of today's bytecode: the
+deployment has no voters and no proposals.
 
 ### get-weights
 
@@ -181,11 +181,17 @@ rmpc get-router --config <CONFIG> --pretty
 Surface all top-level fields in the response envelope. Use this when the user
 asks for the full router state rather than a weights-only summary.
 
-## Governance write commands
+## Router-weight changes
 
-### proposing a weight change (no signing in rmpc)
-
-rmpc does not submit `RouterGovernance.propose()`. That call needs a governance
-signer, and rmpc is not one. Prepare the change as unsigned calldata with
-`rmpc governance draft-proposal`, then a Safe signer submits it through the
-Safe from a wallet (see `robotmoney-cli` references).
+This skill has no governance write command, and neither does `rmpc`. The Safe
+multisig, through the `TimelockController`, is the only body that changes any
+Robot Money contract configuration, router weights included. `WEIGHT_SETTER_ROLE`
+is the only authority over router weights. It submits the Investment
+Committee's consensus receipt, and that submission is the rebalance: one
+timelock operation releases the receipt and applies its weights
+(publish-contracts govern row `apply-receipt`, core 1696). There is no voting
+by token holders or anyone else, and `rmpc governance draft-proposal` prints an unsigned review draft only: no voter set, no voting power, no quorum, no
+voting period, no execution delay, no propose, vote or execute. An analyst's
+weight recommendation reaches the chain only as a committee tilt
+(`rmpc committee vote-submit`, a signed tilt that is not a vote on anything)
+and then as the committee's consensus receipt.

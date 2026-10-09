@@ -240,12 +240,12 @@ path.
 ### 2.6 Governance Model
 
 **Robot Money** governance controls Portfolio Router target weights across active
-vaults. The current deployed `RouterGovernance.sol` is an admin-weighted MVP
-mock: voting power is assigned by `ADMIN_ROLE`; proposal creation is
-`ADMIN_ROLE`-only. There is no token-based governance. The governance
-surface is intentionally narrow — it covers only router weight updates and
-does not control vault internals, per-vault asset selection, fees, or
-individual agent policies.
+vaults. The Safe multisig, through the TimelockController, is the only body
+that changes router weights: `WEIGHT_SETTER_ROLE` applies the Investment
+Committee's consensus receipt in one timelock operation. There is no voting by
+token holders or anyone else. The governance surface is intentionally narrow —
+it covers only router weight updates and does not control vault internals,
+per-vault asset selection, fees, or individual agent policies.
 
 **Enzyme Finance** governance (Enzyme Council / Avantgarde Core) controls
 protocol-level releases and integrations. Individual fund managers control their

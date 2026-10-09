@@ -9,8 +9,8 @@
 
 ## 1. Overview
 
-Robot Money is a USDC treasury system for human depositors, autonomous
-agents, and governance voters. The product architecture has three on-chain
+Robot Money is a USDC treasury system for human depositors and autonomous
+agents, governed by a Safe multisig through a TimelockController. The product architecture has three on-chain
 allocation layers: the Portfolio Router at the outer product layer,
 individual Robot Money vaults at the exposure layer, and vault adapters
 inside each vault for venue-specific strategy execution. Agent access has
@@ -19,9 +19,12 @@ clients share the same read-before-write safety model: chain state is the
 authority for signing and execution, while indexed data is used only for
 display, history, and public observability.
 
-Current governance uses admin-assigned voting power: `ADMIN_ROLE` assigns
-each voter's power and controls proposal creation. There is no
-token-based governance. See §2.3 and `docs/prd.md` §"Allocation Governance".
+The Safe multisig, through the TimelockController, is the only body that
+changes any Robot Money contract configuration, router weights included.
+Router weights change only when the weight setter applies the Investment
+Committee's consensus receipt as one timelock operation. There is no voting
+by token holders or anyone else. See §2.3 and `docs/prd.md`
+§"Allocation Governance".
 
 A fourth surface, the agentic **Investment Committee**, sits upstream of
 governance: admin-allowlisted agents register an on-chain identity and
@@ -88,24 +91,33 @@ weight, and unavailable leg.
 
 ### 2.3 Governance Boundary
 
-**Current MVP:** Governance voting power is admin-assigned.
-`RouterGovernance.sol` is the shipped governance contract. `ADMIN_ROLE`
-assigns each voter's weight and creates proposals; there is no automatic
-RM-balance snapshot. Governance controls Portfolio Router target weights
-across active vaults and nothing else. It does not govern vault
-onboarding, vault retirement, per-vault asset selection, per-vault
-strategy internals, adapter selection, adapter caps, fees, or agent
-permissions.
+The Safe multisig, through the TimelockController, is the only body that
+changes any Robot Money contract configuration, router weights included.
+`WEIGHT_SETTER_ROLE` on the Portfolio Router is the only authority over
+router weights, and `RouterGovernance.sol` is the contract that holds it.
+The weight setter submits the Investment Committee's consensus receipt, and
+that submission is the rebalance: one timelock operation releases the
+receipt and applies its weight vector (govern row `apply-receipt`, core
+1696; on today's bytecode the batch is `releaseReceipt(receiptId)` plus
+`RouterGovernance.setDefaultWeights(vaults, bps)`). The timelock holds
+`ADMIN_ROLE` on `RouterGovernance`, so the role ends with the timelock.
+Router-weight governance controls Portfolio Router target weights across
+active vaults and nothing else. It does not govern vault onboarding, vault
+retirement, per-vault asset selection, per-vault strategy internals,
+adapter selection, adapter caps, fees, or agent permissions.
 
-There is no token-based governance, and none is planned. The quorum,
-cadence, execution-delay, and setWeights call-path decisions are recorded
-in `docs/technical/governance-decisions.md`. Admin-assigned voting power
-is the only governance model.
+There is no voting by token holders or anyone else: no voter set, no voting
+power, no quorum, no voting period, no execution delay, no propose, vote or
+execute. `RouterGovernance.propose`, `vote` and `execute` exist in the
+deployed test bytecode, are unused, have no voters, and are deleted before
+the final deployment, when a weight-setter `applyReceipt` call replaces
+them. The call-path decisions are recorded in
+`docs/technical/governance-decisions.md`.
 
-The governance read surface must expose proposal state, vote tallies,
-cadence metadata, execution state, and the resulting router weights. Those
-surfaces are required for both the dapp and programmatic read clients.
-See `docs/technical/governance-decisions.md` for the accepted parameters.
+The governance read surface must expose the released receipts, the
+timelock operation that applied each one, its execution state, and the
+resulting router weights. Those surfaces are required for both the dapp and
+programmatic read clients.
 
 ### 2.4 Investment Committee Boundary
 
@@ -114,10 +126,11 @@ and the two must not be conflated. RouterGovernance is the only contract
 that sets Portfolio Router target weights (§2.3). The IC policy contract
 (§4.8) holds a different thing: a registry of admin-allowlisted agents and
 their signed per-vault allocation tilts. IC output is an **upstream,
-signalling-only input** to weight governance — aggregated tilts inform a
-RouterGovernance weight proposal, but the IC contract never calls
-`setWeights`, never moves funds, and never holds an asset. Application to
-live weights stays admin-applied through RouterGovernance's existing path.
+input** to weight governance — aggregated tilts form the consensus receipt
+that the weight setter applies through the timelock, but the IC contract
+never calls `setWeights`, never moves funds, and never holds an asset.
+Application to live weights is one timelock operation scheduled by the Safe
+(§2.3).
 
 Three boundary properties are load-bearing and are enforced architecturally:
 
@@ -143,7 +156,7 @@ Three boundary properties are load-bearing and are enforced architecturally:
 | Stable-yield venues | Moonwell Flagship USDC, Aave V3, Compound V3 through vault adapters | Current deployed stable-yield vault normalizes these venues behind adapters. | `docs/technical/adapter-architecture.md` §4; `docs/technical/smart-contracts.md` §4 |
 | IC policy contract | Solidity 0.8.24, OpenZeppelin AccessControl + admin-floor, same Foundry toolchain | Signalling-only registry of committee agents and signed tilts; mirrors `RouterGovernance`/`VaultRegistry` role and event conventions; routed via the gateway. | `docs/prd.md` §"Committee", §12 INV-4; proposal doc; issue #1044 |
 | Committee vote schema | Fixed-shape JSON schema committed to the repo, validated in CI | Committee votes are the core auditable signal; a valid fixture must pass and an invalid fixture must fail a CI schema job. | `docs/prd.md` §"Committee" (constraints); issue #1044 |
-| Committee agent plugin | Skill/plugin extending `robotmoney-analyst` | Reuses the analyst's regime/market datasources, adds form-tilt → sign → submit-vote; proprietary methods stay out of the published surface. | `plugins/robotmoney-analyst/`; proposal doc §3 |
+| Committee agent plugin | Skill/plugin extending `robotmoney-analyst` | Reuses the analyst's regime/market datasources, adds form-tilt → sign → submit tilt (`vote-submit`, not a vote on anything); proprietary methods stay out of the published surface. | `plugins/robotmoney-analyst/`; proposal doc §3 |
 | Agent command client | Rust binary `rmpc` | Builds known calldata, signs through constrained backends, performs direct JSON-RPC reads, and emits stable JSON. | `docs/technical/rmpc-read-output-contract.md` §3 |
 | Rust workspace | Cargo workspace, Tokio, reqwest, Alloy, sqlx where applicable | Existing Rust clients, indexer, tests, and shared logging use this stack. | root `Cargo.toml`; client and service `Cargo.toml` files |
 | Human dapp | React 18, Vite, TypeScript, wagmi/viem, TanStack Query, Tailwind, Playwright | Current dapp package and ADRs target wallet signing, calldata preview, config export, and browser tests. | `clients/dapp/package.json`; `docs/technical/dapp-credential-decisions.md` §3 |
@@ -417,11 +430,10 @@ on-chain and surfaced by `rmpc get-timelock` and the dapp timelocked
 proposals panel.
 
 This constraint does not apply to depositor-owned agent policies, which
-remain under sole depositor authority. Router-weight votes and post-vote
-weight execution use the `RouterGovernance` module's own voting period
-and execution delay. RouterGovernance administration, including voting
-power assignment and cadence/quorum parameter changes, remains a
-protocol-admin operation and must route through the admin timelock in
+remain under sole depositor authority. A router-weight change is itself a
+timelock operation: the Safe schedules `apply-receipt`, the timelock delay
+elapses, and the Safe executes it. RouterGovernance administration is a
+protocol-admin operation and routes through the admin timelock in
 production.
 
 See `docs/technical/security-model.md` §4 and issue #414.
@@ -592,10 +604,11 @@ INV-4 and is mandatory (§8).
 contracts already use: OpenZeppelin `AccessControl` with a self-administered
 `ADMIN_ROLE`, the last-admin floor (`AdminFloorAccessControl`, so the sole
 admin cannot be removed), and role separation (an address that allowlists
-agents must not also be a voting agent). `ADMIN_ROLE` is held by the
+agents must not also be a committee agent). `ADMIN_ROLE` is held by the
 `TimelockController` in production (§4.5) — agent allowlisting and any IC
-parameter change route through schedule → delay → execute. Casting a vote
-is a registered agent's own action and is not timelocked.
+parameter change route through schedule → delay → execute. Submitting a tilt
+is a registered agent's own action and is not timelocked. It is not a vote
+on anything.
 
 **Identity model.** A committee agent's identity is its registered EOA: it
 submits its own vote through the gateway, so `msg.sender` is the
@@ -794,8 +807,8 @@ which data source is authoritative.
 
 **Protocol scope** — no address required. Shows the state of the
 protocol as a whole: all registered vaults, vault statuses, caps, fees,
-risk labels, adapter breakdowns, Portfolio Router weights, governance
-proposals, and aggregate metrics (total TVL, number of active vaults).
+risk labels, adapter breakdowns, Portfolio Router weights, applied
+consensus receipts, and aggregate metrics (total TVL, number of active vaults).
 This is the data a landing page, a public API consumer, or an agent
 with no depositor relationship needs to decide whether and where to
 deposit. Sources: live chain reads for current vault state and weights;
@@ -855,11 +868,11 @@ if a future ADR adds that path.
   decimals), adapter breakdown (address, balance, cap, active flag) and
   rebalance state.
 - `get-router` — Portfolio Router: active vault addresses, current
-  weight bps per vault, pending governance proposal if any, and router
-  cap.
-- `get-governance` — governance state: active proposal, vote tallies if
-  available, cadence, quorum threshold, execution delay, and last
-  applied weights.
+  weight bps per vault, pending timelock weight operation if any, and
+  router cap.
+- `get-governance` — governance state: the last applied weights and the
+  constructor parameters of today's `RouterGovernance` bytecode (unused;
+  there are no proposals and no voters).
 
 **Account-scope reads** (address argument required):
 
@@ -1033,7 +1046,7 @@ explorer API plus live chain reads for vault state. It contains:
   basket vaults, and static labels for STABLE_YIELD and inactive
   SPECULATIVE vaults.
 - Portfolio Router view: active vaults, current target weights, pending
-  governance proposal (if any), and historical weight changes.
+  timelock weight operation (if any), and historical weight changes.
 - Protocol stats: total TVL across all active vaults, number of unique
   depositor addresses (indexed), and a recent activity feed of deposits
   and withdrawals across all vaults.
@@ -1068,8 +1081,9 @@ render a preview before invoking the wallet.
   sign.
 - Agent policy management: authorize a new agent, update or revoke an
   existing policy, and export the resulting `rmpc` config file.
-- Governance: review active weight proposal, cast vote, and view
-  execution state.
+- Governance: view the pending timelock weight operation, the applied
+  consensus receipts, and execution state. The proposal surfaces render
+  nothing on mainnet because there are no proposals.
 
 Credential boundary:
 
@@ -1125,9 +1139,9 @@ token in tests or production, and the RM test token contract is deleted
 are gas, USDC and time warp only, so the harness holds no RM to drip.
 The main-page balances panel reads the RM balance at
 `VITE_RM_TOKEN_ADDRESS`, which every smoke-test env-injection site sets
-to the live address. No test needs to hold RM. `RouterGovernance` voting
-power is assigned by `ADMIN_ROLE` through `setVotingPower`
-(`contracts/RouterGovernance.sol`), not read from an RM balance. rmAGENT
+to the live address. No test needs to hold RM. `RouterGovernance` reads no RM
+balance: router weights are applied by the weight setter through the
+timelock, and nothing in governance reads a token balance. rmAGENT
 launches paused and holding RM: `config/agent-token-shortlist.json` lists RM
 only, on the owner-funded Uniswap V3 RM/USDC pool at fee 10000. The owner
 funds the pool and raises its observation cardinality before the deploy,
@@ -1148,8 +1162,8 @@ integrators who need activity feeds without running their own indexer.
   fee, and receipt token. Updates on every indexer tick.
 - Vault detail: single vault with adapter allocation history, TVL over
   time, deposit and withdrawal event log, and fee collection history.
-- Router state: current weights, weight change history, and governance
-  proposal log.
+- Router state: current weights, weight change history, and the applied
+  consensus receipt log.
 - Protocol stats: aggregate TVL across all active vaults, unique
   depositor count, total deposits and withdrawals by volume and count,
   and a global activity feed of recent events across all vaults.
@@ -1616,7 +1630,7 @@ this architecture:
 | --- | --- | --- |
 | Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The router is not yet on the production mainnet deployment manifest; mainnet onboarding remains planned work on the Plan tracking issue (#109). | — |
 | Vault registry contract | Resolved: `contracts/VaultRegistry.sol` is shipped with stable read methods and event history, indexed by the explorer. Router eligibility is expressed as `setRouterEligible(vault, eligible)` on the registry. | — |
-| Router-weight governance implementation | Resolved (MVP shipped): `contracts/RouterGovernance.sol` is deployed with admin-assigned voting power. `ADMIN_ROLE` assigns voter weights and creates proposals. Quorum, voting period, and execution delay are `ADMIN_ROLE`-configurable storage variables, not fixed in the contract: `setQuorumThreshold`, `setVotingPeriod`, and `setExecutionDelay` adjust them, bounded only by the constant floors `MIN_QUORUM_THRESHOLD` (2), `MIN_VOTING_PERIOD` (1 hour), and `MIN_EXECUTION_DELAY` (1 hour). There is no `cadenceWindow` variable and quorum is an absolute voting-power threshold, not a 5 %-of-`RM.totalSupply()` denominator. `contracts/script/DeployRouterGovernance.s.sol` defaults to a 1-hour voting period, 1-hour execution delay, and quorum 2, and also grants the deployed `RouterGovernance` `ADMIN_ROLE` on the `PortfolioRouter` so `execute()` can reach `setWeights` — without that grant the approving body can approve and cannot act. The quorum floor of 2 is enforced by the contract at both write sites (constructor and `setQuorumThreshold`), so a configured deployment cannot be walked back to a single-voter quorum; it is a bytecode constant, so raising it requires a redeploy rather than an upgrade. The 5 %/7-day/5-day/48 h figures were early recommendations, not shipped contract constants. `vote()` reads admin-assigned power at the proposal's snapshot block (`docs/technical/governance-decisions.md` §6.1). There is no token-based governance. | Admin-assigned voting power is the only governance model. |
+| Router-weight governance implementation | Resolved: `contracts/RouterGovernance.sol` holds `WEIGHT_SETTER_ROLE` on the Portfolio Router and the timelock holds `ADMIN_ROLE` on it, so the Safe, through the timelock, is the only body that changes router weights. A weight change is one timelock operation that releases the Investment Committee's consensus receipt and applies its vector (govern row `apply-receipt`, core 1696; today's bytecode: `releaseReceipt` plus `RouterGovernance.setDefaultWeights`). `contracts/script/DeployRouterGovernance.s.sol` grants the deployed `RouterGovernance` the router roles it needs to reach `setWeights` and `setDefaultWeights`. `RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused, have no voters, and are deleted before the final deployment, when a weight-setter `applyReceipt` call replaces them. There is no voting by token holders or anyone else. | The Safe through the timelock is the only governance body. |
 | Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC at launch; wSOL has no usable pool) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |

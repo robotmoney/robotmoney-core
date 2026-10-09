@@ -9,9 +9,9 @@ description: >
   vote-submit), consensus recommendation receipt commands
   (receipt verify, receipt submit), and the Investment Swarm signing
   identity commands (committee-identity create, show-public-key, sign).
-  Covers all flags, output shapes, and preflight rules. rmpc is not a
-  governance signer and has no voting: it has no vote, propose, or committee
-  register command.
+  Covers all flags, output shapes and preflight rules. rmpc is not a governance
+  signer: it has no vote, propose or committee register command, and router
+  weights change only through the Safe and the timelock.
 ---
 
 # robotmoney-cli (`rmpc`)
@@ -22,7 +22,7 @@ description: >
 
 `rmpc` is the Robot Money Rust payment client. It is the only path to signed
 writes on the Robot Money policy gateway. The binary also exposes direct
-on-chain read commands and governance write commands.
+on-chain read commands. It has no governance write command.
 
 All commands require `--config <path-to-config.toml>` and write JSON to stdout.
 Exit code 0 means success; non-zero means a named, structured error. Add
@@ -50,7 +50,7 @@ rmpc build-info      Print the git commit this binary was compiled from (JSON)
 rmpc get-vault       Read vault state directly from chain
 rmpc get-vaults      List all vaults registered in the VaultRegistry
 rmpc get-router      Read PortfolioRouter state: vault addresses, weight bps, and router cap
-rmpc get-governance  Read RouterGovernance state: active proposal, cadence params, and weights
+rmpc get-governance  Read RouterGovernance state: constructor params and weights
 rmpc get-timelock    Read TimelockController state
 rmpc get-gateway     Read gateway state directly from chain
 rmpc get-agent       Read an agent's authorization + window usage
@@ -59,26 +59,48 @@ rmpc get-balance     Read an ERC-20 token balance for an address (USDC by defaul
 rmpc get-allowance   Read an ERC-20 allowance(owner, spender) on the configured USDC
 rmpc get-deposit     Look up a gateway deposit by its on-chain id
 rmpc get-tx          Look up a transaction's receipt status by hash
-rmpc committee       Investment Committee: submit signed allocation votes
+rmpc committee       Investment Committee: submit signed allocation tilts
 rmpc receipt         Consensus recommendation receipt: verify a receipt off-chain and anchor its digest on chain
 rmpc committee-identity  Investment Swarm signing identity: local Ed25519 identity, public-key export, and canonical-payload signing
 ```
 
-## Governance write commands
+## Router-weight governance
 
-rmpc is not a governance signer. It has no `propose` command and no
-`committee register` command: both are `onlyRole(ADMIN_ROLE)` or governance
-calls that belong to the Safe and timelock after handover. Use
-`rmpc governance draft-proposal` for unsigned calldata, and sign through the
-Safe with a wallet.
+`rmpc` has no governance write command. The Safe multisig, through the
+`TimelockController`, is the only body that changes any Robot Money contract
+configuration, router weights included. `WEIGHT_SETTER_ROLE` is the only
+authority over router weights. It submits the Investment Committee's consensus
+receipt, and that submission is the rebalance: one timelock operation releases
+the receipt and applies its weights (publish-contracts govern row
+`apply-receipt`, core 1696). There is no voting by token holders or anyone else:
+no voter set, no voting power, no quorum, no voting period, no execution delay,
+no propose, vote or execute. `rmpc get-governance` only reads the
+`RouterGovernance` state, and `rmpc governance draft-proposal` prints an unsigned
+review draft only. Today's test bytecode still carries the old voting functions.
+They are unused: the test deploys it with voter addresses nobody holds keys for.
+A later contract change (issue 1698) will delete them and add a weight-setter
+`applyReceipt` call.
+
+## Example trace: read governance state
+
+```bash
+rmpc get-governance --config rmpc.toml --pretty
+```
+
+The `get-governance` output includes `active_proposal` (always `null`, because
+nobody holds a voter key), the `cadence_params` block (constructor arguments of
+today's bytecode, not a governance model) and the router weight vector.
+
 
 ## Investment Committee commands
 
 ### committee vote-submit
 
-Submit a signed allocation vote from an allowlisted committee agent.
-Routes through `RobotMoneyGateway`. Signalling-only: votes have no
-treasury-spend or router-weight authority.
+Submit a signed allocation tilt from an allowlisted committee agent.
+Routes through `RobotMoneyGateway`. The name `vote-submit` is the command's
+name only: a tilt is not a vote on anything. It has no treasury-spend or
+router-weight authority. The committee's consensus receipt is applied by
+`WEIGHT_SETTER_ROLE` through the timelock.
 
 ```bash
 rmpc committee --config <CONFIG> vote-submit ...

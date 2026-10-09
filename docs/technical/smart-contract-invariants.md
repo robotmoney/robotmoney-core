@@ -228,11 +228,11 @@ Sub-invariants that decompose the above and are individually worth proving:
 > **`GOV-2` — A governance action never executes before the minimum execution delay has elapsed.**
 > 🟢 HOLDS · `RouterGovernance` min-delay (prior M-9 fix) · symbolic.
 
-> **`GOV-3` — Vote weight is always taken from a snapshot; the same stake never votes twice.**
-> 🟢 HOLDS · snapshot voting (prior M-10 fix) · stateful-invariant.
+> **`GOV-3` — Router weights change only through the timelock.**
+> 🟢 HOLDS · `WEIGHT_SETTER_ROLE` is held by `RouterGovernance` alone and the timelock holds its `ADMIN_ROLE`; a weight change is one timelock operation (`apply-receipt`). `RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused, have no voters, and are deleted before the final deployment, when a weight-setter `applyReceipt` call replaces them · deploy-assertion.
 
-> **`GOV-4` — A governance proposal that would render router deposits non-executable can never be executed (no self-DoS).**
-> ✅ HOLDS · `propose` now rejects any weight vector with a non-eligible-or-non-Active vault (via `router.isRouterEligibleAndActive`), so a self-DoS proposal never enters the voting pipeline (F-05 / RTR-4 fixed, #968) · symbolic — `FvInvariants.t.sol::test_GOV4_proposalCannotSelfDosRouter`.
+> **`GOV-4` — A weight vector that would render router deposits non-executable can never be applied (no self-DoS).**
+> ✅ HOLDS · the router rejects any weight vector with a non-eligible-or-non-Active vault (via `router.isRouterEligibleAndActive`), and `apply-receipt` refuses a vector whose vault set differs from the registry's eligible list before anything is sent (F-05 / RTR-4 fixed, #968) · symbolic — `FvInvariants.t.sol::test_GOV4_proposalCannotSelfDosRouter`.
 
 > **`GOV-5` — The timelock/Safe is never the *sole* unrecoverable point of liveness that the admin-floor masks.**
 > 🟡 TRUSTED · admin-floor protects the timelock's membership, not the off-chain Safe quorum — see Layer-2 note in the audit doc · documented assumption (not directly FV-able; track operationally).
