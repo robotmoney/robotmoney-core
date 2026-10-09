@@ -3,7 +3,7 @@
 //! prospective agent" section + `docs/ARCHITECTURE.md` §9). Not the same
 //! feature as `docs/product/20260623-product-proposal-investment-committee-v0.md`,
 //! which scopes the separate **on-chain** IC v0 that `rmpc committee
-//! register`/`vote-submit` implement.
+//! vote-submit` implements.
 //! Implements: issue #1111 — `rmpc committee-identity`: committee signing identity;
 //! issue #1192 — safe passphrase input (protected file / `/dev/tty`).
 //!
@@ -13,7 +13,7 @@
 //! canonical submission payload (`POST /api/swarm/signing-payload`) ->
 //! `POST /api/swarm/submit`). This is the production signing path for every swarm member,
 //! and a **distinct identity type** from the on-chain EVM
-//! signer used by `rmpc committee register` / `vote-submit` (see
+//! signer used by `rmpc committee vote-submit` (see
 //! [`crate::signer`]): the frontend's HTTP verifier (`@robotmoney/contract`'s
 //! `canonicalizeSubmission` plus `crypto.subtle.verify({name:"Ed25519"})`)
 //! expects a **raw 32-byte Ed25519 public key** and a **raw 64-byte

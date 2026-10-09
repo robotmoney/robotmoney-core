@@ -76,7 +76,7 @@
 //!    blocking proposal id) rather than presenting it as ready to submit.
 //! 6. **Emits a draft** — the resolved `vaults`/`bps` vector, the exact
 //!    `RouterGovernance.propose` calldata (hex), and enough context for a
-//!    human to decide whether to submit it (via `rmpc propose`, a Safe, or
+//!    human to decide whether to submit it (via a Safe, or
 //!    the runbook's timelock path). Nothing here submits it.
 
 use std::collections::BTreeMap;

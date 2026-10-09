@@ -264,9 +264,10 @@ tooling, not core machinery. No automation submits a proposal unattended.
 ### Step 3 — a human submits the proposal
 
 Submit the draft's `propose_calldata` through the approved channel:
-- `rmpc propose` from an address holding `ADMIN_ROLE` on `RouterGovernance`, or
 - the Safe → `TimelockController` → `ADMIN_ROLE` path, or
 - any wallet the admin body controls.
+
+rmpc has no `propose` command: it is not a governance signer.
 
 `propose()` validates the bps sum to 10 000 and that every vault is
 `isRouterEligibleAndActive`, and enforces the one-active-proposal rule.

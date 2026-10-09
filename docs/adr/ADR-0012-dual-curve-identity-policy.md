@@ -203,8 +203,8 @@ go-gate item 5 dropped. Silent contradiction is not an option.
 
 - HSM/KMS signer backends and the `allow_software_fallback` posture
   (`software.rs:222-238`) — unchanged.
-- The on-chain Investment Committee v0 (`rmpc committee register` /
-  `vote-submit`), which correctly uses the EVM signer — unchanged.
+- The on-chain Investment Committee v0 (`rmpc committee
+  vote-submit`), which correctly uses the EVM signer — unchanged.
 - Any change to the frontend verifier's wire format (raw key, raw
   signature, standard padded base64) — the committee identity continues
   to match it exactly.

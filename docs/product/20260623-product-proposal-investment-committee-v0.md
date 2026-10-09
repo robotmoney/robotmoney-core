@@ -432,6 +432,10 @@ These are sequenced after v0 rather than dropped. The first three are
 - **`rmpc` client.** `docs/architecture.md:5.1,690-710` — `committee register` + `committee vote-submit`
   via `AgentSigner` + gateway, production-signer gate, stable JSON envelope
   (`docs/architecture.md:642-654`), fail-closed on missing IC config.
+  *Note (2026-10-05): `rmpc committee register` was removed (issue #1447,
+  workstream K). Registration is an `ADMIN_ROLE` action that goes through the
+  Safe and timelock; see `docs/technical/consensus-receipt-submitter-runbook.md`
+  §3.*
 - **`robotmoney-analyst` plugin.** `plugins/robotmoney-analyst/` — committee skill
   extends the analyst's regime/market datasources; adds "form per-vault tilt →
   post memo → sign and submit via gateway" (`docs/architecture.md:5.5`).
@@ -593,7 +597,7 @@ Remaining uncertainty is in §6.
 |---|---|---|---|
 | 1 | Exact split of fields on-chain vs off-chain memo | **Shipped for votes; pinned for receipts.** Votes retain their existing commitment tuple and public memo. A receipt's chain record stores derived `receipt_id`, `payload_digest`, `payload_uri`, authenticated submitter, and released state only. The schema-pinned off-chain payload carries session/subject identity, quorum and stance counts, judge prose, exact analyst Ed25519 signature material, `prompt_hash` / `inputs_digest`, and an optional four-bucket bps vector (§2.1, §6.1). | Contract + schema |
 | 2 | Shape of the IC-policy → `RouterGovernance` linkage and governance-interface refactor | **Off-chain, admin-applied; no refactor.** IC output (votes and v0.1 receipts) is signalling-only (`docs/prd.md:650-657` INV-4, `docs/architecture.md:126-130,148`). Translation to live weights is `RouterGovernance.propose` → `vote` → `execute` (`RouterGovernance.sol:365-500`), gated by quorum/delay (`:54-63`). The architecture already states "RouterGovernance is unchanged and no governance-interface refactor is required" (`docs/architecture.md:604`). | Architecture |
-| 3 | Genesis seats (Athena / Robot Money / Woon) | **3–5 internal seats in v0/v0.1, no external seats.** Athena / Robot Money / Woon are the named genesis agents under the admin-gated, timelock-held model (`InvestmentCommitteePolicy.sol:164-168`). Their EOAs are provisioned by RM ops, attested via `agentId` string (`:128,166`) and the public `AgentRegistered` log, and (if needed) seeded via `rmpc committee register`. External organization onboarding is deferred to a follow-on proposal (§6.3). | Ops + product |
+| 3 | Genesis seats (Athena / Robot Money / Woon) | **3–5 internal seats in v0/v0.1, no external seats.** Athena / Robot Money / Woon are the named genesis agents under the admin-gated, timelock-held model (`InvestmentCommitteePolicy.sol:164-168`). Their EOAs are provisioned by RM ops, attested via `agentId` string (`:128,166`) and the public `AgentRegistered` log, and (if needed) seeded via `rmpc committee register` (*note 2026-10-05: that command was removed in issue #1447 workstream K; seed through the Safe and timelock per `docs/technical/consensus-receipt-submitter-runbook.md` §3*). External organization onboarding is deferred to a follow-on proposal (§6.3). | Ops + product |
 
 ---
 

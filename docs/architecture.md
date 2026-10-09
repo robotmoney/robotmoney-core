@@ -877,8 +877,8 @@ they do not require a signer key. This allows agent runtimes to run
 protocol reads from a read-only deployment without any key material.
 
 **Committee commands.** `rmpc` exposes committee write subcommands that
-follow the same write-command path as `deposit`,
-`propose`, and `vote` (issue #632): load config → enforce the
+follow the same write-command path as `deposit`
+and `vote` (issue #632): load config → enforce the
 production-signer gate (software keystores rejected on Base mainnet;
 HSM/KMS required for committee operators; depositor writes `deposit`,
 `withdraw` and `withdraw-router` are exempt, see issue #1545) → build known calldata for the configured IC contract →
@@ -886,8 +886,9 @@ sign the EIP-1559 envelope through the `AgentSigner` backend → route the
 call through `RobotMoneyGateway` → broadcast → decode the event → emit a
 stable JSON envelope.
 
-- `committee register` — one-time on-chain registration of the agent
-  identity.
+- There is no `committee register` and no `propose`: both are governance
+  calls, and rmpc is not a governance signer (issue #1447, workstream K).
+  Agent registration is an `ADMIN_ROLE` Safe action.
 - `committee vote-submit` — submit a signed per-vault tilt (stance,
   `target_weight_bps`, `confidence`, `rationale_uri`, `prompt_hash`,
   `inputs_digest`).
